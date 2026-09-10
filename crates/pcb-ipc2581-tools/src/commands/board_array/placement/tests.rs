@@ -53,17 +53,19 @@ fn sampling_uses_connected_arclength_not_polygon_fragment_count() {
             ..seed.clone()
         })
         .collect::<Vec<_>>();
-    let samples = sample_intervals(&fragments, 4.0, 4).unwrap();
+    let samples = sample_intervals(&fragments, 4.0)
+        .unwrap()
+        .collect::<Vec<_>>();
     assert_eq!(
         samples.iter().map(|(_, s)| *s).collect::<Vec<_>>(),
         vec![1.625, 4.875, 8.125, 11.375]
     );
-    assert!(sample_intervals(&fragments, f64::MIN_POSITIVE, 4).is_err());
+    assert!(sample_intervals(&fragments, f64::MIN_POSITIVE).is_err());
     let mut gap = fragments;
     for i in &mut gap[7..11] {
         i.state = OutlineState::Unknown;
     }
-    let samples = sample_intervals(&gap, 4.0, 4).unwrap();
+    let samples = sample_intervals(&gap, 4.0).unwrap().collect::<Vec<_>>();
     assert_eq!(samples.len(), 4);
     assert!(samples.iter().all(|(_, s)| *s < 4.55 || *s > 7.15));
 }
@@ -220,7 +222,13 @@ fn candidates_from_holes_cannot_cross_their_own_board_to_reach_frame() {
             .all(|c| c["ring"] == 0)
     );
     assert_eq!(report["mechanics"]["status"], "BudgetExhausted");
-    assert!(report["mechanics"]["selected_ids"].is_null());
+    assert_eq!(
+        report["mechanics"]["selected_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -237,6 +245,8 @@ fn complete_connection_checks_obstacles_beyond_the_eligibility_band() {
     // the proposed 1.5 mm connection. A center/band-only check would accept it.
     let mut cfg = config();
     cfg.routing_gap_mm = 1.5;
+    // Four sampled sites, but the rejected overhang must not consume a slot.
+    cfg.max_candidates = 3;
     let report = plan(
         source,
         footprint(),
@@ -256,6 +266,69 @@ fn complete_connection_checks_obstacles_beyond_the_eligibility_band() {
             .unwrap()
             .contains("remote-bottom-overhang")
     }));
+}
+
+#[test]
+fn slanted_board_edges_have_full_width_frame_landings() {
+    let resolution = Resolution::default().strict();
+    let rail = rectangle(
+        BBox::new(Point::new(0.0, 0.0), Point::new(2.0, 4.0)),
+        resolution,
+    );
+    assert_eq!(
+        frame_distance(&rail, Point::new(0.1, 1.0), Point::new(1.0, 0.0)),
+        Some(0.0)
+    );
+    let mut source = prepared(false, false);
+    source.substrate = transform_region(
+        &source.substrate,
+        Affine2::placement(Point::new(0.0, 0.0), 12.0, Default::default(), 1.0),
+    )
+    .unwrap();
+    source.intervals = eligible_outline(
+        &source.substrate,
+        &[],
+        footprint(),
+        QueryTolerance {
+            boundary_mm: 0.0,
+            numerical_mm: 1e-9,
+        },
+    )
+    .unwrap();
+    let mut cfg = config();
+    cfg.max_subsets = 1;
+    let report = plan(source, footprint(), &options(), &cfg, resolution).unwrap();
+    assert!(
+        !report["candidates"].as_array().unwrap().is_empty(),
+        "{report}"
+    );
+    for c in report["candidates"].as_array().unwrap() {
+        assert!((c["frame_landing_area_mm2"].as_f64().unwrap() - 0.3).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn mechanical_budget_failure_preserves_candidate_evidence() {
+    let mut cfg = config();
+    cfg.max_dofs = 1;
+    let report = plan(
+        prepared(false, false),
+        footprint(),
+        &options(),
+        &cfg,
+        Resolution::default().strict(),
+    )
+    .unwrap();
+    assert!(!report["candidates"].as_array().unwrap().is_empty());
+    assert_eq!(report["mechanics"]["status"], "analysis-failed");
+    assert!(
+        report["mechanics"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("exceeding max_dofs 1")
+    );
+    assert!(report["mechanics"]["selected_ids"].is_null());
+    assert_eq!(report["manufacturing_ready"], false);
 }
 
 #[test]

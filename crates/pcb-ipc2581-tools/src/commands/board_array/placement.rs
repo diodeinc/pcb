@@ -133,8 +133,7 @@ struct Candidate {
 fn sample_intervals(
     intervals: &[OutlineInterval],
     pitch: f64,
-    budget: usize,
-) -> Result<Vec<(&OutlineInterval, f64)>> {
+) -> Result<impl Iterator<Item = (&OutlineInterval, f64)>> {
     let mut runs: Vec<(usize, usize)> = Vec::new();
     for (index, interval) in intervals.iter().enumerate() {
         if interval.state != OutlineState::Eligible {
@@ -150,27 +149,29 @@ fn sample_intervals(
             runs.push((index, index));
         }
     }
-    let mut samples = Vec::new();
-    for (first, last) in runs {
+    let runs = runs
+        .into_iter()
+        .map(|(first, last)| {
+            let length = intervals[last].end_mm - intervals[first].start_mm;
+            let count = (length / pitch).ceil().max(1.0);
+            ensure!(
+                count < usize::MAX as f64,
+                "candidate pitch is too small to enumerate"
+            );
+            Ok((first, last, count as usize))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(runs.into_iter().flat_map(move |(first, last, count)| {
         let lo = intervals[first].start_mm;
         let length = intervals[last].end_mm - lo;
-        let count = (length / pitch).ceil().max(1.0);
-        ensure!(
-            count <= budget.saturating_sub(samples.len()) as f64,
-            "candidate budget exceeded for connected eligible runs; increase candidate_pitch_mm or max_candidates"
-        );
-        let count = count as usize;
-        for k in 0..count {
+        (0..count).filter_map(move |k| {
             let station = lo + length * (k as f64 + 0.5) / count as f64;
-            if let Some(interval) = intervals[first..=last]
+            intervals[first..=last]
                 .iter()
                 .find(|i| i.start_mm < station && station < i.end_mm)
-            {
-                samples.push((interval, station));
-            }
-        }
-    }
-    Ok(samples)
+                .map(|interval| (interval, station))
+        })
+    }))
 }
 
 fn rectangle(bbox: BBox, resolution: Resolution) -> ContourSet {
@@ -203,8 +204,11 @@ fn cross(a: Point, b: Point) -> f64 {
     a.x * b.y - a.y * b.x
 }
 
-/// First forward intersection with the actual connected rail-region boundary.
+/// First forward entry into the actual rail region, or zero if already inside.
 fn frame_distance(frame: &ContourSet, p: Point, n: Point) -> Option<f64> {
+    if frame.contains_point(p) {
+        return Some(0.0);
+    }
     frame
         .rings
         .iter()
@@ -329,21 +333,24 @@ fn plan(
     let empty = ContourSet::empty(resolution);
     let mut candidates = Vec::new();
     let mut rejected = Vec::new();
-    let samples = sample_intervals(
-        &prepared.intervals,
-        config.candidate_pitch_mm,
-        config.max_candidates / offsets.len(),
-    )?;
     for (board_index, offset) in offsets.iter().enumerate() {
-        for &(interval, station) in &samples {
+        for (interval, station) in sample_intervals(&prepared.intervals, config.candidate_pitch_mm)?
+        {
             let local = boundary.site(interval.boundary, station)?;
             let p = local.point + *offset;
             let n = local.outward_normal;
             let t = local.tangent;
             let attempt = (|| -> Result<std::result::Result<Candidate, String>> {
-                let Some(span) = frame_distance(&frame, p, n) else {
+                // The leading edge has finite width. On a slanted board edge,
+                // its center reaches a rectangular rail before one endpoint.
+                // Advance until both endpoints and the center reach the frame;
+                // the full-region check below still rejects gaps and corners.
+                let entries = [-0.5, 0.0, 0.5]
+                    .map(|side| frame_distance(&frame, p + t * (side * footprint.width_mm), n));
+                let [Some(a), Some(b), Some(c)] = entries else {
                     return Ok(Err("no forward frame intersection".into()));
                 };
+                let span = a.max(b).max(c);
                 if span > config.max_span_mm {
                     return Ok(Err("frame beyond max_span_mm".into()));
                 }
@@ -421,7 +428,11 @@ fn plan(
                 }))
             })()?;
             match attempt {
-                    Ok(candidate) => candidates.push(candidate),
+                    Ok(candidate) => {
+                        ensure!(candidates.len() < config.max_candidates,
+                            "accepted frame candidate budget exceeded; increase candidate_pitch_mm or max_candidates");
+                        candidates.push(candidate);
+                    },
                     Err(reason) => rejected.push(json!({"board":board_index,"ring":interval.boundary.ring,"station_mm":station,"reason":reason})),
                 }
         }
@@ -486,10 +497,14 @@ fn plan(
                 tolerances: tolerances(),
                 clamp_sides: config.clamp_sides,
             },
-        )
-        .map_err(anyhow::Error::msg)?;
-        let report = evaluation.report;
-        json!({"status":format!("{:?}",report.proof),"dofs":evaluation.dofs,
+        );
+        match evaluation {
+            Err(error) => {
+                json!({"status":"analysis-failed","error":error.to_string(),"selected_ids":null})
+            }
+            Ok(evaluation) => {
+                let report = evaluation.report;
+                json!({"status":format!("{:?}",report.proof),"dofs":evaluation.dofs,
             "visited_subsets":report.visited_subsets,"count_lower_bound":report.count_lower_bound,
             "selected_ids":report.selected.as_ref().map(|s| &s.ids),
             "tab_count":report.selected.as_ref().map(|s| s.ids.len()),
@@ -503,6 +518,8 @@ fn plan(
                 "refinement":format!("{:?}",r),"area_mm2":q.area_mm2,"max_element_area_mm2":q.max_area_mm2,
                 "min_angle_degrees":q.min_angle_degrees})).collect::<Vec<_>>(),
             "unresolved":report.unresolved.iter().map(|u| json!({"ids":u.ids,"case":u.load_case,"reason":format!("{:?}",u.failure)})).collect::<Vec<_>>()})
+            }
+        }
     };
     Ok(
         json!({"phase":"frame-only-placement-analysis","manufacturing_ready":false,

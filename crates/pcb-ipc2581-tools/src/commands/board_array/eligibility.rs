@@ -7,7 +7,7 @@ use ipc2581::{
 use pcb_ir::{
     dialects::ipc::{ArtworkScope, LayoutStepKind, ProfileSet, profile_occurrences_for},
     geom::{
-        ContourBuf, ContourSet, FillRule, PathCmd, PathOp, Resolution, Segment,
+        BBox, ContourBuf, ContourSet, FillRule, PathCmd, PathOp, Resolution, Segment,
         attachment::{
             QueryTolerance,
             outline::{OutlineFootprint, OutlineObstacle, eligible_outline},
@@ -386,45 +386,92 @@ fn courtyard_region(contours: &[ContourBuf], resolution: Resolution) -> Result<O
             segments.extend(contour.segments());
         }
     }
-    // A degree other than two means a gap, branch or duplicated segment.
-    if segments.iter().any(|s| {
-        [s.start(), s.end()].iter().any(|p| {
-            segments
-                .iter()
-                .map(|s| usize::from(s.start() == *p) + usize::from(s.end() == *p))
-                .sum::<usize>()
-                != 2
-        })
-    }) {
-        return Ok(None);
-    }
+    let mut open_components = Vec::new();
     while let Some(first) = segments.pop() {
-        let start = first.start();
-        let mut end = first.end();
-        let mut cmds = vec![PathCmd::move_to(start), segment_command(first, false)];
-        while end != start {
-            let Some(index) = segments
-                .iter()
-                .position(|s| s.start() == end || s.end() == end)
-            else {
-                return Ok(None);
-            };
-            let segment = segments.remove(index);
-            let reverse = segment.end() == end;
-            end = if reverse {
-                segment.start()
-            } else {
-                segment.end()
-            };
-            cmds.push(segment_command(segment, reverse));
+        let mut component = vec![first];
+        let mut index = 0;
+        while index < component.len() {
+            let endpoints = [component[index].start(), component[index].end()];
+            let mut candidate = 0;
+            while candidate < segments.len() {
+                if endpoints.contains(&segments[candidate].start())
+                    || endpoints.contains(&segments[candidate].end())
+                {
+                    component.push(segments.remove(candidate));
+                } else {
+                    candidate += 1;
+                }
+            }
+            index += 1;
         }
-        cmds.push(PathCmd::close());
-        loops.push(ContourBuf::new(cmds).with_uncertainty(uncertainty));
+        let closed = component.iter().all(|segment| {
+            [segment.start(), segment.end()].iter().all(|point| {
+                component
+                    .iter()
+                    .map(|other| {
+                        usize::from(other.start() == *point) + usize::from(other.end() == *point)
+                    })
+                    .sum::<usize>()
+                    == 2
+            })
+        });
+        if closed {
+            loops.push(closed_component(component, uncertainty)?);
+        } else {
+            open_components.push(component);
+        }
     }
     if loops.is_empty() {
         return Ok(None);
     }
-    Ok(Some(ContourSet::from_filled_contours(&loops, resolution)?))
+    let region = ContourSet::from_filled_contours(&loops, resolution)?;
+    // An open component is harmless only when its entire conservative bounds
+    // fit strictly inside the enclosure. Segment bboxes include curve extrema
+    // (cubic control bounds are conservative); source and prepared-boundary
+    // uncertainty plus the requested preparation error expand the proof
+    // rectangle. This is not gap snapping: expansion can only reject evidence,
+    // makes boundary contact fail, and gives axial lines a nonzero area that
+    // survives the region representation.
+    for component in open_components {
+        let guard = uncertainty + region.uncertainty_mm + resolution.accuracy.max_error_mm();
+        let bbox = component
+            .iter()
+            .fold(BBox::empty(), |bbox, segment| bbox.union(segment.bbox()))
+            .expand(guard);
+        if !bbox.is_valid()
+            || bbox.width() <= 0.0
+            || bbox.height() <= 0.0
+            || !ContourSet::rectangle(bbox, resolution)
+                .difference(&region)?
+                .is_empty()
+        {
+            return Ok(None);
+        }
+    }
+    Ok(Some(region))
+}
+
+fn closed_component(mut segments: Vec<Segment>, uncertainty: f64) -> Result<ContourBuf> {
+    let first = segments.pop().context("empty closed courtyard component")?;
+    let start = first.start();
+    let mut end = first.end();
+    let mut cmds = vec![PathCmd::move_to(start), segment_command(first, false)];
+    while end != start {
+        let index = segments
+            .iter()
+            .position(|segment| segment.start() == end || segment.end() == end)
+            .context("disconnected closed courtyard component")?;
+        let segment = segments.remove(index);
+        let reverse = segment.end() == end;
+        end = if reverse {
+            segment.start()
+        } else {
+            segment.end()
+        };
+        cmds.push(segment_command(segment, reverse));
+    }
+    cmds.push(PathCmd::close());
+    Ok(ContourBuf::new(cmds).with_uncertainty(uncertainty))
 }
 
 fn segment_command(segment: Segment, reverse: bool) -> PathCmd {
@@ -627,6 +674,82 @@ mod tests {
             );
             assert_eq!(top.id.matches("feature-").count(), 4);
         }
+    }
+
+    fn fragmented_rectangle_with(extra: Vec<ContourBuf>) -> Vec<ContourBuf> {
+        let point = |x, y| Point::new(x, y);
+        let mut contours = [
+            (point(0.0, 0.0), point(10.0, 0.0)),
+            (point(10.0, 0.0), point(10.0, 6.0)),
+            (point(10.0, 6.0), point(0.0, 6.0)),
+            (point(0.0, 6.0), point(0.0, 0.0)),
+        ]
+        .into_iter()
+        .map(|(start, end)| ContourBuf::new(vec![PathCmd::move_to(start), PathCmd::line_to(end)]))
+        .collect::<Vec<_>>();
+        contours.extend(extra);
+        contours
+    }
+
+    fn open_line(start: Point, end: Point) -> ContourBuf {
+        ContourBuf::new(vec![PathCmd::move_to(start), PathCmd::line_to(end)])
+    }
+
+    #[test]
+    fn fragmented_enclosure_allows_only_fully_enclosed_open_components() {
+        let center_marks = vec![
+            open_line(Point::new(4.0, 2.0), Point::new(6.0, 2.0)),
+            open_line(Point::new(5.0, 1.0), Point::new(5.0, 3.0)),
+        ];
+        let expected = courtyard_region(
+            &fragmented_rectangle_with(Vec::new()),
+            Resolution::default(),
+        )
+        .unwrap()
+        .unwrap();
+        let accepted = courtyard_region(
+            &fragmented_rectangle_with(center_marks),
+            Resolution::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(accepted.difference(&expected).unwrap().is_empty());
+        assert!(expected.difference(&accepted).unwrap().is_empty());
+
+        for y in [6.0, 7.0] {
+            let outside = open_line(Point::new(4.0, y), Point::new(6.0, y));
+            assert!(
+                courtyard_region(
+                    &fragmented_rectangle_with(vec![outside]),
+                    Resolution::default()
+                )
+                .unwrap()
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn open_only_and_curves_bulging_outside_are_rejected() {
+        assert!(
+            courtyard_region(
+                &[open_line(Point::new(1.0, 1.0), Point::new(2.0, 1.0))],
+                Resolution::default()
+            )
+            .unwrap()
+            .is_none()
+        );
+
+        // Both endpoints are inside, but the upper semicircle reaches y=7.
+        let arc = ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(1.0, 3.0)),
+            PathCmd::arc_to(Point::new(9.0, 3.0), Point::new(5.0, 3.0), false),
+        ]);
+        assert!(
+            courtyard_region(&fragmented_rectangle_with(vec![arc]), Resolution::default())
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

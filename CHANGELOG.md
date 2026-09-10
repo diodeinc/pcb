@@ -15,7 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- Keep mouse-bite sampling independent of polygon fragment count and avoid roundoff-only landing coverage failures.
+- Fix mouse-bite sampling budgets, slanted frame landings and enclosed courtyard marks; skip disconnected selections and preserve candidates when mechanics fails.
 
 ### Changed
 

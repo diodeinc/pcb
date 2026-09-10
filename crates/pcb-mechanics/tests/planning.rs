@@ -78,6 +78,45 @@ fn clipped_cross_element_landings_and_asymmetric_resultant_evaluate() {
 }
 
 #[test]
+fn each_board_is_connected_before_the_single_subset_budget_is_spent() {
+    let boards = [rect(0.0, 0.0, 1.0, 1.0), rect(1.5, 0.0, 2.5, 1.0)];
+    let frame = rect(0.0, 1.5, 3.0, 2.5);
+    let sites = [
+        Site {
+            id: 10,
+            board: 0,
+            board_landing: rect(0.2, 0.2, 0.8, 0.8),
+            frame_landing: rect(0.2, 1.7, 0.8, 2.3),
+            reference: [0.5, 1.25],
+        },
+        Site {
+            id: 20,
+            board: 1,
+            board_landing: rect(1.7, 0.2, 2.3, 0.8),
+            frame_landing: rect(1.7, 1.7, 2.3, 2.3),
+            reference: [2.0, 1.25],
+        },
+    ];
+    let mut policy = policy();
+    policy.max_subsets = 1;
+    let result = evaluate(
+        &boards,
+        &frame,
+        &sites,
+        &[],
+        &[LoadCase {
+            board_resultants: vec![[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            compliance_limit: 1e9,
+        }],
+        &policy,
+    )
+    .unwrap();
+    assert_eq!(result.report.selected.unwrap().ids, [10, 20]);
+    assert_eq!(result.report.visited_subsets, 1);
+    assert!(result.report.unresolved.is_empty());
+}
+
+#[test]
 fn repeated_difference_accepts_only_intersection_roundoff() {
     let edge = 92.262_401_f64;
     let board = strict_rect(edge - 4.0, -102.0, edge, -99.0);

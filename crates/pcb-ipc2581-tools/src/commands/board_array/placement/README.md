@@ -55,8 +55,11 @@ at the ring origin), at equal-bin midpoints with bin size at most
 Samples exactly on interval endpoints are omitted because endpoints carry no
 guarantee. This parameter controls candidate resolution, not preferred support
 spacing. Short runs still receive a midpoint unless it is an endpoint. Search
-only optimizes this finite set; candidate-budget overflow is an error, not silent
-truncation. Overlapping envelopes and overlapping cyclic attachment spans conflict.
+only optimizes this finite set. `max_candidates` limits accepted frame connections,
+not rejected samples; samples are generated lazily. Candidate-budget overflow is
+an error, not silent truncation. On slanted edges, the full-width leading edge
+must reach the frame before its landing starts. Overlapping envelopes and
+overlapping cyclic attachment spans conflict.
 
 ## Mechanical interpretation
 
@@ -78,15 +81,24 @@ grounded. Numerical scales/tolerances do not establish physical acceptance.
 The selector minimizes count subject to the supplied compliance limits, then
 worst normalized compliance. JSON contains candidate board/frame points, IDs,
 rejections/conflicts, selected IDs/count, compliance, strain energy, residuals,
-whole-board fitted displacement/rotations, mesh quality, and unresolved/search-budget status. Unsupported smaller subsets
-retain `Unresolved`, even if a verified feasible selection exists. A null
-selection never means zero tabs suffice. Dense storage/solves and exhaustive
-search limit this phase to small models; budgets do not promise wall-clock bounds.
+whole-board fitted displacement/rotations, mesh quality, and unresolved/search-budget status.
+Every board must have at least one frame connection. Subsets that omit a board
+are excluded structurally, without numerical solves or spending the subset budget;
+remaining numerical failures still retain `Unresolved`. Candidate stiffness is
+validated once; each assembled system is still checked before applying fixtures.
+A null selection never means zero tabs suffice. Mechanical failures, including
+the mesh-DOF cap, preserve the geometric candidates and return
+`mechanics.status = "analysis-failed"` with an error and no selected IDs.
+Dense storage/solves and exhaustive search limit this phase to small models;
+budgets do not promise wall-clock bounds.
 
 Footprints without any courtyard contribute no obstruction and are listed in
 `eligibility.ignored_footprints`. All usable courtyards from either side remain
 obstacles; present but unusable courtyards are errors. Clearance is conditional
 on supplied courtyards being complete, not a physical-component clearance guarantee.
+Separate open marks wholly inside an already closed courtyard are redundant;
+they are accepted only when their curve-aware, uncertainty-expanded bounds fit
+inside that enclosure. Open marks outside or touching it remain errors.
 Explicit unknown exclusions still leave sites Unknown. A successful
 mechanical result remains conditional on supplied stiffness, load and fixture
 assumptions and mesh convergence. No tab shapes, holes, route masks, router-access

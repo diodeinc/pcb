@@ -126,12 +126,38 @@ impl Model {
         loads: &[f64],
         prescribed: &[(usize, f64)],
     ) -> Result<Analysis, Error> {
+        self.evaluate_impl(supports, loads, prescribed, false)
+    }
+
+    /// Evaluate contributions whose dimensions, symmetry, and PSD properties
+    /// have already been checked by the caller. Selection uses this after its
+    /// mandatory validation pass over every candidate.
+    pub(crate) fn evaluate_validated(
+        &self,
+        supports: &[Contribution],
+        loads: &[f64],
+        prescribed: &[(usize, f64)],
+    ) -> Result<Analysis, Error> {
+        self.evaluate_impl(supports, loads, prescribed, true)
+    }
+
+    fn evaluate_impl(
+        &self,
+        supports: &[Contribution],
+        loads: &[f64],
+        prescribed: &[(usize, f64)],
+        supports_validated: bool,
+    ) -> Result<Analysis, Error> {
         let n = self.scales.len();
         if loads.len() != n || loads.iter().any(|x| !x.is_finite()) {
             return Err(Error::InvalidInput);
         }
         let mut k = self.stiffness.clone();
-        assemble(&mut k, supports, &self.scales, self.tolerances)?;
+        if supports_validated {
+            assemble_validated(&mut k, supports, &self.scales, self.tolerances)?;
+        } else {
+            assemble(&mut k, supports, &self.scales, self.tolerances)?;
+        }
         let mut fixed = vec![false; n];
         let mut u = DVector::zeros(n);
         for &(i, value) in prescribed {
@@ -348,6 +374,20 @@ fn assemble(
             return Err(Error::InvalidInput);
         }
         validate_psd((&scaled + scaled.transpose()) * 0.5, t)?;
+    }
+    assemble_validated(k, blocks, scales, t)
+}
+
+/// Skip only repeated block validation. Individually tolerated negative
+/// roundoff can accumulate, so the assembled system must still be checked,
+/// including DOFs subsequently removed by prescribed constraints.
+fn assemble_validated(
+    k: &mut DMatrix<f64>,
+    blocks: &[Contribution],
+    scales: &DVector<f64>,
+    t: Tolerances,
+) -> Result<(), Error> {
+    for block in blocks {
         for (i, &di) in block.dofs.iter().enumerate() {
             for (j, &dj) in block.dofs.iter().enumerate() {
                 k[(di, dj)] += (block.stiffness[(i, j)] + block.stiffness[(j, i)]) * 0.5;

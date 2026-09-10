@@ -401,12 +401,22 @@ pub fn evaluate(
     if fixed.is_empty() {
         return Err(err("named clamp sides contain no exterior frame edges"));
     }
-    let report = selection::select(
+    let required_groups = (0..boards.len())
+        .map(|board| {
+            sites
+                .iter()
+                .filter(|site| site.board == board)
+                .map(|site| site.id)
+                .collect()
+        })
+        .collect::<Vec<_>>();
+    let report = selection::select_covering(
         &assembly.model,
         &candidates,
         conflicts,
         &numerical_cases,
         &fixed,
+        &required_groups,
         policy.max_subsets,
     )
     .map_err(|e| err(format!("selection: {e}")))?;

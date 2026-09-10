@@ -1,4 +1,4 @@
-use pcb_elastic::selection::{Candidate, Failure, LoadCase, Proof, select};
+use pcb_elastic::selection::{Candidate, Failure, LoadCase, Proof, select, select_covering};
 use pcb_elastic::{Contribution, DMatrix, DVector, Error, Model, Status, Tolerances};
 
 fn tolerances() -> Tolerances {
@@ -253,12 +253,13 @@ fn numerical_failure_and_inaccuracy_are_not_infeasibility() {
         tolerances(),
     )
     .unwrap();
-    let r = select(
+    let r = select_covering(
         &model,
         &[diagonal(1, &[4e307])],
         &[],
         &[case(&[1e308], 1.0)],
         &[],
+        &[vec![1]],
         10,
     )
     .unwrap();
@@ -309,6 +310,183 @@ fn invalid_inputs_are_rejected_even_with_zero_search_budget() {
     assert!(select(&model, &[], &[(1, 2)], &[case(&[1.0], 1.0)], &[], 0).is_err());
     assert!(select(&model, &[], &[], &[case(&[1.0], 1.0)], &[0, 0], 0).is_err());
     assert!(select(&model, &[], &[], &[], &[], 0).is_err());
+}
+
+#[test]
+fn required_groups_validate_cover_and_overlap_without_charging_skips() {
+    let model = Model::new(vec![1.0], &[block(DMatrix::identity(1, 1))], tolerances()).unwrap();
+    let candidates = [
+        diagonal(1, &[1.0]),
+        diagonal(2, &[1.0]),
+        diagonal(3, &[1.0]),
+    ];
+    let cases = [case(&[1.0], 1.0)];
+
+    let report = select_covering(
+        &model,
+        &candidates,
+        &[],
+        &cases,
+        &[],
+        &[vec![1, 2], vec![2, 3]],
+        1,
+    )
+    .unwrap();
+    assert_eq!(report.selected.unwrap().ids, [2]);
+    assert_eq!(report.visited_subsets, 1);
+
+    assert!(select_covering(&model, &candidates, &[], &cases, &[], &[vec![99]], 0).is_err());
+    let empty = select_covering(&model, &candidates, &[], &cases, &[], &[vec![]], 0).unwrap();
+    assert_eq!(empty.proof, Proof::ExhaustiveInfeasible);
+    assert_eq!(empty.visited_subsets, 0);
+    assert_eq!(empty.count_lower_bound, candidates.len() + 1);
+
+    let legacy = select(&model, &candidates, &[], &cases, &[], 2).unwrap();
+    let explicit = select_covering(&model, &candidates, &[], &cases, &[], &[], 2).unwrap();
+    assert_eq!(legacy.visited_subsets, explicit.visited_subsets);
+    assert_eq!(legacy.selected.unwrap().ids, explicit.selected.unwrap().ids);
+}
+
+#[test]
+fn covering_enumeration_matches_independent_overlapping_group_oracle() {
+    let model = Model::new(vec![1.0], &[block(DMatrix::identity(1, 1))], tolerances()).unwrap();
+    let candidates: Vec<_> = (0..5).map(|id| diagonal(id, &[1.0])).collect();
+    let groups = [vec![0, 1, 2], vec![1, 3], vec![2, 3, 4]];
+    let mut covering = Vec::new();
+    for count in 0..=candidates.len() {
+        for mask in 0usize..1 << candidates.len() {
+            let ids: Vec<_> = (0..candidates.len())
+                .filter(|candidate| mask & (1 << candidate) != 0)
+                .collect();
+            if ids.len() == count
+                && groups
+                    .iter()
+                    .all(|group| group.iter().any(|id| ids.contains(id)))
+            {
+                covering.push(ids);
+            }
+        }
+    }
+    covering.sort_by_key(|ids| (ids.len(), ids.clone()));
+    let minimum_count = covering[0].len();
+    let minimum_layer: Vec<_> = covering
+        .iter()
+        .filter(|ids| ids.len() == minimum_count)
+        .collect();
+
+    let report = select_covering(
+        &model,
+        &candidates,
+        &[],
+        &[case(&[1.0], 1.0)],
+        &[],
+        &groups,
+        usize::MAX,
+    )
+    .unwrap();
+    assert_eq!(report.proof, Proof::ExhaustiveOptimum);
+    assert_eq!(report.visited_subsets, minimum_layer.len());
+    assert_eq!(report.selected.unwrap().ids, *minimum_layer[0]);
+}
+
+#[test]
+fn many_disjoint_groups_reach_first_covering_subset_with_one_budget() {
+    let model = Model::new(vec![1.0], &[block(DMatrix::identity(1, 1))], tolerances()).unwrap();
+    let candidates: Vec<_> = (0..40).map(|id| diagonal(id, &[1.0])).collect();
+    let groups: Vec<_> = (0..20)
+        .map(|group| vec![2 * group, 2 * group + 1])
+        .collect();
+    let report = select_covering(
+        &model,
+        &candidates,
+        &[],
+        &[case(&[1.0], 1.0)],
+        &[],
+        &groups,
+        1,
+    )
+    .unwrap();
+
+    assert_eq!(report.proof, Proof::BudgetExhausted);
+    assert_eq!(report.visited_subsets, 1);
+    assert_eq!(report.analyses, 1);
+    assert_eq!(report.count_lower_bound, 20);
+    assert_eq!(
+        report.selected.unwrap().ids,
+        (0..20).map(|group| 2 * group).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn invalid_conflicting_candidate_is_rejected_before_search() {
+    let model = Model::new(vec![1.0], &[block(DMatrix::identity(1, 1))], tolerances()).unwrap();
+    let candidates = [diagonal(1, &[2.0]), diagonal(2, &[-1.0])];
+    assert!(matches!(
+        select(&model, &candidates, &[(1, 2)], &[case(&[1.0], 0.5)], &[], 2,),
+        Err(Error::Indefinite(_))
+    ));
+}
+
+#[test]
+fn selected_analysis_matches_public_evaluate() {
+    let model = Model::new(vec![0.5, 2.0], &[], tolerances()).unwrap();
+    let candidates = [Candidate {
+        id: 7,
+        contributions: vec![Contribution {
+            dofs: vec![1, 0],
+            stiffness: DMatrix::from_row_slice(2, 2, &[3.0, -0.4, -0.4, 2.0]),
+        }],
+    }];
+    let loads = [0.7, -1.2];
+    let report = select(
+        &model,
+        &candidates,
+        &[],
+        &[case(&loads, 10.0)],
+        &[],
+        usize::MAX,
+    )
+    .unwrap();
+    let selected = report.selected.unwrap();
+    let public = model
+        .evaluate(&candidates[0].contributions, &loads, &[])
+        .unwrap();
+    let internal = &selected.analyses[0];
+    assert_eq!(internal.status, public.status);
+    assert_eq!(internal.displacement, public.displacement);
+    assert_eq!(internal.compliance, public.compliance);
+    assert_eq!(internal.strain_energy, public.strain_energy);
+    assert_eq!(internal.scaled_residual_norm, public.scaled_residual_norm);
+    assert_eq!(internal.relative_residual, public.relative_residual);
+    assert_eq!(
+        internal.unsupported_modes.len(),
+        public.unsupported_modes.len()
+    );
+}
+
+#[test]
+fn prevalidated_candidates_still_check_accumulated_stiffness_before_fixtures() {
+    let model = Model::new(vec![1.0; 3], &[], tolerances()).unwrap();
+    let candidates = [
+        diagonal(1, &[1.0, -6e-12, 0.0]),
+        diagonal(2, &[0.0, -6e-12, 1.0]),
+    ];
+    let report = select_covering(
+        &model,
+        &candidates,
+        &[],
+        &[case(&[0.0; 3], 1.0)],
+        &[0, 1, 2],
+        &[vec![1], vec![2]],
+        1,
+    )
+    .unwrap();
+    assert!(report.selected.is_none());
+    assert_eq!(report.proof, Proof::Unresolved);
+    assert!(matches!(
+        report.unresolved[0].failure,
+        Failure::AnalysisError(Error::Indefinite(_))
+    ));
 }
 
 #[test]
