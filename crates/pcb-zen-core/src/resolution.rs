@@ -244,10 +244,9 @@ pub fn build_package_roots<'a>(
     }
 
     if !has_root_package {
-        roots.insert(
-            LOCAL_WORKSPACE_ROOT_URL.to_string(),
-            workspace_info.root.clone(),
-        );
+        roots
+            .entry(LOCAL_WORKSPACE_ROOT_URL.to_string())
+            .or_insert_with(|| workspace_info.root.clone());
     }
 
     for deps in dependency_maps {
@@ -801,40 +800,16 @@ impl ResolutionResult {
             .canonicalize(root)
             .unwrap_or_else(|_| root.to_path_buf());
 
-        let stdlib_root = self.workspace_info.workspace_stdlib_dir();
-        let canonical_stdlib = file_provider
-            .canonicalize(&stdlib_root)
-            .unwrap_or(stdlib_root);
-        if canonical_root == canonical_stdlib {
-            return Some(STDLIB_MODULE_PATH.to_string());
-        }
-
-        for (url, package) in &self.workspace_info.packages {
-            let package_root = package.dir(&self.workspace_info.root);
-            let canonical_package = file_provider
-                .canonicalize(&package_root)
-                .unwrap_or(package_root);
-            if canonical_root == canonical_package {
-                return Some(url.clone());
-            }
-        }
-
-        let has_root_package = self
-            .workspace_info
-            .packages
-            .values()
-            .any(|pkg| pkg.rel_path.as_os_str().is_empty());
-        if !has_root_package {
-            let workspace_root = self.workspace_info.root.clone();
-            let canonical_workspace = file_provider
-                .canonicalize(&workspace_root)
-                .unwrap_or(workspace_root);
-            if canonical_root == canonical_workspace {
-                return Some(LOCAL_WORKSPACE_ROOT_URL.to_string());
-            }
-        }
-
-        None
+        std::iter::once(STDLIB_MODULE_PATH)
+            .chain(self.workspace_info.packages.keys().map(String::as_str))
+            .chain(std::iter::once(LOCAL_WORKSPACE_ROOT_URL))
+            .find_map(|url| {
+                let path = self.indexes.package_roots.get(url)?;
+                let canonical_package = file_provider
+                    .canonicalize(path)
+                    .unwrap_or_else(|_| path.clone());
+                (canonical_root == canonical_package).then(|| url.to_string())
+            })
     }
 
     pub(crate) fn package_url_for_file(
@@ -1324,6 +1299,64 @@ mod tests {
             .join("test.kicad_mod");
         let uri = result.format_package_uri(&abs);
         assert_eq!(uri.as_deref(), Some("package://stdlib/test.kicad_mod"));
+    }
+
+    #[test]
+    fn workspace_fallback_does_not_replace_discovered_coordinates() {
+        for (directory, root_board) in [
+            ("workspace", ""),
+            ("workspace", "[board]\nname = \"Root\""),
+            ("module", ""),
+        ] {
+            let provider = InMemoryFileProvider::new(HashMap::from([
+                (
+                    "/repo/pcb.toml".to_string(),
+                    format!("[workspace]\npcb-version = \"0.4\"\n{root_board}"),
+                ),
+                (format!("/repo/{directory}/pcb.toml"), String::new()),
+            ]));
+            let workspace =
+                crate::workspace::get_workspace_info(&provider, Path::new("/repo")).unwrap();
+            assert_eq!(workspace.errors.len(), usize::from(!root_board.is_empty()));
+            // Index the retained packages, not a successful dependency resolution.
+            let result =
+                ResolutionResult::frozen(workspace, FrozenResolutionSet::new(), HashMap::new());
+            let package_root = PathBuf::from(format!("/repo/{directory}"));
+            let file = package_root.join("lib.kicad_sym");
+            let uri = format!("package://{directory}/lib.kicad_sym");
+            assert_eq!(
+                result.format_package_uri(&file).as_deref(),
+                Some(uri.as_str())
+            );
+            assert_eq!(result.resolve_package_uri(&uri).unwrap(), file);
+            assert_eq!(
+                result
+                    .package_url_for_package_root(&package_root, &provider)
+                    .as_deref(),
+                Some(directory)
+            );
+
+            let root_uri =
+                (directory != "workspace").then_some("package://workspace/root.kicad_sym");
+            assert_eq!(
+                result
+                    .format_package_uri(Path::new("/repo/root.kicad_sym"))
+                    .as_deref(),
+                root_uri
+            );
+            assert_eq!(
+                result
+                    .package_url_for_package_root(Path::new("/repo"), &provider)
+                    .as_deref(),
+                (directory != "workspace").then_some("workspace")
+            );
+            if let Some(uri) = root_uri {
+                assert_eq!(
+                    result.resolve_package_uri(uri).unwrap(),
+                    Path::new("/repo/root.kicad_sym")
+                );
+            }
+        }
     }
 
     #[test]
