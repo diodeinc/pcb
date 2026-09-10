@@ -662,3 +662,60 @@ fn store_and_erase_are_silent_without_exchanging_credentials() {
         assert!(output.stderr.is_empty());
     }
 }
+
+#[test]
+fn near_expiry_token_refresh() {
+    for (remaining_seconds, refresh_status, bearer) in [
+        (200, 503, Some("Bearer still-valid-token")),
+        (30, 503, None),
+        (200, 200, Some("Bearer refreshed-token")),
+    ] {
+        let server = MockServer::start();
+        let api_url = server.base_url();
+        let context = TestContext::new(api_url.clone());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        fs::write(
+            context
+                .config_dir
+                .join("auth")
+                .join(format!("{}.toml", auth_scope_slug(&api_url))),
+            format!(
+                "access_token = \"still-valid-token\"\n\
+                 refresh_token = \"refresh-token\"\n\
+                 expires_at = {}\n\
+                 token_endpoint = \"{api_url}/oauth/token\"\n\
+                 client_id = \"test-client-id\"\n",
+                now + remaining_seconds,
+            ),
+        )
+        .unwrap();
+        let refresh = server.mock(|when, then| {
+            when.method(POST).path("/oauth/token");
+            then.status(refresh_status).json_body(json!({
+                "access_token": "refreshed-token",
+                "refresh_token": "new-refresh-token",
+                "expires_in": 3600,
+            }));
+        });
+        let exchange = mock_exchange(&server, GIT_API_HOST, 200, bearer);
+        let mut command = context.pcbc();
+        command.args(["auth", "git", "--host", GIT_API_HOST, "get"]);
+        let fill = run_with_input(command, &credential_request());
+        assert_success(&fill);
+        let stdout = String::from_utf8_lossy(&fill.stdout);
+        if bearer.is_some() {
+            assert!(fill.stderr.is_empty(), "{fill:?}");
+            assert!(!stdout.contains("quit=true"));
+            assert!(stdout.contains(&format!("credential={REPOSITORY_TOKEN}")));
+        } else {
+            assert!(stdout.contains("quit=true"));
+            assert!(String::from_utf8_lossy(&fill.stderr).contains("Not authenticated"));
+            assert!(!stdout.contains("credential="));
+        }
+        refresh.assert_calls(1);
+        exchange.assert_calls(usize::from(bearer.is_some()));
+    }
+}
