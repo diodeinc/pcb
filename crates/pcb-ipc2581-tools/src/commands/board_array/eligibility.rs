@@ -101,7 +101,7 @@ pub(super) fn prepare(
         }
         substrate = substrate.union(&region)?;
     }
-    let mut evidence = courtyard_evidence(&imported, resolution)?;
+    let (mut evidence, ignored_footprints) = courtyard_evidence(&imported, resolution)?;
     evidence.extend(exclusions.iter().map(|exclusion| Evidence {
         id: format!("explicit:{}", exclusion.id),
         region: exclusion.region.cloned(),
@@ -129,7 +129,9 @@ pub(super) fn prepare(
         "scope": "canonical-board",
         "source_xml_sha256": hex::encode(Sha256::digest(xml.as_bytes())),
         "units": "mm",
+        "ignored_footprints": ignored_footprints,
         "policy": {
+            "missing_courtyard": "ignore-footprint",
             "width_mm": footprint.width_mm, "inward_mm": footprint.inward_mm,
             "outward_mm": footprint.outward_mm, "clearance_mm": clearance_mm,
             "accuracy_mm": resolution.accuracy.max_error_mm(),
@@ -139,7 +141,7 @@ pub(super) fn prepare(
         "limitations": [
             "Eligible means clear only of supplied courtyard/exclusion evidence on the prepared polygon model; interval endpoints carry no guarantee.",
             "Closed courtyard contours are filled conservatively, regardless of outline ink styling. Both board sides are included without additional mirroring.",
-            "Missing applicable component courtyard evidence is Unknown. No body-free classifications or fallback envelopes are inferred.",
+            "Footprints without courtyard evidence contribute no obstruction and are listed in ignored_footprints. Clearance is conditional on supplied courtyards being complete; ignored physical components may overhang. Present but unusable courtyards are errors.",
             "General keep-out export coverage is not established. No copper, pad, drill, stackup or 3D collision checks are performed.",
             "No tabs, perforations, frame connections, router access, mechanics or panel export are generated."
         ],
@@ -162,7 +164,10 @@ pub(super) fn prepare(
     })
 }
 
-fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Result<Vec<Evidence>> {
+fn courtyard_evidence(
+    imported: &ImportedDesign,
+    resolution: Resolution,
+) -> Result<(Vec<Evidence>, Vec<String>)> {
     let mut evidence = Vec::new();
     let mut covered = Vec::new();
     for (index, layer) in imported
@@ -218,9 +223,18 @@ fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Resu
             } else {
                 None
             };
-            if region.as_ref().is_some_and(|r| !r.is_empty()) {
-                covered.push((group.component, layer.side));
+            if !region.as_ref().is_some_and(|r| !r.is_empty()) {
+                bail!(
+                    "unusable courtyard on {} for {} ({})",
+                    imported.resolve(layer.name),
+                    group
+                        .component
+                        .map(|c| imported.resolve(c))
+                        .unwrap_or("unassociated"),
+                    group.sources.join(",")
+                );
             }
+            covered.push(group.component);
             evidence.push(Evidence {
                 id: format!(
                     "courtyard:{}:{}:{}",
@@ -235,34 +249,24 @@ fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Resu
             });
         }
     }
+    let mut ignored = Vec::new();
     for occurrence in imported.component_occurrences(ArtworkScope::Board)? {
         let component = imported
             .component_definition(occurrence.id.component)
             .unwrap();
-        let side = imported
-            .layer_definitions
-            .iter()
-            .find(|l| l.name == component.source.layer_ref)
-            .and_then(|l| l.side);
-        if component.source.ref_des.is_none()
-            || side.is_none()
-            || !covered.contains(&(component.source.ref_des, side))
-        {
-            evidence.push(Evidence {
-                id: format!(
-                    "missing-courtyard:{}:component-{}",
-                    component
-                        .source
-                        .ref_des
-                        .map(|r| imported.resolve(r))
-                        .unwrap_or("unnamed"),
-                    occurrence.id.component.0
-                ),
-                region: None,
-            });
+        if component.source.ref_des.is_none() || !covered.contains(&component.source.ref_des) {
+            ignored.push(format!(
+                "{}:component-{}",
+                component
+                    .source
+                    .ref_des
+                    .map(|r| imported.resolve(r))
+                    .unwrap_or("unnamed"),
+                occurrence.id.component.0
+            ));
         }
     }
-    Ok(evidence)
+    Ok((evidence, ignored))
 }
 
 // Import is intentionally permissive and may discard unresolved references,
@@ -581,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn fragmented_courtyard_joins_by_component_but_gaps_remain_unknown() {
+    fn fragmented_courtyard_joins_by_component_but_gaps_are_errors() {
         let xml = fixture();
         let start = xml.find("<LayerFeature layerRef=\"F.Courtyard\">").unwrap();
         let end = start + xml[start..].find("</LayerFeature>").unwrap();
@@ -598,23 +602,30 @@ mod tests {
             );
             let imported =
                 import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
-            let evidence = courtyard_evidence(&imported, Resolution::default()).unwrap();
-            let top = &evidence[0];
-            if count == 4 {
+            let result = courtyard_evidence(&imported, Resolution::default());
+            if count == 3 {
                 assert!(
-                    top.region
-                        .as_ref()
+                    result
+                        .err()
                         .unwrap()
-                        .prepare_query()
-                        .signed_distance(Point::new(7.0, 3.0))
-                        .unwrap()
-                        .mm
-                        < -0.9
+                        .to_string()
+                        .contains("unusable courtyard")
                 );
-                assert_eq!(top.id.matches("feature-").count(), 4);
-            } else {
-                assert!(top.region.is_none());
+                continue;
             }
+            let (evidence, _) = result.unwrap();
+            let top = &evidence[0];
+            assert!(
+                top.region
+                    .as_ref()
+                    .unwrap()
+                    .prepare_query()
+                    .signed_distance(Point::new(7.0, 3.0))
+                    .unwrap()
+                    .mm
+                    < -0.9
+            );
+            assert_eq!(top.id.matches("feature-").count(), 4);
         }
     }
 
@@ -656,7 +667,8 @@ mod tests {
     fn courtyard_occurrences_fill_hollow_envelopes_on_both_sides() {
         let ipc = Ipc2581::parse(&fixture()).unwrap();
         let imported = import_design(&ipc, Resolution::default()).unwrap();
-        let evidence = courtyard_evidence(&imported, Resolution::default()).unwrap();
+        let (evidence, ignored) = courtyard_evidence(&imported, Resolution::default()).unwrap();
+        assert!(ignored.is_empty());
         assert_eq!(
             evidence.len(),
             2,
@@ -745,22 +757,33 @@ mod tests {
     }
 
     #[test]
-    fn missing_applicable_courtyard_is_unknown_even_with_opposite_side_evidence() {
+    fn absent_courtyard_is_disclosed_without_poisoning_supplied_evidence() {
         let xml = fixture().replace(
-            "layerRef=\"BOTTOM\" mountType",
-            "layerRef=\"TOP\" mountType",
+            "<Component refDes=\"U2\"",
+            "<Component refDes=\"NO_COURTYARD\"",
         );
         let report = analyze(&xml, footprint(), 0.0, &[], Resolution::default()).unwrap();
-        let intervals = report["intervals"].as_array().unwrap();
-        assert!(intervals.iter().any(|i| i["state"] == "Unknown"));
-        assert!(!intervals.iter().any(|i| i["state"] == "Eligible"));
-        assert!(report["evidence"].as_array().unwrap().iter().any(|e| {
-            e["id"]
-                .as_str()
+        let original = analyze(&fixture(), footprint(), 0.0, &[], Resolution::default()).unwrap();
+        assert_eq!(report["intervals"], original["intervals"]);
+        assert_eq!(
+            report["ignored_footprints"],
+            json!(["NO_COURTYARD:component-1"])
+        );
+        assert_eq!(report["policy"]["missing_courtyard"], "ignore-footprint");
+        assert!(
+            report["intervals"]
+                .as_array()
                 .unwrap()
-                .starts_with("missing-courtyard:U2")
-                && e["available"] == false
-        }));
+                .iter()
+                .any(|i| i["state"] == "Eligible")
+        );
+        assert!(
+            report["intervals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["state"] == "Blocked")
+        );
     }
 
     #[test]

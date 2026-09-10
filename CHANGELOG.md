@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add frame-only mouse-bite candidate placement and elastic selection reports, without generating tab or manufacturing geometry.
+- Treat footprints without courtyards as non-obstructing in mouse-bite analysis, disclose ignored footprints, and reject unusable supplied courtyards.
 
 ### Changed
 

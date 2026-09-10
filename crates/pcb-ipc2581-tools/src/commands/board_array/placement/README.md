@@ -80,8 +80,11 @@ retain `Unresolved`, even if a verified feasible selection exists. A null
 selection never means zero tabs suffice. Dense storage/solves and exhaustive
 search limit this phase to small models; budgets do not promise wall-clock bounds.
 
-Missing evidence can leave all sites Unknown. Then the report names boards with
-no proven frame candidates and does not manufacture a placement. A successful
+Footprints without any courtyard contribute no obstruction and are listed in
+`eligibility.ignored_footprints`. All usable courtyards from either side remain
+obstacles; present but unusable courtyards are errors. Clearance is conditional
+on supplied courtyards being complete, not a physical-component clearance guarantee.
+Explicit unknown exclusions still leave sites Unknown. A successful
 mechanical result remains conditional on supplied stiffness, load and fixture
 assumptions and mesh convergence. No tab shapes, holes, route masks, router-access
 certification, generated rail-tooling clearance, fabrication export or breaking
