@@ -4455,7 +4455,6 @@ dependencies = [
  "starlark",
  "starlark_map",
  "supports-hyperlinks",
- "tempfile",
  "terminal_hyperlink",
  "thiserror 2.0.20",
  "urlencoding",

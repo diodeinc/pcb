@@ -34,6 +34,3 @@ urlencoding = { workspace = true, optional = true }
 default = ["starlark"]
 starlark = ["dep:starlark", "dep:starlark_map", "dep:allocative", "dep:pagable"]
 table = ["comfy-table", "colored", "supports-hyperlinks", "terminal_hyperlink", "urlencoding"]
-
-[dev-dependencies]
-tempfile = { workspace = true }
