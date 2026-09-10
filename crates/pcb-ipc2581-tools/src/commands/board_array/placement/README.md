@@ -57,9 +57,11 @@ guarantee. This parameter controls candidate resolution, not preferred support
 spacing. Short runs still receive a midpoint unless it is an endpoint. Search
 only optimizes this finite set. `max_candidates` limits accepted frame connections,
 not rejected samples; samples are generated lazily. Candidate-budget overflow is
-an error, not silent truncation. On slanted edges, the full-width leading edge
-must reach the frame before its landing starts. Overlapping envelopes and
-overlapping cyclic attachment spans conflict.
+an error, not silent truncation. Frame landing search subtracts the frame from
+the full-width swept corridor, projects connected voids onto the travel axis,
+and finds the first gap long enough for the landing and its uncertainty guard.
+It tests the continuous width, not a fixed set of rays. Overlapping envelopes
+and overlapping cyclic attachment spans conflict.
 
 ## Mechanical interpretation
 

@@ -200,33 +200,41 @@ fn strip(
     )?)
 }
 
-fn cross(a: Point, b: Point) -> f64 {
-    a.x * b.y - a.y * b.x
-}
-
-/// First forward entry into the actual rail region, or zero if already inside.
-fn frame_distance(frame: &ContourSet, p: Point, n: Point) -> Option<f64> {
-    if frame.contains_point(p) {
-        return Some(0.0);
-    }
-    frame
-        .rings
+/// A full-width landing occupies [s, s + depth] along the travel axis.
+/// Each connected void in its swept corridor projects to one blocked interval:
+/// linear projection of a connected set is an interval, with extrema at vertices.
+/// Search the complement of their union, expanded by the uncertainty guard.
+fn landing_start(
+    frame: &ContourSet,
+    corridor: &ContourSet,
+    origin: Point,
+    normal: Point,
+    depth: f64,
+    guard: f64,
+) -> Result<f64> {
+    let mut blocked = corridor
+        .difference(frame)?
+        .connected_components()
         .iter()
-        .flat_map(|ring| {
-            (0..ring.len()).filter_map(move |i| {
-                let a = Point::new(ring[i][0], ring[i][1]);
-                let b = Point::new(ring[(i + 1) % ring.len()][0], ring[(i + 1) % ring.len()][1]);
-                let edge = b - a;
-                let det = cross(n, edge);
-                if det == 0.0 {
-                    return None;
-                }
-                let t = cross(a - p, edge) / det;
-                let u = cross(a - p, n) / det;
-                (t > 0.0 && (0.0..=1.0).contains(&u)).then_some(t)
-            })
+        .map(|component| {
+            component.rings.iter().flatten().fold(
+                (f64::INFINITY, f64::NEG_INFINITY),
+                |(lo, hi), p| {
+                    let s = (p[0] - origin.x) * normal.x + (p[1] - origin.y) * normal.y;
+                    (lo.min(s), hi.max(s))
+                },
+            )
         })
-        .min_by(f64::total_cmp)
+        .collect::<Vec<_>>();
+    blocked.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut start = guard;
+    for (lo, hi) in blocked {
+        if start + depth + guard <= lo {
+            break;
+        }
+        start = start.max(hi + guard);
+    }
+    Ok(start)
 }
 
 /// Analyze repeated boards in the existing array layout. The modeled frame is
@@ -341,28 +349,29 @@ fn plan(
             let n = local.outward_normal;
             let t = local.tangent;
             let attempt = (|| -> Result<std::result::Result<Candidate, String>> {
-                // The leading edge has finite width. On a slanted board edge,
-                // its center reaches a rectangular rail before one endpoint.
-                // Advance until both endpoints and the center reach the frame;
-                // the full-region check below still rejects gaps and corners.
-                let entries = [-0.5, 0.0, 0.5]
-                    .map(|side| frame_distance(&frame, p + t * (side * footprint.width_mm), n));
-                let [Some(a), Some(b), Some(c)] = entries else {
-                    return Ok(Err("no forward frame intersection".into()));
-                };
-                let span = a.max(b).max(c);
-                if span > config.max_span_mm {
-                    return Ok(Err("frame beyond max_span_mm".into()));
-                }
                 let guard =
                     interval.uncertainty_mm.max(frame.uncertainty_mm) + tolerance.numerical_mm;
+                let corridor = strip(
+                    p,
+                    t,
+                    n,
+                    footprint.width_mm,
+                    0.0,
+                    config.max_span_mm + config.frame_landing_mm + 2.0 * guard,
+                    resolution,
+                )?;
+                let start = landing_start(&frame, &corridor, p, n, config.frame_landing_mm, guard)?;
+                let span = start - guard;
+                if span > config.max_span_mm {
+                    return Ok(Err("no full-width frame landing within max_span_mm".into()));
+                }
                 let landing = strip(
                     p,
                     t,
                     n,
                     footprint.width_mm,
-                    span + guard,
-                    span + guard + config.frame_landing_mm,
+                    start,
+                    start + config.frame_landing_mm,
                     resolution,
                 )?;
                 if !landing.difference(&frame)?.is_empty() {
@@ -374,10 +383,10 @@ fn plan(
                     n,
                     footprint.width_mm,
                     -footprint.inward_mm,
-                    span + guard + config.frame_landing_mm,
+                    start + config.frame_landing_mm,
                     resolution,
                 )?;
-                let outward = strip(p, t, n, footprint.width_mm, guard, span + guard, resolution)?;
+                let outward = strip(p, t, n, footprint.width_mm, guard, start, resolution)?;
                 if !outward.intersection(&boards[board_index])?.is_empty() {
                     return Ok(Err("connection re-enters its board".into()));
                 }

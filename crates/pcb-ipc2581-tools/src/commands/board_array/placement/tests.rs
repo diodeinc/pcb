@@ -271,14 +271,6 @@ fn complete_connection_checks_obstacles_beyond_the_eligibility_band() {
 #[test]
 fn slanted_board_edges_have_full_width_frame_landings() {
     let resolution = Resolution::default().strict();
-    let rail = rectangle(
-        BBox::new(Point::new(0.0, 0.0), Point::new(2.0, 4.0)),
-        resolution,
-    );
-    assert_eq!(
-        frame_distance(&rail, Point::new(0.1, 1.0), Point::new(1.0, 0.0)),
-        Some(0.0)
-    );
     let mut source = prepared(false, false);
     source.substrate = transform_region(
         &source.substrate,
@@ -305,6 +297,38 @@ fn slanted_board_edges_have_full_width_frame_landings() {
     for c in report["candidates"].as_array().unwrap() {
         assert!((c["frame_landing_area_mm2"].as_f64().unwrap() - 0.3).abs() < 1e-12);
     }
+}
+
+#[test]
+fn continuous_landing_search_handles_unsampled_notches_and_later_gaps() {
+    let resolution = Resolution::default().strict();
+    let rect = |x0, y0, x1, y1| {
+        rectangle(
+            BBox::new(Point::new(x0, y0), Point::new(x1, y1)),
+            resolution,
+        )
+    };
+    let origin = Point::new(1.0, -0.5);
+    let normal = Point::new(0.0, 1.0);
+    let corridor = rect(0.0, -0.5, 2.0, 4.0);
+    let stock = rect(-1.0, 0.0, 3.0, 4.0);
+    // The notch lies between all three former probes (x=0,1,2).
+    let frame = stock.difference(&rect(0.2, 0.0, 0.3, 1.0)).unwrap();
+    let start = landing_start(&frame, &corridor, origin, normal, 0.3, 0.01).unwrap();
+    assert!((start - 1.51).abs() < 1e-12);
+    // A later void leaves a 0.4 mm rail. A 0.3 mm landing fits before it;
+    // a 0.5 mm landing must skip it. Neither a ray nor a max projection suffices.
+    let frame = frame.difference(&rect(-1.0, 1.4, 3.0, 2.0)).unwrap();
+    for (depth, expected) in [(0.3, 1.51), (0.5, 2.51)] {
+        let start = landing_start(&frame, &corridor, origin, normal, depth, 0.01).unwrap();
+        assert!((start - expected).abs() < 1e-12);
+        let landing = rect(0.0, origin.y + start, 2.0, origin.y + start + depth);
+        assert!(landing.difference(&frame).unwrap().is_empty());
+    }
+    assert_eq!(
+        landing_start(&corridor, &corridor, origin, normal, 0.3, 0.01).unwrap(),
+        0.01
+    );
 }
 
 #[test]

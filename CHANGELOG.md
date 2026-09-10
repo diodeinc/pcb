@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Fix mouse-bite sampling budgets, slanted frame landings and enclosed courtyard marks; skip disconnected selections and preserve candidates when mechanics fails.
+- Find mouse-bite frame landings by continuous swept-region projection instead of fixed ray probes.
 
 ### Changed
 
