@@ -430,10 +430,6 @@ fn prepare_bom_match(
             seen_paths.insert(path.to_string()),
             "BOM match response returned duplicate path: {path}"
         );
-        anyhow::ensure!(
-            bom_line.match_status != BomMatchStatus::NeedsRetry,
-            "BOM matching could not complete"
-        );
 
         let mut resolved_offers = Vec::with_capacity(bom_line.offer_ids.len());
         for offer_id in &bom_line.offer_ids {
@@ -766,7 +762,13 @@ fn prepare_bom_match_with_cache(
     )
     .and_then(|response| {
         let prepared = prepare_bom_match(bom, &response)?;
-        if let Some(cache) = cache {
+        // Serve partial results, but let the next request retry incomplete matches.
+        if let Some(cache) = cache
+            && !response
+                .results
+                .iter()
+                .any(|line| line.match_status == BomMatchStatus::NeedsRetry)
+        {
             let value = serialize_completed_bom_match(&response, &request.paths)?;
             if let Err(error) = cache.store(&request.cache_key, &value) {
                 log::warn!("Failed to update local BOM cache: {error:#}");
@@ -1874,7 +1876,7 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_response_is_neither_served_nor_cached() {
+    fn incomplete_response_is_served_but_not_cached() {
         let server = MockServer::start();
         let tempdir = tempfile::tempdir().unwrap();
         let cache = cache_for(&tempdir);
@@ -1898,21 +1900,26 @@ mod tests {
             then.status(200).json_body(initial_response);
         });
 
-        assert!(
-            match_bom_with_cache(
-                &context,
-                None,
-                &mut bom,
-                true,
-                match_options(BomMatchMode::Online),
-                Some(&cache),
-                now,
-            )
-            .is_err()
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut bom,
+            true,
+            match_options(BomMatchMode::Online),
+            Some(&cache),
+            now,
+        )
+        .unwrap();
+        assert_eq!(bom.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        assert_eq!(
+            bom.availability["root.U1"].match_status,
+            Some(BomMatchStatus::Compatible)
         );
-        assert!(bom.entries["root.U1"].mpn.is_none());
         assert!(bom.entries["root.U2"].mpn.is_none());
-        assert!(bom.availability.is_empty());
+        assert_eq!(
+            bom.availability["root.U2"].match_status,
+            Some(BomMatchStatus::NeedsRetry)
+        );
 
         let mut offline = test_bom_with_distinct_second_line();
         match_bom_with_cache(
