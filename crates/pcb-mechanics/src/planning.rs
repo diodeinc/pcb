@@ -66,8 +66,25 @@ fn matrix(values: [[f64; 3]; 3]) -> DMatrix<f64> {
     DMatrix::from_fn(3, 3, |r, c| values[r][c])
 }
 
-fn area_roundoff(a: f64, b: f64) -> f64 {
-    f64::EPSILON * (a.abs() + b.abs()) * 64.0
+fn area_roundoff(region: &ContourSet, a: f64, b: f64) -> f64 {
+    // Area arithmetic is relative to area, but clipping also rounds world
+    // coordinates. Moving each boundary coordinate by delta perturbs area by
+    // at most delta times its L1 perimeter (plus quadratic corner terms).
+    // Account for two independently rounded constructions. This is machine
+    // precision, not the caller's physical geometry/snapping tolerance.
+    let mut scale = 0.0_f64;
+    let mut perimeter = 0.0;
+    let mut vertices = 0usize;
+    for ring in &region.rings {
+        for (i, p) in ring.iter().enumerate() {
+            let q = ring[(i + 1) % ring.len()];
+            scale = scale.max(p[0].abs()).max(p[1].abs());
+            perimeter += (q[0] - p[0]).abs() + (q[1] - p[1]).abs();
+        }
+        vertices += ring.len();
+    }
+    let delta = 2.0 * f64::EPSILON * scale;
+    f64::EPSILON * (a.abs() + b.abs()) * 64.0 + delta * perimeter + vertices as f64 * delta * delta
 }
 
 fn barycentric(mesh: &AnalysisMesh, element: usize, point: Point) -> Option<[f64; 3]> {
@@ -121,7 +138,7 @@ fn patches(
         .difference(plate_region)
         .map_err(|e| err(format!("{what}: containment check failed: {e}")))?;
     let uncovered_area = uncovered.area();
-    if !uncovered_area.is_finite() || uncovered_area > area_roundoff(region_area, 0.0) {
+    if !uncovered_area.is_finite() || uncovered_area > area_roundoff(region, region_area, 0.0) {
         return Err(err(format!(
             "{what}: landing is not completely covered by its plate"
         )));
@@ -178,7 +195,7 @@ fn patches(
         }
         covered_area += area;
     }
-    let allowance = area_roundoff(covered_area, region_area);
+    let allowance = area_roundoff(region, covered_area, region_area);
     if out.is_empty() || (covered_area - region_area).abs() > allowance {
         return Err(err(format!(
             "{what}: mesh partition does not cover landing ({} of {})",

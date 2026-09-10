@@ -89,7 +89,7 @@ fn repeated_difference_accepts_only_intersection_roundoff() {
         f64::from_bits(edge.to_bits() + 1),
         -99.0,
     );
-    let strip = strict_rect(edge - 2.0, -101.0, edge + 1.0, -100.8);
+    let strip = strict_rect(edge - 0.01, -101.0, edge + 1.0, -100.8);
     let landing = strip.intersection(&clipping_board).unwrap();
     let residue = landing.difference(&board).unwrap().area();
     assert!(
@@ -97,8 +97,8 @@ fn repeated_difference_accepts_only_intersection_roundoff() {
         "fixture must exercise nonempty clipping residue"
     );
     assert!(
-        residue <= f64::EPSILON * landing.area() * 64.0,
-        "fixture residue {residue} exceeds a roundoff-scale allowance"
+        residue > f64::EPSILON * landing.area() * 64.0 && residue < 1e-12,
+        "fixture must distinguish coordinate roundoff from area-only roundoff: {residue}"
     );
 
     let frame = rect(94.0, -102.0, 98.0, -99.0);
