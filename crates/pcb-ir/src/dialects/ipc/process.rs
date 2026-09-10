@@ -15,7 +15,7 @@ use std::hash::Hash;
 
 use crate::dialects::ipc::Document;
 use crate::dialects::ipc::document::Layer;
-use crate::dialects::ipc::feature::{Feature, FeatureBucket, FeatureIntent, FeatureKind};
+use crate::dialects::ipc::feature::{Feature, FeatureBucket, FeatureIntent};
 use crate::geom::path::ContourBuf;
 use crate::geom::region::{self};
 use crate::geom::{
@@ -451,82 +451,6 @@ fn remap_span(span: Span, mapping: &[Option<u32>]) -> Span {
     }
     let start = mapping[span.start as usize].expect("span start is live");
     Span::new(start, span.count)
-}
-
-/// Flatten every layer's ordered paint into one unioned fill mask.
-///
-/// Each layer is lowered to artwork and composed with the same machinery as
-/// rendering and Gerber export, so strokes, flashes, and polarity sequencing
-/// flatten exactly as they manufacture instead of through a second
-/// composition implementation.
-pub fn flatten_layers_to_masks<S, L>(
-    doc: &mut Document<S, L>,
-    resolution: Resolution,
-) -> Result<(), AccuracyError>
-where
-    S: Copy + Eq + Hash,
-    L: Clone,
-{
-    for layer_index in 0..doc.layers.len() {
-        let features = doc.layers[layer_index].features;
-        if features.is_empty() {
-            continue;
-        }
-
-        let artwork = super::lower_layer_to_artwork(
-            doc,
-            layer_index,
-            crate::dialects::LayerRole::Other,
-            crate::dialects::Side::None,
-        );
-        let mask = crate::dialects::artwork::compose_to_mask(&artwork, resolution)?;
-        let contours = mask
-            .layers
-            .first()
-            .map(|mask_layer| {
-                mask.shapes(mask_layer)
-                    .iter()
-                    .flat_map(|shape| mask.arena.path_contours(shape))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
-        for feature_index in features.range() {
-            clear_feature_paths(doc, feature_index);
-        }
-
-        if contours.is_empty() {
-            continue;
-        }
-
-        let mask_index = features.start as usize;
-        replace_feature_with_path(
-            doc,
-            mask_index,
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            contours,
-        );
-        let mask = &mut doc.features[mask_index];
-        mask.kind = FeatureKind::FlattenedBucket;
-        mask.bucket = FeatureBucket::Fill;
-        mask.polarity = Polarity::Dark;
-        mask.net = None;
-    }
-
-    // Composed masks are already in layer coordinates, so their source
-    // placement groups must not be applied again by later consumers.
-    for feature in &mut doc.features {
-        feature.placement_group = None;
-    }
-    doc.feature_placement_groups.clear();
-    doc.feature_placements.clear();
-
-    compact(doc);
-    normalize_bounds(doc);
-
-    Ok(())
 }
 
 /// Merge a feature's identically painted paths into one compound path.
@@ -1055,8 +979,8 @@ fn feature_set_span_bbox<S, L>(doc: &Document<S, L>, set_index: usize) -> BBox {
 mod tests {
     use super::*;
     use crate::dialects::ipc::feature::{
-        FeatureDomain, FeatureMaterial, FeatureOperation, FeaturePlacementGroup, FeatureRole,
-        FeatureSet, PrimitiveRef, SourceRef,
+        FeatureDomain, FeatureKind, FeatureMaterial, FeatureOperation, FeaturePlacementGroup,
+        FeatureRole, FeatureSet, PrimitiveRef, SourceRef,
     };
     use crate::dialects::ipc::validate::validate_artwork_ready;
     use crate::geom::path::PathCmd;
@@ -1411,168 +1335,6 @@ mod tests {
         });
 
         validate_artwork_ready(&doc).unwrap();
-    }
-
-    #[test]
-    fn flattens_processed_layer_features_to_single_mask() {
-        let mut doc = TestDoc::new();
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 2.0, 1.0)],
-        );
-        doc.features.push(Feature {
-            paths: Span::new(0, 1),
-            ..Feature::new(FeatureKind::Padstack, Polarity::Dark)
-        });
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(1.0, 0.0, 3.0, 1.0)],
-        );
-        doc.features.push(Feature {
-            paths: Span::new(1, 1),
-            ..copper_trace_feature()
-        });
-        doc.layers.push(test_layer(Span::new(0, 2)));
-
-        compose_for_rendering(&mut doc, Resolution::default()).unwrap();
-        flatten_layers_to_masks(&mut doc, Resolution::default()).unwrap();
-
-        assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);
-        assert_eq!(doc.features[0].bucket, FeatureBucket::Fill);
-        assert_eq!(doc.features[0].paths.len(), 1);
-        assert_eq!(doc.features[1].paths.len(), 0);
-        let path = &doc.arena.paths[doc.features[0].paths.start as usize];
-        assert_eq!(path.contours.len(), 1);
-        assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
-        assert_eq!(path.bbox.max, Point::new(3.0, 1.0));
-        assert_eq!(doc.layers[0].bbox.min, Point::new(0.0, 0.0));
-        assert_eq!(doc.layers[0].bbox.max, Point::new(3.0, 1.0));
-    }
-
-    #[test]
-    fn flattening_expands_strokes_that_composition_left_unexpanded() {
-        // Only copper-trace features expand strokes during composition;
-        // primitive strokes reach the flattener as strokes and must still
-        // contribute their swept copper to the mask.
-        let mut doc = TestDoc::new();
-        doc.push_path(
-            Paint::Stroke(StrokeStyle::new(1.0, LineCap::Round)),
-            [ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(5.0, 0.0)),
-            ])],
-        );
-        doc.features.push(Feature {
-            paths: Span::new(0, 1),
-            ..Feature::new(FeatureKind::Primitive, Polarity::Dark)
-        });
-        doc.layers.push(test_layer(Span::new(0, 1)));
-
-        compose_for_rendering(&mut doc, Resolution::default()).unwrap();
-        let path = &doc.arena.paths[doc.features[0].paths.start as usize];
-        assert!(
-            path.stroke().is_some(),
-            "precondition: stroke survives composition"
-        );
-
-        flatten_layers_to_masks(&mut doc, Resolution::default()).unwrap();
-
-        assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);
-        assert_eq!(doc.features[0].paths.len(), 1);
-        let path = &doc.arena.paths[doc.features[0].paths.start as usize];
-        assert!(path.is_filled());
-        assert_eq!(path.bbox.min, Point::new(-0.5, -0.5));
-        assert_eq!(path.bbox.max, Point::new(5.5, 0.5));
-    }
-
-    #[test]
-    fn flattening_keeps_layer_cutouts_clear() {
-        // Cutout features keep their dark-drawn geometry after composition;
-        // flattening must subtract it, not union it back over the clearance.
-        let mut doc = TestDoc::new();
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 4.0, 4.0)],
-        );
-        doc.features.push(Feature {
-            paths: Span::new(0, 1),
-            ..Feature::new(FeatureKind::Polygon, Polarity::Dark)
-        });
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(1.0, 1.0, 3.0, 3.0)],
-        );
-        let mut cutout = Feature::new(FeatureKind::Polygon, Polarity::Dark);
-        cutout.bucket = FeatureBucket::Cutout;
-        doc.features.push(Feature {
-            paths: Span::new(1, 1),
-            ..cutout
-        });
-        doc.layers.push(test_layer(Span::new(0, 2)));
-
-        compose_for_rendering(&mut doc, Resolution::default()).unwrap();
-        flatten_layers_to_masks(&mut doc, Resolution::default()).unwrap();
-
-        assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);
-        let path = &doc.arena.paths[doc.features[0].paths.start as usize];
-        let image = ContourSet::from_contours(
-            &doc.arena.path_contours(path),
-            FillRule::NonZero,
-            Resolution::default(),
-        )
-        .unwrap();
-        assert!(image.contains_point(Point::new(0.5, 0.5)));
-        assert!(!image.contains_point(Point::new(2.0, 2.0)));
-    }
-
-    #[test]
-    fn flattening_consumes_feature_placement_groups() {
-        let mut doc = TestDoc::new();
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 1.0, 1.0)],
-        );
-        let mut feature = Feature::new(FeatureKind::Polygon, Polarity::Dark);
-        feature.paths = Span::single(0);
-        feature.placement_group = Some(0);
-        doc.features.push(feature);
-        doc.feature_placements.extend([
-            Affine2::translation(Point::new(10.0, 0.0)),
-            Affine2::translation(Point::new(20.0, 0.0)),
-        ]);
-        doc.feature_placement_groups.push(FeaturePlacementGroup {
-            placements: Span::new(0, 2),
-            features: Span::single(0),
-        });
-        doc.layers.push(test_layer(Span::single(0)));
-
-        flatten_layers_to_masks(&mut doc, Resolution::default()).unwrap();
-
-        assert!(doc.feature_placement_groups.is_empty());
-        assert!(doc.feature_placements.is_empty());
-        assert_eq!(doc.features[0].placement_group, None);
-        assert_eq!(doc.layers[0].bbox.min, Point::new(10.0, 0.0));
-        assert_eq!(doc.layers[0].bbox.max, Point::new(21.0, 1.0));
-        let path = &doc.arena.paths[doc.features[0].paths.start as usize];
-        let image = ContourSet::from_contours(
-            &doc.arena.path_contours(path),
-            FillRule::NonZero,
-            Resolution::default(),
-        )
-        .unwrap();
-        assert!(image.contains_point(Point::new(10.5, 0.5)));
-        assert!(image.contains_point(Point::new(20.5, 0.5)));
-        assert!(!image.contains_point(Point::new(30.5, 0.5)));
     }
 
     #[test]

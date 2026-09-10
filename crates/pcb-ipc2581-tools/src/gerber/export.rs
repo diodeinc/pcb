@@ -3260,21 +3260,5 @@ mod tests {
         assert!(
             pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::layer(0)).contains("<svg")
         );
-
-        pcb_ir::dialects::ipc::process::flatten_layers_to_masks(&mut layer, resolution).unwrap();
-        let flat_artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
-            &layer,
-            0,
-            LayerRole::Copper,
-            pcb_ir::dialects::Side::Top,
-        );
-        flat_artwork.validate().unwrap();
-        let flat_mask =
-            pcb_ir::dialects::artwork::compose_to_mask(&flat_artwork, resolution).unwrap();
-        flat_mask.validate().unwrap();
-        assert!(
-            pcb_ir::render::svg(&flat_mask, &pcb_ir::render::RenderOptions::layer(0))
-                .contains("<svg")
-        );
     }
 }
