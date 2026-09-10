@@ -840,7 +840,7 @@ mod tests {
         let docs =
             include_str!("../../pcb-ipc2581-tools/src/commands/board_array/placement/README.md");
         let policy = docs
-            .split("```json\n")
+            .split("```json")
             .nth(1)
             .unwrap()
             .split("```")
