@@ -846,7 +846,12 @@ mod tests {
             .split("```")
             .next()
             .unwrap();
-        std::fs::write(&config, policy).unwrap();
+        // This CLI test exercises dispatch and conditional evidence, not mesh
+        // refinement or exhaustive optimization of a full-sized board array.
+        let mut policy: serde_json::Value = serde_json::from_str(policy).unwrap();
+        policy["mesh_max_additional_vertices"] = 0.into();
+        policy["max_subsets"] = 1.into();
+        std::fs::write(&config, serde_json::to_vec(&policy).unwrap()).unwrap();
         let args = [
             "pcb",
             "ipc2581",
@@ -878,7 +883,12 @@ mod tests {
         assert_eq!(report["phase"], "frame-only-placement-analysis");
         assert_eq!(report["manufacturing_ready"], false);
         assert!(report["layout"]["columns"].as_u64().unwrap() > 0);
-        assert_eq!(report["mechanics"]["status"], "no-proven-frame-candidates");
+        assert!(!report["candidates"].as_array().unwrap().is_empty());
+        assert_eq!(
+            report["eligibility"]["ignored_footprints"],
+            serde_json::json!(["U1:component-0"])
+        );
+        assert_eq!(report["mechanics"]["status"], "BudgetExhausted");
         assert!(report["mechanics"]["selected_ids"].is_null());
     }
 }
