@@ -381,7 +381,7 @@ def DefaultBoardConfig(
 
 def Board(
     name: str,
-    layout_path: str,
+    path: str | None = None,
     config: BoardConfig | None = None,
     layers: int | None = None,
     outer_copper_weight: str | CopperWeight = "1oz",
@@ -392,12 +392,15 @@ def Board(
     default: bool = False,
     modifiers: list | None = None,
     schematic: bool = False,
+    *,
+    layout_path: str | None = None,
 ):
     """Define a PCB board with an optional board configuration.
 
     Args:
         name: Board configuration name
-        layout_path: Path to the board layout file (e.g., PCB file)
+        path: Path to the KiCad project, shared by layout and schematic
+        layout_path: Backward-compatible alias for path; do not pass both
         config: Optional BoardConfig overrides to merge with a layers-derived default.
                 If layers is not provided, this is used directly.
         layers: Number of PCB layers (2, 4, 6, 8, or 10). Optional helper for deriving a default BoardConfig.
@@ -426,6 +429,13 @@ def Board(
         - Custom track_widths and via_dimensions are appended to base configuration
         - All lists are deduplicated and sorted before use
     """
+
+    if path != None and layout_path != None:
+        fail("Board() accepts either path or layout_path, not both")
+    if path == None:
+        path = layout_path
+    if path == None:
+        fail("Board() requires path (or the legacy layout_path alias)")
 
     # Validate input units
     if isinstance(outer_copper_weight, str):
@@ -461,7 +471,7 @@ def Board(
     # Add the KiCad project to the module
     Project(
         name=name,
-        path=layout_path,
+        path=path,
         modifiers=modifiers,
         schematic=schematic,
     )

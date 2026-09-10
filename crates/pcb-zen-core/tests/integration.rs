@@ -3,6 +3,7 @@ mod common;
 
 mod assert;
 mod binding;
+mod board;
 mod component;
 mod component_footprint_inference;
 mod cross_package_load;
