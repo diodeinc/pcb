@@ -72,7 +72,7 @@ fn sampling_uses_connected_arclength_not_polygon_fragment_count() {
 
 fn prepared(missing: bool, hole: bool) -> eligibility::Prepared {
     let resolution = Resolution::default().strict();
-    let mut substrate = rectangle(
+    let mut substrate = ContourSet::rectangle(
         BBox::new(
             Point::new(0.0, 0.0),
             if hole {
@@ -85,7 +85,7 @@ fn prepared(missing: bool, hole: bool) -> eligibility::Prepared {
     );
     if hole {
         substrate = substrate
-            .difference(&rectangle(
+            .difference(&ContourSet::rectangle(
                 BBox::new(Point::new(2.0, 2.0), Point::new(6.0, 5.0)),
                 resolution,
             ))
@@ -236,7 +236,7 @@ fn complete_connection_checks_obstacles_beyond_the_eligibility_band() {
     let mut source = prepared(false, false);
     source.evidence.push(eligibility::Evidence {
         id: "remote-bottom-overhang".into(),
-        region: Some(rectangle(
+        region: Some(ContourSet::rectangle(
             BBox::new(Point::new(-1.6, 1.0), Point::new(-1.1, 2.0)),
             Resolution::default().strict(),
         )),
@@ -303,7 +303,7 @@ fn slanted_board_edges_have_full_width_frame_landings() {
 fn continuous_landing_search_handles_unsampled_notches_and_later_gaps() {
     let resolution = Resolution::default().strict();
     let rect = |x0, y0, x1, y1| {
-        rectangle(
+        ContourSet::rectangle(
             BBox::new(Point::new(x0, y0), Point::new(x1, y1)),
             resolution,
         )

@@ -6,6 +6,31 @@ pub(super) fn res(tolerance_mm: f64) -> Resolution {
 }
 
 #[test]
+fn projection_intervals_preserve_components_and_use_polygon_not_bbox_extrema() {
+    let resolution = res(1e-6).strict();
+    let triangle = ContourSet::from_rings(
+        vec![vec![[0.0, 0.0], [4.0, 0.0], [0.0, 2.0]]],
+        FillRule::EvenOdd,
+        resolution,
+    )
+    .unwrap();
+    let region = triangle
+        .difference(&ContourSet::rectangle(
+            rect(0.25, 0.25, 0.5, 0.5),
+            resolution,
+        ))
+        .unwrap()
+        .union(&ContourSet::rectangle(
+            rect(10.0, 4.0, 11.0, 6.0),
+            resolution,
+        ))
+        .unwrap();
+    let mut intervals = region.projection_intervals(Point::new(1.0, 2.0), Point::new(2.0, 1.0));
+    intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert_eq!(intervals, vec![(-4.0, 4.0), (20.0, 24.0)]);
+}
+
+#[test]
 fn width_requires_a_disk_that_survives_boundary_uncertainty() {
     let mut region = ContourSet::rectangle(rect(0.0, 0.0, 1.0, 0.003), res(1e-6));
     assert!(

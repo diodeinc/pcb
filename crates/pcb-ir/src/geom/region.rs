@@ -294,6 +294,25 @@ impl ContourSet {
             .collect()
     }
 
+    /// One nominal interval per connected component under `(point - origin) · axis`.
+    /// Intervals are not merged or sorted. Holes do not split a component's
+    /// projection. Supply finite coordinates and a unit axis for millimeters;
+    /// callers apply uncertainty separately.
+    pub fn projection_intervals(&self, origin: Point, axis: Point) -> Vec<(f64, f64)> {
+        self.connected_components()
+            .iter()
+            .map(|component| {
+                component.rings.iter().flatten().fold(
+                    (f64::INFINITY, f64::NEG_INFINITY),
+                    |(lo, hi), point| {
+                        let s = (point[0] - origin.x) * axis.x + (point[1] - origin.y) * axis.y;
+                        (lo.min(s), hi.max(s))
+                    },
+                )
+            })
+            .collect()
+    }
+
     /// What fraction of each cell of a regular grid over `bounds` the region
     /// covers, row-major from the bottom-left cell.
     ///

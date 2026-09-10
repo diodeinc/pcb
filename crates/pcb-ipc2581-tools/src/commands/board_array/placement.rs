@@ -174,10 +174,6 @@ fn sample_intervals(
     }))
 }
 
-fn rectangle(bbox: BBox, resolution: Resolution) -> ContourSet {
-    ContourSet::rectangle(bbox, resolution.strict())
-}
-
 fn strip(
     p: Point,
     tangent: Point,
@@ -214,18 +210,7 @@ fn landing_start(
 ) -> Result<f64> {
     let mut blocked = corridor
         .difference(frame)?
-        .connected_components()
-        .iter()
-        .map(|component| {
-            component.rings.iter().flatten().fold(
-                (f64::INFINITY, f64::NEG_INFINITY),
-                |(lo, hi), p| {
-                    let s = (p[0] - origin.x) * normal.x + (p[1] - origin.y) * normal.y;
-                    (lo.min(s), hi.max(s))
-                },
-            )
-        })
-        .collect::<Vec<_>>();
+        .projection_intervals(origin, normal);
     blocked.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut start = guard;
     for (lo, hi) in blocked {
@@ -315,8 +300,10 @@ fn plan(
             let board = transform_region(&prepared.substrate, transform)?;
             let b = board.bbox();
             let gap = Point::new(config.routing_gap_mm, config.routing_gap_mm);
-            frame =
-                frame.difference(&rectangle(BBox::new(b.min - gap, b.max + gap), resolution))?;
+            frame = frame.difference(&ContourSet::rectangle(
+                BBox::new(b.min - gap, b.max + gap),
+                resolution,
+            ))?;
             for e in &prepared.evidence {
                 if let Some(region) = &e.region {
                     obstacles.push((

@@ -175,7 +175,7 @@ pub fn eligible_outline(
                     if certain {
                         void = void.disk_erode(band)?;
                     }
-                    for (lo, hi) in projections(&void) {
+                    for (lo, hi) in void.projection_intervals(Point::ZERO, Point::new(1.0, 0.0)) {
                         add(lo, hi, None, certain);
                     }
                     let mut void = joins[0].difference(&local)?;
@@ -339,14 +339,6 @@ fn dot(a: Point, b: Point) -> f64 {
     a.x * b.x + a.y * b.y
 }
 
-fn projections(region: &ContourSet) -> Vec<(f64, f64)> {
-    region
-        .connected_components()
-        .iter()
-        .map(|r| (r.bbox().min.x, r.bbox().max.x))
-        .collect()
-}
-
 // Regularized booleans discard line/point contacts. Clip original edges to the
 // CLOSED strip as well: even a point contact blocks a nonzero centre interval.
 fn strip_contacts(
@@ -358,7 +350,9 @@ fn strip_contacts(
     if bottom >= top {
         return Ok(Vec::new());
     }
-    let mut spans = projections(&region.intersection(&rectangle(region, length, bottom, top))?);
+    let mut spans = region
+        .intersection(&rectangle(region, length, bottom, top))?
+        .projection_intervals(Point::ZERO, Point::new(1.0, 0.0));
     for (a, b) in region.rings.iter().flat_map(ring_edges) {
         let mut lo: f64 = 0.0;
         let mut hi: f64 = 1.0;

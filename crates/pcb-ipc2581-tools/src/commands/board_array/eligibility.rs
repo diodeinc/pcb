@@ -455,7 +455,7 @@ fn closed_component(mut segments: Vec<Segment>, uncertainty: f64) -> Result<Cont
     let first = segments.pop().context("empty closed courtyard component")?;
     let start = first.start();
     let mut end = first.end();
-    let mut cmds = vec![PathCmd::move_to(start), segment_command(first, false)];
+    let mut cmds = vec![PathCmd::move_to(start), first.to_path_cmd(false)];
     while end != start {
         let index = segments
             .iter()
@@ -468,36 +468,10 @@ fn closed_component(mut segments: Vec<Segment>, uncertainty: f64) -> Result<Cont
         } else {
             segment.end()
         };
-        cmds.push(segment_command(segment, reverse));
+        cmds.push(segment.to_path_cmd(reverse));
     }
     cmds.push(PathCmd::close());
     Ok(ContourBuf::new(cmds).with_uncertainty(uncertainty))
-}
-
-fn segment_command(segment: Segment, reverse: bool) -> PathCmd {
-    let end = if reverse {
-        segment.start()
-    } else {
-        segment.end()
-    };
-    match segment {
-        Segment::Line { .. } => PathCmd::line_to(end),
-        Segment::Arc(arc) => PathCmd::arc_to(end, arc.center, arc.clockwise ^ reverse),
-        Segment::Ellipse(arc) => PathCmd::ellipse_to(
-            end,
-            arc.center,
-            arc.x_axis,
-            arc.y_axis,
-            arc.clockwise ^ reverse,
-        ),
-        Segment::Cubic { c1, c2, .. } => {
-            if reverse {
-                PathCmd::cubic_to(c2, c1, end)
-            } else {
-                PathCmd::cubic_to(c1, c2, end)
-            }
-        }
-    }
 }
 
 #[cfg(feature = "cli")]
