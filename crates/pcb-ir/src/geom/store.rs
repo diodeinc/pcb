@@ -100,30 +100,6 @@ pub struct Path {
 }
 
 impl Path {
-    pub fn filled(rule: FillRule) -> Self {
-        Self {
-            contours: Span::EMPTY,
-            bbox: BBox::empty(),
-            paint: Paint::Fill { rule },
-        }
-    }
-
-    pub fn stroked(stroke: StrokeStyle) -> Self {
-        Self {
-            contours: Span::EMPTY,
-            bbox: BBox::empty(),
-            paint: Paint::Stroke(stroke),
-        }
-    }
-
-    pub fn unpainted() -> Self {
-        Self {
-            contours: Span::EMPTY,
-            bbox: BBox::empty(),
-            paint: Paint::None,
-        }
-    }
-
     pub fn is_filled(&self) -> bool {
         matches!(self.paint, Paint::Fill { .. })
     }
