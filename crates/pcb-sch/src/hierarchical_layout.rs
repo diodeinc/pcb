@@ -185,7 +185,14 @@ impl HierarchicalLayout {
     /// Find items (components or modules) that have no parent
     fn find_root_items(&self) -> Vec<String> {
         let mut all_children = HashSet::new();
-        for children in self.module_hierarchy.values() {
+        for (module_id, children) in self.module_hierarchy.iter() {
+            // A module whose id is also a registered leaf component short-circuits
+            // in `layout_module_recursive` and never recurses into its children,
+            // so exiling those children here would strand them. Only exile the
+            // children of modules that will actually be recursed into.
+            if self.component_sizes.contains_key(module_id) {
+                continue;
+            }
             for child in children {
                 all_children.insert(child.clone());
             }
@@ -361,6 +368,13 @@ impl HierarchicalLayout {
         offset: Point,
         results: &mut HashMap<String, BoundingBox>,
     ) {
+        // A module whose id is also a registered leaf component was laid out as
+        // a leaf by `layout_module_recursive` (its children were never packed
+        // inside it). Offsetting those children here would relocate them on top
+        // of their own packed root positions, so guard the same way and return.
+        if self.component_sizes.contains_key(module_id) {
+            return;
+        }
         if let Some(children) = self.module_hierarchy.get(module_id) {
             for child_id in children {
                 if let Some(child_bbox) = results.get(child_id).cloned() {
@@ -511,5 +525,159 @@ mod tests {
         for (id, bbox) in items {
             println!("{}: x={:.1}, y={:.1}", id, bbox.position.x, bbox.position.y);
         }
+    }
+
+    fn layout_entries(bboxes: &HashMap<String, BoundingBox>) -> Vec<(&str, f64, f64, f64, f64)> {
+        let mut items: Vec<(&str, f64, f64, f64, f64)> = bboxes
+            .iter()
+            .map(|(id, bbox)| {
+                (
+                    id.as_str(),
+                    bbox.position.x,
+                    bbox.position.y,
+                    bbox.size.width,
+                    bbox.size.height,
+                )
+            })
+            .collect();
+        items.sort_by(|a, b| a.0.cmp(b.0));
+        items
+    }
+
+    #[test]
+    fn test_dual_registered_id_keeps_children() {
+        // An id registered as both a leaf component (set_component_size) and a
+        // module (add_module) is resolved as a leaf by layout_module_recursive:
+        // its component_sizes branch wins and returns before recursing into
+        // module_hierarchy. The module's children must not be stranded -- they
+        // should remain in the output as ordinary roots. Verify for both
+        // registration orders, since the leaf branch wins at layout time
+        // regardless of setter order.
+        for leaf_first in [true, false] {
+            let mut layout = HierarchicalLayout::new(5.0);
+            if leaf_first {
+                layout.set_component_size("M".to_string(), Size::new(10.0, 5.0));
+                layout.add_module("M".to_string(), vec!["R1".to_string(), "C1".to_string()]);
+            } else {
+                layout.add_module("M".to_string(), vec!["R1".to_string(), "C1".to_string()]);
+                layout.set_component_size("M".to_string(), Size::new(10.0, 5.0));
+            }
+            layout.set_component_size("R1".to_string(), Size::new(10.0, 5.0));
+            layout.set_component_size("C1".to_string(), Size::new(8.0, 8.0));
+
+            let bboxes = layout.layout();
+
+            let mut keys: Vec<&str> = bboxes.keys().map(|s| s.as_str()).collect();
+            keys.sort();
+            assert_eq!(
+                keys,
+                vec!["C1", "M", "R1"],
+                "children stranded (leaf_first={leaf_first})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dual_registration_matches_leaf_baseline() {
+        // The dual-registration output (keys AND positions) must equal the
+        // leaf-only baseline (no add_module), making the redundant add_module a
+        // true no-op that yields the consistent leaf interpretation.
+        //
+        // M=(10,10) is larger than its children and packs at the origin;
+        // M=(4,4) is smaller and packs off-origin -- the case where, without
+        // the update_child_positions guard, the reinstated children would be
+        // re-offset on top of their own packed root positions and silently
+        // corrupted. Both registration orders are exercised.
+        for (m_w, m_h) in [(10.0, 10.0), (4.0, 4.0)] {
+            let mut baseline = HierarchicalLayout::new(5.0);
+            baseline.set_component_size("M".to_string(), Size::new(m_w, m_h));
+            baseline.set_component_size("R1".to_string(), Size::new(10.0, 5.0));
+            baseline.set_component_size("C1".to_string(), Size::new(8.0, 8.0));
+            let baseline_bboxes = baseline.layout();
+
+            for leaf_first in [true, false] {
+                let mut dual = HierarchicalLayout::new(5.0);
+                if leaf_first {
+                    dual.set_component_size("M".to_string(), Size::new(m_w, m_h));
+                    dual.add_module("M".to_string(), vec!["R1".to_string(), "C1".to_string()]);
+                } else {
+                    dual.add_module("M".to_string(), vec!["R1".to_string(), "C1".to_string()]);
+                    dual.set_component_size("M".to_string(), Size::new(m_w, m_h));
+                }
+                dual.set_component_size("R1".to_string(), Size::new(10.0, 5.0));
+                dual.set_component_size("C1".to_string(), Size::new(8.0, 8.0));
+                let dual_bboxes = dual.layout();
+
+                assert_eq!(
+                    layout_entries(&baseline_bboxes),
+                    layout_entries(&dual_bboxes),
+                    "dual-registration differs from leaf baseline \
+                     (M=({m_w},{m_h}), leaf_first={leaf_first})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_pure_module_still_packs_children() {
+        // Regression guard: a module id that is NOT also a leaf component must
+        // continue to pack its children inside itself. The component_sizes
+        // guards added to find_root_items and update_child_positions must be
+        // no-ops in this normal (single-registration) case.
+        let mut layout = HierarchicalLayout::new(5.0);
+        layout.set_component_size("R1".to_string(), Size::new(10.0, 5.0));
+        layout.set_component_size("C1".to_string(), Size::new(8.0, 8.0));
+        layout.add_module("M".to_string(), vec!["R1".to_string(), "C1".to_string()]);
+
+        let bboxes = layout.layout();
+
+        let mut keys: Vec<&str> = bboxes.keys().map(|s| s.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["C1", "M", "R1"]);
+
+        // Children must be laid out within the module's bounding box, not as
+        // independent roots.
+        let m_bbox = bboxes.get("M").unwrap();
+        for child_id in ["R1", "C1"] {
+            let child = bboxes.get(child_id).unwrap();
+            assert!(child.position.x >= m_bbox.position.x);
+            assert!(child.position.y >= m_bbox.position.y);
+            assert!(child.max_x() <= m_bbox.max_x());
+            assert!(child.max_y() <= m_bbox.max_y());
+        }
+    }
+
+    #[test]
+    fn test_dual_registered_child_of_real_module_not_corrupted() {
+        // A dual-registered id may also appear as the child of a *real* module
+        // (one that is not itself a leaf). The real module recurses normally
+        // and lays the dual-registered child out as a leaf inside it. The
+        // child's *own* children (R1, C1) must remain ordinary roots, and --
+        // critically -- must NOT be re-offset when update_child_positions
+        // recurses from the real module into the dual-registered child. The
+        // output should match a baseline that omits the redundant
+        // add_module("M", ...).
+        let mut baseline = HierarchicalLayout::new(5.0);
+        baseline.add_module("outer".to_string(), vec!["M".to_string(), "X".to_string()]);
+        baseline.set_component_size("M".to_string(), Size::new(4.0, 4.0));
+        baseline.set_component_size("X".to_string(), Size::new(10.0, 5.0));
+        baseline.set_component_size("R1".to_string(), Size::new(10.0, 5.0));
+        baseline.set_component_size("C1".to_string(), Size::new(8.0, 8.0));
+        let baseline_bboxes = baseline.layout();
+
+        let mut dual = HierarchicalLayout::new(5.0);
+        dual.add_module("outer".to_string(), vec!["M".to_string(), "X".to_string()]);
+        dual.set_component_size("M".to_string(), Size::new(4.0, 4.0));
+        dual.add_module("M".to_string(), vec!["R1".to_string(), "C1".to_string()]);
+        dual.set_component_size("X".to_string(), Size::new(10.0, 5.0));
+        dual.set_component_size("R1".to_string(), Size::new(10.0, 5.0));
+        dual.set_component_size("C1".to_string(), Size::new(8.0, 8.0));
+        let dual_bboxes = dual.layout();
+
+        assert_eq!(
+            layout_entries(&baseline_bboxes),
+            layout_entries(&dual_bboxes),
+            "dual-registered child of real module corrupted root positions"
+        );
     }
 }
