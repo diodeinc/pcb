@@ -572,3 +572,68 @@ fn net_constructor_positional_cast_preserves_behavior() {
     let schematic = sch_result.output.expect("expected schematic output");
     assert_eq!(schematic.nets["SIG"].kind, "Net");
 }
+
+#[test]
+fn bound_cast_rename_still_rejects_reuse_of_prior_name() {
+    let src = r#"
+Power = builtin.net_type("Power")
+
+sig = Net("SIG")
+pwr = Power(sig, name = "PWR")
+check(sig.name == "SIG", "bound base keeps its name")
+other = Net("SIG")
+"#;
+    let result = eval_zen(vec![("test.zen".to_string(), src.to_string())]);
+    let msgs: Vec<String> = result.diagnostics.iter().map(|d| d.to_string()).collect();
+    assert!(
+        msgs.iter().any(|m| m.contains("Duplicate net name: SIG")),
+        "expected duplicate rejection, got: {msgs:?}"
+    );
+}
+
+#[test]
+fn interface_template_unbound_cast_rename_allows_reuse_of_prior_name() {
+    let src = r#"
+Power = builtin.net_type("Power")
+Tpl = interface(p = Power(Net("SIG"), name = "PWR"))
+inst = Tpl()
+other = Net("SIG")
+
+check(inst.p.name == "inst_SIG", "interface net is prefixed from template name")
+check(other.name == "SIG", "freed prior name must be reusable")
+"#;
+    let result = eval_zen(vec![("test.zen".to_string(), src.to_string())]);
+    assert!(result.is_success(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn unbound_cast_rename_netlists_both_nets() {
+    let src = r#"
+Power = builtin.net_type("Power")
+pwr = Power(Net("SIG"), name = "PWR")
+other = Net("SIG")
+
+Component(
+    name = "U1",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+    pin_defs = {"P1": "1", "P2": "2"},
+    pins = {"P1": pwr, "P2": other},
+    skip_bom = True,
+)
+
+check(pwr.name == "PWR", "pwr must be named PWR")
+check(other.name == "SIG", "other must be named SIG")
+"#;
+    let result = eval_zen(vec![("test.zen".to_string(), src.to_string())]);
+    assert!(result.is_success(), "{:?}", result.diagnostics);
+    let eval_output = result.output.expect("expected eval output");
+    let sch_result = eval_output.to_schematic_with_diagnostics();
+    assert!(
+        !sch_result.diagnostics.has_errors(),
+        "schematic conversion failed: {:?}",
+        sch_result.diagnostics
+    );
+    let schematic = sch_result.output.expect("expected schematic output");
+    assert!(schematic.nets.contains_key("PWR"));
+    assert!(schematic.nets.contains_key("SIG"));
+}

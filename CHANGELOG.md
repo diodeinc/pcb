@@ -61,6 +61,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Keep simplified geometry within the accuracy limit near sharp spikes.
 - Respect `in_bom` on KiCad `extends` symbols.
 - Import metric-only `0402Metric`/`0603Metric` passives as `01005`/`0201` packages.
+- Allow reuse of the old name after casting and renaming an unbound net.
 
 ## [0.4.51] - 2026-09-05
 
