@@ -6,7 +6,7 @@ fn config() -> Config {
         routing_gap_mm: 0.5,
         frame_landing_mm: 0.3,
         max_span_mm: 3.0,
-        candidate_pitch_mm: 100.0,
+        candidate_pitch_mm: 3.5,
         max_candidates: 32,
         bending: [[10.0, 2.0, 0.0], [2.0, 10.0, 0.0], [0.0, 0.0, 4.0]],
         connection_stiffness: [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]],
@@ -39,6 +39,33 @@ fn options() -> BoardArrayCreateOptions {
         board_margin_mm: super::super::BoardMarginMm::all(2.0),
         edge_rail_mm: super::super::BoardMarginMm::all(1.0),
     }
+}
+
+#[test]
+fn sampling_uses_connected_arclength_not_polygon_fragment_count() {
+    let seed = prepared(false, false).intervals[0].clone();
+    let fragments = (0..20)
+        .map(|edge| OutlineInterval {
+            edge,
+            start_mm: edge as f64 * 0.65,
+            end_mm: (edge + 1) as f64 * 0.65,
+            state: OutlineState::Eligible,
+            ..seed.clone()
+        })
+        .collect::<Vec<_>>();
+    let samples = sample_intervals(&fragments, 4.0, 4).unwrap();
+    assert_eq!(
+        samples.iter().map(|(_, s)| *s).collect::<Vec<_>>(),
+        vec![1.625, 4.875, 8.125, 11.375]
+    );
+    assert!(sample_intervals(&fragments, f64::MIN_POSITIVE, 4).is_err());
+    let mut gap = fragments;
+    for i in &mut gap[7..11] {
+        i.state = OutlineState::Unknown;
+    }
+    let samples = sample_intervals(&gap, 4.0, 4).unwrap();
+    assert_eq!(samples.len(), 4);
+    assert!(samples.iter().all(|(_, s)| *s < 4.55 || *s > 7.15));
 }
 
 fn prepared(missing: bool, hole: bool) -> eligibility::Prepared {

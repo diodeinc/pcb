@@ -10,6 +10,13 @@ fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> ContourSet {
     )
 }
 
+fn strict_rect(x0: f64, y0: f64, x1: f64, y1: f64) -> ContourSet {
+    ContourSet::rectangle(
+        BBox::new(Point::new(x0, y0), Point::new(x1, y1)),
+        Resolution::default().strict(),
+    )
+}
+
 fn policy() -> Policy {
     Policy {
         bending: [[2.0, 0.2, 0.0], [0.2, 2.0, 0.0], [0.0, 0.0, 0.9]],
@@ -71,6 +78,52 @@ fn clipped_cross_element_landings_and_asymmetric_resultant_evaluate() {
 }
 
 #[test]
+fn repeated_difference_accepts_only_intersection_roundoff() {
+    let edge = 92.262_401_f64;
+    let board = strict_rect(edge - 4.0, -102.0, edge, -99.0);
+    // The clipping input and independently reconstructed translated board differ
+    // by one representable coordinate, as can happen across geometry pipelines.
+    let clipping_board = strict_rect(
+        edge - 4.0,
+        -102.0,
+        f64::from_bits(edge.to_bits() + 1),
+        -99.0,
+    );
+    let strip = strict_rect(edge - 2.0, -101.0, edge + 1.0, -100.8);
+    let landing = strip.intersection(&clipping_board).unwrap();
+    let residue = landing.difference(&board).unwrap().area();
+    assert!(
+        residue > 0.0,
+        "fixture must exercise nonempty clipping residue"
+    );
+    assert!(
+        residue <= f64::EPSILON * landing.area() * 64.0,
+        "fixture residue {residue} exceeds a roundoff-scale allowance"
+    );
+
+    let frame = rect(94.0, -102.0, 98.0, -99.0);
+    let result = evaluate(
+        &[board],
+        &frame,
+        &[Site {
+            id: 11,
+            board: 0,
+            board_landing: landing,
+            frame_landing: rect(95.0, -101.0, 97.0, -100.0),
+            reference: [94.0, -100.5],
+        }],
+        &[],
+        &[LoadCase {
+            board_resultants: vec![[1.0, 0.0, 0.0]],
+            compliance_limit: 1e9,
+        }],
+        &policy(),
+    )
+    .unwrap();
+    assert_eq!(result.report.selected.unwrap().ids, vec![11]);
+}
+
+#[test]
 fn uncovered_and_hole_landings_are_rejected_without_snapping() {
     let outer = rect(0.0, 0.0, 2.0, 2.0);
     let board = outer.difference(&rect(0.8, 0.8, 1.2, 1.2)).unwrap();
@@ -86,6 +139,34 @@ fn uncovered_and_hole_landings_are_rejected_without_snapping() {
         &[board],
         &frame,
         &[site],
+        &[],
+        &[LoadCase {
+            board_resultants: vec![[1.0, 0.0, 0.0]],
+            compliance_limit: 1.0,
+        }],
+        &policy(),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("not completely covered"),
+        "{error}"
+    );
+}
+
+#[test]
+fn protruding_landing_is_rejected_without_physical_tolerance() {
+    let board = rect(0.0, 0.0, 2.0, 2.0);
+    let frame = rect(3.0, 0.0, 5.0, 2.0);
+    let error = evaluate(
+        &[board],
+        &frame,
+        &[Site {
+            id: 2,
+            board: 0,
+            board_landing: rect(1.5, 0.5, 2.001, 1.5),
+            frame_landing: rect(3.5, 0.5, 4.5, 1.5),
+            reference: [2.5, 1.0],
+        }],
         &[],
         &[LoadCase {
             board_resultants: vec![[1.0, 0.0, 0.0]],

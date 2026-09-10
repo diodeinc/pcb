@@ -66,6 +66,10 @@ fn matrix(values: [[f64; 3]; 3]) -> DMatrix<f64> {
     DMatrix::from_fn(3, 3, |r, c| values[r][c])
 }
 
+fn area_roundoff(a: f64, b: f64) -> f64 {
+    f64::EPSILON * (a.abs() + b.abs()) * 64.0
+}
+
 fn barycentric(mesh: &AnalysisMesh, element: usize, point: Point) -> Option<[f64; 3]> {
     if let Some(attachment) = mesh.attach_to_element(point, element, 0.0) {
         return Some(attachment.weights);
@@ -107,7 +111,8 @@ fn patches(
     what: &str,
     options: MeshOptions,
 ) -> Result<Vec<Patch>, Box<dyn Error + Send + Sync>> {
-    if region.is_empty() || !region.area().is_finite() || region.area() <= 0.0 {
+    let region_area = region.area();
+    if region.is_empty() || !region_area.is_finite() || region_area <= 0.0 {
         return Err(err(format!(
             "{what}: landing must have positive finite area"
         )));
@@ -115,7 +120,8 @@ fn patches(
     let uncovered = region
         .difference(plate_region)
         .map_err(|e| err(format!("{what}: containment check failed: {e}")))?;
-    if !uncovered.is_empty() || uncovered.area() != 0.0 {
+    let uncovered_area = uncovered.area();
+    if !uncovered_area.is_finite() || uncovered_area > area_roundoff(region_area, 0.0) {
         return Err(err(format!(
             "{what}: landing is not completely covered by its plate"
         )));
@@ -172,15 +178,11 @@ fn patches(
         }
         covered_area += area;
     }
-    let allowance = region
-        .tolerance()
-        .powi(2)
-        .max(f64::EPSILON * region.area().abs() * 64.0);
-    if out.is_empty() || (covered_area - region.area()).abs() > allowance {
+    let allowance = area_roundoff(covered_area, region_area);
+    if out.is_empty() || (covered_area - region_area).abs() > allowance {
         return Err(err(format!(
             "{what}: mesh partition does not cover landing ({} of {})",
-            covered_area,
-            region.area()
+            covered_area, region_area
         )));
     }
     Ok(out)

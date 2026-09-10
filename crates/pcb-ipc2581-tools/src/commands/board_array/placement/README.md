@@ -49,9 +49,12 @@ pcb ipc2581 board-array create board.xml --mouse-bite \
 The existing width/inward/outward/clearance values still define the eligibility
 band; placement additionally checks the entire straight connection envelope all
 the way to the frame against supplied courtyard evidence and other boards.
-Only open `Eligible` intervals are sampled, at equal-bin midpoints with bin size
-at most `candidate_pitch_mm`. This parameter controls candidate resolution, not
-a preferred support spacing. Short intervals still receive a midpoint. Search
+Consecutive `Eligible` intervals are sampled as connected arclength runs (split
+at the ring origin), at equal-bin midpoints with bin size at most
+`candidate_pitch_mm`. Polygon tessellation fragments do not each force a sample.
+Samples exactly on interval endpoints are omitted because endpoints carry no
+guarantee. This parameter controls candidate resolution, not preferred support
+spacing. Short runs still receive a midpoint unless it is an endpoint. Search
 only optimizes this finite set; candidate-budget overflow is an error, not silent
 truncation. Overlapping envelopes and overlapping cyclic attachment spans conflict.
 

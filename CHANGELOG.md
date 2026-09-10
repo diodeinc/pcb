@@ -13,6 +13,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add frame-only mouse-bite candidate placement and elastic selection reports, without generating tab or manufacturing geometry.
 - Treat footprints without courtyards as non-obstructing in mouse-bite analysis, disclose ignored footprints, and reject unusable supplied courtyards.
 
+### Fixed
+
+- Keep mouse-bite sampling independent of polygon fragment count and avoid roundoff-only landing coverage failures.
+
 ### Changed
 
 - Speed up schematic connectivity analysis and repair planning with indexed terminal matching and verified batches of local wire cuts.

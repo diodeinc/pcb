@@ -5,7 +5,7 @@ use pcb_ir::geom::{
     Affine2, BBox, ContourSet, FillRule, Point, Resolution,
     attachment::{
         BoundaryQuery, Decision, Obstacle, QueryTolerance, check_footprints,
-        outline::{OutlineFootprint, OutlineState},
+        outline::{OutlineFootprint, OutlineInterval, OutlineState},
         transform_region,
     },
     mesh::MeshOptions,
@@ -125,6 +125,52 @@ struct Candidate {
     frame_point: Point,
     span: f64,
     envelope: ContourSet,
+}
+
+// Eligibility is split at every polygon edge for provenance. Sample connected
+// arclength runs, not each tessellation fragment, so a finer arc does not force
+// hundreds of extra candidates. Resolve each sample back to its source interval.
+fn sample_intervals(
+    intervals: &[OutlineInterval],
+    pitch: f64,
+    budget: usize,
+) -> Result<Vec<(&OutlineInterval, f64)>> {
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for (index, interval) in intervals.iter().enumerate() {
+        if interval.state != OutlineState::Eligible {
+            continue;
+        }
+        if let Some((_, last)) = runs.last_mut()
+            && *last + 1 == index
+            && intervals[*last].boundary == interval.boundary
+            && intervals[*last].end_mm == interval.start_mm
+        {
+            *last = index;
+        } else {
+            runs.push((index, index));
+        }
+    }
+    let mut samples = Vec::new();
+    for (first, last) in runs {
+        let lo = intervals[first].start_mm;
+        let length = intervals[last].end_mm - lo;
+        let count = (length / pitch).ceil().max(1.0);
+        ensure!(
+            count <= budget.saturating_sub(samples.len()) as f64,
+            "candidate budget exceeded for connected eligible runs; increase candidate_pitch_mm or max_candidates"
+        );
+        let count = count as usize;
+        for k in 0..count {
+            let station = lo + length * (k as f64 + 0.5) / count as f64;
+            if let Some(interval) = intervals[first..=last]
+                .iter()
+                .find(|i| i.start_mm < station && station < i.end_mm)
+            {
+                samples.push((interval, station));
+            }
+        }
+    }
+    Ok(samples)
 }
 
 fn rectangle(bbox: BBox, resolution: Resolution) -> ContourSet {
@@ -283,124 +329,101 @@ fn plan(
     let empty = ContourSet::empty(resolution);
     let mut candidates = Vec::new();
     let mut rejected = Vec::new();
-    let mut sampled = 0usize;
+    let samples = sample_intervals(
+        &prepared.intervals,
+        config.candidate_pitch_mm,
+        config.max_candidates / offsets.len(),
+    )?;
     for (board_index, offset) in offsets.iter().enumerate() {
-        for interval in prepared
-            .intervals
-            .iter()
-            .filter(|i| i.state == OutlineState::Eligible)
-        {
-            // Midpoints of equal bins avoid uncertain/open interval endpoints.
-            // This is an explicit discretization, not a preferred spacing rule.
-            let count_f = ((interval.end_mm - interval.start_mm) / config.candidate_pitch_mm)
-                .ceil()
-                .max(1.0);
-            ensure!(
-                count_f <= config.max_candidates as f64,
-                "candidate budget exceeded; increase candidate_pitch_mm or max_candidates"
-            );
-            let count = count_f as usize;
-            sampled = sampled
-                .checked_add(count)
-                .context("candidate count overflow")?;
-            ensure!(
-                sampled <= config.max_candidates,
-                "candidate budget exceeded; increase candidate_pitch_mm or max_candidates"
-            );
-            for k in 0..count {
-                let station = interval.start_mm
-                    + (interval.end_mm - interval.start_mm) * (k as f64 + 0.5) / count as f64;
-                let local = boundary.site(interval.boundary, station)?;
-                let p = local.point + *offset;
-                let n = local.outward_normal;
-                let t = local.tangent;
-                let attempt = (|| -> Result<std::result::Result<Candidate, String>> {
-                    let Some(span) = frame_distance(&frame, p, n) else {
-                        return Ok(Err("no forward frame intersection".into()));
-                    };
-                    if span > config.max_span_mm {
-                        return Ok(Err("frame beyond max_span_mm".into()));
-                    }
-                    let guard =
-                        interval.uncertainty_mm.max(frame.uncertainty_mm) + tolerance.numerical_mm;
-                    let landing = strip(
-                        p,
-                        t,
-                        n,
-                        footprint.width_mm,
-                        span + guard,
-                        span + guard + config.frame_landing_mm,
-                        resolution,
-                    )?;
-                    if !landing.difference(&frame)?.is_empty() {
-                        return Ok(Err("full frame landing is not on retained rails".into()));
-                    }
-                    let envelope = strip(
-                        p,
-                        t,
-                        n,
-                        footprint.width_mm,
-                        -footprint.inward_mm,
-                        span + guard + config.frame_landing_mm,
-                        resolution,
-                    )?;
-                    let outward =
-                        strip(p, t, n, footprint.width_mm, guard, span + guard, resolution)?;
-                    if !outward.intersection(&boards[board_index])?.is_empty() {
-                        return Ok(Err("connection re-enters its board".into()));
-                    }
-                    let other_boards = boards
-                        .iter()
-                        .enumerate()
-                        .filter(|(i, _)| *i != board_index)
-                        .map(|(_, b)| Obstacle {
-                            id: "other-board",
-                            region: b,
-                        });
-                    let refs = obstacles
-                        .iter()
-                        .map(|(id, region)| Obstacle { id, region })
-                        .chain(other_boards)
-                        .collect::<Vec<_>>();
-                    let checks = check_footprints(&envelope, &empty, &refs, 0.0, tolerance)?;
-                    if let Some(check) = checks.iter().find(|c| c.decision != Decision::Admissible)
-                    {
-                        return Ok(Err(format!("{}: {:?}", check.obstacle, check.decision)));
-                    }
-                    let board_landing = strip(
-                        p,
-                        t,
-                        n,
-                        footprint.width_mm,
-                        -footprint.inward_mm,
-                        0.0,
-                        resolution,
-                    )?
-                    .intersection(&boards[board_index])?;
-                    if board_landing.is_empty() {
-                        return Ok(Err("no finite board landing".into()));
-                    }
-                    Ok(Ok(Candidate {
-                        site: Site {
-                            id: candidates.len(),
-                            board: board_index,
-                            board_landing,
-                            frame_landing: landing,
-                            reference: [p.x, p.y],
-                        },
-                        ring: interval.boundary.ring,
-                        station,
-                        perimeter: boundary.perimeter(interval.boundary)?,
-                        frame_point: p + n * span,
-                        span,
-                        envelope,
-                    }))
-                })()?;
-                match attempt {
+        for &(interval, station) in &samples {
+            let local = boundary.site(interval.boundary, station)?;
+            let p = local.point + *offset;
+            let n = local.outward_normal;
+            let t = local.tangent;
+            let attempt = (|| -> Result<std::result::Result<Candidate, String>> {
+                let Some(span) = frame_distance(&frame, p, n) else {
+                    return Ok(Err("no forward frame intersection".into()));
+                };
+                if span > config.max_span_mm {
+                    return Ok(Err("frame beyond max_span_mm".into()));
+                }
+                let guard =
+                    interval.uncertainty_mm.max(frame.uncertainty_mm) + tolerance.numerical_mm;
+                let landing = strip(
+                    p,
+                    t,
+                    n,
+                    footprint.width_mm,
+                    span + guard,
+                    span + guard + config.frame_landing_mm,
+                    resolution,
+                )?;
+                if !landing.difference(&frame)?.is_empty() {
+                    return Ok(Err("full frame landing is not on retained rails".into()));
+                }
+                let envelope = strip(
+                    p,
+                    t,
+                    n,
+                    footprint.width_mm,
+                    -footprint.inward_mm,
+                    span + guard + config.frame_landing_mm,
+                    resolution,
+                )?;
+                let outward = strip(p, t, n, footprint.width_mm, guard, span + guard, resolution)?;
+                if !outward.intersection(&boards[board_index])?.is_empty() {
+                    return Ok(Err("connection re-enters its board".into()));
+                }
+                let other_boards = boards
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != board_index)
+                    .map(|(_, b)| Obstacle {
+                        id: "other-board",
+                        region: b,
+                    });
+                let refs = obstacles
+                    .iter()
+                    .map(|(id, region)| Obstacle { id, region })
+                    .chain(other_boards)
+                    .collect::<Vec<_>>();
+                let checks = check_footprints(&envelope, &empty, &refs, 0.0, tolerance)?;
+                if let Some(check) = checks.iter().find(|c| c.decision != Decision::Admissible) {
+                    return Ok(Err(format!("{}: {:?}", check.obstacle, check.decision)));
+                }
+                let board_landing = strip(
+                    p,
+                    t,
+                    n,
+                    footprint.width_mm,
+                    -footprint.inward_mm,
+                    0.0,
+                    resolution,
+                )?
+                .intersection(&boards[board_index])?;
+                if board_landing.is_empty() {
+                    return Ok(Err("no finite board landing".into()));
+                }
+                Ok(Ok(Candidate {
+                    site: Site {
+                        id: candidates.len(),
+                        board: board_index,
+                        board_landing,
+                        frame_landing: landing,
+                        reference: [p.x, p.y],
+                    },
+                    ring: interval.boundary.ring,
+                    station,
+                    perimeter: boundary.perimeter(interval.boundary)?,
+                    frame_point: p + n * span,
+                    span,
+                    envelope,
+                }))
+            })()?;
+            match attempt {
                     Ok(candidate) => candidates.push(candidate),
                     Err(reason) => rejected.push(json!({"board":board_index,"ring":interval.boundary.ring,"station_mm":station,"reason":reason})),
                 }
-            }
         }
     }
     let mut conflicts = Vec::new();
