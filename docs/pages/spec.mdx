@@ -579,7 +579,7 @@ Board(name="MainBoard", layers=4, path="layout/MainBoard", schematic=True)
 Board(name="my_board", layers=4, path="layout/my_board", schematic=True)
 ```
 
-Key parameters: `name`, `path`, `schematic` (default `False`), `layers` (2/4/6/8/10), `config` (explicit `BoardConfig`), `outer_copper_weight` (`"1oz"` or `"2oz"`), `copper_finish` (default `"ENIG"`). `path` is required; the old `layout_path` keyword remains an alias, but passing both is an error. Positional calls remain compatible. An explicit stackup must contain an even number of copper layers.
+Key parameters: `name`, `path`, `schematic` (default `False`), `layers` (2/4/6/8/10), `config` (explicit `BoardConfig`), `outer_copper_weight` (`"1oz"` or `"2oz"`), `copper_finish` (default `"ENIG"`). A non-empty `path` is required; the old `layout_path` keyword remains an alias, but passing both is an error. Positional calls remain compatible. An explicit stackup must contain an even number of copper layers.
 
 When `layers` is provided, `Board()` selects an appropriate default stackup, netclasses, and design rules. An explicit `config` is merged on top. See `@stdlib/board_config.zen` for `BoardConfig`, `Stackup`, `DesignRules`, `NetClass`, and preset stackups.
 

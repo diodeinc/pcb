@@ -434,8 +434,8 @@ def Board(
         fail("Board() accepts either path or layout_path, not both")
     if path == None:
         path = layout_path
-    if path == None:
-        fail("Board() requires path (or the legacy layout_path alias)")
+    if not path:
+        fail("Board() requires a non-empty path (or the legacy layout_path alias)")
 
     # Validate input units
     if isinstance(outer_copper_weight, str):

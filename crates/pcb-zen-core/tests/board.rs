@@ -64,9 +64,18 @@ fn board_path_and_legacy_calls_register_the_same_project() {
 }
 
 #[test]
-fn board_rejects_missing_or_ambiguous_paths() {
+fn board_rejects_empty_missing_or_ambiguous_paths() {
     for (args, message) in [
-        (r#"name="Test""#, "Board() requires path"),
+        (
+            r#"name="Test", path="""#,
+            "Board() requires a non-empty path",
+        ),
+        (
+            r#"name="Test", layout_path="""#,
+            "Board() requires a non-empty path",
+        ),
+        (r#""Test", """#, "Board() requires a non-empty path"),
+        (r#"name="Test""#, "Board() requires a non-empty path"),
         (
             r#"name="Test", path="new", layout_path="old""#,
             "Board() accepts either path or layout_path, not both",
