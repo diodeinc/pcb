@@ -261,6 +261,9 @@ enum BoardArrayCommands {
         /// Analyze outline eligibility only: writes JSON, NOT a mouse-bite panel.
         #[arg(long, requires_all = ["mouse_bite_width", "mouse_bite_inward", "mouse_bite_outward", "mouse_bite_clearance"], conflicts_with_all = ["auto", "sheet", "columns", "rows", "board_margin", "edge_rail", "copper_balance", "no_copper_balance"])]
         mouse_bite: bool,
+        /// Choose mouse-bite tab sites with the built-in preset: writes JSON, NOT a panel.
+        #[arg(long, conflicts_with_all = ["mouse_bite", "auto", "sheet", "columns", "rows", "board_margin", "edge_rail", "copper_balance", "no_copper_balance"])]
+        mouse_bite_placement: bool,
         /// Analysis band width along the cyclic outline, in mm; no manufacturing default.
         #[arg(long, requires = "mouse_bite")]
         mouse_bite_width: Option<f64>,
@@ -475,6 +478,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             BoardArrayCommands::Create {
                 input,
                 mouse_bite,
+                mouse_bite_placement,
                 mouse_bite_width,
                 mouse_bite_inward,
                 mouse_bite_outward,
@@ -488,6 +492,9 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 copper_balance,
                 output,
             } => {
+                if mouse_bite_placement {
+                    return commands::board_array::placement::execute(&input, &output, resolution);
+                }
                 if mouse_bite {
                     return commands::board_array::eligibility::execute(
                         &input,
@@ -719,6 +726,14 @@ mod tests {
             crate::Cli::try_parse_from(base.into_iter().chain(["--mouse-bite-width", "2"]))
                 .is_err()
         );
+        let placement = ["--mouse-bite-placement"];
+        assert!(crate::Cli::try_parse_from(base.into_iter().chain(placement)).is_ok());
+        for conflicting in [vec!["--auto"], vec!["--mouse-bite"], vec!["--columns", "2"]] {
+            assert!(
+                crate::Cli::try_parse_from(base.into_iter().chain(placement).chain(conflicting))
+                    .is_err()
+            );
+        }
     }
 
     #[test]

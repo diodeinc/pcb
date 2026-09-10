@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 pub mod eligibility;
+pub mod placement;
 
 use super::board_array_auto::{
     AutoBoardArrayPlan, AutoSheetSize, TargetSizeMm, auto_board_array_plan,

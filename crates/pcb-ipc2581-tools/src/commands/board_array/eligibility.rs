@@ -25,6 +25,8 @@ pub(super) struct Evidence {
 
 pub(super) struct Prepared {
     pub report: Value,
+    /// Overall stackup thickness, when the source states one.
+    pub thickness_mm: Option<f64>,
     pub substrate: ContourSet,
     pub evidence: Vec<Evidence>,
     pub intervals: Vec<pcb_ir::geom::attachment::outline::OutlineInterval>,
@@ -63,6 +65,10 @@ pub(super) fn prepare(
     }
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     validate_courtyard_references(&ipc)?;
+    let thickness_mm = crate::accessors::IpcAccessor::new(&ipc)
+        .stackup_details()
+        .and_then(|stackup| stackup.overall_thickness_mm)
+        .filter(|t| t.is_finite() && *t > 0.0);
     // Keep small substrate cutouts and courtyard regions; accuracy remains the
     // caller's existing geometry budget (--accuracy-um in the CLI).
     let resolution = resolution.strict();
@@ -158,6 +164,7 @@ pub(super) fn prepare(
     });
     Ok(Prepared {
         report,
+        thickness_mm,
         substrate,
         evidence,
         intervals,
