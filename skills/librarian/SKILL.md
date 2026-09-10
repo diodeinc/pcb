@@ -126,8 +126,8 @@ Expose application-level IO and configs. Keep implementation nodes internal
 unless access is necessary. Include only reusable support circuitry: decoupling,
 feedback, compensation, bootstrap, bias, reset, straps, or a supported
 application topology. Leave board-specific, underspecified, already-provided,
-or unverified circuitry to the integrator. A `Layout()` is useful when the
-reference circuit has reusable physical relationships worth capturing.
+or unverified circuitry to the integrator. Prefer `Project()` when a module
+needs layout or schematics; it enables both by default.
 
 Choose decoupling from the datasheet, effective capacitance, ESL, placement,
 inrush, and regulator stability. Prefer one compact low-ESL MLCC per supply

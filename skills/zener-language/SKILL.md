@@ -38,7 +38,9 @@ Use refdes-like names only when the user explicitly asks. In that case, set `pre
 
 Use `Symbol(library, name=...)` for multi-symbol libraries. Use `Part(mpn=..., manufacturer=...)` only when the symbol does not already provide part identity.
 
-`Layout(name, path)` associates reusable layout metadata with a module. Each entrypoint may declare at most one layout, with a config-independent path; use separate entrypoints for distinct layouts. A root-level `Project(name, path)` links persistent KiCad project files; its path is relative to the root `.zen` file.
+For boards, use `Board(..., schematic = True)` to enable persistent schematics alongside layout in `layout_path`. `Board()` already creates a project; never combine it with `Project()`.
+
+For registry modules needing layout or schematics, prefer `Project(name = "ModuleName", path = "layout")`. It enables both by default; `layout = False` or `schematic = False` disables either. `Layout()` is the older layout-only shorthand. Use one declaration per entrypoint with a config-independent path relative to its `.zen` file; use separate entrypoints for distinct projects.
 
 ## IO and Config
 
@@ -104,20 +106,12 @@ If consumers must change to adopt an update, treat it as breaking. Document the 
 
 ## Schematic Position State
 
-First inspect the root entrypoint for `Project(...)`:
+Inspect the root declaration and its flags:
 
-- With `Project(...)`, the KiCad files under its `path` are persistent schematic state. Use `pcb apply schematic` to reconcile Zener changes and use `schematic-composition` with `agent-schema` for visual composition.
-- Without `Project(...)`, the project uses the legacy generated schematic. `# pcb:sch <ID> ...` comments persist placement; preserve them during textual edits, add new code above the block, and do not use `agent-schema`.
+- `Board(..., schematic = True)` uses `layout_path`; `Project(...)` uses `path` with schematics enabled by default. These KiCad files are persistent state. Reconcile Zener changes with `pcb apply schematic` and compose with `schematic-composition` and `agent-schema`.
+- Without a linked schematic, preserve legacy `# pcb:sch <ID> ...` placement comments, add new code above the block, and do not use `agent-schema`. On rename or deletion, update only the corresponding records; do not hand-edit coordinates outside requested schematic layout work.
 
-To upgrade a legacy project, export before adding `Project(...)`:
-
-```bash
-pcb-sch export-kicad board.zen --output schematic
-```
-
-Then add `Project(name = "Board", path = "schematic")` to the root and run `pcb apply schematic --no-open board.zen` twice. The first pass may normalize the exported KiCad files; the second must report `schematic unchanged`.
-
-When renaming or deleting an item, update or remove only its corresponding records. Do not add records or edit coordinates by hand unless the user requested schematic layout work.
+For a requested legacy migration, first run `pcb-sch export-kicad <root.zen> --output <fresh-directory>`. Preserve the exported placement and existing layout when linking the KiCad files: enable `schematic = True` on the existing `Board()`, or replace a module's `Layout()` with `Project()`. Never add `Project()` alongside `Board()`. Run `pcb apply schematic --no-open <root.zen>` twice; the second must report `schematic unchanged`.
 
 ## Packages and Dependencies
 
