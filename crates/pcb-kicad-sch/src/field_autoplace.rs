@@ -853,7 +853,7 @@ mod tests {
         assert_eq!(
             symbol.field("Reference").unwrap().justify,
             Some(FieldJustify::new(
-                Some(FieldHorizontalJustify::Left),
+                Some(FieldHorizontalJustify::Right),
                 Some(FieldVerticalJustify::Center),
             ))
         );

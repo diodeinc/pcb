@@ -3,9 +3,10 @@ mod common;
 use std::collections::BTreeSet;
 
 use pcb_kicad_sch::{
-    Label, LabelKind, Point, SchDocument, SchItem, SchPage, Symbol, SymbolDefinition,
+    Label, LabelKind, MirrorAxis, Point, Rotation, SchDocument, SchItem, SchPage, Symbol,
+    SymbolDefinition,
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
-    connectivity::{PhysicalConnectivity, PinVisibility},
+    connectivity::{PhysicalConnectivity, PinVisibility, Terminal},
     deterministic_uuid,
     reconcile::{plan_reconciliation, plan_repairs, sync_netlist_derived_symbol_properties},
 };
@@ -187,22 +188,92 @@ fn netlist_derived_symbol_properties_sync_without_repairing_topology() {
 }
 
 #[test]
-fn reconciliation_drives_each_physical_pin_of_a_logical_terminal() {
+fn reconciliation_wires_kicads_rotated_mirrored_physical_pin_anchors() {
     let netlist = common::compile_fixture("multi_pad", "root.zen");
-    let document = plan_reconciliation(None, &netlist, "MultiPad.kicad_sch")
+    let mut document = plan_reconciliation(None, &netlist, "MultiPad.kicad_sch")
         .unwrap()
         .apply(None)
         .unwrap();
+    let page = document
+        .pages
+        .iter_mut()
+        .find(|page| {
+            page.items.iter().any(|item| {
+                matches!(item, SchItem::Symbol(symbol) if symbol.lib_id.contains("MULTI_PAD"))
+            })
+        })
+        .expect("page containing multi-pin symbol");
+    let symbol = page
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.lib_id.contains("MULTI_PAD") => Some(symbol),
+            _ => None,
+        })
+        .expect("managed multi-pin symbol");
+    symbol.rotation = Rotation::Deg270;
+    symbol.mirror = Some(MirrorAxis::Y);
 
-    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let definition = &page.library.definitions[&symbol.lib_id];
+    let mut pin_anchors = definition
+        .placed_pins(symbol)
+        .unwrap()
+        .into_iter()
+        .map(|pin| (pin.number, pin.point))
+        .collect::<Vec<_>>();
+    pin_anchors.sort_by(|left, right| left.0.cmp(&right.0));
+    assert_eq!(
+        pin_anchors,
+        vec![
+            (
+                "1".to_string(),
+                Point::new(symbol.at.x - 2.54, symbol.at.y - 5.08),
+            ),
+            (
+                "2".to_string(),
+                Point::new(symbol.at.x - 2.54, symbol.at.y + 5.08),
+            ),
+            (
+                "3".to_string(),
+                Point::new(symbol.at.x + 2.54, symbol.at.y - 5.08),
+            ),
+            (
+                "4".to_string(),
+                Point::new(symbol.at.x + 2.54, symbol.at.y + 5.08),
+            ),
+        ],
+        "KiCad applies the 270-degree rotation before mirror y"
+    );
+
+    let repaired = plan_reconciliation(Some(&document), &netlist, "MultiPad.kicad_sch")
+        .unwrap()
+        .apply(Some(&document))
+        .unwrap();
+    let inspection = inspect_schematic(&repaired, &netlist).unwrap();
     assert!(
         inspection.analysis.is_equivalent(),
         "{:#?}",
         inspection.analysis.issues()
     );
-
-    let unchanged = plan_reconciliation(Some(&document), &netlist, "MultiPad.kicad_sch").unwrap();
-    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+    let physical = PhysicalConnectivity::from_kicad(&repaired, PinVisibility::VisibleOnly).unwrap();
+    for (net_name, expected_numbers) in [("LEFT", ["1", "3"]), ("RIGHT", ["2", "4"])] {
+        let group = physical
+            .graph
+            .groups
+            .iter()
+            .find(|group| group.names.contains(net_name))
+            .unwrap_or_else(|| panic!("missing native net {net_name}"));
+        let actual_numbers = group
+            .terminals
+            .iter()
+            .flat_map(|terminal| match terminal {
+                Terminal::ComponentPin { pin_numbers, .. } => pin_numbers.iter(),
+                Terminal::InterfacePort { .. } => unreachable!(),
+            })
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual_numbers, BTreeSet::from(expected_numbers));
+    }
 }
 
 #[test]
