@@ -30,7 +30,9 @@ pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
         .collect()
 }
 
-/// Partition rings into groups connected by overlapping bounds.
+/// Partition rings into groups connected by overlapping bounds, each in
+/// input order and the groups ordered by their first ring, so callers that
+/// number the resulting shapes see the same numbering for the same input.
 ///
 /// Bounds carry the overlay's rounding allowance: every group snaps to its
 /// own integer grid, and groups that stay apart by more than the allowance
@@ -76,12 +78,19 @@ fn bounds_connected_groups(rings: Vec<Ring>) -> Vec<Vec<Ring>> {
         open.push(merged);
     }
     closed.extend(open);
-    let mut rings = rings.into_iter().map(Some).collect::<Vec<_>>();
-    closed
+    let mut groups = closed
         .into_iter()
-        .map(|group| {
-            group
-                .members
+        .map(|mut group| {
+            group.members.sort_unstable();
+            group.members
+        })
+        .collect::<Vec<_>>();
+    groups.sort_unstable_by_key(|members| members[0]);
+    let mut rings = rings.into_iter().map(Some).collect::<Vec<_>>();
+    groups
+        .into_iter()
+        .map(|members| {
+            members
                 .into_iter()
                 .filter_map(|index| rings[index].take())
                 .collect()
