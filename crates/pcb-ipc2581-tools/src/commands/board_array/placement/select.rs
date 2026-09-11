@@ -14,39 +14,27 @@
 
 use pcb_ir::geom::Point;
 
-/// Equivalent isotropic laminate, N/mm².
+/// Material, tab and process inputs the model is derived from.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
-pub struct Laminate {
-    pub youngs_modulus: f64,
-    pub shear_modulus: f64,
+pub struct Physics {
+    /// Equivalent isotropic laminate, N/mm².
+    pub youngs_modulus_mpa: f64,
+    pub shear_modulus_mpa: f64,
     pub poisson_ratio: f64,
-}
-
-/// One tab as a beam of `width` and `length` between board and frame, with
-/// its section reduced by perforation.
-#[derive(Debug, Clone, Copy, serde::Serialize)]
-pub struct TabBeam {
-    pub width_mm: f64,
-    pub length_mm: f64,
-    pub perforation_factor: f64,
-}
-
-/// The frame rail a tab lands on: a strip of the board's thickness, held
-/// where cross rails meet it, one board span apart.
-#[derive(Debug, Clone, Copy, serde::Serialize)]
-pub struct Rail {
-    pub width_mm: f64,
-}
-
-#[derive(Debug, Clone, Copy, serde::Serialize)]
-pub struct Process {
+    /// The neck is a beam of this width between board and rail, its section
+    /// reduced by perforation.
+    pub neck_width_mm: f64,
+    pub neck_perforation_factor: f64,
+    /// The rail a tab lands on: a strip of the board's thickness, held where
+    /// cross rails meet it.
+    pub rail_width_mm: f64,
     /// Point load that may act anywhere on the board, N.
     pub load_n: f64,
     /// Allowed deflection under that load, mm.
     pub deflection_limit_mm: f64,
 }
 
-/// Derived stiffnesses for one board thickness and rail span.
+/// Stiffnesses derived for one board's thickness, span and slot.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Model {
     pub thickness_mm: f64,
@@ -79,26 +67,31 @@ impl Model {
     pub fn new(
         thickness_mm: f64,
         rail_span_mm: f64,
-        laminate: Laminate,
-        tab: TabBeam,
-        rail: Rail,
-        process: Process,
+        neck_length_mm: f64,
+        physics: Physics,
         min_separation_mm: f64,
     ) -> Self {
-        let (e, g, nu) = (
-            laminate.youngs_modulus,
-            laminate.shear_modulus,
-            laminate.poisson_ratio,
-        );
-        let (w, l, t) = (tab.width_mm, tab.length_mm, thickness_mm);
-        let f = tab.perforation_factor;
+        let Physics {
+            youngs_modulus_mpa: e,
+            shear_modulus_mpa: g,
+            poisson_ratio: nu,
+            neck_width_mm: w,
+            neck_perforation_factor: f,
+            rail_width_mm,
+            load_n,
+            deflection_limit_mm,
+        } = physics;
+        let (t, l) = (thickness_mm, neck_length_mm);
         let neck_inertia = w * t.powi(3) / 12.0;
+        let rail_inertia = rail_width_mm * t.powi(3) / 12.0;
+        // Neck as a beam guided at both ends; rail loaded at mid-span between
+        // its supports, by a torque for the neck's bending and by a moment
+        // for the neck's twist.
         let neck_transverse = f * 12.0 * e * neck_inertia / l.powi(3);
         let neck_bending = f * 4.0 * e * neck_inertia / l;
         let neck_twist = f * g * torsion_constant(w, t) / l;
-        // A torque or moment applied at mid-span of a rail held at both ends.
-        let rail_twist = 4.0 * g * torsion_constant(rail.width_mm, t) / rail_span_mm;
-        let rail_bending = 12.0 * e * rail.width_mm * t.powi(3) / 12.0 / rail_span_mm;
+        let rail_twist = 4.0 * g * torsion_constant(rail_width_mm, t) / rail_span_mm;
+        let rail_bending = 12.0 * e * rail_inertia / rail_span_mm;
         let rigidity_n_mm = e * t.powi(3) / (12.0 * (1.0 - nu * nu));
         Self {
             thickness_mm,
@@ -107,11 +100,9 @@ impl Model {
             tab_transverse_n_per_mm: neck_transverse,
             tab_bending_n_mm: series(neck_bending, rail_twist),
             tab_twist_n_mm: series(neck_twist, rail_bending),
-            load_n: process.load_n,
-            deflection_limit_mm: process.deflection_limit_mm,
-            reach_mm: (BENDING_SPREAD * rigidity_n_mm * process.deflection_limit_mm
-                / process.load_n)
-                .sqrt(),
+            load_n,
+            deflection_limit_mm,
+            reach_mm: (BENDING_SPREAD * rigidity_n_mm * deflection_limit_mm / load_n).sqrt(),
             min_separation_mm,
         }
     }
@@ -135,7 +126,7 @@ pub struct Site {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Violation {
-    NoSites,
+    NoTabs,
     Deflection { deflection_mm: f64, limit_mm: f64 },
     Separation { distance_mm: f64, minimum_mm: f64 },
 }
@@ -143,7 +134,7 @@ pub enum Violation {
 impl std::fmt::Display for Violation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoSites => write!(f, "no candidate sites on the outline"),
+            Self::NoTabs => write!(f, "no candidate sites on the outline"),
             Self::Deflection {
                 deflection_mm,
                 limit_mm,
@@ -164,6 +155,8 @@ pub struct Selection {
     /// Index of the load point that deflects most.
     pub worst_point: Option<usize>,
     pub violations: Vec<Violation>,
+    /// Whether every smaller set was exhaustively ruled out.
+    pub proven: bool,
 }
 
 impl Selection {
@@ -171,53 +164,42 @@ impl Selection {
         self.violations.is_empty()
     }
 
+    /// Fewer violations first, then less deflection.
     fn better_than(&self, other: &Self) -> bool {
         (self.violations.len(), self.deflection_mm) < (other.violations.len(), other.deflection_mm)
     }
 }
 
+/// Exhaustive search stops after this many tabs.
+const EXHAUSTIVE_TABS: usize = 4;
+/// Subsets the exhaustive phase may enumerate per tab count.
+const EXHAUSTIVE_BUDGET: f64 = 3.0e6;
+
 /// Fewest tabs whose worst deflection is within the limit. A greedy pass
-/// with pruning and swapping gives a feasible set and an upper bound; the
-/// exhaustive search then looks for anything smaller, up to four tabs and as
-/// long as the enumeration stays affordable. Always returns a set; check
-/// `violations`.
+/// with pruning and swapping gives a feasible set; the exhaustive search
+/// then finds the best set no larger than it, smallest count first, up to
+/// [`EXHAUSTIVE_TABS`] and while the enumeration stays within budget, which
+/// is what `proven` records. Always returns a set; check `violations`.
 pub fn select(sites: &[Site], loads: &[Point], model: &Model) -> Selection {
-    if sites.is_empty() {
-        return Selection {
-            chosen: Vec::new(),
-            deflection_mm: f64::INFINITY,
-            worst_point: None,
-            violations: vec![Violation::NoSites],
-        };
-    }
     let evaluator = Evaluator::new(sites, loads, model);
-    let n = sites.len();
-    let greedy = evaluator.greedy();
-    let bound = if greedy.satisfied() {
+    let mut greedy = evaluator.greedy();
+    let largest = if greedy.satisfied() {
         greedy.chosen.len()
     } else {
-        n.min(4) + 1
+        EXHAUSTIVE_TABS
     };
-    for k in 1..bound.min(5) {
-        if combinations(n, k) > EXHAUSTIVE_BUDGET {
-            break;
+    for k in 1..=largest.min(EXHAUSTIVE_TABS).min(sites.len()) {
+        if combinations(sites.len(), k) > EXHAUSTIVE_BUDGET {
+            return greedy;
         }
-        let mut best: Option<Selection> = None;
-        evaluator.search(k, &mut Vec::with_capacity(k), &mut |chosen| {
-            let candidate = evaluator.evaluate(chosen);
-            if candidate.satisfied() && best.as_ref().is_none_or(|b| candidate.better_than(b)) {
-                best = Some(candidate);
-            }
-        });
-        if let Some(best) = best {
+        if let Some(mut best) = evaluator.exhaustive(k) {
+            best.proven = true;
             return best;
         }
     }
+    greedy.proven = greedy.satisfied() && greedy.chosen.len() <= EXHAUSTIVE_TABS + 1;
     greedy
 }
-
-/// Subsets the exhaustive phase may enumerate per tab count.
-const EXHAUSTIVE_BUDGET: f64 = 3.0e6;
 
 fn combinations(n: usize, k: usize) -> f64 {
     (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
@@ -237,6 +219,8 @@ struct Evaluator<'a> {
     rows: Vec<[f64; 3]>,
     /// Sites relative to the same centroid.
     offsets: Vec<Point>,
+    /// Distance between each pair of sites.
+    spacing: Vec<Vec<f64>>,
     /// Squared distance from each site to each load point.
     distance2: Vec<Vec<f64>>,
     /// Per site, the load points within reach, as bit words.
@@ -247,11 +231,6 @@ struct Evaluator<'a> {
 impl<'a> Evaluator<'a> {
     fn new(sites: &'a [Site], loads: &'a [Point], model: &'a Model) -> Self {
         let centroid = loads.iter().fold(Point::ZERO, |c, p| c + *p) / loads.len().max(1) as f64;
-        let rows = loads
-            .iter()
-            .map(|p| [1.0, p.x - centroid.x, p.y - centroid.y])
-            .collect();
-        let offsets = sites.iter().map(|s| s.point - centroid).collect();
         let distance2: Vec<Vec<f64>> = sites
             .iter()
             .map(|site| {
@@ -287,8 +266,15 @@ impl<'a> Evaluator<'a> {
         Self {
             sites,
             model,
-            rows,
-            offsets,
+            rows: loads
+                .iter()
+                .map(|p| [1.0, p.x - centroid.x, p.y - centroid.y])
+                .collect(),
+            offsets: sites.iter().map(|s| s.point - centroid).collect(),
+            spacing: sites
+                .iter()
+                .map(|a| sites.iter().map(|b| a.point.distance_to(b.point)).collect())
+                .collect(),
             distance2,
             within_reach,
             all_points,
@@ -304,7 +290,7 @@ impl<'a> Evaluator<'a> {
             .flat_map(|a| (a + 1..n).map(move |b| vec![a, b]))
             .map(|pair| self.evaluate(&pair))
             .reduce(|a, b| if b.better_than(&a) { b } else { a })
-            .unwrap_or_else(|| self.evaluate(&[0]));
+            .unwrap_or_else(|| self.evaluate(&(0..n).collect::<Vec<_>>()));
         while !incumbent.satisfied() {
             match self.best_neighbor(&incumbent, Move::Add) {
                 Some(better) if better.better_than(&incumbent) => incumbent = better,
@@ -329,43 +315,25 @@ impl<'a> Evaluator<'a> {
         incumbent
     }
 
-    /// The best selection one move away from `from`.
+    /// The best selection one move away from `from`. A neighbor whose running
+    /// maximum already exceeds the best one found cannot win, so its
+    /// evaluation stops there; starting from the incumbent's worst point
+    /// makes that happen early.
     fn best_neighbor(&self, from: &Selection, kind: Move) -> Option<Selection> {
         let n = self.sites.len();
+        let k = from.chosen.len();
         let unused = || (0..n).filter(|i| !from.chosen.contains(i));
-        let candidates: Vec<Vec<usize>> = match kind {
-            Move::Add => unused()
-                .map(|i| {
-                    let mut chosen = from.chosen.clone();
-                    chosen.push(i);
-                    chosen.sort_unstable();
-                    chosen
-                })
-                .collect(),
-            Move::Drop => (0..from.chosen.len())
-                .map(|k| {
-                    let mut chosen = from.chosen.clone();
-                    chosen.remove(k);
-                    chosen
-                })
-                .collect(),
-            Move::Swap => (0..from.chosen.len())
-                .flat_map(|k| {
-                    unused().map(move |i| {
-                        let mut chosen = from.chosen.clone();
-                        chosen[k] = i;
-                        chosen.sort_unstable();
-                        chosen
-                    })
-                })
+        let neighbors: Vec<Vec<usize>> = match kind {
+            Move::Add => unused().map(|i| with(&from.chosen, k, i)).collect(),
+            Move::Drop => (0..k).map(|slot| without(&from.chosen, slot)).collect(),
+            Move::Swap => (0..k)
+                .flat_map(|slot| unused().map(move |i| (slot, i)))
+                .map(|(slot, i)| with(&without(&from.chosen, slot), slot, i))
                 .collect(),
         };
-        // A neighbor whose running maximum already exceeds the best one found
-        // cannot win, so evaluation stops there; starting from the incumbent's
-        // worst point makes that happen early.
         let start = from.worst_point.unwrap_or(0);
         let mut best: Option<Selection> = None;
-        for chosen in candidates.iter().filter(|chosen| !chosen.is_empty()) {
+        for chosen in &neighbors {
             let (bound, crowded) = best.as_ref().map_or((f64::INFINITY, 0), |b| {
                 (
                     b.deflection_mm,
@@ -382,8 +350,19 @@ impl<'a> Evaluator<'a> {
         best
     }
 
-    /// Visit every `k`-subset whose tabs are separated and whose local bending
-    /// alone stays within the limit.
+    /// Best rule-satisfying `k`-subset, enumerated with separation pruning
+    /// and skipping sets whose local bending alone exceeds the limit.
+    fn exhaustive(&self, k: usize) -> Option<Selection> {
+        let mut best: Option<Selection> = None;
+        self.search(k, &mut Vec::with_capacity(k), &mut |chosen| {
+            let candidate = self.evaluate(chosen);
+            if candidate.satisfied() && best.as_ref().is_none_or(|b| candidate.better_than(b)) {
+                best = Some(candidate);
+            }
+        });
+        best
+    }
+
     fn search(&self, k: usize, chosen: &mut Vec<usize>, visit: &mut impl FnMut(&[usize])) {
         if chosen.len() == k {
             if self.all_within_reach(chosen) {
@@ -393,10 +372,10 @@ impl<'a> Evaluator<'a> {
         }
         let start = chosen.last().map_or(0, |&i| i + 1);
         for i in start..=self.sites.len() - (k - chosen.len()) {
-            let separated = chosen.iter().all(|&j| {
-                self.sites[i].point.distance_to(self.sites[j].point) >= self.model.min_separation_mm
-            });
-            if separated {
+            if chosen
+                .iter()
+                .all(|&j| self.spacing[i][j] >= self.model.min_separation_mm)
+            {
                 chosen.push(i);
                 self.search(k, chosen, visit);
                 chosen.pop();
@@ -431,21 +410,29 @@ impl<'a> Evaluator<'a> {
         crowded: usize,
     ) -> Option<Selection> {
         let model = self.model;
-        let mut violations = Vec::new();
+        let mut selection = Selection {
+            chosen: chosen.to_vec(),
+            deflection_mm: f64::INFINITY,
+            worst_point: None,
+            violations: Vec::new(),
+            proven: false,
+        };
+        let Some(compliance) = self.rigid_compliance(chosen) else {
+            selection.violations.push(Violation::NoTabs);
+            return Some(selection);
+        };
         let separation = chosen
             .iter()
             .enumerate()
-            .flat_map(|(i, &a)| chosen[i + 1..].iter().map(move |&b| (a, b)))
-            .map(|(a, b)| self.sites[a].point.distance_to(self.sites[b].point))
+            .flat_map(|(i, &a)| chosen[i + 1..].iter().map(move |&b| self.spacing[a][b]))
             .fold(f64::INFINITY, f64::min);
         if separation < model.min_separation_mm {
-            violations.push(Violation::Separation {
+            selection.violations.push(Violation::Separation {
                 distance_mm: separation,
                 minimum_mm: model.min_separation_mm,
             });
         }
-        let compliance = self.rigid_compliance(chosen);
-        let (mut worst_point, mut deflection_mm) = (None, 0.0);
+        selection.deflection_mm = 0.0;
         let count = self.rows.len();
         for j in (start..count).chain(0..start) {
             let rigid = quadratic_form(&compliance, &self.rows[j]);
@@ -454,31 +441,27 @@ impl<'a> Evaluator<'a> {
                 .map(|&i| self.distance2[i][j])
                 .fold(f64::INFINITY, f64::min);
             let d = model.load_n * (rigid + nearest2 / (BENDING_SPREAD * model.rigidity_n_mm));
-            if d > deflection_mm {
-                (worst_point, deflection_mm) = (Some(j), d);
-                if d > bound && violations.len() >= crowded {
+            if d > selection.deflection_mm {
+                (selection.worst_point, selection.deflection_mm) = (Some(j), d);
+                if d > bound && selection.violations.len() >= crowded {
                     return None;
                 }
             }
         }
-        if deflection_mm > model.deflection_limit_mm {
-            violations.push(Violation::Deflection {
-                deflection_mm,
+        if selection.deflection_mm > model.deflection_limit_mm {
+            selection.violations.push(Violation::Deflection {
+                deflection_mm: selection.deflection_mm,
                 limit_mm: model.deflection_limit_mm,
             });
         }
-        Some(Selection {
-            chosen: chosen.to_vec(),
-            deflection_mm,
-            worst_point,
-            violations,
-        })
+        Some(selection)
     }
 
     /// Inverse stiffness of the rigid plane `[w, ∂w/∂x, ∂w/∂y]` on the chosen
     /// tabs: transverse springs at each tab, bending springs on the slope
     /// along each tab's normal, twist springs on the slope along its tangent.
-    fn rigid_compliance(&self, chosen: &[usize]) -> [[f64; 3]; 3] {
+    /// `None` without tabs, when the plane is free.
+    fn rigid_compliance(&self, chosen: &[usize]) -> Option<[[f64; 3]; 3]> {
         let model = self.model;
         let mut k = [[0.0; 3]; 3];
         for &i in chosen {
@@ -497,8 +480,23 @@ impl<'a> Evaluator<'a> {
                 }
             }
         }
-        invert_symmetric(k).unwrap_or([[f64::INFINITY; 3]; 3])
+        invert_symmetric(k)
     }
+}
+
+/// `chosen` with `site` inserted at `slot`.
+fn with(chosen: &[usize], slot: usize, site: usize) -> Vec<usize> {
+    let mut next = chosen.to_vec();
+    next.insert(slot, site);
+    next.sort_unstable();
+    next
+}
+
+/// `chosen` without the entry at `slot`.
+fn without(chosen: &[usize], slot: usize) -> Vec<usize> {
+    let mut next = chosen.to_vec();
+    next.remove(slot);
+    next
 }
 
 fn quadratic_form(m: &[[f64; 3]; 3], v: &[f64; 3]) -> f64 {
@@ -525,31 +523,23 @@ fn invert_symmetric(m: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
 mod tests {
     use super::*;
 
+    const FR4: Physics = Physics {
+        youngs_modulus_mpa: 22_000.0,
+        shear_modulus_mpa: 4_500.0,
+        poisson_ratio: 0.13,
+        neck_width_mm: 2.0,
+        neck_perforation_factor: 0.5,
+        rail_width_mm: 6.0,
+        load_n: 5.0,
+        deflection_limit_mm: 0.25,
+    };
+
     fn model(thickness_mm: f64) -> Model {
-        Model::new(
-            thickness_mm,
-            60.0,
-            Laminate {
-                youngs_modulus: 22_000.0,
-                shear_modulus: 4_500.0,
-                poisson_ratio: 0.13,
-            },
-            TabBeam {
-                width_mm: 2.0,
-                length_mm: 2.0,
-                perforation_factor: 0.5,
-            },
-            Rail { width_mm: 6.0 },
-            Process {
-                load_n: 5.0,
-                deflection_limit_mm: 0.25,
-            },
-            10.0,
-        )
+        Model::new(thickness_mm, 60.0, 2.0, FR4, 10.0)
     }
 
-    /// Rectangle `w` by `h` at the origin, sampled every mm, with candidate
-    /// sites every `pitch` on all four sides.
+    /// Rectangle `w` by `h` at the origin, sampled every mm along the outline,
+    /// with candidate sites every `pitch` on all four sides.
     fn rectangle(w: f64, h: f64, pitch: f64) -> (Vec<Point>, Vec<Site>) {
         let mut outline = Vec::new();
         let mut sites = Vec::new();
@@ -616,16 +606,19 @@ mod tests {
     }
 
     #[test]
-    fn one_tab_is_a_finite_but_soft_cantilever() {
+    fn no_sites_and_one_tab_are_reported_not_solved() {
         let (outline, sites) = rectangle(40.0, 20.0, 5.0);
         let m = model(1.6);
+        let none = select(&[], &outline, &m);
+        assert_eq!(none.violations, vec![Violation::NoTabs]);
+        assert!(none.chosen.is_empty() && !none.proven);
         let one = Evaluator::new(&sites, &outline, &m).evaluate(&[0]);
         assert!(one.deflection_mm.is_finite());
         assert!(one.deflection_mm > m.deflection_limit_mm);
     }
 
     #[test]
-    fn count_grows_with_board_size() {
+    fn count_grows_with_board_size_and_small_counts_are_proven() {
         let small = tabs(20.0, 10.0, 1.6);
         let medium = tabs(60.0, 30.0, 1.6);
         let long = tabs(250.0, 30.0, 1.6);
@@ -633,6 +626,7 @@ mod tests {
         assert!(small.chosen.len() <= 2, "{:?}", small.chosen);
         assert!(medium.chosen.len() >= 3);
         assert!(long.chosen.len() > medium.chosen.len());
+        assert!(small.proven && medium.proven);
     }
 
     #[test]
@@ -649,7 +643,7 @@ mod tests {
     }
 
     #[test]
-    fn opposed_pair_hinges_where_a_triangle_holds() {
+    fn pairs_hinge_where_a_triangle_holds() {
         let (outline, sites) = rectangle(60.0, 30.0, 5.0);
         let m = model(1.6);
         let evaluator = Evaluator::new(&sites, &outline, &m);
