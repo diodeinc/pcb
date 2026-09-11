@@ -5,20 +5,21 @@
 //! non-plated drills.
 //!
 //! Each tab comes from the single-tab builder in pcb-ir, given the board
-//! instance, the frame around it and a local window of stock. A board's
-//! removal is its slot minus every tab footprint on it, so tabs never erase
-//! one another; the holes are the builder's. The retained panel is then
-//! checked as a whole: every board connected to the frame before the break
-//! rows are cut, every board free of the frame and of each other after.
+//! instance, the frame around it and a local window of stock; the holes and
+//! break rows are the builder's. A board's removal is its slot minus every
+//! tab neck, opened by the cutter around the necks so the fillets a router
+//! leaves beside them are part of the void's shape. The retained panel is
+//! then checked as a whole: every board connected to the frame before the
+//! break rows are cut, every board free of the frame and of each other after.
 
 use std::collections::HashSet;
 
 use anyhow::{Context, Result, bail, ensure};
 use ipc2581::types::Polygon;
 use pcb_ir::geom::{
-    Affine2, ContourBuf, ContourSet, LineCap, LineJoin, Point, Resolution, StrokeToFillStyle,
+    Affine2, BBox, ContourBuf, ContourSet, LineCap, LineJoin, Point, Resolution, StrokeToFillStyle,
     attachment::{BoundaryQuery, QueryTolerance, material_after_break, transform_region},
-    mouse_bite::{Attachment, Npth, SparkFunShallow, build},
+    mouse_bite::{Attachment, Npth, SparkFunShallow, TabGeometry, build},
     path::stroke_to_fill,
     region::ring_signed_area,
 };
@@ -75,11 +76,11 @@ pub(super) fn generate(
         .iter()
         .try_fold(stock.clone(), |frame, slot| frame.difference(slot))?;
     ensure!(
-        significant_components(&frame, resolution) == 1,
+        routable_components(&frame, resolution) == 1,
         "the rails between routed slots do not form one connected frame"
     );
     let candidates = &placement.sites.candidates;
-    let reach = preset.routing_gap_mm + preset.frame_landing_mm;
+    let radius = SparkFunShallow::CUTTER_RADIUS_MM;
     let mut excluded = HashSet::new();
     let mut dropped = Vec::new();
     loop {
@@ -110,75 +111,62 @@ pub(super) fn generate(
         let mut holes = Vec::new();
         let mut perforations = ContourSet::empty(resolution);
         let mut break_rows = Vec::new();
-        let mut witnesses = vec![frame_witness(&frame)?];
-        let mut failure = None;
-        'boards: for ((board, slot), offset) in boards.iter().zip(&grown).zip(offsets) {
-            // The builder wants stock well beyond the support it lands on, so
-            // the support ring stops short of the local stock window.
-            let support = frame.intersection(&slot.disk_dilate(preset.frame_landing_mm + 1.0)?)?;
-            let window = slot
-                .disk_dilate(preset.frame_landing_mm + 4.0)?
-                .intersection(stock)?;
-            let query = BoundaryQuery::new(board, tolerance)?;
-            let mut footprints = ContourSet::empty(resolution);
+        let mut rejected = None;
+        'boards: for ((board, slot), &offset) in boards.iter().zip(&grown).zip(offsets) {
+            let mut necks = ContourSet::empty(resolution);
             for &c in &chosen {
                 let site = candidates[c].site;
-                let point = site.point + *offset;
-                let normal = site.outward_normal;
-                let projection = query
-                    .boundaries()
-                    .map(|id| query.project(id, point))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .min_by(|a, b| a.distance.mm.total_cmp(&b.distance.mm))
-                    .context("board instance has no boundary")?;
-                let attachment = Attachment {
-                    stock: &window,
+                let tab = build_tab(
+                    site.point + offset,
+                    site.outward_normal,
                     board,
-                    support: &support,
-                    boundary: projection.site.boundary,
-                    station_mm: projection.site.station_mm,
-                    support_anchor: point + normal * (preset.routing_gap_mm + reach) / 2.0,
-                    board_witness: point - normal * WITNESS_DEPTH_MM,
+                    slot,
+                    &frame,
+                    stock,
+                    preset,
+                    resolution,
                     tolerance,
-                };
-                match build(attachment) {
+                );
+                match tab {
                     Ok(tab) => {
-                        footprints = footprints.union(&tab.attachment_footprint)?;
+                        necks = necks.union(&tab.neck)?;
                         perforations = perforations.union(&tab.perforations)?;
                         holes.extend(tab.npth);
                         break_rows.push(tab.break_path);
-                        if witnesses.len() == cutouts.len() + 1 {
-                            witnesses.push(attachment_witness(point, normal));
-                        }
                     }
                     Err(error) => {
-                        failure = Some(format!(
-                            "site {c} at ({:.2}, {:.2}): {error}",
-                            site.point.x, site.point.y
+                        rejected = Some((
+                            c,
+                            format!(
+                                "site at ({:.2}, {:.2}): {error:#}",
+                                site.point.x, site.point.y
+                            ),
                         ));
                         break 'boards;
                     }
                 }
             }
-            let removal = slot.difference(board)?.difference(&footprints)?;
-            cutouts.push(removal);
+            // The router clears the slot except where necks bridge it. Its
+            // disk cannot reach into the corners where a neck meets the slot
+            // walls, so the void is opened by the cutter around the necks and
+            // follows the outline exactly everywhere else.
+            let void = slot.difference(board)?.difference(&necks)?;
+            let removal = void
+                .disk_open(radius)?
+                .union(&void.difference(&necks.disk_dilate(2.0 * radius)?)?)?;
+            cutouts.extend(removal.connected_components());
         }
-        if let Some(failure) = failure {
-            let c = failure
-                .split(' ')
-                .nth(1)
-                .and_then(|s| s.parse::<usize>().ok())
-                .expect("failure names its site");
+        if let Some((c, reason)) = rejected {
             excluded.insert(c);
-            dropped.push(failure);
+            dropped.push(reason);
             continue;
         }
-
-        let cutouts: Vec<ContourSet> = cutouts
-            .iter()
-            .flat_map(|removal| significant(removal, resolution))
-            .collect();
+        let witnesses = std::iter::once(frame_witness(&frame)?)
+            .chain(offsets.iter().map(|&offset| {
+                let site = candidates[chosen[0]].site;
+                site.point + offset - site.outward_normal * WITNESS_DEPTH_MM
+            }))
+            .collect::<Vec<_>>();
         check_release(
             stock,
             &cutouts,
@@ -196,11 +184,69 @@ pub(super) fn generate(
     }
 }
 
-/// How far inside the board the builder's witness point sits.
+/// How far inside the board a witness point sits.
 const WITNESS_DEPTH_MM: f64 = 1.0;
+/// Half-size of the window a tab is built in: the drill row, neck, shoulders
+/// and frame landing all lie within a few millimetres of the site.
+const LOCAL_MM: f64 = 10.0;
 
-fn attachment_witness(point: Point, normal: Point) -> Point {
-    point - normal * WITNESS_DEPTH_MM
+/// One tab at `point` on `board`, built in a window around the site so the
+/// cost of a tab does not grow with the panel. The builder wants stock beyond
+/// the support it lands on, so the support ring stops short of the window.
+#[allow(clippy::too_many_arguments)]
+fn build_tab(
+    point: Point,
+    normal: Point,
+    board: &ContourSet,
+    slot: &ContourSet,
+    frame: &ContourSet,
+    stock: &ContourSet,
+    preset: &Preset,
+    resolution: Resolution,
+    tolerance: QueryTolerance,
+) -> Result<TabGeometry> {
+    let reach = preset.routing_gap_mm + preset.frame_landing_mm;
+    let window = ContourSet::rectangle(
+        BBox::new(
+            point - Point::new(LOCAL_MM, LOCAL_MM),
+            point + Point::new(LOCAL_MM, LOCAL_MM),
+        ),
+        resolution,
+    );
+    let local_board = board.intersection(&window)?;
+    let support_anchor = point + normal * (preset.routing_gap_mm + reach) / 2.0;
+    // The frame the tab lands on; a small board's window can also hold
+    // frame beyond its far side or inside its notches.
+    let local_support = frame
+        .intersection(
+            &slot
+                .intersection(&window)?
+                .disk_dilate(preset.frame_landing_mm + 1.0)?
+                .intersection(&window)?,
+        )?
+        .connected_components()
+        .into_iter()
+        .find(|piece| piece.contains_point(support_anchor))
+        .context("the tab's landing is not frame material")?;
+    let local_stock = stock.intersection(&window)?;
+    let query = BoundaryQuery::new(&local_board, tolerance)?;
+    let projection = query
+        .boundaries()
+        .map(|id| query.project(id, point))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .min_by(|a, b| a.distance.mm.total_cmp(&b.distance.mm))
+        .context("board instance has no boundary")?;
+    Ok(build(Attachment {
+        stock: &local_stock,
+        board: &local_board,
+        support: &local_support,
+        boundary: projection.site.boundary,
+        station_mm: projection.site.station_mm,
+        support_anchor,
+        board_witness: point - normal * WITNESS_DEPTH_MM,
+        tolerance,
+    })?)
 }
 
 /// A point on the bottom rail, away from the rounded corners.
@@ -214,23 +260,19 @@ fn frame_witness(frame: &ContourSet) -> Result<Point> {
     Ok(point)
 }
 
-/// Connected pieces of `region` at the cutter's own significance: a void or
-/// an island smaller than the cutter radius squared is not something a router
-/// cuts or leaves, only residue of booleans along coincident edges.
-fn significant(region: &ContourSet, resolution: Resolution) -> Vec<ContourSet> {
+/// Connected pieces of `region` at the cutter's own significance: an island
+/// smaller than the cutter radius squared is residue of booleans along
+/// coincident edges, not something a router leaves.
+fn routable_components(region: &ContourSet, resolution: Resolution) -> usize {
     let routable = resolution.with_tolerance(SparkFunShallow::CUTTER_RADIUS_MM);
     region
         .connected_components()
         .into_iter()
-        .map(|piece| {
-            ContourSet::from_regularized(piece.rings.clone(), routable, piece.uncertainty_mm)
+        .filter(|piece| {
+            !ContourSet::from_regularized(piece.rings.clone(), routable, piece.uncertainty_mm)
+                .is_empty()
         })
-        .filter(|piece| !piece.is_empty())
-        .collect()
-}
-
-fn significant_components(region: &ContourSet, resolution: Resolution) -> usize {
-    significant(region, resolution).len()
+        .count()
 }
 
 /// Every board must connect to the frame through its tabs, and cutting every
@@ -290,21 +332,13 @@ const BREAK_PROBE_MM: f64 = 0.002;
 pub fn cutout_polygon(cutout: &ContourSet) -> Result<Polygon> {
     let [ring] = cutout.rings.as_slice() else {
         bail!(
-            "a routed void has {} rings; each must be a single loop (areas {:?}, bbox {:?})",
-            cutout.rings.len(),
-            cutout
-                .rings
-                .iter()
-                .map(ring_signed_area)
-                .collect::<Vec<_>>(),
-            cutout.bbox()
+            "a routed void has {} rings; each must be a single loop",
+            cutout.rings.len()
         );
     };
     ensure!(
         ring_signed_area(ring) > 0.0 && ring.len() >= 3,
-        "a routed void has no area (signed area {}, {} vertices)",
-        ring_signed_area(ring),
-        ring.len()
+        "a routed void has no area"
     );
     Ok(Polygon {
         begin: ipc2581::types::Point {

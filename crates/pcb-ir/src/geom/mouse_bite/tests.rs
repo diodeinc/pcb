@@ -176,11 +176,13 @@ fn witnesses_must_be_interior_to_the_original_regions() {
         .unwrap()
         .site
         .station_mm;
-    for (support_anchor, board_witness) in [
-        (Point::new(0.0, 3.0), Point::new(0.0, -5.0)),
-        (Point::new(0.0, 3.0 - 1e-7), Point::new(0.0, -5.0)),
-        (Point::new(0.0, 5.0), Point::ZERO),
-        (Point::new(0.0, 5.0), Point::new(0.0, 1e-7)),
+    let anchor = "expected the support anchor inside support";
+    let witness = "expected the board witness inside the board";
+    for (support_anchor, board_witness, expected) in [
+        (Point::new(0.0, 3.0), Point::new(0.0, -5.0), anchor),
+        (Point::new(0.0, 3.0 - 1e-7), Point::new(0.0, -5.0), anchor),
+        (Point::new(0.0, 5.0), Point::ZERO, witness),
+        (Point::new(0.0, 5.0), Point::new(0.0, 1e-7), witness),
     ] {
         assert!(matches!(
             build(Attachment {
@@ -193,9 +195,7 @@ fn witnesses_must_be_interior_to_the_original_regions() {
                 board_witness,
                 tolerance: TOL,
             }),
-            Err(QueryError::InvalidInput(
-                "expected disjoint connected board/support inside stock with interior witnesses"
-            ))
+            Err(QueryError::InvalidInput(message)) if message == expected
         ));
     }
 }

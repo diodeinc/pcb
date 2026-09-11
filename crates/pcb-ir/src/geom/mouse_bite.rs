@@ -63,6 +63,10 @@ pub struct TabGeometry {
     /// Open polygon path following the offset boundary, through every drill.
     /// This is a proposed fracture locus, NOT a predicted crack trajectory.
     pub break_path: ContourBuf,
+    /// The straight bridge from the board boundary to the support anchor,
+    /// before the cutter's fillets: subtract it from a wider void and open
+    /// with the cutter to continue the footprint beyond this construction.
+    pub neck: ContourSet,
     /// Complete unperforated footprint for downstream obstacle clearance checks.
     pub attachment_footprint: ContourSet,
     /// Rounded material added by disk-opening the ideal routing void.
@@ -229,33 +233,48 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
     BoundaryQuery::new(input.stock, input.tolerance)?;
     BoundaryQuery::new(input.support, input.tolerance)?;
     let site = query.site(input.boundary, input.station_mm)?;
-    if input.board.connected_components().len() != 1
-        || input.support.connected_components().len() != 1
-        || !input.board.intersection(input.support)?.is_empty()
-        || !input
-            .board
-            .union(input.support)?
-            .difference(input.stock)?
-            .is_empty()
-        || ![
-            (input.support, input.support_anchor),
-            (input.board, input.board_witness),
-        ]
-        .into_iter()
-        .all(|(region, point)| {
-            point.is_finite()
-                && region
-                    .prepare_query()
-                    .signed_distance(point)
-                    .is_some_and(|d| {
-                        d.mm < -input.tolerance.boundary_mm.max(d.uncertainty_mm)
-                            - input.tolerance.numerical_mm
-                    })
-        })
-    {
-        return Err(QueryError::InvalidInput(
-            "expected disjoint connected board/support inside stock with interior witnesses",
-        ));
+    let interior = |region: &ContourSet, point: Point| {
+        point.is_finite()
+            && region
+                .prepare_query()
+                .signed_distance(point)
+                .is_some_and(|d| {
+                    d.mm < -input.tolerance.boundary_mm.max(d.uncertainty_mm)
+                        - input.tolerance.numerical_mm
+                })
+    };
+    let expected = [
+        (
+            input.board.connected_components().len() == 1,
+            "expected one connected board",
+        ),
+        (
+            input.support.connected_components().len() == 1,
+            "expected one connected support",
+        ),
+        (
+            input.board.intersection(input.support)?.is_empty(),
+            "expected disjoint board and support",
+        ),
+        (
+            input
+                .board
+                .union(input.support)?
+                .difference(input.stock)?
+                .is_empty(),
+            "expected board and support inside stock",
+        ),
+        (
+            interior(input.support, input.support_anchor),
+            "expected the support anchor inside support",
+        ),
+        (
+            interior(input.board, input.board_witness),
+            "expected the board witness inside the board",
+        ),
+    ];
+    if let Some((_, message)) = expected.iter().find(|(holds, _)| !holds) {
+        return Err(QueryError::InvalidInput(message));
     }
     let radius = SparkFunShallow::CUTTER_RADIUS_MM;
     let resolution = input.stock.resolution.strict().with_accuracy(
@@ -285,8 +304,18 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
         .disk_open(radius)?
         .intersection(input.stock)?;
     let undrilled = input.stock.difference(&routed_removal)?;
-    let shoulders = undrilled.difference(&protected)?;
-    let attachment_footprint = undrilled.difference(&input.board.union(input.support)?)?;
+    // Opening can also leave material in slivers of void too narrow for the
+    // cutter anywhere in the stock; the attachment is only what joins the neck.
+    let mut attachment_footprint = ContourSet::empty(resolution);
+    for piece in undrilled
+        .difference(&input.board.union(input.support)?)?
+        .connected_components()
+    {
+        if !piece.intersection(&neck)?.is_empty() {
+            attachment_footprint = attachment_footprint.union(&piece)?;
+        }
+    }
+    let shoulders = attachment_footprint.difference(&protected)?;
 
     // Offset the whole region first, rather than guessing normals on a curved
     // row or assigning straight-line pitch to the source curve's arc length.
@@ -372,6 +401,7 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
         npth,
         perforations,
         break_path,
+        neck,
         attachment_footprint,
         shoulders,
         minimum_ligament_mm,
