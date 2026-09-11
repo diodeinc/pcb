@@ -61,8 +61,13 @@ fn straight_and_curved_retention_release_intrusion_and_cutter_access() -> Result
         let (board, support, stock) = fixture(curved);
         let tab = tab(&board, &support, &stock).unwrap();
         assert_eq!(tab.npth.len(), 5);
-        assert!(tab.minimum_ligament_mm > 0.25);
-        assert!(tab.minimum_ligament_mm <= SparkFunShallow::NOMINAL_LIGAMENT_MM + 1e-6);
+        // Consecutive centers are one pitch apart in a straight line on the
+        // curve as on the straight edge, so the web is exactly nominal.
+        for pair in tab.npth.windows(2) {
+            let chord = pair[0].center.distance_to(pair[1].center);
+            assert!((chord - SparkFunShallow::PITCH_MM).abs() < 1e-9, "{chord}");
+        }
+        assert!((tab.minimum_ligament_mm - SparkFunShallow::NOMINAL_LIGAMENT_MM).abs() < 1e-9);
         // Repeated overlays on curved polygons can leave sub-micron slivers.
         // Check both area and penetration for every material/removal pair,
         // including drill boundaries whose last-bit rounding varies by platform.

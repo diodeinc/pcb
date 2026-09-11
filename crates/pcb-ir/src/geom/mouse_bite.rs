@@ -108,48 +108,116 @@ fn stroke(path: &ContourBuf, width: f64, resolution: Resolution) -> Result<Conto
     Ok(ContourSet::from_filled_contours(&contours, resolution)?)
 }
 
-/// Extract an exact portion of the supplied polygon boundary, including its
-/// vertices and requested drill stations, even when it crosses the cyclic seam.
+/// The portion of the offset boundary carrying the drill row, with its
+/// vertices, and the drill centers. Consecutive centers sit one pitch apart
+/// in a straight line rather than along the curve, so the web between holes
+/// is the same on any curvature while the row still follows the boundary.
 fn row(
     region: &ContourSet,
     query: &BoundaryQuery<'_>,
     boundary: BoundaryId,
     center: f64,
-) -> Result<(ContourBuf, Vec<Point>), QueryError> {
-    let half = 2.0 * SparkFunShallow::PITCH_MM + SparkFunShallow::CUTTER_RADIUS_MM;
+) -> Result<(ContourBuf, Vec<(f64, Point)>), QueryError> {
+    let ring = &region.rings[boundary.ring];
     let perimeter = query.perimeter(boundary)?;
-    if perimeter <= 2.0 * half {
+    let mut centers = vec![(center, query.site(boundary, center)?.point)];
+    for direction in [1.0, -1.0] {
+        let mut last = centers[0];
+        for _ in 0..SparkFunShallow::HOLE_COUNT / 2 {
+            last = chord_step(ring, perimeter, last, SparkFunShallow::PITCH_MM, direction)?;
+            if direction > 0.0 {
+                centers.push(last);
+            } else {
+                centers.insert(0, last);
+            }
+        }
+    }
+    let first = centers[0].0 - SparkFunShallow::CUTTER_RADIUS_MM;
+    let length = centers[centers.len() - 1].0 + SparkFunShallow::CUTTER_RADIUS_MM - first;
+    if length >= perimeter {
         return Err(QueryError::InvalidInput("attachment boundary too short"));
     }
-    let start = center - half;
-    let mut stations = vec![0.0, 2.0 * half];
+    let mut stations = vec![0.0, length];
     let mut cumulative = 0.0;
-    for (a, b) in super::region::ring_edges(&region.rings[boundary.ring]) {
-        let s = (cumulative - start).rem_euclid(perimeter);
-        if s > 0.0 && s < 2.0 * half {
+    for (a, b) in super::region::ring_edges(ring) {
+        let s = (cumulative - first).rem_euclid(perimeter);
+        if s > 0.0 && s < length {
             stations.push(s);
         }
         cumulative += a.distance_to(b);
     }
-    let drill_stations = (0..SparkFunShallow::HOLE_COUNT)
-        .map(|i| half + (i as f64 - 2.0) * SparkFunShallow::PITCH_MM)
-        .collect::<Vec<_>>();
-    stations.extend(&drill_stations);
+    stations.extend(centers.iter().map(|(s, _)| s - first));
     stations.sort_by(f64::total_cmp);
     stations.dedup();
     let points = stations
         .into_iter()
-        .map(|s| query.site(boundary, start + s).map(|site| site.point))
+        .map(|s| query.site(boundary, first + s).map(|site| site.point))
         .collect::<Result<Vec<_>, _>>()?;
     let mut cmds = vec![PathCmd::move_to(points[0])];
     cmds.extend(points[1..].iter().copied().map(PathCmd::line_to));
-    let centers = drill_stations
-        .into_iter()
-        .map(|s| query.site(boundary, start + s).map(|site| site.point))
-        .collect::<Result<Vec<_>, _>>()?;
     Ok((
         ContourBuf::new(cmds).with_uncertainty(region.uncertainty_mm),
         centers,
+    ))
+}
+
+/// Walk the ring from `from` in `direction` to the first point a straight
+/// `chord` away from it, returning that point with its unwrapped station.
+fn chord_step(
+    ring: &[[f64; 2]],
+    perimeter: f64,
+    from: (f64, Point),
+    chord: f64,
+    direction: f64,
+) -> Result<(f64, Point), QueryError> {
+    let n = ring.len();
+    let vertex = |i: usize| Point::new(ring[i % n][0], ring[i % n][1]);
+    let mut stations = vec![0.0];
+    for i in 0..n {
+        stations.push(stations[i] + vertex(i).distance_to(vertex(i + 1)));
+    }
+    let forward = direction > 0.0;
+    let s = match from.0.rem_euclid(perimeter) {
+        0.0 if !forward => perimeter,
+        s => s,
+    };
+    let mut edge = if forward {
+        stations.partition_point(|&v| v <= s)
+    } else {
+        stations.partition_point(|&v| v < s)
+    }
+    .saturating_sub(1)
+    .min(n - 1);
+    let (mut station, mut point) = from;
+    for _ in 0..=n {
+        let end = if forward {
+            vertex(edge + 1)
+        } else {
+            vertex(edge)
+        };
+        let segment = end - point;
+        let length = segment.length();
+        if length > 0.0 {
+            // Leaving the circle of radius `chord` around the origin: the
+            // larger root, since the walk starts inside it.
+            let offset = point - from.1;
+            let a = segment.x * segment.x + segment.y * segment.y;
+            let b = 2.0 * (offset.x * segment.x + offset.y * segment.y);
+            let c = offset.x * offset.x + offset.y * offset.y - chord * chord;
+            let discriminant = b * b - 4.0 * a * c;
+            if discriminant >= 0.0 {
+                let t = (-b + discriminant.sqrt()) / (2.0 * a);
+                if t > 0.0 && t <= 1.0 {
+                    return Ok((station + direction * t * length, point + segment * t));
+                }
+            }
+        }
+        station += direction * length;
+        point = end;
+        edge = if forward { edge + 1 } else { edge + n - 1 } % n;
+    }
+    Err(QueryError::InvalidInput(
+        "boundary too short for the drill row",
     ))
 }
 
@@ -240,6 +308,7 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
         projection.site.boundary,
         projection.site.station_mm,
     )?;
+    let centers: Vec<Point> = centers.into_iter().map(|(_, p)| p).collect();
     let diameter = SparkFunShallow::HOLE_DIAMETER_MM;
     let minimum_ligament_mm = centers
         .iter()
@@ -250,10 +319,14 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
                 .map(move |b| a.distance_to(*b) - diameter)
         })
         .fold(f64::INFINITY, f64::min);
+    // The web between any two holes is a straight-line DFM distance and may
+    // not fall below the pattern's nominal ligament, less the uncertainty.
     let boundary_band = input.tolerance.boundary_mm.max(offset.uncertainty_mm);
-    if minimum_ligament_mm <= 2.0 * boundary_band + input.tolerance.numerical_mm {
+    if minimum_ligament_mm
+        < SparkFunShallow::NOMINAL_LIGAMENT_MM - 2.0 * boundary_band - input.tolerance.numerical_mm
+    {
         return Err(QueryError::InvalidInput(
-            "drill ligaments unresolved or overlapping",
+            "drill web below the pattern's ligament",
         ));
     }
     let circle = ContourSet::from_filled_contours(

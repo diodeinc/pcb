@@ -33,11 +33,11 @@ pub struct Preset {
     pub frame_landing_mm: f64,
     /// Candidate spacing along eligible outline runs.
     pub candidate_pitch_mm: f64,
-    /// Outline may turn at most this much within the tab's own width.
-    pub tab_bend_degrees: f64,
-    /// Outline may turn at most this much within the tab plus the keep-out on
-    /// either side: clear of corners without excluding round boards.
-    pub corner_bend_degrees: f64,
+    /// Tightest curve a tab may sit on; the coupon-validated radius. The
+    /// outline may turn no more within the tab, or within the tab plus the
+    /// keep-out on either side, than an arc of this radius would, which keeps
+    /// tabs off corners without excluding round boards.
+    pub min_tab_radius_mm: f64,
     pub corner_keepout_mm: f64,
     /// Closest two tabs may sit.
     pub min_separation_mm: f64,
@@ -55,8 +55,7 @@ pub const PRESET: Preset = Preset {
     routing_gap_mm: 2.0,
     frame_landing_mm: 1.0,
     candidate_pitch_mm: 2.5,
-    tab_bend_degrees: 15.0,
-    corner_bend_degrees: 60.0,
+    min_tab_radius_mm: 10.0,
     corner_keepout_mm: 5.0,
     min_separation_mm: 10.0,
     load_point_spacing_mm: 2.0,
@@ -150,6 +149,7 @@ pub fn analyze(xml: &str, preset: &Preset, resolution: Resolution) -> Result<Val
         "rejected": sites.rejected.iter().map(|r| json!({
             "ring": r.ring, "station_mm": r.station_mm, "point": [r.point.x, r.point.y], "reason": r.reason,
         })).collect::<Vec<_>>(),
+        "tight": sites.tight.iter().map(|run| run.iter().map(|p| json!([p.x, p.y])).collect::<Vec<_>>()).collect::<Vec<_>>(),
         "selected": selection.chosen,
         "tab_count": selection.chosen.len(),
         "proven_minimal": selection.proven,
