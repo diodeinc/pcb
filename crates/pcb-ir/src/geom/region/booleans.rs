@@ -1,6 +1,6 @@
 //! Set operations and ordered dark/clear paint composition.
 
-use super::{ContourSet, Ring, Shape, flatten_shapes, rings_bbox, simplify_shapes};
+use super::{ContourSet, Ring, Shape, flatten_shapes, rings_bbox, simplify_rings, simplify_shapes};
 use crate::geom::accuracy::numerical_error;
 use crate::geom::{AccuracyError, FillRule, Polarity, Resolution};
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
@@ -14,6 +14,15 @@ pub(crate) fn difference_shapes(subject: Vec<Ring>, cutters: Vec<Ring>) -> Vec<S
         return subject.simplify_shape_as::<i64>(OverlayFillRule::NonZero);
     }
     subject.overlay_as::<i64>(&cutters, OverlayRule::Difference, OverlayFillRule::NonZero)
+}
+
+/// Union of regularized operands. Each operand winds once over its own
+/// interior and not at all outside, so their sum is nonzero exactly on the
+/// union: one simplification, which partitions disjoint features, replaces
+/// the pairwise overlay.
+fn union_rings(mut left: Vec<Ring>, mut right: Vec<Ring>) -> Vec<Ring> {
+    left.append(&mut right);
+    simplify_rings(left, FillRule::NonZero)
 }
 
 impl ContourSet {
@@ -62,11 +71,14 @@ impl ContourSet {
     /// rounding. The result takes the tighter budget and fails when the
     /// operands' history does not fit it.
     fn boolean(&self, other: &Self, rule: OverlayRule) -> Result<Self, AccuracyError> {
-        let rings = flatten_shapes(self.rings.overlay_as::<i64>(
-            &other.rings,
-            rule,
-            OverlayFillRule::NonZero,
-        ));
+        let rings = match rule {
+            OverlayRule::Union => union_rings(self.rings.clone(), other.rings.clone()),
+            _ => flatten_shapes(self.rings.overlay_as::<i64>(
+                &other.rings,
+                rule,
+                OverlayFillRule::NonZero,
+            )),
+        };
         let uncertainty = self.uncertainty_mm.max(other.uncertainty_mm)
             + numerical_error(self.bbox.union(other.bbox));
         Self::from_regularized(rings, self.resolution.meet(other.resolution), uncertainty).checked()
@@ -130,18 +142,16 @@ impl PaintComposer {
         let Some(polarity) = self.run_polarity.take() else {
             return;
         };
-        let rule = match polarity {
-            Polarity::Dark => OverlayRule::Union,
-            Polarity::Clear => OverlayRule::Difference,
-        };
-        let rings = flatten_shapes(self.image.overlay_as::<i64>(
-            &self.run,
-            rule,
-            OverlayFillRule::NonZero,
-        ));
         self.uncertainty_mm +=
             numerical_error(rings_bbox(&self.image).union(rings_bbox(&self.run)));
-        self.image = rings;
-        self.run.clear();
+        let run = std::mem::take(&mut self.run);
+        self.image = match polarity {
+            Polarity::Dark => union_rings(std::mem::take(&mut self.image), run),
+            Polarity::Clear => flatten_shapes(self.image.overlay_as::<i64>(
+                &run,
+                OverlayRule::Difference,
+                OverlayFillRule::NonZero,
+            )),
+        };
     }
 }
