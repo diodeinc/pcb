@@ -28,6 +28,7 @@ struct PlatformDefaults {
     kicad_cli: &'static [&'static str],
     kicad_cli_command: &'static str,
     pcbnew: &'static [&'static str],
+    eeschema: &'static [&'static str],
 }
 
 struct KiCadInstallation {
@@ -35,6 +36,7 @@ struct KiCadInstallation {
     python_site_packages: Option<String>,
     kicad_cli: String,
     pcbnew: String,
+    eeschema: String,
 }
 
 impl KiCadInstallation {
@@ -56,6 +58,7 @@ impl KiCadInstallation {
                 defaults.kicad_cli,
             ),
             pcbnew: discover_path("KICAD_PCBNEW", None, defaults.pcbnew),
+            eeschema: discover_path("KICAD_EESCHEMA", None, defaults.eeschema),
         }
     }
 
@@ -120,6 +123,9 @@ fn platform_defaults() -> PlatformDefaults {
         pcbnew: &[
             "/Applications/KiCad/KiCad.app/Contents/Applications/pcbnew.app/Contents/MacOS/pcbnew",
         ],
+        eeschema: &[
+            "/Applications/KiCad/KiCad.app/Contents/Applications/eeschema.app/Contents/MacOS/eeschema",
+        ],
     }
 }
 
@@ -139,6 +145,10 @@ fn platform_defaults() -> PlatformDefaults {
             r"C:\Program Files\KiCad\10.0\bin\pcbnew.exe",
             r"C:\Program Files\KiCad\9.0\bin\pcbnew.exe",
         ],
+        eeschema: &[
+            r"C:\Program Files\KiCad\10.0\bin\eeschema.exe",
+            r"C:\Program Files\KiCad\9.0\bin\eeschema.exe",
+        ],
     }
 }
 
@@ -149,6 +159,7 @@ fn platform_defaults() -> PlatformDefaults {
         kicad_cli: &["/usr/bin/kicad-cli"],
         kicad_cli_command: "kicad-cli",
         pcbnew: &["/usr/bin/pcbnew"],
+        eeschema: &["/usr/bin/eeschema"],
     }
 }
 
@@ -309,6 +320,38 @@ fn spawn_pcbnew_command(mut cmd: Command, pcbnew_path: &str, pcb_path: &Path) ->
                 pcb_path.display()
             )
         })
+}
+
+/// Open a KiCad schematic in the editor that matches this toolchain's discovered install.
+pub fn open_eeschema(schematic_path: impl AsRef<Path>) -> Result<()> {
+    let schematic_path = schematic_path.as_ref();
+    if !schematic_path.is_file() {
+        anyhow::bail!("Schematic file not found: {}", schematic_path.display());
+    }
+
+    let eeschema = KiCadInstallation::discover().eeschema;
+    if !Path::new(&eeschema).exists() {
+        anyhow::bail!(
+            "KiCad Schematic Editor not found at expected location: {eeschema}\n\
+             Please ensure KiCad is installed.\n\
+             If KiCad Schematic Editor is in a non-standard location, set the KICAD_EESCHEMA environment variable."
+        );
+    }
+
+    let mut cmd = Command::new(&eeschema);
+    cmd.arg(schematic_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| {
+            format!(
+                "Failed to launch KiCad Schematic Editor at {} for {}",
+                eeschema,
+                schematic_path.display()
+            )
+        })?;
+    Ok(())
 }
 
 /// Builder for KiCad CLI commands

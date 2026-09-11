@@ -22,6 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Preserve successful BOM matches when another line needs retrying.
+- Fix false missing-output errors after applying schematics.
 
 ## [0.4.52] - 2026-09-09
 
