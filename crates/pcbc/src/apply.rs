@@ -113,7 +113,7 @@ pub fn execute(args: ApplyArgs) -> Result<()> {
             if !args.shared.no_open
                 && let Some(result) = &result
             {
-                open_path(&result.root_schematic, "schematic")?;
+                pcb_kicad::open_eeschema(&result.root_schematic)?;
             }
             Ok(())
         }

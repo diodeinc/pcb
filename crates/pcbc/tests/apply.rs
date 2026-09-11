@@ -1,6 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
-use std::fs;
+use std::{fs, os::unix::fs::PermissionsExt};
 
 use pcb_kicad_sch::SchItem;
 use pcb_test_utils::sandbox::Sandbox;
@@ -71,6 +71,38 @@ fn apply_schematic_creates_repairs_and_clears_build_diagnostics() {
         .expect("build repaired schematic");
     let diagnostics = String::from_utf8(repaired.stdout).unwrap();
     assert!(!diagnostics.contains("\"kind\": \"sch."), "{diagnostics}");
+}
+
+#[test]
+fn apply_schematic_opens_the_created_output_with_kicad() {
+    let mut sandbox = Sandbox::new().with_workspace();
+    sandbox.write("board.zen", BOARD_ZEN);
+    let editor = sandbox.root_path().join("eeschema");
+    fs::write(&editor, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+    sandbox.env("KICAD_EESCHEMA", editor.to_string_lossy());
+    // No generic desktop opener is available. Applying must launch the KiCad
+    // schematic editor directly rather than misreporting the output as absent.
+    let empty_path = sandbox.root_path().to_string_lossy().into_owned();
+    sandbox.env("PATH", empty_path);
+
+    sandbox
+        .run("pcbc", ["apply", "schematic", "board.zen"])
+        .run()
+        .expect("create and open schematic project");
+
+    let output = sandbox.root_path().join("hardware/ApplyTest.kicad_sch");
+    assert!(output.is_file());
+    let reopened = sandbox
+        .run("pcbc", ["apply", "schematic", "board.zen"])
+        .stdout_capture()
+        .run()
+        .expect("reopen unchanged schematic project");
+    assert!(
+        String::from_utf8(reopened.stdout)
+            .unwrap()
+            .contains("schematic unchanged")
+    );
 }
 
 #[test]
