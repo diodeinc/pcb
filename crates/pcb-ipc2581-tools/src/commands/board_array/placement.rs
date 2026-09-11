@@ -29,11 +29,10 @@ pub struct Preset {
     pub inward_mm: f64,
     /// Growth applied to courtyards before they count as obstacles.
     pub courtyard_clearance_mm: f64,
-    /// Routed slot between the board outline and the frame; the neck spans it.
+    /// Routed slot between the board outline and the frame; the neck spans
+    /// it. It is cut from the board's margin, so the array fits exactly as a
+    /// scored one does.
     pub routing_gap_mm: f64,
-    /// How far the board's cell in the array grows beyond its outline; the
-    /// rest of the slot cuts into the margin, which has clearance to spare.
-    pub cell_growth_mm: f64,
     /// Frame material a tab must reach beyond the slot.
     pub frame_landing_mm: f64,
     /// Candidate spacing along eligible outline runs.
@@ -59,8 +58,7 @@ pub const PRESET: Preset = Preset {
     tab_width_mm: SparkFunShallow::NECK_WIDTH_MM + 2.0 * SparkFunShallow::CUTTER_RADIUS_MM,
     inward_mm: 0.2,
     courtyard_clearance_mm: 0.0,
-    routing_gap_mm: 2.0,
-    cell_growth_mm: 1.0,
+    routing_gap_mm: 1.4,
     frame_landing_mm: 1.0,
     candidate_pitch_mm: 2.5,
     min_tab_radius_mm: 10.0,
@@ -76,7 +74,8 @@ pub const PRESET: Preset = Preset {
         // Perforation halves the neck's section.
         neck_width_mm: SparkFunShallow::NECK_WIDTH_MM,
         neck_perforation_factor: 0.5,
-        // Two default 5 mm board margins minus a slot on each side.
+        // Below what two default 5 mm board margins leave once a slot is
+        // routed on each side.
         rail_width_mm: 6.0,
         // A finger or placement nozzle anywhere on the board, and the sag that
         // still leaves the surface flat enough for placement.

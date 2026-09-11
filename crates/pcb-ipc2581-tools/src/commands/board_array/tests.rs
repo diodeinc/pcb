@@ -180,7 +180,7 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
     let input = board_fixture_with_mask_bbox_mm(12.0, 10.0);
     let source = Ipc2581::parse(&input).unwrap();
     let (options, validation_mode, panelization) =
-        auto_board_array_options(&source, None, Separation::VScore, resolution).unwrap();
+        auto_board_array_options(&source, None, resolution).unwrap();
     let spec = build_board_array_spec(
         &source,
         &options,
@@ -251,7 +251,7 @@ fn board_array_balancing_solves_every_copper_layer() {
     let ipc = Ipc2581::parse(&input).unwrap();
     let sheet = Some(AutoSheetSize::A7);
     let (options, validation_mode, panelization) =
-        auto_board_array_options(&ipc, sheet, Separation::VScore, resolution).unwrap();
+        auto_board_array_options(&ipc, sheet, resolution).unwrap();
     let spec = build_board_array_spec(
         &ipc,
         &options,
@@ -415,7 +415,7 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
     // how much panel surrounds it.
     let sheet = Some(AutoSheetSize::A6);
     let (options, validation_mode, panelization) =
-        auto_board_array_options(&ipc, sheet, Separation::VScore, resolution).unwrap();
+        auto_board_array_options(&ipc, sheet, resolution).unwrap();
     let spec = build_board_array_spec(
         &ipc,
         &options,

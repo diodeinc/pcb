@@ -206,16 +206,6 @@ impl Separation {
             Self::MouseBite => "mouse-bite",
         }
     }
-
-    /// The cell a board occupies in the array: its outline, grown a little
-    /// when boards are routed out so the slot takes only part of the margin's
-    /// clearance from the fiducials, rails and tooling.
-    fn cell(self, board: pcb_ir::geom::BBox) -> pcb_ir::geom::BBox {
-        match self {
-            Self::VScore => board,
-            Self::MouseBite => board.expand(placement::PRESET.cell_growth_mm),
-        }
-    }
 }
 
 /// Generated board-array IPC plus optional per-layer copper-balance accounting.
@@ -545,7 +535,7 @@ pub fn create_auto_board_array(
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let (options, validation_mode, panelization) =
-        auto_board_array_options(&ipc, sheet, separation, resolution)?;
+        auto_board_array_options(&ipc, sheet, resolution)?;
     let spec = build_board_array_spec(
         &ipc,
         &options,
@@ -570,7 +560,6 @@ fn create_auto_board_array_xml_with_sheet(
 fn auto_board_array_options(
     ipc: &Ipc2581,
     sheet: Option<AutoSheetSize>,
-    separation: Separation,
     resolution: Resolution,
 ) -> Result<(
     BoardArrayCreateOptions,
@@ -578,10 +567,9 @@ fn auto_board_array_options(
     BoardArrayPanelizationMetadata,
 )> {
     let board = primary_board_layout(ipc)?;
-    let cell = separation.cell(board.bbox);
-    let board_margin = auto_board_margin(ipc, cell, resolution)?;
-    let board_width = cell.width();
-    let board_height = cell.height();
+    let board_margin = auto_board_margin(ipc, board.bbox, resolution)?;
+    let board_width = board.bbox.width();
+    let board_height = board.bbox.height();
 
     let plan = match sheet {
         Some(sheet) => Some((
@@ -794,9 +782,8 @@ fn build_board_array_spec(
     }
 
     let root = primary_board_layout(ipc)?;
-    let cell = separation.cell(root.bbox);
-    let board_width = cell.width();
-    let board_height = cell.height();
+    let board_width = root.bbox.width();
+    let board_height = root.bbox.height();
 
     let columns = options.columns;
     let rows = options.rows;
@@ -815,8 +802,8 @@ fn build_board_array_spec(
         + edge_rail.bottom
         + edge_rail.top;
     validate_array_dimensions(array_width, array_height, validation_mode)?;
-    let board_repeat_x = board_margin.left - cell.min.x;
-    let board_repeat_y = board_margin.bottom - cell.min.y;
+    let board_repeat_x = board_margin.left - root.bbox.min.x;
+    let board_repeat_y = board_margin.bottom - root.bbox.min.y;
 
     let board_name = ipc.resolve(root.source_step_ref).to_string();
     let existing_step_names = ecad
