@@ -3,7 +3,8 @@ use super::schematic_apply_common as common;
 use std::{collections::BTreeSet, fs};
 
 use pcb_kicad_sch::{
-    Label, LabelKind, LabelShape, LabelSpin, PinInstance, Point, SchItem, SymbolDefinition, Wire,
+    Label, LabelKind, LabelShape, LabelSpin, MirrorAxis, PinInstance, Point, Rotation, SchItem,
+    SymbolDefinition, Wire,
     analysis::{SchematicIssue, inspect_schematic},
     reconcile::plan_repairs,
 };
@@ -28,7 +29,15 @@ fn linked_fixture(path: &std::path::Path) -> pcb_sch::Schematic {
 }
 
 fn linked_fixture_from(path: &std::path::Path, entrypoint: &str) -> pcb_sch::Schematic {
-    let mut netlist = common::compile_fixture("analysis", entrypoint);
+    linked_fixture_project(path, "analysis", entrypoint)
+}
+
+fn linked_fixture_project(
+    path: &std::path::Path,
+    fixture: &str,
+    entrypoint: &str,
+) -> pcb_sch::Schematic {
+    let mut netlist = common::compile_fixture(fixture, entrypoint);
     let root = netlist.root_ref.clone().unwrap();
     let package_root = path.parent().unwrap();
     netlist
@@ -1011,6 +1020,41 @@ fn repairs_a_disconnected_net_without_removing_remaining_wires() {
         .unwrap()
         .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
+}
+
+#[test]
+fn apply_repairs_rotated_mirrored_physical_pin_connectivity() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let netlist = linked_fixture_project(&project_dir, "multi_pad", "root.zen");
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+    let mut project = KicadProject::load(&project_dir).unwrap();
+    let symbol = project
+        .document
+        .pages
+        .iter_mut()
+        .flat_map(|page| &mut page.items)
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.lib_id.contains("MULTI_PAD") => Some(symbol),
+            _ => None,
+        })
+        .expect("managed multi-pin symbol");
+    symbol.rotation = Rotation::Deg270;
+    symbol.mirror = Some(MirrorAxis::Y);
+    for file in project.document.to_kicad_sch_files() {
+        fs::write(project_dir.join(file.file_name.unwrap()), file.content).unwrap();
+    }
+
+    let applied = apply_linked_schematic(&netlist).unwrap().unwrap();
+    assert!(applied.changed);
+    let repaired = KicadProject::load(&project_dir).unwrap();
+    let inspection = inspect_schematic(&repaired.document, &netlist).unwrap();
+    assert!(
+        inspection.analysis.is_equivalent(),
+        "{:?}",
+        inspection.analysis.issues()
+    );
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
 }
 
 #[test]

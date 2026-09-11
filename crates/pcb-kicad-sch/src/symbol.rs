@@ -520,20 +520,19 @@ fn matches_body_style(section: u32, selected: u32) -> bool {
 }
 
 pub(crate) fn transform_vector(mut point: Point, symbol: &Symbol) -> Point {
-    // KiCad composes the symbol matrix as rotation * mirror, so the mirror is
-    // applied to the library-local point before the rotation.
-    point = match symbol.mirror {
-        None => point,
-        Some(MirrorAxis::X) => Point::new(point.x, -point.y),
-        Some(MirrorAxis::Y) => Point::new(-point.x, point.y),
-    };
+    // KiCad parses the symbol's `at` rotation first, then composes the
+    // separately serialized mirror onto that transform.
     point = match symbol.rotation {
         Rotation::Deg0 => point,
         Rotation::Deg90 => Point::new(point.y, -point.x),
         Rotation::Deg180 => Point::new(-point.x, -point.y),
         Rotation::Deg270 => Point::new(-point.y, point.x),
     };
-    point
+    match symbol.mirror {
+        None => point,
+        Some(MirrorAxis::X) => Point::new(point.x, -point.y),
+        Some(MirrorAxis::Y) => Point::new(-point.x, point.y),
+    }
 }
 
 pub(crate) fn transform_point(point: Point, symbol: &Symbol) -> Point {
@@ -551,23 +550,13 @@ fn pin_outward_spin(rotation: Rotation) -> LabelSpin {
 }
 
 fn transform_spin(spin: LabelSpin, symbol: &Symbol) -> LabelSpin {
-    let mut direction = match spin {
+    let direction = match spin {
         LabelSpin::Left => Point::new(-1.0, 0.0),
         LabelSpin::Up => Point::new(0.0, -1.0),
         LabelSpin::Right => Point::new(1.0, 0.0),
         LabelSpin::Bottom => Point::new(0.0, 1.0),
     };
-    direction = match symbol.mirror {
-        None => direction,
-        Some(MirrorAxis::X) => Point::new(direction.x, -direction.y),
-        Some(MirrorAxis::Y) => Point::new(-direction.x, direction.y),
-    };
-    direction = match symbol.rotation {
-        Rotation::Deg0 => direction,
-        Rotation::Deg90 => Point::new(direction.y, -direction.x),
-        Rotation::Deg180 => Point::new(-direction.x, -direction.y),
-        Rotation::Deg270 => Point::new(-direction.y, direction.x),
-    };
+    let direction = transform_vector(direction, symbol);
     match (direction.x as i8, direction.y as i8) {
         (-1, 0) => LabelSpin::Left,
         (0, -1) => LabelSpin::Up,
@@ -652,17 +641,17 @@ mod tests {
             unsupported: Vec::new(),
         };
 
-        // KiCad's matrix is R90 * MirrorX: (2, 3) -> (2, -3) -> (-3, -2).
-        assert_eq!(
-            transform_point(Point::new(2.0, 3.0), &symbol),
-            Point::new(7.0, 18.0)
-        );
-
-        symbol.mirror = Some(MirrorAxis::Y);
-        // R90 * MirrorY: (2, 3) -> (-2, 3) -> (3, 2).
+        // KiCad's matrix is MirrorX * R90: (2, 3) -> (3, -2) -> (3, 2).
         assert_eq!(
             transform_point(Point::new(2.0, 3.0), &symbol),
             Point::new(13.0, 22.0)
+        );
+
+        symbol.mirror = Some(MirrorAxis::Y);
+        // MirrorY * R90: (2, 3) -> (3, -2) -> (-3, -2).
+        assert_eq!(
+            transform_point(Point::new(2.0, 3.0), &symbol),
+            Point::new(7.0, 18.0)
         );
     }
 }
