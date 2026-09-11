@@ -30,22 +30,24 @@ pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
         .collect()
 }
 
-/// Partition rings into groups connected by overlapping bounds, each in
-/// input order and the groups ordered by their first ring.
+/// Partition rings into groups connected by overlapping bounds.
 ///
-/// A sweep in `x` keeps one hull per open group and merges a ring into every
-/// group whose hull it meets. The hull stands in for its members, which can
-/// merge groups that no member pair joins; that costs only the partitioning
-/// benefit and keeps the sweep proportional to the groups a line crosses,
-/// so a layer of long features degenerates to a single overlay as before.
+/// Bounds carry the overlay's rounding allowance: every group snaps to its
+/// own integer grid, and groups that stay apart by more than the allowance
+/// cannot be snapped together. A sweep in `x` keeps one hull per open group
+/// and merges a ring into every group whose hull it meets. The hull stands
+/// in for its members, so it may merge groups no member pair joins; that
+/// costs only partitioning benefit, never correctness, and lets a layer of
+/// long features degenerate to the single overlay it needed before.
 fn bounds_connected_groups(rings: Vec<Ring>) -> Vec<Vec<Ring>> {
     struct Group {
         hull: BBox,
         members: Vec<usize>,
     }
+    let slack = numerical_error(rings_bbox(&rings));
     let mut order = rings
         .iter()
-        .map(|ring| rings_bbox(std::slice::from_ref(ring)))
+        .map(|ring| rings_bbox(std::slice::from_ref(ring)).expand(slack))
         .enumerate()
         .collect::<Vec<_>>();
     order.sort_by(|(_, a), (_, b)| a.min.x.total_cmp(&b.min.x));
@@ -58,9 +60,12 @@ fn bounds_connected_groups(rings: Vec<Ring>) -> Vec<Vec<Ring>> {
         };
         let mut i = 0;
         while i < open.len() {
+            // A sweep line crossing a band of many separate features would
+            // compare every ring against all of them; the surplus folds into
+            // this group instead, bounding the work per ring.
             if open[i].hull.max.x < bbox.min.x {
                 closed.push(open.swap_remove(i));
-            } else if open[i].hull.intersects(bbox) {
+            } else if open[i].hull.intersects(bbox) || open.len() > MAX_OPEN_GROUPS {
                 let group = open.swap_remove(i);
                 merged.hull = merged.hull.union(group.hull);
                 merged.members.extend(group.members);
@@ -71,25 +76,21 @@ fn bounds_connected_groups(rings: Vec<Ring>) -> Vec<Vec<Ring>> {
         open.push(merged);
     }
     closed.extend(open);
-    let mut groups = closed
-        .into_iter()
-        .map(|mut group| {
-            group.members.sort_unstable();
-            group.members
-        })
-        .collect::<Vec<_>>();
-    groups.sort_unstable_by_key(|members| members[0]);
     let mut rings = rings.into_iter().map(Some).collect::<Vec<_>>();
-    groups
+    closed
         .into_iter()
-        .map(|members| {
-            members
+        .map(|group| {
+            group
+                .members
                 .into_iter()
                 .filter_map(|index| rings[index].take())
                 .collect()
         })
         .collect()
 }
+
+/// Open groups a sweep line compares each ring against before folding them.
+const MAX_OPEN_GROUPS: usize = 256;
 
 /// Regularize filled rings on an exact output grid.
 ///
