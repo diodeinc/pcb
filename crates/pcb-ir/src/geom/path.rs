@@ -320,6 +320,30 @@ impl Segment {
         }
     }
 
+    /// Command continuing a path from this segment's start (or end when reversed).
+    /// Reversal preserves curves, changing arc direction and cubic control order.
+    pub fn to_path_cmd(self, reverse: bool) -> PathCmd {
+        let end = if reverse { self.start() } else { self.end() };
+        match self {
+            Self::Line { .. } => PathCmd::line_to(end),
+            Self::Arc(arc) => PathCmd::arc_to(end, arc.center, arc.clockwise ^ reverse),
+            Self::Ellipse(arc) => PathCmd::ellipse_to(
+                end,
+                arc.center,
+                arc.x_axis,
+                arc.y_axis,
+                arc.clockwise ^ reverse,
+            ),
+            Self::Cubic { c1, c2, .. } => {
+                if reverse {
+                    PathCmd::cubic_to(c2, c1, end)
+                } else {
+                    PathCmd::cubic_to(c1, c2, end)
+                }
+            }
+        }
+    }
+
     pub fn bbox(&self) -> BBox {
         match *self {
             Self::Line { start, end } => {
@@ -735,16 +759,7 @@ fn contour_from_segments(segments: &[Segment]) -> Option<ContourBuf> {
             current = segment.start();
             cmds.push(PathCmd::move_to(current));
         }
-        match *segment {
-            Segment::Line { end, .. } => cmds.push(PathCmd::line_to(end)),
-            Segment::Arc(arc) => {
-                cmds.push(PathCmd::arc_to(arc.end, arc.center, arc.clockwise));
-            }
-            Segment::Ellipse(arc) => cmds.push(PathCmd::from_elliptical_arc(arc)),
-            Segment::Cubic { c1, c2, end, .. } => {
-                cmds.push(PathCmd::cubic_to(c1, c2, end));
-            }
-        }
+        cmds.push(segment.to_path_cmd(false));
         current = segment.end();
     }
     Some(ContourBuf::new(cmds))
@@ -989,6 +1004,48 @@ pub(crate) fn ir_point(point: kurbo::Point) -> Point {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn segment_commands_preserve_forward_and_reversed_curves() {
+        for command in [
+            PathCmd::line_to(Point::new(-2.0, 1.0)),
+            PathCmd::arc_to(Point::new(0.0, 3.0), Point::ZERO, false),
+            PathCmd::ellipse_to(
+                Point::new(0.0, 1.0),
+                Point::ZERO,
+                Point::new(3.0, 0.0),
+                Point::new(0.0, 1.0),
+                false,
+            ),
+            PathCmd::cubic_to(
+                Point::new(2.0, 4.0),
+                Point::new(-1.0, 2.0),
+                Point::new(4.0, -2.0),
+            ),
+        ] {
+            let source = ContourBuf::new(vec![PathCmd::move_to(Point::new(3.0, 0.0)), command]);
+            let segment = source.segments().next().unwrap();
+            for reverse in [false, true] {
+                let rebuilt = ContourBuf::new(vec![
+                    PathCmd::move_to(if reverse {
+                        segment.end()
+                    } else {
+                        segment.start()
+                    }),
+                    segment.to_path_cmd(reverse),
+                ]);
+                let rebuilt = rebuilt.segments().next().unwrap();
+                for t in [0.0, 0.17, 0.63, 1.0] {
+                    assert!(
+                        rebuilt
+                            .point_at(t)
+                            .distance_to(segment.point_at(if reverse { 1.0 - t } else { t }))
+                            < 1e-12
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn closed_arc_continuations_match_explicit_moves_through_preparation() {

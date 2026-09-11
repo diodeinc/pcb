@@ -7,7 +7,7 @@ use ipc2581::{
 use pcb_ir::{
     dialects::ipc::{ArtworkScope, LayoutStepKind, ProfileSet, profile_occurrences_for},
     geom::{
-        ContourBuf, ContourSet, FillRule, PathCmd, PathOp, Resolution, Segment,
+        BBox, ContourBuf, ContourSet, FillRule, PathCmd, PathOp, Resolution, Segment,
         attachment::{
             QueryTolerance,
             outline::{OutlineFootprint, OutlineObstacle, eligible_outline},
@@ -18,9 +18,18 @@ use pcb_ir::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-struct Evidence {
-    id: String,
-    region: Option<ContourSet>,
+pub(super) struct Evidence {
+    pub id: String,
+    pub region: Option<ContourSet>,
+}
+
+pub(super) struct Prepared {
+    pub report: Value,
+    /// Overall stackup thickness, when the source states one.
+    pub thickness_mm: Option<f64>,
+    pub substrate: ContourSet,
+    pub evidence: Vec<Evidence>,
+    pub intervals: Vec<pcb_ir::geom::attachment::outline::OutlineInterval>,
 }
 
 struct CourtyardGroup {
@@ -41,11 +50,25 @@ pub fn analyze(
     exclusions: &[OutlineObstacle<'_>],
     resolution: Resolution,
 ) -> Result<Value> {
+    Ok(prepare(xml, footprint, clearance_mm, exclusions, resolution)?.report)
+}
+
+pub(super) fn prepare(
+    xml: &str,
+    footprint: OutlineFootprint,
+    clearance_mm: f64,
+    exclusions: &[OutlineObstacle<'_>],
+    resolution: Resolution,
+) -> Result<Prepared> {
     if !clearance_mm.is_finite() || clearance_mm < 0.0 {
         bail!("clearance must be finite and nonnegative");
     }
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     validate_courtyard_references(&ipc)?;
+    let thickness_mm = crate::accessors::IpcAccessor::new(&ipc)
+        .stackup_details()
+        .and_then(|stackup| stackup.overall_thickness_mm)
+        .filter(|t| t.is_finite() && *t > 0.0);
     // Keep small substrate cutouts and courtyard regions; accuracy remains the
     // caller's existing geometry budget (--accuracy-um in the CLI).
     let resolution = resolution.strict();
@@ -84,7 +107,7 @@ pub fn analyze(
         }
         substrate = substrate.union(&region)?;
     }
-    let mut evidence = courtyard_evidence(&imported, resolution)?;
+    let (mut evidence, ignored_footprints) = courtyard_evidence(&imported, resolution)?;
     evidence.extend(exclusions.iter().map(|exclusion| Evidence {
         id: format!("explicit:{}", exclusion.id),
         region: exclusion.region.cloned(),
@@ -106,13 +129,15 @@ pub fn analyze(
         numerical_mm: pcb_ir::geom::tol::EPSILON_MM,
     };
     let intervals = eligible_outline(&substrate, &obstacles, footprint, tolerance)?;
-    Ok(json!({
+    let report = json!({
         "phase": "outline-eligibility-only",
         "manufacturing_ready": false,
         "scope": "canonical-board",
         "source_xml_sha256": hex::encode(Sha256::digest(xml.as_bytes())),
         "units": "mm",
+        "ignored_footprints": ignored_footprints,
         "policy": {
+            "missing_courtyard": "ignore-footprint",
             "width_mm": footprint.width_mm, "inward_mm": footprint.inward_mm,
             "outward_mm": footprint.outward_mm, "clearance_mm": clearance_mm,
             "accuracy_mm": resolution.accuracy.max_error_mm(),
@@ -122,7 +147,7 @@ pub fn analyze(
         "limitations": [
             "Eligible means clear only of supplied courtyard/exclusion evidence on the prepared polygon model; interval endpoints carry no guarantee.",
             "Closed courtyard contours are filled conservatively, regardless of outline ink styling. Both board sides are included without additional mirroring.",
-            "Missing applicable component courtyard evidence is Unknown. No body-free classifications or fallback envelopes are inferred.",
+            "Footprints without courtyard evidence contribute no obstruction and are listed in ignored_footprints. Clearance is conditional on supplied courtyards being complete; ignored physical components may overhang. Present but unusable courtyards are errors.",
             "General keep-out export coverage is not established. No copper, pad, drill, stackup or 3D collision checks are performed.",
             "No tabs, perforations, frame connections, router access, mechanics or panel export are generated."
         ],
@@ -136,10 +161,20 @@ pub fn analyze(
             "obstacles": i.obstacles.iter().map(|&index| &evidence[index].id).collect::<Vec<_>>(),
             "uncertainty_mm": i.uncertainty_mm,
         })).collect::<Vec<_>>(),
-    }))
+    });
+    Ok(Prepared {
+        report,
+        thickness_mm,
+        substrate,
+        evidence,
+        intervals,
+    })
 }
 
-fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Result<Vec<Evidence>> {
+fn courtyard_evidence(
+    imported: &ImportedDesign,
+    resolution: Resolution,
+) -> Result<(Vec<Evidence>, Vec<String>)> {
     let mut evidence = Vec::new();
     let mut covered = Vec::new();
     for (index, layer) in imported
@@ -195,9 +230,18 @@ fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Resu
             } else {
                 None
             };
-            if region.as_ref().is_some_and(|r| !r.is_empty()) {
-                covered.push((group.component, layer.side));
+            if !region.as_ref().is_some_and(|r| !r.is_empty()) {
+                bail!(
+                    "unusable courtyard on {} for {} ({})",
+                    imported.resolve(layer.name),
+                    group
+                        .component
+                        .map(|c| imported.resolve(c))
+                        .unwrap_or("unassociated"),
+                    group.sources.join(",")
+                );
             }
+            covered.push(group.component);
             evidence.push(Evidence {
                 id: format!(
                     "courtyard:{}:{}:{}",
@@ -212,34 +256,24 @@ fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Resu
             });
         }
     }
+    let mut ignored = Vec::new();
     for occurrence in imported.component_occurrences(ArtworkScope::Board)? {
         let component = imported
             .component_definition(occurrence.id.component)
             .unwrap();
-        let side = imported
-            .layer_definitions
-            .iter()
-            .find(|l| l.name == component.source.layer_ref)
-            .and_then(|l| l.side);
-        if component.source.ref_des.is_none()
-            || side.is_none()
-            || !covered.contains(&(component.source.ref_des, side))
-        {
-            evidence.push(Evidence {
-                id: format!(
-                    "missing-courtyard:{}:component-{}",
-                    component
-                        .source
-                        .ref_des
-                        .map(|r| imported.resolve(r))
-                        .unwrap_or("unnamed"),
-                    occurrence.id.component.0
-                ),
-                region: None,
-            });
+        if component.source.ref_des.is_none() || !covered.contains(&component.source.ref_des) {
+            ignored.push(format!(
+                "{}:component-{}",
+                component
+                    .source
+                    .ref_des
+                    .map(|r| imported.resolve(r))
+                    .unwrap_or("unnamed"),
+                occurrence.id.component.0
+            ));
         }
     }
-    Ok(evidence)
+    Ok((evidence, ignored))
 }
 
 // Import is intentionally permissive and may discard unresolved references,
@@ -359,71 +393,92 @@ fn courtyard_region(contours: &[ContourBuf], resolution: Resolution) -> Result<O
             segments.extend(contour.segments());
         }
     }
-    // A degree other than two means a gap, branch or duplicated segment.
-    if segments.iter().any(|s| {
-        [s.start(), s.end()].iter().any(|p| {
-            segments
-                .iter()
-                .map(|s| usize::from(s.start() == *p) + usize::from(s.end() == *p))
-                .sum::<usize>()
-                != 2
-        })
-    }) {
-        return Ok(None);
-    }
+    let mut open_components = Vec::new();
     while let Some(first) = segments.pop() {
-        let start = first.start();
-        let mut end = first.end();
-        let mut cmds = vec![PathCmd::move_to(start), segment_command(first, false)];
-        while end != start {
-            let Some(index) = segments
-                .iter()
-                .position(|s| s.start() == end || s.end() == end)
-            else {
-                return Ok(None);
-            };
-            let segment = segments.remove(index);
-            let reverse = segment.end() == end;
-            end = if reverse {
-                segment.start()
-            } else {
-                segment.end()
-            };
-            cmds.push(segment_command(segment, reverse));
+        let mut component = vec![first];
+        let mut index = 0;
+        while index < component.len() {
+            let endpoints = [component[index].start(), component[index].end()];
+            let mut candidate = 0;
+            while candidate < segments.len() {
+                if endpoints.contains(&segments[candidate].start())
+                    || endpoints.contains(&segments[candidate].end())
+                {
+                    component.push(segments.remove(candidate));
+                } else {
+                    candidate += 1;
+                }
+            }
+            index += 1;
         }
-        cmds.push(PathCmd::close());
-        loops.push(ContourBuf::new(cmds).with_uncertainty(uncertainty));
+        let closed = component.iter().all(|segment| {
+            [segment.start(), segment.end()].iter().all(|point| {
+                component
+                    .iter()
+                    .map(|other| {
+                        usize::from(other.start() == *point) + usize::from(other.end() == *point)
+                    })
+                    .sum::<usize>()
+                    == 2
+            })
+        });
+        if closed {
+            loops.push(closed_component(component, uncertainty)?);
+        } else {
+            open_components.push(component);
+        }
     }
     if loops.is_empty() {
         return Ok(None);
     }
-    Ok(Some(ContourSet::from_filled_contours(&loops, resolution)?))
-}
-
-fn segment_command(segment: Segment, reverse: bool) -> PathCmd {
-    let end = if reverse {
-        segment.start()
-    } else {
-        segment.end()
-    };
-    match segment {
-        Segment::Line { .. } => PathCmd::line_to(end),
-        Segment::Arc(arc) => PathCmd::arc_to(end, arc.center, arc.clockwise ^ reverse),
-        Segment::Ellipse(arc) => PathCmd::ellipse_to(
-            end,
-            arc.center,
-            arc.x_axis,
-            arc.y_axis,
-            arc.clockwise ^ reverse,
-        ),
-        Segment::Cubic { c1, c2, .. } => {
-            if reverse {
-                PathCmd::cubic_to(c2, c1, end)
-            } else {
-                PathCmd::cubic_to(c1, c2, end)
-            }
+    let region = ContourSet::from_filled_contours(&loops, resolution)?;
+    // An open component is harmless only when its entire conservative bounds
+    // fit strictly inside the enclosure. Segment bboxes include curve extrema
+    // (cubic control bounds are conservative); source and prepared-boundary
+    // uncertainty plus the requested preparation error expand the proof
+    // rectangle. This is not gap snapping: expansion can only reject evidence,
+    // makes boundary contact fail, and gives axial lines a nonzero area that
+    // survives the region representation.
+    for component in open_components {
+        let guard = uncertainty + region.uncertainty_mm + resolution.accuracy.max_error_mm();
+        let bbox = component
+            .iter()
+            .fold(BBox::empty(), |bbox, segment| bbox.union(segment.bbox()))
+            .expand(guard);
+        if !bbox.is_valid()
+            || bbox.width() <= 0.0
+            || bbox.height() <= 0.0
+            || !ContourSet::rectangle(bbox, resolution)
+                .difference(&region)?
+                .is_empty()
+        {
+            return Ok(None);
         }
     }
+    Ok(Some(region))
+}
+
+fn closed_component(mut segments: Vec<Segment>, uncertainty: f64) -> Result<ContourBuf> {
+    let first = segments.pop().context("empty closed courtyard component")?;
+    let start = first.start();
+    let mut end = first.end();
+    let mut cmds = vec![PathCmd::move_to(start), first.to_path_cmd(false)];
+    while end != start {
+        let index = segments
+            .iter()
+            .position(|segment| segment.start() == end || segment.end() == end)
+            .context("disconnected closed courtyard component")?;
+        let segment = segments.remove(index);
+        let reverse = segment.end() == end;
+        end = if reverse {
+            segment.start()
+        } else {
+            segment.end()
+        };
+        cmds.push(segment.to_path_cmd(reverse));
+    }
+    cmds.push(PathCmd::close());
+    Ok(ContourBuf::new(cmds).with_uncertainty(uncertainty))
 }
 
 #[cfg(feature = "cli")]
@@ -558,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn fragmented_courtyard_joins_by_component_but_gaps_remain_unknown() {
+    fn fragmented_courtyard_joins_by_component_but_gaps_are_errors() {
         let xml = fixture();
         let start = xml.find("<LayerFeature layerRef=\"F.Courtyard\">").unwrap();
         let end = start + xml[start..].find("</LayerFeature>").unwrap();
@@ -575,24 +630,107 @@ mod tests {
             );
             let imported =
                 import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
-            let evidence = courtyard_evidence(&imported, Resolution::default()).unwrap();
-            let top = &evidence[0];
-            if count == 4 {
+            let result = courtyard_evidence(&imported, Resolution::default());
+            if count == 3 {
                 assert!(
-                    top.region
-                        .as_ref()
+                    result
+                        .err()
                         .unwrap()
-                        .prepare_query()
-                        .signed_distance(Point::new(7.0, 3.0))
-                        .unwrap()
-                        .mm
-                        < -0.9
+                        .to_string()
+                        .contains("unusable courtyard")
                 );
-                assert_eq!(top.id.matches("feature-").count(), 4);
-            } else {
-                assert!(top.region.is_none());
+                continue;
             }
+            let (evidence, _) = result.unwrap();
+            let top = &evidence[0];
+            assert!(
+                top.region
+                    .as_ref()
+                    .unwrap()
+                    .prepare_query()
+                    .signed_distance(Point::new(7.0, 3.0))
+                    .unwrap()
+                    .mm
+                    < -0.9
+            );
+            assert_eq!(top.id.matches("feature-").count(), 4);
         }
+    }
+
+    fn fragmented_rectangle_with(extra: Vec<ContourBuf>) -> Vec<ContourBuf> {
+        let point = |x, y| Point::new(x, y);
+        let mut contours = [
+            (point(0.0, 0.0), point(10.0, 0.0)),
+            (point(10.0, 0.0), point(10.0, 6.0)),
+            (point(10.0, 6.0), point(0.0, 6.0)),
+            (point(0.0, 6.0), point(0.0, 0.0)),
+        ]
+        .into_iter()
+        .map(|(start, end)| ContourBuf::new(vec![PathCmd::move_to(start), PathCmd::line_to(end)]))
+        .collect::<Vec<_>>();
+        contours.extend(extra);
+        contours
+    }
+
+    fn open_line(start: Point, end: Point) -> ContourBuf {
+        ContourBuf::new(vec![PathCmd::move_to(start), PathCmd::line_to(end)])
+    }
+
+    #[test]
+    fn fragmented_enclosure_allows_only_fully_enclosed_open_components() {
+        let center_marks = vec![
+            open_line(Point::new(4.0, 2.0), Point::new(6.0, 2.0)),
+            open_line(Point::new(5.0, 1.0), Point::new(5.0, 3.0)),
+        ];
+        let expected = courtyard_region(
+            &fragmented_rectangle_with(Vec::new()),
+            Resolution::default(),
+        )
+        .unwrap()
+        .unwrap();
+        let accepted = courtyard_region(
+            &fragmented_rectangle_with(center_marks),
+            Resolution::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(accepted.difference(&expected).unwrap().is_empty());
+        assert!(expected.difference(&accepted).unwrap().is_empty());
+
+        for y in [6.0, 7.0] {
+            let outside = open_line(Point::new(4.0, y), Point::new(6.0, y));
+            assert!(
+                courtyard_region(
+                    &fragmented_rectangle_with(vec![outside]),
+                    Resolution::default()
+                )
+                .unwrap()
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn open_only_and_curves_bulging_outside_are_rejected() {
+        assert!(
+            courtyard_region(
+                &[open_line(Point::new(1.0, 1.0), Point::new(2.0, 1.0))],
+                Resolution::default()
+            )
+            .unwrap()
+            .is_none()
+        );
+
+        // Both endpoints are inside, but the upper semicircle reaches y=7.
+        let arc = ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(1.0, 3.0)),
+            PathCmd::arc_to(Point::new(9.0, 3.0), Point::new(5.0, 3.0), false),
+        ]);
+        assert!(
+            courtyard_region(&fragmented_rectangle_with(vec![arc]), Resolution::default())
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -633,7 +771,8 @@ mod tests {
     fn courtyard_occurrences_fill_hollow_envelopes_on_both_sides() {
         let ipc = Ipc2581::parse(&fixture()).unwrap();
         let imported = import_design(&ipc, Resolution::default()).unwrap();
-        let evidence = courtyard_evidence(&imported, Resolution::default()).unwrap();
+        let (evidence, ignored) = courtyard_evidence(&imported, Resolution::default()).unwrap();
+        assert!(ignored.is_empty());
         assert_eq!(
             evidence.len(),
             2,
@@ -722,22 +861,33 @@ mod tests {
     }
 
     #[test]
-    fn missing_applicable_courtyard_is_unknown_even_with_opposite_side_evidence() {
+    fn absent_courtyard_is_disclosed_without_poisoning_supplied_evidence() {
         let xml = fixture().replace(
-            "layerRef=\"BOTTOM\" mountType",
-            "layerRef=\"TOP\" mountType",
+            "<Component refDes=\"U2\"",
+            "<Component refDes=\"NO_COURTYARD\"",
         );
         let report = analyze(&xml, footprint(), 0.0, &[], Resolution::default()).unwrap();
-        let intervals = report["intervals"].as_array().unwrap();
-        assert!(intervals.iter().any(|i| i["state"] == "Unknown"));
-        assert!(!intervals.iter().any(|i| i["state"] == "Eligible"));
-        assert!(report["evidence"].as_array().unwrap().iter().any(|e| {
-            e["id"]
-                .as_str()
+        let original = analyze(&fixture(), footprint(), 0.0, &[], Resolution::default()).unwrap();
+        assert_eq!(report["intervals"], original["intervals"]);
+        assert_eq!(
+            report["ignored_footprints"],
+            json!(["NO_COURTYARD:component-1"])
+        );
+        assert_eq!(report["policy"]["missing_courtyard"], "ignore-footprint");
+        assert!(
+            report["intervals"]
+                .as_array()
                 .unwrap()
-                .starts_with("missing-courtyard:U2")
-                && e["available"] == false
-        }));
+                .iter()
+                .any(|i| i["state"] == "Eligible")
+        );
+        assert!(
+            report["intervals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["state"] == "Blocked")
+        );
     }
 
     #[test]
