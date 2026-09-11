@@ -33,8 +33,6 @@ pub struct Tabs {
     /// Break perforations in panel coordinates.
     pub holes: Vec<Npth>,
     pub per_board: usize,
-    /// Candidate sites the builder could not turn into a tab, with the reason.
-    pub dropped: Vec<String>,
 }
 
 /// Tab and slot geometry for `placement`'s board repeated at `offsets`
@@ -179,7 +177,6 @@ pub(super) fn generate(
             cutouts,
             holes,
             per_board: chosen.len(),
-            dropped,
         });
     }
 }
