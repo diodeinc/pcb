@@ -86,6 +86,7 @@ fn accuracy_reaches_ipc_manufacturing_geometry() {
             edge_rail_mm: BoardMarginMm::all(5.0),
         },
         false,
+        pcb_ipc2581_tools::commands::board_array::Separation::VScore,
         Resolution::default(),
     )
     .unwrap();

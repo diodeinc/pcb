@@ -50,11 +50,14 @@ pub fn analyze(
     exclusions: &[OutlineObstacle<'_>],
     resolution: Resolution,
 ) -> Result<Value> {
-    Ok(prepare(xml, footprint, clearance_mm, exclusions, resolution)?.report)
+    let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
+    let mut report = prepare(&ipc, footprint, clearance_mm, exclusions, resolution)?.report;
+    report["source_xml_sha256"] = json!(hex::encode(Sha256::digest(xml.as_bytes())));
+    Ok(report)
 }
 
 pub(super) fn prepare(
-    xml: &str,
+    ipc: &Ipc2581,
     footprint: OutlineFootprint,
     clearance_mm: f64,
     exclusions: &[OutlineObstacle<'_>],
@@ -63,16 +66,15 @@ pub(super) fn prepare(
     if !clearance_mm.is_finite() || clearance_mm < 0.0 {
         bail!("clearance must be finite and nonnegative");
     }
-    let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    validate_courtyard_references(&ipc)?;
-    let thickness_mm = crate::accessors::IpcAccessor::new(&ipc)
+    validate_courtyard_references(ipc)?;
+    let thickness_mm = crate::accessors::IpcAccessor::new(ipc)
         .stackup_details()
         .and_then(|stackup| stackup.overall_thickness_mm)
         .filter(|t| t.is_finite() && *t > 0.0);
     // Keep small substrate cutouts and courtyard regions; accuracy remains the
     // caller's existing geometry budget (--accuracy-um in the CLI).
     let resolution = resolution.strict();
-    let imported = import_design(&ipc, resolution)?;
+    let imported = import_design(ipc, resolution)?;
     let doc = &imported.geometry;
     // Both BoardOutlines and ArtworkScope::Board must select the same board.
     // Do not resolve mixed-board panels in this analysis-only phase.
@@ -133,7 +135,6 @@ pub(super) fn prepare(
         "phase": "outline-eligibility-only",
         "manufacturing_ready": false,
         "scope": "canonical-board",
-        "source_xml_sha256": hex::encode(Sha256::digest(xml.as_bytes())),
         "units": "mm",
         "ignored_footprints": ignored_footprints,
         "policy": {
@@ -479,27 +480,6 @@ fn closed_component(mut segments: Vec<Segment>, uncertainty: f64) -> Result<Cont
     }
     cmds.push(PathCmd::close());
     Ok(ContourBuf::new(cmds).with_uncertainty(uncertainty))
-}
-
-#[cfg(feature = "cli")]
-pub fn execute(
-    input: &std::path::Path,
-    output: &std::path::Path,
-    footprint: OutlineFootprint,
-    clearance_mm: f64,
-    resolution: Resolution,
-) -> Result<()> {
-    let xml = crate::utils::file::load_ipc_file(input)?;
-    let report = analyze(&xml, footprint, clearance_mm, &[], resolution)?;
-    let mut json = serde_json::to_vec_pretty(&report)?;
-    json.push(b'\n');
-    if output.as_os_str() == "-" {
-        pcb_ui::write_stdout(|stdout| stdout.write_all(&json))?;
-    } else {
-        std::fs::write(output, json)?;
-    }
-    anstream::eprintln!("Outline eligibility analysis only; no mouse-bite panel generated.");
-    Ok(())
 }
 
 #[cfg(test)]

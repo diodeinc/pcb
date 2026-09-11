@@ -17,8 +17,8 @@ The paper's recommendations, **not** its introductory industry survey, are:
 | Dimension | `SparkFunShallow` | Provenance |
 |---|---:|---|
 | NPTH diameter | 0.381 mm (0.015 in) | Paper p9 |
-| Center pitch | 0.635 mm (0.025 in) | Paper p9; applied to offset polygon arc length |
-| Nominal straight ligament | 0.254 mm | Pitch − diameter; curved chord ligaments are measured separately |
+| Center pitch | 0.635 mm (0.025 in) | Paper p9; applied as a straight chord between consecutive centers along the offset polygon, so the web is the same on curves |
+| Nominal straight ligament | 0.254 mm | Pitch − diameter; the all-pairs chord ligament may not fall below it |
 | Outward center offset | 0.127 mm (0.005 in) | **Experimental project adaptation**, not a SparkFun measurement |
 | Nominal straight board intrusion | 0.0635 mm | Radius − outward offset, not a damage-zone prediction |
 | Hole count / straight neck width | 5 / 2.0 mm | Project construction choice; 2.54 mm center span overlaps shoulders |
@@ -40,8 +40,10 @@ tool's jaw access, support shape, or curved-tab compatibility.
 The straight 2 mm neck connects the explicit anchor to the supplied site. Opening
 the ideal routing void with the 0.5 mm cutter disk leaves rounded shoulders.
 The board's outward disk offset supplies a cyclic polygon break row, preserving
-all intervening vertices and five equally spaced stations. This avoids inventing
-smooth-curve tangents, curvature thresholds, or arc-length error bounds.
+all intervening vertices, with five centers each one straight pitch from the
+last along it. This avoids inventing smooth-curve tangents, curvature
+thresholds, or arc-length error bounds, and keeps the web between holes a
+straight-line distance on curves.
 
 Outputs keep retained substrate, routed removal, full drill masks, analytic
 NPTH centers/diameters, attachment footprint and shoulder material distinct.

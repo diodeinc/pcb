@@ -181,7 +181,15 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
     let source = Ipc2581::parse(&input).unwrap();
     let (options, validation_mode, panelization) =
         auto_board_array_options(&source, None, resolution).unwrap();
-    let spec = build_board_array_spec(&source, &options, validation_mode, panelization).unwrap();
+    let spec = build_board_array_spec(
+        &source,
+        &options,
+        validation_mode,
+        panelization,
+        Separation::VScore,
+        resolution,
+    )
+    .unwrap();
     // Safe-region discovery runs on the completed but not-yet-balanced array;
     // otherwise the generated balance copper becomes its own obstacle.
     let xml = write_board_array_xml(&input, &spec).unwrap();
@@ -244,7 +252,15 @@ fn board_array_balancing_solves_every_copper_layer() {
     let sheet = Some(AutoSheetSize::A7);
     let (options, validation_mode, panelization) =
         auto_board_array_options(&ipc, sheet, resolution).unwrap();
-    let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
+    let spec = build_board_array_spec(
+        &ipc,
+        &options,
+        validation_mode,
+        panelization,
+        Separation::VScore,
+        resolution,
+    )
+    .unwrap();
     let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let balance =
@@ -302,13 +318,20 @@ fn board_array_creation_reports_and_emits_the_balance() {
     let resolution = Resolution::default();
 
     let input = two_layer_board_xml();
-    let creation =
-        create_auto_board_array(&input, Some(AutoSheetSize::A7), true, resolution).unwrap();
+    let creation = create_auto_board_array(
+        &input,
+        Some(AutoSheetSize::A7),
+        true,
+        Separation::VScore,
+        resolution,
+    )
+    .unwrap();
     let copper_balance = creation.copper_balance.as_ref().unwrap();
     let coarser = create_auto_board_array(
         &input,
         Some(AutoSheetSize::A7),
         true,
+        Separation::VScore,
         resolution.with_accuracy(pcb_ir::geom::GeometryAccuracy::micrometres(30)),
     )
     .unwrap();
@@ -357,6 +380,7 @@ fn board_array_creation_accepts_no_source_copper_layers() {
             edge_rail_mm: BoardMarginMm::all(20.0),
         },
         true,
+        Separation::VScore,
         resolution,
     )
     .unwrap();
@@ -368,8 +392,14 @@ fn board_array_creation_accepts_no_source_copper_layers() {
 fn board_array_creation_can_skip_copper_balancing() {
     let resolution = Resolution::default();
 
-    let creation =
-        create_auto_board_array(board_fixture_with_top_line_mm(), None, false, resolution).unwrap();
+    let creation = create_auto_board_array(
+        board_fixture_with_top_line_mm(),
+        None,
+        false,
+        Separation::VScore,
+        resolution,
+    )
+    .unwrap();
 
     assert!(creation.copper_balance.is_none());
     Ipc2581::parse(&creation.xml).unwrap();
@@ -386,7 +416,15 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
     let sheet = Some(AutoSheetSize::A6);
     let (options, validation_mode, panelization) =
         auto_board_array_options(&ipc, sheet, resolution).unwrap();
-    let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
+    let spec = build_board_array_spec(
+        &ipc,
+        &options,
+        validation_mode,
+        panelization,
+        Separation::VScore,
+        resolution,
+    )
+    .unwrap();
     let provisional_xml = write_board_array_xml(input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let layout = geometry::extract_layout(&provisional).unwrap();
@@ -897,6 +935,8 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
             sheet: None,
             sheet_target_mm: None,
         },
+        Separation::VScore,
+        Resolution::default(),
     )
     .unwrap();
 
@@ -1026,6 +1066,8 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
             sheet: None,
             sheet_target_mm: None,
         },
+        Separation::VScore,
+        Resolution::default(),
     )
     .unwrap();
     let safe_region = ContourSet::rectangle(
@@ -2482,4 +2524,51 @@ fn panel_fixture() -> &'static str {
 </CadData>
   </Ecad>
 </IPC-2581>"#
+}
+
+#[test]
+fn mouse_bite_array_routes_slots_bridged_by_perforated_tabs() {
+    let resolution = Resolution::default();
+    let input = board_fixture_with_top_line_mm();
+    let creation = create_board_array(
+        input,
+        &BoardArrayCreateOptions {
+            columns: 2,
+            rows: 2,
+            board_margin_mm: BoardMarginMm::all(5.0),
+            edge_rail_mm: BoardMarginMm::all(20.0),
+        },
+        false,
+        Separation::MouseBite,
+        resolution,
+    )
+    .unwrap();
+    let xml = creation.xml;
+    assert!(!xml.contains("V-Score") && !xml.contains("V_Cut"));
+    assert!(xml.contains(r#"name="diode.panelize.separation" type="STRING" value="mouse-bite""#));
+    let tabs_per_board: usize = xml
+        .split(r#"name="diode.panelize.tabs_per_board" type="INTEGER" value=""#)
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .and_then(|value| value.parse().ok())
+        .unwrap();
+    assert!(tabs_per_board >= 1);
+    // Every tab splits its board's slot once, so a board with k tabs leaves
+    // k routed voids, and every tab carries five break holes.
+    assert_eq!(xml.matches("<Cutout>").count(), 4 * tabs_per_board);
+    let holes = xml.matches(r#"diameter="0.381""#).count();
+    assert_eq!(holes, 4 * tabs_per_board * 5);
+    let reparsed = Ipc2581::parse(&xml).unwrap();
+    let array = reparsed
+        .ecad()
+        .unwrap()
+        .cad_data
+        .steps
+        .iter()
+        .find(|step| reparsed.resolve(step.name) == "array")
+        .unwrap();
+    assert_eq!(
+        array.profile.as_ref().unwrap().cutouts.len(),
+        4 * tabs_per_board
+    );
 }

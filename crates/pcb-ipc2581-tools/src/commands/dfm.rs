@@ -1103,6 +1103,7 @@ reason = "old finding"
                 edge_rail_mm: EdgeInsetsMm::all(5.0),
             },
             false,
+            crate::commands::board_array::Separation::VScore,
             resolution,
         )
         .unwrap()

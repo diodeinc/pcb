@@ -258,24 +258,12 @@ enum BoardArrayCommands {
         /// Input IPC-2581 XML; --mouse-bite requires one board definition.
         #[arg(value_hint = clap::ValueHint::FilePath)]
         input: PathBuf,
-        /// Analyze outline eligibility only: writes JSON, NOT a mouse-bite panel.
-        #[arg(long, requires_all = ["mouse_bite_width", "mouse_bite_inward", "mouse_bite_outward", "mouse_bite_clearance"], conflicts_with_all = ["auto", "sheet", "columns", "rows", "board_margin", "edge_rail", "copper_balance", "no_copper_balance"])]
+        /// Separate boards with routed slots and perforated mouse-bite tabs instead of V-scores.
+        #[arg(long, conflicts_with = "mouse_bite_placement")]
         mouse_bite: bool,
-        /// Choose mouse-bite tab sites with the built-in preset: writes JSON, NOT a panel.
-        #[arg(long, conflicts_with_all = ["mouse_bite", "auto", "sheet", "columns", "rows", "board_margin", "edge_rail", "copper_balance", "no_copper_balance"])]
+        /// Analyze where mouse-bite tabs would go on the board: writes JSON, not a panel.
+        #[arg(long, conflicts_with_all = ["auto", "sheet", "columns", "rows", "board_margin", "edge_rail", "copper_balance", "no_copper_balance"])]
         mouse_bite_placement: bool,
-        /// Analysis band width along the cyclic outline, in mm; no manufacturing default.
-        #[arg(long, requires = "mouse_bite")]
-        mouse_bite_width: Option<f64>,
-        /// Analysis band depth into substrate, in mm.
-        #[arg(long, requires = "mouse_bite")]
-        mouse_bite_inward: Option<f64>,
-        /// Analysis band depth outside substrate, in mm.
-        #[arg(long, requires = "mouse_bite")]
-        mouse_bite_outward: Option<f64>,
-        /// Isotropic courtyard/exclusion expansion in mm (0 adds no clearance).
-        #[arg(long, requires = "mouse_bite")]
-        mouse_bite_clearance: Option<f64>,
         /// Choose the smallest fitting A-series board array automatically.
         #[arg(long)]
         auto: bool,
@@ -296,7 +284,7 @@ enum BoardArrayCommands {
         edge_rail: Vec<f64>,
         #[command(flatten)]
         copper_balance: CopperBalanceArgs,
-        /// Output IPC-2581 XML (eligibility JSON with --mouse-bite), or '-' for stdout
+        /// Output IPC-2581 XML (placement JSON with --mouse-bite-placement), or '-' for stdout
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
     },
@@ -479,10 +467,6 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 input,
                 mouse_bite,
                 mouse_bite_placement,
-                mouse_bite_width,
-                mouse_bite_inward,
-                mouse_bite_outward,
-                mouse_bite_clearance,
                 auto,
                 sheet,
                 columns,
@@ -495,19 +479,11 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 if mouse_bite_placement {
                     return commands::board_array::placement::execute(&input, &output, resolution);
                 }
-                if mouse_bite {
-                    return commands::board_array::eligibility::execute(
-                        &input,
-                        &output,
-                        pcb_ir::geom::attachment::outline::OutlineFootprint {
-                            width_mm: mouse_bite_width.expect("required by clap"),
-                            inward_mm: mouse_bite_inward.expect("required by clap"),
-                            outward_mm: mouse_bite_outward.expect("required by clap"),
-                        },
-                        mouse_bite_clearance.expect("required by clap"),
-                        resolution,
-                    );
-                }
+                let separation = if mouse_bite {
+                    commands::board_array::Separation::MouseBite
+                } else {
+                    commands::board_array::Separation::VScore
+                };
                 let copper_balance = copper_balance.resolve(true);
                 if auto || sheet.is_some() {
                     if columns.is_some()
@@ -524,6 +500,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                         &output,
                         sheet,
                         copper_balance,
+                        separation,
                         resolution,
                     )
                 } else {
@@ -550,6 +527,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                             edge_rail_mm,
                         },
                         copper_balance,
+                        separation,
                         resolution,
                     )
                 }
@@ -680,7 +658,7 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn mouse_bite_requires_explicit_policy_and_rejects_panel_options() {
+    fn mouse_bite_flags_combine_with_layout_but_placement_analysis_stands_alone() {
         let base = [
             "pcb",
             "ipc2581",
@@ -688,56 +666,25 @@ mod tests {
             "create",
             "board.xml",
             "-o",
-            "-",
+            "out",
         ];
-        assert!(crate::Cli::try_parse_from(base).is_ok());
-        let policy = [
-            "--mouse-bite",
-            "--mouse-bite-width",
-            "2",
-            "--mouse-bite-inward",
-            "0.2",
-            "--mouse-bite-outward",
-            "2",
-            "--mouse-bite-clearance",
-            "0",
-        ];
-        assert!(crate::Cli::try_parse_from(base.into_iter().chain(policy)).is_ok());
-        for omitted in [1, 3, 5, 7] {
-            let args = policy
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != omitted && *i != omitted + 1)
-                .map(|(_, arg)| *arg);
-            assert!(crate::Cli::try_parse_from(base.into_iter().chain(args)).is_err());
-        }
-        for conflicting in [
-            vec!["--auto"],
-            vec!["--columns", "2"],
-            vec!["--no-copper-balance"],
-            vec!["--board-margin", "5"],
+        for args in [
+            vec!["--mouse-bite", "--auto"],
+            vec!["--mouse-bite", "--columns", "2"],
         ] {
-            assert!(
-                crate::Cli::try_parse_from(base.into_iter().chain(policy).chain(conflicting))
-                    .is_err()
-            );
+            assert!(crate::Cli::try_parse_from(base.into_iter().chain(args)).is_ok());
         }
-        assert!(
-            crate::Cli::try_parse_from(base.into_iter().chain(["--mouse-bite-width", "2"]))
-                .is_err()
-        );
-        let placement = ["--mouse-bite-placement"];
-        assert!(crate::Cli::try_parse_from(base.into_iter().chain(placement)).is_ok());
-        for conflicting in [vec!["--auto"], vec!["--mouse-bite"], vec!["--columns", "2"]] {
-            assert!(
-                crate::Cli::try_parse_from(base.into_iter().chain(placement).chain(conflicting))
-                    .is_err()
-            );
+        for args in [
+            vec!["--mouse-bite-placement", "--auto"],
+            vec!["--mouse-bite-placement", "--mouse-bite"],
+            vec!["--mouse-bite-placement", "--no-copper-balance"],
+        ] {
+            assert!(crate::Cli::try_parse_from(base.into_iter().chain(args)).is_err());
         }
     }
 
     #[test]
-    fn mouse_bite_create_writes_analysis_json_instead_of_panel_xml() {
+    fn mouse_bite_placement_writes_analysis_json_instead_of_panel_xml() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("board.xml");
         let output = dir.path().join("report.json");
@@ -752,15 +699,7 @@ mod tests {
             "board-array",
             "create",
             input.to_str().unwrap(),
-            "--mouse-bite",
-            "--mouse-bite-width",
-            "2",
-            "--mouse-bite-inward",
-            "0.2",
-            "--mouse-bite-outward",
-            "2",
-            "--mouse-bite-clearance",
-            "0",
+            "--mouse-bite-placement",
             "-o",
             output.to_str().unwrap(),
         ])
@@ -771,8 +710,9 @@ mod tests {
         execute(args, Resolution::default()).unwrap();
         let report: serde_json::Value =
             serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
-        assert_eq!(report["phase"], "outline-eligibility-only");
+        assert_eq!(report["phase"], "tab-placement-only");
         assert_eq!(report["manufacturing_ready"], false);
         assert!(!report["intervals"].as_array().unwrap().is_empty());
+        assert!(report["placement"]["tab_count"].as_u64().unwrap() > 0);
     }
 }

@@ -31,6 +31,9 @@ pub struct Rejection {
 pub struct Sites {
     pub candidates: Vec<Candidate>,
     pub rejected: Vec<Rejection>,
+    /// Outline stretches too tightly curved or too close to a corner for a
+    /// tab, as polylines, whatever the obstacle evidence says there.
+    pub tight: Vec<Vec<Point>>,
     /// Frame material beyond an outline-following slot, local to this board.
     pub frame: ContourSet,
 }
@@ -51,15 +54,22 @@ pub fn find(
     let reach = preset.routing_gap_mm + preset.frame_landing_mm;
     let frame = ContourSet::rectangle(substrate.bbox().expand(reach + 1.0), resolution)
         .difference(&substrate.disk_dilate(preset.routing_gap_mm)?)?;
+    // Small boards cannot keep a full keep-out from every corner.
+    let bbox = substrate.bbox();
+    let keepout_mm = preset
+        .corner_keepout_mm
+        .min(bbox.width().min(bbox.height()) / 4.0);
     let checker = Checker {
         substrate,
         frame: &frame,
         preset,
+        keepout_mm,
         resolution,
     };
     let mut sites = Sites {
         candidates: Vec::new(),
         rejected: Vec::new(),
+        tight: Vec::new(),
         frame: ContourSet::empty(resolution),
     };
     for id in boundary
@@ -68,6 +78,9 @@ pub fn find(
     {
         let perimeter = boundary.perimeter(id)?;
         let turns = turning_angles(&substrate.rings[id.ring]);
+        sites.tight.extend(tight_runs(
+            &boundary, id, &turns, perimeter, preset, keepout_mm,
+        )?);
         for (lo, hi) in eligible_runs(intervals, id, perimeter) {
             let bins = ((hi - lo) / preset.candidate_pitch_mm).ceil().max(1.0) as usize;
             for k in 0..bins {
@@ -100,6 +113,7 @@ struct Checker<'a> {
     substrate: &'a ContourSet,
     frame: &'a ContourSet,
     preset: &'a Preset,
+    keepout_mm: f64,
     resolution: Resolution,
 }
 
@@ -112,21 +126,8 @@ impl Checker<'_> {
         perimeter: f64,
     ) -> Result<Option<String>> {
         let p = self.preset;
-        let half = p.tab_width_mm / 2.0;
-        let tab_bend = bend_within(turns, perimeter, site.station_mm, half);
-        if tab_bend > p.tab_bend_degrees {
-            return Ok(Some(format!("outline turns {tab_bend:.0}° within the tab")));
-        }
-        let corner_bend = bend_within(
-            turns,
-            perimeter,
-            site.station_mm,
-            half + p.corner_keepout_mm,
-        );
-        if corner_bend > p.corner_bend_degrees {
-            return Ok(Some(format!(
-                "outline turns {corner_bend:.0}° within the corner keep-out"
-            )));
+        if let Some(reason) = too_tight(turns, perimeter, site.station_mm, p, self.keepout_mm) {
+            return Ok(Some(reason));
         }
         let across = self.strip(site, 0.0, p.routing_gap_mm)?;
         if across.intersection(self.substrate)?.area() > 0.0 {
@@ -160,6 +161,59 @@ impl Checker<'_> {
             self.resolution,
         )?)
     }
+}
+
+/// Why the outline at `station` is too curved for a tab, if it is: it may
+/// turn no more within the tab width, or within the tab plus the keep-out
+/// on either side, than an arc of the minimum radius would over that length.
+fn too_tight(
+    turns: &[(f64, f64)],
+    perimeter: f64,
+    station: f64,
+    preset: &Preset,
+    keepout_mm: f64,
+) -> Option<String> {
+    let limit = |window: f64| (window / preset.min_tab_radius_mm).to_degrees();
+    let half = preset.tab_width_mm / 2.0;
+    let tab_bend = bend_within(turns, perimeter, station, half);
+    if tab_bend > limit(preset.tab_width_mm) {
+        return Some(format!("outline turns {tab_bend:.0}° within the tab"));
+    }
+    let corner_bend = bend_within(turns, perimeter, station, half + keepout_mm);
+    if corner_bend > limit(preset.tab_width_mm + 2.0 * keepout_mm) {
+        return Some(format!(
+            "outline turns {corner_bend:.0}° within the corner keep-out"
+        ));
+    }
+    None
+}
+
+/// Stretches of one ring that are too tight for a tab, sampled finely and
+/// returned as polylines for inspection.
+fn tight_runs(
+    boundary: &BoundaryQuery<'_>,
+    id: BoundaryId,
+    turns: &[(f64, f64)],
+    perimeter: f64,
+    preset: &Preset,
+    keepout_mm: f64,
+) -> Result<Vec<Vec<Point>>> {
+    let step = preset.candidate_pitch_mm / 5.0;
+    let mut runs: Vec<Vec<Point>> = Vec::new();
+    let mut open = false;
+    for k in 0..(perimeter / step).ceil() as usize {
+        let station = k as f64 * step;
+        let tight = too_tight(turns, perimeter, station, preset, keepout_mm).is_some();
+        if tight {
+            let point = boundary.site(id, station)?.point;
+            match runs.last_mut() {
+                Some(run) if open => run.push(point),
+                _ => runs.push(vec![point]),
+            }
+        }
+        open = tight;
+    }
+    Ok(runs)
 }
 
 /// Contiguous Eligible arclength runs on one ring, joined across the seam.
