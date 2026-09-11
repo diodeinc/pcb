@@ -596,6 +596,7 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
         IPC_BOARD,
         &array_options,
         false,
+        pcb_ipc2581_tools::commands::board_array::Separation::VScore,
         pcb_ir::geom::Resolution::default(),
     )
     .unwrap();
@@ -603,6 +604,7 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
         &IPC_BOARD.replace("name=\"board\"", "name=\"other\""),
         &array_options,
         false,
+        pcb_ipc2581_tools::commands::board_array::Separation::VScore,
         pcb_ir::geom::Resolution::default(),
     )
     .unwrap();

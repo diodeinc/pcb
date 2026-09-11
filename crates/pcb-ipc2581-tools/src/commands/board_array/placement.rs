@@ -9,11 +9,13 @@
 pub mod candidates;
 pub mod select;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
+use ipc2581::Ipc2581;
 use pcb_ir::geom::{
     ContourSet, Resolution, attachment::outline::OutlineFootprint, mouse_bite::SparkFunShallow,
 };
 use serde_json::{Value, json};
+use sha2::Digest;
 
 use super::eligibility;
 use select::{Model, Physics};
@@ -38,6 +40,8 @@ pub struct Preset {
     /// keep-out on either side, than an arc of this radius would, which keeps
     /// tabs off corners without excluding round boards.
     pub min_tab_radius_mm: f64,
+    /// Distance kept from corners, or a quarter of the board's shorter side
+    /// on boards too small for that.
     pub corner_keepout_mm: f64,
     /// Closest two tabs may sit.
     pub min_separation_mm: f64,
@@ -89,10 +93,19 @@ impl Preset {
     }
 }
 
-/// Analyze one canonical board: eligibility plus tab placement.
-pub fn analyze(xml: &str, preset: &Preset, resolution: Resolution) -> Result<Value> {
+/// One board's eligibility, candidate sites and chosen tabs.
+pub(super) struct Placement {
+    pub prepared: eligibility::Prepared,
+    pub sites: candidates::Sites,
+    pub loads: Vec<pcb_ir::geom::Point>,
+    pub model: Model,
+    pub selection: select::Selection,
+}
+
+/// Place tabs on the canonical board of `ipc`.
+pub(super) fn place(ipc: &Ipc2581, preset: &Preset, resolution: Resolution) -> Result<Placement> {
     let prepared = eligibility::prepare(
-        xml,
+        ipc,
         preset.footprint(),
         preset.courtyard_clearance_mm,
         &[],
@@ -121,7 +134,28 @@ pub fn analyze(xml: &str, preset: &Preset, resolution: Resolution) -> Result<Val
         &loads,
         &model,
     );
+    Ok(Placement {
+        prepared,
+        sites,
+        loads,
+        model,
+        selection,
+    })
+}
 
+/// Analyze one canonical board: eligibility plus tab placement, as JSON.
+pub fn analyze(xml: &str, preset: &Preset, resolution: Resolution) -> Result<Value> {
+    let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
+    let placement = place(&ipc, preset, resolution)?;
+    let Placement {
+        prepared,
+        sites,
+        loads,
+        model,
+        selection,
+    } = &placement;
+    let substrate = &prepared.substrate;
+    let bbox = substrate.bbox();
     let rings = |region: &ContourSet| {
         region
             .rings
@@ -131,6 +165,7 @@ pub fn analyze(xml: &str, preset: &Preset, resolution: Resolution) -> Result<Val
     };
     let mut report = prepared.report.clone();
     report["phase"] = json!("tab-placement-only");
+    report["source_xml_sha256"] = json!(hex::encode(sha2::Sha256::digest(xml.as_bytes())));
     report["placement"] = json!({
         "preset": preset,
         "model": model,

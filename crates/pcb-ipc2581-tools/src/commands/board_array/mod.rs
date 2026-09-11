@@ -1,9 +1,10 @@
-use pcb_ir::geom::Resolution;
+use pcb_ir::geom::{ContourSet, FillRule, Resolution};
 use std::collections::HashSet;
 #[cfg(feature = "cli")]
 use std::path::Path;
 
 pub mod eligibility;
+pub mod mouse_bite;
 pub mod placement;
 
 use super::board_array_auto::{
@@ -190,6 +191,33 @@ pub struct BoardArrayCreateOptions {
     pub edge_rail_mm: BoardMarginMm,
 }
 
+/// How boards separate from the array: scored lines, or routed slots bridged
+/// by perforated tabs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Separation {
+    VScore,
+    MouseBite,
+}
+
+impl Separation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::VScore => "v-score",
+            Self::MouseBite => "mouse-bite",
+        }
+    }
+
+    /// The cell a board occupies in the array: its outline, plus the routed
+    /// slot around it when boards are routed out, so margins, rails and
+    /// tooling keep their distances from the slot rather than the board.
+    fn cell(self, board: pcb_ir::geom::BBox) -> pcb_ir::geom::BBox {
+        match self {
+            Self::VScore => board,
+            Self::MouseBite => board.expand(placement::PRESET.routing_gap_mm),
+        }
+    }
+}
+
 /// Generated board-array IPC plus optional per-layer copper-balance accounting.
 #[derive(Debug, Clone)]
 pub struct BoardArrayCreation {
@@ -239,7 +267,11 @@ struct BoardArraySpec {
     array_name: String,
     board_cell_name: String,
     board_name: String,
-    vcut_spec_name: String,
+    vcut_spec_name: Option<String>,
+    /// Routed material in the array profile; empty for scored arrays.
+    profile_cutouts: Vec<Polygon>,
+    separation: Separation,
+    tabs_per_board: usize,
     board_outline_layer_names: Vec<String>,
     content_step_refs: Vec<String>,
     content_layer_refs: Vec<String>,
@@ -414,10 +446,11 @@ pub fn execute(
     output: &Path,
     options: &BoardArrayCreateOptions,
     balance_copper: bool,
+    separation: Separation,
     resolution: Resolution,
 ) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_board_array(&content, options, balance_copper, resolution)?;
+    let creation = create_board_array(&content, options, balance_copper, separation, resolution)?;
     print_copper_balance_summary(creation.copper_balance.as_ref());
     write_board_array_output(output, &creation.xml)?;
     Ok(())
@@ -429,10 +462,12 @@ pub fn execute_auto(
     output: &Path,
     sheet: Option<AutoSheetSize>,
     balance_copper: bool,
+    separation: Separation,
     resolution: Resolution,
 ) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_auto_board_array(&content, sheet, balance_copper, resolution)?;
+    let creation =
+        create_auto_board_array(&content, sheet, balance_copper, separation, resolution)?;
     print_copper_balance_summary(creation.copper_balance.as_ref());
     write_board_array_output(output, &creation.xml)?;
     Ok(())
@@ -465,6 +500,7 @@ pub fn create_board_array(
     xml: &str,
     options: &BoardArrayCreateOptions,
     balance_copper: bool,
+    separation: Separation,
     resolution: Resolution,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
@@ -477,6 +513,8 @@ pub fn create_board_array(
             sheet: None,
             sheet_target_mm: None,
         },
+        separation,
+        resolution,
     )?;
     write_board_array_creation(xml, spec, balance_copper, resolution)
 }
@@ -489,7 +527,7 @@ pub fn create_board_array(
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
     let resolution = Resolution::default();
 
-    Ok(create_board_array(xml, options, false, resolution)?.xml)
+    Ok(create_board_array(xml, options, false, Separation::VScore, resolution)?.xml)
 }
 
 #[cfg(test)]
@@ -502,12 +540,20 @@ pub fn create_auto_board_array(
     xml: &str,
     sheet: Option<AutoSheetSize>,
     balance_copper: bool,
+    separation: Separation,
     resolution: Resolution,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let (options, validation_mode, panelization) =
-        auto_board_array_options(&ipc, sheet, resolution)?;
-    let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization)?;
+        auto_board_array_options(&ipc, sheet, separation, resolution)?;
+    let spec = build_board_array_spec(
+        &ipc,
+        &options,
+        validation_mode,
+        panelization,
+        separation,
+        resolution,
+    )?;
     write_board_array_creation(xml, spec, balance_copper, resolution)
 }
 
@@ -518,12 +564,13 @@ fn create_auto_board_array_xml_with_sheet(
 ) -> Result<String> {
     let resolution = Resolution::default();
 
-    Ok(create_auto_board_array(xml, sheet, false, resolution)?.xml)
+    Ok(create_auto_board_array(xml, sheet, false, Separation::VScore, resolution)?.xml)
 }
 
 fn auto_board_array_options(
     ipc: &Ipc2581,
     sheet: Option<AutoSheetSize>,
+    separation: Separation,
     resolution: Resolution,
 ) -> Result<(
     BoardArrayCreateOptions,
@@ -531,9 +578,10 @@ fn auto_board_array_options(
     BoardArrayPanelizationMetadata,
 )> {
     let board = primary_board_layout(ipc)?;
-    let board_margin = auto_board_margin(ipc, board.bbox, resolution)?;
-    let board_width = board.bbox.width();
-    let board_height = board.bbox.height();
+    let cell = separation.cell(board.bbox);
+    let board_margin = auto_board_margin(ipc, cell, resolution)?;
+    let board_width = cell.width();
+    let board_height = cell.height();
 
     let plan = match sheet {
         Some(sheet) => Some((
@@ -727,6 +775,8 @@ fn build_board_array_spec(
     options: &BoardArrayCreateOptions,
     validation_mode: BoardArrayValidationMode,
     panelization: BoardArrayPanelizationMetadata,
+    separation: Separation,
+    resolution: Resolution,
 ) -> Result<BoardArraySpec> {
     validate_options(options, validation_mode)?;
 
@@ -744,8 +794,9 @@ fn build_board_array_spec(
     }
 
     let root = primary_board_layout(ipc)?;
-    let board_width = root.bbox.width();
-    let board_height = root.bbox.height();
+    let cell = separation.cell(root.bbox);
+    let board_width = cell.width();
+    let board_height = cell.height();
 
     let columns = options.columns;
     let rows = options.rows;
@@ -764,8 +815,8 @@ fn build_board_array_spec(
         + edge_rail.bottom
         + edge_rail.top;
     validate_array_dimensions(array_width, array_height, validation_mode)?;
-    let board_repeat_x = board_margin.left - root.bbox.min.x;
-    let board_repeat_y = board_margin.bottom - root.bbox.min.y;
+    let board_repeat_x = board_margin.left - cell.min.x;
+    let board_repeat_y = board_margin.bottom - cell.min.y;
 
     let board_name = ipc.resolve(root.source_step_ref).to_string();
     let existing_step_names = ecad
@@ -784,7 +835,6 @@ fn build_board_array_spec(
         .keys()
         .map(|name| ipc.resolve(*name).to_string())
         .collect::<HashSet<_>>();
-    let vcut_spec_name = unique_name(&existing_spec_names, VCUT_SPEC_BASE_NAME);
     let mut used_layer_names = ecad
         .cad_data
         .layers
@@ -792,24 +842,65 @@ fn build_board_array_spec(
         .map(|layer| ipc.resolve(layer.name).to_string())
         .collect::<HashSet<_>>();
     let mut generated_geometry = BoardArrayGeneratedGeometry::default();
-    add_vcut_lines(
-        &mut generated_geometry,
-        &mut used_layer_names,
-        vcut_spec_name.clone(),
-        array_width,
-        vcut_lines(VcutLineSpec {
-            columns,
-            rows,
-            board_width_mm: board_width,
-            board_height_mm: board_height,
-            margin_x_mm: margin_x,
-            margin_y_mm: margin_y,
-            pitch_x_mm: pitch_x,
-            pitch_y_mm: pitch_y,
-            array_width_mm: array_width,
-            array_height_mm: array_height,
-        })?,
-    );
+    let vcut_spec_name = (separation == Separation::VScore)
+        .then(|| unique_name(&existing_spec_names, VCUT_SPEC_BASE_NAME));
+    if let Some(vcut_spec_name) = &vcut_spec_name {
+        add_vcut_lines(
+            &mut generated_geometry,
+            &mut used_layer_names,
+            vcut_spec_name.clone(),
+            array_width,
+            vcut_lines(VcutLineSpec {
+                columns,
+                rows,
+                board_width_mm: board_width,
+                board_height_mm: board_height,
+                margin_x_mm: margin_x,
+                margin_y_mm: margin_y,
+                pitch_x_mm: pitch_x,
+                pitch_y_mm: pitch_y,
+                array_width_mm: array_width,
+                array_height_mm: array_height,
+            })?,
+        );
+    }
+    let (profile_cutouts, tabs_per_board) = match separation {
+        Separation::VScore => (Vec::new(), 0),
+        Separation::MouseBite => {
+            let preset = &placement::PRESET;
+            let placement = placement::place(ipc, preset, resolution)?;
+            let stock = array_stock(array_width, array_height, resolution)?;
+            let offsets = (0..rows)
+                .flat_map(|row| {
+                    (0..columns).map(move |column| {
+                        pcb_ir::geom::Point::new(
+                            edge_rail.left + board_repeat_x + f64::from(column) * pitch_x,
+                            edge_rail.bottom + board_repeat_y + f64::from(row) * pitch_y,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            let tabs = mouse_bite::generate(&placement, &stock, &offsets, preset, resolution)?;
+            let layer =
+                ensure_tooling_hole_layer_name(&mut generated_geometry, &mut used_layer_names);
+            generated_geometry.add_layer_feature(
+                GeneratedFeatureScope::Array,
+                layer,
+                Polarity::Positive,
+                round_nonplated_hole_features(
+                    tabs.holes.iter().map(|hole| (hole.center.x, hole.center.y)),
+                    pcb_ir::geom::mouse_bite::SparkFunShallow::HOLE_DIAMETER_MM,
+                ),
+            );
+            (
+                tabs.cutouts
+                    .iter()
+                    .map(mouse_bite::cutout_polygon)
+                    .collect::<Result<Vec<_>>>()?,
+                tabs.per_board,
+            )
+        }
+    };
     add_board_array_corner_tooling(
         &mut generated_geometry,
         &mut used_layer_names,
@@ -863,6 +954,9 @@ fn build_board_array_spec(
         board_cell_name,
         board_name,
         vcut_spec_name,
+        profile_cutouts,
+        separation,
+        tabs_per_board,
         board_outline_layer_names,
         content_step_refs,
         content_layer_refs,
@@ -882,6 +976,25 @@ fn build_board_array_spec(
         generated_geometry,
         units: ecad.cad_header.units,
     })
+}
+
+/// The array's stock: its rounded outline with the corner at the origin.
+fn array_stock(width_mm: f64, height_mm: f64, resolution: Resolution) -> Result<ContourSet> {
+    let outline = pcb_ir::geom::shapes::rounded_rect(
+        width_mm,
+        height_mm,
+        ARRAY_CORNER_RADIUS_MM,
+        pcb_ir::geom::shapes::ALL_CORNERS,
+    )
+    .context("invalid array dimensions")?;
+    let centered = ContourSet::from_contours(&[outline], FillRule::EvenOdd, resolution.strict())?;
+    Ok(pcb_ir::geom::attachment::transform_region(
+        &centered,
+        pcb_ir::geom::Affine2::translation(pcb_ir::geom::Point::new(
+            width_mm / 2.0,
+            height_mm / 2.0,
+        )),
+    )?)
 }
 
 fn validate_options(

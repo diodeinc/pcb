@@ -198,8 +198,21 @@ pub fn hole(writer: &mut XmlWriter, units: Units, hole: &Hole, name: &str) {
 }
 
 pub fn profile(writer: &mut XmlWriter, units: Units, polygon: &Polygon) {
+    profile_with_cutouts(writer, units, polygon, &[]);
+}
+
+/// Write a step profile whose material has `cutouts` removed from it.
+pub fn profile_with_cutouts(
+    writer: &mut XmlWriter,
+    units: Units,
+    polygon: &Polygon,
+    cutouts: &[Polygon],
+) {
     writer.start_element("Profile", &[]);
     self::polygon(writer, units, polygon);
+    for cutout in cutouts {
+        polygon_element(writer, "Cutout", units, cutout);
+    }
     writer.end_element("Profile");
 }
 

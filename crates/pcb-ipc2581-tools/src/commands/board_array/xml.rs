@@ -106,11 +106,13 @@ fn write_content_refs_xml(spec: &BoardArraySpec) -> String {
 
 pub(super) fn write_generated_specs_xml(spec: &BoardArraySpec) -> String {
     let mut writer = XmlWriter::new();
-    writer.start_element("Spec", &[("name", spec.vcut_spec_name.as_str())]);
-    writer.start_element("V_Cut", &[("type", "OFFSET")]);
-    writer.empty_element("Property", &[("value", "0"), ("unit", "MM")]);
-    writer.end_element("V_Cut");
-    writer.end_element("Spec");
+    if let Some(vcut_spec_name) = &spec.vcut_spec_name {
+        writer.start_element("Spec", &[("name", vcut_spec_name.as_str())]);
+        writer.start_element("V_Cut", &[("type", "OFFSET")]);
+        writer.empty_element("Property", &[("value", "0"), ("unit", "MM")]);
+        writer.end_element("V_Cut");
+        writer.end_element("Spec");
+    }
     writer.into_string()
 }
 
@@ -179,7 +181,7 @@ pub(super) fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
     write_panelization_metadata(&mut writer, spec);
     write::location(&mut writer, "Datum", 0.0, 0.0, spec.units);
 
-    write::profile(
+    write::profile_with_cutouts(
         &mut writer,
         spec.units,
         &rounded_rectangle_polygon(
@@ -187,6 +189,7 @@ pub(super) fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
             spec.array_height_mm,
             ARRAY_CORNER_RADIUS_MM,
         ),
+        &spec.profile_cutouts,
     );
 
     write_array_step_repeat(&mut writer, spec);
@@ -210,6 +213,18 @@ pub(super) fn write_panelization_metadata(writer: &mut XmlWriter, spec: &BoardAr
         write_metadata_double(writer, "diode.panelize.sheet_height_mm", target.height);
     }
 
+    write_metadata_string(
+        writer,
+        "diode.panelize.separation",
+        spec.separation.as_str(),
+    );
+    if spec.separation == Separation::MouseBite {
+        write_metadata_integer(
+            writer,
+            "diode.panelize.tabs_per_board",
+            spec.tabs_per_board as u32,
+        );
+    }
     write_metadata_integer(writer, "diode.panelize.columns", spec.columns);
     write_metadata_integer(writer, "diode.panelize.rows", spec.rows);
     write_margin_metadata(writer, "diode.panelize.board_margin", spec.board_margin_mm);

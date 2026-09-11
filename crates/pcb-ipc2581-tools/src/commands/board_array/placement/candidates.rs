@@ -54,10 +54,16 @@ pub fn find(
     let reach = preset.routing_gap_mm + preset.frame_landing_mm;
     let frame = ContourSet::rectangle(substrate.bbox().expand(reach + 1.0), resolution)
         .difference(&substrate.disk_dilate(preset.routing_gap_mm)?)?;
+    // Small boards cannot keep a full keep-out from every corner.
+    let bbox = substrate.bbox();
+    let keepout_mm = preset
+        .corner_keepout_mm
+        .min(bbox.width().min(bbox.height()) / 4.0);
     let checker = Checker {
         substrate,
         frame: &frame,
         preset,
+        keepout_mm,
         resolution,
     };
     let mut sites = Sites {
@@ -72,9 +78,9 @@ pub fn find(
     {
         let perimeter = boundary.perimeter(id)?;
         let turns = turning_angles(&substrate.rings[id.ring]);
-        sites
-            .tight
-            .extend(tight_runs(&boundary, id, &turns, perimeter, preset)?);
+        sites.tight.extend(tight_runs(
+            &boundary, id, &turns, perimeter, preset, keepout_mm,
+        )?);
         for (lo, hi) in eligible_runs(intervals, id, perimeter) {
             let bins = ((hi - lo) / preset.candidate_pitch_mm).ceil().max(1.0) as usize;
             for k in 0..bins {
@@ -107,6 +113,7 @@ struct Checker<'a> {
     substrate: &'a ContourSet,
     frame: &'a ContourSet,
     preset: &'a Preset,
+    keepout_mm: f64,
     resolution: Resolution,
 }
 
@@ -119,7 +126,7 @@ impl Checker<'_> {
         perimeter: f64,
     ) -> Result<Option<String>> {
         let p = self.preset;
-        if let Some(reason) = too_tight(turns, perimeter, site.station_mm, p) {
+        if let Some(reason) = too_tight(turns, perimeter, site.station_mm, p, self.keepout_mm) {
             return Ok(Some(reason));
         }
         let across = self.strip(site, 0.0, p.routing_gap_mm)?;
@@ -164,6 +171,7 @@ fn too_tight(
     perimeter: f64,
     station: f64,
     preset: &Preset,
+    keepout_mm: f64,
 ) -> Option<String> {
     let limit = |window: f64| (window / preset.min_tab_radius_mm).to_degrees();
     let half = preset.tab_width_mm / 2.0;
@@ -171,8 +179,8 @@ fn too_tight(
     if tab_bend > limit(preset.tab_width_mm) {
         return Some(format!("outline turns {tab_bend:.0}° within the tab"));
     }
-    let corner_bend = bend_within(turns, perimeter, station, half + preset.corner_keepout_mm);
-    if corner_bend > limit(preset.tab_width_mm + 2.0 * preset.corner_keepout_mm) {
+    let corner_bend = bend_within(turns, perimeter, station, half + keepout_mm);
+    if corner_bend > limit(preset.tab_width_mm + 2.0 * keepout_mm) {
         return Some(format!(
             "outline turns {corner_bend:.0}° within the corner keep-out"
         ));
@@ -188,13 +196,14 @@ fn tight_runs(
     turns: &[(f64, f64)],
     perimeter: f64,
     preset: &Preset,
+    keepout_mm: f64,
 ) -> Result<Vec<Vec<Point>>> {
     let step = preset.candidate_pitch_mm / 5.0;
     let mut runs: Vec<Vec<Point>> = Vec::new();
     let mut open = false;
     for k in 0..(perimeter / step).ceil() as usize {
         let station = k as f64 * step;
-        let tight = too_tight(turns, perimeter, station, preset).is_some();
+        let tight = too_tight(turns, perimeter, station, preset, keepout_mm).is_some();
         if tight {
             let point = boundary.site(id, station)?.point;
             match runs.last_mut() {
