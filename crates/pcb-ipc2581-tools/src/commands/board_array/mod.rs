@@ -207,13 +207,13 @@ impl Separation {
         }
     }
 
-    /// The cell a board occupies in the array: its outline, plus the routed
-    /// slot around it when boards are routed out, so margins, rails and
-    /// tooling keep their distances from the slot rather than the board.
+    /// The cell a board occupies in the array: its outline, grown a little
+    /// when boards are routed out so the slot takes only part of the margin's
+    /// clearance from the fiducials, rails and tooling.
     fn cell(self, board: pcb_ir::geom::BBox) -> pcb_ir::geom::BBox {
         match self {
             Self::VScore => board,
-            Self::MouseBite => board.expand(placement::PRESET.routing_gap_mm),
+            Self::MouseBite => board.expand(placement::PRESET.cell_growth_mm),
         }
     }
 }

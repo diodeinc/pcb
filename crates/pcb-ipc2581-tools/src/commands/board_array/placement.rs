@@ -31,6 +31,9 @@ pub struct Preset {
     pub courtyard_clearance_mm: f64,
     /// Routed slot between the board outline and the frame; the neck spans it.
     pub routing_gap_mm: f64,
+    /// How far the board's cell in the array grows beyond its outline; the
+    /// rest of the slot cuts into the margin, which has clearance to spare.
+    pub cell_growth_mm: f64,
     /// Frame material a tab must reach beyond the slot.
     pub frame_landing_mm: f64,
     /// Candidate spacing along eligible outline runs.
@@ -57,6 +60,7 @@ pub const PRESET: Preset = Preset {
     inward_mm: 0.2,
     courtyard_clearance_mm: 0.0,
     routing_gap_mm: 2.0,
+    cell_growth_mm: 1.0,
     frame_landing_mm: 1.0,
     candidate_pitch_mm: 2.5,
     min_tab_radius_mm: 10.0,
