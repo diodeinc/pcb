@@ -281,16 +281,18 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    /// Best pair, then add whichever site helps most while adding still
-    /// helps, then drop and swap tabs while that keeps the limit and lowers
-    /// the deflection.
+    /// Best separated pair, then add whichever site helps most while adding
+    /// still helps, then drop and swap tabs while that keeps the limit and
+    /// lowers the deflection. Moves only ever offer sites clear of the tabs
+    /// kept, so a separation violation never has to be repaired.
     fn greedy(&self) -> Selection {
         let n = self.sites.len();
         let mut incumbent = (0..n)
             .flat_map(|a| (a + 1..n).map(move |b| vec![a, b]))
+            .filter(|pair| self.clear(pair[0], &pair[1..]))
             .map(|pair| self.evaluate(&pair))
             .reduce(|a, b| if b.better_than(&a) { b } else { a })
-            .unwrap_or_else(|| self.evaluate(&(0..n).collect::<Vec<_>>()));
+            .unwrap_or_else(|| self.evaluate(&[]));
         while !incumbent.satisfied() {
             match self.best_neighbor(&incumbent, Move::Add) {
                 Some(better) if better.better_than(&incumbent) => incumbent = better,
@@ -315,6 +317,12 @@ impl<'a> Evaluator<'a> {
         incumbent
     }
 
+    /// Whether `site` is unused by and separated from every tab in `kept`.
+    fn clear(&self, site: usize, kept: &[usize]) -> bool {
+        kept.iter()
+            .all(|&j| j != site && self.spacing[site][j] >= self.model.min_separation_mm)
+    }
+
     /// The best selection one move away from `from`. A neighbor whose running
     /// maximum already exceeds the best one found cannot win, so its
     /// evaluation stops there; starting from the incumbent's worst point
@@ -322,26 +330,27 @@ impl<'a> Evaluator<'a> {
     fn best_neighbor(&self, from: &Selection, kind: Move) -> Option<Selection> {
         let n = self.sites.len();
         let k = from.chosen.len();
-        let unused = || (0..n).filter(|i| !from.chosen.contains(i));
         let neighbors: Vec<Vec<usize>> = match kind {
-            Move::Add => unused().map(|i| with(&from.chosen, k, i)).collect(),
+            Move::Add => (0..n)
+                .filter(|&i| self.clear(i, &from.chosen))
+                .map(|i| with(&from.chosen, k, i))
+                .collect(),
             Move::Drop => (0..k).map(|slot| without(&from.chosen, slot)).collect(),
             Move::Swap => (0..k)
-                .flat_map(|slot| unused().map(move |i| (slot, i)))
-                .map(|(slot, i)| with(&without(&from.chosen, slot), slot, i))
+                .flat_map(|slot| {
+                    let kept = without(&from.chosen, slot);
+                    (0..n)
+                        .filter(|&i| self.clear(i, &kept))
+                        .map(|i| with(&kept, slot, i))
+                        .collect::<Vec<_>>()
+                })
                 .collect(),
         };
         let start = from.worst_point.unwrap_or(0);
         let mut best: Option<Selection> = None;
         for chosen in &neighbors {
-            let (bound, crowded) = best.as_ref().map_or((f64::INFINITY, 0), |b| {
-                (
-                    b.deflection_mm,
-                    b.violations.len()
-                        - usize::from(b.deflection_mm > self.model.deflection_limit_mm),
-                )
-            });
-            if let Some(candidate) = self.evaluate_bounded(chosen, start, bound, crowded)
+            let bound = best.as_ref().map_or(f64::INFINITY, |b| b.deflection_mm);
+            if let Some(candidate) = self.evaluate_bounded(chosen, start, bound)
                 && best.as_ref().is_none_or(|b| candidate.better_than(b))
             {
                 best = Some(candidate);
@@ -372,10 +381,7 @@ impl<'a> Evaluator<'a> {
         }
         let start = chosen.last().map_or(0, |&i| i + 1);
         for i in start..=self.sites.len() - (k - chosen.len()) {
-            if chosen
-                .iter()
-                .all(|&j| self.spacing[i][j] >= self.model.min_separation_mm)
-            {
+            if self.clear(i, chosen) {
                 chosen.push(i);
                 self.search(k, chosen, visit);
                 chosen.pop();
@@ -394,21 +400,15 @@ impl<'a> Evaluator<'a> {
     }
 
     fn evaluate(&self, chosen: &[usize]) -> Selection {
-        self.evaluate_bounded(chosen, 0, f64::INFINITY, 0)
+        self.evaluate_bounded(chosen, 0, f64::INFINITY)
             .expect("an unbounded evaluation always completes")
     }
 
-    /// Evaluate `chosen`, scanning load points from `start`. Give up with
-    /// `None` once the deflection exceeds `bound`, unless this set has fewer
-    /// separation violations than the `crowded` count the bound came with,
-    /// since violations rank before deflection.
-    fn evaluate_bounded(
-        &self,
-        chosen: &[usize],
-        start: usize,
-        bound: f64,
-        crowded: usize,
-    ) -> Option<Selection> {
+    /// Evaluate `chosen`, scanning load points from `start`, and give up with
+    /// `None` once the deflection exceeds `bound`. Callers compare sets with
+    /// the same separation state, so a larger deflection can never rank
+    /// better.
+    fn evaluate_bounded(&self, chosen: &[usize], start: usize, bound: f64) -> Option<Selection> {
         let model = self.model;
         let mut selection = Selection {
             chosen: chosen.to_vec(),
@@ -443,7 +443,7 @@ impl<'a> Evaluator<'a> {
             let d = model.load_n * (rigid + nearest2 / (BENDING_SPREAD * model.rigidity_n_mm));
             if d > selection.deflection_mm {
                 (selection.worst_point, selection.deflection_mm) = (Some(j), d);
-                if d > bound && selection.violations.len() >= crowded {
+                if d > bound {
                     return None;
                 }
             }
@@ -658,6 +658,20 @@ mod tests {
         let triangle = evaluator.evaluate(&[at(32.5, 0.0), at(2.5, 30.0), at(57.5, 30.0)]);
         assert!(opposed.deflection_mm > 3.0 * triangle.deflection_mm);
         assert!(same_edge.deflection_mm > 3.0 * triangle.deflection_mm);
+    }
+
+    #[test]
+    fn dense_candidates_still_yield_a_separated_set() {
+        let (outline, sites) = rectangle(250.0, 30.0, 2.5);
+        let m = model(1.6);
+        let selection = select(&sites, &outline, &m);
+        assert!(selection.satisfied(), "{:?}", selection.violations);
+        assert!(selection.chosen.len() > 4);
+        for (i, &a) in selection.chosen.iter().enumerate() {
+            for &b in &selection.chosen[i + 1..] {
+                assert!(sites[a].point.distance_to(sites[b].point) >= m.min_separation_mm);
+            }
+        }
     }
 
     #[test]
