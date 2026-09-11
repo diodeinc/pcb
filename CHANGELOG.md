@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Prefer `Board(path=...)`, retaining `layout_path` as a compatibility alias and rejecting empty paths. New board templates enable persistent schematics while keeping `layout_path` for older compilers.
 - Speed up schematic connectivity analysis and repair planning with indexed terminal matching and verified batches of local wire cuts.
+- Speed up region construction and unions on layers made of many small, locally overlapping features such as silkscreen and solder mask.
 
 ### Fixed
 

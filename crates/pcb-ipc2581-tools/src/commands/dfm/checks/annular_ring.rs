@@ -579,8 +579,11 @@ limit = { minimum = "0.2 mm" }
         assert!(index.query(required.bbox).len() < copper.rings.len());
         let local = missing_copper(&required, &copper, &index).unwrap();
         let complete = required.difference(&copper).unwrap();
-        assert!(local.difference(&complete).unwrap().is_empty());
-        assert!(complete.difference(&local).unwrap().is_empty());
+        // The two differences round on different integer grids, so compare
+        // by area rather than by exact boundary.
+        let negligible = resolution.tolerance_mm.powi(2);
+        assert!(local.difference(&complete).unwrap().area() <= negligible);
+        assert!(complete.difference(&local).unwrap().area() <= negligible);
         assert!(
             !local.contains_point(Point::ZERO),
             "repainted island supplies copper"

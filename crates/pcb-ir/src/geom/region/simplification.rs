@@ -1,9 +1,9 @@
 //! Polygon regularization, fixed-grid simplification, and inward decimation.
 
-use super::{ContourSet, Ring, Shape, flatten_shapes, overlay_fill_rule};
+use super::{ContourSet, Ring, Shape, flatten_shapes, overlay_fill_rule, rings_bbox};
 use crate::geom::accuracy::numerical_error;
 use crate::geom::dist;
-use crate::geom::{AccuracyError, FillRule, Point};
+use crate::geom::{AccuracyError, BBox, FillRule, Point};
 use i_overlay::core::overlay::IntOverlayOptions;
 use i_overlay::core::simplify::Simplify;
 use i_overlay::float::simplify::SimplifyShape;
@@ -16,8 +16,79 @@ pub(crate) fn simplify_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring>
 
 /// Regularize rings keeping the connected-shape structure: each shape is its
 /// outer ring followed by its holes, wound opposite.
+///
+/// Rings whose bounds never touch cannot nest or cross under any fill rule,
+/// so each group of rings connected through their bounds is regularized on
+/// its own. The overlay's split and sort stages then scale with the group,
+/// not the layer, which matters for silkscreen and mask images made of
+/// thousands of small, locally overlapping features.
 pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
-    rings.simplify_shape_as::<i64>(overlay_fill_rule(fill_rule))
+    let rule = overlay_fill_rule(fill_rule);
+    bounds_connected_groups(rings)
+        .into_iter()
+        .flat_map(|group| group.simplify_shape_as::<i64>(rule))
+        .collect()
+}
+
+/// Partition rings into groups connected by overlapping bounds, each in
+/// input order and the groups ordered by their first ring.
+///
+/// A sweep in `x` keeps one hull per open group and merges a ring into every
+/// group whose hull it meets. The hull stands in for its members, which can
+/// merge groups that no member pair joins; that costs only the partitioning
+/// benefit and keeps the sweep proportional to the groups a line crosses,
+/// so a layer of long features degenerates to a single overlay as before.
+fn bounds_connected_groups(rings: Vec<Ring>) -> Vec<Vec<Ring>> {
+    struct Group {
+        hull: BBox,
+        members: Vec<usize>,
+    }
+    let mut order = rings
+        .iter()
+        .map(|ring| rings_bbox(std::slice::from_ref(ring)))
+        .enumerate()
+        .collect::<Vec<_>>();
+    order.sort_by(|(_, a), (_, b)| a.min.x.total_cmp(&b.min.x));
+    let mut open: Vec<Group> = Vec::new();
+    let mut closed: Vec<Group> = Vec::new();
+    for (index, bbox) in order {
+        let mut merged = Group {
+            hull: bbox,
+            members: vec![index],
+        };
+        let mut i = 0;
+        while i < open.len() {
+            if open[i].hull.max.x < bbox.min.x {
+                closed.push(open.swap_remove(i));
+            } else if open[i].hull.intersects(bbox) {
+                let group = open.swap_remove(i);
+                merged.hull = merged.hull.union(group.hull);
+                merged.members.extend(group.members);
+            } else {
+                i += 1;
+            }
+        }
+        open.push(merged);
+    }
+    closed.extend(open);
+    let mut groups = closed
+        .into_iter()
+        .map(|mut group| {
+            group.members.sort_unstable();
+            group.members
+        })
+        .collect::<Vec<_>>();
+    groups.sort_unstable_by_key(|members| members[0]);
+    let mut rings = rings.into_iter().map(Some).collect::<Vec<_>>();
+    groups
+        .into_iter()
+        .map(|members| {
+            members
+                .into_iter()
+                .filter_map(|index| rings[index].take())
+                .collect()
+        })
+        .collect()
 }
 
 /// Regularize filled rings on an exact output grid.
