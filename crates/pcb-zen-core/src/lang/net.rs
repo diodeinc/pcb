@@ -911,20 +911,24 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             .or_insert_with(TypeInstanceId::r#gen)
     }
 
-    /// Returns the parameter specification for this type's constructor
+    /// Returns the parameter specification for this type's constructor.
+    ///
+    /// Each field parameter carries its real `Ty` (extracted from the field spec) so that
+    /// LSP clients receive accurate hover / signature-help information instead of the
+    /// coarse `Ty::any()` that was emitted previously.
     fn param_spec(&self) -> ParamSpec {
         let mut named_params = vec![
             (ArcStr::from("NET"), ParamIsRequired::No, Ty::any()),
             (ArcStr::from("name"), ParamIsRequired::No, Ty::string()),
         ];
 
-        // Add all field parameters as optional named-only
-        // TODO(type-hints): Extract Ty from field specs for better LSP hints. Currently Ty::any().
-        for field_name in self.fields.keys() {
+        // Add all field parameters as optional named-only, using the real Ty from each
+        // field spec so that LSP clients get accurate type information.
+        for (field_name, field_spec) in self.fields.iter() {
             named_params.push((
                 ArcStr::from(field_name.as_str()),
                 ParamIsRequired::No,
-                Ty::any(),
+                ty_from_field_spec(field_spec.to_value()),
             ));
         }
 
@@ -973,6 +977,47 @@ fn compile_field_type<'v>(
     } else {
         TypeCompiled::new(field_spec, heap)
     }
+}
+
+/// Extract a `Ty` from a field spec value without requiring a heap allocation.
+///
+/// Handles the three kinds of field specs the Zen language uses:
+///
+/// - `field(SomeType)` / `field(SomeType, default=…)` → stored as `FieldGen<V>`, which
+///   carries a pre-compiled `TypeCompiled`; we read `.typ.as_ty()` directly.
+/// - A bare `NetType` constructor (e.g. `Net`, `Power`) → `NetTypeGen::eval_type()` returns
+///   the `Ty` that describes *instances* of that net type, which is exactly what an LSP
+///   client needs when the user is filling in a field value.
+/// - Anything else (future custom types, interface factories, …) → `Ty::any()` as a safe
+///   fallback so the LSP never emits a misleading concrete type.
+///
+/// This is the single source of truth used by both `param_spec` (constructor signature
+/// hints) and `eval_type` (field type hints on instances).
+fn ty_from_field_spec(field_spec: Value<'_>) -> Ty {
+    // field(typ) or field(typ, default=…) — FieldGen stores the pre-compiled TypeCompiled
+    // regardless of whether it was compiled against a mutable or frozen heap.
+    if let Some(fg) = field_spec.downcast_ref::<FieldGen<Value<'_>>>() {
+        return fg.typ.as_ty().clone();
+    }
+    if let Some(fg) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
+        return fg.typ.as_ty().clone();
+    }
+
+    // Bare NetType constructor — eval_type() returns the Ty for *instances*, which is
+    // the type a caller passes as the field value.
+    if let Some(nt) = field_spec.downcast_ref::<NetType<'_>>() {
+        if let Some(ty) = nt.eval_type() {
+            return ty;
+        }
+    }
+    if let Some(nt) = field_spec.downcast_ref::<FrozenNetType>() {
+        if let Some(ty) = nt.eval_type() {
+            return ty;
+        }
+    }
+
+    // Safe fallback — lets the LSP accept any value rather than emit a wrong type.
+    Ty::any()
 }
 
 /// Process a field specification: validate provided value or apply default.
@@ -1180,12 +1225,14 @@ where
     fn eval_type(&self) -> Option<Ty> {
         let id = self.type_instance_id();
 
-        // Build known fields from self.fields
-        // TODO(type-hints): Extract proper Ty from field specs instead of Ty::any()
+        // Build known fields with the real Ty for each field spec so that the typechecker
+        // and LSP clients see accurate field types on net instances (e.g. hover, completion).
         let known_fields: SortedMap<String, Ty> = self
             .fields
-            .keys()
-            .map(|field_name| (field_name.clone(), Ty::any()))
+            .iter()
+            .map(|(field_name, field_spec)| {
+                (field_name.clone(), ty_from_field_spec(field_spec.to_value()))
+            })
             .collect();
 
         Some(Ty::custom(
