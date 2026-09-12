@@ -1005,15 +1005,15 @@ fn ty_from_field_spec(field_spec: Value<'_>) -> Ty {
 
     // Bare NetType constructor — eval_type() returns the Ty for *instances*, which is
     // the type a caller passes as the field value.
-    if let Some(nt) = field_spec.downcast_ref::<NetType<'_>>() {
-        if let Some(ty) = nt.eval_type() {
-            return ty;
-        }
+    if let Some(nt) = field_spec.downcast_ref::<NetType<'_>>()
+        && let Some(ty) = nt.eval_type()
+    {
+        return ty;
     }
-    if let Some(nt) = field_spec.downcast_ref::<FrozenNetType>() {
-        if let Some(ty) = nt.eval_type() {
-            return ty;
-        }
+    if let Some(nt) = field_spec.downcast_ref::<FrozenNetType>()
+        && let Some(ty) = nt.eval_type()
+    {
+        return ty;
     }
 
     // Safe fallback — lets the LSP accept any value rather than emit a wrong type.
