@@ -102,6 +102,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- `pcb import` preserves KiCad's numeric suffixes on otherwise identical `unconnected-*` net names, so stacked unconnected pads (KiCad 9+) no longer collapse into a single shorted net.
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
 
