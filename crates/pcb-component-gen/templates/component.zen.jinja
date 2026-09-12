@@ -25,6 +25,9 @@ Component(
 {%- if footprint_literal %}
     footprint = {{ footprint_literal }},
 {%- endif %}
+{%- if properties_literal %}
+    properties = {{ properties_literal }},
+{%- endif %}
     symbol = Symbol(library = {{ sym_path_literal }}),
 {%- if pin_defs %}
     pin_defs = {

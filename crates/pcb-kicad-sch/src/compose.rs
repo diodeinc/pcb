@@ -1801,10 +1801,13 @@ fn component_fields(
         SymbolField::new("Value", value, at),
         SymbolField::new("Path", slot.component_path(), at).with_hidden(true),
     ];
-    if let Some(footprint) = first_attribute(instance, &["footprint"])? {
+    if let Some(footprint) = first_attribute(instance, &["Footprint", "footprint"])? {
         fields.push(SymbolField::new("Footprint", footprint, at).with_hidden(true));
     }
-    if let Some(description) = first_attribute(instance, &["Description", "description"])? {
+    if let Some(description) = first_attribute(
+        instance,
+        &["schematic_description", "Description", "description"],
+    )? {
         fields.push(SymbolField::new("Description", description, at).with_hidden(true));
     }
     Ok(fields)
@@ -1812,9 +1815,8 @@ fn component_fields(
 
 fn first_attribute<'a>(instance: &'a Instance, keys: &[&str]) -> Result<Option<&'a str>> {
     for key in keys {
-        if let Some(value) = component_slots::attribute_string(instance, key)?
-            && !value.trim().is_empty()
-        {
+        // Explicitly empty display fields are meaningful, unlike absent attributes.
+        if let Some(value) = component_slots::attribute_string(instance, key)? {
             return Ok(Some(value));
         }
     }
