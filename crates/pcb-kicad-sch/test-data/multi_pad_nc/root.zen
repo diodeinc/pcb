@@ -1,0 +1,8 @@
+Project(name="MultiPadNotConnected", path="kicad", layout=False)
+
+MultiPad = Module("multi_pad.zen")
+
+LEFT = Net("LEFT")
+RIGHT = Net("RIGHT")
+
+MultiPad(name="U1", A=LEFT, B=RIGHT)

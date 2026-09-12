@@ -76,6 +76,8 @@ fn issue_kind(issue: &SchematicIssue) -> &'static str {
         SchematicIssue::UnexpectedNet { .. } => "unexpected-net",
         SchematicIssue::Shorted { .. } => "short",
         SchematicIssue::UnexpectedConnection { .. } => "unexpected-connection",
+        SchematicIssue::MissingNoConnect { .. } => "missing-no-connect",
+        SchematicIssue::UnexpectedNoConnect { .. } => "unexpected-no-connect",
     }
 }
 
@@ -279,13 +281,18 @@ fn relocating_shorted_symbols_reconnects_their_other_nets() {
 
 #[test]
 fn directly_overlapping_component_pins_relocate_the_affected_symbols() {
-    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut not_connected = netlist.nets.remove("RIGHT").unwrap();
+    not_connected.kind = "NotConnected".to_string();
+    not_connected.name.clear();
+    netlist.nets.insert(String::new(), not_connected);
     let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
         .unwrap()
         .apply(None)
         .unwrap();
     let target = common::pin_point(&document, "R1.R", "1");
     let source = common::pin_point(&document, "R2.R", "1");
+    let nc_source = common::pin_point(&document, "R2.R", "2");
     let symbol = managed_symbol_mut(&mut document, "R2.R");
     let new_at = Point::new(
         symbol.at.x + target.x - source.x,
@@ -293,6 +300,17 @@ fn directly_overlapping_component_pins_relocate_the_affected_symbols() {
     );
     move_symbol(symbol, new_at);
     let moved_id = symbol.id.clone();
+    let offset = Point::new(target.x - source.x, target.y - source.y);
+    let marker = document.pages[0]
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::NoConnect(marker) if marker.at == nc_source => Some(marker),
+            _ => None,
+        })
+        .expect("R2 no-connect marker");
+    marker.at = Point::new(marker.at.x + offset.x, marker.at.y + offset.y);
+    let marker_id = marker.id.clone();
     let inspection = inspect_schematic(&document, &netlist).unwrap();
     let issue = inspection
         .issues
@@ -310,6 +328,25 @@ fn directly_overlapping_component_pins_relocate_the_affected_symbols() {
             })
         })
         .unwrap_or_else(|| panic!("missing direct-pin issue: {:#?}", inspection.issues));
+
+    let intent = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::from([issue.key.clone()]),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    assert!(intent.removals().contains(
+        &pcb_kicad_sch::connectivity::ConnectivityItemRef::NoConnect {
+            page_id: document.pages[0].id.clone(),
+            id: marker_id,
+        }
+    ));
+    let edited = intent.apply_edits(&document).unwrap();
+    let relocated_nc = common::pin_point(&edited, "R2.R", "2");
+    assert_eq!(intent.no_connect_additions().len(), 1);
+    assert_eq!(intent.no_connect_additions()[0].at, relocated_nc);
 
     let plan = plan_repairs(
         &document,
@@ -345,6 +382,212 @@ fn directly_overlapping_component_pins_relocate_the_affected_symbols() {
         .apply(Some(&document))
         .unwrap(),
         repaired
+    );
+}
+
+#[test]
+fn relocation_preserves_a_no_connect_marker_shared_with_a_stationary_pin() {
+    let netlist = common::compile_fixture("analysis", "relocated_shared_nc.zen");
+    let mut document = plan_reconciliation(None, &netlist, "shared_nc.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let old_stationary_nc = common::pin_point(&document, "R1.R", "2");
+    let old_stationary_signal = common::pin_point(&document, "R1.R", "1");
+    managed_symbol_mut(&mut document, "R1.R").rotation = Rotation::Deg90;
+    let stationary_nc = common::pin_point(&document, "R1.R", "2");
+    let stationary_signal = common::pin_point(&document, "R1.R", "1");
+    let stationary_marker = document.pages[0]
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::NoConnect(marker) if marker.at == old_stationary_nc => Some(marker),
+            _ => None,
+        })
+        .unwrap();
+    stationary_marker.at = stationary_nc;
+    for item in &mut document.pages[0].items {
+        if let SchItem::Label(label) = item
+            && label.at == old_stationary_signal
+        {
+            label.at = stationary_signal;
+        }
+    }
+    let moving_nc = common::pin_point(&document, "R2.R", "2");
+    let moving_signal = common::pin_point(&document, "R2.R", "1");
+    let blocker_signal = common::pin_point(&document, "R3.R", "1");
+
+    let moving_offset = Point::new(stationary_nc.x - moving_nc.x, stationary_nc.y - moving_nc.y);
+    let moving_symbol = managed_symbol_mut(&mut document, "R2.R");
+    move_symbol(
+        moving_symbol,
+        Point::new(
+            moving_symbol.at.x + moving_offset.x,
+            moving_symbol.at.y + moving_offset.y,
+        ),
+    );
+    let moved_signal = Point::new(
+        moving_signal.x + moving_offset.x,
+        moving_signal.y + moving_offset.y,
+    );
+    let blocker_symbol = managed_symbol_mut(&mut document, "R3.R");
+    move_symbol(
+        blocker_symbol,
+        Point::new(
+            blocker_symbol.at.x + moved_signal.x - blocker_signal.x,
+            blocker_symbol.at.y + moved_signal.y - blocker_signal.y,
+        ),
+    );
+    document.pages[0]
+        .items
+        .retain(|item| !matches!(item, SchItem::NoConnect(marker) if marker.at == moving_nc));
+    let shared_marker = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::NoConnect(marker) if marker.at == stationary_nc => Some(marker.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let mut missing_shared_marker = document.clone();
+    missing_shared_marker.pages[0].items.retain(
+        |item| !matches!(item, SchItem::NoConnect(marker) if marker.id == shared_marker.id),
+    );
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let issue = inspection
+        .issues
+        .iter()
+        .find(|issue| {
+            matches!(
+                &issue.issue,
+                SchematicIssue::Shorted { net_names, .. }
+                    if net_names == &BTreeSet::from(["MID".to_string(), "RIGHT".to_string()])
+            )
+        })
+        .unwrap_or_else(|| panic!("missing direct-pin issue: {:#?}", inspection.issues));
+    let intent = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::from([issue.key.clone()]),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    assert!(
+        !intent.removals().contains(
+            &pcb_kicad_sch::connectivity::ConnectivityItemRef::NoConnect {
+                page_id: document.pages[0].id.clone(),
+                id: shared_marker.id.clone(),
+            }
+        ),
+        "relocations={:?} removals={:?}",
+        intent.relocated_symbols(),
+        intent.removals()
+    );
+    assert!(intent.no_connect_additions().iter().any(|target| {
+        target.symbol_id
+            == managed_symbols(&document)
+                .find(|symbol| symbol.field_value("Path") == Some("R2.R"))
+                .unwrap()
+                .id
+    }));
+    let repaired = plan_repairs(
+        &document,
+        &netlist,
+        &inspection,
+        BTreeSet::from([issue.key.clone()]),
+    )
+    .unwrap()
+    .apply(Some(&document))
+    .unwrap();
+    assert!(
+        repaired.pages[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, SchItem::NoConnect(marker) if marker == &shared_marker))
+    );
+    assert!(
+        inspect_schematic(&repaired, &netlist)
+            .unwrap()
+            .issues
+            .is_empty()
+    );
+
+    let inspection = inspect_schematic(&missing_shared_marker, &netlist).unwrap();
+    let selected = inspection
+        .issues
+        .iter()
+        .map(|issue| issue.key.clone())
+        .collect::<BTreeSet<_>>();
+    let intent = plan_connectivity_repair(
+        &missing_shared_marker,
+        &netlist,
+        &inspection,
+        &selected,
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    let edited = intent.apply_edits(&missing_shared_marker).unwrap();
+    let stationary_nc = common::pin_point(&edited, "R1.R", "2");
+    let relocated_nc = common::pin_point(&edited, "R2.R", "2");
+    let same_point = |left: Point, right: Point| {
+        (left.x - right.x).abs() < 1.0e-9 && (left.y - right.y).abs() < 1.0e-9
+    };
+    assert_eq!(intent.no_connect_additions().len(), 2);
+    assert!(
+        intent
+            .no_connect_additions()
+            .iter()
+            .any(|target| same_point(target.at, stationary_nc)),
+        "stationary={stationary_nc:?} relocated={relocated_nc:?} additions={:?} relocations={:?}",
+        intent.no_connect_additions(),
+        intent.relocated_symbols()
+    );
+    assert!(
+        intent
+            .no_connect_additions()
+            .iter()
+            .any(|target| same_point(target.at, relocated_nc)),
+        "stationary={stationary_nc:?} relocated={relocated_nc:?} additions={:?} relocations={:?}",
+        intent.no_connect_additions(),
+        intent.relocated_symbols()
+    );
+    let repaired = plan_repairs(&missing_shared_marker, &netlist, &inspection, selected)
+        .unwrap()
+        .apply(Some(&missing_shared_marker))
+        .unwrap();
+    let after = pcb_kicad_sch::verify_connectivity_repair(
+        &missing_shared_marker,
+        &inspection,
+        &netlist,
+        &intent,
+        &repaired,
+    )
+    .unwrap();
+    assert!(after.issues.is_empty());
+    for expected in [stationary_nc, relocated_nc] {
+        assert!(repaired.pages.iter().any(|page| {
+            page.items.iter().any(
+                |item| matches!(item, SchItem::NoConnect(marker) if same_point(marker.at, expected)),
+            )
+        }));
+    }
+
+    let reconciled = plan_reconciliation(
+        Some(&missing_shared_marker),
+        &netlist,
+        "shared_nc.kicad_sch",
+    )
+    .unwrap()
+    .apply(Some(&missing_shared_marker))
+    .unwrap();
+    assert_eq!(reconciled, repaired);
+    assert!(
+        inspect_schematic(&reconciled, &netlist)
+            .unwrap()
+            .issues
+            .is_empty()
     );
 }
 
@@ -657,6 +900,24 @@ fn wired_not_connected_pins_are_cut_free_locally() {
         inspection.issues
     );
 
+    let mut overlapping = baseline.clone();
+    let a = common::pin_point(&overlapping, "R1.R", "2");
+    let b = common::pin_point(&overlapping, "R2.R", "2");
+    let symbol = managed_symbol_mut(&mut overlapping, "R2.R");
+    move_symbol(
+        symbol,
+        Point::new(symbol.at.x + a.x - b.x, symbol.at.y + a.y - b.y),
+    );
+    let inspection = inspect_schematic(&overlapping, &netlist).unwrap();
+    assert!(
+        inspection.issues.iter().any(|issue| matches!(
+            &issue.issue,
+            SchematicIssue::UnexpectedConnection { terminals, .. } if terminals.len() == 2
+        )),
+        "overlapping distinct NotConnected pins must report their connection: {:#?}",
+        inspection.issues
+    );
+
     let mut document = baseline.clone();
     let a = common::pin_point(&document, "R1.R", "2");
     let b = common::pin_point(&document, "R2.R", "2");
@@ -710,6 +971,119 @@ fn wired_not_connected_pins_are_cut_free_locally() {
         2,
         "the local two-wire cut must preserve the other 18 branch segments"
     );
+}
+
+#[test]
+fn one_missing_no_connect_issue_repairs_all_uncovered_physical_pin_occurrences() {
+    let mut netlist = common::compile_fixture("multi_pad_nc", "root.zen");
+    let mut not_connected = netlist.nets.remove("LEFT").unwrap();
+    not_connected.kind = "NotConnected".to_string();
+    not_connected.name.clear();
+    netlist.nets.insert(String::new(), not_connected);
+    let baseline = plan_reconciliation(None, &netlist, "multi_pad_nc.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let (page_index, symbol) = baseline
+        .pages
+        .iter()
+        .enumerate()
+        .find_map(|(page_index, page)| {
+            page.items.iter().find_map(|item| match item {
+                SchItem::Symbol(symbol) if symbol.field_value("Path") == Some("U1.MULTI_PAD") => {
+                    Some((page_index, symbol))
+                }
+                _ => None,
+            })
+        })
+        .unwrap();
+    let pins = baseline.pages[page_index].library.definitions[&symbol.lib_id]
+        .placed_pins(symbol)
+        .unwrap();
+    let visible = pins
+        .iter()
+        .find(|pin| pin.name == "A" && !pin.hidden)
+        .unwrap()
+        .point;
+    let hidden = pins
+        .iter()
+        .find(|pin| pin.name == "A" && pin.hidden)
+        .unwrap()
+        .point;
+    let markers = baseline.pages[page_index]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::NoConnect(marker) => Some(marker.at),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let same_point = |left: Point, right: Point| {
+        (left.x - right.x).abs() < 1.0e-9 && (left.y - right.y).abs() < 1.0e-9
+    };
+    assert_eq!(markers.len(), 2);
+    assert!(markers.iter().any(|point| same_point(*point, visible)));
+    assert!(markers.iter().any(|point| same_point(*point, hidden)));
+
+    let mut both_missing = baseline.clone();
+    both_missing.pages[page_index]
+        .items
+        .retain(|item| !matches!(item, SchItem::NoConnect(_)));
+    let inspection = inspect_schematic(&both_missing, &netlist).unwrap();
+    let missing = inspection
+        .issues
+        .iter()
+        .filter(|issue| matches!(issue.issue, SchematicIssue::MissingNoConnect { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(missing.len(), 1, "{:#?}", inspection.issues);
+    let selected = BTreeSet::from([missing[0].key.clone()]);
+    let intent = plan_connectivity_repair(
+        &both_missing,
+        &netlist,
+        &inspection,
+        &selected,
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    let additions = intent
+        .no_connect_additions()
+        .iter()
+        .map(|target| target.at)
+        .collect::<Vec<_>>();
+    assert_eq!(additions.len(), 2);
+    assert!(additions.iter().any(|point| same_point(*point, visible)));
+    assert!(additions.iter().any(|point| same_point(*point, hidden)));
+    let repaired = plan_repairs(&both_missing, &netlist, &inspection, selected)
+        .unwrap()
+        .apply(Some(&both_missing))
+        .unwrap();
+    assert!(
+        inspect_schematic(&repaired, &netlist)
+            .unwrap()
+            .issues
+            .is_empty()
+    );
+
+    let mut hidden_missing = baseline;
+    hidden_missing.pages[page_index].items.retain(
+        |item| !matches!(item, SchItem::NoConnect(marker) if same_point(marker.at, hidden)),
+    );
+    let inspection = inspect_schematic(&hidden_missing, &netlist).unwrap();
+    let missing = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::MissingNoConnect { .. }))
+        .unwrap();
+    let intent = plan_connectivity_repair(
+        &hidden_missing,
+        &netlist,
+        &inspection,
+        &BTreeSet::from([missing.key.clone()]),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    assert_eq!(intent.no_connect_additions().len(), 1);
+    assert!(same_point(intent.no_connect_additions()[0].at, hidden));
 }
 
 /// Generated child pages live in their parent page's directory so the
