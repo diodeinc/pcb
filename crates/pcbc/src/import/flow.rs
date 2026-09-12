@@ -34,6 +34,7 @@ fn generate_and_report(materialized: Materialized) -> Result<()> {
         &ir,
         &generation.expected_pins_by_refdes,
         &generation.instance_name_by_refdes,
+        &generation.not_connected_nets,
     )?;
     eprintln!("Wrote imported board to {}", board.board_zen.display());
 
@@ -252,26 +253,6 @@ impl Analyzed {
             ir,
         } = hierarchized;
         let semantic = semantic::analyze(&ir);
-
-        eprintln!(
-            "Passive detection (2-pad only): R={} (h:{} m:{} l:{}), C={} (h:{} m:{} l:{}), unknown:{}, known-non-2-pad:{}, pad-count-unknown:{}",
-            semantic.passives.summary.resistor_high
-                + semantic.passives.summary.resistor_medium
-                + semantic.passives.summary.resistor_low,
-            semantic.passives.summary.resistor_high,
-            semantic.passives.summary.resistor_medium,
-            semantic.passives.summary.resistor_low,
-            semantic.passives.summary.capacitor_high
-                + semantic.passives.summary.capacitor_medium
-                + semantic.passives.summary.capacitor_low,
-            semantic.passives.summary.capacitor_high,
-            semantic.passives.summary.capacitor_medium,
-            semantic.passives.summary.capacitor_low,
-            semantic.passives.summary.unknown,
-            semantic.passives.summary.non_two_pad,
-            semantic.passives.summary.unknown_pad_count,
-        );
-
         let ir = ImportIr { semantic, ..ir };
         Self {
             ctx,

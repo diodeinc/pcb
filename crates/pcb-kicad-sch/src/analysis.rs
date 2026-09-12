@@ -340,7 +340,19 @@ pub fn inspect_schematic(
     })
 }
 
-// Stacked opens belong to one symbol anchor on one page, without a wire or driver.
+/// Physical pins covered by native markers on otherwise unconnected anchors.
+/// Stacked pins must belong to the same symbol on the same page. Wires, labels,
+/// implicit power connections, and touching unrelated symbols are not opens.
+pub fn marked_no_connect_targets(document: &SchDocument) -> anyhow::Result<Vec<NoConnectTarget>> {
+    let physical = reduce_with_provenance(document, PinVisibility::IncludeHidden)?;
+    Ok(physical
+        .islands
+        .values()
+        .filter(|island| is_open_pin_stack(island) && !island.items.is_empty())
+        .flat_map(|island| island.pins.iter().map(|pin| pin.no_connect_target()))
+        .collect())
+}
+
 fn is_open_pin_stack(island: &PhysicalIsland) -> bool {
     let mut pins = island.pins.iter().map(|pin| pin.no_connect_target());
     let Some(first) = pins.next() else {

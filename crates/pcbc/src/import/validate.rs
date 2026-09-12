@@ -1,10 +1,7 @@
 use super::*;
+use anstream::eprintln;
 use anyhow::{Context, Result};
-use colored::Colorize;
-use pcb_sexpr::{SexprKind, find_child_list};
 use pcb_zen_core::Diagnostics;
-use pcb_zen_core::diagnostics::{diagnostic_headline, diagnostic_location};
-use pcb_zen_core::lang::error::CategorizedDiagnostic;
 
 pub(super) fn validate(
     paths: &ImportPaths,
@@ -23,10 +20,7 @@ pub(super) fn validate(
     erc_report.add_to_diagnostics(&mut diagnostics, &source_sch.to_string_lossy());
     let (erc_errors, erc_warnings) = count_erc(&erc_report);
 
-    let mut schematic_parity_ok = true;
     let mut schematic_parity_violations = 0;
-    let mut schematic_parity_tolerated = 0;
-    let mut schematic_parity_blocking = 0;
     let mut drc_errors = 0;
     let mut drc_warnings = 0;
 
@@ -64,20 +58,12 @@ pub(super) fn validate(
 
         (drc_errors, drc_warnings) = drc_report.violation_counts();
         schematic_parity_violations = drc_report.schematic_parity.len();
-        let pcb_text_for_parity = std::fs::read_to_string(&validation_pcb)
-            .context("Failed to read KiCad PCB for parity")?;
-        let footprint_index = build_kicad_pcb_footprint_index(&pcb_text_for_parity).ok();
-        (schematic_parity_tolerated, schematic_parity_blocking) =
-            classify_schematic_parity(&drc_report.schematic_parity, footprint_index.as_ref());
-        schematic_parity_ok = schematic_parity_blocking == 0;
     }
 
     let summary = ImportValidation {
         selected: selection.selected.clone(),
-        schematic_parity_ok,
+        schematic_parity_ok: schematic_parity_violations == 0,
         schematic_parity_violations,
-        schematic_parity_tolerated,
-        schematic_parity_blocking,
         erc_errors,
         erc_warnings,
         drc_errors,
@@ -92,13 +78,11 @@ pub(super) fn validate(
     let mut diagnostics_for_render = diagnostics;
     crate::drc::render_diagnostics(&mut diagnostics_for_render, &[], true);
 
-    if !summary.schematic_parity_ok {
-        print_parity_blocking_recap(&diagnostics_for_render, 50);
-        anyhow::bail!(
-            "KiCad schematic/layout parity check failed: schematic and PCB appear out of sync"
+    if schematic_parity_violations > 0 {
+        eprintln!(
+            "Warning: KiCad reported {schematic_parity_violations} schematic/PCB parity mismatches; these do not block import. Connectivity follows the schematic; existing PCB placement and routing are retained."
         );
     }
-
     let error_count = diagnostics_for_render.error_count();
     if error_count > 0 {
         eprintln!(
@@ -110,42 +94,6 @@ pub(super) fn validate(
         summary,
         diagnostics: diagnostics_for_file,
     })
-}
-
-fn print_parity_blocking_recap(diagnostics: &Diagnostics, limit: usize) {
-    let mut parity_issues: Vec<_> = diagnostics
-        .diagnostics
-        .iter()
-        .filter(|d| !d.suppressed)
-        .filter(|d| is_layout_parity_diagnostic(d))
-        .collect();
-
-    if parity_issues.is_empty() {
-        return;
-    }
-
-    eprintln!("{}", "Blocking issues (layout parity):".red().bold());
-
-    let total = parity_issues.len();
-    parity_issues.truncate(limit);
-    for d in parity_issues {
-        let headline = diagnostic_headline(d);
-        if let Some(loc) = diagnostic_location(d) {
-            eprintln!("  - {headline} ({loc})");
-        } else {
-            eprintln!("  - {headline}");
-        }
-    }
-    if total > limit {
-        eprintln!("  ... and {} more", total - limit);
-    }
-}
-
-fn is_layout_parity_diagnostic(d: &pcb_zen_core::diagnostics::Diagnostic) -> bool {
-    d.source_error
-        .as_ref()
-        .and_then(|e| e.downcast_ref::<CategorizedDiagnostic>())
-        .is_some_and(|c| c.kind.starts_with("layout.parity."))
 }
 
 fn count_erc(report: &pcb_kicad::erc::ErcReport) -> (usize, usize) {
@@ -161,215 +109,4 @@ fn count_erc(report: &pcb_kicad::erc::ErcReport) -> (usize, usize) {
         }
     }
     (errors, warnings)
-}
-
-fn classify_schematic_parity(
-    parity: &[pcb_kicad::drc::DrcViolation],
-    footprint_index: Option<&std::collections::BTreeMap<String, KicadPcbFootprintMeta>>,
-) -> (usize, usize) {
-    // Import uses KiCad's parity check as a guardrail against having a split
-    // schematic/layout source of truth.
-    //
-    // Some parity issues are tolerable for import because the importer only
-    // generates Zener components from netlist-keyed symbols/footprints, and
-    // intentionally ignores any unkeyed/unlinked footprints (mechanicals,
-    // tooling, experiments, etc.).
-    let tolerated = parity
-        .iter()
-        .filter(|v| is_tolerated_parity(v, footprint_index))
-        .count();
-    let blocking = parity.len().saturating_sub(tolerated);
-    (tolerated, blocking)
-}
-
-fn is_tolerated_parity(
-    v: &pcb_kicad::drc::DrcViolation,
-    footprint_index: Option<&std::collections::BTreeMap<String, KicadPcbFootprintMeta>>,
-) -> bool {
-    match v.violation_type.as_str() {
-        // Common and acceptable during adoption: footprints placed in the PCB that are not
-        // represented in the schematic/netlist (mechanical items, tooling, experimentation, etc.).
-        //
-        // Even if a footprint still has a stale KiCad `(path ...)`, import ignores any footprints
-        // that are not present in the netlist, so extra footprints do not create a split source of
-        // truth for the imported Zener design.
-        "extra_footprint" => true,
-
-        // Duplicate footprints can occur in a PCB that contains unannotated/unmanaged helper
-        // footprints (often with a `**` suffix). These should not block import because the
-        // importer ignores unkeyed footprints and only generates components from the netlist.
-        "duplicate_footprints" => v
-            .items
-            .iter()
-            .all(|item| is_unmanaged_footprint_item(item, footprint_index)),
-
-        // KiCad 10 can serialize semantically empty values differently between schematic
-        // and PCB parity checks, e.g. "" vs "~", and can preserve incidental trailing
-        // newlines in copied footprint fields. These should not block import because they
-        // do not represent a meaningful source-of-truth split.
-        "footprint_symbol_field_mismatch" => field_mismatch_is_semantically_equal(&v.description),
-
-        _ => false,
-    }
-}
-
-fn field_mismatch_is_semantically_equal(description: &str) -> bool {
-    let Some((_field, pcb_value, schematic_value)) = parse_field_mismatch_description(description)
-    else {
-        return false;
-    };
-
-    normalize_parity_field_value(pcb_value) == normalize_parity_field_value(schematic_value)
-}
-
-fn parse_field_mismatch_description(description: &str) -> Option<(&str, &str, &str)> {
-    let description = description.strip_prefix("Field '")?;
-    let (field, rest) = description.split_once("' differs (PCB: '")?;
-    let (pcb_value, rest) = rest.split_once("', Schematic: '")?;
-    let schematic_value = rest.strip_suffix("')")?;
-    Some((field, pcb_value, schematic_value))
-}
-
-fn normalize_parity_field_value(value: &str) -> &str {
-    let value = value.trim();
-    if value == "~" { "" } else { value }
-}
-
-#[derive(Debug, Clone)]
-struct KicadPcbFootprintMeta {
-    refdes: Option<String>,
-    has_kicad_path: bool,
-}
-
-fn is_unmanaged_footprint_item(
-    item: &pcb_kicad::drc::DrcItem,
-    footprint_index: Option<&std::collections::BTreeMap<String, KicadPcbFootprintMeta>>,
-) -> bool {
-    if let Some(index) = footprint_index
-        && let Some(meta) = index.get(&item.uuid)
-    {
-        let is_unannotated = meta
-            .refdes
-            .as_deref()
-            .is_some_and(|r| r.trim_end().ends_with("**"));
-        return !meta.has_kicad_path || is_unannotated;
-    }
-
-    // Fallback: use KiCad's rendered description. For parity diagnostics this is stable and
-    // includes the footprint reference (e.g. "Footprint REF** ...").
-    extract_footprint_ref_from_item_description(&item.description)
-        .is_some_and(|r| r.ends_with("**"))
-}
-
-fn extract_footprint_ref_from_item_description(desc: &str) -> Option<&str> {
-    // Typical KiCad DRC item: "Footprint REF** at (x, y)".
-    let desc = desc.trim();
-    let rest = desc.strip_prefix("Footprint ")?;
-    let refdes = rest.split_whitespace().next()?;
-    Some(refdes)
-}
-
-fn build_kicad_pcb_footprint_index(
-    pcb_text: &str,
-) -> Result<std::collections::BTreeMap<String, KicadPcbFootprintMeta>> {
-    let root = pcb_sexpr::parse(pcb_text).map_err(|e| anyhow::anyhow!(e))?;
-    let root_list = root
-        .as_list()
-        .ok_or_else(|| anyhow::anyhow!("KiCad PCB root is not a list"))?;
-
-    let mut out: std::collections::BTreeMap<String, KicadPcbFootprintMeta> =
-        std::collections::BTreeMap::new();
-
-    for node in root_list.iter().skip(1) {
-        let Some(items) = node.as_list() else {
-            continue;
-        };
-        if items.first().and_then(|n| n.as_sym()) != Some("footprint") {
-            continue;
-        }
-
-        let uuid = find_child_list(items, "uuid")
-            .and_then(|l| l.get(1))
-            .and_then(as_atom_str);
-        let Some(uuid) = uuid else {
-            continue;
-        };
-
-        let has_kicad_path = find_child_list(items, "path").is_some();
-        let refdes = find_all_child_properties(items)
-            .into_iter()
-            .find(|(k, _)| k == "Reference")
-            .map(|(_, v)| v);
-
-        out.insert(
-            uuid.to_string(),
-            KicadPcbFootprintMeta {
-                refdes,
-                has_kicad_path,
-            },
-        );
-    }
-
-    Ok(out)
-}
-
-fn as_atom_str(sexpr: &pcb_sexpr::Sexpr) -> Option<&str> {
-    match &sexpr.kind {
-        SexprKind::Symbol(s) | SexprKind::String(s) => Some(s.as_str()),
-        _ => None,
-    }
-}
-
-fn find_all_child_properties(items: &[pcb_sexpr::Sexpr]) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for item in items {
-        let Some(list) = item.as_list() else {
-            continue;
-        };
-        if list.first().and_then(|n| n.as_sym()) != Some("property") {
-            continue;
-        }
-        let Some(key) = list.get(1).and_then(as_atom_str) else {
-            continue;
-        };
-        let Some(value) = list.get(2).and_then(as_atom_str) else {
-            continue;
-        };
-        out.push((key.to_string(), value.to_string()));
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tolerates_tilde_vs_empty_field_mismatch() {
-        let description = "Field 'Datasheet' differs (PCB: '~', Schematic: '')";
-        assert!(field_mismatch_is_semantically_equal(description));
-    }
-
-    #[test]
-    fn tolerates_trailing_newline_field_mismatch() {
-        let description =
-            "Field 'Description' differs (PCB: 'connector\n', Schematic: 'connector')";
-        assert!(field_mismatch_is_semantically_equal(description));
-    }
-
-    #[test]
-    fn does_not_tolerate_real_field_difference() {
-        let description =
-            "Field 'Description' differs (PCB: 'connector a', Schematic: 'connector b')";
-        assert!(!field_mismatch_is_semantically_equal(description));
-    }
-
-    #[test]
-    fn parses_field_mismatch_description() {
-        let description = "Field 'Datasheet' differs (PCB: '~', Schematic: '')";
-        let parsed = parse_field_mismatch_description(description).unwrap();
-        assert_eq!(parsed.0, "Datasheet");
-        assert_eq!(parsed.1, "~");
-        assert_eq!(parsed.2, "");
-    }
 }

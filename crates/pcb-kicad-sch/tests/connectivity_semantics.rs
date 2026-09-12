@@ -111,6 +111,40 @@ fn same_name_label_kinds_connect_on_one_page() {
 }
 
 #[test]
+fn imported_net_bindings_do_not_change_native_connectivity() {
+    // Same native name must still connect despite conflicting logical bindings (a short).
+    // Different native names must remain disconnected despite identical logical bindings.
+    for (native, bound, expected) in [
+        (
+            ["SIGNAL", "SIGNAL"],
+            ["/left", "/right"],
+            vec![names(&["/left", "/right"])],
+        ),
+        (
+            ["LEFT", "RIGHT"],
+            ["/signal", "/signal"],
+            vec![names(&["/signal"]), names(&["/signal"])],
+        ),
+    ] {
+        let mut builder = KicadBuilder::new();
+        builder
+            .local_label(native[0], (0.0, 0.0))
+            .local_label(native[1], (10.0, 0.0));
+        let mut document = builder.build();
+        for (item, name) in document.pages[0].items.iter_mut().zip(bound) {
+            let SchItem::Label(label) = item else {
+                unreachable!()
+            };
+            label.fields.insert(
+                "pcb:net".into(),
+                pcb_kicad_sch::SymbolField::new("pcb:net", name, label.at),
+            );
+        }
+        assert_eq!(named_groups(document), expected);
+    }
+}
+
+#[test]
 fn sheet_pin_connects_only_to_its_child_hierarchical_label() {
     let mut builder = KicadBuilder::new();
     builder

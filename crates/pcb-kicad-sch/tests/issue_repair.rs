@@ -975,6 +975,7 @@ fn wired_not_connected_pins_are_cut_free_locally() {
 
 #[test]
 fn stacked_distinct_no_connects_share_one_marker_and_preserve_conflicts() {
+    use pcb_kicad_sch::analysis::marked_no_connect_targets;
     use pcb_sch::{AttributeValue, InstanceKind};
 
     let mut netlist = common::compile_fixture("multi_pad_nc", "root.zen");
@@ -997,6 +998,14 @@ fn stacked_distinct_no_connects_share_one_marker_and_preserve_conflicts() {
         .unwrap()
         .apply(None)
         .unwrap();
+    let targets = marked_no_connect_targets(&baseline).unwrap();
+    assert_eq!(
+        targets
+            .iter()
+            .map(|target| target.pin_number.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["1", "2", "4"])
+    );
     let markers = baseline
         .pages
         .iter()
@@ -1075,6 +1084,7 @@ fn stacked_distinct_no_connects_share_one_marker_and_preserve_conflicts() {
     ] {
         let mut connected = baseline.clone();
         connected.pages[page_index].items.push(attachment);
+        assert!(marked_no_connect_targets(&connected).unwrap().is_empty());
         assert!(
             inspect_schematic(&connected, &netlist)
                 .unwrap()
@@ -1094,6 +1104,7 @@ fn stacked_distinct_no_connects_share_one_marker_and_preserve_conflicts() {
         .retain(|item| !matches!(item, SchItem::NoConnect(_)));
     pages.root_page_ids.push(other.id.clone());
     pages.pages.push(other);
+    assert_eq!(marked_no_connect_targets(&pages).unwrap(), targets);
     let missing = inspect_schematic(&pages, &netlist)
         .unwrap()
         .issues
@@ -1127,6 +1138,7 @@ fn stacked_distinct_no_connects_share_one_marker_and_preserve_conflicts() {
         .unwrap();
     other.id = "different-symbol".into();
     overlap.pages[page_index].items.push(SchItem::Symbol(other));
+    assert!(marked_no_connect_targets(&overlap).unwrap().is_empty());
     assert!(
         inspect_schematic(&overlap, &netlist)
             .unwrap()

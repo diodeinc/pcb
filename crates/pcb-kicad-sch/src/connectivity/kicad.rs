@@ -441,6 +441,7 @@ fn collect_page_connectables(
                         },
                         driver: Some(NameDriver {
                             name: name.clone(),
+                            net_name: None,
                             kind: DriverKind::Local,
                             role: DriverNameRole::HierarchyAlias,
                             merge_by_name: false,
@@ -533,7 +534,7 @@ pub(crate) fn cut_graph(document: &SchDocument, pin_visibility: PinVisibility) -
                     .driver
                     .iter()
                     .filter(|driver| driver.role == DriverNameRole::NetName)
-                    .map(|driver| driver.name.clone())
+                    .map(|driver| driver.net_name().to_string())
                     .collect(),
             });
         }
@@ -674,11 +675,8 @@ fn collect_symbol(
             .filter(|value| !value.is_empty())
             .with_context(|| format!("power symbol {} has no Value", placed.id))?;
         let net_name = static_net_text("power symbol value", net_name)?;
-        for pin in pins
-            .into_iter()
-            .filter(|pin| pin_visibility.includes(pin.hidden))
-            .filter(|pin| pin.is_power_input())
-        {
+        // A power symbol's electrical anchor remains active even when its library hides the pin.
+        for pin in pins.into_iter().filter(|pin| pin.is_power_input()) {
             output.connectables.push(Connectable {
                 geometry: Geometry::Point {
                     at: pin.point.into(),
@@ -686,6 +684,7 @@ fn collect_symbol(
                 },
                 driver: Some(NameDriver {
                     name: net_name.clone(),
+                    net_name: placed.field_value("pcb:net").map(str::to_string),
                     kind: match power_scope {
                         PowerScope::Local => DriverKind::Local,
                         PowerScope::Global => DriverKind::Global,
@@ -751,6 +750,9 @@ fn collect_symbol(
             },
             driver: pin.is_hidden_power_input().then(|| NameDriver {
                 name: pin_name.clone(),
+                net_name: placed
+                    .field_value(&format!("pcb:net:{pin_name}"))
+                    .map(str::to_string),
                 kind: DriverKind::LegacyGlobal,
                 role: DriverNameRole::NetName,
                 merge_by_name: true,
@@ -827,6 +829,7 @@ fn collect_label(
         },
         driver: Some(NameDriver {
             name: name.clone(),
+            net_name: label.fields.get("pcb:net").map(|field| field.value.clone()),
             kind,
             role,
             merge_by_name: true,
@@ -915,7 +918,8 @@ impl From<Point> for GridPoint {
     }
 }
 
-pub(crate) fn points_connect(left: Point, right: Point) -> bool {
+/// Match schematic anchors in KiCad's integer coordinate units, not floating-point millimetres.
+pub fn points_connect(left: Point, right: Point) -> bool {
     GridPoint::from(left) == GridPoint::from(right)
 }
 
@@ -938,10 +942,19 @@ enum HierarchyEndpoint {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct NameDriver {
+    /// Native KiCad name used for electrical merging. A logical binding must never change it.
     name: String,
+    /// Hidden import binding: retain displayed KiCad text while comparing with a Zener net.
+    net_name: Option<String>,
     kind: DriverKind,
     role: DriverNameRole,
     merge_by_name: bool,
+}
+
+impl NameDriver {
+    fn net_name(&self) -> &str {
+        self.net_name.as_deref().unwrap_or(&self.name)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1139,11 +1152,11 @@ fn connection_groups(
                 provenance.pins.extend(item.pin);
                 if let Some(driver) = item.driver {
                     if driver.role == DriverNameRole::NetName {
-                        names.insert(driver.name.clone());
+                        names.insert(driver.net_name().to_string());
                         if let Some(source) = &item.source {
                             provenance
                                 .named_drivers
-                                .entry(driver.name.clone())
+                                .entry(driver.net_name().to_string())
                                 .or_default()
                                 .insert(source.clone());
                         }

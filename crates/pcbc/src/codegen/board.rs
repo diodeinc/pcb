@@ -82,6 +82,7 @@ pub fn render_imported_board(args: RenderImportedBoardArgs<'_>) -> String {
         "    layout_path = {},\n",
         starlark::string("layout")
     ));
+    out.push_str("    schematic = True,\n");
     out.push_str(&format!("    layers = {},\n", args.copper_layers));
 
     if args.design_rules.is_some() || args.stackup.is_some() {

@@ -170,21 +170,23 @@ pub fn generated_signal_io_names(symbol: &Symbol) -> BTreeMap<String, String> {
 }
 
 pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
-    generate_component_zen_inner(args, None, None)
+    generate_component_zen_inner(args, None, None, None)
 }
 
 pub fn generate_component_zen_with_pins(
     args: GenerateComponentZenArgs<'_>,
     pins: &[GenerateComponentPin],
     footprint: Option<&str>,
+    properties: &BTreeMap<String, String>,
 ) -> Result<String> {
-    generate_component_zen_inner(args, Some(pins), footprint)
+    generate_component_zen_inner(args, Some(pins), footprint, Some(properties))
 }
 
 fn generate_component_zen_inner(
     args: GenerateComponentZenArgs<'_>,
     explicit_pins: Option<&[GenerateComponentPin]>,
     footprint: Option<&str>,
+    properties: Option<&BTreeMap<String, String>>,
 ) -> Result<String> {
     let component_name = sanitize_mpn_for_path(args.component_name);
     let signal_io_names = generated_signal_io_names(args.symbol);
@@ -252,6 +254,7 @@ fn generate_component_zen_inner(
             "pin_mappings": pin_mappings,
             "pin_defs": pin_defs,
             "footprint_literal": footprint.map(serde_json::to_string).transpose()?,
+            "properties_literal": properties.filter(|p| !p.is_empty()).map(serde_json::to_string).transpose()?,
             "generated_by": args.generated_by,
             "include_skip_bom": args.include_skip_bom,
             "include_skip_pos": args.include_skip_pos,
@@ -394,10 +397,12 @@ mod tests {
                 },
             ],
             Some("Missing:Footprint"),
+            &BTreeMap::from([("Value".into(), "".into())]),
         )
         .unwrap();
 
         assert!(zen.contains("D_POS_3 = io(Net)"));
+        assert!(zen.contains("properties = {\"Value\":\"\"}"));
         assert!(zen.contains("footprint = \"Missing:Footprint\""));
         assert!(zen.contains("\"D+__3\": \"3\""));
         assert!(zen.contains("\"NC\\\"\\\\é\": \"10\""));
