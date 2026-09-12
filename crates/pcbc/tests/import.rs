@@ -910,11 +910,11 @@ fn multiunit_import_preserves_physical_pins_and_original_net_label_text() {
         include_str!("fixtures/import/multiunit_pinmap_split.kicad_sch")
             .replace("(in_bom yes)", "(in_bom no)"),
     );
-    sandbox
-        .cmd(
-            "kicad-cli",
-            &["sch", "upgrade", "--force", "source/multiunit.kicad_sch"],
-        )
+    pcb_kicad::KiCadCliBuilder::new()
+        .command("sch")
+        .subcommand("upgrade")
+        .args(["--force", "source/multiunit.kicad_sch"])
+        .current_dir(sandbox.root_path().to_string_lossy())
         .run()
         .unwrap();
     let original =
