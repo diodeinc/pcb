@@ -26,6 +26,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Preserve successful BOM matches when another line needs retrying.
 - Fix false missing-output errors after applying schematics.
 
+### Removed
+
+- Remove the unused `pcb-elastic` and `pcb-mechanics` crates and `pcb-ir` analysis meshing left over from the mouse-bite exploration.
+
 ## [0.4.52] - 2026-09-09
 
 ### Added
