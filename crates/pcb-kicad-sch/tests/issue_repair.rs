@@ -900,6 +900,24 @@ fn wired_not_connected_pins_are_cut_free_locally() {
         inspection.issues
     );
 
+    let mut overlapping = baseline.clone();
+    let a = common::pin_point(&overlapping, "R1.R", "2");
+    let b = common::pin_point(&overlapping, "R2.R", "2");
+    let symbol = managed_symbol_mut(&mut overlapping, "R2.R");
+    move_symbol(
+        symbol,
+        Point::new(symbol.at.x + a.x - b.x, symbol.at.y + a.y - b.y),
+    );
+    let inspection = inspect_schematic(&overlapping, &netlist).unwrap();
+    assert!(
+        inspection.issues.iter().any(|issue| matches!(
+            &issue.issue,
+            SchematicIssue::UnexpectedConnection { terminals, .. } if terminals.len() == 2
+        )),
+        "overlapping distinct NotConnected pins must report their connection: {:#?}",
+        inspection.issues
+    );
+
     let mut document = baseline.clone();
     let a = common::pin_point(&document, "R1.R", "2");
     let b = common::pin_point(&document, "R2.R", "2");

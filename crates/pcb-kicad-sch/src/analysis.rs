@@ -696,11 +696,17 @@ fn is_open_not_connected_group(
     if !group.names.is_empty() || group.terminals.is_empty() {
         return false;
     }
-    if !group.terminals.iter().all(|terminal| {
-        not_connected
+    // Multiple physical pins may realize one logical terminal (for example,
+    // stacked pins with the same name), but distinct NotConnected terminals
+    // touching directly are still an electrical connection. Require exactly
+    // one netlist terminal to account for the whole physical island.
+    let mut matching_not_connected = not_connected.iter().filter(|candidate| {
+        group
+            .terminals
             .iter()
-            .any(|candidate| candidate.matches(terminal))
-    }) {
+            .all(|terminal| candidate.matches(terminal))
+    });
+    if matching_not_connected.next().is_none() || matching_not_connected.next().is_some() {
         return false;
     }
     let mut origins = group.origins.iter();
@@ -1429,14 +1435,25 @@ mod tests {
             &islands,
             &not_connected
         ));
-        let stacked = Terminal::ComponentPin {
+        let repeated_physical_pin = Terminal::ComponentPin {
             component: ComponentIdentity::ManagedPath("U1".to_string()),
+            pin_name: "NC".to_string(),
+            pin_numbers: BTreeSet::from(["2".to_string()]),
+        };
+        group.terminals.insert(repeated_physical_pin);
+        assert!(is_open_not_connected_group(
+            &group,
+            &islands,
+            &not_connected
+        ));
+        let other = Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath("U2".to_string()),
             pin_name: "NC2".to_string(),
             pin_numbers: BTreeSet::from(["2".to_string()]),
         };
-        group.terminals.insert(stacked.clone());
-        not_connected.insert(stacked);
-        assert!(is_open_not_connected_group(
+        group.terminals.insert(other.clone());
+        not_connected.insert(other);
+        assert!(!is_open_not_connected_group(
             &group,
             &islands,
             &not_connected
