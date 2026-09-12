@@ -33,6 +33,24 @@ pub(super) fn materialize_board(
             (board_dir.join("layout"), None, None)
         };
 
+    // The live schematic is the original hierarchy, not a reconstruction from symbol positions.
+    for relative in &selection.portable.schematic_files_rel {
+        let destination = layout_dir.join(relative);
+        fs::create_dir_all(destination.parent().context("Schematic has no parent")?)?;
+        fs::copy(staged_root.join(relative), &destination)
+            .with_context(|| format!("Failed to copy schematic {}", relative.display()))?;
+    }
+    let layout_kicad_pro = match layout_kicad_pro {
+        Some(path) => path,
+        None => {
+            let path = layout_dir.join(selection.selected.kicad_sch.with_extension("kicad_pro"));
+            if !path.exists() {
+                fs::write(&path, "{}\n")?;
+            }
+            path
+        }
+    };
+
     if let Some(output_zip) = &portable_kicad_project_zip {
         portable::write_portable_zip(&selection.portable, staged_root, output_zip)
             .context("Failed to write portable KiCad project archive")?;
@@ -42,7 +60,7 @@ pub(super) fn materialize_board(
         board_dir,
         board_zen,
         layout_dir,
-        layout_kicad_pro,
+        layout_kicad_pro: Some(layout_kicad_pro),
         layout_kicad_pcb,
         portable_kicad_project_zip,
         validation_diagnostics_json,

@@ -14,14 +14,19 @@ pcb import <design.kicad_sch|project.kicad_pro> <output-directory>
 2. `validate` runs ERC and, for project imports, DRC and schematic-layout parity checks.
 3. `extract` converts schematic data and optional layout data into the import IR.
 4. `hierarchy` maps KiCad sheets to Zener modules.
-5. `semantic` classifies components and passive-promotion candidates.
-6. `materialize` copies project layout files and writes validation diagnostics.
-7. `generate` writes board, module, component, and schematic-position sources.
-8. `generated_validate` builds the generated board and verifies its physical pins and net partitions.
+5. `semantic` classifies power and ground nets from native power symbols.
+6. `materialize` copies the original schematic hierarchy, optional project layout, and diagnostics.
+7. `generate` writes board, module, and component sources using the original embedded symbols.
+8. `generated_validate` builds the board, verifies physical pins and net partitions, then binds and checks the persistent schematic through `pcb-kicad-sch`.
 9. `report` writes the extraction report.
 
 KiCad CLI validation and netlist export run on temporary source copies.
 Import resolves the generated Zener workspace offline during final validation.
+Source ERC, DRC, and schematic/PCB parity findings are reported, not import blockers.
+Connectivity follows the schematic even when the PCB is out of sync; import retains
+the existing PCB placement and routing rather than repairing it. The diagnostics JSON
+retains the individual parity findings, and the extraction report records their count.
+Generated-model pin and connectivity validation still blocks incorrect conversions.
 
 ## Output behavior
 
@@ -43,12 +48,18 @@ For a board named `<board>`, a standalone schematic import produces:
 ├── components/.../*.zen
 ├── components/.../*.kicad_sym
 ├── components/.../*.kicad_mod
+├── layout/<board>.kicad_pro
+├── layout/<board>.kicad_sch       # and its original child sheets
 ├── .kicad.import.extraction.json
 └── .kicad.validation.diagnostics.json
 ```
 
-A standalone import does not create a KiCad project, PCB, or source archive.
-The generated board declares the standard `layout` path so a later `pcb layout` command can create layout files.
+A standalone import creates a minimal KiCad project for its persistent schematic,
+but no PCB or source archive. It keeps an existing layout and project configuration
+on forced reimport. A differently named retained project is rejected before cleanup;
+import its matching schematic or choose a new output directory instead.
+The board enables `schematic = True` at the standard `layout`
+path so Quiche and `pcb apply schematic` use the copied document.
 
 A project import also creates:
 
@@ -61,9 +72,11 @@ A project import also creates:
     └── <selected-project>.kicad_dru   # when present
 ```
 
-## Standalone footprint resolution
+## Footprint resolution without PCB geometry
 
 A standalone `.kicad_sch` does not contain board-embedded footprint geometry.
+The same resolution applies to schematic components absent from a project's PCB;
+existing board-embedded footprints remain authoritative and are not replaced.
 Import resolves each referenced footprint in this order:
 
 1. the sibling project `fp-lib-table`;
@@ -91,7 +104,10 @@ A global library is external by definition, but a resolved footprint must remain
 Generated components map each KiCad physical pin number to a distinct Zener logical signal through `pin_defs`.
 Displayed KiCad pin names are labels and do not define electrical identity.
 Pins with duplicate displayed names remain distinct unless the source netlist connects them to the same net.
-Separate no-connect pins remain separate open terminals.
+Native no-connect markers become `NotConnected()`; floating unmarked pins remain singleton nets.
+One marker covers all stacked pins, including hidden pins, at the same symbol anchor on the same page.
+Each physical pad remains a distinct generated terminal. Wires, labels, or touching unrelated symbols
+prevent classifying an anchor as an intentional open.
 Mechanical and documentation footprints with no numbered pads remain pinless components.
 
 `pcb-component-gen` renders each physical-pin plan as `Component(...)`.
@@ -103,6 +119,9 @@ sourcing completion is not part of structural import.
 
 Validation compares the complete generated physical-pin set and net partitions with the KiCad source.
 It rejects missing pins, unexpected pins, lost source endpoints, and shorts that are absent from the source schematic.
+Only geometry-proven intentional-open groups are compared as individual open terminals rather than
+shared nets; KiCad exports stacked marked pads as geometric groups. The raw extraction report and
+native schematic retain those groups unchanged. All other partitions must match exactly.
 A source pin with no connection may remain isolated on its own generated net.
 It must not share that net with another endpoint.
 
@@ -120,17 +139,37 @@ the original `.kicad_mod` libraries.
 instance placement, path, UUID, property, and net data. It preserves local geometry,
 converts back-side geometry and layers, and makes embedded zones and pad angles local.
 
-## Schematic positions
+## Persistent schematic identity
 
-Generated `.zen` files store symbol placement in trailing `pcb:sch` comments:
+`schematic.rs` patches the copied native document without reconstructing it:
 
-```text
-# pcb:sch <id> x=<value> y=<value> rot=<value> [mirror=<x|y>]
-```
+- Each managed symbol receives its evaluated component `Path` and the shared
+  `SymbolSlotKey` UUID for that path and unit. Multi-unit symbols share a Path.
+- Hidden `pcb:net` fields bind labels and power symbols to Zener net names without
+  changing displayed text. Hidden power-input pins use `pcb:net:<pin-name>`.
+  The shared connectivity engine still merges using native KiCad names and wiring;
+  logical bindings cannot connect disconnected geometry or conceal a physical short.
+- Generated component properties retain displayed `Value`, `Footprint`, and
+  `schematic_description`, including empty strings, separately from resolved
+  footprint geometry and the inferred BOM description. Applying does not replace
+  displayed values with library IDs or populate visible empty descriptions.
+  Instances share a generated part only when these display properties also agree.
+  Differing display properties across units of one component are rejected explicitly;
+  generated components do not yet represent per-unit display overrides.
+- Wires, graphics, sheet relationships, native no-connects, and symbol geometry
+  remain in the original schematic. Import no longer classifies passive-promotion
+  candidates, substitutes symbols, or writes legacy `pcb:sch` comments.
+- Off-board pinless symbols without a `Path` remain native documentation, outside
+  KiCad's PCB netlist. Symbols with electrical pins (including hidden pins or pins
+  in another unit), or a `Path`, still require component agreement.
+- Embedded definitions resolve through each symbol's `lib_name` override in its
+  source sheet, while `lib_id` remains its library identity. Distinct cached
+  definitions generate distinct parts even when their library IDs match.
 
-The importer converts KiCad coordinates and transformations into the schematic editor coordinate system.
-Passive promotion aligns transformed visual bounds when the replacement standard-library symbol has different geometry.
-The implementation is under `generate/schematic_placement.rs`, `generate/schematic_comments.rs`, and `generate/schematic_types.rs`.
+The shared engine must be able to inspect the imported connectivity. Unsupported
+constructs (including buses and managed components on reused sheet files) fail
+explicitly rather than silently reconstructing a different circuit. KiCad 9 and
+10 documents use the same parser/normalization as the persistent editor.
 
 ## Verification
 

@@ -208,7 +208,7 @@ exec "$PCB_TEST_REAL_KICAD_CLI" "$@"
 }
 
 #[test]
-fn standalone_import_omits_project_outputs_and_writes_root_reports() {
+fn standalone_import_links_schematic_without_creating_a_pcb_or_archive() {
     let mut sandbox = sandbox();
     sandbox.write("layout.kicad_sch", STANDALONE_FIXTURE);
 
@@ -224,8 +224,16 @@ fn standalone_import_omits_project_outputs_and_writes_root_reports() {
 
     let output = sandbox.root_path().join("out");
     assert!(output.join("layout.zen").is_file());
-    assert!(!output.join("layout").exists());
+    assert!(output.join("layout/layout.kicad_pro").is_file());
+    assert!(output.join("layout/layout.kicad_sch").is_file());
+    assert!(!output.join("layout/layout.kicad_pcb").exists());
     assert!(!output.join("layout.kicad.archive.zip").exists());
+    assert_preserved_schematic(
+        &output.join("layout/layout.kicad_sch"),
+        STANDALONE_FIXTURE,
+        false,
+    );
+    assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &["-S", "bom"]);
 
     assert_eq!(
         extraction_report(&stderr).canonicalize().unwrap(),
@@ -263,9 +271,20 @@ fn standalone_import_omits_project_outputs_and_writes_root_reports() {
 #[test]
 fn project_import_preserves_sources_and_existing_archive_behavior() {
     let mut sandbox = sandbox();
-    sandbox.write("source/layout.kicad_sch", STANDALONE_FIXTURE);
+    // Keep this electrical/layout check independent of the fixture's incomplete sourcing.
+    let schematic = STANDALONE_FIXTURE.replace("(in_bom yes)", "(in_bom no)");
+    // Source parity is advisory: preserve stale PCB metadata/nets rather than correcting them.
+    let pcb = PCB_FIXTURE
+        .replace("(attr smd)", "(attr smd exclude_from_bom)")
+        .replace("(attr smd dnp)", "(attr smd dnp exclude_from_bom)")
+        .replace(
+            "(property \"Datasheet\" \"~\"",
+            "(property \"Datasheet\" \"stale datasheet\"",
+        )
+        .replace("unconnected-(R1-Pad1)", "STALE_PCB_NET");
+    sandbox.write("source/layout.kicad_sch", &schematic);
     sandbox.write("source/layout.kicad_pro", PROJECT_FIXTURE);
-    sandbox.write("source/layout.kicad_pcb", PCB_FIXTURE);
+    sandbox.write("source/layout.kicad_pcb", &pcb);
     sandbox.write("source/layout.kicad_prl", PRL_FIXTURE);
     let source = sandbox.root_path().join("source");
     let before = fs::read_dir(&source)
@@ -291,6 +310,20 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
         "project import failed:\n{}",
         String::from_utf8_lossy(&import.stderr)
     );
+    let stderr = String::from_utf8_lossy(&import.stderr);
+    assert!(stderr.contains("schematic/PCB parity mismatches; these do not block import"));
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(extraction_report(&stderr)).unwrap()).unwrap();
+    assert_eq!(report["validation"]["schematic_parity_ok"], false);
+    assert!(
+        report["validation"]["schematic_parity_violations"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let diagnostics = fs::read_to_string(validation_diagnostics(&stderr)).unwrap();
+    assert!(diagnostics.contains("stale datasheet"));
+    assert!(diagnostics.contains("STALE_PCB_NET"));
 
     let after = fs::read_dir(&source)
         .unwrap()
@@ -308,6 +341,140 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     assert!(output.join("layout.kicad.archive.zip").is_file());
     assert!(output.join("layout/layout.kicad_pro").is_file());
     assert!(output.join("layout/layout.kicad_pcb").is_file());
+    assert_preserved_schematic(&output.join("layout/layout.kicad_sch"), &schematic, false);
+    let pcb_before_apply = fs::read(output.join("layout/layout.kicad_pcb")).unwrap();
+    let mut source_pcb = pcb_sexpr::parse(&pcb).unwrap();
+    let mut imported_pcb =
+        pcb_sexpr::parse(std::str::from_utf8(&pcb_before_apply).unwrap()).unwrap();
+    for board in [&mut source_pcb, &mut imported_pcb] {
+        for item in board.as_list_mut().unwrap() {
+            let Some(footprint) = item.as_list_mut() else {
+                continue;
+            };
+            if footprint.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("footprint") {
+                footprint.retain(|item| {
+                    let Some(items) = item.as_list() else {
+                        return true;
+                    };
+                    !(items.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("path")
+                        || (items.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("property")
+                            && items.get(1).and_then(pcb_sexpr::Sexpr::as_str) == Some("Path")))
+                });
+            }
+        }
+    }
+    assert_eq!(
+        imported_pcb, source_pcb,
+        "Only footprint identity bindings may change"
+    );
+    assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
+    assert_eq!(
+        pcb_before_apply,
+        fs::read(output.join("layout/layout.kicad_pcb")).unwrap()
+    );
+}
+
+fn assert_preserved_schematic(path: &std::path::Path, original: &str, applied: bool) {
+    use pcb_kicad_sch::{SchDocument, SchItem, SymbolSlotKey};
+    let mut imported = SchDocument::from_kicad_sch(&fs::read_to_string(path).unwrap()).unwrap();
+    let mut source = SchDocument::from_kicad_sch(original).unwrap();
+    let library = source.pages[0].library.clone();
+    // Only managed symbol identity may differ. This checks the whole parsed page, including
+    // library definitions, wires, graphics, no-connects, fields, hierarchy, and unit placement.
+    for (imported, original) in imported.pages[0]
+        .items
+        .iter_mut()
+        .zip(&mut source.pages[0].items)
+    {
+        match (imported, original) {
+            (SchItem::Symbol(imported), SchItem::Symbol(original)) => {
+                if let Some(path) = imported.field_value("Path") {
+                    assert_eq!(
+                        imported.id,
+                        SymbolSlotKey::new(path, imported.unit).unwrap().symbol_id()
+                    );
+                    imported.id.clone_from(&original.id);
+                    imported.fields.remove("Path");
+                    if let Some(path) = original.fields.get("Path") {
+                        imported.fields.insert("Path".into(), path.clone());
+                    }
+                }
+                imported
+                    .fields
+                    .retain(|name, _| !name.starts_with("pcb:net"));
+                if applied {
+                    // KiCad may store all units' pin UUIDs on each unit. Apply keeps only the
+                    // selected unit's records, without changing its physical pin identity.
+                    let pins = library.definitions[original.library_key()]
+                        .placed_pins(original)
+                        .unwrap()
+                        .into_iter()
+                        .map(|pin| pin.number)
+                        .collect::<BTreeSet<_>>();
+                    original.pins.retain(|pin| pins.contains(&pin.number));
+                    original.pins.sort_by(|a, b| a.number.cmp(&b.number));
+                    imported.pins.sort_by(|a, b| a.number.cmp(&b.number));
+                }
+            }
+            (SchItem::Label(imported), SchItem::Label(_)) => {
+                imported.fields.remove("pcb:net");
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(imported, source);
+}
+
+fn assert_repeated_schematic_apply(sandbox: &mut Sandbox, board: &str, extra: &[&str]) {
+    let build = sandbox
+        .run(
+            "pcbc",
+            ["build", board, "--offline"]
+                .into_iter()
+                .chain(extra.iter().copied()),
+        )
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&build.stderr).contains("Linked KiCad schematic:"));
+    for iteration in 0..2 {
+        let apply = sandbox
+            .run(
+                "pcbc",
+                [
+                    "apply",
+                    "schematic",
+                    board,
+                    "--offline",
+                    "--no-open",
+                    "-f",
+                    "json",
+                ]
+                .into_iter()
+                .chain(extra.iter().copied()),
+            )
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(
+            apply.status.success(),
+            "apply failed: {}",
+            String::from_utf8_lossy(&apply.stderr)
+        );
+        let result: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+        if iteration == 1 {
+            assert_eq!(result["changed"], false, "{result}");
+        }
+    }
 }
 
 #[test]
@@ -350,7 +517,33 @@ fn reimport_refuses_without_force_and_force_regenerates() {
         "forced reimport failed:\n{}",
         String::from_utf8_lossy(&forced.stderr)
     );
-    assert_ne!(fs::read_to_string(component).unwrap(), "authored change\n");
+    let regenerated = fs::read_to_string(&component).unwrap();
+    assert_ne!(regenerated, "authored change\n");
+
+    // A retained differently named project must be rejected before any forced cleanup.
+    fs::rename(
+        output.join("layout/layout.kicad_pro"),
+        output.join("layout/custom.kicad_pro"),
+    )
+    .unwrap();
+    fs::write(output.join("layout/custom.kicad_pcb"), "retained PCB\n").unwrap();
+    let conflict = sandbox
+        .run("pcbc", ["import", "layout.kicad_sch", "out", "--force"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!conflict.status.success());
+    assert!(
+        String::from_utf8_lossy(&conflict.stderr).contains("conflicts with retained KiCad project")
+    );
+    assert!(!output.join("layout/layout.kicad_pro").exists());
+    assert_eq!(fs::read_to_string(component).unwrap(), regenerated);
+    assert_eq!(
+        fs::read_to_string(output.join("layout/custom.kicad_pcb")).unwrap(),
+        "retained PCB\n"
+    );
 }
 
 #[test]
@@ -444,6 +637,11 @@ fn duplicate_pin_connectivity_fixture() -> String {
             index + 1
         ));
     }
+    // J3 pin 2 is intentionally open; J2 pin 2 remains floating and unmarked. The marker
+    // differs in floating point but occupies the same KiCad integer coordinate as the pin.
+    wires.push_str(
+        "\t(no_connect (at 101.60001 132.08) (uuid \"00000000-0000-4000-8000-000000000007\"))\n",
+    );
     schematic.replacen(
         "\t(sheet_instances",
         &format!("{wires}\t(sheet_instances"),
@@ -496,20 +694,16 @@ fn generated_physical_partitions(netlist: &serde_json::Value) -> BTreeSet<Vec<St
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|port| {
+                .flat_map(|port| {
                     let port = port.as_str().unwrap();
-                    let refdes = ["J1", "J2", "J3"]
-                        .into_iter()
-                        .find(|refdes| port.contains(&format!(".{refdes}.")))
-                        .unwrap_or_else(|| {
-                            panic!("missing fixture refdes in generated port {port}")
-                        });
-                    let logical_name = port.rsplit('.').next().unwrap();
-                    let pin = logical_name
-                        .rsplit_once("__")
-                        .map(|(_, pin)| pin)
-                        .unwrap_or_else(|| panic!("missing physical-pin suffix in {port}"));
-                    format!("{refdes}:{pin}")
+                    // The wrapper instance retains the source refdes; logical pin names do not
+                    // identify physical pads (e.g. LM358's V+ is pad 8).
+                    let refdes = port.rsplit('.').nth(2).unwrap();
+                    netlist["instances"][port]["attributes"]["pads"]["Array"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(move |pad| format!("{refdes}:{}", pad["String"].as_str().unwrap()))
                 })
                 .collect();
             partition.sort();
@@ -565,5 +759,495 @@ fn standalone_import_preserves_duplicate_display_name_pin_partitions() {
     assert_eq!(
         source_physical_partitions(&report),
         generated_physical_partitions(&netlist)
+    );
+    assert_preserved_schematic(
+        &output.join("layout/layout.kicad_sch"),
+        &duplicate_pin_connectivity_fixture(),
+        false,
+    );
+    assert_repeated_schematic_apply(&mut sandbox, "layout.zen", &[]);
+}
+
+#[test]
+fn stacked_no_connect_import_preserves_drawing_and_distinct_physical_pads() {
+    let mut sandbox = sandbox();
+    let source = STANDALONE_FIXTURE
+        .replace("(at 0 -3.81 90)", "(at 0 3.81 270) (hide yes)")
+        .replace("(name \"~\"", "(name \"NC\"")
+        .replacen("\t(sheet_instances", concat!(
+            "\t(no_connect (at 101.60001 124.46) (uuid \"00000000-0000-4000-8000-000000000007\"))\n",
+            "\t(sheet_instances"), 1);
+    sandbox.write("layout.kicad_sch", &source);
+    let import = sandbox
+        .run("pcbc", ["import", "layout.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&import.stderr);
+    assert!(import.status.success(), "{stderr}");
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(extraction_report(&stderr)).unwrap()).unwrap();
+    let source_partitions = source_physical_partitions(&report);
+    assert_eq!(
+        source_partitions,
+        BTreeSet::from([
+            vec!["R1:1".into(), "R1:2".into()],
+            vec!["R2:1".into(), "R2:2".into()],
+            vec!["R3:1".into(), "R3:2".into()],
+        ]),
+        "raw extracted source must retain KiCad's geometric groups"
+    );
+    let build = sandbox
+        .run(
+            "pcbc",
+            [
+                "build",
+                "out/layout.zen",
+                "--offline",
+                "--netlist",
+                "-S",
+                "bom",
+            ],
+        )
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let netlist: serde_json::Value = serde_json::from_slice(&build.stdout).unwrap();
+    assert_eq!(
+        generated_physical_partitions(&netlist),
+        BTreeSet::from([
+            vec!["R1:1".into(), "R1:2".into()],
+            vec!["R2:1".into(), "R2:2".into()],
+            vec!["R3:1".into()],
+            vec!["R3:2".into()],
+        ])
+    );
+    assert_eq!(
+        netlist["nets"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|net| net["kind"] == "NotConnected")
+            .count(),
+        2
+    );
+    let schematic_path = sandbox.root_path().join("out/layout/layout.kicad_sch");
+    assert_preserved_schematic(&schematic_path, &source, false);
+    let mut first_apply = None;
+    for _ in 0..2 {
+        let apply = sandbox
+            .run(
+                "pcbc",
+                [
+                    "apply",
+                    "schematic",
+                    "out/layout.zen",
+                    "--offline",
+                    "--no-open",
+                    "-f",
+                    "json",
+                    "-S",
+                    "bom",
+                ],
+            )
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(
+            apply.status.success(),
+            "{}",
+            String::from_utf8_lossy(&apply.stderr)
+        );
+        let bytes = fs::read(&schematic_path).unwrap();
+        if let Some(first) = &first_apply {
+            assert!(first == &bytes, "second apply changed schematic bytes");
+            let result: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+            assert_eq!(result["changed"], false);
+        }
+        first_apply = Some(bytes);
+    }
+}
+
+#[test]
+fn project_import_retains_symbols_missing_from_pcb() {
+    for pinless in [false, true] {
+        let mut sandbox = sandbox();
+        let mut document = pcb_kicad_sch::SchDocument::from_kicad_sch(STANDALONE_FIXTURE).unwrap();
+        let mut logo = document.pages[0].library.definitions["Device:R"]
+            .renamed("Test:Logo")
+            .unwrap();
+        for section in logo.sexpr.as_list_mut().unwrap() {
+            if let Some(items) = section.as_list_mut() {
+                items.retain(|item| {
+                    item.as_list()
+                        .and_then(|items| items.first())
+                        .and_then(pcb_sexpr::Sexpr::as_sym)
+                        != Some("pin")
+                });
+            }
+        }
+        document.pages[0]
+            .library
+            .definitions
+            .insert(logo.lib_id.clone(), logo);
+        for item in &mut document.pages[0].items {
+            if let pcb_kicad_sch::SchItem::Symbol(symbol) = item {
+                symbol.in_bom = false;
+                if pinless && symbol.reference() == Some("R3") {
+                    symbol.lib_id = "Test:Logo".into();
+                    symbol.pins.clear();
+                    symbol.on_board = false;
+                    symbol.fields.get_mut("Footprint").unwrap().value.clear();
+                }
+            }
+        }
+        let source = document.to_kicad_sch().unwrap();
+        let mut pcb = pcb_sexpr::parse(PCB_FIXTURE).unwrap();
+        pcb.as_list_mut().unwrap().retain(|item| {
+            let Some(items) = item.as_list() else {
+                return true;
+            };
+            !(items.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("footprint")
+                && pcb_sexpr::kicad::schematic_properties(items)
+                    .get("Reference")
+                    .map(String::as_str)
+                    == Some("R3"))
+        });
+        sandbox.write("source/layout.kicad_sch", &source);
+        sandbox.write("source/layout.kicad_pro", PROJECT_FIXTURE);
+        sandbox.write(
+            "source/layout.kicad_pcb",
+            pcb.to_string()
+                .replace("(attr smd", "(attr exclude_from_bom smd"),
+        );
+        let import = sandbox
+            .run("pcbc", ["import", "source/layout.kicad_pro", "out"])
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&import.stderr);
+        assert!(import.status.success(), "pinless={pinless}: {stderr}");
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(extraction_report(&stderr)).unwrap()).unwrap();
+        assert_eq!(
+            report["extraction"]["netlist_components"]
+                .as_object()
+                .unwrap()
+                .len(),
+            if pinless { 2 } else { 3 }
+        );
+        let output = sandbox.root_path().join("out/layout");
+        assert_preserved_schematic(&output.join("layout.kicad_sch"), &source, false);
+        let pcb_before = fs::read(output.join("layout.kicad_pcb")).unwrap();
+        assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
+        if pinless {
+            let applied = pcb_kicad_sch::SchDocument::from_kicad_sch(
+                &fs::read_to_string(output.join("layout.kicad_sch")).unwrap(),
+            )
+            .unwrap();
+            let original = document.pages[0].items.iter().find(|item| {
+                matches!(item, pcb_kicad_sch::SchItem::Symbol(symbol) if symbol.reference() == Some("R3"))
+            }).unwrap();
+            assert!(
+                applied.pages[0].items.contains(original),
+                "native documentation changed"
+            );
+            assert_eq!(
+                applied.pages[0].library.definitions["Test:Logo"],
+                document.pages[0].library.definitions["Test:Logo"]
+            );
+        }
+        assert_eq!(
+            fs::read(output.join("layout.kicad_pcb")).unwrap(),
+            pcb_before
+        );
+        let build = sandbox
+            .run("pcbc", ["build", "out/layout.zen", "--netlist"])
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(
+            build.status.success(),
+            "{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        let built = serde_json::from_slice(&build.stdout).unwrap();
+        assert_eq!(
+            source_physical_partitions(&report),
+            generated_physical_partitions(&built)
+        );
+        assert_eq!(
+            source_physical_partitions(&report).len(),
+            if pinless { 4 } else { 6 }
+        );
+    }
+}
+
+#[test]
+fn shared_parts_preserve_distinct_schematic_descriptions() {
+    let mut sandbox = sandbox();
+    let mut document = pcb_kicad_sch::SchDocument::from_kicad_sch(STANDALONE_FIXTURE).unwrap();
+    for item in &mut document.pages[0].items {
+        if let pcb_kicad_sch::SchItem::Symbol(symbol) = item {
+            let description = match symbol.reference().unwrap() {
+                "R1" => "feedback",
+                "R2" => "bias",
+                "R3" => "",
+                reference => panic!("unexpected reference {reference}"),
+            };
+            symbol.fields.get_mut("Description").unwrap().value = description.into();
+            symbol.in_bom = false;
+        }
+    }
+    let source = document.to_kicad_sch().unwrap();
+    sandbox.write("source/layout.kicad_sch", &source);
+    let import = sandbox
+        .run("pcbc", ["import", "source/layout.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        import.status.success(),
+        "{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    let output = sandbox.root_path().join("out/layout/layout.kicad_sch");
+    assert_preserved_schematic(&output, &source, false);
+    assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
+    let applied =
+        pcb_kicad_sch::SchDocument::from_kicad_sch(&fs::read_to_string(output).unwrap()).unwrap();
+    let descriptions = |document: &pcb_kicad_sch::SchDocument| {
+        document.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                pcb_kicad_sch::SchItem::Symbol(symbol) => Some((
+                    symbol.reference().unwrap().to_string(),
+                    symbol.fields["Description"].clone(),
+                )),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert_eq!(descriptions(&applied), descriptions(&document));
+}
+
+#[test]
+fn unwired_hidden_power_net_preserves_native_name_with_logical_binding() {
+    let mut sandbox = sandbox();
+    let source = STANDALONE_FIXTURE
+        .replace("(in_bom yes)", "(in_bom no)")
+        .replacen("(pin passive line", "(pin power_in line", 1)
+        .replacen("(name \"~\"", "hide (name \"VCC.A\"", 1);
+    sandbox.write("source/layout.kicad_sch", &source);
+    let import = sandbox
+        .run("pcbc", ["import", "source/layout.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        import.status.success(),
+        "{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    let output = sandbox.root_path().join("out/layout/layout.kicad_sch");
+    let document =
+        pcb_kicad_sch::SchDocument::from_kicad_sch(&fs::read_to_string(&output).unwrap()).unwrap();
+    let symbols = document.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            pcb_kicad_sch::SchItem::Symbol(symbol) => Some(symbol),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(symbols.len(), 3);
+    for symbol in symbols {
+        assert_eq!(symbol.field_value("pcb:net:VCC.A"), Some("VCC_A"));
+    }
+    assert_preserved_schematic(&output, &source, false);
+    assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
+    let applied =
+        pcb_kicad_sch::SchDocument::from_kicad_sch(&fs::read_to_string(output).unwrap()).unwrap();
+    assert_eq!(
+        pcb_kicad_sch::connectivity::ConnectivityGraph::from_kicad(&applied).unwrap(),
+        pcb_kicad_sch::connectivity::ConnectivityGraph::from_kicad(&document).unwrap()
+    );
+}
+
+#[test]
+fn hierarchy_and_no_connect_markers_survive_import_and_apply() {
+    let mut sandbox = sandbox();
+    let root =
+        include_str!("../../pcb-kicad-sch/test-data/kicad-10/issue24201/issue24201.kicad_sch");
+    // Sourcing is intentionally absent in this upstream electrical test, not part of this check.
+    // Native saves may keep only a cached alias, distinct from the library identity.
+    let child = include_str!("../../pcb-kicad-sch/test-data/kicad-10/issue24201/aSheet.kicad_sch")
+        .replace("(in_bom yes)", "(in_bom no)")
+        .replace("(symbol \"R_", "(symbol \"R_cached_")
+        .replace("(symbol \"Device:R\"", "(symbol \"R_cached\"")
+        .replace(
+            "(lib_id \"Device:R\")",
+            "(lib_id \"Device:R\") (lib_name \"R_cached\")",
+        );
+    sandbox.write("source/issue24201.kicad_sch", root);
+    sandbox.write("source/aSheet.kicad_sch", &child);
+    let import = sandbox
+        .run("pcbc", ["import", "source/issue24201.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        import.status.success(),
+        "{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    let output = sandbox.root_path().join("out/layout");
+    assert_preserved_schematic(&output.join("issue24201.kicad_sch"), root, false);
+    assert_preserved_schematic(&output.join("aSheet.kicad_sch"), &child, false);
+    let project = pcbc::kicad_schematic::KicadProject::load(&output).unwrap();
+    let paths = project
+        .document
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            pcb_kicad_sch::SchItem::Symbol(symbol) => symbol.field_value("Path"),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(paths, BTreeSet::from(["A.R1.R", "A.R3.R"]));
+    assert_repeated_schematic_apply(&mut sandbox, "out/issue24201.zen", &[]);
+    assert_preserved_schematic(&output.join("issue24201.kicad_sch"), root, true);
+    assert_preserved_schematic(&output.join("aSheet.kicad_sch"), &child, true);
+}
+
+#[test]
+fn multiunit_import_preserves_physical_pins_and_original_net_label_text() {
+    let mut sandbox = sandbox();
+    sandbox.write(
+        "source/multiunit.kicad_sch",
+        include_str!("fixtures/import/multiunit_pinmap_split.kicad_sch")
+            .replace("(in_bom yes)", "(in_bom no)"),
+    );
+    pcb_kicad::KiCadCliBuilder::new()
+        .command("sch")
+        .subcommand("upgrade")
+        .args(["--force", "source/multiunit.kicad_sch"])
+        .current_dir(sandbox.root_path().to_string_lossy())
+        .run()
+        .unwrap();
+    let original =
+        fs::read_to_string(sandbox.root_path().join("source/multiunit.kicad_sch")).unwrap();
+    let import = sandbox
+        .run("pcbc", ["import", "source/multiunit.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        import.status.success(),
+        "{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    let output = sandbox.root_path().join("out/layout/multiunit.kicad_sch");
+    assert_preserved_schematic(&output, &original, false);
+    let document =
+        pcb_kicad_sch::SchDocument::from_kicad_sch(&fs::read_to_string(&output).unwrap()).unwrap();
+    let units = document.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            pcb_kicad_sch::SchItem::Symbol(symbol) if symbol.reference() == Some("U1") => {
+                Some(symbol.unit)
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(units, BTreeSet::from([1, 2, 3]));
+    assert!(document.pages[0].items.iter().any(|item| matches!(item, pcb_kicad_sch::SchItem::Label(label) if label.text == "in" && label.fields["pcb:net"].value == "/in")));
+    let build = sandbox
+        .run(
+            "pcbc",
+            ["build", "out/multiunit.zen", "--offline", "--netlist"],
+        )
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let netlist: serde_json::Value = serde_json::from_slice(&build.stdout).unwrap();
+    let report: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            sandbox
+                .root_path()
+                .join("out/.kicad.import.extraction.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let partitions = generated_physical_partitions(&netlist);
+    assert_eq!(source_physical_partitions(&report), partitions);
+    assert_eq!(partitions.len(), 9);
+    assert_repeated_schematic_apply(&mut sandbox, "out/multiunit.zen", &[]);
+    assert_preserved_schematic(&output, &original, true);
+
+    // One component has shared display attributes; differing per-unit text must not
+    // silently collapse to whichever unit happens to sort first by UUID.
+    let mut distinct = pcb_kicad_sch::SchDocument::from_kicad_sch(&original).unwrap();
+    for item in &mut distinct.pages[0].items {
+        if let pcb_kicad_sch::SchItem::Symbol(symbol) = item
+            && symbol.reference() == Some("U1")
+            && symbol.unit == 2
+        {
+            symbol.fields.get_mut("Description").unwrap().value = "amplifier B".into();
+        }
+    }
+    let distinct = distinct.to_kicad_sch().unwrap();
+    sandbox.write("different.kicad_sch", &distinct);
+    let import = sandbox
+        .run("pcbc", ["import", "different.kicad_sch", "rejected"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!import.status.success());
+    assert!(
+        String::from_utf8_lossy(&import.stderr)
+            .contains("Component U1 has differing Description across schematic units"),
+        "{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.root_path().join("different.kicad_sch")).unwrap(),
+        distinct
     );
 }

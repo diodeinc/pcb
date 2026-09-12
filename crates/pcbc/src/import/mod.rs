@@ -10,6 +10,7 @@ mod materialize;
 mod paths;
 mod portable;
 mod report;
+mod schematic;
 mod semantic;
 mod types;
 mod validate;

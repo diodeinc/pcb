@@ -34,6 +34,7 @@ fn generate_and_report(materialized: Materialized) -> Result<()> {
         &ir,
         &generation.expected_pins_by_refdes,
         &generation.instance_name_by_refdes,
+        &generation.not_connected_nets,
     )?;
     eprintln!("Wrote imported board to {}", board.board_zen.display());
 
@@ -95,6 +96,22 @@ fn prepare_output(
             "Board repository already exists: {}. Use --force to overwrite generated files.",
             board_repo.display()
         );
+    }
+
+    // Standalone reimport retains layout/, so reject conflicting projects before cleanup.
+    let layout_dir = board_repo.join("layout");
+    if selection.portable.source_kind == ImportSourceKind::Schematic && layout_dir.is_dir() {
+        let expected = layout_dir.join(selection.selected.kicad_sch.with_extension("kicad_pro"));
+        for entry in std::fs::read_dir(&layout_dir)? {
+            let path = entry?.path();
+            anyhow::ensure!(
+                path.extension()
+                    .is_none_or(|extension| extension != "kicad_pro")
+                    || path == expected,
+                "Standalone import conflicts with retained KiCad project {}. Import its matching schematic or choose a new output directory.",
+                path.display()
+            );
+        }
     }
 
     if args.force {
@@ -252,26 +269,6 @@ impl Analyzed {
             ir,
         } = hierarchized;
         let semantic = semantic::analyze(&ir);
-
-        eprintln!(
-            "Passive detection (2-pad only): R={} (h:{} m:{} l:{}), C={} (h:{} m:{} l:{}), unknown:{}, known-non-2-pad:{}, pad-count-unknown:{}",
-            semantic.passives.summary.resistor_high
-                + semantic.passives.summary.resistor_medium
-                + semantic.passives.summary.resistor_low,
-            semantic.passives.summary.resistor_high,
-            semantic.passives.summary.resistor_medium,
-            semantic.passives.summary.resistor_low,
-            semantic.passives.summary.capacitor_high
-                + semantic.passives.summary.capacitor_medium
-                + semantic.passives.summary.capacitor_low,
-            semantic.passives.summary.capacitor_high,
-            semantic.passives.summary.capacitor_medium,
-            semantic.passives.summary.capacitor_low,
-            semantic.passives.summary.unknown,
-            semantic.passives.summary.non_two_pad,
-            semantic.passives.summary.unknown_pad_count,
-        );
-
         let ir = ImportIr { semantic, ..ir };
         Self {
             ctx,

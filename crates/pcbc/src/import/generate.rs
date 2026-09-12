@@ -1,11 +1,3 @@
-mod schematic_comments;
-mod schematic_placement;
-mod schematic_types;
-
-use self::schematic_comments::{
-    append_schematic_position_comments, build_flat_component_schematic_positions,
-    build_net_symbol_positions_for_sheet,
-};
 use super::*;
 use anyhow::{Context, Result};
 use pcb_component_gen as component_gen;
@@ -25,6 +17,7 @@ use uuid::Uuid;
 
 pub(super) struct GenerationResult {
     pub(super) expected_pins_by_refdes: BTreeMap<KiCadRefDes, BTreeSet<KiCadPinNumber>>,
+    pub(super) not_connected_nets: BTreeSet<KiCadNetName>,
     /// The Zener instance name generated for each source reference designator.
     ///
     /// Exposed because validation has to map a *built* component back to its source refdes, and the
@@ -74,20 +67,25 @@ pub(super) fn generate(
     board_name: &str,
     ir: &ImportIr,
 ) -> Result<GenerationResult> {
+    // Use the same KiCad 9 -> 10 symbol normalization as the persistent editor.
+    let project = pcbc::kicad_schematic::KicadProject::load(
+        materialized
+            .layout_kicad_pro
+            .as_ref()
+            .context("Import has no KiCad project")?,
+    )?;
     let port_to_net = build_port_to_net_map(&ir.nets)?;
-    let not_connected_nets = build_not_connected_nets(&ir.nets);
+    let not_connected_nets = build_not_connected_nets(ir, &project.document)?;
     let net_decls = build_net_decls(&ir.nets, &not_connected_nets, &ir.semantic.net_kinds.by_net);
     let reserved_idents: BTreeSet<String> =
         net_decls.decls.iter().map(|d| d.ident.clone()).collect();
-
     let refdes_instance_names = build_refdes_instance_name_map(&ir.components);
-
     let component_modules = generate_imported_components(GenerateImportedComponentsArgs {
         board_dir: &materialized.board_dir,
         components: &ir.components,
         reserved_idents: &reserved_idents,
-        schematic_lib_symbols: &ir.schematic_lib_symbols,
-        passive_by_component: &ir.semantic.passives.by_component,
+        schematic: &project.document,
+        sheet_tree: &ir.schematic_sheet_tree,
         port_to_net: &port_to_net,
         not_connected_nets: &not_connected_nets,
     })?;
@@ -122,9 +120,6 @@ pub(super) fn generate(
         components: &ir.components,
         hierarchy_plan: &ir.hierarchy_plan,
         schematic_sheet_tree: &ir.schematic_sheet_tree,
-        schematic_lib_symbols: &ir.schematic_lib_symbols,
-        schematic_power_symbol_decls: &ir.schematic_power_symbol_decls,
-        net_kinds_by_net: &ir.semantic.net_kinds.by_net,
         net_decls: &net_decls,
         component_modules: &component_modules,
         sheet_modules: &sheet_modules,
@@ -133,6 +128,7 @@ pub(super) fn generate(
 
     Ok(GenerationResult {
         expected_pins_by_refdes,
+        not_connected_nets,
         instance_name_by_refdes: refdes_instance_names,
     })
 }
@@ -147,9 +143,6 @@ struct ImportedBoardZenArgs<'a> {
     components: &'a BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     hierarchy_plan: &'a ImportHierarchyPlan,
     schematic_sheet_tree: &'a ImportSheetTree,
-    schematic_lib_symbols: &'a BTreeMap<KiCadLibId, String>,
-    schematic_power_symbol_decls: &'a [ImportSchematicPowerSymbolDecl],
-    net_kinds_by_net: &'a BTreeMap<KiCadNetName, ImportNetKindClassification>,
     net_decls: &'a ImportedNetDecls,
     component_modules: &'a GeneratedComponents,
     sheet_modules: &'a GeneratedSheetModules,
@@ -207,11 +200,6 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
                 && KiCadSheetPath::from_sheetpath_tstamps(&a.sheetpath_tstamps).as_str() == "/"
         })
         .collect();
-    let root_schematic_positions = build_flat_component_schematic_positions(
-        &root_anchors,
-        args.refdes_instance_names,
-        args.component_modules,
-    );
 
     let root_component_calls = build_imported_instance_calls_for_instances(
         root_anchors,
@@ -230,20 +218,6 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
         &root_net_set,
         &root_component_calls,
     );
-    let mut root_schematic_positions = if root_sheet_module_calls.is_empty() {
-        root_schematic_positions
-    } else {
-        BTreeMap::new()
-    };
-    if root_sheet_module_calls.is_empty() {
-        root_schematic_positions.extend(build_net_symbol_positions_for_sheet(
-            &root_sheet,
-            &root_plan,
-            args.net_decls,
-            args.net_kinds_by_net,
-            args.schematic_power_symbol_decls,
-        ));
-    }
 
     let mut instance_calls: Vec<crate::codegen::board::ImportedInstanceCall> = Vec::new();
     instance_calls.extend(root_sheet_module_calls);
@@ -278,11 +252,6 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
             module_decls: &module_decls,
             instance_calls: &instance_calls,
         },
-    );
-    let board_zen_content = append_schematic_position_comments(
-        board_zen_content,
-        &root_schematic_positions,
-        args.schematic_lib_symbols,
     );
     write_zen(args.board_zen, &board_zen_content)?;
 
@@ -706,13 +675,71 @@ fn build_net_decls(
 }
 
 fn build_not_connected_nets(
-    netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
-) -> BTreeSet<KiCadNetName> {
-    netlist_nets
+    ir: &ImportIr,
+    document: &pcb_kicad_sch::SchDocument,
+) -> Result<BTreeSet<KiCadNetName>> {
+    let marked = pcb_kicad_sch::analysis::marked_no_connect_targets(document)?;
+    let files = document
+        .pages
         .iter()
-        .filter(|(name, net)| name.as_str().starts_with("unconnected-(") && net.ports.len() == 1)
+        .filter_map(|page| Some((page.id.as_str(), Path::new(page.file_name.as_deref()?))))
+        .collect::<BTreeMap<_, _>>();
+    let marked = marked
+        .iter()
+        .filter_map(|target| {
+            Some((
+                (
+                    *files.get(target.page_id.as_str())?,
+                    target.symbol_id.as_str(),
+                    target.pin_number.as_str(),
+                ),
+                target,
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    Ok(ir
+        .nets
+        .iter()
+        .filter(|(_, net)| {
+            let targets = net
+                .ports
+                .iter()
+                .map(|port| {
+                    ir.components
+                        .get(&port.component)?
+                        .schematic
+                        .as_ref()?
+                        .units
+                        .keys()
+                        .find_map(|key| {
+                            let path =
+                                KiCadSheetPath::from_sheetpath_tstamps(&key.sheetpath_tstamps);
+                            let file = ir
+                                .schematic_sheet_tree
+                                .nodes
+                                .get(&path)?
+                                .schematic_file
+                                .as_deref()?;
+                            marked
+                                .get(&(file, key.symbol_uuid.as_str(), port.pin.as_str()))
+                                .copied()
+                        })
+                })
+                .collect::<Option<Vec<_>>>();
+            let Some(targets) = targets else {
+                return false;
+            };
+            let Some(first) = targets.first() else {
+                return false;
+            };
+            targets.iter().all(|target| {
+                target.page_id == first.page_id
+                    && target.symbol_id == first.symbol_id
+                    && pcb_kicad_sch::connectivity::points_connect(target.at, first.at)
+            })
+        })
         .map(|(name, _)| name.clone())
-        .collect()
+        .collect())
 }
 
 impl ImportedNetDecls {
@@ -944,18 +971,6 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             .iter()
             .filter_map(|a| ir.components.get_key_value(a))
             .collect();
-        let mut module_schematic_positions = build_flat_component_schematic_positions(
-            &sheet_instances,
-            refdes_instance_names,
-            components,
-        );
-        module_schematic_positions.extend(build_net_symbol_positions_for_sheet(
-            &sheet_path,
-            &module_plan,
-            net_decls,
-            &ir.semantic.net_kinds.by_net,
-            &ir.schematic_power_symbol_decls,
-        ));
 
         let component_instance_calls = build_imported_instance_calls_for_instances(
             sheet_instances,
@@ -1055,24 +1070,16 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
         let module_decls: Vec<(String, String)> = module_decls.into_iter().collect();
 
         let mut instance_calls: Vec<crate::codegen::board::ImportedInstanceCall> = Vec::new();
-        let is_flat_component_only_module = child_module_calls.is_empty();
         instance_calls.extend(child_module_calls.into_values());
         instance_calls.extend(component_instance_calls);
 
-        let mut module_zen_content = crate::codegen::board::render_imported_sheet_module(
+        let module_zen_content = crate::codegen::board::render_imported_sheet_module(
             &module_doc,
             &io_nets,
             &internal_net_decls,
             &module_decls,
             &instance_calls,
         );
-        if is_flat_component_only_module {
-            module_zen_content = append_schematic_position_comments(
-                module_zen_content,
-                &module_schematic_positions,
-                &ir.schematic_lib_symbols,
-            );
-        }
         write_zen(&module_zen, &module_zen_content)?;
     }
 
@@ -1364,8 +1371,9 @@ struct ImportPartKey {
     manufacturer: Option<String>,
     footprint: Option<String>,
     lib_id: Option<KiCadLibId>,
-    lib_name: Option<KiCadLibId>,
+    symbol_definition: String,
     value: Option<String>,
+    schematic_properties: BTreeMap<String, String>,
 }
 
 struct GeneratedComponents {
@@ -1376,10 +1384,6 @@ struct GeneratedComponents {
     /// Used to pre-patch KiCad footprints with a stable sync `Path` hook:
     /// `<refdes>.<component_name>`.
     anchor_to_component_name: BTreeMap<KiCadUuidPathKey, String>,
-    /// Per-instance module config kwargs to pass when instantiating the module.
-    ///
-    /// Only used for stdlib-generated components (e.g. promoted passives).
-    anchor_to_config_args: BTreeMap<KiCadUuidPathKey, BTreeMap<String, String>>,
     module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>>,
     module_skip_defaults: BTreeMap<String, ModuleSkipDefaults>,
     expected_pins_by_anchor: BTreeMap<KiCadUuidPathKey, BTreeSet<KiCadPinNumber>>,
@@ -1423,20 +1427,12 @@ impl Default for ImportPartFlags {
     }
 }
 
-fn has_standard_promoted_passive_pins(symbol: &pcb_eda::Symbol) -> bool {
-    symbol
-        .canonical_pins()
-        .map(|pin| pin.number.as_str())
-        .collect::<BTreeSet<_>>()
-        == BTreeSet::from(["1", "2"])
-}
-
 struct GenerateImportedComponentsArgs<'a> {
     board_dir: &'a Path,
     components: &'a BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     reserved_idents: &'a BTreeSet<String>,
-    schematic_lib_symbols: &'a BTreeMap<KiCadLibId, String>,
-    passive_by_component: &'a BTreeMap<KiCadUuidPathKey, ImportPassiveClassification>,
+    schematic: &'a pcb_kicad_sch::SchDocument,
+    sheet_tree: &'a ImportSheetTree,
     port_to_net: &'a BTreeMap<ImportNetPort, KiCadNetName>,
     not_connected_nets: &'a BTreeSet<KiCadNetName>,
 }
@@ -1448,8 +1444,8 @@ fn generate_imported_components(
         board_dir,
         components,
         reserved_idents,
-        schematic_lib_symbols,
-        passive_by_component,
+        schematic,
+        sheet_tree,
         port_to_net,
         not_connected_nets,
     } = args;
@@ -1464,221 +1460,14 @@ fn generate_imported_components(
             .insert(port.pin.clone());
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum PromotedPassiveKind {
-        Resistor,
-        Capacitor,
-    }
-
-    #[derive(Debug, Clone)]
-    struct PromotedPassive {
-        kind: PromotedPassiveKind,
-        config_args: BTreeMap<String, String>,
-    }
-
-    fn alloc_unique_module_ident(base: &str, used: &mut BTreeSet<String>) -> String {
-        if used.insert(base.to_string()) {
-            return base.to_string();
-        }
-        let underscored = format!("_{base}");
-        if used.insert(underscored.clone()) {
-            return underscored;
-        }
-        alloc_unique_ident(base, "_", used)
-    }
-
-    fn canonical_dielectric(raw: &str) -> Option<&'static str> {
-        let s = raw.trim().to_ascii_uppercase();
-        match s.as_str() {
-            "C0G" | "COG" => Some("C0G"),
-            "NP0" | "NPO" => Some("NP0"),
-            "X5R" => Some("X5R"),
-            "X7R" => Some("X7R"),
-            "X7S" => Some("X7S"),
-            "X7T" => Some("X7T"),
-            "Y5V" => Some("Y5V"),
-            "Z5U" => Some("Z5U"),
-            _ => None,
-        }
-    }
-
-    fn canonical_voltage(raw: &str) -> Option<String> {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        let mut s = trimmed.replace(' ', "");
-        s = s.replace('µ', "u");
-
-        if !(s.ends_with('V') || s.ends_with('v')) {
-            return None;
-        }
-        let core = &s[..s.len() - 1];
-        if core.is_empty() {
-            return None;
-        }
-
-        let (num, prefix) = match core.chars().last() {
-            Some(c) if matches!(c, 'm' | 'u' | 'k' | 'M' | 'K' | 'U') => {
-                (&core[..core.len() - 1], Some(c))
-            }
-            _ => (core, None),
-        };
-
-        let num = num.trim();
-        if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit() || c == '.') {
-            return None;
-        }
-        if num.chars().filter(|&c| c == '.').count() > 1 {
-            return None;
-        }
-
-        let mut out = num.to_string();
-        if let Some(p) = prefix {
-            let canonical = match p {
-                'U' => 'u',
-                'K' => 'k',
-                c => c,
-            };
-            out.push(canonical);
-        }
-        out.push('V');
-        Some(out)
-    }
-
-    fn promotable_passive_kind(
-        anchor: &KiCadUuidPathKey,
-        component: &ImportComponentData,
-        passive_by_component: &BTreeMap<KiCadUuidPathKey, ImportPassiveClassification>,
-    ) -> Option<PromotedPassive> {
-        let class = passive_by_component.get(anchor)?;
-
-        let layout = component.layout.as_ref()?;
-        if class.pad_count != Some(2)
-            || layout
-                .pads
-                .keys()
-                .map(KiCadPinNumber::as_str)
-                .collect::<BTreeSet<_>>()
-                != BTreeSet::from(["1", "2"])
-        {
-            return None;
-        }
-        if class.confidence != Some(ImportPassiveConfidence::High) {
-            return None;
-        }
-        let kind = match class.kind? {
-            ImportPassiveKind::Resistor => PromotedPassiveKind::Resistor,
-            ImportPassiveKind::Capacitor => PromotedPassiveKind::Capacitor,
-        };
-        let value = class.parsed_value.as_deref()?;
-        let package = class.package?;
-
-        // Note: stdlib passives support `skip_bom` and `dnp`. We intentionally do not
-        // plumb `skip_pos` for promoted passives.
-
-        let mut config_args: BTreeMap<String, String> = BTreeMap::new();
-        config_args.insert("value".to_string(), value.to_string());
-        config_args.insert("package".to_string(), package.as_str().to_string());
-
-        if let Some(v) = class.mpn.as_deref() {
-            config_args.insert("mpn".to_string(), v.to_string());
-        }
-        if let Some(v) = class.manufacturer.as_deref() {
-            config_args.insert("manufacturer".to_string(), v.to_string());
-        }
-        if kind == PromotedPassiveKind::Capacitor {
-            if let Some(v) = class.voltage.as_deref()
-                && let Some(v) = canonical_voltage(v)
-            {
-                config_args.insert("voltage".to_string(), v);
-            }
-            if let Some(v) = class.dielectric.as_deref()
-                && let Some(d) = canonical_dielectric(v)
-            {
-                config_args.insert("dielectric".to_string(), d.to_string());
-            }
-        }
-
-        Some(PromotedPassive { kind, config_args })
-    }
-
-    // Compute promoted-passive candidates per-instance. The stdlib modules hardcode pins 1 and
-    // 2, so verify the schematic symbol before promotion. This check must remain paired with the
-    // missing-endpoint NotConnected() fallback in instance generation; otherwise a custom A/K
-    // passive could be silently disconnected.
-    let mut candidate_by_anchor: BTreeMap<KiCadUuidPathKey, PromotedPassive> = BTreeMap::new();
-    for (anchor, component) in components {
-        let Some(candidate) = promotable_passive_kind(anchor, component, passive_by_component)
-        else {
-            continue;
-        };
-        let rendered =
-            render_component_symbol("passive-pin-check", component, schematic_lib_symbols)
-                .with_context(|| {
-                    format!(
-                        "Failed to verify passive pin numbers for {}",
-                        component.netlist.refdes
-                    )
-                })?;
-        if has_standard_promoted_passive_pins(&rendered.symbol) {
-            candidate_by_anchor.insert(anchor.clone(), candidate);
-        }
-    }
-
-    // Ensure promotion is consistent within a per-part group: either all instances of a part
-    // are promoted, or none are (avoids mixing stdlib generics with generated component modules).
-    let mut anchors_by_part_key: BTreeMap<ImportPartKey, Vec<KiCadUuidPathKey>> = BTreeMap::new();
-    for (anchor, c) in components {
-        if c.layout.is_none() {
-            continue;
-        }
-        anchors_by_part_key
-            .entry(derive_part_key(c))
-            .or_default()
-            .push(anchor.clone());
-    }
-
-    let mut promoted: BTreeMap<KiCadUuidPathKey, PromotedPassive> = BTreeMap::new();
-    for (_part_key, anchors) in anchors_by_part_key {
-        let Some(first) = anchors.first() else {
-            continue;
-        };
-        let Some(first_candidate) = candidate_by_anchor.get(first) else {
-            continue;
-        };
-
-        let kind = first_candidate.kind;
-        let config_args = &first_candidate.config_args;
-
-        let all_match = anchors.iter().all(|a| {
-            candidate_by_anchor
-                .get(a)
-                .is_some_and(|c| c.kind == kind && &c.config_args == config_args)
-        });
-        if !all_match {
-            continue;
-        }
-
-        for a in anchors {
-            if let Some(c) = candidate_by_anchor.get(&a).cloned() {
-                promoted.insert(a, c);
-            }
-        }
-    }
-
     let mut part_to_instances: BTreeMap<ImportPartKey, Vec<KiCadUuidPathKey>> = BTreeMap::new();
     let mut part_flags: BTreeMap<ImportPartKey, ImportPartFlags> = BTreeMap::new();
     for (anchor, c) in components {
         if c.layout.is_none() {
-            // Only generate component packages for footprints that exist on the PCB.
             continue;
         }
-        if promoted.contains_key(anchor) {
-            // Promoted passives use stdlib generics and don't produce component packages.
-            continue;
-        }
-        let key = derive_part_key(c);
+        let definition = component_symbol_definition(c, schematic, sheet_tree)?;
+        let key = derive_part_key(c, format_tree(&definition.sexpr, FormatMode::Normal))?;
         part_to_instances
             .entry(key.clone())
             .or_default()
@@ -1783,8 +1572,6 @@ fn generate_imported_components(
     let mut used_module_idents: BTreeSet<String> = reserved_idents.iter().cloned().collect();
     let mut anchor_to_module_ident: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
     let mut anchor_to_component_name: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
-    let mut anchor_to_config_args: BTreeMap<KiCadUuidPathKey, BTreeMap<String, String>> =
-        BTreeMap::new();
     let mut module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>> =
         BTreeMap::new();
     let mut module_skip_defaults: BTreeMap<String, ModuleSkipDefaults> = BTreeMap::new();
@@ -1794,8 +1581,8 @@ fn generate_imported_components(
         let Some(instances) = part_to_instances.get(&part_key) else {
             continue;
         };
-        // ImportPartKey includes both library and instance-local symbol identities, so instances
-        // in this group are expected to share one embedded symbol definition. Use one
+        // ImportPartKey includes the actual page-local definition, so instances
+        // in this group share one embedded symbol definition. Use one
         // representative for package pin metadata, then audit
         // every instance's source endpoints against its canonical physical pins below. A real net
         // on any instance also forces an electrical no_connect pin to remain externally exposed.
@@ -1822,7 +1609,7 @@ fn generate_imported_components(
         // Render all artifacts first; only touch the filesystem if we can produce a complete
         // component package.
         let mut symbol =
-            render_component_symbol(&part_dir.component_dir, component, schematic_lib_symbols)
+            render_component_symbol(&part_dir.component_dir, &part_key.symbol_definition)
                 .with_context(|| format!("Failed to render symbol for {}", out_dir.display()))?;
         let footprint = render_component_footprint(component)
             .with_context(|| format!("Failed to render footprint for {}", out_dir.display()))?;
@@ -1882,6 +1669,7 @@ fn generate_imported_components(
             flags,
             &pin_plan,
             unresolved_footprint,
+            &part_key.schematic_properties,
         )
         .with_context(|| format!("Failed to render .zen for {}", out_dir.display()))?;
 
@@ -1948,135 +1736,10 @@ fn generate_imported_components(
         }
     }
 
-    let resistor_module_ident = if promoted
-        .values()
-        .any(|p| p.kind == PromotedPassiveKind::Resistor)
-    {
-        Some(alloc_unique_module_ident(
-            "Resistor",
-            &mut used_module_idents,
-        ))
-    } else {
-        None
-    };
-    let capacitor_module_ident = if promoted
-        .values()
-        .any(|p| p.kind == PromotedPassiveKind::Capacitor)
-    {
-        Some(alloc_unique_module_ident(
-            "Capacitor",
-            &mut used_module_idents,
-        ))
-    } else {
-        None
-    };
-
-    if let Some(ident) = resistor_module_ident.as_ref() {
-        if module_decls
-            .insert(ident.clone(), "@stdlib/generics/Resistor.zen".to_string())
-            .is_some()
-        {
-            anyhow::bail!("Duplicate module declaration generated for {ident}");
-        }
-        module_io_pins.insert(
-            ident.clone(),
-            BTreeMap::from([
-                (
-                    "P1".to_string(),
-                    BTreeSet::from([KiCadPinNumber::from("1".to_string())]),
-                ),
-                (
-                    "P2".to_string(),
-                    BTreeSet::from([KiCadPinNumber::from("2".to_string())]),
-                ),
-            ]),
-        );
-        module_skip_defaults.insert(
-            ident.clone(),
-            ModuleSkipDefaults {
-                include_skip_bom: true,
-                skip_bom_default: false,
-                include_skip_pos: false,
-                skip_pos_default: false,
-            },
-        );
-    }
-    if let Some(ident) = capacitor_module_ident.as_ref() {
-        if module_decls
-            .insert(ident.clone(), "@stdlib/generics/Capacitor.zen".to_string())
-            .is_some()
-        {
-            anyhow::bail!("Duplicate module declaration generated for {ident}");
-        }
-        module_io_pins.insert(
-            ident.clone(),
-            BTreeMap::from([
-                (
-                    "P1".to_string(),
-                    BTreeSet::from([KiCadPinNumber::from("1".to_string())]),
-                ),
-                (
-                    "P2".to_string(),
-                    BTreeSet::from([KiCadPinNumber::from("2".to_string())]),
-                ),
-            ]),
-        );
-        module_skip_defaults.insert(
-            ident.clone(),
-            ModuleSkipDefaults {
-                include_skip_bom: true,
-                skip_bom_default: false,
-                include_skip_pos: false,
-                skip_pos_default: false,
-            },
-        );
-    }
-
-    for (anchor, passive) in promoted {
-        let module_ident = match passive.kind {
-            PromotedPassiveKind::Resistor => resistor_module_ident.as_ref(),
-            PromotedPassiveKind::Capacitor => capacitor_module_ident.as_ref(),
-        }
-        .cloned()
-        .context("Missing promoted passive module ident")?;
-
-        if anchor_to_module_ident
-            .insert(anchor.clone(), module_ident)
-            .is_some()
-        {
-            anyhow::bail!(
-                "Duplicate component instance mapping for {}",
-                anchor.pcb_path()
-            );
-        }
-        let component_name = match passive.kind {
-            PromotedPassiveKind::Resistor => "R",
-            PromotedPassiveKind::Capacitor => "C",
-        };
-        if anchor_to_component_name
-            .insert(anchor.clone(), component_name.to_string())
-            .is_some()
-        {
-            anyhow::bail!(
-                "Duplicate component instance name mapping for {}",
-                anchor.pcb_path()
-            );
-        }
-        expected_pins_by_anchor.insert(
-            anchor.clone(),
-            BTreeSet::from([
-                KiCadPinNumber::from("1".to_string()),
-                KiCadPinNumber::from("2".to_string()),
-            ]),
-        );
-        anchor_to_config_args.insert(anchor, passive.config_args);
-    }
-
     Ok(GeneratedComponents {
         module_decls: module_decls.into_iter().collect(),
         anchor_to_module_ident,
         anchor_to_component_name,
-        anchor_to_config_args,
         module_io_pins,
         module_skip_defaults,
         expected_pins_by_anchor,
@@ -2133,8 +1796,23 @@ fn explicit_manufacturer(component: &ImportComponentData) -> Option<&str> {
     )
 }
 
-fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
+fn derive_part_key(
+    component: &ImportComponentData,
+    symbol_definition: String,
+) -> Result<ImportPartKey> {
     let props = component.best_properties();
+    for name in ["Value", "Description", "Footprint"] {
+        anyhow::ensure!(
+            component
+                .schematic
+                .iter()
+                .flat_map(|schematic| schematic.units.values())
+                .all(|unit| unit.properties.get(name)
+                    == props.and_then(|properties| properties.get(name))),
+            "Component {} has differing {name} across schematic units; per-unit display fields are not supported",
+            component.netlist.refdes.as_str()
+        );
+    }
 
     let mpn = explicit_mpn(component).map(str::to_string);
     let manufacturer = explicit_manufacturer(component).map(str::to_string);
@@ -2149,13 +1827,6 @@ fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
         .schematic
         .as_ref()
         .and_then(|s| s.units.values().find_map(|u| u.lib_id.clone()));
-    let lib_name = component.schematic.as_ref().and_then(|schematic| {
-        schematic.units.values().find_map(|unit| {
-            unit.lib_name
-                .as_ref()
-                .map(|name| KiCadLibId::from(name.clone()))
-        })
-    });
 
     let value = component
         .netlist
@@ -2164,14 +1835,30 @@ fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
         .or_else(|| props.and_then(|p| p.get("Value")).cloned())
         .or_else(|| props.and_then(|p| p.get("Val")).cloned());
 
-    ImportPartKey {
+    // Parts may share a generated module only when all persisted display fields agree.
+    let schematic_properties = props
+        .into_iter()
+        .flat_map(|properties| properties.iter())
+        .filter(|(name, _)| matches!(name.as_str(), "Value" | "Description" | "Footprint"))
+        .map(|(name, value)| {
+            let name = if name == "Description" {
+                "schematic_description"
+            } else {
+                name
+            };
+            (name.to_string(), value.clone())
+        })
+        .collect();
+
+    Ok(ImportPartKey {
         mpn,
         manufacturer,
         footprint,
         lib_id,
-        lib_name,
+        symbol_definition,
         value,
-    }
+        schematic_properties,
+    })
 }
 
 fn derive_part_name(part_key: &ImportPartKey, component: &ImportComponentData) -> String {
@@ -2222,41 +1909,69 @@ struct RenderedComponentSymbol {
     symbol: pcb_eda::Symbol,
 }
 
-fn render_component_symbol(
-    component_name: &str,
+fn component_symbol_definition(
     component: &ImportComponentData,
-    schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
-) -> Result<RenderedComponentSymbol> {
-    let unit = component
+    document: &pcb_kicad_sch::SchDocument,
+    sheet_tree: &ImportSheetTree,
+) -> Result<pcb_kicad_sch::SymbolDefinition> {
+    let mut definition = None;
+    for key in component
         .schematic
         .as_ref()
-        .and_then(|s| s.units.values().next());
-
-    let lib_id = unit.and_then(|u| {
-        u.lib_name
-            .as_deref()
-            .map(|n| KiCadLibId::from(n.to_string()))
-    });
-    let lib_id = lib_id
-        .filter(|k| schematic_lib_symbols.contains_key(k))
-        .or_else(|| unit.and_then(|u| u.lib_id.clone()));
-
-    let Some(lib_id) = lib_id else {
-        anyhow::bail!(
-            "Missing schematic lib_id/lib_name for {}",
+        .context("Imported component has no schematic")?
+        .units
+        .keys()
+    {
+        let sheet_path = KiCadSheetPath::from_sheetpath_tstamps(&key.sheetpath_tstamps);
+        let file = sheet_tree
+            .nodes
+            .get(&sheet_path)
+            .and_then(|sheet| sheet.schematic_file.as_ref())
+            .context("Imported symbol has no source sheet")?;
+        let page = document
+            .pages
+            .iter()
+            .find(|page| page.file_name.as_deref().map(Path::new) == Some(file.as_path()))
+            .context("Imported symbol source sheet was not loaded")?;
+        let symbol = page
+            .items
+            .iter()
+            .find_map(|item| match item {
+                pcb_kicad_sch::SchItem::Symbol(symbol) if symbol.id == key.symbol_uuid => {
+                    Some(symbol)
+                }
+                _ => None,
+            })
+            .context("Imported symbol was not found in its source sheet")?;
+        let cached = page
+            .library
+            .definitions
+            .get(symbol.library_key())
+            .with_context(|| {
+                format!(
+                    "Missing embedded lib_symbol {} for {} in {}",
+                    symbol.library_key(),
+                    component.netlist.refdes.as_str(),
+                    file.display()
+                )
+            })?;
+        // Extract the actual cache content, but keep the external library identity.
+        let cached = cached.renamed(&symbol.lib_id)?;
+        anyhow::ensure!(
+            definition
+                .as_ref()
+                .is_none_or(|previous| previous == &cached),
+            "Component {} uses different embedded definitions across units",
             component.netlist.refdes.as_str()
         );
-    };
+        definition = Some(cached);
+    }
+    definition.context("Imported component has no symbol units")
+}
 
-    let Some(sym) = schematic_lib_symbols.get(&lib_id) else {
-        anyhow::bail!(
-            "Missing embedded lib_symbol {} for {}",
-            lib_id.as_str(),
-            component.netlist.refdes.as_str()
-        );
-    };
-
-    let library_text = pcb_eda::kicad::symbol_library::wrap_symbol_as_library(sym, "pcb import");
+fn render_component_symbol(component_name: &str, sym: &str) -> Result<RenderedComponentSymbol> {
+    let library_text =
+        format!("(kicad_symbol_lib (version 20251024) (generator pcb_import)\n{sym}\n)\n");
     let parsed = pcb_eda::SymbolLibrary::from_string(&library_text, "kicad_sym")
         .context("Failed to parse embedded KiCad symbol as a symbol library")?;
     let symbol = parsed
@@ -2648,6 +2363,7 @@ fn render_component_zen(
     flags: ImportPartFlags,
     pin_plan: &PhysicalPinPlan,
     unresolved_footprint: Option<&str>,
+    properties: &BTreeMap<String, String>,
 ) -> Result<RenderedComponentZen> {
     let pins = pin_plan
         .bindings
@@ -2671,6 +2387,7 @@ fn render_component_zen(
         },
         &pins,
         unresolved_footprint,
+        properties,
     )
     .context("Failed to generate component .zen")?;
 
@@ -2761,11 +2478,7 @@ fn build_imported_instance_calls_for_instances(
             dnp,
             skip_bom: skip_bom_override,
             skip_pos: skip_pos_override,
-            config_args: generated_components
-                .anchor_to_config_args
-                .get(anchor)
-                .cloned()
-                .unwrap_or_default(),
+            config_args: BTreeMap::new(),
             io_nets,
         });
     }
@@ -2854,9 +2567,7 @@ fn alloc_unique_fs_segment(base: &str, used_ci: &mut BTreeSet<String>) -> String
 
 #[cfg(test)]
 mod tests {
-    use super::schematic_types::{ImportSchematicPositionComment, ImportSchematicTargetKind};
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn imported_net_names_are_inferred_only_when_identical() {
@@ -3028,23 +2739,6 @@ mod tests {
         }
     }
 
-    fn make_unit(unit: Option<i64>, at: Option<ImportSchematicAt>) -> ImportSchematicUnit {
-        ImportSchematicUnit {
-            lib_name: None,
-            lib_id: None,
-            unit,
-            at,
-            mirror: None,
-            in_bom: None,
-            on_board: None,
-            dnp: None,
-            exclude_from_sim: None,
-            instance_path: None,
-            properties: BTreeMap::new(),
-            pins: None,
-        }
-    }
-
     fn make_component(
         refdes: &str,
         units: BTreeMap<KiCadUuidPathKey, ImportSchematicUnit>,
@@ -3078,7 +2772,6 @@ mod tests {
             module_decls: Vec::new(),
             anchor_to_module_ident: BTreeMap::new(),
             anchor_to_component_name,
-            anchor_to_config_args: BTreeMap::new(),
             module_io_pins: BTreeMap::new(),
             module_skip_defaults: BTreeMap::new(),
             expected_pins_by_anchor: BTreeMap::new(),
@@ -3418,6 +3111,7 @@ mod tests {
             },
             &plan,
             None,
+            &BTreeMap::new(),
         )
         .unwrap();
         assert_eq!(rendered.filename, "USB_DEVICE__VARIANT.zen");
@@ -3441,6 +3135,7 @@ mod tests {
                 io_pins: BTreeMap::new(),
             },
             Some("Missing:Footprint"),
+            &BTreeMap::new(),
         )
         .unwrap();
 
@@ -3449,668 +3144,5 @@ mod tests {
                 .zen_text
                 .contains("footprint = \"Missing:Footprint\"")
         );
-    }
-
-    #[test]
-    fn passive_promotion_requires_physical_pins_one_and_two() {
-        let standard = pcb_eda::Symbol {
-            pins: vec![make_pin("~", "1", None), make_pin("~", "2", None)],
-            ..Default::default()
-        };
-        let custom = pcb_eda::Symbol {
-            pins: vec![make_pin("~", "A", None), make_pin("~", "K", None)],
-            ..Default::default()
-        };
-        assert!(has_standard_promoted_passive_pins(&standard));
-        assert!(!has_standard_promoted_passive_pins(&custom));
-    }
-
-    fn make_position_comment(
-        x: f64,
-        y: f64,
-        rot: f64,
-        unit: Option<i64>,
-        lib_id: Option<&str>,
-        mirror: Option<&str>,
-        target_kind: ImportSchematicTargetKind,
-    ) -> ImportSchematicPositionComment {
-        ImportSchematicPositionComment {
-            at: ImportSchematicAt {
-                x,
-                y,
-                rot: Some(rot),
-            },
-            unit,
-            mirror: mirror.map(|m| m.to_string()),
-            lib_name: None,
-            lib_id: lib_id.map(|id| KiCadLibId::from(id.to_string())),
-            target_kind,
-        }
-    }
-
-    #[test]
-    fn flat_positions_emit_per_unit_keys_for_multi_unit_components() {
-        let anchor = make_anchor("anchor");
-        let other = make_anchor("other");
-
-        let mut units = BTreeMap::new();
-        units.insert(
-            other,
-            make_unit(
-                Some(5),
-                Some(ImportSchematicAt {
-                    x: 10.0,
-                    y: 20.0,
-                    rot: Some(90.0),
-                }),
-            ),
-        );
-        units.insert(
-            anchor.clone(),
-            make_unit(
-                Some(6),
-                Some(ImportSchematicAt {
-                    x: 30.0,
-                    y: 40.0,
-                    rot: Some(180.0),
-                }),
-            ),
-        );
-
-        let mut component = make_component("J15", units);
-        component.netlist.unit_pcb_paths = vec![make_anchor("u5"), make_anchor("u6")];
-
-        let refs = BTreeMap::from([(KiCadRefDes::from("J15".to_string()), "J15".to_string())]);
-        let generated =
-            make_generated_components(BTreeMap::from([(anchor.clone(), "2309413_1".to_string())]));
-
-        let positions =
-            build_flat_component_schematic_positions(&[(&anchor, &component)], &refs, &generated);
-        let pos_u5 = positions
-            .get("J15.2309413_1@U5")
-            .expect("missing unit-5 position");
-        assert_eq!(pos_u5.at.x, 10.0);
-        assert_eq!(pos_u5.at.y, 20.0);
-        assert_eq!(pos_u5.at.rot, Some(90.0));
-
-        let pos_u6 = positions
-            .get("J15.2309413_1@U6")
-            .expect("missing unit-6 position");
-        assert_eq!(pos_u6.at.x, 30.0);
-        assert_eq!(pos_u6.at.y, 40.0);
-        assert_eq!(pos_u6.at.rot, Some(180.0));
-    }
-
-    #[test]
-    fn flat_positions_keep_unsuffixed_key_for_single_unit_components() {
-        let anchor = make_anchor("anchor");
-
-        let mut units = BTreeMap::new();
-        units.insert(
-            anchor.clone(),
-            make_unit(
-                Some(1),
-                Some(ImportSchematicAt {
-                    x: 30.0,
-                    y: 40.0,
-                    rot: Some(180.0),
-                }),
-            ),
-        );
-
-        let component = make_component("R1", units);
-        let refs = BTreeMap::from([(KiCadRefDes::from("R1".to_string()), "R1".to_string())]);
-        let generated =
-            make_generated_components(BTreeMap::from([(anchor.clone(), "R".to_string())]));
-
-        let positions =
-            build_flat_component_schematic_positions(&[(&anchor, &component)], &refs, &generated);
-        assert!(positions.contains_key("R1.R"));
-        assert!(!positions.contains_key("R1.R@U1"));
-    }
-
-    #[test]
-    fn flat_positions_emit_power_net_symbols_with_monotonic_counters() {
-        let sheet_path = KiCadSheetPath::root();
-
-        let module_plan = ImportModuleBoundaryNets {
-            sheet_name: None,
-            nets_defined_here: BTreeSet::from([KiCadNetName::from("GND".to_string())]),
-            nets_io_here: BTreeSet::from([KiCadNetName::from("+1V8".to_string())]),
-        };
-
-        let net_decls = ImportedNetDecls {
-            decls: Vec::new(),
-            var_ident_by_kicad_name: BTreeMap::from([(
-                KiCadNetName::from("+1V8".to_string()),
-                "NET_1V8".to_string(),
-            )]),
-            zener_name_by_kicad_name: BTreeMap::from([
-                (KiCadNetName::from("GND".to_string()), "GND".to_string()),
-                (KiCadNetName::from("+1V8".to_string()), "+1V8".to_string()),
-            ]),
-            kind_by_kicad_name: BTreeMap::new(),
-        };
-
-        let net_kinds_by_net = BTreeMap::from([
-            (
-                KiCadNetName::from("GND".to_string()),
-                ImportNetKindClassification {
-                    kind: ImportNetKind::Ground,
-                    reasons: BTreeSet::new(),
-                },
-            ),
-            (
-                KiCadNetName::from("+1V8".to_string()),
-                ImportNetKindClassification {
-                    kind: ImportNetKind::Power,
-                    reasons: BTreeSet::new(),
-                },
-            ),
-            (
-                KiCadNetName::from("SIG".to_string()),
-                ImportNetKindClassification {
-                    kind: ImportNetKind::Net,
-                    reasons: BTreeSet::new(),
-                },
-            ),
-        ]);
-
-        let power_symbol_decls = vec![
-            ImportSchematicPowerSymbolDecl {
-                schematic_file: PathBuf::from("root.kicad_sch"),
-                sheet_path: sheet_path.clone(),
-                symbol_uuid: Some("a".to_string()),
-                at: Some(ImportSchematicAt {
-                    x: 1.0,
-                    y: 2.0,
-                    rot: Some(90.0),
-                }),
-                mirror: Some("x".to_string()),
-                reference: Some("#PWR01".to_string()),
-                lib_id: Some(KiCadLibId::from("power:GND".to_string())),
-                value: Some("GND".to_string()),
-            },
-            ImportSchematicPowerSymbolDecl {
-                schematic_file: PathBuf::from("root.kicad_sch"),
-                sheet_path: sheet_path.clone(),
-                symbol_uuid: Some("b".to_string()),
-                at: Some(ImportSchematicAt {
-                    x: 3.0,
-                    y: 4.0,
-                    rot: Some(0.0),
-                }),
-                mirror: None,
-                reference: Some("#PWR02".to_string()),
-                lib_id: Some(KiCadLibId::from("power:GND".to_string())),
-                value: Some("GND".to_string()),
-            },
-            ImportSchematicPowerSymbolDecl {
-                schematic_file: PathBuf::from("root.kicad_sch"),
-                sheet_path: sheet_path.clone(),
-                symbol_uuid: Some("c".to_string()),
-                at: Some(ImportSchematicAt {
-                    x: 5.0,
-                    y: 6.0,
-                    rot: Some(180.0),
-                }),
-                mirror: None,
-                reference: Some("#PWR03".to_string()),
-                lib_id: Some(KiCadLibId::from("power:+1V8".to_string())),
-                value: Some("+1V8".to_string()),
-            },
-            // Non power/ground net should not be emitted.
-            ImportSchematicPowerSymbolDecl {
-                schematic_file: PathBuf::from("root.kicad_sch"),
-                sheet_path: sheet_path.clone(),
-                symbol_uuid: Some("d".to_string()),
-                at: Some(ImportSchematicAt {
-                    x: 7.0,
-                    y: 8.0,
-                    rot: Some(0.0),
-                }),
-                mirror: None,
-                reference: Some("#PWR04".to_string()),
-                lib_id: Some(KiCadLibId::from("power:SIG".to_string())),
-                value: Some("SIG".to_string()),
-            },
-        ];
-
-        let positions = build_net_symbol_positions_for_sheet(
-            &sheet_path,
-            &module_plan,
-            &net_decls,
-            &net_kinds_by_net,
-            &power_symbol_decls,
-        );
-
-        let out = append_schematic_position_comments(
-            "load(\"dummy\")\n".to_string(),
-            &positions,
-            &BTreeMap::new(),
-        );
-
-        let gnd0 = out
-            .lines()
-            .find(|line| line.starts_with("# pcb:sch GND.0 "))
-            .expect("missing GND.0 comment");
-        assert!(gnd0.contains(" x=") && gnd0.contains(" y="));
-        assert!(gnd0.contains(" rot=270"));
-        assert!(gnd0.contains(" mirror=x"));
-
-        let gnd1 = out
-            .lines()
-            .find(|line| line.starts_with("# pcb:sch GND.1 "))
-            .expect("missing GND.1 comment");
-        assert!(gnd1.contains(" x=") && gnd1.contains(" y="));
-        assert!(gnd1.contains(" rot=0"));
-        assert!(!gnd1.contains(" mirror="));
-
-        let net_1v8_0 = out
-            .lines()
-            .find(|line| line.starts_with("# pcb:sch NET_1V8.0 "))
-            .expect("missing NET_1V8.0 comment");
-        assert!(net_1v8_0.contains(" x=") && net_1v8_0.contains(" y="));
-        assert!(net_1v8_0.contains(" rot=180"));
-
-        assert!(!out.contains("# pcb:sch SIG.0 "));
-    }
-
-    #[test]
-    fn flat_positions_mark_promoted_resistor_target_kind() {
-        let anchor = make_anchor("anchor");
-
-        let mut units = BTreeMap::new();
-        units.insert(
-            anchor.clone(),
-            make_unit(
-                Some(1),
-                Some(ImportSchematicAt {
-                    x: 10.0,
-                    y: 20.0,
-                    rot: Some(90.0),
-                }),
-            ),
-        );
-
-        let component = make_component("R1", units);
-        let refs = BTreeMap::from([(KiCadRefDes::from("R1".to_string()), "R1".to_string())]);
-        let mut generated =
-            make_generated_components(BTreeMap::from([(anchor.clone(), "R".to_string())]));
-        generated
-            .anchor_to_module_ident
-            .insert(anchor.clone(), "Resistor".to_string());
-        generated.module_decls.push((
-            "Resistor".to_string(),
-            "@stdlib/generics/Resistor.zen".to_string(),
-        ));
-
-        let positions =
-            build_flat_component_schematic_positions(&[(&anchor, &component)], &refs, &generated);
-        assert_eq!(
-            positions.get("R1.R").map(|p| p.target_kind),
-            Some(ImportSchematicTargetKind::GenericResistor)
-        );
-    }
-
-    #[test]
-    fn flat_positions_prefer_anchor_unit_when_unit_numbers_collide() {
-        let anchor = make_anchor("anchor");
-        let other = make_anchor("other");
-
-        let mut units = BTreeMap::new();
-        units.insert(
-            other,
-            make_unit(
-                Some(1),
-                Some(ImportSchematicAt {
-                    x: 10.0,
-                    y: 20.0,
-                    rot: Some(90.0),
-                }),
-            ),
-        );
-        units.insert(
-            anchor.clone(),
-            make_unit(
-                Some(1),
-                Some(ImportSchematicAt {
-                    x: 30.0,
-                    y: 40.0,
-                    rot: Some(180.0),
-                }),
-            ),
-        );
-
-        let mut component = make_component("U1", units);
-        component.netlist.unit_pcb_paths = vec![make_anchor("u1"), make_anchor("u2")];
-        let refs = BTreeMap::from([(KiCadRefDes::from("U1".to_string()), "U1".to_string())]);
-        let generated =
-            make_generated_components(BTreeMap::from([(anchor.clone(), "IC".to_string())]));
-
-        let positions =
-            build_flat_component_schematic_positions(&[(&anchor, &component)], &refs, &generated);
-        let pos = positions.get("U1.IC@U1").expect("missing position");
-        assert_eq!(pos.at.x, 30.0);
-        assert_eq!(pos.at.y, 40.0);
-        assert_eq!(pos.at.rot, Some(180.0));
-    }
-
-    #[test]
-    fn flat_positions_keep_unsuffixed_key_when_only_one_unit_number_exists() {
-        let anchor = make_anchor("anchor");
-        let other = make_anchor("other");
-
-        let mut units = BTreeMap::new();
-        units.insert(
-            other,
-            make_unit(
-                Some(1),
-                Some(ImportSchematicAt {
-                    x: 10.0,
-                    y: 20.0,
-                    rot: Some(90.0),
-                }),
-            ),
-        );
-        units.insert(
-            anchor.clone(),
-            make_unit(
-                Some(1),
-                Some(ImportSchematicAt {
-                    x: 30.0,
-                    y: 40.0,
-                    rot: Some(180.0),
-                }),
-            ),
-        );
-
-        let component = make_component("U1", units);
-        let refs = BTreeMap::from([(KiCadRefDes::from("U1".to_string()), "U1".to_string())]);
-        let generated =
-            make_generated_components(BTreeMap::from([(anchor.clone(), "IC".to_string())]));
-
-        let positions =
-            build_flat_component_schematic_positions(&[(&anchor, &component)], &refs, &generated);
-        let pos = positions.get("U1.IC").expect("missing position");
-        assert_eq!(pos.at.x, 30.0);
-        assert_eq!(pos.at.y, 40.0);
-        assert_eq!(pos.at.rot, Some(180.0));
-        assert!(!positions.contains_key("U1.IC@U1"));
-    }
-
-    #[test]
-    fn appends_pcb_sch_comments_block() {
-        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
-        let positions = BTreeMap::from([(
-            "R1.R".to_string(),
-            make_position_comment(
-                10.0,
-                20.0,
-                90.0,
-                None,
-                None,
-                None,
-                ImportSchematicTargetKind::Other,
-            ),
-        )]);
-
-        let out = append_schematic_position_comments(content, &positions, &BTreeMap::new());
-        assert!(out.contains("\n\n# pcb:sch R1.R x=100.0000 y=200.0000 rot=270\n"));
-    }
-
-    #[test]
-    fn appends_pcb_sch_comments_include_mirror_axis() {
-        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
-        let positions = BTreeMap::from([(
-            "U1.IC".to_string(),
-            make_position_comment(
-                10.0,
-                20.0,
-                90.0,
-                None,
-                None,
-                Some("x"),
-                ImportSchematicTargetKind::Other,
-            ),
-        )]);
-
-        let out = append_schematic_position_comments(content, &positions, &BTreeMap::new());
-        assert!(out.contains("\n\n# pcb:sch U1.IC x=100.0000 y=200.0000 rot=270 mirror=x\n"));
-    }
-
-    #[test]
-    fn appends_pcb_sch_comments_ignore_invalid_mirror_axis() {
-        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
-        let positions = BTreeMap::from([(
-            "U1.IC".to_string(),
-            make_position_comment(
-                10.0,
-                20.0,
-                90.0,
-                None,
-                None,
-                Some("z"),
-                ImportSchematicTargetKind::Other,
-            ),
-        )]);
-
-        let out = append_schematic_position_comments(content, &positions, &BTreeMap::new());
-        assert!(out.contains("\n\n# pcb:sch U1.IC x=100.0000 y=200.0000 rot=270\n"));
-        assert!(!out.contains(" mirror=z"));
-    }
-
-    #[test]
-    fn appends_pcb_sch_comments_use_symbol_bbox_top_left() {
-        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
-        let positions = BTreeMap::from([(
-            "U1.IC".to_string(),
-            make_position_comment(
-                10.0,
-                20.0,
-                0.0,
-                Some(1),
-                Some("Demo:TestSymbol"),
-                None,
-                ImportSchematicTargetKind::Other,
-            ),
-        )]);
-
-        let schematic_lib_symbols = BTreeMap::from([(
-            KiCadLibId::from("Demo:TestSymbol".to_string()),
-            r#"(symbol "Demo:TestSymbol"
-  (symbol "TestSymbol_0_1"
-    (rectangle (start -1 -2) (end 3 4))
-  )
-)"#
-            .to_string(),
-        )]);
-
-        let out = append_schematic_position_comments(content, &positions, &schematic_lib_symbols);
-        assert!(out.contains("\n\n# pcb:sch U1.IC x=89.0000 y=159.0000 rot=0\n"));
-    }
-
-    #[test]
-    fn appends_pcb_sch_comments_use_unrotated_symbol_offset_with_rotated_symbol() {
-        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
-        let positions = BTreeMap::from([(
-            "U1.IC".to_string(),
-            make_position_comment(
-                50.0,
-                75.0,
-                90.0,
-                Some(1),
-                Some("Demo:RotSymbol"),
-                None,
-                ImportSchematicTargetKind::Other,
-            ),
-        )]);
-
-        let schematic_lib_symbols = BTreeMap::from([(
-            KiCadLibId::from("Demo:RotSymbol".to_string()),
-            r#"(symbol "Demo:RotSymbol"
-  (symbol "RotSymbol_0_1"
-    (rectangle (start -10 -5) (end 10 5))
-  )
-)"#
-            .to_string(),
-        )]);
-
-        let out = append_schematic_position_comments(content, &positions, &schematic_lib_symbols);
-        assert!(out.contains("\n\n# pcb:sch U1.IC x=399.0000 y=699.0000 rot=270\n"));
-    }
-
-    #[test]
-    fn appends_pcb_sch_comments_compensate_promoted_resistor_symbol_axis() {
-        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
-        let positions = BTreeMap::from([(
-            "R166.R".to_string(),
-            make_position_comment(
-                26.67,
-                135.89,
-                90.0,
-                Some(1),
-                Some("Demo:R0402"),
-                None,
-                ImportSchematicTargetKind::GenericResistor,
-            ),
-        )]);
-        let schematic_lib_symbols = BTreeMap::from([
-            (
-                KiCadLibId::from("Demo:R0402".to_string()),
-                r#"(symbol "Demo:R0402"
-  (symbol "R0402_1_1"
-    (pin passive line (at 0 0 0) (length 0.635) (name "~") (number "1"))
-    (pin passive line (at 5.08 0 180) (length 0.635) (name "~") (number "2"))
-  )
-)"#
-                .to_string(),
-            ),
-            (
-                KiCadLibId::from("Device:R".to_string()),
-                r#"(symbol "Device:R"
-  (symbol "R_0_1"
-    (rectangle (start -1 -2) (end 3 4))
-  )
-)"#
-                .to_string(),
-            ),
-        ]);
-
-        let out = append_schematic_position_comments(content, &positions, &schematic_lib_symbols);
-        assert!(out.contains("\n\n# pcb:sch R166.R x=285.7000 y=1287.1000 rot=180\n"));
-    }
-
-    #[test]
-    fn appends_pcb_sch_comments_no_passive_axis_compensation_when_already_aligned() {
-        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
-        let positions = BTreeMap::from([(
-            "R1.R".to_string(),
-            make_position_comment(
-                10.0,
-                20.0,
-                90.0,
-                Some(1),
-                Some("Demo:VertRes"),
-                None,
-                ImportSchematicTargetKind::GenericResistor,
-            ),
-        )]);
-        let schematic_lib_symbols = BTreeMap::from([(
-            KiCadLibId::from("Demo:VertRes".to_string()),
-            r#"(symbol "Demo:VertRes"
-  (symbol "VertRes_1_1"
-    (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
-    (pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))
-  )
-)"#
-            .to_string(),
-        )]);
-
-        let out = append_schematic_position_comments(content, &positions, &schematic_lib_symbols);
-        assert!(out.contains("\n\n# pcb:sch R1.R "));
-        assert!(out.contains(" rot=270\n"));
-    }
-
-    #[test]
-    fn appends_pcb_sch_comments_compensate_promoted_resistor_pin_order() {
-        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
-        let positions = BTreeMap::from([(
-            "R2.R".to_string(),
-            make_position_comment(
-                26.67,
-                135.89,
-                90.0,
-                Some(1),
-                Some("Demo:R0402Reversed"),
-                None,
-                ImportSchematicTargetKind::GenericResistor,
-            ),
-        )]);
-        let schematic_lib_symbols = BTreeMap::from([
-            (
-                KiCadLibId::from("Demo:R0402Reversed".to_string()),
-                r#"(symbol "Demo:R0402Reversed"
-  (symbol "R0402Reversed_1_1"
-    (pin passive line (at 5.08 0 180) (length 0.635) (name "~") (number "1"))
-    (pin passive line (at 0 0 0) (length 0.635) (name "~") (number "2"))
-  )
-)"#
-                .to_string(),
-            ),
-            (
-                KiCadLibId::from("Device:R".to_string()),
-                r#"(symbol "Device:R"
-  (symbol "R_0_1"
-    (rectangle (start -1 -2) (end 3 4))
-  )
-)"#
-                .to_string(),
-            ),
-        ]);
-
-        let out = append_schematic_position_comments(content, &positions, &schematic_lib_symbols);
-        assert!(out.contains("\n\n# pcb:sch R2.R x=265.7000 y=1307.1000 rot=0\n"));
-    }
-
-    #[test]
-    fn appends_pcb_sch_comments_compensate_promoted_resistor_with_mirror() {
-        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
-        let positions = BTreeMap::from([(
-            "R162.R".to_string(),
-            make_position_comment(
-                40.64,
-                63.5,
-                0.0,
-                Some(1),
-                Some("Demo:R0402"),
-                Some("y"),
-                ImportSchematicTargetKind::GenericResistor,
-            ),
-        )]);
-        let schematic_lib_symbols = BTreeMap::from([
-            (
-                KiCadLibId::from("Demo:R0402".to_string()),
-                r#"(symbol "Demo:R0402"
-  (symbol "R0402_1_1"
-    (pin passive line (at 0 0 0) (length 0.635) (name "~") (number "1"))
-    (pin passive line (at 5.08 0 180) (length 0.635) (name "~") (number "2"))
-  )
-)"#
-                .to_string(),
-            ),
-            (
-                KiCadLibId::from("Device:R".to_string()),
-                r#"(symbol "Device:R"
-  (symbol "R_0_1"
-    (rectangle (start -1 -2) (end 3 4))
-  )
-)"#
-                .to_string(),
-            ),
-        ]);
-
-        let out = append_schematic_position_comments(content, &positions, &schematic_lib_symbols);
-        assert!(out.contains("\n\n# pcb:sch R162.R x=364.6000 y=624.0000 rot=270 mirror=y\n"));
     }
 }

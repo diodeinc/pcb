@@ -15,12 +15,15 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Import KiCad designs as Quiche-compatible persistent schematics, preserving original wiring, hierarchy, and multi-unit symbols instead of reconstructing placement from comments.
+- Report schematic/PCB parity mismatches during import without blocking conversion, retaining the existing PCB layout.
 - Prefer `Board(path=...)`, retaining `layout_path` as a compatibility alias and rejecting empty paths. New board templates enable persistent schematics while keeping `layout_path` for older compilers.
 - Speed up schematic connectivity analysis and repair planning with indexed terminal matching and verified batches of local wire cuts.
 - Speed up region construction and unions on layers made of many small, locally overlapping features such as silkscreen and solder mask.
 
 ### Fixed
 
+- Preserve off-board pinless documentation symbols during schematic apply without hiding unbound electrical components.
 - Preserve KiCad embedded symbol cache aliases during schematic apply without dangling references or collapsing distinct definitions.
 - Avoid redundant explicit net names in imported boards and sheet modules while preserving names that differ from their assigned identifiers.
 - Compose IPC-2581 shapes independently with local cutouts and ordered voids, preventing artificial slits and false DFM width violations.

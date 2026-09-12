@@ -9,6 +9,7 @@ pub(super) fn validate_generated_zen(
     ir: &ImportIr,
     expected_pins_by_refdes: &BTreeMap<KiCadRefDes, BTreeSet<KiCadPinNumber>>,
     instance_name_by_refdes: &BTreeMap<KiCadRefDes, String>,
+    not_connected_nets: &BTreeSet<KiCadNetName>,
 ) -> Result<()> {
     // Inverted once: the built instance path carries generated instance names, and this is the only
     // exact way back to the source refdes.
@@ -63,6 +64,7 @@ pub(super) fn validate_generated_zen(
         &schematic,
         expected_pins_by_refdes,
         &refdes_by_instance_name,
+        not_connected_nets,
     )
     .context("Generated Zener is not electrically compatible with the KiCad schematic")?;
 
@@ -70,6 +72,7 @@ pub(super) fn validate_generated_zen(
         "Validated generated Zener against {} physical-pin partition(s)",
         partition_count,
     );
+    super::schematic::bind_imported_schematic(board, ir, &schematic, &refdes_by_instance_name)?;
     Ok(())
 }
 
@@ -82,8 +85,9 @@ fn verify_physical_partitions(
     schematic: &Schematic,
     expected_pins_by_refdes: &BTreeMap<KiCadRefDes, BTreeSet<KiCadPinNumber>>,
     refdes_by_instance_name: &BTreeMap<String, String>,
+    not_connected_nets: &BTreeSet<KiCadNetName>,
 ) -> Result<usize> {
-    let source_partitions = source_partitions(ir)?;
+    let source_partitions = source_partitions(ir, not_connected_nets)?;
     let source_endpoints = source_partitions
         .iter()
         .flat_map(|partition| partition.iter().cloned())
@@ -118,9 +122,12 @@ fn verify_physical_partitions(
     )
 }
 
-fn source_partitions(ir: &ImportIr) -> Result<PhysicalPartitions> {
+fn source_partitions(
+    ir: &ImportIr,
+    not_connected_nets: &BTreeSet<KiCadNetName>,
+) -> Result<PhysicalPartitions> {
     let mut partitions = PhysicalPartitions::new();
-    for net in ir.nets.values() {
+    for (name, net) in &ir.nets {
         let mut partition = PhysicalPartition::new();
         for port in &net.ports {
             let component = ir.components.get(&port.component).with_context(|| {
@@ -134,7 +141,17 @@ fn source_partitions(ir: &ImportIr) -> Result<PhysicalPartitions> {
                 port.pin.as_str().to_string(),
             ));
         }
-        if !partition.is_empty() {
+        if not_connected_nets.contains(name) {
+            // KiCad exports stacked marked pads as one geometric group. They
+            // are intentional opens, not a shared Zener NC net. Normalize only
+            // these geometry-proven groups, retaining every physical endpoint.
+            // The extracted source netlist and native drawing stay untouched.
+            partitions.extend(
+                partition
+                    .into_iter()
+                    .map(|endpoint| BTreeSet::from([endpoint])),
+            );
+        } else if !partition.is_empty() {
             partitions.insert(partition);
         }
     }
@@ -286,7 +303,7 @@ fn built_partitions(
 }
 
 /// Map a built component back to the source reference designator it came from.
-fn source_refdes_for_instance(
+pub(super) fn source_refdes_for_instance(
     instance_ref: &InstanceRef,
     refdes_by_instance_name: &BTreeMap<String, String>,
 ) -> Option<String> {

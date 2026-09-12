@@ -51,9 +51,10 @@ pub(super) fn extract_ir(
             &validation.summary.selected,
             &mut netlist.components,
         )?;
-    } else {
-        resolve_standalone_footprints(selection, staged_root, &mut netlist.components)?;
     }
+    // Missing PCB footprints are source parity findings, not missing schematic components.
+    // Reuse standalone resolution without replacing any board-embedded geometry.
+    resolve_standalone_footprints(selection, staged_root, &mut netlist.components)?;
 
     Ok(ImportIr {
         components: netlist.components,
@@ -622,7 +623,10 @@ fn resolve_standalone_footprints(
     );
     let mut resolved_by_fpid: BTreeMap<String, Option<ResolvedFootprint>> = BTreeMap::new();
 
-    for component in components.values_mut() {
+    for component in components
+        .values_mut()
+        .filter(|component| component.layout.is_none())
+    {
         let Some(fpid) = component
             .netlist
             .footprint
