@@ -42,6 +42,8 @@ pub struct PhysicalConnectivity {
 pub struct PhysicalIsland {
     pub items: BTreeSet<ConnectivityItemRef>,
     pub named_drivers: BTreeMap<String, BTreeSet<ConnectivityItemRef>>,
+    /// Native hidden-power names and their owners, not removable schematic items.
+    pub implicit_power_drivers: BTreeMap<String, BTreeSet<SymbolLocation>>,
     pub names: BTreeSet<String>,
     pub terminals: BTreeSet<Terminal>,
     pub(crate) pins: BTreeSet<PhysicalPinRef>,
@@ -1100,7 +1102,6 @@ fn connection_groups(
                         .pin_terminals
                         .insert(pin.clone(), terminal.clone());
                 }
-                provenance.pins.extend(item.pin);
                 if let Some(driver) = item.driver {
                     if driver.role == DriverNameRole::NetName {
                         names.insert(driver.net_name().to_string());
@@ -1111,11 +1112,22 @@ fn connection_groups(
                                 .or_default()
                                 .insert(source.clone());
                         }
+                        if let Some(pin) = &item.pin {
+                            provenance
+                                .implicit_power_drivers
+                                .entry(driver.name.clone())
+                                .or_default()
+                                .insert(SymbolLocation {
+                                    page_id: pin.page_id.clone(),
+                                    symbol_id: pin.symbol_id.clone(),
+                                });
+                        }
                     }
                     if driver.kind == DriverKind::Global {
                         global_names.insert(driver.name);
                     }
                 }
+                provenance.pins.extend(item.pin);
                 terminals.extend(item.terminal);
                 match item.hierarchy {
                     Some(HierarchyEndpoint::Parent { name }) => {
