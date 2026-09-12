@@ -2859,6 +2859,75 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn imported_net_names_are_inferred_only_when_identical() {
+        use crate::codegen::board::{
+            RenderImportedBoardArgs, render_imported_board, render_imported_sheet_module,
+        };
+
+        let names = [
+            ("SWITCH_INTERRUPT_N", ImportNetKind::Net),
+            ("GND", ImportNetKind::Ground),
+            ("VCC", ImportNetKind::Power),
+            ("+3V3", ImportNetKind::Power),
+            ("Signal.Name", ImportNetKind::Net),
+            ("Signal_Name", ImportNetKind::Net),
+            ("FOO-BAR", ImportNetKind::Net),
+            ("FOO_BAR", ImportNetKind::Net),
+        ];
+        let nets = names
+            .iter()
+            .map(|(name, _)| {
+                (
+                    KiCadNetName::from(name.to_string()),
+                    ImportNetData {
+                        ports: BTreeSet::new(),
+                    },
+                )
+            })
+            .collect();
+        let kinds = names
+            .into_iter()
+            .map(|(name, kind)| {
+                (
+                    KiCadNetName::from(name.to_string()),
+                    ImportNetKindClassification {
+                        kind,
+                        reasons: BTreeSet::new(),
+                    },
+                )
+            })
+            .collect();
+        let decls = build_net_decls(&nets, &BTreeSet::new(), &kinds);
+        let board = render_imported_board(RenderImportedBoardArgs {
+            board_name: "TestBoard",
+            copper_layers: 2,
+            design_rules: None,
+            stackup: None,
+            net_decls: &decls.decls,
+            module_decls: &[],
+            instance_calls: &[],
+        });
+        let sheet = render_imported_sheet_module("TestSheet", &[], &decls.decls, &[], &[]);
+        for source in [board, sheet] {
+            for expected in [
+                "SWITCH_INTERRUPT_N = Net()",
+                "GND = Ground()",
+                "VCC = Power()",
+                "NET_3V3 = Power(\"+3V3\")",
+                "SIGNAL_NAME = Net(\"Signal_Name\")",
+                "SIGNAL_NAME_2 = Net(\"Signal_Name_2\")",
+                "FOO_BAR = Net(\"FOO-BAR\")",
+                "FOO_BAR_2 = Net(\"FOO_BAR\")",
+            ] {
+                assert!(
+                    source.lines().any(|line| line == expected),
+                    "missing {expected:?} in:\n{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn imported_layout_uses_allocated_net_names() {
         let names = ["Signal.Name", "Signal_Name", "Signal_Name_2", "GND"];
         let nets = names
