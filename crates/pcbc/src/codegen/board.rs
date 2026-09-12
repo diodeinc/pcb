@@ -184,7 +184,9 @@ fn render_imported_module_body(
             out.push_str(" = ");
             out.push_str(ctor);
             out.push('(');
-            out.push_str(&starlark::string(&net.name));
+            if net.name != net.ident {
+                out.push_str(&starlark::string(&net.name));
+            }
             out.push_str(")\n");
         }
         out.push('\n');
