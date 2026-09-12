@@ -140,6 +140,7 @@ impl ParsedSymbolDefinition {
                             section.unit,
                             section.body_style,
                             pin.name.clone(),
+                            pin.number.clone(),
                             pin.numbers.clone(),
                             pin.electrical_type.clone(),
                             pin.hidden,

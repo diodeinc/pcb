@@ -206,10 +206,22 @@ fn stale_alias_pin_or_unit_interfaces_are_refreshed() {
         .unwrap();
     let base_id = managed(&document, "R1.R").lib_id.clone();
     let base = document.pages[0].library.definitions[&base_id].clone();
-    for extra_unit in [false, true] {
+    // Equivalent expanded numbers still need identical raw pin-instance keys.
+    for replacement_number in [Some("99"), Some("[1]"), Some("[1-1]"), None] {
         let mut saved = document.clone();
         let mut alias = with_name(&base, "Native_1");
-        if extra_unit {
+        if let Some(number) = replacement_number {
+            let raw = format_tree(&alias.sexpr, FormatMode::Normal);
+            let changed = raw.replace("(number \"1\"", &format!("(number \"{number}\""));
+            assert_ne!(raw, changed);
+            alias = SymbolDefinition::from_kicad_symbol_sexpr(&changed).unwrap();
+            managed_mut(&mut saved, "R1.R")
+                .pins
+                .iter_mut()
+                .find(|pin| pin.number == "1")
+                .unwrap()
+                .number = number.into();
+        } else {
             alias.sexpr.as_list_mut().unwrap().push(
                 pcb_sexpr::parse(
                     r#"(symbol "Native_1_2_1" (pin passive line (at 0 0 0)
@@ -217,11 +229,6 @@ fn stale_alias_pin_or_unit_interfaces_are_refreshed() {
                 )
                 .unwrap(),
             );
-        } else {
-            let raw = format_tree(&alias.sexpr, FormatMode::Normal);
-            let changed = raw.replace("(number \"1\"", "(number \"99\"");
-            assert_ne!(raw, changed);
-            alias = SymbolDefinition::from_kicad_symbol_sexpr(&changed).unwrap();
         }
         managed_mut(&mut saved, "R1.R").lib_name = Some(alias.lib_id.clone());
         saved.pages[0]
@@ -233,6 +240,20 @@ fn stale_alias_pin_or_unit_interfaces_are_refreshed() {
         let symbol = managed(&applied, "R1.R");
         assert_eq!(symbol.lib_id, base_id);
         assert_eq!(
+            symbol
+                .pins
+                .iter()
+                .map(|pin| &pin.number)
+                .collect::<BTreeSet<_>>(),
+            applied.pages[0].library.definitions[symbol.library_key()]
+                .placed_pins(symbol)
+                .unwrap()
+                .iter()
+                .map(|pin| &pin.number)
+                .collect::<BTreeSet<_>>(),
+            "pin instances must reference raw numbers in the retained definition"
+        );
+        assert_eq!(
             applied.pages[0].library.definitions[symbol.library_key()],
             base
         );
@@ -242,10 +263,15 @@ fn stale_alias_pin_or_unit_interfaces_are_refreshed() {
                 .definitions
                 .contains_key("Native_1")
         );
+        let source = applied.to_kicad_sch().unwrap();
+        let reopened = SchDocument::from_kicad_sch(&source).unwrap();
+        let second = plan_reconciliation(Some(&reopened), &netlist, "Alias.kicad_sch").unwrap();
+        assert!(second.is_empty());
         assert!(
-            plan_reconciliation(Some(&applied), &netlist, "Alias.kicad_sch")
+            patch_page_source(&source, &second.apply(Some(&reopened)).unwrap().pages[0])
                 .unwrap()
-                .is_empty()
+                .is_none(),
+            "second apply must be byte unchanged"
         );
     }
 }
