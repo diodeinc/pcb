@@ -529,7 +529,9 @@ where
     Ok(())
 }
 
-/// Merge a feature's identically painted paths into one compound path.
+/// Merge a feature's identically stroked paths into one compound path.
+/// Independent fills must keep their path boundaries: concatenation can cancel
+/// overlaps under both even-odd and nonzero winding rules.
 pub fn compose_feature_paths<S, L>(doc: &mut Document<S, L>) {
     for feature_index in 0..doc.features.len() {
         let span = doc.features[feature_index].paths;
@@ -539,7 +541,7 @@ pub fn compose_feature_paths<S, L>(doc: &mut Document<S, L>) {
 
         let paths = span.slice(&doc.arena.paths);
         let paint = paths[0].paint;
-        if !paths.iter().all(|path| path.paint == paint) {
+        if !matches!(paint, Paint::Stroke(_)) || !paths.iter().all(|path| path.paint == paint) {
             continue;
         }
 
@@ -1009,31 +1011,21 @@ fn layer_cutout_sets<S, L>(
         .collect())
 }
 
-/// The regularized filled image of a feature's fill paths, grouped by fill
-/// rule before the final union.
+/// Union each fill path's independently evaluated image, retaining local holes.
 fn feature_filled_region<S, L>(
     doc: &Document<S, L>,
     feature: &Feature<S>,
     resolution: Resolution,
 ) -> Result<ContourSet, AccuracyError> {
-    let mut groups: HashMap<FillRule, Vec<ContourBuf>> = HashMap::new();
-    for path in feature.paths.slice(&doc.arena.paths) {
-        if let Some(rule) = path.fill_rule() {
-            groups
-                .entry(rule)
-                .or_default()
-                .extend(doc.arena.path_contours(path));
-        }
-    }
-
-    let mut composer = region::PaintComposer::new(resolution);
-    for (fill_rule, contours) in groups {
-        composer.push(
-            Polarity::Dark,
-            ContourSet::from_contours(&contours, fill_rule, resolution.strict())?,
-        );
-    }
-    composer.finish()
+    ContourSet::from_painted_paths(
+        &doc.arena,
+        feature
+            .paths
+            .slice(&doc.arena.paths)
+            .iter()
+            .filter(|path| path.is_filled()),
+        resolution,
+    )
 }
 
 /// Bounds of a set's own feature span, for sets with no linked features.
@@ -1063,6 +1055,28 @@ mod tests {
     use crate::geom::{LineCap, Point, StrokeStyle};
 
     type TestDoc = Document<u32, ()>;
+
+    #[test]
+    fn preserves_independent_overlapping_fill_paths() {
+        let resolution = Resolution::default();
+        for rule in [FillRule::EvenOdd, FillRule::NonZero] {
+            let mut doc = TestDoc::new();
+            doc.push_path(Paint::Fill { rule }, [rect_contour(0.0, 0.0, 6.0, 4.0)]);
+            // Opposite winding: neither parity nor winding may cancel the overlap.
+            doc.push_path(Paint::Fill { rule }, [rect_contour(8.0, 2.0, 2.0, 5.0)]);
+            doc.features.push(Feature {
+                paths: Span::new(0, 2),
+                ..copper_trace_feature()
+            });
+
+            let image = feature_filled_region(&doc, &doc.features[0], resolution).unwrap();
+            assert!((image.area() - 34.0).abs() < 1e-9);
+            normalize_preserving(&mut doc);
+            let image = feature_filled_region(&doc, &doc.features[0], resolution).unwrap();
+            assert!((image.area() - 34.0).abs() < 1e-9);
+            assert!(image.contains_point(Point::new(3.0, 3.0)));
+        }
+    }
 
     #[test]
     fn composes_compatible_stroked_feature_paths() {
