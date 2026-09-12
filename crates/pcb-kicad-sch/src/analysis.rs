@@ -340,6 +340,45 @@ pub fn inspect_schematic(
     })
 }
 
+// Stacked opens belong to one symbol anchor on one page, without a wire or driver.
+fn is_open_pin_stack(island: &PhysicalIsland) -> bool {
+    let mut pins = island.pins.iter().map(|pin| pin.no_connect_target());
+    let Some(first) = pins.next() else {
+        return false;
+    };
+    island.names.is_empty()
+        && island
+            .items
+            .iter()
+            .all(|item| matches!(item, ConnectivityItemRef::NoConnect { .. }))
+        && pins.all(|pin| {
+            pin.page_id == first.page_id
+                && pin.symbol_id == first.symbol_id
+                && points_connect(pin.at, first.at)
+        })
+}
+
+fn matches_physical_terminal(pin: &Terminal, expected: &Terminal) -> bool {
+    if let (
+        Terminal::ComponentPin {
+            component,
+            pin_numbers,
+            ..
+        },
+        Terminal::ComponentPin {
+            component: other,
+            pin_numbers: other_numbers,
+            ..
+        },
+    ) = (pin, expected)
+        && !pin_numbers.is_empty()
+        && !other_numbers.is_empty()
+    {
+        return component == other && !pin_numbers.is_disjoint(other_numbers);
+    }
+    pin.matches(expected)
+}
+
 pub(crate) fn inspect_no_connects(
     document: &SchDocument,
     netlist: &Schematic,
@@ -361,7 +400,7 @@ pub(crate) fn inspect_no_connects(
             .filter(|(_, pin_terminal)| {
                 terminals
                     .iter()
-                    .any(|terminal| pin_terminal.matches(terminal))
+                    .any(|terminal| matches_physical_terminal(pin_terminal, terminal))
             })
             .map(|(pin, _)| pin.no_connect_target())
             .collect::<Vec<_>>()
@@ -396,13 +435,10 @@ pub(crate) fn inspect_no_connects(
         )
         .collect::<Vec<_>>();
     issues.extend(markers.filter_map(|(page_id, marker)| {
-        let at_desired = desired
-            .iter()
-            .any(|target| target.page_id == *page_id && points_connect(target.at, marker.at));
         let at_connected = connected
             .iter()
             .any(|target| target.page_id == *page_id && points_connect(target.at, marker.at));
-        (at_connected && !at_desired).then(|| SchematicIssue::UnexpectedNoConnect {
+        at_connected.then(|| SchematicIssue::UnexpectedNoConnect {
             page_id: page_id.clone(),
             id: marker.id.clone(),
         })
@@ -696,17 +732,11 @@ fn is_open_not_connected_group(
     if !group.names.is_empty() || group.terminals.is_empty() {
         return false;
     }
-    // Multiple physical pins may realize one logical terminal (for example,
-    // stacked pins with the same name), but distinct NotConnected terminals
-    // touching directly are still an electrical connection. Require exactly
-    // one netlist terminal to account for the whole physical island.
-    let mut matching_not_connected = not_connected.iter().filter(|candidate| {
-        group
-            .terminals
+    if !group.terminals.iter().all(|terminal| {
+        not_connected
             .iter()
-            .all(|terminal| candidate.matches(terminal))
-    });
-    if matching_not_connected.next().is_none() || matching_not_connected.next().is_some() {
+            .any(|candidate| matches_physical_terminal(terminal, candidate))
+    }) {
         return false;
     }
     let mut origins = group.origins.iter();
@@ -716,12 +746,7 @@ fn is_open_not_connected_group(
     if origins.next().is_some() {
         return false;
     }
-    islands.get(island).is_some_and(|provenance| {
-        provenance
-            .items
-            .iter()
-            .all(|item| matches!(item, ConnectivityItemRef::NoConnect { .. }))
-    })
+    islands.get(island).is_some_and(is_open_pin_stack)
 }
 
 pub(crate) fn expected_reconcilable_connectivity(
@@ -1413,10 +1438,11 @@ mod tests {
 
     #[test]
     fn not_connected_terminal_rejects_an_attached_wire() {
+        use crate::connectivity::PhysicalPinRef;
         let terminal = Terminal::ComponentPin {
             component: ComponentIdentity::ManagedPath("U1".to_string()),
             pin_name: "NC".to_string(),
-            pin_numbers: BTreeSet::from(["1".to_string()]),
+            pin_numbers: BTreeSet::from(["1".to_string(), "2".to_string()]),
         };
         let island = IslandRef {
             page_id: "page".to_string(),
@@ -1427,7 +1453,16 @@ mod tests {
             terminals: BTreeSet::from([terminal.clone()]),
             origins: BTreeSet::from([ConnectionOrigin::KiCadIsland(island.clone())]),
         };
-        let mut islands = BTreeMap::from([(island, PhysicalIsland::default())]);
+        let mut islands = BTreeMap::from([(
+            island,
+            PhysicalIsland {
+                pins: BTreeSet::from([
+                    PhysicalPinRef::new("page", "U1", "1", Point::default()),
+                    PhysicalPinRef::new("page", "U1", "2", Point::default()),
+                ]),
+                ..PhysicalIsland::default()
+            },
+        )]);
         let mut not_connected = BTreeSet::from([terminal]);
 
         assert!(is_open_not_connected_group(
@@ -1453,6 +1488,12 @@ mod tests {
         };
         group.terminals.insert(other.clone());
         not_connected.insert(other);
+        islands
+            .values_mut()
+            .next()
+            .unwrap()
+            .pins
+            .insert(PhysicalPinRef::new("page", "U2", "2", Point::default()));
         assert!(!is_open_not_connected_group(
             &group,
             &islands,

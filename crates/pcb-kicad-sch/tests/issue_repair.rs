@@ -974,6 +974,169 @@ fn wired_not_connected_pins_are_cut_free_locally() {
 }
 
 #[test]
+fn stacked_distinct_no_connects_share_one_marker_and_preserve_conflicts() {
+    use pcb_sch::{AttributeValue, InstanceKind};
+
+    let mut netlist = common::compile_fixture("multi_pad_nc", "root.zen");
+    // Distinct logical A/B terminals, including a hidden occurrence, all share
+    // a displayed name and anchor. Pad identities, not names, identify intent.
+    for instance in netlist.instances.values_mut() {
+        if instance.kind == InstanceKind::Component {
+            instance.attributes.insert("__symbol_value".into(), AttributeValue::String(r#"
+                (symbol "MULTI_PAD" (symbol "MULTI_PAD_1_1"
+                  (pin no_connect line (at -5.08 2.54 0) (length 2.54) (name "NC") (number "1"))
+                  (pin no_connect line (at -5.08 2.54 0) (length 2.54) hide (name "NC") (number "2"))
+                  (pin no_connect line (at -5.08 2.54 0) (length 2.54) (name "NC") (number "4"))))
+            "#.into()));
+        }
+    }
+    for net in netlist.nets.values_mut() {
+        net.kind = "NotConnected".into();
+    }
+    let baseline = plan_reconciliation(None, &netlist, "stacked.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let markers = baseline
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(index, page)| {
+            page.items.iter().filter_map(move |item| match item {
+                SchItem::NoConnect(marker) => Some((index, marker.at)),
+                _ => None,
+            })
+        })
+        .collect::<Vec<_>>();
+    let [(page_index, at)] = markers.as_slice() else {
+        panic!("expected one marker, got {markers:?}");
+    };
+    let (page_index, at) = (*page_index, *at);
+    assert!(
+        inspect_schematic(&baseline, &netlist)
+            .unwrap()
+            .issues
+            .is_empty()
+    );
+    let second = plan_reconciliation(Some(&baseline), &netlist, "stacked.kicad_sch")
+        .unwrap()
+        .apply(Some(&baseline))
+        .unwrap();
+    assert_eq!(second, baseline);
+
+    let mut missing = baseline.clone();
+    for page in &mut missing.pages {
+        page.items
+            .retain(|item| !matches!(item, SchItem::NoConnect(_)));
+    }
+    let inspection = inspect_schematic(&missing, &netlist).unwrap();
+    assert_eq!(
+        inspection
+            .issues
+            .iter()
+            .filter_map(|issue| match &issue.issue {
+                SchematicIssue::MissingNoConnect { pin_number, .. } => Some(pin_number.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["1", "2", "4"]),
+        "include the hidden pin and distinguish duplicate display names"
+    );
+    let selected = inspection
+        .issues
+        .iter()
+        .filter(|issue| matches!(issue.issue, SchematicIssue::MissingNoConnect { .. }))
+        .map(|issue| issue.key.clone())
+        .collect();
+    let repair =
+        plan_connectivity_repair(&missing, &netlist, &inspection, &selected, &BTreeSet::new())
+            .unwrap();
+    assert_eq!(repair.no_connect_additions().len(), 1);
+
+    // A marker still conflicts with B even while it correctly covers A.
+    let mut mixed = netlist.clone();
+    mixed.nets.get_mut("RIGHT").unwrap().kind = "Net".into();
+    assert!(
+        inspect_schematic(&baseline, &mixed)
+            .unwrap()
+            .issues
+            .iter()
+            .any(|issue| matches!(issue.issue, SchematicIssue::UnexpectedNoConnect { .. }))
+    );
+
+    for attachment in [
+        SchItem::Wire(Wire {
+            id: "nc-wire".into(),
+            a: at,
+            b: Point::new(at.x + 2.54, at.y),
+            unsupported: Vec::new(),
+        }),
+        SchItem::Label(pcb_kicad_sch::Label::new("nc-label", "CONNECTED", at)),
+    ] {
+        let mut connected = baseline.clone();
+        connected.pages[page_index].items.push(attachment);
+        assert!(
+            inspect_schematic(&connected, &netlist)
+                .unwrap()
+                .issues
+                .iter()
+                .any(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. }))
+        );
+    }
+
+    // An identical symbol UUID and anchor in another file must not inherit NC.
+    let mut pages = baseline.clone();
+    let mut other = pages.pages[page_index].clone();
+    other.id = "other-page".into();
+    other.file_name = Some("other.kicad_sch".into());
+    other
+        .items
+        .retain(|item| !matches!(item, SchItem::NoConnect(_)));
+    pages.root_page_ids.push(other.id.clone());
+    pages.pages.push(other);
+    let missing = inspect_schematic(&pages, &netlist)
+        .unwrap()
+        .issues
+        .into_iter()
+        .filter_map(|issue| match issue.issue {
+            SchematicIssue::MissingNoConnect {
+                page_id,
+                pin_number,
+                ..
+            } => Some((page_id, pin_number)),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        missing,
+        ["1", "2", "4"]
+            .into_iter()
+            .map(|pin| ("other-page".into(), pin.into()))
+            .collect()
+    );
+
+    // Two different symbols touching at their NC pins remain a real short.
+    let mut overlap = baseline.clone();
+    let mut other = overlap.pages[page_index]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) => Some(symbol.clone()),
+            _ => None,
+        })
+        .unwrap();
+    other.id = "different-symbol".into();
+    overlap.pages[page_index].items.push(SchItem::Symbol(other));
+    assert!(
+        inspect_schematic(&overlap, &netlist)
+            .unwrap()
+            .issues
+            .iter()
+            .any(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. }))
+    );
+}
+
+#[test]
 fn one_missing_no_connect_issue_repairs_all_uncovered_physical_pin_occurrences() {
     let mut netlist = common::compile_fixture("multi_pad_nc", "root.zen");
     let mut not_connected = netlist.nets.remove("LEFT").unwrap();

@@ -27,6 +27,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Report and repair missing Zener `NotConnected()` intent as native KiCad no-connect markers.
 - Preserve successful BOM matches when another line needs retrying.
 - Fix false missing-output errors after applying schematics.
+- Accept one KiCad no-connect marker for stacked intentional-open pins, including hidden pins, while preserving physical pad identities and rejecting connected or cross-page collisions.
 
 ### Removed
 
