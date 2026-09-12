@@ -1231,7 +1231,10 @@ where
             .fields
             .iter()
             .map(|(field_name, field_spec)| {
-                (field_name.clone(), ty_from_field_spec(field_spec.to_value()))
+                (
+                    field_name.clone(),
+                    ty_from_field_spec(field_spec.to_value()),
+                )
             })
             .collect();
 
