@@ -12,10 +12,16 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Interpret KiCad schematic bus connectivity, including vectors, groups, aliases, and hierarchical buses, while preserving buses during `pcb apply`.
 
+### Changed
+
+- Import KiCad designs as Quiche-compatible persistent schematics, preserving original wiring, hierarchy, and multi-unit symbols instead of reconstructing placement from comments.
+- Report schematic/PCB parity mismatches during import without blocking conversion, retaining the existing PCB layout.
+
 ### Fixed
 
 - Export STEP connector subassemblies with explicit product occurrences for better CAD reader placement compatibility.
 - Correct STEP wall boundary orientation so shared edges traverse oppositely across board, drill, and machined-hole faces.
+- Preserve off-board pinless documentation symbols during schematic apply without hiding unbound electrical components.
 
 ## [0.4.61] - 2026-09-27
 
@@ -149,8 +155,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Import KiCad designs as Quiche-compatible persistent schematics, preserving original wiring, hierarchy, and multi-unit symbols instead of reconstructing placement from comments.
-- Report schematic/PCB parity mismatches during import without blocking conversion, retaining the existing PCB layout.
 - Prefer `Board(path=...)`, retaining `layout_path` as a compatibility alias and rejecting empty paths. New board templates enable persistent schematics while keeping `layout_path` for older compilers.
 - Speed up schematic connectivity analysis and repair planning with indexed terminal matching and verified batches of local wire cuts.
 - Speed up region construction and unions on layers made of many small, locally overlapping features such as silkscreen and solder mask.

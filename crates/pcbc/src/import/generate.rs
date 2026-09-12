@@ -1464,11 +1464,10 @@ fn generate_imported_components(
     let mut part_flags: BTreeMap<ImportPartKey, ImportPartFlags> = BTreeMap::new();
     for (anchor, c) in components {
         if c.layout.is_none() {
-            // Only generate component packages for footprints that exist on the PCB.
             continue;
         }
         let definition = component_symbol_definition(c, schematic, sheet_tree)?;
-        let key = derive_part_key(c, format_tree(&definition.sexpr, FormatMode::Normal));
+        let key = derive_part_key(c, format_tree(&definition.sexpr, FormatMode::Normal))?;
         part_to_instances
             .entry(key.clone())
             .or_default()
@@ -1797,8 +1796,23 @@ fn explicit_manufacturer(component: &ImportComponentData) -> Option<&str> {
     )
 }
 
-fn derive_part_key(component: &ImportComponentData, symbol_definition: String) -> ImportPartKey {
+fn derive_part_key(
+    component: &ImportComponentData,
+    symbol_definition: String,
+) -> Result<ImportPartKey> {
     let props = component.best_properties();
+    for name in ["Value", "Description", "Footprint"] {
+        anyhow::ensure!(
+            component
+                .schematic
+                .iter()
+                .flat_map(|schematic| schematic.units.values())
+                .all(|unit| unit.properties.get(name)
+                    == props.and_then(|properties| properties.get(name))),
+            "Component {} has differing {name} across schematic units; per-unit display fields are not supported",
+            component.netlist.refdes.as_str()
+        );
+    }
 
     let mpn = explicit_mpn(component).map(str::to_string);
     let manufacturer = explicit_manufacturer(component).map(str::to_string);
@@ -1836,7 +1850,7 @@ fn derive_part_key(component: &ImportComponentData, symbol_definition: String) -
         })
         .collect();
 
-    ImportPartKey {
+    Ok(ImportPartKey {
         mpn,
         manufacturer,
         footprint,
@@ -1844,7 +1858,7 @@ fn derive_part_key(component: &ImportComponentData, symbol_definition: String) -
         symbol_definition,
         value,
         schematic_properties,
-    }
+    })
 }
 
 fn derive_part_name(part_key: &ImportPartKey, component: &ImportComponentData) -> String {

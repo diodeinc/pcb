@@ -771,6 +771,72 @@ fn move_symbol(symbol: &mut Symbol, at: Point) {
     }
 }
 
+#[test]
+fn only_unmanaged_off_board_pinless_symbols_are_native_documentation() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let baseline = plan_reconciliation(None, &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    for (pinless, on_board, managed) in [
+        (true, false, false),
+        (true, true, false),
+        (true, false, true),
+        (false, false, false),
+    ] {
+        let mut document = baseline.clone();
+        let mut symbol = managed_symbols(&document).next().unwrap().clone();
+        symbol.id = "documentation".into();
+        symbol.lib_id = "Test:Documentation".into();
+        symbol.lib_name = None;
+        symbol.on_board = on_board;
+        symbol.pins.clear();
+        if managed {
+            symbol.fields.get_mut("Path").unwrap().value = "STALE.R".into();
+        } else {
+            symbol.fields.remove("Path");
+        }
+        // Hidden pins in another unit still make this an electrical definition.
+        let pins = if pinless {
+            ""
+        } else {
+            r#"(symbol "Documentation_2_1" (pin passive line (at 0 0 0) (length 2.54) hide
+                (name "hidden") (number "1")))"#
+        };
+        let definition = pcb_kicad_sch::SymbolDefinition::from_kicad_symbol_sexpr(&format!(
+            r#"(symbol "Test:Documentation" {pins})"#
+        ))
+        .unwrap();
+        document.pages[0]
+            .library
+            .definitions
+            .insert(definition.lib_id.clone(), definition);
+        document.pages[0]
+            .items
+            .push(SchItem::Symbol(symbol.clone()));
+        let inspection = inspect_schematic(&document, &netlist).unwrap();
+        let documentation = pinless && !on_board && !managed;
+        assert_eq!(
+            inspection.issues.is_empty(),
+            documentation,
+            "{pinless}/{on_board}/{managed}: {:?}",
+            inspection.issues
+        );
+        if documentation {
+            let applied = plan_reconciliation(Some(&document), &netlist, "simple.kicad_sch")
+                .unwrap()
+                .apply(Some(&document))
+                .unwrap();
+            assert_eq!(applied, document);
+        } else {
+            assert!(inspection.issues.iter().any(|issue| matches!(
+                issue.issue,
+                SchematicIssue::UnboundSymbol { .. } | SchematicIssue::UnexpectedSymbol { .. }
+            )));
+        }
+    }
+}
+
 /// Symbol locations must address file pages, not page instances, so unbound
 /// symbols on generated child sheets can be repaired by issue selection.
 #[test]
