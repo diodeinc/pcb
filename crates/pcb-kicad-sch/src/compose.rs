@@ -433,11 +433,20 @@ fn project_component_slot(
     }
 
     let previous = selected.map(|selected| &selected.symbol);
+    let at = previous.map(|symbol| symbol.at).unwrap_or_default();
+    let rotation = match previous {
+        Some(symbol) => symbol.rotation,
+        None => initial_component_rotation(netlist, slot, &definition, net_symbol_specs)?,
+    };
+    let mirror = previous.and_then(|symbol| symbol.mirror);
+    // Derive fields and library identity from the authoritative definition, never a cache key.
+    let mut symbol =
+        build_component_symbol(instance, slot, &definition, at, rotation, mirror, previous)?;
+
     // A native save may give an instance its own presentation without changing
     // the library identity. Keep that presentation unless the symbol is replaced
     // or its electrical interface needs repair. Missing base entries are normal.
     let mut definition = definition;
-    let library_id = definition.lib_id.clone();
     if let Some(previous) = previous
         && previous.lib_name.is_some()
         && definition.lib_id == previous.lib_id
@@ -450,15 +459,6 @@ fn project_component_slot(
     {
         definition = cached.clone();
     }
-    let at = previous.map(|symbol| symbol.at).unwrap_or_default();
-    let rotation = match previous {
-        Some(symbol) => symbol.rotation,
-        None => initial_component_rotation(netlist, slot, &definition, net_symbol_specs)?,
-    };
-    let mirror = previous.and_then(|symbol| symbol.mirror);
-    let mut symbol =
-        build_component_symbol(instance, slot, &definition, at, rotation, mirror, previous)?;
-    symbol.lib_id = library_id;
     cache_symbol_definition(&mut document.pages[page_index], &mut symbol, &definition)?;
     if let Some(selected) = selected {
         let selected_page_id = document.pages[selected.page_index].id.clone();
