@@ -373,6 +373,7 @@ pub enum UserShapeType {
     Arc(Arc),
     Polyline(Polyline),
     UserPrimitiveRef(Symbol),
+    UserPrimitive(UserPrimitive),
 }
 
 // FromStr implementations for shape enums

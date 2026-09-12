@@ -3,9 +3,9 @@ use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
 use ipc2581::types::{
-    FillDesc, FillProperty, HoleShape as IpcHoleShape, LayerFunction, LineEnd, LineProperty,
-    PadUse, PlatingStatus, Polarity, PolyStep, SlotShape, StandardPrimitive, UserPrimitive,
-    UserShapeType, Xform,
+    FillProperty, HoleShape as IpcHoleShape, LayerFunction, LineEnd, LineProperty, PadUse,
+    PlatingStatus, Polarity, PolyStep, SlotShape, StandardPrimitive, UserPrimitive, UserShapeType,
+    Xform,
     ecad::{Layer, SetFeature, Step, StepRepeat, StepType},
 };
 use ipc2581::{Interner, Ipc2581, Symbol};
@@ -238,6 +238,7 @@ struct LayoutInstanceSpec {
 
 struct ExtractContext<'a> {
     strings: &'a Interner,
+    resolution: Resolution,
     padstacks: HashMap<Symbol, &'a ipc2581::types::PadStackDef>,
     line_descs: HashMap<Symbol, ipc2581::types::LineDesc>,
     fill_descs: HashMap<Symbol, ipc2581::types::FillDesc>,
@@ -1508,6 +1509,7 @@ pub fn extract_step_layer_local(
     let content = ipc.content();
     let context = ExtractContext {
         strings: ipc.interner(),
+        resolution,
         padstacks: step
             .padstack_defs
             .iter()
@@ -2417,7 +2419,7 @@ fn extract_pad(
                 ));
                 return Ok(None);
             };
-            lower_user_primitive(context, doc, primitive, placement.transform)
+            lower_user_primitive(context, doc, primitive, placement.transform)?
         }
     };
     let path_count = doc.arena.paths.len() as u32 - path_start;
@@ -2536,7 +2538,7 @@ fn extract_feature_primitive(
                 return Ok(Vec::new());
             };
             (
-                lower_user_primitive(context, doc, primitive, transform),
+                lower_user_primitive(context, doc, primitive, transform)?,
                 PrimitiveRef::User(primitive_ref.id),
             )
         }
@@ -2567,7 +2569,7 @@ fn extract_inline_user_primitive(
     let transform =
         Affine2::placement(Point::new(primitive.x, primitive.y), 0.0, Mirror::NONE, 1.0);
     let path_start = doc.arena.paths.len() as u32;
-    let paint = lower_user_primitive(context, doc, &primitive.primitive, transform);
+    let paint = lower_user_primitive(context, doc, &primitive.primitive, transform)?;
     primitive_features_from_paths(
         doc,
         primitive_path_feature(net, polarity, source, transform, path_start, paint, None),
@@ -3350,23 +3352,15 @@ fn lower_user_primitive(
     doc: &mut GeometryDocument,
     primitive: &UserPrimitive,
     transform: Affine2,
-) -> PrimitivePaint {
+) -> Result<PrimitivePaint> {
     match primitive {
         UserPrimitive::UserSpecial(user_special) => {
             let mut paint = PrimitivePaint::Fill;
-            let mut pending_contours = Vec::new();
-            let mut pending_fill_key = user_fill_key(None);
+            let primitive_start = doc.arena.paths.len();
+            // IPC-2581C §3.5.11.2: UserSpecial combines independent shapes.
+            // A Contour's Polygon and Cutouts stay together (§3.5.9.3); sibling
+            // contours are additive, including KiCad zone fills and text islands.
             for shape in &user_special.shapes {
-                if user_shape_is_filled_contour(shape) {
-                    let fill_key = user_fill_key(shape.fill_desc);
-                    if !pending_contours.is_empty() && pending_fill_key != fill_key {
-                        flush_user_contours(doc, &mut pending_contours);
-                    }
-                    pending_fill_key = fill_key;
-                    push_user_shape_contours(&mut pending_contours, &shape.shape, transform);
-                    continue;
-                }
-                flush_user_contours(doc, &mut pending_contours);
                 let path_start = doc.arena.paths.len() as u32;
                 let mut nested_paint = None;
                 match &shape.shape {
@@ -3454,18 +3448,27 @@ fn lower_user_primitive(
                             line_desc,
                         );
                     }
+                    UserShapeType::UserPrimitive(primitive) => {
+                        nested_paint =
+                            Some(lower_user_primitive(context, doc, primitive, transform)?);
+                    }
                     UserShapeType::UserPrimitiveRef(primitive_ref) => {
                         if let Some(primitive) = context.user_primitives.get(primitive_ref).copied()
                         {
                             nested_paint =
-                                Some(lower_user_primitive(context, doc, primitive, transform));
+                                Some(lower_user_primitive(context, doc, primitive, transform)?);
                         } else {
                             make_paths_unpainted(doc, path_start);
                         }
                     }
                 }
 
-                match shape.fill_desc {
+                let fill_desc = shape.fill_desc.or_else(|| {
+                    shape
+                        .fill_desc_ref
+                        .and_then(|id| context.fill_descs.get(&id).copied())
+                });
+                match fill_desc {
                     Some(fill_desc) if fill_desc.fill_property == FillProperty::Hollow => {
                         if let Some(line_desc) = user_shape_line_desc(context, shape) {
                             make_paths_stroked(
@@ -3481,7 +3484,12 @@ fn lower_user_primitive(
                         paint = PrimitivePaint::Hollow;
                     }
                     Some(fill_desc) if fill_desc.fill_property == FillProperty::Void => {
-                        paint = PrimitivePaint::Void;
+                        subtract_user_void(
+                            doc,
+                            primitive_start,
+                            path_start as usize,
+                            context.resolution,
+                        )?;
                     }
                     Some(_) => {}
                     None => {
@@ -3491,54 +3499,52 @@ fn lower_user_primitive(
                     }
                 }
             }
-            flush_user_contours(doc, &mut pending_contours);
-            paint
+            Ok(paint)
         }
     }
 }
 
-/// Grouping key for consecutive filled user-shape contours: contours sharing a
-/// source fill description are merged into one even-odd compound path.
-fn user_fill_key(fill_desc: Option<FillDesc>) -> (FillProperty, Option<f64>, Option<f64>) {
-    match fill_desc {
-        Some(desc) if matches!(desc.fill_property, FillProperty::Hatch | FillProperty::Mesh) => {
-            (desc.fill_property, desc.angle1, desc.angle2)
+/// IPC-2581C §3.5.6.1: VOID clears only preceding filled shapes in its own
+/// UserSpecial, never strokes, later islands, or neighboring primitives.
+fn subtract_user_void(
+    doc: &mut GeometryDocument,
+    primitive_start: usize,
+    void_start: usize,
+    resolution: Resolution,
+) -> Result<()> {
+    let cutters = ContourSet::from_painted_paths(
+        &doc.arena,
+        doc.arena.paths[void_start..]
+            .iter()
+            .filter(|path| path.is_filled()),
+        resolution.strict(),
+    )?;
+    doc.arena.paths.truncate(void_start);
+    for index in primitive_start..void_start {
+        let path = doc.arena.paths[index];
+        let Some(rule) = path.fill_rule() else {
+            continue;
+        };
+        if !path.bbox.intersects(cutters.bbox) {
+            continue;
         }
-        Some(desc) => (desc.fill_property, None, None),
-        None => (FillProperty::Fill, None, None),
+        let subject =
+            ContourSet::from_contours(&doc.arena.path_contours(&path), rule, resolution.strict())?;
+        let result = subject.difference(&cutters)?;
+        let (contours, bbox) = doc.arena.push_contours(result.to_contours());
+        doc.arena.paths[index] = Path {
+            contours,
+            bbox,
+            paint: if result.is_empty() {
+                Paint::None
+            } else {
+                Paint::Fill {
+                    rule: FillRule::NonZero,
+                }
+            },
+        };
     }
-}
-
-fn user_shape_is_filled_contour(shape: &ipc2581::types::UserShape) -> bool {
-    matches!(
-        shape.fill_desc.map(|desc| desc.fill_property),
-        None | Some(FillProperty::Fill | FillProperty::Hatch | FillProperty::Mesh)
-    ) && matches!(
-        &shape.shape,
-        UserShapeType::Polygon(_) | UserShapeType::Contour(_)
-    )
-}
-
-fn push_user_shape_contours(out: &mut Vec<ContourBuf>, shape: &UserShapeType, transform: Affine2) {
-    match shape {
-        UserShapeType::Polygon(polygon) => {
-            out.push(polygon_contour(polygon).transformed(transform))
-        }
-        UserShapeType::Contour(contour) => push_contour_payloads(out, contour, transform),
-        _ => {}
-    }
-}
-
-fn flush_user_contours(doc: &mut GeometryDocument, contours: &mut Vec<ContourBuf>) {
-    if contours.is_empty() {
-        return;
-    }
-    doc.push_path(
-        Paint::Fill {
-            rule: FillRule::EvenOdd,
-        },
-        std::mem::take(contours),
-    );
+    Ok(())
 }
 
 fn user_shape_line_desc(
@@ -4138,6 +4144,7 @@ mod tests {
         .unwrap();
         let context = ExtractContext {
             strings: ipc.interner(),
+            resolution: Resolution::default(),
             padstacks: HashMap::new(),
             line_descs: HashMap::new(),
             fill_descs: HashMap::new(),
@@ -4178,6 +4185,7 @@ mod tests {
         .unwrap();
         let context = ExtractContext {
             strings: ipc.interner(),
+            resolution: Resolution::default(),
             padstacks: HashMap::new(),
             line_descs: HashMap::new(),
             fill_descs: HashMap::new(),
@@ -4266,6 +4274,7 @@ mod tests {
         let feature = extract_feature_polyline(
             &ExtractContext {
                 strings: ipc.interner(),
+                resolution: Resolution::default(),
                 padstacks: HashMap::new(),
                 line_descs: HashMap::new(),
                 fill_descs: HashMap::new(),
@@ -4316,13 +4325,15 @@ mod tests {
         .unwrap();
         let context = ExtractContext {
             strings: ipc.interner(),
+            resolution: Resolution::default(),
             padstacks: HashMap::new(),
             line_descs: HashMap::new(),
             fill_descs: HashMap::new(),
             standard_primitives: HashMap::new(),
             user_primitives: HashMap::new(),
         };
-        let paint = lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity());
+        let paint =
+            lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
 
         assert_eq!(paint, PrimitivePaint::Hollow);
         assert_eq!(doc.arena.paths.len(), 1);
@@ -4353,6 +4364,7 @@ mod tests {
         let entry = ipc.content().dictionary_line_desc.entries[0].clone();
         let context = ExtractContext {
             strings: ipc.interner(),
+            resolution: Resolution::default(),
             padstacks: HashMap::new(),
             line_descs: HashMap::from([(entry.id, entry.line_desc)]),
             fill_descs: HashMap::new(),
@@ -4389,7 +4401,8 @@ mod tests {
             ],
         });
 
-        let paint = lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity());
+        let paint =
+            lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
 
         assert_eq!(paint, PrimitivePaint::Fill);
         assert_eq!(doc.arena.paths.len(), 2);
@@ -4411,6 +4424,7 @@ mod tests {
         .unwrap();
         let context = ExtractContext {
             strings: ipc.interner(),
+            resolution: Resolution::default(),
             padstacks: HashMap::new(),
             line_descs: HashMap::new(),
             fill_descs: HashMap::new(),
@@ -4464,6 +4478,7 @@ mod tests {
         .unwrap();
         let context = ExtractContext {
             strings: ipc.interner(),
+            resolution: Resolution::default(),
             padstacks: HashMap::new(),
             line_descs: HashMap::new(),
             fill_descs: HashMap::new(),
@@ -4472,28 +4487,16 @@ mod tests {
         };
         let primitive = ipc2581::types::ecad::FeatureUserPrimitive {
             primitive: UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
-                shapes: vec![
-                    ipc2581::types::UserShape {
-                        shape: UserShapeType::Contour(ipc2581::types::Contour {
-                            polygon: rect_polygon(0.0, 0.0, 2.0, 2.0),
-                            cutouts: Vec::new(),
-                        }),
-                        line_desc: None,
-                        line_desc_ref: None,
-                        fill_desc: None,
-                        fill_desc_ref: None,
-                    },
-                    ipc2581::types::UserShape {
-                        shape: UserShapeType::Contour(ipc2581::types::Contour {
-                            polygon: rect_polygon(0.5, 0.5, 1.5, 1.5),
-                            cutouts: Vec::new(),
-                        }),
-                        line_desc: None,
-                        line_desc_ref: None,
-                        fill_desc: None,
-                        fill_desc_ref: None,
-                    },
-                ],
+                shapes: vec![ipc2581::types::UserShape {
+                    shape: UserShapeType::Contour(ipc2581::types::Contour {
+                        polygon: rect_polygon(0.0, 0.0, 2.0, 2.0),
+                        cutouts: vec![rect_polygon(0.5, 0.5, 1.5, 1.5)],
+                    }),
+                    line_desc: None,
+                    line_desc_ref: None,
+                    fill_desc: None,
+                    fill_desc_ref: None,
+                }],
             }),
             x: 10.0,
             y: 20.0,
@@ -4517,6 +4520,86 @@ mod tests {
         assert_eq!(doc.arena.paths[0].contours.count, 2);
         assert_eq!(doc.arena.paths[0].bbox.min, Point::new(10.0, 20.0));
         assert_eq!(doc.arena.paths[0].bbox.max, Point::new(12.0, 22.0));
+        let image =
+            ContourSet::from_painted_paths(&doc.arena, &doc.arena.paths, Resolution::default())
+                .unwrap();
+        assert!((image.area() - 3.0).abs() < 1e-9);
+        assert!(!image.contains_point(Point::new(11.0, 21.0)));
+    }
+
+    #[test]
+    fn user_special_voids_clear_only_preceding_fills_in_their_own_scope() {
+        let contour = |x0, y0, x1, y1, style: &str| {
+            format!(
+                "<Contour><Polygon><PolyBegin x='{x0}' y='{y0}'/>
+             <PolyStepSegment x='{x1}' y='{y0}'/><PolyStepSegment x='{x1}' y='{y1}'/>
+             <PolyStepSegment x='{x0}' y='{y1}'/><PolyStepSegment x='{x0}' y='{y0}'/>
+             {style}</Polygon></Contour>"
+            )
+        };
+        let nested = format!(
+            "<UserSpecial>{}
+             <Line startX='1.2' startY='3.6' endX='4.8' endY='3.6'>
+               <LineDesc lineWidth='0.1' lineEnd='NONE'/>
+             </Line>{}{}</UserSpecial>",
+            contour(0.0, 0.0, 8.0, 6.0, ""),
+            contour(1.0, 1.0, 5.0, 4.0, "<FillDescRef id='void'/>"),
+            contour(2.0, 2.0, 3.0, 3.0, ""),
+        );
+        // Both direct nesting and dictionary references must establish a scope.
+        for child in [&nested, "<UserPrimitiveRef id='nested'/>"] {
+            let ipc = Ipc2581::parse(&format!(
+                "<IPC-2581 revision='C' xmlns='http://webstds.ipc.org/2581'>
+                 <Content roleRef='owner'><FunctionMode mode='FABRICATION'/>
+                   <StepRef name='board'/><LayerRef name='TOP'/>
+                   <DictionaryFillDesc units='MILLIMETER'>
+                     <EntryFillDesc id='void'><FillDesc fillProperty='VOID'/></EntryFillDesc>
+                   </DictionaryFillDesc>
+                   <DictionaryUser units='MILLIMETER'><EntryUser id='nested'>{nested}</EntryUser></DictionaryUser>
+                 </Content><Ecad><CadHeader units='MILLIMETER'/><CadData>
+                 <Layer name='TOP' layerFunction='SIGNAL' side='TOP' polarity='POSITIVE'/>
+                 <Step name='board' type='BOARD'><LayerFeature layerRef='TOP'><Set>
+                   <Features><UserSpecial>{}</UserSpecial></Features>
+                   <Features><UserSpecial>{}{child}</UserSpecial></Features>
+                 </Set></LayerFeature></Step></CadData></Ecad></IPC-2581>",
+                contour(1.1, 1.1, 1.4, 1.4, ""),
+                contour(1.5, 1.1, 1.8, 1.4, ""),
+            )).unwrap();
+            let resolution = Resolution::default();
+            let mut doc = extract_layer(&ipc, "TOP", resolution).unwrap();
+            process::normalize_for_artwork(&mut doc, resolution).unwrap();
+            let image = ContourSet::from_painted_paths(
+                &doc.arena,
+                doc.features
+                    .iter()
+                    .flat_map(|feature| feature.paths.slice(&doc.arena.paths))
+                    .filter(|path| path.is_filled()),
+                resolution,
+            )
+            .unwrap();
+            // Plate minus void, plus later island and two independent earlier squares.
+            assert!(
+                (image.area() - 37.18).abs() < 1e-6,
+                "area: {}",
+                image.area()
+            );
+            for point in [
+                Point::new(1.2, 1.2),
+                Point::new(1.6, 1.2),
+                Point::new(2.5, 2.5),
+            ] {
+                assert!(image.contains_point(point));
+            }
+            assert!(!image.contains_point(Point::new(4.0, 2.0)));
+            let strokes = doc
+                .features
+                .iter()
+                .flat_map(|feature| feature.paths.slice(&doc.arena.paths))
+                .filter(|path| path.is_stroked())
+                .collect::<Vec<_>>();
+            assert_eq!(strokes.len(), 1);
+            assert!((strokes[0].bbox.width() - 3.7).abs() < 1e-9);
+        }
     }
 
     #[test]
@@ -4527,6 +4610,7 @@ mod tests {
         .unwrap();
         let context = ExtractContext {
             strings: ipc.interner(),
+            resolution: Resolution::default(),
             padstacks: HashMap::new(),
             line_descs: HashMap::new(),
             fill_descs: HashMap::new(),

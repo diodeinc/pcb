@@ -349,6 +349,9 @@ fn validate_user_primitive(
 ) -> Result<()> {
     let UserPrimitive::UserSpecial(special) = primitive;
     for shape in &special.shapes {
+        if let UserShapeType::UserPrimitive(primitive) = &shape.shape {
+            validate_user_primitive(ipc, primitive, ancestors)?;
+        }
         if let UserShapeType::UserPrimitiveRef(id) = shape.shape {
             if ancestors.contains(&id) {
                 bail!(

@@ -661,6 +661,7 @@ fn geometry_reference(
 fn package_shape_context(design: &ImportedDesign) -> super::ExtractContext<'_> {
     super::ExtractContext {
         strings: &design.strings,
+        resolution: crate::geom::Resolution::default(),
         padstacks: HashMap::new(),
         line_descs: design
             .content
