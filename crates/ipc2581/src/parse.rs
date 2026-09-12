@@ -1023,11 +1023,6 @@ impl<'a> Parser<'a> {
         let mut shapes = Vec::new();
 
         for child in self.element_children(node) {
-            if self.name(&child) == "UserSpecial" {
-                let UserPrimitive::UserSpecial(nested) = self.parse_user_special(&child, units)?;
-                shapes.extend(nested.shapes);
-                continue;
-            }
             if let Some(shape) = self.parse_user_shape(&child, units)? {
                 shapes.push(shape);
             }
@@ -1039,6 +1034,10 @@ impl<'a> Parser<'a> {
     fn parse_user_shape(&mut self, node: &Node, units: Units) -> Result<Option<UserShape>> {
         let tag_name = self.name(node);
         let shape = match tag_name {
+            // Preserve the scope of ordered VOID operations in nested primitives.
+            "UserSpecial" => Some(UserShapeType::UserPrimitive(
+                self.parse_user_special(node, units)?,
+            )),
             "Contour" => Some(UserShapeType::Contour(self.parse_contour(node, units)?)),
             "Circle" => Some(UserShapeType::Circle(Circle {
                 diameter: self.parse_f64_attr_with_units(node, "diameter", "Circle", units)?,

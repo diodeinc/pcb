@@ -2915,11 +2915,100 @@ mod tests {
     }
 
     #[test]
+    fn gerber_export_preserves_overlapping_contours_and_local_cutouts() {
+        let resolution = Resolution::default();
+        let source = r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/><LayerRef name="TOP"/>
+  </Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+    <Step name="board" type="BOARD"><LayerFeature layerRef="TOP">
+      <Set net="VCC"><Features><UserSpecial>
+        <Contour>
+          <Polygon>
+            <PolyBegin x="0" y="0"/><PolyStepSegment x="6" y="0"/>
+            <PolyStepSegment x="6" y="4"/><PolyStepSegment x="0" y="4"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+          <Cutout>
+            <PolyBegin x="1" y="1"/><PolyStepSegment x="3" y="1"/>
+            <PolyStepSegment x="3" y="3"/><PolyStepSegment x="1" y="3"/>
+            <PolyStepSegment x="1" y="1"/>
+          </Cutout>
+        </Contour>
+        <!-- Opposite winding; overlaps both the first polygon and its cutout. -->
+        <Contour><Polygon>
+          <PolyBegin x="8" y="2"/><PolyStepSegment x="2" y="2"/>
+          <PolyStepSegment x="2" y="5"/><PolyStepSegment x="8" y="5"/>
+          <PolyStepSegment x="8" y="2"/>
+        </Polygon></Contour>
+        <!-- A nested positive sibling is additional material, not a counter. -->
+        <Contour><Polygon>
+          <PolyBegin x="4" y="0.5"/><PolyStepSegment x="5" y="0.5"/>
+          <PolyStepSegment x="5" y="1.5"/><PolyStepSegment x="4" y="1.5"/>
+          <PolyStepSegment x="4" y="0.5"/>
+        </Polygon></Contour>
+      </UserSpecial></Features></Set>
+    </LayerFeature></Step>
+  </CadData></Ecad>
+</IPC-2581>"#;
+        for (function, filename) in [("SIGNAL", "F_Cu.gtl"), ("LEGEND", "F_SilkS.gto")] {
+            let ipc = ipc::Ipc2581::parse(&source.replace("SIGNAL", function)).unwrap();
+
+            // Check source import and both normalization paths before exporting.
+            let doc = pcb_ir::import::ipc2581::extract_layer(&ipc, "TOP", resolution).unwrap();
+            let image = |doc: &pcb_ir::import::ipc2581::GeometryDocument| {
+                pcb_ir::geom::ContourSet::from_painted_paths(
+                    &doc.arena,
+                    doc.features
+                        .iter()
+                        .flat_map(|f| f.paths.slice(&doc.arena.paths)),
+                    resolution,
+                )
+                .unwrap()
+            };
+            for (mut doc, rendering) in [(doc.clone(), false), (doc, true)] {
+                assert!((image(&doc).area() - 31.0).abs() < 1e-6);
+                if rendering {
+                    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut doc, resolution)
+                        .unwrap();
+                } else {
+                    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc, resolution)
+                        .unwrap();
+                }
+                let region = image(&doc);
+                assert!((region.area() - 31.0).abs() < 1e-6);
+                assert!(!region.contains_point(pcb_ir::geom::Point::new(1.5, 2.5)));
+                assert!(region.contains_point(pcb_ir::geom::Point::new(2.5, 2.5)));
+                assert!(region.contains_point(pcb_ir::geom::Point::new(4.5, 1.0)));
+            }
+
+            let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
+            let layer = files.iter().find(|file| file.filename == filename).unwrap();
+            assert!(
+                !layer.contents.contains("%LPC*%"),
+                "cutouts must stay local"
+            );
+            let parsed = gerberx2::GerberX2::parse(&layer.contents).unwrap();
+            let geometry =
+                gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
+            let summary =
+                pcb_ir::dialects::artwork::compare::summarize(&geometry, resolution).unwrap();
+            // 24 - 4 + 18 - (8 - 1) = 31; the nested sibling adds no new area.
+            assert!(
+                (summary.area_mm2 - 31.0).abs() < 1e-6,
+                "area: {}",
+                summary.area_mm2
+            );
+        }
+    }
+
+    #[test]
     fn gerber_export_preserves_user_special_counter_holes() {
         let resolution = Resolution::default();
 
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
+        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
     <FunctionMode mode="FABRICATION"/>
@@ -2943,15 +3032,13 @@ mod tests {
                     <PolyStepSegment x="0" y="4"/>
                     <PolyStepSegment x="0" y="0"/>
                   </Polygon>
-                </Contour>
-                <Contour>
-                  <Polygon>
+                  <Cutout>
                     <PolyBegin x="1" y="1"/>
                     <PolyStepSegment x="3" y="1"/>
                     <PolyStepSegment x="3" y="3"/>
                     <PolyStepSegment x="1" y="3"/>
                     <PolyStepSegment x="1" y="1"/>
-                  </Polygon>
+                  </Cutout>
                 </Contour>
               </UserSpecial>
             </Features>
@@ -2960,27 +3047,52 @@ mod tests {
       </Step>
     </CadData>
   </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
+</IPC-2581>"#;
+        // KiCad's Fracture() joins a hole to its outer ring with a retraced
+        // bridge. Knockout text can also leave a separate positive counter island.
+        let mut fractured = source.to_owned();
+        let start = fractured.find("<Contour>").unwrap();
+        let end = fractured.find("</Contour>").unwrap() + "</Contour>".len();
+        fractured.replace_range(
+            start..end,
+            r#"
+          <Contour><Polygon>
+            <PolyBegin x="0" y="0"/><PolyStepSegment x="4" y="0"/>
+            <PolyStepSegment x="4" y="4"/><PolyStepSegment x="0" y="4"/>
+            <PolyStepSegment x="0" y="0"/><PolyStepSegment x="1" y="1"/>
+            <PolyStepSegment x="1" y="3"/><PolyStepSegment x="3" y="3"/>
+            <PolyStepSegment x="3" y="1"/><PolyStepSegment x="1" y="1"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon></Contour>
+          <Contour><Polygon>
+            <PolyBegin x="1.5" y="1.5"/><PolyStepSegment x="2" y="1.5"/>
+            <PolyStepSegment x="2" y="2"/><PolyStepSegment x="1.5" y="2"/>
+            <PolyStepSegment x="1.5" y="1.5"/>
+          </Polygon></Contour>"#,
+        );
+        for (source, expected_area) in [(source, 12.0), (fractured.as_str(), 12.25)] {
+            let ipc = ipc::Ipc2581::parse(source).unwrap();
+            let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
 
-        let silk = files
-            .iter()
-            .find(|file| file.filename == "F_SilkS.gto")
-            .unwrap();
-        assert!(
-            !silk.contents.contains("%LPC*%"),
-            "positive compound region holes should not export as layer-global clear regions"
-        );
-        let parsed = gerberx2::GerberX2::parse(&silk.contents).unwrap();
-        let geometry = gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, resolution).unwrap();
-        assert!(
-            (summary.area_mm2 - 12.0).abs() < 1e-6,
-            "compound region should preserve its counter hole; area was {}",
-            summary.area_mm2
-        );
+            let silk = files
+                .iter()
+                .find(|file| file.filename == "F_SilkS.gto")
+                .unwrap();
+            assert!(
+                !silk.contents.contains("%LPC*%"),
+                "positive compound region holes should not export as layer-global clear regions"
+            );
+            let parsed = gerberx2::GerberX2::parse(&silk.contents).unwrap();
+            let geometry =
+                gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
+            let summary =
+                pcb_ir::dialects::artwork::compare::summarize(&geometry, resolution).unwrap();
+            assert!(
+                (summary.area_mm2 - expected_area).abs() < 1e-6,
+                "compound region should preserve its counter hole; area was {}",
+                summary.area_mm2
+            );
+        }
     }
 
     #[test]

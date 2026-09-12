@@ -22,6 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Avoid redundant explicit net names in imported boards and sheet modules while preserving names that differ from their assigned identifiers.
+- Compose IPC-2581 shapes independently with local cutouts and ordered voids, preventing artificial slits and false DFM width violations.
 - Wire rotated and mirrored schematic symbol pins at KiCad's physical pin anchors.
 - Report and repair missing Zener `NotConnected()` intent as native KiCad no-connect markers.
 - Preserve successful BOM matches when another line needs retrying.
