@@ -72,9 +72,11 @@ A project import also creates:
     └── <selected-project>.kicad_dru   # when present
 ```
 
-## Standalone footprint resolution
+## Footprint resolution without PCB geometry
 
 A standalone `.kicad_sch` does not contain board-embedded footprint geometry.
+The same resolution applies to schematic components absent from a project's PCB;
+existing board-embedded footprints remain authoritative and are not replaced.
 Import resolves each referenced footprint in this order:
 
 1. the sibling project `fp-lib-table`;
@@ -152,9 +154,14 @@ converts back-side geometry and layers, and makes embedded zones and pad angles 
   footprint geometry and the inferred BOM description. Applying does not replace
   displayed values with library IDs or populate visible empty descriptions.
   Instances share a generated part only when these display properties also agree.
+  Differing display properties across units of one component are rejected explicitly;
+  generated components do not yet represent per-unit display overrides.
 - Wires, graphics, sheet relationships, native no-connects, and symbol geometry
   remain in the original schematic. Import no longer classifies passive-promotion
   candidates, substitutes symbols, or writes legacy `pcb:sch` comments.
+- Off-board pinless symbols without a `Path` remain native documentation, outside
+  KiCad's PCB netlist. Symbols with electrical pins (including hidden pins or pins
+  in another unit), or a `Path`, still require component agreement.
 - Embedded definitions resolve through each symbol's `lib_name` override in its
   source sheet, while `lib_id` remains its library identity. Distinct cached
   definitions generate distinct parts even when their library IDs match.

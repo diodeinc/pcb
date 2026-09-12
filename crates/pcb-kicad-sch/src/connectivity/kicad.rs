@@ -672,6 +672,9 @@ fn collect_symbol(
         }
         return Ok(());
     }
+    if definition.is_unmanaged_graphic(placed) {
+        return Ok(());
+    }
 
     let component_path = placed.field_value("Path").filter(|path| !path.is_empty());
     let slot = component_path.and_then(|path| SymbolSlotKey::new(path, placed.unit));

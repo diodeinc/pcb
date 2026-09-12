@@ -23,6 +23,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Preserve off-board pinless documentation symbols during schematic apply without hiding unbound electrical components.
 - Preserve KiCad embedded symbol cache aliases during schematic apply without dangling references or collapsing distinct definitions.
 - Avoid redundant explicit net names in imported boards and sheet modules while preserving names that differ from their assigned identifiers.
 - Compose IPC-2581 shapes independently with local cutouts and ordered voids, preventing artificial slits and false DFM width violations.

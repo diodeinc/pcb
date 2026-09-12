@@ -158,8 +158,8 @@ pub(crate) fn reconcile_document(
     )?;
     materialize_hierarchy(&mut document, netlist, &hierarchy)?;
 
-    let retained_power_symbols = if complete {
-        power_symbol_locations(&document)?
+    let retained_native_symbols = if complete {
+        native_symbol_locations(&document)?
     } else {
         BTreeSet::new()
     };
@@ -199,7 +199,11 @@ pub(crate) fn reconcile_document(
         )?;
     }
     if complete {
-        retain_expected_and_power_symbols(&mut document, &expected_slots, &retained_power_symbols);
+        retain_expected_and_native_symbols(
+            &mut document,
+            &expected_slots,
+            &retained_native_symbols,
+        );
     }
 
     let mut placed = placed_symbols_from_document(&document, &expected_slots)?;
@@ -696,8 +700,9 @@ fn placed_symbols_from_document(
 
 /// Component symbols are projected from Zener. Explicit KiCad power symbols
 /// are semantic net-name drivers, so they remain available for connectivity
-/// analysis and minimally destructive repair.
-fn power_symbol_locations(document: &SchDocument) -> Result<BTreeSet<SymbolLocation>> {
+/// analysis and minimally destructive repair. Off-board pinless artwork is
+/// native documentation, not a missing component.
+fn native_symbol_locations(document: &SchDocument) -> Result<BTreeSet<SymbolLocation>> {
     let mut locations = BTreeSet::new();
     for page in &document.pages {
         for item in &page.items {
@@ -707,10 +712,8 @@ fn power_symbol_locations(document: &SchDocument) -> Result<BTreeSet<SymbolLocat
             let Some(definition) = page.library.definitions.get(symbol.library_key()) else {
                 continue;
             };
-            if symbol::ParsedSymbolDefinition::parse(definition)?
-                .power_scope()
-                .is_some()
-            {
+            let definition = symbol::ParsedSymbolDefinition::parse(definition)?;
+            if definition.power_scope().is_some() || definition.is_unmanaged_graphic(symbol) {
                 locations.insert(SymbolLocation {
                     page_id: page.id.clone(),
                     symbol_id: symbol.id.clone(),
@@ -721,10 +724,10 @@ fn power_symbol_locations(document: &SchDocument) -> Result<BTreeSet<SymbolLocat
     Ok(locations)
 }
 
-fn retain_expected_and_power_symbols(
+fn retain_expected_and_native_symbols(
     document: &mut SchDocument,
     expected_slots: &BTreeSet<SymbolSlotKey>,
-    retained_power_symbols: &BTreeSet<SymbolLocation>,
+    retained_native_symbols: &BTreeSet<SymbolLocation>,
 ) {
     for page in &mut document.pages {
         let page_id = page.id.clone();
@@ -732,7 +735,7 @@ fn retain_expected_and_power_symbols(
             let SchItem::Symbol(symbol) = item else {
                 return true;
             };
-            if retained_power_symbols.contains(&SymbolLocation {
+            if retained_native_symbols.contains(&SymbolLocation {
                 page_id: page_id.clone(),
                 symbol_id: symbol.id.clone(),
             }) {
