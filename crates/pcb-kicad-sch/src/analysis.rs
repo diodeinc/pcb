@@ -783,7 +783,7 @@ fn managed_terminals_by_visibility(
             let definition = page
                 .library
                 .definitions
-                .get(&placed.lib_id)
+                .get(placed.library_key())
                 .with_context(|| {
                     format!(
                         "managed symbol {} has no cached definition {}",
@@ -1652,6 +1652,7 @@ mod tests {
         Symbol {
             id,
             lib_id: "power:GND".to_string(),
+            lib_name: None,
             unit: 1,
             body_style: 1,
             at,

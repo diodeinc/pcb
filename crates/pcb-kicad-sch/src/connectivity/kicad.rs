@@ -600,17 +600,18 @@ fn cached_symbol_definition<'a>(
     placed: &Symbol,
     parsed: &'a mut BTreeMap<String, symbol::ParsedSymbolDefinition>,
 ) -> Result<&'a symbol::ParsedSymbolDefinition> {
-    match parsed.entry(placed.lib_id.clone()) {
+    match parsed.entry(placed.library_key().to_owned()) {
         std::collections::btree_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
         std::collections::btree_map::Entry::Vacant(entry) => {
             let definition = page
                 .library
                 .definitions
-                .get(&placed.lib_id)
+                .get(placed.library_key())
                 .with_context(|| {
                     format!(
                         "symbol {} on page instance {page_instance_id} has no cached definition {}",
-                        placed.id, placed.lib_id
+                        placed.id,
+                        placed.library_key()
                     )
                 })?;
             Ok(entry.insert(symbol::ParsedSymbolDefinition::parse(definition)?))

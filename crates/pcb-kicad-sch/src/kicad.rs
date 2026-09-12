@@ -101,6 +101,35 @@ impl SymbolDefinition {
         )
     }
 
+    /// Rename the library/cache key and unit-section prefixes, preserving all content.
+    pub fn renamed(&self, name: &str) -> Result<Self> {
+        let mut definition = self.clone();
+        let items = definition
+            .sexpr
+            .as_list_mut()
+            .context("expected symbol list")?;
+        items[1] = Sexpr::string(name);
+        let stem = name.rsplit(':').next().unwrap_or(name);
+        for child in &mut items[2..] {
+            let Some(section) = child.as_list_mut() else {
+                continue;
+            };
+            if section.first().and_then(Sexpr::as_sym) != Some("symbol") {
+                continue;
+            }
+            let old = section
+                .get(1)
+                .and_then(Sexpr::as_atom)
+                .context("missing section name")?;
+            let mut suffix = old.rsplitn(3, '_');
+            let style = suffix.next().context("missing section body style")?;
+            let unit = suffix.next().context("missing section unit")?;
+            section[1] = Sexpr::string(format!("{stem}_{unit}_{style}"));
+        }
+        definition.lib_id = name.to_owned();
+        Ok(definition)
+    }
+
     pub(crate) fn default_fields(&self) -> Result<BTreeMap<String, SymbolField>> {
         let items = SexprList::from_sexpr(&self.sexpr)
             .with_context(|| format!("symbol '{}' definition is not a list", self.lib_id))?;
@@ -365,6 +394,7 @@ fn symbol_definition_from_symbol_items(
 fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
     let mut id = None;
     let mut lib_id = None;
+    let mut lib_name = None;
     let mut unit = None;
     let mut body_style = 1;
     let mut at = None;
@@ -387,6 +417,9 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
         match list.tag() {
             Some("lib_id") => {
                 lib_id = list.string(1);
+            }
+            Some("lib_name") => {
+                lib_name = Some(list.string(1).context("symbol lib_name is not a string")?);
             }
             Some("at") => {
                 at = Some(parse_at(list)?);
@@ -446,6 +479,7 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
     Ok(Symbol {
         id: id.ok_or_else(|| anyhow!("symbol {lib_id} missing uuid"))?,
         lib_id,
+        lib_name,
         unit: unit.context("symbol missing unit")?,
         body_style,
         at,
@@ -1217,6 +1251,13 @@ fn symbol_to_sexpr(symbol: &Symbol) -> Sexpr {
             Sexpr::int(symbol.body_style as i64),
         ]),
     ];
+
+    if let Some(lib_name) = &symbol.lib_name {
+        items.push(Sexpr::list(vec![
+            Sexpr::symbol("lib_name"),
+            Sexpr::string(lib_name),
+        ]));
+    }
 
     if let Some(axis) = symbol.mirror {
         items.push(Sexpr::list(vec![
