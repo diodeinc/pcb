@@ -172,25 +172,25 @@ fn bind_net_names(project_file: &Path, netlist: &Schematic) -> Result<()> {
             let ConnectionOrigin::KiCadIsland(island) = origin else {
                 continue;
             };
-            for (source_name, drivers) in &physical.islands[island].named_drivers {
+            for drivers in physical.islands[island].named_drivers.values() {
                 for driver in drivers {
                     let (page_id, id) = match driver {
                         ConnectivityItemRef::Label { page_id, id }
                         | ConnectivityItemRef::Symbol { page_id, id } => (page_id, id),
                         _ => continue,
                     };
-                    let managed = project.document.pages.iter().find(|page| page.id == *page_id)
-                        .and_then(|page| page.items.iter().find(|item| item.id() == Some(id)))
-                        .is_some_and(|item| matches!(item, pcb_kicad_sch::SchItem::Symbol(symbol) if symbol.field_value("Path").is_some()));
-                    let field = if managed {
-                        format!("pcb:net:{source_name}")
-                    } else {
-                        "pcb:net".to_string()
-                    };
                     fields
                         .entry((page_id.clone(), id.clone()))
                         .or_default()
-                        .insert(field, (*name).clone());
+                        .insert("pcb:net".into(), (*name).clone());
+                }
+            }
+            for (source_name, owners) in &physical.islands[island].implicit_power_drivers {
+                for owner in owners {
+                    fields
+                        .entry((owner.page_id.clone(), owner.symbol_id.clone()))
+                        .or_default()
+                        .insert(format!("pcb:net:{source_name}"), (*name).clone());
                 }
             }
         }

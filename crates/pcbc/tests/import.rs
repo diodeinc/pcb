@@ -517,7 +517,33 @@ fn reimport_refuses_without_force_and_force_regenerates() {
         "forced reimport failed:\n{}",
         String::from_utf8_lossy(&forced.stderr)
     );
-    assert_ne!(fs::read_to_string(component).unwrap(), "authored change\n");
+    let regenerated = fs::read_to_string(&component).unwrap();
+    assert_ne!(regenerated, "authored change\n");
+
+    // A retained differently named project must be rejected before any forced cleanup.
+    fs::rename(
+        output.join("layout/layout.kicad_pro"),
+        output.join("layout/custom.kicad_pro"),
+    )
+    .unwrap();
+    fs::write(output.join("layout/custom.kicad_pcb"), "retained PCB\n").unwrap();
+    let conflict = sandbox
+        .run("pcbc", ["import", "layout.kicad_sch", "out", "--force"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!conflict.status.success());
+    assert!(
+        String::from_utf8_lossy(&conflict.stderr).contains("conflicts with retained KiCad project")
+    );
+    assert!(!output.join("layout/layout.kicad_pro").exists());
+    assert_eq!(fs::read_to_string(component).unwrap(), regenerated);
+    assert_eq!(
+        fs::read_to_string(output.join("layout/custom.kicad_pcb")).unwrap(),
+        "retained PCB\n"
+    );
 }
 
 #[test]
@@ -851,6 +877,102 @@ fn stacked_no_connect_import_preserves_drawing_and_distinct_physical_pads() {
         }
         first_apply = Some(bytes);
     }
+}
+
+#[test]
+fn shared_parts_preserve_distinct_schematic_descriptions() {
+    let mut sandbox = sandbox();
+    let mut document = pcb_kicad_sch::SchDocument::from_kicad_sch(STANDALONE_FIXTURE).unwrap();
+    for item in &mut document.pages[0].items {
+        if let pcb_kicad_sch::SchItem::Symbol(symbol) = item {
+            let description = match symbol.reference().unwrap() {
+                "R1" => "feedback",
+                "R2" => "bias",
+                "R3" => "",
+                reference => panic!("unexpected reference {reference}"),
+            };
+            symbol.fields.get_mut("Description").unwrap().value = description.into();
+            symbol.in_bom = false;
+        }
+    }
+    let source = document.to_kicad_sch().unwrap();
+    sandbox.write("source/layout.kicad_sch", &source);
+    let import = sandbox
+        .run("pcbc", ["import", "source/layout.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        import.status.success(),
+        "{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    let output = sandbox.root_path().join("out/layout/layout.kicad_sch");
+    assert_preserved_schematic(&output, &source, false);
+    assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
+    let applied =
+        pcb_kicad_sch::SchDocument::from_kicad_sch(&fs::read_to_string(output).unwrap()).unwrap();
+    let descriptions = |document: &pcb_kicad_sch::SchDocument| {
+        document.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                pcb_kicad_sch::SchItem::Symbol(symbol) => Some((
+                    symbol.reference().unwrap().to_string(),
+                    symbol.fields["Description"].clone(),
+                )),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert_eq!(descriptions(&applied), descriptions(&document));
+}
+
+#[test]
+fn unwired_hidden_power_net_preserves_native_name_with_logical_binding() {
+    let mut sandbox = sandbox();
+    let source = STANDALONE_FIXTURE
+        .replace("(in_bom yes)", "(in_bom no)")
+        .replacen("(pin passive line", "(pin power_in line", 1)
+        .replacen("(name \"~\"", "hide (name \"VCC.A\"", 1);
+    sandbox.write("source/layout.kicad_sch", &source);
+    let import = sandbox
+        .run("pcbc", ["import", "source/layout.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        import.status.success(),
+        "{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    let output = sandbox.root_path().join("out/layout/layout.kicad_sch");
+    let document =
+        pcb_kicad_sch::SchDocument::from_kicad_sch(&fs::read_to_string(&output).unwrap()).unwrap();
+    let symbols = document.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            pcb_kicad_sch::SchItem::Symbol(symbol) => Some(symbol),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(symbols.len(), 3);
+    for symbol in symbols {
+        assert_eq!(symbol.field_value("pcb:net:VCC.A"), Some("VCC_A"));
+    }
+    assert_preserved_schematic(&output, &source, false);
+    assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
+    let applied =
+        pcb_kicad_sch::SchDocument::from_kicad_sch(&fs::read_to_string(output).unwrap()).unwrap();
+    assert_eq!(
+        pcb_kicad_sch::connectivity::ConnectivityGraph::from_kicad(&applied).unwrap(),
+        pcb_kicad_sch::connectivity::ConnectivityGraph::from_kicad(&document).unwrap()
+    );
 }
 
 #[test]

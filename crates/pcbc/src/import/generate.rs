@@ -1373,6 +1373,7 @@ struct ImportPartKey {
     lib_id: Option<KiCadLibId>,
     symbol_definition: String,
     value: Option<String>,
+    schematic_properties: BTreeMap<String, String>,
 }
 
 struct GeneratedComponents {
@@ -1669,21 +1670,7 @@ fn generate_imported_components(
             flags,
             &pin_plan,
             unresolved_footprint,
-            &component
-                .best_properties()
-                .into_iter()
-                .flat_map(|properties| properties.iter())
-                .filter(|(name, _)| matches!(name.as_str(), "Value" | "Description" | "Footprint"))
-                .map(|(name, value)| {
-                    // Display text is independent of Component's inferred BOM description.
-                    let name = if name == "Description" {
-                        "schematic_description"
-                    } else {
-                        name
-                    };
-                    (name.to_string(), value.clone())
-                })
-                .collect(),
+            &part_key.schematic_properties,
         )
         .with_context(|| format!("Failed to render .zen for {}", out_dir.display()))?;
 
@@ -1834,6 +1821,21 @@ fn derive_part_key(component: &ImportComponentData, symbol_definition: String) -
         .or_else(|| props.and_then(|p| p.get("Value")).cloned())
         .or_else(|| props.and_then(|p| p.get("Val")).cloned());
 
+    // Parts may share a generated module only when all persisted display fields agree.
+    let schematic_properties = props
+        .into_iter()
+        .flat_map(|properties| properties.iter())
+        .filter(|(name, _)| matches!(name.as_str(), "Value" | "Description" | "Footprint"))
+        .map(|(name, value)| {
+            let name = if name == "Description" {
+                "schematic_description"
+            } else {
+                name
+            };
+            (name.to_string(), value.clone())
+        })
+        .collect();
+
     ImportPartKey {
         mpn,
         manufacturer,
@@ -1841,6 +1843,7 @@ fn derive_part_key(component: &ImportComponentData, symbol_definition: String) -
         lib_id,
         symbol_definition,
         value,
+        schematic_properties,
     }
 }
 

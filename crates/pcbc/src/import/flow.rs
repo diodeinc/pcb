@@ -98,6 +98,22 @@ fn prepare_output(
         );
     }
 
+    // Standalone reimport retains layout/, so reject conflicting projects before cleanup.
+    let layout_dir = board_repo.join("layout");
+    if selection.portable.source_kind == ImportSourceKind::Schematic && layout_dir.is_dir() {
+        let expected = layout_dir.join(selection.selected.kicad_sch.with_extension("kicad_pro"));
+        for entry in std::fs::read_dir(&layout_dir)? {
+            let path = entry?.path();
+            anyhow::ensure!(
+                path.extension()
+                    .is_none_or(|extension| extension != "kicad_pro")
+                    || path == expected,
+                "Standalone import conflicts with retained KiCad project {}. Import its matching schematic or choose a new output directory.",
+                path.display()
+            );
+        }
+    }
+
     if args.force {
         remove_generated_output(
             board_repo,
