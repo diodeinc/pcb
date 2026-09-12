@@ -45,6 +45,7 @@ pub struct PhysicalIsland {
     pub names: BTreeSet<String>,
     pub terminals: BTreeSet<Terminal>,
     pub(crate) pins: BTreeSet<PhysicalPinRef>,
+    pub(crate) pin_terminals: BTreeMap<PhysicalPinRef, Terminal>,
 }
 
 /// Exact identity of one placed KiCad symbol pin.
@@ -77,6 +78,18 @@ impl PhysicalPinRef {
 
     pub(crate) fn is_on_symbol(&self, location: &SymbolLocation) -> bool {
         self.page_id == location.page_id && self.symbol_id == location.symbol_id
+    }
+
+    pub(crate) fn no_connect_target(&self) -> crate::analysis::NoConnectTarget {
+        crate::analysis::NoConnectTarget {
+            page_id: self.page_id.clone(),
+            symbol_id: self.symbol_id.clone(),
+            pin_number: self.number.clone(),
+            at: Point::new(
+                self.point.x as f64 / SCH_IU_PER_MM,
+                self.point.y as f64 / SCH_IU_PER_MM,
+            ),
+        }
     }
 }
 
@@ -691,6 +704,11 @@ fn collect_symbol(
         .filter(|pin| pin_visibility.includes(pin.hidden))
     {
         let pin_name = static_net_text("symbol pin name", &pin.name)?;
+        let terminal = Terminal::ComponentPin {
+            component: component.clone(),
+            pin_name: pin_name.clone(),
+            pin_numbers: pin.numbers.clone(),
+        };
         output.connectables.push(Connectable {
             geometry: Geometry::Point {
                 at: pin.point.into(),
@@ -702,11 +720,7 @@ fn collect_symbol(
                 role: DriverNameRole::NetName,
                 merge_by_name: true,
             }),
-            terminal: Some(Terminal::ComponentPin {
-                component: component.clone(),
-                pin_name,
-                pin_numbers: pin.numbers.clone(),
-            }),
+            terminal: Some(terminal.clone()),
             pin: Some(PhysicalPinRef::new(
                 &page.id,
                 &placed.id,
@@ -861,6 +875,10 @@ impl From<Point> for GridPoint {
             y: (point.y * SCH_IU_PER_MM).round() as i64,
         }
     }
+}
+
+pub(crate) fn points_connect(left: Point, right: Point) -> bool {
+    GridPoint::from(left) == GridPoint::from(right)
 }
 
 #[derive(Debug, Clone)]
@@ -1062,6 +1080,11 @@ fn connection_groups(
             for item in items {
                 if let Some(source) = &item.source {
                     provenance.items.insert(source.clone());
+                }
+                if let (Some(pin), Some(terminal)) = (&item.pin, &item.terminal) {
+                    provenance
+                        .pin_terminals
+                        .insert(pin.clone(), terminal.clone());
                 }
                 provenance.pins.extend(item.pin);
                 if let Some(driver) = item.driver {

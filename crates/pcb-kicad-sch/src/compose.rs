@@ -5,14 +5,14 @@ use pcb_sch::{ATTR_SCHEMATIC_PATH, Instance, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
 
 use crate::{
-    CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point,
-    Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
+    CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, NoConnect, Paper,
+    Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
     SymbolField, SymbolSlotKey, Wire,
     analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
     component_slots,
     connectivity::{
         ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland,
-        PhysicalPinRef, PinVisibility, SymbolLocation, named_connected_nets,
+        PhysicalPinRef, PinVisibility, SymbolLocation, named_connected_nets, points_connect,
         reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
@@ -316,6 +316,8 @@ fn is_connectivity_issue(issue: &SchematicIssue) -> bool {
             | SchematicIssue::MissingPort { .. }
             | SchematicIssue::UnexpectedNet { .. }
             | SchematicIssue::UnexpectedConnection { .. }
+            | SchematicIssue::MissingNoConnect { .. }
+            | SchematicIssue::UnexpectedNoConnect { .. }
             | SchematicIssue::Shorted { .. }
     )
 }
@@ -376,6 +378,8 @@ fn repair_targets(
                 | SchematicIssue::MissingPort { .. }
                 | SchematicIssue::UnexpectedNet { .. }
                 | SchematicIssue::UnexpectedConnection { .. }
+                | SchematicIssue::MissingNoConnect { .. }
+                | SchematicIssue::UnexpectedNoConnect { .. }
                 | SchematicIssue::Shorted { .. } => {
                     selected_connectivity.insert(context.key.clone());
                 }
@@ -1967,6 +1971,31 @@ fn apply_connectivity_repair(
         root_page,
         reconnect_nets,
     )?;
+    for target in &intent.no_connect_additions {
+        if document.pages.iter().any(|page| {
+            page.id == target.page_id
+                && page.items.iter().any(
+                    |item| matches!(item, SchItem::NoConnect(marker) if points_connect(marker.at, target.at)),
+                )
+        }) {
+            continue;
+        }
+        let key = format!(
+            "zener:no-connect:{}:{}:{}",
+            target.page_id, target.symbol_id, target.pin_number
+        );
+        let id = available_deterministic_id(document, &key);
+        let page = document
+            .pages
+            .iter_mut()
+            .find(|page| page.id == target.page_id)
+            .with_context(|| format!("no-connect target page '{}' is absent", target.page_id))?;
+        page.items.push(SchItem::NoConnect(NoConnect {
+            id,
+            at: target.at,
+            unsupported: Vec::new(),
+        }));
+    }
     Ok(())
 }
 

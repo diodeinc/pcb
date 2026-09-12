@@ -10,7 +10,8 @@ use crate::{
     connectivity::{
         ComponentIdentity, ComponentOrigin, ConnectionGroup, ConnectionOrigin, ConnectivityGraph,
         ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland, PinVisibility,
-        SymbolLocation, Terminal, TerminalIndex, not_connected_terminals, reduce_with_provenance,
+        SymbolLocation, Terminal, TerminalIndex, not_connected_terminals, points_connect,
+        reduce_with_provenance,
     },
     symbol,
 };
@@ -35,6 +36,15 @@ pub struct NetAnalysis {
     pub missing_terminals: Vec<Terminal>,
     pub islands: Vec<IslandRef>,
     pub connected_islands: Vec<Vec<IslandRef>>,
+}
+
+/// One physical component pin that needs a native KiCad no-connect marker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoConnectTarget {
+    pub page_id: String,
+    pub symbol_id: String,
+    pub pin_number: String,
+    pub at: crate::Point,
 }
 
 impl NetAnalysis {
@@ -89,6 +99,15 @@ pub enum SchematicIssue {
         islands: Vec<IslandRef>,
         terminals: Vec<Terminal>,
     },
+    MissingNoConnect {
+        page_id: String,
+        symbol_id: String,
+        pin_number: String,
+    },
+    UnexpectedNoConnect {
+        page_id: String,
+        id: String,
+    },
     Shorted {
         islands: Vec<IslandRef>,
         net_names: BTreeSet<String>,
@@ -110,6 +129,8 @@ impl SchematicIssue {
             SchematicIssue::MissingPort { .. } => "missing_port",
             SchematicIssue::UnexpectedNet { .. } => "unexpected_net",
             SchematicIssue::UnexpectedConnection { .. } => "unexpected_connection",
+            SchematicIssue::MissingNoConnect { .. } => "missing_no_connect",
+            SchematicIssue::UnexpectedNoConnect { .. } => "unexpected_no_connect",
             SchematicIssue::Shorted { .. } => "short",
         }
     }
@@ -177,6 +198,16 @@ impl SchematicIssue {
                 "{} pins the netlist keeps apart are joined",
                 terminals.len()
             ),
+            SchematicIssue::MissingNoConnect {
+                symbol_id,
+                pin_number,
+                ..
+            } => format!(
+                "component symbol '{symbol_id}' pin {pin_number} is missing a no-connect marker"
+            ),
+            SchematicIssue::UnexpectedNoConnect { id, .. } => {
+                format!("no-connect marker '{id}' is attached to a connected pin")
+            }
             SchematicIssue::Shorted { net_names, .. } => format!(
                 "nets {} are shorted together",
                 net_names
@@ -217,6 +248,15 @@ pub enum SchematicIssueKey {
     UnexpectedConnection {
         terminals: Vec<Terminal>,
         items: BTreeSet<ConnectivityItemRef>,
+    },
+    MissingNoConnect {
+        page_id: String,
+        symbol_id: String,
+        pin_number: String,
+    },
+    UnexpectedNoConnect {
+        page_id: String,
+        id: String,
     },
     Shorted {
         net_names: BTreeSet<String>,
@@ -272,6 +312,8 @@ pub fn inspect_schematic(
     apply_symbol_or_label_endpoint_requirements(document, netlist, &mut expected)?;
     let physical = observed_reconcilable_connectivity(document, netlist)?;
     let mut analysis = analyze_connectivity(&expected, &physical.graph);
+    let (_, no_connect_issues) = inspect_no_connects(document, netlist)?;
+    analysis.issues.extend(no_connect_issues);
     analysis.issues.splice(
         0..0,
         document.pages.iter().flat_map(|page| {
@@ -295,6 +337,85 @@ pub fn inspect_schematic(
         expected,
         physical,
         issues,
+    })
+}
+
+pub(crate) fn inspect_no_connects(
+    document: &SchDocument,
+    netlist: &Schematic,
+) -> anyhow::Result<(Vec<NoConnectTarget>, Vec<SchematicIssue>)> {
+    let physical = reduce_with_provenance(document, PinVisibility::IncludeHidden)?;
+    let pins = physical
+        .islands
+        .values()
+        .flat_map(|island| island.pin_terminals.iter())
+        .collect::<BTreeMap<_, _>>();
+    let expected_not_connected = not_connected_terminals(netlist);
+    let expected_connected = ConnectivityGraph::from_zener(netlist)?
+        .groups
+        .into_iter()
+        .flat_map(|group| group.terminals)
+        .collect::<BTreeSet<_>>();
+    let targets_for = |terminals: &BTreeSet<Terminal>| {
+        pins.iter()
+            .filter(|(_, pin_terminal)| {
+                terminals
+                    .iter()
+                    .any(|terminal| pin_terminal.matches(terminal))
+            })
+            .map(|(pin, _)| pin.no_connect_target())
+            .collect::<Vec<_>>()
+    };
+    let desired = targets_for(&expected_not_connected);
+    let connected = targets_for(&expected_connected);
+    let markers = document.pages.iter().flat_map(|page| {
+        page.items.iter().filter_map(|item| match item {
+            SchItem::NoConnect(marker) => Some((&page.id, marker)),
+            _ => None,
+        })
+    });
+    let missing = desired
+        .iter()
+        .filter(|target| !has_no_connect(document, target))
+        .map(|target| {
+            (
+                target.page_id.clone(),
+                target.symbol_id.clone(),
+                target.pin_number.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let mut issues = missing
+        .into_iter()
+        .map(
+            |(page_id, symbol_id, pin_number)| SchematicIssue::MissingNoConnect {
+                page_id,
+                symbol_id,
+                pin_number,
+            },
+        )
+        .collect::<Vec<_>>();
+    issues.extend(markers.filter_map(|(page_id, marker)| {
+        let at_desired = desired
+            .iter()
+            .any(|target| target.page_id == *page_id && points_connect(target.at, marker.at));
+        let at_connected = connected
+            .iter()
+            .any(|target| target.page_id == *page_id && points_connect(target.at, marker.at));
+        (at_connected && !at_desired).then(|| SchematicIssue::UnexpectedNoConnect {
+            page_id: page_id.clone(),
+            id: marker.id.clone(),
+        })
+    }));
+    Ok((desired, issues))
+}
+
+pub(crate) fn has_no_connect(document: &SchDocument, target: &NoConnectTarget) -> bool {
+    document.pages.iter().any(|page| {
+        page.id == target.page_id
+            && page.items.iter().any(|item| {
+                matches!(item, SchItem::NoConnect(marker) if points_connect(marker.at, target.at))
+            })
     })
 }
 
@@ -426,6 +547,31 @@ pub(crate) fn issue_context(
                 items,
             )
         }
+        SchematicIssue::MissingNoConnect {
+            page_id,
+            symbol_id,
+            pin_number,
+        } => (
+            SchematicIssueKey::MissingNoConnect {
+                page_id: page_id.clone(),
+                symbol_id: symbol_id.clone(),
+                pin_number: pin_number.clone(),
+            },
+            BTreeSet::new(),
+        ),
+        SchematicIssue::UnexpectedNoConnect { page_id, id } => {
+            let item = ConnectivityItemRef::NoConnect {
+                page_id: page_id.clone(),
+                id: id.clone(),
+            };
+            (
+                SchematicIssueKey::UnexpectedNoConnect {
+                    page_id: page_id.clone(),
+                    id: id.clone(),
+                },
+                BTreeSet::from([item]),
+            )
+        }
         SchematicIssue::Shorted {
             net_names,
             islands: issue_islands,
@@ -458,7 +604,9 @@ pub(crate) fn coarse_key(key: &SchematicIssueKey) -> SchematicIssueKey {
         | SchematicIssueKey::UnexpectedSymbol(_)
         | SchematicIssueKey::UnboundSymbol(_)
         | SchematicIssueKey::DisconnectedNet(_)
-        | SchematicIssueKey::MissingPort(_) => {}
+        | SchematicIssueKey::MissingPort(_)
+        | SchematicIssueKey::MissingNoConnect { .. }
+        | SchematicIssueKey::UnexpectedNoConnect { .. } => {}
     }
     key
 }
@@ -545,14 +693,14 @@ fn is_open_not_connected_group(
     islands: &BTreeMap<IslandRef, PhysicalIsland>,
     not_connected: &BTreeSet<Terminal>,
 ) -> bool {
-    if !group.names.is_empty() || group.terminals.len() != 1 {
+    if !group.names.is_empty() || group.terminals.is_empty() {
         return false;
     }
-    let terminal = group.terminals.first().expect("checked one terminal");
-    if !not_connected
-        .iter()
-        .any(|candidate| candidate.matches(terminal))
-    {
+    if !group.terminals.iter().all(|terminal| {
+        not_connected
+            .iter()
+            .any(|candidate| candidate.matches(terminal))
+    }) {
         return false;
     }
     let mut origins = group.origins.iter();
@@ -981,6 +1129,18 @@ mod tests {
     };
 
     #[test]
+    fn no_connect_matching_uses_kicad_internal_coordinate_units() {
+        assert!(points_connect(
+            Point::new(10.00004, 20.00004),
+            Point::new(10.0, 20.0)
+        ));
+        assert!(!points_connect(
+            Point::new(10.00006, 20.0),
+            Point::new(10.0, 20.0)
+        ));
+    }
+
+    #[test]
     fn indexed_group_matching_preserves_analysis_and_source_order() {
         let pin = |name: &str, number: &str| Terminal::ComponentPin {
             component: ComponentIdentity::ManagedPath("U1".into()),
@@ -1256,14 +1416,26 @@ mod tests {
             page_id: "page".to_string(),
             index: 0,
         };
-        let group = ConnectionGroup {
+        let mut group = ConnectionGroup {
             names: BTreeSet::new(),
             terminals: BTreeSet::from([terminal.clone()]),
             origins: BTreeSet::from([ConnectionOrigin::KiCadIsland(island.clone())]),
         };
         let mut islands = BTreeMap::from([(island, PhysicalIsland::default())]);
-        let not_connected = BTreeSet::from([terminal]);
+        let mut not_connected = BTreeSet::from([terminal]);
 
+        assert!(is_open_not_connected_group(
+            &group,
+            &islands,
+            &not_connected
+        ));
+        let stacked = Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath("U1".to_string()),
+            pin_name: "NC2".to_string(),
+            pin_numbers: BTreeSet::from(["2".to_string()]),
+        };
+        group.terminals.insert(stacked.clone());
+        not_connected.insert(stacked);
         assert!(is_open_not_connected_group(
             &group,
             &islands,

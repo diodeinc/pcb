@@ -11,14 +11,16 @@ use pcb_sch::Schematic;
 use crate::{
     GEOMETRY_EPS_MM, Point, SchDocument, SchItem, SchPage, Symbol,
     analysis::{
-        ConnectivityAnalysis, ConnectivityInspection, SchematicIssue, SchematicIssueKey,
-        analyze_connectivity, ensure_issues_resolved, ensure_no_new_issues, inspect_schematic,
-        issue_context, logical_name, observed_reconcilable_connectivity,
+        ConnectivityAnalysis, ConnectivityInspection, NoConnectTarget, SchematicIssue,
+        SchematicIssueKey, analyze_connectivity, ensure_issues_resolved, ensure_no_new_issues,
+        has_no_connect, inspect_no_connects, inspect_schematic, issue_context, logical_name,
+        observed_reconcilable_connectivity,
     },
     compose,
     connectivity::{
         ComponentIdentity, ConnectivityGraph, ConnectivityItemRef, CutNode, PhysicalConnectivity,
         PhysicalIsland, PinVisibility, SymbolLocation, Terminal, TerminalIndex, cut_graph,
+        points_connect, reduce_with_provenance,
     },
     cut,
     net_symbols::NetSymbolSpec,
@@ -26,10 +28,10 @@ use crate::{
 
 /// A deterministic, UUID-addressed connectivity repair decision.
 ///
-/// The intent says what must change, never where geometry goes: exact items to
-/// remove, symbols that must move, nets whose connectivity a realizer rebuilds,
-/// and the name driver each of those nets needs on each page. Planning does
-/// not mutate the input document. A realizer applies the intent and then
+/// The intent says what must change: exact items to remove, symbols that must
+/// move, nets whose connectivity a realizer rebuilds, the name driver each net
+/// needs, and exact native no-connect marker targets. Planning does not mutate
+/// the input document. A realizer applies the intent and then
 /// [`verify_connectivity_repair`] judges the result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectivityRepairIntent {
@@ -38,6 +40,7 @@ pub struct ConnectivityRepairIntent {
     pub(crate) relocated_symbols: BTreeSet<SymbolLocation>,
     pub(crate) reconnect_nets: BTreeSet<String>,
     pub(crate) drivers: BTreeMap<String, BTreeMap<String, NetDriverKind>>,
+    pub(crate) no_connect_additions: Vec<NoConnectTarget>,
 }
 
 impl ConnectivityRepairIntent {
@@ -50,6 +53,7 @@ impl ConnectivityRepairIntent {
             relocated_symbols: BTreeSet::new(),
             reconnect_nets: BTreeSet::new(),
             drivers: BTreeMap::new(),
+            no_connect_additions: Vec::new(),
         }
     }
 
@@ -86,9 +90,14 @@ impl ConnectivityRepairIntent {
         self.drivers.get(net_name)?.get(page_id)
     }
 
+    /// Native KiCad no-connect markers the realizer must add.
+    pub fn no_connect_additions(&self) -> &[NoConnectTarget] {
+        &self.no_connect_additions
+    }
+
     /// Apply the removals and symbol relocations of this intent: everything
     /// PCB decided must change, with no new geometry. A consumer's realizer
-    /// starts from this document and only adds connections.
+    /// starts from this document and adds connections and no-connect markers.
     pub fn apply_edits(&self, document: &SchDocument) -> Result<SchDocument> {
         let mut repaired = document.clone();
         remove_items(&mut repaired, &self.removals)?;
@@ -172,6 +181,7 @@ pub(crate) fn plan_connectivity_repair_core(
         .flat_map(|context| repair_problems(&context.issue))
         .collect::<BTreeSet<_>>();
     let mut reconnect_nets = BTreeSet::new();
+    let mut selected_no_connects = BTreeSet::new();
 
     for context in &selected {
         match &context.issue {
@@ -215,6 +225,23 @@ pub(crate) fn plan_connectivity_repair_core(
                         reconnect_nets.extend(expected_nets.for_island(provenance));
                     }
                 }
+            }
+            SchematicIssue::MissingNoConnect {
+                page_id,
+                symbol_id,
+                pin_number,
+            } => {
+                selected_no_connects.insert((
+                    page_id.clone(),
+                    symbol_id.clone(),
+                    pin_number.clone(),
+                ));
+            }
+            SchematicIssue::UnexpectedNoConnect { page_id, id } => {
+                removals.insert(ConnectivityItemRef::NoConnect {
+                    page_id: page_id.clone(),
+                    id: id.clone(),
+                });
             }
             SchematicIssue::MissingSheet { .. }
             | SchematicIssue::UnboundSymbol { .. }
@@ -376,13 +403,100 @@ pub(crate) fn plan_connectivity_repair_core(
     }
 
     removals.extend(orphaned_junctions(document, &simulated, &removals));
+    removals.extend(no_connects_on_relocated_symbols(
+        document,
+        netlist,
+        &relocate_symbols,
+    )?);
+
+    // Additions are coordinates in the document after this intent's edits.
+    // Relocation leaves pin-attached annotations behind, so remove those and
+    // regenerate NC markers on the moved pins along with explicitly selected
+    // missing-marker issues.
+    let mut post_edits = document.clone();
+    remove_items(&mut post_edits, &removals)?;
+    compose::relocate_symbols(&mut post_edits, &relocate_symbols)?;
+    let required_no_connects = inspect_no_connects(&post_edits, netlist)?
+        .0
+        .into_iter()
+        .filter(|target| {
+            !has_no_connect(&post_edits, target)
+                && (selected_no_connects.contains(&(
+                    target.page_id.clone(),
+                    target.symbol_id.clone(),
+                    target.pin_number.clone(),
+                )) || relocate_symbols.contains(&SymbolLocation {
+                    page_id: target.page_id.clone(),
+                    symbol_id: target.symbol_id.clone(),
+                }))
+        })
+        .collect::<Vec<_>>();
+    // Every physical pin requirement participates in issue selection above.
+    // One native marker satisfies all pins that deliberately share a point.
+    let mut no_connect_additions = Vec::<NoConnectTarget>::new();
+    for target in required_no_connects {
+        if !no_connect_additions.iter().any(|existing| {
+            existing.page_id == target.page_id && points_connect(existing.at, target.at)
+        }) {
+            no_connect_additions.push(target);
+        }
+    }
     Ok(ConnectivityRepairIntent {
         selected_keys: selected_keys.clone(),
         removals,
         relocated_symbols: relocate_symbols,
         reconnect_nets,
         drivers: BTreeMap::new(),
+        no_connect_additions,
     })
+}
+
+fn no_connects_on_relocated_symbols(
+    document: &SchDocument,
+    netlist: &Schematic,
+    locations: &BTreeSet<SymbolLocation>,
+) -> Result<BTreeSet<ConnectivityItemRef>> {
+    if locations.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let physical = reduce_with_provenance(document, PinVisibility::IncludeHidden)?;
+    let pins = physical
+        .islands
+        .values()
+        .flat_map(|island| island.pin_terminals.iter())
+        .map(|(pin, terminal)| (pin, terminal, pin.no_connect_target()))
+        .collect::<Vec<_>>();
+    let expected_no_connects = crate::connectivity::not_connected_terminals(netlist);
+    Ok(document
+        .pages
+        .iter()
+        .flat_map(|page| {
+            let pins = &pins;
+            let expected_no_connects = &expected_no_connects;
+            page.items.iter().filter_map(move |item| match item {
+                SchItem::NoConnect(marker)
+                    if pins.iter().any(|(pin, _, target)| {
+                        locations.iter().any(|location| pin.is_on_symbol(location))
+                            && target.page_id == page.id
+                            && points_connect(target.at, marker.at)
+                    }) && !pins.iter().any(|(pin, terminal, target)| {
+                        !locations.iter().any(|location| pin.is_on_symbol(location))
+                            && expected_no_connects
+                                .iter()
+                                .any(|expected| terminal.matches(expected))
+                            && target.page_id == page.id
+                            && points_connect(target.at, marker.at)
+                    }) =>
+                {
+                    Some(ConnectivityItemRef::NoConnect {
+                        page_id: page.id.clone(),
+                        id: marker.id.clone(),
+                    })
+                }
+                _ => None,
+            })
+        })
+        .collect())
 }
 
 /// Verify a realized repair against the inspection it was planned from.
@@ -1177,7 +1291,9 @@ fn repair_problems(issue: &SchematicIssue) -> BTreeSet<RepairProblem> {
         | SchematicIssue::MissingSymbol { .. }
         | SchematicIssue::DuplicateSymbol { .. }
         | SchematicIssue::MismatchedSymbolId { .. }
-        | SchematicIssue::UnexpectedSymbol { .. } => BTreeSet::new(),
+        | SchematicIssue::UnexpectedSymbol { .. }
+        | SchematicIssue::MissingNoConnect { .. }
+        | SchematicIssue::UnexpectedNoConnect { .. } => BTreeSet::new(),
     }
 }
 

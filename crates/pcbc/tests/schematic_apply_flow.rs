@@ -6,6 +6,7 @@ use pcb_kicad_sch::{
     Label, LabelKind, LabelShape, LabelSpin, MirrorAxis, PinInstance, Point, Rotation, SchItem,
     SymbolDefinition, Wire,
     analysis::{SchematicIssue, inspect_schematic},
+    plan_connectivity_repair,
     reconcile::plan_repairs,
 };
 use pcb_sch::{ATTR_SCHEMATIC_PATH, ATTR_SYMBOL_FORMAT_VERSION, AttributeValue};
@@ -627,27 +628,154 @@ fn preserves_user_symbol_and_equivalent_label_geometry() {
 }
 
 #[test]
-fn accepts_an_isolated_not_connected_pin() {
+fn materializes_an_isolated_not_connected_pin_and_then_makes_no_changes() {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
     let mut netlist = linked_fixture(&project_dir);
+    let connected_netlist = netlist.clone();
     let mut not_connected = netlist.nets.remove("RIGHT").unwrap();
     not_connected.kind = "NotConnected".to_string();
     not_connected.name.clear();
     netlist.nets.insert(String::new(), not_connected);
 
-    apply_linked_schematic(&netlist).unwrap().unwrap();
+    let created = apply_linked_schematic(&netlist).unwrap().unwrap();
 
-    let project = KicadProject::load(project_dir).unwrap();
+    let project = KicadProject::load(&project_dir).unwrap();
     let analysis = inspect_schematic(&project.document, &netlist)
         .unwrap()
         .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
+    let not_connected_pin = common::pin_point(&project.document, "R2.R", "2");
+    let marker_points = project.document.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::NoConnect(marker) => Some(marker.at),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(marker_points, vec![not_connected_pin]);
     assert!(
         !project.document.pages[0]
             .items
             .iter()
             .any(|item| matches!(item, SchItem::Label(label) if label.text == "RIGHT"))
+    );
+
+    let source = fs::read(&created.schematic_files[0]).unwrap();
+    assert!(String::from_utf8_lossy(&source).contains("(no_connect"));
+    let unchanged = apply_linked_schematic(&netlist).unwrap().unwrap();
+    assert!(!unchanged.changed);
+    assert_eq!(fs::read(&unchanged.schematic_files[0]).unwrap(), source);
+
+    let mut without_marker = KicadProject::load(&project_dir).unwrap();
+    let marker = without_marker.document.pages[0]
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::NoConnect(marker) => Some(marker),
+            _ => None,
+        })
+        .unwrap();
+    marker.id = pcb_kicad_sch::deterministic_uuid("user-owned-no-connect");
+    let user_source = without_marker.document.to_kicad_sch().unwrap();
+    fs::write(&created.schematic_files[0], &user_source).unwrap();
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    assert_eq!(
+        fs::read_to_string(&created.schematic_files[0]).unwrap(),
+        user_source
+    );
+
+    without_marker.document.pages[0]
+        .items
+        .retain(|item| !matches!(item, SchItem::NoConnect(_)));
+    fs::write(
+        &created.schematic_files[0],
+        without_marker.document.to_kicad_sch().unwrap(),
+    )
+    .unwrap();
+    let missing_inspection = inspect_schematic(&without_marker.document, &netlist).unwrap();
+    let missing_key = missing_inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::MissingNoConnect { .. }))
+        .unwrap()
+        .key
+        .clone();
+    let intent = plan_connectivity_repair(
+        &without_marker.document,
+        &netlist,
+        &missing_inspection,
+        &BTreeSet::from([missing_key.clone()]),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    assert_eq!(intent.no_connect_additions().len(), 1);
+    assert_eq!(intent.no_connect_additions()[0].at, not_connected_pin);
+    let scoped = plan_repairs(
+        &without_marker.document,
+        &netlist,
+        &missing_inspection,
+        BTreeSet::from([missing_key]),
+    )
+    .unwrap()
+    .apply(Some(&without_marker.document))
+    .unwrap();
+    assert!(
+        scoped.pages[0].items.iter().any(
+            |item| matches!(item, SchItem::NoConnect(marker) if marker.at == not_connected_pin)
+        )
+    );
+    assert!(apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    let repaired_source = fs::read(&created.schematic_files[0]).unwrap();
+    assert!(String::from_utf8_lossy(&repaired_source).contains("(no_connect"));
+    let repaired = KicadProject::load(&project_dir).unwrap();
+    assert_eq!(
+        repaired.document.pages[0]
+            .items
+            .iter()
+            .filter(|item| matches!(item, SchItem::NoConnect(_)))
+            .count(),
+        1
+    );
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    assert_eq!(
+        fs::read(&created.schematic_files[0]).unwrap(),
+        repaired_source
+    );
+
+    let stale_inspection = inspect_schematic(&repaired.document, &connected_netlist).unwrap();
+    let stale = stale_inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::UnexpectedNoConnect { .. }))
+        .unwrap();
+    let stale_intent = plan_connectivity_repair(
+        &repaired.document,
+        &connected_netlist,
+        &stale_inspection,
+        &BTreeSet::from([stale.key.clone()]),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    assert_eq!(stale_intent.removals(), &stale.items);
+    assert!(
+        apply_linked_schematic(&connected_netlist)
+            .unwrap()
+            .unwrap()
+            .changed
+    );
+    let reconnected = KicadProject::load(&project_dir).unwrap();
+    assert!(
+        !reconnected.document.pages[0].items.iter().any(
+            |item| matches!(item, SchItem::NoConnect(marker) if marker.at == not_connected_pin)
+        )
+    );
+    assert!(
+        !apply_linked_schematic(&connected_netlist)
+            .unwrap()
+            .unwrap()
+            .changed
     );
 }
 

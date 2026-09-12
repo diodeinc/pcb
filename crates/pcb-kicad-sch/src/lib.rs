@@ -29,6 +29,7 @@ mod symbol;
 pub mod analysis;
 mod compose;
 
+pub use analysis::NoConnectTarget;
 pub use field_autoplace::Bounds;
 pub use identity::{
     KiCadUuidPath, ROOT_PAGE_KEY, SymbolSlotKey, UUID_NAMESPACE_URL, canonical_component_path,

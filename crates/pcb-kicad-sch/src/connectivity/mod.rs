@@ -9,7 +9,9 @@ mod raw;
 mod zener;
 
 pub use kicad::{ConnectivityItemRef, PhysicalConnectivity, PhysicalIsland, PinVisibility};
-pub(crate) use kicad::{CutGraph, CutNode, PhysicalPinRef, cut_graph, reduce_with_provenance};
+pub(crate) use kicad::{
+    CutGraph, CutNode, PhysicalPinRef, cut_graph, points_connect, reduce_with_provenance,
+};
 pub(crate) use raw::TerminalIndex;
 pub(crate) use zener::{named_connected_nets, not_connected_terminals};
 

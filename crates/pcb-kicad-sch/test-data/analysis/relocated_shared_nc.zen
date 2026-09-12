@@ -1,0 +1,11 @@
+Project(name="RelocatedSharedNoConnect", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+LEFT = Net("LEFT")
+MID = Net("MID")
+RIGHT = Net("RIGHT")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=LEFT, P2=NotConnected())
+Resistor(name="R2", value="2kohms", package="0402", P1=MID, P2=NotConnected())
+Resistor(name="R3", value="3kohms", package="0402", P1=RIGHT, P2=RIGHT)
