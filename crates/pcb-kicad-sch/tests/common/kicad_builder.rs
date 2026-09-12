@@ -200,6 +200,7 @@ impl KicadBuilder {
         self.push(SchItem::Symbol(Symbol {
             id,
             lib_id: lib_id.to_string(),
+            lib_name: None,
             unit: 1,
             body_style: 1,
             at,

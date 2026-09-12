@@ -926,6 +926,7 @@ mod tests {
         Symbol {
             id: "symbol".to_string(),
             lib_id: "Test:IC".to_string(),
+            lib_name: None,
             unit: 1,
             body_style: 1,
             at,

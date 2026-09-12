@@ -238,6 +238,9 @@ pub struct SheetPin {
 pub struct Symbol {
     pub id: Id,
     pub lib_id: LibId,
+    /// Page-local embedded definition override; `lib_id` remains the library identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lib_name: Option<String>,
     pub unit: u32,
     pub body_style: u32,
     pub at: Point,
@@ -259,6 +262,10 @@ pub struct Symbol {
 }
 
 impl Symbol {
+    pub fn library_key(&self) -> &str {
+        self.lib_name.as_deref().unwrap_or(&self.lib_id)
+    }
+
     pub fn reference(&self) -> Option<&str> {
         self.field_value("Reference")
     }

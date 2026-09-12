@@ -44,6 +44,7 @@ pub(crate) fn specs(netlist: &Schematic) -> Result<BTreeMap<String, NetSymbolSpe
             let unplaced = Symbol {
                 id: String::new(),
                 lib_id: definition.lib_id.clone(),
+                lib_name: None,
                 unit: *unit,
                 body_style: 1,
                 at: Point::default(),

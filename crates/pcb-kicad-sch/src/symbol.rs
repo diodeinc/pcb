@@ -128,6 +128,36 @@ impl ParsedSymbolDefinition {
         &self.unit_indices
     }
 
+    /// Compare every unit/style's electrical interface, excluding presentation.
+    pub(crate) fn same_pin_interface(&self, other: &Self) -> bool {
+        let pins = |definition: &Self| {
+            let mut pins = definition
+                .sections
+                .iter()
+                .flat_map(|section| {
+                    section.pins.iter().map(|pin| {
+                        (
+                            section.unit,
+                            section.body_style,
+                            pin.name.clone(),
+                            pin.numbers.clone(),
+                            pin.electrical_type.clone(),
+                            pin.hidden,
+                            pin.alternates.clone(),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            pins.sort();
+            pins
+        };
+        self.unit_indices == other.unit_indices
+            && self.power_scope == other.power_scope
+            && self.duplicate_pin_numbers_are_jumpers == other.duplicate_pin_numbers_are_jumpers
+            && self.jumper_pin_groups == other.jumper_pin_groups
+            && pins(self) == pins(other)
+    }
+
     pub fn duplicate_pin_numbers_are_jumpers(&self) -> bool {
         self.duplicate_pin_numbers_are_jumpers
     }
@@ -591,6 +621,7 @@ mod tests {
         let symbol = Symbol {
             id: "symbol".into(),
             lib_id: "Device:Multi".into(),
+            lib_name: None,
             unit: 2,
             body_style: 1,
             at: Point::new(10.0, 20.0),
@@ -626,6 +657,7 @@ mod tests {
         let mut symbol = Symbol {
             id: "symbol".into(),
             lib_id: "Test:Symbol".into(),
+            lib_name: None,
             unit: 1,
             body_style: 1,
             at: Point::new(10.0, 20.0),

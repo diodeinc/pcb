@@ -433,18 +433,33 @@ fn project_component_slot(
     }
 
     let previous = selected.map(|selected| &selected.symbol);
+    // A native save may give an instance its own presentation without changing
+    // the library identity. Keep that presentation unless the symbol is replaced
+    // or its electrical interface needs repair. Missing base entries are normal.
+    let mut definition = definition;
+    let library_id = definition.lib_id.clone();
+    if let Some(previous) = previous
+        && previous.lib_name.is_some()
+        && definition.lib_id == previous.lib_id
+        && let Some(cached) = document.pages[page_index]
+            .library
+            .definitions
+            .get(previous.library_key())
+        && symbol::ParsedSymbolDefinition::parse(cached)?
+            .same_pin_interface(&symbol::ParsedSymbolDefinition::parse(&definition)?)
+    {
+        definition = cached.clone();
+    }
     let at = previous.map(|symbol| symbol.at).unwrap_or_default();
     let rotation = match previous {
         Some(symbol) => symbol.rotation,
         None => initial_component_rotation(netlist, slot, &definition, net_symbol_specs)?,
     };
     let mirror = previous.and_then(|symbol| symbol.mirror);
-    let symbol =
+    let mut symbol =
         build_component_symbol(instance, slot, &definition, at, rotation, mirror, previous)?;
-    document.pages[page_index]
-        .library
-        .definitions
-        .insert(definition.lib_id.clone(), definition);
+    symbol.lib_id = library_id;
+    cache_symbol_definition(&mut document.pages[page_index], &mut symbol, &definition)?;
     if let Some(selected) = selected {
         let selected_page_id = document.pages[selected.page_index].id.clone();
         let mut replacement = Some(symbol);
@@ -490,6 +505,7 @@ fn initial_component_rotation(
     let unplaced = Symbol {
         id: String::new(),
         lib_id: definition.lib_id.clone(),
+        lib_name: None,
         unit: slot.unit(),
         body_style: 1,
         at: Point::default(),
@@ -657,11 +673,12 @@ fn placed_symbols_from_document(
         let definition = document.pages[candidate.page_index]
             .library
             .definitions
-            .get(&candidate.symbol.lib_id)
+            .get(candidate.symbol.library_key())
             .with_context(|| {
                 format!(
                     "managed symbol {} has no cached definition {}",
-                    candidate.symbol.id, candidate.symbol.lib_id
+                    candidate.symbol.id,
+                    candidate.symbol.library_key()
                 )
             })?
             .clone();
@@ -687,7 +704,7 @@ fn power_symbol_locations(document: &SchDocument) -> Result<BTreeSet<SymbolLocat
             let SchItem::Symbol(symbol) = item else {
                 continue;
             };
-            let Some(definition) = page.library.definitions.get(&symbol.lib_id) else {
+            let Some(definition) = page.library.definitions.get(symbol.library_key()) else {
                 continue;
             };
             if symbol::ParsedSymbolDefinition::parse(definition)?
@@ -1482,7 +1499,7 @@ fn occupy_page_items_except(
     for item in &page.items {
         match item {
             SchItem::Symbol(symbol) if !excluded_symbol_ids.contains(&symbol.id) => {
-                let Some(definition) = page.library.definitions.get(&symbol.lib_id) else {
+                let Some(definition) = page.library.definitions.get(symbol.library_key()) else {
                     continue;
                 };
                 if let Some(bounds) = field_autoplace::symbol_visual_bounds(symbol, definition)? {
@@ -1680,6 +1697,7 @@ fn build_component_symbol(
     let mut symbol = Symbol {
         id: slot.symbol_id(),
         lib_id: definition.lib_id.clone(),
+        lib_name: None,
         unit: slot.unit(),
         body_style: previous.map(|symbol| symbol.body_style).unwrap_or(1),
         at,
@@ -2129,11 +2147,12 @@ fn relocate_symbol(
     let definition = document.pages[page_index]
         .library
         .definitions
-        .get(&symbol.lib_id)
+        .get(symbol.library_key())
         .with_context(|| {
             format!(
                 "schematic symbol '{}' has no cached definition '{}'",
-                symbol.id, symbol.lib_id
+                symbol.id,
+                symbol.library_key()
             )
         })?;
     let mut packer = GridPacker::for_page(&document.pages[page_index].paper)?;
@@ -2820,7 +2839,7 @@ fn net_symbol_stub_collides(
             SchItem::NoConnect(no_connect) => existing_points.push(no_connect.at),
             SchItem::Sheet(sheet) => existing_points.extend(sheet.pins.iter().map(|pin| pin.at)),
             SchItem::Symbol(symbol) => {
-                if let Some(definition) = page.library.definitions.get(&symbol.lib_id) {
+                if let Some(definition) = page.library.definitions.get(symbol.library_key()) {
                     existing_points.extend(
                         definition
                             .placed_pins(symbol)?
@@ -3222,6 +3241,7 @@ fn build_net_symbol(
     let mut symbol = Symbol {
         id,
         lib_id: spec.definition.lib_id.clone(),
+        lib_name: None,
         unit: spec.unit,
         body_style: 1,
         at: Point::default(),
@@ -3416,7 +3436,7 @@ fn upsert_wire(document: &mut SchDocument, page_index: usize, mut wire: Wire) {
 fn insert_net_symbol(
     document: &mut SchDocument,
     page_index: usize,
-    symbol: Symbol,
+    mut symbol: Symbol,
     definition: &SymbolDefinition,
 ) -> Result<()> {
     if contains_id(document, &symbol.id) {
@@ -3426,21 +3446,39 @@ fn insert_net_symbol(
         );
     }
     let page = &mut document.pages[page_index];
-    match page.library.definitions.get(&definition.lib_id) {
-        Some(existing) if existing != definition => bail!(
-            "page '{}' already has a different definition for net symbol '{}'",
-            page.id,
-            definition.lib_id
-        ),
-        Some(_) => {}
-        None => {
-            page.library
-                .definitions
-                .insert(definition.lib_id.clone(), definition.clone());
-        }
-    }
+    cache_symbol_definition(page, &mut symbol, definition)?;
     page.items.push(SchItem::Symbol(symbol));
     Ok(())
+}
+
+/// Install a definition without changing another instance's cached geometry.
+fn cache_symbol_definition(
+    page: &mut SchPage,
+    symbol: &mut Symbol,
+    definition: &SymbolDefinition,
+) -> Result<()> {
+    let mut cached = definition.clone();
+    for suffix in 1.. {
+        match page.library.definitions.get(&cached.lib_id) {
+            Some(existing)
+                if existing != &cached
+                    && page.items.iter().any(|item| {
+                        matches!(item, SchItem::Symbol(other)
+                    if other.id != symbol.id && other.library_key() == cached.lib_id)
+                    }) =>
+            {
+                cached = definition.renamed(&format!("{}_{}", definition.lib_id, suffix))?;
+            }
+            _ => {
+                symbol.lib_name = (cached.lib_id != symbol.lib_id).then(|| cached.lib_id.clone());
+                page.library
+                    .definitions
+                    .insert(cached.lib_id.clone(), cached);
+                return Ok(());
+            }
+        }
+    }
+    unreachable!()
 }
 
 fn prune_unused_symbol_definitions(document: &mut SchDocument) {
@@ -3449,7 +3487,7 @@ fn prune_unused_symbol_definitions(document: &mut SchDocument) {
             .items
             .iter()
             .filter_map(|item| match item {
-                SchItem::Symbol(symbol) => Some(symbol.lib_id.as_str()),
+                SchItem::Symbol(symbol) => Some(symbol.library_key()),
                 _ => None,
             })
             .collect::<BTreeSet<_>>();
@@ -4009,6 +4047,7 @@ mod tests {
         let symbol = Symbol {
             id: slot.symbol_id(),
             lib_id: definition.lib_id.clone(),
+            lib_name: None,
             unit: 1,
             body_style: 1,
             at: Point::default(),

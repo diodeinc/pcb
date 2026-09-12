@@ -748,7 +748,8 @@ fn orphaned_junctions(
                 SchItem::Label(label) => remaining_points.push(label.at),
                 SchItem::NoConnect(no_connect) => remaining_points.push(no_connect.at),
                 SchItem::Symbol(symbol) => {
-                    if let Some(definition) = remaining_page.library.definitions.get(&symbol.lib_id)
+                    if let Some(definition) =
+                        remaining_page.library.definitions.get(symbol.library_key())
                         && let Ok(pins) = definition.placed_pins(symbol)
                     {
                         remaining_points.extend(pins.into_iter().map(|pin| pin.point));
@@ -1676,6 +1677,7 @@ mod tests {
         Symbol {
             id: "part".to_string(),
             lib_id: "Test:Part".to_string(),
+            lib_name: None,
             unit: 1,
             body_style: 1,
             at,
