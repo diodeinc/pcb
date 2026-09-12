@@ -4493,6 +4493,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-step"
+version = "0.4.52"
+dependencies = [
+ "base64 0.23.1",
+ "glam 0.33.6",
+ "memchr",
+ "pcb-ir",
+ "zstd",
+]
+
+[[package]]
 name = "pcb-test-utils"
 version = "0.4.52"
 dependencies = [
@@ -4667,6 +4678,7 @@ dependencies = [
  "pcb-sch",
  "pcb-sexpr",
  "pcb-sim",
+ "pcb-step",
  "pcb-test-utils",
  "pcb-ui",
  "pcb-zen",
