@@ -13,7 +13,6 @@ pub mod copper_balance;
 pub mod dfm;
 pub mod dist;
 mod grid;
-pub mod mesh;
 pub mod mouse_bite;
 pub mod path;
 pub mod pattern;

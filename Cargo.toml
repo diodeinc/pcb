@@ -153,8 +153,6 @@ boostvoronoi = "0.12.1"
 sha2 = "0.11"
 semver = { version = "1.0", features = ["serde"] }
 kurbo = "0.13"
-spade = "2.15.1"
-robust = "1.2"
 resvg = { version = "0.48", default-features = false }
 zstd = "0.13"
 jiff = "0.2"
@@ -196,9 +194,6 @@ opt-level = 2
 
 # Dense elastic validation/solves must stay practical on refinement fixtures.
 # Keep debug assertions and full checks; optimize only this numerical crate.
-[profile.dev.package.pcb-elastic]
-opt-level = 2
-
 # Test binaries are short-lived and do not need the full debug information that
 # made this workspace's integration-test artifacts hundreds of megabytes each.
 [profile.test]
