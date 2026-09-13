@@ -1,0 +1,16 @@
+[package]
+name = "pcb-step"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
+description = "STEP export for KiCad boards without a CAD kernel"
+publish = false
+
+[dependencies]
+base64 = { workspace = true }
+glam = { workspace = true }
+memchr = { workspace = true }
+pcb-ir = { workspace = true }
+zstd = { workspace = true }

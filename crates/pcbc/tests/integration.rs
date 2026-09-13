@@ -23,6 +23,7 @@ mod schematic_apply_common;
 mod schematic_apply_flow;
 mod sim;
 mod simple;
+mod step;
 mod sync;
 mod tag;
 mod test_bench;

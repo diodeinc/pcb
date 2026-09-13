@@ -51,6 +51,7 @@ mod remote_sandbox;
 mod route;
 mod sandbox_uri;
 mod sim;
+mod step;
 mod test;
 mod update;
 mod vendor;
@@ -193,6 +194,9 @@ enum Commands {
     /// Gerber X2 parser and rendering tool
     Gerber(gerber::GerberArgs),
 
+    /// Export a KiCad board to STEP without kicad-cli
+    Step(step::StepArgs),
+
     /// Inspect KiCad symbol libraries as structured JSON
     #[command(hide = true)]
     Kq(kq::KqArgs),
@@ -273,6 +277,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Simulate(args) => sim::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args, resolution),
         Commands::Gerber(args) => gerber::execute(args, resolution),
+        Commands::Step(args) => step::execute(args),
         Commands::Kq(args) => kq::execute(args),
         Commands::External(args) => execute_external(args),
     }

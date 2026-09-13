@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Add `--mouse-bite` to `board-array create` to route boards out with perforated tabs instead of V-scores.
 - Add `--mouse-bite-placement` to `board-array create` to report where breakaway tabs would go on a board.
+- Add `pcb step export` to write a STEP assembly for a KiCad board without kicad-cli.
 
 ### Changed
 
