@@ -106,7 +106,7 @@ impl TextStyle {
 pub(crate) fn strokes(text: &str, at: Vec2, style: &TextStyle) -> Vec<Vec<Vec2>> {
     let size = style.size;
     let pen = style.pen_width();
-    let lines: Vec<&str> = text.split('\n').collect();
+    let lines = split_lines(text);
     let interline = size.y * INTERLINE_PITCH * LEGACY_INTERLINE;
     let extents: Vec<f64> = lines.iter().map(|l| line_extent(l, size)).collect();
     let height = size.y * 1.17 + interline * (lines.len() as f64 - 1.0);
@@ -133,9 +133,106 @@ pub(crate) fn strokes(text: &str, at: Vec2, style: &TextStyle) -> Vec<Vec<Vec2>>
     out
 }
 
+/// `text` broken into lines no wider than `column`, as KiCad wraps a
+/// text box: a word is a run of markup or a space-delimited token, a
+/// word that would overflow the column starts a new line, and the
+/// spaces before it are dropped, as are the spaces ending a line.
+pub(crate) fn wrap(text: &str, column: f64, style: &TextStyle) -> String {
+    let size = style.size;
+    let limit = column - style.pen_width();
+    let space = size.x * glyph_of(' ').advance;
+    let lines = split_lines(text);
+    let mut out = String::new();
+    for (k, line) in lines.iter().enumerate() {
+        let mut words: Vec<(String, f64)> = Vec::new();
+        for run in markup(line) {
+            let pieces: Vec<(String, f64)> = if run.script != 0 || run.overbar {
+                let escape = match run.script {
+                    1 => '^',
+                    -1 => '_',
+                    _ => '~',
+                };
+                let run_size = if run.script == 0 {
+                    size
+                } else {
+                    size * SUPER_SUB_SIZE
+                };
+                vec![(
+                    format!("{escape}{{{}}}", run.text),
+                    advance_of(&run.text, run_size),
+                )]
+            } else {
+                run.text
+                    .split_inclusive(' ')
+                    .map(|token| {
+                        let bare = token.trim_end();
+                        let measured = if bare.is_empty() { token } else { bare };
+                        (token.to_owned(), advance_of(measured, size))
+                    })
+                    .collect()
+            };
+            for (word, width) in pieces {
+                match words.last_mut() {
+                    Some(last) if !last.0.ends_with(' ') => {
+                        last.0.push_str(&word);
+                        last.1 += width;
+                    }
+                    _ => words.push((word, width)),
+                }
+            }
+        }
+        let mut bury = false;
+        let mut line_width = 0.0;
+        let mut pending = 0usize;
+        for (word, width) in words {
+            if pending > 0 && line_width + pending as f64 * space + width > limit {
+                out.push('\n');
+                line_width = 0.0;
+                pending = 0;
+                bury = true;
+            }
+            if word == " " {
+                pending += 1;
+                continue;
+            }
+            if bury {
+                bury = false;
+            } else {
+                out.extend(std::iter::repeat_n(' ', pending));
+                line_width += pending as f64 * space;
+            }
+            match word.strip_suffix(' ') {
+                Some(bare) => {
+                    out.push_str(bare);
+                    pending = 1;
+                }
+                None => {
+                    out.push_str(&word);
+                    pending = 0;
+                }
+            }
+            line_width += width;
+        }
+        if k + 1 < lines.len() {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// The lines of a text as KiCad splits them: a trailing newline adds
+/// no line.
+fn split_lines(text: &str) -> Vec<&str> {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    if lines.len() > 1 && lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
 /// Width of one line as KiCad measures it for justification: the sum
 /// of the glyph advances, trailing inter-character space included.
-fn line_extent(line: &str, size: Vec2) -> f64 {
+pub(crate) fn line_extent(line: &str, size: Vec2) -> f64 {
     let mut cursor = 0.0;
     for run in markup(line) {
         let run_size = if run.script == 0 {
