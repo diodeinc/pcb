@@ -1443,3 +1443,197 @@ fn silkscreen_and_mask_are_flat_faces() {
         count(&literal, "SHELL_BASED_SURFACE_MODEL") > count(&text, "SHELL_BASED_SURFACE_MODEL")
     );
 }
+
+#[test]
+fn dashed_strokes_follow_kicad_pattern() {
+    use crate::board::LineStyle;
+    use crate::faces::dashes;
+    // KiCad's ISO 128-2 ratios: dashes of 11 widths, gaps of 4, dots of
+    // a fifth, the line starting lit and the last dash clipped.
+    let pattern = LineStyle::Dash.pattern(0.1, 12.0, 3.0);
+    assert!((pattern[0] - 1.1).abs() < 1e-12 && (pattern[1] - 0.4).abs() < 1e-12);
+    let dots = LineStyle::DashDotDot.pattern(0.1, 12.0, 3.0);
+    assert_eq!(dots.len(), 6);
+    assert!((dots[2] - 0.02).abs() < 1e-12);
+    let near = |got: Vec<(f64, f64)>, want: &[(f64, f64)]| {
+        assert_eq!(got.len(), want.len(), "{got:?}");
+        for (g, w) in got.iter().zip(want) {
+            assert!(
+                (g.0 - w.0).abs() < 1e-9 && (g.1 - w.1).abs() < 1e-9,
+                "{got:?}"
+            );
+        }
+    };
+    near(dashes(&pattern, 3.0), &[(0.0, 1.1), (1.5, 2.6)]);
+    near(dashes(&pattern, 2.0), &[(0.0, 1.1), (1.5, 2.0)]);
+    near(dashes(&[], 2.0), &[(0.0, 2.0)]);
+    let text = parse(&format!(
+        "{}{}",
+        rect_outline(0.0, 0.0, 30.0, 20.0),
+        r#"(setup (pcbplotparams (dashed_line_dash_ratio 8) (dashed_line_gap_ratio 2)))
+(gr_line (start 2 2) (end 12 2) (stroke (width 0.2) (type dash)) (layer "F.SilkS"))
+(gr_line (start 2 4) (end 12 4) (stroke (width 0.2) (type solid)) (layer "F.SilkS"))
+(gr_circle (center 20 10) (end 22 10) (stroke (width 0.2) (type dot)) (fill no) (layer "F.SilkS"))
+"#
+    ));
+    let board = Board::parse(text.as_bytes()).unwrap();
+    assert!((board.dash_ratio - 8.0).abs() < 1e-12 && (board.gap_ratio - 2.0).abs() < 1e-12);
+    assert_eq!(board.shapes[0].style, LineStyle::Dash);
+    assert_eq!(board.shapes[1].style, LineStyle::Solid);
+    assert_eq!(board.shapes[2].style, LineStyle::Dot);
+    // A 10 mm line in 1.4 mm dashes and 0.6 mm gaps is five dashes; the
+    // solid line is one face and the dotted circle many.
+    let options = Options {
+        silkscreen: true,
+        soldermask: false,
+        components: false,
+        ..Options::default()
+    };
+    let (step, report) = export_text(&text, &options);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let (body, front) = silk_sections(&step);
+    let faces = step[body..front].matches("ADVANCED_FACE(").count();
+    assert_eq!(faces, 5 + 1 + 20);
+}
+
+#[test]
+fn text_boxes_wrap_and_anchor_like_kicad() {
+    use crate::board::{Knockout, ShapeKind};
+    use crate::font::{TextStyle, line_extent, wrap};
+    let style = TextStyle {
+        size: Vec2::new(1.0, 1.0),
+        thickness: 0.15,
+        bold: false,
+        italic: false,
+        halign: -1,
+        valign: -1,
+        mirror: false,
+        angle: 0.0,
+    };
+    // A word that would overflow the column starts a new line, and the
+    // spaces before it go; trailing spaces go too, as KiCad drops them.
+    let fits = line_extent("aa bb", style.size) + style.pen_width() + 1e-6;
+    assert_eq!(wrap("aa bb cc", fits, &style), "aa bb\ncc");
+    assert_eq!(wrap("aa  bb cc ", fits, &style), "aa\nbb cc");
+    let wide = line_extent("aa  bb", style.size) + style.pen_width() + 1e-6;
+    assert_eq!(wrap("aa  bb cc ", wide, &style), "aa  bb\ncc");
+    assert_eq!(wrap("aa bb cc", 0.0, &style), "aa\nbb\ncc");
+    // A markup run is one word, its trailing space counted with it.
+    let marked = line_extent("aa ~{b c} ", style.size) + style.pen_width() + 1e-6;
+    assert_eq!(wrap("aa ~{b c} dd", marked, &style), "aa ~{b c}\ndd");
+    assert_eq!(wrap("aa ~{b c} dd", fits, &style), "aa\n~{b c}\ndd");
+    assert_eq!(wrap("x\n\ny", 100.0, &style), "x\n\ny");
+    // A trailing newline adds no line to a text.
+    assert_eq!(
+        crate::font::strokes("H\n", Vec2::ZERO, &style),
+        crate::font::strokes("H", Vec2::ZERO, &style)
+    );
+    let text = parse(&format!(
+        "{}{}",
+        rect_outline(0.0, 0.0, 30.0, 20.0),
+        r#"(gr_text_box "ab cd" (start 2 2) (end 12 4) (margins 0.5 0.25 0.5 0.25) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15)) (justify left top)) (border yes) (stroke (width 0.2) (type solid)))
+(gr_text_box "LT" (start 2 6) (end 12 8) (margins 0 0 0 0) (angle 90) (layer "B.SilkS") (effects (font (size 1 1) (thickness 0.15)) (justify top mirror)) (border no) (stroke (width 0.1) (type solid)))
+(gr_text_box "LT" (start 2 12) (end 12 14) (margins 0.5 0.5 0.5 0.5) (layer "B.SilkS") (effects (font (size 1 1) (thickness 0.15)) (justify left top mirror)) (border no) (stroke (width 0.1) (type solid)) (knockout yes))
+(footprint "Lib:Part" (layer "F.Cu") (at 20 10 90)
+  (fp_text_box "ref" (start -3 -1) (end 3 1) (margins 0 0 0 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15)) (justify left top)) (border no) (stroke (width 0) (type solid))))
+"#
+    ));
+    let board = Board::parse(text.as_bytes()).unwrap();
+    assert_eq!(board.texts.len(), 4);
+    // The text sits in the box grown by half its border, moved in by
+    // the margins; the border is the box itself, stroked.
+    let first = &board.texts[0];
+    assert!(
+        (first.at - Vec2::new(2.4, 2.15)).length() < 1e-9,
+        "{:?}",
+        first.at
+    );
+    assert!((first.column.unwrap() - 9.2).abs() < 1e-9);
+    assert_eq!(first.knockout, Knockout::No);
+    let border = &board.shapes[0];
+    assert!((border.width - 0.2).abs() < 1e-12 && !border.filled);
+    let ShapeKind::Poly { points } = border.kind else {
+        panic!("border is not a polygon");
+    };
+    let corners = &board.shape_points[points.0 as usize..points.1 as usize];
+    assert_eq!(
+        corners,
+        &[
+            Vec2::new(2.0, 2.0),
+            Vec2::new(12.0, 2.0),
+            Vec2::new(12.0, 4.0),
+            Vec2::new(2.0, 4.0)
+        ]
+    );
+    // At 90 degrees the text reads up the box: its top-left is the
+    // box's bottom-left; the effects block centres what it leaves
+    // unsaid, and mirroring anchors the text at the other end.
+    let second = &board.texts[1];
+    assert!(second.style.mirror && second.style.halign == 0 && second.style.valign == -1);
+    assert!(
+        (second.at - Vec2::new(1.95, 7.0)).length() < 1e-9,
+        "{:?}",
+        second.at
+    );
+    assert!((second.column.unwrap() - 2.1).abs() < 1e-9);
+    assert_eq!(second.knockout, Knockout::No);
+    assert!(matches!(board.texts[2].knockout, Knockout::Frame(_)));
+    assert_eq!(board.shapes.len(), 1);
+    // A footprint's text box turns with the footprint.
+    let third = &board.texts[3];
+    assert!((third.style.angle - 90.0).abs() < 1e-9);
+    assert!(
+        (third.at - Vec2::new(19.0, 13.0)).length() < 1e-9,
+        "{:?}",
+        third.at
+    );
+    let options = Options {
+        silkscreen: true,
+        soldermask: false,
+        components: false,
+        ..Options::default()
+    };
+    let (step, report) = export_text(&text, &options);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    // The back has the mirrored box's two glyphs and the knockout box
+    // as one face with its two glyphs as holes.
+    let (_, front) = silk_sections(&step);
+    let back = step.rfind("PRODUCT('board_silkscreen'").unwrap();
+    assert_eq!(step[front..back].matches("ADVANCED_FACE(").count(), 3);
+    assert_eq!(step[front..back].matches("FACE_BOUND(").count(), 2);
+}
+
+#[test]
+fn knockout_text_is_cut_from_its_hull() {
+    let text = parse(&format!(
+        "{}{}",
+        rect_outline(0.0, 0.0, 30.0, 20.0),
+        r#"(gr_text "HI" (at 10 10 30) (layer "F.SilkS" knockout) (effects (font (size 2 2) (thickness 0.3))))
+(gr_text "HI" (at 20 10 30) (layer "F.SilkS") (effects (font (size 2 2) (thickness 0.3))))
+"#
+    ));
+    let board = Board::parse(text.as_bytes()).unwrap();
+    assert_eq!(board.texts[0].knockout, crate::board::Knockout::Hull);
+    assert_eq!(board.texts[1].knockout, crate::board::Knockout::No);
+    let options = Options {
+        silkscreen: true,
+        soldermask: false,
+        components: false,
+        ..Options::default()
+    };
+    let (step, report) = export_text(&text, &options);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    // The plain text is two glyph faces; the knockout is one face with
+    // the two glyphs as holes.
+    let (body, front) = silk_sections(&step);
+    assert_eq!(step[body..front].matches("ADVANCED_FACE(").count(), 3);
+    assert_eq!(step[body..front].matches("FACE_BOUND(").count(), 2);
+}
+
+/// Where the front silkscreen's geometry lies in an export: after the
+/// board body's product and before the silkscreen's own.
+fn silk_sections(step: &str) -> (usize, usize) {
+    let body = step.find("PRODUCT('board_PCB'").unwrap();
+    let front = step.find("PRODUCT('board_silkscreen'").unwrap();
+    (body, front)
+}

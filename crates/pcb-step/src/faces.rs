@@ -5,13 +5,15 @@
 
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, FillRule, PathCmd};
 
-use crate::board::{Board, Machining, Mouth, Physical, Shape, ShapeKind, Tech, Text, Via};
+use crate::board::{
+    Board, Knockout, Machining, Mouth, Physical, Shape, ShapeKind, Tech, Text, Via,
+};
 use crate::copper::{
     PLATING, circle_edges, contour, grown_pad_outline, pad_drill, pad_outline, point, resolution,
     stroke_contour,
 };
 use crate::font;
-use crate::geom::{Vec2, point_in_polygon, signed_area};
+use crate::geom::{Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad, signed_area};
 use crate::outline::{Edge, Frame, Loop, Solid, board_solids, flatten, orient};
 use crate::rings::{Nested, fit, nest, nested_of, rings_of};
 
@@ -183,6 +185,7 @@ fn drawn_items(
     tech: Tech,
     variables: &[(String, String)],
     threads: usize,
+    warnings: &mut Vec<String>,
 ) -> Vec<Vec<ContourBuf>> {
     enum Item<'a> {
         Shape(&'a Shape),
@@ -201,14 +204,42 @@ fn drawn_items(
                 .map(Item::Text),
         )
         .collect();
-    crate::parallel_map(threads, &items, |item| {
+    let drawn = crate::parallel_map(threads, &items, |item| {
         let mut out = Vec::new();
+        let mut notes = Vec::new();
         match item {
             Item::Shape(shape) => shape_contours(board, frame, shape, &mut out),
-            Item::Text(text) => text_contours(frame, text, variables, &mut out),
+            Item::Text(text) => text_contours(board, frame, text, variables, &mut notes, &mut out),
         }
-        out
-    })
+        (out, notes)
+    });
+    drawn
+        .into_iter()
+        .map(|(out, notes)| {
+            warnings.extend(notes);
+            out
+        })
+        .collect()
+}
+
+/// The lit intervals of a dash `pattern` along a curve `len` long; the
+/// whole curve when the pattern is empty. The pattern starts lit at 0
+/// and the last dash is clipped at the end, as KiCad plots it.
+pub(crate) fn dashes(pattern: &[f64], len: f64) -> Vec<(f64, f64)> {
+    if pattern.iter().sum::<f64>() <= 0.0 {
+        return vec![(0.0, len)];
+    }
+    let mut out = Vec::new();
+    let (mut s, mut i) = (0.0, 0);
+    while s < len {
+        let e = s + pattern[i % pattern.len()];
+        if i % 2 == 0 {
+            out.push((s, e.min(len)));
+        }
+        s = e;
+        i += 1;
+    }
+    out
 }
 
 /// `${NAME}` replaced by the project's text variables; an unknown name
@@ -229,26 +260,78 @@ pub(crate) fn expand(text: &str, variables: &[(String, String)]) -> String {
     out
 }
 
+/// The contours of one graphic. Strokes are cut into dashes by the
+/// shape's line style, each line, arc and polygon edge starting its
+/// pattern afresh, as KiCad plots them.
 fn shape_contours(board: &Board, frame: Frame, shape: &Shape, out: &mut Vec<ContourBuf>) {
     let w = shape.width;
+    let pattern = shape.style.pattern(w, board.dash_ratio, board.gap_ratio);
     let stroke = |a: Vec2, mid: Vec2, b: Vec2, out: &mut Vec<ContourBuf>| {
         if let Some(c) = stroke_contour(frame.point(a), frame.point(mid), frame.point(b), w) {
             out.push(c);
         }
     };
+    let angle_of = |p: Vec2| p.y.atan2(p.x);
+    let line = |a: Vec2, b: Vec2, out: &mut Vec<ContourBuf>| {
+        let len = a.distance(b);
+        if len < 1e-9 {
+            return stroke(a, a, b, out);
+        }
+        let at = |s: f64| a + (b - a) * (s / len);
+        for (s0, s1) in dashes(&pattern, len) {
+            stroke(at(s0), at(s0), at(s1), out);
+        }
+    };
+    // An arc from `start` sweeping `sweep` radians, positive in KiCad's
+    // angle sense, dashed along its length.
+    let arc = |c: Vec2, r: f64, start: f64, sweep: f64, out: &mut Vec<ContourBuf>| {
+        let at = |s: f64| c + Vec2::from_angle(start + sweep.signum() * s / r) * r;
+        for (s0, s1) in dashes(&pattern, sweep.abs() * r) {
+            stroke(at(s0), at((s0 + s1) * 0.5), at(s1), out);
+        }
+    };
     match shape.kind {
-        ShapeKind::Line { a, b } => stroke(a, a, b, out),
-        ShapeKind::Arc { a, mid, b } => stroke(a, mid, b, out),
-        ShapeKind::Circle { center, radius } => {
+        ShapeKind::Line { a, b } => line(a, b, out),
+        ShapeKind::Arc { a, mid, b } => match circle_center(a, mid, b) {
+            Some(c) => {
+                let start = angle_of(a - c);
+                let (to_mid, to_b) = (
+                    ccw_sweep(start, angle_of(mid - c)),
+                    ccw_sweep(start, angle_of(b - c)),
+                );
+                let sweep = if to_mid < to_b {
+                    to_b
+                } else {
+                    to_b - std::f64::consts::TAU
+                };
+                arc(c, a.distance(c), start, sweep, out);
+            }
+            None => line(a, b, out),
+        },
+        ShapeKind::Circle { center, end } => {
+            let radius = center.distance(end);
             let c = frame.point(center);
-            if shape.filled {
-                out.push(contour(&circle_edges(c, radius + w * 0.5)));
-            } else if w > 0.0 {
-                // A ring: the outer circle with the inner one as a hole.
-                out.push(contour(&circle_edges(c, radius + w * 0.5)));
-                if radius > w * 0.5 {
-                    out.push(contour(&orient(circle_edges(c, radius - w * 0.5), false)));
+            if pattern.is_empty() {
+                if shape.filled {
+                    out.push(contour(&circle_edges(c, radius + w * 0.5)));
+                } else if w > 0.0 {
+                    // A ring: the outer circle with the inner one as a hole.
+                    out.push(contour(&circle_edges(c, radius + w * 0.5)));
+                    if radius > w * 0.5 {
+                        out.push(contour(&orient(circle_edges(c, radius - w * 0.5), false)));
+                    }
                 }
+            } else {
+                if shape.filled {
+                    out.push(contour(&circle_edges(c, radius)));
+                }
+                arc(
+                    center,
+                    radius,
+                    angle_of(end - center),
+                    std::f64::consts::TAU,
+                    out,
+                );
             }
         }
         ShapeKind::Poly { points } => {
@@ -269,36 +352,80 @@ fn shape_contours(board: &Board, frame: Frame, shape: &Shape, out: &mut Vec<Cont
                 out.push(contour(&orient(edges, true)));
             }
             if w > 0.0 {
-                for k in 0..pts.len() {
-                    let (a, b) = (pts[k], pts[(k + 1) % pts.len()]);
-                    if let Some(c) = stroke_contour(a, a, b, w) {
-                        out.push(c);
-                    }
+                let raw = &board.shape_points[points.0 as usize..points.1 as usize];
+                for k in 0..raw.len() {
+                    line(raw[k], raw[(k + 1) % raw.len()], out);
                 }
             }
         }
     }
 }
 
+/// The contours of one text: its glyph strokes, or, for a knockout,
+/// the hull with the strokes cut out of it.
 fn text_contours(
+    board: &Board,
     frame: Frame,
     text: &Text,
     variables: &[(String, String)],
+    warnings: &mut Vec<String>,
     out: &mut Vec<ContourBuf>,
 ) {
     let pen = text.style.pen_width();
     let content = expand(&text.text, variables);
-    for stroke in font::strokes(&content, text.at, &text.style) {
+    let content = match text.column {
+        Some(column) => font::wrap(&content, column, &text.style),
+        None => content,
+    };
+    let strokes = font::strokes(&content, text.at, &text.style);
+    let mut glyphs = Vec::new();
+    for stroke in &strokes {
         let pts: Vec<Vec2> = stroke.iter().map(|p| frame.point(*p)).collect();
         if pts.len() == 1 {
-            out.push(contour(&circle_edges(pts[0], pen * 0.5)));
+            glyphs.push(contour(&circle_edges(pts[0], pen * 0.5)));
         }
         for pair in pts.windows(2) {
             if let Some(c) = stroke_contour(pair[0], pair[0], pair[1], pen) {
-                out.push(c);
+                glyphs.push(c);
             }
         }
     }
+    let hull = match text.knockout {
+        Knockout::No => return out.extend(glyphs),
+        Knockout::Hull => text_hull(&strokes, text, pen),
+        Knockout::Frame((a, b)) => board.shape_points[a as usize..b as usize].to_vec(),
+    };
+    if hull.is_empty() {
+        return;
+    }
+    let hull: Vec<Vec2> = hull.into_iter().map(|p| frame.point(p)).collect();
+    let what = "knockout text";
+    if let Some(filled) = region(&[polyline_contour(&hull)], what, warnings) {
+        out.extend(less(filled, &glyphs, what, warnings).to_contours());
+    }
+}
+
+/// The rectangle KiCad knocks a text out of: the strokes' bounding box
+/// in the text's own frame, grown by the pen and the knockout margin,
+/// turned back to the text's angle. Empty for a text with no strokes.
+fn text_hull(strokes: &[Vec<Vec2>], text: &Text, pen: f64) -> Vec<Vec2> {
+    let (at, angle) = (text.at, text.style.angle);
+    let (lo, hi) = strokes.iter().flatten().fold(
+        (Vec2::splat(f64::INFINITY), Vec2::splat(f64::NEG_INFINITY)),
+        |(lo, hi), p| {
+            let local = rotate_kicad(*p - at, -angle);
+            (lo.min(local), hi.max(local))
+        },
+    );
+    if lo.x > hi.x {
+        return Vec::new();
+    }
+    let grow = Vec2::splat(pen * 0.5 + (pen * 0.5).max(text.style.size.y / 9.0));
+    let (lo, hi) = (lo - grow, hi + grow);
+    [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)]
+        .into_iter()
+        .map(|c| at + rotate_kicad(c, angle))
+        .collect()
 }
 
 /// Drills and machining that pierce `tech`'s side, as counter-clockwise
@@ -533,7 +660,7 @@ fn silk_faces(
     warnings: &mut Vec<String>,
 ) -> Vec<Face> {
     let what = format!("{} silkscreen", if tech.front() { "front" } else { "back" });
-    let items = drawn_items(board, frame, tech, variables, threads);
+    let items = drawn_items(board, frame, tech, variables, threads, warnings);
     let islands = nest(union_rings(items, threads, &what, warnings));
     let boxes: Vec<(Vec2, Vec2)> = islands.iter().map(|i| ring_bbox(&i.outer)).collect();
     let outline = boxes
@@ -649,7 +776,9 @@ fn mask_faces(
             ))]);
         }
     }
-    openings.extend(drawn_items(board, frame, tech, variables, threads));
+    openings.extend(drawn_items(
+        board, frame, tech, variables, threads, warnings,
+    ));
     openings.extend(
         pierce_edges(board, frame, tech)
             .iter()

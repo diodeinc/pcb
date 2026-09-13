@@ -99,9 +99,13 @@ The defaults follow KiCad's exporter (`pcbnew/exporters/step/`):
   by the board's clearance with their drills, graphics and text drawn on
   the mask layer, and machined mouths. One deliberate difference: pads
   open the mask whether or not pads are exported, where kicad-cli only
-  opens them with `--include-pads`. Not drawn: text boxes, tables,
-  barcodes, knockout text (drawn as plain text), dashed strokes (drawn
-  solid) and outline fonts (drawn with the stroke font).
+  opens them with `--include-pads`. Dashed, dotted and dash-dot strokes
+  are cut into KiCad's pattern from the board's plot ratios. Text boxes
+  wrap their text to the box with KiCad's word breaking, anchor it by
+  its justification and margins, and draw their border. Knockout text
+  is the text's hull, or a text box's frame, with the glyphs cut out.
+  Not drawn: tables, barcodes and outline fonts (drawn with the stroke
+  font).
 
 Missing model files are warned about and skipped; a model that exists but
 cannot be read makes the exit code 1 after the file is written, both as
@@ -156,6 +160,14 @@ boxes.
 
 ```bash
 uv run --with cadquery crates/pcb-step/scripts/oracle.py ours.step kicad.step
+```
+
+`scripts/faces.py` compares the silkscreen and solder mask faces of two
+files, pairing them by centroid and area and listing the ones left over,
+which is how the drawn items are checked against kicad-cli.
+
+```bash
+uv run --with cadquery crates/pcb-step/scripts/faces.py ours.step kicad.step
 ```
 
 `scripts/corpus.py` runs both exporters over every board under a directory,

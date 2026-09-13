@@ -40,6 +40,10 @@ pub struct Board<'a> {
     pub(crate) texts: Vec<Text>,
     /// Solder mask expansion around pads from `(setup ...)`, in mm.
     pub(crate) mask_expansion: f64,
+    /// Dash and gap lengths of dashed strokes as multiples of the stroke
+    /// width, from the plot parameters.
+    pub(crate) dash_ratio: f64,
+    pub(crate) gap_ratio: f64,
     /// Whether vias are tented by default on the front and back.
     pub(crate) tent: [bool; 2],
     /// Net ids by the name or number written in the file; 0 is no net.
@@ -82,6 +86,7 @@ pub(crate) struct Shape {
     pub(crate) kind: ShapeKind,
     /// Stroke width; zero for an unstroked filled shape.
     pub(crate) width: f64,
+    pub(crate) style: LineStyle,
     pub(crate) filled: bool,
 }
 
@@ -96,14 +101,54 @@ pub(crate) enum ShapeKind {
         mid: Vec2,
         b: Vec2,
     },
+    /// `end` is on the circle, where a dashed stroke starts.
     Circle {
         center: Vec2,
-        radius: f64,
+        end: Vec2,
     },
     /// Indices into `shape_points`; rectangles and curves are polygons.
     Poly {
         points: (u32, u32),
     },
+}
+
+/// The dash pattern of a stroke, as `(stroke (type ...))` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum LineStyle {
+    #[default]
+    Solid,
+    Dash,
+    Dot,
+    DashDot,
+    DashDotDot,
+}
+
+impl LineStyle {
+    fn from_name(name: &str) -> Self {
+        match name {
+            "dash" => Self::Dash,
+            "dot" => Self::Dot,
+            "dash_dot" => Self::DashDot,
+            "dash_dot_dot" => Self::DashDotDot,
+            _ => Self::Solid,
+        }
+    }
+
+    /// The on/off lengths of one period for a stroke `width` wide, the
+    /// way KiCad plots them from the board's dash and gap ratios; empty
+    /// for a solid stroke.
+    pub(crate) fn pattern(self, width: f64, dash_ratio: f64, gap_ratio: f64) -> Vec<f64> {
+        let dash = (dash_ratio - 1.0).max(1.0) * width;
+        let gap = (gap_ratio + 1.0).max(1.0) * width;
+        let dot = 0.2 * width;
+        match self {
+            Self::Solid => Vec::new(),
+            Self::Dash => vec![dash, gap],
+            Self::Dot => vec![dot, gap],
+            Self::DashDot => vec![dash, gap, dot, gap],
+            Self::DashDotDot => vec![dash, gap, dot, gap, dot, gap],
+        }
+    }
 }
 
 /// A text on a silkscreen or mask layer, in board coordinates.
@@ -113,6 +158,20 @@ pub(crate) struct Text {
     pub(crate) at: Vec2,
     pub(crate) layer: Tech,
     pub(crate) style: crate::font::TextStyle,
+    /// The width a text box wraps its lines to; free text is never
+    /// rewrapped.
+    pub(crate) column: Option<f64>,
+    pub(crate) knockout: Knockout,
+}
+
+/// Whether a text is drawn as glyphs or cut out of a filled hull.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Knockout {
+    No,
+    /// The text's bounding box grown by KiCad's knockout margin.
+    Hull,
+    /// A text box's frame, as a range into `shape_points`.
+    Frame((u32, u32)),
 }
 
 /// Copper and dielectric layers top to bottom, plus the mask colour.
@@ -367,6 +426,9 @@ pub(crate) const DEFAULT_THICKNESS: f64 = 1.6;
 const VIA_PROTECTION_VERSION: u32 = 20250228;
 const DEFAULT_COPPER_THICKNESS: f64 = 0.035;
 const DEFAULT_MASK_THICKNESS: f64 = 0.01;
+/// KiCad's dashed-line ratios, from ISO 128-2.
+const DEFAULT_DASH_RATIO: f64 = 12.0;
+const DEFAULT_GAP_RATIO: f64 = 3.0;
 const DEFAULT_MASK_COLOR: [f64; 3] = [0.08, 0.2, 0.14];
 const DEFAULT_CORE_COLOR: [f64; 3] = [0.42, 0.45, 0.29];
 const MASK_DARKEN: f64 = 0.2;
@@ -419,6 +481,8 @@ impl<'a> Board<'a> {
             shape_points: Vec::new(),
             texts: Vec::new(),
             mask_expansion: 0.0,
+            dash_ratio: DEFAULT_DASH_RATIO,
+            gap_ratio: DEFAULT_GAP_RATIO,
             tent: [false; 2],
             nets: std::collections::HashMap::new(),
         };
@@ -449,6 +513,10 @@ impl<'a> Board<'a> {
                 "gr_text" if graphics => {
                     let value = p.atom()?.unwrap_or("");
                     board.texts.extend(parse_text(&mut p, value, false)?);
+                }
+                "gr_text_box" if graphics => {
+                    let (shapes, points) = (&mut board.shapes, &mut board.shape_points);
+                    parse_text_box(&mut p, 0.0, &mut board.texts, shapes, points)?;
                 }
                 _ => {
                     let mut shapes =
@@ -533,6 +601,20 @@ impl<'a> Board<'a> {
                 "tenting" => {
                     let [front, back] = parse_front_back(p)?;
                     self.tent = [front.unwrap_or(false), back.unwrap_or(false)];
+                }
+                "pcbplotparams" => {
+                    while let Some(param) = p.open()? {
+                        match param {
+                            "dashed_line_dash_ratio" => {
+                                self.dash_ratio = p.f64("dashed_line_dash_ratio")?
+                            }
+                            "dashed_line_gap_ratio" => {
+                                self.gap_ratio = p.f64("dashed_line_gap_ratio")?
+                            }
+                            _ => {}
+                        }
+                        p.skip()?;
+                    }
                 }
                 _ => p.skip()?,
             }
@@ -675,6 +757,10 @@ impl<'a> Board<'a> {
                         p.skip()?;
                     }
                 }
+                "fp_text_box" if scratch.graphics => {
+                    let (shapes, points) = (&mut scratch.shapes, &mut scratch.shape_points);
+                    parse_text_box(p, fp.rotation, &mut scratch.texts, shapes, points)?;
+                }
                 "solder_mask_margin" => {
                     mask_margin = Some(p.f64("solder_mask_margin")?);
                     p.skip()?;
@@ -735,9 +821,9 @@ impl<'a> Board<'a> {
                     mid: place(mid),
                     b: place(b),
                 },
-                ShapeKind::Circle { center, radius } => ShapeKind::Circle {
+                ShapeKind::Circle { center, end } => ShapeKind::Circle {
                     center: place(center),
-                    radius,
+                    end: place(end),
                 },
                 ShapeKind::Poly { points } => ShapeKind::Poly {
                     points: (points.0 + base, points.1 + base),
@@ -750,9 +836,14 @@ impl<'a> Board<'a> {
                 .text
                 .replace("${REFERENCE}", fp.reference)
                 .replace("${VALUE}", &scratch.value);
+            let knockout = match text.knockout {
+                Knockout::Frame((a, b)) => Knockout::Frame((a + base, b + base)),
+                other => other,
+            };
             self.texts.push(Text {
                 text: content,
                 at: place(text.at),
+                knockout,
                 ..text.clone()
             });
         }
@@ -1570,6 +1661,7 @@ fn parse_graphic<'a>(
     let mut on_edge = false;
     let mut tech = None;
     let mut width = 0.0;
+    let mut style = LineStyle::Solid;
     let mut filled = false;
     let mut radius = 0.0;
     let mut pts: Vec<PolyPoint> = Vec::new();
@@ -1587,12 +1679,7 @@ fn parse_graphic<'a>(
             }
             "width" => width = p.f64("width")?,
             "stroke" => {
-                while let Some(f) = p.open()? {
-                    if f == "width" {
-                        width = p.f64("stroke width")?;
-                    }
-                    p.skip()?;
-                }
+                (width, style) = parse_stroke(p)?;
                 continue;
             }
             "fill" => filled = matches!(p.atom()?, Some("yes" | "solid")),
@@ -1619,10 +1706,7 @@ fn parse_graphic<'a>(
                 mid,
                 b: end,
             },
-            "circle" => ShapeKind::Circle {
-                center,
-                radius: center.distance(end),
-            },
+            "circle" => ShapeKind::Circle { center, end },
             "rect" => polygon(points, &rounded_rect_points(start, end, radius)),
             "curve" => {
                 let control = bezier_control_points(&pts)?;
@@ -1641,6 +1725,7 @@ fn parse_graphic<'a>(
             layer,
             kind: shape,
             width,
+            style,
             filled,
         });
     }
@@ -1686,17 +1771,9 @@ fn parse_text<'a>(
     let mut angle = 0.0;
     let mut layer = None;
     let mut hidden = false;
+    let mut knockout = false;
     let mut keep_upright = in_footprint;
-    let mut style = crate::font::TextStyle {
-        size: Vec2::new(1.0, 1.0),
-        thickness: 0.0,
-        bold: false,
-        italic: false,
-        halign: 0,
-        valign: 0,
-        mirror: false,
-        angle: 0.0,
-    };
+    let mut style = default_style(0, 0);
     while let Some(field) = p.open()? {
         match field {
             "at" => {
@@ -1706,57 +1783,14 @@ fn parse_text<'a>(
                     keep_upright = false;
                 }
             }
-            "layer" => layer = p.atom()?.and_then(Tech::from_layer),
+            "layer" => {
+                layer = p.atom()?.and_then(Tech::from_layer);
+                knockout = p.atom()? == Some("knockout");
+            }
             "hide" => hidden = p.atom()? != Some("no"),
             "unlocked" => keep_upright = p.atom()? == Some("no"),
             "effects" => {
-                while let Some(effect) = p.open()? {
-                    match effect {
-                        "font" => {
-                            loop {
-                                // Older files write bold and italic as
-                                // bare words, newer ones as lists.
-                                while let Some(flag) = p.atom()? {
-                                    match flag {
-                                        "bold" => style.bold = true,
-                                        "italic" => style.italic = true,
-                                        _ => {}
-                                    }
-                                }
-                                let Some(f) = p.open()? else {
-                                    break;
-                                };
-                                match f {
-                                    "size" => {
-                                        let size = p.xy("font size")?;
-                                        style.size = Vec2::new(size.y, size.x);
-                                    }
-                                    "thickness" => style.thickness = p.f64("font thickness")?,
-                                    "bold" => style.bold = p.atom()? != Some("no"),
-                                    "italic" => style.italic = p.atom()? != Some("no"),
-                                    _ => {}
-                                }
-                                p.skip()?;
-                            }
-                            continue;
-                        }
-                        "justify" => {
-                            while let Some(j) = p.atom()? {
-                                match j {
-                                    "left" => style.halign = -1,
-                                    "right" => style.halign = 1,
-                                    "top" => style.valign = -1,
-                                    "bottom" => style.valign = 1,
-                                    "mirror" => style.mirror = true,
-                                    _ => {}
-                                }
-                            }
-                        }
-                        "hide" => hidden = p.atom()? != Some("no"),
-                        _ => {}
-                    }
-                    p.skip()?;
-                }
+                hidden |= parse_effects(p, &mut style)?;
                 continue;
             }
             _ => {}
@@ -1784,7 +1818,289 @@ fn parse_text<'a>(
         at,
         layer,
         style,
+        column: None,
+        knockout: if knockout {
+            Knockout::Hull
+        } else {
+            Knockout::No
+        },
     }))
+}
+
+fn default_style(halign: i8, valign: i8) -> crate::font::TextStyle {
+    crate::font::TextStyle {
+        size: Vec2::new(1.0, 1.0),
+        thickness: 0.0,
+        bold: false,
+        italic: false,
+        halign,
+        valign,
+        mirror: false,
+        angle: 0.0,
+    }
+}
+
+/// The `(effects ...)` of a text, already opened: font and
+/// justification into `style`. The list starts from KiCad's centred,
+/// unmirrored defaults whatever the item had before. Consumes the list;
+/// returns whether the text is hidden.
+fn parse_effects(p: &mut Parser<'_>, style: &mut crate::font::TextStyle) -> Result<bool, Error> {
+    let mut hidden = false;
+    (style.halign, style.valign, style.mirror) = (0, 0, false);
+    while let Some(effect) = p.open()? {
+        match effect {
+            "font" => {
+                loop {
+                    // Older files write bold and italic as bare words,
+                    // newer ones as lists.
+                    while let Some(flag) = p.atom()? {
+                        match flag {
+                            "bold" => style.bold = true,
+                            "italic" => style.italic = true,
+                            _ => {}
+                        }
+                    }
+                    let Some(f) = p.open()? else {
+                        break;
+                    };
+                    match f {
+                        "size" => {
+                            let size = p.xy("font size")?;
+                            style.size = Vec2::new(size.y, size.x);
+                        }
+                        "thickness" => style.thickness = p.f64("font thickness")?,
+                        "bold" => style.bold = p.atom()? != Some("no"),
+                        "italic" => style.italic = p.atom()? != Some("no"),
+                        _ => {}
+                    }
+                    p.skip()?;
+                }
+                continue;
+            }
+            "justify" => {
+                while let Some(j) = p.atom()? {
+                    match j {
+                        "left" => style.halign = -1,
+                        "right" => style.halign = 1,
+                        "top" => style.valign = -1,
+                        "bottom" => style.valign = 1,
+                        "mirror" => style.mirror = true,
+                        _ => {}
+                    }
+                }
+            }
+            "hide" => hidden = p.atom()? != Some("no"),
+            _ => {}
+        }
+        p.skip()?;
+    }
+    Ok(hidden)
+}
+
+/// A `(stroke ...)` list, already opened: its width and line style.
+/// Consumes the list.
+fn parse_stroke(p: &mut Parser<'_>) -> Result<(f64, LineStyle), Error> {
+    let mut width = 0.0;
+    let mut style = LineStyle::Solid;
+    while let Some(f) = p.open()? {
+        match f {
+            "width" => width = p.f64("stroke width")?,
+            "type" => style = LineStyle::from_name(p.atom()?.unwrap_or("")),
+            _ => {}
+        }
+        p.skip()?;
+    }
+    Ok((width, style))
+}
+
+/// A `gr_text_box` or `fp_text_box`, lowered to a text anchored where
+/// KiCad anchors it in the box, wrapping to the box's width, plus the
+/// border as a stroked polygon. Coordinates are the item's own frame;
+/// `rotation` is the parent footprint's, which the box's text angle is
+/// relative to.
+fn parse_text_box<'a>(
+    p: &mut Parser<'a>,
+    rotation: f64,
+    texts: &mut Vec<Text>,
+    shapes: &mut Vec<Shape>,
+    points: &mut Vec<Vec2>,
+) -> Result<(), Error> {
+    let value = p.atom()?.unwrap_or("");
+    let mut start = Vec2::ZERO;
+    let mut end = Vec2::ZERO;
+    let mut pts: Vec<PolyPoint> = Vec::new();
+    let mut margins = None;
+    let mut angle = 0.0;
+    let mut layer = None;
+    let mut hidden = false;
+    let mut border = true;
+    let mut knockout = false;
+    let mut width = 0.0;
+    let mut style = default_style(-1, 0);
+    while let Some(field) = p.open()? {
+        match field {
+            "start" => start = p.xy("start")?,
+            "end" => end = p.xy("end")?,
+            "pts" => {
+                parse_pts(p, &mut pts)?;
+                continue;
+            }
+            "margins" => {
+                let (l, t) = (p.f64("margins")?, p.f64("margins")?);
+                let (r, b) = (p.f64("margins")?, p.f64("margins")?);
+                margins = Some([l, t, r, b]);
+            }
+            "angle" => angle = p.f64("angle")?,
+            "layer" => layer = p.atom()?.and_then(Tech::from_layer),
+            "border" => border = p.atom()? != Some("no"),
+            "knockout" => knockout = p.atom()? != Some("no"),
+            "hide" => hidden = p.atom()? != Some("no"),
+            "stroke" => {
+                width = parse_stroke(p)?.0;
+                continue;
+            }
+            "effects" => {
+                hidden |= parse_effects(p, &mut style)?;
+                continue;
+            }
+            _ => {}
+        }
+        p.skip()?;
+    }
+    let Some(layer) = layer else {
+        return Ok(());
+    };
+    if hidden {
+        return Ok(());
+    }
+    // Files before the explicit margins keep KiCad's legacy margin.
+    let [left, top, right, bottom] = margins.unwrap_or([width * 0.5 + style.size.y * 0.75; 4]);
+    // The text is laid out in the box grown by half its border, as
+    // KiCad takes the box's corners from its bounding box; the border
+    // and the knockout hull are the box itself.
+    let half = Vec2::splat(width.max(0.0) * 0.5);
+    let (frame, corners) = if pts.is_empty() {
+        let (lo, hi) = (start.min(end), start.max(end));
+        let frame = vec![lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
+        (frame, rect_corners_in_sequence(lo - half, hi + half, angle))
+    } else {
+        let mut flat = Vec::new();
+        flatten_pts(&pts, &mut flat);
+        let corners = poly_corners_in_sequence(&flat, angle);
+        (flat, corners)
+    };
+    let Some(corners) = corners else {
+        return Ok(());
+    };
+    // The text anchor is the box corner or edge midpoint its
+    // justification names, moved in by the margins on that side; a
+    // mirrored text's left and right swap.
+    let halign = if style.mirror {
+        -style.halign
+    } else {
+        style.halign
+    };
+    let anchor = |i: usize, j: usize| (corners[i] + corners[j]) * 0.5;
+    let at = match (halign, style.valign) {
+        (-1, -1) => corners[0],
+        (0, -1) => anchor(0, 1),
+        (1, -1) => corners[1],
+        (-1, 0) => anchor(0, 3),
+        (1, 0) => anchor(1, 2),
+        (-1, _) => corners[3],
+        (0, _) => anchor(3, 2),
+        (1, _) => corners[2],
+        _ => (corners[0] + corners[2]) * 0.5,
+    };
+    let offset = Vec2::new(
+        match halign {
+            -1 => left,
+            1 => -right,
+            _ => 0.0,
+        },
+        match style.valign {
+            -1 => top,
+            1 => -bottom,
+            _ => 0.0,
+        },
+    );
+    let horizontal = (angle.rem_euclid(180.0)).abs() < 1e-9;
+    let column = corners[0].distance(corners[1])
+        - if horizontal {
+            left + right
+        } else {
+            top + bottom
+        };
+    let first = points.len() as u32;
+    points.extend_from_slice(&frame);
+    let frame = (first, points.len() as u32);
+    style.angle = angle + rotation;
+    texts.push(Text {
+        text: unescape(value).into_owned(),
+        at: at + rotate_kicad(offset, angle),
+        layer,
+        style,
+        column: Some(column),
+        knockout: if knockout {
+            Knockout::Frame(frame)
+        } else {
+            Knockout::No
+        },
+    });
+    if border && width > 0.0 {
+        shapes.push(Shape {
+            layer,
+            kind: ShapeKind::Poly { points: frame },
+            width,
+            style: LineStyle::Solid,
+            filled: false,
+        });
+    }
+    Ok(())
+}
+
+/// A rectangle's corners in reading order for a text at `angle`:
+/// top-left, top-right, bottom-right, bottom-left as the text sees
+/// them. A non-cardinal angle turns the rectangle about its centre.
+fn rect_corners_in_sequence(lo: Vec2, hi: Vec2, angle: f64) -> Option<[Vec2; 4]> {
+    let (tl, tr) = (lo, Vec2::new(hi.x, lo.y));
+    let (br, bl) = (hi, Vec2::new(lo.x, hi.y));
+    let angle = angle.rem_euclid(360.0);
+    let cardinal = (angle / 90.0 - (angle / 90.0).round()).abs() < 1e-9;
+    if !cardinal {
+        let center = (lo + hi) * 0.5;
+        return Some([tl, tr, br, bl].map(|c| center + rotate_kicad(c - center, angle)));
+    }
+    Some(match (angle / 90.0).round() as i32 % 4 {
+        0 => [tl, tr, br, bl],
+        1 => [bl, tl, tr, br],
+        2 => [br, bl, tl, tr],
+        _ => [tr, br, bl, tl],
+    })
+}
+
+/// KiCad's corner order for a polygon text box: the extreme points,
+/// sequenced by the text angle's quadrant.
+fn poly_corners_in_sequence(pts: &[Vec2], angle: f64) -> Option<[Vec2; 4]> {
+    let first = *pts.first()?;
+    let pick = |better: fn(Vec2, Vec2) -> bool| {
+        pts.iter()
+            .fold(first, |best, &p| if better(p, best) { p } else { best })
+    };
+    let min_x = pick(|p, b| p.x < b.x);
+    let max_x = pick(|p, b| p.x > b.x);
+    let min_y = pick(|p, b| p.y < b.y);
+    let max_y = pick(|p, b| p.y > b.y);
+    let angle = angle.rem_euclid(360.0);
+    Some(if angle < 90.0 {
+        [min_x, min_y, max_x, max_y]
+    } else if angle < 180.0 {
+        [max_y, min_x, min_y, max_x]
+    } else if angle < 270.0 {
+        [max_x, max_y, min_x, min_y]
+    } else {
+        [min_y, max_x, max_y, min_x]
+    })
 }
 
 enum PolyPoint {
@@ -1920,11 +2236,18 @@ fn rounded_rect_edges(start: Vec2, end: Vec2, radius: f64, out: &mut Vec<RawEdge
     }
 }
 
-/// A rectangle as a polygon, rounded corners sampled.
+/// A rectangle as a polygon, rounded corners sampled. A sharp rectangle
+/// keeps KiCad's corner order from `start`, which is where each edge's
+/// dash pattern begins.
 fn rounded_rect_points(start: Vec2, end: Vec2, radius: f64) -> Vec<Vec2> {
     let (lo, hi, r) = rounded_rect_corners(start, end, radius);
     if r <= 1e-9 {
-        return vec![lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
+        return vec![
+            start,
+            Vec2::new(end.x, start.y),
+            end,
+            Vec2::new(start.x, end.y),
+        ];
     }
     const STEPS: usize = 8;
     let centers = [
