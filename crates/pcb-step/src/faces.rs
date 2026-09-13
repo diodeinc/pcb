@@ -3,6 +3,8 @@
 //! and text with the drills taken out, clipped to the board; the mask is
 //! the board with every opening taken out.
 
+use std::f64::consts::TAU;
+
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, FillRule, PathCmd};
 
 use crate::board::{
@@ -299,11 +301,7 @@ fn shape_contours(board: &Board, frame: Frame, shape: &Shape, out: &mut Vec<Cont
                     ccw_sweep(start, angle_of(mid - c)),
                     ccw_sweep(start, angle_of(b - c)),
                 );
-                let sweep = if to_mid < to_b {
-                    to_b
-                } else {
-                    to_b - std::f64::consts::TAU
-                };
+                let sweep = if to_mid < to_b { to_b } else { to_b - TAU };
                 arc(c, a.distance(c), start, sweep, out);
             }
             None => line(a, b, out),
@@ -311,7 +309,10 @@ fn shape_contours(board: &Board, frame: Frame, shape: &Shape, out: &mut Vec<Cont
         ShapeKind::Circle { center, end } => {
             let radius = center.distance(end);
             let c = frame.point(center);
-            if pattern.is_empty() {
+            // A dash at least as long as the circumference is the whole
+            // ring, which the arc stroke cannot close on itself.
+            let solid = pattern.first().is_none_or(|&dash| dash >= TAU * radius);
+            if solid {
                 if shape.filled {
                     out.push(contour(&circle_edges(c, radius + w * 0.5)));
                 } else if w > 0.0 {
@@ -325,13 +326,7 @@ fn shape_contours(board: &Board, frame: Frame, shape: &Shape, out: &mut Vec<Cont
                 if shape.filled {
                     out.push(contour(&circle_edges(c, radius)));
                 }
-                arc(
-                    center,
-                    radius,
-                    angle_of(end - center),
-                    std::f64::consts::TAU,
-                    out,
-                );
+                arc(center, radius, angle_of(end - center), TAU, out);
             }
         }
         ShapeKind::Poly { points } => {

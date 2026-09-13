@@ -1474,6 +1474,7 @@ fn dashed_strokes_follow_kicad_pattern() {
 (gr_line (start 2 2) (end 12 2) (stroke (width 0.2) (type dash)) (layer "F.SilkS"))
 (gr_line (start 2 4) (end 12 4) (stroke (width 0.2) (type solid)) (layer "F.SilkS"))
 (gr_circle (center 20 10) (end 22 10) (stroke (width 0.2) (type dot)) (fill no) (layer "F.SilkS"))
+(gr_circle (center 25 10) (end 25.1 10) (stroke (width 0.2) (type dash)) (fill no) (layer "F.SilkS"))
 "#
     ));
     let board = Board::parse(text.as_bytes()).unwrap();
@@ -1482,7 +1483,8 @@ fn dashed_strokes_follow_kicad_pattern() {
     assert_eq!(board.shapes[1].style, LineStyle::Solid);
     assert_eq!(board.shapes[2].style, LineStyle::Dot);
     // A 10 mm line in 1.4 mm dashes and 0.6 mm gaps is five dashes; the
-    // solid line is one face and the dotted circle many.
+    // solid line is one face, the dotted circle twenty dots, and the
+    // tiny dashed circle, shorter than a dash, one ring.
     let options = Options {
         silkscreen: true,
         soldermask: false,
@@ -1493,7 +1495,7 @@ fn dashed_strokes_follow_kicad_pattern() {
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     let (body, front) = silk_sections(&step);
     let faces = step[body..front].matches("ADVANCED_FACE(").count();
-    assert_eq!(faces, 5 + 1 + 20);
+    assert_eq!(faces, 5 + 1 + 20 + 1);
 }
 
 #[test]
