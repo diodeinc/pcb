@@ -25,7 +25,7 @@ All geometry is a filled planar point set in panel coordinates, in millimeters:
 - `r = 0.5`: required feature and panel-edge clearance.
 - `q = 0.5`: filled-region rolling-disk radius.
 - `v = 0.5`: void-gap rolling-disk radius.
-- `e = 0.025`: numerical construction guard.
+- `e`: numerical construction guard, half the panel accuracy budget (default 0.005 mm).
 
 Clearance and filled-region regularization are direct morphology:
 
@@ -99,7 +99,6 @@ pub struct BalancingRegionOptions {
     pub clearance_mm: f64,
     pub regularization_radius_mm: f64,
     pub gap_radius_mm: f64,
-    pub numerical_guard_mm: f64,
 }
 ```
 
@@ -134,7 +133,6 @@ Options:
 --clearance-mm <mm>                  nominal clearance; default 0.5
 --regularization-radius-mm <mm>      filled-region disk radius; default 0.5
 --gap-radius-mm <mm>                 void-gap disk radius; default 0.5
---numerical-guard-mm <mm>            construction guard; default 0.025
 --check-area-tolerance-mm2 <mm²>     certificate threshold; default 0.0001
 --copper-layer <name>                layer to inspect; default first copper layer
 --require-a-series-auto              reject non-A-series auto arrays
