@@ -40,8 +40,7 @@ impl Affine2 {
     }
 
     /// Placement transform: mirror, then uniformly scale, then rotate, then
-    /// translate to `center`. This is the standard component/step placement
-    /// used by IPC-2581 `Xform` and Gerber load-state commands.
+    /// translate to `center`, as used by Gerber load-state commands.
     pub fn placement(center: Point, rotation_degrees: f64, mirror: Mirror, scale: f64) -> Self {
         let sx = if mirror.x { -scale } else { scale };
         let sy = if mirror.y { -scale } else { scale };
