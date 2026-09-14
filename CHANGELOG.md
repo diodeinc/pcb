@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.53] - 2026-09-14
+
 ### Added
 
 - Add `--mouse-bite` to `board-array create` to route boards out with perforated tabs instead of V-scores.
@@ -1940,7 +1942,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.52...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.53...HEAD
+[0.4.53]: https://github.com/diodeinc/pcb/compare/v0.4.52...v0.4.53
 [0.4.52]: https://github.com/diodeinc/pcb/compare/v0.4.51...v0.4.52
 [0.4.51]: https://github.com/diodeinc/pcb/compare/v0.4.50...v0.4.51
 [0.4.50]: https://github.com/diodeinc/pcb/compare/v0.4.49...v0.4.50
