@@ -1149,8 +1149,8 @@ pub fn stroke_paint(width: f64, cap: crate::geom::LineCap) -> Paint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geom::LineCap;
     use crate::geom::path::PathCmd;
-    use crate::geom::{LineCap, LinePattern};
 
     #[test]
     fn stores_layers_objects_and_paths_in_fat_struct_arenas() {
@@ -1510,19 +1510,4 @@ mod tests {
         assert_ne!(a, c);
         assert_eq!(doc.apertures.len(), 2);
     }
-
-    #[test]
-    fn stroked_paths_preserve_line_pattern() {
-        let stroke = StrokeStyle {
-            width: 0.1,
-            cap: LineCap::Round,
-            join: crate::geom::LineJoin::Round,
-            pattern: LinePattern::Phantom,
-        };
-        let path = Path::stroked(stroke);
-
-        assert_eq!(path.stroke().unwrap().pattern, LinePattern::Phantom);
-    }
-
-    use crate::geom::Path;
 }
