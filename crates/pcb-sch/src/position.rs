@@ -1,8 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
-use std::io::{Seek, Write};
-use std::path::Path;
 
 use crate::natural_string::NaturalString;
 
@@ -156,51 +153,6 @@ pub fn edit_position_comments(
     }
 
     (block_start, position_comments)
-}
-
-/// Truncate `file_path` at `block_start` and append `position_comments`.
-fn write_position_block<P: AsRef<Path>>(
-    file_path: P,
-    block_start: usize,
-    position_comments: &str,
-) -> std::io::Result<()> {
-    // Open file for read+write (don't truncate the whole file)
-    let mut file = OpenOptions::new().write(true).read(true).open(&file_path)?;
-
-    // Truncate at position block start and append new comments
-    file.set_len(block_start as u64)?;
-    file.seek(std::io::SeekFrom::Start(block_start as u64))?;
-    file.write_all(position_comments.as_bytes())?;
-    file.flush()?;
-
-    Ok(())
-}
-
-pub fn replace_pcb_sch_comments<P: AsRef<Path>>(
-    file_path: P,
-    positions: &BTreeMap<String, Position>,
-) -> std::io::Result<()> {
-    let content = std::fs::read_to_string(&file_path)?;
-    let (block_start, position_comments) = edit_position_comments(&content, positions, &[]);
-    write_position_block(&file_path, block_start, &position_comments)
-}
-
-/// Remove positions for specific symbol IDs from a .zen file.
-///
-/// This removes the specified symbols from the position block while preserving
-/// all other positions. Used when components are deleted from the schematic.
-pub fn remove_positions<P: AsRef<Path>>(
-    file_path: P,
-    symbol_ids_to_remove: &[String],
-) -> std::io::Result<()> {
-    if symbol_ids_to_remove.is_empty() {
-        return Ok(());
-    }
-
-    let content = std::fs::read_to_string(&file_path)?;
-    let (block_start, position_comments) =
-        edit_position_comments(&content, &BTreeMap::new(), symbol_ids_to_remove);
-    write_position_block(&file_path, block_start, &position_comments)
 }
 
 /// Convert a stable symbol ID (e.g. "comp:R1" or "sym:NET#2") to the
@@ -697,43 +649,6 @@ Resistor = Module("@stdlib/generics/Resistor.zen")"#;
     }
 
     #[test]
-    fn test_replace_pcb_sch_comments_file_operations() {
-        use std::fs;
-        use tempfile::NamedTempFile;
-
-        // Create temporary file
-        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-        let temp_path = temp_file.path();
-
-        // Write initial content
-        let initial_content = r#"load("@stdlib/interfaces.zen", "Power")
-
-# pcb:sch OLD_ELEMENT x=100.0 y=200.0 rot=0"#;
-        fs::write(temp_path, initial_content).expect("Failed to write initial content");
-
-        // Update positions
-        let mut new_positions = std::collections::BTreeMap::new();
-        new_positions.insert(
-            "NEW_ELEMENT".to_string(),
-            Position {
-                x: 300.0,
-                y: 400.0,
-                rotation: 90.0,
-                mirror: None,
-            },
-        );
-
-        // Test file update
-        replace_pcb_sch_comments(temp_path, &new_positions).expect("Failed to replace comments");
-
-        // Verify updated content
-        let updated_content = fs::read_to_string(temp_path).expect("Failed to read updated file");
-        assert!(updated_content.contains("load(\"@stdlib/interfaces.zen\""));
-        assert!(updated_content.contains("NEW_ELEMENT"));
-        assert!(updated_content.contains("OLD_ELEMENT")); // Should be preserved by merge
-    }
-
-    #[test]
     fn test_multiple_blank_lines_and_mixed_whitespace() {
         let content = "load(\"test\")\n\n\n# pcb:sch A x=1.0 y=2.0 rot=0\n\n# pcb:sch B x=3.0 y=4.0 rot=90\n\n\n";
 
@@ -844,36 +759,6 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
     }
 
     #[test]
-    fn test_remove_positions() {
-        use std::fs;
-        use tempfile::NamedTempFile;
-
-        // Create temporary file with multiple positions
-        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-        let temp_path = temp_file.path();
-
-        let initial_content = r#"load("@stdlib/interfaces.zen", "Power")
-
-# pcb:sch R1 x=100.0 y=200.0 rot=0
-# pcb:sch C1 x=300.0 y=400.0 rot=90
-# pcb:sch VCC.0 x=500.0 y=600.0 rot=0
-# pcb:sch R2 x=700.0 y=800.0 rot=180"#;
-        fs::write(temp_path, initial_content).expect("Failed to write initial content");
-
-        // Remove some positions
-        let to_remove = vec!["C1".to_string(), "VCC.0".to_string()];
-        remove_positions(temp_path, &to_remove).expect("Failed to remove positions");
-
-        // Verify updated content
-        let updated_content = fs::read_to_string(temp_path).expect("Failed to read updated file");
-        assert!(updated_content.contains("load(\"@stdlib/interfaces.zen\""));
-        assert!(updated_content.contains("R1")); // Should still exist
-        assert!(updated_content.contains("R2")); // Should still exist
-        assert!(!updated_content.contains("C1")); // Should be removed
-        assert!(!updated_content.contains("VCC.0")); // Should be removed
-    }
-
-    #[test]
     fn test_edit_position_comments_removes_positions() {
         let content = r#"load("@stdlib/interfaces.zen", "Power")
 
@@ -897,26 +782,5 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
         );
         assert!(position_comments.is_empty());
         assert!(!content[..block_start].contains("# pcb:sch"));
-    }
-
-    #[test]
-    fn test_remove_positions_empty_list() {
-        use std::fs;
-        use tempfile::NamedTempFile;
-
-        // Create temporary file
-        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-        let temp_path = temp_file.path();
-
-        let initial_content = r#"# pcb:sch R1 x=100.0 y=200.0 rot=0"#;
-        fs::write(temp_path, initial_content).expect("Failed to write initial content");
-
-        // Remove empty list (should be no-op)
-        let to_remove: Vec<String> = vec![];
-        remove_positions(temp_path, &to_remove).expect("Failed to remove positions");
-
-        // Verify content unchanged
-        let updated_content = fs::read_to_string(temp_path).expect("Failed to read updated file");
-        assert!(updated_content.contains("R1"));
     }
 }
