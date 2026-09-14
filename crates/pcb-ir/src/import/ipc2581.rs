@@ -255,27 +255,15 @@ struct IpcPlacement {
 
 fn ipc_placement(location: Point, xform: Option<Xform>) -> IpcPlacement {
     let xform = xform.unwrap_or_default();
-    // IPC-2581C 3.3 rotates before mirroring. Affine2::placement mirrors first,
-    // so negate the rotation when mirrored: M * R(angle) = R(-angle) * M.
-    let rotation = if xform.mirror {
-        -xform.rotation
-    } else {
-        xform.rotation
-    };
-    let offset = Affine2::placement(
-        Point::default(),
-        rotation,
-        Mirror::across_y(xform.mirror),
-        xform.scale,
-    )
-    .transform_vector(Point::new(xform.x_offset, xform.y_offset));
-    let center = Point::new(location.x + offset.x, location.y + offset.y);
-    let transform = Affine2::placement(
-        center,
-        rotation,
-        Mirror::across_y(xform.mirror),
-        xform.scale,
-    );
+    let mut transform = Affine2::placement(location, xform.rotation, Mirror::NONE, xform.scale);
+    // IPC-2581C 3.3 mirrors X after rotation, before board-space translation.
+    if xform.mirror {
+        transform.m00 = -transform.m00;
+        transform.m01 = -transform.m01;
+    }
+    let center = transform.transform_point(Point::new(xform.x_offset, xform.y_offset));
+    transform.m02 = center.x;
+    transform.m12 = center.y;
 
     IpcPlacement {
         center,
@@ -1921,19 +1909,18 @@ fn validate_copper_balance_void_shape(
 }
 
 pub fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
-    Affine2::placement(
+    ipc_placement(
         Point::new(
             repeat.x + ix as f64 * repeat.dx,
             repeat.y + iy as f64 * repeat.dy,
         ),
-        if repeat.mirror {
-            -repeat.angle
-        } else {
-            repeat.angle
-        },
-        Mirror::across_y(repeat.mirror),
-        1.0,
+        Some(Xform {
+            rotation: repeat.angle,
+            mirror: repeat.mirror,
+            ..Xform::default()
+        }),
     )
+    .transform
 }
 
 fn source_layer_set_span(source: &GeometryDocument, layer_index: usize) -> Result<u32> {
