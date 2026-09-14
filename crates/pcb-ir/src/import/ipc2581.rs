@@ -255,20 +255,15 @@ struct IpcPlacement {
 
 fn ipc_placement(location: Point, xform: Option<Xform>) -> IpcPlacement {
     let xform = xform.unwrap_or_default();
-    let offset = Affine2::placement(
-        Point::default(),
-        xform.rotation,
-        Mirror::across_y(xform.mirror),
-        xform.scale,
-    )
-    .transform_vector(Point::new(xform.x_offset, xform.y_offset));
-    let center = Point::new(location.x + offset.x, location.y + offset.y);
-    let transform = Affine2::placement(
-        center,
-        xform.rotation,
-        Mirror::across_y(xform.mirror),
-        xform.scale,
-    );
+    let mut transform = Affine2::placement(location, xform.rotation, Mirror::NONE, xform.scale);
+    // IPC-2581C 3.3 mirrors X after rotation, before board-space translation.
+    if xform.mirror {
+        transform.m00 = -transform.m00;
+        transform.m01 = -transform.m01;
+    }
+    let center = transform.transform_point(Point::new(xform.x_offset, xform.y_offset));
+    transform.m02 = center.x;
+    transform.m12 = center.y;
 
     IpcPlacement {
         center,
@@ -1914,15 +1909,18 @@ fn validate_copper_balance_void_shape(
 }
 
 pub fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
-    Affine2::placement(
+    ipc_placement(
         Point::new(
             repeat.x + ix as f64 * repeat.dx,
             repeat.y + iy as f64 * repeat.dy,
         ),
-        repeat.angle,
-        Mirror::across_y(repeat.mirror),
-        1.0,
+        Some(Xform {
+            rotation: repeat.angle,
+            mirror: repeat.mirror,
+            ..Xform::default()
+        }),
     )
+    .transform
 }
 
 fn source_layer_set_span(source: &GeometryDocument, layer_index: usize) -> Result<u32> {
@@ -3918,6 +3916,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rotated_bottom_silkscreen_matches_kicad_board_coordinates() {
+        // Warden J3: the line must stay left of the footprint origin after placement.
+        let ipc = Ipc2581::parse(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/></Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="B.Silkscreen" layerFunction="SILKSCREEN" side="BOTTOM"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="B.Silkscreen">
+          <Set geometryUsage="GRAPHIC">
+            <Features>
+              <Xform rotation="270" mirror="true"/>
+              <Location x="171.456527" y="-116.7"/>
+              <Line startX="-2.15" startY="2.8" endX="-3.25" endY="2.8">
+                <LineDesc lineWidth="0.25" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let resolution = Resolution::default();
+        let imported = import_design(&ipc, resolution).unwrap();
+        let image = imported
+            .composed_layer_image(
+                imported.layer_id("B.Silkscreen").unwrap(),
+                ArtworkScope::Board,
+                resolution,
+            )
+            .unwrap();
+
+        // Coordinates independently checked against KiCad's board and direct Gerber.
+        assert!(image.contains_point(Point::new(168.656527, -114.55)));
+        assert!(image.contains_point(Point::new(168.656527, -113.45)));
+        assert!(!image.contains_point(Point::new(174.256527, -118.85)));
+    }
+
+    #[test]
+    fn ipc_offsets_and_geometry_rotate_before_mirroring() {
+        for (rotation, mirror, expected) in [
+            (0.0, false, Point::new(14.0, 26.0)),
+            (90.0, false, Point::new(4.0, 24.0)),
+            (180.0, false, Point::new(6.0, 14.0)),
+            (270.0, false, Point::new(16.0, 16.0)),
+            (0.0, true, Point::new(6.0, 26.0)),
+            (90.0, true, Point::new(16.0, 24.0)),
+            (180.0, true, Point::new(14.0, 14.0)),
+            (270.0, true, Point::new(4.0, 16.0)),
+        ] {
+            let placement = ipc_placement(
+                Point::new(10.0, 20.0),
+                Some(Xform {
+                    rotation,
+                    mirror,
+                    scale: 2.0,
+                    x_offset: 0.5,
+                    y_offset: 1.0,
+                    ..Xform::default()
+                }),
+            );
+            let actual = placement.transform.transform_point(Point::new(1.5, 2.0));
+            assert!((actual.x - expected.x).abs() < 1e-9);
+            assert!((actual.y - expected.y).abs() < 1e-9);
+        }
+    }
+
+    #[test]
     fn void_verification_inherits_accuracy_but_keeps_its_significance() {
         let metadata = CopperBalanceVoidMetadata {
             lattice_origin: Point::new(0.0, 0.0),
@@ -5134,7 +5205,7 @@ mod tests {
         </Component>
       </Step>
       <Step name="panel" type="PALLET">
-        <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="20" dy="0" mirror="true"/>
+        <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="20" dy="0" angle="90" mirror="true"/>
       </Step>
     </CadData>
   </Ecad>
@@ -5149,9 +5220,10 @@ mod tests {
         assert_eq!(occurrences.len(), 2);
         assert_ne!(occurrences[0].id, occurrences[1].id);
         assert_eq!(occurrences[0].id.component, occurrences[1].id.component);
-        assert!((occurrences[0].root_from_component.m02 - 9.0).abs() < 1e-9);
-        assert!((occurrences[1].root_from_component.m02 - 29.0).abs() < 1e-9);
+        assert!((occurrences[0].root_from_component.m02 - 12.0).abs() < 1e-9);
+        assert!((occurrences[1].root_from_component.m02 - 32.0).abs() < 1e-9);
         for occurrence in occurrences {
+            assert!((occurrence.root_from_component.m12 - 21.0).abs() < 1e-9);
             let board_local = occurrence.board_from_component.unwrap();
             assert!((board_local.m02 - 1.0).abs() < 1e-9);
             assert!((board_local.m12 - 2.0).abs() < 1e-9);

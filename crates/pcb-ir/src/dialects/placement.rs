@@ -40,7 +40,9 @@ pub struct Placement {
     pub side: PlacementSide,
     pub mount: PlacementMount,
     pub at: Point,
+    /// Counterclockwise rotation viewed from the board top, before mirroring.
     pub rotation_degrees: f64,
+    /// Negate X after rotation, matching IPC-2581 component placement.
     pub mirror: bool,
     pub face_up: bool,
     pub scale: f64,
@@ -176,12 +178,11 @@ fn decompose_placement(transform: Affine2) -> Result<DecomposedPlacement> {
         bail!("component occurrence transform is not a rigid uniform placement");
     }
     let mirror = transform.determinant() < 0.0;
-    let signed_scale = if mirror { -scale } else { scale };
     Ok(DecomposedPlacement {
         at: Point::new(transform.m02, transform.m12),
-        rotation_degrees: (transform.m10 / signed_scale)
-            .atan2(transform.m00 / signed_scale)
-            .to_degrees(),
+        // For M * R(angle), the Y row is scale * [sin(angle), cos(angle)]
+        // whether or not X is mirrored.
+        rotation_degrees: transform.m10.atan2(transform.m11).to_degrees(),
         mirror,
         scale,
     })

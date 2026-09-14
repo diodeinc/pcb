@@ -176,13 +176,81 @@ fn write_csv_field(output: &mut String, field: &str) {
 
 #[cfg(test)]
 mod tests {
+    use ipc2581::Ipc2581;
     use pcb_ir::dialects::assembly::{
         ComponentDefinitionId, ComponentOccurrenceId, LayoutOccurrenceId, Scope,
     };
     use pcb_ir::dialects::placement::{PlacementMount, PlacementSide};
     use pcb_ir::geom::Point;
+    use pcb_ir::import::ipc2581::import_design;
+
+    use crate::placement::extract_single_board_placements;
 
     use super::*;
+
+    #[test]
+    fn imported_cpl_preserves_rotation_before_mirroring() {
+        let resolution = pcb_ir::geom::Resolution::default();
+        let options = CplOptions {
+            output: None,
+            side: CplSideFilter::Both,
+            exclude_dnp: false,
+        };
+        for (rotation, csv_rotation, local_x, local_y) in [
+            (0, "0.000000", 2.0, 1.0),
+            (30, "30.000000", 1.2320508075688772, 1.8660254037844386),
+            (90, "90.000000", -1.0, 2.0),
+            (180, "180.000000", -2.0, -1.0),
+            (270, "-90.000000", 1.0, -2.0),
+        ] {
+            for mirror in [false, true] {
+                for panel in [false, true] {
+                    let side = if mirror { "BOTTOM" } else { "TOP" };
+                    let layer = if mirror { "bottom" } else { "top" };
+                    let root = if panel { "panel" } else { "board" };
+                    let ipc = Ipc2581::parse(&format!(
+                        r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="ASSEMBLY"/><StepRef name="{root}"/></Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="component" layerFunction="COMPONENT_{side}" side="{side}"/>
+    <Step name="board" type="BOARD">
+      <Component refDes="U1" packageRef="QFN" part="ic" layerRef="component" mountType="SMT">
+        <Xform rotation="{rotation}" mirror="{mirror}"/>
+        <Location x="10" y="20"/>
+      </Component>
+    </Step>
+    <Step name="panel" type="PALLET">
+      <StepRepeat stepRef="board" x="50" y="60" nx="2" ny="1" dx="20" dy="0" angle="13" mirror="true"/>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#
+                    ))
+                    .unwrap();
+                    let imported = import_design(&ipc, resolution).unwrap();
+                    let placements = extract_single_board_placements(&imported).unwrap();
+
+                    // Geometry and CPL must describe the same orientation, including
+                    // when the board occurs in a rotated, mirrored panel.
+                    let landmark = imported.components[0]
+                        .local_from_component
+                        .transform_point(Point::new(2.0, 1.0));
+                    let expected_x = 10.0 + if mirror { -local_x } else { local_x };
+                    assert!((landmark.x - expected_x).abs() < 1e-9);
+                    assert!((landmark.y - (20.0 + local_y)).abs() < 1e-9);
+                    assert_eq!(placements.components.len(), 1);
+                    assert_eq!(placements.components[0].mirror, mirror);
+                    assert_eq!(
+                        emit_cpl_csv(&placements, &options),
+                        format!(
+                            "Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n\
+U1,,QFN,10.000000,20.000000,{csv_rotation},{layer}\n"
+                        ),
+                        "rotation={rotation}, mirror={mirror}, panel={panel}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn emits_release_cpl_header_and_rows() {
