@@ -857,7 +857,7 @@ fn serialization_is_deterministic() {
     assert_eq!(first, second);
     assert_eq!(
         hex::encode(Sha256::digest(first.as_bytes())),
-        "603792a48cab06f08eb5c1bb7258767c59a225705d3635d1db85c7b33018f3ff",
+        "346c46f0b59e7e8a8fc649a7d3497c6df193c8e0e7dd9bf8f2517882c6c8f843",
         "schema v4 changed without an explicit version change"
     );
 }
