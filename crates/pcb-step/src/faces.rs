@@ -17,6 +17,7 @@ use crate::copper::{
 use crate::font;
 use crate::geom::{Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad, signed_area};
 use crate::outline::{Edge, Frame, Loop, Solid, board_solids, flatten, orient};
+use crate::outline_font::Fonts;
 use crate::rings::{Nested, fit, nest, nested_of, rings_of};
 
 /// Height of the silkscreen above the outer copper.
@@ -51,6 +52,7 @@ pub(crate) fn build(
     warnings: &mut Vec<String>,
 ) -> Result<Vec<TechLayer>, crate::Error> {
     let edge = BoardEdge::new(&board_solids(board, frame)?);
+    let fonts = Fonts::load(board, warnings);
     let mut layers = Vec::new();
     if silk {
         layers.push(Tech::FrontSilk);
@@ -63,9 +65,13 @@ pub(crate) fn build(
     let built = crate::parallel_map(threads, &layers, |tech| {
         let mut notes = Vec::new();
         let faces = if tech.silk() {
-            silk_faces(board, frame, &edge, *tech, variables, threads, &mut notes)
+            silk_faces(
+                board, frame, &edge, &fonts, *tech, variables, threads, &mut notes,
+            )
         } else {
-            mask_faces(board, frame, &edge, *tech, variables, threads, &mut notes)
+            mask_faces(
+                board, frame, &edge, &fonts, *tech, variables, threads, &mut notes,
+            )
         };
         (faces, notes)
     });
@@ -181,9 +187,11 @@ fn overlaps((alo, ahi): (Vec2, Vec2), (blo, bhi): (Vec2, Vec2)) -> bool {
 }
 
 /// The graphics and text of `tech` as contours, one list per item.
+#[allow(clippy::too_many_arguments)]
 fn drawn_items(
     board: &Board,
     frame: Frame,
+    fonts: &Fonts,
     tech: Tech,
     variables: &[(String, String)],
     threads: usize,
@@ -211,7 +219,9 @@ fn drawn_items(
         let mut notes = Vec::new();
         match item {
             Item::Shape(shape) => shape_contours(board, frame, shape, &mut out),
-            Item::Text(text) => text_contours(board, frame, text, variables, &mut notes, &mut out),
+            Item::Text(text) => {
+                text_contours(board, frame, fonts, text, variables, &mut notes, &mut out)
+            }
         }
         (out, notes)
     });
@@ -356,11 +366,14 @@ fn shape_contours(board: &Board, frame: Frame, shape: &Shape, out: &mut Vec<Cont
     }
 }
 
-/// The contours of one text: its glyph strokes, or, for a knockout,
-/// the hull with the strokes cut out of it.
+/// The contours of one text: its glyphs, stroked in the stroke font or
+/// filled in an outline font, or, for a knockout, the hull with the
+/// glyphs cut out of it.
+#[allow(clippy::too_many_arguments)]
 fn text_contours(
     board: &Board,
     frame: Frame,
+    fonts: &Fonts,
     text: &Text,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
@@ -368,12 +381,28 @@ fn text_contours(
 ) {
     let pen = text.style.pen_width();
     let content = expand(&text.text, variables);
+    let face = text
+        .style
+        .face
+        .as_deref()
+        .map(|f| fonts.resolve(f, text.style.bold, text.style.italic));
+    let measure = |s: &str, size: Vec2, script: i8| match &face {
+        Some(face) => face.advance(s, size, script),
+        None => font::measure(s, size, script),
+    };
     let content = match text.column {
-        Some(column) => font::wrap(&content, column, &text.style),
+        Some(column) => font::wrap(&content, column, &text.style, measure),
         None => content,
     };
-    let strokes = font::strokes(&content, text.at, &text.style);
+    let (rings, strokes) = match &face {
+        Some(face) => face.glyphs(&content, text.at, &text.style),
+        None => (Vec::new(), font::strokes(&content, text.at, &text.style)),
+    };
     let mut glyphs = Vec::new();
+    for ring in &rings {
+        let pts: Vec<Vec2> = ring.iter().map(|p| frame.point(*p)).collect();
+        glyphs.push(polyline_contour(&pts));
+    }
     for stroke in &strokes {
         let pts: Vec<Vec2> = stroke.iter().map(|p| frame.point(*p)).collect();
         if pts.len() == 1 {
@@ -387,7 +416,7 @@ fn text_contours(
     }
     let hull = match text.knockout {
         Knockout::No => return out.extend(glyphs),
-        Knockout::Hull => text_hull(&strokes, text, pen),
+        Knockout::Hull => text_hull(&rings, &strokes, text, pen),
         Knockout::Frame((a, b)) => board.shape_points[a as usize..b as usize].to_vec(),
     };
     if hull.is_empty() {
@@ -400,22 +429,28 @@ fn text_contours(
     }
 }
 
-/// The rectangle KiCad knocks a text out of: the strokes' bounding box
-/// in the text's own frame, grown by the pen and the knockout margin,
-/// turned back to the text's angle. Empty for a text with no strokes.
-fn text_hull(strokes: &[Vec<Vec2>], text: &Text, pen: f64) -> Vec<Vec2> {
+/// The rectangle KiCad knocks a text out of: the bounding box of the
+/// drawn glyphs in the text's own frame, the strokes as wide as the
+/// pen, grown by the knockout margin and turned back to the text's
+/// angle. Empty for a text that draws nothing.
+fn text_hull(rings: &[Vec<Vec2>], strokes: &[Vec<Vec2>], text: &Text, pen: f64) -> Vec<Vec2> {
     let (at, angle) = (text.at, text.style.angle);
-    let (lo, hi) = strokes.iter().flatten().fold(
+    let points = rings
+        .iter()
+        .flatten()
+        .map(|p| (*p, 0.0))
+        .chain(strokes.iter().flatten().map(|p| (*p, pen * 0.5)));
+    let (lo, hi) = points.fold(
         (Vec2::splat(f64::INFINITY), Vec2::splat(f64::NEG_INFINITY)),
-        |(lo, hi), p| {
-            let local = rotate_kicad(*p - at, -angle);
-            (lo.min(local), hi.max(local))
+        |(lo, hi), (p, r)| {
+            let local = rotate_kicad(p - at, -angle);
+            (lo.min(local - r), hi.max(local + r))
         },
     );
     if lo.x > hi.x {
         return Vec::new();
     }
-    let grow = Vec2::splat(pen * 0.5 + (pen * 0.5).max(text.style.size.y / 9.0));
+    let grow = Vec2::splat((pen * 0.5).max(text.style.size.y / 9.0));
     let (lo, hi) = (lo - grow, hi + grow);
     [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)]
         .into_iter()
@@ -645,17 +680,19 @@ fn face(island: &Nested, threads: usize) -> Face {
 
 /// The silkscreen of one side. Drills are cut and the board edge
 /// applied only to the islands they actually meet.
+#[allow(clippy::too_many_arguments)]
 fn silk_faces(
     board: &Board,
     frame: Frame,
     edge: &BoardEdge,
+    fonts: &Fonts,
     tech: Tech,
     variables: &[(String, String)],
     threads: usize,
     warnings: &mut Vec<String>,
 ) -> Vec<Face> {
     let what = format!("{} silkscreen", if tech.front() { "front" } else { "back" });
-    let items = drawn_items(board, frame, tech, variables, threads, warnings);
+    let items = drawn_items(board, frame, fonts, tech, variables, threads, warnings);
     let islands = nest(union_rings(items, threads, &what, warnings));
     let boxes: Vec<(Vec2, Vec2)> = islands.iter().map(|i| ring_bbox(&i.outer)).collect();
     let outline = boxes
@@ -708,10 +745,12 @@ fn silk_faces(
 /// The solder mask of one side: the board less every opening. Openings
 /// clear of the board edge are holes as they are; only those meeting it
 /// are taken out of the outline with a boolean.
+#[allow(clippy::too_many_arguments)]
 fn mask_faces(
     board: &Board,
     frame: Frame,
     edge: &BoardEdge,
+    fonts: &Fonts,
     tech: Tech,
     variables: &[(String, String)],
     threads: usize,
@@ -772,7 +811,7 @@ fn mask_faces(
         }
     }
     openings.extend(drawn_items(
-        board, frame, tech, variables, threads, warnings,
+        board, frame, fonts, tech, variables, threads, warnings,
     ));
     openings.extend(
         pierce_edges(board, frame, tech)
