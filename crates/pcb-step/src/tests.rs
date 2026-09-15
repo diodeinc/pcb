@@ -1639,3 +1639,81 @@ fn silk_sections(step: &str) -> (usize, usize) {
     let front = step.find("PRODUCT('board_silkscreen'").unwrap();
     (body, front)
 }
+
+#[test]
+fn thick_arc_strokes_reach_past_their_centre() {
+    use crate::copper::{resolution, stroke_contour};
+    use pcb_ir::geom::{ContourSet, FillRule};
+    // A dot drawn as two semicircles of radius 0.05 with a 0.1 pen, as
+    // footprint polarity marks are, is a disc of radius 0.1.
+    let (a, b) = (Vec2::new(0.0, -0.05), Vec2::new(0.0, 0.05));
+    let halves = [
+        stroke_contour(a, Vec2::new(0.05, 0.0), b, 0.1).unwrap(),
+        stroke_contour(b, Vec2::new(-0.05, 0.0), a, 0.1).unwrap(),
+    ];
+    let disc = ContourSet::from_contours(&halves, FillRule::NonZero, resolution()).unwrap();
+    let out = disc.to_contours();
+    assert_eq!(out.len(), 1);
+    let bbox = out[0].bbox;
+    assert!((bbox.max.x - bbox.min.x - 0.2).abs() < 1e-3, "{bbox:?}");
+    assert!((bbox.max.y - bbox.min.y - 0.2).abs() < 1e-3, "{bbox:?}");
+    // One half alone reaches the outer arc on its side and only as far
+    // as its end caps on the other.
+    let half = ContourSet::from_contours(&halves[..1], FillRule::NonZero, resolution()).unwrap();
+    let bbox = half.to_contours()[0].bbox;
+    assert!(
+        (bbox.max.x - 0.1).abs() < 1e-3 && (bbox.min.x + 0.05).abs() < 1e-3,
+        "{bbox:?}"
+    );
+}
+
+#[test]
+fn stroked_arcs_cover_their_pen_sweep_whatever_the_arc() {
+    use crate::copper::{resolution, stroke_contour};
+    use pcb_ir::geom::{ContourSet, FillRule, Point};
+    // Every point within the pen of the arc is inside the outline and
+    // nothing else is, for thick and thin pens, minor and major arcs,
+    // in both senses.
+    let cases: [(f64, f64, f64, f64); 7] = [
+        (1.0, 45.0, 315.0, 4.0),
+        (1.0, 315.0, 45.0, 4.0),
+        (1.0, 0.0, 90.0, 4.0),
+        (1.0, 90.0, 0.0, 4.0),
+        (1.0, 0.0, 180.0, 2.0),
+        (1.0, 45.0, 315.0, 0.5),
+        (1.0, 0.0, 60.0, 0.5),
+    ];
+    for (radius, from_deg, to_deg, width) in cases {
+        let (from, to) = (from_deg.to_radians(), to_deg.to_radians());
+        let sweep = (to - from).rem_euclid(std::f64::consts::TAU);
+        let at = |t: f64| Vec2::from_angle(from + t) * radius;
+        let (a, mid, b) = (at(0.0), at(sweep / 2.0), at(sweep));
+        let contour = stroke_contour(a, mid, b, width).unwrap();
+        let region =
+            ContourSet::from_contours(&[contour], FillRule::NonZero, resolution()).unwrap();
+        let r = width / 2.0;
+        let mut wrong = Vec::new();
+        for i in -30..=30 {
+            for j in -30..=30 {
+                let p = Vec2::new(i as f64 * 0.1, j as f64 * 0.1);
+                let angle = (p.y.atan2(p.x) - from).rem_euclid(std::f64::consts::TAU);
+                let nearest = if angle <= sweep {
+                    (p.length() - radius).abs()
+                } else {
+                    p.distance(a).min(p.distance(b))
+                };
+                if (nearest - r).abs() < 0.02 {
+                    continue;
+                }
+                let inside = region.contains_point(Point::new(p.x, p.y));
+                if inside != (nearest < r) {
+                    wrong.push(p);
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{radius} {from_deg}..{to_deg} w{width}: {wrong:?}"
+        );
+    }
+}

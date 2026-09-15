@@ -808,15 +808,42 @@ pub(crate) fn stroke_contour(a: Vec2, mid: Vec2, b: Vec2, width: f64) -> Option<
     let start = (a - c).y.atan2((a - c).x);
     let ccw = ccw_sweep(start, (mid - c).y.atan2((mid - c).x))
         < ccw_sweep(start, (b - c).y.atan2((b - c).x));
-    if radius <= r {
-        // Inner offset collapses; the outline is the outer arc plus caps.
-        let mut l = Loop::stadium(a, b, r);
-        l.reverse();
-        return Some(contour(&l.edges));
-    }
     let unit = |p: Vec2| (p - c) / radius;
-    let (a_out, a_in) = (c + unit(a) * (radius + r), c + unit(a) * (radius - r));
-    let (b_out, b_in) = (c + unit(b) * (radius + r), c + unit(b) * (radius - r));
+    let (a_out, b_out) = (c + unit(a) * (radius + r), c + unit(b) * (radius + r));
+    if radius <= r {
+        // The inner offset collapses: the pen reaches past the centre,
+        // so the outline is the outer arc and the two end caps, which
+        // meet where the cap circles cross on the far side of the chord.
+        if a.distance(b) < 1e-9 {
+            return Some(contour(&circle_edges(c, radius + r)));
+        }
+        let m = (a + b) * 0.5;
+        let half = a.distance(b) * 0.5;
+        let away = (m - mid).normalize_or_zero();
+        let p = m + away * (r * r - half * half).max(0.0).sqrt();
+        let edges = vec![
+            Edge::Arc {
+                a: a_out,
+                b: b_out,
+                c,
+                ccw,
+            },
+            Edge::Arc {
+                a: b_out,
+                b: p,
+                c: b,
+                ccw,
+            },
+            Edge::Arc {
+                a: p,
+                b: a_out,
+                c: a,
+                ccw,
+            },
+        ];
+        return Some(contour(&orient(edges, true)));
+    }
+    let (a_in, b_in) = (c + unit(a) * (radius - r), c + unit(b) * (radius - r));
     let edges = vec![
         Edge::Arc {
             a: a_out,
