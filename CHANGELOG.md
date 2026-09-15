@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Draw outline-font text on STEP silkscreen and solder mask, with Liberation Sans standing in for faces the board does not embed.
+
 ### Fixed
 
 - Keep the exact round caps and thick arcs of thin strokes in STEP silkscreen and copper.

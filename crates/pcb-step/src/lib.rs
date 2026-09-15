@@ -15,6 +15,7 @@ mod geom;
 mod holes;
 mod newstroke;
 mod outline;
+mod outline_font;
 mod rings;
 mod sexpr;
 mod step;
@@ -869,7 +870,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
 /// Decode KiCad's embedded payload: base64 text (whitespace allowed) of a
 /// zstd frame.
-fn decode_embedded(text: &[u8]) -> Result<Vec<u8>, Error> {
+pub(crate) fn decode_embedded(text: &[u8]) -> Result<Vec<u8>, Error> {
     let compressed = base64_decode(text)?;
     match zstd::zstd_safe::get_frame_content_size(&compressed) {
         Ok(Some(size)) if size > 0 => zstd::bulk::decompress(&compressed, size as usize)

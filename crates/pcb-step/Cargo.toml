@@ -11,6 +11,8 @@ publish = false
 [dependencies]
 base64 = { workspace = true }
 glam = { workspace = true }
+kurbo = { workspace = true }
 memchr = { workspace = true }
 pcb-ir = { workspace = true }
+rustybuzz = { workspace = true }
 zstd = { workspace = true }

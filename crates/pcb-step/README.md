@@ -104,8 +104,12 @@ The defaults follow KiCad's exporter (`pcbnew/exporters/step/`):
   wrap their text to the box with KiCad's word breaking, anchor it by
   its justification and margins, and draw their border. Knockout text
   is the text's hull, or a text box's frame, with the glyphs cut out.
-  Not drawn: tables, barcodes and outline fonts (drawn with the stroke
-  font).
+  Text with a `(face ...)` is drawn in that outline font when the board
+  embeds it, shaped with HarfBuzz's rules and laid out at KiCad's 1.4 em
+  per size; any face the board does not embed is drawn in the bundled
+  Liberation Sans, the metric-compatible stand-in for Arial, so the
+  export never depends on the fonts installed where it runs. Not drawn:
+  tables and barcodes.
 
 Missing model files are warned about and skipped; a model that exists but
 cannot be read makes the exit code 1 after the file is written, both as
@@ -125,6 +129,8 @@ would silently export its bounding box.
 | `src/faces.rs` | Silkscreen and mask faces: strokes, fills and openings unioned cell by cell in parallel, drills cut and the board edge applied where they meet an island. |
 | `src/font.rs` | KiCad's stroke font: glyph decoding, line layout, justification, markup, pen width. |
 | `src/newstroke.rs` | The `newstroke` glyph table, generated from `common/newstroke_font.cpp`. |
+| `src/outline_font.rs` | Outline fonts: embedded and bundled faces, HarfBuzz shaping, KiCad's outline layout, glyphs as rings. |
+| `fonts/` | Liberation Sans, the fallback face, under the SIL Open Font License. |
 | `src/donor.rs` | Donor STEP files: statement split, kind byte per statement, product tree, geometry closure, renumbered copy. |
 | `src/step.rs` | The output buffer, the STEP vocabulary, the extruded board solid, product structure. |
 | `src/lib.rs` | `Board::parse` and `export`: options, model batching across threads, placement math. |

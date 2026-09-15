@@ -82,6 +82,8 @@ pub(crate) struct TextStyle {
     pub(crate) mirror: bool,
     /// Rotation in degrees, KiCad's sense.
     pub(crate) angle: f64,
+    /// The outline font's face name; the stroke font when absent.
+    pub(crate) face: Option<String>,
 }
 
 impl TextStyle {
@@ -137,10 +139,15 @@ pub(crate) fn strokes(text: &str, at: Vec2, style: &TextStyle) -> Vec<Vec<Vec2>>
 /// text box: a word is a run of markup or a space-delimited token, a
 /// word that would overflow the column starts a new line, and the
 /// spaces before it are dropped, as are the spaces ending a line.
-pub(crate) fn wrap(text: &str, column: f64, style: &TextStyle) -> String {
+pub(crate) fn wrap(
+    text: &str,
+    column: f64,
+    style: &TextStyle,
+    measure: impl Fn(&str, Vec2) -> f64,
+) -> String {
     let size = style.size;
     let limit = column - style.pen_width();
-    let space = size.x * glyph_of(' ').advance;
+    let space = measure(" ", size);
     let lines = split_lines(text);
     let mut out = String::new();
     for (k, line) in lines.iter().enumerate() {
@@ -159,7 +166,7 @@ pub(crate) fn wrap(text: &str, column: f64, style: &TextStyle) -> String {
                 };
                 vec![(
                     format!("{escape}{{{}}}", run.text),
-                    advance_of(&run.text, run_size),
+                    measure(&run.text, run_size),
                 )]
             } else {
                 run.text
@@ -167,7 +174,7 @@ pub(crate) fn wrap(text: &str, column: f64, style: &TextStyle) -> String {
                     .map(|token| {
                         let bare = token.trim_end();
                         let measured = if bare.is_empty() { token } else { bare };
-                        (token.to_owned(), advance_of(measured, size))
+                        (token.to_owned(), measure(measured, size))
                     })
                     .collect()
             };
@@ -222,7 +229,7 @@ pub(crate) fn wrap(text: &str, column: f64, style: &TextStyle) -> String {
 
 /// The lines of a text as KiCad splits them: a trailing newline adds
 /// no line.
-fn split_lines(text: &str) -> Vec<&str> {
+pub(crate) fn split_lines(text: &str) -> Vec<&str> {
     let mut lines: Vec<&str> = text.split('\n').collect();
     if lines.len() > 1 && lines.last().is_some_and(|l| l.is_empty()) {
         lines.pop();
@@ -245,7 +252,8 @@ pub(crate) fn line_extent(line: &str, size: Vec2) -> f64 {
     cursor
 }
 
-fn advance_of(text: &str, size: Vec2) -> f64 {
+/// Width of `text` in the stroke font at `size`, advances summed.
+pub(crate) fn advance_of(text: &str, size: Vec2) -> f64 {
     let space = glyph_of(' ').advance;
     let mut x = 0.0;
     let mut count = 0usize;
@@ -270,16 +278,16 @@ fn advance_of(text: &str, size: Vec2) -> f64 {
 
 /// A stretch of text with one style: plain, superscript, subscript, with
 /// or without an overbar.
-struct Run {
-    text: String,
+pub(crate) struct Run {
+    pub(crate) text: String,
     /// 0 plain, 1 superscript, -1 subscript.
-    script: i8,
-    overbar: bool,
+    pub(crate) script: i8,
+    pub(crate) overbar: bool,
 }
 
 /// Split KiCad markup: `~{x}` draws an overbar, `^{x}` a superscript and
 /// `_{x}` a subscript. Anything else is literal.
-fn markup(line: &str) -> Vec<Run> {
+pub(crate) fn markup(line: &str) -> Vec<Run> {
     let mut runs = Vec::new();
     let chars: Vec<char> = line.chars().collect();
     let mut plain = String::new();

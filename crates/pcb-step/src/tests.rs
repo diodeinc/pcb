@@ -395,6 +395,10 @@ fn board_body_is_one_closed_solid() {
 /// Encode bytes the way KiCad embeds files: zstd, then base64 wrapped
 /// in bar text.
 fn embed(name: &str, data: &[u8]) -> String {
+    embed_as(name, "model", data)
+}
+
+fn embed_as(name: &str, kind: &str, data: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let compressed = zstd::bulk::compress(data, 3).unwrap();
     let mut text = String::new();
@@ -414,7 +418,7 @@ fn embed(name: &str, data: &[u8]) -> String {
             text.push('\n');
         }
     }
-    format!(r#"(embedded_files (file (name "{name}") (type model) (data |{text}|)))"#)
+    format!(r#"(embedded_files (file (name "{name}") (type {kind}) (data |{text}|)))"#)
 }
 
 /// A donor STEP file: our own export of a 2x2 board, which has product
@@ -1238,6 +1242,7 @@ fn stroke_font_matches_kicad_layout() {
         valign: 0,
         mirror: false,
         angle: 0.0,
+        face: None,
     };
     // H is three strokes: two stems and a bar joining them.
     let h = strokes("H", Vec2::ZERO, &style);
@@ -1501,7 +1506,7 @@ fn dashed_strokes_follow_kicad_pattern() {
 #[test]
 fn text_boxes_wrap_and_anchor_like_kicad() {
     use crate::board::{Knockout, ShapeKind};
-    use crate::font::{TextStyle, line_extent, wrap};
+    use crate::font::{TextStyle, line_extent};
     let style = TextStyle {
         size: Vec2::new(1.0, 1.0),
         thickness: 0.15,
@@ -1511,10 +1516,12 @@ fn text_boxes_wrap_and_anchor_like_kicad() {
         valign: -1,
         mirror: false,
         angle: 0.0,
+        face: None,
     };
     // A word that would overflow the column starts a new line, and the
     // spaces before it go; trailing spaces go too, as KiCad drops them.
     let fits = line_extent("aa bb", style.size) + style.pen_width() + 1e-6;
+    let wrap = |t: &str, c: f64, s: &TextStyle| crate::font::wrap(t, c, s, crate::font::advance_of);
     assert_eq!(wrap("aa bb cc", fits, &style), "aa bb\ncc");
     assert_eq!(wrap("aa  bb cc ", fits, &style), "aa\nbb cc");
     let wide = line_extent("aa  bb", style.size) + style.pen_width() + 1e-6;
@@ -1716,4 +1723,98 @@ fn stroked_arcs_cover_their_pen_sweep_whatever_the_arc() {
             "{radius} {from_deg}..{to_deg} w{width}: {wrong:?}"
         );
     }
+}
+
+#[test]
+fn outline_fonts_shape_and_lay_out_like_kicad() {
+    use crate::font::TextStyle;
+    use crate::outline_font::Fonts;
+    let style = TextStyle {
+        size: Vec2::new(1.0, 1.0),
+        thickness: 0.15,
+        bold: false,
+        italic: false,
+        halign: -1,
+        valign: -1,
+        mirror: false,
+        angle: 0.0,
+        face: Some("Arial".into()),
+    };
+    let text = parse(&format!(
+        "{}{}{}",
+        rect_outline(0.0, 0.0, 30.0, 20.0),
+        embed_as(
+            "Bold.ttf",
+            "font",
+            include_bytes!("../fonts/LiberationSans-Bold.ttf")
+        ),
+        r#"(gr_text "o" (at 5 5) (layer "F.SilkS") (effects (font (face "Arial") (size 1 1) (thickness 0.15))))
+(gr_text "o" (at 15 5) (layer "F.SilkS" knockout) (effects (font (face "Arial Black") (size 1 1) (thickness 0.15))))
+"#
+    ));
+    let board = Board::parse(text.as_bytes()).unwrap();
+    assert_eq!(board.texts[0].style.face.as_deref(), Some("Arial"));
+    let mut warnings = Vec::new();
+    let fonts = Fonts::load(&board, &mut warnings);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    // An 'o' is an outer ring and a hole; the em is 1.4 times the size,
+    // so the x-height glyph stands about 0.75 mm tall on the baseline.
+    let regular = fonts.resolve("Arial", false, false);
+    let (rings, strokes) = regular.glyphs("o", Vec2::ZERO, &style);
+    assert_eq!(rings.len(), 2);
+    assert!(strokes.is_empty());
+    let (lo, hi) = rings.iter().flatten().fold(
+        (Vec2::splat(f64::INFINITY), Vec2::splat(f64::NEG_INFINITY)),
+        |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+    );
+    assert!((hi.y - lo.y - 0.76).abs() < 0.05, "{lo:?} {hi:?}");
+    assert!(
+        (hi.y - 1.0).abs() < 0.05,
+        "baseline at the anchor plus size: {hi:?}"
+    );
+    // Advances shape with kerning: "AV" is narrower than "A" plus "V".
+    let a = regular.advance("A", style.size);
+    let v = regular.advance("V", style.size);
+    assert!(regular.advance("AV", style.size) < a + v - 0.01);
+    // A face name that says black is bold, and the embedded bold font
+    // answers to its family name; a synthetic italic leans right.
+    let bold = fonts.resolve("Liberation Sans", true, false);
+    let (bold_rings, _) = bold.glyphs("l", Vec2::ZERO, &style);
+    let (thin_rings, _) = regular.glyphs("l", Vec2::ZERO, &style);
+    let width = |rings: &[Vec<Vec2>]| {
+        let xs = rings.iter().flatten().map(|p| p.x);
+        xs.clone().fold(f64::NEG_INFINITY, f64::max) - xs.fold(f64::INFINITY, f64::min)
+    };
+    assert!(width(&bold_rings) > width(&thin_rings) * 1.2);
+    let italic = fonts.resolve("Liberation Sans", false, true);
+    let (lean, _) = italic.glyphs("l", Vec2::ZERO, &style);
+    let top = lean
+        .iter()
+        .flatten()
+        .min_by(|a, b| a.y.total_cmp(&b.y))
+        .unwrap();
+    let bottom = lean
+        .iter()
+        .flatten()
+        .max_by(|a, b| a.y.total_cmp(&b.y))
+        .unwrap();
+    assert!(top.x > bottom.x + 0.1, "{top:?} {bottom:?}");
+    // Wrapping measures with the outline font's advances.
+    let wide = regular.advance("aa bb", style.size) + style.pen_width() + 1e-6;
+    let wrapped = crate::font::wrap("aa bb cc", wide, &style, |s, size| regular.advance(s, size));
+    assert_eq!(wrapped, "aa bb\ncc");
+    // Exported, the plain 'o' is one face with a hole and the knockout
+    // 'o' a hull with the ring cut out, so a face with a hole plus the
+    // counter as its own face.
+    let options = Options {
+        silkscreen: true,
+        soldermask: false,
+        components: false,
+        ..Options::default()
+    };
+    let (step, report) = export_text(&text, &options);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let (body, front) = silk_sections(&step);
+    assert_eq!(step[body..front].matches("ADVANCED_FACE(").count(), 3);
+    assert_eq!(step[body..front].matches("FACE_BOUND(").count(), 2);
 }
