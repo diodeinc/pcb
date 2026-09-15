@@ -4,7 +4,7 @@
 //! Sans, the metric-compatible stand-in for Arial, the face boards name
 //! most, and what a Linux kicad-cli substitutes for it.
 
-use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder, name_id};
+use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder, fonts_in_collection, name_id};
 use rustybuzz::{Face, UnicodeBuffer};
 
 use crate::board::Board;
@@ -38,16 +38,19 @@ static LIBERATION: [[&[u8]; 2]; 2] = [
     ],
 ];
 
-/// One font file: the names it answers to, its style, and its bytes.
+/// One face of an embedded font file: the names it answers to, its
+/// style, and where it is.
 struct Font {
     names: Vec<String>,
     bold: bool,
     italic: bool,
-    data: Vec<u8>,
+    file: usize,
+    index: u32,
 }
 
 /// The fonts a board's texts can be drawn with.
 pub(crate) struct Fonts {
+    files: Vec<Vec<u8>>,
     embedded: Vec<Font>,
 }
 
@@ -59,9 +62,10 @@ pub(crate) struct Loaded<'a> {
 }
 
 impl Fonts {
-    /// The board's embedded fonts, decoded. A file that is not a font
-    /// is noted and skipped.
+    /// The board's embedded fonts, decoded, every face of a collection
+    /// on its own. A file that is not a font is noted and skipped.
     pub(crate) fn load(board: &Board, warnings: &mut Vec<String>) -> Self {
+        let mut files = Vec::new();
         let mut embedded = Vec::new();
         for file in board.embedded.iter().filter(|f| f.font) {
             let data = match crate::decode_embedded(file.data) {
@@ -71,30 +75,38 @@ impl Fonts {
                     continue;
                 }
             };
-            let Some(face) = Face::from_slice(&data, 0) else {
+            let count = fonts_in_collection(&data).unwrap_or(1);
+            let faces: Vec<(u32, Face)> = (0..count)
+                .filter_map(|index| Face::from_slice(&data, index).map(|f| (index, f)))
+                .collect();
+            if faces.is_empty() {
                 warnings.push(format!("embedded font {}: not a readable font", file.name));
                 continue;
-            };
-            let names = face
-                .names()
-                .into_iter()
-                .filter(|n| {
-                    matches!(
-                        n.name_id,
-                        name_id::FAMILY | name_id::FULL_NAME | name_id::TYPOGRAPHIC_FAMILY
-                    )
-                })
-                .filter_map(|n| n.to_string())
-                .map(|n| n.to_lowercase())
-                .collect();
-            embedded.push(Font {
-                names,
-                bold: face.is_bold(),
-                italic: face.is_italic(),
-                data,
-            });
+            }
+            for (index, face) in &faces {
+                let names = face
+                    .names()
+                    .into_iter()
+                    .filter(|n| {
+                        matches!(
+                            n.name_id,
+                            name_id::FAMILY | name_id::FULL_NAME | name_id::TYPOGRAPHIC_FAMILY
+                        )
+                    })
+                    .filter_map(|n| n.to_string())
+                    .map(|n| n.to_lowercase())
+                    .collect();
+                embedded.push(Font {
+                    names,
+                    bold: face.is_bold(),
+                    italic: face.is_italic(),
+                    file: files.len(),
+                    index: *index,
+                });
+            }
+            files.push(data);
         }
-        Self { embedded }
+        Self { files, embedded }
     }
 
     /// The font for a face name and style, as KiCad picks it: a name
@@ -116,12 +128,16 @@ impl Fonts {
             .iter()
             .copied()
             .min_by_key(|f| usize::from(f.bold != bold) * 2 + usize::from(f.italic != italic));
-        let (data, has_italic): (&[u8], bool) = match closest {
-            Some(font) => (&font.data, font.italic),
-            None => (LIBERATION[usize::from(bold)][usize::from(italic)], italic),
+        let (data, index, has_italic): (&[u8], u32, bool) = match closest {
+            Some(font) => (&self.files[font.file], font.index, font.italic),
+            None => (
+                LIBERATION[usize::from(bold)][usize::from(italic)],
+                0,
+                italic,
+            ),
         };
         Loaded {
-            face: Face::from_slice(data, 0).expect("font was readable when loaded"),
+            face: Face::from_slice(data, index).expect("font was readable when loaded"),
             slant: italic && !has_italic,
         }
     }
@@ -168,19 +184,22 @@ impl Loaded<'_> {
         let mut strokes = Vec::new();
         for (i, line) in lines.iter().enumerate() {
             let runs = markup(line);
-            let extent: f64 = runs
-                .iter()
-                .map(|r| {
-                    self.run(
-                        &r.text,
-                        size,
-                        r.script,
-                        Vec2::ZERO,
-                        Vec2::ZERO,
-                        &mut Vec::new(),
-                    )
-                })
-                .sum();
+            // KiCad measures a line from the anchor's x with tab stops
+            // counted from zero, and draws it from the justified start
+            // with tab stops counted from the anchor.
+            let mut measured = at.x;
+            for run in &runs {
+                let cursor = Vec2::new(measured, 0.0);
+                measured += self.run(
+                    &run.text,
+                    size,
+                    run.script,
+                    cursor,
+                    Vec2::ZERO,
+                    &mut Vec::new(),
+                );
+            }
+            let extent = measured - at.x;
             let offset_x = match style.halign {
                 -1 => 0.0,
                 0 => -extent / 2.0,
@@ -246,7 +265,10 @@ impl Loaded<'_> {
         let mut x = cursor.x;
         for (k, piece) in text.split('\t').enumerate() {
             if k > 0 {
-                x += tab - (x - origin.x).rem_euclid(tab);
+                // KiCad's intrusion is a C++ remainder: negative left of
+                // the origin, where a justified line can start, so the
+                // tab then jumps a whole extra stop.
+                x += tab - (x - origin.x) % tab;
             }
             let mut buffer = UnicodeBuffer::new();
             buffer.push_str(piece);
