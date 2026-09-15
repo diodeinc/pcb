@@ -1837,3 +1837,27 @@ fn outline_fonts_shape_and_lay_out_like_kicad() {
     assert_eq!(step[body..front].matches("ADVANCED_FACE(").count(), 3);
     assert_eq!(step[body..front].matches("FACE_BOUND(").count(), 2);
 }
+
+#[test]
+fn embedded_font_names_are_what_faces_resolve_against() {
+    let text = parse(&format!(
+        "{}{}",
+        rect_outline(0.0, 0.0, 30.0, 20.0),
+        embed_as(
+            "Bold.ttf",
+            "font",
+            include_bytes!("../fonts/LiberationSans-Bold.ttf")
+        )
+    ));
+    let names = crate::embedded_font_names(text.as_bytes()).unwrap();
+    assert!(names.contains(&"liberation sans".to_string()), "{names:?}");
+    assert!(
+        names.contains(&"liberation sans bold".to_string()),
+        "{names:?}"
+    );
+    assert!(
+        crate::embedded_font_names(parse("").as_bytes())
+            .unwrap()
+            .is_empty()
+    );
+}

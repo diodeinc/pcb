@@ -4406,6 +4406,7 @@ dependencies = [
  "pcb-kicad",
  "pcb-sch",
  "pcb-sexpr",
+ "pcb-step",
  "pcb-zen",
  "pcb-zen-core",
  "regex",

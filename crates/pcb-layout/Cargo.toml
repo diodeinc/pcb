@@ -18,6 +18,7 @@ atomicwrites = { workspace = true }
 thiserror = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-sexpr = { workspace = true }
+pcb-step = { workspace = true }
 pcb-kicad = { workspace = true }
 pcb-zen-core = { workspace = true }
 log = { workspace = true }
