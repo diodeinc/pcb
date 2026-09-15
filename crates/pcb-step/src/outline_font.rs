@@ -109,6 +109,11 @@ impl Fonts {
         Self { files, embedded }
     }
 
+    /// Every name an embedded face answers to, lowercased.
+    pub(crate) fn names(&self) -> Vec<String> {
+        self.embedded.iter().flat_map(|f| f.names.clone()).collect()
+    }
+
     /// The font for a face name and style, as KiCad picks it: a name
     /// that says bold is bold, an embedded family is preferred in its
     /// closest style, and anything else is Liberation Sans in the style

@@ -162,6 +162,16 @@ fn model_key(path: &str) -> &str {
 }
 
 /// Write the STEP assembly for `board` to `sink`.
+/// The names every font embedded in a board answers to, lowercased: the
+/// family, full and typographic family names of each face. A text's
+/// `(face ...)` is drawn from an embedded font when its lowercased name
+/// is among them.
+pub fn embedded_font_names(source: &[u8]) -> Result<Vec<String>, Error> {
+    let board = Board::parse_with(source, false, false)?;
+    let mut warnings = Vec::new();
+    Ok(outline_font::Fonts::load(&board, &mut warnings).names())
+}
+
 pub fn export(board: &Board, options: &Options, sink: &mut dyn Write) -> Result<Report, Error> {
     if !options.board_body
         && !options.components

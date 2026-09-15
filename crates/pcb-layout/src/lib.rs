@@ -466,45 +466,40 @@ fn embed_board_fonts(pcb_path: &Path) -> anyhow::Result<()> {
     apply_source_preserving_patches_to_file(pcb_path, &board_source, &patches)
 }
 
-/// The faces the board's text names that no embedded font file carries.
-/// KiCad embeds a substitute when a face is not installed where the sync
-/// runs, or nothing when it finds none, and either way the text is not
-/// drawn in the font the designer chose.
+/// The faces the board's text names that no embedded font answers to,
+/// by the names `pcb step export` resolves faces with. KiCad embeds a
+/// substitute when a face is not installed where the sync runs, or
+/// nothing when it finds none, and either way the text is not drawn in
+/// the font the designer chose.
 fn unembedded_faces(pcb_path: &Path) -> anyhow::Result<Vec<String>> {
     let board_source = fs::read_to_string(pcb_path)
         .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
     let board = pcb_sexpr::parse(&board_source)
         .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
-    let key = |name: &str| -> String {
-        name.chars()
-            .filter(char::is_ascii_alphanumeric)
-            .flat_map(char::to_lowercase)
-            .collect()
-    };
+    let embedded = pcb_step::embedded_font_names(board_source.as_bytes()).with_context(|| {
+        format!(
+            "Failed to read the fonts embedded in {}",
+            pcb_path.display()
+        )
+    })?;
     let mut faces = BTreeSet::new();
-    let mut fonts: Vec<String> = Vec::new();
     board.walk(|node, ctx| {
         let Some(list) = node.as_list() else {
             return;
         };
-        match (
-            list.first().and_then(pcb_sexpr::Sexpr::as_sym),
-            ctx.parent_tag(),
-        ) {
-            (Some("face"), Some("font")) => {
-                if let Some(face) = list.get(1).and_then(pcb_sexpr::Sexpr::as_atom) {
-                    faces.insert(face.to_string());
-                }
-            }
-            (Some("file"), Some("embedded_files")) if child_atom(list, "type") == Some("font") => {
-                fonts.extend(child_atom(list, "name").map(key));
-            }
-            _ => {}
+        if list.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("face")
+            && ctx.parent_tag() == Some("font")
+        {
+            faces.extend(
+                list.get(1)
+                    .and_then(pcb_sexpr::Sexpr::as_atom)
+                    .map(str::to_string),
+            );
         }
     });
     Ok(faces
         .into_iter()
-        .filter(|face| !face.starts_with("KiCad") && !fonts.iter().any(|f| f.contains(&key(face))))
+        .filter(|face| !face.starts_with("KiCad") && !embedded.contains(&face.to_lowercase()))
         .collect())
 }
 
@@ -2127,22 +2122,19 @@ mod tests {
     }
 
     #[test]
-    fn unembedded_faces_are_the_ones_without_a_font_file() {
+    fn unembedded_faces_are_the_ones_no_embedded_font_answers_to() {
         let dir = tempfile::tempdir().unwrap();
         let pcb = dir.path().join("layout.kicad_pcb");
+        // Nothing readable is embedded, so every face but KiCad's own is
+        // reported once, footprint text included.
         std::fs::write(
             &pcb,
             r#"(kicad_pcb (version 20250101)
   (gr_text "a" (effects (font (face "Arial") (size 1 1))))
   (gr_text "b" (effects (font (face "Inter ExtraBold") (size 1 1))))
-  (gr_text "c" (effects (font (face "DIN Condensed") (size 1 1))))
   (gr_text "d" (effects (font (face "KiCad Font") (size 1 1))))
   (footprint "X" (fp_text user "e" (effects (font (face "Arial") (size 1 1)))))
-  (embedded_files
-    (file (name "Arial.ttf") (type font) (data |AA==|))
-    (file (name "DIN Condensed Bold.ttf") (type font) (data |AA==|))
-    (file (name "Verdana Bold.ttf") (type font) (data |AA==|))
-    (file (name "part.step") (type model) (data |AA==|)))
+  (embedded_files (file (name "part.step") (type model) (data |AA==|)))
   (embedded_fonts yes)
 )
 "#,
@@ -2150,7 +2142,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             super::unembedded_faces(&pcb).unwrap(),
-            vec!["Inter ExtraBold"]
+            vec!["Arial", "Inter ExtraBold"]
         );
     }
 }
