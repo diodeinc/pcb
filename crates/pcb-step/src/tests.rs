@@ -1639,3 +1639,30 @@ fn silk_sections(step: &str) -> (usize, usize) {
     let front = step.find("PRODUCT('board_silkscreen'").unwrap();
     (body, front)
 }
+
+#[test]
+fn thick_arc_strokes_reach_past_their_centre() {
+    use crate::copper::{resolution, stroke_contour};
+    use pcb_ir::geom::{ContourSet, FillRule};
+    // A dot drawn as two semicircles of radius 0.05 with a 0.1 pen, as
+    // footprint polarity marks are, is a disc of radius 0.1.
+    let (a, b) = (Vec2::new(0.0, -0.05), Vec2::new(0.0, 0.05));
+    let halves = [
+        stroke_contour(a, Vec2::new(0.05, 0.0), b, 0.1).unwrap(),
+        stroke_contour(b, Vec2::new(-0.05, 0.0), a, 0.1).unwrap(),
+    ];
+    let disc = ContourSet::from_contours(&halves, FillRule::NonZero, resolution()).unwrap();
+    let out = disc.to_contours();
+    assert_eq!(out.len(), 1);
+    let bbox = out[0].bbox;
+    assert!((bbox.max.x - bbox.min.x - 0.2).abs() < 1e-3, "{bbox:?}");
+    assert!((bbox.max.y - bbox.min.y - 0.2).abs() < 1e-3, "{bbox:?}");
+    // One half alone reaches the outer arc on its side and only as far
+    // as its end caps on the other.
+    let half = ContourSet::from_contours(&halves[..1], FillRule::NonZero, resolution()).unwrap();
+    let bbox = half.to_contours()[0].bbox;
+    assert!(
+        (bbox.max.x - 0.1).abs() < 1e-3 && (bbox.min.x + 0.05).abs() < 1e-3,
+        "{bbox:?}"
+    );
+}

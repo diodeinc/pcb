@@ -165,9 +165,11 @@ pub(crate) fn fit(island: &Nested, threads: usize) -> (Loop, Vec<Loop>) {
 
 /// Drop vertices that lie within `SIMPLIFY_TOLERANCE` of the line through
 /// their neighbours, as KiCad's `SimplifyOutlines` does before it refits
-/// arcs. Flattened arcs keep their chords since those deviate more.
+/// arcs. The tolerance is the boolean's own resolution: a flattened arc
+/// of any radius drawn here, down to the caps of a 0.05 mm pen, bends
+/// more than that between chords and keeps them for the refit.
 fn simplify_ring(ring: &mut Vec<Vec2>) {
-    const SIMPLIFY_TOLERANCE: f64 = 0.002;
+    const SIMPLIFY_TOLERANCE: f64 = 0.0005;
     if ring.len() < 4 {
         return;
     }
