@@ -1521,7 +1521,7 @@ fn text_boxes_wrap_and_anchor_like_kicad() {
     // A word that would overflow the column starts a new line, and the
     // spaces before it go; trailing spaces go too, as KiCad drops them.
     let fits = line_extent("aa bb", style.size) + style.pen_width() + 1e-6;
-    let wrap = |t: &str, c: f64, s: &TextStyle| crate::font::wrap(t, c, s, crate::font::advance_of);
+    let wrap = |t: &str, c: f64, s: &TextStyle| crate::font::wrap(t, c, s, crate::font::measure);
     assert_eq!(wrap("aa bb cc", fits, &style), "aa bb\ncc");
     assert_eq!(wrap("aa  bb cc ", fits, &style), "aa\nbb cc");
     let wide = line_extent("aa  bb", style.size) + style.pen_width() + 1e-6;
@@ -1773,9 +1773,9 @@ fn outline_fonts_shape_and_lay_out_like_kicad() {
         "baseline at the anchor plus size: {hi:?}"
     );
     // Advances shape with kerning: "AV" is narrower than "A" plus "V".
-    let a = regular.advance("A", style.size);
-    let v = regular.advance("V", style.size);
-    assert!(regular.advance("AV", style.size) < a + v - 0.01);
+    let a = regular.advance("A", style.size, 0);
+    let v = regular.advance("V", style.size, 0);
+    assert!(regular.advance("AV", style.size, 0) < a + v - 0.01);
     // A face name that says black is bold, and the embedded bold font
     // answers to its family name; a synthetic italic leans right.
     let bold = fonts.resolve("Liberation Sans", true, false);
@@ -1799,10 +1799,29 @@ fn outline_fonts_shape_and_lay_out_like_kicad() {
         .max_by(|a, b| a.y.total_cmp(&b.y))
         .unwrap();
     assert!(top.x > bottom.x + 0.1, "{top:?} {bottom:?}");
-    // Wrapping measures with the outline font's advances.
-    let wide = regular.advance("aa bb", style.size) + style.pen_width() + 1e-6;
-    let wrapped = crate::font::wrap("aa bb cc", wide, &style, |s, size| regular.advance(s, size));
-    assert_eq!(wrapped, "aa bb\ncc");
+    // Wrapping measures with the outline font's advances, a superscript
+    // at the outline font's own smaller size.
+    let measure = |s: &str, size: Vec2, script: i8| regular.advance(s, size, script);
+    let wide = measure("aa bb", style.size, 0) + style.pen_width() + 1e-6;
+    assert_eq!(
+        crate::font::wrap("aa bb cc", wide, &style, measure),
+        "aa bb\ncc"
+    );
+    let space = measure(" ", style.size, 0);
+    let exact = measure("A", style.size, 0)
+        + measure("BC", style.size, 1)
+        + 2.0 * space
+        + measure("D", style.size, 0)
+        + style.pen_width()
+        + 1e-6;
+    assert_eq!(
+        crate::font::wrap("A^{BC} D", exact, &style, measure),
+        "A^{BC} D"
+    );
+    assert_eq!(
+        crate::font::wrap("A^{BC} D", exact - 0.01, &style, measure),
+        "A^{BC}\nD"
+    );
     // Exported, the plain 'o' is one face with a hole and the knockout
     // 'o' a hull with the ring cut out, so a face with a hole plus the
     // counter as its own face.
