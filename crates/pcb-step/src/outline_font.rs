@@ -128,11 +128,12 @@ impl Fonts {
 }
 
 impl Loaded<'_> {
-    /// The width of `text` at `size`, as KiCad measures it for wrapping
-    /// and justification: the shaped advances, tabs included.
-    pub(crate) fn advance(&self, text: &str, size: Vec2) -> f64 {
+    /// The width of `text` at `size` and script, as KiCad measures it
+    /// for wrapping and justification: the shaped advances, tabs
+    /// included.
+    pub(crate) fn advance(&self, text: &str, size: Vec2, script: i8) -> f64 {
         let mut sink = Vec::new();
-        self.run(text, size, 0, Vec2::ZERO, Vec2::ZERO, &mut sink)
+        self.run(text, size, script, Vec2::ZERO, Vec2::ZERO, &mut sink)
     }
 
     /// The glyph rings of `text` anchored at `at`, in board coordinates,

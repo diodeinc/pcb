@@ -386,9 +386,9 @@ fn text_contours(
         .face
         .as_deref()
         .map(|f| fonts.resolve(f, text.style.bold, text.style.italic));
-    let measure = |s: &str, size: Vec2| match &face {
-        Some(face) => face.advance(s, size),
-        None => font::advance_of(s, size),
+    let measure = |s: &str, size: Vec2, script: i8| match &face {
+        Some(face) => face.advance(s, size, script),
+        None => font::measure(s, size, script),
     };
     let content = match text.column {
         Some(column) => font::wrap(&content, column, &text.style, measure),

@@ -139,15 +139,17 @@ pub(crate) fn strokes(text: &str, at: Vec2, style: &TextStyle) -> Vec<Vec<Vec2>>
 /// text box: a word is a run of markup or a space-delimited token, a
 /// word that would overflow the column starts a new line, and the
 /// spaces before it are dropped, as are the spaces ending a line.
+/// `measure` is the font's width of a text at a size and script (0
+/// plain, 1 superscript, -1 subscript).
 pub(crate) fn wrap(
     text: &str,
     column: f64,
     style: &TextStyle,
-    measure: impl Fn(&str, Vec2) -> f64,
+    measure: impl Fn(&str, Vec2, i8) -> f64,
 ) -> String {
     let size = style.size;
     let limit = column - style.pen_width();
-    let space = measure(" ", size);
+    let space = measure(" ", size, 0);
     let lines = split_lines(text);
     let mut out = String::new();
     for (k, line) in lines.iter().enumerate() {
@@ -159,14 +161,9 @@ pub(crate) fn wrap(
                     -1 => '_',
                     _ => '~',
                 };
-                let run_size = if run.script == 0 {
-                    size
-                } else {
-                    size * SUPER_SUB_SIZE
-                };
                 vec![(
                     format!("{escape}{{{}}}", run.text),
-                    measure(&run.text, run_size),
+                    measure(&run.text, size, run.script),
                 )]
             } else {
                 run.text
@@ -174,7 +171,7 @@ pub(crate) fn wrap(
                     .map(|token| {
                         let bare = token.trim_end();
                         let measured = if bare.is_empty() { token } else { bare };
-                        (token.to_owned(), measure(measured, size))
+                        (token.to_owned(), measure(measured, size, 0))
                     })
                     .collect()
             };
@@ -252,8 +249,19 @@ pub(crate) fn line_extent(line: &str, size: Vec2) -> f64 {
     cursor
 }
 
+/// Width of `text` in the stroke font at `size` and script, as `wrap`
+/// measures it.
+pub(crate) fn measure(text: &str, size: Vec2, script: i8) -> f64 {
+    let size = if script == 0 {
+        size
+    } else {
+        size * SUPER_SUB_SIZE
+    };
+    advance_of(text, size)
+}
+
 /// Width of `text` in the stroke font at `size`, advances summed.
-pub(crate) fn advance_of(text: &str, size: Vec2) -> f64 {
+fn advance_of(text: &str, size: Vec2) -> f64 {
     let space = glyph_of(' ').advance;
     let mut x = 0.0;
     let mut count = 0usize;
