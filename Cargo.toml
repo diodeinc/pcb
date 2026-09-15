@@ -131,6 +131,7 @@ smallvec = "1.15"
 strip-ansi-escapes = "0.2"
 supports-hyperlinks = "3"
 tar = { version = "0.4", default-features = false }
+rustybuzz = "0.20"
 ruzstd = "0.9"
 terminal_size = "0.4.4"
 terminal_hyperlink = "0.1"

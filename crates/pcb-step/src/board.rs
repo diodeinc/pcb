@@ -419,6 +419,8 @@ pub(crate) struct Embedded<'a> {
     pub(crate) name: &'a str,
     /// Base64 text as written, whitespace included.
     pub(crate) data: &'a [u8],
+    /// Whether the file is a font rather than a model.
+    pub(crate) font: bool,
 }
 
 pub(crate) const DEFAULT_THICKNESS: f64 = 1.6;
@@ -1059,16 +1061,18 @@ impl<'a> Board<'a> {
             }
             let mut file_name = None;
             let mut data = None;
+            let mut font = false;
             while let Some(field) = p.open()? {
                 match field {
                     "name" => file_name = p.atom()?,
+                    "type" => font = p.atom()? == Some("font"),
                     "data" => data = p.bar()?,
                     _ => {}
                 }
                 p.skip()?;
             }
             if let (Some(name), Some(data)) = (file_name, data) {
-                self.embedded.push(Embedded { name, data });
+                self.embedded.push(Embedded { name, data, font });
             }
         }
         Ok(())
@@ -1837,6 +1841,7 @@ fn default_style(halign: i8, valign: i8) -> crate::font::TextStyle {
         valign,
         mirror: false,
         angle: 0.0,
+        face: None,
     }
 }
 
@@ -1864,6 +1869,7 @@ fn parse_effects(p: &mut Parser<'_>, style: &mut crate::font::TextStyle) -> Resu
                         break;
                     };
                     match f {
+                        "face" => style.face = p.atom()?.map(|f| unescape(f).into_owned()),
                         "size" => {
                             let size = p.xy("font size")?;
                             style.size = Vec2::new(size.y, size.x);
