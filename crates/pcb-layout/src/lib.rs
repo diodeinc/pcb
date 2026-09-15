@@ -7,7 +7,7 @@ use pcb_zen_core::lang::stackup::{BoardConfig, DesignRules, NetClass, Stackup, S
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use starlark::errors::EvalSeverity;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -431,6 +431,60 @@ fn refresh_board_embedded_models(pcb_path: &Path, schematic: &Schematic) -> anyh
     Ok(())
 }
 
+/// Turn on KiCad's font embedding. KiCad stores the outline fonts a
+/// board's text uses in the board itself whenever it saves with this flag
+/// set, and the sync saves through KiCad, so the fonts the designer sees
+/// travel with the layout and a release draws them exactly.
+fn embed_board_fonts(pcb_path: &Path) -> anyhow::Result<()> {
+    let board_source = fs::read_to_string(pcb_path)
+        .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
+    let board = pcb_sexpr::parse(&board_source)
+        .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
+    let items = board
+        .as_list()
+        .with_context(|| format!("PCB file {} is not a list", pcb_path.display()))?;
+    let flag = "(embedded_fonts yes)";
+    let mut patches = pcb_sexpr::PatchSet::new();
+    match pcb_sexpr::find_named_list_index(items, "embedded_fonts") {
+        Some(index) => {
+            let node = &items[index];
+            let value = node
+                .as_list()
+                .and_then(|list| list.get(1))
+                .and_then(pcb_sexpr::Sexpr::as_atom);
+            if value == Some("yes") {
+                return Ok(());
+            }
+            patches.replace_raw(node.span, flag.to_string());
+        }
+        None => {
+            let close = board.span.end - 1;
+            patches.replace_raw(pcb_sexpr::Span::new(close, close), format!("\t{flag}\n"));
+        }
+    }
+    info!("Enabling font embedding in {}", pcb_path.display());
+    apply_source_preserving_patches_to_file(pcb_path, &board_source, &patches)
+}
+
+/// The fonts KiCad could not find while saving, from the sync log. The
+/// board names a face that is not installed here, so KiCad embedded its
+/// substitute instead.
+fn font_substitutions(log: &Path) -> Vec<String> {
+    let log = fs::read_to_string(log).unwrap_or_default();
+    let notes: BTreeSet<String> = log
+        .lines()
+        .filter(|line| line.contains("substituting"))
+        .filter_map(|line| {
+            line.find("Font '")
+                .map(|start| line[start..].trim().to_string())
+        })
+        .collect();
+    notes
+        .into_iter()
+        .map(|note| format!("{note} The layout embeds the substitute; install the named font to embed it instead."))
+        .collect()
+}
+
 /// Apply moved() path renames to a PCB file
 fn apply_moved_paths(
     pcb_path: &Path,
@@ -747,6 +801,7 @@ pub fn process_layout(
 
     // Apply moved() path renames and detect implicit net renames before sync
     if pcb_exists {
+        embed_board_fonts(&paths.pcb)?;
         apply_moved_paths(
             &paths.pcb,
             &schematic.moved_paths,
@@ -762,6 +817,14 @@ pub fn process_layout(
 
     // Run the Python sync script
     run_sync_script(&paths, &lens_python_path, options.sync_footprints)?;
+    for note in font_substitutions(&paths.log) {
+        diagnostics.diagnostics.push(Diagnostic::categorized(
+            &diagnostics_pcb_path,
+            &note,
+            "layout.fonts",
+            EvalSeverity::Warning,
+        ));
+    }
 
     let layout_name = utils::extract_layout_name(schematic);
     let netclass_assignments = board_config
@@ -2008,5 +2071,48 @@ mod tests {
 
         assert!(out.contains("(title_block"));
         assert!(out.contains(r#"(title "${PCB_NAME}")"#));
+    }
+
+    #[test]
+    fn embed_board_fonts_sets_the_flag_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let pcb = dir.path().join("layout.kicad_pcb");
+        let head = "(kicad_pcb\n\t(version 20250101)\n\t(general\n\t\t(thickness 1.6)\n\t)\n";
+        // Absent: inserted at the end of the board.
+        std::fs::write(&pcb, format!("{head})\n")).unwrap();
+        super::embed_board_fonts(&pcb).unwrap();
+        let written = std::fs::read_to_string(&pcb).unwrap();
+        assert_eq!(written, format!("{head}\t(embedded_fonts yes)\n)\n"));
+        // Off: flipped in place, nothing else touched.
+        std::fs::write(&pcb, format!("{head}\t(embedded_fonts no)\n)\n")).unwrap();
+        super::embed_board_fonts(&pcb).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&pcb).unwrap(),
+            format!("{head}\t(embedded_fonts yes)\n)\n")
+        );
+        // On: left alone, byte for byte.
+        let on = format!("{head}\t(embedded_fonts yes)\n   )\n");
+        std::fs::write(&pcb, &on).unwrap();
+        super::embed_board_fonts(&pcb).unwrap();
+        assert_eq!(std::fs::read_to_string(&pcb).unwrap(), on);
+    }
+
+    #[test]
+    fn font_substitutions_come_from_kicad_notes() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("sync.log");
+        std::fs::write(
+            &log,
+            "01:54:13 PM: Font 'Inter ExtraBold' not found; substituting 'Verdana Bold'.\n\
+             Saved 3 diagnostic(s)\n\
+             01:54:14 PM: Font 'Inter ExtraBold' not found; substituting 'Verdana Bold'.\n",
+        )
+        .unwrap();
+        let notes = super::font_substitutions(&log);
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].starts_with("Font 'Inter ExtraBold' not found; substituting 'Verdana Bold'.")
+        );
+        assert!(super::font_substitutions(&dir.path().join("missing.log")).is_empty());
     }
 }
