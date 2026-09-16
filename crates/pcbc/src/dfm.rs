@@ -283,16 +283,11 @@ mod tests {
     #[test]
     fn restore_failure_preserves_the_backup_and_reports_where() {
         let parent = tempfile::tempdir().unwrap();
-        let live = parent.path().join("layout");
-        std::fs::create_dir_all(&live).unwrap();
-        std::fs::write(live.join("board.kicad_pcb"), "original").unwrap();
+        // A missing destination parent makes rename fail regardless of the
+        // test process's permissions (CI may run as root).
+        let live = parent.path().join("missing").join("layout");
         let backup = tempfile::tempdir_in(parent.path()).unwrap();
         std::fs::write(backup.path().join("board.kicad_pcb"), "original").unwrap();
-        // Make the live directory undeletable so the restore fails after the
-        // backup's automatic cleanup was already relinquished.
-        let mut permissions = std::fs::metadata(&live).unwrap().permissions();
-        permissions.set_readonly(true);
-        std::fs::set_permissions(&live, permissions).unwrap();
 
         let snapshot = LayoutSnapshot {
             directory: Some(live.clone()),
@@ -304,7 +299,7 @@ mod tests {
             message.contains("preserved at"),
             "restore error reports the surviving backup: {message}"
         );
-        // The backup persists beside the layout directory with its contents.
+        // The backup persists with its contents.
         let survivors = std::fs::read_dir(parent.path())
             .unwrap()
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
@@ -315,8 +310,5 @@ mod tests {
             std::fs::read(survivors[0].join("board.kicad_pcb")).unwrap(),
             b"original"
         );
-
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
