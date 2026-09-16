@@ -55,6 +55,40 @@ impl SegmentClearance {
     }
 }
 
+/// Index from exact boundary vertices to their segment ids, for endpoint
+/// contact constraints that must not depend on a spatial query box.
+#[derive(Default)]
+pub(crate) struct ContactIndex {
+    map: std::collections::HashMap<(u64, u64), Vec<usize>>,
+}
+
+fn point_key(point: Point) -> (u64, u64) {
+    // Normalize signed zero: `Point` equality treats `-0.0 == 0.0`, so the
+    // index must hash them identically or contacts miss incident segments.
+    let normalize = |value: f64| if value == 0.0 { 0.0 } else { value };
+    (normalize(point.x).to_bits(), normalize(point.y).to_bits())
+}
+
+impl ContactIndex {
+    pub(crate) fn for_segments(segments: &[(Point, Point)]) -> Self {
+        let mut map = std::collections::HashMap::new();
+        for (id, &(start, end)) in segments.iter().enumerate() {
+            map.entry(point_key(start))
+                .or_insert_with(Vec::new)
+                .push(id);
+            if point_key(end) != point_key(start) {
+                map.entry(point_key(end)).or_insert_with(Vec::new).push(id);
+            }
+        }
+        Self { map }
+    }
+
+    /// Ids of segments sharing `point`, in source order.
+    pub(crate) fn sharers(&self, point: Point) -> &[usize] {
+        self.map.get(&point_key(point)).map_or(&[], Vec::as_slice)
+    }
+}
+
 /// A line or parabola, with its active point/interior-segment contacts.
 /// Degenerate contact segments denote endpoints, not short supporting lines.
 #[derive(Clone, Copy, Debug)]
@@ -273,18 +307,125 @@ impl WidthAxis {
         }
     }
 
-    pub fn in_region(self, region: &ContourSet, boundary: &PreparedRegion) -> Vec<Self> {
+    pub(crate) fn in_region_with_contact_index(
+        self,
+        region: &ContourSet,
+        boundary: &PreparedRegion,
+        radius_cap: f64,
+        contact_index: &ContactIndex,
+    ) -> Vec<Self> {
         let bounds = self.bounds();
         if !bounds.intersects(region.bbox) {
             return Vec::new();
         }
         let error = numerical_error(bounds.union(region.bbox));
+        // Endpoint contact constraints must match the un-narrowed query
+        // exactly: they cut along half-planes through far contact vertices,
+        // so a spatial box around the axis cannot decide them. Resolve every
+        // segment sharing a contact endpoint through the index, keeping those
+        // the original query box would have returned.
         let maximum_radius = self
             .radius_at(self.range.0)
             .max(self.radius_at(self.range.1));
+        let original_box = bounds.expand(maximum_radius + error);
+        let mut cone_ids = Vec::new();
+        for (a, b) in self.contacts {
+            for point in [a, b] {
+                cone_ids.extend(contact_index.sharers(point).iter().copied());
+            }
+        }
+        cone_ids.sort_unstable();
+        cone_ids.dedup();
+        let cones = cone_ids
+            .into_iter()
+            .filter(|&id| {
+                let (start, end) = boundary.segments[id];
+                BBox::spanning(start, end).intersects(original_box)
+            })
+            .map(|id| boundary.segments[id])
+            .collect::<Vec<_>>();
+        // Narrow the parameter range to radii the downstream measurement can
+        // keep: every kept axis portion has radius at most the acceptance
+        // threshold (plus evaluation slack), so portions beyond it are
+        // discarded either way. The hull is a superset of the sublevel set,
+        // hence safe.
+        let mut narrowed = self;
+        if radius_cap.is_finite() {
+            match narrowed.range_with_radius_below(radius_cap + error) {
+                Some(range) => {
+                    narrowed.range = (narrowed.range.0.max(range.0), narrowed.range.1.min(range.1));
+                    if narrowed.range.0 > narrowed.range.1 {
+                        return Vec::new();
+                    }
+                }
+                None => return Vec::new(),
+            }
+        }
+        let bounds = narrowed.bounds();
+        let maximum_radius = narrowed
+            .radius_at(narrowed.range.0)
+            .max(narrowed.radius_at(narrowed.range.1));
         let nearby = boundary
             .segments_meeting(bounds.expand(maximum_radius + error))
             .collect::<Vec<_>>();
+        narrowed.in_region_narrowed(region, error, nearby, cones)
+    }
+
+    /// Hull of the `{t ∈ range}` sublevel set of a polynomial predicate.
+    /// The hull is a superset, used only to drop provably useless spans.
+    fn sublevel_hull(poly: Polynomial, le_zero: bool, range: (f64, f64)) -> Option<(f64, f64)> {
+        let crossings = roots(poly);
+        let mut points = vec![range.0, range.1];
+        points.extend(
+            crossings
+                .iter()
+                .copied()
+                .filter(|&t| t > range.0 && t < range.1),
+        );
+        points.sort_by(f64::total_cmp);
+        let mut low = f64::INFINITY;
+        let mut high = f64::NEG_INFINITY;
+        for pair in points.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let mid = a.midpoint(b);
+            let satisfies = if le_zero {
+                value(poly, mid) <= 0.0
+            } else {
+                value(poly, mid) >= 0.0
+            };
+            if satisfies {
+                low = low.min(a);
+                high = high.max(b);
+            }
+        }
+        (low <= high).then_some((low, high))
+    }
+
+    /// Hull of the parameter range where the axis radius is at most `cap`.
+    fn range_with_radius_below(&self, cap: f64) -> Option<(f64, f64)> {
+        if self.squared_radius {
+            // radius = sqrt(radius[0] + radius[1]*t + radius[2]*t^2).
+            let mut poly = self.radius;
+            poly[0] -= cap * cap;
+            return Self::sublevel_hull(poly, true, self.range);
+        }
+        // radius = |radius[0] + radius[1]*t + radius[2]*t^2|: both sides.
+        let mut upper = self.radius;
+        upper[0] -= cap;
+        let mut lower = self.radius;
+        lower[0] += cap;
+        let below = Self::sublevel_hull(upper, true, self.range)?;
+        let above = Self::sublevel_hull(lower, false, self.range)?;
+        Some((below.0.max(above.0), below.1.min(above.1)))
+    }
+
+    fn in_region_narrowed(
+        self,
+        region: &ContourSet,
+        error: f64,
+        nearby: Vec<(Point, Point)>,
+        cones: Vec<(Point, Point)>,
+    ) -> Vec<Self> {
         let mut constraints = Vec::new();
         for (a, b) in self.contacts {
             if a != b {
@@ -296,7 +437,10 @@ impl WidthAxis {
                 // Endpoint normal cone, including adjacent source edges. A
                 // shadowed endpoint is not a nearest contact even when the
                 // distance difference rounds to zero at a corner transition.
-                for &(start, end) in &nearby {
+                // These resolve through the contact index (see above), not the
+                // narrowed nearby set, whose box cannot decide half-planes
+                // through far contact vertices.
+                for &(start, end) in &cones {
                     let direction = if a == start {
                         end - start
                     } else if a == end {
@@ -467,6 +611,11 @@ mod tests {
         )
     }
 
+    fn validate(axis: WidthAxis, region: &ContourSet, boundary: &PreparedRegion) -> Vec<WidthAxis> {
+        let index = ContactIndex::for_segments(&boundary.segments);
+        axis.in_region_with_contact_index(region, boundary, f64::INFINITY, &index)
+    }
+
     #[test]
     fn off_grid_parallel_walls_have_equal_radii() {
         let first = (Point::new(-3.0, 0.00037), Point::new(3.0, 0.00037));
@@ -475,7 +624,7 @@ mod tests {
         let boundary = PreparedRegion::from_segments(vec![first, second], 0.0);
         let axes = WidthAxis::between(first, second, region.bbox)
             .into_iter()
-            .flat_map(|a| a.in_region(&region, &boundary))
+            .flat_map(|a| validate(a, &region, &boundary))
             .collect::<Vec<_>>();
         assert!(!axes.is_empty());
         for axis in axes {
@@ -518,7 +667,7 @@ mod tests {
             let boundary = PreparedRegion::from_segments(walls.to_vec(), 0.0);
             let axes = WidthAxis::between(walls[0], walls[1], region.bbox)
                 .into_iter()
-                .flat_map(|a| a.in_region(&region, &boundary))
+                .flat_map(|a| validate(a, &region, &boundary))
                 .collect::<Vec<_>>();
             assert!(!axes.is_empty());
             for axis in axes {
@@ -552,10 +701,23 @@ mod tests {
         let axes = WidthAxis::between((q, q), wall, region.bbox);
         assert!(
             axes.into_iter()
-                .flat_map(|a| a.in_region(&region, &boundary))
+                .flat_map(|a| validate(a, &region, &boundary))
                 .next()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn contact_index_treats_signed_zero_as_equal() {
+        // `Point` equality treats `-0.0 == 0.0`; the index must too, or a
+        // contact misses an incident segment while clearance still skips it.
+        let segments = vec![
+            (Point::new(-0.0, 0.0), Point::new(1.0, 0.0)),
+            (Point::new(0.0, -0.0), Point::new(0.0, 1.0)),
+        ];
+        let index = ContactIndex::for_segments(&segments);
+        assert_eq!(index.sharers(Point::new(0.0, 0.0)), &[0, 1]);
+        assert_eq!(index.sharers(Point::new(-0.0, -0.0)), &[0, 1]);
     }
 
     #[test]
@@ -569,7 +731,7 @@ mod tests {
         let region = region();
         let axes = WidthAxis::between(first, second, region.bbox)
             .into_iter()
-            .flat_map(|a| a.in_region(&region, &boundary))
+            .flat_map(|a| validate(a, &region, &boundary))
             .collect::<Vec<_>>();
         assert_eq!(axes.len(), 2);
         for axis in axes {
@@ -593,7 +755,7 @@ mod tests {
             let boundary = PreparedRegion::from_segments(vec![point, wall, third], 0.0);
             let axes = WidthAxis::between(point, wall, region.bbox)
                 .into_iter()
-                .flat_map(|a| a.in_region(&region, &boundary))
+                .flat_map(|a| validate(a, &region, &boundary))
                 .collect::<Vec<_>>();
             if displacement < 0.0 {
                 assert!(axes.is_empty());
@@ -625,7 +787,7 @@ mod tests {
         let region = region();
         let axes = WidthAxis::between(point, wall, region.bbox)
             .into_iter()
-            .flat_map(|a| a.in_region(&region, &boundary))
+            .flat_map(|a| validate(a, &region, &boundary))
             .collect::<Vec<_>>();
         assert_eq!(axes.len(), 1);
         let axis = axes[0];
@@ -643,6 +805,6 @@ mod tests {
             BBox::from_point(center).expand(1e-5),
             Resolution::default().with_tolerance(1e-7),
         );
-        assert!(!axis.in_region(&region, &boundary).is_empty());
+        assert!(!validate(axis, &region, &boundary).is_empty());
     }
 }

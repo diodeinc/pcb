@@ -11,6 +11,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Layout sync turns on KiCad's font embedding so boards carry the outline fonts their text uses.
+- Speed up `pcb dfm` up to 21x on large boards with identical results.
+- Add `pcb dfm --no-sync` to check the existing layout without regenerating it.
 
 ### Added
 

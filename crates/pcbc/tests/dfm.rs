@@ -105,6 +105,92 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
     }
 }
 
+#[test]
+fn dfm_no_sync_checks_the_existing_layout_without_regenerating_it() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .env("SOURCE_DATE_EPOCH", "1787702400")
+        .write("pcb.toml", PCB_TOML)
+        .write("MyBoard.zen", BOARD_ZEN)
+        .write("BMI270.zen", MODULE_ZEN)
+        .write("eda/BMI270.kicad_mod", FOOTPRINT)
+        .write("eda/BMI270.kicad_sym", SYMBOL);
+
+    let regenerated = run_pcbc(
+        &mut sandbox,
+        ["dfm", "MyBoard.zen", "--output", "regen.dfm.json"],
+    );
+    assert!(regenerated.status.success());
+    let layout_before = std::fs::read(sandbox.default_cwd().join("build/layout.kicad_pcb"))
+        .expect("dfm creates the layout from scratch");
+
+    let reused = run_pcbc(
+        &mut sandbox,
+        [
+            "dfm",
+            "MyBoard.zen",
+            "--no-sync",
+            "--output",
+            "reuse.dfm.json",
+        ],
+    );
+    assert!(reused.status.success());
+    let layout_after = std::fs::read(sandbox.default_cwd().join("build/layout.kicad_pcb"))
+        .expect("no-sync run leaves the layout alone");
+    assert_eq!(
+        layout_before, layout_after,
+        "--no-sync must not regenerate the layout"
+    );
+
+    let mut regen_report = read_report(&sandbox, "regen.dfm.json");
+    let mut reuse_report = read_report(&sandbox, "reuse.dfm.json");
+    // Each .zen run asks KiCad for new IPC, which can reorder independent
+    // features; compare everything but the input identity, timestamps, and
+    // rendered scene vectors.
+    for generated in [&mut regen_report, &mut reuse_report] {
+        generated.as_object_mut().unwrap().remove("input");
+        generated.as_object_mut().unwrap().remove("generated_at");
+        for pass in generated["scene"]["passes"].as_array_mut().unwrap() {
+            pass.as_object_mut().unwrap().remove("svg");
+        }
+    }
+    assert_eq!(reuse_report, regen_report);
+}
+
+#[test]
+fn dfm_no_sync_without_a_layout_reports_an_incomplete_run() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .env("SOURCE_DATE_EPOCH", "1787702400")
+        .write("pcb.toml", PCB_TOML)
+        .write("MyBoard.zen", BOARD_ZEN)
+        .write("BMI270.zen", MODULE_ZEN)
+        .write("eda/BMI270.kicad_mod", FOOTPRINT)
+        .write("eda/BMI270.kicad_sym", SYMBOL);
+
+    let output = run_pcbc(
+        &mut sandbox,
+        [
+            "dfm",
+            "MyBoard.zen",
+            "--no-sync",
+            "--output",
+            "missing.dfm.json",
+        ],
+    );
+    assert!(!output.status.success());
+    let report = read_report(&sandbox, "missing.dfm.json");
+    assert_eq!(report["verdict"], "incomplete");
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("kicad_pro"),
+        "unexpected error: {}",
+        report["error"]["message"]
+    );
+}
+
 const IPC_BOARD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">

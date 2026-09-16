@@ -689,6 +689,7 @@ pub fn thin_features(
         region.disk_feature_violation_components(
             (min_width_mm + (2.0 * region.budget().max_error_mm() + region.uncertainty_mm)) / 2.0,
             min_width_mm - 2.0 * region.uncertainty_mm,
+            min_width_mm,
         )?,
         min_width_mm,
     ))
@@ -703,6 +704,7 @@ pub fn thin_gaps(region: &ContourSet, min_gap_mm: f64) -> Result<Vec<ThinPiece>,
         region.disk_gap_violation_components(
             (min_gap_mm + (2.0 * region.budget().max_error_mm() + region.uncertainty_mm)) / 2.0,
             min_gap_mm - 2.0 * region.uncertainty_mm,
+            min_gap_mm,
         )?,
         min_gap_mm,
     ))

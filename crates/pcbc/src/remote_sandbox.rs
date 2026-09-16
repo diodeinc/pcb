@@ -88,6 +88,7 @@ pub fn execute_open(uri: SandboxFileUri, args: OpenArgs) -> Result<()> {
             no_sync: true,
             sync_footprints: false,
             format: LayoutOutputFormat::Human,
+            skip_bom_hydration: false,
         };
         status.set_message("Running pcb layout in sandbox...");
         let result = run_remote_layout(&client, &uri, &layout_args)?;

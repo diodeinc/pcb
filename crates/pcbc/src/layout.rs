@@ -49,6 +49,14 @@ pub struct LayoutArgs {
     /// Output format
     #[arg(short = 'f', long, value_enum, default_value_t = LayoutOutputFormat::Human)]
     pub format: LayoutOutputFormat,
+
+    /// Skip BOM hydration (MPN matching) when building the schematic.
+    ///
+    /// DFM checks copper geometry and net attribution, neither of which uses
+    /// hydrated part data, so `pcb dfm` sets this to avoid the BOM-match
+    /// network round trip. Internal only; not a CLI flag.
+    #[arg(skip)]
+    pub(crate) skip_bom_hydration: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -163,16 +171,23 @@ pub(crate) fn prepare_design(args: &LayoutArgs) -> Result<PreparedDesign> {
     } else {
         pcb_diode_api::BomMatchMode::Online
     };
-    let build_result = BuildEvalState::new(resolution_result)
-        .with_bom_hydration(bom_match_mode)
-        .build(
-            zen_path,
-            config_inputs,
-            create_diagnostics_passes(&args.suppress, &[]),
-            false,
-            &mut false.clone(),
-            &mut false.clone(),
-        );
+    let eval_state = BuildEvalState::new(resolution_result);
+    // DFM never reads hydrated part data (it checks copper geometry and net
+    // attribution), so it skips the BOM-match round trip entirely. The layout
+    // files it regenerates as a side effect are restored afterwards.
+    let eval_state = if args.skip_bom_hydration {
+        eval_state
+    } else {
+        eval_state.with_bom_hydration(bom_match_mode)
+    };
+    let build_result = eval_state.build(
+        zen_path,
+        config_inputs,
+        create_diagnostics_passes(&args.suppress, &[]),
+        false,
+        &mut false.clone(),
+        &mut false.clone(),
+    );
     let Some(schematic) = build_result.schematic else {
         anyhow::bail!("Build failed");
     };
@@ -298,7 +313,10 @@ pub(crate) fn run_drc_check(args: &LayoutArgs, result: &LayoutCommandResult) -> 
     render_or_bail(&mut diagnostics, &args.suppress, "DRC failed")
 }
 
-fn resolve_existing_layout(zen_path: &Path, schematic: &Schematic) -> Result<LayoutCommandResult> {
+pub(crate) fn resolve_existing_layout(
+    zen_path: &Path,
+    schematic: &Schematic,
+) -> Result<LayoutCommandResult> {
     let Some(layout_dir) = layout_utils::resolve_layout_dir(schematic)? else {
         return Ok(LayoutCommandResult {
             source_file: zen_path.to_path_buf(),
