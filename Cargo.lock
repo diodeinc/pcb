@@ -4338,6 +4338,7 @@ dependencies = [
  "kurbo",
  "libm",
  "pcb-sexpr",
+ "rayon",
  "resvg",
  "terminal_size",
 ]
@@ -4716,6 +4717,7 @@ dependencies = [
  "tracing-chrome",
  "tracing-subscriber",
  "uuid",
+ "walkdir",
  "zip",
  "zstd",
 ]

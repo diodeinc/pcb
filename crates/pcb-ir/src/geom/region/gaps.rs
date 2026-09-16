@@ -1,6 +1,6 @@
 //! Two-sided morphology residues, local widths, and void-gap regularization.
 
-use super::widths::WidthAxis;
+use super::widths::{ContactIndex, WidthAxis};
 use super::{
     ContourSet, PreparedRegion, Ring, ring_edges, ring_signed_area, ring_winding, simplify_rings,
 };
@@ -342,10 +342,14 @@ impl ContourSet {
 
     /// Connected material residues of the opening by `radius` whose local
     /// width can be under `width_mm`, with the local width of each.
+    /// `minimum_mm` is the reported acceptance threshold the downstream
+    /// measurement clips to; it must be the exact value the caller passes to
+    /// `pieces`, since the radius cap derived from it has to match that clip.
     pub(crate) fn disk_feature_violation_components(
         &self,
         radius: f64,
         width_mm: f64,
+        minimum_mm: f64,
     ) -> Result<Vec<TwoSidedResidualComponent>, AccuracyError> {
         // A width is a disk touching two facing walls, so it is at least
         // their separation: material whose walls never face each other that
@@ -357,7 +361,7 @@ impl ContourSet {
         // uses the source walls directly, and `M \ (X ∩ M)` is `M \ X`, so
         // the opening's clip to the source is not needed to find what the
         // opening removed.
-        self.two_sided_residual(radius, |region, radius| {
+        self.two_sided_residual(radius, minimum_mm, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance();
             let touching = 3.0 * region.tolerance() + region.uncertainty_mm;
             let reach = 3.0 * (radius + 2.0 * region.tolerance());
@@ -367,18 +371,20 @@ impl ContourSet {
     }
 
     /// Connected void residues of the closing by `radius` whose local width
-    /// can be under `width_mm`, with the local width of each.
+    /// can be under `width_mm`, with the local width of each. `minimum_mm`
+    /// must be the exact acceptance threshold passed to `pieces`.
     pub(crate) fn disk_gap_violation_components(
         &self,
         radius: f64,
         width_mm: f64,
+        minimum_mm: f64,
     ) -> Result<Vec<TwoSidedResidualComponent>, AccuracyError> {
         // A gap is a disk touching two walls facing across void, so it is
         // at least their separation. A residue point lies within a radius
         // of its walls and the disks that decide it reach a diameter
         // further, so the closing of the material within two diameters of
         // facing walls is the closing of the whole region there.
-        self.two_sided_residual(radius, |region, radius| {
+        self.two_sided_residual(radius, minimum_mm, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance();
             let reach = 4.0 * (radius + 2.0 * region.tolerance());
             let candidates = region.facing_components(0.0, facing, reach)?;
@@ -391,16 +397,15 @@ impl ContourSet {
     fn two_sided_residual(
         &self,
         radius: f64,
+        minimum_mm: f64,
         residual: impl FnOnce(&Self, f64) -> Result<Self, AccuracyError>,
     ) -> Result<Vec<TwoSidedResidualComponent>, AccuracyError> {
         if self.is_empty() || !(radius > 0.0 && radius.is_finite()) {
             return Ok(Vec::new());
         }
-        Ok(two_sided_residual_components(
-            self,
-            &residual(self, radius)?,
-            radius,
-        ))
+        let residue = residual(self, radius)?;
+        let components = two_sided_residual_components(self, &residue, radius, minimum_mm);
+        Ok(components)
     }
 }
 
@@ -531,6 +536,7 @@ fn two_sided_residual_components(
     source: &ContourSet,
     residual: &ContourSet,
     reach: f64,
+    minimum_mm: f64,
 ) -> Vec<TwoSidedResidualComponent> {
     if residual.is_empty() {
         return Vec::new();
@@ -545,26 +551,112 @@ fn two_sided_residual_components(
     );
     let complete_boundary = source.prepare_query();
     let boundary_uncertainty = source.uncertainty_mm + numerical_error(source.bbox);
-    residual
-        .connected_components()
-        .into_iter()
-        .filter_map(|component| {
-            // Preserve the source-boundary index: candidate axes use the
-            // nearby subset, while validation sees every (including short)
-            // source edge through `complete_boundary`.
-            let sites = boundary
-                .segment_ids_meeting(component.bbox.expand(reach))
-                .into_iter()
-                .map(|id| segments[id])
-                .collect::<Vec<_>>();
-            let axis = component_axis(&sites, &component, &complete_boundary, reach);
-            (!axis.is_empty()).then_some(TwoSidedResidualComponent {
-                region: component,
-                boundary_uncertainty_mm: boundary_uncertainty,
-                axis,
+    // The downstream measurement only keeps axis portions whose radius is at
+    // most this acceptance threshold (see `pieces`): it matches that clip
+    // exactly, so narrowing to it cannot change the kept set.
+    let radius_cap = ((minimum_mm - 2.0 * boundary_uncertainty) / 2.0).next_down();
+    // Contact constraints are resolved through this index so they match the
+    // un-narrowed spatial query exactly (see `in_region_with_contact_index`).
+    let contact_index = ContactIndex::for_segments(&complete_boundary.segments);
+    // Components are independent: each measures its own medial axis against
+    // shared read-only indexes. Parallel iteration preserves component order,
+    // so reports are identical to the sequential run.
+    #[cfg(not(target_family = "wasm"))]
+    {
+        use rayon::prelude::*;
+        residual
+            .connected_components()
+            .into_par_iter()
+            .filter_map(|component| {
+                measure_component(
+                    component,
+                    &segments,
+                    &boundary,
+                    &complete_boundary,
+                    &contact_index,
+                    boundary_uncertainty,
+                    reach,
+                    radius_cap,
+                )
             })
-        })
-        .collect()
+            .collect()
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        residual
+            .connected_components()
+            .into_iter()
+            .filter_map(|component| {
+                measure_component(
+                    component,
+                    &segments,
+                    &boundary,
+                    &complete_boundary,
+                    &contact_index,
+                    boundary_uncertainty,
+                    reach,
+                    radius_cap,
+                )
+            })
+            .collect()
+    }
+}
+
+/// Measure one residue component's medial axis, or `None` when it has none.
+#[allow(clippy::too_many_arguments)]
+fn measure_component(
+    component: ContourSet,
+    segments: &[OrientedBoundarySegment],
+    boundary: &PreparedRegion,
+    complete_boundary: &PreparedRegion,
+    contact_index: &ContactIndex,
+    boundary_uncertainty: f64,
+    reach: f64,
+    radius_cap: f64,
+) -> Option<TwoSidedResidualComponent> {
+    // Preserve the source-boundary index: candidate axes use the
+    // nearby subset, while validation sees every (including short)
+    // source edge through `complete_boundary`.
+    let sites = boundary
+        .segment_ids_meeting(component.bbox.expand(reach))
+        .into_iter()
+        .map(|id| segments[id])
+        .collect::<Vec<_>>();
+    let axis = component_axis(
+        &sites,
+        &component,
+        complete_boundary,
+        reach,
+        radius_cap,
+        contact_index,
+    );
+    (!axis.is_empty()).then_some(TwoSidedResidualComponent {
+        region: component,
+        boundary_uncertainty_mm: boundary_uncertainty,
+        axis,
+    })
+}
+
+/// Validate one wall pair's bisectors. Pure over shared read-only inputs, so
+/// pairs validate in parallel.
+fn validate_pair(
+    first_wall: (Point, Point),
+    second_wall: (Point, Point),
+    component: &ContourSet,
+    complete_boundary: &PreparedRegion,
+    radius_cap: f64,
+    contact_index: &ContactIndex,
+) -> Vec<WidthAxis> {
+    let mut validated = Vec::new();
+    for axis in WidthAxis::between(first_wall, second_wall, component.bbox) {
+        validated.extend(axis.in_region_with_contact_index(
+            component,
+            complete_boundary,
+            radius_cap,
+            contact_index,
+        ));
+    }
+    validated
 }
 
 /// Enumerate exact bisectors of every reachable pair of nonincident walls,
@@ -575,6 +667,8 @@ fn component_axis(
     component: &ContourSet,
     complete_boundary: &PreparedRegion,
     reach: f64,
+    radius_cap: f64,
+    contact_index: &ContactIndex,
 ) -> Vec<WidthAxis> {
     if sites.len() < 2 {
         return Vec::new();
@@ -623,6 +717,9 @@ fn component_axis(
     let candidate_diameter = 2.0 * reach + error;
 
     let mut axes = Vec::new();
+    // Passing wall pairs, in first-major order. Validation is the expensive
+    // part; it runs in parallel below while preserving this order exactly.
+    let mut passing = Vec::new();
     for first in 0..sites.len() {
         for second in first + 1..sites.len() {
             if !within_reach[first] || !within_reach[second] || incident(first, second) {
@@ -630,17 +727,36 @@ fn component_axis(
             }
             let first_wall = (sites[first].start, sites[first].end);
             let second_wall = (sites[second].start, sites[second].end);
-            if dist::segments(first_wall.0, first_wall.1, second_wall.0, second_wall.1).0
-                > candidate_diameter
-            {
+            let separation =
+                dist::segments(first_wall.0, first_wall.1, second_wall.0, second_wall.1).0;
+            if separation > candidate_diameter {
                 continue;
             }
-            axes.extend(
-                WidthAxis::between(first_wall, second_wall, component.bbox)
-                    .into_iter()
-                    .flat_map(|axis| axis.in_region(component, complete_boundary)),
-            );
+            passing.push((first_wall, second_wall));
         }
+    }
+    // Validate pairs in parallel; the ordered collect keeps axis order
+    // identical to the sequential loop. Rayon has no threads on wasm, so the
+    // wasm target below runs the same closure sequentially.
+    let validate = |(first_wall, second_wall): ((Point, Point), (Point, Point))| {
+        validate_pair(
+            first_wall,
+            second_wall,
+            component,
+            complete_boundary,
+            radius_cap,
+            contact_index,
+        )
+    };
+    #[cfg(not(target_family = "wasm"))]
+    let validated_all = {
+        use rayon::prelude::*;
+        passing.into_par_iter().map(validate).collect::<Vec<_>>()
+    };
+    #[cfg(target_family = "wasm")]
+    let validated_all = passing.into_iter().map(validate).collect::<Vec<_>>();
+    for validated in validated_all {
+        axes.extend(validated);
     }
     axes
 }

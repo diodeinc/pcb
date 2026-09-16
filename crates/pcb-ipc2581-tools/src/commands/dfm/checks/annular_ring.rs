@@ -33,7 +33,8 @@
 //! boundaries cannot violate.
 
 use pcb_ir::geom::dfm::{BBoxIndex, Distance, circular_region};
-use pcb_ir::geom::{BBox, ContourSet, FillRule, Point};
+use pcb_ir::geom::region::Ring;
+use pcb_ir::geom::{BBox, ContourSet, Point};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
@@ -188,16 +189,16 @@ fn missing_copper(
     copper: &ContourSet,
     index: &BBoxIndex,
 ) -> anyhow::Result<ContourSet> {
-    let rings = index
+    let rings: Vec<Ring> = index
         .query(required.bbox)
         .into_iter()
         .map(|id| copper.rings[id].clone())
         .collect();
-    Ok(required.difference(&ContourSet::from_rings(
-        rings,
-        FillRule::NonZero,
-        required.resolution,
-    )?)?)
+    // The retained rings are verbatim regular source rings, so they need no
+    // re-simplification before the boolean below: composing them directly
+    // keeps their exact coordinates instead of snapping them twice.
+    let nearby = ContourSet::from_regularized(rings, required.resolution, 0.0);
+    Ok(required.difference(&nearby)?)
 }
 
 fn measured(
