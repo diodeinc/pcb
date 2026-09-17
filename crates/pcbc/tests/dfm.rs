@@ -41,7 +41,8 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
         .write("MyBoard.zen", BOARD_ZEN)
         .write("BMI270.zen", MODULE_ZEN)
         .write("eda/BMI270.kicad_mod", FOOTPRINT)
-        .write("eda/BMI270.kicad_sym", SYMBOL);
+        .write("eda/BMI270.kicad_sym", SYMBOL)
+        .write("build/.gitkeep", "");
 
     let output = run_pcbc(&mut sandbox, ["dfm", "MyBoard.zen"]);
     let mut report: Value =

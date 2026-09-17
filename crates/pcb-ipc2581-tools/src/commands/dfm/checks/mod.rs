@@ -234,7 +234,7 @@ pub(super) fn run(
             finding.rule_id,
         );
     }
-    assign_ids(&mut results.findings, &annular_rules);
+    let waiver_aliases = assign_ids(&mut results.findings, &annular_rules);
     for finding in &mut results.findings {
         let instance = finding
             .subjects
@@ -253,7 +253,8 @@ pub(super) fn run(
             .and_then(|instance| instance.transform.inverse())
             .and_then(|inverse| repeat_group_key(finding, inverse));
     }
-    results.waivers = waiver_file.map(|file| waivers::apply(&mut results.findings, file, today));
+    results.waivers =
+        waiver_file.map(|file| waivers::apply(&mut results.findings, file, &waiver_aliases, today));
 
     let mut per_rule: HashMap<&str, (usize, usize)> = HashMap::new();
     for finding in &results.findings {
@@ -783,15 +784,29 @@ fn layers<'a>(layers: impl IntoIterator<Item = &'a LayerRef>) -> Vec<LayerRef> {
 /// finding, so its stale waiver surfaces as unmatched. The measured value
 /// is deliberately excluded — a waived violation that changes magnitude
 /// in place keeps its waiver.
-fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) {
+fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) -> HashMap<String, String> {
     findings.sort_by(|left, right| {
         left.rule_id
             .cmp(&right.rule_id)
             .then_with(|| compare_locations(&left.location, &right.location))
     });
     let mut seen: HashMap<String, u32> = HashMap::new();
+    let mut legacy_seen: HashMap<String, u32> = HashMap::new();
+    let mut waiver_aliases = HashMap::new();
     for finding in findings.iter_mut() {
-        let fingerprint = if annular_rules.contains(finding.rule_id.as_str()) {
+        let legacy_fingerprint = serde_json::to_string(&(
+            &finding.rule_id,
+            finding
+                .subjects
+                .iter()
+                .map(LegacySubject::from)
+                .collect::<Vec<_>>(),
+            &finding.layers,
+            &finding.location.point,
+        ))
+        .expect("legacy finding identity serializes");
+        let annular = annular_rules.contains(finding.rule_id.as_str());
+        let fingerprint = if annular {
             let hole = finding
                 .evidence
                 .iter()
@@ -809,16 +824,7 @@ fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) {
                 &hole.diameter,
             ))
         } else {
-            serde_json::to_string(&(
-                &finding.rule_id,
-                finding
-                    .subjects
-                    .iter()
-                    .map(LegacySubject::from)
-                    .collect::<Vec<_>>(),
-                &finding.layers,
-                &finding.location.point,
-            ))
+            Ok(legacy_fingerprint.clone())
         }
         .expect("finding identity serializes");
         let digest = Sha256::digest(fingerprint.as_bytes());
@@ -832,6 +838,24 @@ fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) {
         } else {
             format!("dfm-{short}-{repeat}")
         };
+        if annular {
+            let digest = Sha256::digest(legacy_fingerprint.as_bytes());
+            let legacy_short = hex::encode(&digest[..6]);
+            let repeat = legacy_seen
+                .entry(legacy_short.clone())
+                .and_modify(|n| *n += 1)
+                .or_insert(1);
+            let legacy_id = format!("dfm-{legacy_short}");
+            if *repeat == 1 {
+                if legacy_id != finding.id {
+                    waiver_aliases.insert(legacy_id, finding.id.clone());
+                }
+            } else {
+                // An ordinal legacy ID can move when equivalent findings are
+                // reordered. Do not transfer either waiver ambiguously.
+                waiver_aliases.remove(&legacy_id);
+            }
+        }
         let mut sites_seen: HashMap<String, usize> = HashMap::new();
         for site in &mut finding.sites {
             let bytes = if annular_rules.contains(finding.rule_id.as_str()) {
@@ -868,6 +892,7 @@ fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) {
             }
         }
     }
+    waiver_aliases
 }
 
 /// Collapse only proven repeats of the same definition-local subjects, with
@@ -1104,9 +1129,14 @@ mod tests {
             note: None,
         });
         let annular = HashSet::from(["annular"]);
-        super::assign_ids(std::slice::from_mut(&mut finding), &annular);
+        let aliases = super::assign_ids(std::slice::from_mut(&mut finding), &annular);
         let finding_id = finding.id.clone();
         let site_id = finding.sites[0].id.clone();
+        assert_eq!(
+            aliases.get("dfm-ed8c542f1d5c"),
+            Some(&finding_id),
+            "the released annular ID remains a waiver alias"
+        );
 
         for subject in [&mut finding.subjects[0], &mut finding.sites[0].subjects[0]] {
             subject.name = Some("OVAL_10".into());

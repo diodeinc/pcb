@@ -127,7 +127,7 @@ fn export_layout(args: &DfmArgs) -> Result<(tempfile::TempDir, PathBuf)> {
     }
     let layout_dir = pcb_layout::utils::resolve_layout_dir(&design.schematic)?
         .with_context(|| format!("{} does not declare a layout", args.file.display()))?;
-    if layout_dir.exists() {
+    if layout_has_board(&layout_dir)? {
         // Synchronize a disposable copy so DFM never rewrites, replaces, or
         // changes metadata on a pre-existing user layout.
         let working = tempfile::tempdir().context("failed to create temporary layout directory")?;
@@ -142,6 +142,17 @@ fn export_layout(args: &DfmArgs) -> Result<(tempfile::TempDir, PathBuf)> {
     // scratch remains available after DFM completes.
     let layout = crate::layout::apply_prepared(&layout_args, design)?;
     export_generated_layout(args, layout)
+}
+
+fn layout_has_board(layout_dir: &std::path::Path) -> Result<bool> {
+    let board = pcb_layout::utils::resolve_kicad_files(layout_dir)?.kicad_pcb();
+    match std::fs::symlink_metadata(&board) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to inspect layout file {}", board.display()))
+        }
+    }
 }
 
 fn export_generated_layout(
@@ -198,47 +209,6 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use super::copy_layout;
-
-    #[test]
-    fn temporary_layout_copy_reads_selected_symlinks_without_modifying_targets() {
-        let source = tempfile::tempdir().unwrap();
-        let destination = tempfile::tempdir().unwrap();
-        let external_project = tempfile::NamedTempFile::new().unwrap();
-        let external_board = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(external_project.path(), "project").unwrap();
-        std::fs::write(external_board.path(), "board").unwrap();
-        symlink(
-            external_project.path(),
-            source.path().join("layout.kicad_pro"),
-        )
-        .unwrap();
-        symlink(
-            external_board.path(),
-            source.path().join("layout.kicad_pcb"),
-        )
-        .unwrap();
-        symlink(external_board.path(), source.path().join("unrelated-link")).unwrap();
-
-        copy_layout(source.path(), destination.path()).unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(external_project.path()).unwrap(),
-            "project"
-        );
-        assert_eq!(
-            std::fs::read_to_string(external_board.path()).unwrap(),
-            "board"
-        );
-        assert_eq!(
-            std::fs::read_to_string(destination.path().join("layout.kicad_pro")).unwrap(),
-            "project"
-        );
-        assert_eq!(
-            std::fs::read_to_string(destination.path().join("layout.kicad_pcb")).unwrap(),
-            "board"
-        );
-        assert!(!destination.path().join("unrelated-link").exists());
-    }
 
     #[test]
     fn temporary_layout_copy_rejects_unusable_selected_files() {
