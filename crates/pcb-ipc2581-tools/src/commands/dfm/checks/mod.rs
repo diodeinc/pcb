@@ -36,8 +36,8 @@ use sha2::{Digest, Sha256};
 use super::design::{Design, Hole, HoleClass, Slot};
 use super::pdk::SlotPlating;
 use super::report::{
-    Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox, ReportPoint,
-    RuleResult, RuleStatus, Site, SourceLocator, Subject, Witness,
+    DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox,
+    ReportPoint, RuleResult, RuleStatus, Site, SourceLocator, Subject, Witness,
 };
 use super::rules::{Comparison, Linework, Rule, RuleKind};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
@@ -712,6 +712,7 @@ struct AnnularSubject<'a> {
     pin: &'a Option<String>,
     net: &'a Option<String>,
     source: Option<AnnularSource<'a>>,
+    drill_span: &'a Option<DrillSpan>,
 }
 
 #[derive(serde::Serialize)]
@@ -734,6 +735,7 @@ impl<'a> From<&'a Subject> for AnnularSubject<'a> {
                 layer: &source.layer,
                 instance_index: source.instance_index,
             }),
+            drill_span: &subject.drill_span,
         }
     }
 }
@@ -790,6 +792,11 @@ fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) {
     let mut seen: HashMap<String, u32> = HashMap::new();
     for finding in findings.iter_mut() {
         let fingerprint = if annular_rules.contains(finding.rule_id.as_str()) {
+            let hole = finding
+                .evidence
+                .iter()
+                .find(|evidence| evidence.role == "drilled_hole")
+                .expect("annular findings report their drilled hole");
             serde_json::to_string(&(
                 &finding.rule_id,
                 finding
@@ -798,7 +805,8 @@ fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) {
                     .map(AnnularSubject::from)
                     .collect::<Vec<_>>(),
                 &finding.layers,
-                &finding.location.point,
+                &hole.center,
+                &hole.diameter,
             ))
         } else {
             serde_json::to_string(&(
@@ -1065,8 +1073,16 @@ mod tests {
                 feature_index: Some(13),
                 instance_index: Some(2),
             }),
+            drill_span: Some(DrillSpan {
+                first_copper_index: 0,
+                last_copper_index: 1,
+                interpretation: "declared",
+            }),
             ..Subject::default()
         });
+        finding
+            .evidence
+            .push(Evidence::circle("drilled_hole", Point::new(2.0, 3.0), 0.2));
         finding.sites.push(Site {
             id: String::new(),
             measurement: Measurement::minimum_distance(0.1, 0.2),
@@ -1103,10 +1119,21 @@ mod tests {
             Point::new(0.95, -0.05).into(),
             Point::new(1.05, 0.05).into(),
         ]];
+        finding.location.point = Some(Point::new(9.0, 9.0).into());
         super::assign_ids(std::slice::from_mut(&mut finding), &annular);
 
         assert_eq!(finding.id, finding_id);
         assert_eq!(finding.sites[0].id, site_id);
+
+        let mut different_hole = finding_at(9.0);
+        different_hole.rule_id = "annular".to_owned();
+        different_hole.subjects = finding.subjects.clone();
+        different_hole.layers = finding.layers.clone();
+        different_hole
+            .evidence
+            .push(Evidence::circle("drilled_hole", Point::new(2.0, 3.0), 0.3));
+        super::assign_ids(std::slice::from_mut(&mut different_hole), &annular);
+        assert_ne!(different_hole.id, finding.id);
     }
 
     fn repeated_hole(offset: f64, instance: u32) -> Finding {

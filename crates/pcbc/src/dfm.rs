@@ -167,9 +167,21 @@ fn copy_layout(source: &std::path::Path, destination: &std::path::Path) -> Resul
     let files = pcb_layout::utils::resolve_kicad_files(source)?;
     let pcb = files.kicad_pcb();
     for path in [files.kicad_pro, pcb] {
-        if !path.is_file() {
-            continue;
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect layout file {}", path.display()));
+            }
         }
+        let metadata = std::fs::metadata(&path)
+            .with_context(|| format!("failed to inspect layout file {}", path.display()))?;
+        anyhow::ensure!(
+            metadata.is_file(),
+            "layout file is not a regular file: {}",
+            path.display()
+        );
         let target = destination.join(
             path.file_name()
                 .with_context(|| format!("layout file {} has no name", path.display()))?,
@@ -188,21 +200,34 @@ mod tests {
     use super::copy_layout;
 
     #[test]
-    fn temporary_layout_copy_ignores_unrelated_symlinks() {
+    fn temporary_layout_copy_reads_selected_symlinks_without_modifying_targets() {
         let source = tempfile::tempdir().unwrap();
         let destination = tempfile::tempdir().unwrap();
-        let external = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(external.path(), "unchanged").unwrap();
-        symlink(external.path(), source.path().join("external-link")).unwrap();
-        std::fs::write(source.path().join("layout.kicad_pro"), "project").unwrap();
-        std::fs::write(source.path().join("layout.kicad_pcb"), "board").unwrap();
+        let external_project = tempfile::NamedTempFile::new().unwrap();
+        let external_board = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(external_project.path(), "project").unwrap();
+        std::fs::write(external_board.path(), "board").unwrap();
+        symlink(
+            external_project.path(),
+            source.path().join("layout.kicad_pro"),
+        )
+        .unwrap();
+        symlink(
+            external_board.path(),
+            source.path().join("layout.kicad_pcb"),
+        )
+        .unwrap();
+        symlink(external_board.path(), source.path().join("unrelated-link")).unwrap();
 
         copy_layout(source.path(), destination.path()).unwrap();
 
-        assert!(source.path().join("external-link").is_symlink());
         assert_eq!(
-            std::fs::read_to_string(external.path()).unwrap(),
-            "unchanged"
+            std::fs::read_to_string(external_project.path()).unwrap(),
+            "project"
+        );
+        assert_eq!(
+            std::fs::read_to_string(external_board.path()).unwrap(),
+            "board"
         );
         assert_eq!(
             std::fs::read_to_string(destination.path().join("layout.kicad_pro")).unwrap(),
@@ -212,6 +237,21 @@ mod tests {
             std::fs::read_to_string(destination.path().join("layout.kicad_pcb")).unwrap(),
             "board"
         );
-        assert!(!destination.path().join("external-link").exists());
+        assert!(!destination.path().join("unrelated-link").exists());
+    }
+
+    #[test]
+    fn temporary_layout_copy_rejects_unusable_selected_files() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("layout.kicad_pro"), "project").unwrap();
+        symlink("missing", source.path().join("layout.kicad_pcb")).unwrap();
+        let error = copy_layout(source.path(), destination.path()).unwrap_err();
+        assert!(error.to_string().contains("failed to inspect layout file"));
+
+        std::fs::remove_file(source.path().join("layout.kicad_pcb")).unwrap();
+        std::fs::create_dir(source.path().join("layout.kicad_pcb")).unwrap();
+        let error = copy_layout(source.path(), destination.path()).unwrap_err();
+        assert!(error.to_string().contains("not a regular file"));
     }
 }

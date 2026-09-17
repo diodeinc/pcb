@@ -968,13 +968,18 @@ pub mod utils {
             .with_context(|| format!("Failed to read {}", layout_dir.display()))?
         {
             let entry = entry?;
-            if !entry.file_type()?.is_file() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("kicad_pro") {
                 continue;
             }
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("kicad_pro")
-                && pro_path.replace(path).is_some()
-            {
+            anyhow::ensure!(
+                fs::metadata(&path)
+                    .with_context(|| format!("Failed to inspect {}", path.display()))?
+                    .is_file(),
+                "KiCad project is not a regular file: {}",
+                path.display()
+            );
+            if pro_path.replace(path).is_some() {
                 anyhow::bail!(
                     "Multiple .kicad_pro files found in {}",
                     layout_dir.display()
