@@ -20,7 +20,7 @@ use crate::config_input::{CONFIG_ARG_HELP, parse_config_overrides};
 use crate::file_walker;
 
 pub(crate) struct BuildEvalState {
-    session: pcb_zen_core::lang::eval::EvalSession,
+    caches: Arc<pcb_zen_core::lang::eval::EvalCaches>,
     file_provider: Arc<DefaultFileProvider>,
     resolution: Arc<ResolutionResult>,
     bom_match_mode: Option<pcb_diode_api::BomMatchMode>,
@@ -39,7 +39,7 @@ impl BuildEvalState {
         let file_provider = Arc::new(DefaultFileProvider::new());
         resolution.canonicalize_keys(file_provider.as_ref());
         Self {
-            session: pcb_zen_core::lang::eval::EvalSession::default(),
+            caches: Arc::default(),
             file_provider,
             resolution: Arc::new(resolution),
             bom_match_mode: None,
@@ -56,14 +56,13 @@ impl BuildEvalState {
         zen_path: &Path,
         inputs: SmallMap<String, JsonValue>,
     ) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::EvalOutput> {
-        self.session.prepare_for_root_eval();
         let source_path = self
             .file_provider
             .canonicalize(zen_path)
             .expect("failed to canonicalise input path");
 
-        let mut ctx = EvalContext::from_session_and_config(
-            self.session.clone(),
+        let mut ctx = EvalContext::from_caches_and_config(
+            self.caches.clone(),
             EvalContextConfig::new(self.file_provider.clone(), self.resolution.clone()),
         )
         .set_source_path(source_path);
@@ -95,7 +94,7 @@ impl BuildEvalState {
             for (check, defining_module) in eval_output.collect_electrical_checks() {
                 diagnostics
                     .diagnostics
-                    .push(execute_electrical_check(&check, &defining_module));
+                    .push(execute_electrical_check(check, defining_module));
             }
             Some(eval_output)
         } else {

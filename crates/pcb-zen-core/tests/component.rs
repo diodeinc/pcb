@@ -8,11 +8,21 @@ use pcb_zen_core::lang::net::FrozenNetValue;
 use starlark::errors::EvalSeverity;
 use starlark::values::{FrozenValue, ValueLike};
 
-fn eval_single_root_component(source: &str) -> FrozenComponentValue {
+struct TestComponent(pcb_zen_core::EvalOutput);
+
+impl std::ops::Deref for TestComponent {
+    type Target = FrozenComponentValue;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.sch_module().components().next().unwrap()
+    }
+}
+
+fn eval_single_root_component(source: &str) -> TestComponent {
     eval_single_root_component_with_files(vec![("test.zen", source)])
 }
 
-fn eval_single_root_component_with_files(files: Vec<(&str, &str)>) -> FrozenComponentValue {
+fn eval_single_root_component_with_files(files: Vec<(&str, &str)>) -> TestComponent {
     let result = common::eval_zen(
         files
             .into_iter()
@@ -22,24 +32,13 @@ fn eval_single_root_component_with_files(files: Vec<(&str, &str)>) -> FrozenComp
     assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
 
     let output = result.output.expect("expected eval output");
-    let module_tree = output.module_tree();
-    let root_module = module_tree
-        .values()
-        .find(|module| module.path().is_root())
-        .expect("expected root module");
-
-    let components: Vec<_> = root_module.components().cloned().collect();
     assert_eq!(
-        components.len(),
+        output.sch_module().components().count(),
         1,
-        "expected exactly one root component, got {}",
-        components.len()
+        "expected exactly one root component",
     );
 
-    components
-        .into_iter()
-        .next()
-        .expect("expected one component")
+    TestComponent(output)
 }
 
 fn frozen_net_id(value: FrozenValue) -> u64 {
@@ -226,7 +225,7 @@ Component(
 
 #[test]
 fn file_backed_footprint_validation_reports_embedded_file_errors() {
-    let result = common::eval_zen(vec![
+    let files = vec![
         (
             "bad.kicad_mod".to_string(),
             r#"
@@ -267,13 +266,15 @@ fn file_backed_footprint_validation_reports_embedded_file_errors() {
             "#
             .to_string(),
         ),
-    ]);
+    ];
+    let result = common::eval_zen(files.clone());
     assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
 
+    let provider = common::InMemoryFileProvider::new(files.into_iter().collect());
     let diagnostics = result
         .output
         .expect("expected eval output")
-        .validate_footprints();
+        .validate_footprints(&provider);
 
     assert!(diagnostics.iter().any(|d| d.is_error()));
     let footprint_diags = diagnostics

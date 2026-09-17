@@ -232,7 +232,7 @@ impl ModuleConverter {
 
     pub(crate) fn build(
         mut self,
-        module_tree: BTreeMap<ModulePath, FrozenModuleValue>,
+        module_tree: BTreeMap<ModulePath, &FrozenModuleValue>,
     ) -> crate::WithDiagnostics<Schematic> {
         let _span = info_span!("schematic_convert", modules = module_tree.len()).entered();
         let root_module = module_tree.get(&ModulePath::root()).unwrap();
@@ -484,7 +484,7 @@ impl ModuleConverter {
 
     fn diagnose_unused_module_io(
         &self,
-        module_tree: &BTreeMap<ModulePath, FrozenModuleValue>,
+        module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
         diagnostics: &mut Diagnostics,
     ) {
         for (path, module) in module_tree {
@@ -1174,7 +1174,7 @@ fn collect_net_ids_into(value: Value, net_ids: &mut HashSet<NetId>) {
 /// Propagate impedance from DiffPair interfaces to P/N nets
 fn propagate_diffpair_impedance(
     net_info: &mut HashMap<NetId, NetInfo>,
-    tree: &BTreeMap<ModulePath, FrozenModuleValue>,
+    tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
 ) {
     for module in tree.values() {
         for param in module.signature().iter().filter(|p| !p.is_config) {

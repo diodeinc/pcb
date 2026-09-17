@@ -1797,27 +1797,24 @@ where
         // Get the parent context from the evaluator's ContextValue if available
         let parent_context = eval.eval_context().expect("expected eval context");
         let span = eval.call_stack_top_location().unwrap().resolve_span();
-        let output = parent_context.resolve_and_eval_module(&path, Some(span))?;
+        let frozen_module = parent_context.resolve_and_eval_module(&path, Some(span))?;
         let mut params: Vec<String> = vec!["name".to_string(), "properties".to_string()];
         let mut param_types: SmallMap<String, String> = SmallMap::new();
 
-        if let Some(extra) = output
-            .star_module
+        let extra = frozen_module
             .extra_value()
             .and_then(|e| e.downcast_ref::<FrozenContextValue>())
-        {
-            // Get the signature from the module
-            for param in extra.module.signature().iter() {
-                params.push(param.name.clone());
-                param_types.insert(param.name.clone(), param.type_value.to_string());
-            }
+            .unwrap();
+        for param in extra.module.signature().iter() {
+            params.push(param.name.clone());
+            param_types.insert(param.name.clone(), param.type_value.to_string());
         }
         let loader = ModuleLoader {
-            name: output.sch_module.path.name().clone(),
-            source_path: output.sch_module.source_path.clone(),
+            name: extra.module.path.name().clone(),
+            source_path: extra.module.source_path.clone(),
             params,
             param_types,
-            frozen_module: output.star_module,
+            frozen_module,
         };
 
         Ok(eval.heap().alloc(loader))

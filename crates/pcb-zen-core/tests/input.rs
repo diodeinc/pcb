@@ -66,7 +66,7 @@ fn json_config_preserves_numeric_inputs() {
             result.diagnostics
         );
         let output = result.output.unwrap();
-        let value = output.star_module.get("value").unwrap();
+        let value = output.star_module().get("value").unwrap();
         assert_eq!(value.value().get_type(), typ, "input {raw}");
         let actual: serde_json::Value =
             serde_json::from_str(&value.value().to_json().unwrap()).unwrap();
@@ -768,7 +768,7 @@ fn net_cast_from_inferred_net_preserves_runtime_name_without_setting_original_na
     );
 
     let output = eval_result.output.expect("expected eval output");
-    let copy = output.star_module.get("COPY").expect("expected COPY");
+    let copy = output.star_module().get("COPY").expect("expected COPY");
     let net = copy
         .value()
         .downcast_ref::<FrozenNetValue>()

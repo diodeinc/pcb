@@ -533,7 +533,7 @@ pub(crate) struct DiscoveredLayout {
 /// Discover layout info from zen evaluation output.
 /// Returns None if no layout_path property exists or the layout directory doesn't contain KiCad files.
 pub(crate) fn discover_layout_from_output(output: &EvalOutput) -> Result<Option<DiscoveredLayout>> {
-    let properties = output.sch_module.properties();
+    let properties = output.sch_module().properties();
 
     let Some(layout_path_value) = properties.get("layout_path") else {
         return Ok(None);

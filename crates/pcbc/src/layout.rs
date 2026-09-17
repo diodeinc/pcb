@@ -239,7 +239,7 @@ fn apply_prepared_in(
         let mut footprint_diagnostics = pcb_zen_core::Diagnostics::default();
         footprint_diagnostics
             .diagnostics
-            .extend(eval_output.validate_footprints());
+            .extend(eval_output.validate_footprints(&pcb_zen_core::DefaultFileProvider::new()));
         if !footprint_diagnostics.diagnostics.is_empty() {
             render_or_bail(
                 &mut footprint_diagnostics,
