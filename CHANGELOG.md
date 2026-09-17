@@ -20,8 +20,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- Keep existing layouts unchanged during `pcb dfm`.
-- Stabilize annular-ring finding IDs across equivalent DFM exports.
 - Keep the exact round caps and thick arcs of thin strokes in STEP silkscreen and copper.
 
 ## [0.4.53] - 2026-09-14
