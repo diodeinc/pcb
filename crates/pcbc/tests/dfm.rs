@@ -41,7 +41,8 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
         .write("MyBoard.zen", BOARD_ZEN)
         .write("BMI270.zen", MODULE_ZEN)
         .write("eda/BMI270.kicad_mod", FOOTPRINT)
-        .write("eda/BMI270.kicad_sym", SYMBOL);
+        .write("eda/BMI270.kicad_sym", SYMBOL)
+        .write("build/.gitkeep", "");
 
     let output = run_pcbc(&mut sandbox, ["dfm", "MyBoard.zen"]);
     let mut report: Value =
@@ -103,6 +104,50 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
     ] {
         assert_eq!(file_report[field], report[field], "{field} differs");
     }
+}
+
+#[test]
+fn dfm_with_workspace_root_layout_preserves_sources_and_writes_relative_report() {
+    let mut sandbox = Sandbox::new();
+    let board = BOARD_ZEN.replace("path=\"build/\"", "path=\".\"");
+    sandbox
+        .env("SOURCE_DATE_EPOCH", "1787702400")
+        .write("pcb.toml", PCB_TOML)
+        .write("MyBoard.zen", &board)
+        .write("BMI270.zen", MODULE_ZEN)
+        .write("eda/BMI270.kicad_mod", FOOTPRINT)
+        .write("eda/BMI270.kicad_sym", SYMBOL);
+
+    let layout = run_pcbc(&mut sandbox, ["layout", "MyBoard.zen", "--no-open"]);
+    assert!(
+        layout.status.success(),
+        "{}",
+        String::from_utf8_lossy(&layout.stderr)
+    );
+    let pcb_before = std::fs::read(sandbox.default_cwd().join("layout.kicad_pcb")).unwrap();
+    let source_before = std::fs::read(sandbox.default_cwd().join("MyBoard.zen")).unwrap();
+
+    let output = run_pcbc(
+        &mut sandbox,
+        ["dfm", "MyBoard.zen", "--output", "relative-report.json"],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read(sandbox.default_cwd().join("layout.kicad_pcb")).unwrap(),
+        pcb_before
+    );
+    assert_eq!(
+        std::fs::read(sandbox.default_cwd().join("MyBoard.zen")).unwrap(),
+        source_before
+    );
+    assert_eq!(
+        read_report(&sandbox, "relative-report.json")["verdict"],
+        "pass"
+    );
 }
 
 #[test]

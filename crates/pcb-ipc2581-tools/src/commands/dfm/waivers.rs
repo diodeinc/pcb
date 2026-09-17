@@ -8,6 +8,7 @@
 use anyhow::Result;
 use chrono::NaiveDate;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 use super::report::Finding;
 
@@ -62,15 +63,18 @@ pub(super) struct WaiverOutcome {
 pub(super) fn apply(
     findings: &mut [Finding],
     file: &WaiverFile,
+    aliases: &HashMap<String, String>,
     today: NaiveDate,
 ) -> WaiverOutcome {
     let mut outcome = WaiverOutcome::default();
     for waiver in &file.waiver {
         let expired = waiver.expires.is_some_and(|expires| today >= expires.0);
-        let Some(finding) = findings
-            .iter_mut()
-            .find(|finding| finding.id == waiver.finding)
-        else {
+        let Some(finding) = findings.iter_mut().find(|finding| {
+            finding.id == waiver.finding
+                || aliases
+                    .get(&waiver.finding)
+                    .is_some_and(|id| id == &finding.id)
+        }) else {
             outcome.unmatched.push(waiver.finding.clone());
             continue;
         };

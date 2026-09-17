@@ -24,7 +24,7 @@ mod slot_width;
 mod thin_regions;
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::NaiveDate;
 use ipc2581::Symbol;
@@ -36,8 +36,8 @@ use sha2::{Digest, Sha256};
 use super::design::{Design, Hole, HoleClass, Slot};
 use super::pdk::SlotPlating;
 use super::report::{
-    Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox, ReportPoint,
-    RuleResult, RuleStatus, Site, SourceLocator, Subject, Witness,
+    DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox,
+    ReportPoint, RuleResult, RuleStatus, Site, SourceLocator, Subject, Witness,
 };
 use super::rules::{Comparison, Linework, Rule, RuleKind};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
@@ -149,6 +149,11 @@ pub(super) fn run(
     today: NaiveDate,
 ) -> anyhow::Result<Results> {
     let mut results = Results::default();
+    let annular_rules = rules
+        .iter()
+        .filter(|rule| matches!(rule.kind, RuleKind::AnnularRing(_)))
+        .map(|rule| rule.id.as_str())
+        .collect::<HashSet<_>>();
     for rule in rules {
         let mut result = RuleResult::new(rule);
         match skip_reason(rule, design) {
@@ -229,7 +234,7 @@ pub(super) fn run(
             finding.rule_id,
         );
     }
-    assign_ids(&mut results.findings);
+    let waiver_aliases = assign_ids(&mut results.findings, &annular_rules);
     for finding in &mut results.findings {
         let instance = finding
             .subjects
@@ -248,7 +253,8 @@ pub(super) fn run(
             .and_then(|instance| instance.transform.inverse())
             .and_then(|inverse| repeat_group_key(finding, inverse));
     }
-    results.waivers = waiver_file.map(|file| waivers::apply(&mut results.findings, file, today));
+    results.waivers =
+        waiver_file.map(|file| waivers::apply(&mut results.findings, file, &waiver_aliases, today));
 
     let mut per_rule: HashMap<&str, (usize, usize)> = HashMap::new();
     for finding in &results.findings {
@@ -697,6 +703,44 @@ impl<'a> From<&'a Subject> for LegacySubject<'a> {
     }
 }
 
+/// Stable annular identity excludes generated IPC primitive names and feature
+/// indices, which can change between equivalent clean exports.
+#[derive(serde::Serialize)]
+struct AnnularSubject<'a> {
+    role: &'static str,
+    kind: &'static str,
+    reference_designator: &'a Option<String>,
+    pin: &'a Option<String>,
+    net: &'a Option<String>,
+    source: Option<AnnularSource<'a>>,
+    drill_span: &'a Option<DrillSpan>,
+}
+
+#[derive(serde::Serialize)]
+struct AnnularSource<'a> {
+    step: &'a Option<String>,
+    layer: &'a Option<String>,
+    instance_index: Option<u32>,
+}
+
+impl<'a> From<&'a Subject> for AnnularSubject<'a> {
+    fn from(subject: &'a Subject) -> Self {
+        Self {
+            role: subject.role,
+            kind: subject.kind,
+            reference_designator: &subject.reference_designator,
+            pin: &subject.pin,
+            net: &subject.net,
+            source: subject.source.as_ref().map(|source| AnnularSource {
+                step: &source.step,
+                layer: &source.layer,
+                instance_index: source.instance_index,
+            }),
+            drill_span: &subject.drill_span,
+        }
+    }
+}
+
 /// The original evidence record, excluding display-only constructions.
 /// Borrow the potentially large rings rather than cloning them to hash IDs.
 #[derive(serde::Serialize)]
@@ -740,15 +784,17 @@ fn layers<'a>(layers: impl IntoIterator<Item = &'a LayerRef>) -> Vec<LayerRef> {
 /// finding, so its stale waiver surfaces as unmatched. The measured value
 /// is deliberately excluded — a waived violation that changes magnitude
 /// in place keeps its waiver.
-fn assign_ids(findings: &mut [Finding]) {
+fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) -> HashMap<String, String> {
     findings.sort_by(|left, right| {
         left.rule_id
             .cmp(&right.rule_id)
             .then_with(|| compare_locations(&left.location, &right.location))
     });
     let mut seen: HashMap<String, u32> = HashMap::new();
+    let mut legacy_seen: HashMap<String, u32> = HashMap::new();
+    let mut waiver_aliases = HashMap::new();
     for finding in findings.iter_mut() {
-        let fingerprint = serde_json::to_string(&(
+        let legacy_fingerprint = serde_json::to_string(&(
             &finding.rule_id,
             finding
                 .subjects
@@ -758,6 +804,28 @@ fn assign_ids(findings: &mut [Finding]) {
             &finding.layers,
             &finding.location.point,
         ))
+        .expect("legacy finding identity serializes");
+        let annular = annular_rules.contains(finding.rule_id.as_str());
+        let fingerprint = if annular {
+            let hole = finding
+                .evidence
+                .iter()
+                .find(|evidence| evidence.role == "drilled_hole")
+                .expect("annular findings report their drilled hole");
+            serde_json::to_string(&(
+                &finding.rule_id,
+                finding
+                    .subjects
+                    .iter()
+                    .map(AnnularSubject::from)
+                    .collect::<Vec<_>>(),
+                &finding.layers,
+                &hole.center,
+                &hole.diameter,
+            ))
+        } else {
+            Ok(legacy_fingerprint.clone())
+        }
         .expect("finding identity serializes");
         let digest = Sha256::digest(fingerprint.as_bytes());
         let short = hex::encode(&digest[..6]);
@@ -770,17 +838,47 @@ fn assign_ids(findings: &mut [Finding]) {
         } else {
             format!("dfm-{short}-{repeat}")
         };
+        if annular {
+            let digest = Sha256::digest(legacy_fingerprint.as_bytes());
+            let legacy_short = hex::encode(&digest[..6]);
+            let repeat = legacy_seen
+                .entry(legacy_short.clone())
+                .and_modify(|n| *n += 1)
+                .or_insert(1);
+            let legacy_id = format!("dfm-{legacy_short}");
+            if *repeat == 1 {
+                if legacy_id != finding.id {
+                    waiver_aliases.insert(legacy_id, finding.id.clone());
+                }
+            } else {
+                // An ordinal legacy ID can move when equivalent findings are
+                // reordered. Do not transfer either waiver ambiguously.
+                waiver_aliases.remove(&legacy_id);
+            }
+        }
         let mut sites_seen: HashMap<String, usize> = HashMap::new();
         for site in &mut finding.sites {
-            let bytes = serde_json::to_vec(&(
-                &site.layers,
-                &site.measurement_kind,
-                &site.bounding_box,
-                site.evidence
-                    .iter()
-                    .map(LegacyEvidence::from)
-                    .collect::<Vec<_>>(),
-            ))
+            let bytes = if annular_rules.contains(finding.rule_id.as_str()) {
+                serde_json::to_vec(&(
+                    &site.layers,
+                    &site.measurement_kind,
+                    &site.bounding_box,
+                    site.subjects
+                        .iter()
+                        .map(AnnularSubject::from)
+                        .collect::<Vec<_>>(),
+                ))
+            } else {
+                serde_json::to_vec(&(
+                    &site.layers,
+                    &site.measurement_kind,
+                    &site.bounding_box,
+                    site.evidence
+                        .iter()
+                        .map(LegacyEvidence::from)
+                        .collect::<Vec<_>>(),
+                ))
+            }
             .expect("site identity serializes");
             let digest = Sha256::digest(bytes);
             let short = hex::encode(&digest[..6]);
@@ -794,6 +892,7 @@ fn assign_ids(findings: &mut [Finding]) {
             }
         }
     }
+    waiver_aliases
 }
 
 /// Collapse only proven repeats of the same definition-local subjects, with
@@ -892,6 +991,10 @@ mod tests {
     use super::*;
     use crate::commands::dfm::report::ReportPoint;
 
+    fn assign_ids(findings: &mut [Finding]) {
+        super::assign_ids(findings, &HashSet::new());
+    }
+
     fn finding_at(x: f64) -> Finding {
         Finding {
             id: String::new(),
@@ -974,6 +1077,93 @@ mod tests {
         assign_ids(std::slice::from_mut(&mut finding));
         assert_eq!(finding.id, "dfm-bee136ee7a39");
         assert!(finding.sites[0].id.starts_with("dfm-bee136ee7a39-site-"));
+    }
+
+    #[test]
+    fn annular_ids_ignore_generated_export_identity_and_evidence_paths() {
+        let mut finding = finding_at(1.0);
+        finding.rule_id = "annular".to_owned();
+        finding.subjects.push(Subject {
+            role: "land",
+            kind: "padstack_land",
+            name: Some("OVAL_32".into()),
+            reference_designator: Some("U1".into()),
+            pin: Some("3".into()),
+            net: Some("GND".into()),
+            padstack_ref: Some("PADSTACK_17".into()),
+            source: Some(SourceLocator {
+                step: Some("board".into()),
+                layer: Some("F.Cu".into()),
+                set_index: Some(8),
+                feature_index: Some(13),
+                instance_index: Some(2),
+            }),
+            drill_span: Some(DrillSpan {
+                first_copper_index: 0,
+                last_copper_index: 1,
+                interpretation: "declared",
+            }),
+            ..Subject::default()
+        });
+        finding
+            .evidence
+            .push(Evidence::circle("drilled_hole", Point::new(2.0, 3.0), 0.2));
+        finding.sites.push(Site {
+            id: String::new(),
+            measurement: Measurement::minimum_distance(0.1, 0.2),
+            measurement_kind: MeasurementKind::MissingCopper,
+            uncertainty_mm: 0.0,
+            witnesses: Vec::new(),
+            bounding_box: BBox::from_point(Point::new(1.0, 0.0)).expand(0.2).into(),
+            layers: Vec::new(),
+            subjects: finding.subjects.clone(),
+            evidence: vec![Evidence {
+                role: "missing_copper",
+                kind: "region",
+                paths: vec![vec![
+                    Point::new(0.9, 0.0).into(),
+                    Point::new(1.1, 0.0).into(),
+                ]],
+                ..Evidence::default()
+            }],
+            note: None,
+        });
+        let annular = HashSet::from(["annular"]);
+        let aliases = super::assign_ids(std::slice::from_mut(&mut finding), &annular);
+        let finding_id = finding.id.clone();
+        let site_id = finding.sites[0].id.clone();
+        assert_eq!(
+            aliases.get("dfm-ed8c542f1d5c"),
+            Some(&finding_id),
+            "the released annular ID remains a waiver alias"
+        );
+
+        for subject in [&mut finding.subjects[0], &mut finding.sites[0].subjects[0]] {
+            subject.name = Some("OVAL_10".into());
+            subject.padstack_ref = Some("PADSTACK_4".into());
+            let source = subject.source.as_mut().unwrap();
+            source.set_index = Some(10);
+            source.feature_index = Some(29);
+        }
+        finding.sites[0].evidence[0].paths = vec![vec![
+            Point::new(0.95, -0.05).into(),
+            Point::new(1.05, 0.05).into(),
+        ]];
+        finding.location.point = Some(Point::new(9.0, 9.0).into());
+        super::assign_ids(std::slice::from_mut(&mut finding), &annular);
+
+        assert_eq!(finding.id, finding_id);
+        assert_eq!(finding.sites[0].id, site_id);
+
+        let mut different_hole = finding_at(9.0);
+        different_hole.rule_id = "annular".to_owned();
+        different_hole.subjects = finding.subjects.clone();
+        different_hole.layers = finding.layers.clone();
+        different_hole
+            .evidence
+            .push(Evidence::circle("drilled_hole", Point::new(2.0, 3.0), 0.3));
+        super::assign_ids(std::slice::from_mut(&mut different_hole), &annular);
+        assert_ne!(different_hole.id, finding.id);
     }
 
     fn repeated_hole(offset: f64, instance: u32) -> Finding {
