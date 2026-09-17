@@ -12,6 +12,7 @@ use pcb_starlark_lsp::server::{
 };
 use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::file_extensions::is_kicad_symbol_file;
+use pcb_zen_core::lang::module::ModuleLoader;
 use pcb_zen_core::lang::symbol::invalidate_symbol_library;
 use pcb_zen_core::lang::type_info::ParameterInfo;
 use pcb_zen_core::{
@@ -21,7 +22,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use starlark::docs::DocModule;
-use std::collections::{BTreeMap, HashMap};
+use starlark::values::ValueLike;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use url::Url;
@@ -53,18 +55,19 @@ fn offset_to_lsp_position(content: &str, offset: usize) -> lsp_types::Position {
     lsp_types::Position { line, character }
 }
 
-/// Wrapper around EvalContext that implements LspContext
+/// Language-server state, containing only owned results of evaluations.
 pub struct LspEvalContext {
-    inner: EvalContext,
+    eager: bool,
+    analysis: RwLock<HashMap<PathBuf, FileAnalysis>>,
     builtin_docs: HashMap<LspUri, String>,
+    builtin_meta: HashMap<String, pcb_zen_core::SymbolInfo>,
     file_provider: Arc<dyn FileProvider>,
     offline: bool,
     resolution_cache: RwLock<HashMap<PathBuf, Arc<ResolutionResult>>>,
     workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
     open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
     netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, HashMap<String, JsonValue>>>>,
-    /// Per-file cache of the schematic computed right after evaluation, before
-    /// the shared session module tree can be contaminated by other files.
+    /// Per-file cache of the schematic extracted before dropping the evaluation.
     last_schematics: Arc<RwLock<HashMap<PathBuf, pcb_sch::Schematic>>>,
     custom_request_handler: Option<Arc<CustomRequestHandler>>,
     schematic_hydrator: Option<Arc<SchematicHydrator>>,
@@ -73,6 +76,12 @@ pub struct LspEvalContext {
 type CustomRequestHandler =
     dyn Fn(&str, &JsonValue) -> anyhow::Result<Option<JsonValue>> + Send + Sync;
 type SchematicHydrator = dyn Fn(&Path, &mut pcb_sch::Schematic) + Send + Sync;
+
+#[derive(Default)]
+struct FileAnalysis {
+    symbols: HashMap<String, pcb_zen_core::SymbolInfo>,
+    dependencies: HashSet<PathBuf>,
+}
 
 struct OverlayFileProvider {
     base: Arc<dyn FileProvider>,
@@ -176,14 +185,27 @@ impl Default for LspEvalContext {
             base: base_provider,
             open_files: open_files.clone(),
         });
-        let resolution = crate::get_workspace_info(&file_provider, &std::env::temp_dir())
-            .and_then(|ws| crate::resolve_workspace_dependencies(ws, &std::env::temp_dir(), false))
-            .unwrap_or_else(|_| ResolutionResult::empty());
-        let inner = EvalContext::new(file_provider.clone(), resolution);
+        let builtin_meta = EvalContext::build_globals()
+            .documentation()
+            .members
+            .into_iter()
+            .map(|(name, item)| {
+                let info = pcb_zen_core::SymbolInfo {
+                    kind: pcb_zen_core::SymbolKind::Function,
+                    parameters: None,
+                    source_path: None,
+                    type_name: "function".to_string(),
+                    documentation: Some(item.render_as_code(&name)),
+                };
+                (name, info)
+            })
+            .collect();
 
         Self {
-            inner,
+            eager: true,
+            analysis: RwLock::new(HashMap::new()),
             builtin_docs,
+            builtin_meta,
             file_provider,
             offline: false,
             resolution_cache: RwLock::new(HashMap::new()),
@@ -215,7 +237,7 @@ impl LspEvalContext {
     }
 
     pub fn set_eager(mut self, eager: bool) -> Self {
-        self.inner = self.inner.set_eager(eager);
+        self.eager = eager;
         self
     }
 
@@ -275,7 +297,6 @@ impl LspEvalContext {
     fn maybe_invalidate_symbol_library(&self, path: &Path) {
         if is_kicad_symbol_file(path.extension()) {
             invalidate_symbol_library(path, self.file_provider.as_ref());
-            self.inner.invalidate_file(path);
         }
     }
 
@@ -353,7 +374,7 @@ impl LspEvalContext {
         let evaluated_content_hash = maybe_contents.as_deref().map(content_hash);
 
         let config = self.config_for(path_buf);
-        let mut ctx = EvalContext::from_session_and_config(Default::default(), config);
+        let mut ctx = EvalContext::from_caches_and_config(Default::default(), config);
 
         if let Some(contents) = maybe_contents {
             ctx = ctx.set_source_contents(contents);
@@ -456,8 +477,77 @@ impl LspEvalContext {
     /// same package-local resolution scope.
     fn config_for(&self, file_path: &Path) -> EvalContextConfig {
         EvalContextConfig::new(self.file_provider.clone(), self.resolution_for(file_path))
-            .set_eager(self.inner.is_eager())
             .set_source_path(file_path.to_path_buf())
+    }
+
+    fn analyze_module(
+        &self,
+        path: &Path,
+        module: &starlark::environment::FrozenModule,
+        config: &EvalContextConfig,
+    ) -> FileAnalysis {
+        use pcb_zen_core::{SymbolInfo, SymbolKind};
+
+        let mut analysis = FileAnalysis::default();
+        for name in module.names() {
+            let name = name.as_str();
+            if let Ok(Some(owned)) = module.get_option(name) {
+                let value = owned.value();
+                let info = if let Some(loader) = value.downcast_ref::<ModuleLoader>() {
+                    let mut target = PathBuf::from(&loader.source_path);
+                    if target.is_relative()
+                        && let Some(parent) = path.parent()
+                    {
+                        target = parent.join(target);
+                    }
+                    let target = self.normalize_path(&target);
+                    analysis.dependencies.insert(target.clone());
+                    SymbolInfo {
+                        kind: SymbolKind::Module,
+                        parameters: Some(loader.params.clone()),
+                        source_path: Some(target),
+                        type_name: "ModuleLoader".to_string(),
+                        documentation: None,
+                    }
+                } else {
+                    let typ = value.get_type();
+                    SymbolInfo {
+                        kind: match typ {
+                            "NativeFunction" | "function" | "FrozenNativeFunction" => {
+                                SymbolKind::Function
+                            }
+                            "ComponentFactory" | "ComponentType" => SymbolKind::Component,
+                            "InterfaceFactory" => SymbolKind::Interface,
+                            _ => SymbolKind::Variable,
+                        },
+                        parameters: None,
+                        source_path: None,
+                        type_name: typ.to_string(),
+                        documentation: None,
+                    }
+                };
+                analysis.symbols.insert(name.to_string(), info);
+            }
+        }
+
+        // Prelude definitions are navigation targets even when not exported.
+        for &(module_path, symbols) in config.prelude() {
+            if let Ok(resolved) = config.resolve_path(module_path, path) {
+                for &name in symbols {
+                    let info = analysis.symbols.entry(name.to_string()).or_insert_with(|| {
+                        self.builtin_meta.get(name).cloned().unwrap_or(SymbolInfo {
+                            kind: SymbolKind::Variable,
+                            parameters: None,
+                            source_path: None,
+                            type_name: name.to_string(),
+                            documentation: None,
+                        })
+                    });
+                    info.source_path.get_or_insert_with(|| resolved.clone());
+                }
+            }
+        }
+        analysis
     }
 
     /// Create LSP-specific diagnostic passes
@@ -610,7 +700,6 @@ impl LspContext for LspEvalContext {
     fn did_change_file_contents(&self, uri: &LspUri, contents: &str) {
         if let LspUri::File(path) = uri {
             self.store_open_file(path, contents);
-            self.inner.invalidate_file(path);
             self.maybe_invalidate_symbol_library(path);
             self.maybe_invalidate_resolution_cache(path);
         }
@@ -621,7 +710,6 @@ impl LspContext for LspEvalContext {
             self.remove_open_file(path);
             let key = self.normalize_path(path);
             self.netlist_subscriptions.write().unwrap().remove(&key);
-            self.inner.invalidate_file(path);
             self.clear_last_schematic(path);
             self.maybe_invalidate_symbol_library(path);
             self.maybe_invalidate_resolution_cache(path);
@@ -660,9 +748,7 @@ impl LspContext for LspEvalContext {
             _ => return vec![],
         };
 
-        // Use the schematic cached during parse_file_with_contents, which was
-        // computed before the session module tree could be contaminated by
-        // other files.
+        // Use the owned schematic cached during parse_file_with_contents.
         let Some(schematic) = self.get_last_schematic(path) else {
             return vec![];
         };
@@ -773,18 +859,29 @@ impl LspContext for LspEvalContext {
                 let workspace_root = self.workspace_root_for(path);
                 let config = self.config_for(path);
 
-                // Parse and analyze the file with the right resolution
-                let ctx =
-                    EvalContext::from_session_and_config(self.inner.session().clone(), config);
-                let mut result = ctx.parse_and_analyze_file(path.clone(), content);
+                let mut result =
+                    EvalContext::from_caches_and_config(Default::default(), config.clone())
+                        .set_source_contents(content)
+                        .eval();
+
+                if let Some(output) = &result.output {
+                    let analysis = self.analyze_module(path, output.star_module(), &config);
+                    self.analysis
+                        .write()
+                        .unwrap()
+                        .insert(path.clone(), analysis);
+                } else {
+                    // Keep dependency reachability through failed evaluations.
+                    if let Some(analysis) = self.analysis.write().unwrap().get_mut(path) {
+                        analysis.symbols.clear();
+                    }
+                }
 
                 // Apply LSP-specific diagnostic passes
                 let passes = self.create_lsp_diagnostic_passes(&workspace_root);
                 result.diagnostics.apply_passes(&passes);
 
                 if let Some(parsed) = result.output.as_ref() {
-                    // Cache the schematic now, while the session module tree
-                    // still reflects only this file's evaluation.
                     if let Ok(sch) = parsed.to_schematic() {
                         self.set_last_schematic(path, sch);
                     } else {
@@ -822,7 +919,6 @@ impl LspContext for LspEvalContext {
         current_file: &LspUri,
         _workspace_root: Option<&Path>,
     ) -> Result<LspUri, String> {
-        // Use the load resolver from the inner context
         match current_file {
             LspUri::File(current_path) => {
                 let config = self.config_for(current_path);
@@ -918,7 +1014,14 @@ impl LspContext for LspEvalContext {
     ) -> Result<Option<LspUri>, String> {
         match current_file {
             LspUri::File(path) => {
-                if let Some(target_path) = self.inner.get_url_for_global_symbol(path, symbol) {
+                if let Some(target_path) = self
+                    .analysis
+                    .read()
+                    .unwrap()
+                    .get(path)
+                    .and_then(|analysis| analysis.symbols.get(symbol))
+                    .and_then(|info| info.source_path.clone())
+                {
                     Ok(Some(LspUri::File(target_path)))
                 } else {
                     // Check if it's a builtin
@@ -939,11 +1042,18 @@ impl LspContext for LspEvalContext {
         match current_file {
             LspUri::File(path) => {
                 // First check for symbol info from the file
-                if let Some(info) = self.inner.get_symbol_info(path, symbol) {
+                if let Some(info) = self
+                    .analysis
+                    .read()
+                    .unwrap()
+                    .get(path)
+                    .and_then(|analysis| analysis.symbols.get(symbol))
+                    .or_else(|| self.builtin_meta.get(symbol))
+                {
                     return Some(CompletionMeta {
                         kind: None, // We could map SymbolKind to CompletionItemKind here
-                        detail: Some(info.type_name),
-                        documentation: info.documentation,
+                        detail: Some(info.type_name.clone()),
+                        documentation: info.documentation.clone(),
                     });
                 }
 
@@ -966,20 +1076,49 @@ impl LspContext for LspEvalContext {
     }
 
     fn is_eager(&self) -> bool {
-        self.inner.is_eager()
+        self.eager
     }
 
     fn workspace_files(
         &self,
         workspace_roots: &[std::path::PathBuf],
     ) -> Result<Vec<std::path::PathBuf>, String> {
-        self.inner
-            .find_workspace_files(workspace_roots)
-            .map_err(|error| format!("{error:#}"))
+        let mut files = Vec::new();
+        let mut pending = workspace_roots.to_vec();
+        while let Some(path) = pending.pop() {
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with('.'))
+            {
+                continue;
+            }
+            if self.file_provider.is_directory(&path) {
+                if let Ok(entries) = self.file_provider.list_directory(&path) {
+                    pending.extend(
+                        entries
+                            .into_iter()
+                            .filter(|entry| !self.file_provider.is_symlink(entry)),
+                    );
+                }
+            } else if self.file_provider.exists(&path)
+                && matches!(
+                    path.extension().and_then(|ext| ext.to_str()),
+                    Some("zen" | "star")
+                )
+            {
+                files.push(path);
+            }
+        }
+        Ok(files)
     }
 
     fn has_module_dependency(&self, from: &Path, to: &Path) -> bool {
-        self.inner.module_dep_exists(from, to)
+        self.analysis
+            .read()
+            .unwrap()
+            .get(from)
+            .is_some_and(|analysis| analysis.dependencies.contains(to))
     }
 
     fn get_custom_hover_for_load(
@@ -1094,15 +1233,12 @@ impl LspContext for LspEvalContext {
                                 self.hydrate_schematic(path_buf, &mut cached);
                                 serde_json::to_value(&cached).ok()
                             } else {
-                                // Fallback: evaluate from scratch using the
-                                // shared session so loaded modules are cached.
+                                // Fallback: evaluate in a fresh context.
                                 let maybe_contents =
                                     self.get_load_contents(&params.uri).ok().flatten();
                                 let config = self.config_for(path_buf);
-                                let ctx = EvalContext::from_session_and_config(
-                                    self.inner.session().clone(),
-                                    config,
-                                );
+                                let ctx =
+                                    EvalContext::from_caches_and_config(Default::default(), config);
 
                                 let eval_result = if let Some(contents) = maybe_contents {
                                     ctx.set_source_contents(contents).eval()
@@ -1467,6 +1603,148 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    #[cfg(unix)]
+    fn workspace_discovery_follows_only_root_symlinks() -> anyhow::Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().join("workspace");
+        let linked = dir.path().join("linked");
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(root.join("sub"))?;
+        fs::create_dir_all(root.join(".hidden"))?;
+        fs::create_dir(&outside)?;
+        fs::write(root.join("board.zen"), "")?;
+        fs::write(root.join("sub/part.star"), "")?;
+        fs::write(root.join(".hidden/hidden.zen"), "")?;
+        fs::write(outside.join("excluded.zen"), "")?;
+        symlink(&root, &linked)?;
+        symlink(&outside, root.join("external"))?;
+        symlink(outside.join("excluded.zen"), root.join("alias.zen"))?;
+
+        let ctx = LspEvalContext::default();
+        let mut files = ctx
+            .workspace_files(std::slice::from_ref(&linked))
+            .map_err(anyhow::Error::msg)?;
+        files.sort();
+        assert_eq!(
+            files,
+            vec![linked.join("board.zen"), linked.join("sub/part.star")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_omits_disabled_prelude_navigation() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        fs::write(
+            root.join("pcb.toml"),
+            "[workspace]\npcb-version = \"0.4\"\n",
+        )?;
+        let board = root.join("board.zen");
+        let source = "answer = 42\n";
+        fs::write(&board, source)?;
+        let ctx = LspEvalContext::default().set_offline(true);
+        let stdlib = ctx
+            .resolution_for(&board)
+            .workspace_info
+            .workspace_stdlib_dir();
+        let stdlib_file = stdlib.join("navigation_probe.zen");
+        fs::write(&stdlib_file, source)?;
+
+        for (path, has_prelude) in [(board, true), (stdlib_file, false)] {
+            let uri = LspUri::File(path.clone());
+            let result = ctx.parse_file_with_contents(&uri, source.to_string());
+            assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+            assert!(result.ast.is_some());
+            assert_eq!(
+                ctx.analysis.read().unwrap()[&path]
+                    .symbols
+                    .contains_key("Power"),
+                has_prelude
+            );
+            assert_eq!(
+                ctx.get_uri_for_global_symbol(&uri, "Power")
+                    .unwrap()
+                    .is_some(),
+                has_prelude
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_retains_dependencies_on_failure_and_replaces_them_on_success() -> anyhow::Result<()>
+    {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        fs::write(
+            root.join("pcb.toml"),
+            "[workspace]\npcb-version = \"0.4\"\n",
+        )?;
+        let path = root.join("main.zen");
+        let child = root.join("child.zen");
+        fs::write(&child, "setting = config(int, default = 7)\n")?;
+        let source = "Child = Module(\"./child.zen\")\n";
+        fs::write(&path, source)?;
+        let uri = LspUri::File(path.clone());
+        let ctx = LspEvalContext::default().set_offline(true);
+
+        let result = ctx.parse_file_with_contents(&uri, source.to_string());
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(ctx.has_module_dependency(&path, &child));
+        assert_eq!(
+            ctx.get_uri_for_global_symbol(&uri, "Child").unwrap(),
+            Some(LspUri::File(child.clone()))
+        );
+        assert_eq!(
+            ctx.analysis.read().unwrap()[&path].symbols["Child"].parameters,
+            Some(vec![
+                "name".to_string(),
+                "properties".to_string(),
+                "setting".to_string()
+            ])
+        );
+        assert!(
+            ctx.get_uri_for_global_symbol(&uri, "Power")
+                .unwrap()
+                .is_some()
+        );
+
+        let failed = ctx.parse_file_with_contents(&uri, "fail(\"broken\")\n".to_string());
+        assert!(!failed.diagnostics.is_empty());
+        assert!(ctx.has_module_dependency(&path, &child));
+        assert!(
+            ctx.get_uri_for_global_symbol(&uri, "Child")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            ctx.get_completion_meta(&uri, "Module")
+                .unwrap()
+                .documentation
+                .is_some()
+        );
+
+        let replaced = ctx.parse_file_with_contents(&uri, "answer = 42\n".to_string());
+        assert!(
+            replaced.diagnostics.is_empty(),
+            "{:?}",
+            replaced.diagnostics
+        );
+        assert!(!ctx.has_module_dependency(&path, &child));
+        assert_eq!(
+            ctx.get_completion_meta(&uri, "answer")
+                .unwrap()
+                .detail
+                .as_deref(),
+            Some("int")
+        );
+        Ok(())
+    }
 
     #[test]
     fn closing_document_removes_netlist_subscription() {

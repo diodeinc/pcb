@@ -134,7 +134,7 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
         let output = result.output.unwrap();
 
         if let Some(frozen_ctx) = output
-            .star_module
+            .star_module()
             .extra_value()
             .and_then(|extra| extra.downcast_ref::<crate::lang::context::FrozenContextValue>())
         {
@@ -176,7 +176,7 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
         // Check the result
         if let Some(output) = result.output
             && let Some(frozen_ctx) = output
-                .star_module
+                .star_module()
                 .extra_value()
                 .and_then(|extra| extra.downcast_ref::<crate::lang::context::FrozenContextValue>())
         {

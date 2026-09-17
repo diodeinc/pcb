@@ -271,14 +271,14 @@ impl<'v> SymbolValue {
             )?;
 
             // Loading a symbol from a library is pure in (resolved_path, name),
-            // so the constructed value is cached on the session.
+            // so the constructed value is reusable across evaluations.
             let cache_key = (resolved_path, name);
-            if let Some(cached) = eval_ctx.session().symbol_cache.get(&cache_key) {
+            if let Some(cached) = eval_ctx.caches().symbol_cache.get(&cache_key) {
                 return Ok(cached);
             }
             let value = Self::load_library_symbol(&cache_key.0, cache_key.1.clone(), eval_ctx)?;
             eval_ctx
-                .session()
+                .caches()
                 .symbol_cache
                 .insert(cache_key, value.clone());
             Ok(value)

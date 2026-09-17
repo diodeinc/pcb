@@ -1,14 +1,14 @@
 use crate::common;
 
 use common::{InMemoryFileProvider, stdlib_test_files_at, test_resolution_at};
-use pcb_zen_core::lang::eval::EvalSession;
+use pcb_zen_core::lang::eval::EvalCaches;
 use pcb_zen_core::{EvalContext, EvalContextConfig, FileProvider};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[test]
-fn shared_session_reuses_caches_without_leaking_module_tree_between_roots() {
+fn completed_roots_are_independent_of_shared_caches() {
     let workspace_root = Path::new("/workspace");
     let mut files = stdlib_test_files_at(workspace_root);
     files.extend(HashMap::from([
@@ -53,12 +53,12 @@ check(VALUE == "shared", "shared module should load")
     let mut resolution = test_resolution_at(workspace_root);
     resolution.canonicalize_keys(file_provider.as_ref());
     let resolution = Arc::new(resolution);
-    let session = EvalSession::default();
+    let caches = Arc::new(EvalCaches::default());
+    let weak_caches = Arc::downgrade(&caches);
 
     let eval = |path: &str| {
-        session.prepare_for_root_eval();
-        EvalContext::from_session_and_config(
-            session.clone(),
+        EvalContext::from_caches_and_config(
+            caches.clone(),
             EvalContextConfig::new(file_provider.clone(), resolution.clone()),
         )
         .set_source_path(PathBuf::from(path))
@@ -70,6 +70,14 @@ check(VALUE == "shared", "shared module should load")
         first.is_success(),
         "first eval failed: {:?}",
         first.diagnostics
+    );
+
+    let second = eval("/workspace/b.zen");
+    assert!(second.is_success(), "{:?}", second.diagnostics);
+    drop(caches);
+    assert!(
+        weak_caches.upgrade().is_none(),
+        "outputs must not retain caches"
     );
 
     let first_schematic = first
@@ -86,13 +94,6 @@ check(VALUE == "shared", "shared module should load")
                 .is_some_and(|name| name == "leaked")
         }),
         "first schematic should include the instantiated child module",
-    );
-
-    let second = eval("/workspace/b.zen");
-    assert!(
-        second.is_success(),
-        "second eval failed: {:?}",
-        second.diagnostics
     );
 
     let second_schematic = second
@@ -113,7 +114,7 @@ check(VALUE == "shared", "shared module should load")
 }
 
 #[test]
-fn shared_session_replays_load_warnings_on_cache_hits() {
+fn shared_caches_replay_load_warnings() {
     let workspace_root = Path::new("/workspace");
     let mut files = stdlib_test_files_at(workspace_root);
     files.extend(HashMap::from([
@@ -145,12 +146,11 @@ load("shared/lib.zen", "VALUE")
     let mut resolution = test_resolution_at(workspace_root);
     resolution.canonicalize_keys(file_provider.as_ref());
     let resolution = Arc::new(resolution);
-    let session = EvalSession::default();
+    let caches = Arc::new(EvalCaches::default());
 
     let eval = |path: &str| {
-        session.prepare_for_root_eval();
-        EvalContext::from_session_and_config(
-            session.clone(),
+        EvalContext::from_caches_and_config(
+            caches.clone(),
             EvalContextConfig::new(file_provider.clone(), resolution.clone()),
         )
         .set_source_path(PathBuf::from(path))

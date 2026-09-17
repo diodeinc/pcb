@@ -13,18 +13,29 @@ use crate::{
     Diagnostic, FrozenComponentValue, FrozenModuleValue,
     lang::{
         context::ContextValue,
-        eval::EvalContext,
+        eval::{EvalContext, EvalOutput},
         module::{ModulePath, ModuleValue},
     },
 };
 
 pub struct EvalContextRef<'a> {
     context: &'a EvalContext,
+    output: Option<&'a EvalOutput>,
 }
 
 impl<'a> EvalContextRef<'a> {
     pub fn new(context: &'a EvalContext) -> Self {
-        Self { context }
+        Self {
+            context,
+            output: None,
+        }
+    }
+
+    pub fn for_checks(context: &'a EvalContext, output: &'a EvalOutput) -> Self {
+        Self {
+            context,
+            output: Some(output),
+        }
     }
 }
 
@@ -64,7 +75,7 @@ pub(crate) trait EvaluatorExt<'v> {
     /// Return the [`Context`] that is currently being used.
     fn eval_context(&self) -> Option<&EvalContext>;
 
-    fn module_tree(&self) -> Option<BTreeMap<ModulePath, FrozenModuleValue>>;
+    fn module_tree(&self) -> Option<BTreeMap<ModulePath, &FrozenModuleValue>>;
 
     /// Recursively collect components from a module and all its submodules
     /// Returns a map of component_path -> component_value (as FrozenValue)
@@ -123,8 +134,12 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
         })
     }
 
-    fn module_tree(&self) -> Option<BTreeMap<ModulePath, FrozenModuleValue>> {
-        self.eval_context().map(|ctx| ctx.module_tree())
+    fn module_tree(&self) -> Option<BTreeMap<ModulePath, &FrozenModuleValue>> {
+        let extra: &dyn AnyLifetime<'_> = &**self.extra_mut.as_ref()?;
+        extra
+            .downcast_ref::<EvalContextRef>()?
+            .output
+            .map(EvalOutput::module_tree)
     }
 
     fn collect_components(&self, module_path: &ModulePath) -> HashMap<ModulePath, FrozenValue> {

@@ -201,10 +201,10 @@ pub(crate) struct SubCircuit {
     pub(crate) params: HashSet<String>,
 }
 
-/// A spice subcircuit cached on the [`EvalSession`] by (resolved model path,
+/// A spice subcircuit cached on the [`EvalCaches`] by (resolved model path,
 /// subcircuit name): the model file's contents plus the parsed subcircuit.
 ///
-/// [`EvalSession`]: crate::lang::eval::EvalSession
+/// [`EvalCaches`]: crate::lang::eval::EvalCaches
 #[derive(Clone)]
 pub(crate) struct CachedSpiceModel {
     pub(crate) definition: String,
@@ -225,9 +225,9 @@ pub(crate) fn resolve_spice_subcircuit(
         })?;
 
     // Reading and parsing the subcircuit is pure in (resolved_path, name), so
-    // the result is cached on the session.
+    // the result is reusable across evaluations.
     let cache_key = (resolved_path, name.to_string());
-    let cached = match eval_ctx.session().spice_cache.get(&cache_key) {
+    let cached = match eval_ctx.caches().spice_cache.get(&cache_key) {
         Some(cached) => cached,
         None => {
             let definition = eval_ctx
@@ -246,7 +246,7 @@ pub(crate) fn resolve_spice_subcircuit(
                 circuit,
             };
             eval_ctx
-                .session()
+                .caches()
                 .spice_cache
                 .insert(cache_key, loaded.clone());
             loaded
