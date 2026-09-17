@@ -368,7 +368,7 @@ impl LspEvalContext {
         &self,
         path_buf: &Path,
         inputs: &HashMap<String, JsonValue>,
-    ) -> anyhow::Result<ZenerEvaluateResponse> {
+    ) -> ZenerEvaluateResponse {
         let uri = LspUri::File(path_buf.to_path_buf());
         let maybe_contents = self.get_load_contents(&uri).ok().flatten();
         let evaluated_content_hash = maybe_contents.as_deref().map(content_hash);
@@ -392,11 +392,27 @@ impl LspEvalContext {
             .as_ref()
             .map(|output| output.signature.clone());
 
-        let schematic_result = eval_result
-            .and_then(|output| output.to_schematic_with_diagnostics())
-            .inspect_mut(|schematic| self.hydrate_schematic(path_buf, schematic));
+        let schematic_result =
+            eval_result.and_then(|output| output.to_schematic_with_diagnostics());
 
-        Ok(ZenerEvaluateResponse {
+        self.evaluation_response(
+            path_buf,
+            parameters,
+            schematic_result,
+            evaluated_content_hash,
+        )
+    }
+
+    fn evaluation_response(
+        &self,
+        path: &Path,
+        parameters: Option<Vec<ParameterInfo>>,
+        schematic_result: pcb_zen_core::WithDiagnostics<pcb_sch::Schematic>,
+        content_hash: Option<String>,
+    ) -> ZenerEvaluateResponse {
+        let schematic_result =
+            schematic_result.inspect_mut(|schematic| self.hydrate_schematic(path, schematic));
+        ZenerEvaluateResponse {
             success: schematic_result.is_success(),
             parameters,
             schematic: schematic_result
@@ -409,8 +425,8 @@ impl LspEvalContext {
                 .into_iter()
                 .map(|d| diagnostic_to_info(&d))
                 .collect(),
-            content_hash: evaluated_content_hash,
-        })
+            content_hash,
+        }
     }
 
     fn workspace_root_for(&self, file_path: &Path) -> PathBuf {
@@ -826,40 +842,14 @@ impl LspContext for LspEvalContext {
         }
     }
 
-    fn netlist_update(&self, uri: &LspUri) -> Result<Option<JsonValue>, String> {
-        let path = match uri {
-            LspUri::File(path) => path,
-            _ => return Ok(None),
-        };
-
-        let Some(inputs) = self.get_netlist_inputs(path) else {
-            return Ok(None);
-        };
-
-        let response = self
-            .evaluate_with_inputs(path, &inputs)
-            .map_err(|error| format!("{error:#}"))?;
-        let params = ZenerNetlistUpdateParams {
-            uri: uri.clone(),
-            result: response,
-            inputs: if inputs.is_empty() {
-                None
-            } else {
-                Some(inputs)
-            },
-        };
-        serde_json::to_value(params)
-            .map(Some)
-            .map_err(|error| error.to_string())
-    }
-
-    fn parse_file_with_contents(&self, uri: &LspUri, content: String) -> LspEvalResult {
+    fn parse_file_with_contents(&self, uri: &LspUri, content: String) -> LspEvalResult<'_> {
         match uri {
             LspUri::File(path) => {
                 let workspace_root = self.workspace_root_for(path);
                 let config = self.config_for(path);
+                let evaluated_content_hash = content_hash(&content);
 
-                let mut result =
+                let result =
                     EvalContext::from_caches_and_config(Default::default(), config.clone())
                         .set_source_contents(content)
                         .eval();
@@ -879,28 +869,56 @@ impl LspContext for LspEvalContext {
 
                 // Apply LSP-specific diagnostic passes
                 let passes = self.create_lsp_diagnostic_passes(&workspace_root);
-                result.diagnostics.apply_passes(&passes);
+                let mut lsp_diagnostics = result.diagnostics.clone();
+                lsp_diagnostics.apply_passes(&passes);
+                let diagnostics = lsp_diagnostics
+                    .iter()
+                    .map(|d| self.diagnostic_to_lsp(d))
+                    .collect();
+                let ast = result.output.as_ref().map(|output| output.ast.clone());
+                let parameters = result
+                    .output
+                    .as_ref()
+                    .map(|output| output.signature.clone());
 
-                if let Some(parsed) = result.output.as_ref() {
-                    if let Ok(sch) = parsed.to_schematic() {
-                        self.set_last_schematic(path, sch);
-                    } else {
-                        self.clear_last_schematic(path);
-                    }
+                let converted = result
+                    .output
+                    .map(|output| output.to_schematic_with_diagnostics())
+                    .unwrap_or_default();
+                let netlist_update = self.get_netlist_inputs(path).map(|inputs| {
+                    let path = path.clone();
+                    let uri = uri.clone();
+                    let mut schematic_result = converted.clone();
+                    schematic_result.diagnostics.extend(result.diagnostics);
+                    Box::new(move || {
+                        let response = if inputs.is_empty() {
+                            self.evaluation_response(
+                                &path,
+                                parameters,
+                                schematic_result,
+                                Some(evaluated_content_hash),
+                            )
+                        } else {
+                            self.evaluate_with_inputs(&path, &inputs)
+                        };
+                        serde_json::to_value(ZenerNetlistUpdateParams {
+                            uri,
+                            result: response,
+                            inputs: (!inputs.is_empty()).then_some(inputs),
+                        })
+                        .expect("netlist update contains JSON-serializable data")
+                    }) as Box<dyn FnOnce() -> JsonValue>
+                });
+                if let Ok(schematic) = converted.output_result() {
+                    self.set_last_schematic(path, schematic);
                 } else {
                     self.clear_last_schematic(path);
                 }
 
-                // Convert diagnostics to LSP format
-                let diagnostics = result
-                    .diagnostics
-                    .iter()
-                    .map(|d| self.diagnostic_to_lsp(d))
-                    .collect();
-
                 LspEvalResult {
                     diagnostics,
-                    ast: result.output.map(|parsed| Arc::unwrap_or_clone(parsed.ast)),
+                    ast: ast.map(Arc::unwrap_or_clone),
+                    netlist_update,
                 }
             }
             _ => {
@@ -908,6 +926,7 @@ impl LspContext for LspEvalContext {
                 LspEvalResult {
                     diagnostics: vec![],
                     ast: None,
+                    netlist_update: None,
                 }
             }
         }
@@ -1447,7 +1466,7 @@ impl LspEvalContext {
             _ => return Err(anyhow::anyhow!("Only file URIs are supported")),
         };
 
-        let response = self.evaluate_with_inputs(path_buf, &params.inputs)?;
+        let response = self.evaluate_with_inputs(path_buf, &params.inputs);
         self.set_netlist_subscription(path_buf, &params.inputs);
         Ok(response)
     }
@@ -1603,6 +1622,109 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    fn subscribed_validation_reuses_default_evaluation_and_preserves_custom_inputs()
+    -> anyhow::Result<()> {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        fs::write(
+            root.join("pcb.toml"),
+            "[workspace]\npcb-version = \"0.4\"\n",
+        )?;
+        let path = root.join("board.zen");
+        let uri = LspUri::File(path.clone());
+        let source = "label = config(str, default = \"DEFAULT\")\nsignal = Net(label)\n";
+        fs::write(&path, source)?;
+        let hydrations = Arc::new(AtomicUsize::new(0));
+        let counter = hydrations.clone();
+        let ctx = LspEvalContext::default()
+            .set_offline(true)
+            .with_schematic_hydrator(move |_, _| {
+                counter.fetch_add(1, Ordering::Relaxed);
+            });
+        ctx.did_change_file_contents(&uri, source);
+        ctx.set_netlist_subscription(&path, &HashMap::new());
+
+        let mut previous_id = None;
+        for i in 0..2 {
+            let result = ctx.parse_file_with_contents(&uri, source.to_string());
+            assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(hydrations.load(Ordering::Relaxed), i);
+            let update: super::ZenerNetlistUpdateParams =
+                serde_json::from_value(result.netlist_update.unwrap()())?;
+            assert_eq!(hydrations.load(Ordering::Relaxed), i + 1);
+            assert!(update.result.success);
+            assert!(update.inputs.is_none());
+            assert_eq!(
+                update.result.content_hash,
+                Some(super::content_hash(source))
+            );
+            assert_eq!(update.result.parameters.unwrap()[0].name, "label");
+            let schematic: pcb_sch::Schematic =
+                serde_json::from_value(update.result.schematic.unwrap())?;
+            let id = schematic.nets["DEFAULT"].id;
+            // Net IDs are unique per evaluation: matching IDs prove both consumers
+            // use the same evaluation, while a new edit must produce a fresh one.
+            assert_eq!(
+                ctx.get_last_schematic(&path).unwrap().nets["DEFAULT"].id,
+                id
+            );
+            assert_ne!(previous_id, Some(id));
+            previous_id = Some(id);
+        }
+
+        let inputs = HashMap::from([("label".to_string(), json!("CUSTOM"))]);
+        ctx.set_netlist_subscription(&path, &inputs);
+        // Save-only validation discards the update without hydrating it.
+        drop(ctx.parse_file_with_contents(&uri, source.to_string()));
+        assert_eq!(hydrations.load(Ordering::Relaxed), 2);
+        let result = ctx.parse_file_with_contents(&uri, source.to_string());
+        let update: super::ZenerNetlistUpdateParams =
+            serde_json::from_value(result.netlist_update.unwrap()())?;
+        assert!(result.diagnostics.is_empty());
+        assert_eq!(update.inputs, Some(inputs));
+        assert!(update.result.success);
+        let schematic: pcb_sch::Schematic =
+            serde_json::from_value(update.result.schematic.unwrap())?;
+        assert!(schematic.nets.contains_key("CUSTOM"));
+        assert!(!schematic.nets.contains_key("DEFAULT"));
+        assert!(
+            ctx.get_last_schematic(&path)
+                .unwrap()
+                .nets
+                .contains_key("DEFAULT")
+        );
+
+        ctx.set_netlist_subscription(&path, &HashMap::new());
+        let broken = "fail(\"broken edit\")\n";
+        ctx.did_change_file_contents(&uri, broken);
+        let result = ctx.parse_file_with_contents(&uri, broken.to_string());
+        let update: super::ZenerNetlistUpdateParams =
+            serde_json::from_value(result.netlist_update.unwrap()())?;
+        assert!(!result.diagnostics.is_empty());
+        assert!(!update.result.success);
+        assert!(update.result.schematic.is_none());
+        assert!(!update.result.diagnostics.is_empty());
+        assert_eq!(
+            update.result.content_hash,
+            Some(super::content_hash(broken))
+        );
+        assert!(ctx.get_last_schematic(&path).is_none());
+
+        ctx.did_close_file(&uri);
+        assert!(
+            ctx.parse_file_with_contents(&uri, source.to_string())
+                .netlist_update
+                .is_none()
+        );
+        Ok(())
+    }
 
     #[test]
     #[cfg(unix)]

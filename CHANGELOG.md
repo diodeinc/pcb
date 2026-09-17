@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Reuse LSP validation results for default-input netlist updates instead of evaluating boards twice per edit.
+
 ## [0.4.54] - 2026-09-17
 
 ### Changed

@@ -310,11 +310,14 @@ fn _assert_string_literal_result_is_send() {
 
 /// The result of evaluating a starlark program for use in the LSP.
 #[derive(Default)]
-pub struct LspEvalResult {
+pub struct LspEvalResult<'a> {
     /// The list of diagnostic issues that were encountered while evaluating a starlark program.
     pub diagnostics: Vec<Diagnostic>,
     /// If the program could be parsed, the parsed module.
     pub ast: Option<AstModule>,
+    /// Prepare a netlist notification after publishing diagnostics. Save-only
+    /// validation drops this without doing netlist-specific work.
+    pub netlist_update: Option<Box<dyn FnOnce() -> JsonValue + 'a>>,
 }
 
 /// Settings that the LspContext can provide to change what capabilities the server enables
@@ -374,7 +377,7 @@ pub trait LspContext {
     }
 
     /// Parse a file with the given contents. The filename is used in the diagnostics.
-    fn parse_file_with_contents(&self, uri: &LspUri, content: String) -> LspEvalResult;
+    fn parse_file_with_contents(&self, uri: &LspUri, content: String) -> LspEvalResult<'_>;
 
     /// Resolve a path given in a `load()` statement.
     ///
@@ -418,7 +421,7 @@ pub trait LspContext {
     fn get_load_contents(&self, uri: &LspUri) -> Result<Option<String>, String>;
 
     /// Get the contents of a file at a given URI, and attempt to parse it.
-    fn parse_file(&self, uri: &LspUri) -> Result<Option<LspEvalResult>, String> {
+    fn parse_file(&self, uri: &LspUri) -> Result<Option<LspEvalResult<'_>>, String> {
         let result = self
             .get_load_contents(uri)?
             .map(|content| self.parse_file_with_contents(uri, content));
@@ -467,12 +470,6 @@ pub trait LspContext {
     /// The returned diagnostics are merged with parse diagnostics before publishing.
     fn on_save_diagnostics(&self, _uri: &LspUri) -> Vec<Diagnostic> {
         Vec::new()
-    }
-
-    /// Return a netlist update payload for the given file, if one should be pushed
-    /// to the client. Returning `None` means "no update".
-    fn netlist_update(&self, _uri: &LspUri) -> Result<Option<JsonValue>, String> {
-        Ok(None)
     }
 
     /// Handle custom LSP request messages that are not recognised by the core `starlark_lsp`
@@ -678,18 +675,14 @@ impl<T: LspContext> Backend<T> {
     }
 
     /// Parse, update AST cache, and return diagnostics without publishing them.
-    fn validate_and_collect(
-        &self,
-        lsp_url: LspUri,
-        text: String,
-    ) -> Result<(LspUri, Vec<Diagnostic>), LspOpError> {
-        let eval_result = self.context.parse_file_with_contents(&lsp_url, text);
-        if let Some(ast) = eval_result.ast {
+    fn validate_and_collect(&self, lsp_url: &LspUri, text: String) -> LspEvalResult<'_> {
+        let mut eval_result = self.context.parse_file_with_contents(lsp_url, text);
+        if let Some(ast) = eval_result.ast.take() {
             let module = Arc::new(LspModule::new(ast));
             let mut last_valid_parse = self.last_valid_parse.write().unwrap();
             last_valid_parse.insert(lsp_url.clone(), module);
         }
-        Ok((lsp_url, eval_result.diagnostics))
+        eval_result
     }
 
     fn validate(
@@ -698,9 +691,9 @@ impl<T: LspContext> Backend<T> {
         version: Option<i64>,
         text: String,
     ) -> Result<(), LspOpError> {
-        let (lsp_url, diagnostics) = self.validate_and_collect(lsp_url, text)?;
-        self.publish_grouped_diagnostics(&lsp_url, diagnostics, version);
-        self.maybe_publish_netlist_update(&lsp_url)?;
+        let result = self.validate_and_collect(&lsp_url, text);
+        self.publish_grouped_diagnostics(&lsp_url, result.diagnostics, version);
+        self.maybe_publish_netlist_update(&lsp_url, result.netlist_update);
 
         // Propagate changes: if `lsp_url` was modified, re-validate any other
         // open documents that `load()` this file so that their diagnostics are
@@ -777,13 +770,13 @@ impl<T: LspContext> Backend<T> {
             return Ok(());
         };
 
-        let (lsp_url, mut diagnostics) = self.validate_and_collect(lsp_url, text)?;
+        let mut result = self.validate_and_collect(&lsp_url, text);
 
         // Collect save-time diagnostics (e.g. simulation) and merge them in.
         let sim_diagnostics = self.context.on_save_diagnostics(&lsp_url);
-        diagnostics.extend(sim_diagnostics);
+        result.diagnostics.extend(sim_diagnostics);
 
-        self.publish_grouped_diagnostics(&lsp_url, diagnostics, None);
+        self.publish_grouped_diagnostics(&lsp_url, result.diagnostics, None);
         self.propagate_change(&lsp_url)?;
 
         // Save is the explicit "refresh now" signal; force a full sweep so
@@ -1546,16 +1539,9 @@ impl<T: LspContext> Backend<T> {
             return Ok(());
         };
 
-        let eval_result = self.context.parse_file_with_contents(uri, text);
-
-        if let Some(ast) = eval_result.ast {
-            let module = Arc::new(LspModule::new(ast));
-            let mut last_valid_parse = self.last_valid_parse.write().unwrap();
-            last_valid_parse.insert(uri.clone(), module);
-        }
-
+        let eval_result = self.validate_and_collect(uri, text);
         self.publish_grouped_diagnostics(uri, eval_result.diagnostics, None);
-        self.maybe_publish_netlist_update(uri)?;
+        self.maybe_publish_netlist_update(uri, eval_result.netlist_update);
         Ok(())
     }
 
@@ -1755,13 +1741,14 @@ impl<T: LspContext> Backend<T> {
         }
     }
 
-    fn maybe_publish_netlist_update(&self, uri: &LspUri) -> Result<(), LspOpError> {
-        match self
-            .context
-            .netlist_update(uri)
-            .map_err(LspOpError::FromContext)?
-        {
-            Some(params) => {
+    fn maybe_publish_netlist_update(
+        &self,
+        uri: &LspUri,
+        update: Option<Box<dyn FnOnce() -> JsonValue + '_>>,
+    ) {
+        match update {
+            Some(prepare) => {
+                let params = prepare();
                 let should_emit = {
                     let mut last_emitted = self.last_emitted_netlist_payloads.write().unwrap();
                     record_netlist_payload(&mut last_emitted, uri, &params)
@@ -1780,7 +1767,6 @@ impl<T: LspContext> Backend<T> {
                     .remove(uri);
             }
         }
-        Ok(())
     }
 
     fn register_file_watchers(&self) {

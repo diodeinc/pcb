@@ -133,7 +133,16 @@ pub(crate) struct TestServerContext {
 }
 
 impl LspContext for TestServerContext {
-    fn parse_file_with_contents(&self, uri: &LspUri, content: String) -> LspEvalResult {
+    fn parse_file_with_contents(&self, uri: &LspUri, content: String) -> LspEvalResult<'_> {
+        let netlist_update = self.netlist_subscribed.load(Ordering::Relaxed).then(|| {
+            Box::new(|| {
+                let evaluator_id = self.netlist_update_counter.fetch_add(1, Ordering::Relaxed);
+                serde_json::json!({
+                    "contentHash": "unchanged",
+                    "evaluatorId": evaluator_id,
+                })
+            }) as Box<dyn FnOnce() -> serde_json::Value>
+        });
         match uri {
             LspUri::File(path) | LspUri::Starlark(path) => {
                 match AstModule::parse(
@@ -148,6 +157,7 @@ impl LspContext for TestServerContext {
                         LspEvalResult {
                             diagnostics,
                             ast: Some(ast),
+                            netlist_update,
                         }
                     }
                     Err(e) => {
@@ -157,6 +167,7 @@ impl LspContext for TestServerContext {
                         LspEvalResult {
                             diagnostics,
                             ast: None,
+                            netlist_update,
                         }
                     }
                 }
@@ -327,18 +338,6 @@ impl LspContext for TestServerContext {
         } else {
             None
         }
-    }
-
-    fn netlist_update(&self, _uri: &LspUri) -> Result<Option<serde_json::Value>, String> {
-        if !self.netlist_subscribed.load(Ordering::Relaxed) {
-            return Ok(None);
-        }
-
-        let evaluator_id = self.netlist_update_counter.fetch_add(1, Ordering::Relaxed);
-        Ok(Some(serde_json::json!({
-            "contentHash": "unchanged",
-            "evaluatorId": evaluator_id,
-        })))
     }
 
     fn watched_file_changed(&self, uri: &LspUri) -> bool {
