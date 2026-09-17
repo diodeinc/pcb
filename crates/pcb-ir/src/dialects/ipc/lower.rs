@@ -560,11 +560,11 @@ pub struct BoardArrayFabricationProfile {
 
 #[derive(Debug, Clone, Default)]
 pub struct BoardArrayReliefFeatures {
-    /// Through-board features that interrupt V-score separation.
+    /// Source feature envelopes requiring exposure along a scored board edge.
     ///
     /// For non-plated holes/slots this is the mechanical aperture. For plated
-    /// holes/slots this is the actual pad/copper envelope, so score reliefs are
-    /// derived from source geometry instead of clearance guesses.
+    /// holes/slots this is the actual pad/copper envelope. Only material outside
+    /// the finished board is sacrificial; these never authorize inward cuts.
     pub score_blockers: Vec<ContourBuf>,
 }
 
