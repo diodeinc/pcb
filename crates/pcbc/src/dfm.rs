@@ -16,7 +16,7 @@ pub(crate) const DFM_RESOLUTION: Resolution = Resolution {
 #[derive(Args, Debug)]
 #[command(about = "Run DFM checks for a .zen board")]
 pub struct DfmArgs {
-    /// Path to the board .zen file
+    /// Path to a .zen, .kicad_pcb, or .kicad_pro file. Checks the saved layout as-is.
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     pub file: PathBuf,
 
@@ -35,13 +35,6 @@ pub struct DfmArgs {
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
-
-    /// Check the existing layout as-is without regenerating it. Fails when no
-    /// layout exists. Only use this when the layout is known to match the
-    /// source: unlike the default path it never refreshes copper fills, so a
-    /// stale layout checks stale geometry.
-    #[arg(long = "no-sync")]
-    pub no_sync: bool,
 }
 
 pub fn execute(args: DfmArgs) -> Result<()> {
@@ -108,57 +101,35 @@ pub fn execute(args: DfmArgs) -> Result<()> {
 }
 
 fn export_layout(args: &DfmArgs) -> Result<(tempfile::TempDir, PathBuf)> {
+    match args.file.extension().and_then(|ext| ext.to_str()) {
+        Some("kicad_pcb") => return export_ipc(&args.file),
+        Some("kicad_pro") => {
+            anyhow::ensure!(
+                args.file.is_file(),
+                "Project file not found: {}",
+                args.file.display()
+            );
+            return export_ipc(&args.file.with_extension("kicad_pcb"));
+        }
+        _ => {}
+    }
     let layout_args = LayoutArgs {
         file: args.file.clone(),
         no_open: true,
         offline: args.offline,
-        // DFM never reads hydrated part data, and hydration only renames
-        // footprint Value text, which lives on Fab/Silk layers DFM does not
-        // consume (no footprint Value sits on copper corpus-wide, and sync
-        // hides Value on every created footprint). Skipping it pins the
-        // fallback geometry a failed BOM match already produces today.
+        // Only evaluate the source to locate its saved layout.
         skip_bom_hydration: true,
-        no_sync: args.no_sync,
+        no_sync: true,
         ..Default::default()
     };
     let design = crate::layout::prepare_design(&layout_args)?;
-    if args.no_sync {
-        return export_generated_layout(args, crate::layout::apply_prepared(&layout_args, design)?);
-    }
-    let layout_dir = pcb_layout::utils::resolve_layout_dir(&design.schematic)?
-        .with_context(|| format!("{} does not declare a layout", args.file.display()))?;
-    if layout_has_board(&layout_dir)? {
-        // Synchronize a disposable copy so DFM never rewrites, replaces, or
-        // changes metadata on a pre-existing user layout.
-        let working = tempfile::tempdir().context("failed to create temporary layout directory")?;
-        let working_layout = working.path().join("layout");
-        std::fs::create_dir(&working_layout)
-            .context("failed to create temporary layout working copy")?;
-        copy_layout(&layout_dir, &working_layout)?;
-        let layout = crate::layout::apply_prepared_to(&layout_args, design, &working_layout)?;
-        return export_generated_layout(args, layout);
-    }
-    // Preserve the existing first-run behavior: a layout created from
-    // scratch remains available after DFM completes.
-    let layout = crate::layout::apply_prepared(&layout_args, design)?;
-    export_generated_layout(args, layout)
-}
-
-fn layout_has_board(layout_dir: &std::path::Path) -> Result<bool> {
-    let board = pcb_layout::utils::resolve_kicad_files(layout_dir)?.kicad_pcb();
-    match std::fs::symlink_metadata(&board) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => {
-            Err(error).with_context(|| format!("failed to inspect layout file {}", board.display()))
-        }
-    }
-}
-
-fn export_generated_layout(
-    args: &DfmArgs,
-    layout: crate::layout::LayoutCommandResult,
-) -> Result<(tempfile::TempDir, PathBuf)> {
+    let layout = crate::layout::resolve_existing_layout(&args.file, &design.schematic)
+        .with_context(|| {
+            format!(
+                "Could not find the existing layout. Run 'pcb layout {}' to generate it.",
+                args.file.display()
+            )
+        })?;
     let pcb_file = layout
         .pcb_file_abs
         .as_deref()
@@ -168,60 +139,13 @@ fn export_generated_layout(
 
 /// Export a board file to a temporary IPC-2581 document for checking.
 fn export_ipc(pcb_file: &std::path::Path) -> Result<(tempfile::TempDir, PathBuf)> {
+    anyhow::ensure!(
+        pcb_file.is_file(),
+        "Layout file not found: {}",
+        pcb_file.display()
+    );
     let temporary_dir = tempfile::tempdir().context("failed to create temporary DFM directory")?;
     let ipc_path = temporary_dir.path().join("ipc2581.xml");
     crate::release::export_ipc2581(pcb_file, &ipc_path)?;
     Ok((temporary_dir, ipc_path))
-}
-
-fn copy_layout(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
-    let files = pcb_layout::utils::resolve_kicad_files(source)?;
-    let pcb = files.kicad_pcb();
-    for path in [files.kicad_pro, pcb] {
-        match std::fs::symlink_metadata(&path) {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("failed to inspect layout file {}", path.display()));
-            }
-        }
-        let metadata = std::fs::metadata(&path)
-            .with_context(|| format!("failed to inspect layout file {}", path.display()))?;
-        anyhow::ensure!(
-            metadata.is_file(),
-            "layout file is not a regular file: {}",
-            path.display()
-        );
-        let target = destination.join(
-            path.file_name()
-                .with_context(|| format!("layout file {} has no name", path.display()))?,
-        );
-        std::fs::copy(&path, &target).with_context(|| {
-            format!("failed to copy {} to {}", path.display(), target.display())
-        })?;
-    }
-    Ok(())
-}
-
-#[cfg(all(test, unix))]
-mod tests {
-    use std::os::unix::fs::symlink;
-
-    use super::copy_layout;
-
-    #[test]
-    fn temporary_layout_copy_rejects_unusable_selected_files() {
-        let source = tempfile::tempdir().unwrap();
-        let destination = tempfile::tempdir().unwrap();
-        std::fs::write(source.path().join("layout.kicad_pro"), "project").unwrap();
-        symlink("missing", source.path().join("layout.kicad_pcb")).unwrap();
-        let error = copy_layout(source.path(), destination.path()).unwrap_err();
-        assert!(error.to_string().contains("failed to inspect layout file"));
-
-        std::fs::remove_file(source.path().join("layout.kicad_pcb")).unwrap();
-        std::fs::create_dir(source.path().join("layout.kicad_pcb")).unwrap();
-        let error = copy_layout(source.path(), destination.path()).unwrap_err();
-        assert!(error.to_string().contains("not a regular file"));
-    }
 }

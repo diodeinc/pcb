@@ -11,6 +11,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Reuse LSP validation results for default-input netlist updates instead of evaluating boards twice per edit.
+- Make `pcb dfm` check saved layouts without syncing; remove `--no-sync`.
+- Accept `.kicad_pcb` and `.kicad_pro` inputs in `pcb dfm`.
 
 ## [0.4.54] - 2026-09-17
 
