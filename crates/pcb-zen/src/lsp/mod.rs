@@ -12,7 +12,6 @@ use pcb_starlark_lsp::server::{
 };
 use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::file_extensions::is_kicad_symbol_file;
-use pcb_zen_core::lang::eval::PRELUDE;
 use pcb_zen_core::lang::module::ModuleLoader;
 use pcb_zen_core::lang::symbol::invalidate_symbol_library;
 use pcb_zen_core::lang::type_info::ParameterInfo;
@@ -532,7 +531,7 @@ impl LspEvalContext {
         }
 
         // Prelude definitions are navigation targets even when not exported.
-        for &(module_path, symbols) in PRELUDE {
+        for &(module_path, symbols) in config.prelude() {
             if let Ok(resolved) = config.resolve_path(module_path, path) {
                 for &name in symbols {
                     let info = analysis.symbols.entry(name.to_string()).or_insert_with(|| {
@@ -1091,13 +1090,16 @@ impl LspContext for LspEvalContext {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with('.'))
-                || self.file_provider.is_symlink(&path)
             {
                 continue;
             }
             if self.file_provider.is_directory(&path) {
                 if let Ok(entries) = self.file_provider.list_directory(&path) {
-                    pending.extend(entries);
+                    pending.extend(
+                        entries
+                            .into_iter()
+                            .filter(|entry| !self.file_provider.is_symlink(entry)),
+                    );
                 }
             } else if self.file_provider.exists(&path)
                 && matches!(
@@ -1601,6 +1603,78 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    #[cfg(unix)]
+    fn workspace_discovery_follows_only_root_symlinks() -> anyhow::Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().join("workspace");
+        let linked = dir.path().join("linked");
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(root.join("sub"))?;
+        fs::create_dir_all(root.join(".hidden"))?;
+        fs::create_dir(&outside)?;
+        fs::write(root.join("board.zen"), "")?;
+        fs::write(root.join("sub/part.star"), "")?;
+        fs::write(root.join(".hidden/hidden.zen"), "")?;
+        fs::write(outside.join("excluded.zen"), "")?;
+        symlink(&root, &linked)?;
+        symlink(&outside, root.join("external"))?;
+        symlink(outside.join("excluded.zen"), root.join("alias.zen"))?;
+
+        let ctx = LspEvalContext::default();
+        let mut files = ctx
+            .workspace_files(std::slice::from_ref(&linked))
+            .map_err(anyhow::Error::msg)?;
+        files.sort();
+        assert_eq!(
+            files,
+            vec![linked.join("board.zen"), linked.join("sub/part.star")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_omits_disabled_prelude_navigation() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        fs::write(
+            root.join("pcb.toml"),
+            "[workspace]\npcb-version = \"0.4\"\n",
+        )?;
+        let board = root.join("board.zen");
+        let source = "answer = 42\n";
+        fs::write(&board, source)?;
+        let ctx = LspEvalContext::default().set_offline(true);
+        let stdlib = ctx
+            .resolution_for(&board)
+            .workspace_info
+            .workspace_stdlib_dir();
+        let stdlib_file = stdlib.join("navigation_probe.zen");
+        fs::write(&stdlib_file, source)?;
+
+        for (path, has_prelude) in [(board, true), (stdlib_file, false)] {
+            let uri = LspUri::File(path.clone());
+            let result = ctx.parse_file_with_contents(&uri, source.to_string());
+            assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+            assert!(result.ast.is_some());
+            assert_eq!(
+                ctx.analysis.read().unwrap()[&path]
+                    .symbols
+                    .contains_key("Power"),
+                has_prelude
+            );
+            assert_eq!(
+                ctx.get_uri_for_global_symbol(&uri, "Power")
+                    .unwrap()
+                    .is_some(),
+                has_prelude
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn analysis_retains_dependencies_on_failure_and_replaces_them_on_success() -> anyhow::Result<()>

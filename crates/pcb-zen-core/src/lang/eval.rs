@@ -66,7 +66,7 @@ use super::{
 /// Stdlib symbols that are implicitly available in user `.zen` files without
 /// an explicit `load()` statement. Each entry maps a stdlib module path to the
 /// symbol names to inject.
-pub const PRELUDE: &[(&str, &[&str])] = &[
+const PRELUDE: &[(&str, &[&str])] = &[
     ("@stdlib/io.zen", &["io", "input", "output"]),
     (
         "@stdlib/interfaces.zen",
@@ -108,7 +108,7 @@ fn explicit_prelude_load_diagnostics(
     ast: &AstModule,
     config: &EvalContextConfig,
 ) -> Vec<Diagnostic> {
-    if !config.inject_prelude {
+    if config.prelude().is_empty() {
         return Vec::new();
     }
 
@@ -121,7 +121,8 @@ fn explicit_prelude_load_diagnostics(
     }
 
     let file_provider = config.file_provider.as_ref();
-    let prelude_modules: Vec<_> = PRELUDE
+    let prelude_modules: Vec<_> = config
+        .prelude()
         .iter()
         .filter_map(|(module_path, symbols)| {
             config
@@ -543,6 +544,11 @@ impl EvalContextConfig {
     pub fn set_inject_prelude(mut self, inject: bool) -> Self {
         self.inject_prelude = inject;
         self
+    }
+
+    /// Implicit symbols available under this configuration.
+    pub fn prelude(&self) -> &[(&str, &[&str])] {
+        if self.inject_prelude { PRELUDE } else { &[] }
     }
 
     /// Create a child config for loading a module at the given path.
@@ -1430,13 +1436,8 @@ impl EvalContext {
     }
 
     /// Inject prelude symbols into the module scope before evaluation.
-    /// Controlled by `config.inject_prelude`.
     fn inject_prelude<'v>(&self, module: &Module<'v>) {
-        if !self.config.inject_prelude {
-            return;
-        }
-
-        for &(module_path, symbols) in PRELUDE {
+        for &(module_path, symbols) in self.config.prelude() {
             let frozen_module = match self.resolve_and_eval_module(module_path, None) {
                 Ok(module) => module,
                 Err(err) => {
