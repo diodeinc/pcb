@@ -123,20 +123,11 @@ fn export_layout(args: &DfmArgs) -> Result<(tempfile::TempDir, PathBuf)> {
     };
     let design = crate::layout::prepare_design(&layout_args)?;
     if args.no_sync {
-        // Trust the on-disk layout without touching it: resolve the existing
-        // board file and export it directly.
-        let layout = crate::layout::resolve_existing_layout(&layout_args.file, &design.schematic)?;
-        let pcb_file = layout
-            .pcb_file_abs
-            .as_deref()
-            .with_context(|| format!("{} does not declare a layout", args.file.display()))?;
-
-        return export_ipc(pcb_file);
+        return export_generated_layout(args, crate::layout::apply_prepared(&layout_args, design)?);
     }
     let layout_dir = pcb_layout::utils::resolve_layout_dir(&design.schematic)?
         .with_context(|| format!("{} does not declare a layout", args.file.display()))?;
-    let mut working_dir = None;
-    let layout = if layout_dir.exists() {
+    if layout_dir.exists() {
         // Synchronize a disposable copy so DFM never rewrites, replaces, or
         // changes metadata on a pre-existing user layout.
         let working = tempfile::tempdir().context("failed to create temporary layout directory")?;
@@ -145,20 +136,23 @@ fn export_layout(args: &DfmArgs) -> Result<(tempfile::TempDir, PathBuf)> {
             .context("failed to create temporary layout working copy")?;
         copy_layout(&layout_dir, &working_layout)?;
         let layout = crate::layout::apply_prepared_to(&layout_args, design, &working_layout)?;
-        working_dir = Some(working);
-        layout
-    } else {
-        // Preserve the existing first-run behavior: a layout created from
-        // scratch remains available after DFM completes.
-        crate::layout::apply_prepared(&layout_args, design)?
-    };
+        return export_generated_layout(args, layout);
+    }
+    // Preserve the existing first-run behavior: a layout created from
+    // scratch remains available after DFM completes.
+    let layout = crate::layout::apply_prepared(&layout_args, design)?;
+    export_generated_layout(args, layout)
+}
+
+fn export_generated_layout(
+    args: &DfmArgs,
+    layout: crate::layout::LayoutCommandResult,
+) -> Result<(tempfile::TempDir, PathBuf)> {
     let pcb_file = layout
         .pcb_file_abs
         .as_deref()
         .with_context(|| format!("{} does not declare a layout", args.file.display()))?;
-    let export = export_ipc(pcb_file);
-    drop(working_dir);
-    export
+    export_ipc(pcb_file)
 }
 
 /// Export a board file to a temporary IPC-2581 document for checking.

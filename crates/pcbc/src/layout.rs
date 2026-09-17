@@ -173,8 +173,8 @@ pub(crate) fn prepare_design(args: &LayoutArgs) -> Result<PreparedDesign> {
     };
     let eval_state = BuildEvalState::new(resolution_result);
     // DFM never reads hydrated part data (it checks copper geometry and net
-    // attribution), so it skips the BOM-match round trip entirely. The layout
-    // files it regenerates as a side effect are restored afterwards.
+    // attribution), so it skips the BOM-match round trip entirely. Existing
+    // layouts are synchronized in a disposable working directory.
     let eval_state = if args.skip_bom_hydration {
         eval_state
     } else {
