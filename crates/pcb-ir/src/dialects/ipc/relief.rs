@@ -10,7 +10,8 @@
 //! - `B` is the protected finished-board material for the whole array.
 //! - `C_i` is the rectangular score cell bounded by the nearest V-score lines.
 //! - `B'_i` is the instance board after tolerance-scale score alignment.
-//! - `P_i = C_i \ B'_i` is sacrificial dead-space material in that cell.
+//! - `E_i` is the source feature envelope requiring edge exposure.
+//! - `P_i = ((C_i \ B'_i) ∪ E_i) \ B` is sacrificial material to remove.
 //! - `D_r` is a disk whose radius is the route-tool radius.
 //!
 //! Tool awareness is the usual configuration-space construction for a
@@ -340,7 +341,7 @@ fn append_contour_line_segments(cmds: &[PathCmd], lines: &mut Vec<VScoreLine>) {
 
 fn boundary_pocket_relief(
     boundary: &ContourBuf,
-    base_protected_material: &ContourSet,
+    protected_material: &ContourSet,
     input: &VScoreReliefInput,
 ) -> Result<Option<BoundaryRelief>, VScoreReliefError> {
     if boundary.bbox.is_empty()
@@ -367,15 +368,10 @@ fn boundary_pocket_relief(
         score_tolerance,
         input.resolution,
     )?;
-    let protected_material = if score_blockers.is_empty() {
-        base_protected_material.clone()
-    } else {
-        base_protected_material.difference(&score_blockers)?
-    };
 
     let geometry = compute_relief_geometry(
         boundary,
-        &protected_material,
+        protected_material,
         &score_blockers,
         score_cell,
         input.tool_diameter_mm / 2.0,
@@ -444,10 +440,13 @@ fn compute_relief_geometry(
     )?;
     // B'_i: absorb tolerance-scale slivers along score-cell edges so tiny
     // source/score mismatches do not become false relief pockets.
-    let aligned_board = score_aligned_board_region(current_board, score_cell, score_tolerance)?
-        .difference(score_blockers)?;
-    // P_i = C_i \ B'_i.
-    let dead_space = score_cell_region.difference(&aligned_board)?;
+    let aligned_board = score_aligned_board_region(current_board, score_cell, score_tolerance)?;
+    // Edge features request exposure, never permission to remove finished board.
+    // Include their exterior portions even when they lie outside this score cell.
+    let dead_space = score_cell_region
+        .difference(&aligned_board)?
+        .union(score_blockers)?
+        .difference(protected_material)?;
     let (legal_tool_centers, material_removal) =
         tool_aware_material_removal(&dead_space, protected_material, tool_radius)?;
 
@@ -807,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    fn score_edge_blocker_creates_relief() {
+    fn edge_exposure_routes_outside_without_removing_finished_board() {
         let mut input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -820,14 +819,31 @@ mod tests {
             Resolution::default(),
         );
         input.score_blockers = vec![rectangle_payload(BBox {
-            min: Point::new(0.0, 2.0),
-            max: Point::new(1.2, 3.0),
+            min: Point::new(-2.0, 2.0),
+            max: Point::new(4.0, 3.0),
         })];
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let relief =
+            ContourSet::from_filled_contours(&output.relief_contours, input.resolution).unwrap();
+        let board = ContourSet::rectangle(
+            BBox {
+                min: Point::new(0.0, 0.0),
+                max: Point::new(10.0, 5.0),
+            },
+            input.resolution,
+        );
+        let exterior = ContourSet::rectangle(
+            BBox {
+                min: Point::new(-2.0, 2.0),
+                max: Point::new(0.0, 3.0),
+            },
+            input.resolution,
+        );
 
-        assert!(!output.relief_contours.is_empty());
-        assert!(!output.debug.entries[0].dead_space_pockets.is_empty());
+        // Ignoring the exposure must fail, as must routing the whole pad envelope.
+        assert!(exterior.difference(&relief).unwrap().is_empty());
+        assert!(relief.intersection(&board).unwrap().is_empty());
     }
 
     #[test]
