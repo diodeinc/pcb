@@ -690,7 +690,12 @@ fn compose_board_array_fabrication_profile(
         } else {
             relief::vscore_route_reliefs(&relief_input)?
         };
-        material_removal.union_assign(&ContourSet::from_filled_contours(&reliefs, resolution)?)?;
+        // Relief contours encode a region with holes for protected board material.
+        material_removal.union_assign(&ContourSet::from_contours(
+            &reliefs,
+            FillRule::NonZero,
+            resolution,
+        )?)?;
     }
 
     Ok((
@@ -873,6 +878,56 @@ mod tests {
             .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox));
         assert_eq!(bbox.min, Point::new(0.0, 0.0));
         assert_eq!(bbox.max, Point::new(4.0, 2.0));
+    }
+
+    #[test]
+    fn exterior_relief_preserves_a_surrounded_board() {
+        let resolution = Resolution::default();
+        let boards = vec![
+            rectangle_contour(0.0, 0.0, 10.0, 5.0),
+            rectangle_contour(-3.0, 2.0, -2.0, 3.0),
+        ];
+        let protected = ContourSet::from_filled_contours(&boards, resolution).unwrap();
+        let score_lines = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 5.0),
+            Point::new(0.0, 5.0),
+            Point::new(0.0, 0.0),
+        ]
+        .windows(2)
+        .map(|points| relief::VScoreLine {
+            start: points[0],
+            end: points[1],
+            width: 0.025,
+        })
+        .collect::<Vec<_>>();
+        let (profile, _) = compose_board_array_fabrication_profile(
+            BoardArrayFabricationProfileInput {
+                board_boundaries: boards,
+                ..Default::default()
+            },
+            &score_lines,
+            FabricationProfileOptions {
+                relief_features: BoardArrayReliefFeatures {
+                    score_blockers: vec![rectangle_contour(-4.0, 1.0, 1.0, 4.0)],
+                },
+                ..Default::default()
+            },
+            resolution,
+        )
+        .unwrap();
+        let removal =
+            ContourSet::from_contours(&profile.material_removal, FillRule::NonZero, resolution)
+                .unwrap();
+        let exterior =
+            ContourSet::from_filled_contours(&[rectangle_contour(-4.0, 1.0, 0.0, 4.0)], resolution)
+                .unwrap()
+                .difference(&protected)
+                .unwrap();
+
+        assert!(removal.intersection(&protected).unwrap().is_empty());
+        assert!(exterior.difference(&removal).unwrap().is_empty());
     }
 
     #[test]
