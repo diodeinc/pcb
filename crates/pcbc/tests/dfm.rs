@@ -44,6 +44,8 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
         .write("eda/BMI270.kicad_sym", SYMBOL)
         .write("build/.gitkeep", "");
 
+    let layout = run_pcbc(&mut sandbox, ["layout", "MyBoard.zen", "--no-open"]);
+    assert!(layout.status.success());
     let output = run_pcbc(&mut sandbox, ["dfm", "MyBoard.zen"]);
     let mut report: Value =
         serde_json::from_slice(&output.stdout).expect("stdout should contain only the DFM report");
@@ -151,7 +153,7 @@ fn dfm_with_workspace_root_layout_preserves_sources_and_writes_relative_report()
 }
 
 #[test]
-fn dfm_no_sync_checks_the_existing_layout_without_regenerating_it() {
+fn dfm_checks_kicad_board_and_project_without_a_workspace() {
     let mut sandbox = Sandbox::new();
     sandbox
         .env("SOURCE_DATE_EPOCH", "1787702400")
@@ -161,49 +163,56 @@ fn dfm_no_sync_checks_the_existing_layout_without_regenerating_it() {
         .write("eda/BMI270.kicad_mod", FOOTPRINT)
         .write("eda/BMI270.kicad_sym", SYMBOL);
 
-    let regenerated = run_pcbc(
-        &mut sandbox,
-        ["dfm", "MyBoard.zen", "--output", "regen.dfm.json"],
-    );
-    assert!(regenerated.status.success());
+    let layout = run_pcbc(&mut sandbox, ["layout", "MyBoard.zen", "--no-open"]);
+    assert!(layout.status.success());
     let layout_before = std::fs::read(sandbox.default_cwd().join("build/layout.kicad_pcb"))
-        .expect("dfm creates the layout from scratch");
+        .expect("layout command creates the board");
+    let project_before =
+        std::fs::read(sandbox.default_cwd().join("build/layout.kicad_pro")).unwrap();
+    let reference = run_pcbc(&mut sandbox, ["dfm", "MyBoard.zen"]);
+    assert!(reference.status.success());
+    let reference: Value = serde_json::from_slice(&reference.stdout).unwrap();
 
-    let reused = run_pcbc(
-        &mut sandbox,
-        [
-            "dfm",
-            "MyBoard.zen",
-            "--no-sync",
-            "--output",
-            "reuse.dfm.json",
-        ],
-    );
-    assert!(reused.status.success());
-    let layout_after = std::fs::read(sandbox.default_cwd().join("build/layout.kicad_pcb"))
-        .expect("no-sync run leaves the layout alone");
-    assert_eq!(
-        layout_before, layout_after,
-        "--no-sync must not regenerate the layout"
-    );
-
-    let mut regen_report = read_report(&sandbox, "regen.dfm.json");
-    let mut reuse_report = read_report(&sandbox, "reuse.dfm.json");
-    // Each .zen run asks KiCad for new IPC, which can reorder independent
-    // features; compare everything but the input identity, timestamps, and
-    // rendered scene vectors.
-    for generated in [&mut regen_report, &mut reuse_report] {
-        generated.as_object_mut().unwrap().remove("input");
-        generated.as_object_mut().unwrap().remove("generated_at");
-        for pass in generated["scene"]["passes"].as_array_mut().unwrap() {
-            pass.as_object_mut().unwrap().remove("svg");
+    let mut standalone = Sandbox::new();
+    standalone
+        .write("custom.kicad_pcb", &layout_before)
+        .write("custom.kicad_pro", &project_before);
+    for input in ["custom.kicad_pcb", "custom.kicad_pro"] {
+        let output = run_pcbc(&mut standalone, ["dfm", input]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["layout"]["selected_step"], "custom");
+        for field in ["verdict", "summary", "rules", "findings"] {
+            assert_eq!(report[field], reference[field], "{input}: {field}");
         }
+        assert_eq!(
+            std::fs::read(standalone.default_cwd().join("custom.kicad_pcb")).unwrap(),
+            layout_before
+        );
+        assert_eq!(
+            std::fs::read(standalone.default_cwd().join("custom.kicad_pro")).unwrap(),
+            project_before
+        );
     }
-    assert_eq!(reuse_report, regen_report);
+    std::fs::remove_file(standalone.default_cwd().join("custom.kicad_pcb")).unwrap();
+    let output = run_pcbc(&mut standalone, ["dfm", "custom.kicad_pro"]);
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["verdict"], "incomplete");
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("custom.kicad_pcb")
+    );
 }
 
 #[test]
-fn dfm_no_sync_without_a_layout_reports_an_incomplete_run() {
+fn dfm_without_a_layout_reports_an_incomplete_run() {
     let mut sandbox = Sandbox::new();
     sandbox
         .env("SOURCE_DATE_EPOCH", "1787702400")
@@ -215,13 +224,7 @@ fn dfm_no_sync_without_a_layout_reports_an_incomplete_run() {
 
     let output = run_pcbc(
         &mut sandbox,
-        [
-            "dfm",
-            "MyBoard.zen",
-            "--no-sync",
-            "--output",
-            "missing.dfm.json",
-        ],
+        ["dfm", "MyBoard.zen", "--output", "missing.dfm.json"],
     );
     assert!(!output.status.success());
     let report = read_report(&sandbox, "missing.dfm.json");
@@ -230,9 +233,15 @@ fn dfm_no_sync_without_a_layout_reports_an_incomplete_run() {
         report["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("kicad_pro"),
+            .contains("pcb layout MyBoard.zen"),
         "unexpected error: {}",
         report["error"]["message"]
+    );
+    assert!(
+        !sandbox
+            .default_cwd()
+            .join("build/layout.kicad_pcb")
+            .exists()
     );
 }
 

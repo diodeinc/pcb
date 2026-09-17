@@ -173,8 +173,7 @@ pub(crate) fn prepare_design(args: &LayoutArgs) -> Result<PreparedDesign> {
     };
     let eval_state = BuildEvalState::new(resolution_result);
     // DFM never reads hydrated part data (it checks copper geometry and net
-    // attribution), so it skips the BOM-match round trip entirely. Existing
-    // layouts are synchronized in a disposable working directory.
+    // attribution), so it skips the BOM-match round trip entirely.
     let eval_state = if args.skip_bom_hydration {
         eval_state
     } else {
@@ -204,22 +203,6 @@ pub(crate) fn apply_prepared(
     args: &LayoutArgs,
     design: PreparedDesign,
 ) -> Result<LayoutCommandResult> {
-    apply_prepared_in(args, design, None)
-}
-
-pub(crate) fn apply_prepared_to(
-    args: &LayoutArgs,
-    design: PreparedDesign,
-    layout_dir: &Path,
-) -> Result<LayoutCommandResult> {
-    apply_prepared_in(args, design, Some(layout_dir))
-}
-
-fn apply_prepared_in(
-    args: &LayoutArgs,
-    design: PreparedDesign,
-    layout_dir: Option<&Path>,
-) -> Result<LayoutCommandResult> {
     let hide_progress = args.format == LayoutOutputFormat::Json;
     let PreparedDesign {
         zen_path,
@@ -229,7 +212,6 @@ fn apply_prepared_in(
     } = design;
 
     if args.no_sync {
-        debug_assert!(layout_dir.is_none());
         return resolve_existing_layout(&zen_path, &schematic);
     }
 
@@ -257,27 +239,14 @@ fn apply_prepared_in(
     };
     let spinner = Spinner::builder(spinner_msg).hidden(hide_progress).start();
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
-    let result = if let Some(layout_dir) = layout_dir {
-        anyhow::ensure!(
-            !args.check,
-            "an explicit layout directory cannot be used with --check"
-        );
-        Some(pcb_layout::generate_layout_in(
-            &schematic,
-            layout_dir,
-            args.sync_footprints,
-            &mut diagnostics,
-        )?)
-    } else {
-        process_layout(
-            &schematic,
-            LayoutOptions {
-                check: args.check,
-                sync_footprints: args.sync_footprints,
-            },
-            &mut diagnostics,
-        )?
-    };
+    let result = process_layout(
+        &schematic,
+        LayoutOptions {
+            check: args.check,
+            sync_footprints: args.sync_footprints,
+        },
+        &mut diagnostics,
+    )?;
     spinner.finish();
 
     let Some(layout_result) = result else {
