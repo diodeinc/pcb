@@ -24,7 +24,7 @@ mod slot_width;
 mod thin_regions;
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::NaiveDate;
 use ipc2581::Symbol;
@@ -149,6 +149,11 @@ pub(super) fn run(
     today: NaiveDate,
 ) -> anyhow::Result<Results> {
     let mut results = Results::default();
+    let annular_rules = rules
+        .iter()
+        .filter(|rule| matches!(rule.kind, RuleKind::AnnularRing(_)))
+        .map(|rule| rule.id.as_str())
+        .collect::<HashSet<_>>();
     for rule in rules {
         let mut result = RuleResult::new(rule);
         match skip_reason(rule, design) {
@@ -229,7 +234,7 @@ pub(super) fn run(
             finding.rule_id,
         );
     }
-    assign_ids(&mut results.findings);
+    assign_ids(&mut results.findings, &annular_rules);
     for finding in &mut results.findings {
         let instance = finding
             .subjects
@@ -697,6 +702,42 @@ impl<'a> From<&'a Subject> for LegacySubject<'a> {
     }
 }
 
+/// Stable annular identity excludes generated IPC primitive names and feature
+/// indices, which can change between equivalent clean exports.
+#[derive(serde::Serialize)]
+struct AnnularSubject<'a> {
+    role: &'static str,
+    kind: &'static str,
+    reference_designator: &'a Option<String>,
+    pin: &'a Option<String>,
+    net: &'a Option<String>,
+    source: Option<AnnularSource<'a>>,
+}
+
+#[derive(serde::Serialize)]
+struct AnnularSource<'a> {
+    step: &'a Option<String>,
+    layer: &'a Option<String>,
+    instance_index: Option<u32>,
+}
+
+impl<'a> From<&'a Subject> for AnnularSubject<'a> {
+    fn from(subject: &'a Subject) -> Self {
+        Self {
+            role: subject.role,
+            kind: subject.kind,
+            reference_designator: &subject.reference_designator,
+            pin: &subject.pin,
+            net: &subject.net,
+            source: subject.source.as_ref().map(|source| AnnularSource {
+                step: &source.step,
+                layer: &source.layer,
+                instance_index: source.instance_index,
+            }),
+        }
+    }
+}
+
 /// The original evidence record, excluding display-only constructions.
 /// Borrow the potentially large rings rather than cloning them to hash IDs.
 #[derive(serde::Serialize)]
@@ -740,7 +781,7 @@ fn layers<'a>(layers: impl IntoIterator<Item = &'a LayerRef>) -> Vec<LayerRef> {
 /// finding, so its stale waiver surfaces as unmatched. The measured value
 /// is deliberately excluded — a waived violation that changes magnitude
 /// in place keeps its waiver.
-fn assign_ids(findings: &mut [Finding]) {
+fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) {
     findings.sort_by(|left, right| {
         left.rule_id
             .cmp(&right.rule_id)
@@ -748,16 +789,29 @@ fn assign_ids(findings: &mut [Finding]) {
     });
     let mut seen: HashMap<String, u32> = HashMap::new();
     for finding in findings.iter_mut() {
-        let fingerprint = serde_json::to_string(&(
-            &finding.rule_id,
-            finding
-                .subjects
-                .iter()
-                .map(LegacySubject::from)
-                .collect::<Vec<_>>(),
-            &finding.layers,
-            &finding.location.point,
-        ))
+        let fingerprint = if annular_rules.contains(finding.rule_id.as_str()) {
+            serde_json::to_string(&(
+                &finding.rule_id,
+                finding
+                    .subjects
+                    .iter()
+                    .map(AnnularSubject::from)
+                    .collect::<Vec<_>>(),
+                &finding.layers,
+                &finding.location.point,
+            ))
+        } else {
+            serde_json::to_string(&(
+                &finding.rule_id,
+                finding
+                    .subjects
+                    .iter()
+                    .map(LegacySubject::from)
+                    .collect::<Vec<_>>(),
+                &finding.layers,
+                &finding.location.point,
+            ))
+        }
         .expect("finding identity serializes");
         let digest = Sha256::digest(fingerprint.as_bytes());
         let short = hex::encode(&digest[..6]);
@@ -772,15 +826,27 @@ fn assign_ids(findings: &mut [Finding]) {
         };
         let mut sites_seen: HashMap<String, usize> = HashMap::new();
         for site in &mut finding.sites {
-            let bytes = serde_json::to_vec(&(
-                &site.layers,
-                &site.measurement_kind,
-                &site.bounding_box,
-                site.evidence
-                    .iter()
-                    .map(LegacyEvidence::from)
-                    .collect::<Vec<_>>(),
-            ))
+            let bytes = if annular_rules.contains(finding.rule_id.as_str()) {
+                serde_json::to_vec(&(
+                    &site.layers,
+                    &site.measurement_kind,
+                    &site.bounding_box,
+                    site.subjects
+                        .iter()
+                        .map(AnnularSubject::from)
+                        .collect::<Vec<_>>(),
+                ))
+            } else {
+                serde_json::to_vec(&(
+                    &site.layers,
+                    &site.measurement_kind,
+                    &site.bounding_box,
+                    site.evidence
+                        .iter()
+                        .map(LegacyEvidence::from)
+                        .collect::<Vec<_>>(),
+                ))
+            }
             .expect("site identity serializes");
             let digest = Sha256::digest(bytes);
             let short = hex::encode(&digest[..6]);
@@ -892,6 +958,10 @@ mod tests {
     use super::*;
     use crate::commands::dfm::report::ReportPoint;
 
+    fn assign_ids(findings: &mut [Finding]) {
+        super::assign_ids(findings, &HashSet::new());
+    }
+
     fn finding_at(x: f64) -> Finding {
         Finding {
             id: String::new(),
@@ -974,6 +1044,69 @@ mod tests {
         assign_ids(std::slice::from_mut(&mut finding));
         assert_eq!(finding.id, "dfm-bee136ee7a39");
         assert!(finding.sites[0].id.starts_with("dfm-bee136ee7a39-site-"));
+    }
+
+    #[test]
+    fn annular_ids_ignore_generated_export_identity_and_evidence_paths() {
+        let mut finding = finding_at(1.0);
+        finding.rule_id = "annular".to_owned();
+        finding.subjects.push(Subject {
+            role: "land",
+            kind: "padstack_land",
+            name: Some("OVAL_32".into()),
+            reference_designator: Some("U1".into()),
+            pin: Some("3".into()),
+            net: Some("GND".into()),
+            padstack_ref: Some("PADSTACK_17".into()),
+            source: Some(SourceLocator {
+                step: Some("board".into()),
+                layer: Some("F.Cu".into()),
+                set_index: Some(8),
+                feature_index: Some(13),
+                instance_index: Some(2),
+            }),
+            ..Subject::default()
+        });
+        finding.sites.push(Site {
+            id: String::new(),
+            measurement: Measurement::minimum_distance(0.1, 0.2),
+            measurement_kind: MeasurementKind::MissingCopper,
+            uncertainty_mm: 0.0,
+            witnesses: Vec::new(),
+            bounding_box: BBox::from_point(Point::new(1.0, 0.0)).expand(0.2).into(),
+            layers: Vec::new(),
+            subjects: finding.subjects.clone(),
+            evidence: vec![Evidence {
+                role: "missing_copper",
+                kind: "region",
+                paths: vec![vec![
+                    Point::new(0.9, 0.0).into(),
+                    Point::new(1.1, 0.0).into(),
+                ]],
+                ..Evidence::default()
+            }],
+            note: None,
+        });
+        let annular = HashSet::from(["annular"]);
+        super::assign_ids(std::slice::from_mut(&mut finding), &annular);
+        let finding_id = finding.id.clone();
+        let site_id = finding.sites[0].id.clone();
+
+        for subject in [&mut finding.subjects[0], &mut finding.sites[0].subjects[0]] {
+            subject.name = Some("OVAL_10".into());
+            subject.padstack_ref = Some("PADSTACK_4".into());
+            let source = subject.source.as_mut().unwrap();
+            source.set_index = Some(10);
+            source.feature_index = Some(29);
+        }
+        finding.sites[0].evidence[0].paths = vec![vec![
+            Point::new(0.95, -0.05).into(),
+            Point::new(1.05, 0.05).into(),
+        ]];
+        super::assign_ids(std::slice::from_mut(&mut finding), &annular);
+
+        assert_eq!(finding.id, finding_id);
+        assert_eq!(finding.sites[0].id, site_id);
     }
 
     fn repeated_hole(offset: f64, instance: u32) -> Finding {

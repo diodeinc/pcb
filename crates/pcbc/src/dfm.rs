@@ -133,31 +133,32 @@ fn export_layout(args: &DfmArgs) -> Result<(tempfile::TempDir, PathBuf)> {
 
         return export_ipc(pcb_file);
     }
-    // DFM regenerates the layout as an intermediate artifact. Snapshot a
-    // pre-existing layout directory so the unhydrated regeneration below does
-    // not clobber the user's hydrated files; a layout created from scratch is
-    // left in place, as today.
-    let snapshot = LayoutSnapshot::capture(&design.schematic)?;
-    let export = (|| {
-        let layout = crate::layout::apply_prepared(&layout_args, design)?;
-        let pcb_file = layout
-            .pcb_file_abs
-            .as_deref()
-            .with_context(|| format!("{} does not declare a layout", args.file.display()))?
-            .to_path_buf();
-
-        export_ipc(&pcb_file)
-    })();
-    // The export error takes precedence, but a failed restore (which leaves
-    // regenerated files behind) must still surface.
-    match (export, snapshot.restore()) {
-        (Ok(export), Ok(())) => Ok(export),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(restore)) => Err(restore),
-        (Err(error), Err(restore)) => Err(anyhow::anyhow!(
-            "{error:#}; also failed to restore the layout directory: {restore:#}"
-        )),
-    }
+    let layout_dir = pcb_layout::utils::resolve_layout_dir(&design.schematic)?
+        .with_context(|| format!("{} does not declare a layout", args.file.display()))?;
+    let mut working_dir = None;
+    let layout = if layout_dir.exists() {
+        // Synchronize a disposable copy so DFM never rewrites, replaces, or
+        // changes metadata on a pre-existing user layout.
+        let working = tempfile::tempdir().context("failed to create temporary layout directory")?;
+        let working_layout = working.path().join("layout");
+        std::fs::create_dir(&working_layout)
+            .context("failed to create temporary layout working copy")?;
+        copy_layout(&layout_dir, &working_layout)?;
+        let layout = crate::layout::apply_prepared_to(&layout_args, design, &working_layout)?;
+        working_dir = Some(working);
+        layout
+    } else {
+        // Preserve the existing first-run behavior: a layout created from
+        // scratch remains available after DFM completes.
+        crate::layout::apply_prepared(&layout_args, design)?
+    };
+    let pcb_file = layout
+        .pcb_file_abs
+        .as_deref()
+        .with_context(|| format!("{} does not declare a layout", args.file.display()))?;
+    let export = export_ipc(pcb_file);
+    drop(working_dir);
+    export
 }
 
 /// Export a board file to a temporary IPC-2581 document for checking.
@@ -168,147 +169,55 @@ fn export_ipc(pcb_file: &std::path::Path) -> Result<(tempfile::TempDir, PathBuf)
     Ok((temporary_dir, ipc_path))
 }
 
-/// A pre-existing layout directory preserved across DFM's intermediate
-/// regeneration, or nothing when DFM creates the layout from scratch.
-struct LayoutSnapshot {
-    directory: Option<PathBuf>,
-    backup: Option<tempfile::TempDir>,
-}
-
-impl LayoutSnapshot {
-    fn capture(schematic: &pcb_sch::Schematic) -> Result<Self> {
-        let directory = pcb_layout::utils::resolve_layout_dir(schematic)?;
-        let backup = directory
-            .as_deref()
-            .filter(|directory| directory.exists())
-            .map(|directory| {
-                // Stage the backup beside the layout directory so restoring
-                // it is a same-filesystem rename.
-                let parent = directory.parent().with_context(|| {
-                    format!("layout directory {} has no parent", directory.display())
-                })?;
-                let backup =
-                    tempfile::tempdir_in(parent).context("failed to snapshot layout directory")?;
-                copy_dir(directory, backup.path())?;
-                Ok::<_, anyhow::Error>(backup)
-            })
-            .transpose()?;
-        Ok(Self { directory, backup })
-    }
-
-    fn restore(self) -> Result<()> {
-        let (Some(directory), Some(backup)) = (self.directory, self.backup) else {
-            return Ok(());
-        };
-        // Relinquish automatic cleanup before touching the live directory:
-        // if the restore fails halfway, the backup survives and the error
-        // below tells the user where to find it.
-        let backup_path = backup.keep();
-        let restore_context = || {
-            format!(
-                "failed to restore layout directory {}; the pre-existing contents are preserved at {}",
-                directory.display(),
-                backup_path.display(),
-            )
-        };
-        if directory.exists() {
-            std::fs::remove_dir_all(&directory).with_context(restore_context)?;
+fn copy_layout(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+    let files = pcb_layout::utils::resolve_kicad_files(source)?;
+    let pcb = files.kicad_pcb();
+    for path in [files.kicad_pro, pcb] {
+        if !path.is_file() {
+            continue;
         }
-        // Persist the backup in place of the regenerated directory with a
-        // same-filesystem rename.
-        std::fs::rename(&backup_path, &directory).with_context(restore_context)?;
-        Ok(())
-    }
-}
-
-fn copy_dir(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
-    let entries = walkdir::WalkDir::new(source)
-        .min_depth(1)
-        .into_iter()
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .with_context(|| format!("failed to scan {}", source.display()))?;
-    for entry in entries {
-        let relative = entry
-            .path()
-            .strip_prefix(source)
-            .with_context(|| format!("failed to relativize {}", entry.path().display()))?;
-        let target = destination.join(relative);
-        let file_type = entry.file_type();
-        if file_type.is_dir() {
-            std::fs::create_dir_all(&target)
-                .with_context(|| format!("failed to create {}", target.display()))?;
-        } else if file_type.is_file() {
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create {}", parent.display()))?;
-            }
-            std::fs::copy(entry.path(), &target).with_context(|| {
-                format!(
-                    "failed to copy {} to {}",
-                    entry.path().display(),
-                    target.display()
-                )
-            })?;
-        } else if file_type.is_symlink() {
-            copy_symlink(entry.path(), &target)?;
-        }
+        let target = destination.join(
+            path.file_name()
+                .with_context(|| format!("layout file {} has no name", path.display()))?,
+        );
+        std::fs::copy(&path, &target).with_context(|| {
+            format!("failed to copy {} to {}", path.display(), target.display())
+        })?;
     }
     Ok(())
 }
 
-#[cfg(unix)]
-fn copy_symlink(source: &std::path::Path, target: &std::path::Path) -> Result<()> {
-    let link = std::fs::read_link(source)
-        .with_context(|| format!("failed to read link {}", source.display()))?;
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    std::os::unix::fs::symlink(link, target)
-        .with_context(|| format!("failed to create link {}", target.display()))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn copy_symlink(source: &std::path::Path, target: &std::path::Path) -> Result<()> {
-    // Layout directories do not use symlinks; fail closed rather than
-    // silently dropping one during the snapshot round trip.
-    anyhow::bail!("cannot snapshot symbolic link {}", source.display());
-}
-
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
-    use super::*;
+    use std::os::unix::fs::symlink;
+
+    use super::copy_layout;
 
     #[test]
-    fn restore_failure_preserves_the_backup_and_reports_where() {
-        let parent = tempfile::tempdir().unwrap();
-        // A missing destination parent makes rename fail regardless of the
-        // test process's permissions (CI may run as root).
-        let live = parent.path().join("missing").join("layout");
-        let backup = tempfile::tempdir_in(parent.path()).unwrap();
-        std::fs::write(backup.path().join("board.kicad_pcb"), "original").unwrap();
+    fn temporary_layout_copy_ignores_unrelated_symlinks() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let external = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(external.path(), "unchanged").unwrap();
+        symlink(external.path(), source.path().join("external-link")).unwrap();
+        std::fs::write(source.path().join("layout.kicad_pro"), "project").unwrap();
+        std::fs::write(source.path().join("layout.kicad_pcb"), "board").unwrap();
 
-        let snapshot = LayoutSnapshot {
-            directory: Some(live.clone()),
-            backup: Some(backup),
-        };
-        let error = snapshot.restore().unwrap_err();
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("preserved at"),
-            "restore error reports the surviving backup: {message}"
-        );
-        // The backup persists with its contents.
-        let survivors = std::fs::read_dir(parent.path())
-            .unwrap()
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| path != &live)
-            .collect::<Vec<_>>();
-        assert_eq!(survivors.len(), 1, "exactly the backup survives");
+        copy_layout(source.path(), destination.path()).unwrap();
+
+        assert!(source.path().join("external-link").is_symlink());
         assert_eq!(
-            std::fs::read(survivors[0].join("board.kicad_pcb")).unwrap(),
-            b"original"
+            std::fs::read_to_string(external.path()).unwrap(),
+            "unchanged"
         );
+        assert_eq!(
+            std::fs::read_to_string(destination.path().join("layout.kicad_pro")).unwrap(),
+            "project"
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.path().join("layout.kicad_pcb")).unwrap(),
+            "board"
+        );
+        assert!(!destination.path().join("external-link").exists());
     }
 }

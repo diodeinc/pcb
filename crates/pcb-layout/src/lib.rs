@@ -748,13 +748,32 @@ pub fn process_layout(
         None => return Ok(None),
     };
 
+    generate_layout_in(
+        schematic,
+        &resolved_layout_dir,
+        options.sync_footprints,
+        diagnostics,
+    )
+    .map(Some)
+}
+
+/// Generate or update a layout in an explicit directory.
+///
+/// This supports callers that need layout synchronization against a disposable
+/// working copy instead of the directory declared by the schematic.
+pub fn generate_layout_in(
+    schematic: &Schematic,
+    layout_dir: &Path,
+    sync_footprints: bool,
+    diagnostics: &mut pcb_zen_core::Diagnostics,
+) -> Result<LayoutResult, LayoutError> {
+    let layout_dir = layout_dir.to_path_buf();
+
     let source_path = schematic
         .root_ref
         .as_ref()
         .map(|r| r.module.source_path.clone())
         .unwrap_or_default();
-
-    let layout_dir = resolved_layout_dir.clone();
 
     let kicad_files = utils::resolve_kicad_files(&layout_dir)?;
     let paths = utils::get_layout_paths_for_pcb(&layout_dir, kicad_files.kicad_pcb());
@@ -803,7 +822,7 @@ pub fn process_layout(
 
     ensure_board_compatible_with_installed_kicad(&paths.pcb)?;
 
-    if pcb_exists && options.sync_footprints {
+    if pcb_exists && sync_footprints {
         refresh_board_embedded_models(&paths.pcb, schematic)?;
     }
 
@@ -835,7 +854,7 @@ pub fn process_layout(
         extract_lens_module(paths.temp_dir.path()).context("Failed to extract lens module")?;
 
     // Run the Python sync script
-    run_sync_script(&paths, &lens_python_path, options.sync_footprints)?;
+    run_sync_script(&paths, &lens_python_path, sync_footprints)?;
     // A board the sync just created gets the flag now, so the designer's
     // first save in KiCad embeds the fonts.
     embed_board_fonts(&paths.pcb)?;
@@ -878,7 +897,7 @@ pub fn process_layout(
         }
     }
 
-    Ok(Some(LayoutResult {
+    Ok(LayoutResult {
         source_file: source_path,
         layout_dir,
         pcb_file: paths.pcb.clone(),
@@ -887,7 +906,7 @@ pub fn process_layout(
         log_file: paths.log,
         diagnostics_file: paths.diagnostics,
         created: !pcb_exists,
-    }))
+    })
 }
 
 /// Utility functions
