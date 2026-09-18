@@ -215,7 +215,7 @@ impl<'a> Writer<'a> {
 
     /// One additive code-4 outline primitive per polygon.
     fn write_outline_macro(&mut self, code: i32, outlines: &[Ring]) -> Result<()> {
-        write!(self.output, "%AMOUTLINE{code}*\n").unwrap();
+        writeln!(self.output, "%AMOUTLINE{code}*").unwrap();
         for outline in outlines {
             if outline.len() < 3 {
                 return Err(GerberError::InvalidStructure(

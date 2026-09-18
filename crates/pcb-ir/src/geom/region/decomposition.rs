@@ -105,9 +105,11 @@ fn coalesce(
     let id = |p: Vertex| vertices.binary_search(&(p.x, p.y)).map(|id| id as u32);
     let triangles: Vec<[u32; 3]> = mesh
         .indices
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| {
-            let [a, b, c] = [0, 1, 2].map(|k| mesh.points[t[k] as usize]);
+            let [a, b, c] = t.map(|index| mesh.points[index as usize]);
             ensure!(
                 cross(a, b, c) > 0,
                 "polygon triangulation produced a non-positive triangle"
