@@ -34,6 +34,8 @@ use pcb_ir::geom::{
     Affine2, BBox, LineCap, LineJoin, LinePattern, Paint, Point, Polarity, Span, StrokeStyle,
 };
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
+#[cfg(not(target_family = "wasm"))]
+use rayon::prelude::*;
 
 type IpcGeometryDocument = pcb_ir::dialects::ipc::Document<ipc2581::Symbol, LayerFunction>;
 
@@ -84,14 +86,14 @@ pub fn build_gerber_x2_files(
     } else {
         view
     };
-    let mut files = Vec::new();
     let plans = export_layer_plans(imported, &imported.layer_definitions);
     let has_profile_plan = plans
         .iter()
         .any(|plan| plan.role == GerberLayerRole::Profile);
     let part = gerber_part_for_ipc_view(imported, view)?;
 
-    for plan in &plans {
+    // Layers are independent of one another.
+    let export = |plan: &ExportLayerPlan<'_>| -> Result<Option<GerberX2File>> {
         let source_layer = plan.layer;
         let layer_name = imported.resolve(source_layer.name);
         let spec = GerberArtworkSpec {
@@ -121,19 +123,28 @@ pub fn build_gerber_x2_files(
         if matches!(plan.role, GerberLayerRole::Vcut | GerberLayerRole::Score)
             && artwork.layers[0].objects.is_empty()
         {
-            continue;
+            return Ok(None);
         }
         let layer = lower_artwork_layer(&artwork, resolution.accuracy)?;
         if plan.role == GerberLayerRole::Profile && layer.objects.is_empty() {
-            continue;
+            return Ok(None);
         }
         let contents = write_layer(&layer)?;
-        files.push(GerberX2File {
+        Ok(Some(GerberX2File {
             filename: plan.filename.clone(),
             layer,
             contents,
-        });
-    }
+        }))
+    };
+    #[cfg(not(target_family = "wasm"))]
+    let exported = plans.par_iter().map(export);
+    #[cfg(target_family = "wasm")]
+    let exported = plans.iter().map(export);
+    let mut files = exported
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
     if view == ArtworkScope::ArrayFlattened {
         files.extend(board_array_profile_gerber_files(
             imported,
