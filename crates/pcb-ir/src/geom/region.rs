@@ -20,6 +20,7 @@ mod widths;
 
 pub use booleans::PaintComposer;
 pub(crate) use booleans::difference_shapes;
+pub use construction::flatten_within;
 pub use decomposition::decompose_on_grid;
 pub use flattening::rings_to_contours;
 pub(crate) use gaps::TwoSidedResidualComponent;
