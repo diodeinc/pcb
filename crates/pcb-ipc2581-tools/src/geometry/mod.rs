@@ -12,6 +12,7 @@ use pcb_ir::dialects::ipc::{
     },
 };
 use pcb_ir::geom::Resolution;
+use pcb_ir::geom::dfm::BBoxIndex;
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
@@ -121,18 +122,21 @@ fn board_array_relief_features(
             crossing.push(cutout);
         }
     }
+    // Dense panels carry a pad envelope per hole per copper layer; indexed
+    // bounds keep pairing them with the crossing cutouts linear.
+    let crossing_index = BBoxIndex::new(crossing.iter().map(|cutout| cutout.bbox).collect());
     let envelopes = prepare_candidates(envelopes, resolution, |envelope| {
-        crossing
-            .iter()
-            .any(|cutout| envelope.bbox.intersects(cutout.bbox))
+        !crossing_index.query(envelope.bbox).is_empty()
     })?;
+    let envelope_index = BBoxIndex::new(envelopes.iter().map(|envelope| envelope.bbox).collect());
     // Every blocker joins one batched union: unioning them one at a time is
     // quadratic in the number of cutouts on dense panels.
     let mut blockers = Vec::new();
     for cutout in crossing {
         if plated_like(cutout.plating) {
             let mut matches = Vec::new();
-            for envelope in &envelopes {
+            for envelope in envelope_index.query(cutout.bbox) {
+                let envelope = &envelopes[envelope];
                 if envelope.matches_cutout(&cutout)? {
                     matches.push(envelope.region.clone());
                 }
