@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Split long Gerber arcs for CAM compatibility.
 - Reuse LSP validation results for default-input netlist updates instead of evaluating boards twice per edit.
 - Make `pcb dfm` check saved layouts without syncing; remove `--no-sync`.
 - Accept `.kicad_pcb` and `.kicad_pro` inputs in `pcb dfm`.

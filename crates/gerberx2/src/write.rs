@@ -528,13 +528,8 @@ impl<'a> Writer<'a> {
                 aperture,
             } => {
                 self.set_aperture(*aperture);
-                self.set_plot_mode(if *clockwise {
-                    PlotMode::ClockwiseArc
-                } else {
-                    PlotMode::CounterclockwiseArc
-                });
                 self.write_move(*start);
-                self.write_plot(*end, Some(*center_offset));
+                self.write_arc(*start, *end, *center_offset, *clockwise);
             }
             ObjectKind::Flash { at, aperture } => {
                 self.set_aperture(*aperture);
@@ -690,17 +685,12 @@ impl<'a> Writer<'a> {
                         self.write_plot(end, None);
                     }
                     ContourSegment::Arc {
+                        start,
                         end,
                         center_offset,
                         clockwise,
-                        ..
                     } => {
-                        self.set_plot_mode(if clockwise {
-                            PlotMode::ClockwiseArc
-                        } else {
-                            PlotMode::CounterclockwiseArc
-                        });
-                        self.write_plot(end, Some(center_offset));
+                        self.write_arc(start, end, center_offset, clockwise);
                     }
                 }
             }
@@ -743,6 +733,46 @@ impl<'a> Writer<'a> {
     fn write_move(&mut self, point: Point) {
         self.write_point(point);
         self.output.push_str("D02*\n");
+    }
+
+    /// Split circular arcs into nominal sweeps of at most 180 degrees before
+    /// coordinate rounding. Serialized sweeps can differ slightly; G75 allows
+    /// this. Splitting keeps long arcs away from coincident endpoints, which
+    /// G75 interprets as a full circle.
+    /// Equal subdivisions avoid leaving a tiny remainder for near-full circles.
+    fn write_arc(&mut self, start: Point, end: Point, offset: Point, clockwise: bool) {
+        use pcb_ir::geom::{Arc, Point as GeometryPoint, Segment};
+        let arc = Arc::new(
+            GeometryPoint::new(start.x, start.y),
+            GeometryPoint::new(end.x, end.y),
+            GeometryPoint::new(start.x + offset.x, start.y + offset.y),
+            clockwise,
+        );
+        let sweep = arc.sweep_radians();
+        let count = (sweep / std::f64::consts::PI).ceil().max(1.0) as usize;
+        self.set_plot_mode(if clockwise {
+            PlotMode::ClockwiseArc
+        } else {
+            PlotMode::CounterclockwiseArc
+        });
+        let mut center_offset = offset;
+        for index in 1..=count {
+            // Preserve the source endpoint exactly, including source rounding.
+            let next = if index == count {
+                end
+            } else {
+                let point = Segment::Arc(arc).point_at(index as f64 / count as f64);
+                Point {
+                    x: point.x,
+                    y: point.y,
+                }
+            };
+            self.write_plot(next, Some(center_offset));
+            center_offset = Point {
+                x: arc.center.x - next.x,
+                y: arc.center.y - next.y,
+            };
+        }
     }
 
     fn write_plot(&mut self, point: Point, center_offset: Option<Point>) {
