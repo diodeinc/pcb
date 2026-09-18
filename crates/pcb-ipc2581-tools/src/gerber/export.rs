@@ -1257,90 +1257,53 @@ fn standard_flash_aperture(
         return None;
     }
 
-    if let Some(aperture) = exact_flash_aperture(primitive, feature.transform) {
-        let at = feature.center;
-        let bbox = flash_bbox(at, &aperture);
-        return Some((aperture, Affine2::translation(at), bbox));
-    }
-
-    // Every other solid catalogue shape flashes through a contour aperture
-    // shared per shape, keeping repeated pads one definition each instead of
-    // re-painting a region at every placement.
-    let shape = pcb_ir::dialects::ipc::contour_flash_aperture(doc, feature)?;
-    Some((Aperture::solid(shape), feature.transform, feature.bbox))
-}
-
-/// The catalogue primitives Gerber expresses as exact standard apertures.
-fn exact_flash_aperture(primitive: &StandardPrimitive, transform: Affine2) -> Option<Aperture> {
-    let aperture = match primitive {
-        StandardPrimitive::Circle(circle) => {
-            let scale = uniform_scale(transform)?;
-            Aperture::solid(ApertureShape::Circle {
-                diameter: circle.shape.diameter * scale,
-            })
-        }
-        StandardPrimitive::RectCenter(rect) => {
-            let (width, height) =
-                axis_aligned_size(transform, rect.shape.size.width, rect.shape.size.height)?;
-            Aperture::solid(ApertureShape::Rectangle { width, height })
-        }
-        StandardPrimitive::Oval(oval) => {
-            let (width, height) =
-                axis_aligned_size(transform, oval.shape.size.width, oval.shape.size.height)?;
-            Aperture::solid(ApertureShape::Obround { width, height })
-        }
-        StandardPrimitive::RectRound(rect) => {
-            let corners = [
-                rect.shape.upper_right,
-                rect.shape.upper_left,
-                rect.shape.lower_right,
-                rect.shape.lower_left,
-            ];
-            if corners.iter().any(|rounded| !rounded) {
-                return None;
-            }
-            let (width, height) =
-                axis_aligned_size(transform, rect.shape.size.width, rect.shape.size.height)?;
-            let radius = rect.shape.radius * uniform_scale(transform)?;
-            if radius <= 0.0 {
-                Aperture::solid(ApertureShape::Rectangle { width, height })
-            } else {
-                Aperture::solid(ApertureShape::RoundRect {
-                    width,
-                    height,
-                    radius,
-                })
-            }
-        }
-        StandardPrimitive::Hexagon(hexagon) => {
-            regular_polygon_aperture(6, hexagon.shape.point_to_point, transform)?
-        }
-        StandardPrimitive::Octagon(octagon) => {
-            regular_polygon_aperture(8, octagon.shape.point_to_point, transform)?
-        }
-        _ => return None,
+    // Catalogue shapes Gerber knows flash through their own aperture; every
+    // other solid shape flashes through a contour aperture shared per shape,
+    // keeping repeated pads one definition each instead of re-painting a
+    // region at every placement. The Gerber lowering bakes the placement.
+    let aperture = match catalogue_aperture(primitive) {
+        Some(aperture) => aperture,
+        None => Aperture::solid(pcb_ir::dialects::ipc::contour_flash_aperture(doc, feature)?),
     };
-    Some(aperture)
+    Some((aperture, feature.transform, feature.bbox))
 }
 
-/// IPC hexagons and octagons place their first vertex pointing down (-90°);
-/// a rigid rotation folds into the Gerber polygon aperture's own rotation,
-/// while mirrored placements keep the contour fallback.
-fn regular_polygon_aperture(
-    vertices: u32,
-    point_to_point: f64,
-    transform: Affine2,
-) -> Option<Aperture> {
-    let scale = uniform_scale(transform)?;
-    let determinant = transform.m00 * transform.m11 - transform.m01 * transform.m10;
-    if determinant <= 0.0 {
-        return None;
-    }
-    let rotation_degrees = transform.m10.atan2(transform.m00).to_degrees() - 90.0;
-    Some(Aperture::solid(ApertureShape::Polygon {
-        diameter: point_to_point * scale,
+/// The catalogue primitives the artwork dialect carries as exact apertures.
+fn catalogue_aperture(primitive: &StandardPrimitive) -> Option<Aperture> {
+    // IPC hexagons and octagons place their first vertex pointing down.
+    let polygon = |vertices, point_to_point| ApertureShape::Polygon {
+        diameter: point_to_point,
         vertices,
-        rotation_degrees,
+        rotation_degrees: -90.0,
+    };
+    Some(Aperture::solid(match primitive {
+        StandardPrimitive::Circle(circle) => ApertureShape::Circle {
+            diameter: circle.shape.diameter,
+        },
+        StandardPrimitive::RectCenter(rect) => ApertureShape::Rectangle {
+            width: rect.shape.size.width,
+            height: rect.shape.size.height,
+        },
+        StandardPrimitive::Oval(oval) => ApertureShape::Obround {
+            width: oval.shape.size.width,
+            height: oval.shape.size.height,
+        },
+        StandardPrimitive::RectRound(rect)
+            if rect.shape.upper_right
+                && rect.shape.upper_left
+                && rect.shape.lower_right
+                && rect.shape.lower_left
+                && rect.shape.radius > 0.0 =>
+        {
+            ApertureShape::RoundRect {
+                width: rect.shape.size.width,
+                height: rect.shape.size.height,
+                radius: rect.shape.radius,
+            }
+        }
+        StandardPrimitive::Hexagon(hexagon) => polygon(6, hexagon.shape.point_to_point),
+        StandardPrimitive::Octagon(octagon) => polygon(8, octagon.shape.point_to_point),
+        _ => return None,
     }))
 }
 
@@ -1394,47 +1357,6 @@ fn standard_primitive_fill_property(primitive: &StandardPrimitive) -> Option<Fil
         StandardPrimitive::Triangle(styled) => styled.fill_property,
         StandardPrimitive::Moire(_) | StandardPrimitive::Contour(_) => None,
     }
-}
-
-fn uniform_scale(transform: Affine2) -> Option<f64> {
-    let sx = transform.m00.hypot(transform.m10);
-    let sy = transform.m01.hypot(transform.m11);
-    let dot = transform.m00 * transform.m01 + transform.m10 * transform.m11;
-    if sx <= GEOMETRY_EPSILON
-        || sy <= GEOMETRY_EPSILON
-        || !nearly_equal(sx, sy)
-        || dot.abs() > GEOMETRY_EPSILON * sx.max(sy).max(1.0)
-    {
-        return None;
-    }
-    Some((sx + sy) / 2.0)
-}
-
-fn axis_aligned_size(transform: Affine2, width: f64, height: f64) -> Option<(f64, f64)> {
-    let sx = transform.m00.hypot(transform.m10);
-    let sy = transform.m01.hypot(transform.m11);
-    if sx <= GEOMETRY_EPSILON || sy <= GEOMETRY_EPSILON {
-        return None;
-    }
-
-    if transform.m10.abs() <= GEOMETRY_EPSILON && transform.m01.abs() <= GEOMETRY_EPSILON {
-        return Some((width * sx, height * sy));
-    }
-    if transform.m00.abs() <= GEOMETRY_EPSILON && transform.m11.abs() <= GEOMETRY_EPSILON {
-        return Some((height * sy, width * sx));
-    }
-    None
-}
-
-fn flash_bbox(at: Point, aperture: &Aperture) -> BBox {
-    let local = aperture.bbox();
-    BBox::new(at + local.min, at + local.max)
-}
-
-const GEOMETRY_EPSILON: f64 = 1e-9;
-
-fn nearly_equal(left: f64, right: f64) -> bool {
-    (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
 }
 
 fn object_attributes(
