@@ -35,8 +35,28 @@ pub(crate) fn compute_truncated_path_patches(
             continue;
         }
         let path = instance_ref.instance_path.join(".");
-        let truncated = path.rsplit(':').next().unwrap_or(&path).to_string();
-        candidates.entry(truncated).or_default().insert(path);
+        let mut record_alias = |old_path: &str| {
+            let truncated = old_path.rsplit(':').next().unwrap_or(old_path).to_string();
+            candidates
+                .entry(truncated)
+                .or_default()
+                .insert(path.clone());
+        };
+        record_alias(&path);
+        for (old_prefix, new_prefix) in &schematic.moved_paths {
+            let Some(suffix) = path
+                .strip_prefix(new_prefix)
+                .filter(|suffix| suffix.is_empty() || suffix.starts_with('.'))
+            else {
+                continue;
+            };
+            let old_path = format!("{old_prefix}{suffix}");
+            if apply_longest_prefix_match(&old_path, &schematic.moved_paths).as_deref()
+                == Some(&path)
+            {
+                record_alias(&old_path);
+            }
+        }
     }
 
     let mut renames = HashMap::new();
