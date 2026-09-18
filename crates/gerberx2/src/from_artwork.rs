@@ -5,7 +5,7 @@
 //! can be emitted as a Gerber file, regardless of which source dialect
 //! produced it.
 
-use pcb_ir::geom::{AccuracyError, GeometryAccuracy, Resolution};
+use pcb_ir::geom::{AccuracyError, GeometryAccuracy};
 use std::collections::HashMap;
 
 use crate::{
@@ -515,11 +515,11 @@ struct ApertureKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ApertureTemplateKey {
-    /// A source aperture under one exact linear basis. The layer is immutable
+    /// A source aperture under one linear basis. The layer is immutable
     /// and the accuracy fixed for this table, so a hit skips all preparation.
     Source {
         aperture: u32,
-        basis: [u64; 4],
+        basis: [i64; 4],
     },
     Circle {
         diameter_nm: i64,
@@ -566,9 +566,10 @@ impl ApertureTable {
         let key = ApertureKey {
             template: ApertureTemplateKey::Source {
                 aperture: source,
-                // Adding zero folds `-0.0` into `0.0`.
+                // Composed placements of one orientation differ in their
+                // last bits; a nano-scale basis grid reunites them.
                 basis: [basis.m00, basis.m01, basis.m10, basis.m11]
-                    .map(|value| (value + 0.0).to_bits()),
+                    .map(|value| (value * 1e9).round() as i64),
             },
             function: function.to_vec(),
         };
@@ -764,11 +765,12 @@ fn prepare_on_grid(
     fill_rule: FillRule,
     accuracy: GeometryAccuracy,
 ) -> Result<Vec<Ring>> {
-    let region =
-        region::ContourSet::from_contours(payloads, fill_rule, Resolution::new(0.0, accuracy))?;
-    accuracy.check(region.uncertainty_mm + GERBER_GEOMETRY_GRID_MM / std::f64::consts::SQRT_2)?;
+    // The grid overlay is the only regularization: it resolves the fill rule
+    // on the coordinates the file will actually carry.
+    let (rings, uncertainty_mm) = region::flatten_within(payloads, accuracy)?;
+    accuracy.check(uncertainty_mm + GERBER_GEOMETRY_GRID_MM / std::f64::consts::SQRT_2)?;
     region::decompose_on_grid(
-        region.rings,
+        rings,
         fill_rule,
         GERBER_GEOMETRY_GRID_MM,
         GERBER_OUTLINE_MAX_VERTICES,
@@ -868,7 +870,7 @@ mod tests {
         Layer as IrArtworkDocument, Object as ArtworkObject, PaintOrder,
     };
     use pcb_ir::dialects::{LayerRole, Side};
-    use pcb_ir::geom::{BBox, Mirror, Paint, Span};
+    use pcb_ir::geom::{BBox, Mirror, Paint, Resolution, Span};
 
     fn assert_strict_simple_rings(rings: &[Ring]) {
         for ring in rings {
@@ -1025,7 +1027,7 @@ mod tests {
         assert!(!table.by_key.contains_key(&ApertureKey {
             template: ApertureTemplateKey::Source {
                 aperture: invalid,
-                basis: [1.0, 0.0, 0.0, 1.0].map(f64::to_bits),
+                basis: [1_000_000_000, 0, 0, 1_000_000_000],
             },
             function: Vec::new(),
         }));
