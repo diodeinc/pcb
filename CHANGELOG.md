@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.55] - 2026-09-18
+
 ### Fixed
 
 - Emit spec-compliant horizontal cut-ins for Gerber region holes.
@@ -1971,7 +1973,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.54...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.55...HEAD
+[0.4.55]: https://github.com/diodeinc/pcb/compare/v0.4.54...v0.4.55
 [0.4.54]: https://github.com/diodeinc/pcb/compare/v0.4.53...v0.4.54
 [0.4.53]: https://github.com/diodeinc/pcb/compare/v0.4.52...v0.4.53
 [0.4.52]: https://github.com/diodeinc/pcb/compare/v0.4.51...v0.4.52
