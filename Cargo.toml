@@ -152,6 +152,7 @@ comfy-table = { version = "8", features = ["custom_styling"] }
 url = "2.5"
 ignore = "0.4.33"
 i_overlay = "8.1"
+i_triangle = "0.48"
 boostvoronoi = "0.12.1"
 sha2 = "0.11"
 semver = { version = "1.0", features = ["serde"] }
@@ -183,6 +184,8 @@ num-complex = "0.4"
 [profile.dev.package.pcb-ir]
 opt-level = 2
 [profile.dev.package.i_overlay]
+opt-level = 2
+[profile.dev.package.i_triangle]
 opt-level = 2
 [profile.dev.package.i_float]
 opt-level = 2

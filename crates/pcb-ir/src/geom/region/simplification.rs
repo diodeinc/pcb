@@ -8,6 +8,7 @@ use i_overlay::core::overlay::IntOverlayOptions;
 use i_overlay::core::simplify::Simplify;
 use i_overlay::float::simplify::SimplifyShape;
 use i_overlay::i_float::int::point::IntPoint;
+use i_overlay::i_shape::int::shape::IntShapes;
 
 /// Regularize rings under the given fill rule into non-overlapping shapes.
 pub(crate) fn simplify_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring> {
@@ -108,17 +109,7 @@ const MAX_OPEN_GROUPS: usize = 256;
 /// `grid`. Geometry that collapses during coordinate quantization is not
 /// representable on that output grid.
 pub fn simplify_shapes_on_grid(rings: Vec<Ring>, fill_rule: FillRule, grid: f64) -> Vec<Shape> {
-    let rings = rings
-        .into_iter()
-        .map(|ring| {
-            ring.into_iter()
-                .map(|[x, y]| IntPoint::new((x / grid).round() as i64, (y / grid).round() as i64))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    rings
-        .as_slice()
-        .simplify(overlay_fill_rule(fill_rule), IntOverlayOptions::default())
+    integer_shapes_on_grid(rings, fill_rule, grid, IntOverlayOptions::default())
         .into_iter()
         .map(|shape| {
             shape
@@ -131,6 +122,25 @@ pub fn simplify_shapes_on_grid(rings: Vec<Ring>, fill_rule: FillRule, grid: f64)
                 .collect::<Shape>()
         })
         .collect()
+}
+
+pub(super) fn integer_shapes_on_grid(
+    rings: Vec<Ring>,
+    fill_rule: FillRule,
+    grid: f64,
+    options: IntOverlayOptions<u128>,
+) -> IntShapes<i64> {
+    let rings = rings
+        .into_iter()
+        .map(|ring| {
+            ring.into_iter()
+                .map(|[x, y]| IntPoint::new((x / grid).round() as i64, (y / grid).round() as i64))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    rings
+        .as_slice()
+        .simplify(overlay_fill_rule(fill_rule), options)
 }
 
 /// Decimate rings so the region only shrinks: the result covers no point the

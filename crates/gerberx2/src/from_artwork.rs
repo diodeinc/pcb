@@ -20,6 +20,7 @@ use pcb_ir::geom::region::{self, Ring};
 use pcb_ir::geom::{Affine2, FillRule, Point, Polarity, Segment, StrokePatternMark};
 
 const GERBER_GEOMETRY_GRID_MM: f64 = 0.001;
+const GERBER_OUTLINE_MAX_VERTICES: usize = 5000;
 
 /// Gerber file-level attributes carried as artwork layer metadata.
 #[derive(Debug, Clone, Default)]
@@ -665,21 +666,7 @@ impl ApertureTable {
         let hole_diameter = (aperture.hole_diameter > 0.0).then_some(aperture.hole_diameter);
         match aperture.shape {
             ApertureShape::Contour { outline, fill_rule } => {
-                // Resolve the buffer's raw loops under the aperture's fill
-                // rule so winding is canonical: each shape is an outer ring
-                // followed by its holes, wound opposite. Larger shapes paint
-                // first so an island inside a hole survives the hole's erase.
-                let mut shapes =
-                    prepare_on_grid(std::slice::from_ref(&outline), fill_rule, accuracy)?;
-                shapes.sort_by(|a, b| {
-                    let area = |shape: &region::Shape| {
-                        shape
-                            .first()
-                            .map_or(0.0, |ring| region::ring_signed_area(ring).abs())
-                    };
-                    area(b).total_cmp(&area(a))
-                });
-                let rings = shapes.into_iter().flatten().collect::<Vec<_>>();
+                let rings = prepare_on_grid(std::slice::from_ref(&outline), fill_rule, accuracy)?;
                 if rings.is_empty() {
                     return Err(GerberError::InvalidStructure(
                         "cannot export an empty contour aperture".to_string(),
@@ -850,8 +837,7 @@ impl ApertureTable {
 
     /// Define a one-off macro aperture filling the given closed outline,
     /// expressed relative to the flash origin.
-    /// One code-4 outline primitive per ring: material rings expose, hole
-    /// rings (negative winding) erase what earlier primitives painted.
+    /// One additive code-4 outline primitive per decomposed material ring.
     fn outline_macro(&mut self, rings: &[Ring], function: &[String]) -> Result<i32> {
         let attributes = (!function.is_empty())
             .then(|| AttributeValue::new(".AperFunction", function.iter().cloned()))
@@ -874,13 +860,8 @@ impl ApertureTable {
                         .to_string(),
                 ));
             }
-            let exposure = if region::ring_signed_area(outline) < 0.0 {
-                0.0
-            } else {
-                1.0
-            };
             let mut parameters = Vec::with_capacity(2 * outline.len() + 5);
-            parameters.push(WriterMacroExpression::Number(exposure));
+            parameters.push(WriterMacroExpression::Number(1.0));
             parameters.push(WriterMacroExpression::Number(outline.len() as f64));
             for [x, y] in outline.iter().chain(std::iter::once(&outline[0])) {
                 parameters.push(WriterMacroExpression::Number(*x));
@@ -1111,15 +1092,17 @@ fn prepare_on_grid(
     payloads: &[ContourBuf],
     fill_rule: FillRule,
     accuracy: GeometryAccuracy,
-) -> Result<Vec<region::Shape>> {
+) -> Result<Vec<Ring>> {
     let region =
         region::ContourSet::from_contours(payloads, fill_rule, Resolution::new(0.0, accuracy))?;
     accuracy.check(region.uncertainty_mm + GERBER_GEOMETRY_GRID_MM / std::f64::consts::SQRT_2)?;
-    Ok(region::simplify_shapes_on_grid(
+    region::decompose_on_grid(
         region.rings,
         fill_rule,
         GERBER_GEOMETRY_GRID_MM,
-    ))
+        GERBER_OUTLINE_MAX_VERTICES,
+    )
+    .map_err(|error| GerberError::InvalidStructure(error.to_string()))
 }
 
 fn lower_region_image_contours(
@@ -1127,9 +1110,9 @@ fn lower_region_image_contours(
     fill_rule: FillRule,
     accuracy: GeometryAccuracy,
 ) -> Result<Vec<Contour>> {
-    prepare_on_grid(payloads, fill_rule, accuracy)?
-        .into_iter()
-        .filter_map(region_shape_contour)
+    region::rings_to_contours(prepare_on_grid(payloads, fill_rule, accuracy)?)
+        .iter()
+        .map(lower_region_contour)
         .collect::<Result<Vec<_>>>()
 }
 
@@ -1162,19 +1145,6 @@ fn lower_region_contour(contour: &ContourBuf) -> Result<Contour> {
             })
             .collect(),
     })
-}
-
-fn region_shape_contour(shape: Vec<Ring>) -> Option<Result<Contour>> {
-    let mut merged = pcb_ir::geom::bridge::bridge_shape(shape);
-    merged.dedup();
-    if merged.first() == merged.last() {
-        merged.pop();
-    }
-    if merged.len() < 3 {
-        return None;
-    }
-    let payload = region::rings_to_contours(vec![merged]).pop()?;
-    Some(lower_region_contour(&payload))
 }
 
 /// Decode a contour into the line and circular-arc segments Gerber can draw,
@@ -1260,6 +1230,62 @@ mod tests {
     };
     use pcb_ir::dialects::{LayerRole, Side};
     use pcb_ir::geom::{BBox, Mirror, Paint, Span};
+
+    fn assert_strict_simple_rings(rings: &[Ring]) {
+        for ring in rings {
+            assert!(ring.len() >= 3);
+            for (index, point) in ring.iter().enumerate() {
+                assert!(!ring[..index].contains(point), "ring repeats a coordinate");
+            }
+            for index in 0..ring.len() {
+                assert_ne!(ring[index], ring[(index + 1) % ring.len()], "zero edge");
+            }
+            // The small regression fixtures use integer-grid straight edges;
+            // a simple ring may only intersect an adjacent edge at its endpoint.
+            for a in 0..ring.len() {
+                for b in (a + 1)..ring.len() {
+                    if b == a + 1 || (a == 0 && b + 1 == ring.len()) {
+                        continue;
+                    }
+                    let [a0, a1] = [ring[a], ring[(a + 1) % ring.len()]];
+                    let [b0, b1] = [ring[b], ring[(b + 1) % ring.len()]];
+                    let orient = |p: [f64; 2], q: [f64; 2], r: [f64; 2]| {
+                        (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+                    };
+                    let on_segment = |p: [f64; 2], q: [f64; 2], r: [f64; 2]| {
+                        orient(p, q, r) == 0.0
+                            && r[0] >= p[0].min(q[0])
+                            && r[0] <= p[0].max(q[0])
+                            && r[1] >= p[1].min(q[1])
+                            && r[1] <= p[1].max(q[1])
+                    };
+                    let [o1, o2, o3, o4] = [
+                        orient(a0, a1, b0),
+                        orient(a0, a1, b1),
+                        orient(b0, b1, a0),
+                        orient(b0, b1, a1),
+                    ];
+                    let crosses = (o1 * o2 < 0.0 && o3 * o4 < 0.0)
+                        || on_segment(a0, a1, b0)
+                        || on_segment(a0, a1, b1)
+                        || on_segment(b0, b1, a0)
+                        || on_segment(b0, b1, a1);
+                    assert!(!crosses, "non-adjacent edges intersect");
+                }
+            }
+        }
+    }
+
+    fn parsed_area(layer: &GerberLayer) -> f64 {
+        let text = crate::write_layer(layer).expect("serialize Gerber");
+        assert_external_parser_accepts(&text);
+        let parsed = crate::GerberX2::parse(&text).expect("parse Gerber");
+        let geometry = crate::geometry::extract_document(&parsed, GeometryAccuracy::default())
+            .expect("extract Gerber geometry");
+        pcb_ir::dialects::artwork::compare::summarize(&geometry, Resolution::default())
+            .unwrap()
+            .area_mm2
+    }
 
     #[test]
     fn grid_preparation_rejects_subgrid_budgets() {
@@ -1815,7 +1841,7 @@ mod tests {
     }
 
     #[test]
-    fn lowers_compound_region_holes_as_local_cut_ins() {
+    fn lowers_compound_region_holes_as_strict_additive_contours() {
         let accuracy = GeometryAccuracy::default();
 
         let mut artwork = ArtworkDocument::new();
@@ -1849,35 +1875,100 @@ mod tests {
 
         let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower artwork");
 
-        assert_eq!(gerber.objects.len(), 1);
-        assert_eq!(gerber.objects[0].polarity, Polarity::Dark);
-        let ObjectKind::Region { contours } = &gerber.objects[0].kind else {
-            panic!("expected local cut-in region");
-        };
-        assert_eq!(contours.len(), 1);
-        assert_eq!(
-            contours[0].segments.len(),
-            11,
-            "split the outer edge and connect the hole with two horizontal cut-in segments"
-        );
+        assert!(!gerber.objects.is_empty());
+        assert!(gerber.objects.iter().all(|object| {
+            object.polarity == Polarity::Dark
+                && matches!(&object.kind, ObjectKind::Region { contours } if contours.len() == 1)
+        }));
         let contents = crate::write_layer(&gerber).unwrap();
+        assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).unwrap();
-        let ObjectKind::Region { contours } = &parsed.objects()[0].kind else {
-            panic!("expected region");
-        };
-        for (start, end) in [(0.0, 2.0), (2.0, 0.0)] {
-            assert!(contours[0].segments.contains(&ContourSegment::Line {
-                start: GerberPoint { x: start, y: 2.0 },
-                end: GerberPoint { x: end, y: 2.0 },
-            }));
+        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary =
+            pcb_ir::dialects::artwork::compare::summarize(&geometry, Resolution::default())
+                .unwrap();
+        assert!(
+            (summary.area_mm2 - 64.0).abs() < 0.001,
+            "area was {}",
+            summary.area_mm2
+        );
+    }
+
+    #[test]
+    fn pinched_even_odd_hole_snaps_to_simple_exact_contours() {
+        for (offset, reflected) in [
+            (0.0, false),
+            (0.0, true),
+            (0.00025, false),
+            (0.00075, false),
+            (0.00025, true),
+        ] {
+            let map =
+                |x: f64, y: f64| Point::new((if reflected { -x } else { x }) + offset, y + offset);
+            let payloads = [
+                polygon_payload([
+                    map(-5.0, -5.0),
+                    map(5.0, -5.0),
+                    map(5.0, 5.0),
+                    map(-5.0, 5.0),
+                ]),
+                polygon_payload([
+                    map(-2.0, -2.0),
+                    map(2.0, -2.0),
+                    map(0.0004, 0.0),
+                    map(2.0, 2.0),
+                    map(-2.0, 2.0),
+                    map(-0.0004, 0.0),
+                ]),
+            ];
+            let rings = prepare_on_grid(&payloads, FillRule::EvenOdd, GeometryAccuracy::default())
+                .expect("decompose pinched hole");
+            assert_strict_simple_rings(&rings);
+            let snapped = |point: Point| {
+                [
+                    (point.x / GERBER_GEOMETRY_GRID_MM).round() * GERBER_GEOMETRY_GRID_MM,
+                    (point.y / GERBER_GEOMETRY_GRID_MM).round() * GERBER_GEOMETRY_GRID_MM,
+                ]
+            };
+            let snapped_hole = [
+                map(-2.0, -2.0),
+                map(2.0, -2.0),
+                map(0.0004, 0.0),
+                map(2.0, 2.0),
+                map(-2.0, 2.0),
+                map(-0.0004, 0.0),
+            ]
+            .into_iter()
+            .map(snapped)
+            .collect();
+            let expected_area = 100.0 - region::ring_signed_area(&snapped_hole).abs();
+            let area: f64 = rings
+                .iter()
+                .map(|ring| region::ring_signed_area(ring).abs())
+                .sum();
+            assert!(
+                (area - expected_area).abs() < 1e-12,
+                "snap must preserve the analytic material area: {area} versus {expected_area}"
+            );
+            let contours = rings
+                .into_iter()
+                .map(|ring| {
+                    lower_region_contour(&region::rings_to_contours(vec![ring]).pop().unwrap())
+                        .unwrap()
+                })
+                .collect();
+            let layer = GerberLayer {
+                objects: vec![WriterObject::dark(ObjectKind::Region { contours })],
+                ..GerberLayer::default()
+            };
+            assert!((parsed_area(&layer) - expected_area).abs() < 1e-9);
         }
     }
 
     #[test]
-    fn horizontal_cut_ins_survive_grid_and_file_rounding() {
-        let accuracy = GeometryAccuracy::default();
-        for (source_y, grid_y) in [(3.0004, 3.0), (3.0006, 3.001)] {
-            let payloads = vec![
+    fn horizontal_cut_in_rounding_fixtures_emit_no_bridge_coordinates() {
+        for source_y in [3.0004, 3.0006] {
+            let payloads = [
                 polygon_payload([
                     Point::new(0.0, 0.0),
                     Point::new(23.0, 0.0),
@@ -1890,76 +1981,41 @@ mod tests {
                     Point::new(12.0, 9.0),
                 ]),
             ];
-            let contours =
-                lower_region_image_contours(&payloads, FillRule::EvenOdd, accuracy).unwrap();
+            let rings =
+                prepare_on_grid(&payloads, FillRule::EvenOdd, GeometryAccuracy::default()).unwrap();
+            assert_strict_simple_rings(&rings);
+            let contours = lower_region_image_contours(
+                &payloads,
+                FillRule::EvenOdd,
+                GeometryAccuracy::default(),
+            )
+            .unwrap();
+            for contour in &contours {
+                let edges: Vec<_> = contour
+                    .segments
+                    .iter()
+                    .map(|segment| match segment {
+                        ContourSegment::Line { start, end } => (*start, *end),
+                        _ => panic!("expected snapped lines"),
+                    })
+                    .collect();
+                assert!(
+                    !edges.iter().any(|&(a, b)| edges.contains(&(b, a))),
+                    "decomposition must not insert a doubled bridge"
+                );
+            }
             let layer = GerberLayer {
                 objects: vec![WriterObject::dark(ObjectKind::Region { contours })],
                 ..GerberLayer::default()
             };
-            let contents = crate::write_layer(&layer).unwrap();
-            let parsed = crate::GerberX2::parse(&contents).unwrap();
-            let ObjectKind::Region { contours } = &parsed.objects()[0].kind else {
-                panic!("expected region");
-            };
-            let edges: Vec<_> = contours[0]
-                .segments
-                .iter()
-                .map(|segment| {
-                    let ContourSegment::Line { start, end } = segment else {
-                        panic!("expected line")
-                    };
-                    assert_ne!(start, end);
-                    (*start, *end)
-                })
-                .collect();
-            let cut_ins: Vec<_> = edges
-                .iter()
-                .filter(|&&(a, b)| edges.contains(&(b, a)))
-                .collect();
-            assert_eq!(cut_ins.len(), 2);
-            // The sloped wall intersection needs a second rounding, from
-            // the geometry grid to the file's six decimal places.
-            let wall_x = (7.0_f64 * grid_y / 17.0 * 1e6).round() / 1e6;
-            assert!(cut_ins.contains(&&(
-                GerberPoint {
-                    x: wall_x,
-                    y: grid_y
-                },
-                GerberPoint { x: 9.0, y: grid_y }
-            )));
-            let expected = region::ContourSet::from_contours(
-                &payloads,
-                FillRule::EvenOdd,
-                Resolution::default(),
-            )
-            .unwrap();
-            let ring = edges.iter().map(|(p, _)| [p.x, p.y]).collect();
-            let actual = region::ContourSet::from_rings(
-                vec![ring],
-                FillRule::NonZero,
-                Resolution::default(),
-            )
-            .unwrap();
-            let difference = expected.difference(&actual).unwrap().area()
-                + actual.difference(&expected).unwrap().area();
-            assert!(
-                difference < 0.003,
-                "rounding changed filled geometry by {difference}"
-            );
+            parsed_area(&layer);
         }
     }
 
     #[test]
-    fn reject_cut_ins_that_collapse_at_file_precision() {
-        // Both inputs are on the geometry grid, but their distances to the
-        // sloped wall are about 0.33 nm and 1 nm, respectively.
-        for (top_y, representable, dx) in [
-            (3.001, false, 0.0),
-            (3.003, true, 0.0),
-            (3.001, false, -0.001),
-            (3.003, true, -0.001),
-        ] {
-            let payloads = vec![
+    fn formerly_collapsing_cut_in_fixtures_are_all_serializable() {
+        for (top_y, dx) in [(3.001, 0.0), (3.003, 0.0), (3.001, -0.001), (3.003, -0.001)] {
+            let payloads = [
                 polygon_payload([
                     Point::new(dx, 0.0),
                     Point::new(10.0 + dx, 0.0),
@@ -1972,6 +2028,9 @@ mod tests {
                     Point::new(2.0 + dx, 3.0),
                 ]),
             ];
+            let rings =
+                prepare_on_grid(&payloads, FillRule::EvenOdd, GeometryAccuracy::default()).unwrap();
+            assert_strict_simple_rings(&rings);
             let contours = lower_region_image_contours(
                 &payloads,
                 FillRule::EvenOdd,
@@ -1982,29 +2041,146 @@ mod tests {
                 objects: vec![WriterObject::dark(ObjectKind::Region { contours })],
                 ..GerberLayer::default()
             };
-            let result = crate::write_layer(&layer);
-            if !representable {
-                assert!(
-                    result
-                        .unwrap_err()
-                        .to_string()
-                        .contains("collapses at output precision")
-                );
-                continue;
-            }
-            let parsed = crate::GerberX2::parse(&result.unwrap()).unwrap();
-            let ObjectKind::Region { contours } = &parsed.objects()[0].kind else {
-                panic!("expected region");
-            };
-            for contour in contours {
-                for segment in &contour.segments {
-                    let ContourSegment::Line { start, end } = segment else {
-                        panic!("expected line");
-                    };
-                    assert_ne!(start, end);
-                }
-            }
+            parsed_area(&layer);
         }
+    }
+
+    #[test]
+    fn compound_contour_aperture_is_additive_for_both_polarities() {
+        for polarity in [Polarity::Dark, Polarity::Clear] {
+            let mut artwork = ArtworkDocument::new();
+            let layer = artwork.push_layer(IrArtworkDocument {
+                name: "F.Cu".into(),
+                role: LayerRole::Copper,
+                side: Side::Top,
+                objects: Span::EMPTY,
+                bbox: BBox::empty(),
+                meta: LayerAttributes::default(),
+            });
+            let base = artwork.push_path(
+                Paint::Fill {
+                    rule: FillRule::NonZero,
+                },
+                vec![rect_payload(-10.0, -10.0, 10.0, 10.0)],
+            );
+            artwork.push_object(
+                layer,
+                ArtworkObject {
+                    polarity: Polarity::Dark,
+                    order: Default::default(),
+                    geometry: ArtworkGeometry::Region { path: base },
+                    bbox: artwork.path_bbox(base),
+                    meta: ObjectAttributes::default(),
+                },
+            );
+            let loops = [
+                (-5.0, -5.0, 5.0, 5.0),
+                (-3.0, -3.0, 3.0, 3.0),
+                (-1.0, -1.0, 1.0, 1.0),
+            ];
+            let mut contour = rect_payload(loops[0].0, loops[0].1, loops[0].2, loops[0].3);
+            for &(x0, y0, x1, y1) in &loops[1..] {
+                let ring = rect_payload(x0, y0, x1, y1);
+                contour.cmds.extend(ring.cmds);
+            }
+            let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
+                outline: contour,
+                fill_rule: FillRule::EvenOdd,
+            }));
+            artwork.push_object(
+                layer,
+                ArtworkObject {
+                    polarity,
+                    order: PaintOrder {
+                        stage: PaintStage::Overlay,
+                    },
+                    geometry: ArtworkGeometry::Flash {
+                        aperture,
+                        transform: Affine2::placement(Point::new(2.0, 1.0), 90.0, Mirror::Y, 1.0),
+                    },
+                    bbox: BBox::empty(),
+                    meta: ObjectAttributes::default(),
+                },
+            );
+            let gerber = lower_artwork_layer(&artwork, GeometryAccuracy::default()).unwrap();
+            assert!(gerber.aperture_macros.iter().flat_map(|m| &m.primitives)
+                .all(|p| matches!(p, WriterMacroPrimitive::Shape { code: 4, parameters } if matches!(parameters.first(), Some(WriterMacroExpression::Number(1.0))))));
+            let expected = if polarity == Polarity::Dark {
+                400.0
+            } else {
+                332.0
+            };
+            assert!((parsed_area(&gerber) - expected).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn oversized_non_collinear_outline_splits_code4_primitives() {
+        let points: Vec<_> = (0..6001)
+            .map(|i| {
+                let angle = i as f64 * std::f64::consts::TAU / 6001.0;
+                let radius = if i % 2 == 0 { 10.0 } else { 9.8 };
+                Point::new(
+                    (radius * angle.cos() * 1000.0).round() / 1000.0,
+                    (radius * angle.sin() * 1000.0).round() / 1000.0,
+                )
+            })
+            .collect();
+        let outline = polygon_payload(points);
+        let expected = region::ContourSet::from_contours(
+            std::slice::from_ref(&outline),
+            FillRule::EvenOdd,
+            Resolution::default(),
+        )
+        .unwrap()
+        .area();
+        let mut artwork = ArtworkDocument::new();
+        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
+            outline,
+            fill_rule: FillRule::EvenOdd,
+        }));
+        let layer = artwork.push_layer(IrArtworkDocument {
+            name: "F.Cu".into(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+        artwork.push_object(
+            layer,
+            ArtworkObject {
+                polarity: Polarity::Dark,
+                order: Default::default(),
+                geometry: ArtworkGeometry::Flash {
+                    aperture,
+                    transform: Affine2::IDENTITY,
+                },
+                bbox: BBox::empty(),
+                meta: ObjectAttributes::default(),
+            },
+        );
+        let gerber = lower_artwork_layer(&artwork, GeometryAccuracy::default()).unwrap();
+        let primitives: Vec<_> = gerber
+            .aperture_macros
+            .iter()
+            .flat_map(|m| &m.primitives)
+            .collect();
+        assert!(primitives.len() > 1);
+        for primitive in primitives {
+            let WriterMacroPrimitive::Shape {
+                code: 4,
+                parameters,
+            } = primitive
+            else {
+                panic!("expected code 4")
+            };
+            let WriterMacroExpression::Number(vertices) = parameters[1] else {
+                panic!("numeric vertex count")
+            };
+            assert!(vertices <= 5000.0);
+        }
+        assert!((parsed_area(&gerber) - expected).abs() < 0.01);
     }
 
     #[test]
@@ -2044,7 +2220,7 @@ mod tests {
 
         let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower artwork");
 
-        assert_eq!(gerber.objects.len(), 2);
+        assert_eq!(gerber.objects.len(), 4);
         assert!(
             gerber
                 .objects
@@ -2138,7 +2314,7 @@ mod tests {
         assert_external_parser_accepts(&contents);
         assert_eq!(contents.matches("%ABD").count(), 0);
         assert_eq!(contents.matches("%AM").count(), 0);
-        assert_eq!(contents.matches("G36*").count(), 1);
+        assert_eq!(contents.matches("G36*").count(), 2);
         assert!(contents.contains("%TA.AperFunction,Conductor*%"));
         let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
         let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
