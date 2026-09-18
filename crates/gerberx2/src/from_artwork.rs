@@ -60,23 +60,23 @@ pub fn annotate_for_export(
     gerber: &crate::GerberX2,
     doc: crate::geometry::GerberArtworkDocument,
 ) -> ArtworkDocument {
+    let annotate =
+        |object: pcb_ir::dialects::artwork::Object<crate::geometry::GerberObjectMeta>| {
+            pcb_ir::dialects::artwork::Object {
+                polarity: object.polarity,
+                order: object.order,
+                geometry: object.geometry,
+                bbox: object.bbox,
+                meta: object_attributes(gerber, &object.meta),
+            }
+        };
     ArtworkDocument {
         apertures: doc.apertures,
         blocks: doc
             .blocks
             .into_iter()
             .map(|block| pcb_ir::dialects::artwork::Block {
-                objects: block
-                    .objects
-                    .into_iter()
-                    .map(|object| pcb_ir::dialects::artwork::Object {
-                        polarity: object.polarity,
-                        order: object.order,
-                        geometry: object.geometry,
-                        bbox: object.bbox,
-                        meta: object_attributes(gerber, &object.meta),
-                    })
-                    .collect(),
+                objects: block.objects.into_iter().map(annotate).collect(),
                 bbox: block.bbox,
             })
             .collect(),
@@ -98,17 +98,7 @@ pub fn annotate_for_export(
                 },
             })
             .collect(),
-        objects: doc
-            .objects
-            .into_iter()
-            .map(|object| pcb_ir::dialects::artwork::Object {
-                polarity: object.polarity,
-                order: object.order,
-                geometry: object.geometry,
-                bbox: object.bbox,
-                meta: object_attributes(gerber, &object.meta),
-            })
-            .collect(),
+        objects: doc.objects.into_iter().map(annotate).collect(),
         arena: doc.arena,
         diagnostics: doc.diagnostics,
     }
@@ -171,35 +161,40 @@ pub fn lower_artwork_layer(
         .map(|layer| layer.meta.clone())
         .unwrap_or_default();
 
-    // Expansion leaves only primitives and grids of primitive-only blocks.
+    // Expansion leaves only primitives and grids of primitive-only blocks:
+    // every layer object is its children imaged at each occurrence.
     for object in &layer.objects {
-        match object.geometry {
+        let (children, polarity, occurrences) = match object.geometry {
             ArtworkGeometry::GridInstance {
                 block,
                 transform,
                 repeat,
-            } => {
-                lower_grid_objects(
+            } => (
+                layer.blocks[block as usize].objects.as_slice(),
+                object.polarity,
+                grid_occurrences(transform, repeat),
+            ),
+            _ => (
+                std::slice::from_ref(object),
+                Polarity::Dark,
+                vec![(Affine2::IDENTITY, None)],
+            ),
+        };
+        for (placement, repeat) in occurrences {
+            for child in children {
+                let polarity = polarity.compose(child.polarity);
+                let mut objects = lower_artwork_object(
                     &layer,
-                    block,
-                    transform,
-                    repeat,
-                    object.polarity,
+                    child,
+                    placement,
+                    polarity,
                     &mut apertures,
-                    &mut plan,
                     accuracy,
                 )?;
-            }
-            _ => {
-                let objects = lower_artwork_object(
-                    &layer,
-                    object,
-                    Affine2::IDENTITY,
-                    object.polarity,
-                    &mut apertures,
-                    accuracy,
-                )?;
-                plan.push_group(object.order.stage, object.polarity, objects);
+                for object in &mut objects {
+                    object.repeat = repeat;
+                }
+                plan.push_group(child.order.stage, polarity, objects);
             }
         }
     }
@@ -213,59 +208,29 @@ pub fn lower_artwork_layer(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn lower_grid_objects(
-    layer: &ArtworkDocument,
-    block: u32,
+/// A grid as Gerber images it: one step-repeated occurrence when its steps
+/// run along the axes, otherwise every occurrence on its own.
+fn grid_occurrences(
     placement: Affine2,
     grid: pcb_ir::dialects::artwork::GridRepeat,
-    polarity: Polarity,
-    apertures: &mut ApertureTable,
-    plan: &mut GerberPlan,
-    accuracy: GeometryAccuracy,
-) -> Result<()> {
-    if let Some((base, step_repeat)) = gerber_step_repeat(placement, grid) {
-        let repeat =
-            (step_repeat.x_repeats > 1 || step_repeat.y_repeats > 1).then_some(step_repeat);
-        lower_grid_occurrence(
-            layer, block, base, polarity, repeat, apertures, plan, accuracy,
-        )
-    } else {
-        for offset in grid.offsets() {
-            let occurrence = Affine2 {
-                m02: placement.m02 + offset.x,
-                m12: placement.m12 + offset.y,
-                ..placement
-            };
-            lower_grid_occurrence(
-                layer, block, occurrence, polarity, None, apertures, plan, accuracy,
-            )?;
-        }
-        Ok(())
+) -> Vec<(Affine2, Option<crate::StepRepeat>)> {
+    match gerber_step_repeat(placement, grid) {
+        Some((base, repeat)) => vec![(
+            base,
+            (repeat.x_repeats > 1 || repeat.y_repeats > 1).then_some(repeat),
+        )],
+        None => grid
+            .offsets()
+            .map(|offset| {
+                let occurrence = Affine2 {
+                    m02: placement.m02 + offset.x,
+                    m12: placement.m12 + offset.y,
+                    ..placement
+                };
+                (occurrence, None)
+            })
+            .collect(),
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn lower_grid_occurrence(
-    layer: &ArtworkDocument,
-    block: u32,
-    base: Affine2,
-    polarity: Polarity,
-    repeat: Option<crate::StepRepeat>,
-    apertures: &mut ApertureTable,
-    plan: &mut GerberPlan,
-    accuracy: GeometryAccuracy,
-) -> Result<()> {
-    for child in &layer.blocks[block as usize].objects {
-        let child_polarity = polarity.compose(child.polarity);
-        let mut objects =
-            lower_artwork_object(layer, child, base, child_polarity, apertures, accuracy)?;
-        for object in &mut objects {
-            object.repeat = repeat;
-        }
-        plan.push_group(child.order.stage, child_polarity, objects);
-    }
-    Ok(())
 }
 
 fn gerber_step_repeat(
