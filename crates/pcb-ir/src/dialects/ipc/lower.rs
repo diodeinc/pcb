@@ -51,6 +51,13 @@ pub trait ArtworkLowering<Symbol, ObjectMeta> {
         None
     }
 
+    /// Whether this feature may image as a flash. Targets where a flash
+    /// claims pad semantics return `false` for other copper, which then
+    /// lowers through its own paths.
+    fn flashes(&mut self, _feature: &Feature<Symbol>) -> bool {
+        true
+    }
+
     /// Rewrite a stroke into what the target can express. Gerber traces, for
     /// example, are round-joined by construction.
     fn stroke_style(&mut self, stroke: StrokeStyle) -> StrokeStyle {
@@ -234,8 +241,9 @@ fn lower_feature_artwork<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
 ) where
     Symbol: Copy + Eq + Hash,
 {
-    if let Some((aperture, transform, bbox)) =
-        flash_for(out, doc, feature, lowering, instance_apertures)
+    if lowering.flashes(feature)
+        && let Some((aperture, transform, bbox)) =
+            flash_for(out, doc, feature, lowering, instance_apertures)
     {
         objects.push(artwork::Object {
             polarity: feature.polarity,

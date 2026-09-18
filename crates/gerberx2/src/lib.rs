@@ -8,8 +8,7 @@ pub use pcb_intern::{Interner, Symbol};
 use pcb_ir::geom::AccuracyError;
 pub use types::*;
 pub use write::{
-    AttributeValue, GerberLayer, WriterAperture, WriterApertureMacro, WriterApertureTemplate,
-    WriterApertureTransform, WriterMacroExpression, WriterMacroPrimitive, WriterObject,
+    AttributeValue, GerberLayer, WriterAperture, WriterApertureTemplate, WriterObject,
     sanitize_attribute_field, write_layer,
 };
 

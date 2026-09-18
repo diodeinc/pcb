@@ -737,6 +737,21 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
         standard_flash_aperture(self.imported, self.doc, feature)
     }
 
+    /// Only pad-like copper and full balance voids may image as flashes.
+    fn flashes(&mut self, feature: &Feature<ipc2581::Symbol>) -> bool {
+        self.role != GerberLayerRole::Copper
+            || match feature.flags.copper_balance {
+                Some(kind) => kind == CopperBalanceKind::FullVoid,
+                None => matches!(
+                    feature.bucket,
+                    FeatureBucket::Smd
+                        | FeatureBucket::Pth
+                        | FeatureBucket::Via
+                        | FeatureBucket::Fiducial
+                ),
+            }
+    }
+
     fn stroke_style(&mut self, stroke: StrokeStyle) -> StrokeStyle {
         StrokeStyle {
             join: LineJoin::Round,
@@ -1433,17 +1448,8 @@ fn object_attributes(
     let pin_ref = feature.pin_refs.slice(&doc.pin_refs).first();
     let carries_netlist = role == GerberLayerRole::Copper;
     let carries_pins = carries_netlist && matches!(side, IrSide::Top | IrSide::Bottom);
-    // Only pad-like copper and full balance voids may image as flashes.
-    let keeps_flashes = match feature.flags.copper_balance {
-        Some(kind) => kind == CopperBalanceKind::FullVoid,
-        None => matches!(
-            feature.bucket,
-            FeatureBucket::Smd | FeatureBucket::Pth | FeatureBucket::Via | FeatureBucket::Fiducial
-        ),
-    };
     ObjectAttributes {
         aperture_function,
-        lower_flashes_to_regions: role == GerberLayerRole::Copper && !keeps_flashes,
         net: if carries_netlist {
             feature
                 .net

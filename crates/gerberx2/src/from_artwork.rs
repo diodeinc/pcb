@@ -10,10 +10,10 @@ use std::collections::HashMap;
 
 use crate::{
     AttributeValue, Contour, ContourSegment, GerberError, GerberLayer, ObjectKind,
-    Point as GerberPoint, Result, WriterAperture, WriterApertureMacro, WriterApertureTemplate,
-    WriterApertureTransform, WriterMacroExpression, WriterMacroPrimitive, WriterObject,
+    Point as GerberPoint, Result, WriterAperture, WriterApertureTemplate, WriterObject,
     sanitize_attribute_field,
 };
+use pcb_ir::dialects::artwork::legalize::bake_aperture_basis;
 use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
 use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::region::{self, Ring};
@@ -35,9 +35,6 @@ pub struct LayerAttributes {
 #[derive(Debug, Clone, Default)]
 pub struct ObjectAttributes {
     pub aperture_function: Option<Vec<String>>,
-    /// Lower flashed occurrences as `G36` regions so non-pad copper never
-    /// masquerades as pads.
-    pub lower_flashes_to_regions: bool,
     pub net: Option<String>,
     pub component: Option<String>,
     pub pin: Option<String>,
@@ -50,8 +47,7 @@ pub type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerAttributes, 
 ///
 /// This is the normalize pipeline: extract the parsed layer into artwork,
 /// carry its X2 attributes across, and lower it back to idiomatic Gerber.
-/// Source flashes survive as flashes unless explicit copper feature semantics
-/// require region output; block instances are expanded.
+/// Source flashes survive as flashes; block instances are expanded.
 pub fn normalize_layer(gerber: &crate::GerberX2, accuracy: GeometryAccuracy) -> Result<String> {
     let annotated =
         annotate_for_export(gerber, crate::geometry::extract_document(gerber, accuracy)?);
@@ -135,7 +131,6 @@ fn object_attributes(
         .and_then(|fields| fields.into_iter().next());
     ObjectAttributes {
         aperture_function: attribute_fields(gerber, &meta.aperture_attributes, ".AperFunction"),
-        lower_flashes_to_regions: false,
         net: attribute_fields(gerber, &meta.object_attributes, ".N")
             .and_then(|fields| fields.into_iter().next()),
         component,
@@ -167,8 +162,7 @@ pub fn lower_artwork_layer(
     layer: &ArtworkDocument,
     accuracy: GeometryAccuracy,
 ) -> Result<GerberLayer> {
-    let mut layer = pcb_ir::dialects::artwork::expand_instances_preserving_grids(layer);
-    pcb_ir::dialects::artwork::legalize::legalize_for_jlcpcb(&mut layer);
+    let layer = pcb_ir::dialects::artwork::expand_instances_preserving_grids(layer);
     let mut apertures = ApertureTable::default();
     let mut plan = GerberPlan::default();
     let layer_attributes = layer
@@ -211,11 +205,9 @@ pub fn lower_artwork_layer(
     }
     let objects = plan.into_ordered_objects();
 
-    let (aperture_list, aperture_macros) = apertures.into_parts();
     Ok(GerberLayer {
         file_attributes: lower_layer_attributes(&layer_attributes),
-        apertures: aperture_list,
-        aperture_macros,
+        apertures: apertures.apertures,
         objects,
         ..GerberLayer::default()
     })
@@ -351,14 +343,14 @@ fn lower_artwork_object(
         ArtworkGeometry::Stroke { path } => {
             let artwork_path = &layer.arena.paths[path as usize];
             let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
-            let region_aperture_attributes = lower_aperture_function(aperture_function);
             let stroke = artwork_path.stroke().ok_or_else(|| {
                 GerberError::InvalidStructure(
                     "artwork stroke geometry references a path without stroke paint".to_string(),
                 )
             })?;
             let stroke_width = stroke.width * transform.m00.hypot(transform.m10);
-            let aperture = apertures.circle(stroke_width, aperture_function)?;
+            let aperture =
+                apertures.define(Aperture::circle(stroke_width), aperture_function, accuracy)?;
             for contour in layer
                 .arena
                 .path_contours(artwork_path)
@@ -371,39 +363,22 @@ fn lower_artwork_object(
                 {
                     match mark {
                         StrokePatternMark::Dash(segments) => {
-                            objects.extend(segments.into_iter().map(|segment| WriterObject {
-                                kind: lower_stroke_segment(segment, aperture),
-                                polarity,
-                                repeat: None,
-                                aperture_transform: WriterApertureTransform::default(),
-                                aperture_attributes: Vec::new(),
-                                attributes: attributes.clone(),
+                            objects.extend(segments.into_iter().map(|segment| {
+                                WriterObject::new(
+                                    lower_stroke_segment(segment, aperture),
+                                    polarity,
+                                    attributes.clone(),
+                                )
                             }));
                         }
-                        StrokePatternMark::Dot(at) => {
-                            if object.meta.lower_flashes_to_regions {
-                                objects.extend(lower_aperture_as_regions(
-                                    &Aperture::circle(stroke_width),
-                                    Affine2::translation(at),
-                                    polarity,
-                                    &region_aperture_attributes,
-                                    &attributes,
-                                    accuracy,
-                                )?);
-                            } else {
-                                objects.push(WriterObject {
-                                    kind: ObjectKind::Flash {
-                                        at: lower_point(at),
-                                        aperture,
-                                    },
-                                    polarity,
-                                    repeat: None,
-                                    aperture_transform: WriterApertureTransform::default(),
-                                    aperture_attributes: Vec::new(),
-                                    attributes: attributes.clone(),
-                                });
-                            }
-                        }
+                        StrokePatternMark::Dot(at) => objects.push(WriterObject::new(
+                            ObjectKind::Flash {
+                                at: lower_point(at),
+                                aperture,
+                            },
+                            polarity,
+                            attributes.clone(),
+                        )),
                     }
                 }
             }
@@ -412,72 +387,18 @@ fn lower_artwork_object(
             aperture,
             transform: placement,
         } => {
-            let mut transform = transform.concat(placement);
-            let mut artwork_aperture =
-                layer
-                    .apertures
-                    .get(aperture as usize)
-                    .cloned()
-                    .ok_or_else(|| {
-                        GerberError::InvalidStructure(format!(
-                            "artwork flash references missing aperture {aperture}"
-                        ))
-                    })?;
+            let transform = transform.concat(placement);
             let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
-            let source_key = (transform.is_translation()
-                && !object.meta.lower_flashes_to_regions
-                && matches!(artwork_aperture.shape, ApertureShape::Contour { .. }))
-            .then(|| ApertureKey {
-                template: ApertureTemplateKey::SourceContour(aperture),
-                function: aperture_function.to_vec(),
-            });
-            if !transform.is_translation() {
-                let basis = Affine2 {
-                    m02: 0.0,
-                    m12: 0.0,
-                    ..transform
-                };
-                artwork_aperture = pcb_ir::dialects::artwork::legalize::bake_aperture_basis(
-                    &artwork_aperture,
-                    basis,
-                );
-                transform = Affine2::translation(Point::new(transform.m02, transform.m12));
-            }
-            let region_aperture_attributes = lower_aperture_function(aperture_function);
-            if object.meta.lower_flashes_to_regions {
-                return lower_aperture_as_regions(
-                    &artwork_aperture,
-                    transform,
-                    polarity,
-                    &region_aperture_attributes,
-                    &attributes,
-                    accuracy,
-                );
-            }
-            let aperture = if let Some(code) = source_key
-                .as_ref()
-                .and_then(|key| apertures.by_key.get(key))
-            {
-                *code
-            } else {
-                let code =
-                    apertures.artwork_aperture(artwork_aperture, aperture_function, accuracy)?;
-                if let Some(key) = source_key {
-                    apertures.by_key.insert(key, code);
-                }
-                code
-            };
-            objects.push(WriterObject {
-                kind: ObjectKind::Flash {
+            let aperture =
+                apertures.flash(layer, aperture, transform, aperture_function, accuracy)?;
+            objects.push(WriterObject::new(
+                ObjectKind::Flash {
                     at: lower_point(Point::new(transform.m02, transform.m12)),
                     aperture,
                 },
                 polarity,
-                repeat: None,
-                aperture_transform: WriterApertureTransform::default(),
-                aperture_attributes: Vec::new(),
                 attributes,
-            });
+            ));
         }
         ArtworkGeometry::Instance { .. } | ArtworkGeometry::GridInstance { .. } => {
             unreachable!("instance expansion leaves only primitive geometry")
@@ -582,11 +503,8 @@ impl GerberPlan {
 
 #[derive(Default)]
 struct ApertureTable {
-    next_code: i32,
     by_key: HashMap<ApertureKey, i32>,
     apertures: Vec<WriterAperture>,
-    aperture_macros: Vec<WriterApertureMacro>,
-    roundrect_macro_defined: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -597,9 +515,12 @@ struct ApertureKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ApertureTemplateKey {
-    // The legalized layer is immutable and its accuracy is fixed for this table.
-    // Translation affects only flash placement, not local aperture preparation.
-    SourceContour(u32),
+    /// A source aperture under one exact linear basis. The layer is immutable
+    /// and the accuracy fixed for this table, so a hit skips all preparation.
+    Source {
+        aperture: u32,
+        basis: [u64; 4],
+    },
     Circle {
         diameter_nm: i64,
         hole_nm: i64,
@@ -620,281 +541,150 @@ enum ApertureTemplateKey {
         rotation_microdeg: i64,
         hole_nm: i64,
     },
-    RoundRect {
-        width_nm: i64,
-        height_nm: i64,
-        radius_nm: i64,
-    },
-    Contour(Vec<Vec<(i64, i64)>>),
+    Outline(Vec<Vec<(i64, i64)>>),
 }
 
 impl ApertureTable {
-    fn circle(&mut self, diameter: f64, function: &[String]) -> Result<i32> {
-        self.circle_with_hole(diameter, None, function)
-    }
-
-    fn circle_with_hole(
+    /// The aperture imaging `source` under the linear part of `transform`.
+    ///
+    /// Gerber's own `%LR`/`%LM`/`%LS` are never used: JLCPCB shifts
+    /// off-origin custom apertures under `%LR`, so every basis is baked
+    /// into the definition.
+    fn flash(
         &mut self,
-        diameter: f64,
-        hole_diameter: Option<f64>,
+        layer: &ArtworkDocument,
+        source: u32,
+        transform: Affine2,
         function: &[String],
+        accuracy: GeometryAccuracy,
     ) -> Result<i32> {
-        if diameter <= 0.0 {
-            return Err(GerberError::InvalidStructure(format!(
-                "cannot export non-positive Gerber stroke aperture diameter {diameter}"
-            )));
+        let basis = Affine2 {
+            m02: 0.0,
+            m12: 0.0,
+            ..transform
+        };
+        let key = ApertureKey {
+            template: ApertureTemplateKey::Source {
+                aperture: source,
+                // Adding zero folds `-0.0` into `0.0`.
+                basis: [basis.m00, basis.m01, basis.m10, basis.m11]
+                    .map(|value| (value + 0.0).to_bits()),
+            },
+            function: function.to_vec(),
+        };
+        if let Some(code) = self.by_key.get(&key) {
+            return Ok(*code);
         }
-        self.define(
-            ApertureTemplateKey::Circle {
-                diameter_nm: quantize_mm(diameter),
-                hole_nm: quantize_hole(hole_diameter),
-            },
-            WriterApertureTemplate::Circle {
-                diameter,
-                hole_diameter,
-            },
-            function,
-        )
+        let aperture = layer.apertures.get(source as usize).ok_or_else(|| {
+            GerberError::InvalidStructure(format!(
+                "artwork flash references missing aperture {source}"
+            ))
+        })?;
+        let code = self.define(bake_aperture_basis(aperture, basis), function, accuracy)?;
+        self.by_key.insert(key, code);
+        Ok(code)
     }
 
-    fn artwork_aperture(
+    /// Define an aperture, reusing an identical definition.
+    ///
+    /// The four standard templates stay standard. Every other shape is one
+    /// flattened outline macro: JLCPCB renders primitive 21 rounded
+    /// rectangles oversized, and legacy CAM importers evaluate compound
+    /// macros per flash.
+    fn define(
         &mut self,
         aperture: Aperture,
         function: &[String],
         accuracy: GeometryAccuracy,
     ) -> Result<i32> {
         let hole_diameter = (aperture.hole_diameter > 0.0).then_some(aperture.hole_diameter);
-        match aperture.shape {
-            ApertureShape::Contour { outline, fill_rule } => {
-                let rings = prepare_on_grid(std::slice::from_ref(&outline), fill_rule, accuracy)?;
-                if rings.is_empty() {
-                    return Err(GerberError::InvalidStructure(
-                        "cannot export an empty contour aperture".to_string(),
-                    ));
-                }
-                let key = rings
-                    .iter()
-                    .map(|ring| {
-                        ring.iter()
-                            .map(|[x, y]| (quantize_mm(*x), quantize_mm(*y)))
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-                if let Some(code) = self.by_key.get(&ApertureKey {
-                    template: ApertureTemplateKey::Contour(key.clone()),
-                    function: function.to_vec(),
-                }) {
-                    return Ok(*code);
-                }
-                let code = self.outline_macro(&rings, function)?;
-                self.by_key.insert(
-                    ApertureKey {
-                        template: ApertureTemplateKey::Contour(key),
-                        function: function.to_vec(),
-                    },
-                    code,
-                );
-                Ok(code)
-            }
-            ApertureShape::Circle { diameter } => {
-                self.circle_with_hole(diameter, hole_diameter, function)
-            }
-            ApertureShape::Rectangle { width, height } => {
-                if width <= 0.0 || height <= 0.0 {
-                    return Err(GerberError::InvalidStructure(format!(
-                        "cannot export non-positive Gerber rectangle aperture {width} x {height}"
-                    )));
-                }
-                self.define(
-                    ApertureTemplateKey::Rectangle {
-                        width_nm: quantize_mm(width),
-                        height_nm: quantize_mm(height),
-                        hole_nm: quantize_hole(hole_diameter),
-                    },
-                    WriterApertureTemplate::Rectangle {
-                        width,
-                        height,
-                        hole_diameter,
-                    },
-                    function,
-                )
-            }
-            ApertureShape::Obround { width, height } => {
-                if width <= 0.0 || height <= 0.0 {
-                    return Err(GerberError::InvalidStructure(format!(
-                        "cannot export non-positive Gerber obround aperture {width} x {height}"
-                    )));
-                }
-                self.define(
-                    ApertureTemplateKey::Obround {
-                        width_nm: quantize_mm(width),
-                        height_nm: quantize_mm(height),
-                        hole_nm: quantize_hole(hole_diameter),
-                    },
-                    WriterApertureTemplate::Obround {
-                        width,
-                        height,
-                        hole_diameter,
-                    },
-                    function,
-                )
-            }
+        let hole_nm = hole_diameter.map_or(0, quantize_mm);
+        let (template_key, template, dimensions) = match aperture.shape {
+            ApertureShape::Circle { diameter } => (
+                ApertureTemplateKey::Circle {
+                    diameter_nm: quantize_mm(diameter),
+                    hole_nm,
+                },
+                WriterApertureTemplate::Circle {
+                    diameter,
+                    hole_diameter,
+                },
+                [diameter, diameter],
+            ),
+            ApertureShape::Rectangle { width, height } => (
+                ApertureTemplateKey::Rectangle {
+                    width_nm: quantize_mm(width),
+                    height_nm: quantize_mm(height),
+                    hole_nm,
+                },
+                WriterApertureTemplate::Rectangle {
+                    width,
+                    height,
+                    hole_diameter,
+                },
+                [width, height],
+            ),
+            ApertureShape::Obround { width, height } => (
+                ApertureTemplateKey::Obround {
+                    width_nm: quantize_mm(width),
+                    height_nm: quantize_mm(height),
+                    hole_nm,
+                },
+                WriterApertureTemplate::Obround {
+                    width,
+                    height,
+                    hole_diameter,
+                },
+                [width, height],
+            ),
             ApertureShape::Polygon {
                 diameter,
                 vertices,
                 rotation_degrees,
-            } => {
-                if diameter <= 0.0 {
-                    return Err(GerberError::InvalidStructure(format!(
-                        "cannot export non-positive Gerber polygon aperture diameter {diameter}"
-                    )));
-                }
-                self.define(
-                    ApertureTemplateKey::Polygon {
-                        diameter_nm: quantize_mm(diameter),
-                        vertices,
-                        rotation_microdeg: quantize_mm(rotation_degrees),
-                        hole_nm: quantize_hole(hole_diameter),
-                    },
-                    WriterApertureTemplate::Polygon {
-                        outer_diameter: diameter,
-                        vertices: vertices as i32,
-                        rotation_degrees: Some(rotation_degrees),
-                        hole_diameter,
-                    },
-                    function,
-                )
-            }
-            ApertureShape::RoundRect {
-                width,
-                height,
-                radius,
-            } => {
-                if width <= 0.0 || height <= 0.0 || radius <= 0.0 {
-                    return Err(GerberError::InvalidStructure(format!(
-                        "cannot export non-positive Gerber rounded-rectangle aperture \
-                         {width} x {height} r {radius}"
-                    )));
-                }
-                if hole_diameter.is_some() {
+            } => (
+                ApertureTemplateKey::Polygon {
+                    diameter_nm: quantize_mm(diameter),
+                    vertices,
+                    rotation_microdeg: quantize_mm(rotation_degrees),
+                    hole_nm,
+                },
+                WriterApertureTemplate::Polygon {
+                    outer_diameter: diameter,
+                    vertices: vertices as i32,
+                    rotation_degrees: Some(rotation_degrees),
+                    hole_diameter,
+                },
+                [diameter, diameter],
+            ),
+            _ => {
+                let outlines =
+                    prepare_on_grid(&aperture.contours(), aperture.fill_rule(), accuracy)?;
+                if outlines.is_empty() {
                     return Err(GerberError::InvalidStructure(
-                        "cannot export a Gerber rounded-rectangle aperture with a hole".to_string(),
+                        "cannot export an empty Gerber aperture outline".to_string(),
                     ));
                 }
-                // An oversized radius images clamped, matching how
-                // `shapes::rounded_rect` flattens the same aperture; past the
-                // limit the macro's rectangle terms would go negative.
-                let radius = radius.min(width / 2.0).min(height / 2.0);
-                if !self.roundrect_macro_defined {
-                    self.aperture_macros.push(roundrect_macro());
-                    self.roundrect_macro_defined = true;
-                }
-                self.define(
-                    ApertureTemplateKey::RoundRect {
-                        width_nm: quantize_mm(width),
-                        height_nm: quantize_mm(height),
-                        radius_nm: quantize_mm(radius),
-                    },
-                    WriterApertureTemplate::Macro {
-                        name: ROUNDRECT_MACRO_NAME.to_string(),
-                        parameters: vec![width, height, radius],
-                    },
-                    function,
+                (
+                    ApertureTemplateKey::Outline(
+                        outlines
+                            .iter()
+                            .map(|ring| {
+                                ring.iter()
+                                    .map(|[x, y]| (quantize_mm(*x), quantize_mm(*y)))
+                                    .collect()
+                            })
+                            .collect(),
+                    ),
+                    WriterApertureTemplate::Outline { outlines },
+                    [1.0, 1.0],
                 )
             }
-            ApertureShape::RoundedHex {
-                radius,
-                corner_radius,
-                rotation_degrees,
-            } => {
-                if hole_diameter.is_some() {
-                    return Err(GerberError::InvalidStructure(
-                        "cannot export a Gerber rounded-hex aperture with a hole".to_string(),
-                    ));
-                }
-                // Flatten the exact shape once into a concrete one-primitive
-                // outline; legacy CAM importers evaluate compound macros per
-                // flash.
-                let outline =
-                    pcb_ir::geom::shapes::rounded_hexagon(radius, corner_radius, rotation_degrees)
-                        .ok_or_else(|| {
-                            GerberError::InvalidStructure(format!(
-                                "cannot export invalid rounded-hex aperture r {radius}, corner r \
-                                 {corner_radius}, rotation {rotation_degrees}"
-                            ))
-                        })?;
-                self.artwork_aperture(
-                    Aperture::solid(ApertureShape::Contour {
-                        outline,
-                        fill_rule: FillRule::NonZero,
-                    }),
-                    function,
-                    accuracy,
-                )
-            }
+        };
+        if dimensions.iter().any(|dimension| *dimension <= 0.0) {
+            return Err(GerberError::InvalidStructure(format!(
+                "cannot export non-positive Gerber aperture {template:?}"
+            )));
         }
-    }
-
-    /// Define a one-off macro aperture filling the given closed outline,
-    /// expressed relative to the flash origin.
-    /// One additive code-4 outline primitive per decomposed material ring.
-    fn outline_macro(&mut self, rings: &[Ring], function: &[String]) -> Result<i32> {
-        let attributes = (!function.is_empty())
-            .then(|| AttributeValue::new(".AperFunction", function.iter().cloned()))
-            .into_iter()
-            .collect();
-        self.outline_macro_with_attributes(rings, attributes)
-    }
-
-    fn outline_macro_with_attributes(
-        &mut self,
-        rings: &[Ring],
-        attributes: Vec<AttributeValue>,
-    ) -> Result<i32> {
-        let name = format!("REPEAT{}", self.aperture_macros.len());
-        let mut primitives = Vec::with_capacity(rings.len());
-        for outline in rings {
-            if outline.len() < 3 {
-                return Err(GerberError::InvalidStructure(
-                    "cannot export a Gerber outline macro with fewer than three vertices"
-                        .to_string(),
-                ));
-            }
-            let mut parameters = Vec::with_capacity(2 * outline.len() + 5);
-            parameters.push(WriterMacroExpression::Number(1.0));
-            parameters.push(WriterMacroExpression::Number(outline.len() as f64));
-            for [x, y] in outline.iter().chain(std::iter::once(&outline[0])) {
-                parameters.push(WriterMacroExpression::Number(*x));
-                parameters.push(WriterMacroExpression::Number(*y));
-            }
-            parameters.push(WriterMacroExpression::Number(0.0));
-            primitives.push(WriterMacroPrimitive::Shape {
-                code: 4,
-                parameters,
-            });
-        }
-        self.aperture_macros.push(WriterApertureMacro {
-            name: name.clone(),
-            primitives,
-        });
-        let code = self.allocate_code();
-        self.apertures.push(WriterAperture {
-            code,
-            template: WriterApertureTemplate::Macro {
-                name,
-                parameters: Vec::new(),
-            },
-            attributes,
-        });
-        Ok(code)
-    }
-
-    fn define(
-        &mut self,
-        template_key: ApertureTemplateKey,
-        template: WriterApertureTemplate,
-        function: &[String],
-    ) -> Result<i32> {
         let key = ApertureKey {
             template: template_key,
             function: function.to_vec(),
@@ -902,98 +692,14 @@ impl ApertureTable {
         if let Some(code) = self.by_key.get(&key) {
             return Ok(*code);
         }
-        let code = self.allocate_code();
+        let code = 10 + self.apertures.len() as i32;
         self.by_key.insert(key, code);
         self.apertures.push(WriterAperture {
             code,
             template,
-            attributes: (!function.is_empty())
-                .then(|| AttributeValue::new(".AperFunction", function.iter().cloned()))
-                .into_iter()
-                .collect(),
+            attributes: lower_aperture_function(function),
         });
         Ok(code)
-    }
-
-    fn allocate_code(&mut self) -> i32 {
-        if self.next_code == 0 {
-            self.next_code = 10;
-        } else {
-            self.next_code += 1;
-        }
-        self.next_code
-    }
-
-    fn into_parts(self) -> (Vec<WriterAperture>, Vec<WriterApertureMacro>) {
-        (self.apertures, self.aperture_macros)
-    }
-}
-
-const ROUNDRECT_MACRO_NAME: &str = "RoundedRect";
-
-/// The shared parameterized rounded-rectangle macro: two centered rectangles
-/// leaving the corner insets uncovered, plus one circle per corner. Parameters
-/// are `$1` width, `$2` height, `$3` corner radius; at the obround and circle
-/// degeneracies a rectangle collapses to zero area and drops out.
-fn roundrect_macro() -> WriterApertureMacro {
-    use WriterMacroExpression as Expression;
-    let number = |value: f64| Expression::Number(value);
-    let variable = |index: usize| Expression::Variable(index);
-    let subtract =
-        |left: Expression, right: Expression| Expression::Subtract(Box::new(left), Box::new(right));
-    let multiply =
-        |left: Expression, right: Expression| Expression::Multiply(Box::new(left), Box::new(right));
-    let divide =
-        |left: Expression, right: Expression| Expression::Divide(Box::new(left), Box::new(right));
-    // `$n/2-$3` and its negation `$3-$n/2`: the corner-circle center offset.
-    let inset = |axis: usize, positive: bool| {
-        if positive {
-            subtract(divide(variable(axis), number(2.0)), variable(3))
-        } else {
-            subtract(variable(3), divide(variable(axis), number(2.0)))
-        }
-    };
-
-    let mut primitives = vec![
-        WriterMacroPrimitive::Shape {
-            code: 21,
-            parameters: vec![
-                number(1.0),
-                variable(1),
-                subtract(variable(2), multiply(number(2.0), variable(3))),
-                number(0.0),
-                number(0.0),
-                number(0.0),
-            ],
-        },
-        WriterMacroPrimitive::Shape {
-            code: 21,
-            parameters: vec![
-                number(1.0),
-                subtract(variable(1), multiply(number(2.0), variable(3))),
-                variable(2),
-                number(0.0),
-                number(0.0),
-                number(0.0),
-            ],
-        },
-    ];
-    primitives.extend(
-        [(true, true), (false, true), (true, false), (false, false)].map(|(right, top)| {
-            WriterMacroPrimitive::Shape {
-                code: 1,
-                parameters: vec![
-                    number(1.0),
-                    multiply(number(2.0), variable(3)),
-                    inset(1, right),
-                    inset(2, top),
-                ],
-            }
-        }),
-    );
-    WriterApertureMacro {
-        name: ROUNDRECT_MACRO_NAME.to_string(),
-        primitives,
     }
 }
 
@@ -1030,64 +736,29 @@ fn lower_region_objects(
     accuracy: GeometryAccuracy,
 ) -> Result<Vec<WriterObject>> {
     let artwork_path = &layer.arena.paths[path_index as usize];
-    lower_contours_as_regions(
-        layer.arena.path_contours(artwork_path),
-        artwork_path.fill_rule().unwrap_or(FillRule::NonZero),
-        transform,
-        polarity,
-        aperture_attributes,
-        attributes,
-        accuracy,
-    )
-}
-
-fn lower_aperture_as_regions(
-    aperture: &Aperture,
-    transform: Affine2,
-    polarity: Polarity,
-    aperture_attributes: &[AttributeValue],
-    attributes: &[AttributeValue],
-    accuracy: GeometryAccuracy,
-) -> Result<Vec<WriterObject>> {
-    lower_contours_as_regions(
-        aperture.contours(),
-        aperture.fill_rule(),
-        transform,
-        polarity,
-        aperture_attributes,
-        attributes,
-        accuracy,
-    )
-}
-
-fn lower_contours_as_regions(
-    contours: impl IntoIterator<Item = ContourBuf>,
-    fill_rule: FillRule,
-    transform: Affine2,
-    polarity: Polarity,
-    aperture_attributes: &[AttributeValue],
-    attributes: &[AttributeValue],
-    accuracy: GeometryAccuracy,
-) -> Result<Vec<WriterObject>> {
-    let payloads = contours
+    let contours = layer
+        .arena
+        .path_contours(artwork_path)
         .into_iter()
         .map(|contour| contour.transformed(transform))
         .collect::<Vec<_>>();
-    Ok(lower_region_image_contours(&payloads, fill_rule, accuracy)?
-        .into_iter()
-        .map(|contour| WriterObject {
-            kind: ObjectKind::Region {
-                contours: vec![contour],
-            },
-            polarity,
-            repeat: None,
-            aperture_transform: WriterApertureTransform::default(),
+    let fill_rule = artwork_path.fill_rule().unwrap_or(FillRule::NonZero);
+    Ok(prepare_on_grid(&contours, fill_rule, accuracy)?
+        .iter()
+        .map(|ring| WriterObject {
             aperture_attributes: aperture_attributes.to_vec(),
-            attributes: attributes.to_vec(),
+            ..WriterObject::new(
+                ObjectKind::Region {
+                    contours: vec![lower_ring(ring)],
+                },
+                polarity,
+                attributes.to_vec(),
+            )
         })
         .collect())
 }
 
+/// Quantize a filled set onto the Gerber grid as simple additive polygons.
 fn prepare_on_grid(
     payloads: &[ContourBuf],
     fill_rule: FillRule,
@@ -1105,46 +776,18 @@ fn prepare_on_grid(
     .map_err(|error| GerberError::InvalidStructure(error.to_string()))
 }
 
-fn lower_region_image_contours(
-    payloads: &[ContourBuf],
-    fill_rule: FillRule,
-    accuracy: GeometryAccuracy,
-) -> Result<Vec<Contour>> {
-    region::rings_to_contours(prepare_on_grid(payloads, fill_rule, accuracy)?)
-        .iter()
-        .map(lower_region_contour)
-        .collect::<Result<Vec<_>>>()
-}
-
-fn lower_region_contour(contour: &ContourBuf) -> Result<Contour> {
-    if contour.cmds.is_empty() {
-        return Err(GerberError::InvalidStructure(
-            "cannot export empty Gerber region contour".to_string(),
-        ));
-    }
-    Ok(Contour {
-        segments: contour
-            .segments()
-            .map(|segment| match segment {
-                Segment::Line { start, end } => ContourSegment::Line {
-                    start: lower_point(start),
-                    end: lower_point(end),
-                },
-                Segment::Arc(arc) => ContourSegment::Arc {
-                    start: lower_point(arc.start),
-                    end: lower_point(arc.end),
-                    center_offset: lower_point(Point::new(
-                        arc.center.x - arc.start.x,
-                        arc.center.y - arc.start.y,
-                    )),
-                    clockwise: arc.clockwise,
-                },
-                Segment::Cubic { .. } | Segment::Ellipse(_) => {
-                    unreachable!("region rings are polygonal")
-                }
+fn lower_ring(ring: &Ring) -> Contour {
+    let point = |&[x, y]: &[f64; 2]| GerberPoint { x, y };
+    Contour {
+        segments: ring
+            .iter()
+            .zip(ring.iter().cycle().skip(1))
+            .map(|(start, end)| ContourSegment::Line {
+                start: point(start),
+                end: point(end),
             })
             .collect(),
-    })
+    }
 }
 
 /// Decode a contour into the line and circular-arc segments Gerber can draw,
@@ -1206,10 +849,6 @@ fn quantize_mm(value: f64) -> i64 {
 
 fn gerber_coordinate(value: f64) -> f64 {
     quantize_mm(value) as f64 / 1_000_000.0
-}
-
-fn quantize_hole(hole_diameter: Option<f64>) -> i64 {
-    hole_diameter.map_or(0, quantize_mm)
 }
 
 #[cfg(test)]
@@ -1276,6 +915,17 @@ mod tests {
         }
     }
 
+    fn outlines(layer: &GerberLayer) -> Vec<&Ring> {
+        layer
+            .apertures
+            .iter()
+            .flat_map(|aperture| match &aperture.template {
+                WriterApertureTemplate::Outline { outlines } => outlines.as_slice(),
+                _ => &[],
+            })
+            .collect()
+    }
+
     fn parsed_area(layer: &GerberLayer) -> f64 {
         let text = crate::write_layer(layer).expect("serialize Gerber");
         assert_external_parser_accepts(&text);
@@ -1333,7 +983,7 @@ mod tests {
         let ObjectKind::Flash { aperture: code, .. } = first[0].kind else {
             panic!("expected a flash");
         };
-        let definitions = (table.apertures.len(), table.aperture_macros.len());
+        let definitions = table.apertures.len();
         let translated = lower(
             &flash,
             Affine2::translation(Point::new(100_000.000_3, -10_000.000_2)),
@@ -1344,10 +994,7 @@ mod tests {
             matches!(translated[0].kind, ObjectKind::Flash { aperture, at }
             if aperture == code && at.x == 100_000.000_3 && at.y == -10_000.000_2)
         );
-        assert_eq!(
-            (table.apertures.len(), table.aperture_macros.len()),
-            definitions
-        );
+        assert_eq!(table.apertures.len(), definitions);
 
         // Functions remain separate even for the same source geometry.
         flash.meta.aperture_function = Some(vec!["SMDPad".into()]);
@@ -1356,7 +1003,7 @@ mod tests {
             matches!(attributed[0].kind, ObjectKind::Flash { aperture, .. } if aperture != code)
         );
         flash.meta.aperture_function = None;
-        // A parent instance's basis must not reuse the translation-only alias.
+        // Every basis is its own definition.
         let scaled = lower(
             &flash,
             Affine2 {
@@ -1367,24 +1014,19 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(scaled[0].kind, ObjectKind::Flash { aperture, .. } if aperture != code));
-        flash.meta.lower_flashes_to_regions = true;
-        let regions = lower(&flash, Affine2::IDENTITY, &mut table).unwrap();
-        assert!(
-            regions
-                .iter()
-                .all(|object| matches!(object.kind, ObjectKind::Region { .. }))
-        );
 
         // A different source ID with the same coordinates must still validate
         // its inherited uncertainty; failures must not register an alias.
-        flash.meta.lower_flashes_to_regions = false;
         flash.geometry = ArtworkGeometry::Flash {
             aperture: invalid,
             transform: Affine2::IDENTITY,
         };
         assert!(lower(&flash, Affine2::IDENTITY, &mut table).is_err());
         assert!(!table.by_key.contains_key(&ApertureKey {
-            template: ApertureTemplateKey::SourceContour(invalid),
+            template: ApertureTemplateKey::Source {
+                aperture: invalid,
+                basis: [1.0, 0.0, 0.0, 1.0].map(f64::to_bits),
+            },
             function: Vec::new(),
         }));
         // A new export/table must check its own, finer accuracy budget.
@@ -1409,7 +1051,6 @@ mod tests {
     fn sanitizes_net_names_for_gerber_attribute_fields() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
-            lower_flashes_to_regions: false,
             net: Some("PWR_RST*,A%B".to_string()),
             component: None,
             pin: None,
@@ -1423,7 +1064,6 @@ mod tests {
     fn lowers_pin_attribute_with_component_context() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
-            lower_flashes_to_regions: false,
             net: None,
             component: Some("U1".to_string()),
             pin: Some("1".to_string()),
@@ -1439,7 +1079,6 @@ mod tests {
     fn skips_pin_attribute_without_component_context() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
-            lower_flashes_to_regions: false,
             net: None,
             component: None,
             pin: Some("1".to_string()),
@@ -1780,12 +1419,6 @@ mod tests {
         );
 
         let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower aliased placement");
-        assert!(
-            !gerber
-                .apertures
-                .iter()
-                .any(|aperture| matches!(aperture.template, WriterApertureTemplate::Block { .. }))
-        );
         let [object] = gerber.objects.as_slice() else {
             panic!("expected one direct flash");
         };
@@ -1829,12 +1462,6 @@ mod tests {
 
         let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower empty block");
         assert!(gerber.objects.is_empty());
-        assert!(
-            !gerber
-                .apertures
-                .iter()
-                .any(|aperture| matches!(aperture.template, WriterApertureTemplate::Block { .. }))
-        );
         let contents = crate::write_layer(&gerber).expect("write empty layer");
         assert!(!contents.contains("%ABD"));
         assert_external_parser_accepts(&contents);
@@ -1950,13 +1577,7 @@ mod tests {
                 (area - expected_area).abs() < 1e-12,
                 "snap must preserve the analytic material area: {area} versus {expected_area}"
             );
-            let contours = rings
-                .into_iter()
-                .map(|ring| {
-                    lower_region_contour(&region::rings_to_contours(vec![ring]).pop().unwrap())
-                        .unwrap()
-                })
-                .collect();
+            let contours = rings.iter().map(lower_ring).collect();
             let layer = GerberLayer {
                 objects: vec![WriterObject::dark(ObjectKind::Region { contours })],
                 ..GerberLayer::default()
@@ -1984,12 +1605,7 @@ mod tests {
             let rings =
                 prepare_on_grid(&payloads, FillRule::EvenOdd, GeometryAccuracy::default()).unwrap();
             assert_strict_simple_rings(&rings);
-            let contours = lower_region_image_contours(
-                &payloads,
-                FillRule::EvenOdd,
-                GeometryAccuracy::default(),
-            )
-            .unwrap();
+            let contours: Vec<_> = rings.iter().map(lower_ring).collect();
             for contour in &contours {
                 let edges: Vec<_> = contour
                     .segments
@@ -2031,12 +1647,7 @@ mod tests {
             let rings =
                 prepare_on_grid(&payloads, FillRule::EvenOdd, GeometryAccuracy::default()).unwrap();
             assert_strict_simple_rings(&rings);
-            let contours = lower_region_image_contours(
-                &payloads,
-                FillRule::EvenOdd,
-                GeometryAccuracy::default(),
-            )
-            .unwrap();
+            let contours: Vec<_> = rings.iter().map(lower_ring).collect();
             let layer = GerberLayer {
                 objects: vec![WriterObject::dark(ObjectKind::Region { contours })],
                 ..GerberLayer::default()
@@ -2103,8 +1714,7 @@ mod tests {
                 },
             );
             let gerber = lower_artwork_layer(&artwork, GeometryAccuracy::default()).unwrap();
-            assert!(gerber.aperture_macros.iter().flat_map(|m| &m.primitives)
-                .all(|p| matches!(p, WriterMacroPrimitive::Shape { code: 4, parameters } if matches!(parameters.first(), Some(WriterMacroExpression::Number(1.0))))));
+            assert!(outlines(&gerber).len() > 1);
             let expected = if polarity == Polarity::Dark {
                 400.0
             } else {
@@ -2161,25 +1771,9 @@ mod tests {
             },
         );
         let gerber = lower_artwork_layer(&artwork, GeometryAccuracy::default()).unwrap();
-        let primitives: Vec<_> = gerber
-            .aperture_macros
-            .iter()
-            .flat_map(|m| &m.primitives)
-            .collect();
-        assert!(primitives.len() > 1);
-        for primitive in primitives {
-            let WriterMacroPrimitive::Shape {
-                code: 4,
-                parameters,
-            } = primitive
-            else {
-                panic!("expected code 4")
-            };
-            let WriterMacroExpression::Number(vertices) = parameters[1] else {
-                panic!("numeric vertex count")
-            };
-            assert!(vertices <= 5000.0);
-        }
+        let outlines = outlines(&gerber);
+        assert!(outlines.len() > 1);
+        assert!(outlines.iter().all(|outline| outline.len() <= 5000));
         assert!((parsed_area(&gerber) - expected).abs() < 0.01);
     }
 
@@ -2284,26 +1878,21 @@ mod tests {
         }
         let contour = ContourBuf::from_parts(bbox, cmds);
 
-        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
-            outline: contour,
-            fill_rule: FillRule::NonZero,
-        }));
+        let path = artwork.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            vec![contour],
+        );
         artwork.push_object(
             layer_id,
             ArtworkObject {
                 polarity: Polarity::Dark,
                 order: Default::default(),
-                geometry: ArtworkGeometry::Flash {
-                    aperture,
-                    transform: pcb_ir::geom::Affine2::translation(Point::new(20.0, 5.0)),
-                },
-                bbox: BBox {
-                    min: Point::new(20.0, 5.0),
-                    max: Point::new(30.0, 15.0),
-                },
+                geometry: ArtworkGeometry::Region { path },
+                bbox: artwork.path_bbox(path),
                 meta: ObjectAttributes {
                     aperture_function: Some(vec!["Conductor".to_string()]),
-                    lower_flashes_to_regions: true,
                     ..ObjectAttributes::default()
                 },
             },
@@ -2323,7 +1912,7 @@ mod tests {
                 .unwrap();
         assert!(
             (summary.area_mm2 - 64.0).abs() < 0.01,
-            "the hole ring must survive inside the aperture macro: {}",
+            "the hole ring must survive decomposition: {}",
             summary.area_mm2
         );
     }
@@ -2358,7 +1947,6 @@ mod tests {
                 bbox: BBox::empty(),
                 meta: ObjectAttributes {
                     aperture_function: Some(vec!["CopperBalancing".to_string()]),
-                    lower_flashes_to_regions: false,
                     ..ObjectAttributes::default()
                 },
             },
@@ -2368,12 +1956,7 @@ mod tests {
         // The exact rounded hex flattens once into a concrete one-primitive
         // outline macro; legacy CAM importers never evaluate compound
         // parameterized macros per flash.
-        assert_eq!(gerber.aperture_macros.len(), 1);
-        assert_eq!(gerber.aperture_macros[0].primitives.len(), 1);
-        assert!(matches!(
-            &gerber.aperture_macros[0].primitives[0],
-            WriterMacroPrimitive::Shape { code: 4, .. }
-        ));
+        assert_eq!(outlines(&gerber).len(), 1);
         assert!(matches!(gerber.objects[0].kind, ObjectKind::Flash { .. }));
         let contents = crate::write_layer(&gerber).expect("write balance cell");
         assert_external_parser_accepts(&contents);
