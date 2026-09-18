@@ -104,26 +104,10 @@ const MAX_OPEN_GROUPS: usize = 256;
 
 /// Regularize filled rings on an exact output grid.
 ///
-/// The fixed-scale integer overlay resolves crossings, removes coincident
-/// vertices and merges collinear edges while snapping every result vertex to
-/// `grid`. Geometry that collapses during coordinate quantization is not
-/// representable on that output grid.
-pub fn simplify_shapes_on_grid(rings: Vec<Ring>, fill_rule: FillRule, grid: f64) -> Vec<Shape> {
-    integer_shapes_on_grid(rings, fill_rule, grid, IntOverlayOptions::default())
-        .into_iter()
-        .map(|shape| {
-            shape
-                .into_iter()
-                .map(|ring| {
-                    ring.into_iter()
-                        .map(|point| [point.x as f64 * grid, point.y as f64 * grid])
-                        .collect::<Ring>()
-                })
-                .collect::<Shape>()
-        })
-        .collect()
-}
-
+/// The fixed-scale integer overlay resolves crossings and removes coincident
+/// vertices while snapping every result vertex to `grid`. Geometry that
+/// collapses during coordinate quantization is not representable on that
+/// output grid.
 pub(super) fn integer_shapes_on_grid(
     rings: Vec<Ring>,
     fill_rule: FillRule,

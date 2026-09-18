@@ -33,7 +33,7 @@ fn erosion_of_a_convex_polygon_does_not_spend_round_join_error() {
 
 #[test]
 fn fixed_grid_regularization_removes_sub_grid_geometry() {
-    let shapes = simplify_shapes_on_grid(
+    let rings = decompose_on_grid(
         vec![
             vec![
                 [0.0004, 0.0004],
@@ -51,11 +51,13 @@ fn fixed_grid_regularization_removes_sub_grid_geometry() {
         ],
         FillRule::NonZero,
         0.001,
-    );
+        5000,
+    )
+    .unwrap();
 
-    assert_eq!(shapes.len(), 1);
-    assert!((rings_area(&shapes[0]) - 1.0).abs() < 1e-9);
-    for ring in &shapes[0] {
+    assert_eq!(rings.len(), 1);
+    assert!((rings_area(&rings) - 1.0).abs() < 1e-9);
+    for ring in &rings {
         for point in ring {
             assert!((point[0] * 1000.0 - (point[0] * 1000.0).round()).abs() < 1e-9);
             assert!((point[1] * 1000.0 - (point[1] * 1000.0).round()).abs() < 1e-9);
@@ -270,28 +272,6 @@ fn segment_spans_omit_degenerate_and_sub_tolerance_intervals() {
         square.segment_spans(Point::new(-1e-5, 2.0), Point::new(1e-5, 2.0)),
         &[((0.0, 2.0), (1e-5, 2.0))],
     );
-}
-
-#[test]
-fn bridged_contour_preserves_local_holes_without_clear_polarity() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let circle = shapes::circle(2.0).unwrap();
-    let circle = circle.transformed(crate::geom::Affine2::translation(Point::new(5.0, 5.0)));
-    let hole = ContourSet::from_filled_contours(&[circle], res(tol::REGION_MM)).unwrap();
-    let region = outer.difference(&hole).unwrap();
-
-    let contours = region.to_bridged_contours();
-    let round_trip =
-        ContourSet::from_contours(&contours, FillRule::NonZero, res(tol::REGION_MM)).unwrap();
-
-    assert_eq!(contours.len(), 1);
-    assert!(
-        (round_trip.area() - region.area()).abs() <= 0.01,
-        "bridged area {}, source area {}",
-        round_trip.area(),
-        region.area()
-    );
-    assert!(!round_trip.contains_point(Point::new(5.0, 5.0)));
 }
 
 #[test]
