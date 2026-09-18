@@ -291,7 +291,7 @@ fn lower_artwork_object(
     accuracy: GeometryAccuracy,
 ) -> Result<Vec<WriterObject>> {
     let attributes = lower_object_attributes(&object.meta);
-    let aperture_attributes = lower_aperture_attributes(&object.meta);
+    let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
     let mut objects = Vec::new();
     match object.geometry {
         ArtworkGeometry::Region { path } => {
@@ -300,14 +300,13 @@ fn lower_artwork_object(
                 path,
                 transform,
                 polarity,
-                &aperture_attributes,
+                &lower_aperture_function(aperture_function),
                 &attributes,
                 accuracy,
             )?);
         }
         ArtworkGeometry::Stroke { path } => {
             let artwork_path = &layer.arena.paths[path as usize];
-            let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
             let stroke = artwork_path.stroke().ok_or_else(|| {
                 GerberError::InvalidStructure(
                     "artwork stroke geometry references a path without stroke paint".to_string(),
@@ -353,7 +352,6 @@ fn lower_artwork_object(
             transform: placement,
         } => {
             let transform = transform.concat(placement);
-            let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
             let aperture =
                 apertures.flash(layer, aperture, transform, aperture_function, accuracy)?;
             objects.push(WriterObject::new(
@@ -563,9 +561,16 @@ impl ApertureTable {
         function: &[String],
         accuracy: GeometryAccuracy,
     ) -> Result<i32> {
+        let bounds = aperture.bbox();
+        if !(bounds.width() > 0.0 && bounds.height() > 0.0) {
+            return Err(GerberError::InvalidStructure(format!(
+                "cannot export empty Gerber aperture {:?}",
+                aperture.shape
+            )));
+        }
         let hole_diameter = (aperture.hole_diameter > 0.0).then_some(aperture.hole_diameter);
         let hole_nm = hole_diameter.map_or(0, quantize_mm);
-        let (template_key, template, dimensions) = match aperture.shape {
+        let (template_key, template) = match aperture.shape {
             ApertureShape::Circle { diameter } => (
                 ApertureTemplateKey::Circle {
                     diameter_nm: quantize_mm(diameter),
@@ -575,7 +580,6 @@ impl ApertureTable {
                     diameter,
                     hole_diameter,
                 },
-                [diameter, diameter],
             ),
             ApertureShape::Rectangle { width, height } => (
                 ApertureTemplateKey::Rectangle {
@@ -588,7 +592,6 @@ impl ApertureTable {
                     height,
                     hole_diameter,
                 },
-                [width, height],
             ),
             ApertureShape::Obround { width, height } => (
                 ApertureTemplateKey::Obround {
@@ -601,7 +604,6 @@ impl ApertureTable {
                     height,
                     hole_diameter,
                 },
-                [width, height],
             ),
             ApertureShape::Polygon {
                 diameter,
@@ -620,9 +622,10 @@ impl ApertureTable {
                     rotation_degrees: Some(rotation_degrees),
                     hole_diameter,
                 },
-                [diameter, diameter],
             ),
-            _ => {
+            ApertureShape::RoundRect { .. }
+            | ApertureShape::RoundedHex { .. }
+            | ApertureShape::Contour { .. } => {
                 let outlines =
                     prepare_on_grid(&aperture.contours(), aperture.fill_rule(), accuracy)?;
                 if outlines.is_empty() {
@@ -642,15 +645,9 @@ impl ApertureTable {
                             .collect(),
                     ),
                     WriterApertureTemplate::Outline { outlines },
-                    [1.0, 1.0],
                 )
             }
         };
-        if dimensions.iter().any(|dimension| *dimension <= 0.0) {
-            return Err(GerberError::InvalidStructure(format!(
-                "cannot export non-positive Gerber aperture {template:?}"
-            )));
-        }
         let key = ApertureKey {
             template: template_key,
             function: function.to_vec(),
@@ -787,13 +784,6 @@ fn lower_object_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue>
         values.push(AttributeValue::new(".N", [sanitize_attribute_field(net)]));
     }
     values
-}
-
-fn lower_aperture_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue> {
-    attributes
-        .aperture_function
-        .as_ref()
-        .map_or_else(Vec::new, |function| lower_aperture_function(function))
 }
 
 fn lower_aperture_function(function: &[String]) -> Vec<AttributeValue> {
