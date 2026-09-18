@@ -2553,6 +2553,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e9d4a992a9fe83130f41ceacceac3bb116a4355dfc9c8d6ecea4f1e4b4c6caf"
 
 [[package]]
+name = "i_triangle"
+version = "0.48.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "724353137db54dc96e4e92373f8e6017fcaac6e300ea41e5e320a132ab9264b2"
+dependencies = [
+ "i_key_sort",
+ "i_overlay",
+ "i_tree",
+]
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4334,6 +4345,7 @@ dependencies = [
  "boostvoronoi",
  "getrandom 0.3.4",
  "i_overlay",
+ "i_triangle",
  "ipc2581",
  "kurbo",
  "libm",

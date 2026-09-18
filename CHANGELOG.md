@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix self-touching Gerber regions and custom aperture outlines.
+
 ## [0.4.55] - 2026-09-18
 
 ### Fixed

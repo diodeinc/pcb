@@ -17,6 +17,7 @@ pcb-sexpr = { workspace = true }
 anyhow = { workspace = true }
 boostvoronoi = { workspace = true }
 i_overlay = { workspace = true }
+i_triangle = { workspace = true }
 ipc2581 = { workspace = true }
 kurbo = { workspace = true }
 libm = { workspace = true }
