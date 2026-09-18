@@ -4352,6 +4352,7 @@ dependencies = [
  "pcb-sexpr",
  "rayon",
  "resvg",
+ "rustc-hash",
  "terminal_size",
 ]
 
