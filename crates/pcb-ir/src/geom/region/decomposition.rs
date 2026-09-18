@@ -56,7 +56,7 @@ pub fn decompose_on_grid(
     for shape in shapes {
         // Keep already-simple boundaries instead of triangulating and rebuilding
         // them. Unique vertices alone do not exclude endpoint-on-edge contacts.
-        if shape.len() == 1 && shape[0].len() <= max_vertices && is_simple_ccw(&shape[0]) {
+        if shape.len() == 1 && shape[0].len() <= max_vertices && certify_simple_ccw(&shape[0]) {
             output.extend(shape);
             continue;
         }
@@ -101,7 +101,8 @@ fn cross(a: Vertex, b: Vertex, c: Vertex) -> i128 {
 /// Certify an identity decomposition using exact integer edges. The x sweep
 /// excludes distant edges before intersection tests; forward collinear boundary
 /// subdivisions are retained, but backtracking and all self-contacts fail.
-fn is_simple_ccw(ring: &[Vertex]) -> bool {
+/// False also means the work budget was exhausted: use certified triangulation.
+fn certify_simple_ccw(ring: &[Vertex]) -> bool {
     if ring.len() < 3 {
         return false;
     }
@@ -123,17 +124,28 @@ fn is_simple_ccw(ring: &[Vertex]) -> bool {
         {
             return false;
         }
-        area += cross(ring[0], a, b);
+        let Some(sum) = area.checked_add(cross(ring[0], a, b)) else {
+            return false;
+        };
+        area = sum;
         edges.push((a, b, i));
     }
     if area <= 0 {
         return false;
     }
     edges.sort_unstable_by_key(|&(a, b, i)| (a.x.min(b.x), i));
-    let mut active: Vec<(Vertex, Vertex, usize)> = Vec::new();
-    for (a, b, i) in edges {
-        active.retain(|&(c, d, _)| c.x.max(d.x) >= a.x.min(b.x));
-        for &(c, d, j) in &active {
+    // Bound candidate visits, including bounding-box rejects, so a crowded
+    // projection cannot turn this optional shortcut into quadratic work.
+    let mut budget = 16 * ring.len();
+    for (index, &(a, b, i)) in edges.iter().enumerate() {
+        for &(c, d, j) in &edges[index + 1..] {
+            if c.x.min(d.x) > a.x.max(b.x) {
+                break;
+            }
+            if budget == 0 {
+                return false;
+            }
+            budget -= 1;
             let distance = i.abs_diff(j);
             if distance == 1 || distance == ring.len() - 1 {
                 continue;
@@ -147,7 +159,6 @@ fn is_simple_ccw(ring: &[Vertex]) -> bool {
                 return false;
             }
         }
-        active.push((a, b, i));
     }
     true
 }
@@ -311,6 +322,52 @@ mod tests {
     }
 
     #[test]
+    fn crowded_projections_fall_back_without_changing_the_boundary() {
+        let teeth = 1249;
+        let mut ring = vec![
+            [0, 0],
+            [10000, 0],
+            [10000, 2 * teeth + 1],
+            [0, 2 * teeth + 1],
+        ];
+        for y in (0..teeth).rev() {
+            ring.extend([
+                [0, 2 * y + 2],
+                [9999, 2 * y + 2],
+                [9999, 2 * y + 1],
+                [0, 2 * y + 1],
+            ]);
+        }
+        for rotate in [false, true] {
+            let points: Vec<_> = ring
+                .iter()
+                .map(|&[x, y]| vertex(if rotate { [-y, x] } else { [x, y] }))
+                .collect();
+            // The same simple 5000-vertex comb exhausts the candidate budget
+            // along x, but stays cheap along y. Both routes must keep its fill.
+            assert_eq!(certify_simple_ccw(&points), rotate);
+            let input: Vec<_> = points.iter().map(|p| [p.x as f64, p.y as f64]).collect();
+            let output = decompose_on_grid(vec![input], FillRule::NonZero, 1., 5000).unwrap();
+            let mut coverage = Coverage::default();
+            coverage.ring(&points, 1);
+            let mut area2 = 0;
+            for ring in output {
+                assert!(ring.len() <= 5000);
+                let ring: Vec<_> = ring
+                    .iter()
+                    .map(|p| vertex([p[0] as i64, p[1] as i64]))
+                    .collect();
+                area2 += (1..ring.len() - 1)
+                    .map(|i| cross(ring[0], ring[i], ring[i + 1]))
+                    .sum::<i128>();
+                coverage.ring(&ring, -1);
+            }
+            assert_eq!(area2, 2 * (10000 * (2 * teeth + 1) - 9999 * teeth) as i128);
+            assert!(coverage.0.is_empty());
+        }
+    }
+
+    #[test]
     fn identity_certificate_checks_edges_not_just_vertices() {
         let cases: &[(&[[i64; 2]], bool)] = &[
             // Concave, with forward collinear subdivisions.
@@ -355,12 +412,86 @@ mod tests {
                     })
                     .collect();
                 for _ in 0..ring.len().max(1) {
-                    assert_eq!(is_simple_ccw(&ring), expected, "{ring:?}");
+                    assert_eq!(certify_simple_ccw(&ring), expected, "{ring:?}");
                     if !ring.is_empty() {
                         ring.rotate_left(1);
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn identity_certificate_handles_full_range_and_unit_determinants() {
+        let m = 1_i64 << 50;
+        for points in [
+            vec![[-m, -m], [m, -m], [m, m], [-m, m]],
+            // Despite spanning the supported range, twice this area is one:
+            // (2m-1)^2 - (2m)(2m-2) = 1. Floating-point predicates lose it.
+            vec![[-m, -m], [m - 1, m - 2], [m, m - 1]],
+        ] {
+            let mut ring: Vec<_> = points.into_iter().map(vertex).collect();
+            assert!(certify_simple_ccw(&ring));
+            ring.reverse();
+            assert!(!certify_simple_ccw(&ring));
+        }
+    }
+
+    #[test]
+    fn mixed_identity_and_holed_components_preserve_point_contact() {
+        let input = vec![
+            vec![[0., 0.], [20., 0.], [20., 15.], [0., 15.]],
+            vec![[2., 2.], [2., 7.], [8., 7.], [8., 2.]],
+            vec![[20., 15.], [24., 15.], [20., 18.]],
+        ];
+        let shapes = integer_shapes_on_grid(
+            input.clone(),
+            FillRule::NonZero,
+            1.,
+            IntOverlayOptions::keep_output_points(),
+        );
+        assert!(
+            shapes
+                .iter()
+                .any(|s| s.len() == 1 && certify_simple_ccw(&s[0]))
+        );
+        assert!(shapes.iter().any(|s| s.len() == 2));
+        for limit in [3, 5000] {
+            let output = decompose_on_grid(input.clone(), FillRule::NonZero, 1., limit).unwrap();
+            assert_eq!(
+                output,
+                decompose_on_grid(input.clone(), FillRule::NonZero, 1., limit).unwrap()
+            );
+            assert!(
+                output
+                    .iter()
+                    .any(|r| r.len() == 3 && r.iter().all(|p| input[2].contains(p)))
+            );
+            let mut coverage = Coverage::default();
+            for ring in &input {
+                coverage.ring(
+                    &ring
+                        .iter()
+                        .map(|p| vertex([p[0] as i64, p[1] as i64]))
+                        .collect::<Vec<_>>(),
+                    1,
+                );
+            }
+            let mut area2 = 0;
+            for ring in output {
+                assert!(ring.len() <= limit);
+                let ring: Vec<_> = ring
+                    .iter()
+                    .map(|p| vertex([p[0] as i64, p[1] as i64]))
+                    .collect();
+                assert_simple(&ring);
+                area2 += (1..ring.len() - 1)
+                    .map(|i| cross(ring[0], ring[i], ring[i + 1]))
+                    .sum::<i128>();
+                coverage.ring(&ring, -1);
+            }
+            assert_eq!(area2, 552); // 2 * (20*15 - 6*5 + 4*3/2).
+            assert!(coverage.0.is_empty());
         }
     }
 
