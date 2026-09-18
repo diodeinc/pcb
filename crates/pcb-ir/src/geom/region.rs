@@ -504,7 +504,7 @@ pub(crate) fn overlay_fill_rule(fill_rule: FillRule) -> OverlayFillRule {
 }
 
 /// Where an edge crosses the horizontal line at `y`, with its direction.
-fn horizontal_crossing(start: Point, end: Point, y: f64) -> Option<(f64, i32)> {
+pub(crate) fn horizontal_crossing(start: Point, end: Point, y: f64) -> Option<(f64, i32)> {
     // Half-open in y so a vertex shared by two edges is counted once, which
     // keeps the winding number honest.
     let direction = if start.y <= y && y < end.y {

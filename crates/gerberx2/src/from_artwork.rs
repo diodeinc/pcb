@@ -1857,9 +1857,154 @@ mod tests {
         assert_eq!(contours.len(), 1);
         assert_eq!(
             contours[0].segments.len(),
-            10,
-            "outer rectangle plus inner rectangle should be connected by two cut-in segments"
+            11,
+            "split the outer edge and connect the hole with two horizontal cut-in segments"
         );
+        let contents = crate::write_layer(&gerber).unwrap();
+        let parsed = crate::GerberX2::parse(&contents).unwrap();
+        let ObjectKind::Region { contours } = &parsed.objects()[0].kind else {
+            panic!("expected region");
+        };
+        for (start, end) in [(0.0, 2.0), (2.0, 0.0)] {
+            assert!(contours[0].segments.contains(&ContourSegment::Line {
+                start: GerberPoint { x: start, y: 2.0 },
+                end: GerberPoint { x: end, y: 2.0 },
+            }));
+        }
+    }
+
+    #[test]
+    fn horizontal_cut_ins_survive_grid_and_file_rounding() {
+        let accuracy = GeometryAccuracy::default();
+        for (source_y, grid_y) in [(3.0004, 3.0), (3.0006, 3.001)] {
+            let payloads = vec![
+                polygon_payload([
+                    Point::new(0.0, 0.0),
+                    Point::new(23.0, 0.0),
+                    Point::new(23.0, 17.0),
+                    Point::new(7.0, 17.0),
+                ]),
+                polygon_payload([
+                    Point::new(9.0, source_y),
+                    Point::new(15.0, 5.0),
+                    Point::new(12.0, 9.0),
+                ]),
+            ];
+            let contours =
+                lower_region_image_contours(&payloads, FillRule::EvenOdd, accuracy).unwrap();
+            let layer = GerberLayer {
+                objects: vec![WriterObject::dark(ObjectKind::Region { contours })],
+                ..GerberLayer::default()
+            };
+            let contents = crate::write_layer(&layer).unwrap();
+            let parsed = crate::GerberX2::parse(&contents).unwrap();
+            let ObjectKind::Region { contours } = &parsed.objects()[0].kind else {
+                panic!("expected region");
+            };
+            let edges: Vec<_> = contours[0]
+                .segments
+                .iter()
+                .map(|segment| {
+                    let ContourSegment::Line { start, end } = segment else {
+                        panic!("expected line")
+                    };
+                    assert_ne!(start, end);
+                    (*start, *end)
+                })
+                .collect();
+            let cut_ins: Vec<_> = edges
+                .iter()
+                .filter(|&&(a, b)| edges.contains(&(b, a)))
+                .collect();
+            assert_eq!(cut_ins.len(), 2);
+            // The sloped wall intersection needs a second rounding, from
+            // the geometry grid to the file's six decimal places.
+            let wall_x = (7.0_f64 * grid_y / 17.0 * 1e6).round() / 1e6;
+            assert!(cut_ins.contains(&&(
+                GerberPoint {
+                    x: wall_x,
+                    y: grid_y
+                },
+                GerberPoint { x: 9.0, y: grid_y }
+            )));
+            let expected = region::ContourSet::from_contours(
+                &payloads,
+                FillRule::EvenOdd,
+                Resolution::default(),
+            )
+            .unwrap();
+            let ring = edges.iter().map(|(p, _)| [p.x, p.y]).collect();
+            let actual = region::ContourSet::from_rings(
+                vec![ring],
+                FillRule::NonZero,
+                Resolution::default(),
+            )
+            .unwrap();
+            let difference = expected.difference(&actual).unwrap().area()
+                + actual.difference(&expected).unwrap().area();
+            assert!(
+                difference < 0.003,
+                "rounding changed filled geometry by {difference}"
+            );
+        }
+    }
+
+    #[test]
+    fn reject_cut_ins_that_collapse_at_file_precision() {
+        // Both inputs are on the geometry grid, but their distances to the
+        // sloped wall are about 0.33 nm and 1 nm, respectively.
+        for (top_y, representable, dx) in [
+            (3.001, false, 0.0),
+            (3.003, true, 0.0),
+            (3.001, false, -0.001),
+            (3.003, true, -0.001),
+        ] {
+            let payloads = vec![
+                polygon_payload([
+                    Point::new(dx, 0.0),
+                    Point::new(10.0 + dx, 0.0),
+                    Point::new(10.0 + dx, top_y),
+                    Point::new(0.001 + dx, top_y),
+                ]),
+                polygon_payload([
+                    Point::new(0.001 + dx, 3.0),
+                    Point::new(2.0 + dx, 2.0),
+                    Point::new(2.0 + dx, 3.0),
+                ]),
+            ];
+            let contours = lower_region_image_contours(
+                &payloads,
+                FillRule::EvenOdd,
+                GeometryAccuracy::default(),
+            )
+            .unwrap();
+            let layer = GerberLayer {
+                objects: vec![WriterObject::dark(ObjectKind::Region { contours })],
+                ..GerberLayer::default()
+            };
+            let result = crate::write_layer(&layer);
+            if !representable {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("collapses at output precision")
+                );
+                continue;
+            }
+            let parsed = crate::GerberX2::parse(&result.unwrap()).unwrap();
+            let ObjectKind::Region { contours } = &parsed.objects()[0].kind else {
+                panic!("expected region");
+            };
+            for contour in contours {
+                for segment in &contour.segments {
+                    let ContourSegment::Line { start, end } = segment else {
+                        panic!("expected line");
+                    };
+                    assert_ne!(start, end);
+                }
+            }
+        }
     }
 
     #[test]
