@@ -175,14 +175,13 @@ fn vscore_route_reliefs_inner(
         return Err(VScoreReliefError::EmptyBoundary);
     }
 
-    let protected_material = protected_board_material(input)?;
+    let protected = ProtectedMaterial::new(input)?;
     let mut debug = VScoreReliefDebug::default();
     // Every board's removal joins one batched union: unioning them one at a
     // time is quadratic in the board count.
     let mut removals = Vec::new();
     for boundary in &input.board_boundaries {
-        let Some(boundary_relief) = boundary_pocket_relief(boundary, &protected_material, input)?
-        else {
+        let Some(boundary_relief) = boundary_pocket_relief(boundary, &protected, input)? else {
             continue;
         };
         if include_debug {
@@ -341,7 +340,7 @@ fn append_contour_line_segments(cmds: &[PathCmd], lines: &mut Vec<VScoreLine>) {
 
 fn boundary_pocket_relief(
     boundary: &ContourBuf,
-    protected_material: &ContourSet,
+    protected: &ProtectedMaterial,
     input: &VScoreReliefInput,
 ) -> Result<Option<BoundaryRelief>, VScoreReliefError> {
     if boundary.bbox.is_empty()
@@ -371,7 +370,7 @@ fn boundary_pocket_relief(
 
     let geometry = compute_relief_geometry(
         boundary,
-        protected_material,
+        protected,
         &score_blockers,
         score_cell,
         input.tool_diameter_mm / 2.0,
@@ -423,7 +422,7 @@ struct ReliefGeometry {
 /// boundary (`∂R_i`) as closed profile contours.
 fn compute_relief_geometry(
     boundary: &ContourBuf,
-    protected_material: &ContourSet,
+    protected: &ProtectedMaterial,
     score_blockers: &ContourSet,
     score_cell: BBox,
     tool_radius: f64,
@@ -446,9 +445,9 @@ fn compute_relief_geometry(
     let dead_space = score_cell_region
         .difference(&aligned_board)?
         .union(score_blockers)?
-        .difference(protected_material)?;
+        .difference(&protected.material)?;
     let (legal_tool_centers, material_removal) =
-        tool_aware_material_removal(&dead_space, protected_material, tool_radius)?;
+        tool_aware_material_removal(&dead_space, protected, tool_radius)?;
 
     Ok(ReliefGeometry {
         dead_space,
@@ -465,33 +464,46 @@ fn compute_relief_geometry(
 /// centers back into the physical tool sweep.
 fn tool_aware_material_removal(
     dead_space: &ContourSet,
-    protected_material: &ContourSet,
+    protected: &ProtectedMaterial,
     tool_radius: f64,
 ) -> Result<(ContourSet, ContourSet), AccuracyError> {
     // T_i = (P_i ⊕ D_r) \ (B ⊕ D_r).
     let sacrificial_center_window = dead_space.disk_dilate(tool_radius)?;
-    let protected_clearance = protected_material.disk_dilate(tool_radius)?;
-    let legal_tool_centers = sacrificial_center_window.difference(&protected_clearance)?;
+    let legal_tool_centers = sacrificial_center_window.difference(&protected.clearance)?;
 
     // W_i = (T_i ⊕ D_r) \ B.
     let tool_sweep = legal_tool_centers
         .disk_dilate(tool_radius)?
-        .difference(protected_material)?;
+        .difference(&protected.material)?;
 
     // R_i = P_i ∪ W_i.
     let material_removal = dead_space.union(&tool_sweep)?;
     Ok((legal_tool_centers, material_removal))
 }
 
-/// Finished-board material that the route tool must not touch.
-fn protected_board_material(input: &VScoreReliefInput) -> Result<ContourSet, VScoreReliefError> {
-    let mut board_region = finished_board_region(&input.board_boundaries, input.resolution)?;
-    if !input.board_cutouts.is_empty() {
-        let cutout_region =
-            ContourSet::from_filled_contours(&input.board_cutouts, input.resolution)?;
-        board_region = board_region.difference(&cutout_region)?;
+/// Finished-board material that the route tool must not touch, with the
+/// tool-center region it forbids. Both span the whole array and are shared
+/// by every board's relief.
+struct ProtectedMaterial {
+    material: ContourSet,
+    /// `B ⊕ D_r`: the material dilated by the tool radius.
+    clearance: ContourSet,
+}
+
+impl ProtectedMaterial {
+    fn new(input: &VScoreReliefInput) -> Result<Self, VScoreReliefError> {
+        let mut material = finished_board_region(&input.board_boundaries, input.resolution)?;
+        if !input.board_cutouts.is_empty() {
+            let cutout_region =
+                ContourSet::from_filled_contours(&input.board_cutouts, input.resolution)?;
+            material = material.difference(&cutout_region)?;
+        }
+        let clearance = material.disk_dilate(input.tool_diameter_mm / 2.0)?;
+        Ok(Self {
+            material,
+            clearance,
+        })
     }
-    Ok(board_region)
 }
 
 fn score_blockers_for_cell(
