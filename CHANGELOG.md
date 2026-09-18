@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Emit spec-compliant horizontal cut-ins for Gerber region holes.
+
 ### Changed
 
 - Reuse LSP validation results for default-input netlist updates instead of evaluating boards twice per edit.

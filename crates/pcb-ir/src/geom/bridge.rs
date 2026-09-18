@@ -4,20 +4,23 @@
 //! directly; the standard encoding is a "cut-in": walk from the boundary to
 //! the hole, around it, and back along the same segment. The two coincident
 //! bridge edges cancel under any winding rule, so the filled geometry is
-//! unchanged — but the bridges are visible to CAM tools, so they must stay
-//! short and local. This is the classic hole-elimination construction used
-//! by ear-clipping triangulators: connect each hole's leftmost vertex to the
-//! nearest visible boundary point, merging holes left to right so a bridge
-//! can land on an already-merged hole but never cross one.
+//! unchanged. Gerber requires fully coincident, axis-aligned cut-ins of one
+//! orientation per contour. Connect each hole's leftmost vertex horizontally
+//! to the nearest boundary intersection, splitting the boundary edge there.
+//! Merge holes left to right so a bridge can land on an already-merged hole
+//! but never cross one. Include boundary vertices and horizontal edges in
+//! the ray cast: ignoring tangencies could overlap a boundary or cut-in.
 
-use crate::geom::region::{Ring, ring_signed_area};
+use crate::geom::Point;
+use crate::geom::region::{Ring, horizontal_crossing, ring_signed_area};
 
 /// Merge a shape's holes into its outer ring with zero-width bridges.
 ///
 /// `shape[0]` is the outer boundary and the remaining rings are its holes,
 /// as produced by regularized boolean output. Winding is normalized
 /// internally. The result is a single ring tracing the outer boundary with
-/// each hole spliced in through a pair of coincident bridge segments.
+/// each hole spliced in through a pair of exactly coincident horizontal
+/// segments. Rings must be simple, with disjoint holes inside the boundary.
 pub fn bridge_shape(mut shape: Vec<Ring>) -> Ring {
     if shape.is_empty() {
         return Ring::new();
@@ -27,7 +30,7 @@ pub fn bridge_shape(mut shape: Vec<Ring>) -> Ring {
         return contour;
     }
     // Outer counter-clockwise, holes clockwise, so the spliced walk keeps a
-    // consistent winding and the leftward ray cast sees descending edges.
+    // consistent winding.
     if ring_signed_area(&contour) < 0.0 {
         contour.reverse();
     }
@@ -48,11 +51,14 @@ pub fn bridge_shape(mut shape: Vec<Ring>) -> Ring {
 
 /// Splice one hole into the contour at the bridge vertex pair.
 fn merge_hole(contour: &mut Ring, hole: Ring) {
-    if hole.len() < 3 {
-        return;
-    }
     let (_, hole_start) = leftmost(&hole);
-    let bridge = find_bridge(contour, hole[hole_start]);
+    let (edge, intersection) = find_bridge(contour, hole[hole_start]);
+    let bridge = if contour[edge] == intersection {
+        edge
+    } else {
+        contour.insert(edge + 1, intersection);
+        edge + 1
+    };
 
     let mut merged = Ring::with_capacity(contour.len() + hole.len() + 2);
     merged.extend_from_slice(&contour[..=bridge]);
@@ -76,92 +82,35 @@ fn leftmost(ring: &Ring) -> (f64, usize) {
     (ring[best][0], best)
 }
 
-/// Find the contour vertex to bridge a hole point to: cast a ray to the left
-/// and take the nearest crossing, then refine against vertices inside the
-/// candidate triangle so the bridge cannot cross the boundary (David
-/// Eberly's construction, as used by ear-clipping hole elimination).
-fn find_bridge(contour: &Ring, hole_point: [f64; 2]) -> usize {
+/// Nearest intersection with the closed boundary, and its edge index.
+fn find_bridge(contour: &Ring, hole_point: [f64; 2]) -> (usize, [f64; 2]) {
     let [hx, hy] = hole_point;
-    let n = contour.len();
-
-    // Nearest leftward crossing of the horizontal ray through the hole point.
-    let mut qx = f64::NEG_INFINITY;
-    let mut m = None;
-    for i in 0..n {
-        let [px, py] = contour[i];
-        let [sx, sy] = contour[(i + 1) % n];
-        if hy <= py && hy >= sy && sy != py {
-            let x = px + (hy - py) * (sx - px) / (sy - py);
-            if x <= hx && x > qx {
-                qx = x;
-                m = Some(if px < sx { i } else { (i + 1) % n });
-                if x == hx {
-                    return m.expect("just set");
-                }
-            }
-        }
-    }
-    let Some(mut m) = m else {
-        // The hole is not strictly inside the contour (degenerate input);
-        // fall back to the nearest vertex so the output stays well-formed.
-        return nearest_vertex(contour, hole_point);
-    };
-
-    // The ray hit an edge interior. Any contour vertex inside the triangle
-    // (hole point, ray intersection, edge endpoint) would be crossed by a
-    // direct bridge; among those, bridge to the one with the smallest angle
-    // from the ray (breaking ties toward the hole).
-    let [mx, my] = contour[m];
-    let mut tan_min = f64::INFINITY;
-    for i in 0..n {
-        let [px, py] = contour[i];
-        if hx >= px && px >= mx && hx != px {
-            let inside = if hy < my {
-                point_in_triangle([hx, hy], [mx, my], [qx, hy], [px, py])
+    contour
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &[x, y])| {
+            let [ex, ey] = contour[(i + 1) % contour.len()];
+            // Visit vertices once, using their original coordinates. This
+            // includes horizontal edges and tangencies at local maxima,
+            // unlike the half-open crossing rule used for winding queries.
+            let x = if y == hy {
+                x
+            } else if ey == hy {
+                return None;
             } else {
-                point_in_triangle([qx, hy], [mx, my], [hx, hy], [px, py])
+                horizontal_crossing(Point::new(x, y), Point::new(ex, ey), hy)?.0
             };
-            if inside {
-                let tan = (hy - py).abs() / (hx - px);
-                if tan < tan_min || (tan == tan_min && px > contour[m][0]) {
-                    m = i;
-                    tan_min = tan;
-                }
-            }
-        }
-    }
-    m
-}
-
-fn nearest_vertex(ring: &Ring, [hx, hy]: [f64; 2]) -> usize {
-    let mut best = 0;
-    let mut best_distance = f64::INFINITY;
-    for (index, [x, y]) in ring.iter().enumerate() {
-        let distance = (x - hx).powi(2) + (y - hy).powi(2);
-        if distance < best_distance {
-            best_distance = distance;
-            best = index;
-        }
-    }
-    best
-}
-
-fn point_in_triangle(a: [f64; 2], b: [f64; 2], c: [f64; 2], p: [f64; 2]) -> bool {
-    let sign = |p1: [f64; 2], p2: [f64; 2], p3: [f64; 2]| {
-        (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1])
-    };
-    let d1 = sign(p, a, b);
-    let d2 = sign(p, b, c);
-    let d3 = sign(p, c, a);
-    let has_negative = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
-    let has_positive = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
-    !(has_negative && has_positive)
+            (x <= hx).then_some((i, [x, hy]))
+        })
+        .max_by(|a, b| a.1[0].total_cmp(&b.1[0]))
+        .expect("a hole inside a regularized shape has a left boundary")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::region::rings_area;
+    use crate::geom::region::{ContourSet, rings_area};
+    use crate::geom::{FillRule, Resolution};
 
     fn rect(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Ring {
         vec![
@@ -189,6 +138,7 @@ mod tests {
             let a = ring[i];
             let b = ring[(i + 1) % n];
             if seen.contains(&(quantize(b), quantize(a))) {
+                assert_eq!(a[1], b[1], "cut-ins must all be horizontal");
                 lengths.push((a[0] - b[0]).hypot(a[1] - b[1]));
             }
             seen.insert((quantize(a), quantize(b)));
@@ -206,15 +156,8 @@ mod tests {
         assert!((merged_area(&merged) - (1000.0 - 4.0)).abs() < 1e-9);
         let bridges = bridge_lengths(&merged);
         assert_eq!(bridges.len(), 1);
-        // Nearest boundary leftward of x=90 within the strip is far (x=0),
-        // but the refinement may land on a corner; either way the bridge
-        // must be dramatically shorter than the old first-vertex anchor
-        // would allow from the far end of the board.
-        assert!(
-            bridges[0] <= 91.0,
-            "bridge length {} should not exceed the leftward span",
-            bridges[0]
-        );
+        assert_eq!(bridges, [90.0]);
+        assert!(merged.contains(&[0.0, 4.0]), "split the wall, not a corner");
     }
 
     #[test]
@@ -240,11 +183,9 @@ mod tests {
         assert!((merged_area(&merged) - (1000.0 - hole_area)).abs() < 1e-9);
         let bridges = bridge_lengths(&merged);
         assert_eq!(bridges.len(), 9);
-        // Every hole is 8mm from its left neighbor (or ~11mm diagonally from
-        // the wall corner); a global-anchor scheme would produce bridges up
-        // to ~90mm.
+        // Every hole is 8mm from its left neighbor (or 10mm from the wall).
         for length in &bridges {
-            assert!(*length <= 11.0, "bridge too long: {length}");
+            assert!(*length <= 10.0, "bridge too long: {length}");
         }
     }
 
@@ -267,9 +208,8 @@ mod tests {
         shape.extend(holes);
         let merged = bridge_shape(shape);
 
-        // Exact area identity is only possible if no bridge crosses any
-        // boundary (a crossing would flip winding somewhere and change the
-        // shoelace sum).
+        // Signed area alone cannot detect crossing bridges: reverse edges
+        // cancel regardless of where they pass. Check intersections too.
         assert!((merged_area(&merged) - (3600.0 - hole_area)).abs() < 1e-9);
 
         // And explicitly: no two non-adjacent segments properly intersect,
@@ -291,6 +231,125 @@ mod tests {
                 assert!(
                     !proper,
                     "segments {i} and {j} cross: {a1:?}->{a2:?} x {b1:?}->{b2:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adversarial_cut_ins_preserve_structure_and_filled_geometry() {
+        let cases = [
+            // Sloped wall: the intersection is not an existing vertex.
+            vec![
+                vec![[0.0, 0.0], [23.0, 0.0], [23.0, 17.0], [7.0, 17.0]],
+                vec![[9.0, 3.0], [15.0, 5.0], [12.0, 9.0]],
+            ],
+            // Top and bottom tangencies with horizontal edges, and a
+            // vertex-only tangent at the triangular hole's maximum.
+            vec![
+                rect(0.0, 0.0, 30.0, 20.0),
+                rect(2.0, 2.0, 5.0, 6.0),
+                rect(8.0, 6.0, 10.0, 9.0),
+                rect(13.0, 6.0, 15.0, 8.0),
+                vec![[3.0, 10.0], [7.0, 10.0], [5.0, 14.0]],
+                rect(18.0, 14.0, 21.0, 17.0),
+            ],
+            // Concave outer boundary and hole. The later hole's ray must
+            // land on the earlier hole, not cut through it to the wall.
+            vec![
+                vec![
+                    [0.0, 0.0],
+                    [30.0, 0.0],
+                    [30.0, 20.0],
+                    [0.0, 20.0],
+                    [0.0, 12.0],
+                    [6.0, 12.0],
+                    [6.0, 8.0],
+                    [0.0, 8.0],
+                ],
+                vec![
+                    [9.0, 3.0],
+                    [16.0, 3.0],
+                    [16.0, 6.0],
+                    [12.0, 6.0],
+                    [12.0, 14.0],
+                    [9.0, 14.0],
+                ],
+                rect(19.0, 10.0, 24.0, 16.0),
+                rect(2.0, 15.0, 5.0, 18.0),
+            ],
+        ];
+        for mut shape in cases {
+            // Input hole order, ring starting vertex, and winding are not
+            // constraints on the shared encoding contract.
+            for _ in 0..2 {
+                let merged = bridge_shape(shape.clone());
+                assert_cut_ins(&merged, shape.len() - 1);
+                let expected =
+                    ContourSet::from_rings(shape.clone(), FillRule::EvenOdd, Resolution::default())
+                        .unwrap();
+                for rule in [FillRule::EvenOdd, FillRule::NonZero] {
+                    let actual =
+                        ContourSet::from_rings(vec![merged.clone()], rule, Resolution::default())
+                            .unwrap();
+                    let difference = expected.difference(&actual).unwrap().area()
+                        + actual.difference(&expected).unwrap().area();
+                    assert!(difference < 1e-8, "filled geometry changed: {difference}");
+                }
+                shape[1..].reverse();
+                for ring in &mut shape {
+                    ring.reverse();
+                    ring.rotate_left(1);
+                }
+            }
+        }
+    }
+
+    fn assert_cut_ins(ring: &Ring, holes: usize) {
+        let edges: Vec<_> = ring
+            .iter()
+            .copied()
+            .zip(ring.iter().copied().cycle().skip(1))
+            .collect();
+        let mut pairs = 0;
+        let cross = |a: [f64; 2], b: [f64; 2], p: [f64; 2]| {
+            (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+        };
+        let interior = |a: [f64; 2], b: [f64; 2], p: [f64; 2]| {
+            cross(a, b, p).abs() < 1e-10
+                && (p[0] - a[0]) * (p[0] - b[0]) + (p[1] - a[1]) * (p[1] - b[1]) < 0.0
+        };
+        for (i, &(a, b)) in edges.iter().enumerate() {
+            assert_ne!(a, b, "zero-length edge");
+            for &(c, d) in &edges[i + 1..] {
+                if a == d && b == c {
+                    assert_eq!(a[1], b[1], "non-horizontal cut-in");
+                    pairs += 1;
+                    continue;
+                }
+                assert!(!(a == c && b == d), "repeated edge");
+                assert!(
+                    !interior(a, b, c)
+                        && !interior(a, b, d)
+                        && !interior(c, d, a)
+                        && !interior(c, d, b),
+                    "partial overlap or T-junction"
+                );
+                assert!(
+                    !(cross(a, b, c) * cross(a, b, d) < -1e-10
+                        && cross(c, d, a) * cross(c, d, b) < -1e-10),
+                    "crossing edges"
+                );
+            }
+        }
+        assert_eq!(pairs, holes, "exactly one reverse pair per hole");
+        for (i, &point) in ring.iter().enumerate() {
+            if ring[i + 1..].contains(&point) {
+                assert!(
+                    edges
+                        .iter()
+                        .any(|&(a, b)| (point == a || point == b) && edges.contains(&(b, a))),
+                    "non-cut-in self-touch"
                 );
             }
         }

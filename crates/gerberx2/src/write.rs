@@ -677,7 +677,15 @@ impl<'a> Writer<'a> {
             self.write_move(segment_start(first));
             for segment in &contour.segments {
                 match *segment {
-                    ContourSegment::Line { end, .. } => {
+                    ContourSegment::Line { start, end } => {
+                        if self.coordinate(start.x, true) == self.coordinate(end.x, true)
+                            && self.coordinate(start.y, false) == self.coordinate(end.y, false)
+                        {
+                            return Err(GerberError::InvalidStructure(format!(
+                                "region segment from ({}, {}) to ({}, {}) collapses at output precision; increase precision or repair the source geometry",
+                                start.x, start.y, end.x, end.y
+                            )));
+                        }
                         self.set_plot_mode(PlotMode::Linear);
                         self.write_plot(end, None);
                     }
@@ -783,7 +791,12 @@ impl<'a> Writer<'a> {
             self.layer.coordinate_format.y_decimal_digits
         };
         let scale = 10_f64.powi(decimals as i32);
-        format!("{:.0}", value * scale)
+        let coordinate = format!("{:.0}", value * scale);
+        if coordinate == "-0" {
+            "0".to_string()
+        } else {
+            coordinate
+        }
     }
 
     fn write_decimal(&mut self, value: f64) {
