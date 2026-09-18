@@ -503,14 +503,18 @@ fn unembedded_faces(pcb_path: &Path) -> anyhow::Result<Vec<String>> {
         .collect())
 }
 
-/// Apply moved() path renames to a PCB file
 fn apply_moved_paths(
     pcb_path: &Path,
-    moved_paths: &HashMap<String, String>,
+    schematic: &Schematic,
     diagnostics_pcb_path: &str,
     diagnostics: &mut pcb_zen_core::Diagnostics,
 ) -> anyhow::Result<()> {
-    if moved_paths.is_empty() {
+    if schematic.moved_paths.is_empty()
+        && !schematic
+            .instances
+            .keys()
+            .any(|r| r.instance_path.iter().any(|s| s.contains(':')))
+    {
         return Ok(());
     }
 
@@ -519,7 +523,11 @@ fn apply_moved_paths(
     let board = pcb_sexpr::parse(&pcb_content)
         .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
 
-    let (patches, renames) = compute_moved_paths_patches(&board, moved_paths);
+    let (patches, mut renames) = compute_moved_paths_patches(&board, &schematic.moved_paths);
+    let pcb_content = render_patches(&pcb_content, &patches)?;
+    let board = pcb_sexpr::parse(&pcb_content)?;
+    let (patches, repaired_paths) = moved::compute_truncated_path_patches(&board, schematic)?;
+    renames.extend(repaired_paths);
 
     if renames.is_empty() {
         return Ok(());
@@ -822,6 +830,10 @@ pub fn generate_layout_in(
 
     ensure_board_compatible_with_installed_kicad(&paths.pcb)?;
 
+    if pcb_exists {
+        apply_moved_paths(&paths.pcb, schematic, &diagnostics_pcb_path, diagnostics)?;
+    }
+
     if pcb_exists && sync_footprints {
         refresh_board_embedded_models(&paths.pcb, schematic)?;
     }
@@ -836,16 +848,9 @@ pub fn generate_layout_in(
         ));
     }
 
-    // Apply moved() path renames and detect implicit net renames before sync
     if pcb_exists {
         // With the flag on before the sync saves, this run embeds the fonts.
         embed_board_fonts(&paths.pcb)?;
-        apply_moved_paths(
-            &paths.pcb,
-            &schematic.moved_paths,
-            &diagnostics_pcb_path,
-            diagnostics,
-        )?;
         repair_net_names(&paths.pcb, schematic, &diagnostics_pcb_path, diagnostics)?;
     }
 
@@ -1052,9 +1057,6 @@ pub mod utils {
             .map(str::to_string)
     }
 
-    /// Serialize the schematic to JSON for Python layout sync, enriching component
-    /// instances with a derived `footprint_fpid` field while preserving the original
-    /// authored `attributes.footprint` value.
     pub fn layout_json_netlist(schematic: &Schematic) -> anyhow::Result<String> {
         let mut json: serde_json::Value = serde_json::from_str(
             &schematic
@@ -1068,6 +1070,15 @@ pub mod utils {
             .context("Schematic JSON missing instances object")?;
 
         for (inst_ref, inst) in &schematic.instances {
+            let instance = instances
+                .get_mut(&inst_ref.to_string())
+                .and_then(serde_json::Value::as_object_mut)
+                .with_context(|| format!("Missing instance in JSON: {inst_ref}"))?;
+            instance.insert(
+                "instance_path".to_string(),
+                serde_json::Value::String(inst_ref.instance_path.join(".")),
+            );
+
             if inst.kind != InstanceKind::Component {
                 continue;
             }
@@ -1079,11 +1090,6 @@ pub mod utils {
             let (footprint_fpid, _) =
                 try_format_footprint_with_package_roots(fp_attr, &schematic.package_roots)
                     .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?;
-
-            let instance = instances
-                .get_mut(&inst_ref.to_string())
-                .and_then(serde_json::Value::as_object_mut)
-                .with_context(|| format!("Missing component instance in JSON: {inst_ref}"))?;
 
             instance.insert(
                 "footprint_fpid".to_string(),

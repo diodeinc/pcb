@@ -200,26 +200,14 @@ class JsonNetlistParser:
         parser.package_roots = data.get("package_roots", {})
 
         # Parse modules first
-        for instance_ref, instance in data["instances"].items():
+        for instance in data["instances"].values():
             if instance["kind"] != "Module":
                 continue
 
-            # Extract module path (remove file path and <root> prefix)
-            if ":" in instance_ref:
-                _, instance_path = instance_ref.rsplit(":", 1)
-            else:
-                instance_path = instance_ref
-
-            # Remove <root> prefix if present
-            path_parts = instance_path.split(".")
-            if path_parts[0] == "<root>":
-                path_parts = path_parts[1:]
-
+            module_path = instance["instance_path"]
             # Skip the root module itself
-            if not path_parts:
+            if not module_path:
                 continue
-
-            module_path = ".".join(path_parts)
 
             # Get layout_path attribute if present
             layout_path = None
@@ -260,24 +248,7 @@ class JsonNetlistParser:
                     "'footprint_fpid'; regenerate the layout netlist with a current pcb tool."
                 )
 
-            # Build hierarchical path - this needs to match the Rust implementation
-            # Extract the instance path after the root module
-            # Format: "/path/to/file.star:<root>.BMI270.IC"
-            # We need to extract "BMI270.IC" as the hierarchical name
-
-            # Split by ':' to separate file path from instance path
-            if ":" in instance_ref:
-                _, instance_path = instance_ref.rsplit(":", 1)
-            else:
-                instance_path = instance_ref
-
-            # Remove <root> prefix if present
-            path_parts = instance_path.split(".")
-            if path_parts[0] == "<root>":
-                path_parts = path_parts[1:]
-
-            # The hierarchical name is the dot-separated path (matching comp.hier_name in Rust)
-            hier_name = ".".join(path_parts)
+            hier_name = instance["instance_path"]
 
             # Generate UUID v5 using the same namespace and input as Rust
             # UUID_NAMESPACE_URL = uuid.UUID('6ba7b811-9dad-11d1-80b4-00c04fd430c8')
