@@ -727,9 +727,10 @@ impl<'a> Writer<'a> {
         self.output.push_str("D02*\n");
     }
 
-    /// Emit every circular arc with sweeps of at most 180 degrees. In G75,
-    /// coincident endpoints mean a full circle; bounding the sweep keeps long
-    /// arcs away from that ambiguity when a CAM tool rounds coordinates.
+    /// Split circular arcs into nominal sweeps of at most 180 degrees before
+    /// coordinate rounding. Serialized sweeps can differ slightly; G75 allows
+    /// this. Splitting keeps long arcs away from coincident endpoints, which
+    /// G75 interprets as a full circle.
     /// Equal subdivisions avoid leaving a tiny remainder for near-full circles.
     fn write_arc(&mut self, start: Point, end: Point, offset: Point, clockwise: bool) {
         use pcb_ir::geom::{Arc, Point as GeometryPoint, Segment};
