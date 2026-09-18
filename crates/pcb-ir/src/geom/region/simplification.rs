@@ -114,11 +114,16 @@ pub(super) fn integer_shapes_on_grid(
     grid: f64,
     options: IntOverlayOptions<u128>,
 ) -> IntShapes<i64> {
+    // Round half up, deciding ties on a 1/1024 sub-grid so floating-point
+    // noise cannot flip them. Unlike rounding away from zero this commutes
+    // with translation by grid multiples: a dimension that is a whole number
+    // of grid steps survives exactly wherever the shape sits.
+    let snap = |value: f64| ((value / grid * 1024.0).round() as i64 + 512).div_euclid(1024);
     let rings = rings
         .into_iter()
         .map(|ring| {
             ring.into_iter()
-                .map(|[x, y]| IntPoint::new((x / grid).round() as i64, (y / grid).round() as i64))
+                .map(|[x, y]| IntPoint::new(snap(x), snap(y)))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
