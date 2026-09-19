@@ -692,19 +692,22 @@ impl SandboxClient {
     }
 
     fn request_timeout(&self, timeout: Duration) -> Result<Duration> {
-        let deadline = match &self.scope {
-            RequestScope::Unleased => Instant::now() + timeout,
+        let remaining = match &self.scope {
+            RequestScope::Unleased => timeout,
             RequestScope::Editing(state) => {
                 if !state.running.load(Ordering::SeqCst) {
                     bail!("Sandbox sync stopped");
                 }
-                state.lease.lock().unwrap().1
+                state
+                    .lease
+                    .lock()
+                    .unwrap()
+                    .1
+                    .saturating_duration_since(Instant::now())
             }
-            RequestScope::Cleanup(deadline) => *deadline,
-        };
-        let remaining = deadline
-            .saturating_duration_since(Instant::now())
-            .min(timeout);
+            RequestScope::Cleanup(deadline) => deadline.saturating_duration_since(Instant::now()),
+        }
+        .min(timeout);
         if remaining.is_zero() {
             bail!("Sandbox request deadline or editor lease expired");
         }
@@ -713,13 +716,18 @@ impl SandboxClient {
 
     fn wait(&self, duration: Duration) -> Result<()> {
         let deadline = Instant::now() + duration;
-        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            // Completing a backoff is not the same as exhausting the request
+            // budget. In particular, consecutive clock reads can be equal.
             thread::sleep(
-                self.request_timeout(remaining)?
-                    .min(Duration::from_millis(50)),
+                self.request_timeout(Duration::from_millis(50))?
+                    .min(remaining),
             );
         }
-        Ok(())
     }
 
     fn url(&self, path: &str) -> String {
@@ -1017,6 +1025,27 @@ fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_waits_do_not_expire_unleased_requests() {
+        let mut client = SandboxClient {
+            api_base_url: "http://localhost".to_string(),
+            ctx: WorkspaceContext::from_api_base_url("http://localhost"),
+            http: Client::new(),
+            connections: Arc::default(),
+            scope: RequestScope::Unleased,
+        };
+        // A relative timeout must not expire inside the budget calculation.
+        let short = Duration::from_nanos(1);
+        assert_eq!(client.request_timeout(short).unwrap(), short);
+        assert!(client.request_timeout(Duration::ZERO).is_err());
+        client.wait(Duration::ZERO).unwrap();
+        client.wait(short).unwrap();
+
+        // Finishing a backoff is not an error; exhausting a real deadline is.
+        client.scope = RequestScope::Cleanup(Instant::now() - Duration::from_secs(1));
+        assert!(client.wait(Duration::from_millis(1)).is_err());
+    }
 
     #[test]
     fn extracts_exec_id_from_location() {
