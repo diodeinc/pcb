@@ -12,6 +12,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Fix self-touching Gerber regions and custom aperture outlines.
 
+### Changed
+
+- Speed up Gerber export, most of all for V-scored board arrays.
+- Omit redundant moves from Gerber strokes for smaller files.
+
 ## [0.4.55] - 2026-09-18
 
 ### Fixed

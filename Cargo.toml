@@ -119,6 +119,7 @@ pathdiff = "0.2"
 percent-encoding = "2.3"
 petgraph = "0.8"
 rayon = "1.12"
+rustc-hash = "2.1"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "http2", "json", "multipart", "rustls", "system-proxy"] }
 ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 rand = "0.10"

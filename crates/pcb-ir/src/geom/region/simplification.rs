@@ -104,37 +104,26 @@ const MAX_OPEN_GROUPS: usize = 256;
 
 /// Regularize filled rings on an exact output grid.
 ///
-/// The fixed-scale integer overlay resolves crossings, removes coincident
-/// vertices and merges collinear edges while snapping every result vertex to
-/// `grid`. Geometry that collapses during coordinate quantization is not
-/// representable on that output grid.
-pub fn simplify_shapes_on_grid(rings: Vec<Ring>, fill_rule: FillRule, grid: f64) -> Vec<Shape> {
-    integer_shapes_on_grid(rings, fill_rule, grid, IntOverlayOptions::default())
-        .into_iter()
-        .map(|shape| {
-            shape
-                .into_iter()
-                .map(|ring| {
-                    ring.into_iter()
-                        .map(|point| [point.x as f64 * grid, point.y as f64 * grid])
-                        .collect::<Ring>()
-                })
-                .collect::<Shape>()
-        })
-        .collect()
-}
-
+/// The fixed-scale integer overlay resolves crossings and removes coincident
+/// vertices while snapping every result vertex to `grid`. Geometry that
+/// collapses during coordinate quantization is not representable on that
+/// output grid.
 pub(super) fn integer_shapes_on_grid(
     rings: Vec<Ring>,
     fill_rule: FillRule,
     grid: f64,
     options: IntOverlayOptions<u128>,
 ) -> IntShapes<i64> {
+    // Round half up, deciding ties on a 1/1024 sub-grid so floating-point
+    // noise cannot flip them. Unlike rounding away from zero this commutes
+    // with translation by grid multiples: a dimension that is a whole number
+    // of grid steps survives exactly wherever the shape sits.
+    let snap = |value: f64| ((value / grid * 1024.0 + 0.5).floor() as i64 + 512).div_euclid(1024);
     let rings = rings
         .into_iter()
         .map(|ring| {
             ring.into_iter()
-                .map(|[x, y]| IntPoint::new((x / grid).round() as i64, (y / grid).round() as i64))
+                .map(|[x, y]| IntPoint::new(snap(x), snap(y)))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();

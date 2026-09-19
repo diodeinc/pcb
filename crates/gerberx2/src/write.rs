@@ -1,6 +1,8 @@
 use crate::types::*;
 use crate::{GerberError, Result};
 use pcb_ir::geom::Polarity;
+use pcb_ir::geom::region::Ring;
+use std::fmt::Write as _;
 
 /// String-backed X2 attribute used by the Gerber writer.
 ///
@@ -76,94 +78,9 @@ pub enum WriterApertureTemplate {
         rotation_degrees: Option<f64>,
         hole_diameter: Option<f64>,
     },
-    Macro {
-        name: String,
-        parameters: Vec<f64>,
-    },
-    Block {
-        objects: Vec<WriterObject>,
-    },
-}
-
-impl TryFrom<ApertureTemplate> for WriterApertureTemplate {
-    type Error = GerberError;
-
-    fn try_from(template: ApertureTemplate) -> Result<Self> {
-        match template {
-            ApertureTemplate::Circle {
-                diameter,
-                hole_diameter,
-            } => Ok(Self::Circle {
-                diameter,
-                hole_diameter,
-            }),
-            ApertureTemplate::Rectangle {
-                width,
-                height,
-                hole_diameter,
-            } => Ok(Self::Rectangle {
-                width,
-                height,
-                hole_diameter,
-            }),
-            ApertureTemplate::Obround {
-                width,
-                height,
-                hole_diameter,
-            } => Ok(Self::Obround {
-                width,
-                height,
-                hole_diameter,
-            }),
-            ApertureTemplate::Polygon {
-                outer_diameter,
-                vertices,
-                rotation_degrees,
-                hole_diameter,
-            } => Ok(Self::Polygon {
-                outer_diameter,
-                vertices,
-                rotation_degrees,
-                hole_diameter,
-            }),
-            ApertureTemplate::Macro { .. } | ApertureTemplate::Block { .. } => Err(
-                GerberError::InvalidStructure(
-                    "parsed macro/block aperture templates contain interned data; construct WriterApertureTemplate directly"
-                        .to_string(),
-                ),
-            ),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct WriterApertureMacro {
-    pub name: String,
-    pub primitives: Vec<WriterMacroPrimitive>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum WriterMacroPrimitive {
-    Comment(String),
-    VariableDefinition {
-        variable: usize,
-        expression: WriterMacroExpression,
-    },
-    Shape {
-        code: i32,
-        parameters: Vec<WriterMacroExpression>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum WriterMacroExpression {
-    Number(f64),
-    Variable(usize),
-    UnaryMinus(Box<WriterMacroExpression>),
-    Add(Box<WriterMacroExpression>, Box<WriterMacroExpression>),
-    Subtract(Box<WriterMacroExpression>, Box<WriterMacroExpression>),
-    Multiply(Box<WriterMacroExpression>, Box<WriterMacroExpression>),
-    Divide(Box<WriterMacroExpression>, Box<WriterMacroExpression>),
+    /// Filled simple polygons about the flash origin, written as one
+    /// aperture macro of additive outline primitives.
+    Outline { outlines: Vec<Ring> },
 }
 
 /// One ordered graphical object plus X2 object attributes active while emitting it.
@@ -172,40 +89,24 @@ pub struct WriterObject {
     pub kind: ObjectKind,
     pub polarity: Polarity,
     pub repeat: Option<StepRepeat>,
-    /// Gerber aperture load transformation active for this object.
-    pub aperture_transform: WriterApertureTransform,
     /// Aperture attributes attached directly to a region object.
     pub aperture_attributes: Vec<AttributeValue>,
     pub attributes: Vec<AttributeValue>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WriterApertureTransform {
-    pub mirroring: Mirroring,
-    pub rotation_degrees: f64,
-    pub scaling: f64,
-}
-
-impl Default for WriterApertureTransform {
-    fn default() -> Self {
-        Self {
-            mirroring: Mirroring::None,
-            rotation_degrees: 0.0,
-            scaling: 1.0,
-        }
-    }
-}
-
 impl WriterObject {
-    pub fn dark(kind: ObjectKind) -> Self {
+    pub fn new(kind: ObjectKind, polarity: Polarity, attributes: Vec<AttributeValue>) -> Self {
         Self {
             kind,
-            polarity: Polarity::Dark,
+            polarity,
             repeat: None,
-            aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: Vec::new(),
-            attributes: Vec::new(),
+            attributes,
         }
+    }
+
+    pub fn dark(kind: ObjectKind) -> Self {
+        Self::new(kind, Polarity::Dark, Vec::new())
     }
 }
 
@@ -221,7 +122,6 @@ pub struct GerberLayer {
     pub unit: Unit,
     pub coordinate_format: CoordinateFormat,
     pub file_attributes: Vec<AttributeValue>,
-    pub aperture_macros: Vec<WriterApertureMacro>,
     pub apertures: Vec<WriterAperture>,
     pub objects: Vec<WriterObject>,
 }
@@ -237,7 +137,6 @@ impl Default for GerberLayer {
                 y_decimal_digits: 6,
             },
             file_attributes: Vec::new(),
-            aperture_macros: Vec::new(),
             apertures: Vec::new(),
             objects: Vec::new(),
         }
@@ -258,8 +157,10 @@ struct Writer<'a> {
     current_polarity: Polarity,
     current_plot_mode: Option<PlotMode>,
     current_repeat: Option<StepRepeat>,
-    current_coordinates: Option<(String, String)>,
-    current_aperture_transform: WriterApertureTransform,
+    /// Modal X/Y last written.
+    current_coordinates: Option<(i64, i64)>,
+    /// The current point while it is known to continue a stroke.
+    current_point: Option<(i64, i64)>,
     current_aperture_attributes: Vec<AttributeValue>,
     current_object_attributes: Vec<AttributeValue>,
 }
@@ -274,7 +175,7 @@ impl<'a> Writer<'a> {
             current_plot_mode: None,
             current_repeat: None,
             current_coordinates: None,
-            current_aperture_transform: WriterApertureTransform::default(),
+            current_point: None,
             current_aperture_attributes: Vec::new(),
             current_object_attributes: Vec::new(),
         }
@@ -290,8 +191,10 @@ impl<'a> Writer<'a> {
             self.write_attribute("TF", attr)?;
         }
 
-        for macro_def in &self.layer.aperture_macros {
-            self.write_macro(macro_def)?;
+        for aperture in &self.layer.apertures {
+            if let WriterApertureTemplate::Outline { outlines } = &aperture.template {
+                self.write_outline_macro(aperture.code, outlines)?;
+            }
         }
 
         for aperture in &self.layer.apertures {
@@ -299,15 +202,8 @@ impl<'a> Writer<'a> {
                 self.write_attribute("TA", attr)?;
             }
             self.write_aperture(aperture)?;
-            if !aperture.attributes.is_empty()
-                || !self.current_aperture_attributes.is_empty()
-                || !self.current_object_attributes.is_empty()
-            {
-                // %TD clears the whole attribute dictionary, including any
-                // object attributes a block aperture's contents left behind.
+            if !aperture.attributes.is_empty() {
                 self.output.push_str("%TD*%\n");
-                self.current_aperture_attributes.clear();
-                self.current_object_attributes.clear();
             }
         }
 
@@ -317,38 +213,24 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
-    fn write_macro(&mut self, macro_def: &WriterApertureMacro) -> Result<()> {
-        validate_identifier(&macro_def.name, "aperture macro name")?;
-        self.output.push_str("%AM");
-        self.output.push_str(&macro_def.name);
-        self.output.push_str("*\n");
-        for primitive in &macro_def.primitives {
-            match primitive {
-                WriterMacroPrimitive::Comment(comment) => {
-                    validate_no_command_delimiters(comment, "aperture macro comment")?;
-                    self.output.push_str("0 ");
-                    self.output.push_str(comment);
-                    self.output.push_str("*\n");
-                }
-                WriterMacroPrimitive::VariableDefinition {
-                    variable,
-                    expression,
-                } => {
-                    self.output.push('$');
-                    self.output.push_str(&variable.to_string());
-                    self.output.push('=');
-                    self.output.push_str(&format_macro_expression(expression));
-                    self.output.push_str("*\n");
-                }
-                WriterMacroPrimitive::Shape { code, parameters } => {
-                    self.output.push_str(&code.to_string());
-                    for parameter in parameters {
-                        self.output.push(',');
-                        self.output.push_str(&format_macro_expression(parameter));
-                    }
-                    self.output.push_str("*\n");
-                }
+    /// One additive code-4 outline primitive per polygon.
+    fn write_outline_macro(&mut self, code: i32, outlines: &[Ring]) -> Result<()> {
+        writeln!(self.output, "%AMOUTLINE{code}*").unwrap();
+        for outline in outlines {
+            if outline.len() < 3 {
+                return Err(GerberError::InvalidStructure(
+                    "cannot export a Gerber outline macro with fewer than three vertices"
+                        .to_string(),
+                ));
             }
+            write!(self.output, "4,1,{}", outline.len()).unwrap();
+            for [x, y] in outline.iter().chain(std::iter::once(&outline[0])) {
+                self.output.push(',');
+                self.write_decimal(*x);
+                self.output.push(',');
+                self.write_decimal(*y);
+            }
+            self.output.push_str(",0*\n");
         }
         self.output.push_str("%\n");
         Ok(())
@@ -392,11 +274,6 @@ impl<'a> Writer<'a> {
                 "aperture D{} is invalid; aperture codes must be >= 10",
                 aperture.code
             )));
-        }
-
-        if let WriterApertureTemplate::Block { objects } = &aperture.template {
-            self.write_block_aperture(aperture.code, objects)?;
-            return Ok(());
         }
 
         self.output.push_str(&format!("%ADD{}", aperture.code));
@@ -459,33 +336,11 @@ impl<'a> Writer<'a> {
                     self.write_decimal(*hole_diameter);
                 }
             }
-            WriterApertureTemplate::Macro { name, parameters } => {
-                validate_identifier(name, "aperture macro name")?;
-                self.output.push_str(name);
-                if !parameters.is_empty() {
-                    self.output.push(',');
-                    for (index, parameter) in parameters.iter().enumerate() {
-                        if index > 0 {
-                            self.output.push('X');
-                        }
-                        self.write_decimal(*parameter);
-                    }
-                }
-            }
-            WriterApertureTemplate::Block { .. } => {
-                unreachable!("block apertures are handled above")
+            WriterApertureTemplate::Outline { .. } => {
+                write!(self.output, "OUTLINE{}", aperture.code).unwrap();
             }
         }
         self.output.push_str("*%\n");
-        Ok(())
-    }
-
-    fn write_block_aperture(&mut self, code: i32, objects: &[WriterObject]) -> Result<()> {
-        self.output.push_str(&format!("%ABD{code}*%\n"));
-        self.reset_coordinates();
-        self.write_objects(objects)?;
-        self.output.push_str("%AB*%\n");
-        self.reset_coordinates();
         Ok(())
     }
 
@@ -504,7 +359,6 @@ impl<'a> Writer<'a> {
             self.close_step_repeat();
         }
 
-        self.set_aperture_transform(object.aperture_transform)?;
         self.set_polarity(object.polarity);
         self.set_attributes(&object.aperture_attributes, &object.attributes)?;
         self.open_step_repeat(object.repeat)?;
@@ -535,6 +389,7 @@ impl<'a> Writer<'a> {
                 self.set_aperture(*aperture);
                 self.write_point(*at);
                 self.output.push_str("D03*\n");
+                self.current_point = None;
             }
             ObjectKind::Region { contours } => {
                 self.write_region(contours)?;
@@ -624,44 +479,6 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
-    fn set_aperture_transform(&mut self, transform: WriterApertureTransform) -> Result<()> {
-        if !transform.rotation_degrees.is_finite() {
-            return Err(GerberError::InvalidNumber(format!(
-                "non-finite aperture rotation {}",
-                transform.rotation_degrees
-            )));
-        }
-        if !transform.scaling.is_finite() || transform.scaling <= 0.0 {
-            return Err(GerberError::InvalidNumber(format!(
-                "invalid aperture scaling {}",
-                transform.scaling
-            )));
-        }
-        if self.current_aperture_transform.mirroring != transform.mirroring {
-            let value = match transform.mirroring {
-                Mirroring::None => "N",
-                Mirroring::X => "X",
-                Mirroring::Y => "Y",
-                Mirroring::XY => "XY",
-            };
-            self.output.push_str(&format!("%LM{value}*%\n"));
-            self.current_aperture_transform.mirroring = transform.mirroring;
-        }
-        if self.current_aperture_transform.rotation_degrees != transform.rotation_degrees {
-            self.output.push_str("%LR");
-            self.write_decimal(transform.rotation_degrees);
-            self.output.push_str("*%\n");
-            self.current_aperture_transform.rotation_degrees = transform.rotation_degrees;
-        }
-        if self.current_aperture_transform.scaling != transform.scaling {
-            self.output.push_str("%LS");
-            self.write_decimal(transform.scaling);
-            self.output.push_str("*%\n");
-            self.current_aperture_transform.scaling = transform.scaling;
-        }
-        Ok(())
-    }
-
     fn write_region(&mut self, contours: &[Contour]) -> Result<()> {
         self.output.push_str("G36*\n");
         for contour in contours {
@@ -669,13 +486,13 @@ impl<'a> Writer<'a> {
                 continue;
             };
             self.set_plot_mode(PlotMode::Linear);
+            // A contour always opens with its own move.
+            self.current_point = None;
             self.write_move(segment_start(first));
             for segment in &contour.segments {
                 match *segment {
                     ContourSegment::Line { start, end } => {
-                        if self.coordinate(start.x, true) == self.coordinate(end.x, true)
-                            && self.coordinate(start.y, false) == self.coordinate(end.y, false)
-                        {
+                        if self.coordinates(start) == self.coordinates(end) {
                             return Err(GerberError::InvalidStructure(format!(
                                 "region segment from ({}, {}) to ({}, {}) collapses at output precision; increase precision or repair the source geometry",
                                 start.x, start.y, end.x, end.y
@@ -696,6 +513,7 @@ impl<'a> Writer<'a> {
             }
         }
         self.output.push_str("G37*\n");
+        self.current_point = None;
         Ok(())
     }
 
@@ -730,9 +548,14 @@ impl<'a> Writer<'a> {
         }
     }
 
+    /// Move to `point`, unless the previous plot already ended there.
     fn write_move(&mut self, point: Point) {
+        if self.current_point == Some(self.coordinates(point)) {
+            return;
+        }
         self.write_point(point);
         self.output.push_str("D02*\n");
+        self.current_point = self.current_coordinates;
     }
 
     /// Split circular arcs into nominal sweeps of at most 180 degrees before
@@ -778,55 +601,47 @@ impl<'a> Writer<'a> {
     fn write_plot(&mut self, point: Point, center_offset: Option<Point>) {
         self.write_point(point);
         if let Some(center_offset) = center_offset {
-            self.output.push('I');
-            self.output
-                .push_str(&self.coordinate(center_offset.x, true));
-            self.output.push('J');
-            self.output
-                .push_str(&self.coordinate(center_offset.y, false));
+            let (i, j) = self.coordinates(center_offset);
+            write!(self.output, "I{i}J{j}").unwrap();
         }
         self.output.push_str("D01*\n");
+        self.current_point = self.current_coordinates;
     }
 
     fn write_point(&mut self, point: Point) {
-        let x = self.coordinate(point.x, true);
-        let y = self.coordinate(point.y, false);
+        let (x, y) = self.coordinates(point);
         let (x_changed, y_changed) = self
             .current_coordinates
-            .as_ref()
-            .map(|(current_x, current_y)| (current_x != &x, current_y != &y))
-            .unwrap_or((true, true));
+            .map_or((true, true), |(current_x, current_y)| {
+                (current_x != x, current_y != y)
+            });
 
         // X and Y are modal. Keep one axis explicit for same-point operations
         // to avoid relying on coordinate-free D codes in older CAM software.
         if x_changed || !y_changed {
-            self.output.push('X');
-            self.output.push_str(&x);
+            write!(self.output, "X{x}").unwrap();
         }
         if y_changed {
-            self.output.push('Y');
-            self.output.push_str(&y);
+            write!(self.output, "Y{y}").unwrap();
         }
         self.current_coordinates = Some((x, y));
     }
 
     fn reset_coordinates(&mut self) {
         self.current_coordinates = None;
+        self.current_point = None;
     }
 
-    fn coordinate(&self, value: f64, x_axis: bool) -> String {
-        let decimals = if x_axis {
-            self.layer.coordinate_format.x_decimal_digits
-        } else {
-            self.layer.coordinate_format.y_decimal_digits
+    /// `point` in integer output units.
+    fn coordinates(&self, point: Point) -> (i64, i64) {
+        let format = self.layer.coordinate_format;
+        let scaled = |value: f64, decimals: u8| {
+            (value * 10_f64.powi(decimals as i32)).round_ties_even() as i64
         };
-        let scale = 10_f64.powi(decimals as i32);
-        let coordinate = format!("{:.0}", value * scale);
-        if coordinate == "-0" {
-            "0".to_string()
-        } else {
-            coordinate
-        }
+        (
+            scaled(point.x, format.x_decimal_digits),
+            scaled(point.y, format.y_decimal_digits),
+        )
     }
 
     fn write_decimal(&mut self, value: f64) {
@@ -849,23 +664,6 @@ fn validate_attribute(attr: &AttributeValue) -> Result<()> {
     validate_no_command_delimiters(&attr.name, "attribute name")?;
     for field in &attr.fields {
         validate_no_command_delimiters(field, "attribute field")?;
-    }
-    Ok(())
-}
-
-fn validate_identifier(value: &str, label: &str) -> Result<()> {
-    if value.is_empty() {
-        return Err(GerberError::InvalidStructure(format!(
-            "{label} must not be empty"
-        )));
-    }
-    if !value
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.')
-    {
-        return Err(GerberError::InvalidStructure(format!(
-            "{label} '{value}' contains characters that are not safe in Gerber identifiers"
-        )));
     }
     Ok(())
 }
@@ -896,52 +694,6 @@ fn trim_decimal(value: f64) -> String {
     if text == "-0" { "0".to_string() } else { text }
 }
 
-fn format_macro_expression(expression: &WriterMacroExpression) -> String {
-    match expression {
-        WriterMacroExpression::Number(value) => trim_decimal(*value),
-        WriterMacroExpression::Variable(index) => format!("${index}"),
-        WriterMacroExpression::UnaryMinus(inner) => format!("-{}", format_macro_factor(inner)),
-        WriterMacroExpression::Add(left, right) => {
-            format!(
-                "{}+{}",
-                format_macro_expression(left),
-                format_macro_term(right)
-            )
-        }
-        WriterMacroExpression::Subtract(left, right) => {
-            format!(
-                "{}-{}",
-                format_macro_expression(left),
-                format_macro_term(right)
-            )
-        }
-        WriterMacroExpression::Multiply(left, right) => {
-            format!("{}x{}", format_macro_term(left), format_macro_factor(right))
-        }
-        WriterMacroExpression::Divide(left, right) => {
-            format!("{}/{}", format_macro_term(left), format_macro_factor(right))
-        }
-    }
-}
-
-fn format_macro_term(expression: &WriterMacroExpression) -> String {
-    match expression {
-        WriterMacroExpression::Add(..) | WriterMacroExpression::Subtract(..) => {
-            format!("({})", format_macro_expression(expression))
-        }
-        _ => format_macro_expression(expression),
-    }
-}
-
-fn format_macro_factor(expression: &WriterMacroExpression) -> String {
-    match expression {
-        WriterMacroExpression::Number(_) | WriterMacroExpression::Variable(_) => {
-            format_macro_expression(expression)
-        }
-        _ => format!("({})", format_macro_expression(expression)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -964,6 +716,57 @@ mod tests {
     }
 
     #[test]
+    fn chained_draws_share_the_current_point_but_contours_always_move() {
+        let point = |x: f64, y: f64| Point { x, y };
+        let draw = |start, end| {
+            WriterObject::dark(ObjectKind::Draw {
+                start,
+                end,
+                aperture: 10,
+            })
+        };
+        let layer = GerberLayer {
+            apertures: vec![WriterAperture {
+                code: 10,
+                template: WriterApertureTemplate::Circle {
+                    diameter: 0.1,
+                    hole_diameter: None,
+                },
+                attributes: Vec::new(),
+            }],
+            objects: vec![
+                draw(point(0.0, 0.0), point(1.0, 0.0)),
+                draw(point(1.0, 0.0), point(1.0, 1.0)),
+                draw(point(2.0, 2.0), point(3.0, 2.0)),
+                WriterObject::dark(ObjectKind::Region {
+                    contours: vec![Contour {
+                        segments: [
+                            (3.0, 2.0, 4.0, 2.0),
+                            (4.0, 2.0, 4.0, 3.0),
+                            (4.0, 3.0, 3.0, 2.0),
+                        ]
+                        .map(|(x0, y0, x1, y1)| ContourSegment::Line {
+                            start: point(x0, y0),
+                            end: point(x1, y1),
+                        })
+                        .to_vec(),
+                    }],
+                }),
+                draw(point(3.0, 2.0), point(5.0, 5.0)),
+            ],
+            ..GerberLayer::default()
+        };
+
+        let output = write_layer(&layer).unwrap();
+        // One move per disjoint stroke start, the region contour, and the
+        // stroke after the region; the chained second draw needs none.
+        assert_eq!(output.matches("D02*").count(), 4, "{output}");
+        assert!(output.contains("G36*\nX3000000D02*"), "{output}");
+        let parsed = crate::GerberX2::parse(&output).unwrap();
+        assert_eq!(parsed.objects().len(), 5);
+    }
+
+    #[test]
     fn object_attributes_persist_across_objects() {
         let flash = |x: f64, attributes: Vec<AttributeValue>| WriterObject {
             kind: ObjectKind::Flash {
@@ -972,7 +775,6 @@ mod tests {
             },
             polarity: Polarity::Dark,
             repeat: None,
-            aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: Vec::new(),
             attributes,
         };

@@ -1,17 +1,16 @@
 //! An additive, simple-polygon cover of a quantized filled set.
 
-use std::collections::{HashMap, HashSet};
-
 use anyhow::{Result, ensure};
 use i_overlay::core::overlay::IntOverlayOptions;
 use i_overlay::i_float::int::point::IntPoint;
 use i_triangle::int::{triangulation::IntTriangulation, unchecked::IntUncheckedTriangulatable};
 
+use rustc_hash::{FxHashMap, FxHashSet};
+
 use super::{Ring, simplification::integer_shapes_on_grid};
 use crate::geom::FillRule;
 
 type Vertex = IntPoint<i64>;
-type Boundary = HashMap<Vertex, Vertex>;
 
 /// Quantize and regularize a filled set, then cover it with CCW simple polygons.
 ///
@@ -54,33 +53,12 @@ pub fn decompose_on_grid(
     );
     let mut output = Vec::new();
     for shape in shapes {
-        // Keep already-simple boundaries instead of triangulating and rebuilding
-        // them. Unique vertices alone do not exclude endpoint-on-edge contacts.
-        if shape.len() == 1 && shape[0].len() <= max_vertices && certify_simple_ccw(&shape[0]) {
+        if shape.len() == 1 && shape[0].len() <= max_vertices && is_simple(&shape[0]) {
             output.extend(shape);
             continue;
         }
-        let mesh: IntTriangulation<i64, usize> = shape.uncheck_triangulate().into_triangulation();
-        let triangles: Vec<_> = mesh.triangles().collect();
-        let mut coverage = Coverage::default();
-        for ring in &shape {
-            coverage.ring(ring, 1);
-        }
-        for triangle in &triangles {
-            ensure!(
-                cross(triangle[0], triangle[1], triangle[2]) > 0,
-                "polygon triangulation produced a non-positive triangle"
-            );
-            coverage.ring(triangle, -1);
-        }
-        // Positive triangles with the same directed boundary have winding one
-        // exactly on the source material. Exact edge pairs also preserve the
-        // boundary subdivisions required by the conforming mesh coalescer.
-        ensure!(
-            coverage.0.is_empty(),
-            "polygon triangulation changed the filled boundary"
-        );
-        output.extend(coalesce(&triangles, max_vertices));
+        let mesh: IntTriangulation<i64, u32> = shape.uncheck_triangulate().into_triangulation();
+        output.extend(coalesce(&shape, &mesh, max_vertices)?);
     }
 
     Ok(output
@@ -98,98 +76,194 @@ fn cross(a: Vertex, b: Vertex, c: Vertex) -> i128 {
         - (b.y as i128 - a.y as i128) * (c.x as i128 - a.x as i128)
 }
 
-/// Certify an identity decomposition using exact integer edges. The x sweep
-/// excludes distant edges before intersection tests; forward collinear boundary
-/// subdivisions are retained, but backtracking and all self-contacts fail.
-/// False also means the work budget was exhausted: use certified triangulation.
-fn certify_simple_ccw(ring: &[Vertex]) -> bool {
-    if ring.len() < 3 {
-        return false;
-    }
-    let mut area = 0_i128;
-    let mut edges = Vec::with_capacity(ring.len());
-    for i in 0..ring.len() {
-        let (a, b, c) = (
-            ring[i],
-            ring[(i + 1) % ring.len()],
-            ring[(i + 2) % ring.len()],
-        );
-        if a == b {
-            return false;
-        }
-        if cross(a, b, c) == 0
-            && (b.x as i128 - a.x as i128) * (c.x as i128 - b.x as i128)
-                + (b.y as i128 - a.y as i128) * (c.y as i128 - b.y as i128)
-                <= 0
-        {
-            return false;
-        }
-        let Some(sum) = area.checked_add(cross(ring[0], a, b)) else {
-            return false;
-        };
-        area = sum;
-        edges.push((a, b, i));
-    }
-    if area <= 0 {
-        return false;
-    }
-    edges.sort_unstable_by_key(|&(a, b, i)| (a.x.min(b.x), i));
-    // Bound candidate visits, including bounding-box rejects, so a crowded
-    // projection cannot turn this optional shortcut into quadratic work.
-    let mut budget = 16 * ring.len();
-    for (index, &(a, b, i)) in edges.iter().enumerate() {
-        for &(c, d, j) in &edges[index + 1..] {
-            if c.x.min(d.x) > a.x.max(b.x) {
-                break;
-            }
-            if budget == 0 {
-                return false;
-            }
-            budget -= 1;
-            let distance = i.abs_diff(j);
-            if distance == 1 || distance == ring.len() - 1 {
-                continue;
-            }
-            if a.y.max(b.y) < c.y.min(d.y) || c.y.max(d.y) < a.y.min(b.y) {
-                continue;
-            }
-            if cross(a, b, c).signum() * cross(a, b, d).signum() <= 0
-                && cross(c, d, a).signum() * cross(c, d, b).signum() <= 0
-            {
-                return false;
-            }
-        }
-    }
-    true
+/// Whether an overlay output ring is already a simple polygon. The overlay
+/// keeps a vertex at every contact, including an endpoint meeting the interior
+/// of another edge, so a ring touches itself exactly where a vertex repeats.
+fn is_simple(ring: &[Vertex]) -> bool {
+    let mut vertices: Vec<_> = ring.iter().map(|p| (p.x, p.y)).collect();
+    vertices.sort_unstable();
+    vertices.windows(2).all(|pair| pair[0] != pair[1])
 }
 
-/// Signed endpoint-pair counts. Unlike area or supporting-line comparisons,
-/// these reject losing a contact vertex in the middle of a boundary edge.
-#[derive(Default)]
-struct Coverage(HashMap<(Vertex, Vertex), i64>);
+/// Merge a triangulation of `shape` back into simple polygons of at most
+/// `max_vertices`, certifying that the mesh covers the shape exactly.
+///
+/// Vertices are ranked by coordinate, so everything below is integer ids:
+/// sorting the directed mesh edges pairs each interior edge with its twin and
+/// leaves the mesh boundary, which must equal the shape's directed rings edge
+/// for edge. Positive triangles with that boundary have winding one exactly
+/// on the source material, and no contact vertex in the middle of a boundary
+/// edge was lost.
+fn coalesce(
+    shape: &[Vec<Vertex>],
+    mesh: &IntTriangulation<i64, u32>,
+    max_vertices: usize,
+) -> Result<Vec<Vec<Vertex>>> {
+    let mut vertices: Vec<_> = mesh.points.iter().map(|p| (p.x, p.y)).collect();
+    vertices.sort_unstable();
+    vertices.dedup();
+    let id = |p: Vertex| vertices.binary_search(&(p.x, p.y)).map(|id| id as u32);
+    let triangles: Vec<[u32; 3]> = mesh
+        .indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|t| {
+            let [a, b, c] = t.map(|index| mesh.points[index as usize]);
+            ensure!(
+                cross(a, b, c) > 0,
+                "polygon triangulation produced a non-positive triangle"
+            );
+            Ok([id(a).unwrap(), id(b).unwrap(), id(c).unwrap()])
+        })
+        .collect::<Result<_>>()?;
 
-impl Coverage {
-    fn ring(&mut self, ring: &[Vertex], sign: i64) {
-        for (&a, &b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
-            let (key, delta) = if (a.x, a.y) < (b.x, b.y) {
-                ((a, b), sign)
+    // (undirected edge, forward, triangle, slot), twins adjacent after sorting.
+    let mut edges: Vec<_> = triangles
+        .iter()
+        .enumerate()
+        .flat_map(|(triangle, t)| {
+            (0..3).map(move |slot| {
+                let (a, b) = (t[slot], t[(slot + 1) % 3]);
+                ((a.min(b), a.max(b)), a < b, triangle, slot)
+            })
+        })
+        .collect();
+    edges.sort_unstable();
+    let mut adjacency = Vec::new();
+    let mut boundary = Vec::new();
+    for run in edges.chunk_by(|a, b| a.0 == b.0) {
+        match run {
+            [(edge, forward, ..)] => boundary.push(if *forward {
+                (edge.0, edge.1)
             } else {
-                ((b, a), -sign)
-            };
-            let count = self.0.entry(key).or_default();
-            *count += delta;
-            if *count == 0 {
-                self.0.remove(&key);
+                (edge.1, edge.0)
+            }),
+            [(_, false, earlier, _), (_, true, later, slot)]
+            | [(_, false, later, slot), (_, true, earlier, _)]
+                if earlier < later =>
+            {
+                adjacency.push((*later, *slot, *earlier))
             }
+            _ => anyhow::bail!("polygon triangulation is not an edge-manifold mesh"),
         }
     }
+    let mut rings: Vec<_> = shape
+        .iter()
+        .flat_map(|ring| ring.iter().zip(ring.iter().cycle().skip(1)))
+        .map(|(&a, &b)| Ok((id(a)?, id(b)?)))
+        .collect::<std::result::Result<_, usize>>()
+        .unwrap_or_default();
+    rings.sort_unstable();
+    boundary.sort_unstable();
+    ensure!(
+        rings == boundary,
+        "polygon triangulation changed the filled boundary"
+    );
+
+    // One successor map for every face boundary, keyed by (face, vertex).
+    let key = |face: usize, vertex: u32| (face as u64) << 32 | vertex as u64;
+    let mut next: FxHashMap<u64, u32> = triangles
+        .iter()
+        .enumerate()
+        .flat_map(|(face, t)| (0..3).map(move |k| (key(face, t[k]), t[(k + 1) % 3])))
+        .collect();
+    let mut faces: Vec<_> = triangles
+        .iter()
+        .enumerate()
+        .map(|(index, t)| Face {
+            parent: index,
+            weight: 1,
+            len: 3,
+            start: t[0],
+        })
+        .collect();
+    // Mesh order gives a deterministic merge order. Avoid rescanning a
+    // rejected face pair along every edge.
+    adjacency.sort_unstable();
+    let mut rejected = FxHashSet::default();
+    let mut small = Vec::new();
+    for (later, _, earlier) in adjacency {
+        let (mut a, mut b) = (root(&mut faces, earlier), root(&mut faces, later));
+        if a == b {
+            continue;
+        }
+        if (faces[a].len, a) < (faces[b].len, b) {
+            std::mem::swap(&mut a, &mut b);
+        }
+        if !rejected.insert((a, b, faces[a].weight, faces[b].weight)) {
+            continue;
+        }
+        small.clear();
+        let mut u = faces[b].start;
+        for _ in 0..faces[b].len {
+            let v = next[&key(b, u)];
+            small.push((u, v));
+            u = v;
+        }
+        let common = small
+            .iter()
+            .filter(|(u, _)| next.contains_key(&key(a, *u)))
+            .count();
+        let shared = small
+            .iter()
+            .filter(|(u, v)| next.get(&key(a, *v)) == Some(u))
+            .count();
+        // Two simple faces of a planar mesh may join only along one boundary
+        // path: k shared edges have k+1 shared vertices. Extra contacts or
+        // disjoint shared paths would create a self-touch or close a hole.
+        if shared == 0
+            || common != shared + 1
+            || faces[a].len + faces[b].len - 2 * shared > max_vertices
+        {
+            continue;
+        }
+        // Shared edges cancel against their twins; the rest of the small
+        // boundary joins the large one once every twin is gone.
+        small.retain(|&(u, v)| {
+            next.remove(&key(b, u));
+            let shared = next.get(&key(a, v)) == Some(&u);
+            if shared {
+                next.remove(&key(a, v));
+            }
+            !shared
+        });
+        faces[a].start = small[0].0;
+        next.extend(small.iter().map(|&(u, v)| (key(a, u), v)));
+        faces[a].len += faces[b].len - 2 * shared;
+        faces[a].weight += faces[b].weight;
+        faces[b].parent = a;
+        faces[b].len = 0;
+    }
+    Ok((0..faces.len())
+        .filter(|&face| faces[face].parent == face)
+        .map(|face| {
+            let mut ring = Vec::with_capacity(faces[face].len);
+            let mut u = faces[face].start;
+            for _ in 0..faces[face].len {
+                ring.push(u);
+                u = next[&key(face, u)];
+            }
+            // Ids rank by coordinate, so the least id is the least vertex.
+            let least = (0..ring.len()).min_by_key(|&i| ring[i]).unwrap();
+            ring.rotate_left(least);
+            ring.into_iter()
+                .map(|id| {
+                    let (x, y) = vertices[id as usize];
+                    Vertex::new(x, y)
+                })
+                .collect()
+        })
+        .collect())
 }
 
 struct Face {
     parent: usize,
     // Counts triangles, not boundary vertices: every union changes this value.
     weight: usize,
-    boundary: Boundary,
+    /// Boundary vertex count, and one vertex on it.
+    len: usize,
+    start: u32,
 }
 
 fn root(faces: &mut [Face], mut index: usize) -> usize {
@@ -200,92 +274,40 @@ fn root(faces: &mut [Face], mut index: usize) -> usize {
     index
 }
 
-fn coalesce(triangles: &[[Vertex; 3]], max_vertices: usize) -> Vec<Vec<Vertex>> {
-    let mut faces = Vec::with_capacity(triangles.len());
-    let mut owners = HashMap::new();
-    let mut adjacency = Vec::new();
-    for (index, triangle) in triangles.iter().enumerate() {
-        let mut boundary = Boundary::with_capacity(3);
-        for i in 0..3 {
-            let (a, b) = (triangle[i], triangle[(i + 1) % 3]);
-            boundary.insert(a, b);
-            if let Some(other) = owners.remove(&(b, a)) {
-                adjacency.push((other, index));
-            } else {
-                owners.insert((a, b), index);
-            }
-        }
-        faces.push(Face {
-            parent: index,
-            weight: 1,
-            boundary,
-        });
-    }
-    // Original mesh edges give a deterministic merge order, independent of
-    // hash iteration. Avoid rescanning a rejected face pair along every edge.
-    let mut rejected = HashSet::new();
-    for (a, b) in adjacency {
-        let (mut a, mut b) = (root(&mut faces, a), root(&mut faces, b));
-        if a == b {
-            continue;
-        }
-        if (faces[a].boundary.len(), a) < (faces[b].boundary.len(), b) {
-            std::mem::swap(&mut a, &mut b);
-        }
-        if !rejected.insert((a, b, faces[a].weight, faces[b].weight)) {
-            continue;
-        }
-        let (large, small) = (&faces[a].boundary, &faces[b].boundary);
-        let common = small.keys().filter(|p| large.contains_key(p)).count();
-        let shared = small
-            .iter()
-            .filter(|(u, v)| large.get(v) == Some(u))
-            .count();
-        // Two simple faces of a planar mesh may join only along one boundary
-        // path: k shared edges have k+1 shared vertices. Extra contacts or
-        // disjoint shared paths would create a self-touch or close a hole.
-        if shared == 0
-            || common != shared + 1
-            || large.len() + small.len() - 2 * shared > max_vertices
-        {
-            continue;
-        }
-        let small = std::mem::take(&mut faces[b].boundary);
-        let mut additions = Vec::with_capacity(small.len() - shared);
-        for (u, v) in small {
-            if faces[a].boundary.get(&v) == Some(&u) {
-                faces[a].boundary.remove(&v);
-            } else {
-                additions.push((u, v));
-            }
-        }
-        faces[a].boundary.extend(additions);
-        faces[b].parent = a;
-        faces[a].weight += faces[b].weight;
-    }
-    faces
-        .into_iter()
-        .filter(|f| !f.boundary.is_empty())
-        .map(|face| {
-            let start = *face.boundary.keys().min_by_key(|p| (p.x, p.y)).unwrap();
-            let mut ring = Vec::with_capacity(face.boundary.len());
-            let mut point = start;
-            loop {
-                ring.push(point);
-                point = face.boundary[&point];
-                if point == start {
-                    break;
-                }
-            }
-            debug_assert_eq!(ring.len(), face.boundary.len());
-            ring
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{HashMap, HashSet};
+
+    /// Independent oracle: signed endpoint-pair counts. Unlike area or
+    /// supporting-line comparisons, these reject losing a contact vertex in
+    /// the middle of a boundary edge.
+    #[derive(Default)]
+    struct Coverage(HashMap<(Vertex, Vertex), i64>);
+
+    impl Coverage {
+        fn ring(&mut self, ring: &[Vertex], sign: i64) {
+            for (&a, &b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+                let (key, delta) = if (a.x, a.y) < (b.x, b.y) {
+                    ((a, b), sign)
+                } else {
+                    ((b, a), -sign)
+                };
+                let count = self.0.entry(key).or_default();
+                *count += delta;
+                if *count == 0 {
+                    self.0.remove(&key);
+                }
+            }
+        }
+    }
+
+    fn mesh(points: &[Vertex], triangles: &[[u32; 3]]) -> IntTriangulation<i64, u32> {
+        IntTriangulation {
+            points: points.to_vec(),
+            indices: triangles.iter().flatten().copied().collect(),
+        }
+    }
 
     fn vertex([x, y]: [i64; 2]) -> Vertex {
         Vertex::new(x, y)
@@ -321,120 +343,88 @@ mod tests {
         }
     }
 
+    /// Random small-coordinate rings touch and cross constantly; every
+    /// single-ring overlay output must be simple exactly when its vertices
+    /// are unique.
     #[test]
-    fn crowded_projections_fall_back_without_changing_the_boundary() {
-        let teeth = 1249;
-        let mut ring = vec![
-            [0, 0],
-            [10000, 0],
-            [10000, 2 * teeth + 1],
-            [0, 2 * teeth + 1],
-        ];
-        for y in (0..teeth).rev() {
-            ring.extend([
-                [0, 2 * y + 2],
-                [9999, 2 * y + 2],
-                [9999, 2 * y + 1],
-                [0, 2 * y + 1],
-            ]);
-        }
-        for rotate in [false, true] {
-            let points: Vec<_> = ring
-                .iter()
-                .map(|&[x, y]| vertex(if rotate { [-y, x] } else { [x, y] }))
-                .collect();
-            // The same simple 5000-vertex comb exhausts the candidate budget
-            // along x, but stays cheap along y. Both routes must keep its fill.
-            assert_eq!(certify_simple_ccw(&points), rotate);
-            let input: Vec<_> = points.iter().map(|p| [p.x as f64, p.y as f64]).collect();
-            let output = decompose_on_grid(vec![input], FillRule::NonZero, 1., 5000).unwrap();
-            let mut coverage = Coverage::default();
-            coverage.ring(&points, 1);
-            let mut area2 = 0;
-            for ring in output {
-                assert!(ring.len() <= 5000);
-                let ring: Vec<_> = ring
-                    .iter()
-                    .map(|p| vertex([p[0] as i64, p[1] as i64]))
-                    .collect();
-                area2 += (1..ring.len() - 1)
-                    .map(|i| cross(ring[0], ring[i], ring[i + 1]))
-                    .sum::<i128>();
-                coverage.ring(&ring, -1);
-            }
-            assert_eq!(area2, 2 * (10000 * (2 * teeth + 1) - 9999 * teeth) as i128);
-            assert!(coverage.0.is_empty());
-        }
-    }
-
-    #[test]
-    fn identity_certificate_checks_edges_not_just_vertices() {
-        let cases: &[(&[[i64; 2]], bool)] = &[
-            // Concave, with forward collinear subdivisions.
-            (&[[0, 0], [3, 0], [8, 0], [8, 5], [4, 2], [0, 5]], true),
-            (&[[0, 0], [0, 5], [8, 5], [8, 0]], false), // Clockwise.
-            (&[[0, 0], [2, 0], [5, 0]], false),         // Zero area.
-            (&[[0, 0], [8, 0], [8, 0], [0, 5]], false), // Zero edge.
-            (&[[0, 0], [8, 0], [3, 0], [8, 5], [0, 5]], false), // Backtracking.
-            // Positive area, distinct vertices, but a proper crossing.
-            (&[[0, 0], [6, 0], [1, 4], [5, 4], [0, 1]], false),
-            // A unique vertex touches the interior of a nonadjacent edge.
-            (
-                &[[4, 0], [4, 8], [0, 8], [0, 6], [4, 4], [0, 2], [0, 0]],
-                false,
-            ),
-            // Nonadjacent collinear overlap.
-            (
-                &[
-                    [0, 0],
-                    [8, 0],
-                    [8, 5],
-                    [3, 5],
-                    [3, 0],
-                    [5, 0],
-                    [5, 3],
-                    [0, 3],
-                ],
-                false,
-            ),
-            (&[], false),
-            (&[[0, 0], [1, 2]], false),
-        ];
-        for &(points, expected) in cases {
-            // Exercise both sweep axes, closing-edge adjacency, equal-x ties,
-            // and large coordinates without changing winding or simplicity.
-            for rotate in [false, true] {
-                let mut ring: Vec<_> = points
-                    .iter()
-                    .map(|&[x, y]| {
-                        let [x, y] = if rotate { [-y, x] } else { [x, y] };
-                        vertex([x + (1 << 49), y - (1 << 49)])
+    fn overlay_rings_are_simple_exactly_when_vertices_are_unique() {
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = |modulus: u64| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) % modulus
+        };
+        let strictly_simple = |ring: &[Vertex]| {
+            (0..ring.len()).all(|i| {
+                let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+                (i + 2..ring.len())
+                    .filter(|&j| !(i == 0 && j == ring.len() - 1))
+                    .all(|j| {
+                        let (c, d) = (ring[j], ring[(j + 1) % ring.len()]);
+                        !(on_segment(a, b, c)
+                            || on_segment(a, b, d)
+                            || on_segment(c, d, a)
+                            || on_segment(c, d, b)
+                            || (cross(a, b, c).signum() * cross(a, b, d).signum() == -1
+                                && cross(c, d, a).signum() * cross(c, d, b).signum() == -1))
                     })
-                    .collect();
-                for _ in 0..ring.len().max(1) {
-                    assert_eq!(certify_simple_ccw(&ring), expected, "{ring:?}");
-                    if !ring.is_empty() {
-                        ring.rotate_left(1);
-                    }
+            })
+        };
+        let mut touching = 0;
+        for case in 0..20_000 {
+            let rings = (0..1 + next(3))
+                .map(|_| {
+                    (0..3 + next(8))
+                        .map(|_| [next(10) as f64, next(10) as f64])
+                        .collect()
+                })
+                .collect();
+            let rule = [FillRule::NonZero, FillRule::EvenOdd][case % 2];
+            for shape in
+                integer_shapes_on_grid(rings, rule, 1., IntOverlayOptions::keep_output_points())
+            {
+                if let [ring] = shape.as_slice() {
+                    assert_eq!(is_simple(ring), strictly_simple(ring), "{ring:?}");
+                    touching += usize::from(!is_simple(ring));
                 }
             }
         }
+        assert!(touching > 1000, "the fixture must exercise self-contact");
     }
 
     #[test]
-    fn identity_certificate_handles_full_range_and_unit_determinants() {
-        let m = 1_i64 << 50;
-        for points in [
-            vec![[-m, -m], [m, -m], [m, m], [-m, m]],
-            // Despite spanning the supported range, twice this area is one:
-            // (2m-1)^2 - (2m)(2m-2) = 1. Floating-point predicates lose it.
-            vec![[-m, -m], [m - 1, m - 2], [m, m - 1]],
-        ] {
-            let mut ring: Vec<_> = points.into_iter().map(vertex).collect();
-            assert!(certify_simple_ccw(&ring));
-            ring.reverse();
-            assert!(!certify_simple_ccw(&ring));
+    fn whole_grid_dimensions_survive_every_placement() {
+        // Centered on the origin, both edges of a 0.635 mm feature land on
+        // half-grid ties; rounding away from zero would widen it to 0.636.
+        for center in [0.0, 0.0005, -0.0005, 12.7, -12.7, 40.0005, -40.0005] {
+            let (min, max) = (center - 0.3175, center - 0.3175 + 0.635);
+            let ring = vec![[min, min], [max, min], [max, max], [min, max]];
+            let [ring] = decompose_on_grid(vec![ring], FillRule::NonZero, 0.001, 5000)
+                .unwrap()
+                .try_into()
+                .unwrap();
+            for axis in 0..2 {
+                let low = ring.iter().map(|p| p[axis]).fold(f64::INFINITY, f64::min);
+                let high = ring
+                    .iter()
+                    .map(|p| p[axis])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                assert!(
+                    ((high - low) - 0.635).abs() < 1e-9,
+                    "{center}: {low}..{high}"
+                );
+                assert!(
+                    (low - min).abs() <= 0.0005 + 1e-9,
+                    "{center}: {low} from {min}"
+                );
+            }
         }
+        // Ties on the sub-grid round the same way on both sides of zero.
+        let (min, max) = (-1025.0 / 2048.0, 1023.0 / 2048.0);
+        let ring = vec![[min, min], [max, min], [max, max], [min, max]];
+        let rings = decompose_on_grid(vec![ring], FillRule::NonZero, 1.0, 5000).unwrap();
+        assert_eq!(rings, [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]]);
     }
 
     #[test]
@@ -450,11 +440,7 @@ mod tests {
             1.,
             IntOverlayOptions::keep_output_points(),
         );
-        assert!(
-            shapes
-                .iter()
-                .any(|s| s.len() == 1 && certify_simple_ccw(&s[0]))
-        );
+        assert!(shapes.iter().any(|s| s.len() == 1 && is_simple(&s[0])));
         assert!(shapes.iter().any(|s| s.len() == 2));
         for limit in [3, 5000] {
             let output = decompose_on_grid(input.clone(), FillRule::NonZero, 1., limit).unwrap();
@@ -590,27 +576,38 @@ mod tests {
     }
 
     #[test]
-    fn coverage_checks_directed_boundaries_not_just_area() {
+    fn certificate_checks_directed_boundaries_not_just_area() {
         let square = [[0, 0], [8, 0], [8, 5], [0, 5]].map(vertex);
-        let first = [square[0], square[1], square[2]];
-        let second = [square[0], square[2], square[3]];
-        let mut coverage = Coverage::default();
-        coverage.ring(&square, 1);
-        coverage.ring(&first, -1);
-        assert!(!coverage.0.is_empty(), "missing triangle");
-        coverage.ring(&second, -1);
-        assert!(coverage.0.is_empty());
-        coverage.ring(&first, -1);
-        assert!(!coverage.0.is_empty(), "duplicate triangle");
-
-        let mut coverage = Coverage::default();
-        coverage.ring(&square, 1);
-        coverage.ring(&[[0, 0], [3, 0], [8, 0], [8, 5], [0, 5]].map(vertex), -1);
-        assert!(!coverage.0.is_empty(), "lost collinear contact vertex");
-        let mut coverage = Coverage::default();
-        coverage.ring(&square, 1);
-        coverage.ring(&[[1, 0], [9, 0], [9, 5], [1, 5]].map(vertex), -1);
-        assert!(!coverage.0.is_empty(), "equal area with displaced boundary");
+        let halves = [[0, 1, 2], [0, 2, 3]];
+        let certified = |ring: &[Vertex], triangles: &[[u32; 3]]| {
+            coalesce(&[ring.to_vec()], &mesh(&square, triangles), 5000)
+        };
+        assert_eq!(certified(&square, &halves).unwrap(), [square.to_vec()]);
+        assert!(
+            certified(&square, &halves[..1]).is_err(),
+            "missing triangle"
+        );
+        assert!(
+            certified(&square, &[halves[0], halves[1], halves[0]]).is_err(),
+            "duplicate triangle"
+        );
+        assert!(
+            certified(&square, &[halves[0], [0, 3, 2]]).is_err(),
+            "negative triangle"
+        );
+        assert!(
+            certified(
+                &[[0, 0], [3, 0], [8, 0], [8, 5], [0, 5]].map(vertex),
+                &halves
+            )
+            .is_err(),
+            "lost collinear contact vertex"
+        );
+        let shifted = [[1, 0], [9, 0], [9, 5], [1, 5]].map(vertex);
+        assert!(
+            coalesce(&[shifted.to_vec()], &mesh(&square, &halves), 5000).is_err(),
+            "equal area with displaced boundary"
+        );
     }
 
     #[test]
@@ -626,7 +623,7 @@ mod tests {
             [2, 6],
         ]
         .map(vertex);
-        let triangles: Vec<_> = [
+        let triangles = [
             [0, 1, 5],
             [0, 5, 4],
             [1, 2, 6],
@@ -635,17 +632,19 @@ mod tests {
             [2, 7, 6],
             [3, 0, 4],
             [3, 4, 7],
-        ]
-        .map(|indices| indices.map(|i| points[i]))
-        .to_vec();
-        let polygons = coalesce(&triangles, 5000);
+        ];
+        let shape = [
+            points[..4].to_vec(),
+            [5, 4, 7, 6].map(|i| points[i]).to_vec(),
+        ];
+        let polygons = coalesce(&shape, &mesh(&points, &triangles), 5000).unwrap();
         assert!(
             polygons.len() >= 2,
             "a hole cannot fit in one simple additive polygon"
         );
         let mut coverage = Coverage::default();
-        for triangle in &triangles {
-            coverage.ring(triangle, 1);
+        for ring in &shape {
+            coverage.ring(ring, 1);
         }
         for polygon in &polygons {
             assert_simple(polygon);
@@ -653,8 +652,14 @@ mod tests {
         }
         assert!(coverage.0.is_empty());
 
-        let touching =
-            [[[0, 0], [3, 0], [0, 2]], [[0, 0], [-4, 0], [0, -2]]].map(|t| t.map(vertex));
-        assert_eq!(coalesce(&touching, 5000).len(), 2);
+        let points = [[0, 0], [3, 0], [0, 2], [-4, 0], [0, -2]].map(vertex);
+        let touching = [[0, 1, 2], [0, 3, 4]];
+        let shape = touching.map(|t| t.map(|i| points[i as usize]).to_vec());
+        assert_eq!(
+            coalesce(&shape, &mesh(&points, &touching), 5000)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }

@@ -13,6 +13,49 @@ use crate::geom::{
 /// Chords past which a single curve is being flattened to an absurd budget.
 const MAX_CHORDS_PER_SEGMENT: f64 = 1.0e6;
 
+/// Flatten source contours within `accuracy`: the raw rings, not yet
+/// regularized under any fill rule, and the approximation they now carry.
+pub fn flatten_within(
+    contours: &[ContourBuf],
+    accuracy: GeometryAccuracy,
+) -> Result<(Vec<Ring>, f64), AccuracyError> {
+    if contours.iter().any(|c| {
+        !c.bbox.is_valid()
+            || !c.uncertainty_mm.is_finite()
+            || c.uncertainty_mm < 0.0
+            || !c.cmds.iter().all(|cmd| cmd.is_finite())
+    }) {
+        return Err(AccuracyError::InvalidGeometry(
+            "invalid coordinates or significance tolerance",
+        ));
+    }
+    let prior = contours
+        .iter()
+        .map(|c| c.uncertainty_mm)
+        .fold(0.0, f64::max);
+    let bbox = contours.iter().fold(BBox::empty(), |b, c| b.union(c.bbox));
+    let numeric = numerical_error(bbox);
+    let remaining = accuracy.allowance(prior + numeric)?;
+    // Guard against absurd budgets segment by segment, never against
+    // input size: a flattened panel legitimately needs millions of
+    // vertices, while one curve needing a million chords is a budget
+    // no target can use.
+    let absurd = |segment: Segment| {
+        let bounds = segment.bbox();
+        (bounds.width().max(bounds.height()) / remaining).sqrt() > MAX_CHORDS_PER_SEGMENT
+    };
+    if contours
+        .iter()
+        .flat_map(ContourBuf::segments)
+        .filter(|segment| !matches!(segment, Segment::Line { .. }))
+        .any(absurd)
+    {
+        return Err(AccuracyError::SubdivisionLimit);
+    }
+    let (rings, added) = flatten_contours(contours, remaining);
+    Ok((rings, prior + added + numeric))
+}
+
 impl ContourSet {
     /// Regularize source polygons. Their vertices are taken as exact; only
     /// coordinate rounding is charged, and checked like any other cost.
@@ -72,49 +115,13 @@ impl ContourSet {
         fill_rule: FillRule,
         resolution: Resolution,
     ) -> Result<Self, AccuracyError> {
-        let accuracy = resolution.accuracy;
-        if !resolution.is_valid()
-            || contours.iter().any(|c| {
-                !c.bbox.is_valid()
-                    || !c.uncertainty_mm.is_finite()
-                    || c.uncertainty_mm < 0.0
-                    || !c.cmds.iter().all(|cmd| cmd.is_finite())
-            })
-        {
+        if !resolution.is_valid() {
             return Err(AccuracyError::InvalidGeometry(
                 "invalid coordinates or significance tolerance",
             ));
         }
-        let prior = contours
-            .iter()
-            .map(|c| c.uncertainty_mm)
-            .fold(0.0, f64::max);
-        let bbox = contours.iter().fold(BBox::empty(), |b, c| b.union(c.bbox));
-        let numeric = numerical_error(bbox);
-        let remaining = accuracy.allowance(prior + numeric)?;
-        // Guard against absurd budgets segment by segment, never against
-        // input size: a flattened panel legitimately needs millions of
-        // vertices, while one curve needing a million chords is a budget
-        // no target can use.
-        let absurd = |segment: Segment| {
-            let bounds = segment.bbox();
-            (bounds.width().max(bounds.height()) / remaining).sqrt() > MAX_CHORDS_PER_SEGMENT
-        };
-        if contours
-            .iter()
-            .flat_map(ContourBuf::segments)
-            .filter(|segment| !matches!(segment, Segment::Line { .. }))
-            .any(absurd)
-        {
-            return Err(AccuracyError::SubdivisionLimit);
-        }
-        let (rings, added) = flatten_contours(contours, remaining);
-        Self::from_regularized(
-            simplify_rings(rings, fill_rule),
-            resolution,
-            prior + added + numeric,
-        )
-        .checked()
+        let (rings, uncertainty) = flatten_within(contours, resolution.accuracy)?;
+        Self::from_regularized(simplify_rings(rings, fill_rule), resolution, uncertainty).checked()
     }
 
     /// Build the union of independently filled contours.

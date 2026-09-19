@@ -1,9 +1,9 @@
 //! Conversion between curved contours and polygon rings.
 
-use super::{ContourSet, Ring, simplify_shapes};
+use super::{ContourSet, Ring};
 use crate::geom::accuracy::{ErrorAllocation, allocate_error};
 use crate::geom::path::{ContourBuf, PathCmd};
-use crate::geom::{BBox, FillRule, Point};
+use crate::geom::{BBox, Point};
 
 pub(super) fn flatten_contours(contours: &[ContourBuf], accuracy: f64) -> (Vec<Ring>, f64) {
     // Arc-to-cubic conversion is cheap in error and reported exactly, so it
@@ -51,21 +51,6 @@ impl ContourSet {
     pub fn to_contours(&self) -> Vec<ContourBuf> {
         rings_to_contours(self.rings.clone())
             .into_iter()
-            .map(|c| c.with_uncertainty(self.uncertainty_mm))
-            .collect()
-    }
-
-    /// Convert each connected component to one positive contour.
-    ///
-    /// Hole rings are connected to their outer ring with zero-width bridges,
-    /// allowing formats without compound-polygon holes to carry the same
-    /// local positive geometry without layer-wide clear features.
-    pub fn to_bridged_contours(&self) -> Vec<ContourBuf> {
-        simplify_shapes(self.rings.clone(), FillRule::NonZero)
-            .into_iter()
-            .map(crate::geom::bridge::bridge_shape)
-            .filter(|ring| ring.len() >= 3)
-            .filter_map(ring_to_contour)
             .map(|c| c.with_uncertainty(self.uncertainty_mm))
             .collect()
     }

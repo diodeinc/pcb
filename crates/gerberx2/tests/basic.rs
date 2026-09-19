@@ -1,7 +1,6 @@
 use gerberx2::{
     ApertureTemplate, AttributeValue, Command, Contour, ContourSegment, GerberLayer, GerberX2,
-    ObjectKind, PathCommand, Point, StepRepeat, Unit, WriterAperture, WriterApertureMacro,
-    WriterApertureTemplate, WriterApertureTransform, WriterMacroExpression, WriterMacroPrimitive,
+    ObjectKind, PathCommand, Point, StepRepeat, Unit, WriterAperture, WriterApertureTemplate,
     WriterObject,
 };
 use pcb_ir::geom::Polarity;
@@ -78,7 +77,6 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
             },
             polarity: Polarity::Dark,
             repeat: None,
-            aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: Vec::new(),
             attributes: vec![
                 AttributeValue::new(".N", ["GND"]),
@@ -119,7 +117,6 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
             },
             polarity: Polarity::Dark,
             repeat: None,
-            aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: vec![AttributeValue::new(".AperFunction", ["Conductor"])],
             attributes: Vec::new(),
         },
@@ -180,7 +177,6 @@ fn writes_standard_step_repeat() {
                 x_step: 10.0,
                 y_step: 20.0,
             }),
-            aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: Vec::new(),
             attributes: Vec::new(),
         }],
@@ -209,7 +205,6 @@ fn coalesces_compatible_step_repeats() {
         },
         polarity: Polarity::Dark,
         repeat: Some(repeat),
-        aperture_transform: WriterApertureTransform::default(),
         aperture_attributes: Vec::new(),
         attributes,
     };
@@ -258,7 +253,6 @@ fn preserves_polarity_order_across_step_repeats() {
         },
         polarity,
         repeat: Some(repeat),
-        aperture_transform: WriterApertureTransform::default(),
         aperture_attributes: Vec::new(),
         attributes: Vec::new(),
     };
@@ -332,122 +326,6 @@ fn writes_modal_coordinates_with_explicit_operations() {
     assert_eq!(objects.len(), 4);
     assert!(matches!(objects[1].kind, ObjectKind::Flash { at, .. } if at.x == 1.0 && at.y == 3.0));
     assert!(matches!(objects[2].kind, ObjectKind::Flash { at, .. } if at.x == 4.0 && at.y == 3.0));
-}
-
-#[test]
-fn writes_macro_and_block_apertures_without_flattening() {
-    let accuracy = GeometryAccuracy::default();
-
-    let layer = GerberLayer {
-        aperture_macros: vec![WriterApertureMacro {
-            name: "ROUNDRECT".to_string(),
-            primitives: vec![
-                WriterMacroPrimitive::Comment("rounded rectangle test macro".to_string()),
-                WriterMacroPrimitive::VariableDefinition {
-                    variable: 3,
-                    expression: WriterMacroExpression::Add(
-                        Box::new(WriterMacroExpression::Variable(1)),
-                        Box::new(WriterMacroExpression::Multiply(
-                            Box::new(WriterMacroExpression::Variable(2)),
-                            Box::new(WriterMacroExpression::Number(2.0)),
-                        )),
-                    ),
-                },
-                WriterMacroPrimitive::Shape {
-                    code: 1,
-                    parameters: vec![
-                        WriterMacroExpression::Number(1.0),
-                        WriterMacroExpression::Variable(3),
-                        WriterMacroExpression::Number(0.0),
-                        WriterMacroExpression::Number(0.0),
-                        WriterMacroExpression::Number(0.0),
-                    ],
-                },
-            ],
-        }],
-        apertures: vec![
-            WriterAperture {
-                code: 10,
-                template: WriterApertureTemplate::Circle {
-                    diameter: 0.1,
-                    hole_diameter: None,
-                },
-                attributes: Vec::new(),
-            },
-            WriterAperture {
-                code: 11,
-                template: WriterApertureTemplate::Macro {
-                    name: "ROUNDRECT".to_string(),
-                    parameters: vec![0.2, 0.4],
-                },
-                attributes: vec![AttributeValue::new(".AperFunction", ["SMDPad", "CuDef"])],
-            },
-            WriterAperture {
-                code: 20,
-                template: WriterApertureTemplate::Block {
-                    objects: vec![WriterObject {
-                        kind: ObjectKind::Flash {
-                            at: Point { x: 1.0, y: 0.0 },
-                            aperture: 10,
-                        },
-                        polarity: Polarity::Clear,
-                        repeat: None,
-                        aperture_transform: WriterApertureTransform::default(),
-                        aperture_attributes: Vec::new(),
-                        attributes: Vec::new(),
-                    }],
-                },
-                attributes: Vec::new(),
-            },
-        ],
-        objects: vec![
-            WriterObject::dark(ObjectKind::Flash {
-                at: Point { x: 0.0, y: 0.0 },
-                aperture: 11,
-            }),
-            WriterObject::dark(ObjectKind::Flash {
-                at: Point { x: 2.0, y: 3.0 },
-                aperture: 20,
-            }),
-            WriterObject::dark(ObjectKind::Flash {
-                at: Point { x: 4.0, y: 4.0 },
-                aperture: 10,
-            }),
-        ],
-        ..GerberLayer::default()
-    };
-
-    let output = gerberx2::write_layer(&layer).unwrap();
-    assert_external_parser_accepts(&output);
-    assert!(output.contains("%AMROUNDRECT*"));
-    assert!(output.contains("%ADD11ROUNDRECT,0.2X0.4*%"));
-    assert!(output.contains("%ABD20*%"));
-    assert!(output.contains("%AB*%\n%LPD*%"));
-
-    let parsed = GerberX2::parse(&output).unwrap();
-    assert_eq!(parsed.aperture_macros().len(), 1);
-    assert_eq!(parsed.aperture_definitions().len(), 3);
-    assert!(matches!(
-        parsed.aperture_definitions()[1].template,
-        ApertureTemplate::Macro { .. }
-    ));
-    assert!(matches!(
-        parsed.aperture_definitions()[2].template,
-        ApertureTemplate::Block { .. }
-    ));
-    assert_eq!(parsed.objects().len(), 3);
-    assert!(matches!(
-        parsed.objects()[1].kind,
-        ObjectKind::Flash { at, aperture: 20 } if at.x == 2.0 && at.y == 3.0
-    ));
-    assert_eq!(parsed.objects()[1].polarity, Polarity::Dark);
-    assert_eq!(parsed.objects()[2].polarity, Polarity::Dark);
-    let artwork = gerberx2::geometry::extract_document(&parsed, accuracy).unwrap();
-    assert_eq!(artwork.blocks.len(), 1);
-    assert!(matches!(
-        artwork.objects[1].geometry,
-        pcb_ir::dialects::artwork::Geometry::Instance { block: 0, .. }
-    ));
 }
 
 #[test]

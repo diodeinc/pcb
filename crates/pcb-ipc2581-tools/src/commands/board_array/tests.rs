@@ -1186,7 +1186,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         .unwrap();
     assert!(top_gerber.contents.contains("G36*"));
     assert!(top_gerber.contents.contains("G37*"));
-    assert!(top_gerber.contents.contains("%AMREPEAT"));
+    assert!(top_gerber.contents.contains("%AMOUTLINE"));
     assert!(top_gerber.contents.contains("%SRX"));
     assert!(
         top_gerber

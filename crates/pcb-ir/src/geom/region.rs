@@ -20,13 +20,14 @@ mod widths;
 
 pub use booleans::PaintComposer;
 pub(crate) use booleans::difference_shapes;
+pub use construction::flatten_within;
 pub use decomposition::decompose_on_grid;
 pub use flattening::rings_to_contours;
 pub(crate) use gaps::TwoSidedResidualComponent;
 pub use gaps::{DiskGapRegularization, GapRegularizationError};
 pub use query::PreparedRegion;
+pub use simplification::simplify_shapes;
 pub(crate) use simplification::{decimate_rings_inward, simplify_rings};
-pub use simplification::{simplify_shapes, simplify_shapes_on_grid};
 
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 
