@@ -744,7 +744,7 @@ where
 }
 
 /// Resolve IPC set-void semantics: a feature flagged `clears_previous_in_set`
-/// subtracts its filled image from earlier positive features of the same set.
+/// subtracts its image from earlier positive features of the same set.
 pub fn resolve_set_voids<S, L>(
     doc: &mut Document<S, L>,
     resolution: Resolution,
@@ -753,62 +753,25 @@ where
     S: Clone,
     L: Clone,
 {
-    // Void subtraction images features in layer coordinates, so shared
-    // placement groups must be materialized before any void can cut.
-    if !doc.feature_placement_groups.is_empty()
-        && doc
-            .features
-            .iter()
-            .any(|feature| feature.flags.clears_previous_in_set)
-    {
-        expand_feature_placement_groups(doc);
-    }
+    let is_void = |feature: &Feature<S>| feature.flags.clears_previous_in_set;
+    materialize_for_cutters(doc, is_void);
     for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
-        for mut feature_indices in layer_features_by_set(doc, &layer).into_values() {
-            feature_indices.sort_by_key(|&index| doc.features[index].source.feature_index);
-            let mut previous = Vec::new();
-
-            for feature_index in feature_indices {
-                let feature = &doc.features[feature_index];
-                if feature.bucket == FeatureBucket::Cutout {
-                    continue;
-                }
-
-                if feature.flags.clears_previous_in_set {
-                    let cutters = feature_filled_region(
-                        doc,
-                        &doc.features[feature_index],
-                        resolution.strict(),
-                    )?;
-                    if !cutters.is_empty() {
-                        for subject_index in previous.iter().copied() {
-                            subtract_region_from_feature(doc, subject_index, &cutters)?;
-                        }
-                    }
-                    clear_feature_paths(doc, feature_index);
-                    continue;
-                }
-
-                if doc.features[feature_index].polarity == Polarity::Dark {
-                    previous.push(feature_index);
-                }
-            }
+        for mut set in layer_features_by_set(doc, &layer).into_values() {
+            set.sort_by_key(|&index| doc.features[index].source.feature_index);
+            set.retain(|&index| {
+                let feature = &doc.features[index];
+                feature.bucket != FeatureBucket::Cutout
+                    && (is_void(feature) || feature.polarity == Polarity::Dark)
+            });
+            resolve_clears(doc, &set, is_void, resolution)?;
         }
     }
     Ok(())
 }
 
-/// Resolve negative polarity: a clear feature subtracts its painted image
-/// from every feature painted before it on its layer, then disappears.
-///
-/// IPC paints a layer sequentially, so features after a clear run repaint it
-/// untouched. Consecutive clears commute and cut as one unioned region.
-///
-/// A balance void on a lattice cuts as its whole lattice cell wherever that
-/// cell is solid copper, and turns into the dark `cell - void` ring that
-/// restores it. The image is the same, but every ring of one void size is one
-/// shared instance rather than explicit boundary in the plane it perforates.
+/// Resolve negative polarity: a clear feature subtracts its image from every
+/// feature painted before it on its layer.
 pub fn resolve_negative_polarity<S, L>(
     doc: &mut Document<S, L>,
     resolution: Resolution,
@@ -817,114 +780,150 @@ where
     S: Clone,
     L: Clone,
 {
-    // Subtraction images features in layer coordinates, so shared placement
-    // groups must be materialized before any clear can cut.
-    if !doc.feature_placement_groups.is_empty()
-        && doc
-            .features
-            .iter()
-            .any(|feature| feature.polarity == Polarity::Clear)
-    {
-        expand_feature_placement_groups(doc);
-    }
-    let strict = resolution.strict();
+    let is_clear = |feature: &Feature<S>| feature.polarity == Polarity::Clear;
+    materialize_for_cutters(doc, is_clear);
     for layer_index in 0..doc.layers.len() {
-        let features = doc.layers[layer_index]
+        let order = doc.layers[layer_index].features.range().collect::<Vec<_>>();
+        resolve_clears(doc, &order, is_clear, resolution)?;
+    }
+    Ok(())
+}
+
+/// Subtract cutout features from every other feature on their layer.
+pub fn subtract_layer_cutouts<S, L>(
+    doc: &mut Document<S, L>,
+    resolution: Resolution,
+) -> Result<(), AccuracyError>
+where
+    S: Clone,
+    L: Clone,
+{
+    let is_cutout = |feature: &Feature<S>| feature.bucket == FeatureBucket::Cutout;
+    materialize_for_cutters(doc, is_cutout);
+    for layer_index in 0..doc.layers.len() {
+        let (cutouts, subjects): (Vec<_>, Vec<_>) = doc.layers[layer_index]
             .features
             .range()
-            .map(|index| (index, doc.features[index].polarity))
-            .collect::<Vec<_>>();
-        let mut painted = Vec::new();
-        for run in features.chunk_by(|(_, a), (_, b)| a == b) {
-            let polarity = run[0].1;
-            let run = run.iter().map(|&(index, _)| index);
-            if polarity == Polarity::Dark {
-                painted.extend(run);
-                continue;
-            }
+            .partition(|&index| is_cutout(&doc.features[index]));
+        let cutters = painted_union(doc, cutouts, resolution)?;
+        cut_features(doc, subjects, &cutters)?;
+    }
+    Ok(())
+}
 
-            let tiles = lattice_tiles(doc, run.clone());
-            let tile_features = tiles
-                .iter()
-                .map(|tile| tile.feature)
-                .collect::<HashSet<_>>();
-            let blockers = ContourSet::union_all(
-                strict,
-                run.clone()
-                    .filter(|index| !tile_features.contains(index))
-                    .map(|index| feature_painted_region(doc, &doc.features[index], strict))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )?;
-            // A tile's whole ring cell must be solid copper of one feature
-            // once everything that cannot tile has cut.
-            let tiles_bbox = tiles
-                .iter()
-                .map(|tile| tile.ring_cell.bbox)
-                .fold(BBox::empty(), BBox::union);
-            let solid = painted
-                .iter()
-                .map(|&index| &doc.features[index])
-                .filter(|subject| doc.arena.paths_bbox(subject.paths).intersects(tiles_bbox))
-                .map(|subject| {
-                    let image = feature_painted_region(doc, subject, strict)?;
-                    Ok(difference_near(&image, &blockers)?
-                        .unwrap_or(image)
-                        .prepare_query())
-                })
-                .collect::<Result<Vec<_>, AccuracyError>>()?;
-            let (tiled, untiled): (Vec<_>, Vec<_>) = tiles.into_iter().partition(|tile| {
-                solid.iter().any(|solid| {
-                    solid.signed_distance(tile.center).is_some_and(|distance| {
-                        distance.mm + distance.uncertainty_mm <= -tile.ring_cell_radius
-                    })
-                })
-            });
+/// Cutting images features in layer coordinates, so shared placement groups
+/// must be materialized before any cutter can cut.
+fn materialize_for_cutters<S: Clone, L>(
+    doc: &mut Document<S, L>,
+    is_cutter: impl Fn(&Feature<S>) -> bool,
+) {
+    if doc.features.iter().any(is_cutter) {
+        expand_feature_placement_groups(doc);
+    }
+}
 
-            let cutters = ContourSet::union_all(
-                strict,
-                std::iter::once(Ok(blockers))
-                    .chain(untiled.iter().map(|tile| {
-                        feature_painted_region(doc, &doc.features[tile.feature], strict)
-                    }))
-                    .chain(tiled.iter().map(|tile| {
-                        ContourSet::from_filled_contours(
-                            std::slice::from_ref(&tile.cut_cell),
-                            strict,
-                        )
-                    }))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )?;
-            for &subject_index in &painted {
-                let subject = &doc.features[subject_index];
-                if !doc.arena.paths_bbox(subject.paths).intersects(cutters.bbox) {
-                    continue;
+/// Paint `order` sequentially: each run of clear features subtracts its image
+/// from every feature before it, then disappears. Features after a run
+/// repaint it untouched, and consecutive clears commute and cut as one region.
+///
+/// A balance void on a lattice cuts as its whole lattice cell wherever that
+/// cell is solid copper, and turns into the dark `cell - void` ring that
+/// restores it. The image is the same, but every ring of one void size is one
+/// shared instance rather than explicit boundary in the plane it perforates.
+fn resolve_clears<S, L>(
+    doc: &mut Document<S, L>,
+    order: &[usize],
+    is_clear: impl Fn(&Feature<S>) -> bool,
+    resolution: Resolution,
+) -> Result<(), AccuracyError> {
+    let order = order
+        .iter()
+        .map(|&index| (index, is_clear(&doc.features[index])))
+        .collect::<Vec<_>>();
+    let mut painted = Vec::new();
+    for run in order.chunk_by(|(_, a), (_, b)| a == b) {
+        let clear = run[0].1;
+        let run = run.iter().map(|&(index, _)| index);
+        if !clear {
+            painted.extend(run);
+            continue;
+        }
+
+        let tiles = lattice_tiles(doc, run.clone());
+        let tile_features = tiles
+            .iter()
+            .map(|tile| tile.feature)
+            .collect::<HashSet<_>>();
+        let blockers = painted_union(
+            doc,
+            run.clone().filter(|index| !tile_features.contains(index)),
+            resolution,
+        )?;
+        // A tile's whole ring cell must be solid copper of one feature once
+        // everything that cannot tile has cut.
+        let tiles_bbox = tiles
+            .iter()
+            .map(|tile| tile.ring_cell.bbox)
+            .fold(BBox::empty(), BBox::union);
+        let solid = painted
+            .iter()
+            .map(|&index| &doc.features[index])
+            .filter(|subject| doc.arena.paths_bbox(subject.paths).intersects(tiles_bbox))
+            .map(|subject| {
+                let image = feature_painted_region(doc, subject, resolution.strict())?;
+                Ok(match near_cutters(&image, &blockers) {
+                    Some(near) => image.difference(&near)?,
+                    None => image,
                 }
-                let subject = feature_painted_region(doc, subject, strict)?;
-                subtract_region_from_image(doc, subject_index, subject, &cutters)?;
-            }
+                .prepare_query())
+            })
+            .collect::<Result<Vec<_>, AccuracyError>>()?;
+        let (tiled, untiled): (Vec<_>, Vec<_>) = tiles.into_iter().partition(|tile| {
+            solid.iter().any(|solid| {
+                solid.signed_distance(tile.center).is_some_and(|distance| {
+                    distance.mm + distance.uncertainty_mm <= -tile.ring_cell_radius
+                })
+            })
+        });
 
-            run.filter(|index| !tile_features.contains(index))
-                .chain(untiled.iter().map(|tile| tile.feature))
-                .for_each(|index| clear_feature_paths(doc, index));
-            for tile in tiled {
-                // The ring keeps the void's dictionary identity, so every
-                // ring of one void size lowers through one shared aperture.
-                let feature = &doc.features[tile.feature];
-                let void = feature.paths.slice(&doc.arena.paths);
-                let ring = std::iter::once(tile.ring_cell)
-                    .chain(void.iter().flat_map(|path| doc.arena.path_contours(path)))
-                    .collect::<Vec<_>>();
-                let ring = doc.arena.push_path(
-                    Paint::Fill {
-                        rule: FillRule::EvenOdd,
-                    },
-                    ring,
-                );
-                let feature = &mut doc.features[tile.feature];
-                feature.paths = Span::single(ring);
-                feature.polarity = Polarity::Dark;
-                painted.push(tile.feature);
-            }
+        let cutters = ContourSet::union_all(
+            resolution.strict(),
+            [
+                blockers,
+                painted_union(doc, untiled.iter().map(|tile| tile.feature), resolution)?,
+                ContourSet::from_filled_contours(
+                    &tiled
+                        .iter()
+                        .map(|tile| tile.cut_cell.clone())
+                        .collect::<Vec<_>>(),
+                    resolution.strict(),
+                )?,
+            ],
+        )?;
+        cut_features(doc, painted.iter().copied(), &cutters)?;
+
+        run.filter(|index| !tile_features.contains(index))
+            .chain(untiled.iter().map(|tile| tile.feature))
+            .for_each(|index| clear_feature_paths(doc, index));
+        for tile in tiled {
+            // The ring keeps the void's dictionary identity, so every ring
+            // of one void size lowers through one shared aperture.
+            let feature = &doc.features[tile.feature];
+            let void = feature.paths.slice(&doc.arena.paths);
+            let ring = std::iter::once(tile.ring_cell)
+                .chain(void.iter().flat_map(|path| doc.arena.path_contours(path)))
+                .collect::<Vec<_>>();
+            let ring = doc.arena.push_path(
+                Paint::Fill {
+                    rule: FillRule::EvenOdd,
+                },
+                ring,
+            );
+            let feature = &mut doc.features[tile.feature];
+            feature.paths = Span::single(ring);
+            feature.polarity = Polarity::Dark;
+            feature.flags.clears_previous_in_set = false;
+            painted.push(tile.feature);
         }
     }
     Ok(())
@@ -1001,59 +1000,6 @@ fn layer_features_by_set<S, L>(
             .push(feature_index);
     }
     features_by_set
-}
-
-/// Subtract cutout features from every other feature on their layer.
-pub fn subtract_layer_cutouts<S, L>(
-    doc: &mut Document<S, L>,
-    resolution: Resolution,
-) -> Result<(), AccuracyError>
-where
-    S: Clone,
-    L: Clone,
-{
-    // Cutout subtraction images features in layer coordinates, so shared
-    // placement groups must be materialized before any cutout can cut.
-    if !doc.feature_placement_groups.is_empty()
-        && doc
-            .features
-            .iter()
-            .any(|feature| feature.bucket == FeatureBucket::Cutout)
-    {
-        expand_feature_placement_groups(doc);
-    }
-    for layer_index in 0..doc.layers.len() {
-        let layer = doc.layers[layer_index].clone();
-        let cutouts = layer_cutout_sets(doc, &layer, resolution)?;
-        if cutouts.is_empty() {
-            continue;
-        }
-
-        for feature_index in layer.features.range() {
-            let feature = &doc.features[feature_index];
-            if feature.bucket == FeatureBucket::Cutout {
-                continue;
-            }
-
-            let feature_bbox = doc.arena.paths_bbox(feature.paths);
-            if feature_bbox.is_empty() {
-                continue;
-            }
-
-            let cutters = ContourSet::union_all(
-                resolution.strict(),
-                cutouts
-                    .iter()
-                    .filter(|cutout| feature_bbox.intersects(cutout.bbox))
-                    .cloned(),
-            )?;
-            if cutters.is_empty() {
-                continue;
-            }
-            subtract_region_from_feature(doc, feature_index, &cutters)?;
-        }
-    }
-    Ok(())
 }
 
 /// Split a lowered-primitive feature into per-paint-kind runs so each run can
@@ -1163,62 +1109,47 @@ fn clear_feature_paths<S, L>(doc: &mut Document<S, L>, feature_index: usize) {
     feature.primitive_ref = None;
 }
 
-fn subtract_region_from_feature<S, L>(
+/// Subtract `cutters` from every subject they actually cut. A subject the
+/// cutters only pass near keeps its native paths, strokes, and dictionary
+/// identity.
+fn cut_features<S, L>(
     doc: &mut Document<S, L>,
-    feature_index: usize,
+    subjects: impl IntoIterator<Item = usize>,
     cutters: &ContourSet,
 ) -> Result<(), AccuracyError> {
-    let subject = feature_filled_region(
-        doc,
-        &doc.features[feature_index],
-        cutters.resolution.strict(),
-    )?;
-    subtract_region_from_image(doc, feature_index, subject, cutters)
-}
-
-/// Replace a feature with `subject \ cutters`, where `subject` is the image
-/// the caller resolved for it.
-fn subtract_region_from_image<S, L>(
-    doc: &mut Document<S, L>,
-    feature_index: usize,
-    subject: ContourSet,
-    cutters: &ContourSet,
-) -> Result<(), AccuracyError> {
-    if subject.is_empty() {
-        return Ok(());
+    for index in subjects {
+        let subject = &doc.features[index];
+        if !doc.arena.paths_bbox(subject.paths).intersects(cutters.bbox) {
+            continue;
+        }
+        let image = feature_painted_region(doc, subject, cutters.resolution)?;
+        let Some(near) = near_cutters(&image, cutters) else {
+            continue;
+        };
+        if image.intersection(&near)?.is_empty() {
+            continue;
+        }
+        let contours = image.difference(&near)?.to_contours();
+        if contours.is_empty() {
+            clear_feature_paths(doc, index);
+        } else {
+            replace_feature_with_path(
+                doc,
+                index,
+                Paint::Fill {
+                    rule: FillRule::NonZero,
+                },
+                contours,
+            );
+        }
     }
-
-    let Some(difference) = difference_near(&subject, cutters)? else {
-        return Ok(());
-    };
-    let contours = difference.to_contours();
-    if contours.is_empty() {
-        clear_feature_paths(doc, feature_index);
-        return Ok(());
-    }
-
-    replace_feature_with_path(
-        doc,
-        feature_index,
-        Paint::Fill {
-            rule: FillRule::NonZero,
-        },
-        contours,
-    );
-
     Ok(())
 }
 
-/// `subject \ cutters`, or `None` when no cutter can reach the subject.
-///
-/// Only cutters that can reach the subject participate; most features on a
-/// layer are nowhere near any of them, and dense generated cutter sets
-/// (balance void lattices) would otherwise make every subtraction sweep the
-/// whole set.
-fn difference_near(
-    subject: &ContourSet,
-    cutters: &ContourSet,
-) -> Result<Option<ContourSet>, AccuracyError> {
+/// The cutters whose bounds reach `subject`, if any. Most features on a layer
+/// are nowhere near any cutter, and dense generated cutter sets (balance void
+/// lattices) would otherwise make every subtraction sweep the whole set.
+fn near_cutters(subject: &ContourSet, cutters: &ContourSet) -> Option<ContourSet> {
     let near = cutters
         .rings
         .iter()
@@ -1226,28 +1157,23 @@ fn difference_near(
         .filter(|(_, bounds)| bounds.intersects(subject.bbox))
         .map(|(ring, _)| ring.clone())
         .collect::<Vec<_>>();
-    if near.is_empty() {
-        return Ok(None);
-    }
-    let near = ContourSet::from_regularized(near, cutters.resolution, cutters.uncertainty_mm);
-    subject.difference(&near).map(Some)
+    (!near.is_empty())
+        .then(|| ContourSet::from_regularized(near, cutters.resolution, cutters.uncertainty_mm))
 }
 
-fn layer_cutout_sets<S, L>(
+/// The union of the features' painted images.
+fn painted_union<S, L>(
     doc: &Document<S, L>,
-    layer: &Layer<S, L>,
+    features: impl IntoIterator<Item = usize>,
     resolution: Resolution,
-) -> Result<Vec<ContourSet>, AccuracyError> {
-    Ok(layer
-        .features
-        .slice(&doc.features)
-        .iter()
-        .filter(|feature| feature.bucket == FeatureBucket::Cutout)
-        .map(|feature| feature_filled_region(doc, feature, resolution))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .filter(|region| !region.is_empty())
-        .collect())
+) -> Result<ContourSet, AccuracyError> {
+    ContourSet::union_all(
+        resolution.strict(),
+        features
+            .into_iter()
+            .map(|index| feature_painted_region(doc, &doc.features[index], resolution.strict()))
+            .collect::<Result<Vec<_>, _>>()?,
+    )
 }
 
 /// Union each fill path's independently evaluated image, retaining local holes.
@@ -1649,6 +1575,56 @@ mod tests {
         let ring = feature_painted_region(&doc, tiled, Resolution::default()).unwrap();
         let cell = 2.0 * 3.0_f64.sqrt() * (1.0 + LATTICE_TILE_OVERLAP_MM).powi(2);
         assert!((ring.area() - (cell - 1.0)).abs() < 1e-6, "{}", ring.area());
+    }
+
+    #[test]
+    fn cutouts_cut_strokes_and_leave_untouched_neighbours_native() {
+        let fill = Paint::Fill {
+            rule: FillRule::NonZero,
+        };
+        let mut doc = TestDoc::new();
+        // A trace the cutout crosses, and a pad whose bounds the L-shaped
+        // cutout overlaps without touching it.
+        doc.push_path(
+            Paint::Stroke(StrokeStyle::new(1.0, LineCap::Butt)),
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.5)),
+                PathCmd::line_to(Point::new(6.0, 0.5)),
+            ])],
+        );
+        doc.push_path(fill, [rect_contour(4.0, 3.0, 5.0, 4.0)]);
+        doc.push_path(
+            fill,
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(2.0, 0.0)),
+                PathCmd::line_to(Point::new(3.0, 0.0)),
+                PathCmd::line_to(Point::new(3.0, 5.0)),
+                PathCmd::line_to(Point::new(6.0, 5.0)),
+                PathCmd::line_to(Point::new(6.0, 6.0)),
+                PathCmd::line_to(Point::new(2.0, 6.0)),
+                PathCmd::close(),
+            ])],
+        );
+        let mut pad = Feature::new(FeatureKind::Primitive, Polarity::Dark);
+        pad.primitive_ref = Some(PrimitiveRef::User(7));
+        let mut cutout = Feature::new(FeatureKind::Polygon, Polarity::Dark);
+        cutout.bucket = FeatureBucket::Cutout;
+        for (path, feature) in [copper_trace_feature(), pad, cutout]
+            .into_iter()
+            .enumerate()
+        {
+            doc.features.push(Feature {
+                paths: Span::new(path as u32, 1),
+                ..feature
+            });
+        }
+        doc.layers.push(test_layer(Span::new(0, 3)));
+
+        normalize_for_artwork(&mut doc, Resolution::default()).unwrap();
+
+        let trace = feature_painted_region(&doc, &doc.features[0], Resolution::default());
+        assert!((trace.unwrap().area() - 5.0).abs() < 1e-6);
+        assert_eq!(doc.features[1].primitive_ref, Some(PrimitiveRef::User(7)));
     }
 
     #[test]

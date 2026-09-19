@@ -23,9 +23,9 @@ use pcb_ir::dialects::artwork::{
 #[cfg(feature = "cli")]
 use pcb_ir::dialects::ipc::relief;
 use pcb_ir::dialects::ipc::{
-    ArtworkLowering, ArtworkObjectKind, ArtworkScope, CopperBalanceKind, Feature, FeatureBucket,
-    FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, LayoutPurpose, PlatingKind,
-    PrimitiveRef, ProfileSet, lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with,
+    ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureBucket, FeatureDomain,
+    FeatureOperation, FeatureRole, FiducialKind, LayoutPurpose, PlatingKind, PrimitiveRef,
+    ProfileSet, lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with,
     profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
@@ -742,16 +742,14 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
     /// Only pad-like copper and tiled balance cells may image as flashes.
     fn flashes(&mut self, feature: &Feature<ipc2581::Symbol>) -> bool {
         self.role != GerberLayerRole::Copper
-            || match feature.flags.copper_balance {
-                Some(kind) => kind == CopperBalanceKind::FullVoid,
-                None => matches!(
-                    feature.bucket,
-                    FeatureBucket::Smd
-                        | FeatureBucket::Pth
-                        | FeatureBucket::Via
-                        | FeatureBucket::Fiducial
-                ),
-            }
+            || feature.flags.copper_balance_void.is_some()
+            || matches!(
+                feature.bucket,
+                FeatureBucket::Smd
+                    | FeatureBucket::Pth
+                    | FeatureBucket::Via
+                    | FeatureBucket::Fiducial
+            )
     }
 
     fn stroke_style(&mut self, stroke: StrokeStyle) -> StrokeStyle {
@@ -766,10 +764,7 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
     fn paint_order(&mut self, feature: &Feature<ipc2581::Symbol>) -> PaintOrder {
         let stage = if feature.intent.role == FeatureRole::Cutout || feature.is_drill_like() {
             PaintStage::FinalCutout
-        } else if feature.polarity == Polarity::Clear
-            || feature.flags.clears_previous_in_set
-            || feature.bucket == FeatureBucket::Fill
-        {
+        } else if feature.bucket == FeatureBucket::Fill {
             PaintStage::Base
         } else {
             PaintStage::Overlay
@@ -1412,7 +1407,7 @@ fn aperture_function(
         GerberLayerRole::Copper => {}
     }
 
-    if feature.flags.copper_balance.is_some() {
+    if feature.flags.copper_balance {
         return Some(vec!["CopperBalancing".to_string()]);
     }
 

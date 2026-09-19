@@ -1095,7 +1095,7 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
                     .expect("materialized copper pad must retain its occurrence identity"),
             });
         }
-        if feature.is_fiducial() || feature.flags.copper_balance.is_some() {
+        if feature.is_fiducial() || feature.flags.copper_balance {
             return Some(ConductorId::Auxiliary {
                 step: feature.source_step_ref,
                 instance: feature.source_instance,
