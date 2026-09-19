@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Fix self-touching Gerber regions and custom aperture outlines.
+- Keep footprint and pad UUIDs across `pcb layout --sync-footprints` and footprint changes so KiCad DRC exclusions survive.
 
 ### Changed
 

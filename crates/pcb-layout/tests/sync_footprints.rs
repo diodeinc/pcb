@@ -53,6 +53,32 @@ fn placement_state(footprint: &serde_json::Value) -> serde_json::Value {
     })
 }
 
+/// UUIDs of a footprint and its pads, which KiCad DRC exclusions reference.
+fn footprint_and_pad_uuids(board: &str, reference: &str) -> Result<Vec<String>> {
+    let uuid = |item: &[pcb_sexpr::Sexpr]| {
+        pcb_sexpr::find_child_list(item, "uuid")
+            .and_then(|uuid| uuid.get(1)?.as_atom())
+            .map(str::to_owned)
+    };
+    let board = pcb_sexpr::parse(board)?;
+    let footprint = board
+        .find_all_lists("footprint")
+        .into_iter()
+        .find(|footprint| {
+            pcb_sexpr::find_all_child_lists(footprint, "property")
+                .iter()
+                .any(|property| {
+                    property.get(1).and_then(pcb_sexpr::Sexpr::as_atom) == Some("Reference")
+                        && property.get(2).and_then(pcb_sexpr::Sexpr::as_atom) == Some(reference)
+                })
+        })
+        .with_context(|| format!("Footprint {reference} not found"))?;
+    std::iter::once(footprint)
+        .chain(pcb_sexpr::find_all_child_lists(footprint, "pad"))
+        .map(|item| uuid(item).context("missing uuid"))
+        .collect()
+}
+
 fn add_test_track(pcb_file: &std::path::Path) -> Result<()> {
     let mut board = std::fs::read_to_string(pcb_file)?;
     let end = board
@@ -149,6 +175,10 @@ fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Resul
     assert_eq!(placement_state(synced_ic1), initial_placement);
     assert_eq!(synced_ic1["pads"], initial_ic1["pads"]);
     assert_eq!(synced_snapshot["tracks"], unchanged_tracks);
+    assert_eq!(
+        footprint_and_pad_uuids(&synced_board, "IC1")?,
+        footprint_and_pad_uuids(&unchanged_board, "IC1")?
+    );
 
     let schematic = evaluate_board(&zen_file, resolution)?;
     let mut diagnostics = Diagnostics::default();

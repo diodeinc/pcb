@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid as uuid_module
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -724,13 +725,22 @@ def apply_changeset(
     view = changeset.view
     layout_dir = board_path.parent if board_path else None
 
+    # FPID changes and source refreshes both appear as remove + add at one path.
+    removed_by_path = {
+        eid.path: (eid, comp) for eid, comp in changeset.removed_footprints.items()
+    }
+
     # Load every footprint before applying lens mutations, so a missing source
-    # cannot leave a partially replaced set of footprints.
+    # cannot leave a partially replaced set of footprints. A replacement is
+    # created in the placement of the footprint it replaces.
     materialized_footprints: dict[EntityId, Any] = {}
     for entity_id in sorted(changeset.added_footprints, key=lambda e: str(e.path)):
+        _, complement = removed_by_path.get(
+            entity_id.path, (None, default_footprint_complement())
+        )
         materialized_footprints[entity_id] = _create_footprint(
             view.footprints[entity_id],
-            default_footprint_complement(),
+            complement,
             kicad_board,
             pcbnew,
             footprint_lib_map,
@@ -793,11 +803,14 @@ def apply_changeset(
         logger.info(f"Removed group: {entity_id}")
 
     # 1b. FP-REMOVE - delete footprints explicitly marked for removal
+    replacements = {eid.path: fp for eid, fp in materialized_footprints.items()}
     for entity_id in sorted(
         changeset.removed_footprints.keys(), key=lambda e: str(e.path)
     ):
         fp = _lookup_fp(entity_id)
         if fp:
+            if entity_id.path in replacements:
+                _inherit_uuids(fp, replacements[entity_id.path])
             kicad_board.Delete(fp)
             if entity_id in fps_by_entity_id:
                 del fps_by_entity_id[entity_id]
@@ -808,9 +821,9 @@ def apply_changeset(
     # Phase 2: Materialization (footprints and groups)
     # ==========================================================================
 
-    # 2a. FP-ADD - install preloaded footprints at origin (0,0)
-    # All new footprints start at origin; HierPlace will position them
-    # (including position inheritance and fragment placement).
+    # 2a. FP-ADD - install preloaded footprints
+    # Replacements are already placed; the rest start at origin (0,0) and are
+    # positioned by HierPlace (including fragment placement).
     for entity_id in sorted(changeset.added_footprints, key=lambda e: str(e.path)):
         fp_view = view.footprints[entity_id]
         fp = materialized_footprints[entity_id]
@@ -830,6 +843,15 @@ def apply_changeset(
             layer=layer_name,
             pad_count=pad_count,
         )
+        if entity_id.path in removed_by_path:
+            old_id, old_comp = removed_by_path[entity_id.path]
+            oplog.place_fp_inherit(
+                str(entity_id.path),
+                old_comp.position.x,
+                old_comp.position.y,
+                old_id.fpid,
+                entity_id.fpid,
+            )
         logger.info(f"Added footprint: {entity_id}")
 
     # 2b. GR-ADD - create groups (routing applied in Phase 6 after membership rebuild)
@@ -1202,50 +1224,6 @@ def _build_group_tree(
     return dict(tree)
 
 
-def _apply_position_inheritance(
-    changeset: SyncChangeset,
-    fps_by_entity_id: dict[EntityId, Any],
-    pcbnew: Any,
-    oplog: OpLog,
-) -> tuple[int, set[EntityId]]:
-    """Apply position inheritance for footprint replacements.
-
-    FPID changes and explicit source refreshes both appear as remove + add operations
-    with the same path. We inherit placement from the removed complement.
-
-    Returns (placed_count, inherited_footprint_ids).
-    """
-    placed_count = 0
-    inherited: set[EntityId] = set()
-
-    # Map path -> (old EntityId, old complement)
-    removed_by_path = {
-        eid.path: (eid, comp) for eid, comp in changeset.removed_footprints.items()
-    }
-
-    for added_id in changeset.added_footprints:
-        removed_info = removed_by_path.get(added_id.path)
-        if not removed_info:
-            continue
-        old_id, old_comp = removed_info
-        fp = fps_by_entity_id.get(added_id)
-        if not fp:
-            continue
-
-        apply_footprint_placement(fp, old_comp, pcbnew)
-        inherited.add(added_id)
-        placed_count += 1
-        oplog.place_fp_inherit(
-            str(added_id.path),
-            old_comp.position.x,
-            old_comp.position.y,
-            old_id.fpid,
-            added_id.fpid,
-        )
-
-    return placed_count, inherited
-
-
 def _apply_fragment_positions(
     plan: FragmentPlan,
     inherited: set[EntityId],
@@ -1370,9 +1348,10 @@ def _run_hierarchical_placement(
     Rule C: Non-fragment groups use pure bottom-up HierPlace
     Rule D: Root integration with existing content
     """
-    placed, inherited = _apply_position_inheritance(
-        changeset, fps_by_entity_id, pcbnew, oplog
-    )
+    # Replacements were created in the placement of the footprint they replace.
+    removed_paths = {eid.path for eid in changeset.removed_footprints}
+    inherited = {eid for eid in changeset.added_footprints if eid.path in removed_paths}
+    placed = len(inherited)
 
     newly_added = changeset.added_footprints - inherited
     # IMPORTANT: group-only repairs (GR_ADD with no FP_ADD) must not trigger placement.
@@ -1505,6 +1484,40 @@ def apply_footprint_placement(
 
     fp.SetOrientation(pcbnew.EDA_ANGLE(complement.orientation, pcbnew.DEGREES_T))
     fp.SetLocked(complement.locked)
+
+
+def _inherit_uuids(old_fp: Any, new_fp: Any) -> None:
+    """Give a replacement footprint the UUIDs of the footprint it replaces.
+
+    KiCad keys DRC exclusions by item UUID. The replacement shares the old
+    placement, so pads with the same number pair up closest first: a pad that
+    stayed put keeps its UUID however its neighbours moved or the library orders
+    them. Pads the old footprint lacks keep their fresh UUIDs.
+
+    pcbnew has no UUID setter, so this writes through the exposed member. That
+    is only sound while new_fp is detached: the board indexes its items by UUID.
+    """
+    new_fp.m_Uuid.Clone(old_fp.m_Uuid)
+
+    def pads_by_number(fp: Any) -> dict[str, list[tuple[int, int, Any]]]:
+        pads = defaultdict(list)
+        for pad in fp.Pads():
+            pos = pad.GetPosition()
+            pads[pad.GetNumber()].append((pos.x, pos.y, pad))
+        return pads
+
+    old_pads = pads_by_number(old_fp)
+    for number, pads in pads_by_number(new_fp).items():
+        olds = dict(enumerate(old_pads[number]))
+        news = dict(enumerate(pads))
+        closest_first = sorted(
+            ((ox - nx) ** 2 + (oy - ny) ** 2, i, j)
+            for i, (ox, oy, _) in olds.items()
+            for j, (nx, ny, _) in news.items()
+        )
+        for _, i, j in closest_first:
+            if i in olds and j in news:
+                news.pop(j)[2].m_Uuid.Clone(olds.pop(i)[2].m_Uuid)
 
 
 def _resolve_field_value(

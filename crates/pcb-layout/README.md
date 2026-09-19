@@ -34,19 +34,22 @@ This model enforces four invariants:
 
 | Entity | Identity | Netlist controls | KiCad controls |
 |---|---|---|---|
-| Footprint | Hierarchical path and footprint ID | Reference, value, footprint ID, DNP state, fields | Position, orientation, layer, lock state |
+| Footprint | Hierarchical path and footprint ID | Reference, value, footprint ID, DNP state, fields | Position, orientation, layer, lock state, footprint and pad UUIDs |
 | Group | Hierarchical path | Name and membership | Existing routing and graphics |
 | Net | Name | Name and pad connections | Existing routed items associated with the name |
 
 A footprint ID change is a removal followed by an addition. The new footprint
-inherits the previous position when possible. Zener `moved()` declarations are
-resolved before the Python synchronizer runs.
+is created in the placement of the footprint it replaces and takes over its
+UUID and the UUIDs of its pads, matched by pad number, so KiCad DRC exclusions
+keep referring to the same items. Zener `moved()` declarations are resolved
+before the Python synchronizer runs.
 
 By default, a footprint with the same hierarchical path and footprint ID keeps
 its existing KiCad geometry. Run `pcb layout <FILE> --sync-footprints` to reload
-all managed footprints from their source libraries while preserving board
-placement and routing. All replacements are loaded before lens mutations begin,
-so a missing source footprint cannot leave a partially refreshed board.
+all managed footprints from their source libraries through the same
+replacement, preserving board placement, routing, and UUIDs. All replacements
+are loaded before lens mutations begin, so a missing source footprint cannot
+leave a partially refreshed board.
 
 ## Synchronization process
 
@@ -57,7 +60,7 @@ The synchronizer applies a changeset in this order:
 3. Update source-controlled footprint metadata.
 4. Rebuild group membership.
 5. Assign pads to nets.
-6. Place new entities and restore inherited positions.
+6. Place new entities.
 7. Copy routing and graphics from reusable layout fragments.
 
 The log records the extracted state, planned changeset, and applied operations.
