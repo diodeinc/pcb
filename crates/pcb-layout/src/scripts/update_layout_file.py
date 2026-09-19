@@ -248,6 +248,7 @@ class JsonNetlistParser:
                     "'footprint_fpid'; regenerate the layout netlist with a current pcb tool."
                 )
 
+            # The hierarchical name is the dot-separated path (matching comp.hier_name in Rust)
             hier_name = instance["instance_path"]
 
             # Generate UUID v5 using the same namespace and input as Rust

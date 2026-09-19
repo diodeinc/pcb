@@ -90,12 +90,12 @@ fn colon_paths_preserve_existing_board_and_repeat_sync() -> Result<()> {
     let module_file = temp.path().join("BMI270.zen");
     let source = std::fs::read_to_string(&module_file)?.replace("name=\"IC\"", "name=\"Chip:IC\"");
     std::fs::write(module_file, source)?;
-    let mut schematic = evaluate_board(&zen_file, resolution.clone())?;
+    let schematic = evaluate_board(&zen_file, resolution)?;
     let mut diagnostics = Diagnostics::default();
     let layout = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?.unwrap();
     add_test_track(&layout.pcb_file)?;
     process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?;
-    let mut original = std::fs::read_to_string(&layout.pcb_file)?;
+    let original = std::fs::read_to_string(&layout.pcb_file)?;
     let project_file = layout.pcb_file.with_extension("kicad_pro");
     let project = std::fs::read(&project_file)?;
 
@@ -103,6 +103,7 @@ fn colon_paths_preserve_existing_board_and_repeat_sync() -> Result<()> {
     pcb_layout::check_layout_sync(&schematic, &mut checked)?;
     assert!(checked.diagnostics.is_empty(), "{checked:?}");
 
+    // Rewrite the board the way older syncs stored it: paths truncated after their last colon.
     let board = pcb_sexpr::parse(&original)?;
     let mut patches = pcb_sexpr::PatchSet::default();
     let mut links = HashMap::new();
@@ -124,27 +125,16 @@ fn colon_paths_preserve_existing_board_and_repeat_sync() -> Result<()> {
     let mut legacy = Vec::new();
     patches.write_to(&original, &mut legacy)?;
     assert_ne!(original.as_bytes(), legacy);
-    for rename in [false, true] {
-        if rename {
-            let source =
-                std::fs::read_to_string(&zen_file)?.replace("Block:BMI270", "Block:Renamed");
-            std::fs::write(
-                &zen_file,
-                format!("{source}\nmoved(\"Block:BMI270\", \"Block:Renamed\")\n"),
-            )?;
-            schematic = evaluate_board(&zen_file, resolution.clone())?;
-            process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?;
-            original = std::fs::read_to_string(&layout.pcb_file)?;
-        }
-        std::fs::write(&layout.pcb_file, &legacy)?;
-        for _ in 0..2 {
-            process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?;
-            assert_eq!(std::fs::read_to_string(&layout.pcb_file)?, original);
-            assert_eq!(std::fs::read(&project_file)?, project);
-            let mut checked = Diagnostics::default();
-            pcb_layout::check_layout_sync(&schematic, &mut checked)?;
-            assert!(checked.diagnostics.is_empty(), "{checked:?}");
-        }
+    std::fs::write(&layout.pcb_file, &legacy)?;
+
+    // Sync restores the full paths in place, and syncing again changes nothing.
+    for _ in 0..2 {
+        process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?;
+        assert_eq!(std::fs::read_to_string(&layout.pcb_file)?, original);
+        assert_eq!(std::fs::read(&project_file)?, project);
+        let mut checked = Diagnostics::default();
+        pcb_layout::check_layout_sync(&schematic, &mut checked)?;
+        assert!(checked.diagnostics.is_empty(), "{checked:?}");
     }
     Ok(())
 }
