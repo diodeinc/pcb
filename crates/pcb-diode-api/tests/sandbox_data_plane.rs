@@ -2,12 +2,15 @@
 //! connections from the API and using them against the orchestrator data
 //! plane (fs read/write/list, job-shaped exec, CAS locks).
 
-use std::sync::Once;
-use std::time::Duration;
+use std::sync::{Arc, Barrier, Mutex, Once, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 
-use httpmock::Mock;
 use httpmock::prelude::*;
-use pcb_diode_api::{ExecSyncRequest, SandboxClient, SandboxLockOptions, WorkspaceContext};
+use httpmock::{HttpMockResponse, Mock};
+use pcb_diode_api::{
+    ExecSyncRequest, SandboxClient, SandboxLockGuard, SandboxLockOptions, WorkspaceContext,
+};
 
 const SANDBOX: &str = "sbx_1";
 const LOCK_QUERY: &str = "/home/sandbox/.diode/sandbox-lock.json";
@@ -90,7 +93,7 @@ fn mock_exec<'a>(
 }
 
 #[test]
-fn applies_arbitrary_headers_and_mints_for_each_request() {
+fn parallel_client_clones_share_one_connection() {
     let server = MockServer::start();
     let mint = mock_mint(&server, "minted-token");
     let read = server.mock(|when, then| {
@@ -102,25 +105,50 @@ fn applies_arbitrary_headers_and_mints_for_each_request() {
     });
 
     let client = client_for(&server);
-    for _ in 0..2 {
-        let bytes = client.read_file(SANDBOX, "/home/sandbox/main.zen").unwrap();
-        assert_eq!(bytes, b"zen-content");
-    }
+    let barrier = Barrier::new(8);
+    thread::scope(|scope| {
+        for _ in 0..8 {
+            let client = client.clone();
+            let barrier = &barrier;
+            scope.spawn(move || {
+                barrier.wait();
+                let bytes = client.read_file(SANDBOX, "/home/sandbox/main.zen").unwrap();
+                assert_eq!(bytes, b"zen-content");
+            });
+        }
+    });
 
-    read.assert_calls(2);
-    mint.assert_calls(2);
+    read.assert_calls(8);
+    mint.assert_calls(1);
 }
 
 #[test]
-fn does_not_replay_when_data_plane_rejects_a_mutation() {
+fn rejected_mutation_invalidates_without_replay_or_discarding_newer_connection() {
     let server = MockServer::start();
-    let mint = mock_mint(&server, "rejected-token");
+    let mut mint = mock_mint(&server, "rejected-token");
+    let slow_write = server.mock(|when, then| {
+        when.method(PUT)
+            .path("/sandboxes/sbx_1/fs/write")
+            .query_param("path", "/slow");
+        then.status(403).delay(Duration::from_secs(1));
+    });
     let write = server.mock(|when, then| {
-        when.method(PUT).path("/sandboxes/sbx_1/fs/write");
+        when.method(PUT)
+            .path("/sandboxes/sbx_1/fs/write")
+            .query_param("path", "/home/sandbox/main.zen");
         then.status(403);
+    });
+    let read = server.mock(|when, then| {
+        when.method(GET)
+            .path("/sandboxes/sbx_1/fs/read")
+            .header("x-sandbox-connection", "replacement-token");
+        then.status(200).body("renewed");
     });
 
     let client = client_for(&server);
+    let slow_client = client.clone();
+    let slow = thread::spawn(move || slow_client.write_file(SANDBOX, "/slow", b"old"));
+    wait_for_call(&slow_write);
     let err = client
         .write_file(SANDBOX, "/home/sandbox/main.zen", b"content")
         .unwrap_err();
@@ -131,6 +159,18 @@ fn does_not_replay_when_data_plane_rejects_a_mutation() {
     );
     write.assert_calls(1);
     mint.assert_calls(1);
+    mint.delete();
+    let replacement = mock_mint(&server, "replacement-token");
+    assert_eq!(client.read_file(SANDBOX, "/file").unwrap(), b"renewed");
+    assert!(
+        !slow.is_finished(),
+        "old request must still be in flight after renewal"
+    );
+    assert!(slow.join().unwrap().is_err());
+    assert_eq!(client.read_file(SANDBOX, "/file").unwrap(), b"renewed");
+    replacement.assert_calls(1);
+    slow_write.assert_calls(1);
+    read.assert_calls(2);
 }
 
 #[test]
@@ -172,7 +212,7 @@ fn does_not_forward_connection_headers_to_redirects() {
 }
 
 #[test]
-fn uses_each_fresh_endpoint_and_its_headers_together() {
+fn renews_expiring_endpoint_and_headers_together() {
     let api = MockServer::start();
     let first_data_plane = MockServer::start();
     let second_data_plane = MockServer::start();
@@ -183,6 +223,7 @@ fn uses_each_fresh_endpoint_and_its_headers_together() {
                 "endpoint": format!("{}/first/sandbox-base?route=first%2Fvalue", first_data_plane.base_url()),
                 "headers": { "x-connection": "first" },
             },
+            "expiresAt": chrono::Utc::now().timestamp() + 30,
         }));
     });
     let first_read = first_data_plane.mock(|when, then| {
@@ -197,6 +238,7 @@ fn uses_each_fresh_endpoint_and_its_headers_together() {
     let client = client_for(&api);
     assert_eq!(client.read_file(SANDBOX, "/file").unwrap(), b"first");
     first_read.assert();
+    first_mint.assert_calls(1);
     first_mint.delete();
 
     let second_mint = api.mock(|when, then| {
@@ -216,8 +258,93 @@ fn uses_each_fresh_endpoint_and_its_headers_together() {
     });
 
     assert_eq!(client.read_file(SANDBOX, "/file").unwrap(), b"second");
-    second_mint.assert();
-    second_read.assert();
+    assert_eq!(client.read_file(SANDBOX, "/file").unwrap(), b"second");
+    second_mint.assert_calls(1);
+    second_read.assert_calls(2);
+}
+
+fn wait_for_call(mock: &Mock<'_>) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while mock.calls() == 0 {
+        assert!(Instant::now() < deadline, "expected request did not arrive");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn waits_for_lifecycle_contention_before_submitting_work() {
+    for code in ["SANDBOX_BUSY", "SANDBOX_UPDATING"] {
+        let server = MockServer::start();
+        let mut busy = server.mock(|when, then| {
+            when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+            then.status(503)
+                .json_body(serde_json::json!({"code": code}));
+        });
+        let read = server.mock(|when, then| {
+            when.method(GET).path("/sandboxes/sbx_1/fs/read");
+            then.status(200).body("ready");
+        });
+        let client = client_for(&server);
+        let worker = thread::spawn(move || client.read_file(SANDBOX, "/file"));
+        wait_for_call(&busy);
+        read.assert_calls(0);
+        busy.delete();
+        let mint = mock_mint(&server, "ready-token");
+        assert_eq!(worker.join().unwrap().unwrap(), b"ready");
+        mint.assert_calls(1);
+        read.assert_calls(1);
+    }
+}
+
+#[test]
+fn does_not_wait_for_unavailable_sandbox() {
+    let server = MockServer::start();
+    let mint = server.mock(|when, then| {
+        when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+        then.status(503)
+            .json_body(serde_json::json!({"code": "SANDBOX_UNAVAILABLE"}));
+    });
+    let error = client_for(&server).read_file(SANDBOX, "/file").unwrap_err();
+    assert!(error.to_string().contains("SANDBOX_UNAVAILABLE"));
+    mint.assert_calls(1);
+}
+
+#[test]
+fn connections_are_scoped_to_the_sandbox() {
+    let server = MockServer::start();
+    let mint = mock_mint(&server, "first");
+    let other_mint = server.mock(|when, then| {
+        when.method(POST).path("/api/sandboxes/sbx_2/access-token");
+        then.status(200).json_body(serde_json::json!({
+            "http": {"endpoint": format!("{}/other", server.base_url()),
+                     "headers": {"x-sandbox-connection": "second"}},
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/sandboxes/sbx_1/fs/read")
+            .header("x-sandbox-connection", "first");
+        then.status(200).body("first sandbox");
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/other/fs/read")
+            .header("x-sandbox-connection", "second");
+        then.status(200).body("second sandbox");
+    });
+    let client = client_for(&server);
+    for _ in 0..2 {
+        assert_eq!(
+            client.read_file(SANDBOX, "/file").unwrap(),
+            b"first sandbox"
+        );
+        assert_eq!(
+            client.read_file("sbx_2", "/file").unwrap(),
+            b"second sandbox"
+        );
+    }
+    mint.assert_calls(1);
+    other_mint.assert_calls(1);
 }
 
 #[test]
@@ -496,4 +623,283 @@ fn lock_lifecycle_heartbeats_with_cas_and_releases() {
 
     assert!(heartbeat.calls() >= 1, "expected at least one heartbeat");
     rm_create.assert_calls(1);
+}
+
+/// Use expiring credentials so the first heartbeat must renew, without waiting
+/// fifteen minutes. Acquisition itself may mint twice, before a lease exists.
+fn expiring_editor_lease(server: &MockServer, ttl: u64) -> SandboxLockGuard {
+    let mut mint = server.mock(|when, then| {
+        when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+        then.status(200).json_body(serde_json::json!({
+            "http": {"endpoint": server.url("/sandboxes/sbx_1")},
+            "expiresAt": chrono::Utc::now().timestamp(),
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/sandboxes/sbx_1/fs/read")
+            .query_param("path", LOCK_QUERY);
+        then.status(404);
+    });
+    server.mock(|when, then| {
+        when.method(PUT)
+            .path("/sandboxes/sbx_1/fs/write")
+            .query_param("path", LOCK_QUERY)
+            .header("if-none-match", "*");
+        then.status(200).header("etag", "lock-1");
+    });
+    let mut options = SandboxLockOptions::local_edit("pcb open");
+    options.ttl = Duration::from_secs(ttl);
+    options.heartbeat_interval = Duration::from_secs(1);
+    let guard = client_for(server).acquire_lock(SANDBOX, options).unwrap();
+    mint.delete();
+    guard
+}
+
+#[test]
+fn lease_expiry_and_cancellation_stop_shared_renewal_waiters() {
+    for cancel in [false, true] {
+        let server = MockServer::start();
+        let guard = expiring_editor_lease(&server, if cancel { 30 } else { 2 });
+        let mut busy = server.mock(|when, then| {
+            when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+            then.status(503)
+                .json_body(serde_json::json!({"code": "SANDBOX_UPDATING"}));
+        });
+        let writes = server.mock(|when, then| {
+            when.method(PUT).path("/sandboxes/sbx_1/fs/write");
+            then.status(200).header("etag", "lock-2");
+        });
+        let (cleanup, _) = mock_exec(&server, &["rm -f --"], (0, ""), (0, ""));
+        // The heartbeat owns renewal; uploads must also be able to stop while
+        // waiting for its mutex, without ever submitting a stale write.
+        wait_for_call(&busy);
+        if cancel {
+            // Reach a multi-second backoff so an uninterruptible sleep fails.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while busy.calls() < 5 {
+                assert!(Instant::now() < deadline, "renewal stopped retrying");
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let client = guard.client();
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..2 {
+            let client = client.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                tx.send(client.write_file(SANDBOX, "/board.kicad_pcb", b"local edit"))
+                    .unwrap();
+            });
+        }
+        thread::sleep(Duration::from_millis(100));
+        if cancel {
+            guard.stop_handler()();
+        }
+        for _ in 0..2 {
+            let err = rx
+                .recv_timeout(Duration::from_secs(if cancel { 1 } else { 3 }))
+                .unwrap()
+                .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains(if cancel { "stopped" } else { "expired" }),
+                "{err:#}"
+            );
+        }
+        assert!(!guard.is_active());
+        let started = Instant::now();
+        if cancel {
+            // Cleanup gets its own short budget, not another maintenance wait.
+            assert!(guard.release().is_err());
+        } else {
+            guard.release().unwrap();
+        }
+        assert!(started.elapsed() < Duration::from_secs(6));
+        busy.delete();
+        let mint = mock_mint(&server, "maintenance-finished");
+        assert!(
+            client
+                .write_file(SANDBOX, "/board.kicad_pcb", b"late edit")
+                .is_err()
+        );
+        mint.assert_calls(0);
+        writes.assert_calls(0);
+        cleanup.assert_calls(0);
+    }
+}
+
+#[test]
+fn heartbeat_after_maintenance_uses_fresh_timestamps_and_extends_lease() {
+    let server = MockServer::start();
+    let guard = expiring_editor_lease(&server, 4);
+    let started = Instant::now();
+    let mut busy = server.mock(|when, then| {
+        when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+        then.status(503)
+            .json_body(serde_json::json!({"code": "SANDBOX_UPDATING"}));
+    });
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let received = Arc::clone(&observed);
+    let heartbeat = server.mock(|when, then| {
+        when.method(PUT)
+            .path("/sandboxes/sbx_1/fs/write")
+            .query_param("path", LOCK_QUERY)
+            .header("if-match", "lock-1");
+        then.respond_with(move |request| {
+            let body: serde_json::Value = serde_json::from_slice(request.body_ref()).unwrap();
+            received.lock().unwrap().push((chrono::Utc::now(), body));
+            HttpMockResponse::builder()
+                .status(200)
+                .header("etag", "lock-1")
+                .build()
+        });
+    });
+    let (cleanup, _) = mock_exec(&server, &["rm -f --"], (0, ""), (0, ""));
+    wait_for_call(&busy);
+    thread::sleep(Duration::from_millis(1100));
+    busy.delete();
+    let mint = mock_mint(&server, "renewed");
+    wait_for_call(&heartbeat);
+    // A session can outlive both its original credentials and original lease.
+    thread::sleep(Duration::from_millis(4300).saturating_sub(started.elapsed()));
+    assert!(guard.is_active());
+    guard.release().unwrap();
+    for (received_at, body) in observed.lock().unwrap().iter() {
+        let updated =
+            chrono::DateTime::parse_from_rfc3339(body["updatedAt"].as_str().unwrap()).unwrap();
+        let expires =
+            chrono::DateTime::parse_from_rfc3339(body["expiresAt"].as_str().unwrap()).unwrap();
+        assert!(
+            (*received_at - updated.with_timezone(&chrono::Utc)).num_milliseconds() < 500,
+            "stale heartbeat: {body}"
+        );
+        assert_eq!(expires - updated, chrono::Duration::seconds(4));
+    }
+    mint.assert_calls(1);
+    cleanup.assert_calls(1);
+}
+
+#[test]
+fn reclaimed_lease_stops_writes_and_does_not_delete_successors_lock() {
+    let server = MockServer::start();
+    let guard = expiring_editor_lease(&server, 30);
+    let _mint = mock_mint(&server, "renewed");
+    let heartbeat = server.mock(|when, then| {
+        when.method(PUT)
+            .path("/sandboxes/sbx_1/fs/write")
+            .query_param("path", LOCK_QUERY)
+            .header("if-match", "lock-1");
+        then.status(412);
+    });
+    let upload = server.mock(|when, then| {
+        when.method(PUT)
+            .path("/sandboxes/sbx_1/fs/write")
+            .query_param("path", "/board.kicad_pcb");
+        then.status(200);
+    });
+    let (cleanup, _) = mock_exec(&server, &["rm -f --"], (0, ""), (0, ""));
+    wait_for_call(&heartbeat);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while guard.is_active() {
+        assert!(Instant::now() < deadline, "reclaimed lease remained active");
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        guard
+            .client()
+            .write_file(SANDBOX, "/board.kicad_pcb", b"edit")
+            .is_err()
+    );
+    guard.release().unwrap();
+    upload.assert_calls(0);
+    cleanup.assert_calls(0);
+}
+
+#[test]
+fn mint_timeout_retries_only_while_editor_lease_is_valid() {
+    for ttl in [20, 2] {
+        let server = MockServer::start();
+        let guard = expiring_editor_lease(&server, ttl);
+        let mut slow_mint = server.mock(|when, then| {
+            when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+            then.status(200)
+                .delay(Duration::from_secs(6))
+                .json_body(serde_json::json!({
+                    "http": {"endpoint": server.url("/sandboxes/sbx_1")},
+                    "expiresAt": 4102444800u64,
+                }));
+        });
+        server.mock(|when, then| {
+            when.method(PUT)
+                .path("/sandboxes/sbx_1/fs/write")
+                .query_param("path", LOCK_QUERY)
+                .header("if-match", "lock-1");
+            then.status(200).header("etag", "lock-1");
+        });
+        let upload = server.mock(|when, then| {
+            when.method(PUT)
+                .path("/sandboxes/sbx_1/fs/write")
+                .query_param("path", "/board.kicad_pcb")
+                .header("x-sandbox-connection", "renewed")
+                .body("local edit");
+            then.status(200).json_body(serde_json::json!({}));
+        });
+        let (cleanup, _) = mock_exec(&server, &["rm -f --"], (0, ""), (0, ""));
+        let client = guard.client();
+        let worker =
+            thread::spawn(move || client.write_file(SANDBOX, "/board.kicad_pcb", b"local edit"));
+        wait_for_call(&slow_mint);
+        // The in-flight request still takes six seconds, but its retry succeeds.
+        slow_mint.delete();
+        let mint = mock_mint(&server, "renewed");
+        let result = worker.join().unwrap();
+        if ttl == 20 {
+            result.unwrap();
+            assert!(guard.is_active());
+            mint.assert_calls(1);
+            upload.assert_calls(1);
+        } else {
+            assert!(result.unwrap_err().to_string().contains("expired"));
+            assert!(!guard.is_active());
+            mint.assert_calls(0);
+            upload.assert_calls(0);
+        }
+        guard.release().unwrap();
+        cleanup.assert_calls(if ttl == 20 { 1 } else { 0 });
+    }
+}
+
+#[test]
+fn transfer_can_outlast_initial_lease_while_heartbeats_renew_it() {
+    let server = MockServer::start();
+    let guard = expiring_editor_lease(&server, 2);
+    let mint = mock_mint(&server, "renewed");
+    let heartbeat = server.mock(|when, then| {
+        when.method(PUT)
+            .path("/sandboxes/sbx_1/fs/write")
+            .query_param("path", LOCK_QUERY)
+            .header("if-match", "lock-1");
+        then.status(200).header("etag", "lock-1");
+    });
+    let upload = server.mock(|when, then| {
+        when.method(PUT)
+            .path("/sandboxes/sbx_1/fs/write")
+            .query_param("path", "/board.kicad_pcb")
+            .body("slow upload");
+        then.status(200)
+            .delay(Duration::from_secs(4))
+            .json_body(serde_json::json!({}));
+    });
+    let (cleanup, _) = mock_exec(&server, &["rm -f --"], (0, ""), (0, ""));
+    guard
+        .client()
+        .write_file(SANDBOX, "/board.kicad_pcb", b"slow upload")
+        .unwrap();
+    assert!(guard.is_active());
+    assert!(heartbeat.calls() >= 2);
+    guard.release().unwrap();
+    mint.assert_calls(1);
+    upload.assert_calls(1);
+    cleanup.assert_calls(1);
 }

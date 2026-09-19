@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Share renewable sandbox connections across PCB downloads and KiCad sync; stop safely on editor lease expiry or cancellation, preserving local edits.
 - Fix self-touching Gerber regions and custom aperture outlines.
 - Keep footprint and pad UUIDs across `pcb layout --sync-footprints` and footprint changes so KiCad DRC exclusions survive.
 - Cut stroked copper under IPC-2581 cutouts and set voids.

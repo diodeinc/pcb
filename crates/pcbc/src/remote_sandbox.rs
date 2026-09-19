@@ -10,11 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-    mpsc::{self, Receiver, RecvTimeoutError},
-};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
@@ -47,6 +43,8 @@ pub fn execute_layout(uri: SandboxFileUri, args: LayoutArgs) -> Result<()> {
         &uri.sandbox_id,
         lock_options("pcb layout", "This sandbox is running pcb layout locally."),
     )?;
+    let client = lock.client();
+    install_shutdown_handler(&lock)?;
 
     let status = pcb_ui::Spinner::builder("Running pcb layout in sandbox...").start();
     let result = run_remote_layout(&client, &uri, &args)?;
@@ -56,7 +54,7 @@ pub fn execute_layout(uri: SandboxFileUri, args: LayoutArgs) -> Result<()> {
         return finish_cancelled(lock, status);
     };
     if should_open {
-        return open_layout_and_sync(&client, &uri, &local, lock, status);
+        return open_layout_and_sync(&uri, &local, lock, status);
     }
 
     lock.release()?;
@@ -73,6 +71,8 @@ pub fn execute_open(uri: SandboxFileUri, args: OpenArgs) -> Result<()> {
         &uri.sandbox_id,
         lock_options("pcb open", "This sandbox is open in KiCad locally."),
     )?;
+    let client = lock.client();
+    install_shutdown_handler(&lock)?;
 
     let status = pcb_ui::Spinner::builder("Downloading layout from sandbox...").start();
     let local = if crate::sandbox_uri::is_remote_kicad_pcb_file(&uri) {
@@ -99,7 +99,7 @@ pub fn execute_open(uri: SandboxFileUri, args: OpenArgs) -> Result<()> {
         return finish_cancelled(lock, status);
     };
 
-    open_layout_and_sync(&client, &uri, &local, lock, status)
+    open_layout_and_sync(&uri, &local, lock, status)
 }
 
 /// Wind down cleanly after the user cancels the recovery prompt.
@@ -179,7 +179,7 @@ impl RecoverableStopReason {
     fn message(self) -> &'static str {
         match self {
             Self::LockReclaimed => {
-                "Sandbox lock was reclaimed while KiCad was open; stopped syncing remote changes"
+                "Sandbox editor lease expired or was reclaimed; stopped syncing remote changes"
             }
             Self::SyncFailed => "Remote layout sync failed",
         }
@@ -231,7 +231,6 @@ fn lock_options(holder: &str, message: &str) -> SandboxLockOptions {
 }
 
 fn open_layout_and_sync(
-    client: &SandboxClient,
     uri: &SandboxFileUri,
     local: &LocalLayout,
     lock: SandboxLockGuard,
@@ -244,14 +243,13 @@ fn open_layout_and_sync(
     // Start watching before recovery upload so saves made in an already-open
     // KiCad window during the upload are queued for the sync loop.
     let watcher = LocalLayoutWatcher::new(&local.local_layout_dir)?;
-    restore_recovered_layout_if_needed(client, uri, local, &mut sync_session, &status)
+    restore_recovered_layout_if_needed(&lock.client(), uri, local, &mut sync_session, &status)
         .with_context(|| {
             format!(
                 "Failed to restore local recovery file {}",
                 local.pcb_file.display()
             )
         })?;
-    let running = install_shutdown_flag()?;
     status.set_message(match local.attached_editor_pid {
         Some(_) => format!("Resuming sync for {}...", local.pcb_file.display()),
         None => format!("Opening {}...", local.pcb_file.display()),
@@ -272,16 +270,7 @@ fn open_layout_and_sync(
         local.local_layout_dir.display()
     ));
 
-    match run_local_sync_loop(
-        client,
-        uri,
-        local,
-        &lock,
-        &mut session,
-        &watcher,
-        &running,
-        &status,
-    ) {
+    match run_local_sync_loop(uri, local, &lock, &mut session, &watcher, &status) {
         SyncOutcome::Clean(stats) => {
             sync_session.mark_complete()?;
             lock.release()?;
@@ -320,25 +309,26 @@ fn open_layout_and_sync(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_local_sync_loop(
-    client: &SandboxClient,
     uri: &SandboxFileUri,
     local: &LocalLayout,
     lock: &SandboxLockGuard,
     session: &mut EditorSession,
     watcher: &LocalLayoutWatcher,
-    running: &AtomicBool,
     status: &pcb_ui::Spinner,
 ) -> SyncOutcome {
+    let client = lock.client();
     loop {
+        if lock.is_stopped() {
+            return recoverable_outcome(
+                RecoverableStopReason::SyncFailed,
+                anyhow::anyhow!("Sync interrupted; local changes have been preserved"),
+            );
+        }
         match session.is_running() {
             Ok(true) => {}
             Ok(false) => break,
             Err(err) => return recoverable_outcome(RecoverableStopReason::SyncFailed, err),
-        }
-        if !running.load(Ordering::SeqCst) {
-            break;
         }
         if !lock.is_active() {
             return recoverable_outcome(
@@ -352,7 +342,7 @@ fn run_local_sync_loop(
         };
         if changed {
             status.set_message("Syncing local changes to sandbox...");
-            let stats = match sync_layout_up_with_retry(client, uri, local) {
+            let stats = match sync_layout_up_with_retry(&client, uri, local) {
                 Ok(stats) => stats,
                 Err(err) => return recoverable_outcome(RecoverableStopReason::SyncFailed, err),
             };
@@ -365,7 +355,7 @@ fn run_local_sync_loop(
 
     if lock.is_active() {
         status.set_message("Final sync to sandbox...");
-        match sync_layout_up_with_retry(client, uri, local) {
+        match sync_layout_up_with_retry(&client, uri, local) {
             Ok(stats) => SyncOutcome::Clean(stats),
             Err(err) => recoverable_outcome(RecoverableStopReason::SyncFailed, err),
         }
@@ -424,14 +414,8 @@ fn relevant_watch_event(event: notify::Event) -> Result<bool> {
     Ok(event.paths.iter().any(|path| !should_skip_sync_path(path)))
 }
 
-fn install_shutdown_flag() -> Result<Arc<AtomicBool>> {
-    let running = Arc::new(AtomicBool::new(true));
-    let flag = Arc::clone(&running);
-    ctrlc::set_handler(move || {
-        flag.store(false, Ordering::SeqCst);
-    })
-    .context("Failed to set Ctrl-C handler")?;
-    Ok(running)
+fn install_shutdown_handler(lock: &SandboxLockGuard) -> Result<()> {
+    ctrlc::set_handler(lock.stop_handler()).context("Failed to set Ctrl-C handler")
 }
 
 fn run_remote_layout(
