@@ -86,7 +86,7 @@ def get(netlist: Any) -> BoardView:
     nets: dict[str, NetView] = {}
 
     for part in netlist.parts:
-        path_str = part.sheetpath.names.split(":")[-1] if part.sheetpath.names else ""
+        path_str = part.sheetpath.names
         entity_path = EntityPath.from_string(path_str)
         # Include fpid in entity identity - FPID change = delete + create
         entity_id = EntityId(path=entity_path, fpid=part.footprint)

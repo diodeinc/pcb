@@ -1,16 +1,18 @@
-//! Apply moved() path renames to KiCad PCB files.
+//! Apply path renames to KiCad PCB files.
 //!
 //! This module handles preprocessing of .kicad_pcb files to apply path renames
 //! before the main sync process runs. This is a structural operation that:
 //! 1. Walks the parsed board to find patchable strings using structural predicates
-//! 2. Applies longest-prefix matching to determine renames
+//! 2. Renames them, skipping any rename whose target already exists
 //! 3. Returns patches that can be applied while preserving formatting
-//! 4. Updates footprint UUIDs to match the new paths
+//! 4. Updates footprint KIID paths to match the new paths
 //!
-//! Also provides `compute_net_renames_patches` for implicit net rename detection,
-//! which uses exact-match only and patches only net-related strings.
+//! `compute_moved_paths_patches` applies moved() directives by longest-prefix match.
+//! `compute_net_renames_patches` and `compute_truncated_path_patches` use exact-match only,
+//! and patch only net-related strings and only footprint paths and group names respectively.
 
-use pcb_sch::kicad_identity::uuid_for_path;
+use pcb_sch::kicad_identity::{footprint_kiid_path, uuid_for_path};
+use pcb_sch::{InstanceKind, Schematic};
 use pcb_sexpr::board::{
     is_footprint_kiid_path, is_footprint_path_property, is_group_name, is_net_name,
     is_zone_net_name,
@@ -26,35 +28,11 @@ pub fn compute_net_renames_patches(
     board: &Sexpr,
     net_renames: &HashMap<String, String>,
 ) -> (PatchSet, Vec<(String, String)>) {
-    let mut patches = PatchSet::default();
-    let mut renames = Vec::new();
-
-    if net_renames.is_empty() {
-        return (patches, renames);
-    }
-
-    let is_net_patchable = |ctx: &WalkCtx<'_>| is_net_name(ctx) || is_zone_net_name(ctx);
-
-    // Collect existing net names to prevent collisions
-    let mut existing: HashSet<String> = HashSet::new();
-    board.walk_strings(|value, _span, ctx| {
-        if is_net_patchable(&ctx) {
-            existing.insert(value.to_string());
-        }
-    });
-
-    // Apply exact-match renames
-    board.walk_strings(|value, span, ctx| {
-        if is_net_patchable(&ctx)
-            && let Some(new_value) = net_renames.get(value)
-            && !existing.contains(new_value)
-        {
-            patches.replace_string(span, new_value);
-            renames.push((value.to_string(), new_value.clone()));
-        }
-    });
-
-    (patches, renames)
+    compute_path_patches(
+        board,
+        |path| net_renames.get(path).cloned(),
+        |ctx| is_net_name(ctx) || is_zone_net_name(ctx),
+    )
 }
 
 /// Compute patches for moved() path renames on a board.
@@ -65,26 +43,79 @@ pub fn compute_net_renames_patches(
 /// Uses longest-prefix matching:
 /// - For a path like "Power.R1" and moved_paths {"Power": "Supply"},
 ///   the result is "Supply.R1"
-///
-/// Also updates footprint UUIDs to match the new paths.
 pub fn compute_moved_paths_patches(
     board: &Sexpr,
     moved_paths: &HashMap<String, String>,
 ) -> (PatchSet, Vec<(String, String)>) {
+    compute_path_patches(
+        board,
+        |path| apply_longest_prefix_match(path, moved_paths),
+        |ctx| {
+            is_footprint_path_property(ctx)
+                || is_group_name(ctx)
+                || is_net_name(ctx)
+                || is_zone_net_name(ctx)
+        },
+    )
+}
+
+/// Map the paths an older layout sync truncated to the full paths they should carry.
+///
+/// Older syncs kept only the text after a path's last colon, so "Block:Power.R1" was
+/// stored as "Power.R1". A truncated path is restored when it names nothing in the
+/// source and exactly one instance truncates to it.
+pub(crate) fn truncated_paths(schematic: &Schematic) -> HashMap<String, String> {
+    let paths: HashSet<String> = schematic
+        .instances
+        .iter()
+        .filter(|(_, instance)| {
+            matches!(
+                instance.kind,
+                InstanceKind::Component | InstanceKind::Module
+            )
+        })
+        .map(|(instance_ref, _)| instance_ref.instance_path.join("."))
+        .collect();
+
+    let mut full_paths: HashMap<&str, Vec<&str>> = HashMap::new();
+    paths
+        .iter()
+        .filter_map(|path| Some((path.rsplit_once(':')?.1, path.as_str())))
+        .filter(|(truncated, _)| !paths.contains(*truncated))
+        .for_each(|(truncated, path)| full_paths.entry(truncated).or_default().push(path));
+
+    full_paths
+        .into_iter()
+        .filter_map(|(truncated, full_paths)| match full_paths.as_slice() {
+            [full_path] => Some((truncated.to_string(), full_path.to_string())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Compute patches restoring truncated footprint paths and group names (exact match).
+pub(crate) fn compute_truncated_path_patches(
+    board: &Sexpr,
+    truncated_paths: &HashMap<String, String>,
+) -> (PatchSet, Vec<(String, String)>) {
+    compute_path_patches(
+        board,
+        |path| truncated_paths.get(path).cloned(),
+        |ctx| is_footprint_path_property(ctx) || is_group_name(ctx),
+    )
+}
+
+/// Compute patches renaming every patchable string that `rename` maps to a new value.
+///
+/// Returns patches to apply and a list of (old, new) renames that were applied.
+/// Renamed footprints keep their UUIDs; only their KIID paths follow the new paths.
+fn compute_path_patches(
+    board: &Sexpr,
+    rename: impl Fn(&str) -> Option<String>,
+    is_patchable: impl Fn(&WalkCtx<'_>) -> bool,
+) -> (PatchSet, Vec<(String, String)>) {
     let mut patches = PatchSet::default();
     let mut renames = Vec::new();
-
-    if moved_paths.is_empty() {
-        return (patches, renames);
-    }
-
-    // Helper: check if context is a patchable identifier (footprint path, group name, or net name)
-    let is_patchable = |ctx: &WalkCtx<'_>| {
-        is_footprint_path_property(ctx)
-            || is_group_name(ctx)
-            || is_net_name(ctx)
-            || is_zone_net_name(ctx)
-    };
 
     // First pass: collect existing identifiers
     let mut existing: HashSet<String> = HashSet::new();
@@ -95,54 +126,34 @@ pub fn compute_moved_paths_patches(
     });
 
     // Second pass: apply renames, skipping if computed target already exists
-    let mut footprint_path_renames: HashMap<String, String> = HashMap::new();
+    // (idempotency / collision safety)
+    let mut kiid_path_renames: HashMap<String, String> = HashMap::new();
     board.walk_strings(|value, span, ctx| {
-        if let Some(new_value) = apply_longest_prefix_match(value, moved_paths) {
-            // Skip if computed target already exists (idempotency / collision safety)
-            if is_patchable(&ctx) && !existing.contains(&new_value) {
-                patches.replace_string(span, &new_value);
-                renames.push((value.to_string(), new_value.clone()));
-                if is_footprint_path_property(&ctx) {
-                    footprint_path_renames.insert(value.to_string(), new_value);
-                }
+        if is_patchable(&ctx)
+            && let Some(new_value) = rename(value)
+            && !existing.contains(&new_value)
+        {
+            patches.replace_string(span, &new_value);
+            if is_footprint_path_property(&ctx) {
+                kiid_path_renames.insert(uuid_for_path(value), footprint_kiid_path(&new_value));
+            }
+            renames.push((value.to_string(), new_value));
+        }
+    });
+
+    // Third pass: point (path "/old-uuid/old-uuid") entries at the renamed footprint paths
+    board.walk_strings(|value, span, ctx| {
+        if is_footprint_kiid_path(&ctx) {
+            // value is like "/uuid" or "/uuid/uuid"
+            let trimmed = value.trim_start_matches('/');
+            let first_uuid = trimmed.split('/').next().unwrap_or(trimmed);
+            if let Some(new_kiid_path) = kiid_path_renames.get(first_uuid) {
+                patches.replace_string(span, new_kiid_path);
             }
         }
     });
 
-    // Second pass: update footprint KiCad UUIDs based on old UUID -> new path mapping
-    // We need to find (path "/old-uuid") entries and compute new UUIDs from the new paths
-    if !footprint_path_renames.is_empty() {
-        // Build a map of old_uuid -> new_uuid
-        let mut uuid_renames: HashMap<String, String> = HashMap::new();
-        for (old_path, new_path) in &footprint_path_renames {
-            let old_uuid = compute_uuid_from_path(old_path);
-            let new_uuid = compute_uuid_from_path(new_path);
-            uuid_renames.insert(old_uuid, new_uuid);
-        }
-
-        // Walk again to find and patch UUID paths
-        board.walk_strings(|value, span, ctx| {
-            if is_footprint_kiid_path(&ctx) {
-                // value is like "/uuid" or "/uuid/uuid"
-                let trimmed = value.trim_start_matches('/');
-                // Extract the first UUID segment
-                let first_uuid = trimmed.split('/').next().unwrap_or(trimmed);
-                if let Some(new_uuid) = uuid_renames.get(first_uuid) {
-                    // Rebuild the path with new UUID (format: /uuid/uuid)
-                    let new_kiid_path = format!("/{new_uuid}/{new_uuid}");
-                    patches.replace_string(span, &new_kiid_path);
-                }
-            }
-        });
-    }
-
     (patches, renames)
-}
-
-/// Compute deterministic UUID from a hierarchical path.
-/// Uses UUID v5 with NAMESPACE_URL, matching Python's uuid.uuid5(uuid.NAMESPACE_URL, path).
-fn compute_uuid_from_path(path: &str) -> String {
-    uuid_for_path(path)
 }
 
 /// Apply longest-prefix matching to remap a path.
@@ -176,7 +187,74 @@ fn apply_longest_prefix_match(path: &str, moved_paths: &HashMap<String, String>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pcb_sch::{Instance, InstanceRef, ModuleRef};
     use pcb_sexpr::parse;
+
+    #[test]
+    fn test_truncated_paths() {
+        let module = ModuleRef::new("board.zen", "<root>");
+        let truncated = |paths: &[&str]| {
+            let mut schematic = Schematic::new();
+            for path in paths {
+                schematic.add_instance(
+                    InstanceRef::new(module.clone(), path.split('.').map(Into::into).collect()),
+                    Instance::component(module.clone()),
+                );
+            }
+            truncated_paths(&schematic)
+        };
+
+        assert_eq!(
+            truncated(&["Signal.R1", "Block:Power.R1", "Block:Power.Chip:IC"]),
+            HashMap::from([
+                ("Power.R1".to_string(), "Block:Power.R1".to_string()),
+                ("IC".to_string(), "Block:Power.Chip:IC".to_string()),
+            ])
+        );
+        // "Power.R1" names a source instance, so "Block:Power.R1" must not claim its footprint.
+        assert!(truncated(&["Power.R1", "Block:Power.R1"]).is_empty());
+        // Two instances truncate to "Power.R1".
+        assert!(truncated(&["Block:Power.R1", "Other:Power.R1"]).is_empty());
+    }
+
+    #[test]
+    fn test_restore_truncated_paths() {
+        let old_kiid_path = footprint_kiid_path("Power.R1");
+        let new_kiid_path = footprint_kiid_path("Block:Power.R1");
+        let input = format!(
+            r#"(kicad_pcb
+            (net 1 "Power")
+            (footprint "R_0603"
+                (uuid "footprint-uuid")
+                (path "{old_kiid_path}")
+                (property "Path" "Power.R1")
+            )
+            (group "Power"
+                (uuid "group-uuid")
+            )
+        )"#
+        );
+        let expected = input
+            .replace(&old_kiid_path, &new_kiid_path)
+            .replace("\"Power.R1\"", "\"Block:Power.R1\"")
+            .replace("(group \"Power\"", "(group \"Block:Power\"");
+        let truncated_paths = HashMap::from([
+            ("Power".to_string(), "Block:Power".to_string()),
+            ("Power.R1".to_string(), "Block:Power.R1".to_string()),
+        ]);
+
+        let restore = |source: &str| {
+            let (patches, _) =
+                compute_truncated_path_patches(&parse(source).unwrap(), &truncated_paths);
+            let mut buf = Vec::new();
+            patches.write_to(source, &mut buf).unwrap();
+            String::from_utf8(buf).unwrap()
+        };
+
+        // Only the path, its KIID path, and the group change; the net and UUIDs stay.
+        assert_eq!(restore(&input), expected);
+        assert_eq!(restore(&expected), expected);
+    }
 
     fn apply_to_string(
         board: &Sexpr,
@@ -212,21 +290,6 @@ mod tests {
     }
 
     #[test]
-    fn test_uuid_computation() {
-        // Verify UUID computation matches Python's uuid.uuid5(uuid.NAMESPACE_URL, path)
-        let uuid = compute_uuid_from_path("Power.R1");
-        // This should be deterministic
-        assert_eq!(uuid.len(), 36); // UUID format: 8-4-4-4-12
-        assert!(uuid.contains('-'));
-
-        // Same path should produce same UUID
-        assert_eq!(uuid, compute_uuid_from_path("Power.R1"));
-
-        // Different paths should produce different UUIDs
-        assert_ne!(uuid, compute_uuid_from_path("Power.R2"));
-    }
-
-    #[test]
     fn test_apply_moved_paths() {
         let input = r#"(kicad_pcb
             (net 1 "Power_VCC")
@@ -257,8 +320,8 @@ mod tests {
     #[test]
     fn test_apply_moved_paths_with_uuid() {
         // Compute the expected UUIDs
-        let old_uuid = compute_uuid_from_path("Power.R1");
-        let new_uuid = compute_uuid_from_path("Supply.R1");
+        let old_uuid = uuid_for_path("Power.R1");
+        let new_uuid = uuid_for_path("Supply.R1");
 
         let input = format!(
             r#"(kicad_pcb

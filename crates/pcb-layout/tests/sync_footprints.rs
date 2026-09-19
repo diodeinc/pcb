@@ -103,6 +103,70 @@ fn add_test_track(pcb_file: &std::path::Path) -> Result<()> {
 
 #[cfg(not(target_os = "windows"))]
 #[test]
+fn colon_paths_preserve_existing_board_and_repeat_sync() -> Result<()> {
+    use pcb_sch::kicad_identity::footprint_kiid_path;
+    use pcb_sexpr::board::{is_footprint_kiid_path, is_footprint_path_property, is_group_name};
+    use std::collections::HashMap;
+
+    let (temp, resolution) = prepare_simple_workspace()?;
+    let zen_file = temp.path().join("MyBoard.zen");
+    let source =
+        std::fs::read_to_string(&zen_file)?.replace("name=\"BMI270\"", "name=\"Block:BMI270\"");
+    std::fs::write(&zen_file, source)?;
+    let module_file = temp.path().join("BMI270.zen");
+    let source = std::fs::read_to_string(&module_file)?.replace("name=\"IC\"", "name=\"Chip:IC\"");
+    std::fs::write(module_file, source)?;
+    let schematic = evaluate_board(&zen_file, resolution)?;
+    let mut diagnostics = Diagnostics::default();
+    let layout = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?.unwrap();
+    add_test_track(&layout.pcb_file)?;
+    process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?;
+    let original = std::fs::read_to_string(&layout.pcb_file)?;
+    let project_file = layout.pcb_file.with_extension("kicad_pro");
+    let project = std::fs::read(&project_file)?;
+
+    let mut checked = Diagnostics::default();
+    pcb_layout::check_layout_sync(&schematic, &mut checked)?;
+    assert!(checked.diagnostics.is_empty(), "{checked:?}");
+
+    // Rewrite the board the way older syncs stored it: paths truncated after their last colon.
+    let board = pcb_sexpr::parse(&original)?;
+    let mut patches = pcb_sexpr::PatchSet::default();
+    let mut links = HashMap::new();
+    board.walk_strings(|value, span, ctx| {
+        if (is_footprint_path_property(&ctx) || is_group_name(&ctx))
+            && let Some((_, truncated)) = value.rsplit_once(':')
+        {
+            patches.replace_string(span, truncated);
+            links.insert(footprint_kiid_path(value), footprint_kiid_path(truncated));
+        }
+    });
+    board.walk_strings(|value, span, ctx| {
+        if is_footprint_kiid_path(&ctx)
+            && let Some(link) = links.get(value)
+        {
+            patches.replace_string(span, link);
+        }
+    });
+    let mut legacy = Vec::new();
+    patches.write_to(&original, &mut legacy)?;
+    assert_ne!(original.as_bytes(), legacy);
+    std::fs::write(&layout.pcb_file, &legacy)?;
+
+    // Sync restores the full paths in place, and syncing again changes nothing.
+    for _ in 0..2 {
+        process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?;
+        assert_eq!(std::fs::read_to_string(&layout.pcb_file)?, original);
+        assert_eq!(std::fs::read(&project_file)?, project);
+        let mut checked = Diagnostics::default();
+        pcb_layout::check_layout_sync(&schematic, &mut checked)?;
+        assert!(checked.diagnostics.is_empty(), "{checked:?}");
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
 fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Result<()> {
     let (temp, resolution) = prepare_simple_workspace()?;
     let zen_file = temp.path().join("MyBoard.zen");

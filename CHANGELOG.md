@@ -26,6 +26,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Preserve colons in instance names during layout sync, keeping existing footprints in place.
 - Emit spec-compliant horizontal cut-ins for Gerber region holes.
 
 ### Changed
