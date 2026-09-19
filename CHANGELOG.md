@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Export Gerbers as dark-only artwork so copper-balanced panels load quickly in CAM software.
+
 ### Fixed
 
 - Fix self-touching Gerber regions and custom aperture outlines.

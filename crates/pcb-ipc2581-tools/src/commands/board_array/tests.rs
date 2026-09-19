@@ -1186,7 +1186,6 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         .unwrap();
     assert!(top_gerber.contents.contains("G36*"));
     assert!(top_gerber.contents.contains("G37*"));
-    assert!(top_gerber.contents.contains("%AMOUTLINE"));
     assert!(top_gerber.contents.contains("%SRX"));
     assert!(
         top_gerber
@@ -1195,7 +1194,11 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     );
     // Manufacturing Gerbers expand array hierarchy for broad CAM compatibility.
     assert!(!top_gerber.contents.contains("%ABD"));
-    assert!(top_gerber.contents.contains("%LPC*%"));
+    // CAM importers composite every clear object, so the lattice ships
+    // dark-only: shared cell-ring flashes where the plane is solid, regions
+    // along its boundary.
+    assert!(top_gerber.contents.contains("%AMOUTLINE"));
+    assert!(!top_gerber.contents.contains("%LPC*%"));
 
     // The composed Gerber image must match the composed IPC image.
     let ipc_copper = {

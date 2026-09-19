@@ -383,14 +383,17 @@ pub struct FeatureFlags {
     pub clears_previous_in_set: bool,
     /// Generated copper balancing inherited from the source IPC feature set.
     pub copper_balance: Option<CopperBalanceKind>,
-    /// Exact source parameters for a generated rounded-hex balance void.
+    /// Validated source parameters of a generated rounded-hex balance void.
     pub copper_balance_void: Option<CopperBalanceVoid>,
 }
 
+/// A flat-top rounded hexagon of circumradius `radius_mm` centered on a site
+/// of `lattice`, whose sites tile the plane with flat-top hexagonal cells one
+/// pitch across the flats.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CopperBalanceVoid {
+    pub lattice: crate::geom::copper_balance::DenseCopperLattice,
     pub radius_mm: f64,
-    pub corner_radius_mm: f64,
 }
 
 /// Position of a feature within its source feature set, for stable ordering.

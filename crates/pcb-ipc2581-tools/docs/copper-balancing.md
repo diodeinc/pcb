@@ -183,7 +183,14 @@ neighboring radius pair. Edge candidates too small to contain the minimum disk
 are rejected. Output clears every admitted site with the same full rounded-hex
 template, then restores `usable - voidable` as one positive boundary web. This
 is exactly the clipped geometry used by the solve, while keeping the repeated
-voids as flashes.
+voids as shared IPC instances.
+
+Gerber export ships the lattice dark-only. CAM importers composite every clear
+object against the copper beneath it, so a clear lattice that is compact on
+disk is the slowest thing a fabricator can load. Wherever a void's whole
+lattice cell is solid plane, the cell is cut from the plane and restored as one
+dark `cell - void` ring flash, shared by every void of that size; cells that
+reach the plane boundary cut the plane as ordinary region geometry.
 
 ## Pass-specific inputs
 

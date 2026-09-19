@@ -623,9 +623,7 @@ impl ApertureTable {
                     hole_diameter,
                 },
             ),
-            ApertureShape::RoundRect { .. }
-            | ApertureShape::RoundedHex { .. }
-            | ApertureShape::Contour { .. } => {
+            ApertureShape::RoundRect { .. } | ApertureShape::Contour { .. } => {
                 let outlines =
                     prepare_on_grid(&aperture.contours(), aperture.fill_rule(), accuracy)?;
                 if outlines.is_empty() {
@@ -1871,63 +1869,6 @@ mod tests {
             (summary.area_mm2 - 64.0).abs() < 0.01,
             "the hole ring must survive decomposition: {}",
             summary.area_mm2
-        );
-    }
-
-    #[test]
-    fn full_copper_balance_cells_remain_shared_flashes() {
-        let accuracy = GeometryAccuracy::default();
-
-        let mut artwork = ArtworkDocument::new();
-        let layer_id = artwork.push_layer(IrArtworkDocument {
-            name: "F.Cu".to_string(),
-            role: LayerRole::Copper,
-            side: Side::Top,
-            objects: Span::EMPTY,
-            bbox: BBox::empty(),
-            meta: LayerAttributes::default(),
-        });
-        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::RoundedHex {
-            radius: 1.0,
-            corner_radius: 0.15,
-            rotation_degrees: 0.0,
-        }));
-        artwork.push_object(
-            layer_id,
-            ArtworkObject {
-                polarity: Polarity::Dark,
-                order: Default::default(),
-                geometry: ArtworkGeometry::Flash {
-                    aperture,
-                    transform: Affine2::translation(Point::new(4.0, 5.0)),
-                },
-                bbox: BBox::empty(),
-                meta: ObjectAttributes {
-                    aperture_function: Some(vec!["CopperBalancing".to_string()]),
-                    ..ObjectAttributes::default()
-                },
-            },
-        );
-
-        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower balance cell");
-        // The exact rounded hex flattens once into a concrete one-primitive
-        // outline macro; legacy CAM importers never evaluate compound
-        // parameterized macros per flash.
-        assert_eq!(outlines(&gerber).len(), 1);
-        assert!(matches!(gerber.objects[0].kind, ObjectKind::Flash { .. }));
-        let contents = crate::write_layer(&gerber).expect("write balance cell");
-        assert_external_parser_accepts(&contents);
-        let parsed = crate::GerberX2::parse(&contents).expect("parse balance cell");
-        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
-        let actual_area =
-            pcb_ir::dialects::artwork::compare::summarize(&geometry, Resolution::default())
-                .unwrap()
-                .area_mm2;
-        let expected_area = 3.0 * 3.0_f64.sqrt() / 2.0
-            - (2.0 * 3.0_f64.sqrt() - std::f64::consts::PI) * 0.15_f64.powi(2);
-        assert!(
-            (actual_area - expected_area).abs() < 3e-3,
-            "rounded-hex macro area {actual_area}, expected {expected_area}"
         );
     }
 
