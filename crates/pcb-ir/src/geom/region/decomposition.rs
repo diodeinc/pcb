@@ -420,6 +420,11 @@ mod tests {
                 );
             }
         }
+        // Ties on the sub-grid round the same way on both sides of zero.
+        let (min, max) = (-1025.0 / 2048.0, 1023.0 / 2048.0);
+        let ring = vec![[min, min], [max, min], [max, max], [min, max]];
+        let rings = decompose_on_grid(vec![ring], FillRule::NonZero, 1.0, 5000).unwrap();
+        assert_eq!(rings, [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]]);
     }
 
     #[test]

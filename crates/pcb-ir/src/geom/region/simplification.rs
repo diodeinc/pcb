@@ -118,7 +118,7 @@ pub(super) fn integer_shapes_on_grid(
     // noise cannot flip them. Unlike rounding away from zero this commutes
     // with translation by grid multiples: a dimension that is a whole number
     // of grid steps survives exactly wherever the shape sits.
-    let snap = |value: f64| ((value / grid * 1024.0).round() as i64 + 512).div_euclid(1024);
+    let snap = |value: f64| ((value / grid * 1024.0 + 0.5).floor() as i64 + 512).div_euclid(1024);
     let rings = rings
         .into_iter()
         .map(|ring| {
