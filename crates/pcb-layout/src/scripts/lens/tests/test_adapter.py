@@ -738,19 +738,11 @@ class FakeUuid:
         self.value = other.value
 
 
-class FakeVector(SimpleNamespace):
-    def __sub__(self, other: FakeVector) -> FakeVector:
-        return FakeVector(x=self.x - other.x, y=self.y - other.y)
-
-    def SquaredEuclideanNorm(self) -> int:
-        return self.x**2 + self.y**2
-
-
 def fake_pad(uuid: str, number: str, x: int, y: int) -> SimpleNamespace:
     return SimpleNamespace(
         m_Uuid=FakeUuid(uuid),
         GetNumber=lambda: number,
-        GetPosition=lambda: FakeVector(x=x, y=y),
+        GetPosition=lambda: SimpleNamespace(x=x, y=y),
     )
 
 
@@ -759,7 +751,7 @@ def fake_footprint(uuid: str, pads: list[SimpleNamespace]) -> SimpleNamespace:
 
 
 def test_replacement_inherits_footprint_and_pad_uuids():
-    """Same-numbered pads pair up by position; added pads keep fresh UUIDs."""
+    """Same-numbered pads pair up closest first; added pads keep fresh UUIDs."""
     old = fake_footprint(
         "old-fp",
         [
@@ -769,11 +761,12 @@ def test_replacement_inherits_footprint_and_pad_uuids():
             fake_pad("old-removed", "9", 300, 0),
         ],
     )
+    # 5a moved next to 5b and is listed first; 5b stayed put and must keep its UUID.
     new = fake_footprint(
         "new-fp",
         [
-            fake_pad("new-5b", "5", 201, 0),
-            fake_pad("new-5a", "5", 99, 0),
+            fake_pad("new-5a", "5", 180, 0),
+            fake_pad("new-5b", "5", 200, 0),
             fake_pad("new-1", "1", 50, 50),
             fake_pad("new-added", "7", 400, 0),
         ],
@@ -783,8 +776,8 @@ def test_replacement_inherits_footprint_and_pad_uuids():
 
     assert new.m_Uuid.value == "old-fp"
     assert [pad.m_Uuid.value for pad in new.Pads()] == [
-        "old-5b",
         "old-5a",
+        "old-5b",
         "old-1",
         "new-added",
     ]

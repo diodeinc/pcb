@@ -1490,28 +1490,34 @@ def _inherit_uuids(old_fp: Any, new_fp: Any) -> None:
     """Give a replacement footprint the UUIDs of the footprint it replaces.
 
     KiCad keys DRC exclusions by item UUID. The replacement shares the old
-    placement, so each pad takes over the nearest old pad with its number; pads
-    the old footprint lacks keep their fresh UUIDs.
+    placement, so pads with the same number pair up closest first: a pad that
+    stayed put keeps its UUID however its neighbours moved or the library orders
+    them. Pads the old footprint lacks keep their fresh UUIDs.
 
     pcbnew has no UUID setter, so this writes through the exposed member. That
     is only sound while new_fp is detached: the board indexes its items by UUID.
     """
     new_fp.m_Uuid.Clone(old_fp.m_Uuid)
 
-    old_pads: dict[str, list[Any]] = defaultdict(list)
-    for pad in old_fp.Pads():
-        old_pads[pad.GetNumber()].append(pad)
+    def pads_by_number(fp: Any) -> dict[str, list[tuple[int, int, Any]]]:
+        pads = defaultdict(list)
+        for pad in fp.Pads():
+            pos = pad.GetPosition()
+            pads[pad.GetNumber()].append((pos.x, pos.y, pad))
+        return pads
 
-    for pad in new_fp.Pads():
-        candidates = old_pads[pad.GetNumber()]
-        if not candidates:
-            continue
-        pos = pad.GetPosition()
-        nearest = min(
-            range(len(candidates)),
-            key=lambda i: (candidates[i].GetPosition() - pos).SquaredEuclideanNorm(),
+    old_pads = pads_by_number(old_fp)
+    for number, pads in pads_by_number(new_fp).items():
+        olds = dict(enumerate(old_pads[number]))
+        news = dict(enumerate(pads))
+        closest_first = sorted(
+            ((ox - nx) ** 2 + (oy - ny) ** 2, i, j)
+            for i, (ox, oy, _) in olds.items()
+            for j, (nx, ny, _) in news.items()
         )
-        pad.m_Uuid.Clone(candidates.pop(nearest).m_Uuid)
+        for _, i, j in closest_first:
+            if i in olds and j in news:
+                news.pop(j)[2].m_Uuid.Clone(olds.pop(i)[2].m_Uuid)
 
 
 def _resolve_field_value(
