@@ -348,6 +348,57 @@ fn connections_are_scoped_to_the_sandbox() {
 }
 
 #[test]
+fn renewal_does_not_block_other_sandboxes() {
+    for cached in [false, true] {
+        let server = MockServer::start();
+        let mut busy = server.mock(|when, then| {
+            when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+            then.status(503)
+                .json_body(serde_json::json!({"code": "SANDBOX_UPDATING"}));
+        });
+        let other_mint = server.mock(|when, then| {
+            when.method(POST).path("/api/sandboxes/sbx_2/access-token");
+            then.status(200).json_body(serde_json::json!({
+                "http": {"endpoint": server.url("/other")},
+            }));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/other/fs/read");
+            then.status(200).body("other sandbox");
+        });
+        let client = client_for(&server);
+        if cached {
+            assert_eq!(
+                client.read_file("sbx_2", "/file").unwrap(),
+                b"other sandbox"
+            );
+        }
+        let renewing = client.clone();
+        let renewal = thread::spawn(move || renewing.read_file(SANDBOX, "/file"));
+        wait_for_call(&busy);
+        let (tx, rx) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            tx.send(client.read_file("sbx_2", "/file")).unwrap();
+        });
+        let result = rx.recv_timeout(Duration::from_secs(1));
+        // End maintenance before asserting so a regression cannot strand a
+        // worker in the twenty-minute renewal loop.
+        busy.delete();
+        server.mock(|when, then| {
+            when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+            then.status(404);
+        });
+        assert!(renewal.join().unwrap().is_err());
+        reader.join().unwrap();
+        assert_eq!(
+            result.expect("unrelated sandbox blocked").unwrap(),
+            b"other sandbox"
+        );
+        other_mint.assert_calls(1);
+    }
+}
+
+#[test]
 fn exec_runs_job_shaped_and_returns_output() {
     let server = MockServer::start();
     let _mint = mock_mint(&server, "minted-token");
@@ -654,6 +705,55 @@ fn expiring_editor_lease(server: &MockServer, ttl: u64) -> SandboxLockGuard {
     let guard = client_for(server).acquire_lock(SANDBOX, options).unwrap();
     mint.delete();
     guard
+}
+
+#[test]
+fn stopped_or_expired_editor_cancels_exec_before_releasing_lock() {
+    for stopped in [true, false] {
+        let server = MockServer::start();
+        let guard = expiring_editor_lease(&server, if stopped { 30 } else { 2 });
+        let mint = mock_mint(&server, "renewed");
+        let create = server.mock(|when, then| {
+            when.method(POST)
+                .path("/sandboxes/sbx_1/exec")
+                .body_includes("; pcb layout");
+            then.status(201).header("Location", "/exec/layout-1");
+        });
+        let poll = server.mock(|when, then| {
+            when.method(GET).path("/sandboxes/sbx_1/exec/layout-1");
+            then.status(200).json_body(exec_info_json("running", None));
+        });
+        let cancel = server.mock(|when, then| {
+            when.method(DELETE).path("/sandboxes/sbx_1/exec/layout-1");
+            then.status(202).delay(Duration::from_millis(200));
+        });
+        let (release, _) = mock_exec(&server, &["; rm -f -- "], (0, ""), (0, ""));
+        let stop = guard.stop_handler();
+        let worker = thread::spawn(move || {
+            let result = guard.client().exec_sync(
+                SANDBOX,
+                ExecSyncRequest::command("pcb layout").timeout(Duration::from_secs(900)),
+            );
+            guard.release().unwrap();
+            result
+        });
+        wait_for_call(&poll);
+        if stopped {
+            stop();
+        }
+        wait_for_call(&cancel);
+        release.assert_calls(0);
+        let error = worker.join().unwrap().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(if stopped { "stopped" } else { "expired" })
+        );
+        create.assert_calls(1);
+        cancel.assert_calls(1);
+        release.assert_calls(if stopped { 1 } else { 0 });
+        mint.assert_calls(1);
+    }
 }
 
 #[test]

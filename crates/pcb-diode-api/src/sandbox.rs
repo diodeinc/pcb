@@ -46,8 +46,16 @@ pub struct SandboxClient {
     api_base_url: String,
     ctx: WorkspaceContext,
     http: Client,
-    connections: Arc<Mutex<BTreeMap<String, Arc<SandboxConnection>>>>,
+    connections: Arc<Mutex<BTreeMap<String, Arc<SandboxConnectionState>>>>,
     scope: RequestScope,
+}
+
+#[derive(Default)]
+struct SandboxConnectionState {
+    cached: Mutex<Option<Arc<SandboxConnection>>>,
+    // Keep renewal separate so a failed transfer can invalidate its connection
+    // without waiting for an in-progress mint or maintenance backoff.
+    renewal: Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -560,7 +568,17 @@ impl SandboxClient {
     }
 
     fn cancel_exec(&self, sandbox_id: &str, exec_id: &str) -> Result<()> {
-        let response = self.data_plane_request(sandbox_id, |http, base| {
+        // Cancelling an existing job is cleanup, even after sync stops or its
+        // lease expires. Do not extend an existing cleanup deadline.
+        let deadline = Instant::now() + LOCK_REQUEST_TIMEOUT;
+        let client = Self {
+            scope: RequestScope::Cleanup(match self.scope {
+                RequestScope::Cleanup(existing) => existing.min(deadline),
+                _ => deadline,
+            }),
+            ..self.clone()
+        };
+        let response = client.data_plane_request(sandbox_id, |http, base| {
             http.delete(sandbox_endpoint_url(
                 base,
                 &format!("/exec/{}", encode_segment(exec_id)),
@@ -579,7 +597,14 @@ impl SandboxClient {
     where
         F: FnOnce(&Client, &str) -> reqwest::blocking::RequestBuilder,
     {
-        let connection = self.connection(sandbox_id)?;
+        let state = self
+            .connections
+            .lock()
+            .unwrap()
+            .entry(sandbox_id.to_owned())
+            .or_default()
+            .clone();
+        let connection = self.connection(sandbox_id, &state)?;
         let headers = sandbox_headers(&connection.http.headers)?;
         let mut request = build(&self.http, &connection.http.endpoint).headers(headers);
         if let RequestScope::Cleanup(deadline) = self.scope {
@@ -595,34 +620,38 @@ impl SandboxClient {
                 StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
             ) || response.status().is_server_error()
         }) {
-            let mut connections = self.connections.lock().unwrap();
+            let mut cached = state.cached.lock().unwrap();
             // A late failure must not discard a newer connection.
-            if connections
-                .get(sandbox_id)
+            if cached
+                .as_ref()
                 .is_some_and(|current| Arc::ptr_eq(current, &connection))
             {
-                connections.remove(sandbox_id);
+                *cached = None;
             }
         }
         // Never replay a submitted request: commands and writes may have taken effect.
         response.context("Sandbox request failed")
     }
 
-    fn connection(&self, sandbox_id: &str) -> Result<Arc<SandboxConnection>> {
+    fn connection(
+        &self,
+        sandbox_id: &str,
+        state: &SandboxConnectionState,
+    ) -> Result<Arc<SandboxConnection>> {
         // Pre-lease waits may last twenty minutes; a sync lease or cleanup
         // deadline always bounds this further through request_timeout.
         let deadline = Instant::now() + Duration::from_secs(20 * 60);
-        // Only renewal holds this lock, never file transfers. Clones (including
-        // the lock heartbeat) reuse the same endpoint + credentials together.
-        let mut connections = loop {
+        // Serialize renewal for this sandbox only, never holding the map lock
+        // during network requests. Clones and heartbeats share the result.
+        let _renewal = loop {
             self.request_timeout(deadline.saturating_duration_since(Instant::now()))?;
-            match self.connections.try_lock() {
-                Ok(connections) => break connections,
+            match state.renewal.try_lock() {
+                Ok(renewal) => break renewal,
                 Err(TryLockError::WouldBlock) => self.wait(Duration::from_millis(50))?,
                 Err(TryLockError::Poisoned(_)) => bail!("Sandbox connection cache poisoned"),
             }
         };
-        if let Some(connection) = connections.get(sandbox_id)
+        if let Some(connection) = state.cached.lock().unwrap().as_ref()
             && connection
                 .expires_at
                 .is_none_or(|expiry| expiry > Utc::now().timestamp() + 60)
@@ -672,7 +701,7 @@ impl SandboxClient {
                 validate_sandbox_endpoint(&self.api_base_url, &connection.http.endpoint)?;
                 sandbox_headers(&connection.http.headers)?;
                 let connection = Arc::new(connection);
-                connections.insert(sandbox_id.to_owned(), connection.clone());
+                *state.cached.lock().unwrap() = Some(connection.clone());
                 return Ok(connection);
             }
             let text = response
