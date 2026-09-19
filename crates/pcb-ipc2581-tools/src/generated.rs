@@ -1,13 +1,7 @@
 //! Serialization of generated IPC-2581 layer features, shared by the
 //! board-array and fab-panel panelizers.
 
-use crate::copper_balance::{
-    BalanceVoidSet, BalanceVoidTemplate, COPPER_BALANCE_ATTRIBUTE_NAME,
-    COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME,
-    COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME,
-    COPPER_BALANCE_LATTICE_VALUE, COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME,
-    COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME, copper_balance_attribute_value,
-};
+use crate::copper_balance::{BalanceVoidSet, BalanceVoidTemplate};
 use anyhow::{Result, bail};
 use ipc2581::XmlWriter;
 use ipc2581::types::{
@@ -16,7 +10,13 @@ use ipc2581::types::{
     primitives::{UserPrimitive, UserShapeType},
 };
 use ipc2581::write;
-use pcb_ir::dialects::ipc::CopperBalanceKind;
+use pcb_ir::import::ipc2581::{
+    COPPER_BALANCE_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME,
+    COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME,
+    COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_VALUE,
+    COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME, COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME,
+    CopperBalanceKind,
+};
 
 /// Only board-array tooling generates named holes today; the prefix stays
 /// stable so re-panelization produces identical names.
@@ -69,7 +69,7 @@ pub(crate) fn write_generated_layer_feature(
         &[("polarity", write::polarity_attr(layer_feature.polarity))],
     );
     if let Some(kind) = layer_feature.copper_balance {
-        let value = copper_balance_attribute_value(kind);
+        let value = kind.attribute_value();
         writer.empty_element(
             "NonstandardAttribute",
             &[

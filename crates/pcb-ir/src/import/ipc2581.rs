@@ -190,13 +190,40 @@ pub fn layer_role(function: LayerFunction) -> crate::dialects::LayerRole {
     }
 }
 
-fn parse_copper_balance_attribute(value: &str) -> Result<CopperBalanceKind> {
-    match value {
-        "plane" => Ok(CopperBalanceKind::Plane),
-        "full_void" => Ok(CopperBalanceKind::FullVoid),
-        "edge_void" => Ok(CopperBalanceKind::EdgeVoid),
-        "boundary_web" => Ok(CopperBalanceKind::BoundaryWeb),
-        _ => bail!("unknown diode.copper_balance value '{value}'"),
+/// The role a generated copper-balance feature set declares through
+/// [`COPPER_BALANCE_ATTRIBUTE_NAME`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopperBalanceKind {
+    Plane,
+    FullVoid,
+    /// A boundary void emitted as an explicit clipped contour rather than a
+    /// lattice hex instance.
+    EdgeVoid,
+    BoundaryWeb,
+}
+
+impl CopperBalanceKind {
+    const ALL: [Self; 4] = [
+        Self::Plane,
+        Self::FullVoid,
+        Self::EdgeVoid,
+        Self::BoundaryWeb,
+    ];
+
+    pub fn attribute_value(self) -> &'static str {
+        match self {
+            Self::Plane => "plane",
+            Self::FullVoid => "full_void",
+            Self::EdgeVoid => "edge_void",
+            Self::BoundaryWeb => "boundary_web",
+        }
+    }
+
+    fn from_attribute_value(value: &str) -> Result<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.attribute_value() == value)
+            .with_context(|| format!("unknown diode.copper_balance value '{value}'"))
     }
 }
 
@@ -359,7 +386,6 @@ fn push_spec_refs(doc: &mut GeometryDocument, spec_refs: &[Symbol]) -> Span {
 
 #[derive(Debug, Clone, Copy)]
 struct CopperBalanceMetadata {
-    kind: CopperBalanceKind,
     void: Option<CopperBalanceVoidMetadata>,
 }
 
@@ -394,7 +420,7 @@ fn set_copper_balance_metadata(
         }
         return Ok(None);
     };
-    let kind = parse_copper_balance_attribute(kind)?;
+    let kind = CopperBalanceKind::from_attribute_value(kind)?;
     let void = if kind == CopperBalanceKind::FullVoid {
         let lattice = required_nonstandard_attribute(
             ipc,
@@ -456,7 +482,7 @@ fn set_copper_balance_metadata(
         }
         None
     };
-    Ok(Some(CopperBalanceMetadata { kind, void }))
+    Ok(Some(CopperBalanceMetadata { void }))
 }
 
 fn required_double_attribute(
@@ -555,7 +581,7 @@ fn push_extracted_feature(
 ) {
     feature.source_layer_ref = Some(source_layer_ref);
     feature.set = Some(set_id);
-    feature.flags.copper_balance = copper_balance.map(|metadata| metadata.kind);
+    feature.flags.copper_balance = copper_balance.is_some();
     feature.flags.copper_balance_void = copper_balance.and_then(|metadata| {
         metadata.void.map(|void| CopperBalanceVoid {
             lattice: crate::geom::copper_balance::DenseCopperLattice {

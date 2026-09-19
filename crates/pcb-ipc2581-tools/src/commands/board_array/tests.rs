@@ -1140,34 +1140,31 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
             .iter()
             .filter(|feature| feature.source_step_kind == LayoutStepKind::Panel
                 && !feature.is_fiducial())
-            .all(|feature| feature.flags.copper_balance.is_some())
+            .all(|feature| feature.flags.copper_balance)
     );
-    let balance_paths = |kind: pcb_ir::dialects::ipc::CopperBalanceKind| {
-        let paths = top
-            .features
-            .iter()
-            .filter(|feature| {
-                feature.source_step_kind == LayoutStepKind::Panel
-                    && feature.kind == FeatureKind::Primitive
-                    && feature.flags.copper_balance == Some(kind)
-            })
-            .flat_map(|feature| feature.paths.slice(&top.arena.paths))
-            .collect::<Vec<_>>();
-        ContourSet::from_painted_paths(&top.arena, paths, resolution).unwrap()
-    };
-    let round_trip = balance_paths(pcb_ir::dialects::ipc::CopperBalanceKind::Plane)
-        .difference(&balance_paths(
-            pcb_ir::dialects::ipc::CopperBalanceKind::FullVoid,
-        ))
-        .unwrap()
-        .difference(&balance_paths(
-            pcb_ir::dialects::ipc::CopperBalanceKind::EdgeVoid,
-        ))
-        .unwrap()
-        .union(&balance_paths(
-            pcb_ir::dialects::ipc::CopperBalanceKind::BoundaryWeb,
-        ))
-        .unwrap();
+    // Paint the balance features in order: the plane, the voids that clear
+    // it, then the boundary web.
+    let round_trip = top
+        .features
+        .iter()
+        .filter(|feature| {
+            feature.source_step_kind == LayoutStepKind::Panel
+                && feature.kind == FeatureKind::Primitive
+                && feature.flags.copper_balance
+        })
+        .fold(ContourSet::empty(resolution), |image, feature| {
+            let paint = ContourSet::from_painted_paths(
+                &top.arena,
+                feature.paths.slice(&top.arena.paths),
+                resolution,
+            )
+            .unwrap();
+            match feature.polarity {
+                pcb_ir::geom::Polarity::Dark => image.union(&paint),
+                pcb_ir::geom::Polarity::Clear => image.difference(&paint),
+            }
+            .unwrap()
+        });
 
     assert!(!round_trip.is_empty());
     assert!(

@@ -8,17 +8,15 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-### Changed
-
-- Export Gerbers as dark-only artwork so copper-balanced panels load quickly in CAM software.
-
 ### Fixed
 
 - Fix self-touching Gerber regions and custom aperture outlines.
 - Keep footprint and pad UUIDs across `pcb layout --sync-footprints` and footprint changes so KiCad DRC exclusions survive.
+- Cut stroked copper under IPC-2581 cutouts and set voids.
 
 ### Changed
 
+- Export Gerbers as dark-only artwork so copper-balanced panels load quickly in CAM software.
 - Speed up Gerber export, most of all for V-scored board arrays.
 - Omit redundant moves from Gerber strokes for smaller files.
 

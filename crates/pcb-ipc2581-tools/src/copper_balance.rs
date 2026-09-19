@@ -27,30 +27,7 @@ use pcb_ir::geom::{ContourSet, FillRule, PathOp};
 use serde::Serialize;
 
 use crate::ipc2581::Ipc2581;
-use pcb_ir::dialects::ipc::CopperBalanceKind;
-
-pub(crate) const COPPER_BALANCE_ATTRIBUTE_NAME: &str = "diode.copper_balance";
-pub(crate) const COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME: &str = "diode.copper_balance_lattice";
-pub(crate) const COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME: &str =
-    "diode.copper_balance_lattice_origin_x_mm";
-pub(crate) const COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME: &str =
-    "diode.copper_balance_lattice_origin_y_mm";
-pub(crate) const COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME: &str =
-    "diode.copper_balance_lattice_pitch_mm";
-pub(crate) const COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME: &str =
-    "diode.copper_balance_void_radius_mm";
-pub(crate) const COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME: &str =
-    "diode.copper_balance_void_corner_radius_mm";
-pub(crate) const COPPER_BALANCE_LATTICE_VALUE: &str = "staggered-hex-v1";
-
-pub(crate) fn copper_balance_attribute_value(kind: CopperBalanceKind) -> &'static str {
-    match kind {
-        CopperBalanceKind::Plane => "plane",
-        CopperBalanceKind::FullVoid => "full_void",
-        CopperBalanceKind::EdgeVoid => "edge_void",
-        CopperBalanceKind::BoundaryWeb => "boundary_web",
-    }
-}
+use pcb_ir::import::ipc2581::CopperBalanceKind;
 
 /// Maximum violation area tolerated when certifying a balancing region.
 pub const CERTIFICATE_AREA_TOLERANCE_MM2: f64 = 1e-4;
