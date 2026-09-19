@@ -18,7 +18,7 @@ use pcb_sexpr::board::{
     is_zone_net_name,
 };
 use pcb_sexpr::{PatchSet, Sexpr, WalkCtx};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Compute patches for net-only renames (exact match, no prefix matching).
 ///
@@ -62,10 +62,10 @@ pub fn compute_moved_paths_patches(
 /// Map the paths an older layout sync truncated to the full paths they should carry.
 ///
 /// Older syncs kept only the text after a path's last colon, so "Block:Power.R1" was
-/// stored as "Power.R1". A truncated path is restored when it names nothing in the
-/// source and exactly one instance truncates to it.
+/// stored as "Power.R1". A truncated path that names a source instance belongs to that
+/// instance; of several instances truncating to one path, the last in path order takes it.
 pub(crate) fn truncated_paths(schematic: &Schematic) -> HashMap<String, String> {
-    let paths: HashSet<String> = schematic
+    let paths: BTreeSet<String> = schematic
         .instances
         .iter()
         .filter(|(_, instance)| {
@@ -77,19 +77,11 @@ pub(crate) fn truncated_paths(schematic: &Schematic) -> HashMap<String, String> 
         .map(|(instance_ref, _)| instance_ref.instance_path.join("."))
         .collect();
 
-    let mut full_paths: HashMap<&str, Vec<&str>> = HashMap::new();
     paths
         .iter()
-        .filter_map(|path| Some((path.rsplit_once(':')?.1, path.as_str())))
+        .filter_map(|path| Some((path.rsplit_once(':')?.1, path)))
         .filter(|(truncated, _)| !paths.contains(*truncated))
-        .for_each(|(truncated, path)| full_paths.entry(truncated).or_default().push(path));
-
-    full_paths
-        .into_iter()
-        .filter_map(|(truncated, full_paths)| match full_paths.as_slice() {
-            [full_path] => Some((truncated.to_string(), full_path.to_string())),
-            _ => None,
-        })
+        .map(|(truncated, path)| (truncated.to_string(), path.clone()))
         .collect()
 }
 
@@ -213,8 +205,11 @@ mod tests {
         );
         // "Power.R1" names a source instance, so "Block:Power.R1" must not claim its footprint.
         assert!(truncated(&["Power.R1", "Block:Power.R1"]).is_empty());
-        // Two instances truncate to "Power.R1".
-        assert!(truncated(&["Block:Power.R1", "Other:Power.R1"]).is_empty());
+        // Two instances truncate to "Power.R1"; one keeps the footprint.
+        assert_eq!(
+            truncated(&["Block:Power.R1", "Other:Power.R1"]),
+            HashMap::from([("Power.R1".to_string(), "Other:Power.R1".to_string())])
+        );
     }
 
     #[test]
