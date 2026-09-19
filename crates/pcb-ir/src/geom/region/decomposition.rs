@@ -394,6 +394,35 @@ mod tests {
     }
 
     #[test]
+    fn whole_grid_dimensions_survive_every_placement() {
+        // Centered on the origin, both edges of a 0.635 mm feature land on
+        // half-grid ties; rounding away from zero would widen it to 0.636.
+        for center in [0.0, 0.0005, -0.0005, 12.7, -12.7, 40.0005, -40.0005] {
+            let (min, max) = (center - 0.3175, center - 0.3175 + 0.635);
+            let ring = vec![[min, min], [max, min], [max, max], [min, max]];
+            let [ring] = decompose_on_grid(vec![ring], FillRule::NonZero, 0.001, 5000)
+                .unwrap()
+                .try_into()
+                .unwrap();
+            for axis in 0..2 {
+                let low = ring.iter().map(|p| p[axis]).fold(f64::INFINITY, f64::min);
+                let high = ring
+                    .iter()
+                    .map(|p| p[axis])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                assert!(
+                    ((high - low) - 0.635).abs() < 1e-9,
+                    "{center}: {low}..{high}"
+                );
+                assert!(
+                    (low - min).abs() <= 0.0005 + 1e-9,
+                    "{center}: {low} from {min}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn mixed_identity_and_holed_components_preserve_point_contact() {
         let input = vec![
             vec![[0., 0.], [20., 0.], [20., 15.], [0., 15.]],
