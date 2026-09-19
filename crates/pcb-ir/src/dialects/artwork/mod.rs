@@ -364,13 +364,6 @@ pub enum ApertureShape {
         height: f64,
         radius: f64,
     },
-    /// Regular hexagon with circularly rounded corners. `radius` is the
-    /// center-to-vertex radius before rounding.
-    RoundedHex {
-        radius: f64,
-        corner_radius: f64,
-        rotation_degrees: f64,
-    },
     /// An arbitrary origin-local filled contour, shared by every flash of
     /// this aperture, painted under its source path's fill rule. This is
     /// how repeated dictionary instances stay instances all the way to the
@@ -410,11 +403,6 @@ impl Aperture {
                 height,
                 radius,
             } => shapes::rounded_rect(*width, *height, *radius, shapes::ALL_CORNERS),
-            ApertureShape::RoundedHex {
-                radius,
-                corner_radius,
-                rotation_degrees,
-            } => shapes::rounded_hexagon(*radius, *corner_radius, *rotation_degrees),
             ApertureShape::Contour { outline, .. } => return vec![outline.clone()],
         };
         let mut contours: Vec<ContourBuf> = outer.into_iter().collect();
@@ -446,12 +434,6 @@ impl Aperture {
             ApertureShape::Polygon { diameter, .. } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
-            ApertureShape::RoundedHex {
-                radius,
-                corner_radius,
-                rotation_degrees,
-            } => shapes::rounded_hexagon(*radius, *corner_radius, *rotation_degrees)
-                .map_or_else(BBox::empty, |contour| contour.bbox),
             ApertureShape::Contour { outline, .. } => outline.bbox,
         }
     }

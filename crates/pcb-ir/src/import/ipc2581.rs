@@ -558,8 +558,11 @@ fn push_extracted_feature(
     feature.flags.copper_balance = copper_balance.map(|metadata| metadata.kind);
     feature.flags.copper_balance_void = copper_balance.and_then(|metadata| {
         metadata.void.map(|void| CopperBalanceVoid {
+            lattice: crate::geom::copper_balance::DenseCopperLattice {
+                origin: void.lattice_origin,
+                pitch_mm: void.lattice_pitch_mm,
+            },
             radius_mm: void.radius_mm,
-            corner_radius_mm: void.corner_radius_mm,
         })
     });
     let bbox = feature.bbox;

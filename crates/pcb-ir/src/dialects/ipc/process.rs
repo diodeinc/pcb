@@ -1,16 +1,18 @@
 //! Pass pipelines over IPC documents.
 //!
-//! Passes are plain functions that mutate a [`Document`] in place. Three
+//! Passes are plain functions that mutate a [`Document`] in place. Four
 //! standard pipelines cover the common targets:
 //!
 //! - [`normalize_preserving`]: structure-preserving cleanup only.
 //! - [`normalize_for_artwork`]: additionally resolves IPC paint semantics
-//!   (set voids, negative polarity, layer cutouts) for artwork export.
+//!   (set voids, layer cutouts) for artwork export.
+//! - [`normalize_for_positive_artwork`]: additionally resolves negative
+//!   polarity, for targets whose consumers pay for every clear object.
 //! - [`compose_for_rendering`]: destructive image composition (outlines
 //!   strokes, unions fills) for final rendering targets.
 
 use crate::geom::{AccuracyError, Resolution};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use crate::dialects::ipc::Document;
@@ -19,7 +21,7 @@ use crate::dialects::ipc::feature::{Feature, FeatureBucket, FeatureIntent, Featu
 use crate::geom::path::ContourBuf;
 use crate::geom::region::{self};
 use crate::geom::{
-    Affine2, BBox, ContourSet, FillRule, Paint, PaintKind, Path, PathArena, Polarity, Span,
+    Affine2, BBox, ContourSet, FillRule, Paint, PaintKind, Path, PathArena, Point, Polarity, Span,
 };
 
 /// Run only structure-preserving cleanup passes.
@@ -54,6 +56,31 @@ pub fn normalize_for_artwork<S: Copy + Eq + Hash, L: Clone>(
     normalize_preserving(doc);
     resolve_set_voids(doc, resolution)?;
     subtract_layer_cutouts(doc, resolution)?;
+    finish_artwork_normalization(doc, resolution)
+}
+
+/// [`normalize_for_artwork`] that also resolves negative polarity, so the
+/// artwork is dark-only.
+///
+/// CAM importers composite every clear object against all copper beneath it,
+/// so a dense clear lattice that is compact on disk is the most expensive
+/// thing a fabricator can be handed. Positive artwork carries the same image
+/// as dark geometry that loads without compositing.
+pub fn normalize_for_positive_artwork<S: Copy + Eq + Hash, L: Clone>(
+    doc: &mut Document<S, L>,
+    resolution: Resolution,
+) -> Result<(), AccuracyError> {
+    normalize_preserving(doc);
+    resolve_set_voids(doc, resolution)?;
+    subtract_layer_cutouts(doc, resolution)?;
+    resolve_negative_polarity(doc, resolution)?;
+    finish_artwork_normalization(doc, resolution)
+}
+
+fn finish_artwork_normalization<S, L>(
+    doc: &mut Document<S, L>,
+    resolution: Resolution,
+) -> Result<(), AccuracyError> {
     compact(doc);
     normalize_bounds(doc);
     for contour in &doc.arena.contours {
@@ -772,6 +799,196 @@ where
     Ok(())
 }
 
+/// Resolve negative polarity: a clear feature subtracts its painted image
+/// from every feature painted before it on its layer, then disappears.
+///
+/// IPC paints a layer sequentially, so features after a clear run repaint it
+/// untouched. Consecutive clears commute and cut as one unioned region.
+///
+/// A balance void on a lattice cuts as its whole lattice cell wherever that
+/// cell is solid copper, and turns into the dark `cell - void` ring that
+/// restores it. The image is the same, but every ring of one void size is one
+/// shared instance rather than explicit boundary in the plane it perforates.
+pub fn resolve_negative_polarity<S, L>(
+    doc: &mut Document<S, L>,
+    resolution: Resolution,
+) -> Result<(), AccuracyError>
+where
+    S: Clone,
+    L: Clone,
+{
+    // Subtraction images features in layer coordinates, so shared placement
+    // groups must be materialized before any clear can cut.
+    if !doc.feature_placement_groups.is_empty()
+        && doc
+            .features
+            .iter()
+            .any(|feature| feature.polarity == Polarity::Clear)
+    {
+        expand_feature_placement_groups(doc);
+    }
+    let strict = resolution.strict();
+    for layer_index in 0..doc.layers.len() {
+        let features = doc.layers[layer_index]
+            .features
+            .range()
+            .map(|index| (index, doc.features[index].polarity))
+            .collect::<Vec<_>>();
+        let mut painted = Vec::new();
+        for run in features.chunk_by(|(_, a), (_, b)| a == b) {
+            let polarity = run[0].1;
+            let run = run.iter().map(|&(index, _)| index);
+            if polarity == Polarity::Dark {
+                painted.extend(run);
+                continue;
+            }
+
+            let tiles = lattice_tiles(doc, run.clone());
+            let tile_features = tiles
+                .iter()
+                .map(|tile| tile.feature)
+                .collect::<HashSet<_>>();
+            let blockers = ContourSet::union_all(
+                strict,
+                run.clone()
+                    .filter(|index| !tile_features.contains(index))
+                    .map(|index| feature_painted_region(doc, &doc.features[index], strict))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?;
+            // A tile's whole ring cell must be solid copper of one feature
+            // once everything that cannot tile has cut.
+            let tiles_bbox = tiles
+                .iter()
+                .map(|tile| tile.ring_cell.bbox)
+                .fold(BBox::empty(), BBox::union);
+            let solid = painted
+                .iter()
+                .map(|&index| &doc.features[index])
+                .filter(|subject| doc.arena.paths_bbox(subject.paths).intersects(tiles_bbox))
+                .map(|subject| {
+                    let image = feature_painted_region(doc, subject, strict)?;
+                    Ok(difference_near(&image, &blockers)?
+                        .unwrap_or(image)
+                        .prepare_query())
+                })
+                .collect::<Result<Vec<_>, AccuracyError>>()?;
+            let (tiled, untiled): (Vec<_>, Vec<_>) = tiles.into_iter().partition(|tile| {
+                solid.iter().any(|solid| {
+                    solid.signed_distance(tile.center).is_some_and(|distance| {
+                        distance.mm + distance.uncertainty_mm <= -tile.ring_cell_radius
+                    })
+                })
+            });
+
+            let cutters = ContourSet::union_all(
+                strict,
+                std::iter::once(Ok(blockers))
+                    .chain(untiled.iter().map(|tile| {
+                        feature_painted_region(doc, &doc.features[tile.feature], strict)
+                    }))
+                    .chain(tiled.iter().map(|tile| {
+                        ContourSet::from_filled_contours(
+                            std::slice::from_ref(&tile.cut_cell),
+                            strict,
+                        )
+                    }))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?;
+            for &subject_index in &painted {
+                let subject = &doc.features[subject_index];
+                if !doc.arena.paths_bbox(subject.paths).intersects(cutters.bbox) {
+                    continue;
+                }
+                let subject = feature_painted_region(doc, subject, strict)?;
+                subtract_region_from_image(doc, subject_index, subject, &cutters)?;
+            }
+
+            run.filter(|index| !tile_features.contains(index))
+                .chain(untiled.iter().map(|tile| tile.feature))
+                .for_each(|index| clear_feature_paths(doc, index));
+            for tile in tiled {
+                // The ring keeps the void's dictionary identity, so every
+                // ring of one void size lowers through one shared aperture.
+                let feature = &doc.features[tile.feature];
+                let void = feature.paths.slice(&doc.arena.paths);
+                let ring = std::iter::once(tile.ring_cell)
+                    .chain(void.iter().flat_map(|path| doc.arena.path_contours(path)))
+                    .collect::<Vec<_>>();
+                let ring = doc.arena.push_path(
+                    Paint::Fill {
+                        rule: FillRule::EvenOdd,
+                    },
+                    ring,
+                );
+                let feature = &mut doc.features[tile.feature];
+                feature.paths = Span::single(ring);
+                feature.polarity = Polarity::Dark;
+                painted.push(tile.feature);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// How far a ring cell reaches past its exact lattice cell. Ring instances
+/// are placed and rounded independently, so they overlap their neighbours,
+/// and the copper they were cut from, instead of abutting them.
+const LATTICE_TILE_OVERLAP_MM: f64 = 0.002;
+
+/// A balance void that may image as its lattice cell.
+struct LatticeTile {
+    feature: usize,
+    center: Point,
+    /// The cell the dark ring fills.
+    ring_cell: ContourBuf,
+    ring_cell_radius: f64,
+    /// The cell cut from earlier copper: past the exact cell so neighbouring
+    /// cuts merge, inside the ring cell so the ring covers the cut edge.
+    cut_cell: ContourBuf,
+}
+
+/// The run's balance voids that may tile: alone on their site of one common
+/// lattice, and inside their cell by the overlap, so no ring cell reaches
+/// another tile's void.
+fn lattice_tiles<S, L>(doc: &Document<S, L>, run: impl Iterator<Item = usize>) -> Vec<LatticeTile> {
+    let voids = run
+        .filter_map(|index| {
+            let feature = &doc.features[index];
+            let void = feature.flags.copper_balance_void?;
+            let center = Point::new(feature.transform.m02, feature.transform.m12);
+            Some((index, void, center, void.lattice.nearest_site(center).0))
+        })
+        .collect::<Vec<_>>();
+    let lattice = voids.first().map(|(_, void, ..)| void.lattice);
+    let mut occupancy = HashMap::new();
+    for (.., site) in &voids {
+        *occupancy.entry(*site).or_insert(0_usize) += 1;
+    }
+    voids
+        .into_iter()
+        .filter(|(_, void, _, site)| Some(void.lattice) == lattice && occupancy[site] == 1)
+        .filter_map(|(feature, void, center, _)| {
+            // Flat-top hexagons, like the voids they hold.
+            let cell = |apothem: f64| {
+                let radius = apothem / (std::f64::consts::PI / 6.0).cos();
+                crate::geom::shapes::regular_polygon(2.0 * radius, 6, 0.0)
+                    .map(|cell| (cell.transformed(Affine2::translation(center)), radius))
+            };
+            let apothem = void.lattice.pitch_mm / 2.0;
+            let (_, void_limit) = cell(apothem - LATTICE_TILE_OVERLAP_MM)?;
+            let (cut_cell, _) = cell(apothem + LATTICE_TILE_OVERLAP_MM / 2.0)?;
+            let (ring_cell, ring_cell_radius) = cell(apothem + LATTICE_TILE_OVERLAP_MM)?;
+            (void.radius_mm <= void_limit).then_some(LatticeTile {
+                feature,
+                center,
+                ring_cell,
+                ring_cell_radius,
+                cut_cell,
+            })
+        })
+        .collect()
+}
+
 fn layer_features_by_set<S, L>(
     doc: &Document<S, L>,
     layer: &Layer<S, L>,
@@ -956,27 +1173,25 @@ fn subtract_region_from_feature<S, L>(
         &doc.features[feature_index],
         cutters.resolution.strict(),
     )?;
+    subtract_region_from_image(doc, feature_index, subject, cutters)
+}
+
+/// Replace a feature with `subject \ cutters`, where `subject` is the image
+/// the caller resolved for it.
+fn subtract_region_from_image<S, L>(
+    doc: &mut Document<S, L>,
+    feature_index: usize,
+    subject: ContourSet,
+    cutters: &ContourSet,
+) -> Result<(), AccuracyError> {
     if subject.is_empty() {
         return Ok(());
     }
 
-    // Only cutters that can reach this feature participate; most features on
-    // a layer are nowhere near any of them, and dense generated cutter sets
-    // (balance void lattices) would otherwise make every subtraction sweep
-    // the whole set.
-    let near = cutters
-        .rings
-        .iter()
-        .zip(&cutters.ring_bounds)
-        .filter(|(_, bounds)| bounds.intersects(subject.bbox))
-        .map(|(ring, _)| ring.clone())
-        .collect::<Vec<_>>();
-    if near.is_empty() {
+    let Some(difference) = difference_near(&subject, cutters)? else {
         return Ok(());
-    }
-
-    let near = ContourSet::from_regularized(near, cutters.resolution, cutters.uncertainty_mm);
-    let contours = subject.difference(&near)?.to_contours();
+    };
+    let contours = difference.to_contours();
     if contours.is_empty() {
         clear_feature_paths(doc, feature_index);
         return Ok(());
@@ -992,6 +1207,30 @@ fn subtract_region_from_feature<S, L>(
     );
 
     Ok(())
+}
+
+/// `subject \ cutters`, or `None` when no cutter can reach the subject.
+///
+/// Only cutters that can reach the subject participate; most features on a
+/// layer are nowhere near any of them, and dense generated cutter sets
+/// (balance void lattices) would otherwise make every subtraction sweep the
+/// whole set.
+fn difference_near(
+    subject: &ContourSet,
+    cutters: &ContourSet,
+) -> Result<Option<ContourSet>, AccuracyError> {
+    let near = cutters
+        .rings
+        .iter()
+        .zip(&cutters.ring_bounds)
+        .filter(|(_, bounds)| bounds.intersects(subject.bbox))
+        .map(|(ring, _)| ring.clone())
+        .collect::<Vec<_>>();
+    if near.is_empty() {
+        return Ok(None);
+    }
+    let near = ContourSet::from_regularized(near, cutters.resolution, cutters.uncertainty_mm);
+    subject.difference(&near).map(Some)
 }
 
 fn layer_cutout_sets<S, L>(
@@ -1024,6 +1263,19 @@ fn feature_filled_region<S, L>(
             .slice(&doc.arena.paths)
             .iter()
             .filter(|path| path.is_filled()),
+        resolution,
+    )
+}
+
+/// Union every painted path's image: fills and outlined strokes alike.
+fn feature_painted_region<S, L>(
+    doc: &Document<S, L>,
+    feature: &Feature<S>,
+    resolution: Resolution,
+) -> Result<ContourSet, AccuracyError> {
+    ContourSet::from_painted_paths(
+        &doc.arena,
+        feature.paths.slice(&doc.arena.paths),
         resolution,
     )
 }
@@ -1279,6 +1531,124 @@ mod tests {
         .unwrap();
         assert!((image.area() - 12.0).abs() < 1e-6);
         assert!(!image.contains_point(Point::new(2.0, 2.0)));
+    }
+
+    #[test]
+    fn positive_artwork_resolves_clears_into_earlier_features_only() {
+        let fill = Paint::Fill {
+            rule: FillRule::NonZero,
+        };
+        let mut doc = TestDoc::new();
+        // A plane and a stroked trace, two commuting clears, then a repaint.
+        doc.push_path(fill, [rect_contour(0.0, 0.0, 4.0, 4.0)]);
+        doc.push_path(
+            Paint::Stroke(StrokeStyle::new(1.0, LineCap::Butt)),
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 6.0)),
+                PathCmd::line_to(Point::new(4.0, 6.0)),
+            ])],
+        );
+        doc.push_path(fill, [rect_contour(1.0, 1.0, 3.0, 3.0)]);
+        doc.push_path(fill, [rect_contour(1.0, 5.0, 3.0, 7.0)]);
+        doc.push_path(fill, [rect_contour(1.5, 1.5, 2.5, 2.5)]);
+        for (path, polarity) in [
+            (0, Polarity::Dark),
+            (1, Polarity::Dark),
+            (2, Polarity::Clear),
+            (3, Polarity::Clear),
+            (4, Polarity::Dark),
+        ] {
+            doc.features.push(Feature {
+                paths: Span::new(path, 1),
+                ..Feature::new(FeatureKind::Polygon, polarity)
+            });
+        }
+        doc.layers.push(test_layer(Span::new(0, 5)));
+
+        normalize_for_positive_artwork(&mut doc, Resolution::default()).unwrap();
+
+        assert!(
+            doc.features
+                .iter()
+                .all(|feature| feature.polarity == Polarity::Dark || feature.paths.is_empty())
+        );
+        let areas = doc
+            .features
+            .iter()
+            .map(|feature| {
+                feature_painted_region(&doc, feature, Resolution::default())
+                    .unwrap()
+                    .area()
+            })
+            .collect::<Vec<_>>();
+        for (area, expected) in areas.iter().zip([12.0, 2.0, 0.0, 0.0, 1.0]) {
+            assert!((area - expected).abs() < 1e-6, "{areas:?}");
+        }
+    }
+
+    #[test]
+    fn lattice_voids_tile_as_dark_cell_rings_where_the_plane_is_solid() {
+        let fill = Paint::Fill {
+            rule: FillRule::NonZero,
+        };
+        let lattice = crate::geom::copper_balance::DenseCopperLattice {
+            origin: Point::new(5.0, 5.0),
+            pitch_mm: 2.0,
+        };
+        let mut doc = TestDoc::new();
+        doc.push_path(fill, [rect_contour(0.0, 0.0, 10.0, 10.0)]);
+        doc.features.push(Feature {
+            paths: Span::new(0, 1),
+            ..Feature::new(FeatureKind::Polygon, Polarity::Dark)
+        });
+        // One void deep in the plane, one whose cell crosses the plane edge.
+        let sites = [(0, 0), (0, 2)].map(|(column, row)| {
+            lattice.center(crate::geom::copper_balance::DenseCopperLatticeSite { column, row })
+        });
+        for center in sites {
+            let path = doc.push_path(
+                fill,
+                [rect_contour(
+                    center.x - 0.5,
+                    center.y - 0.5,
+                    center.x + 0.5,
+                    center.y + 0.5,
+                )],
+            );
+            let mut void = Feature::new(FeatureKind::Primitive, Polarity::Clear);
+            void.paths = Span::single(path);
+            void.transform = Affine2::translation(center);
+            void.primitive_ref = Some(PrimitiveRef::User(7));
+            void.flags.copper_balance_void =
+                Some(crate::dialects::ipc::feature::CopperBalanceVoid {
+                    lattice,
+                    radius_mm: 0.5 * 2.0_f64.sqrt(),
+                });
+            doc.features.push(void);
+        }
+        doc.layers.push(test_layer(Span::new(0, 3)));
+
+        normalize_for_positive_artwork(&mut doc, Resolution::default()).unwrap();
+
+        let [plane, tiled, cut] = &doc.features[..] else {
+            panic!("features are rewritten in place");
+        };
+        // The tiled void is its dark cell ring and keeps its shared identity;
+        // the edge void cut the plane and disappeared.
+        assert_eq!(tiled.polarity, Polarity::Dark);
+        assert_eq!(tiled.primitive_ref, Some(PrimitiveRef::User(7)));
+        assert!(cut.paths.is_empty());
+        let image = ContourSet::union_all(
+            Resolution::default(),
+            [plane, tiled].map(|feature| {
+                feature_painted_region(&doc, feature, Resolution::default()).unwrap()
+            }),
+        )
+        .unwrap();
+        assert!((image.area() - 98.0).abs() < 1e-6, "{}", image.area());
+        let ring = feature_painted_region(&doc, tiled, Resolution::default()).unwrap();
+        let cell = 2.0 * 3.0_f64.sqrt() * (1.0 + LATTICE_TILE_OVERLAP_MM).powi(2);
+        assert!((ring.area() - (cell - 1.0)).abs() < 1e-6, "{}", ring.area());
     }
 
     #[test]

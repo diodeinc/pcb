@@ -114,7 +114,7 @@ pub fn build_gerber_x2_files(
             let mut doc = imported
                 .materialize_layer(plan.layer_id, view)
                 .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
-            pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc, resolution)?;
+            pcb_ir::dialects::ipc::process::normalize_for_positive_artwork(&mut doc, resolution)?;
             if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
                 bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
             }
@@ -674,7 +674,7 @@ fn build_step_artwork_objects(
                 context.layer_name
             )
         })?;
-    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut local, resolution)?;
+    pcb_ir::dialects::ipc::process::normalize_for_positive_artwork(&mut local, resolution)?;
     if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&local) {
         bail!(
             "IPC-2581 Step '{}' layer '{}' is not artwork-ready: {error}",
@@ -736,19 +736,10 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
         &mut self,
         feature: &Feature<ipc2581::Symbol>,
     ) -> Option<(Aperture, Affine2, BBox)> {
-        if let Some(void) = feature.flags.copper_balance_void {
-            let aperture = Aperture::solid(ApertureShape::RoundedHex {
-                radius: void.radius_mm,
-                corner_radius: void.corner_radius_mm,
-                rotation_degrees: 0.0,
-            });
-            let bbox = aperture.bbox().transformed(feature.transform);
-            return Some((aperture, feature.transform, bbox));
-        }
         standard_flash_aperture(self.imported, self.doc, feature)
     }
 
-    /// Only pad-like copper and full balance voids may image as flashes.
+    /// Only pad-like copper and tiled balance cells may image as flashes.
     fn flashes(&mut self, feature: &Feature<ipc2581::Symbol>) -> bool {
         self.role != GerberLayerRole::Copper
             || match feature.flags.copper_balance {
@@ -1851,11 +1842,11 @@ mod tests {
     }
 
     #[test]
-    fn negative_set_after_an_overlay_pad_erases_it_natively() {
+    fn negative_set_after_an_overlay_pad_erases_it_as_dark_geometry() {
         let resolution = Resolution::default();
 
         // Sequential set semantics: the clear paints after the pad, erasing
-        // the overlap, and exports natively as clear polarity.
+        // the overlap. Gerber carries the result as dark-only geometry.
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1926,8 +1917,8 @@ mod tests {
             parsed
                 .objects()
                 .iter()
-                .any(|object| object.polarity == Polarity::Clear),
-            "the clear set should export natively as clear polarity"
+                .all(|object| object.polarity == Polarity::Dark),
+            "the clear set should resolve into the dark copper it erases"
         );
 
         let mask = pcb_ir::dialects::artwork::compose_to_mask(

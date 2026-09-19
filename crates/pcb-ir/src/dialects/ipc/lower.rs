@@ -350,7 +350,8 @@ where
 }
 
 /// The feature's whole image as an origin-local contour aperture: its single
-/// filled path pulled back through the inverse of its placement transform.
+/// filled path, holes included, pulled back through the inverse of its
+/// placement transform.
 /// Flashing the aperture through `feature.transform` reproduces the source
 /// image exactly, so repeated placements of one shape share one definition.
 pub fn contour_flash_aperture<Symbol, LayerFunction>(
@@ -370,9 +371,16 @@ pub fn contour_flash_aperture<Symbol, LayerFunction>(
         .into_iter()
         .map(|contour| contour.transformed(inverse))
         .collect::<Vec<_>>();
-    let [outline] = local.try_into().ok()?;
+    if local.is_empty() {
+        return None;
+    }
+    let uncertainty_mm = local
+        .iter()
+        .map(|contour| contour.uncertainty_mm)
+        .fold(0.0, f64::max);
+    let cmds = local.into_iter().flat_map(|contour| contour.cmds).collect();
     Some(artwork::ApertureShape::Contour {
-        outline,
+        outline: ContourBuf::new(cmds).with_uncertainty(uncertainty_mm),
         fill_rule: path.fill_rule().unwrap_or(FillRule::NonZero),
     })
 }
