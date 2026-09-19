@@ -728,3 +728,63 @@ class TestFieldVisibility:
 
         # No SetVisible calls should be made during update
         assert len(set_visible_calls) == 0
+
+
+class FakeUuid:
+    def __init__(self, value: str):
+        self.value = value
+
+    def Clone(self, other: FakeUuid) -> None:
+        self.value = other.value
+
+
+class FakeVector(SimpleNamespace):
+    def __sub__(self, other: FakeVector) -> FakeVector:
+        return FakeVector(x=self.x - other.x, y=self.y - other.y)
+
+    def SquaredEuclideanNorm(self) -> int:
+        return self.x**2 + self.y**2
+
+
+def fake_pad(uuid: str, number: str, x: int, y: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        m_Uuid=FakeUuid(uuid),
+        GetNumber=lambda: number,
+        GetPosition=lambda: FakeVector(x=x, y=y),
+    )
+
+
+def fake_footprint(uuid: str, pads: list[SimpleNamespace]) -> SimpleNamespace:
+    return SimpleNamespace(m_Uuid=FakeUuid(uuid), Pads=lambda: pads)
+
+
+def test_replacement_inherits_footprint_and_pad_uuids():
+    """Same-numbered pads pair up by position; added pads keep fresh UUIDs."""
+    old = fake_footprint(
+        "old-fp",
+        [
+            fake_pad("old-1", "1", 0, 0),
+            fake_pad("old-5a", "5", 100, 0),
+            fake_pad("old-5b", "5", 200, 0),
+            fake_pad("old-removed", "9", 300, 0),
+        ],
+    )
+    new = fake_footprint(
+        "new-fp",
+        [
+            fake_pad("new-5b", "5", 201, 0),
+            fake_pad("new-5a", "5", 99, 0),
+            fake_pad("new-1", "1", 50, 50),
+            fake_pad("new-added", "7", 400, 0),
+        ],
+    )
+
+    kicad_adapter._inherit_uuids(old, new)
+
+    assert new.m_Uuid.value == "old-fp"
+    assert [pad.m_Uuid.value for pad in new.Pads()] == [
+        "old-5b",
+        "old-5a",
+        "old-1",
+        "new-added",
+    ]
