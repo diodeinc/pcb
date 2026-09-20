@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.56] - 2026-09-20
+
 ### Fixed
 
 - Share renewable sandbox connections across PCB downloads and KiCad sync; stop safely on editor lease expiry or cancellation, preserving local edits.
@@ -1987,7 +1989,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.55...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.56...HEAD
+[0.4.56]: https://github.com/diodeinc/pcb/compare/v0.4.55...v0.4.56
 [0.4.55]: https://github.com/diodeinc/pcb/compare/v0.4.54...v0.4.55
 [0.4.54]: https://github.com/diodeinc/pcb/compare/v0.4.53...v0.4.54
 [0.4.53]: https://github.com/diodeinc/pcb/compare/v0.4.52...v0.4.53
