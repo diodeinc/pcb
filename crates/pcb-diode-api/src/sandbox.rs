@@ -1,11 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::{
-    Arc, Mutex,
+    Arc, Mutex, TryLockError,
     atomic::{AtomicBool, Ordering},
-    mpsc::{self, Receiver, Sender},
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -20,7 +19,7 @@ use uuid::Uuid;
 use crate::WorkspaceContext;
 
 pub const SANDBOX_LOCK_FILE_PATH: &str = "/home/sandbox/.diode/sandbox-lock.json";
-const LOCK_HEARTBEAT_MAX_FAILURES: usize = 3;
+const LOCK_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const FILE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -47,16 +46,34 @@ pub struct SandboxClient {
     api_base_url: String,
     ctx: WorkspaceContext,
     http: Client,
+    connections: Arc<Mutex<BTreeMap<String, Arc<SandboxConnectionState>>>>,
+    scope: RequestScope,
+}
+
+#[derive(Default)]
+struct SandboxConnectionState {
+    cached: Mutex<Option<Arc<SandboxConnection>>>,
+    // Keep renewal separate so a failed transfer can invalidate its connection
+    // without waiting for an in-progress mint or maintenance backoff.
+    renewal: Mutex<()>,
+}
+
+#[derive(Clone)]
+enum RequestScope {
+    Unleased,
+    Editing(Arc<SandboxLockState>),
+    Cleanup(Instant),
 }
 
 /// Provider-neutral transport details minted atomically by the API.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SandboxConnection {
     http: SandboxHttpConnection,
+    expires_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Deserialize)]
 struct SandboxHttpConnection {
     endpoint: String,
     #[serde(default)]
@@ -221,12 +238,9 @@ struct SandboxLockState {
     /// The lock contents we wrote; heartbeats re-write it with fresh
     /// timestamps.
     template: SandboxLockFile,
-    /// Etag of our last lock write — the compare-and-swap token for the next
-    /// heartbeat. A 412 means someone else took the lock.
-    etag: Mutex<String>,
-    stop: AtomicBool,
-    active: AtomicBool,
-    released: AtomicBool,
+    /// Etag and conservative monotonic expiry of our last successful write.
+    lease: Mutex<(String, Instant)>,
+    running: AtomicBool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,7 +262,6 @@ struct SandboxLockFile {
 pub struct SandboxLockGuard {
     state: Arc<SandboxLockState>,
     heartbeat_thread: Option<JoinHandle<()>>,
-    stop_tx: Option<Sender<()>>,
 }
 
 impl SandboxClient {
@@ -258,6 +271,8 @@ impl SandboxClient {
         Ok(Self {
             api_base_url,
             ctx,
+            connections: Arc::default(),
+            scope: RequestScope::Unleased,
             http: Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 // Minted headers are scoped to the returned endpoint. Never
@@ -366,20 +381,27 @@ impl SandboxClient {
 
     /// Compare-and-swap write: the data plane checks the precondition
     /// against the file's current etag, making lock acquire/refresh atomic.
-    fn write_file_if(
+    fn write_lock_file(
         &self,
         sandbox_id: &str,
-        path: &str,
-        bytes: &[u8],
+        template: &SandboxLockFile,
         precondition: &WritePrecondition,
     ) -> Result<ConditionalWrite> {
-        require_safe_absolute_path(path)?;
+        let mut expires_at = Instant::now();
         let response = self.data_plane_request(sandbox_id, |http, base| {
+            // Connection renewal can wait. Start the lease only once we can send it.
+            let now = Utc::now();
+            expires_at = Instant::now() + Duration::from_secs(template.ttl_seconds as u64);
+            let lock = SandboxLockFile {
+                updated_at: now,
+                expires_at: now + chrono::Duration::seconds(template.ttl_seconds),
+                ..template.clone()
+            };
             let request = http
-                .put(sandbox_fs_url(base, "/fs/write", path))
+                .put(sandbox_fs_url(base, "/fs/write", SANDBOX_LOCK_FILE_PATH))
                 .header(CONTENT_TYPE, "application/octet-stream")
-                .body(bytes.to_vec())
-                .timeout(FILE_TRANSFER_TIMEOUT);
+                .json(&lock)
+                .timeout(LOCK_REQUEST_TIMEOUT);
             match precondition {
                 WritePrecondition::CreateOnly => request.header(IF_NONE_MATCH, "*"),
                 WritePrecondition::Match(etag) => request.header(IF_MATCH, etag.clone()),
@@ -391,7 +413,7 @@ impl SandboxClient {
         let response = ensure_data_plane_success(response)?;
         let etag = header_string(response.headers(), ETAG)
             .context("Sandbox write response is missing an ETag header")?;
-        Ok(ConditionalWrite::Written(etag))
+        Ok(ConditionalWrite::Written(etag, expires_at))
     }
 
     pub fn remove(&self, sandbox_id: &str, path: &str) -> Result<()> {
@@ -428,27 +450,23 @@ impl SandboxClient {
             expires_at: now + chrono::Duration::seconds(ttl_seconds),
             ttl_seconds,
         };
-        let etag = acquire_lock_file(self, sandbox_id, &lock, options.force_reclaim_stale)?;
+        let lease = acquire_lock_file(self, sandbox_id, &lock, options.force_reclaim_stale)?;
 
         let state = Arc::new(SandboxLockState {
             client: self.clone(),
             sandbox_id: sandbox_id.to_string(),
             template: lock,
-            etag: Mutex::new(etag),
-            stop: AtomicBool::new(false),
-            active: AtomicBool::new(true),
-            released: AtomicBool::new(false),
+            lease: Mutex::new(lease),
+            running: AtomicBool::new(true),
         });
         let thread_state = Arc::clone(&state);
-        let (stop_tx, stop_rx) = mpsc::channel();
         let heartbeat_thread = thread::spawn(move || {
-            heartbeat_loop(thread_state, options.heartbeat_interval, stop_rx);
+            heartbeat_loop(thread_state, options.heartbeat_interval);
         });
 
         Ok(SandboxLockGuard {
             state,
             heartbeat_thread: Some(heartbeat_thread),
-            stop_tx: Some(stop_tx),
         })
     }
 
@@ -496,7 +514,7 @@ impl SandboxClient {
             if started.elapsed() > deadline {
                 bail!("Sandbox command did not finish within {deadline:?}");
             }
-            thread::sleep(delay);
+            self.wait(delay)?;
             delay = (delay * 2).min(EXEC_POLL_MAX_DELAY);
         }
     }
@@ -550,7 +568,17 @@ impl SandboxClient {
     }
 
     fn cancel_exec(&self, sandbox_id: &str, exec_id: &str) -> Result<()> {
-        let response = self.data_plane_request(sandbox_id, |http, base| {
+        // Cancelling an existing job is cleanup, even after sync stops or its
+        // lease expires. Do not extend an existing cleanup deadline.
+        let deadline = Instant::now() + LOCK_REQUEST_TIMEOUT;
+        let client = Self {
+            scope: RequestScope::Cleanup(match self.scope {
+                RequestScope::Cleanup(existing) => existing.min(deadline),
+                _ => deadline,
+            }),
+            ..self.clone()
+        };
+        let response = client.data_plane_request(sandbox_id, |http, base| {
             http.delete(sandbox_endpoint_url(
                 base,
                 &format!("/exec/{}", encode_segment(exec_id)),
@@ -567,43 +595,168 @@ impl SandboxClient {
         build: F,
     ) -> Result<reqwest::blocking::Response>
     where
-        F: Fn(&Client, &str) -> reqwest::blocking::RequestBuilder,
+        F: FnOnce(&Client, &str) -> reqwest::blocking::RequestBuilder,
     {
-        // ENG-675 deliberately renews the complete endpoint + credentials
-        // capability for every request. Do not cache either part independently.
-        let connection = self.mint_connection(sandbox_id)?;
-        validate_sandbox_endpoint(&self.api_base_url, &connection.http.endpoint)?;
+        let state = self
+            .connections
+            .lock()
+            .unwrap()
+            .entry(sandbox_id.to_owned())
+            .or_default()
+            .clone();
+        let connection = self.connection(sandbox_id, &state)?;
         let headers = sandbox_headers(&connection.http.headers)?;
-        build(&self.http, &connection.http.endpoint)
-            .headers(headers)
-            .send()
-            .context("Sandbox request failed")
+        let mut request = build(&self.http, &connection.http.endpoint).headers(headers);
+        if let RequestScope::Cleanup(deadline) = self.scope {
+            request = request.timeout(deadline.saturating_duration_since(Instant::now()));
+        }
+        // Recheck after renewal, immediately before submitting work. Keep the
+        // transfer's own timeout: heartbeats can extend the lease while it runs.
+        self.request_timeout(DEFAULT_REQUEST_TIMEOUT)?;
+        let response = request.send();
+        if response.as_ref().map_or(true, |response| {
+            matches!(
+                response.status(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ) || response.status().is_server_error()
+        }) {
+            let mut cached = state.cached.lock().unwrap();
+            // A late failure must not discard a newer connection.
+            if cached
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &connection))
+            {
+                *cached = None;
+            }
+        }
+        // Never replay a submitted request: commands and writes may have taken effect.
+        response.context("Sandbox request failed")
     }
 
-    fn mint_connection(&self, sandbox_id: &str) -> Result<SandboxConnection> {
+    fn connection(
+        &self,
+        sandbox_id: &str,
+        state: &SandboxConnectionState,
+    ) -> Result<Arc<SandboxConnection>> {
+        // Pre-lease waits may last twenty minutes; a sync lease or cleanup
+        // deadline always bounds this further through request_timeout.
+        let deadline = Instant::now() + Duration::from_secs(20 * 60);
+        // Serialize renewal for this sandbox only, never holding the map lock
+        // during network requests. Clones and heartbeats share the result.
+        let _renewal = loop {
+            self.request_timeout(deadline.saturating_duration_since(Instant::now()))?;
+            match state.renewal.try_lock() {
+                Ok(renewal) => break renewal,
+                Err(TryLockError::WouldBlock) => self.wait(Duration::from_millis(50))?,
+                Err(TryLockError::Poisoned(_)) => bail!("Sandbox connection cache poisoned"),
+            }
+        };
+        if let Some(connection) = state.cached.lock().unwrap().as_ref()
+            && connection
+                .expires_at
+                .is_none_or(|expiry| expiry > Utc::now().timestamp() + 60)
+        {
+            return Ok(connection.clone());
+        }
         let url = self.url(&format!(
             "/api/sandboxes/{}/access-token",
             encode_segment(sandbox_id)
         ));
-        let response = self
-            .authenticated(self.http.post(url))?
-            .timeout(DEFAULT_REQUEST_TIMEOUT)
-            .send()
-            .context("Failed to mint sandbox connection")?;
-        let status = response.status();
-        if status == StatusCode::UNAUTHORIZED {
-            bail!("Sandbox API request was not authorized. Run `pcb auth login`.");
+        let mut delay = Duration::ZERO;
+        loop {
+            self.wait(delay.min(deadline.saturating_duration_since(Instant::now())))?;
+            delay = (delay * 2).clamp(Duration::from_millis(200), Duration::from_secs(4));
+            let remaining =
+                self.request_timeout(deadline.saturating_duration_since(Instant::now()))?;
+            // Blocking HTTP cannot be cancelled mid-request. Keep lease renewal
+            // attempts short so shutdown can join the heartbeat promptly.
+            let timeout = if matches!(self.scope, RequestScope::Editing(_)) {
+                LOCK_REQUEST_TIMEOUT
+            } else {
+                DEFAULT_REQUEST_TIMEOUT
+            };
+            let response = match self
+                .authenticated(self.http.post(&url))?
+                .timeout(timeout.min(remaining))
+                .send()
+            {
+                Ok(response) => response,
+                Err(err) if err.is_timeout() || err.is_connect() || err.is_request() => {
+                    log::warn!("Failed to mint sandbox connection; retrying: {err}");
+                    continue;
+                }
+                Err(err) => return Err(err).context("Failed to mint sandbox connection"),
+            };
+            let status = response.status();
+            if status == StatusCode::UNAUTHORIZED {
+                bail!("Sandbox API request was not authorized. Run `pcb auth login`.");
+            }
+            if status == StatusCode::NOT_FOUND {
+                bail!("Sandbox {sandbox_id} was not found or you do not have access to it");
+            }
+            if status.is_success() {
+                let connection: SandboxConnection = response
+                    .json()
+                    .context("Invalid sandbox connection response")?;
+                validate_sandbox_endpoint(&self.api_base_url, &connection.http.endpoint)?;
+                sandbox_headers(&connection.http.headers)?;
+                let connection = Arc::new(connection);
+                *state.cached.lock().unwrap() = Some(connection.clone());
+                return Ok(connection);
+            }
+            let text = response
+                .text()
+                .context("Failed to read sandbox connection error")?;
+            let retry = status == StatusCode::SERVICE_UNAVAILABLE
+                && serde_json::from_str::<serde_json::Value>(&text).is_ok_and(|error| {
+                    matches!(
+                        error["code"].as_str(),
+                        Some("SANDBOX_BUSY" | "SANDBOX_UPDATING")
+                    )
+                });
+            if !retry {
+                bail!("Failed to mint sandbox connection ({status}): {text}");
+            }
         }
-        if status == StatusCode::NOT_FOUND {
-            bail!("Sandbox {sandbox_id} was not found or you do not have access to it");
+    }
+
+    fn request_timeout(&self, timeout: Duration) -> Result<Duration> {
+        let remaining = match &self.scope {
+            RequestScope::Unleased => timeout,
+            RequestScope::Editing(state) => {
+                if !state.running.load(Ordering::SeqCst) {
+                    bail!("Sandbox sync stopped");
+                }
+                state
+                    .lease
+                    .lock()
+                    .unwrap()
+                    .1
+                    .saturating_duration_since(Instant::now())
+            }
+            RequestScope::Cleanup(deadline) => deadline.saturating_duration_since(Instant::now()),
         }
-        if !status.is_success() {
-            let text = response.text().unwrap_or_default();
-            bail!("Failed to mint sandbox connection ({status}): {text}");
+        .min(timeout);
+        if remaining.is_zero() {
+            bail!("Sandbox request deadline or editor lease expired");
         }
-        response
-            .json()
-            .context("Invalid sandbox connection response")
+        Ok(remaining)
+    }
+
+    fn wait(&self, duration: Duration) -> Result<()> {
+        let deadline = Instant::now() + duration;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            // Completing a backoff is not the same as exhausting the request
+            // budget. In particular, consecutive clock reads can be equal.
+            thread::sleep(
+                self.request_timeout(Duration::from_millis(50))?
+                    .min(remaining),
+            );
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -632,8 +785,8 @@ enum WritePrecondition {
 }
 
 enum ConditionalWrite {
-    /// The write landed; holds the file's new etag.
-    Written(String),
+    /// The write landed; holds its new etag and conservative lease expiry.
+    Written(String, Instant),
     /// 412 — another writer changed or created the file first.
     PreconditionFailed,
 }
@@ -708,8 +861,27 @@ fn exec_id_from_location(location: &str) -> Result<String> {
 }
 
 impl SandboxLockGuard {
+    /// Stop submitting new work when the editor lease expires or sync stops.
+    /// Requests already in flight retain their own timeouts.
+    pub fn client(&self) -> SandboxClient {
+        SandboxClient {
+            scope: RequestScope::Editing(Arc::clone(&self.state)),
+            ..self.state.client.clone()
+        }
+    }
+
+    /// A one-way stop callback suitable for a Ctrl-C handler.
+    pub fn stop_handler(&self) -> impl Fn() + Send + 'static {
+        let state = Arc::clone(&self.state);
+        move || state.running.store(false, Ordering::SeqCst)
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        !self.state.running.load(Ordering::SeqCst)
+    }
+
     pub fn is_active(&self) -> bool {
-        self.state.active.load(Ordering::SeqCst) && !self.state.stop.load(Ordering::SeqCst)
+        !self.is_stopped() && Instant::now() < self.state.lease.lock().unwrap().1
     }
 
     pub fn release(mut self) -> Result<()> {
@@ -717,21 +889,13 @@ impl SandboxLockGuard {
     }
 
     fn release_inner(&mut self) -> Result<()> {
-        self.state.stop.store(true, Ordering::SeqCst);
-        if let Some(stop_tx) = self.stop_tx.take() {
-            let _ = stop_tx.send(());
-        }
-        if let Some(thread) = self.heartbeat_thread.take() {
-            let _ = thread.join();
-        }
-
-        if self.state.released.swap(true, Ordering::SeqCst) {
+        let Some(thread) = self.heartbeat_thread.take() else {
             return Ok(());
-        }
-
-        let result = release_once(&self.state);
-        self.state.active.store(false, Ordering::SeqCst);
-        result
+        };
+        self.state.running.store(false, Ordering::SeqCst);
+        thread.thread().unpark();
+        let _ = thread.join();
+        release_once(&self.state)
     }
 }
 
@@ -741,84 +905,53 @@ impl Drop for SandboxLockGuard {
     }
 }
 
-enum LockHeartbeat {
-    Active,
-    Lost,
-}
-
-fn heartbeat_loop(state: Arc<SandboxLockState>, interval: Duration, stop_rx: Receiver<()>) {
-    let mut failures = 0;
-    while !state.stop.load(Ordering::SeqCst) {
-        match stop_rx.recv_timeout(interval) {
-            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-        }
-        if state.stop.load(Ordering::SeqCst) {
-            break;
-        }
-        match heartbeat_once(&state) {
-            Ok(LockHeartbeat::Active) => failures = 0,
-            Ok(LockHeartbeat::Lost) => {
-                state.active.store(false, Ordering::SeqCst);
+fn heartbeat_loop(state: Arc<SandboxLockState>, interval: Duration) {
+    let client = SandboxClient {
+        scope: RequestScope::Editing(Arc::clone(&state)),
+        ..state.client.clone()
+    };
+    while let Ok(remaining) = client.request_timeout(interval) {
+        thread::park_timeout(remaining);
+        let etag = state.lease.lock().unwrap().0.clone();
+        match client.write_lock_file(
+            &state.sandbox_id,
+            &state.template,
+            &WritePrecondition::Match(etag),
+        ) {
+            Ok(ConditionalWrite::Written(etag, expires_at)) => {
+                *state.lease.lock().unwrap() = (etag, expires_at);
+            }
+            Ok(ConditionalWrite::PreconditionFailed) => {
+                // Someone else changed the lock. Stop without deleting it.
+                state.lease.lock().unwrap().1 = Instant::now();
                 break;
             }
-            Err(err) => {
-                failures += 1;
-                if failures >= LOCK_HEARTBEAT_MAX_FAILURES {
-                    log::warn!(
-                        "Sandbox lock heartbeat failed {LOCK_HEARTBEAT_MAX_FAILURES} times; marking lock inactive: {err:#}"
-                    );
-                    state.active.store(false, Ordering::SeqCst);
-                    break;
-                }
+            Err(err) if state.running.load(Ordering::SeqCst) => {
+                log::warn!("Sandbox lock heartbeat failed: {err:#}");
             }
+            Err(_) => break,
         }
-    }
-}
-
-/// Refresh the lock with a compare-and-swap write against the etag of our
-/// previous write. A 412 means another client took the lock.
-fn heartbeat_once(state: &SandboxLockState) -> Result<LockHeartbeat> {
-    let now = Utc::now();
-    let lock = SandboxLockFile {
-        updated_at: now,
-        expires_at: now + chrono::Duration::seconds(state.template.ttl_seconds),
-        ..state.template.clone()
-    };
-    let etag = state
-        .etag
-        .lock()
-        .map_err(|_| anyhow!("sandbox lock etag poisoned"))?
-        .clone();
-    let outcome = state
-        .client
-        .write_file_if(
-            &state.sandbox_id,
-            SANDBOX_LOCK_FILE_PATH,
-            &encode_lock_file(&lock)?,
-            &WritePrecondition::Match(etag),
-        )
-        .context("Failed to refresh sandbox lock")?;
-    match outcome {
-        ConditionalWrite::Written(new_etag) => {
-            *state
-                .etag
-                .lock()
-                .map_err(|_| anyhow!("sandbox lock etag poisoned"))? = new_etag;
-            Ok(LockHeartbeat::Active)
-        }
-        ConditionalWrite::PreconditionFailed => Ok(LockHeartbeat::Lost),
     }
 }
 
 fn release_once(state: &SandboxLockState) -> Result<()> {
-    if let Some((current, _)) = read_lock_file(&state.client, &state.sandbox_id)
-        .context("Failed to release sandbox lock")?
+    let expires_at = state.lease.lock().unwrap().1;
+    if Instant::now() >= expires_at {
+        return Ok(());
+    }
+    // Shutdown must not start another twenty-minute maintenance wait. If cleanup
+    // cannot finish, the remote lease expires naturally.
+    let client = SandboxClient {
+        scope: RequestScope::Cleanup(expires_at.min(Instant::now() + LOCK_REQUEST_TIMEOUT)),
+        ..state.client.clone()
+    };
+    if let Some((current, _)) =
+        read_lock_file(&client, &state.sandbox_id).context("Failed to release sandbox lock")?
         && current.lease_id != state.template.lease_id
     {
         return Ok(());
     }
-    delete_lock_file(&state.client, &state.sandbox_id).context("Failed to release sandbox lock")
+    delete_lock_file(&client, &state.sandbox_id).context("Failed to release sandbox lock")
 }
 
 /// Take the lock atomically: create-only when no lock exists, or a
@@ -830,7 +963,7 @@ fn acquire_lock_file(
     sandbox_id: &str,
     lock: &SandboxLockFile,
     force_reclaim_stale: bool,
-) -> Result<String> {
+) -> Result<(String, Instant)> {
     let precondition = match read_lock_file(client, sandbox_id)? {
         None => WritePrecondition::CreateOnly,
         Some((existing, etag)) => {
@@ -843,13 +976,8 @@ fn acquire_lock_file(
             WritePrecondition::Match(etag)
         }
     };
-    match client.write_file_if(
-        sandbox_id,
-        SANDBOX_LOCK_FILE_PATH,
-        &encode_lock_file(lock)?,
-        &precondition,
-    )? {
-        ConditionalWrite::Written(etag) => Ok(etag),
+    match client.write_lock_file(sandbox_id, lock, &precondition)? {
+        ConditionalWrite::Written(etag, expires_at) => Ok((etag, expires_at)),
         ConditionalWrite::PreconditionFailed => {
             bail!("Sandbox is already locked: another client just acquired it")
         }
@@ -873,10 +1001,6 @@ fn read_lock_file(
     let etag = etag.context("Sandbox lock read response is missing an ETag header")?;
     let lock = serde_json::from_slice(&bytes).context("Failed to parse sandbox lock file")?;
     Ok(Some((lock, etag)))
-}
-
-fn encode_lock_file(lock: &SandboxLockFile) -> Result<Vec<u8>> {
-    serde_json::to_vec_pretty(lock).context("Failed to encode sandbox lock file")
 }
 
 fn delete_lock_file(client: &SandboxClient, sandbox_id: &str) -> Result<()> {
@@ -930,6 +1054,27 @@ fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_waits_do_not_expire_unleased_requests() {
+        let mut client = SandboxClient {
+            api_base_url: "http://localhost".to_string(),
+            ctx: WorkspaceContext::from_api_base_url("http://localhost"),
+            http: Client::new(),
+            connections: Arc::default(),
+            scope: RequestScope::Unleased,
+        };
+        // A relative timeout must not expire inside the budget calculation.
+        let short = Duration::from_nanos(1);
+        assert_eq!(client.request_timeout(short).unwrap(), short);
+        assert!(client.request_timeout(Duration::ZERO).is_err());
+        client.wait(Duration::ZERO).unwrap();
+        client.wait(short).unwrap();
+
+        // Finishing a backoff is not an error; exhausting a real deadline is.
+        client.scope = RequestScope::Cleanup(Instant::now() - Duration::from_secs(1));
+        assert!(client.wait(Duration::from_millis(1)).is_err());
+    }
 
     #[test]
     fn extracts_exec_id_from_location() {

@@ -19,6 +19,7 @@ mod netlist;
 mod part;
 mod path;
 mod release;
+mod remote_sandbox;
 mod schematic_apply_common;
 mod schematic_apply_flow;
 mod sim;
