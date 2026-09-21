@@ -1551,8 +1551,7 @@ fn board_array_tooling_skips_when_no_rail_pair_fits() {
     let fiducial_count = step
         .layer_features
         .iter()
-        .flat_map(|layer_feature| &layer_feature.sets)
-        .flat_map(|set| set.fiducials())
+        .flat_map(|layer_feature| layer_feature.fiducials())
         .count();
     let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
 
@@ -2007,8 +2006,7 @@ fn fiducials_on_layer<'a>(
     step.layer_features
         .iter()
         .filter(|layer_feature| ipc.resolve(layer_feature.layer_ref) == layer_name)
-        .flat_map(|layer_feature| &layer_feature.sets)
-        .flat_map(|set| set.fiducials())
+        .flat_map(|layer_feature| layer_feature.fiducials())
         .collect()
 }
 
@@ -2081,8 +2079,7 @@ fn holes_on_layer<'a>(
     step.layer_features
         .iter()
         .filter(|layer_feature| ipc.resolve(layer_feature.layer_ref) == layer_name)
-        .flat_map(|layer_feature| &layer_feature.sets)
-        .flat_map(|set| set.holes())
+        .flat_map(|layer_feature| layer_feature.holes())
         .collect()
 }
 

@@ -47,8 +47,6 @@ fn parses_pad_def_xform_in_ecad_units() {
         panic!("unexpected feature: {:?}", pad_def.feature);
     };
     assert_eq!(doc.resolve(id), "SHAPE_LP5842X089_FS_SHAPE");
-    assert_eq!(pad_def.standard_primitive_ref, Some(id));
-    assert_eq!(pad_def.user_primitive_ref, None);
 }
 
 #[test]
@@ -70,17 +68,16 @@ fn parses_pad_def_inline_and_user_ref_shapes() {
 
     assert_eq!(inline.xform, None);
     assert!((inline.x - 2.54).abs() < 1e-12 && (inline.y - 5.08).abs() < 1e-12);
-    let Some(FeatureShape::StandardPrimitive(StandardPrimitive::Circle(circle))) = &inline.feature
-    else {
+    let Some(FeatureShape::StandardPrimitive(primitive)) = &inline.feature else {
         panic!("unexpected feature: {:?}", inline.feature);
     };
+    let StandardPrimitive::Circle(circle) = &**primitive else {
+        panic!("unexpected primitive: {primitive:?}");
+    };
     assert!((circle.shape.diameter - 1.27).abs() < 1e-12);
-    assert_eq!(inline.standard_primitive_ref, None);
-    assert_eq!(inline.user_primitive_ref, None);
 
     let Some(FeatureShape::UserPrimitiveRef(id)) = user.feature else {
         panic!("unexpected feature: {:?}", user.feature);
     };
     assert_eq!(doc.resolve(id), "custom");
-    assert_eq!(user.user_primitive_ref, Some(id));
 }

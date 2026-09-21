@@ -358,7 +358,7 @@ pub(super) fn round_fiducial_features(
 ) -> Vec<SetFeature> {
     points
         .into_iter()
-        .map(|(x, y)| SetFeature::Fiducial(round_fiducial(kind, x, y, diameter_mm)))
+        .map(|(x, y)| SetFeature::Fiducial(Box::new(round_fiducial(kind, x, y, diameter_mm))))
         .collect()
 }
 

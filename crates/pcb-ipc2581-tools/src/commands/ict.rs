@@ -132,7 +132,7 @@ pub fn extract_contacts(
         // remains authoritative when one exists.
         for layer_feature in &step.layer_features {
             for set in &layer_feature.sets {
-                for feature in &set.features {
+                for feature in set.features.slice(&layer_feature.features) {
                     let ipc2581::types::SetFeature::Pad(pad) = feature else {
                         continue;
                     };

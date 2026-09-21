@@ -110,11 +110,12 @@ pub(super) fn push_feature_set_record(
     doc: &mut GeometryDocument,
     layer: u32,
     source_set_index: u32,
+    layer_feature: &ipc2581::types::LayerFeature,
     set: &ipc2581::types::FeatureSet,
     polarity: GeometryPolarity,
     copper_balance: Option<CopperBalanceMetadata>,
 ) -> u32 {
-    let spec_refs = push_spec_refs(doc, &set.spec_refs);
+    let spec_refs = push_spec_refs(doc, set.spec_refs.slice(&layer_feature.spec_refs));
     let set_id = doc.feature_sets.len() as u32;
     doc.feature_sets.push(FeatureSet {
         layer,
@@ -223,7 +224,11 @@ pub(super) fn append_step_layer(
             // layer's. They do not compose: Allegro marks anti-etch on NEGATIVE
             // planes as NEGATIVE sets, which clear like the antipads beside them.
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
-            let copper_balance = set_copper_balance_metadata(context.strings, set)?;
+            let copper_balance = set_copper_balance_metadata(
+                context.strings,
+                set.nonstandard_attributes
+                    .slice(&layer_feature.nonstandard_attributes),
+            )?;
             if copper_balance.is_some_and(|metadata| metadata.void.is_some())
                 && set.features.len() != 1
             {
@@ -233,12 +238,14 @@ pub(super) fn append_step_layer(
                 doc,
                 layer_index,
                 set_index as u32,
+                layer_feature,
                 set,
                 polarity,
                 copper_balance,
             );
 
-            for (feature_index, set_feature) in set.features.iter().enumerate() {
+            let set_features = set.features.slice(&layer_feature.features);
+            for (feature_index, set_feature) in set_features.iter().enumerate() {
                 let source = SourceRef {
                     set_index: set_index as u32,
                     feature_index: feature_index as u32,
@@ -291,11 +298,16 @@ pub(super) fn append_step_layer(
 
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
-            let copper_balance = set_copper_balance_metadata(context.strings, set)?;
+            let copper_balance = set_copper_balance_metadata(
+                context.strings,
+                set.nonstandard_attributes
+                    .slice(&layer_feature.nonstandard_attributes),
+            )?;
             let mut emitted = Vec::new();
+            let set_features = set.features.slice(&layer_feature.features);
 
             if is_drill_layer && source_layer.name == layer.name {
-                for (feature_index, set_feature) in set.features.iter().enumerate() {
+                for (feature_index, set_feature) in set_features.iter().enumerate() {
                     if let SetFeature::Hole(hole) = set_feature {
                         let source = SourceRef {
                             set_index: set_index as u32,
@@ -309,7 +321,7 @@ pub(super) fn append_step_layer(
                 }
             }
 
-            for (feature_index, set_feature) in set.features.iter().enumerate() {
+            for (feature_index, set_feature) in set_features.iter().enumerate() {
                 if let SetFeature::Slot(slot) = set_feature {
                     if !slot_applies_to_layer(
                         source_layer,
@@ -335,6 +347,7 @@ pub(super) fn append_step_layer(
                     doc,
                     layer_index,
                     set_index as u32,
+                    layer_feature,
                     set,
                     polarity,
                     copper_balance,
@@ -645,8 +658,7 @@ pub(super) fn resolve_slot_layer_order(
         .iter()
         .flat_map(|step| &step.layer_features)
         .filter(|layer_feature| spanned(layer_feature.layer_ref))
-        .flat_map(|layer_feature| &layer_feature.sets)
-        .flat_map(|set| &set.features)
+        .flat_map(|layer_feature| &layer_feature.features)
         .any(|feature| matches!(feature, SetFeature::Slot(slot) if !slot.z_axis_dim));
     if !needed {
         return None;

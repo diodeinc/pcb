@@ -167,7 +167,10 @@ fn test_testcase5_full() {
         .expect("padstack should exist");
     assert_eq!(pad_def.xform.map(|xform| xform.x_offset), Some(2.8987));
     assert_eq!((pad_def.x, pad_def.y), (0.0, 0.0));
-    assert!(pad_def.standard_primitive_ref.is_some());
+    assert!(matches!(
+        pad_def.feature,
+        Some(ipc2581::FeatureShape::StandardPrimitiveRef(_))
+    ));
 }
 
 #[test]
@@ -319,14 +322,12 @@ fn validate_testcase1_metadata(doc: &Ipc2581) {
             });
 
             if is_drill_layer {
-                for set in &feature.sets {
-                    for hole in set.holes() {
-                        total_drills += 1;
-                        match hole.plating_status {
-                            PlatingStatus::Via | PlatingStatus::ViaCapped => via_drills += 1,
-                            PlatingStatus::Plated => plated_drills += 1,
-                            PlatingStatus::NonPlated => nonplated_drills += 1,
-                        }
+                for hole in feature.holes() {
+                    total_drills += 1;
+                    match hole.plating_status {
+                        PlatingStatus::Via | PlatingStatus::ViaCapped => via_drills += 1,
+                        PlatingStatus::Plated => plated_drills += 1,
+                        PlatingStatus::NonPlated => nonplated_drills += 1,
                     }
                 }
             }
@@ -442,7 +443,7 @@ fn assert_metadata_populated(doc: &Ipc2581, testcase_name: &str) {
                 doc.resolve(layer.name) == layer_name
                     && layer.layer_function == ipc2581::LayerFunction::Drill
             });
-            is_drill_layer && feature.sets.iter().any(|set| set.holes().next().is_some())
+            is_drill_layer && feature.holes().next().is_some()
         }),
         "{testcase_name}: drills"
     );

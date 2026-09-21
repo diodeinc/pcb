@@ -1699,14 +1699,15 @@ fn non_finite_source_numbers_never_reach_the_arena() {
         SetFeature::Pad(nan),
         SetFeature::Pad(_),
         SetFeature::Pad(infinite),
-    ] = step.layer_features[0].sets[0].features.as_mut_slice()
+    ] = step.layer_features[0].features.as_mut_slice()
     else {
         panic!("fixture pads");
     };
     nan.x = Some(f64::NAN);
-    let Some(FeatureShape::StandardPrimitive(StandardPrimitive::Circle(circle))) =
-        &mut infinite.feature
-    else {
+    let Some(FeatureShape::StandardPrimitive(primitive)) = &mut infinite.feature else {
+        panic!("fixture shape");
+    };
+    let StandardPrimitive::Circle(circle) = &mut **primitive else {
         panic!("fixture circle");
     };
     circle.shape.diameter = f64::INFINITY;

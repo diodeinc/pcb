@@ -169,7 +169,7 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
         let on_drill = drill_layers.contains(&layer_feature.layer_ref);
         let side = copper_side(layer_feature.layer_ref);
         for set in &layer_feature.sets {
-            for feature in &set.features {
+            for feature in set.features.slice(&layer_feature.features) {
                 match feature {
                     SetFeature::Hole(hole)
                         if on_drill && hole.plating_status == PlatingStatus::NonPlated =>

@@ -53,8 +53,7 @@ fn malformed_transform_attributes_are_errors() {
     }
 
     let doc = Ipc2581::parse(&pad(r#"rotation=" 90 " xOffset="1""#)).unwrap();
-    let SetFeature::Pad(pad) =
-        &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0].features[0]
+    let SetFeature::Pad(pad) = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].features[0]
     else {
         panic!("expected a pad");
     };

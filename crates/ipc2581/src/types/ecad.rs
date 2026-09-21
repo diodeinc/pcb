@@ -1,6 +1,7 @@
-use super::{Tokens, Units, UserPrimitive, from_token, token};
+use super::{Span, Tokens, Units, UserPrimitive, from_token, token};
 use crate::Symbol;
 use std::collections::HashMap;
+use std::fmt;
 
 /// CadHeader defines units and specifications for the ECAD section
 ///
@@ -214,10 +215,6 @@ pub struct PadstackPadDef {
     pub y: f64,
     /// The layer shape: a dictionary reference or any inline `Feature`.
     pub feature: Option<FeatureShape>,
-    /// `feature` when it is a `StandardPrimitiveRef`.
-    pub standard_primitive_ref: Option<Symbol>,
-    /// `feature` when it is a `UserPrimitiveRef`.
-    pub user_primitive_ref: Option<Symbol>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -368,20 +365,23 @@ pub struct PackagePin {
 /// Shape content allowed by the IPC-2581C `StandardShape` substitution group.
 #[derive(Debug, Clone)]
 pub enum StandardShape {
-    Primitive(super::StandardPrimitive),
+    Primitive(Box<super::StandardPrimitive>),
     PrimitiveRef(Symbol),
 }
 
 /// Shape content allowed by the broader IPC-2581C `Feature` substitution group.
+///
+/// Nearly every shape is a dictionary reference, so the inline definitions
+/// are boxed to keep each pad that holds one of these small.
 #[derive(Debug, Clone)]
 pub enum FeatureShape {
-    StandardPrimitive(super::StandardPrimitive),
+    StandardPrimitive(Box<super::StandardPrimitive>),
     StandardPrimitiveRef(Symbol),
-    UserPrimitive(super::UserPrimitive),
+    UserPrimitive(Box<super::UserPrimitive>),
     UserPrimitiveRef(Symbol),
-    UserShape(super::UserShape),
-    Text(super::Text),
-    Outline(PackageOutline),
+    UserShape(Box<super::UserShape>),
+    Text(Box<super::Text>),
+    Outline(Box<PackageOutline>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -589,10 +589,16 @@ pub struct LayerSpan {
 }
 
 /// LayerFeature contains features on a layer
-#[derive(Debug, Clone)]
+///
+/// Allegro writes one `Set` per pad, so a layer holds its sets' features,
+/// spec refs and attributes in three tables that each set spans.
+#[derive(Clone)]
 pub struct LayerFeature {
     pub layer_ref: Symbol,
     pub sets: Vec<FeatureSet>,
+    pub features: Vec<SetFeature>,
+    pub spec_refs: Vec<Symbol>,
+    pub nonstandard_attributes: Vec<NonstandardAttribute>,
 }
 
 /// FeatureSet groups features with common properties
@@ -603,9 +609,12 @@ pub struct FeatureSet {
     pub component_ref: Option<Symbol>,
     pub geometry_usage: Option<GeometryUsage>,
     pub polarity: Option<Polarity>,
-    pub spec_refs: Vec<Symbol>,
-    pub features: Vec<SetFeature>,
-    pub nonstandard_attributes: Vec<NonstandardAttribute>,
+    /// Into [`LayerFeature::spec_refs`].
+    pub spec_refs: Span,
+    /// Into [`LayerFeature::features`], in source document order.
+    pub features: Span,
+    /// Into [`LayerFeature::nonstandard_attributes`].
+    pub nonstandard_attributes: Span,
 }
 
 /// Intended use of geometry in a feature set.
@@ -638,14 +647,14 @@ impl GeometryUsage {
     }
 }
 
-impl FeatureSet {
-    /// Iterate features, descending into placement groups.
+impl LayerFeature {
+    /// Every feature of the layer, descending into placement groups.
     ///
     /// Placement-group members are yielded once, in group-local coordinates:
     /// the group's `locations` and `xform` are NOT applied. Consumers that
     /// need placed occurrences must match [`SetFeature::PlacementGroup`]
     /// directly and apply its placements themselves.
-    fn iter_features(&self) -> impl Iterator<Item = &SetFeature> {
+    fn flat_features(&self) -> impl Iterator<Item = &SetFeature> {
         self.features.iter().flat_map(|feature| match feature {
             SetFeature::PlacementGroup(group) => group.features.iter(),
             _ => std::slice::from_ref(feature).iter(),
@@ -653,69 +662,76 @@ impl FeatureSet {
     }
 
     pub fn holes(&self) -> impl Iterator<Item = &Hole> {
-        self.iter_features().filter_map(|feature| match feature {
+        self.flat_features().filter_map(|feature| match feature {
             SetFeature::Hole(hole) => Some(hole),
             _ => None,
         })
     }
 
     pub fn slots(&self) -> impl Iterator<Item = &Slot> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Slot(slot) => Some(slot),
-            _ => None,
-        })
-    }
-
-    pub fn pads(&self) -> impl Iterator<Item = &Pad> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Pad(pad) => Some(pad),
+        self.flat_features().filter_map(|feature| match feature {
+            SetFeature::Slot(slot) => Some(&**slot),
             _ => None,
         })
     }
 
     pub fn fiducials(&self) -> impl Iterator<Item = &Fiducial> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Fiducial(fiducial) => Some(fiducial),
-            _ => None,
-        })
-    }
-
-    pub fn traces(&self) -> impl Iterator<Item = &Trace> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Trace(trace) => Some(trace),
-            _ => None,
-        })
-    }
-
-    pub fn polygons(&self) -> impl Iterator<Item = &super::Polygon> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Polygon(polygon) => Some(polygon),
-            _ => None,
-        })
-    }
-
-    pub fn lines(&self) -> impl Iterator<Item = &Line> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Line(line) => Some(line),
-            _ => None,
-        })
-    }
-
-    pub fn polylines(&self) -> impl Iterator<Item = &FeaturePolyline> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Polyline(polyline) => Some(polyline),
+        self.flat_features().filter_map(|feature| match feature {
+            SetFeature::Fiducial(fiducial) => Some(&**fiducial),
             _ => None,
         })
     }
 }
 
+/// Prints each set with the features, spec refs and attributes it spans.
+impl fmt::Debug for LayerFeature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Sets<'a>(&'a LayerFeature);
+        struct Set<'a>(&'a LayerFeature, &'a FeatureSet);
+
+        impl fmt::Debug for Sets<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let sets = self.0.sets.iter().map(|set| Set(self.0, set));
+                f.debug_list().entries(sets).finish()
+            }
+        }
+
+        impl fmt::Debug for Set<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let Self(layer, set) = self;
+                let attributes = set
+                    .nonstandard_attributes
+                    .slice(&layer.nonstandard_attributes);
+                f.debug_struct("FeatureSet")
+                    .field("net", &set.net)
+                    .field("geometry", &set.geometry)
+                    .field("component_ref", &set.component_ref)
+                    .field("geometry_usage", &set.geometry_usage)
+                    .field("polarity", &set.polarity)
+                    .field("spec_refs", &set.spec_refs.slice(&layer.spec_refs))
+                    .field("features", &set.features.slice(&layer.features))
+                    .field("nonstandard_attributes", &attributes)
+                    .finish()
+            }
+        }
+
+        f.debug_struct("LayerFeature")
+            .field("layer_ref", &self.layer_ref)
+            .field("sets", &Sets(self))
+            .finish()
+    }
+}
+
 /// Geometry-bearing children of a Set in source document order.
+///
+/// A pad, hole or line is what a layer holds by the hundred thousand, so the
+/// rare fat kinds are boxed and do not size the rest.
 #[derive(Debug, Clone)]
 pub enum SetFeature {
     Hole(Hole),
-    Slot(Slot),
+    Slot(Box<Slot>),
     Pad(Pad),
-    Fiducial(Fiducial),
+    Fiducial(Box<Fiducial>),
     Trace(Trace),
     UserPrimitive(FeatureUserPrimitive),
     Polygon(super::Polygon),
@@ -727,7 +743,7 @@ pub enum SetFeature {
     /// One or more local feature definitions placed at shared IPC
     /// `Features/Location` transforms. Keeping the definitions separate from
     /// their placements avoids cloning arbitrary contours for every location.
-    PlacementGroup(FeaturePlacementGroup),
+    PlacementGroup(Box<FeaturePlacementGroup>),
 }
 
 #[derive(Debug, Clone)]
@@ -908,13 +924,8 @@ pub struct Pad {
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub xform: Option<super::Xform>,
-    /// Source feature shape, including inline definitions that cannot be
-    /// represented by the reference-only convenience fields below.
+    /// The pad's own shape, which takes precedence over its padstack's.
     pub feature: Option<FeatureShape>,
-    /// Inline primitive override (takes precedence over padstack definition)
-    pub standard_primitive_ref: Option<Symbol>,
-    /// Inline user primitive override (takes precedence over padstack definition)
-    pub user_primitive_ref: Option<Symbol>,
     pub pin_ref: Option<PinRef>,
 }
 
@@ -1298,4 +1309,18 @@ pub struct SurfaceFinish {
     pub finish_type: FinishType,
     pub comment: Option<Symbol>,
     pub products: Vec<FinishProduct>,
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod tests {
+    use super::*;
+
+    /// Allegro writes a `Set` and a `Pad` per pad, a hundred thousand on a
+    /// board, so what each costs is the size of the model.
+    #[test]
+    fn per_pad_records_stay_small() {
+        assert!(size_of::<FeatureSet>() <= 56);
+        assert!(size_of::<SetFeature>() <= 128);
+        assert!(size_of::<FeatureShape>() <= 16);
+    }
 }

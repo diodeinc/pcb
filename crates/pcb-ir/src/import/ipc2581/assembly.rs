@@ -369,20 +369,11 @@ fn map_land_pattern(
             .pads
             .iter()
             .map(|pad| {
-                let graphic = match (
-                    pad.feature.as_ref(),
-                    pad.standard_primitive_ref,
-                    pad.user_primitive_ref,
-                ) {
-                    (Some(feature), _, _) => Some(map_feature_shape(design, context, feature)?),
-                    (None, Some(reference), _) => Some(ir::PackageGraphic::Shape(
-                        map_standard_reference(design, context, reference)?,
-                    )),
-                    (None, None, Some(reference)) => Some(ir::PackageGraphic::Shape(
-                        map_user_reference(design, context, reference),
-                    )),
-                    (None, None, None) => None,
-                };
+                let graphic = pad
+                    .feature
+                    .as_ref()
+                    .map(|feature| map_feature_shape(design, context, feature))
+                    .transpose()?;
                 Ok(ir::PackagePad {
                     padstack_ref: resolve_optional(design, pad.padstack_def_ref),
                     x: pad.x,

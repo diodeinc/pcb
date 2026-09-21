@@ -68,9 +68,9 @@ pub(super) struct CopperBalanceVoidMetadata {
 
 pub(super) fn set_copper_balance_metadata(
     strings: &Interner,
-    set: &ipc2581::types::FeatureSet,
+    attributes: &[ipc2581::types::NonstandardAttribute],
 ) -> Result<Option<CopperBalanceMetadata>> {
-    let kind = nonstandard_attribute(strings, set, COPPER_BALANCE_ATTRIBUTE_NAME, "STRING")?;
+    let kind = nonstandard_attribute(strings, attributes, COPPER_BALANCE_ATTRIBUTE_NAME, "STRING")?;
     let auxiliary_attributes = [
         (COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME, "STRING"),
         (COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME, "DOUBLE"),
@@ -81,7 +81,7 @@ pub(super) fn set_copper_balance_metadata(
     ];
     let Some(kind) = kind else {
         if auxiliary_attributes.iter().any(|(name, _)| {
-            set.nonstandard_attributes
+            attributes
                 .iter()
                 .any(|attribute| strings.resolve(attribute.name) == *name)
         }) {
@@ -93,7 +93,7 @@ pub(super) fn set_copper_balance_metadata(
     let void = if kind == CopperBalanceKind::FullVoid {
         let lattice = required_nonstandard_attribute(
             strings,
-            set,
+            attributes,
             COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME,
             "STRING",
         )?;
@@ -104,28 +104,28 @@ pub(super) fn set_copper_balance_metadata(
             lattice_origin: Point::new(
                 required_double_attribute(
                     strings,
-                    set,
+                    attributes,
                     COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME,
                 )?,
                 required_double_attribute(
                     strings,
-                    set,
+                    attributes,
                     COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME,
                 )?,
             ),
             lattice_pitch_mm: required_double_attribute(
                 strings,
-                set,
+                attributes,
                 COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME,
             )?,
             radius_mm: required_double_attribute(
                 strings,
-                set,
+                attributes,
                 COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME,
             )?,
             corner_radius_mm: required_double_attribute(
                 strings,
-                set,
+                attributes,
                 COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME,
             )?,
         };
@@ -145,7 +145,7 @@ pub(super) fn set_copper_balance_metadata(
         Some(metadata)
     } else {
         for (name, attribute_type) in auxiliary_attributes {
-            if nonstandard_attribute(strings, set, name, attribute_type)?.is_some() {
+            if nonstandard_attribute(strings, attributes, name, attribute_type)?.is_some() {
                 bail!("copper-balance {kind:?} set must not carry lattice metadata");
             }
         }
@@ -156,10 +156,10 @@ pub(super) fn set_copper_balance_metadata(
 
 pub(super) fn required_double_attribute(
     strings: &Interner,
-    set: &ipc2581::types::FeatureSet,
+    attributes: &[ipc2581::types::NonstandardAttribute],
     name: &str,
 ) -> Result<f64> {
-    let value = required_nonstandard_attribute(strings, set, name, "DOUBLE")?;
+    let value = required_nonstandard_attribute(strings, attributes, name, "DOUBLE")?;
     value
         .parse::<f64>()
         .with_context(|| format!("{name} has invalid DOUBLE value '{value}'"))
@@ -167,28 +167,27 @@ pub(super) fn required_double_attribute(
 
 pub(super) fn required_nonstandard_attribute<'a>(
     strings: &'a Interner,
-    set: &'a ipc2581::types::FeatureSet,
+    attributes: &'a [ipc2581::types::NonstandardAttribute],
     name: &str,
     expected_type: &str,
 ) -> Result<&'a str> {
-    nonstandard_attribute(strings, set, name, expected_type)?
+    nonstandard_attribute(strings, attributes, name, expected_type)?
         .with_context(|| format!("copper-balance set is missing {name}"))
 }
 
 pub(super) fn nonstandard_attribute<'a>(
     strings: &'a Interner,
-    set: &'a ipc2581::types::FeatureSet,
+    attributes: &'a [ipc2581::types::NonstandardAttribute],
     name: &str,
     expected_type: &str,
 ) -> Result<Option<&'a str>> {
-    let mut attributes = set
-        .nonstandard_attributes
+    let mut named = attributes
         .iter()
         .filter(|attribute| strings.resolve(attribute.name) == name);
-    let Some(attribute) = attributes.next() else {
+    let Some(attribute) = named.next() else {
         return Ok(None);
     };
-    if attributes.next().is_some() {
+    if named.next().is_some() {
         bail!("{name} attribute occurs more than once");
     }
     let attr_type = attribute

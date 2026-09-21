@@ -519,7 +519,10 @@ impl<'a> IpcAccessor<'a> {
 
         for layer_feature in &step.layer_features {
             for set in &layer_feature.sets {
-                for attr in &set.nonstandard_attributes {
+                for attr in set
+                    .nonstandard_attributes
+                    .slice(&layer_feature.nonstandard_attributes)
+                {
                     if self.ipc.resolve(attr.name) != "TEXT" {
                         continue;
                     }

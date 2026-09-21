@@ -519,15 +519,16 @@ mod tests {
         let layer = &ecad.cad_data.layers[0];
         assert_eq!(doc.resolve(layer.spec_refs[0]), "VCut_1");
 
-        let set = &ecad.cad_data.steps[0].layer_features[0].sets[0];
-        assert_eq!(doc.resolve(set.spec_refs[0]), "VCut_1");
-        assert_eq!(set.fiducials().count(), 1);
+        let layer_feature = &ecad.cad_data.steps[0].layer_features[0];
+        let set = &layer_feature.sets[0];
+        let spec_refs = set.spec_refs.slice(&layer_feature.spec_refs);
+        assert_eq!(doc.resolve(spec_refs[0]), "VCut_1");
+        let fiducials = layer_feature.fiducials().collect::<Vec<_>>();
+        assert_eq!(fiducials.len(), 1);
+        assert_eq!(fiducials[0].kind, ecad::FiducialKind::Global);
         assert!(matches!(
-            set.features[0],
-            ecad::SetFeature::Fiducial(ecad::Fiducial {
-                kind: ecad::FiducialKind::Global,
-                ..
-            })
+            set.features.slice(&layer_feature.features),
+            [ecad::SetFeature::Fiducial(_)]
         ));
     }
 
@@ -578,22 +579,21 @@ mod tests {
 </IPC-2581>"#;
 
         let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
-        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+        let layer_feature = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0];
+        let features = layer_feature.sets[0]
+            .features
+            .slice(&layer_feature.features);
 
-        assert_eq!(set.features.len(), 4);
-        assert!(matches!(set.features[0], ecad::SetFeature::Trace(_)));
-        assert!(matches!(set.features[1], ecad::SetFeature::Polygon(_)));
-        assert!(matches!(
-            set.features[2],
-            ecad::SetFeature::UserPrimitive(_)
-        ));
-        assert!(matches!(set.features[3], ecad::SetFeature::Trace(_)));
-
-        let traces = set.traces().collect::<Vec<_>>();
-        assert_eq!(traces.len(), 2);
-        assert!(matches!(traces[1].steps[0], PolyStep::Curve(_)));
-        assert_eq!(set.polygons().count(), 1);
-        assert_eq!(set.lines().count(), 0);
+        let [
+            ecad::SetFeature::Trace(_),
+            ecad::SetFeature::Polygon(_),
+            ecad::SetFeature::UserPrimitive(_),
+            ecad::SetFeature::Trace(curved),
+        ] = features
+        else {
+            panic!("expected trace, polygon, user primitive, trace: {features:?}");
+        };
+        assert!(matches!(curved.steps[0], PolyStep::Curve(_)));
     }
 
     #[test]
@@ -629,10 +629,9 @@ mod tests {
 </IPC-2581>"#;
 
         let doc = Ipc2581::parse(xml).expect("parse multi-feature Features block");
-        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+        let layer_feature = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0];
 
-        assert_eq!(set.features.len(), 1);
-        let ecad::SetFeature::PlacementGroup(group) = &set.features[0] else {
+        let [ecad::SetFeature::PlacementGroup(group)] = &layer_feature.features[..] else {
             panic!("expected one shared placement group");
         };
         assert_eq!(
@@ -683,16 +682,13 @@ mod tests {
 </IPC-2581>"#;
 
         let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
-        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+        let layer_feature = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0];
 
-        assert_eq!(set.features.len(), 1);
-        let ecad::SetFeature::Polyline(polyline) = &set.features[0] else {
-            panic!("expected feature polyline");
+        let [ecad::SetFeature::Polyline(polyline)] = &layer_feature.features[..] else {
+            panic!("expected one feature polyline");
         };
         assert_eq!(polyline.begin, Point { x: 11.0, y: 20.0 });
         assert!(matches!(polyline.steps[0], PolyStep::Curve(_)));
-        assert_eq!(set.polylines().count(), 1);
-        assert_eq!(set.lines().count(), 0);
     }
 
     #[test]
@@ -736,21 +732,23 @@ mod tests {
 </IPC-2581>"#;
 
         let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
-        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+        let layer_feature = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0];
 
-        let polygons = set.polygons().collect::<Vec<_>>();
-        assert_eq!(polygons.len(), 1);
-        assert_eq!(polygons[0].begin, Point { x: 10.0, y: 20.0 });
+        let [
+            ecad::SetFeature::Polygon(polygon),
+            ecad::SetFeature::UserPrimitive(user_primitive),
+        ] = &layer_feature.features[..]
+        else {
+            panic!("expected a polygon and an inline user primitive");
+        };
+        assert_eq!(polygon.begin, Point { x: 10.0, y: 20.0 });
         assert!(matches!(
-            polygons[0].steps[1],
+            polygon.steps[1],
             PolyStep::Curve(PolyStepCurve {
                 center: Point { x: 10.0, y: 20.0 },
                 ..
             })
         ));
-        let ecad::SetFeature::UserPrimitive(user_primitive) = &set.features[1] else {
-            panic!("expected inline user primitive");
-        };
         assert_eq!(user_primitive.x, 10.0);
         assert_eq!(user_primitive.y, 20.0);
         let UserPrimitive::UserSpecial(user_special) = &user_primitive.primitive;
@@ -1142,7 +1140,7 @@ mod tests {
         assert_eq!(land_pattern.pads.len(), 1);
         assert!(matches!(
             &land_pattern.targets[0].shape,
-            StandardShape::Primitive(StandardPrimitive::Circle(_))
+            StandardShape::Primitive(primitive) if matches!(**primitive, StandardPrimitive::Circle(_))
         ));
         assert_eq!(package.silkscreen.as_ref().unwrap().markings.len(), 1);
         let assembly_drawing = package.assembly_drawing.as_ref().unwrap();

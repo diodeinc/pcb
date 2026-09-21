@@ -871,7 +871,7 @@ impl<'a> Parser<'a> {
         units: Units,
     ) -> Result<UserPrimitive> {
         Ok(match shape {
-            FeatureShape::UserPrimitive(primitive) => primitive,
+            FeatureShape::UserPrimitive(primitive) => *primitive,
             shape => UserPrimitive::UserSpecial(UserSpecial {
                 shapes: vec![self.user_shape(node, shape, units)?],
             }),
@@ -882,8 +882,8 @@ impl<'a> Parser<'a> {
     fn user_shape(&mut self, node: &Node, shape: FeatureShape, units: Units) -> Result<UserShape> {
         let mut style_node = *node;
         let shape = match shape {
-            FeatureShape::UserShape(shape) => return Ok(shape),
-            FeatureShape::StandardPrimitive(primitive) => match primitive {
+            FeatureShape::UserShape(shape) => return Ok(*shape),
+            FeatureShape::StandardPrimitive(primitive) => match *primitive {
                 StandardPrimitive::Circle(circle) => UserShapeType::Circle(circle.shape),
                 StandardPrimitive::RectCenter(rect) => UserShapeType::RectCenter(rect.shape),
                 StandardPrimitive::Oval(oval) => UserShapeType::Oval(oval.shape),
@@ -896,10 +896,10 @@ impl<'a> Parser<'a> {
                 primitive => UserShapeType::StandardPrimitive(primitive),
             },
             FeatureShape::StandardPrimitiveRef(id) => UserShapeType::StandardPrimitiveRef(id),
-            FeatureShape::UserPrimitive(primitive) => UserShapeType::UserPrimitive(primitive),
+            FeatureShape::UserPrimitive(primitive) => UserShapeType::UserPrimitive(*primitive),
             FeatureShape::UserPrimitiveRef(id) => UserShapeType::UserPrimitiveRef(id),
-            FeatureShape::Text(text) => UserShapeType::Text(text),
-            FeatureShape::Outline(outline) => UserShapeType::Outline(outline),
+            FeatureShape::Text(text) => UserShapeType::Text(*text),
+            FeatureShape::Outline(outline) => UserShapeType::Outline(*outline),
         };
         let style = self.parse_fill_and_line_desc(&style_node, units)?;
         Ok(user_shape(shape, style))
@@ -1933,16 +1933,18 @@ impl<'a> Parser<'a> {
                 "id",
                 "UserPrimitiveRef",
             )?),
-            "UserSpecial" => FeatureShape::UserPrimitive(self.parse_user_special(node, units)?),
-            "Text" => FeatureShape::Text(self.parse_text(node, units)?),
-            "Outline" => FeatureShape::Outline(self.parse_package_outline(node, units)?),
-            name if is_standard_primitive_name(name) => {
-                FeatureShape::StandardPrimitive(self.parse_standard_primitive(node, units)?)
+            "UserSpecial" => {
+                FeatureShape::UserPrimitive(Box::new(self.parse_user_special(node, units)?))
             }
+            "Text" => FeatureShape::Text(Box::new(self.parse_text(node, units)?)),
+            "Outline" => FeatureShape::Outline(Box::new(self.parse_package_outline(node, units)?)),
+            name if is_standard_primitive_name(name) => FeatureShape::StandardPrimitive(Box::new(
+                self.parse_standard_primitive(node, units)?,
+            )),
             _ => {
                 return Ok(self
                     .parse_user_shape(node, units)?
-                    .map(FeatureShape::UserShape));
+                    .map(|shape| FeatureShape::UserShape(Box::new(shape))));
             }
         };
         Ok(Some(shape))
@@ -2135,17 +2137,25 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_layer_feature(&mut self, node: &Node) -> Result<LayerFeature> {
-        let layer_ref = self.required_attr(node, "layerRef", "LayerFeature")?;
-
-        let sets = self
-            .children_named(node, "Set")
-            .map(|n| self.parse_feature_set(&n))
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(LayerFeature { layer_ref, sets })
+        let mut layer = LayerFeature {
+            layer_ref: self.required_attr(node, "layerRef", "LayerFeature")?,
+            sets: Vec::new(),
+            features: Vec::new(),
+            spec_refs: Vec::new(),
+            nonstandard_attributes: Vec::new(),
+        };
+        for set in self.children_named(node, "Set") {
+            self.parse_feature_set(&set, &mut layer)?;
+        }
+        layer.sets.shrink_to_fit();
+        layer.features.shrink_to_fit();
+        layer.spec_refs.shrink_to_fit();
+        layer.nonstandard_attributes.shrink_to_fit();
+        Ok(layer)
     }
 
-    fn parse_feature_set(&mut self, node: &Node) -> Result<FeatureSet> {
+    /// Appends the `Set` at `node`, and what it spans, to `layer`.
+    fn parse_feature_set(&mut self, node: &Node, layer: &mut LayerFeature) -> Result<()> {
         let net = self.attr(node, "net").map(|s| self.interner.intern(s));
         let geometry = self.attr(node, "geometry").map(|s| self.interner.intern(s));
         let component_ref = self
@@ -2161,38 +2171,31 @@ impl<'a> Parser<'a> {
             .map(Polarity::from_ipc)
             .transpose()?;
 
-        let mut features = Vec::new();
-        let mut spec_refs = Vec::new();
-        let mut nonstandard_attributes = Vec::new();
+        let LayerFeature {
+            features,
+            spec_refs,
+            nonstandard_attributes,
+            ..
+        } = layer;
+        let starts = (
+            features.len(),
+            spec_refs.len(),
+            nonstandard_attributes.len(),
+        );
 
         for child in self.element_children(node) {
             match self.name(&child) {
                 "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
-                "Hole" => {
-                    let hole = self.parse_hole(&child)?;
-                    features.push(ecad::SetFeature::Hole(hole));
-                }
-                "SlotCavity" => {
-                    let slot = self.parse_slot_cavity(&child)?;
-                    features.push(ecad::SetFeature::Slot(slot));
-                }
-                "Pad" => {
-                    let pad = self.parse_pad(&child)?;
-                    features.push(ecad::SetFeature::Pad(pad));
-                }
-                name if ecad::FiducialKind::from_ipc(name).is_ok() => {
-                    let fiducial = self.parse_fiducial(&child)?;
-                    features.push(ecad::SetFeature::Fiducial(fiducial));
-                }
-                "Polyline" => {
-                    let trace = self.parse_trace(&child)?;
-                    features.push(ecad::SetFeature::Trace(trace));
-                }
-                "Features" => {
-                    for feature in self.parse_features(&child)? {
-                        features.push(feature);
-                    }
-                }
+                "Hole" => features.push(ecad::SetFeature::Hole(self.parse_hole(&child)?)),
+                "SlotCavity" => features.push(ecad::SetFeature::Slot(Box::new(
+                    self.parse_slot_cavity(&child)?,
+                ))),
+                "Pad" => features.push(ecad::SetFeature::Pad(self.parse_pad(&child)?)),
+                name if ecad::FiducialKind::from_ipc(name).is_ok() => features.push(
+                    ecad::SetFeature::Fiducial(Box::new(self.parse_fiducial(&child)?)),
+                ),
+                "Polyline" => features.push(ecad::SetFeature::Trace(self.parse_trace(&child)?)),
+                "Features" => self.parse_features(&child, features)?,
                 "NonstandardAttribute" => {
                     nonstandard_attributes.push(self.parse_nonstandard_attribute(&child)?);
                 }
@@ -2200,16 +2203,17 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(FeatureSet {
+        layer.sets.push(FeatureSet {
             net,
             geometry,
             component_ref,
             geometry_usage,
             polarity,
-            spec_refs,
-            features,
-            nonstandard_attributes,
-        })
+            spec_refs: span(starts.1, layer.spec_refs.len()),
+            features: span(starts.0, layer.features.len()),
+            nonstandard_attributes: span(starts.2, layer.nonstandard_attributes.len()),
+        });
+        Ok(())
     }
 
     fn parse_nonstandard_attribute(&mut self, node: &Node) -> Result<ecad::NonstandardAttribute> {
@@ -2241,7 +2245,7 @@ impl<'a> Parser<'a> {
                 "PinRef" => pin_ref = Some(self.parse_pin_ref(&child)?),
                 _ => match self.parse_standard_shape(&child, units)? {
                     Some(StandardShape::Primitive(primitive)) => {
-                        shape = Some(ecad::FiducialShape::Primitive(primitive));
+                        shape = Some(ecad::FiducialShape::Primitive(*primitive));
                     }
                     Some(StandardShape::PrimitiveRef(id)) => {
                         shape = Some(ecad::FiducialShape::StandardPrimitiveRef(id));
@@ -2260,21 +2264,26 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_features(&mut self, features_node: &Node) -> Result<Vec<ecad::SetFeature>> {
+    /// Appends the members of the `Features` at `features_node` to `out`.
+    fn parse_features(
+        &mut self,
+        features_node: &Node,
+        out: &mut Vec<ecad::SetFeature>,
+    ) -> Result<()> {
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
         let mut locations = Vec::new();
         let mut xform = None;
         // IPC-2581C specifies one Feature child, but KiCad emits multiple
         // substitution-group children in a single Features container. Accept
         // that de facto shape without relaxing the container's child ordering.
-        let mut features = Vec::new();
+        let start = out.len();
 
         for child in self.element_children(features_node) {
             let child_name = self.name(&child);
             let offset = single_feature_offset(&locations, xform);
             match child_name {
                 "Xform" => {
-                    if xform.is_some() || !locations.is_empty() || !features.is_empty() {
+                    if xform.is_some() || !locations.is_empty() || out.len() > start {
                         return Err(Ipc2581Error::InvalidStructure(
                             "Xform must be the first child of Features".to_string(),
                         ));
@@ -2282,7 +2291,7 @@ impl<'a> Parser<'a> {
                     xform = Some(self.parse_xform(&child, units)?);
                 }
                 "Location" => {
-                    if !features.is_empty() {
+                    if out.len() > start {
                         return Err(Ipc2581Error::InvalidStructure(
                             "Location must precede the Feature in Features".to_string(),
                         ));
@@ -2293,12 +2302,12 @@ impl<'a> Parser<'a> {
                     let shape = self.parse_feature_shape(&child, units)?.ok_or_else(|| {
                         Ipc2581Error::InvalidStructure(format!("Unexpected {name} in Features"))
                     })?;
-                    features.push(self.set_feature(&child, shape, units, offset)?);
+                    out.push(self.set_feature(&child, shape, units, offset)?);
                 }
             }
         }
 
-        if features.is_empty() {
+        if out.len() == start {
             return Err(Ipc2581Error::MissingElement("Feature in Features"));
         }
 
@@ -2306,16 +2315,16 @@ impl<'a> Parser<'a> {
             if locations.is_empty() {
                 locations.push(Point { x: 0.0, y: 0.0 });
             }
-            Ok(vec![ecad::SetFeature::PlacementGroup(
+            let features = out.split_off(start);
+            out.push(ecad::SetFeature::PlacementGroup(Box::new(
                 ecad::FeaturePlacementGroup {
                     xform,
                     locations,
                     features,
                 },
-            )])
-        } else {
-            Ok(features)
+            )));
         }
+        Ok(())
     }
 
     /// A `Feature` parsed from `node` as a `Features` member placed at `at`.
@@ -2338,7 +2347,7 @@ impl<'a> Parser<'a> {
                     ecad::FeaturePrimitiveRef { id, x, y },
                 ));
             }
-            FeatureShape::UserShape(shape) => shape,
+            FeatureShape::UserShape(shape) => *shape,
             shape => {
                 let primitive = self.user_primitive(node, shape, units)?;
                 return Ok(ecad::SetFeature::UserPrimitive(
@@ -2471,7 +2480,7 @@ impl<'a> Parser<'a> {
                             Some(SlotShape::Outline(outline.polygon))
                         }
                         Some(FeatureShape::StandardPrimitive(primitive)) => {
-                            Some(SlotShape::Primitive(primitive))
+                            Some(SlotShape::Primitive(*primitive))
                         }
                         Some(_) => {
                             return Err(Ipc2581Error::InvalidStructure(format!(
@@ -2526,11 +2535,6 @@ impl<'a> Parser<'a> {
                 _ => {}
             }
         }
-        let (standard_primitive_ref, user_primitive_ref) = match feature {
-            Some(FeatureShape::StandardPrimitiveRef(id)) => (Some(id), None),
-            Some(FeatureShape::UserPrimitiveRef(id)) => (None, Some(id)),
-            _ => (None, None),
-        };
 
         Ok(Pad {
             padstack_def_ref,
@@ -2538,8 +2542,6 @@ impl<'a> Parser<'a> {
             y,
             xform,
             feature,
-            standard_primitive_ref,
-            user_primitive_ref,
             pin_ref,
         })
     }
@@ -2643,11 +2645,6 @@ impl<'a> Parser<'a> {
                 _ => {}
             }
         }
-        let (standard_primitive_ref, user_primitive_ref) = match feature {
-            Some(FeatureShape::StandardPrimitiveRef(id)) => (Some(id), None),
-            Some(FeatureShape::UserPrimitiveRef(id)) => (None, Some(id)),
-            _ => (None, None),
-        };
 
         Ok(PadstackPadDef {
             layer_ref,
@@ -2656,8 +2653,6 @@ impl<'a> Parser<'a> {
             x,
             y,
             feature,
-            standard_primitive_ref,
-            user_primitive_ref,
         })
     }
 
@@ -3088,6 +3083,15 @@ impl<'a> Parser<'a> {
 /// and the importer images each one.
 const MAX_MOIRE_RINGS: u32 = 256;
 
+/// The span of a table that grew from `start` to `end` items. Every item
+/// comes from an element of its own, and `Dom` numbers those in a `u32`.
+fn span(start: usize, end: usize) -> Span {
+    Span {
+        start: start as u32,
+        count: (end - start) as u32,
+    }
+}
+
 fn user_shape(shape: UserShapeType, style: ShapeStyle) -> UserShape {
     UserShape {
         shape,
@@ -3242,9 +3246,6 @@ mod tests {
             .first()
             .unwrap()
             .layer_features
-            .first()
-            .unwrap()
-            .sets
             .first()
             .unwrap()
             .slots()

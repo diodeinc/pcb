@@ -74,7 +74,10 @@ fn rejects_unknown_geometry_usage() {
 }
 
 fn set_features(doc: &Ipc2581) -> &[SetFeature] {
-    &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0].features
+    let layer_feature = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0];
+    layer_feature.sets[0]
+        .features
+        .slice(&layer_feature.features)
 }
 
 fn shape_types(primitive: &UserPrimitive) -> Vec<&UserShapeType> {
@@ -213,16 +216,10 @@ fn slot_cavity_and_pad_take_any_inline_standard_primitive() {
     let SetFeature::Pad(pad) = &set_features(&doc)[0] else {
         panic!("expected a pad");
     };
-    assert!(matches!(
-        pad.feature,
-        Some(FeatureShape::StandardPrimitive(StandardPrimitive::Circle(
-            _
-        )))
-    ));
-    assert_eq!(
-        (pad.standard_primitive_ref, pad.user_primitive_ref),
-        (None, None)
-    );
+    let Some(FeatureShape::StandardPrimitive(primitive)) = &pad.feature else {
+        panic!("expected an inline shape: {:?}", pad.feature);
+    };
+    assert!(matches!(**primitive, StandardPrimitive::Circle(_)));
 }
 
 #[test]

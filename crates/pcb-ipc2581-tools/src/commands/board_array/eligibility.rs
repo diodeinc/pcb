@@ -332,8 +332,7 @@ fn validate_courtyard_references(ipc: &Ipc2581) -> Result<()> {
                 layer.name == features.layer_ref && layer.layer_function == LayerFunction::Courtyard
             })
         })
-        .flat_map(|layer| &layer.sets)
-        .flat_map(|set| &set.features)
+        .flat_map(|layer| &layer.features)
         .collect::<Vec<_>>();
     while let Some(feature) = features.pop() {
         match feature {
