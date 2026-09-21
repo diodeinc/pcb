@@ -114,17 +114,16 @@ impl DenseCopperBalanceProfile {
         minimum + (maximum - minimum) * index as f64 / (self.void_area_levels - 1) as f64
     }
 
-    /// The void-area level nearest a squared radius, as a squared radius.
-    fn nearest_void_area_level(self, radius_squared: f64) -> f64 {
+    fn quantize_void_radius(self, radius_mm: f64) -> f64 {
         let minimum = self.min_void_radius_mm.powi(2);
         let maximum = self.max_void_radius_mm.powi(2);
         if minimum == maximum {
-            return minimum;
+            return self.min_void_radius_mm;
         }
-        let index = ((radius_squared.clamp(minimum, maximum) - minimum) / (maximum - minimum)
+        let index = ((radius_mm.powi(2).clamp(minimum, maximum) - minimum) / (maximum - minimum)
             * (self.void_area_levels - 1) as f64)
             .round() as usize;
-        self.void_area_level(index)
+        self.void_area_level(index).sqrt()
     }
 
     /// The lowest void-area level holding at least this radius.
