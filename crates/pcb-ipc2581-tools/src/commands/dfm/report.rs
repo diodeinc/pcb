@@ -621,10 +621,17 @@ impl DrillSpan {
             .contains(&copper_index)
     }
 
-    /// Whether two drill spans coexist at some board depth.
+    /// Whether two drill spans coexist at some board depth. A span drills
+    /// the dielectric between its terminal layers, so spans that only meet at
+    /// a shared terminal layer — stacked or staggered microvias — share no
+    /// depth. A span confined to one copper layer has no dielectric interval
+    /// of its own and meets every span that reaches its layer; that keeps
+    /// every hole of a single-layer board interacting.
     pub(super) fn overlaps(&self, other: &Self) -> bool {
-        self.first_copper_index <= other.last_copper_index
-            && other.first_copper_index <= self.last_copper_index
+        let first = self.first_copper_index.max(other.first_copper_index);
+        let last = self.last_copper_index.min(other.last_copper_index);
+        let single_layer = |span: &Self| span.first_copper_index == span.last_copper_index;
+        first < last || (first == last && (single_layer(self) || single_layer(other)))
     }
 
     /// Whether this is an end of the span, where the plating must land.

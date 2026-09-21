@@ -11,7 +11,8 @@
 //! witness points ([`pcb_ir::geom::dfm::disk_clearance`]). The check
 //! requires `dist(Dᵢ, Dⱼ) ≥ L` for every unordered pair whose drill spans
 //! overlap in the copper stackup — holes that share no board depth cannot
-//! interact, so stacked blind and buried vias on disjoint spans are exempt.
+//! interact, so blind and buried vias on disjoint spans are exempt, as are
+//! vias stacked on a shared terminal layer (L1–L2 over L2–L3).
 //!
 //! Enumeration is a plane sweep: with holes sorted by their bounds' minimum
 //! x, the inner scan stops at the first hole separated from the current one
@@ -159,8 +160,13 @@ mod tests {
     #[test]
     fn physical_overlap_is_independent_of_copper_declaration_order() {
         for order in [[0, 1, 2, 3], [0, 2, 1, 3], [0, 3, 1, 2]] {
-            // Disjoint blind spans must not interact; nested spans must.
-            for (first, second, findings) in [((0, 1), (2, 3), 0), ((0, 3), (1, 2), 1)] {
+            // Disjoint blind spans must not interact, nor spans stacked on a
+            // shared terminal layer; nested spans must.
+            for (first, second, findings) in [
+                ((0, 1), (2, 3), 0),
+                ((0, 1), (1, 2), 0),
+                ((0, 3), (1, 2), 1),
+            ] {
                 let layers = order.map(|i| format!(r#"<Layer name="L{i}" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE"/>"#)).join("");
                 let stackup = [0, 1, 2, 3].map(|i| format!(r#"<StackupLayer layerOrGroupRef="L{i}" thickness="0.035" tolPlus="0" tolMinus="0" sequence="{i}"/>"#)).join("");
                 let ipc = Ipc2581::parse(&format!(r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

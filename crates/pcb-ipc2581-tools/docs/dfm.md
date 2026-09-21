@@ -279,8 +279,10 @@ when fewer than two exist.
   or an incomplete through span without that default, skips the rule with the
   precise missing-data reason rather than claiming a pass.
 - Hole-to-hole clearance measures edge-to-edge distance between hole pairs
-  whose drill spans overlap; stacked blind and buried vias on disjoint spans
-  do not interact.
+  whose drill spans share board depth. Blind and buried vias on disjoint
+  spans do not interact, and neither do vias stacked on a shared terminal
+  layer (L1–L2 over L2–L3): each drills only the dielectric between its own
+  terminal layers.
 - Hole- and slot-to-board-edge clearance measure true edge-to-edge distance
   from each circular hole or materialized routed-slot outline to the boundary
   of its enclosing physical board profile. Profile cutouts are board edges.
