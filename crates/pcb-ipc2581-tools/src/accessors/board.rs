@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 use super::IpcAccessor;
-use crate::geometry;
 use crate::utils::Length;
 use pcb_ir::dialects::ipc::{LayoutMargins, SimpleBoardArrayLayout};
 
@@ -136,22 +135,19 @@ impl StackupInfo {
 impl<'a> IpcAccessor<'a> {
     /// Extract board and board-array geometry from canonical IPC layout IR.
     pub fn board_layout_info(&self) -> Option<BoardLayoutInfo> {
-        let doc = geometry::extract_layout(self.ipc()).ok()?;
-        let board_name = pcb_ir::dialects::ipc::layout_steps_by_kind(
-            &doc,
-            pcb_ir::dialects::ipc::LayoutStepKind::Board,
-        )
-        .next()
-        .map(|(_, step)| self.ipc().resolve(step.source_step_ref).to_string());
+        let doc = self.layout()?;
+        let board_name = self
+            .board_step()
+            .map(|step| self.ipc().resolve(step.name).to_string());
         let board_dimensions =
-            pcb_ir::dialects::ipc::board_bbox(&doc).and_then(dimensions_from_bbox);
-        let simple_array = pcb_ir::dialects::ipc::simple_board_array_layout(&doc);
+            pcb_ir::dialects::ipc::board_bbox(doc).and_then(dimensions_from_bbox);
+        let simple_array = pcb_ir::dialects::ipc::simple_board_array_layout(doc);
         let board_array =
-            pcb_ir::dialects::ipc::root_panel_step(&doc).map(|(_, panel_step)| BoardArrayInfo {
+            pcb_ir::dialects::ipc::root_panel_step(doc).map(|(_, panel_step)| BoardArrayInfo {
                 step_name: self.ipc().resolve(panel_step.source_step_ref).to_string(),
-                board_count: pcb_ir::dialects::ipc::board_step_count(&doc),
-                board_instances: pcb_ir::dialects::ipc::board_instance_count(&doc),
-                dimensions: pcb_ir::dialects::ipc::panel_bbox(&doc).and_then(dimensions_from_bbox),
+                board_count: pcb_ir::dialects::ipc::board_step_count(doc),
+                board_instances: pcb_ir::dialects::ipc::board_instance_count(doc),
+                dimensions: pcb_ir::dialects::ipc::panel_bbox(doc).and_then(dimensions_from_bbox),
                 grid: simple_array.map(board_array_grid_from_ir),
             });
 
@@ -164,21 +160,6 @@ impl<'a> IpcAccessor<'a> {
             board_dimensions,
             board_array,
         })
-    }
-
-    /// Extract board physical dimensions from canonical IPC profile geometry.
-    pub fn board_dimensions(&self) -> Option<BoardDimensions> {
-        self.board_layout_info()?.board_dimensions
-    }
-
-    /// Extract board-array physical dimensions from canonical IPC geometry.
-    pub fn board_array_dimensions(&self) -> Option<BoardArrayDimensions> {
-        self.board_layout_info()?.board_array?.dimensions
-    }
-
-    /// Extract board-array placement information from canonical IPC layout geometry.
-    pub fn board_array_info(&self) -> Option<BoardArrayInfo> {
-        self.board_layout_info()?.board_array
     }
 
     /// Extract stackup information (thickness and layer count)
@@ -301,7 +282,11 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let dimensions = accessor.board_dimensions().unwrap();
+        let dimensions = accessor
+            .board_layout_info()
+            .unwrap()
+            .board_dimensions
+            .unwrap();
 
         assert_close(dimensions.width_mm(), 2.0);
         assert_close(dimensions.height_mm(), 2.0);
@@ -312,7 +297,11 @@ mod tests {
         let ipc = ipc2581::Ipc2581::parse(panel_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let dimensions = accessor.board_dimensions().unwrap();
+        let dimensions = accessor
+            .board_layout_info()
+            .unwrap()
+            .board_dimensions
+            .unwrap();
 
         assert_close(dimensions.width_mm(), 10.0);
         assert_close(dimensions.height_mm(), 5.0);

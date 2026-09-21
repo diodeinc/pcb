@@ -3,7 +3,7 @@ use ipc2581::Symbol;
 use pcb_ir::geom::{GeometryAccuracy, Resolution};
 use pcb_ir::render::RenderOptions;
 
-pub use crate::layers::layer_role;
+use crate::layers::layer_role;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::artwork::{Geometry, Object, PaintOrder, PaintStage};
 use pcb_ir::dialects::ipc::{

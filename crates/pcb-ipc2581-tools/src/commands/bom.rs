@@ -144,7 +144,7 @@ pub fn extract_bom_lines(accessor: &IpcAccessor) -> Vec<BomLine> {
         }
     }
     if lines.is_empty()
-        && let Some(step) = accessor.first_step()
+        && let Some(step) = accessor.board_step()
     {
         for component in &step.components {
             let Some(ref_des) = component.ref_des else {

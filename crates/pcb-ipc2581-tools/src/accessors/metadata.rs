@@ -51,9 +51,9 @@ impl<'a> IpcAccessor<'a> {
         // Source units from CadHeader
         let source_units = ecad.map(|e| format_units(e.cad_header.units));
 
-        // Timestamps from HistoryRecord (keep as strings, validate format)
-        let created = history.map(|h| validate_timestamp(self.ipc.resolve(h.origination)));
-        let last_modified = history.map(|h| validate_timestamp(self.ipc.resolve(h.last_change)));
+        // Timestamps from HistoryRecord, as the source wrote them
+        let created = history.map(|h| self.ipc.resolve(h.origination).to_string());
+        let last_modified = history.map(|h| self.ipc.resolve(h.last_change).to_string());
 
         // Software info from HistoryRecord
         let software = history.and_then(|h| {
@@ -111,35 +111,9 @@ fn format_units(units: Units) -> String {
     }
 }
 
-/// Validate and return ISO 8601 timestamp
-fn validate_timestamp(s: &str) -> String {
-    // IPC-2581 uses ISO 8601 format: "2025-11-16T20:08:43"
-    // Just validate it's parseable using jiff and return the original string
-    use jiff::civil::DateTime;
-
-    // Try to parse to validate format
-    if s.parse::<DateTime>().is_ok() || s.parse::<jiff::Timestamp>().is_ok() {
-        s.to_string()
-    } else {
-        // If it doesn't parse, still return it but it might be invalid
-        s.to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_validate_timestamp() {
-        // IPC-2581 timestamp format
-        let ts = validate_timestamp("2025-10-23T16:30:12");
-        assert_eq!(ts, "2025-10-23T16:30:12");
-
-        // With timezone
-        let ts_tz = validate_timestamp("2025-11-17T22:17:48Z");
-        assert_eq!(ts_tz, "2025-11-17T22:17:48Z");
-    }
 
     #[test]
     fn test_software_info_format() {

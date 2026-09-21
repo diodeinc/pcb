@@ -1,8 +1,9 @@
 use pcb_ir::geom::Resolution;
 use std::fmt::Write;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use ipc2581::types::LayerFunction;
+use pcb_ir::dialects::LayerRole;
 use pcb_ir::dialects::ipc::{ArtworkScope, Feature, LayoutStep, LayoutStepKind};
 use pcb_ir::geom::{Affine2, BBox, ContourBuf};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
@@ -28,13 +29,14 @@ pub fn render_board_array_overview_svg(
     else {
         return Ok(None);
     };
-    let doc = crate::geometry::extract_layout(accessor.ipc())
-        .context("failed to extract board-array geometry for overview")?;
-    let Some(panel) = pcb_ir::dialects::ipc::panel_bbox(&doc) else {
+    let Some(doc) = accessor.layout() else {
+        return Ok(None);
+    };
+    let Some(panel) = pcb_ir::dialects::ipc::panel_bbox(doc) else {
         return Ok(None);
     };
     let layer_overlays = board_array_layer_overlays(imported, resolution)?;
-    render_board_array_svg(imported, &grid, panel, &doc, &layer_overlays, resolution)
+    render_board_array_svg(imported, &grid, panel, doc, &layer_overlays, resolution)
 }
 
 /// Draw the array in world millimetres wherever the panel sits; the screen
@@ -379,41 +381,36 @@ fn board_array_layer_style(function: LayerFunction, vscore: bool) -> BoardArrayL
         };
     }
 
-    match function {
-        LayerFunction::Drill => BoardArrayLayerStyle {
+    match crate::layers::layer_role(function) {
+        LayerRole::Drill => BoardArrayLayerStyle {
             class_name: "array-layer-drill",
             fill: "#2563eb",
             stroke: "#1d4ed8",
             fill_opacity: 0.85,
             stroke_opacity: 0.85,
         },
-        LayerFunction::Conductor
-        | LayerFunction::CondFilm
-        | LayerFunction::CondFoil
-        | LayerFunction::Plane
-        | LayerFunction::Signal
-        | LayerFunction::Mixed => BoardArrayLayerStyle {
+        LayerRole::Copper => BoardArrayLayerStyle {
             class_name: "array-layer-copper",
             fill: "#d87822",
             stroke: "#b45309",
             fill_opacity: 0.90,
             stroke_opacity: 0.85,
         },
-        LayerFunction::Soldermask => BoardArrayLayerStyle {
+        LayerRole::Soldermask => BoardArrayLayerStyle {
             class_name: "array-layer-mask",
             fill: "#159447",
             stroke: "#15803d",
             fill_opacity: 0.55,
             stroke_opacity: 0.70,
         },
-        LayerFunction::Solderpaste | LayerFunction::Pastemask => BoardArrayLayerStyle {
+        LayerRole::Paste => BoardArrayLayerStyle {
             class_name: "array-layer-paste",
             fill: "#64748b",
             stroke: "#475569",
             fill_opacity: 0.90,
             stroke_opacity: 0.85,
         },
-        LayerFunction::Silkscreen | LayerFunction::Legend => BoardArrayLayerStyle {
+        LayerRole::Legend => BoardArrayLayerStyle {
             class_name: "array-layer-legend",
             fill: "#111827",
             stroke: "#111827",

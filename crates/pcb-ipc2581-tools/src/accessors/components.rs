@@ -28,7 +28,7 @@ impl<'a> IpcAccessor<'a> {
     ///
     /// Returns None if no ECAD section or no steps exist
     pub fn component_stats(&self) -> Option<ComponentStats> {
-        let step = self.first_step()?;
+        let step = self.board_step()?;
         Some(count_components_by_mount_type(step))
     }
 }

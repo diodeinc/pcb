@@ -868,7 +868,7 @@ pub fn info_json(
         String,
         (String, String, Option<ComponentMountType>, Option<String>),
     > = accessor
-        .first_step()
+        .board_step()
         .map(|step| {
             step.components
                 .iter()

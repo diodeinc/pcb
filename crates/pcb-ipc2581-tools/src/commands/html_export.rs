@@ -157,7 +157,6 @@ struct StackupData {
 struct SurfaceFinish {
     name: String,
     hex: String,
-    is_standard: bool,
 }
 
 #[derive(Serialize)]
@@ -562,7 +561,6 @@ fn surface_finish_to_html(finish: &SurfaceFinishInfo) -> SurfaceFinish {
     SurfaceFinish {
         name: finish.name.clone(),
         hex: finish.hex_color(),
-        is_standard: finish.is_standard, // Track but don't render
     }
 }
 

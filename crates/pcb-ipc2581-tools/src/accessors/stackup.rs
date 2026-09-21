@@ -77,8 +77,6 @@ pub struct SurfaceFinishInfo {
     pub name: String,
     /// Canonical category used for downstream quoting logic.
     pub category: SurfaceFinishCategory,
-    /// Whether this was parsed from standard IPC-2581 location (true) or fallback (false)
-    pub is_standard: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -295,12 +293,7 @@ impl<'a> IpcAccessor<'a> {
 
             // Determine layer type from layer function
             let layer_type = match layer_function {
-                Some(LayerFunction::Conductor)
-                | Some(LayerFunction::Signal)
-                | Some(LayerFunction::Plane)
-                | Some(LayerFunction::Mixed)
-                | Some(LayerFunction::CondFilm)
-                | Some(LayerFunction::CondFoil) => StackupLayerType::Conductor,
+                Some(function) if crate::layers::is_copper(function) => StackupLayerType::Conductor,
                 Some(LayerFunction::Soldermask) => StackupLayerType::Soldermask,
                 Some(LayerFunction::DielCore) => StackupLayerType::DielectricCore,
                 Some(LayerFunction::DielPreg) => StackupLayerType::DielectricPrepreg,
@@ -398,7 +391,6 @@ impl<'a> IpcAccessor<'a> {
                     return Some(SurfaceFinishInfo {
                         name: format_finish_type(surface_finish.finish_type),
                         category,
-                        is_standard: true,
                     });
                 }
             }
@@ -518,7 +510,7 @@ impl<'a> IpcAccessor<'a> {
 
     /// Extract distinct nonstandard TEXT attribute values from layer feature sets.
     pub fn nonstandard_text_attributes(&self) -> Vec<String> {
-        let Some(step) = self.first_step() else {
+        let Some(step) = self.board_step() else {
             return Vec::new();
         };
 

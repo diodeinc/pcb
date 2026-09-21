@@ -51,7 +51,7 @@ impl<'a> IpcAccessor<'a> {
     ///
     /// Returns None if no ECAD section or no steps exist
     pub fn net_stats(&self) -> Option<NetStats> {
-        let step = self.first_step()?;
+        let step = self.board_step()?;
         Some(NetStats::new(step.logical_nets.len()))
     }
 }
