@@ -4,18 +4,18 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
 use ipc2581::Symbol;
-use ipc2581::types::{LayerFunction, Step, StepRepeat};
+use ipc2581::types::{LayerFunction, StepRepeat};
 use pcb_ir::dialects::artwork::{
     Document, Geometry, GridRepeat, Layer, Object, PaintStage, normalize_bounds,
 };
 use pcb_ir::geom::{Point, Polarity};
-use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, step_repeat_transform};
+use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, StepDefinition, step_repeat_transform};
 
 type GeometryDocument = pcb_ir::dialects::ipc::Document<Symbol, LayerFunction>;
 
 /// The Step a scope draws from: the design's primary Step, or the board
 /// definition it places.
-pub fn root_step(imported: &ImportedDesign, board: bool) -> Result<&Step> {
+pub fn root_step(imported: &ImportedDesign, board: bool) -> Result<&StepDefinition> {
     let source = if board {
         pcb_ir::dialects::ipc::layout_steps_by_kind(
             &imported.geometry,
@@ -32,7 +32,7 @@ pub fn root_step(imported: &ImportedDesign, board: bool) -> Result<&Step> {
     find_step(imported, source)
 }
 
-fn find_step(imported: &ImportedDesign, name: Symbol) -> Result<&Step> {
+fn find_step(imported: &ImportedDesign, name: Symbol) -> Result<&StepDefinition> {
     imported
         .steps
         .iter()
@@ -56,10 +56,10 @@ fn find_step(imported: &ImportedDesign, name: Symbol) -> Result<&Step> {
 pub fn step_graph_artwork<LayerMeta, ObjectMeta: Default>(
     imported: &ImportedDesign,
     layer: LayerId,
-    root: &Step,
+    root: &StepDefinition,
     header: Layer<LayerMeta>,
     mut lower_step: impl FnMut(
-        &Step,
+        &StepDefinition,
         GeometryDocument,
         &mut Document<LayerMeta, ObjectMeta>,
     ) -> Result<Vec<Object<ObjectMeta>>>,
@@ -87,7 +87,7 @@ pub fn step_graph_artwork<LayerMeta, ObjectMeta: Default>(
 type Staged<T> = [T; 2];
 
 type LowerStep<'a, LayerMeta, ObjectMeta> = dyn FnMut(
-        &Step,
+        &StepDefinition,
         GeometryDocument,
         &mut Document<LayerMeta, ObjectMeta>,
     ) -> Result<Vec<Object<ObjectMeta>>>
@@ -104,7 +104,7 @@ struct StepGraph<'a, LayerMeta, ObjectMeta> {
 }
 
 impl<LayerMeta, ObjectMeta: Default> StepGraph<'_, LayerMeta, ObjectMeta> {
-    fn step_blocks(&mut self, step: &Step) -> Result<Staged<Option<u32>>> {
+    fn step_blocks(&mut self, step: &StepDefinition) -> Result<Staged<Option<u32>>> {
         match self.blocks.get(&step.name) {
             Some(Some(blocks)) => return Ok(*blocks),
             Some(None) => bail!(
@@ -127,7 +127,7 @@ impl<LayerMeta, ObjectMeta: Default> StepGraph<'_, LayerMeta, ObjectMeta> {
         Ok(blocks)
     }
 
-    fn step_objects(&mut self, step: &Step) -> Result<Staged<Vec<Object<ObjectMeta>>>> {
+    fn step_objects(&mut self, step: &StepDefinition) -> Result<Staged<Vec<Object<ObjectMeta>>>> {
         // Children first: a block may only reference earlier blocks.
         let children = step
             .step_repeats
@@ -173,8 +173,8 @@ impl<LayerMeta, ObjectMeta: Default> StepGraph<'_, LayerMeta, ObjectMeta> {
     }
 }
 
-fn placement(block: u32, child: &Step, repeat: &StepRepeat) -> Geometry {
-    let transform = step_repeat_transform(child, repeat, 0, 0);
+fn placement(block: u32, child: &StepDefinition, repeat: &StepRepeat) -> Geometry {
+    let transform = step_repeat_transform(child.datum, repeat, 0, 0);
     if repeat.nx > 1 || repeat.ny > 1 {
         Geometry::GridInstance {
             block,

@@ -451,15 +451,13 @@ impl GerberPart {
 
 fn gerber_part_for_ipc_view(imported: &ImportedDesign, view: ArtworkScope) -> Result<GerberPart> {
     let step = geometry::step_artwork::root_step(imported, false)?;
-    Ok(
-        if view == ArtworkScope::Board || !geometry::is_panel_step(step) {
-            GerberPart::Single
-        } else if imported.resolve(step.name) == crate::steps::FAB_PANEL_STEP_NAME {
-            GerberPart::FabricationPanel
-        } else {
-            GerberPart::Array
-        },
-    )
+    Ok(if view == ArtworkScope::Board || !step.is_panel() {
+        GerberPart::Single
+    } else if imported.resolve(step.name) == crate::steps::FAB_PANEL_STEP_NAME {
+        GerberPart::FabricationPanel
+    } else {
+        GerberPart::Array
+    })
 }
 
 fn layer_attributes(

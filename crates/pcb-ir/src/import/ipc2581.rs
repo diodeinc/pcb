@@ -6,7 +6,7 @@ use ipc2581::types::{
     ConcentricShape, FillProperty, HoleShape as IpcHoleShape, LayerFunction, LineEnd, LineProperty,
     PadUse, PlatingStatus, Polarity, PolyStep, SlotShape, StandardPrimitive, UserPrimitive,
     UserShapeType, Xform,
-    ecad::{FeatureShape, Layer, SetFeature, Step, StepRepeat, StepType},
+    ecad::{Datum, FeatureShape, Layer, SetFeature, Step, StepRepeat, StepType},
 };
 use ipc2581::{Interner, Ipc2581, Symbol};
 
@@ -30,7 +30,9 @@ type GeometryFeature = crate::dialects::ipc::Feature<Symbol>;
 ///
 /// Geometry is stored once in step-local coordinates. Layout and feature
 /// occurrences are derived by joining those definitions to the layout graph;
-/// final layer images are lowerings, not independent design state.
+/// final layer images are lowerings, not independent design state. The layer
+/// features that make up nearly all of a source file are therefore kept only
+/// as that lowered geometry, never as a second copy of the parsed Steps.
 #[derive(Debug, Clone)]
 pub struct ImportedDesign {
     strings: Interner,
@@ -44,7 +46,7 @@ pub struct ImportedDesign {
     pub geometry: GeometryDocument,
     pub layer_definitions: Vec<Layer>,
     pub stackups: Vec<ipc2581::types::Stackup>,
-    pub steps: Vec<Step>,
+    pub steps: Vec<StepDefinition>,
     pub step_layers: Vec<StepLayer>,
     pub packages: Vec<PackageDefinition>,
     pub components: Vec<ComponentDefinition>,
@@ -52,6 +54,23 @@ pub struct ImportedDesign {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LayerId(pub u32);
+
+/// What a source Step declares about itself, in source order. Its bulk —
+/// features, padstacks, packages, components and nets — is lowered into
+/// `geometry`, `packages` and `components` instead of being kept here.
+#[derive(Debug, Clone)]
+pub struct StepDefinition {
+    pub name: Symbol,
+    pub step_type: Option<StepType>,
+    pub datum: Option<Datum>,
+    pub step_repeats: Vec<StepRepeat>,
+}
+
+impl StepDefinition {
+    pub fn is_panel(&self) -> bool {
+        is_panel(self.step_type, &self.step_repeats)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StepLayer {
@@ -910,7 +929,17 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
         geometry,
         layer_definitions: ecad.cad_data.layers.clone(),
         stackups: ecad.cad_data.stackups.clone(),
-        steps: ecad.cad_data.steps.clone(),
+        steps: ecad
+            .cad_data
+            .steps
+            .iter()
+            .map(|step| StepDefinition {
+                name: step.name,
+                step_type: step.step_type,
+                datum: step.datum,
+                step_repeats: step.step_repeats.clone(),
+            })
+            .collect(),
         step_layers,
         packages,
         components,
@@ -2103,15 +2132,19 @@ fn validate_copper_balance_void_shape(
     Ok(())
 }
 
-/// Placement of one StepRepeat instance of `child` in its parent step.
+/// Placement of one StepRepeat instance in its parent step, given the
+/// repeated child step's Datum.
 ///
 /// A Step's Datum is its point of origin, and x/y plus the grid pitch say
 /// where that point goes (IPC-2581C 8.2.3.3 and 8.2.3.5, as in ODB++
 /// step-and-repeat): the child turns and mirrors about its datum.
-pub fn step_repeat_transform(child: &Step, repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
-    let datum = child
-        .datum
-        .unwrap_or(ipc2581::types::ecad::Datum { x: 0.0, y: 0.0 });
+pub fn step_repeat_transform(
+    child_datum: Option<Datum>,
+    repeat: &StepRepeat,
+    ix: u32,
+    iy: u32,
+) -> Affine2 {
+    let datum = child_datum.unwrap_or(Datum { x: 0.0, y: 0.0 });
     ipc_placement(
         Point::new(
             repeat.x + ix as f64 * repeat.dx,
@@ -2355,10 +2388,12 @@ fn append_layout_repeats(
         let mut pending_panel_instances = Vec::new();
         for iy in 0..repeat.ny {
             for ix in 0..repeat.nx {
-                let transform =
-                    parent
-                        .transform
-                        .concat(step_repeat_transform(source_step, repeat, ix, iy));
+                let transform = parent.transform.concat(step_repeat_transform(
+                    source_step.datum,
+                    repeat,
+                    ix,
+                    iy,
+                ));
                 let layout_instance = push_layout_instance(
                     doc,
                     LayoutInstanceSpec {
@@ -2516,8 +2551,11 @@ fn layout_step_kind(step: &Step) -> LayoutStepKind {
 }
 
 pub fn is_panel_step(step: &Step) -> bool {
-    matches!(step.step_type, Some(StepType::Pallet))
-        || (step.step_type.is_none() && !step.step_repeats.is_empty())
+    is_panel(step.step_type, &step.step_repeats)
+}
+
+fn is_panel(step_type: Option<StepType>, step_repeats: &[StepRepeat]) -> bool {
+    matches!(step_type, Some(StepType::Pallet)) || (step_type.is_none() && !step_repeats.is_empty())
 }
 
 fn is_board_step(step: &Step) -> bool {

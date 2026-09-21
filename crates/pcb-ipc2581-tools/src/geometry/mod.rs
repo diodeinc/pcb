@@ -17,7 +17,6 @@ use pcb_ir::geom::dfm::BBoxIndex;
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
-pub(crate) use pcb_ir::import::ipc2581::is_panel_step;
 pub use pcb_ir::import::ipc2581::{extract_layer, extract_layer_for_view, extract_layout};
 
 pub(crate) type GeometryDocument =

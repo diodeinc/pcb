@@ -113,7 +113,7 @@ pub fn extract_contacts(
         at: Option<(f64, f64)>,
     }
     let mut pins: BTreeMap<(String, String), PinInfo> = BTreeMap::new();
-    for step in &imported.steps {
+    for step in ipc.ecad().map_or(&[][..], |ecad| &ecad.cad_data.steps) {
         for net in &step.logical_nets {
             for pin_ref in &net.pin_refs {
                 let Some(component_ref) = pin_ref.component_ref else {
