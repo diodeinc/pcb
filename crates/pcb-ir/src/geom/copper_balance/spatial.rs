@@ -1,5 +1,5 @@
 //! Spatial copper-redistribution machinery: normalized lattice convolution,
-//! stratified cell-coverage sampling, and sum-preserving box projection.
+//! exact lattice-tile coverage, and sum-preserving box projection.
 
 use std::collections::HashMap;
 
@@ -9,7 +9,7 @@ use super::{
     DenseCopperBalanceSolution, DenseCopperLatticeSite, DenseCopperVoid, NUMERIC_EPSILON,
     SpatialCopperBalanceLayerRequest,
 };
-use crate::geom::{ContourSet, Point};
+use crate::geom::{BBox, ContourSet, Point};
 
 const DENSITY_KERNEL_TRUNCATION: f64 = 3.0;
 // A cap, not a schedule: a layer stops when its radii stop moving. What runs
@@ -298,17 +298,60 @@ pub(super) fn density_evaluation_points(
 /// Fraction of each site's rectangular lattice tile covered by `region`.
 ///
 /// The staggered columns tile the plane exactly with column-pitch × pitch
-/// rectangles centered on the sites, so stratified subsamples of every tile
-/// estimate local density without aliasing sub-pitch geometry to zero or one.
+/// rectangles centered on the sites. Odd columns sit half a pitch up, so every
+/// tile is two stacked cells of one rectangular grid half a pitch tall: an
+/// even column's row `r` takes half-rows `2r - 1` and `2r`, an odd column's
+/// `2r` and `2r + 1`. One exact grid measurement therefore serves both
+/// parities, and a lattice of voids — periodic at the very pitch any sampling
+/// would share — is measured rather than aliased.
 pub(super) fn lattice_cell_coverage(
     points: &[Point],
     region: &ContourSet,
+    origin: Point,
     profile: DenseCopperBalanceProfile,
 ) -> Vec<f64> {
-    region.cell_coverage(
-        points,
-        (profile.lattice_column_pitch_mm(), profile.pitch_mm),
-    )
+    // Column, and the lower of the two half-rows, of each site's tile.
+    let tiles = points
+        .iter()
+        .map(|point| {
+            let (column, row) = lattice_index(*point, origin, profile);
+            (column, 2 * row - 1 + column.rem_euclid(2))
+        })
+        .collect::<Vec<_>>();
+    let span = |values: &mut dyn Iterator<Item = i64>| {
+        values.fold((i64::MAX, i64::MIN), |(low, high), value| {
+            (low.min(value), high.max(value))
+        })
+    };
+    if tiles.is_empty() {
+        return Vec::new();
+    }
+    let (first_column, last_column) = span(&mut tiles.iter().map(|tile| tile.0));
+    let (first_half_row, last_half_row) = span(&mut tiles.iter().map(|tile| tile.1));
+    let (width, height) = (profile.lattice_column_pitch_mm(), profile.pitch_mm / 2.0);
+    let corner = |column: i64, half_row: i64| {
+        Point::new(
+            origin.x + (column as f64 - 0.5) * width,
+            origin.y + half_row as f64 * height,
+        )
+    };
+    let columns = (last_column - first_column + 1) as usize;
+    let coverage = region.grid_coverage(
+        BBox::new(
+            corner(first_column, first_half_row),
+            corner(last_column + 1, last_half_row + 2),
+        ),
+        columns,
+        (last_half_row - first_half_row + 2) as usize,
+    );
+    tiles
+        .iter()
+        .map(|(column, half_row)| {
+            let lower =
+                (half_row - first_half_row) as usize * columns + (column - first_column) as usize;
+            (coverage[lower] + coverage[lower + columns]) / 2.0
+        })
+        .collect()
 }
 
 /// Euclidean projection onto `{x : lower <= x <= upper, sum(x) = target}`, in
@@ -520,6 +563,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Tile coverage is an area, so a region cutting through tiles at any
+    /// offset has to come back as each tile's exact overlap, on even and odd
+    /// columns alike.
+    #[test]
+    fn lattice_cell_coverage_is_each_tiles_exact_overlap() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let origin = Point::new(0.4, -0.3);
+        let bounds = BBox::new(Point::new(-2.0, -3.0), Point::new(11.0, 8.0));
+        let samples = hex_aligned_lattice_centers(bounds, origin, profile);
+        let cut = BBox::new(Point::new(1.23, -0.71), Point::new(7.9, 4.56));
+        let region = ContourSet::rectangle(cut, res(tol::REGION_MM));
+
+        let (width, height) = (profile.lattice_column_pitch_mm(), profile.pitch_mm);
+        let overlap = |low: f64, high: f64, cut_low: f64, cut_high: f64| {
+            (high.min(cut_high) - low.max(cut_low)).max(0.0)
+        };
+        let coverage = lattice_cell_coverage(&samples, &region, origin, profile);
+        assert_eq!(coverage.len(), samples.len());
+        let mut partial = [0, 0];
+        for (sample, coverage) in samples.iter().zip(coverage) {
+            let expected = overlap(
+                sample.x - width / 2.0,
+                sample.x + width / 2.0,
+                cut.min.x,
+                cut.max.x,
+            ) * overlap(
+                sample.y - height / 2.0,
+                sample.y + height / 2.0,
+                cut.min.y,
+                cut.max.y,
+            ) / (width * height);
+            assert!(
+                (coverage - expected).abs() <= 1e-9,
+                "{sample:?}: {coverage} != {expected}"
+            );
+            if expected > 0.0 && expected < 1.0 {
+                let (column, _) = lattice_index(*sample, origin, profile);
+                partial[column.rem_euclid(2) as usize] += 1;
+            }
+        }
+        assert!(partial[0] > 0 && partial[1] > 0);
     }
 
     /// The gradient step is the reciprocal of this bound, so the bound has to

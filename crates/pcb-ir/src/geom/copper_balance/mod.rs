@@ -749,7 +749,12 @@ pub fn generate_spatial_dense_copper_balance(
         profile,
     );
     let smooth_coverage = |region: &ContourSet| {
-        density_kernel.smooth(&lattice_cell_coverage(&panel_samples, region, profile))
+        density_kernel.smooth(&lattice_cell_coverage(
+            &panel_samples,
+            region,
+            request.lattice_origin,
+            profile,
+        ))
     };
 
     let mut coverage = map_layers(
