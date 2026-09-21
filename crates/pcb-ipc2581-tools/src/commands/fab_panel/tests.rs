@@ -987,8 +987,20 @@ fn usable_bin_never_reaches_into_the_process_margins() {
         let size = spec.usable_size().unwrap();
         for (whole_um, exact_mm) in [(size.width, usable.width()), (size.height, usable.height())] {
             let whole_mm = f64::from(whole_um) / 1_000.0;
-            assert!(whole_mm <= exact_mm, "{spec:?}");
+            assert!(
+                whole_mm <= exact_mm + pcb_ir::geom::tol::EPSILON_MM,
+                "{spec:?}"
+            );
             assert!(exact_mm - whole_mm < 0.001, "{spec:?}");
         }
     }
+    // 18 x 24 in less the default margins is 406.4 x 508 mm exactly, whichever
+    // side of those the subtraction lands on.
+    assert_eq!(
+        FabPanelSpec::INCHES_18_X_24.usable_size().unwrap(),
+        Size {
+            width: 406_400,
+            height: 508_000
+        }
+    );
 }

@@ -98,11 +98,12 @@ impl FabPanelSpec {
     }
 
     /// The packing bin in whole micrometres. Items round up and the bin
-    /// rounds down, so a packed panel never reaches into a process margin.
+    /// rounds down, so a packed panel never reaches into a process margin;
+    /// a size that is a whole count but for arithmetic noise keeps it.
     fn usable_size(self) -> Result<Size> {
         let usable = self.usable_bbox()?;
         let whole_um = |value_mm: f64| {
-            let value = (value_mm * MICROMETERS_PER_MM).floor();
+            let value = ((value_mm + pcb_ir::geom::tol::EPSILON_MM) * MICROMETERS_PER_MM).floor();
             if !(1.0..=f64::from(u32::MAX)).contains(&value) {
                 bail!(
                     "usable fabrication panel dimension {value_mm} mm is outside the supported range"
