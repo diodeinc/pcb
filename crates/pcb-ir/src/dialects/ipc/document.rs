@@ -63,6 +63,21 @@ impl Document {
             .transformed_contours_bbox(path.contours, transform)
     }
 
+    /// Append a feature to a set, maintaining the set's feature span and
+    /// bounds. A set's features must be pushed contiguously.
+    pub fn push_feature(&mut self, set_id: u32, mut feature: Feature) -> u32 {
+        let id = self.features.len() as u32;
+        let set = &mut self.feature_sets[set_id as usize];
+        if set.features.is_empty() {
+            set.features.start = id;
+        }
+        set.features.count += 1;
+        set.bbox = set.bbox.union(feature.bbox);
+        feature.set = Some(set_id);
+        self.features.push(feature);
+        id
+    }
+
     /// The IPC `Set` a feature came from, if it came from one.
     pub fn feature_set(&self, feature: &Feature) -> Option<&FeatureSet> {
         feature

@@ -160,13 +160,8 @@ pub(super) fn push_extracted_feature(
     layer_bbox: &mut BBox,
 ) {
     feature.source_layer_ref = Some(source_layer_ref);
-    feature.set = Some(set_id);
-    let bbox = feature.bbox;
-    *layer_bbox = layer_bbox.union(bbox);
-    let set = &mut doc.feature_sets[set_id as usize];
-    set.bbox = set.bbox.union(bbox);
-    set.features.count += 1;
-    doc.features.push(feature);
+    *layer_bbox = layer_bbox.union(feature.bbox);
+    doc.push_feature(set_id, feature);
 }
 
 /// One step's features on one layer, as a document of their own.

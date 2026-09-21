@@ -3,7 +3,7 @@
 use crate::dialects::ipc::Document;
 use crate::dialects::ipc::feature::Feature;
 use crate::geom::path::{PathCmd, PathOp};
-use crate::geom::{Diagnostics, PaintKind, Point, Span, tol};
+use crate::geom::{Diagnostics, PaintKind, Point, tol};
 
 /// Check that every feature is exportable as native artwork: no unresolved
 /// set-void semantics, homogeneous paint per feature, and circular arcs.
@@ -27,17 +27,26 @@ pub fn validate_artwork_ready(doc: &Document) -> Result<(), Diagnostics> {
 }
 
 fn validate_homogeneous_features_into(doc: &Document, diagnostics: &mut Diagnostics) {
-    for (group_index, group) in doc.feature_placement_groups.iter().enumerate() {
-        if let Err(error) = checked_span(group.features, "features", doc.features.len()) {
-            diagnostics.error(format!("feature placement group {group_index}: {error}"));
-        }
-        if let Err(error) = checked_span(
-            group.placements,
-            "feature placements",
-            doc.feature_placements.len(),
-        ) {
-            diagnostics.error(format!("feature placement group {group_index}: {error}"));
-        }
+    let group_spans = doc
+        .feature_placement_groups
+        .iter()
+        .enumerate()
+        .flat_map(|(index, group)| {
+            [
+                group.features.validate(
+                    "feature placement group features",
+                    index,
+                    doc.features.len(),
+                ),
+                group.placements.validate(
+                    "feature placement group placements",
+                    index,
+                    doc.feature_placements.len(),
+                ),
+            ]
+        });
+    for error in group_spans.filter_map(Result::err) {
+        diagnostics.error(error);
     }
     for (feature_index, feature) in doc.features.iter().enumerate() {
         if let Some(group) = feature.placement_group
@@ -47,8 +56,12 @@ fn validate_homogeneous_features_into(doc: &Document, diagnostics: &mut Diagnost
                 "feature {feature_index} references missing placement group {group}"
             ));
         }
-        if let Err(error) = checked_span(feature.paths, "feature paths", doc.arena.paths.len()) {
-            diagnostics.error(format!("feature {feature_index}: {error}"));
+        if let Err(error) =
+            feature
+                .paths
+                .validate("feature paths", feature_index, doc.arena.paths.len())
+        {
+            diagnostics.error(error);
             continue;
         }
         let mut feature_kind = None;
@@ -89,13 +102,18 @@ fn validate_feature_arcs(
 
 fn validate_path_arcs(doc: &Document, feature_index: usize, path_index: u32) -> Result<(), String> {
     let path = &doc.arena.paths[path_index as usize];
-    checked_span(path.contours, "path contours", doc.arena.contours.len())
-        .map_err(|error| format!("feature {feature_index} path {path_index}: {error}"))?;
+    path.contours.validate(
+        "path contours",
+        path_index as usize,
+        doc.arena.contours.len(),
+    )?;
     for contour_index in path.contours.indices() {
         let contour = doc.arena.contours[contour_index as usize];
-        checked_span(contour.cmds, "contour commands", doc.arena.cmds.len()).map_err(|error| {
-            format!("feature {feature_index} path {path_index} contour {contour_index}: {error}")
-        })?;
+        contour.cmds.validate(
+            "contour commands",
+            contour_index as usize,
+            doc.arena.cmds.len(),
+        )?;
         let mut current = Point::default();
         for cmd_index in contour.cmds.indices() {
             let cmd = doc.arena.cmds[cmd_index as usize];
@@ -130,20 +148,6 @@ fn validate_arc_command(
     if !arc_radii_nearly_equal(start_radius, end_radius) {
         return Err(format!(
             "feature {feature_index} path {path_index} command {cmd_index} has non-circular arc radii {start_radius} and {end_radius}"
-        ));
-    }
-    Ok(())
-}
-
-fn checked_span(span: Span, label: &str, len: usize) -> Result<(), String> {
-    let end = span
-        .start
-        .checked_add(span.count)
-        .ok_or_else(|| format!("{label} range overflows"))?;
-    if end as usize > len {
-        return Err(format!(
-            "{label} range {}..{end} exceeds available length {len}",
-            span.start
         ));
     }
     Ok(())

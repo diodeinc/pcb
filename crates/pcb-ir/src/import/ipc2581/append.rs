@@ -114,7 +114,6 @@ pub(super) fn append_transformed_layer(
             feature.paths = paths;
             feature.placement_group = target_placement_group;
             feature.source_instance = source_instance;
-            feature.set = Some(target_set);
             feature.source.set_index = feature
                 .source
                 .set_index
@@ -122,10 +121,7 @@ pub(super) fn append_transformed_layer(
                 .context("Panel source feature set index overflow")?;
             feature.pin_refs =
                 append_span(&mut target.pin_refs, &source.pin_refs, feature.pin_refs);
-            target.features.push(feature);
-            let target_set_record = &mut target.feature_sets[target_set as usize];
-            target_set_record.features.count += 1;
-            target_set_record.bbox = target_set_record.bbox.union(bbox);
+            target.push_feature(target_set, feature);
             layer_bbox = layer_bbox.union(bbox);
         }
     }
