@@ -115,11 +115,11 @@ pub struct ComponentOccurrence {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct StepOccurrence {
+pub(in crate::import) struct StepOccurrence {
     pub(super) step: u32,
-    pub(super) layout: LayoutOccurrenceId,
+    pub(in crate::import) layout: LayoutOccurrenceId,
     pub(super) root_from_step: Affine2,
-    pub(super) board: Option<LayoutOccurrenceId>,
+    pub(in crate::import) board: Option<LayoutOccurrenceId>,
     pub(super) root_from_board: Affine2,
 }
 
@@ -743,7 +743,10 @@ impl ImportedDesign {
         )
     }
 
-    pub(super) fn step_occurrences(&self, scope: ArtworkScope) -> Result<Vec<StepOccurrence>> {
+    pub(in crate::import) fn step_occurrences(
+        &self,
+        scope: ArtworkScope,
+    ) -> Result<Vec<StepOccurrence>> {
         let root_step = self
             .geometry
             .layout

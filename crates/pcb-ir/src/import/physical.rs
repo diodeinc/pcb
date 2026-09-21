@@ -22,8 +22,9 @@ use crate::dialects::ipc::{
 use crate::geom::dfm::BBoxIndex;
 use crate::geom::{BBox, ContourSet, Point, Polarity, Span, tol};
 use crate::import::ipc2581::{
-    ComponentOccurrenceId, FeatureOccurrenceId, ImportedDesign, LayerId, LayoutOccurrenceId,
-    PopulationState, feature_occurrence_id, is_copper, layer_role, side_for_layer,
+    ComponentOccurrenceId, FeatureOccurrence, FeatureOccurrenceId, ImportedDesign, LayerId,
+    LayoutOccurrenceId, PopulationState, feature_occurrence_id, is_copper, layer_role,
+    side_for_layer,
 };
 
 /// A relationship whose uncertainty is part of the result rather than hidden
@@ -236,7 +237,7 @@ impl ImportedDesign {
         resolution: Resolution,
     ) -> Result<Vec<PhysicalLand>> {
         let components = self.component_index(scope)?;
-        self.derive_physical_lands(scope, &components, true, resolution)
+        self.derive_physical_lands(scope, &components, true, &|_| true, resolution)
     }
 
     /// Derive surviving final copper lands without materializing unrelated physical
@@ -247,7 +248,7 @@ impl ImportedDesign {
         resolution: Resolution,
     ) -> Result<Vec<PhysicalLand>> {
         let components = self.component_index(scope)?;
-        self.derive_physical_lands(scope, &components, false, resolution)
+        self.derive_physical_lands(scope, &components, false, &|_| true, resolution)
     }
 
     /// Derive electrical contacts from surviving lands using exact IPC identities.
@@ -268,7 +269,40 @@ impl ImportedDesign {
         resolution: Resolution,
     ) -> Result<Vec<PhysicalHole>> {
         let lands = self.source_lands(scope, resolution)?;
-        self.derive_physical_holes(scope, &lands, resolution)
+        self.derive_physical_holes(scope, &lands, &|_| true, resolution)
+    }
+
+    /// The drilled openings that one Step occurrence of `scope` holds itself,
+    /// each exactly as [`Self::physical_holes`] derives it. Only a land of an
+    /// opening's own board can claim it, so only the occurrences sharing the
+    /// board of `occurrence` are imaged: a panel of one board derives that
+    /// board's openings from one placement of it, not from all of them.
+    pub fn physical_holes_of(
+        &self,
+        scope: ArtworkScope,
+        occurrence: LayoutOccurrenceId,
+        resolution: Resolution,
+    ) -> Result<Vec<PhysicalHole>> {
+        let board = self
+            .step_occurrences(scope)?
+            .iter()
+            .find(|step| step.layout == occurrence)
+            .context("layout occurrence is outside the materialized scope")?
+            .board;
+        let components = self.component_index(scope)?;
+        let lands = self.derive_physical_lands(
+            scope,
+            &components,
+            true,
+            &|land| land.board == board,
+            resolution,
+        )?;
+        self.derive_physical_holes(
+            scope,
+            &lands,
+            &|hole| hole.id.layout == occurrence,
+            resolution,
+        )
     }
 
     /// Derive physical lands, exact electrical terminations, independent paste
@@ -280,12 +314,14 @@ impl ImportedDesign {
         resolution: Resolution,
     ) -> Result<PhysicalView> {
         let components = self.component_index(scope)?;
-        let lands = self.derive_physical_lands(scope, &components, false, resolution)?;
+        let all = |_: &FeatureOccurrence| true;
+        let lands = self.derive_physical_lands(scope, &components, false, &all, resolution)?;
         let terminations = self.derive_physical_terminations(&lands);
         let paste_islands = self.paste_islands(scope, &components, &terminations, resolution)?;
         let mask_openings = self.mask_openings(scope, &lands, resolution)?;
-        let source_lands = self.derive_physical_lands(scope, &components, true, resolution)?;
-        let mut holes = self.derive_physical_holes(scope, &source_lands, resolution)?;
+        let source_lands =
+            self.derive_physical_lands(scope, &components, true, &all, resolution)?;
+        let mut holes = self.derive_physical_holes(scope, &source_lands, &all, resolution)?;
         self.attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes, resolution)?;
         Ok(PhysicalView {
             source_lands,
@@ -320,6 +356,7 @@ impl ImportedDesign {
         scope: ArtworkScope,
         components: &ComponentIndex,
         source_geometry: bool,
+        include: &dyn Fn(&FeatureOccurrence) -> bool,
         resolution: Resolution,
     ) -> Result<Vec<PhysicalLand>> {
         let mut lands = Vec::new();
@@ -350,6 +387,7 @@ impl ImportedDesign {
                 if feature.kind != FeatureKind::Padstack
                     || feature.polarity != Polarity::Dark
                     || feature.intent.domain != FeatureDomain::Copper
+                    || !include(&occurrence)
                 {
                     continue;
                 }
@@ -609,6 +647,7 @@ impl ImportedDesign {
         &self,
         scope: ArtworkScope,
         lands: &[PhysicalLand],
+        include: &dyn Fn(&FeatureOccurrence) -> bool,
         resolution: Resolution,
     ) -> Result<Vec<PhysicalHole>> {
         let layer_order = physical_stackup_layers(&self.stackups, &self.layer_definitions)?
@@ -639,7 +678,9 @@ impl ImportedDesign {
                 let feature = self
                     .feature_definition(occurrence.id.feature)
                     .context("physical opening references a missing feature definition")?;
-                if !matches!(feature.kind, FeatureKind::Hole | FeatureKind::Slot) {
+                if !matches!(feature.kind, FeatureKind::Hole | FeatureKind::Slot)
+                    || !include(&occurrence)
+                {
                     continue;
                 }
                 let image = self.feature_region(occurrence, resolution)?;
@@ -855,7 +896,7 @@ impl ImportedDesign {
         layer: LayerId,
         scope: ArtworkScope,
         resolution: Resolution,
-    ) -> Result<Vec<(crate::import::ipc2581::FeatureOccurrence, ContourSet)>> {
+    ) -> Result<Vec<(FeatureOccurrence, ContourSet)>> {
         self.attributed_feature_images_where(layer, scope, |_| true, resolution)
     }
 
@@ -864,7 +905,7 @@ impl ImportedDesign {
         layer: LayerId,
         scope: ArtworkScope,
         resolution: Resolution,
-    ) -> Result<Vec<(crate::import::ipc2581::FeatureOccurrence, ContourSet)>> {
+    ) -> Result<Vec<(FeatureOccurrence, ContourSet)>> {
         self.attributed_feature_images_where(
             layer,
             scope,
@@ -883,7 +924,7 @@ impl ImportedDesign {
         scope: ArtworkScope,
         include: impl Fn(&Feature) -> bool,
         resolution: Resolution,
-    ) -> Result<Vec<(crate::import::ipc2581::FeatureOccurrence, ContourSet)>> {
+    ) -> Result<Vec<(FeatureOccurrence, ContourSet)>> {
         let definition = self
             .layer_definition(layer)
             .context("layer id is outside the imported design")?;
@@ -1452,7 +1493,7 @@ mod tests {
 
         // Individually valid images can exceed the tighter budget when combined.
         let hole_error = imported
-            .derive_physical_holes(scope, &lands, fine)
+            .derive_physical_holes(scope, &lands, &|_| true, fine)
             .unwrap_err();
         let mask_error = imported.mask_openings(scope, &lands, fine).unwrap_err();
         let terminations = imported.derive_physical_terminations(&lands);
@@ -1676,6 +1717,23 @@ mod tests {
                     );
                 }
                 assert_eq!(linked.len(), count);
+
+                // One occurrence's openings are the scope's, derived alone.
+                let facts = |hole: &PhysicalHole| {
+                    let lands = hole.lands.iter();
+                    let lands = lands.map(|link| (link.layer, link.land.clone()));
+                    (hole.id, hole.at, hole.board, lands.collect::<Vec<_>>())
+                };
+                let mut alone = Vec::new();
+                for (_, occurrence) in imported.layout_occurrences(scope).unwrap() {
+                    let holes = imported
+                        .physical_holes_of(scope, occurrence, resolution)
+                        .unwrap();
+                    assert!(holes.iter().all(|hole| hole.id.0.layout == occurrence));
+                    alone.extend(holes.iter().map(facts));
+                }
+                alone.sort_by_key(|(id, ..)| *id);
+                assert_eq!(alone, view.holes.iter().map(facts).collect::<Vec<_>>());
             }
         }
     }
