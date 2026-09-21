@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use gerberx2::trim_decimal;
 use gerberx2::write_layer;
 use ipc2581::types::{
-    FillProperty, LayerFunction, Side as IpcSide, StandardPrimitive, ecad::Layer,
+    LayerFunction, Side as IpcSide, StandardPrimitive, ecad::Layer,
 };
 
 use crate::geometry;
@@ -31,9 +31,7 @@ use pcb_ir::dialects::ipc::{
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::ContourBuf;
-use pcb_ir::geom::{
-    Affine2, BBox, LineCap, LineJoin, LinePattern, Paint, Polarity, Span, StrokeStyle,
-};
+use pcb_ir::geom::{BBox, LineCap, LineJoin, LinePattern, Paint, Polarity, Span, StrokeStyle};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
@@ -616,11 +614,11 @@ struct GerberLowering<'a> {
 }
 
 impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
-    fn source_aperture(
-        &mut self,
-        feature: &Feature<ipc2581::Symbol>,
-    ) -> Option<(Aperture, Affine2, BBox)> {
-        standard_flash_aperture(self.standard_primitives, self.doc, feature)
+    fn catalogue_aperture(&mut self, primitive: PrimitiveRef<ipc2581::Symbol>) -> Option<Aperture> {
+        let PrimitiveRef::Standard(id) = primitive else {
+            return None;
+        };
+        catalogue_aperture(self.standard_primitives.get(&id)?)
     }
 
     /// Only pad-like copper and tiled balance cells may image as flashes.
@@ -1067,34 +1065,6 @@ fn ir_side(side: Option<IpcSide>) -> IrSide {
     }
 }
 
-fn standard_flash_aperture(
-    standard_primitives: &StandardPrimitives,
-    doc: &IpcGeometryDocument,
-    feature: &Feature<ipc2581::Symbol>,
-) -> Option<(Aperture, Affine2, BBox)> {
-    if !standard_flash_feature_is_eligible(feature) {
-        return None;
-    }
-
-    let Some(PrimitiveRef::Standard(primitive_ref)) = feature.primitive_ref else {
-        return None;
-    };
-    let primitive = *standard_primitives.get(&primitive_ref)?;
-    if !standard_primitive_is_solid_fill(primitive) {
-        return None;
-    }
-
-    // Catalogue shapes Gerber knows flash through their own aperture; every
-    // other solid shape flashes through a contour aperture shared per shape,
-    // keeping repeated pads one definition each instead of re-painting a
-    // region at every placement. The Gerber lowering bakes the placement.
-    let aperture = match catalogue_aperture(primitive) {
-        Some(aperture) => aperture,
-        None => Aperture::solid(pcb_ir::dialects::ipc::contour_flash_aperture(doc, feature)?),
-    };
-    Some((aperture, feature.transform, feature.bbox))
-}
-
 /// The catalogue primitives the artwork dialect carries as exact apertures.
 fn catalogue_aperture(primitive: &StandardPrimitive) -> Option<Aperture> {
     // IPC hexagons and octagons place their first vertex pointing down.
@@ -1132,42 +1102,6 @@ fn catalogue_aperture(primitive: &StandardPrimitive) -> Option<Aperture> {
         StandardPrimitive::Octagon(octagon) => polygon(8, octagon.shape.point_to_point),
         _ => return None,
     }))
-}
-
-fn standard_flash_feature_is_eligible(feature: &Feature<ipc2581::Symbol>) -> bool {
-    feature.polarity == Polarity::Dark
-        && !feature.paths.is_empty()
-        && (matches!(
-            feature.intent.role,
-            FeatureRole::Pad | FeatureRole::Via | FeatureRole::Hole
-        ) || feature.is_fiducial())
-}
-
-fn standard_primitive_is_solid_fill(primitive: &StandardPrimitive) -> bool {
-    matches!(
-        standard_primitive_fill_property(primitive),
-        None | Some(FillProperty::Fill)
-    )
-}
-
-fn standard_primitive_fill_property(primitive: &StandardPrimitive) -> Option<FillProperty> {
-    match primitive {
-        StandardPrimitive::Circle(styled) => styled.fill_property,
-        StandardPrimitive::RectCenter(styled) => styled.fill_property,
-        StandardPrimitive::RectRound(styled) => styled.fill_property,
-        StandardPrimitive::RectCham(styled) => styled.fill_property,
-        StandardPrimitive::RectCorner(styled) => styled.fill_property,
-        StandardPrimitive::Oval(styled) => styled.fill_property,
-        StandardPrimitive::Butterfly(styled) => styled.fill_property,
-        StandardPrimitive::Diamond(styled) => styled.fill_property,
-        StandardPrimitive::Donut(styled) => styled.fill_property,
-        StandardPrimitive::Ellipse(styled) => styled.fill_property,
-        StandardPrimitive::Hexagon(styled) => styled.fill_property,
-        StandardPrimitive::Octagon(styled) => styled.fill_property,
-        StandardPrimitive::Thermal(styled) => styled.fill_property,
-        StandardPrimitive::Triangle(styled) => styled.fill_property,
-        StandardPrimitive::Moire(_) | StandardPrimitive::Contour(_) => None,
-    }
 }
 
 fn object_attributes(

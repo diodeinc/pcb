@@ -2083,8 +2083,9 @@ fn nested_panel_render_draws_every_descendant_board_instance() {
     let svg =
         crate::render::artwork_svg(&artwork, &crate::render::RenderOptions::default()).unwrap();
 
-    // One drawn pad per board across both nested repeat levels.
-    assert_eq!(svg.matches("<path d=").count(), 4, "{svg}");
+    // One drawn pad per board across both nested repeat levels, all through
+    // the dictionary entry's one aperture.
+    assert_eq!(svg.matches("<use href='#a0'").count(), 4, "{svg}");
 }
 
 #[test]

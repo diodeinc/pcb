@@ -54,7 +54,7 @@ pub struct Feature<Symbol> {
 /// A reference into one of the source document's two shape dictionaries.
 /// The dictionary matters: standard entries are exact catalogue primitives
 /// (circles, rectangles, ovals), user entries are arbitrary contour shapes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrimitiveRef<Symbol> {
     Standard(Symbol),
     User(Symbol),

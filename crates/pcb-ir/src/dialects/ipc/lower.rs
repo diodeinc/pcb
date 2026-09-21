@@ -17,9 +17,7 @@ use crate::dialects::ipc::{Document, relief};
 use crate::dialects::{LayerRole, Side};
 use crate::dialects::{artwork, nc};
 use crate::geom::path::ContourBuf;
-use crate::geom::{
-    Affine2, BBox, ContourSet, FillRule, Paint, Point, Polarity, Span, StrokeStyle, tol,
-};
+use crate::geom::{Affine2, BBox, ContourSet, FillRule, Paint, Point, Polarity, Span, StrokeStyle};
 
 /// How one artwork object was expressed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,13 +39,13 @@ pub enum ArtworkObjectKind {
 /// catalogue, the stroke styles its target can express, and the per-object
 /// metadata that target carries.
 pub trait ArtworkLowering<Symbol, ObjectMeta> {
-    /// An aperture the source document declares for this feature, with its
-    /// placement and bounds. Returning `None` falls through to the generic
-    /// instance, circle, and per-path tiers.
-    fn source_aperture(
+    /// The exact aperture of a dictionary entry the target has a catalogue
+    /// shape for. Returning `None` derives the entry's aperture from the
+    /// outline of its first instance.
+    fn catalogue_aperture(
         &mut self,
-        _feature: &Feature<Symbol>,
-    ) -> Option<(artwork::Aperture, Affine2, BBox)> {
+        _primitive: PrimitiveRef<Symbol>,
+    ) -> Option<artwork::Aperture> {
         None
     }
 
@@ -162,7 +160,7 @@ where
 {
     let layer = &doc.layers[layer_index];
     let layer_features = layer.features.slice(&doc.features);
-    let mut instance_apertures = HashMap::<Symbol, u32>::new();
+    let mut instance_apertures = HashMap::<PrimitiveRef<Symbol>, u32>::new();
     let mut objects = Vec::new();
 
     for (offset, feature) in layer_features.iter().enumerate() {
@@ -254,7 +252,7 @@ fn lower_feature_artwork<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
     feature: &Feature<Symbol>,
     out: &mut artwork::Document<LayerMeta, ObjectMeta>,
     lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
-    instance_apertures: &mut HashMap<Symbol, u32>,
+    instance_apertures: &mut HashMap<PrimitiveRef<Symbol>, u32>,
     objects: &mut Vec<artwork::Object<ObjectMeta>>,
 ) where
     Symbol: Copy + Eq + Hash,
@@ -316,16 +314,13 @@ fn flash_for<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
     doc: &Document<Symbol, LayerFunction>,
     feature: &Feature<Symbol>,
     lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
-    apertures: &mut HashMap<Symbol, u32>,
+    apertures: &mut HashMap<PrimitiveRef<Symbol>, u32>,
 ) -> Option<(u32, Affine2, BBox)>
 where
     Symbol: Copy + Eq + Hash,
 {
-    if let Some((aperture, transform, bbox)) = lowering.source_aperture(feature) {
-        return Some((out.push_aperture(aperture), transform, bbox));
-    }
-    if let Some((aperture, transform)) = instance_aperture(out, doc, feature, apertures) {
-        return Some((aperture, transform, feature.bbox));
+    if let Some(aperture) = dictionary_aperture(out, doc, feature, lowering, apertures) {
+        return Some((aperture, feature.transform, feature.bbox));
     }
     let (at, diameter) = circle_flash(doc, feature)?;
     Some((
@@ -335,36 +330,39 @@ where
     ))
 }
 
-/// A user-dictionary instance feature: a placed reference whose local shape
-/// is shared by every sibling instance. The shape flashes through one contour
-/// aperture per dictionary entry, keeping repeated geometry repeated all the
-/// way to the output. Standard-dictionary references stay out: those are
-/// exact catalogue primitives that a source lowering flashes through standard
-/// apertures instead.
-fn instance_aperture<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
+/// A dictionary instance: a placed reference whose local shape every sibling
+/// instance shares. The shape flashes through one aperture per dictionary
+/// entry — the target's catalogue shape where it has one, else the outline
+/// of the first instance pulled back to the origin — keeping repeated
+/// geometry repeated all the way to the output. Any placement that inverts
+/// reproduces its instance exactly, mirrored and scaled ones included.
+fn dictionary_aperture<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
     out: &mut artwork::Document<LayerMeta, ObjectMeta>,
     doc: &Document<Symbol, LayerFunction>,
     feature: &Feature<Symbol>,
-    apertures: &mut HashMap<Symbol, u32>,
-) -> Option<(u32, Affine2)>
+    lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
+    apertures: &mut HashMap<PrimitiveRef<Symbol>, u32>,
+) -> Option<u32>
 where
     Symbol: Copy + Eq + Hash,
 {
-    let Some(PrimitiveRef::User(primitive)) = feature.primitive_ref else {
+    let primitive = feature.primitive_ref?;
+    let [path] = feature.paths.slice(&doc.arena.paths) else {
         return None;
     };
-    if feature.kind != FeatureKind::Primitive || !is_rigid(feature.transform) {
+    if !path.is_filled() || feature.transform.inverse().is_none() {
         return None;
     }
     if let Some(&aperture) = apertures.get(&primitive) {
-        return Some((aperture, feature.transform));
+        return Some(aperture);
     }
-    // Derive the origin-local template from this first instance; every
-    // sibling shares the aperture and differs only by its rigid transform.
-    let shape = contour_flash_aperture(doc, feature)?;
-    let aperture = out.push_aperture(artwork::Aperture::solid(shape));
+    let aperture = match lowering.catalogue_aperture(primitive) {
+        Some(aperture) => aperture,
+        None => artwork::Aperture::solid(contour_flash_aperture(doc, feature)?),
+    };
+    let aperture = out.push_aperture(aperture);
     apertures.insert(primitive, aperture);
-    Some((aperture, feature.transform))
+    Some(aperture)
 }
 
 /// The feature's whole image as an origin-local contour aperture: its single
@@ -419,14 +417,6 @@ fn circle_flash<Symbol, LayerFunction>(
             || feature.intent.role == FeatureRole::Hole
             || feature.intent.operation == FeatureOperation::Drill))
         .then_some((feature.center, diameter))
-}
-
-/// Rotation plus translation, without mirroring or scaling.
-fn is_rigid(transform: Affine2) -> bool {
-    let determinant = transform.m00 * transform.m11 - transform.m01 * transform.m10;
-    (determinant - 1.0).abs() <= tol::EPSILON_MM
-        && (transform.m00 * transform.m00 + transform.m10 * transform.m10 - 1.0).abs()
-            <= tol::EPSILON_MM
 }
 
 /// Which paint stage a feature belongs to.
