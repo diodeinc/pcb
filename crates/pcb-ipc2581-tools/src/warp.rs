@@ -63,7 +63,7 @@ pub fn analyze(ipc: &Ipc2581, resolution: Resolution) -> Result<WarpAnalysis> {
     let imported = import_design(ipc, resolution)?;
     let (stack, copper_names) = physical_stack(ipc)?;
     let conductors = stack.conductor_weights();
-    let bounds = panel_bounds(ipc, &imported, resolution)?;
+    let bounds = panel_bounds(&imported)?;
     let sample_pitch_mm =
         (bounds.width().max(bounds.height()) / SAMPLES_ACROSS).max(MIN_SAMPLE_PITCH_MM);
     let columns = (bounds.width() / sample_pitch_mm).ceil().max(1.0) as usize;
@@ -188,23 +188,10 @@ pub(crate) fn physical_stack(ipc: &Ipc2581) -> Result<(ThermalStack, Vec<String>
     Ok((stack, copper_names))
 }
 
-fn panel_bounds(ipc: &Ipc2581, imported: &ImportedDesign, resolution: Resolution) -> Result<BBox> {
-    let layout =
-        crate::geometry::extract_layout(ipc).context("failed to extract the panel outline")?;
-    let profile =
-        crate::geometry::board_array_fabrication_profile(imported, &layout, &[], resolution)
-            .context("failed to derive the panel profile")?;
-    let outline = ContourSet::from_filled_contours(
-        &profile
-            .array_outlines
-            .iter()
-            .flatten()
-            .cloned()
-            .collect::<Vec<_>>(),
-        resolution,
-    )?;
-    if outline.is_empty() {
-        bail!("panel has no outline to measure");
-    }
-    Ok(outline.bbox)
+/// The plate warp is estimated for: the root Step, a panel or a lone board.
+fn panel_bounds(imported: &ImportedDesign) -> Result<BBox> {
+    pcb_ir::dialects::ipc::root_step(&imported.geometry)
+        .map(|(_, step)| step.bbox)
+        .filter(|bbox| !bbox.is_empty())
+        .context("the design's root step has no outline to measure")
 }
