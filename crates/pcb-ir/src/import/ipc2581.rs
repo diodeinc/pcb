@@ -317,6 +317,24 @@ struct StrokedFeatureStyle {
     line_pattern: LinePattern,
 }
 
+impl StrokedFeatureStyle {
+    fn new(
+        net: Option<Symbol>,
+        polarity: GeometryPolarity,
+        source: SourceRef,
+        line_desc: ipc2581::types::LineDesc,
+    ) -> Self {
+        Self {
+            net,
+            polarity,
+            source,
+            width: line_desc.line_width,
+            line_cap: map_line_cap(line_desc.line_end),
+            line_pattern: map_line_pattern(line_desc.line_property),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrimitivePaint {
     Fill,
@@ -1843,13 +1861,17 @@ fn extract_set_feature(
         SetFeature::Polygon(polygon) => {
             Ok(vec![extract_polygon(net, polarity, source, polygon, doc)])
         }
-        SetFeature::Line(line) => Ok(vec![extract_line(
-            context, net, polarity, source, line, doc,
-        )]),
-        SetFeature::Arc(arc) => Ok(vec![extract_arc(context, net, polarity, source, arc, doc)]),
-        SetFeature::Polyline(polyline) => Ok(vec![extract_feature_polyline(
+        SetFeature::Line(line) => Ok(extract_line(context, net, polarity, source, line, doc)
+            .into_iter()
+            .collect()),
+        SetFeature::Arc(arc) => Ok(extract_arc(context, net, polarity, source, arc, doc)
+            .into_iter()
+            .collect()),
+        SetFeature::Polyline(polyline) => Ok(extract_feature_polyline(
             context, net, polarity, source, polyline, doc,
-        )]),
+        )
+        .into_iter()
+        .collect()),
         SetFeature::StandardPrimitiveRef(primitive_ref) => extract_feature_primitive(
             context,
             net,
@@ -2844,31 +2866,10 @@ fn extract_trace(
     if trace.points.is_empty() {
         return None;
     }
-    let line_desc_ref = match trace.line_desc_ref {
-        Some(line_desc_ref) => line_desc_ref,
-        None => {
-            doc.warn("Skipping trace without LineDescRef");
-            return None;
-        }
-    };
-    let Some(line_desc) = context.line_descs.get(&line_desc_ref).copied() else {
-        doc.warn(format!(
-            "Skipping trace referencing missing LineDesc '{}'",
-            context.strings.resolve(line_desc_ref)
-        ));
-        return None;
-    };
-
+    let line_desc = resolve_line_desc(context, doc, "trace", trace.line_desc_ref, None)?;
     Some(push_stroked_trace(
         doc,
-        StrokedFeatureStyle {
-            net,
-            polarity,
-            source,
-            width: line_desc.line_width,
-            line_cap: map_line_cap(line_desc.line_end),
-            line_pattern: map_line_pattern(line_desc.line_property),
-        },
+        StrokedFeatureStyle::new(net, polarity, source, line_desc),
         trace,
     ))
 }
@@ -2880,30 +2881,22 @@ fn extract_line(
     source: SourceRef,
     line: &ipc2581::types::ecad::Line,
     doc: &mut GeometryDocument,
-) -> GeometryFeature {
-    let (line_width, line_cap, line_pattern) = resolve_feature_line_style(
+) -> Option<GeometryFeature> {
+    let line_desc = resolve_line_desc(
         context,
-        line.line_desc_ref,
-        line.line_width,
-        line.line_end,
-        line.line_property,
-    );
-
-    push_stroked_polyline(
         doc,
-        StrokedFeatureStyle {
-            net,
-            polarity,
-            source,
-            width: line_width,
-            line_cap,
-            line_pattern,
-        },
+        "line",
+        line.line_desc_ref,
+        inline_line_desc(line.line_width, line.line_end, line.line_property),
+    )?;
+    Some(push_stroked_polyline(
+        doc,
+        StrokedFeatureStyle::new(net, polarity, source, line_desc),
         vec![
             Point::new(line.start_x, line.start_y),
             Point::new(line.end_x, line.end_y),
         ],
-    )
+    ))
 }
 
 fn extract_feature_polyline(
@@ -2913,28 +2906,24 @@ fn extract_feature_polyline(
     source: SourceRef,
     polyline: &ipc2581::types::ecad::FeaturePolyline,
     doc: &mut GeometryDocument,
-) -> GeometryFeature {
-    let (line_width, line_cap, line_pattern) = resolve_feature_line_style(
+) -> Option<GeometryFeature> {
+    let line_desc = resolve_line_desc(
         context,
-        polyline.line_desc_ref,
-        polyline.line_width,
-        polyline.line_end,
-        polyline.line_property,
-    );
-
-    push_stroked_steps(
         doc,
-        StrokedFeatureStyle {
-            net,
-            polarity,
-            source,
-            width: line_width,
-            line_cap,
-            line_pattern,
-        },
+        "polyline",
+        polyline.line_desc_ref,
+        inline_line_desc(
+            polyline.line_width,
+            polyline.line_end,
+            polyline.line_property,
+        ),
+    )?;
+    Some(push_stroked_steps(
+        doc,
+        StrokedFeatureStyle::new(net, polarity, source, line_desc),
         Point::new(polyline.begin.x, polyline.begin.y),
         &polyline.steps,
-    )
+    ))
 }
 
 fn extract_arc(
@@ -2944,55 +2933,77 @@ fn extract_arc(
     source: SourceRef,
     arc: &ipc2581::types::ecad::FeatureArc,
     doc: &mut GeometryDocument,
-) -> GeometryFeature {
-    let (line_width, line_cap, line_pattern) = resolve_feature_line_style(
+) -> Option<GeometryFeature> {
+    let line_desc = resolve_line_desc(
         context,
-        arc.line_desc_ref,
-        arc.line_width,
-        arc.line_end,
-        arc.line_property,
-    );
-
-    push_stroked_arc(
         doc,
-        StrokedFeatureStyle {
-            net,
-            polarity,
-            source,
-            width: line_width,
-            line_cap,
-            line_pattern,
-        },
+        "arc",
+        arc.line_desc_ref,
+        inline_line_desc(arc.line_width, arc.line_end, arc.line_property),
+    )?;
+    Some(push_stroked_arc(
+        doc,
+        StrokedFeatureStyle::new(net, polarity, source, line_desc),
         Point::new(arc.start.x, arc.start.y),
         Point::new(arc.end.x, arc.end.y),
         Point::new(arc.center.x, arc.center.y),
         arc.clockwise,
-    )
+    ))
 }
 
-fn resolve_feature_line_style(
+/// The line description a stroke names: the dictionary entry behind its
+/// `LineDescRef`, else its inline `LineDesc`. Warns and returns `None` when
+/// neither yields one, so the caller leaves the stroke out rather than invent
+/// a width.
+fn resolve_line_desc(
     context: &ExtractContext<'_>,
-    line_desc_ref: Option<Symbol>,
-    inline_width: Option<f64>,
-    inline_end: Option<LineEnd>,
-    inline_property: Option<LineProperty>,
-) -> (f64, LineCap, LinePattern) {
-    let line_desc =
-        line_desc_ref.and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
-    let width = line_desc
-        .map(|desc| desc.line_width)
-        .or(inline_width)
-        .unwrap_or(0.25);
-    let line_cap = line_desc
-        .map(|desc| map_line_cap(desc.line_end))
-        .or_else(|| inline_end.map(map_line_cap))
-        .unwrap_or(LineCap::Round);
-    let line_pattern = map_line_pattern(
-        line_desc
-            .and_then(|desc| desc.line_property)
-            .or(inline_property),
+    doc: &mut GeometryDocument,
+    what: &str,
+    reference: Option<Symbol>,
+    inline: Option<ipc2581::types::LineDesc>,
+) -> Option<ipc2581::types::LineDesc> {
+    let resolved = match reference {
+        Some(reference) => context.line_descs.get(&reference).copied(),
+        None => inline,
+    };
+    if resolved.is_none() {
+        doc.warn(match reference {
+            Some(reference) => format!(
+                "Not drawing {what}: LineDesc '{}' is missing",
+                context.strings.resolve(reference)
+            ),
+            None => format!("Not drawing {what}: it has no line description"),
+        });
+    }
+    resolved
+}
+
+/// A stroked set feature's inline description, present when it states a width.
+fn inline_line_desc(
+    line_width: Option<f64>,
+    line_end: Option<LineEnd>,
+    line_property: Option<LineProperty>,
+) -> Option<ipc2581::types::LineDesc> {
+    Some(ipc2581::types::LineDesc {
+        line_width: line_width?,
+        line_end: line_end.unwrap_or(LineEnd::Round),
+        line_property,
+    })
+}
+
+/// Paint for a line description whose geometry is placed at `scale`.
+fn stroke_paint(line_desc: ipc2581::types::LineDesc, scale: f64) -> Paint {
+    let mut stroke = StrokeStyle::new(
+        line_desc.line_width * scale,
+        map_line_cap(line_desc.line_end),
     );
-    (width, line_cap, line_pattern)
+    stroke.pattern = map_line_pattern(line_desc.line_property);
+    Paint::Stroke(stroke)
+}
+
+/// Uniform scale of a placement, as placement-group expansion measures it.
+fn placement_scale(transform: Affine2) -> f64 {
+    transform.m00.hypot(transform.m10)
 }
 
 fn extract_polygon(
@@ -3406,18 +3417,15 @@ fn lower_standard_primitive(
     match paint {
         PrimitivePaint::Fill => {}
         PrimitivePaint::Hollow => {
-            let Some(line_desc) = primitive_line_desc(context, primitive) else {
-                doc.warn("Skipping hollow primitive without LineDescRef");
-                make_paths_unpainted(doc, path_start);
-                return Ok(paint);
-            };
-            make_paths_stroked(
+            let style = primitive_style(primitive);
+            let line_desc = resolve_line_desc(
+                context,
                 doc,
-                path_start,
-                line_desc.line_width,
-                map_line_cap(line_desc.line_end),
-                map_line_pattern(line_desc.line_property),
+                "hollow primitive",
+                style.line_desc_ref,
+                style.line_desc,
             );
+            paint_paths(doc, path_start, line_desc, transform);
         }
         PrimitivePaint::Void => {}
     }
@@ -3502,6 +3510,7 @@ fn lower_user_shape(
 ) -> Result<()> {
     let path_start = doc.arena.paths.len() as u32;
     let mut nested_paint = None;
+    let mut strokes = false;
     match &shape.shape {
         UserShapeType::Circle(circle) => {
             push_filled_shape(
@@ -3548,43 +3557,40 @@ fn lower_user_shape(
             push_contour_path(doc, contour, transform);
         }
         UserShapeType::Line(line) => {
-            let line_desc = user_shape_line_desc(context, shape);
-            push_user_stroke(
+            strokes = true;
+            push_open_contour(
                 doc,
-                ContourBuf::new(vec![
+                transform,
+                vec![
                     PathCmd::move_to(Point::new(line.start.x, line.start.y)),
                     PathCmd::line_to(Point::new(line.end.x, line.end.y)),
-                ]),
-                transform,
-                line_desc,
+                ],
             );
         }
         UserShapeType::Arc(arc) => {
-            let line_desc = user_shape_line_desc(context, shape);
-            push_user_stroke(
+            strokes = true;
+            push_open_contour(
                 doc,
-                ContourBuf::new(vec![
+                transform,
+                vec![
                     PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
                     PathCmd::arc_to(
                         Point::new(arc.end.x, arc.end.y),
                         Point::new(arc.center.x, arc.center.y),
                         arc.clockwise,
                     ),
-                ]),
-                transform,
-                line_desc,
+                ],
             );
         }
         UserShapeType::Polyline(polyline) => {
-            let line_desc = user_shape_line_desc(context, shape);
-            push_user_stroke(
+            strokes = true;
+            push_open_contour(
                 doc,
-                ContourBuf::new(poly_step_commands(
+                transform,
+                poly_step_commands(
                     Point::new(polyline.begin.x, polyline.begin.y),
                     &polyline.steps,
-                )),
-                transform,
-                line_desc,
+                ),
             );
         }
         UserShapeType::StandardPrimitive(primitive) => {
@@ -3609,7 +3615,10 @@ fn lower_user_shape(
             if let Some(primitive) = context.user_primitives.get(primitive_ref).copied() {
                 nested_paint = Some(lower_user_primitive(context, doc, primitive, transform)?);
             } else {
-                make_paths_unpainted(doc, path_start);
+                doc.warn(format!(
+                    "Not drawing nested user primitive '{}': it is missing",
+                    context.strings.resolve(*primitive_ref)
+                ));
             }
         }
     }
@@ -3619,21 +3628,19 @@ fn lower_user_shape(
             .fill_desc_ref
             .and_then(|id| context.fill_descs.get(&id).copied())
     });
+    let hollow = fill_desc.is_some_and(|fill| fill.fill_property == FillProperty::Hollow);
+    if strokes || hollow {
+        let line_desc = resolve_line_desc(
+            context,
+            doc,
+            "user shape outline",
+            shape.line_desc_ref,
+            shape.line_desc,
+        );
+        paint_paths(doc, path_start, line_desc, transform);
+    }
     match fill_desc {
-        Some(fill_desc) if fill_desc.fill_property == FillProperty::Hollow => {
-            if let Some(line_desc) = user_shape_line_desc(context, shape) {
-                make_paths_stroked(
-                    doc,
-                    path_start,
-                    line_desc.line_width,
-                    map_line_cap(line_desc.line_end),
-                    map_line_pattern(line_desc.line_property),
-                );
-            } else {
-                make_paths_unpainted(doc, path_start);
-            }
-            *paint = PrimitivePaint::Hollow;
-        }
+        Some(_) if hollow => *paint = PrimitivePaint::Hollow,
         Some(fill_desc) if fill_desc.fill_property == FillProperty::Void => {
             subtract_trailing_paths(
                 doc,
@@ -3696,29 +3703,9 @@ fn subtract_trailing_paths(
     Ok(())
 }
 
-fn user_shape_line_desc(
-    context: &ExtractContext<'_>,
-    shape: &ipc2581::types::UserShape,
-) -> Option<ipc2581::types::LineDesc> {
-    shape.line_desc.or_else(|| {
-        shape
-            .line_desc_ref
-            .and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied())
-    })
-}
-
-fn push_user_stroke(
-    doc: &mut GeometryDocument,
-    contour: ContourBuf,
-    transform: Affine2,
-    line_desc: Option<ipc2581::types::LineDesc>,
-) {
-    let mut stroke = StrokeStyle::new(
-        line_desc.map_or(0.25, |desc| desc.line_width),
-        line_desc.map_or(LineCap::Round, |desc| map_line_cap(desc.line_end)),
-    );
-    stroke.pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
-    doc.push_path(Paint::Stroke(stroke), [contour.transformed(transform)]);
+/// An open contour awaiting its stroke; see [`paint_paths`].
+fn push_open_contour(doc: &mut GeometryDocument, transform: Affine2, cmds: Vec<PathCmd>) {
+    doc.push_path(Paint::None, [ContourBuf::new(cmds).transformed(transform)]);
 }
 
 fn push_polygon_path(
@@ -3749,18 +3736,6 @@ fn primitive_fill_property(
             .fill_desc_ref
             .and_then(|reference| context.fill_descs.get(&reference))
             .map(|description| description.fill_property)
-    })
-}
-
-fn primitive_line_desc(
-    context: &ExtractContext<'_>,
-    primitive: &StandardPrimitive,
-) -> Option<ipc2581::types::LineDesc> {
-    let style = primitive_style(primitive);
-    style.line_desc.or_else(|| {
-        style
-            .line_desc_ref
-            .and_then(|reference| context.line_descs.get(&reference).copied())
     })
 }
 
@@ -3806,23 +3781,25 @@ fn primitive_style(primitive: &StandardPrimitive) -> StandardPrimitiveStyle {
     }
 }
 
-fn make_paths_stroked(
+/// Stroke the outlines pushed since `path_start` with `line_desc`, scaled
+/// with the placement like the outlines themselves. Without a description
+/// they stay unpainted: no width is invented.
+fn paint_paths(
     doc: &mut GeometryDocument,
     path_start: u32,
-    width: f64,
-    line_cap: LineCap,
-    line_pattern: LinePattern,
+    line_desc: Option<ipc2581::types::LineDesc>,
+    transform: Affine2,
 ) {
-    let mut stroke = StrokeStyle::new(width, line_cap);
-    stroke.pattern = line_pattern;
-    for path in &mut doc.arena.paths[path_start as usize..] {
-        path.paint = Paint::Stroke(stroke);
-    }
-}
-
-fn make_paths_unpainted(doc: &mut GeometryDocument, path_start: u32) {
-    for path in &mut doc.arena.paths[path_start as usize..] {
-        path.paint = Paint::None;
+    let paint = line_desc.map_or(Paint::None, |line_desc| {
+        stroke_paint(line_desc, placement_scale(transform))
+    });
+    let half_width = paint.stroke().map_or(0.0, |stroke| stroke.width / 2.0);
+    for index in path_start as usize..doc.arena.paths.len() {
+        let contours = doc.arena.paths[index].contours;
+        let bbox = doc.arena.contours_bbox(contours).expand(half_width);
+        let path = &mut doc.arena.paths[index];
+        path.paint = paint;
+        path.bbox = bbox;
     }
 }
 
@@ -4534,7 +4511,8 @@ mod tests {
             SourceRef::default(),
             &polyline,
             &mut doc,
-        );
+        )
+        .unwrap();
 
         assert_eq!(feature.paths.count, 1);
         assert_eq!(doc.arena.paths[0].bbox.min, Point::new(-0.1, -0.1));
@@ -4588,10 +4566,131 @@ mod tests {
         assert!(doc.arena.paths[0].is_stroked());
         assert!(!doc.arena.paths[0].is_filled());
         assert_eq!(doc.arena.paths[0].stroke().unwrap().width, 0.1);
-        assert_eq!(doc.arena.paths[0].bbox.min, Point::new(-0.7, -0.7));
-        assert_eq!(doc.arena.paths[0].bbox.max, Point::new(0.7, 0.7));
+        assert_eq!(doc.arena.paths[0].bbox.min, Point::new(-0.75, -0.75));
+        assert_eq!(doc.arena.paths[0].bbox.max, Point::new(0.75, 0.75));
         assert!(doc.arena.cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
         assert!(!doc.arena.cmds.iter().any(|cmd| cmd.op == PathOp::CubicTo));
+    }
+
+    #[test]
+    fn strokes_without_a_line_description_are_reported_not_invented() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <DictionaryUser units="MILLIMETER">
+      <EntryUser id="bare_line">
+        <UserSpecial>
+          <Line startX="0" startY="0" endX="4" endY="0"/>
+        </UserSpecial>
+      </EntryUser>
+    </DictionaryUser>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Features>
+              <Location x="0" y="0"/>
+              <UserPrimitiveRef id="bare_line"/>
+            </Features>
+          </Set>
+          <Set>
+            <Features>
+              <Location x="0" y="0"/>
+              <Line startX="0" startY="5" endX="4" endY="5">
+                <LineDescRef id="absent"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let resolution = Resolution::default();
+        let imported = import_design(&ipc, resolution).unwrap();
+
+        // Neither stroke becomes copper of a made-up width.
+        assert!(
+            imported
+                .geometry
+                .arena
+                .paths
+                .iter()
+                .all(|path| !path.is_stroked()),
+            "{:?}",
+            imported.geometry.arena.paths
+        );
+        let messages = imported
+            .geometry
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("it has no line description")),
+            "{messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("LineDesc 'absent' is missing")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn hollow_outline_width_scales_with_its_placement() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="ring">
+        <Circle diameter="2">
+          <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+          <FillDesc fillProperty="HOLLOW"/>
+        </Circle>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Pad>
+              <Xform scale="2"/>
+              <Location x="0" y="0"/>
+              <StandardPrimitiveRef id="ring"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let doc = extract_layer(&ipc, "TOP", Resolution::default()).unwrap();
+        let path = &doc.arena.paths[doc.features[0].paths.start as usize];
+        assert!((path.stroke().unwrap().width - 0.2).abs() < 1e-12);
+        assert!((path.bbox.width() - 4.2).abs() < 1e-9);
     }
 
     #[test]
