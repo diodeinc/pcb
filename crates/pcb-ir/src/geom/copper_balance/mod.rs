@@ -19,8 +19,8 @@ use lattice::{
     LatticeCandidates, ROUNDED_HEXAGON_AREA_FACTOR, hex_aligned_lattice_centers, lattice_index,
 };
 use spatial::{
-    LatticeDensityKernel, density_evaluation_points, lattice_cell_coverage,
-    normalized_stack_weights, project_box_sum, spatial_result_from_squared_radii,
+    LatticeDensityKernel, LayerDensityModel, density_evaluation_points, lattice_cell_coverage,
+    normalized_stack_weights, spatial_result_from_squared_radii,
 };
 
 const NUMERIC_EPSILON: f64 = 1e-9;
@@ -31,10 +31,6 @@ const AREA_SOLVE_TOLERANCE_MM2: f64 = 1e-3;
 /// the profile can place, and above the slivers a regularized difference
 /// leaves where its operands share an edge.
 const CONTAINMENT_AREA_TOLERANCE_MM2: f64 = 1e-3;
-// A cap, not a schedule: the solve stops on convergence, and at the step the
-// operator allows its slowest modes — a few kernel widths across, which the
-// smoothing all but hides from the objective — are what would run this long.
-const SPATIAL_SOLVE_ITERATIONS: usize = 512;
 const SQRT_3: f64 = 1.732_050_807_568_877_2;
 
 /// Independent per-layer work, in source order. Browsers cannot spawn native
@@ -602,13 +598,15 @@ fn generate_dense_copper_balance_with_lattice(
     })
 }
 
-/// Jointly distribute each layer's already-selected copper area in space.
+/// Distribute each layer's already-selected copper area in space.
 ///
 /// The solver uses squared void radius as its variable. Each layer scatters
-/// only its admitted variables onto one panel lattice; normalized convolution
-/// maps all layers to one evaluation field. Projected gradient then minimizes
-/// local density error plus signed through-stack error while preserving each
-/// layer's selected void area and radius bounds.
+/// only its admitted variables onto one panel lattice, and one normalized
+/// convolution maps every layer to the same evaluation sites. The stack's
+/// copper moment is settled first, in closed form, as a bounded shift of each
+/// layer's copper area. Projected gradient then minimizes each layer's own
+/// local density error while preserving that area and the radius bounds, so
+/// the layers iterate independently of one another.
 ///
 /// For a perforated layer, `rho = H(c + s - p - beta P x)`: `c` and `s` are
 /// fixed-copper and safe-region indicators, `p` is the clipped edge-void
@@ -765,7 +763,7 @@ pub fn generate_spatial_dense_copper_balance(
     // The uniform solve already selected each layer's full-void area at one
     // radius within the profile bounds, so the equal-radius field it implies
     // is already feasible and needs no projection.
-    let mut squared_radii = uniform
+    let squared_radii = uniform
         .iter()
         .enumerate()
         .map(|(layer_index, result)| match result.solution.mode {
@@ -840,190 +838,81 @@ pub fn generate_spatial_dense_copper_balance(
     // to descend with. `H` has unit row sums, so `||H||_2^2 <= ||H||_1`.
     let step = 1.0 / (void_fraction_per_radius_squared.powi(2) * density_kernel.max_column_sum());
 
-    // Updates below this leave every radius well inside half a quantization
-    // step of its converged value, so the emitted lattice is already final.
-    let convergence_mm2 = 1e-6;
-    // Per-layer scratch reused across iterations: the void-fraction field is
-    // written only at active sites (the rest stays zero), and the adjoint
-    // fills its buffer, so neither needs re-zeroing per pass.
-    let mut void_scratch = request
-        .layers
-        .iter()
-        .map(|_| vec![0.0; panel_samples.len()])
-        .collect::<Vec<_>>();
-    let mut influence_scratch = void_scratch.clone();
-    // The panel's copper moment about its mid-plane for one set of radii,
-    // read before and after so the summary can say what the solve bought.
-    let modes = uniform
-        .iter()
-        .map(|result| result.solution.mode)
-        .collect::<Vec<_>>();
-    let moment_reading = |squared_radii: &[Vec<f64>]| {
-        let density = map_layers(squared_radii.iter().enumerate(), |(layer_index, radii)| {
+    // Nothing couples the layers once the settlement has pinned their areas,
+    // so each runs its whole iteration on its own thread and owns its scratch.
+    // The density fields either side of it are what the moment is read from:
+    // the field the uniform selection left behind, and the field of the
+    // emitted radii — what ships is the quantized lattice, not the iterate it
+    // was rounded from.
+    let solved = map_layers(
+        uniform.into_iter().zip(squared_radii).enumerate(),
+        |(layer_index, (baseline, squared_radii))| {
             let available = &region_available_density[layer_regions[layer_index]];
-            let fixed = &fixed_density[layer_index];
-            match modes[layer_index] {
-                DenseCopperBalanceMode::None => fixed.clone(),
-                DenseCopperBalanceMode::Solid => {
-                    fixed.iter().zip(available).map(|(c, s)| c + s).collect()
-                }
-                DenseCopperBalanceMode::Perforated { .. } => {
-                    let mut void_fraction = vec![0.0; panel_samples.len()];
-                    for (sample_index, radius_squared) in
-                        active_sites[layer_index].iter().zip(radii)
-                    {
-                        void_fraction[*sample_index] =
-                            void_fraction_per_radius_squared * radius_squared;
-                    }
-                    let void_density = density_kernel.smooth(&void_fraction);
-                    (0..fixed.len())
-                        .map(|site| {
-                            fixed[site] + available[site]
-                                - partial_void_density[layer_index][site]
-                                - void_density[site]
-                        })
-                        .collect::<Vec<_>>()
-                }
-            }
-        });
+            let partial_void = &partial_void_density[layer_index];
+            let model = LayerDensityModel {
+                kernel: &density_kernel,
+                active_sites: &active_sites[layer_index],
+                base_density: fixed_density[layer_index]
+                    .iter()
+                    .enumerate()
+                    .map(|(site, fixed)| match baseline.solution.mode {
+                        DenseCopperBalanceMode::None => *fixed,
+                        DenseCopperBalanceMode::Solid => fixed + available[site],
+                        DenseCopperBalanceMode::Perforated { .. } => {
+                            fixed + available[site] - partial_void[site]
+                        }
+                    })
+                    .collect(),
+                void_fraction_per_radius_squared,
+            };
+            let initial_density = model.density(&squared_radii);
+            let squared_radii = model.redistribute(
+                squared_radii,
+                request.layers[layer_index].target_density,
+                (lower, upper),
+                pinned_sums[layer_index],
+                step,
+            );
+            let result = if squared_radii.is_empty() {
+                baseline
+            } else {
+                spatial_result_from_squared_radii(
+                    &region_lattices[layer_regions[layer_index]].full_sites,
+                    &squared_radii,
+                    baseline,
+                    request.layers[layer_index],
+                    density_domain_areas[layer_index],
+                    profile,
+                )
+            };
+            let emitted = result
+                .full_voids
+                .iter()
+                .map(|void| void.radius_mm.powi(2))
+                .collect::<Vec<_>>();
+            let achieved_density = model.density(&emitted);
+            (result, initial_density, achieved_density)
+        },
+    );
+
+    // The panel's copper moment about its mid-plane, before and after, so the
+    // summary can say what the solve bought.
+    let moment_reading = |density: &[&Vec<f64>]| {
         MomentReading::of(
             &(0..evaluation_points.len())
                 .map(|site| {
                     normalized_stack_weights
                         .iter()
-                        .zip(&density)
+                        .zip(density)
                         .map(|(weight, density)| weight * density[site])
                         .sum::<f64>()
                 })
                 .collect::<Vec<_>>(),
         )
     };
-    // The field the uniform selection left behind.
-    let initial_reading = stack_is_weighed.then(|| moment_reading(&squared_radii));
-    for _ in 0..SPATIAL_SOLVE_ITERATIONS {
-        // The modeled final copper fraction of each layer, not its distance
-        // from target: the moment below is the copper the panel carries, and
-        // subtracting the targets would leave it blind to whatever imbalance
-        // the boards were designed with.
-        let density = map_layers(
-            void_scratch.iter_mut().enumerate(),
-            |(layer_index, void_fraction)| {
-                let void_density = match uniform[layer_index].solution.mode {
-                    DenseCopperBalanceMode::Perforated { .. } => {
-                        for (sample_index, radius_squared) in active_sites[layer_index]
-                            .iter()
-                            .zip(&squared_radii[layer_index])
-                        {
-                            void_fraction[*sample_index] =
-                                void_fraction_per_radius_squared * radius_squared;
-                        }
-                        density_kernel.smooth(void_fraction)
-                    }
-                    DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => {
-                        vec![0.0; evaluation_points.len()]
-                    }
-                };
-                fixed_density[layer_index]
-                    .iter()
-                    .enumerate()
-                    .map(|(site_index, fixed)| {
-                        let available = &region_available_density[layer_regions[layer_index]];
-                        let generated_density = match uniform[layer_index].solution.mode {
-                            DenseCopperBalanceMode::None => 0.0,
-                            DenseCopperBalanceMode::Solid => available[site_index],
-                            DenseCopperBalanceMode::Perforated { .. } => {
-                                available[site_index]
-                                    - partial_void_density[layer_index][site_index]
-                                    - void_density[site_index]
-                            }
-                        };
-                        fixed + generated_density
-                    })
-                    .collect::<Vec<_>>()
-            },
-        );
-        let proposals = map_layers(
-            squared_radii
-                .iter()
-                .zip(influence_scratch.iter_mut())
-                .enumerate(),
-            |(layer_index, (radii, influence))| {
-                if radii.is_empty() {
-                    return Vec::new();
-                }
-                // Its own density error. The moment is not here: the
-                // settlement already spent what the stack was owed.
-                let residual = density[layer_index]
-                    .iter()
-                    .map(|density| density - request.layers[layer_index].target_density)
-                    .collect::<Vec<_>>();
-                density_kernel.smooth_adjoint_into(&residual, influence);
-                radii
-                    .iter()
-                    .enumerate()
-                    .map(|(local_index, radius_squared)| {
-                        radius_squared
-                            + step
-                                * void_fraction_per_radius_squared
-                                * influence[active_sites[layer_index][local_index]]
-                    })
-                    .collect::<Vec<_>>()
-            },
-        );
-        // Each layer keeps the copper area the settlement asked for, so it
-        // redistributes within the panel and never spends against the stack.
-        let update = squared_radii
-            .iter_mut()
-            .zip(&proposals)
-            .zip(&pinned_sums)
-            .map(|((radii, proposal), pinned)| {
-                let projected = project_box_sum(proposal, lower, upper, *pinned);
-                let update = radii
-                    .iter()
-                    .zip(&projected)
-                    .map(|(before, after)| (before - after).abs())
-                    .fold(0.0_f64, f64::max);
-                *radii = projected;
-                update
-            })
-            .fold(0.0_f64, f64::max);
-        if update < convergence_mm2 {
-            break;
-        }
-    }
-
-    let layers = uniform
-        .into_iter()
-        .enumerate()
-        .map(|(layer_index, baseline)| {
-            if squared_radii[layer_index].is_empty() {
-                return baseline;
-            }
-            spatial_result_from_squared_radii(
-                &region_lattices[layer_regions[layer_index]].full_sites,
-                &squared_radii[layer_index],
-                baseline,
-                request.layers[layer_index],
-                density_domain_areas[layer_index],
-                profile,
-            )
-        })
-        .collect::<Vec<_>>();
-    // What ships is the quantized lattice, so the achieved reading is taken
-    // from the emitted radii rather than from the iterate they were rounded
-    // from.
-    let moment_field = initial_reading.map(|initial| {
-        let emitted = layers
-            .iter()
-            .map(|result| {
-                result
-                    .full_voids
-                    .iter()
-                    .map(|void| void.radius_mm.powi(2))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let achieved = moment_reading(&emitted);
+    let moment_field = stack_is_weighed.then(|| {
+        let initial = moment_reading(&solved.iter().map(|layer| &layer.1).collect::<Vec<_>>());
+        let achieved = moment_reading(&solved.iter().map(|layer| &layer.2).collect::<Vec<_>>());
         StackMomentField {
             initial_mean: initial.mean,
             initial_rms: initial.rms,
@@ -1032,7 +921,7 @@ pub fn generate_spatial_dense_copper_balance(
         }
     });
     Ok(SpatialCopperBalance {
-        layers,
+        layers: solved.into_iter().map(|(result, _, _)| result).collect(),
         moment_field,
     })
 }

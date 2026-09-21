@@ -162,8 +162,10 @@ converted to squared-radius space, after subtracting already-clipped
 edge-fragment area (edge fragments keep their projected geometry; they are
 boundary constraints, not variables). Projected gradient converges on this
 convex problem; the gradient uses the exact transpose `-beta P_l^T H^T` of the
-forward operator, and projection onto box-with-pinned-sum is a single
-water-filling bisection per layer. For runtime, the objective is evaluated on a
+forward operator, the step is the reciprocal of the operator's Lipschitz bound
+`beta^2 ||H||_1`, and projection onto box-with-pinned-sum is a water-filling
+shift found by safeguarded Newton. Nothing couples the layers once their areas
+are pinned, so each layer iterates on its own. For runtime, the objective is evaluated on a
 deterministic site subset spaced about one kernel sigma apart; this changes no
 safe geometry, void sites, radius constraints, or copper area. A
 constant-radius pattern is what falls out when the measured fields are

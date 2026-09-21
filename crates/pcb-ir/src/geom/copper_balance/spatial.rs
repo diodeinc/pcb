@@ -12,6 +12,13 @@ use super::{
 use crate::geom::{ContourSet, Point};
 
 const DENSITY_KERNEL_TRUNCATION: f64 = 3.0;
+// A cap, not a schedule: a layer stops when its radii stop moving. What runs
+// this long is the radius field drifting along shapes a few kernel widths
+// across, which the smoothing all but hides from the objective.
+const SPATIAL_SOLVE_ITERATIONS: usize = 512;
+// Updates below this leave every radius well inside half a quantization step
+// of its converged value, so the emitted lattice is already final.
+const SPATIAL_SOLVE_CONVERGENCE_MM2: f64 = 1e-6;
 
 pub(super) fn normalized_stack_weights(
     layers: &[SpatialCopperBalanceLayerRequest<'_>],
@@ -174,6 +181,96 @@ impl LatticeDensityKernel {
     }
 }
 
+/// One layer's density at the evaluation sites as a function of its squared
+/// void radii, `rho = base - beta H P x`.
+pub(super) struct LayerDensityModel<'a> {
+    pub(super) kernel: &'a LatticeDensityKernel,
+    /// Sample index of each squared-radius variable: the scatter `P`.
+    pub(super) active_sites: &'a [usize],
+    /// Copper fraction with every full void closed: fixed copper, plus the
+    /// generated plane less its clipped edge voids.
+    pub(super) base_density: Vec<f64>,
+    /// `beta`, the share of a lattice cell a void takes per unit squared
+    /// radius.
+    pub(super) void_fraction_per_radius_squared: f64,
+}
+
+impl LayerDensityModel<'_> {
+    /// `void_fraction` spans the samples and is written only at active sites,
+    /// so it must arrive zero everywhere else.
+    fn density_into(&self, squared_radii: &[f64], void_fraction: &mut [f64], density: &mut [f64]) {
+        for (sample_index, radius_squared) in self.active_sites.iter().zip(squared_radii) {
+            void_fraction[*sample_index] = self.void_fraction_per_radius_squared * radius_squared;
+        }
+        self.kernel.smooth_into(void_fraction, density);
+        for (density, base) in density.iter_mut().zip(&self.base_density) {
+            *density = base - *density;
+        }
+    }
+
+    /// The modeled copper fraction itself, not its distance from target: the
+    /// stack moment is the copper the panel carries, and subtracting targets
+    /// would leave it blind to whatever imbalance the boards were drawn with.
+    pub(super) fn density(&self, squared_radii: &[f64]) -> Vec<f64> {
+        let mut density = vec![0.0; self.kernel.row_count()];
+        self.density_into(
+            squared_radii,
+            &mut vec![0.0; self.kernel.sample_count],
+            &mut density,
+        );
+        density
+    }
+
+    /// Projected gradient on the layer's own squared density error, over
+    /// `{x : lower <= x <= upper, sum(x) = pinned_sum}`.
+    ///
+    /// The moment is not in the objective: the settlement already spent what
+    /// the stack was owed, and pinning the sum keeps the layer redistributing
+    /// within the panel rather than spending against the stack.
+    pub(super) fn redistribute(
+        &self,
+        mut squared_radii: Vec<f64>,
+        target_density: f64,
+        (lower, upper): (f64, f64),
+        pinned_sum: f64,
+        step: f64,
+    ) -> Vec<f64> {
+        let mut void_fraction = vec![0.0; self.kernel.sample_count];
+        let mut influence = vec![0.0; self.kernel.sample_count];
+        let mut residual = vec![0.0; self.kernel.row_count()];
+        let mut proposal = squared_radii.clone();
+        let mut shift = 0.0;
+        for _ in 0..SPATIAL_SOLVE_ITERATIONS {
+            self.density_into(&squared_radii, &mut void_fraction, &mut residual);
+            for residual in &mut residual {
+                *residual -= target_density;
+            }
+            self.kernel.smooth_adjoint_into(&residual, &mut influence);
+            for ((proposal, radius_squared), sample_index) in proposal
+                .iter_mut()
+                .zip(&squared_radii)
+                .zip(self.active_sites)
+            {
+                *proposal = radius_squared
+                    + step * self.void_fraction_per_radius_squared * influence[*sample_index];
+            }
+            // Successive proposals differ by one small gradient step, so the
+            // last shift is nearly this one.
+            shift = project_box_sum(&mut proposal, lower, upper, pinned_sum, shift);
+            let update = squared_radii
+                .iter()
+                .zip(&proposal)
+                .map(|(before, after)| (before - after).abs())
+                .fold(0.0_f64, f64::max);
+            std::mem::swap(&mut squared_radii, &mut proposal);
+            if update < SPATIAL_SOLVE_CONVERGENCE_MM2 {
+                break;
+            }
+        }
+        squared_radii
+    }
+}
+
 /// Sample the 5 mm-scale objective on a deterministic subset of the 1.35 mm
 /// fabrication lattice. Geometry and output stay on the full lattice.
 pub(super) fn density_evaluation_points(
@@ -214,42 +311,71 @@ pub(super) fn lattice_cell_coverage(
     )
 }
 
-/// Euclidean projection onto `{x : lower <= x <= upper, sum(x) = target}`.
+/// Euclidean projection onto `{x : lower <= x <= upper, sum(x) = target}`, in
+/// place. Returns the shift it settled on, to seed the next call.
 ///
-/// Water-filling: one common shift moves every value, the box clamps, and the
-/// shift that lands the clamped sum on the target is found by bisection. A
-/// target outside what the box can reach saturates every value at the nearer
-/// bound, which is the closest feasible point.
-pub(super) fn project_box_sum(values: &[f64], lower: f64, upper: f64, target: f64) -> Vec<f64> {
-    let clamped_sum = |shift: f64| -> f64 {
-        values
-            .iter()
-            .map(|value| (value - shift).clamp(lower, upper))
-            .sum()
-    };
-    let mut low_shift = values
+/// Water-filling: one common shift moves every value and the box clamps. The
+/// clamped sum is piecewise linear and non-increasing in the shift, with slope
+/// minus the number of values the box leaves free, so Newton's step is exact
+/// once it shares a linear piece with the root. It is kept inside a bracket
+/// and gives way to bisection whenever it stops halving its own stride, which
+/// bounds the pass count however the pieces fall. A target outside what the
+/// box can reach saturates every value at the nearer bound, which is the
+/// closest feasible point.
+pub(super) fn project_box_sum(
+    values: &mut [f64],
+    lower: f64,
+    upper: f64,
+    target: f64,
+    shift_guess: f64,
+) -> f64 {
+    let count = values.len() as f64;
+    let target = target.clamp(count * lower, count * upper);
+    let (least, greatest) = values
         .iter()
-        .map(|value| value - upper)
-        .min_by(f64::total_cmp)
-        .unwrap_or(0.0);
-    let mut high_shift = values
-        .iter()
-        .map(|value| value - lower)
-        .max_by(f64::total_cmp)
-        .unwrap_or(0.0);
-    for _ in 0..44 {
-        let trial = (low_shift + high_shift) / 2.0;
-        if clamped_sum(trial) > target {
-            low_shift = trial;
+        .fold((f64::MAX, f64::MIN), |(least, greatest), value| {
+            (least.min(*value), greatest.max(*value))
+        });
+    // Every value sits at `upper` for shifts up to `low`, at `lower` from
+    // `high` on.
+    let (mut low, mut high) = (least - upper, greatest - lower);
+    // Not `clamp`: no values leaves an inverted bracket, which the loop below
+    // leaves at once.
+    let mut shift = shift_guess.max(low).min(high);
+    let mut stride = high - low;
+    loop {
+        let (sum, free) = values.iter().fold((0.0, 0.0), |(sum, free), value| {
+            let moved = value - shift;
+            (
+                sum + moved.clamp(lower, upper),
+                free + f64::from(lower < moved && moved < upper),
+            )
+        });
+        let excess = sum - target;
+        if excess > 0.0 {
+            low = shift;
+        } else if excess < 0.0 {
+            high = shift;
         } else {
-            high_shift = trial;
+            break;
         }
+        let newton = shift + excess / free;
+        let next = if low < newton && newton < high && 2.0 * (newton - shift).abs() <= stride {
+            newton
+        } else {
+            (low + high) / 2.0
+        };
+        // The bracket has closed to adjacent floats.
+        if next <= low || next >= high {
+            break;
+        }
+        stride = (next - shift).abs();
+        shift = next;
     }
-    let shift = (low_shift + high_shift) / 2.0;
-    values
-        .iter()
-        .map(|value| (value - shift).clamp(lower, upper))
-        .collect()
+    for value in values {
+        *value = (*value - shift).clamp(lower, upper);
+    }
+    shift
 }
 
 pub(super) fn spatial_result_from_squared_radii(
@@ -318,6 +444,12 @@ mod tests {
         Resolution::default().with_tolerance(tolerance_mm)
     }
 
+    fn projected(values: &[f64], lower: f64, upper: f64, target: f64, guess: f64) -> Vec<f64> {
+        let mut values = values.to_vec();
+        project_box_sum(&mut values, lower, upper, target, guess);
+        values
+    }
+
     /// The projection lands the sum on the target when the box can reach it,
     /// and saturates at the nearer bound when it cannot.
     #[test]
@@ -326,19 +458,68 @@ mod tests {
         let (lower, upper) = (0.04_f64, 0.42_f64);
 
         for target in [0.6, 1.0, 1.9] {
-            let projected = project_box_sum(&values, lower, upper, target);
+            let projected = projected(&values, lower, upper, target, 0.0);
             assert!(projected.iter().all(|v| (lower..=upper).contains(v)));
             assert!(
-                (projected.iter().sum::<f64>() - target).abs() <= 1e-9,
+                (projected.iter().sum::<f64>() - target).abs() <= 1e-12,
                 "{projected:?}"
             );
         }
 
         // Beyond the box's reach on either side, every value saturates.
-        let low = project_box_sum(&values, lower, upper, 0.0);
-        assert!(low.iter().all(|v| (v - lower).abs() <= 1e-9));
-        let high = project_box_sum(&values, lower, upper, 10.0);
-        assert!(high.iter().all(|v| (v - upper).abs() <= 1e-9));
+        let low = projected(&values, lower, upper, 0.0, 0.0);
+        assert!(low.iter().all(|v| (v - lower).abs() <= 1e-12));
+        let high = projected(&values, lower, upper, 10.0, 0.0);
+        assert!(high.iter().all(|v| (v - upper).abs() <= 1e-12));
+    }
+
+    /// The shift is unique wherever any value is left free, so bisecting for
+    /// it to the last bit and stepping to it have to agree, from any seed.
+    #[test]
+    fn box_sum_projection_matches_bisection_from_any_seed() {
+        let bisected = |values: &[f64], lower: f64, upper: f64, target: f64| {
+            let clamped_sum = |shift: f64| -> f64 {
+                values
+                    .iter()
+                    .map(|value| (value - shift).clamp(lower, upper))
+                    .sum()
+            };
+            let (mut low, mut high) = (-10.0, 10.0);
+            for _ in 0..200 {
+                let trial = (low + high) / 2.0;
+                if clamped_sum(trial) > target {
+                    low = trial;
+                } else {
+                    high = trial;
+                }
+            }
+            values
+                .iter()
+                .map(|value| (value - (low + high) / 2.0).clamp(lower, upper))
+                .collect::<Vec<_>>()
+        };
+        let (lower, upper) = (0.04, 0.4225);
+        // Clustered, spread, and mostly saturated fields.
+        let fields = [0.002, 0.2, 3.0].map(|spread| {
+            (0..997)
+                .map(|index| 0.23 + spread * (((index * 7919) % 1013) as f64 / 1013.0 - 0.5))
+                .collect::<Vec<_>>()
+        });
+        for values in &fields {
+            for fraction in [0.0, 0.03, 0.5, 0.97, 1.0] {
+                let target = values.len() as f64 * (lower + fraction * (upper - lower));
+                let expected = bisected(values, lower, upper, target);
+                for guess in [0.0, -5.0, 5.0, 0.1] {
+                    let actual = projected(values, lower, upper, target, guess);
+                    let worst = actual
+                        .iter()
+                        .zip(&expected)
+                        .map(|(left, right)| (left - right).abs())
+                        .fold(0.0_f64, f64::max);
+                    assert!(worst <= 1e-12, "{fraction} from {guess}: {worst}");
+                }
+            }
+        }
     }
 
     /// The gradient step is the reciprocal of this bound, so the bound has to
