@@ -253,10 +253,7 @@ pub fn is_vcut_operation_feature(doc: &Document, feature: &crate::dialects::ipc:
 }
 
 fn feature_has_vcut_spec(doc: &Document, feature: &crate::dialects::ipc::Feature) -> bool {
-    let Some(set_index) = feature.set else {
-        return false;
-    };
-    let Some(set) = doc.feature_sets.get(set_index as usize) else {
+    let Some(set) = doc.feature_set(feature) else {
         return false;
     };
     spec_refs_include_vcut(doc, set.spec_refs)
@@ -769,6 +766,8 @@ mod tests {
             geometry_usage: None,
             net: None,
             polarity: Polarity::Dark,
+            copper_balance: false,
+            copper_balance_void: None,
             spec_refs: Span::single(0),
             features: Span::single(0),
             bbox: BBox::empty(),

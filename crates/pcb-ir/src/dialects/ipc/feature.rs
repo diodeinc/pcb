@@ -49,7 +49,9 @@ pub struct Feature {
     pub primitive_ref: Option<PrimitiveRef>,
     /// Spans `doc.pin_refs`.
     pub pin_refs: Span,
-    pub flags: FeatureFlags,
+    /// An IPC set void: clears the features before it in its set, and no
+    /// others. Ordered artwork cannot say that, so normalization resolves it.
+    pub clears_previous_in_set: bool,
 }
 
 /// A reference into one of the source document's two shape dictionaries.
@@ -97,7 +99,7 @@ impl Feature {
             padstack_ref: None,
             primitive_ref: None,
             pin_refs: Span::EMPTY,
-            flags: FeatureFlags::default(),
+            clears_previous_in_set: false,
         }
     }
 
@@ -391,15 +393,6 @@ pub enum FiducialKind {
     GoodPanel,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FeatureFlags {
-    pub clears_previous_in_set: bool,
-    /// Generated copper balancing inherited from the source IPC feature set.
-    pub copper_balance: bool,
-    /// Validated source parameters of a generated rounded-hex balance void.
-    pub copper_balance_void: Option<CopperBalanceVoid>,
-}
-
 /// A flat-top rounded hexagon of circumradius `radius_mm` centered on a site
 /// of `lattice`, whose sites tile the plane with flat-top hexagonal cells one
 /// pitch across the flats.
@@ -428,6 +421,11 @@ pub struct FeatureSet {
     pub geometry_usage: Option<GeometryUsage>,
     pub net: Option<Symbol>,
     pub polarity: Polarity,
+    /// Whether the set is generated copper balancing.
+    pub copper_balance: bool,
+    /// Validated source parameters of the rounded-hex balance void the set
+    /// holds, when it is one.
+    pub copper_balance_void: Option<CopperBalanceVoid>,
     /// Spans `doc.spec_refs`.
     pub spec_refs: Span,
     /// Spans `doc.features`.

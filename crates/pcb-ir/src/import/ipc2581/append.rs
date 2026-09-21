@@ -49,14 +49,10 @@ pub(super) fn append_transformed_layer(
                 .source_set_index
                 .checked_add(source_set_offset)
                 .context("Panel source feature set index overflow")?,
-            source_geometry_ref: source_set.source_geometry_ref,
-            component_ref: source_set.component_ref,
-            geometry_usage: source_set.geometry_usage,
-            net: source_set.net,
-            polarity: source_set.polarity,
             spec_refs,
             features: Span::new(target.features.len() as u32, 0),
             bbox: BBox::empty(),
+            ..source_set.clone()
         });
 
         for feature in source_set.features.slice(&source.features) {

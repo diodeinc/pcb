@@ -112,6 +112,7 @@ pub(super) fn push_feature_set_record(
     source_set_index: u32,
     set: &ipc2581::types::FeatureSet,
     polarity: GeometryPolarity,
+    copper_balance: Option<CopperBalanceMetadata>,
 ) -> u32 {
     let spec_refs = push_spec_refs(doc, &set.spec_refs);
     let set_id = doc.feature_sets.len() as u32;
@@ -123,6 +124,16 @@ pub(super) fn push_feature_set_record(
         geometry_usage: set.geometry_usage.map(map_geometry_usage),
         net: set.net,
         polarity,
+        copper_balance: copper_balance.is_some(),
+        copper_balance_void: copper_balance.and_then(|metadata| {
+            metadata.void.map(|void| CopperBalanceVoid {
+                lattice: crate::geom::copper_balance::DenseCopperLattice {
+                    origin: void.lattice_origin,
+                    pitch_mm: void.lattice_pitch_mm,
+                },
+                radius_mm: void.radius_mm,
+            })
+        }),
         spec_refs,
         features: Span::new(doc.features.len() as u32, 0),
         bbox: BBox::empty(),
@@ -145,22 +156,11 @@ pub(super) fn push_extracted_feature(
     doc: &mut GeometryDocument,
     set_id: u32,
     source_layer_ref: Symbol,
-    copper_balance: Option<CopperBalanceMetadata>,
     mut feature: GeometryFeature,
     layer_bbox: &mut BBox,
 ) {
     feature.source_layer_ref = Some(source_layer_ref);
     feature.set = Some(set_id);
-    feature.flags.copper_balance = copper_balance.is_some();
-    feature.flags.copper_balance_void = copper_balance.and_then(|metadata| {
-        metadata.void.map(|void| CopperBalanceVoid {
-            lattice: crate::geom::copper_balance::DenseCopperLattice {
-                origin: void.lattice_origin,
-                pitch_mm: void.lattice_pitch_mm,
-            },
-            radius_mm: void.radius_mm,
-        })
-    });
     let bbox = feature.bbox;
     *layer_bbox = layer_bbox.union(bbox);
     let set = &mut doc.feature_sets[set_id as usize];
@@ -234,7 +234,14 @@ pub(super) fn append_step_layer(
             {
                 bail!("copper-balance full_void set must contain exactly one feature group");
             }
-            let set_id = push_feature_set_record(doc, layer_index, set_index as u32, set, polarity);
+            let set_id = push_feature_set_record(
+                doc,
+                layer_index,
+                set_index as u32,
+                set,
+                polarity,
+                copper_balance,
+            );
 
             for (feature_index, set_feature) in set.features.iter().enumerate() {
                 let source = SourceRef {
@@ -269,7 +276,6 @@ pub(super) fn append_step_layer(
                         doc,
                         set_id,
                         layer_feature.layer_ref,
-                        copper_balance,
                         feature,
                         &mut layer_bbox,
                     );
@@ -330,8 +336,14 @@ pub(super) fn append_step_layer(
             }
 
             if !emitted.is_empty() {
-                let set_id =
-                    push_feature_set_record(doc, layer_index, set_index as u32, set, polarity);
+                let set_id = push_feature_set_record(
+                    doc,
+                    layer_index,
+                    set_index as u32,
+                    set,
+                    polarity,
+                    copper_balance,
+                );
                 for mut feature in emitted {
                     feature.source_step_ref = Some(step.name);
                     feature.source_step_kind = source_step_kind;
@@ -340,7 +352,6 @@ pub(super) fn append_step_layer(
                         doc,
                         set_id,
                         layer_feature.layer_ref,
-                        copper_balance,
                         feature,
                         &mut layer_bbox,
                     );
@@ -488,6 +499,8 @@ pub(super) fn push_negative_layer_plane(
         geometry_usage: None,
         net: None,
         polarity: GeometryPolarity::Dark,
+        copper_balance: false,
+        copper_balance_void: None,
         spec_refs: Span::EMPTY,
         features: Span::new(doc.features.len() as u32, 0),
         bbox: BBox::empty(),
@@ -504,7 +517,7 @@ pub(super) fn push_negative_layer_plane(
     complete_feature_intent(layer, &mut feature);
     let source = feature.source;
     for feature in keep_finite(doc, mark, vec![feature], source) {
-        push_extracted_feature(doc, set_id, layer.name, None, feature, layer_bbox);
+        push_extracted_feature(doc, set_id, layer.name, feature, layer_bbox);
     }
 }
 
@@ -761,7 +774,7 @@ pub(super) fn extract_pad(
         .and_then(|padstack| padstack.hole_def.as_ref())
         .map(|hole| plating_kind(hole.plating_status))
         .unwrap_or(PlatingKind::None);
-    feature.flags.clears_previous_in_set = void;
+    feature.clears_previous_in_set = void;
     push_pin_ref(doc, &mut feature, pad.pin_ref.as_ref());
 
     Ok(Some(feature))

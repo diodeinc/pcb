@@ -1172,12 +1172,16 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         "shared IPC Locations should remain a placement group"
     );
     pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut top);
+    let copper_balance = |feature: &pcb_ir::dialects::ipc::Feature| {
+        top.feature_set(feature)
+            .is_some_and(|set| set.copper_balance)
+    };
     assert!(
         top.features
             .iter()
             .filter(|feature| feature.source_step_kind == LayoutStepKind::Panel
                 && !feature.is_fiducial())
-            .all(|feature| feature.flags.copper_balance)
+            .all(copper_balance)
     );
     // Paint the balance features in order: the plane, the voids that clear
     // it, then the boundary web.
@@ -1187,7 +1191,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         .filter(|feature| {
             feature.source_step_kind == LayoutStepKind::Panel
                 && feature.kind == FeatureKind::Primitive
-                && feature.flags.copper_balance
+                && copper_balance(feature)
         })
         .fold(ContourSet::empty(resolution), |image, feature| {
             let paint = ContourSet::from_painted_paths(

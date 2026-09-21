@@ -37,10 +37,9 @@ pub use balancing_region::{
 };
 pub use document::{Document, Layer};
 pub use feature::{
-    CopperBalanceVoid, Feature, FeatureBucket, FeatureDomain, FeatureFlags, FeatureIntent,
-    FeatureKind, FeatureMaterial, FeatureOperation, FeaturePlacementGroup, FeatureRole, FeatureSet,
-    FeatureSpan, FiducialKind, GeometryUsage, PinRef, PlatingKind, PrimitiveRef, SimpleShape,
-    SourceRef,
+    CopperBalanceVoid, Feature, FeatureBucket, FeatureDomain, FeatureIntent, FeatureKind,
+    FeatureMaterial, FeatureOperation, FeaturePlacementGroup, FeatureRole, FeatureSet, FeatureSpan,
+    FiducialKind, GeometryUsage, PinRef, PlatingKind, PrimitiveRef, SimpleShape, SourceRef,
 };
 pub use layout::{
     LayoutGraph, LayoutInstance, LayoutMargins, LayoutPurpose, LayoutRepeat, LayoutStep,

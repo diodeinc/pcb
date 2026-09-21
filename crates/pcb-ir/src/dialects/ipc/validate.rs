@@ -16,7 +16,7 @@ pub fn validate_artwork_ready(doc: &Document) -> Result<(), Diagnostics> {
         if feature.paths.is_empty() {
             continue;
         }
-        if feature.flags.clears_previous_in_set {
+        if feature.clears_previous_in_set {
             diagnostics.error(format!(
                 "feature {feature_index} still has unresolved set-void clear semantics"
             ));

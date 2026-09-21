@@ -603,8 +603,9 @@ fn gerber_target<'a>(
     ArtworkTarget {
         catalogue,
         flashes: if role == GerberLayerRole::Copper {
-            &|_, feature| {
-                feature.flags.copper_balance_void.is_some()
+            &|doc, feature| {
+                doc.feature_set(feature)
+                    .is_some_and(|set| set.copper_balance_void.is_some())
                     || matches!(
                         feature.bucket,
                         FeatureBucket::Smd
@@ -1080,7 +1081,7 @@ fn object_attributes(
     let carries_netlist = role == GerberLayerRole::Copper;
     let carries_pins = carries_netlist && matches!(side, IrSide::Top | IrSide::Bottom);
     ObjectAttributes {
-        aperture_function: aperture_function(feature, role, side),
+        aperture_function: aperture_function(doc, feature, role, side),
         net: if carries_netlist {
             feature
                 .net
@@ -1100,6 +1101,7 @@ fn object_attributes(
 }
 
 fn aperture_function(
+    doc: &GeometryDocument,
     feature: &Feature,
     role: GerberLayerRole,
     side: IrSide,
@@ -1119,7 +1121,10 @@ fn aperture_function(
         GerberLayerRole::Copper => {}
     }
 
-    if feature.flags.copper_balance {
+    if doc
+        .feature_set(feature)
+        .is_some_and(|set| set.copper_balance)
+    {
         return Some(vec!["CopperBalancing".to_string()]);
     }
 

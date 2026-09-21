@@ -404,10 +404,7 @@ fn circle_flash(doc: &Document, feature: &Feature) -> Option<(Point, f64)> {
 pub fn paint_order(feature: &Feature) -> artwork::PaintOrder {
     let stage = if feature.bucket == FeatureBucket::Cutout {
         artwork::PaintStage::FinalCutout
-    } else if feature.polarity == Polarity::Clear
-        || feature.flags.clears_previous_in_set
-        || feature.bucket == FeatureBucket::Fill
-    {
+    } else if feature.polarity == Polarity::Clear || feature.bucket == FeatureBucket::Fill {
         artwork::PaintStage::Base
     } else {
         artwork::PaintStage::Overlay

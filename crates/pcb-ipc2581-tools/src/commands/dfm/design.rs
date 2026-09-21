@@ -1400,12 +1400,9 @@ fn physical_copper_span(span: FeatureSpan, stackup: &PhysicalStackup) -> Option<
 }
 
 fn source_net(document: &GeometryDocument, feature: &Feature) -> Option<Symbol> {
-    feature.net.or_else(|| {
-        feature
-            .set
-            .and_then(|set| document.feature_sets.get(set as usize))
-            .and_then(|set| set.net)
-    })
+    feature
+        .net
+        .or_else(|| document.feature_set(feature).and_then(|set| set.net))
 }
 
 fn feature_provenance(source: Source<'_>, layer: &str, feature: &Feature) -> SourceLocator {
@@ -1437,7 +1434,11 @@ fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
 }
 
 /// The conductor a copper feature belongs to.
-fn copper_conductor(source: Source<'_>, feature: &Feature) -> ConductorId {
+fn copper_conductor(
+    source: Source<'_>,
+    document: &GeometryDocument,
+    feature: &Feature,
+) -> ConductorId {
     let step = feature.source_step_ref;
     let instance = source.placed(feature);
     if let Some(net) = feature.net {
@@ -1455,7 +1456,11 @@ fn copper_conductor(source: Source<'_>, feature: &Feature) -> ConductorId {
                 .expect("materialized copper pad must retain its occurrence identity"),
         };
     }
-    if feature.is_fiducial() || feature.flags.copper_balance {
+    if feature.is_fiducial()
+        || document
+            .feature_set(feature)
+            .is_some_and(|set| set.copper_balance)
+    {
         return ConductorId::Auxiliary {
             step,
             instance,
@@ -1479,7 +1484,7 @@ fn compose_attributed_copper(
     let owners = compose_attributed_owners(
         document,
         LayerRole::Copper,
-        &|_, feature| copper_conductor(source, feature),
+        &|document, feature| copper_conductor(source, document, feature),
         source.resolution,
     )?;
     let mut composer = pcb_ir::geom::region::PaintComposer::new(source.resolution);

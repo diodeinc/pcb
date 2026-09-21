@@ -461,7 +461,7 @@ pub fn compose_feature_paths(doc: &mut Document) {
 /// Only sets that hold a void are visited, in document order, and each is
 /// painted in the order its features stand in the document.
 pub fn resolve_set_voids(doc: &mut Document, resolution: Resolution) -> Result<(), AccuracyError> {
-    let is_void = |feature: &Feature| feature.flags.clears_previous_in_set;
+    let is_void = |feature: &Feature| feature.clears_previous_in_set;
     materialize_for_cutters(doc, is_void);
     let mut sets = doc
         .features
@@ -632,7 +632,7 @@ fn resolve_clears(
             let feature = &mut doc.features[tile.feature];
             feature.paths = Span::single(ring);
             feature.polarity = Polarity::Dark;
-            feature.flags.clears_previous_in_set = false;
+            feature.clears_previous_in_set = false;
             painted.push(tile.feature);
         }
     }
@@ -663,7 +663,7 @@ fn lattice_tiles(doc: &Document, run: impl Iterator<Item = usize>) -> Vec<Lattic
     let voids = run
         .filter_map(|index| {
             let feature = &doc.features[index];
-            let void = feature.flags.copper_balance_void?;
+            let void = doc.feature_set(feature)?.copper_balance_void?;
             let center = Point::new(feature.transform.m02, feature.transform.m12);
             Some((index, void, center, void.lattice.nearest_site(center).0))
         })
@@ -1108,13 +1108,17 @@ mod tests {
             void.paths = Span::single(path);
             void.transform = Affine2::translation(center);
             void.primitive_ref = Some(PrimitiveRef::User(sym(7)));
-            void.flags.copper_balance_void =
-                Some(crate::dialects::ipc::feature::CopperBalanceVoid {
-                    lattice,
-                    radius_mm: 0.5 * 2.0_f64.sqrt(),
-                });
+            void.set = Some(0);
             doc.features.push(void);
         }
+        doc.feature_sets.push(FeatureSet {
+            copper_balance: true,
+            copper_balance_void: Some(crate::dialects::ipc::feature::CopperBalanceVoid {
+                lattice,
+                radius_mm: 0.5 * 2.0_f64.sqrt(),
+            }),
+            ..test_set(0, Span::new(1, 2))
+        });
         doc.layers.push(test_layer(Span::new(0, 3)));
 
         normalize_for_positive_artwork(&mut doc, Resolution::default()).unwrap();
@@ -1376,25 +1380,11 @@ mod tests {
         );
         doc.features.push(Feature {
             paths: Span::new(1, 1),
-            flags: crate::dialects::ipc::FeatureFlags {
-                clears_previous_in_set: true,
-                ..Default::default()
-            },
+            clears_previous_in_set: true,
             ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
-        doc.feature_sets.push(crate::dialects::ipc::FeatureSet {
-            layer: 0,
-            source_set_index: 0,
-            source_geometry_ref: None,
-            component_ref: None,
-            geometry_usage: None,
-            net: None,
-            polarity: Polarity::Dark,
-            spec_refs: Span::EMPTY,
-            features: Span::new(0, 2),
-            bbox: BBox::empty(),
-        });
+        doc.feature_sets.push(test_set(0, Span::new(0, 2)));
         for feature in &mut doc.features {
             feature.set = Some(0);
         }
@@ -1437,30 +1427,8 @@ mod tests {
             placements: Span::new(0, 2),
             features: Span::new(1, 2),
         });
-        doc.feature_sets.push(FeatureSet {
-            layer: 0,
-            source_set_index: 0,
-            source_geometry_ref: None,
-            component_ref: None,
-            geometry_usage: None,
-            net: None,
-            polarity: Polarity::Dark,
-            spec_refs: Span::EMPTY,
-            features: Span::single(0),
-            bbox: BBox::empty(),
-        });
-        doc.feature_sets.push(FeatureSet {
-            layer: 0,
-            source_set_index: 1,
-            source_geometry_ref: None,
-            component_ref: None,
-            geometry_usage: None,
-            net: None,
-            polarity: Polarity::Dark,
-            spec_refs: Span::EMPTY,
-            features: Span::new(1, 2),
-            bbox: BBox::empty(),
-        });
+        doc.feature_sets.push(test_set(0, Span::single(0)));
+        doc.feature_sets.push(test_set(1, Span::new(1, 2)));
         doc.layers.push(test_layer(Span::new(0, 3)));
 
         retain_features(&mut doc, |feature| {
@@ -1557,6 +1525,23 @@ mod tests {
             layer_function: ipc2581::types::LayerFunction::Conductor,
             spec_refs: Span::EMPTY,
             sets: Span::EMPTY,
+            features,
+            bbox: BBox::empty(),
+        }
+    }
+
+    fn test_set(source_set_index: u32, features: Span) -> FeatureSet {
+        FeatureSet {
+            layer: 0,
+            source_set_index,
+            source_geometry_ref: None,
+            component_ref: None,
+            geometry_usage: None,
+            net: None,
+            polarity: Polarity::Dark,
+            copper_balance: false,
+            copper_balance_void: None,
+            spec_refs: Span::EMPTY,
             features,
             bbox: BBox::empty(),
         }

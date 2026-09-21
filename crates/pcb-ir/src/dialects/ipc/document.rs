@@ -63,6 +63,13 @@ impl Document {
             .transformed_contours_bbox(path.contours, transform)
     }
 
+    /// The IPC `Set` a feature came from, if it came from one.
+    pub fn feature_set(&self, feature: &Feature) -> Option<&FeatureSet> {
+        feature
+            .set
+            .and_then(|set| self.feature_sets.get(set as usize))
+    }
+
     /// Layer-space placements for one feature definition.
     ///
     /// Ungrouped features already use layer coordinates and therefore have
