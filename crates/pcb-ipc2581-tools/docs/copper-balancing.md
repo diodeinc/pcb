@@ -29,8 +29,10 @@ closed form, and the bound between them is the one deliberate trade
 (see [Knobs](#knobs)).
 
 `pcbc ipc2581 warp` closes the loop: it estimates a panel's bow and twist from
-the same stackup and copper distribution, against the IPC-6012 limit, so the
-effect of any balancing change is measurable in seconds.
+the same stackup and copper distribution, so the effect of any balancing change
+is measurable in seconds. The figure is the elastic copper-laminate mismatch
+alone and is for comparing panelizations, not for clearing a panel against the
+IPC-6012 limit.
 
 ## Geometry model
 
@@ -240,7 +242,7 @@ Related constants outside the profile, with the same posture:
 |---|---|---|
 | Balancing-region clearance / regularization radii | 0.5 mm | safe-region construction |
 | Warp model temperature drop (`LAMINATE_RELAXATION_DROP_K`) | 110 K | `pcb-ir::geom::warp` — the largest uncertainty in the *absolute* warp figure; cancels when comparing panelizations of one stackup |
-| Warp material constants | textbook Cu / FR-4 | `pcb-ir::geom::warp` — calibrated only by consistency: the model puts the 0.75 % IPC bow limit at ~13 % mirror-pair mismatch, inside the 10–15 % fabricators quote |
+| Warp material constants | textbook Cu / FR-4 | `pcb-ir::geom::warp` — elastic expansion mismatch below the glass transition only. Cure shrinkage is not modelled, so the absolute figure does not reproduce the 10–15 % mirror-pair rule fabricators quote |
 
 Removed knobs, for the record: `stack_moment_weight` (the local-versus-moment
 exchange rate) is gone — the moment left the iterated objective when its

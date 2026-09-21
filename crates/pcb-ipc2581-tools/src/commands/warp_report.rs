@@ -74,10 +74,12 @@ reported after the method of IPC-TM-650 2.4.22.</p>
 <div><dt>&Delta;T</dt><dd>{:.0} K</dd></div>
 <div><dt>Samples</dt><dd>{}</dd></div>
 </dl>
-<p class="caveat"><b>Modelled, not measured.</b> The absolute figure rests on textbook material
-constants and an assumed drop from where the laminate stops relaxing. Comparison between
-panelisations of one stackup is firmer by a wide margin, since that constant multiplies both
-and cancels.</p>
+<p class="caveat"><b>Modelled, not measured.</b> The figure is the elastic expansion mismatch
+between copper and laminate alone, on textbook material constants and an assumed drop from where
+the laminate stops relaxing. Cure shrinkage and resin expansion above the glass transition are
+outside the model, and the copper-balance rules fabricators work to put their effect well above
+it, so bow under the limit here does not clear a panel. Comparison between panelisations of one
+stackup is firmer by a wide margin, since the constant multiplies both and cancels.</p>
 </header>"#,
         analysis.bounds.width(),
         analysis.bounds.height(),
@@ -100,9 +102,9 @@ fn results(html: &mut String, analysis: &WarpAnalysis) {
             warp.bow_percent / SURFACE_MOUNT_LIMIT_PERCENT
         )
     } else if margin > 999.0 {
-        r#"<span class="pass">PASS</span> &gt;999&times; margin"#.to_string()
+        "&gt;999&times; under, elastic term only".to_string()
     } else {
-        format!(r#"<span class="pass">PASS</span> {margin:.0}&times; margin"#)
+        format!("{margin:.0}&times; under, elastic term only")
     };
     let _ = write!(
         html,

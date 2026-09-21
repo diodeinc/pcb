@@ -69,5 +69,10 @@ pub fn summary_lines(analysis: &WarpAnalysis) -> Vec<String> {
         "modelled from the stackup and copper distribution at a {:.0} K drop, not measured",
         analysis.temperature_drop_k,
     ));
+    lines.push(
+        "elastic copper-laminate mismatch only: cure shrinkage is not modelled, so compare \
+         panelizations rather than reading the figure against the limit"
+            .to_string(),
+    );
     lines
 }

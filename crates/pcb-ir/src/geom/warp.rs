@@ -26,6 +26,15 @@
 //! carries the uncertainty of the assumed temperature drop and moduli. Ratios
 //! between panelizations of one stackup are far more trustworthy than absolute
 //! values, because the material constant is common to both and cancels.
+//!
+//! What is modelled is the elastic expansion mismatch between copper and
+//! laminate below the glass transition, and nothing else. That mismatch is
+//! about 1 ppm/K, and on its own it does not reproduce the fabricator rule of
+//! keeping mirrored layers within 10-15 % copper of each other: the IPC-6012
+//! bow limit is reached only at a mismatch no panel can carry. Resin cure
+//! shrinkage and the several-times-larger resin expansion above the glass
+//! transition are outside this model, so the absolute figure is the elastic
+//! contribution to warp and not the panel's total.
 
 use crate::geom::{BBox, Point};
 
@@ -109,6 +118,9 @@ pub struct ThermalStack {
     flexural_rigidity_gpa_mm3: f64,
     /// Stiffness-weighted Poisson ratio, used to convert moment to curvature.
     poisson: f64,
+    /// In-plane expansion of the free nominal stack, per kelvin: the mean of
+    /// its layers' expansions weighted by biaxial stiffness.
+    membrane_cte_per_k: f64,
     total_thickness_mm: f64,
 }
 
@@ -132,10 +144,12 @@ impl ThermalStack {
     /// so an asymmetric copper distribution moves the axis, and lever arms
     /// measured from the geometric middle are wrong for mixed copper weights.
     ///
-    /// Both the axis and the rigidity are evaluated for fully present layers.
-    /// Linearizing the stiffness about that nominal stack keeps `A`, `B` and
-    /// `D` constant across the panel so only the moment varies, which is valid
-    /// while copper fractions vary modestly — the regime balancing operates in.
+    /// The axis, the rigidity and the membrane expansion are evaluated for
+    /// fully present layers, and the response is linearized in copper fraction
+    /// about that nominal stack, which is valid while copper fractions vary
+    /// modestly — the regime balancing operates in. At first order the rigidity
+    /// holds its nominal value. The bending-stretching coupling does not, and
+    /// [`Self::moment_coefficient`] carries its variation.
     pub fn new(layers: Vec<StackLayer>) -> Option<Self> {
         let usable = |thickness: f64| thickness.is_finite() && thickness > 0.0;
         if layers.is_empty() || !layers.iter().all(|layer| usable(layer.thickness_mm)) {
@@ -189,11 +203,23 @@ impl ThermalStack {
             .sum::<f64>()
             / total_stiffness;
 
+        // `N_T / A`: the free stack stretches as one membrane, and only
+        // expansion relative to that stretch strains a layer.
+        let membrane_cte_per_k = layers
+            .iter()
+            .map(|layer| layer.material.thermal_stress_gpa_per_k() * layer.thickness_mm)
+            .sum::<f64>()
+            / layers
+                .iter()
+                .map(|layer| layer.material.biaxial_modulus_gpa() * layer.thickness_mm)
+                .sum::<f64>();
+
         Some(Self {
             layers,
             lever_arms_mm,
             flexural_rigidity_gpa_mm3,
             poisson,
+            membrane_cte_per_k,
             total_thickness_mm,
         })
     }
@@ -208,12 +234,32 @@ impl ThermalStack {
 
     /// The material constant multiplying the geometric copper field.
     ///
-    /// Copper displaces laminate rather than vacuum, so what drives the moment
-    /// is the difference of their thermal stresses. Units are GPa per kelvin;
-    /// combined with a temperature drop and the geometric field's mm^2 it
-    /// yields a moment resultant in GPa mm^2 per unit width.
+    /// A free plate answers a temperature change with a membrane strain and a
+    /// curvature, `[N_T; M_T] = [A B; B D] [e0; kappa]`, which leaves
+    /// `kappa (D - B^2 / A) = M_T - (B / A) N_T`. Trading laminate for copper
+    /// at height `z` moves both terms on the right at first order: the
+    /// thermal moment by `Q_c a_c - Q_d a_d` per unit `t z`, and the coupling
+    /// `B` by `Q_c - Q_d`, which the membrane expansion `N_T / A = a dT` turns
+    /// into a moment of its own. `B` is zero for the nominal stack about its
+    /// neutral axis, so `B^2 / A` is second order and what remains is
+    /// `Q_c (a_c - a) - Q_d (a_d - a)`: each material's thermal stress against
+    /// the panel's own expansion, not against a rigid frame. Materials that
+    /// expand alike cannot bend the panel however unevenly they are
+    /// distributed, and this vanishes when they do.
+    ///
+    /// Exact to first order for a build symmetric about its mid-plane. An
+    /// asymmetric build also carries the nominal stack's own thermal moment,
+    /// which the copper field does not contain.
+    ///
+    /// Units are GPa per kelvin; combined with a temperature drop and the
+    /// geometric field's mm^2 it yields a moment resultant in GPa mm^2 per
+    /// unit width.
     pub fn moment_coefficient(&self, displaced: Material) -> f64 {
-        Material::COPPER.thermal_stress_gpa_per_k() - displaced.thermal_stress_gpa_per_k()
+        let misfit_stress_gpa_per_k = |material: Material| {
+            material.thermal_stress_gpa_per_k()
+                - material.biaxial_modulus_gpa() * self.membrane_cte_per_k
+        };
+        misfit_stress_gpa_per_k(Material::COPPER) - misfit_stress_gpa_per_k(displaced)
     }
 
     /// Per-conductor moment arms `t_l z_l`, signed about the neutral axis.
@@ -871,17 +917,83 @@ mod tests {
         );
     }
 
-    /// Two industry numbers that were arrived at independently have to be
-    /// reconcilable, and reconciling them is the closest thing to a calibration
-    /// available without measuring a panel.
-    ///
-    /// Fabricators advise keeping mirrored layers within 10–15 % copper
-    /// coverage of each other. IPC-6012 accepts 0.75 % bow. Neither was derived
-    /// from the other, so a model connecting copper to bow has to place the
-    /// 0.75 % crossing somewhere in that 10–15 % band — and if it lands at 1 %
-    /// or 60 % instead, the material constants are wrong.
+    /// Materials that expand alike cannot bend a panel however unevenly they
+    /// are distributed: a bimetal's curvature is proportional to the difference
+    /// of its expansions. Stiffness contrast alone must drive nothing.
     #[test]
-    fn the_ipc_limit_falls_where_fabricators_place_the_copper_rule() {
+    fn equal_expansion_predicts_no_warp_for_any_copper_imbalance() {
+        let matched = Material {
+            cte_ppm_per_k: Material::COPPER.cte_ppm_per_k,
+            ..Material::LAMINATE
+        };
+        let core = |thickness_mm| StackLayer {
+            thickness_mm,
+            material: matched,
+            is_conductor: false,
+        };
+        let stack = ThermalStack::new(vec![
+            copper(0.035),
+            core(0.5),
+            copper(0.035),
+            core(0.5),
+            copper(0.035),
+        ])
+        .unwrap();
+        assert!(stack.moment_coefficient(matched).abs() <= 1e-15);
+
+        let outer_arm = stack.conductor_weights()[0].moment_arm_mm2;
+        for mismatch in [0.1, 0.5, 1.0] {
+            let field = uniform_field(panel(), mismatch * outer_arm);
+            let warp = estimate_warp(&stack, matched, &field, LAMINATE_RELAXATION_DROP_K);
+            assert!(warp.bow_mm <= 1e-9, "{mismatch}: {}", warp.bow_mm);
+        }
+    }
+
+    /// A film far thinner than its substrate is the one bimetal with a closed
+    /// form that needs no stiffness bookkeeping: Stoney's
+    /// `kappa = 6 Q_f t_f (a_f - a_s) dT / (Q_s h^2)`. A foil on one face only
+    /// has to reproduce it.
+    #[test]
+    fn a_thin_foil_on_one_face_bends_to_stoneys_curvature() {
+        let (foil_mm, core_mm) = (1e-5, 1.6);
+        let stack =
+            ThermalStack::new(vec![copper(foil_mm), laminate(core_mm), copper(foil_mm)]).unwrap();
+        let bounds = panel();
+        // Top foil whole, bottom foil etched away.
+        let field = uniform_field(bounds, stack.conductor_weights()[0].moment_arm_mm2);
+        let warp = estimate_warp(
+            &stack,
+            Material::LAMINATE,
+            &field,
+            LAMINATE_RELAXATION_DROP_K,
+        );
+
+        let (film, substrate) = (Material::COPPER, Material::LAMINATE);
+        let stoney = 6.0
+            * film.biaxial_modulus_gpa()
+            * foil_mm
+            * (film.cte_ppm_per_k - substrate.cte_ppm_per_k)
+            * 1e-6
+            * LAMINATE_RELAXATION_DROP_K
+            / (substrate.biaxial_modulus_gpa() * core_mm * core_mm);
+        // A spherical cap seated on its corners rises an eighth of the squared
+        // diagonal per unit curvature.
+        let diagonal_squared = bounds.width().powi(2) + bounds.height().powi(2);
+        let curvature = 8.0 * warp.bow_mm / diagonal_squared;
+        assert!(
+            (curvature - stoney).abs() <= 1e-3 * stoney,
+            "{curvature} != {stoney}"
+        );
+    }
+
+    /// Fabricators advise keeping mirrored layers within 10-15 % copper
+    /// coverage of each other, and IPC-6012 accepts 0.75 % bow. The elastic
+    /// mismatch modelled here does not connect the two: copper and laminate
+    /// expand within about 1 ppm/K of each other below the glass transition,
+    /// and on a production panel that reaches the limit only at a mismatch no
+    /// panel can carry. The rule guards against what this model leaves out.
+    #[test]
+    fn elastic_mismatch_alone_does_not_reproduce_the_fabricator_copper_rule() {
         let stack = six_layer_panel();
         let outer_arm = stack.conductor_weights()[0].moment_arm_mm2;
         let bounds = BBox::new(Point::new(0.0, 0.0), Point::new(457.2, 609.6));
@@ -895,50 +1007,72 @@ mod tests {
             .bow_percent
         };
 
-        // The chain is linear in copper, so one evaluation locates the crossing.
-        let crossing = 0.10 * 0.75 / bow_at(0.10);
-        eprintln!(
-            "bow: 10% mismatch -> {:.3} %, 15% -> {:.3} %; 0.75% limit crossed at {:.1} % mismatch",
-            bow_at(0.10),
-            bow_at(0.15),
-            100.0 * crossing,
-        );
-        assert!(
-            (0.08..=0.18).contains(&crossing),
-            "0.75 % bow reached at {:.1} % copper mismatch, outside the 10-15 % fabricators advise",
-            100.0 * crossing
-        );
+        // An outer foil whole on one face and absent from the other is the
+        // most a mirrored pair can differ by, and it stays under the limit.
+        assert!(bow_at(1.0) < 0.75, "{} %", bow_at(1.0));
+        // The chain is linear in copper, so the advised band sits as far under
+        // the limit as it sits under total mismatch.
+        assert!((bow_at(0.15) - 0.15 * bow_at(1.0)).abs() <= 1e-12);
     }
 
-    /// A one-sided copper surplus on a realistic 1.6 mm six-layer panel should
-    /// land near the fraction of a percent that IPC's 0.75 % limit implies,
-    /// rather than orders away from it. An order-of-magnitude sanity check on
-    /// the material constants — not a validation, since nothing here has been
-    /// compared against a measured panel.
+    /// On a build symmetric about its mid-plane the material constant scales
+    /// every deflection alike. It cancels from any comparison between two
+    /// copper distributions, and the lever arms balancing draws on never see
+    /// it.
     #[test]
-    fn predicted_bow_lands_in_the_range_the_ipc_limit_implies() {
-        let stack = six_layer_panel();
-        // A 30% copper surplus carried entirely by the outermost layer.
-        let imbalance = 0.30 * stack.conductor_weights()[0].moment_arm_mm2;
-        let bounds = BBox::new(Point::new(0.0, 0.0), Point::new(457.2, 609.6));
-        let warp = estimate_warp(
-            &stack,
-            Material::LAMINATE,
-            &uniform_field(bounds, imbalance),
-            LAMINATE_RELAXATION_DROP_K,
-        );
+    fn the_material_constant_cancels_between_copper_distributions() {
+        let resin = Material {
+            cte_ppm_per_k: 60.0,
+            ..Material::LAMINATE
+        };
+        let build = |dielectric: Material| {
+            let core = |thickness_mm| StackLayer {
+                thickness_mm,
+                material: dielectric,
+                is_conductor: false,
+            };
+            ThermalStack::new(vec![
+                copper(0.035),
+                core(0.2),
+                copper(0.035),
+                core(1.06),
+                copper(0.035),
+                core(0.2),
+                copper(0.035),
+            ])
+            .unwrap()
+        };
+        let shaped = |scale: f64| {
+            let mut field = uniform_field(panel(), 0.0);
+            field.values = field
+                .samples
+                .iter()
+                .map(|point| {
+                    let (x, y) = field.normalized(*point);
+                    scale * (0.01 + 0.004 * x - 0.003 * x * y + 0.002 * y * y)
+                })
+                .collect();
+            field
+        };
 
-        eprintln!(
-            "stack {:.2} mm, D {:.1} GPa mm3 -> bow {:.3} mm ({:.3} %)",
-            stack.total_thickness_mm(),
-            stack.flexural_rigidity_gpa_mm3(),
-            warp.bow_mm,
-            warp.bow_percent,
-        );
-        assert!(
-            (0.001..20.0).contains(&warp.bow_percent),
-            "{} %",
-            warp.bow_percent
+        let ratio = |dielectric: Material| {
+            let stack = build(dielectric);
+            let warp = |field| estimate_warp(&stack, dielectric, &field, 110.0);
+            let (before, after) = (warp(shaped(1.0)), warp(shaped(0.4)));
+            (
+                after.bow_mm / before.bow_mm,
+                after.twist_mm / before.twist_mm,
+            )
+        };
+        let (laminate_ratio, resin_ratio) = (ratio(Material::LAMINATE), ratio(resin));
+        // Two constants well apart, or the comparison shows nothing.
+        let coefficient = |dielectric: Material| build(dielectric).moment_coefficient(dielectric);
+        assert!(coefficient(resin).abs() > 10.0 * coefficient(Material::LAMINATE).abs());
+        assert!((laminate_ratio.0 - resin_ratio.0).abs() <= 1e-9);
+        assert!((laminate_ratio.1 - resin_ratio.1).abs() <= 1e-9);
+        assert_eq!(
+            build(Material::LAMINATE).conductor_weights(),
+            build(resin).conductor_weights()
         );
     }
 }
