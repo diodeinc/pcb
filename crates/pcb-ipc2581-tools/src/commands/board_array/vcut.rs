@@ -36,15 +36,28 @@ pub(super) fn add_vcut_lines(
 }
 
 pub(super) fn vcut_line_feature(line: VcutLine) -> SetFeature {
-    SetFeature::Line(Line {
-        start_x: line.start_x_mm,
-        start_y: line.start_y_mm,
-        end_x: line.end_x_mm,
-        end_y: line.end_y_mm,
-        line_desc_ref: None,
-        line_width: Some(VCUT_MARKER_STROKE_MM),
-        line_end: Some(LineEnd::Round),
-        line_property: Some(LineProperty::Solid),
+    solid_line_feature(
+        Point::new(line.start_x_mm, line.start_y_mm),
+        Point::new(line.end_x_mm, line.end_y_mm),
+        VCUT_MARKER_STROKE_MM,
+    )
+}
+
+fn solid_line_feature(start: Point, end: Point, line_width: f64) -> SetFeature {
+    let point = |point: Point| IpcPoint {
+        x: point.x,
+        y: point.y,
+    };
+    SetFeature::Stroke(Stroke {
+        path: StrokePath::Line(Line {
+            start: point(start),
+            end: point(end),
+        }),
+        line_desc: Some(LineDescGroup::Inline(LineDesc {
+            line_width,
+            line_end: LineEnd::Round,
+            line_property: Some(LineProperty::Solid),
+        })),
     })
 }
 
@@ -267,16 +280,7 @@ pub(super) fn add_vcut_annotation_line(
     end: Point,
     line_width: f64,
 ) {
-    features.push(SetFeature::Line(Line {
-        start_x: start.x,
-        start_y: start.y,
-        end_x: end.x,
-        end_y: end.y,
-        line_desc_ref: None,
-        line_width: Some(line_width),
-        line_end: Some(LineEnd::Round),
-        line_property: Some(LineProperty::Solid),
-    }));
+    features.push(solid_line_feature(start, end, line_width));
 }
 
 pub(super) struct VcutLineSpec {

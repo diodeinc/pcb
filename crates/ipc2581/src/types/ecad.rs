@@ -732,12 +732,9 @@ pub enum SetFeature {
     Slot(Box<Slot>),
     Pad(Pad),
     Fiducial(Box<Fiducial>),
-    Trace(Trace),
+    Stroke(Stroke),
     UserPrimitive(FeatureUserPrimitive),
     Polygon(super::Polygon),
-    Line(Line),
-    Arc(FeatureArc),
-    Polyline(FeaturePolyline),
     StandardPrimitiveRef(FeaturePrimitiveRef),
     UserPrimitiveRef(FeaturePrimitiveRef),
     /// One or more local feature definitions placed at shared IPC
@@ -810,47 +807,20 @@ pub struct NonstandardAttribute {
     pub attr_type: Option<Symbol>,
 }
 
-/// Line represents a straight trace segment
+/// A stroked `Line`, `Arc` or `Polyline` of a Set, in step coordinates.
 #[derive(Debug, Clone)]
-pub struct Line {
-    pub start_x: f64,
-    pub start_y: f64,
-    pub end_x: f64,
-    pub end_y: f64,
-    pub line_desc_ref: Option<Symbol>,
-    /// Width of the inline `LineDesc`; `None` when the style comes from
-    /// `line_desc_ref` or is missing.
-    pub line_width: Option<f64>,
-    pub line_end: Option<super::LineEnd>,
-    pub line_property: Option<super::LineProperty>,
+pub struct Stroke {
+    pub path: StrokePath,
+    /// The `LineDescRef` if the feature has one, else its inline `LineDesc`.
+    /// Without either there is no width to draw.
+    pub line_desc: Option<super::LineDescGroup>,
 }
 
-/// Open polyline feature preserving straight and curved PolyStep order.
 #[derive(Debug, Clone)]
-pub struct FeaturePolyline {
-    pub begin: super::Point,
-    pub steps: Vec<super::PolyStep>,
-    pub line_desc_ref: Option<Symbol>,
-    /// Width of the inline `LineDesc`; `None` when the style comes from
-    /// `line_desc_ref` or is missing.
-    pub line_width: Option<f64>,
-    pub line_end: Option<super::LineEnd>,
-    pub line_property: Option<super::LineProperty>,
-}
-
-/// Arc feature preserving center and direction.
-#[derive(Debug, Clone)]
-pub struct FeatureArc {
-    pub start: super::Point,
-    pub end: super::Point,
-    pub center: super::Point,
-    pub clockwise: bool,
-    pub line_desc_ref: Option<Symbol>,
-    /// Width of the inline `LineDesc`; `None` when the style comes from
-    /// `line_desc_ref` or is missing.
-    pub line_width: Option<f64>,
-    pub line_end: Option<super::LineEnd>,
-    pub line_property: Option<super::LineProperty>,
+pub enum StrokePath {
+    Line(super::Line),
+    Arc(super::Arc),
+    Polyline(super::Polyline),
 }
 
 /// Primitive reference used directly as feature geometry.
@@ -927,21 +897,6 @@ pub struct Pad {
     /// The pad's own shape, which takes precedence over its padstack's.
     pub feature: Option<FeatureShape>,
     pub pin_ref: Option<PinRef>,
-}
-
-/// Trace represents a copper trace or line on a layer
-#[derive(Debug, Clone)]
-pub struct Trace {
-    pub line_desc_ref: Option<Symbol>,
-    pub points: Vec<TracePoint>,
-    pub steps: Vec<super::PolyStep>,
-}
-
-/// Point in a trace
-#[derive(Debug, Clone)]
-pub struct TracePoint {
-    pub x: f64,
-    pub y: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

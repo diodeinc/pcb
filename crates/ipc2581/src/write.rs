@@ -8,8 +8,10 @@
 use uppsala::XmlWriter;
 
 use crate::types::Units;
-use crate::types::ecad::{Fiducial, FiducialShape, Hole, Line};
-use crate::types::primitives::{Contour, PolyStep, PolyStepCurve, Polygon, StandardPrimitive};
+use crate::types::ecad::{Fiducial, FiducialShape, Hole, Stroke, StrokePath};
+use crate::types::primitives::{
+    Contour, LineDescGroup, PolyStep, PolyStepCurve, Polygon, StandardPrimitive,
+};
 use crate::{Ipc2581Error, Result};
 
 /// Format a millimeter value in the document's units, with up to six
@@ -64,35 +66,58 @@ pub fn circle(writer: &mut XmlWriter, units: Units, diameter_mm: f64) {
     );
 }
 
-/// Write a `Line` feature with an inline `LineDesc`. Lines that reference a
-/// dictionary `LineDescRef` cannot be written as standalone fragments.
-pub fn line(writer: &mut XmlWriter, units: Units, line: &Line) -> Result<()> {
-    let (None, Some(line_width)) = (line.line_desc_ref, line.line_width) else {
+/// Write a stroked feature with its inline `LineDesc`. A stroke that names a
+/// dictionary `LineDescRef`, or no description, cannot be written standalone.
+pub fn stroke(writer: &mut XmlWriter, units: Units, stroke: &Stroke) -> Result<()> {
+    let Some(LineDescGroup::Inline(line_desc)) = stroke.line_desc else {
         return Err(Ipc2581Error::InvalidStructure(
-            "Line without an inline LineDesc cannot be written standalone".into(),
+            "stroke without an inline LineDesc cannot be written standalone".into(),
         ));
     };
-
-    writer.start_element(
-        "Line",
-        &[
-            ("startX", fmt_units(line.start_x, units).as_str()),
-            ("startY", fmt_units(line.start_y, units).as_str()),
-            ("endX", fmt_units(line.end_x, units).as_str()),
-            ("endY", fmt_units(line.end_y, units).as_str()),
-        ],
-    );
-
-    let line_width = fmt_units(line_width, units);
-    let mut attrs = vec![("lineWidth", line_width.as_str())];
-    if let Some(line_end) = line.line_end {
-        attrs.push(("lineEnd", line_end.as_str()));
+    let line_width = fmt_units(line_desc.line_width, units);
+    let mut line_desc_attrs = vec![
+        ("lineWidth", line_width.as_str()),
+        ("lineEnd", line_desc.line_end.as_str()),
+    ];
+    if let Some(line_property) = line_desc.line_property {
+        line_desc_attrs.push(("lineProperty", line_property.as_str()));
     }
-    if let Some(line_property) = line.line_property {
-        attrs.push(("lineProperty", line_property.as_str()));
+
+    let mm = |value| fmt_units(value, units);
+    let (name, attrs) = match &stroke.path {
+        StrokePath::Line(line) => (
+            "Line",
+            vec![
+                ("startX", mm(line.start.x)),
+                ("startY", mm(line.start.y)),
+                ("endX", mm(line.end.x)),
+                ("endY", mm(line.end.y)),
+            ],
+        ),
+        StrokePath::Arc(arc) => (
+            "Arc",
+            vec![
+                ("startX", mm(arc.start.x)),
+                ("startY", mm(arc.start.y)),
+                ("endX", mm(arc.end.x)),
+                ("endY", mm(arc.end.y)),
+                ("centerX", mm(arc.center.x)),
+                ("centerY", mm(arc.center.y)),
+                ("clockwise", arc.clockwise.to_string()),
+            ],
+        ),
+        StrokePath::Polyline(_) => ("Polyline", Vec::new()),
+    };
+    let attrs = attrs
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect::<Vec<_>>();
+    writer.start_element(name, &attrs);
+    if let StrokePath::Polyline(polyline) = &stroke.path {
+        poly_steps(writer, units, polyline);
     }
-    writer.empty_element("LineDesc", &attrs);
-    writer.end_element("Line");
+    writer.empty_element("LineDesc", &line_desc_attrs);
+    writer.end_element(name);
     Ok(())
 }
 
@@ -175,6 +200,12 @@ pub fn contour(writer: &mut XmlWriter, units: Units, contour: &Contour) {
 
 fn polygon_element(writer: &mut XmlWriter, name: &str, units: Units, polygon: &Polygon) {
     writer.start_element(name, &[]);
+    poly_steps(writer, units, polygon);
+    writer.end_element(name);
+}
+
+/// Write the `PolyBegin` and steps of a polygon or polyline.
+fn poly_steps(writer: &mut XmlWriter, units: Units, polygon: &Polygon) {
     location(writer, "PolyBegin", polygon.begin.x, polygon.begin.y, units);
     for step in &polygon.steps {
         match step {
@@ -190,7 +221,6 @@ fn polygon_element(writer: &mut XmlWriter, name: &str, units: Units, polygon: &P
             PolyStep::Curve(curve) => poly_step_curve(writer, units, curve),
         }
     }
-    writer.end_element(name);
 }
 
 pub fn poly_step_curve(writer: &mut XmlWriter, units: Units, curve: &PolyStepCurve) {
@@ -270,20 +300,57 @@ mod tests {
     }
 
     #[test]
-    fn line_requires_inline_desc() {
-        let mut writer = XmlWriter::new();
-        let mut interner = pcb_intern::Interner::default();
-        let bad = Line {
-            start_x: 0.0,
-            start_y: 0.0,
-            end_x: 1.0,
-            end_y: 0.0,
-            line_desc_ref: Some(interner.intern("ref")),
-            line_width: Some(0.1),
-            line_end: None,
-            line_property: None,
+    fn stroke_writes_its_path_and_requires_an_inline_desc() {
+        use crate::types::{Arc, Line, LineDesc, LineEnd, LineProperty, Point};
+
+        let line_desc = LineDesc {
+            line_width: 0.1,
+            line_end: LineEnd::Round,
+            line_property: Some(LineProperty::Solid),
         };
-        assert!(line(&mut writer, Units::Millimeter, &bad).is_err());
+        let point = |x, y| Point { x, y };
+        let paths = [
+            StrokePath::Line(Line {
+                start: point(0.0, 0.0),
+                end: point(1.0, 0.0),
+            }),
+            StrokePath::Arc(Arc {
+                start: point(1.0, 0.0),
+                end: point(0.0, 1.0),
+                center: point(0.0, 0.0),
+                clockwise: false,
+            }),
+            StrokePath::Polyline(Polygon {
+                begin: point(0.0, 0.0),
+                steps: vec![PolyStep::Segment(crate::types::PolyStepSegment {
+                    point: point(0.0, 2.0),
+                })],
+            }),
+        ];
+        let mut writer = XmlWriter::new();
+        for path in &paths {
+            let stroke = Stroke {
+                path: path.clone(),
+                line_desc: Some(LineDescGroup::Inline(line_desc)),
+            };
+            self::stroke(&mut writer, Units::Millimeter, &stroke).unwrap();
+        }
+        let desc = r#"<LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="SOLID"/>"#;
+        assert_eq!(
+            writer.into_string(),
+            format!(
+                r#"<Line startX="0" startY="0" endX="1" endY="0">{desc}</Line><Arc startX="1" startY="0" endX="0" endY="1" centerX="0" centerY="0" clockwise="false">{desc}</Arc><Polyline><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="2"/>{desc}</Polyline>"#
+            )
+        );
+
+        let mut interner = pcb_intern::Interner::default();
+        for line_desc in [None, Some(LineDescGroup::Ref(interner.intern("ref")))] {
+            let stroke = Stroke {
+                path: paths[0].clone(),
+                line_desc,
+            };
+            assert!(self::stroke(&mut XmlWriter::new(), Units::Millimeter, &stroke).is_err());
+        }
     }
 
     #[test]

@@ -550,26 +550,17 @@ pub(super) fn extract_set_feature(
         )?
         .into_iter()
         .collect()),
-        SetFeature::Trace(trace) => Ok(extract_trace(context, net, polarity, source, trace, doc)
-            .into_iter()
-            .collect()),
+        SetFeature::Stroke(stroke) => {
+            Ok(extract_stroke(context, net, polarity, source, stroke, doc)
+                .into_iter()
+                .collect())
+        }
         SetFeature::UserPrimitive(primitive) => {
             extract_inline_user_primitive(context, net, polarity, source, primitive, doc)
         }
         SetFeature::Polygon(polygon) => {
             Ok(vec![extract_polygon(net, polarity, source, polygon, doc)])
         }
-        SetFeature::Line(line) => Ok(extract_line(context, net, polarity, source, line, doc)
-            .into_iter()
-            .collect()),
-        SetFeature::Arc(arc) => Ok(extract_arc(context, net, polarity, source, arc, doc)
-            .into_iter()
-            .collect()),
-        SetFeature::Polyline(polyline) => Ok(extract_feature_polyline(
-            context, net, polarity, source, polyline, doc,
-        )
-        .into_iter()
-        .collect()),
         SetFeature::StandardPrimitiveRef(primitive_ref) => extract_feature_primitive(
             context,
             net,
@@ -960,101 +951,49 @@ pub(super) fn map_fiducial_kind(kind: ipc2581::types::ecad::FiducialKind) -> Fid
     }
 }
 
-pub(super) fn extract_trace(
+/// A stroked line, arc or polyline, which without a line description has no
+/// width to draw.
+pub(super) fn extract_stroke(
     context: &ExtractContext<'_>,
     net: Option<Symbol>,
     polarity: GeometryPolarity,
     source: SourceRef,
-    trace: &ipc2581::types::Trace,
+    stroke: &ipc2581::types::Stroke,
     doc: &mut GeometryDocument,
 ) -> Option<GeometryFeature> {
-    if trace.points.is_empty() {
-        return None;
-    }
-    let line_desc = require_line_desc(context, doc, "trace", trace.line_desc_ref, None)?;
-    Some(push_stroked_trace(
-        doc,
-        StrokedFeatureStyle::new(net, polarity, source, line_desc),
-        trace,
-    ))
-}
-
-pub(super) fn extract_line(
-    context: &ExtractContext<'_>,
-    net: Option<Symbol>,
-    polarity: GeometryPolarity,
-    source: SourceRef,
-    line: &ipc2581::types::ecad::Line,
-    doc: &mut GeometryDocument,
-) -> Option<GeometryFeature> {
-    let line_desc = resolve_line_desc(
-        context,
-        doc,
-        "line",
-        line.line_desc_ref,
-        inline_line_desc(line.line_width, line.line_end, line.line_property),
-    )?;
-    Some(push_stroked_contour(
-        doc,
-        StrokedFeatureStyle::new(net, polarity, source, line_desc),
-        vec![
-            PathCmd::move_to(Point::new(line.start_x, line.start_y)),
-            PathCmd::line_to(Point::new(line.end_x, line.end_y)),
-        ],
-    ))
-}
-
-pub(super) fn extract_feature_polyline(
-    context: &ExtractContext<'_>,
-    net: Option<Symbol>,
-    polarity: GeometryPolarity,
-    source: SourceRef,
-    polyline: &ipc2581::types::ecad::FeaturePolyline,
-    doc: &mut GeometryDocument,
-) -> Option<GeometryFeature> {
-    let line_desc = resolve_line_desc(
-        context,
-        doc,
-        "polyline",
-        polyline.line_desc_ref,
-        inline_line_desc(
-            polyline.line_width,
-            polyline.line_end,
-            polyline.line_property,
+    let (what, cmds) = match &stroke.path {
+        StrokePath::Line(line) => (
+            "line",
+            vec![
+                PathCmd::move_to(Point::new(line.start.x, line.start.y)),
+                PathCmd::line_to(Point::new(line.end.x, line.end.y)),
+            ],
         ),
-    )?;
-    Some(push_stroked_contour(
-        doc,
-        StrokedFeatureStyle::new(net, polarity, source, line_desc),
-        poly_step_commands(
-            Point::new(polyline.begin.x, polyline.begin.y),
-            &polyline.steps,
+        StrokePath::Arc(arc) => (
+            "arc",
+            vec![
+                PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
+                arc_step(arc.end, arc.center, arc.clockwise),
+            ],
         ),
-    ))
-}
-
-pub(super) fn extract_arc(
-    context: &ExtractContext<'_>,
-    net: Option<Symbol>,
-    polarity: GeometryPolarity,
-    source: SourceRef,
-    arc: &ipc2581::types::ecad::FeatureArc,
-    doc: &mut GeometryDocument,
-) -> Option<GeometryFeature> {
-    let line_desc = resolve_line_desc(
-        context,
-        doc,
-        "arc",
-        arc.line_desc_ref,
-        inline_line_desc(arc.line_width, arc.line_end, arc.line_property),
-    )?;
+        StrokePath::Polyline(polyline) => (
+            "polyline",
+            poly_step_commands(
+                Point::new(polyline.begin.x, polyline.begin.y),
+                &polyline.steps,
+            ),
+        ),
+    };
+    let (reference, inline) = match stroke.line_desc {
+        Some(LineDescGroup::Ref(reference)) => (Some(reference), None),
+        Some(LineDescGroup::Inline(line_desc)) => (None, Some(line_desc)),
+        None => (None, None),
+    };
+    let line_desc = require_line_desc(context, doc, what, reference, inline)?;
     Some(push_stroked_contour(
         doc,
         StrokedFeatureStyle::new(net, polarity, source, line_desc),
-        vec![
-            PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
-            arc_step(arc.end, arc.center, arc.clockwise),
-        ],
+        cmds,
     ))
 }
 
@@ -1080,26 +1019,6 @@ pub(super) fn extract_polygon(
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
     feature
-}
-
-pub(super) fn push_stroked_trace(
-    doc: &mut GeometryDocument,
-    style: StrokedFeatureStyle,
-    trace: &ipc2581::types::Trace,
-) -> GeometryFeature {
-    let begin = Point::new(trace.points[0].x, trace.points[0].y);
-    let cmds = if trace.steps.is_empty() {
-        std::iter::once(PathCmd::move_to(begin))
-            .chain(
-                trace.points[1..]
-                    .iter()
-                    .map(|point| PathCmd::line_to(Point::new(point.x, point.y))),
-            )
-            .collect()
-    } else {
-        poly_step_commands(begin, &trace.steps)
-    };
-    push_stroked_contour(doc, style, cmds)
 }
 
 /// One open centerline stroked as a trace feature.

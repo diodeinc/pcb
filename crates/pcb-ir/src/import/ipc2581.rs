@@ -3,10 +3,10 @@ use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
 use ipc2581::types::{
-    ConcentricShape, FillProperty, HoleShape as IpcHoleShape, LayerFunction, LineEnd, LineProperty,
-    PadUse, PlatingStatus, Polarity, PolyStep, SlotShape, StandardPrimitive, UserPrimitive,
-    UserShapeType, Xform,
-    ecad::{Datum, FeatureShape, Layer, SetFeature, Step, StepRepeat, StepType},
+    ConcentricShape, FillProperty, HoleShape as IpcHoleShape, LayerFunction, LineDescGroup,
+    LineEnd, LineProperty, PadUse, PlatingStatus, Polarity, PolyStep, SlotShape, StandardPrimitive,
+    UserPrimitive, UserShapeType, Xform,
+    ecad::{Datum, FeatureShape, Layer, SetFeature, Step, StepRepeat, StepType, StrokePath},
 };
 use ipc2581::{Interner, Ipc2581, Symbol};
 

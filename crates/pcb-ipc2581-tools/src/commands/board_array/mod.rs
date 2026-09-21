@@ -22,12 +22,12 @@ use anyhow::{Context, Result, bail};
 use ipc2581::types::{
     Units,
     ecad::{
-        Fiducial, FiducialKind as IpcFiducialKind, FiducialShape, Hole, LayerFunction, Line,
-        PlatingStatus, Polarity, SetFeature, Side,
+        Fiducial, FiducialKind as IpcFiducialKind, FiducialShape, Hole, LayerFunction,
+        PlatingStatus, Polarity, SetFeature, Side, Stroke, StrokePath,
     },
     primitives::{
-        Circle, LineEnd, LineProperty, Point as IpcPoint, PolyStep, PolyStepCurve, PolyStepSegment,
-        Polygon, StandardPrimitive, Styled,
+        Circle, Line, LineDesc, LineDescGroup, LineEnd, LineProperty, Point as IpcPoint, PolyStep,
+        PolyStepCurve, PolyStepSegment, Polygon, StandardPrimitive, Styled,
     },
     transform::Location,
 };

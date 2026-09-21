@@ -2782,12 +2782,16 @@ fn score_callouts_fit_the_gap_a_fabrication_panel_leaves_beside_an_array() {
     ];
     let (mut right, mut below) = (0.0_f64, 0.0_f64);
     for feature in vcut_callout_features(&lines, array_width_mm) {
-        let SetFeature::Line(line) = feature else {
-            panic!("callouts are strokes");
+        let SetFeature::Stroke(Stroke {
+            path: StrokePath::Line(line),
+            line_desc: Some(LineDescGroup::Inline(line_desc)),
+        }) = feature
+        else {
+            panic!("callouts are lines that carry their width");
         };
-        let reach = line.line_width.expect("callouts carry their width") / 2.0;
-        right = right.max(line.start_x.max(line.end_x) + reach - array_width_mm);
-        below = below.max(reach - line.start_y.min(line.end_y));
+        let reach = line_desc.line_width / 2.0;
+        right = right.max(line.start.x.max(line.end.x) + reach - array_width_mm);
+        below = below.max(reach - line.start.y.min(line.end.y));
     }
     let gap = crate::commands::fab_panel::DEFAULT_PANEL_GAP_MM;
     assert!(right > 0.0 && right < gap, "right overhang {right} mm");

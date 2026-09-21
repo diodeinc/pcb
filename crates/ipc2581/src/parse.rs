@@ -928,7 +928,7 @@ impl<'a> Parser<'a> {
                 (UserShapeType::Polyline(Polyline { begin, steps }), style)
             }
             "Line" => (
-                UserShapeType::Line(crate::types::primitives::Line {
+                UserShapeType::Line(Line {
                     start: self.point(node, "startX", "startY", "Line", units)?,
                     end: self.point(node, "endX", "endY", "Line", units)?,
                 }),
@@ -2194,7 +2194,9 @@ impl<'a> Parser<'a> {
                 name if ecad::FiducialKind::from_ipc(name).is_ok() => features.push(
                     ecad::SetFeature::Fiducial(Box::new(self.parse_fiducial(&child)?)),
                 ),
-                "Polyline" => features.push(ecad::SetFeature::Trace(self.parse_trace(&child)?)),
+                "Polyline" => {
+                    features.push(ecad::SetFeature::Stroke(self.parse_set_polyline(&child)?))
+                }
                 "Features" => self.parse_features(&child, features)?,
                 "NonstandardAttribute" => {
                     nonstandard_attributes.push(self.parse_nonstandard_attribute(&child)?);
@@ -2356,69 +2358,45 @@ impl<'a> Parser<'a> {
             }
         };
 
-        let line_desc_ref = stroked.line_desc_ref;
-        let line_width = stroked.line_desc.map(|desc| desc.line_width);
-        let line_end = stroked.line_desc.map(|desc| desc.line_end);
-        let line_property = stroked.line_desc.and_then(|desc| desc.line_property);
+        let line_desc = line_desc_group(stroked.line_desc_ref, stroked.line_desc);
         let moved = |point: Point| Point {
             x: point.x + x,
             y: point.y + y,
         };
-        Ok(match stroked.shape {
+        let path = match stroked.shape {
             UserShapeType::Polygon(polygon) => {
-                ecad::SetFeature::Polygon(Self::translate_polygon(polygon, at))
+                return Ok(ecad::SetFeature::Polygon(Self::translate_polygon(
+                    polygon, at,
+                )));
             }
-            UserShapeType::Line(line) => ecad::SetFeature::Line(ecad::Line {
-                start_x: line.start.x + x,
-                start_y: line.start.y + y,
-                end_x: line.end.x + x,
-                end_y: line.end.y + y,
-                line_desc_ref,
-                line_width,
-                line_end,
-                line_property,
+            UserShapeType::Line(line) => ecad::StrokePath::Line(Line {
+                start: moved(line.start),
+                end: moved(line.end),
             }),
-            UserShapeType::Arc(arc) => ecad::SetFeature::Arc(ecad::FeatureArc {
+            UserShapeType::Arc(arc) => ecad::StrokePath::Arc(Arc {
                 start: moved(arc.start),
                 end: moved(arc.end),
                 center: moved(arc.center),
                 clockwise: arc.clockwise,
-                line_desc_ref,
-                line_width,
-                line_end,
-                line_property,
             }),
-            UserShapeType::Polyline(mut polyline) => {
-                Self::translate_steps(&mut polyline.steps, at);
-                ecad::SetFeature::Polyline(ecad::FeaturePolyline {
-                    begin: moved(polyline.begin),
-                    steps: polyline.steps,
-                    line_desc_ref,
-                    line_width,
-                    line_end,
-                    line_property,
-                })
+            UserShapeType::Polyline(polyline) => {
+                ecad::StrokePath::Polyline(Self::translate_polygon(polyline, at))
             }
             _ => unreachable!("parse_user_shape yields only stroked shapes and polygons"),
-        })
+        };
+        Ok(ecad::SetFeature::Stroke(ecad::Stroke { path, line_desc }))
     }
 
     fn translate_polygon(mut polygon: Polygon, offset: Point) -> Polygon {
-        polygon.begin.x += offset.x;
-        polygon.begin.y += offset.y;
-        Self::translate_steps(&mut polygon.steps, offset);
-        polygon
-    }
-
-    fn translate_steps(steps: &mut [PolyStep], offset: Point) {
-        let points = steps.iter_mut().flat_map(|step| match step {
+        let points = polygon.steps.iter_mut().flat_map(|step| match step {
             PolyStep::Segment(segment) => [Some(&mut segment.point), None],
             PolyStep::Curve(curve) => [Some(&mut curve.point), Some(&mut curve.center)],
         });
-        for point in points.flatten() {
+        for point in points.flatten().chain([&mut polygon.begin]) {
             point.x += offset.x;
             point.y += offset.y;
         }
+        polygon
     }
 
     fn parse_hole(&mut self, node: &Node) -> Result<Hole> {
@@ -2546,8 +2524,9 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_trace(&mut self, node: &Node) -> Result<Trace> {
-        // Trace is in ECAD section, use ECAD units
+    /// A `Polyline` directly inside a `Set`, which may name its `LineDescRef`
+    /// in an attribute.
+    fn parse_set_polyline(&mut self, node: &Node) -> Result<ecad::Stroke> {
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
         let Poly {
             begin,
@@ -2555,26 +2534,13 @@ impl<'a> Parser<'a> {
             style,
             ..
         } = self.parse_poly(node, units, "PolyBegin in Polyline")?;
-
-        // LineDescRef can be attribute OR child element <LineDescRef id="..."/>
-        let line_desc_ref = style
+        let reference = style
             .line_desc_ref
             .or_else(|| self.optional_attr(node, "lineDescRef"));
-        let points = std::iter::once(begin)
-            .chain(steps.iter().map(|step| match step {
-                PolyStep::Segment(segment) => segment.point,
-                PolyStep::Curve(curve) => curve.point,
-            }))
-            .map(|point| TracePoint {
-                x: point.x,
-                y: point.y,
-            })
-            .collect();
-
-        Ok(Trace {
-            line_desc_ref,
-            points,
-            steps,
+        let line_desc = line_desc_group(reference, style.line_desc);
+        Ok(ecad::Stroke {
+            path: ecad::StrokePath::Polyline(Polyline { begin, steps }),
+            line_desc,
         })
     }
 
@@ -3090,6 +3056,13 @@ fn span(start: usize, end: usize) -> Span {
         start: start as u32,
         count: (end - start) as u32,
     }
+}
+
+/// A shape's one line description: its reference if it names one.
+fn line_desc_group(reference: Option<Symbol>, inline: Option<LineDesc>) -> Option<LineDescGroup> {
+    reference
+        .map(LineDescGroup::Ref)
+        .or(inline.map(LineDescGroup::Inline))
 }
 
 fn user_shape(shape: UserShapeType, style: ShapeStyle) -> UserShape {

@@ -585,13 +585,16 @@ mod tests {
             .slice(&layer_feature.features);
 
         let [
-            ecad::SetFeature::Trace(_),
+            ecad::SetFeature::Stroke(_),
             ecad::SetFeature::Polygon(_),
             ecad::SetFeature::UserPrimitive(_),
-            ecad::SetFeature::Trace(curved),
+            ecad::SetFeature::Stroke(curved),
         ] = features
         else {
-            panic!("expected trace, polygon, user primitive, trace: {features:?}");
+            panic!("expected stroke, polygon, user primitive, stroke: {features:?}");
+        };
+        let ecad::StrokePath::Polyline(curved) = &curved.path else {
+            panic!("expected a polyline: {curved:?}");
         };
         assert!(matches!(curved.steps[0], PolyStep::Curve(_)));
     }
@@ -684,9 +687,13 @@ mod tests {
         let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
         let layer_feature = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0];
 
-        let [ecad::SetFeature::Polyline(polyline)] = &layer_feature.features[..] else {
-            panic!("expected one feature polyline");
+        let [ecad::SetFeature::Stroke(stroke)] = &layer_feature.features[..] else {
+            panic!("expected one stroke");
         };
+        let ecad::StrokePath::Polyline(polyline) = &stroke.path else {
+            panic!("expected a polyline: {stroke:?}");
+        };
+        assert!(matches!(stroke.line_desc, Some(LineDescGroup::Ref(_))));
         assert_eq!(polyline.begin, Point { x: 11.0, y: 20.0 });
         assert!(matches!(polyline.steps[0], PolyStep::Curve(_)));
     }

@@ -128,19 +128,6 @@ pub(super) fn require_line_desc(
     resolve_line_desc(context, doc, what, reference, inline)
 }
 
-/// A stroked set feature's inline description, present when it states a width.
-pub(super) fn inline_line_desc(
-    line_width: Option<f64>,
-    line_end: Option<LineEnd>,
-    line_property: Option<LineProperty>,
-) -> Option<ipc2581::types::LineDesc> {
-    Some(ipc2581::types::LineDesc {
-        line_width: line_width?,
-        line_end: line_end.unwrap_or(LineEnd::Round),
-        line_property,
-    })
-}
-
 /// Paint for a line description whose geometry is placed at `scale`.
 pub(super) fn stroke_paint(line_desc: ipc2581::types::LineDesc, scale: f64) -> Paint {
     let mut stroke = StrokeStyle::new(

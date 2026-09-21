@@ -151,9 +151,9 @@ fn write_set_features(
 ) -> Result<()> {
     for feature in features {
         match feature {
-            SetFeature::Line(line) => {
+            SetFeature::Stroke(stroke) => {
                 writer.start_element("Features", &[]);
-                write::line(writer, units, line)?;
+                write::stroke(writer, units, stroke)?;
                 writer.end_element("Features");
             }
             SetFeature::Polygon(polygon) => {

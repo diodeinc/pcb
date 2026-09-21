@@ -1,6 +1,6 @@
 use ipc2581::{
-    FeatureShape, GeometryUsage, Ipc2581, Ipc2581Error, SetFeature, SlotShape, StandardPrimitive,
-    UserPrimitive, UserShapeType,
+    FeatureShape, GeometryUsage, Ipc2581, Ipc2581Error, LineDescGroup, SetFeature, SlotShape,
+    StandardPrimitive, UserPrimitive, UserShapeType,
 };
 
 fn fixture(sets: &str) -> String {
@@ -223,21 +223,40 @@ fn slot_cavity_and_pad_take_any_inline_standard_primitive() {
 }
 
 #[test]
-fn feature_line_width_is_absent_without_an_inline_line_desc() {
+fn a_stroke_carries_its_reference_or_its_inline_line_desc() {
     let doc = Ipc2581::parse(&fixture(
         r#"<Set>
              <Features><Line startX="0" startY="0" endX="1" endY="0"><LineDescRef id="thin"/></Line></Features>
              <Features><Line startX="0" startY="0" endX="1" endY="0"><LineDesc lineEnd="SQUARE" lineWidth="0.2"/></Line></Features>
+             <Features><Line startX="0" startY="0" endX="1" endY="0"/></Features>
+             <Polyline lineDescRef="thin"><PolyBegin x="0" y="0"/><PolyStepSegment x="1" y="0"/><LineDesc lineEnd="ROUND" lineWidth="0.3"/></Polyline>
+             <Polyline><PolyBegin x="0" y="0"/><PolyStepSegment x="1" y="0"/><LineDesc lineEnd="ROUND" lineWidth="0.3"/></Polyline>
            </Set>"#,
     ))
     .unwrap();
-    let [SetFeature::Line(by_ref), SetFeature::Line(inline)] = set_features(&doc) else {
-        panic!("expected two lines");
-    };
+    let line_descs = set_features(&doc)
+        .iter()
+        .map(|feature| match feature {
+            SetFeature::Stroke(stroke) => stroke.line_desc,
+            feature => panic!("expected a stroke: {feature:?}"),
+        })
+        .collect::<Vec<_>>();
 
-    assert_eq!(by_ref.line_desc_ref.map(|id| doc.resolve(id)), Some("thin"));
-    assert_eq!((by_ref.line_width, by_ref.line_end), (None, None));
-    assert_eq!(inline.line_desc_ref, None);
-    assert_eq!(inline.line_width, Some(0.2));
-    assert_eq!(inline.line_end, Some(ipc2581::LineEnd::Square));
+    let [
+        Some(LineDescGroup::Ref(by_ref)),
+        Some(LineDescGroup::Inline(inline)),
+        None,
+        Some(LineDescGroup::Ref(by_attribute)),
+        Some(LineDescGroup::Inline(set_polyline)),
+    ] = line_descs[..]
+    else {
+        panic!("unexpected line descriptions: {line_descs:?}");
+    };
+    assert_eq!(doc.resolve(by_ref), "thin");
+    assert_eq!(doc.resolve(by_attribute), "thin");
+    assert_eq!(
+        (inline.line_width, inline.line_end),
+        (0.2, ipc2581::LineEnd::Square)
+    );
+    assert_eq!(set_polyline.line_width, 0.3);
 }

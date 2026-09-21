@@ -214,7 +214,7 @@ pub struct Contour {
     pub cutouts: Vec<Polygon>,
 }
 
-/// Polygon (closed shape)
+/// `Polygon`, `Cutout` or `Polyline`: a begin point and the steps from it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Polygon {
     pub begin: PolyBegin,
@@ -245,12 +245,8 @@ pub struct PolyStepCurve {
     pub clockwise: bool,
 }
 
-/// Polyline (open shape - series of connected lines)
-#[derive(Debug, Clone, PartialEq)]
-pub struct Polyline {
-    pub begin: PolyBegin,
-    pub steps: Vec<PolyStep>,
-}
+/// An open run of steps, which is a [`Polygon`] that need not close.
+pub type Polyline = Polygon;
 
 /// Line segment
 #[derive(Debug, Clone, Copy, PartialEq)]

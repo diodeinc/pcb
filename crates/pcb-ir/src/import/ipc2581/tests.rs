@@ -571,66 +571,34 @@ fn a_curve_step_onto_its_own_center_lowers_as_a_straight_step() {
 }
 
 #[test]
-fn lowers_trace_poly_step_curves_as_arcs() {
+fn lowers_stroke_poly_step_curves_as_arcs() {
     let mut doc = GeometryDocument::new();
-    let trace = ipc2581::types::Trace {
-        line_desc_ref: None,
-        points: vec![
-            ipc2581::types::ecad::TracePoint { x: 1.0, y: 0.0 },
-            ipc2581::types::ecad::TracePoint { x: 0.0, y: 1.0 },
-        ],
-        steps: vec![PolyStep::Curve(ipc2581::types::PolyStepCurve {
-            point: ipc2581::types::Point { x: 0.0, y: 1.0 },
-            center: ipc2581::types::Point { x: 0.0, y: 0.0 },
-            clockwise: false,
-        })],
-    };
-
-    let feature = push_stroked_trace(
-        &mut doc,
-        StrokedFeatureStyle {
-            net: None,
-            polarity: GeometryPolarity::Dark,
-            source: SourceRef::default(),
-            width: 0.2,
-            line_cap: LineCap::Round,
-            line_pattern: LinePattern::Solid,
-        },
-        &trace,
-    );
-
-    assert_eq!(feature.paths.count, 1);
-    assert_eq!(doc.arena.paths[0].bbox.min, Point::new(-0.1, -0.1));
-    assert_eq!(doc.arena.paths[0].bbox.max, Point::new(1.1, 1.1));
-    assert!(doc.arena.cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
-}
-
-#[test]
-fn lowers_feature_poly_step_curves_as_arcs() {
-    let mut doc = GeometryDocument::new();
-    let polyline = ipc2581::types::ecad::FeaturePolyline {
-        begin: ipc2581::types::Point { x: 1.0, y: 0.0 },
-        steps: vec![PolyStep::Curve(ipc2581::types::PolyStepCurve {
-            point: ipc2581::types::Point { x: 0.0, y: 1.0 },
-            center: ipc2581::types::Point { x: 0.0, y: 0.0 },
-            clockwise: false,
-        })],
-        line_desc_ref: None,
-        line_width: Some(0.2),
-        line_end: Some(LineEnd::Round),
-        line_property: None,
+    let stroke = ipc2581::types::Stroke {
+        path: StrokePath::Polyline(ipc2581::types::Polyline {
+            begin: ipc2581::types::Point { x: 1.0, y: 0.0 },
+            steps: vec![PolyStep::Curve(ipc2581::types::PolyStepCurve {
+                point: ipc2581::types::Point { x: 0.0, y: 1.0 },
+                center: ipc2581::types::Point { x: 0.0, y: 0.0 },
+                clockwise: false,
+            })],
+        }),
+        line_desc: Some(LineDescGroup::Inline(ipc2581::types::LineDesc {
+            line_width: 0.2,
+            line_end: LineEnd::Round,
+            line_property: None,
+        })),
     };
 
     let ipc = Ipc2581::parse(
         r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
     )
     .unwrap();
-    let feature = extract_feature_polyline(
+    let feature = extract_stroke(
         &ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default()),
         None,
         GeometryPolarity::Dark,
         SourceRef::default(),
-        &polyline,
+        &stroke,
         &mut doc,
     )
     .unwrap();
