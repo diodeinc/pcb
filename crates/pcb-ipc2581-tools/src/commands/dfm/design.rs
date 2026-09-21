@@ -26,9 +26,9 @@ use anyhow::{Context, Result, bail};
 use ipc2581::Symbol;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::{
-    ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureDomain, FeatureKind,
-    FeatureSpan, LayoutPurpose, LayoutStepKind, PlatingKind, ProfileSet, SimpleShape,
-    lower_layer_to_artwork_with, profile_occurrences_for,
+    ArtworkScope, ArtworkTarget, Feature, FeatureDomain, FeatureKind, FeatureSpan, LayoutPurpose,
+    LayoutStepKind, PlatingKind, ProfileSet, SimpleShape, lower_layer_to_artwork_with,
+    profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side, artwork};
 use pcb_ir::geom::dfm::{BBoxIndex, Distance, WidthDisk, min_width_disk};
@@ -1436,40 +1436,37 @@ fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
     }
 }
 
-struct CopperAttributionLowering<'a>(Source<'a>);
-
-impl ArtworkLowering<Option<ConductorId>> for CopperAttributionLowering<'_> {
-    fn object_meta(&mut self, feature: &Feature, _kind: ArtworkObjectKind) -> Option<ConductorId> {
-        let step = feature.source_step_ref;
-        let instance = self.0.placed(feature);
-        if let Some(net) = feature.net {
-            return Some(ConductorId::Net {
-                step,
-                instance,
-                net,
-            });
-        }
-        if feature.kind == FeatureKind::Padstack {
-            return Some(ConductorId::Isolated {
-                step,
-                instance,
-                occurrence: feature_occurrence_id(feature)
-                    .expect("materialized copper pad must retain its occurrence identity"),
-            });
-        }
-        if feature.is_fiducial() || feature.flags.copper_balance {
-            return Some(ConductorId::Auxiliary {
-                step,
-                instance,
-                source_set_index: feature.source.set_index,
-            });
-        }
-        Some(ConductorId::Unattributed {
+/// The conductor a copper feature belongs to.
+fn copper_conductor(source: Source<'_>, feature: &Feature) -> ConductorId {
+    let step = feature.source_step_ref;
+    let instance = source.placed(feature);
+    if let Some(net) = feature.net {
+        return ConductorId::Net {
+            step,
+            instance,
+            net,
+        };
+    }
+    if feature.kind == FeatureKind::Padstack {
+        return ConductorId::Isolated {
+            step,
+            instance,
+            occurrence: feature_occurrence_id(feature)
+                .expect("materialized copper pad must retain its occurrence identity"),
+        };
+    }
+    if feature.is_fiducial() || feature.flags.copper_balance {
+        return ConductorId::Auxiliary {
             step,
             instance,
             source_set_index: feature.source.set_index,
-            source_feature_index: feature.source.feature_index,
-        })
+        };
+    }
+    ConductorId::Unattributed {
+        step,
+        instance,
+        source_set_index: feature.source.set_index,
+        source_feature_index: feature.source.feature_index,
     }
 }
 
@@ -1482,7 +1479,7 @@ fn compose_attributed_copper(
     let owners = compose_attributed_owners(
         document,
         LayerRole::Copper,
-        &mut CopperAttributionLowering(source),
+        &|_, feature| copper_conductor(source, feature),
         source.resolution,
     )?;
     let mut composer = pcb_ir::geom::region::PaintComposer::new(source.resolution);
@@ -1507,7 +1504,7 @@ fn compose_attributed_copper(
 fn compose_attributed_owners<Owner: Clone + Eq + std::hash::Hash>(
     document: &mut GeometryDocument,
     role: LayerRole,
-    lowering: &mut impl ArtworkLowering<Option<Owner>>,
+    owner: &dyn Fn(&GeometryDocument, &Feature) -> Owner,
     resolution: Resolution,
 ) -> Result<artwork::OwnerImages<Owner>> {
     pcb_ir::dialects::ipc::process::normalize_for_artwork(document, resolution)?;
@@ -1525,7 +1522,13 @@ fn compose_attributed_owners<Owner: Clone + Eq + std::hash::Hash>(
         bbox: layer.bbox,
         meta: layer.layer_function,
     };
-    let attributed_artwork = lower_layer_to_artwork_with(document, 0, header, lowering);
+    let attributed_artwork = lower_layer_to_artwork_with(
+        document,
+        0,
+        header,
+        &ArtworkTarget::default(),
+        &|document, feature| Some(owner(document, feature)),
+    );
     let (mut layers, _) = artwork::compose_owner_regions(
         &attributed_artwork,
         |owner| Some(owner.clone()),
@@ -1768,18 +1771,6 @@ fn stack_side(ordinal: usize, total: usize) -> &'static str {
     }
 }
 
-struct MaskAttributionLowering<'a>(Source<'a>);
-
-impl ArtworkLowering<Option<(Option<Symbol>, Option<u32>)>> for MaskAttributionLowering<'_> {
-    fn object_meta(
-        &mut self,
-        feature: &Feature,
-        _kind: ArtworkObjectKind,
-    ) -> Option<(Option<Symbol>, Option<u32>)> {
-        Some((feature.source_step_ref, self.0.placed(feature)))
-    }
-}
-
 fn collect_mask_layers(source: Source<'_>) -> Result<Vec<MaskLayer>> {
     let Source {
         imported,
@@ -1812,7 +1803,7 @@ fn collect_mask_layers(source: Source<'_>) -> Result<Vec<MaskLayer>> {
             let owners = compose_attributed_owners(
                 &mut document,
                 LayerRole::Soldermask,
-                &mut MaskAttributionLowering(source),
+                &|_, feature| (feature.source_step_ref, source.placed(feature)),
                 resolution,
             )?;
             Ok(MaskLayer {

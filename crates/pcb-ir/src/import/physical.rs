@@ -16,8 +16,8 @@ use ipc2581::types::{
 use crate::dialects::Side;
 use crate::dialects::artwork;
 use crate::dialects::ipc::{
-    ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureDomain, FeatureKind,
-    FeatureSpan, PlatingKind, SimpleShape, lower_layer_to_artwork_with,
+    ArtworkScope, ArtworkTarget, Feature, FeatureDomain, FeatureKind, FeatureSpan, PlatingKind,
+    SimpleShape, lower_layer_to_artwork_with,
 };
 use crate::geom::dfm::BBoxIndex;
 use crate::geom::{BBox, ContourSet, Point, Polarity, Span, tol};
@@ -904,7 +904,18 @@ impl ImportedDesign {
             bbox: document.layers[0].bbox,
             meta: definition.layer_function,
         };
-        let artwork = lower_layer_to_artwork_with(&document, 0, header, &mut OccurrenceAttribution);
+        let artwork = lower_layer_to_artwork_with(
+            &document,
+            0,
+            header,
+            &ArtworkTarget::default(),
+            &|_, feature| {
+                Some(
+                    feature_occurrence_id(feature)
+                        .expect("canonical imported feature has a definition id"),
+                )
+            },
+        );
         let (mut layers, _) = artwork::compose_owner_regions(
             &artwork,
             |owner| {
@@ -964,20 +975,6 @@ impl ImportedDesign {
                 .and_then(|set| set.source_geometry_ref)
                 .or(feature.padstack_ref),
         }
-    }
-}
-
-struct OccurrenceAttribution;
-
-impl ArtworkLowering<Option<FeatureOccurrenceId>> for OccurrenceAttribution {
-    fn object_meta(
-        &mut self,
-        feature: &Feature,
-        _kind: ArtworkObjectKind,
-    ) -> Option<FeatureOccurrenceId> {
-        Some(
-            feature_occurrence_id(feature).expect("canonical imported feature has a definition id"),
-        )
     }
 }
 

@@ -4,7 +4,7 @@ use anyhow::Result;
 use pcb_ir::dialects::artwork::{self, Geometry, Object};
 use pcb_ir::dialects::ipc::process::{normalize_for_artwork, retain_features};
 use pcb_ir::dialects::ipc::{
-    ArtworkScope, Feature, LayoutStepKind, NetMetaLowering, lower_layer_to_artwork_objects_with,
+    ArtworkScope, ArtworkTarget, Feature, LayoutStepKind, lower_layer_to_artwork_objects_with,
 };
 use pcb_ir::dialects::{LayerRole, Side};
 use pcb_ir::geom::{BBox, ContourBuf, FillRule, LineCap, Paint, Point, Polarity, Resolution};
@@ -262,8 +262,13 @@ impl Overview {
             return Ok(());
         }
         normalize_for_artwork(&mut doc, resolution)?;
-        let objects =
-            lower_layer_to_artwork_objects_with(&doc, 0, &mut self.artwork, &mut NetMetaLowering);
+        let objects = lower_layer_to_artwork_objects_with(
+            &doc,
+            0,
+            &mut self.artwork,
+            &ArtworkTarget::default(),
+            &|_, feature| feature.net,
+        );
         if !objects.is_empty() {
             let layer = self.role_layer(&name, role, LayerStyle::of(role));
             for object in objects {

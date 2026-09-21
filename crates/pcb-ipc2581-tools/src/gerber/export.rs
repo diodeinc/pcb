@@ -22,10 +22,9 @@ use pcb_ir::dialects::artwork::{
 #[cfg(feature = "cli")]
 use pcb_ir::dialects::ipc::relief;
 use pcb_ir::dialects::ipc::{
-    ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureBucket, FeatureDomain,
-    FeatureOperation, FeatureRole, FiducialKind, LayoutPurpose, PlatingKind, PrimitiveRef,
-    ProfileSet, lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with,
-    profile_occurrences_for,
+    ArtworkScope, ArtworkTarget, Feature, FeatureBucket, FeatureDomain, FeatureOperation,
+    FeatureRole, FiducialKind, LayoutPurpose, PlatingKind, PrimitiveRef, ProfileSet,
+    lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with, profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::ContourBuf;
@@ -524,14 +523,15 @@ fn artwork_from_ipc_layer(
         bbox: layer.bbox,
         meta: spec.meta,
     };
-    let mut lowering = GerberLowering {
-        imported,
-        standard_primitives,
+    let mut artwork = lower_layer_to_artwork_with(
         doc,
-        role: spec.role,
-        side: spec.side,
-    };
-    let mut artwork = lower_layer_to_artwork_with(doc, layer_index, header, &mut lowering);
+        layer_index,
+        header,
+        &gerber_target(spec.role, &|primitive| {
+            catalogue_aperture(standard_primitives, primitive)
+        }),
+        &|doc, feature| object_attributes(imported, doc, feature, spec.role, spec.side),
+    );
 
     if spec.role == GerberLayerRole::Profile
         && spec.view != ArtworkScope::ArrayFlattened
@@ -579,79 +579,58 @@ fn hierarchical_artwork_from_ipc_layer(
                     imported.resolve(step.name),
                 );
             }
-            let mut lowering = GerberLowering {
-                imported,
-                standard_primitives,
-                doc: &local,
-                role: spec.role,
-                side: spec.side,
-            };
             Ok(lower_layer_to_artwork_objects_with(
                 &local,
                 0,
                 artwork,
-                &mut lowering,
+                &gerber_target(spec.role, &|primitive| {
+                    catalogue_aperture(standard_primitives, primitive)
+                }),
+                &|doc, feature| object_attributes(imported, doc, feature, spec.role, spec.side),
             ))
         },
     )
     .with_context(|| format!("failed to lower IPC-2581 layer '{layer_name}'"))
 }
 
-/// Gerber's source-specific half of IPC artwork lowering: standard-dictionary
-/// primitives flash through standard apertures, traces are round-joined, and
-/// every object carries X2 attributes.
-struct GerberLowering<'a> {
-    imported: &'a ImportedDesign,
-    standard_primitives: &'a StandardPrimitives<'a>,
-    doc: &'a GeometryDocument,
+/// Gerber's half of IPC artwork lowering: standard-dictionary primitives
+/// flash through the standard apertures `catalogue` holds, and on copper
+/// only pad-like features and tiled balance cells may image as flashes.
+fn gerber_target<'a>(
     role: GerberLayerRole,
-    side: IrSide,
+    catalogue: &'a dyn Fn(PrimitiveRef) -> Option<Aperture>,
+) -> ArtworkTarget<'a> {
+    ArtworkTarget {
+        catalogue,
+        flashes: if role == GerberLayerRole::Copper {
+            &|_, feature| {
+                feature.flags.copper_balance_void.is_some()
+                    || matches!(
+                        feature.bucket,
+                        FeatureBucket::Smd
+                            | FeatureBucket::Pth
+                            | FeatureBucket::Via
+                            | FeatureBucket::Fiducial
+                    )
+            }
+        } else {
+            &|_, _| true
+        },
+        paint_order: &gerber_paint_order,
+    }
 }
 
-impl ArtworkLowering<ObjectAttributes> for GerberLowering<'_> {
-    fn catalogue_aperture(&mut self, primitive: PrimitiveRef) -> Option<Aperture> {
-        let PrimitiveRef::Standard(id) = primitive else {
-            return None;
-        };
-        catalogue_aperture(self.standard_primitives.get(&id)?)
-    }
-
-    /// Only pad-like copper and tiled balance cells may image as flashes.
-    fn flashes(&mut self, feature: &Feature) -> bool {
-        self.role != GerberLayerRole::Copper
-            || feature.flags.copper_balance_void.is_some()
-            || matches!(
-                feature.bucket,
-                FeatureBucket::Smd
-                    | FeatureBucket::Pth
-                    | FeatureBucket::Via
-                    | FeatureBucket::Fiducial
-            )
-    }
-
-    /// Gerber orders removals rather than imaging them as clears, so every
-    /// drilled or routed feature stages last regardless of its bucket.
-    fn paint_order(&mut self, feature: &Feature) -> PaintOrder {
-        let stage = if feature.is_drill_like() {
-            PaintStage::FinalCutout
-        } else if feature.bucket == FeatureBucket::Fill {
-            PaintStage::Base
-        } else {
-            PaintStage::Overlay
-        };
-        PaintOrder { stage }
-    }
-
-    fn object_meta(&mut self, feature: &Feature, _kind: ArtworkObjectKind) -> ObjectAttributes {
-        object_attributes(
-            self.imported,
-            self.doc,
-            feature,
-            self.role,
-            self.side,
-            aperture_function(feature, self.role, self.side),
-        )
-    }
+/// Gerber orders removals rather than imaging them as clears, so every
+/// drilled or routed feature stages last regardless of its bucket.
+fn gerber_paint_order(feature: &Feature) -> PaintOrder {
+    let stage = if feature.is_drill_like() {
+        PaintStage::FinalCutout
+    } else if feature.bucket == FeatureBucket::Fill {
+        PaintStage::Base
+    } else {
+        PaintStage::Overlay
+    };
+    PaintOrder { stage }
 }
 
 struct GerberArtworkSpec {
@@ -1044,15 +1023,22 @@ fn ir_side(side: Option<IpcSide>) -> IrSide {
     }
 }
 
-/// The catalogue primitives the artwork dialect carries as exact apertures.
-fn catalogue_aperture(primitive: &StandardPrimitive) -> Option<Aperture> {
+/// The standard-dictionary primitives the artwork dialect carries as exact
+/// apertures.
+fn catalogue_aperture(
+    standard_primitives: &StandardPrimitives,
+    primitive: PrimitiveRef,
+) -> Option<Aperture> {
+    let PrimitiveRef::Standard(id) = primitive else {
+        return None;
+    };
     // IPC hexagons and octagons place their first vertex pointing down.
     let polygon = |vertices, point_to_point| ApertureShape::Polygon {
         diameter: point_to_point,
         vertices,
         rotation_degrees: -90.0,
     };
-    Some(Aperture::solid(match primitive {
+    Some(Aperture::solid(match standard_primitives.get(&id)? {
         StandardPrimitive::Circle(circle) => ApertureShape::Circle {
             diameter: circle.shape.diameter,
         },
@@ -1089,13 +1075,12 @@ fn object_attributes(
     feature: &Feature,
     role: GerberLayerRole,
     side: IrSide,
-    aperture_function: Option<Vec<String>>,
 ) -> ObjectAttributes {
     let pin_ref = feature.pin_refs.slice(&doc.pin_refs).first();
     let carries_netlist = role == GerberLayerRole::Copper;
     let carries_pins = carries_netlist && matches!(side, IrSide::Top | IrSide::Bottom);
     ObjectAttributes {
-        aperture_function,
+        aperture_function: aperture_function(feature, role, side),
         net: if carries_netlist {
             feature
                 .net

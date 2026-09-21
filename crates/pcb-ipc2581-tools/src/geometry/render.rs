@@ -7,7 +7,7 @@ use crate::layers::layer_role;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::artwork::{Geometry, Object, PaintOrder, PaintStage};
 use pcb_ir::dialects::ipc::{
-    ArtworkScope, Feature, FeatureBucket, NetMetaLowering, ProfileSet,
+    ArtworkScope, ArtworkTarget, Feature, FeatureBucket, ProfileSet,
     lower_layer_to_artwork_objects_with, profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side};
@@ -73,7 +73,8 @@ pub fn layer_artwork(
                 &local,
                 0,
                 artwork,
-                &mut NetMetaLowering,
+                &ArtworkTarget::default(),
+                &|_, feature| feature.net,
             ))
         },
     )?;
