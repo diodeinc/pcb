@@ -6,7 +6,7 @@ use ipc2581::types::{
     FillProperty, HoleShape as IpcHoleShape, LayerFunction, LineEnd, LineProperty, PadUse,
     PlatingStatus, Polarity, PolyStep, SlotShape, StandardPrimitive, UserPrimitive, UserShapeType,
     Xform,
-    ecad::{Layer, SetFeature, Step, StepRepeat, StepType},
+    ecad::{FeatureShape, Layer, SetFeature, Step, StepRepeat, StepType},
 };
 use ipc2581::{Interner, Ipc2581, Symbol};
 
@@ -2395,10 +2395,6 @@ fn extract_pad(
     pad: &ipc2581::types::Pad,
     doc: &mut GeometryDocument,
 ) -> Result<Option<GeometryFeature>> {
-    let Some(padstack_ref) = pad.padstack_def_ref else {
-        doc.warn("Skipping pad without PadStackDefRef");
-        return Ok(None);
-    };
     let Some(x) = pad.x else {
         doc.warn("Skipping pad without x coordinate");
         return Ok(None);
@@ -2407,9 +2403,11 @@ fn extract_pad(
         doc.warn("Skipping pad without y coordinate");
         return Ok(None);
     };
-    // A pad may carry its own primitive, so a padstack definition refines
-    // (hole plating, per-layer shapes) rather than gates.
-    let padstack = context.padstacks.get(&padstack_ref).copied();
+    // A pad may carry its own shape, so a padstack definition refines (hole
+    // plating, per-layer shapes) rather than gates.
+    let padstack = pad
+        .padstack_def_ref
+        .and_then(|padstack_ref| context.padstacks.get(&padstack_ref).copied());
 
     let role = match padstack
         .and_then(|padstack| padstack.hole_def.as_ref())
@@ -2419,10 +2417,16 @@ fn extract_pad(
         _ => FeatureRole::Pad,
     };
 
-    let Some(primitive_ref) = pad_primitive_ref(pad, padstack, layer_ref) else {
+    let padstack_shape = padstack.and_then(|padstack| padstack_pad_shape(padstack, layer_ref));
+    let Some(shape) = pad.feature.as_ref().or(padstack_shape.as_ref()) else {
         doc.warn(format!(
-            "Skipping padstack '{}' because it has no regular primitive for layer '{}'",
-            context.strings.resolve(padstack_ref),
+            "Skipping pad{} because it has no shape for layer '{}'",
+            pad.padstack_def_ref
+                .map(|padstack_ref| format!(
+                    " of padstack '{}'",
+                    context.strings.resolve(padstack_ref)
+                ))
+                .unwrap_or_default(),
             context.strings.resolve(layer_ref)
         ));
         return Ok(None);
@@ -2430,29 +2434,10 @@ fn extract_pad(
     let placement = ipc_placement(Point::new(x, y), pad.xform);
 
     let path_start = doc.arena.paths.len() as u32;
-    let paint = match primitive_ref {
-        PrimitiveRef::Standard(primitive_ref) => {
-            let Some(primitive) = context.standard_primitives.get(&primitive_ref).copied() else {
-                doc.warn(format!(
-                    "Skipping padstack '{}' because primitive '{}' is missing",
-                    context.strings.resolve(padstack_ref),
-                    context.strings.resolve(primitive_ref)
-                ));
-                return Ok(None);
-            };
-            lower_standard_primitive(context, doc, primitive, placement.transform)?
-        }
-        PrimitiveRef::User(primitive_ref) => {
-            let Some(primitive) = context.user_primitives.get(&primitive_ref).copied() else {
-                doc.warn(format!(
-                    "Skipping padstack '{}' because user primitive '{}' is missing",
-                    context.strings.resolve(padstack_ref),
-                    context.strings.resolve(primitive_ref)
-                ));
-                return Ok(None);
-            };
-            lower_user_primitive(context, doc, primitive, placement.transform)?
-        }
+    let Some((paint, primitive_ref)) =
+        lower_feature_shape(context, doc, shape, placement.transform)?
+    else {
+        return Ok(None);
     };
     let path_count = doc.arena.paths.len() as u32 - path_start;
     if path_count == 0 {
@@ -2475,8 +2460,8 @@ fn extract_pad(
     feature.paths = paths;
     feature.intent.role = role;
     apply_ipc_placement(&mut feature, placement);
-    feature.padstack_ref = Some(padstack_ref);
-    feature.primitive_ref = Some(primitive_ref);
+    feature.padstack_ref = pad.padstack_def_ref;
+    feature.primitive_ref = primitive_ref;
     feature.intent.plating = padstack
         .and_then(|padstack| padstack.hole_def.as_ref())
         .map(|hole| plating_kind(hole.plating_status))
@@ -2496,31 +2481,84 @@ fn extract_pad(
     Ok(Some(feature))
 }
 
-fn pad_primitive_ref(
-    pad: &ipc2581::types::Pad,
-    padstack: Option<&ipc2581::types::PadStackDef>,
+/// The shape a padstack contributes on `layer_ref` when the pad has none of
+/// its own.
+fn padstack_pad_shape(
+    padstack: &ipc2581::types::PadStackDef,
     layer_ref: Symbol,
-) -> Option<PrimitiveRef<Symbol>> {
-    let pad_defs = padstack.map_or(&[][..], |padstack| &padstack.pad_defs);
-    let pad_def = pad_defs
-        .iter()
-        .find(|pad_def| pad_def.layer_ref == layer_ref && pad_def.pad_use == PadUse::Regular)
+) -> Option<FeatureShape> {
+    let pad_def = [PadUse::Regular, PadUse::Thermal]
+        .into_iter()
+        .find_map(|pad_use| {
+            padstack
+                .pad_defs
+                .iter()
+                .find(|pad_def| pad_def.layer_ref == layer_ref && pad_def.pad_use == pad_use)
+        })?;
+    pad_def
+        .standard_primitive_ref
+        .map(FeatureShape::StandardPrimitiveRef)
         .or_else(|| {
-            pad_defs.iter().find(|pad_def| {
-                pad_def.layer_ref == layer_ref && pad_def.pad_use == PadUse::Thermal
-            })
-        });
-    pad.standard_primitive_ref
-        .map(PrimitiveRef::Standard)
-        .or_else(|| pad.user_primitive_ref.map(PrimitiveRef::User))
-        .or_else(|| {
-            pad_def.and_then(|pad_def| {
-                pad_def
-                    .standard_primitive_ref
-                    .map(PrimitiveRef::Standard)
-                    .or_else(|| pad_def.user_primitive_ref.map(PrimitiveRef::User))
-            })
+            pad_def
+                .user_primitive_ref
+                .map(FeatureShape::UserPrimitiveRef)
         })
+}
+
+/// Lower one member of the IPC-2581C `Feature` substitution group. Warns and
+/// returns `None` when the shape cannot be drawn.
+fn lower_feature_shape(
+    context: &ExtractContext<'_>,
+    doc: &mut GeometryDocument,
+    shape: &FeatureShape,
+    transform: Affine2,
+) -> Result<Option<(PrimitivePaint, Option<PrimitiveRef<Symbol>>)>> {
+    Ok(Some(match shape {
+        FeatureShape::StandardPrimitive(primitive) => (
+            lower_standard_primitive(context, doc, primitive, transform)?,
+            None,
+        ),
+        FeatureShape::StandardPrimitiveRef(id) => {
+            let Some(primitive) = context.standard_primitives.get(id).copied() else {
+                doc.warn(format!(
+                    "Skipping feature because standard primitive '{}' is missing",
+                    context.strings.resolve(*id)
+                ));
+                return Ok(None);
+            };
+            (
+                lower_standard_primitive(context, doc, primitive, transform)?,
+                Some(PrimitiveRef::Standard(*id)),
+            )
+        }
+        FeatureShape::UserPrimitive(primitive) => (
+            lower_user_primitive(context, doc, primitive, transform)?,
+            None,
+        ),
+        FeatureShape::UserPrimitiveRef(id) => {
+            let Some(primitive) = context.user_primitives.get(id).copied() else {
+                doc.warn(format!(
+                    "Skipping feature because user primitive '{}' is missing",
+                    context.strings.resolve(*id)
+                ));
+                return Ok(None);
+            };
+            (
+                lower_user_primitive(context, doc, primitive, transform)?,
+                Some(PrimitiveRef::User(*id)),
+            )
+        }
+        FeatureShape::UserShape(shape) => {
+            let mut paint = PrimitivePaint::Fill;
+            let primitive_start = doc.arena.paths.len();
+            lower_user_shape(context, doc, shape, transform, primitive_start, &mut paint)?;
+            (paint, None)
+        }
+        FeatureShape::Text(_) | FeatureShape::Outline(_) => {
+            doc.warn("Skipping feature whose shape is text or a package outline");
+            return Ok(None);
+        }
+    }))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3394,164 +3432,173 @@ fn lower_user_primitive(
             // A Contour's Polygon and Cutouts stay together (§3.5.9.3); sibling
             // contours are additive, including KiCad zone fills and text islands.
             for shape in &user_special.shapes {
-                let path_start = doc.arena.paths.len() as u32;
-                let mut nested_paint = None;
-                match &shape.shape {
-                    UserShapeType::Circle(circle) => {
-                        push_filled_shape(
-                            doc,
-                            transform,
-                            shapes::ellipse(circle.diameter, circle.diameter),
-                        );
-                    }
-                    UserShapeType::RectCenter(rect) => {
-                        push_filled_shape(
-                            doc,
-                            transform,
-                            shapes::rect(rect.size.width, rect.size.height),
-                        );
-                    }
-                    UserShapeType::Oval(oval) => {
-                        push_filled_shape(
-                            doc,
-                            transform,
-                            shapes::obround(oval.size.width, oval.size.height),
-                        );
-                    }
-                    UserShapeType::RectRound(rect) => {
-                        push_filled_shape(
-                            doc,
-                            transform,
-                            shapes::rounded_rect(
-                                rect.size.width,
-                                rect.size.height,
-                                rect.radius,
-                                [
-                                    rect.upper_right,
-                                    rect.lower_right,
-                                    rect.lower_left,
-                                    rect.upper_left,
-                                ],
-                            ),
-                        );
-                    }
-                    UserShapeType::Polygon(polygon) => {
-                        push_polygon_path(doc, polygon, transform, FillRule::NonZero);
-                    }
-                    UserShapeType::Contour(contour) => {
-                        push_contour_path(doc, contour, transform);
-                    }
-                    UserShapeType::Line(line) => {
-                        let line_desc = user_shape_line_desc(context, shape);
-                        push_user_stroke(
-                            doc,
-                            ContourBuf::new(vec![
-                                PathCmd::move_to(Point::new(line.start.x, line.start.y)),
-                                PathCmd::line_to(Point::new(line.end.x, line.end.y)),
-                            ]),
-                            transform,
-                            line_desc,
-                        );
-                    }
-                    UserShapeType::Arc(arc) => {
-                        let line_desc = user_shape_line_desc(context, shape);
-                        push_user_stroke(
-                            doc,
-                            ContourBuf::new(vec![
-                                PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
-                                PathCmd::arc_to(
-                                    Point::new(arc.end.x, arc.end.y),
-                                    Point::new(arc.center.x, arc.center.y),
-                                    arc.clockwise,
-                                ),
-                            ]),
-                            transform,
-                            line_desc,
-                        );
-                    }
-                    UserShapeType::Polyline(polyline) => {
-                        let line_desc = user_shape_line_desc(context, shape);
-                        push_user_stroke(
-                            doc,
-                            ContourBuf::new(poly_step_commands(
-                                Point::new(polyline.begin.x, polyline.begin.y),
-                                &polyline.steps,
-                            )),
-                            transform,
-                            line_desc,
-                        );
-                    }
-                    UserShapeType::StandardPrimitive(primitive) => {
-                        nested_paint = Some(lower_standard_primitive(
-                            context, doc, primitive, transform,
-                        )?);
-                    }
-                    UserShapeType::StandardPrimitiveRef(primitive_ref) => {
-                        if let Some(primitive) =
-                            context.standard_primitives.get(primitive_ref).copied()
-                        {
-                            nested_paint = Some(lower_standard_primitive(
-                                context, doc, primitive, transform,
-                            )?);
-                        }
-                    }
-                    // Text has no glyphs here, and KiCad's zero-width glyph
-                    // Outlines have no area to image.
-                    UserShapeType::Text(_) | UserShapeType::Outline(_) => {}
-                    UserShapeType::UserPrimitive(primitive) => {
-                        nested_paint =
-                            Some(lower_user_primitive(context, doc, primitive, transform)?);
-                    }
-                    UserShapeType::UserPrimitiveRef(primitive_ref) => {
-                        if let Some(primitive) = context.user_primitives.get(primitive_ref).copied()
-                        {
-                            nested_paint =
-                                Some(lower_user_primitive(context, doc, primitive, transform)?);
-                        } else {
-                            make_paths_unpainted(doc, path_start);
-                        }
-                    }
-                }
-
-                let fill_desc = shape.fill_desc.or_else(|| {
-                    shape
-                        .fill_desc_ref
-                        .and_then(|id| context.fill_descs.get(&id).copied())
-                });
-                match fill_desc {
-                    Some(fill_desc) if fill_desc.fill_property == FillProperty::Hollow => {
-                        if let Some(line_desc) = user_shape_line_desc(context, shape) {
-                            make_paths_stroked(
-                                doc,
-                                path_start,
-                                line_desc.line_width,
-                                map_line_cap(line_desc.line_end),
-                                map_line_pattern(line_desc.line_property),
-                            );
-                        } else {
-                            make_paths_unpainted(doc, path_start);
-                        }
-                        paint = PrimitivePaint::Hollow;
-                    }
-                    Some(fill_desc) if fill_desc.fill_property == FillProperty::Void => {
-                        subtract_user_void(
-                            doc,
-                            primitive_start,
-                            path_start as usize,
-                            context.resolution,
-                        )?;
-                    }
-                    Some(_) => {}
-                    None => {
-                        if let Some(nested_paint) = nested_paint {
-                            paint = nested_paint;
-                        }
-                    }
-                }
+                lower_user_shape(context, doc, shape, transform, primitive_start, &mut paint)?;
             }
             Ok(paint)
         }
     }
+}
+
+/// Lower one shape of a user primitive whose paths start at
+/// `primitive_start`; a VOID shape clears the fills pushed since then.
+fn lower_user_shape(
+    context: &ExtractContext<'_>,
+    doc: &mut GeometryDocument,
+    shape: &ipc2581::types::UserShape,
+    transform: Affine2,
+    primitive_start: usize,
+    paint: &mut PrimitivePaint,
+) -> Result<()> {
+    let path_start = doc.arena.paths.len() as u32;
+    let mut nested_paint = None;
+    match &shape.shape {
+        UserShapeType::Circle(circle) => {
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::ellipse(circle.diameter, circle.diameter),
+            );
+        }
+        UserShapeType::RectCenter(rect) => {
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::rect(rect.size.width, rect.size.height),
+            );
+        }
+        UserShapeType::Oval(oval) => {
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::obround(oval.size.width, oval.size.height),
+            );
+        }
+        UserShapeType::RectRound(rect) => {
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::rounded_rect(
+                    rect.size.width,
+                    rect.size.height,
+                    rect.radius,
+                    [
+                        rect.upper_right,
+                        rect.lower_right,
+                        rect.lower_left,
+                        rect.upper_left,
+                    ],
+                ),
+            );
+        }
+        UserShapeType::Polygon(polygon) => {
+            push_polygon_path(doc, polygon, transform, FillRule::NonZero);
+        }
+        UserShapeType::Contour(contour) => {
+            push_contour_path(doc, contour, transform);
+        }
+        UserShapeType::Line(line) => {
+            let line_desc = user_shape_line_desc(context, shape);
+            push_user_stroke(
+                doc,
+                ContourBuf::new(vec![
+                    PathCmd::move_to(Point::new(line.start.x, line.start.y)),
+                    PathCmd::line_to(Point::new(line.end.x, line.end.y)),
+                ]),
+                transform,
+                line_desc,
+            );
+        }
+        UserShapeType::Arc(arc) => {
+            let line_desc = user_shape_line_desc(context, shape);
+            push_user_stroke(
+                doc,
+                ContourBuf::new(vec![
+                    PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
+                    PathCmd::arc_to(
+                        Point::new(arc.end.x, arc.end.y),
+                        Point::new(arc.center.x, arc.center.y),
+                        arc.clockwise,
+                    ),
+                ]),
+                transform,
+                line_desc,
+            );
+        }
+        UserShapeType::Polyline(polyline) => {
+            let line_desc = user_shape_line_desc(context, shape);
+            push_user_stroke(
+                doc,
+                ContourBuf::new(poly_step_commands(
+                    Point::new(polyline.begin.x, polyline.begin.y),
+                    &polyline.steps,
+                )),
+                transform,
+                line_desc,
+            );
+        }
+        UserShapeType::StandardPrimitive(primitive) => {
+            nested_paint = Some(lower_standard_primitive(
+                context, doc, primitive, transform,
+            )?);
+        }
+        UserShapeType::StandardPrimitiveRef(primitive_ref) => {
+            if let Some(primitive) = context.standard_primitives.get(primitive_ref).copied() {
+                nested_paint = Some(lower_standard_primitive(
+                    context, doc, primitive, transform,
+                )?);
+            }
+        }
+        // Text has no glyphs here, and KiCad's zero-width glyph Outlines have
+        // no area to image.
+        UserShapeType::Text(_) | UserShapeType::Outline(_) => {}
+        UserShapeType::UserPrimitive(primitive) => {
+            nested_paint = Some(lower_user_primitive(context, doc, primitive, transform)?);
+        }
+        UserShapeType::UserPrimitiveRef(primitive_ref) => {
+            if let Some(primitive) = context.user_primitives.get(primitive_ref).copied() {
+                nested_paint = Some(lower_user_primitive(context, doc, primitive, transform)?);
+            } else {
+                make_paths_unpainted(doc, path_start);
+            }
+        }
+    }
+
+    let fill_desc = shape.fill_desc.or_else(|| {
+        shape
+            .fill_desc_ref
+            .and_then(|id| context.fill_descs.get(&id).copied())
+    });
+    match fill_desc {
+        Some(fill_desc) if fill_desc.fill_property == FillProperty::Hollow => {
+            if let Some(line_desc) = user_shape_line_desc(context, shape) {
+                make_paths_stroked(
+                    doc,
+                    path_start,
+                    line_desc.line_width,
+                    map_line_cap(line_desc.line_end),
+                    map_line_pattern(line_desc.line_property),
+                );
+            } else {
+                make_paths_unpainted(doc, path_start);
+            }
+            *paint = PrimitivePaint::Hollow;
+        }
+        Some(fill_desc) if fill_desc.fill_property == FillProperty::Void => {
+            subtract_user_void(
+                doc,
+                primitive_start,
+                path_start as usize,
+                context.resolution,
+            )?;
+        }
+        Some(_) => {}
+        None => {
+            if let Some(nested_paint) = nested_paint {
+                *paint = nested_paint;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// IPC-2581C §3.5.6.1: VOID clears only preceding filled shapes in its own
@@ -5840,6 +5887,108 @@ mod tests {
         let rotated = doc.features[1].bbox;
         assert!((rotated.center().x - 40.0).abs() < 1e-9);
         assert!((rotated.center().y - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pad_draws_its_inline_shape_without_a_padstack() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="TOP">
+          <Set net="GND">
+            <Pad>
+              <Location x="5" y="7"/>
+              <Circle diameter="2"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let doc = extract_layer(&ipc, "TOP", Resolution::default()).unwrap();
+        assert!(doc.diagnostics.is_empty(), "{:?}", doc.diagnostics);
+        assert_eq!(doc.features.len(), 1);
+
+        let pad = &doc.features[0];
+        assert_eq!(pad.kind, FeatureKind::Padstack);
+        assert_eq!(pad.padstack_ref, None);
+        assert_eq!(pad.primitive_ref, None);
+        assert_eq!(pad.bbox.min, Point::new(4.0, 6.0));
+        assert_eq!(pad.bbox.max, Point::new(6.0, 8.0));
+    }
+
+    #[test]
+    fn pad_inline_shape_overrides_its_padstack_shape() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="square">
+        <RectCenter width="8" height="8"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="via">
+          <PadstackHoleDef name="drill" diameter="0.3" platingStatus="VIA" plusTol="0" minusTol="0" x="0" y="0"/>
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <Location x="0" y="0"/>
+            <StandardPrimitiveRef id="square"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Pad padstackDefRef="via">
+              <Location x="10" y="10"/>
+              <Oval width="3" height="1"/>
+            </Pad>
+            <Pad padstackDefRef="via">
+              <Location x="30" y="10"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let doc = extract_layer(&ipc, "TOP", Resolution::default()).unwrap();
+        assert_eq!(doc.features.len(), 2);
+
+        // The padstack still refines what the pad is, not what it looks like.
+        let inline = &doc.features[0];
+        assert_eq!(inline.intent.role, FeatureRole::Via);
+        assert_eq!(inline.primitive_ref, None);
+        assert!((inline.bbox.width() - 3.0).abs() < 1e-9);
+        assert!((inline.bbox.height() - 1.0).abs() < 1e-9);
+
+        let from_padstack = &doc.features[1];
+        assert!(from_padstack.primitive_ref.is_some());
+        assert!((from_padstack.bbox.width() - 8.0).abs() < 1e-9);
     }
 
     #[test]
