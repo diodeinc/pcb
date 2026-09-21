@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use pcb_ir::dialects::ipc::collect_fab_panel_balancing_input;
 use pcb_ir::geom::Resolution;
-use pcb_ir::geom::copper_balance::DenseCopperBalanceProfile;
+use pcb_ir::geom::copper_balance::{DenseCopperBalanceProfile, map_layers};
 use pcb_ir::geom::{BBox, ContourSet};
 use pcb_ir::import::ipc2581::import_design;
 
@@ -75,11 +75,9 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
     let safe_region = certified_safe_region(&input, "the fabrication panel")?;
 
     let stack_weights = physical_copper_stack_weights(ipc);
-    let prepared = layer_names
-        .iter()
-        .zip(copper_images)
-        .zip(&stray_copper)
-        .map(|((layer_name, existing), stray)| {
+    let prepared = map_layers(
+        layer_names.iter().zip(copper_images).zip(&stray_copper),
+        |((layer_name, existing), stray)| {
             prepared_layer(
                 layer_name,
                 existing,
@@ -88,8 +86,10 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
                 &footprints,
                 stack_weights.as_ref(),
             )
-        })
-        .collect::<Result<Vec<_>>>()?;
+        },
+    )
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
 
     solve_copper_balance(
         &usable_region,

@@ -101,12 +101,9 @@ pub fn generate_automatic_board_array_copper_balance(
     .into_iter()
     .collect::<Result<Vec<_>>>()?;
     let stack_weights = physical_copper_stack_weights(ipc);
-    let prepared = layer_names
-        .iter()
-        .zip(existing)
-        .zip(frame)
-        .zip(region_of)
-        .map(|(((layer_name, existing), frame), region)| {
+    let prepared = map_layers(
+        layer_names.iter().zip(existing).zip(frame).zip(region_of),
+        |(((layer_name, existing), frame), region)| {
             prepared_layer(
                 layer_name,
                 existing,
@@ -115,8 +112,10 @@ pub fn generate_automatic_board_array_copper_balance(
                 board_footprints,
                 stack_weights.as_ref(),
             )
-        })
-        .collect::<Result<Vec<_>>>()?;
+        },
+    )
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
 
     solve_copper_balance(
         panel_outer,
