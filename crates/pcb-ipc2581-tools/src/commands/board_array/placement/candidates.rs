@@ -114,6 +114,9 @@ struct Checker<'a> {
     frame: &'a ContourSet,
     preset: &'a Preset,
     keepout_mm: f64,
+    /// Strips share edges with the board and the slot, so what a boolean
+    /// leaves of one is judged at this significance: residue along a shared
+    /// edge is neither the board crossing back nor missing frame.
     resolution: Resolution,
 }
 
@@ -336,6 +339,58 @@ mod tests {
         let perimeter: f64 = ring_edges(&big).map(|(a, b)| a.distance_to(b)).sum();
         assert!(bend_within(&turns, perimeter, 10.0, 1.5) < 15.0);
         assert!(bend_within(&turns, perimeter, 10.0, 6.5) < 60.0);
+    }
+
+    #[test]
+    fn a_strip_along_a_diagonal_edge_is_not_the_board_crossing_back() {
+        // A chamfered corner. A tab's strip shares its base with the diagonal
+        // edge, where rounding leaves the two a hair apart or a hair
+        // overlapped from one site to the next; neither is the board.
+        let ring = vec![
+            [100.0, -114.0],
+            [100.0, -141.5],
+            [100.382683, -142.42388],
+            [106.889612, -149.087824],
+            [108.0, -149.5],
+            [125.0, -149.5],
+            [125.0, -114.0],
+        ];
+        let resolution = Resolution::default();
+        let board =
+            ContourSet::from_rings(vec![ring], FillRule::NonZero, resolution.strict()).unwrap();
+        let id = BoundaryId {
+            component: 0,
+            ring: 0,
+        };
+        // Sites every 10 µm wherever the tab lies within the straight chamfer.
+        let chamfer =
+            27.5 + Point::new(100.0, -141.5).distance_to(Point::new(100.382683, -142.42388));
+        let run = OutlineInterval {
+            boundary: id,
+            edge: 2,
+            start_mm: chamfer + 1.55,
+            end_mm: chamfer + 7.75,
+            start: Point::ZERO,
+            end: Point::ZERO,
+            state: OutlineState::Eligible,
+            landing: OutlineState::Eligible,
+            obstacles: Vec::new(),
+            uncertainty_mm: 0.0,
+        };
+        let preset = Preset {
+            candidate_pitch_mm: 0.01,
+            corner_keepout_mm: 0.0,
+            min_tab_radius_mm: 1.0,
+            ..crate::commands::board_array::placement::PRESET
+        };
+        let sites = find(&board, &[run], &preset, resolution).unwrap();
+        let reasons = sites
+            .rejected
+            .iter()
+            .map(|r| format!("{:.3}: {}", r.station_mm - chamfer, r.reason))
+            .collect::<Vec<_>>();
+        assert!(reasons.is_empty(), "{reasons:?}");
+        assert_eq!(sites.candidates.len(), 620);
     }
 
     #[test]

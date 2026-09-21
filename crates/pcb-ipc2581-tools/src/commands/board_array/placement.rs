@@ -123,7 +123,7 @@ pub(super) fn place(
         islands == 1,
         "placement models one connected board; this substrate has {islands} separate islands"
     );
-    let sites = candidates::find(substrate, &prepared.intervals, preset, resolution.strict())?;
+    let sites = candidates::find(substrate, &prepared.intervals, preset, resolution)?;
     let loads = candidates::load_points(substrate, preset.load_point_spacing_mm);
     let bbox = substrate.bbox();
     // Cross rails sit one board span apart, so the rail a tab lands on is
