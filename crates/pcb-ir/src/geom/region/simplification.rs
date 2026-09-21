@@ -4,6 +4,7 @@ use super::{ContourSet, Ring, Shape, flatten_shapes, overlay_fill_rule, rings_bb
 use crate::geom::accuracy::numerical_error;
 use crate::geom::dist;
 use crate::geom::{AccuracyError, BBox, FillRule, Point};
+use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay::IntOverlayOptions;
 use i_overlay::core::simplify::Simplify;
 use i_overlay::float::simplify::SimplifyShape;
@@ -24,7 +25,10 @@ pub(crate) fn simplify_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring>
 /// not the layer, which matters for silkscreen and mask images made of
 /// thousands of small, locally overlapping features.
 pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
-    let rule = overlay_fill_rule(fill_rule);
+    regularize(rings, overlay_fill_rule(fill_rule))
+}
+
+fn regularize(rings: Vec<Ring>, rule: OverlayFillRule) -> Vec<Shape> {
     bounds_connected_groups(rings.into_iter().map(|ring| (ring, ())).collect())
         .into_iter()
         .flat_map(|group| untagged(group).simplify_shape_as::<i64>(rule))
@@ -214,14 +218,18 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
 impl ContourSet {
     /// Decimate the region's boundary so it only shrinks; see
     /// [`decimate_rings_inward`].
+    ///
+    /// A chord takes one turn of winding off what it cuts from its ring and
+    /// changes nothing elsewhere, so the decimated rings wind no point more
+    /// than the source did and positive winding keeps a subset of it. The
+    /// nonzero rule would not: a hole left outside its ring by a chord winds
+    /// negatively there and would fill.
     pub fn decimate_inward(&self) -> Result<Self, AccuracyError> {
         let inherited = self.uncertainty_mm + numerical_error(self.bbox);
         let deviation_mm = self.budget().allowance(inherited)?;
+        let decimated = decimate_rings_inward(&self.rings, deviation_mm);
         Ok(Self::from_regularized(
-            simplify_rings(
-                decimate_rings_inward(&self.rings, deviation_mm),
-                FillRule::NonZero,
-            ),
+            flatten_shapes(regularize(decimated, OverlayFillRule::Positive)),
             self.resolution,
             inherited + deviation_mm,
         ))
@@ -233,7 +241,7 @@ mod tests {
     use super::super::ring_edges;
     use super::super::tests::res;
     use super::*;
-    use crate::geom::{shapes, tol};
+    use crate::geom::{GeometryAccuracy, Resolution, shapes, tol};
 
     #[test]
     fn inward_decimation_only_shrinks_and_respects_deviation() {
@@ -259,6 +267,28 @@ mod tests {
             .map(|(start, end)| start.distance_to(end))
             .sum();
         assert!(ring.area() - decimated.area() <= deviation * perimeter);
+    }
+
+    #[test]
+    fn inward_decimation_does_not_fill_a_hole_inside_the_bulge_it_cuts() {
+        // The chord across the shallow bulge passes above a hole within it,
+        // which leaves the hole outside its ring, wound the wrong way.
+        let outer = vec![
+            [0.0, 0.0],
+            [5.0, -0.01],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+        ];
+        let hole = vec![[4.0, -0.002], [6.0, -0.002], [5.0, -0.008]];
+        let resolution = Resolution::new(tol::REGION_MM, GeometryAccuracy::new(0.05).unwrap());
+        let region = ContourSet::from_regularized(vec![outer, hole], resolution, 0.0);
+        assert!((region.area() - 100.044).abs() < 1e-9);
+
+        let decimated = region.decimate_inward().unwrap();
+
+        assert_eq!(decimated.rings.len(), 1);
+        assert!(decimated.difference(&region).unwrap().is_empty());
     }
 
     #[test]
