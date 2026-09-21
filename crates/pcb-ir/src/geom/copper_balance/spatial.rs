@@ -10,9 +10,10 @@ use super::{
 use crate::geom::{BBox, ContourSet, Point};
 
 const DENSITY_KERNEL_TRUNCATION: f64 = 3.0;
-// Part of the method, not a safety cap: with the solve's short step this many
-// iterations carry gradient information across a panel without letting the
-// field drift toward the saturated minimiser the smoothing hides.
+// A safety cap only. The lattice-scale term makes the objective strongly
+// convex with a condition number near the number of scales, so projected
+// gradient at the Lipschitz step is within the tolerance below in tens of
+// iterations.
 const SPATIAL_SOLVE_ITERATIONS: usize = 512;
 // Updates below this leave every radius well inside half a quantization step
 // of its converged value, so the emitted lattice is already final.
@@ -37,11 +38,12 @@ pub(super) fn normalized_stack_weights(
         .collect()
 }
 
-/// Sparse row-normalized convolution from panel-lattice samples to a shared
-/// evaluation field, stored CSR (row offsets over flat index/weight arrays)
-/// so the per-iteration passes stream contiguously. `smooth_adjoint` is the
-/// exact transpose of `smooth`, so projected gradient follows the same
-/// density model used by the objective.
+/// Sparse row-normalized Gaussian from panel-lattice samples to the density
+/// seen over one interaction length, evaluated on a site subset about that
+/// length apart. Stored CSR (row offsets over flat index/weight arrays) so the
+/// per-iteration passes stream contiguously. `smooth_adjoint` is the exact
+/// transpose of `smooth`, so projected gradient follows the same density model
+/// used by the objective.
 pub(super) struct LatticeDensityKernel {
     sample_count: usize,
     row_offsets: Vec<u32>,
@@ -50,14 +52,10 @@ pub(super) struct LatticeDensityKernel {
 }
 
 impl LatticeDensityKernel {
-    pub(super) fn new(
-        samples: &SiteTable,
-        evaluation_sites: &[DenseCopperLatticeSite],
-        lattice: DenseCopperLattice,
-        profile: DenseCopperBalanceProfile,
-    ) -> Self {
-        let support_mm = DENSITY_KERNEL_TRUNCATION * profile.density_sigma_mm;
-        let inverse_two_sigma_squared = 0.5 / profile.density_sigma_mm.powi(2);
+    pub(super) fn new(samples: &SiteTable, lattice: DenseCopperLattice, sigma_mm: f64) -> Self {
+        let evaluation_sites = density_evaluation_sites(&samples.sites, lattice, sigma_mm);
+        let support_mm = DENSITY_KERNEL_TRUNCATION * sigma_mm;
+        let inverse_two_sigma_squared = 0.5 / sigma_mm.powi(2);
         let column_span = (support_mm / lattice.column_pitch_mm()).ceil() as i64;
         let row_span = (support_mm / lattice.pitch_mm).ceil() as i64 + 1;
         let offsets = [0_i64, 1_i64].map(|parity| {
@@ -84,7 +82,7 @@ impl LatticeDensityKernel {
         let mut csr_sample_indices = Vec::new();
         let mut weights = Vec::new();
         row_offsets.push(0_u32);
-        for site in evaluation_sites {
+        for site in &evaluation_sites {
             let row_start = weights.len();
             for &(column_offset, row_offset, weight) in &offsets[site.column.rem_euclid(2) as usize]
             {
@@ -114,6 +112,17 @@ impl LatticeDensityKernel {
 
     pub(super) fn row_count(&self) -> usize {
         self.row_offsets.len() - 1
+    }
+
+    /// `||H||_1`, the most any one sample contributes across all rows. Every
+    /// row sums to one, so `||H||_inf = 1` and this bounds the squared
+    /// operator norm: `||H||_2^2 <= ||H||_1 ||H||_inf`.
+    fn max_column_sum(&self) -> f64 {
+        let mut column_sums = vec![0.0; self.sample_count];
+        for (sample_index, weight) in self.sample_indices.iter().zip(&self.weights) {
+            column_sums[*sample_index as usize] += weight;
+        }
+        column_sums.into_iter().fold(0.0, f64::max)
     }
 
     pub(super) fn smooth(&self, values: &[f64]) -> Vec<f64> {
@@ -158,48 +167,71 @@ impl LatticeDensityKernel {
     }
 }
 
-/// One layer's density at the evaluation sites as a function of its squared
-/// void radii, `rho = base - beta H P x`.
+/// The interaction lengths the fill is matched at, longest first: the process
+/// scale, then one per octave below it down to the lattice, then the lattice
+/// tile itself.
+///
+/// Etch loading and plating current respond to the copper around a feature
+/// over a length nobody knows better than its range, so the fit minimises the
+/// deficit at every length in that range rather than at one. Matched at the
+/// longest length alone the problem is a deconvolution: bands of saturated
+/// voids that average out over exactly that length fit best, and are uneven
+/// at every shorter one. The shorter lengths see those bands as the density
+/// errors they are, and the tile-scale term makes the optimum unique.
+pub(super) fn density_scales_mm(profile: DenseCopperBalanceProfile) -> Vec<f64> {
+    std::iter::successors(Some(profile.density_sigma_mm), |sigma| Some(sigma / 2.0))
+        .take_while(|sigma| *sigma >= profile.pitch_mm)
+        // Narrower than the gap between neighbouring sites, so the normalized
+        // kernel is each tile alone.
+        .chain([profile.pitch_mm / (2.0 * DENSITY_KERNEL_TRUNCATION)])
+        .collect()
+}
+
+/// One layer's density at every scale as a function of its squared void
+/// radii, `rho_s = H_s (base - beta P x)`.
 pub(super) struct LayerDensityModel<'a> {
-    pub(super) kernel: &'a LatticeDensityKernel,
+    /// The density kernels, longest interaction length first.
+    pub(super) scales: &'a [LatticeDensityKernel],
     /// Sample index of each squared-radius variable: the scatter `P`.
     pub(super) active_sites: &'a [usize],
-    /// Copper fraction with every full void closed: fixed copper, plus the
-    /// generated plane less its clipped edge voids.
-    pub(super) base_density: Vec<f64>,
+    /// Copper fraction of each scale's evaluation sites with every full void
+    /// closed: fixed copper, plus the generated plane less its clipped edge
+    /// voids.
+    pub(super) base_density: Vec<Vec<f64>>,
     /// `beta`, the share of a lattice cell a void takes per unit squared
     /// radius.
     pub(super) void_fraction_per_radius_squared: f64,
 }
 
 impl LayerDensityModel<'_> {
+    fn sample_count(&self) -> usize {
+        self.scales[0].sample_count
+    }
+
     /// `void_fraction` spans the samples and is written only at active sites,
     /// so it must arrive zero everywhere else.
-    fn density_into(&self, squared_radii: &[f64], void_fraction: &mut [f64], density: &mut [f64]) {
+    fn scatter(&self, squared_radii: &[f64], void_fraction: &mut [f64]) {
         for (sample_index, radius_squared) in self.active_sites.iter().zip(squared_radii) {
             void_fraction[*sample_index] = self.void_fraction_per_radius_squared * radius_squared;
         }
-        self.kernel.smooth_into(void_fraction, density);
-        for (density, base) in density.iter_mut().zip(&self.base_density) {
-            *density = base - *density;
-        }
     }
 
-    /// The modeled copper fraction itself, not its distance from target: the
-    /// stack moment is the copper the panel carries, and subtracting targets
-    /// would leave it blind to whatever imbalance the boards were drawn with.
+    /// The modeled copper fraction at the process scale itself, not its
+    /// distance from target: the stack moment is the copper the panel carries,
+    /// and subtracting targets would leave it blind to whatever imbalance the
+    /// boards were drawn with.
     pub(super) fn density(&self, squared_radii: &[f64]) -> Vec<f64> {
-        let mut density = vec![0.0; self.kernel.row_count()];
-        self.density_into(
-            squared_radii,
-            &mut vec![0.0; self.kernel.sample_count],
-            &mut density,
-        );
+        let mut void_fraction = vec![0.0; self.sample_count()];
+        self.scatter(squared_radii, &mut void_fraction);
+        let mut density = self.scales[0].smooth(&void_fraction);
+        for (density, base) in density.iter_mut().zip(&self.base_density[0]) {
+            *density = base - *density;
+        }
         density
     }
 
-    /// Projected gradient on the layer's own squared density error, over
-    /// `{x : lower <= x <= upper, sum(x) = pinned_sum}`.
+    /// Projected gradient on the layer's mean squared density error summed
+    /// over the scales, over `{x : lower <= x <= upper, sum(x) = pinned_sum}`.
     ///
     /// The moment is not in the objective: the settlement already spent what
     /// the stack was owed, and pinning the sum keeps the layer redistributing
@@ -210,29 +242,62 @@ impl LayerDensityModel<'_> {
         target_density: f64,
         (lower, upper): (f64, f64),
         pinned_sum: f64,
-        step: f64,
     ) -> Vec<f64> {
-        let mut void_fraction = vec![0.0; self.kernel.sample_count];
-        let mut influence = vec![0.0; self.kernel.sample_count];
-        let mut residual = vec![0.0; self.kernel.row_count()];
+        let beta = self.void_fraction_per_radius_squared;
+        // Each scale's share of the gradient of its mean squared error, and
+        // the reciprocal of the Lipschitz bound they add up to: the longest
+        // step projected gradient is guaranteed to descend with.
+        let shares = self
+            .scales
+            .iter()
+            .map(|scale| 1.0 / scale.row_count() as f64)
+            .collect::<Vec<_>>();
+        let step = 1.0
+            / (beta.powi(2)
+                * self
+                    .scales
+                    .iter()
+                    .zip(&shares)
+                    .map(|(scale, share)| share * scale.max_column_sum())
+                    .sum::<f64>());
+        let mut void_fraction = vec![0.0; self.sample_count()];
+        let mut influence = vec![0.0; self.sample_count()];
+        let mut scale_influence = vec![0.0; self.sample_count()];
+        let mut residuals = self
+            .scales
+            .iter()
+            .map(|scale| vec![0.0; scale.row_count()])
+            .collect::<Vec<_>>();
         let mut proposal = squared_radii.clone();
         let mut shift = 0.0;
         for _ in 0..SPATIAL_SOLVE_ITERATIONS {
-            self.density_into(&squared_radii, &mut void_fraction, &mut residual);
-            for residual in &mut residual {
-                *residual -= target_density;
+            self.scatter(&squared_radii, &mut void_fraction);
+            influence.fill(0.0);
+            for (((scale, base), residual), share) in self
+                .scales
+                .iter()
+                .zip(&self.base_density)
+                .zip(&mut residuals)
+                .zip(&shares)
+            {
+                scale.smooth_into(&void_fraction, residual);
+                for (residual, base) in residual.iter_mut().zip(base) {
+                    *residual = share * (base - *residual - target_density);
+                }
+                scale.smooth_adjoint_into(residual, &mut scale_influence);
+                for (influence, scale_influence) in influence.iter_mut().zip(&scale_influence) {
+                    *influence += scale_influence;
+                }
             }
-            self.kernel.smooth_adjoint_into(&residual, &mut influence);
             for ((proposal, radius_squared), sample_index) in proposal
                 .iter_mut()
                 .zip(&squared_radii)
                 .zip(self.active_sites)
             {
-                *proposal = radius_squared
-                    + step * self.void_fraction_per_radius_squared * influence[*sample_index];
+                *proposal = radius_squared + step * beta * influence[*sample_index];
             }
-            // Successive proposals differ by one small gradient step, so the
-            // last shift is nearly this one.
+            // Successive proposals differ by one gradient step, so the last
+            // shift is near this one.
             shift = project_box_sum(&mut proposal, lower, upper, pinned_sum, shift);
             let update = squared_radii
                 .iter()
@@ -248,15 +313,15 @@ impl LayerDensityModel<'_> {
     }
 }
 
-/// Sample the 5 mm-scale objective on a deterministic subset of the 1.35 mm
-/// fabrication lattice. Geometry and output stay on the full lattice.
-pub(super) fn density_evaluation_sites(
+/// Sample one scale's objective on a deterministic subset of the fabrication
+/// lattice about that scale apart. Geometry and output stay on the full
+/// lattice.
+fn density_evaluation_sites(
     samples: &[DenseCopperLatticeSite],
-    profile: DenseCopperBalanceProfile,
+    lattice: DenseCopperLattice,
+    sigma_mm: f64,
 ) -> Vec<DenseCopperLatticeSite> {
-    let stride = (profile.density_sigma_mm / profile.pitch_mm)
-        .round()
-        .max(1.0) as i64;
+    let stride = (sigma_mm / lattice.pitch_mm).round().max(1.0) as i64;
     // Anchoring the coarse grid on the first sample keeps the result nonempty
     // for every nonempty input.
     let anchor = samples[0];
@@ -457,14 +522,7 @@ mod tests {
         Resolution::default().with_tolerance(tolerance_mm)
     }
 
-    fn panel_kernel(
-        panel: &ContourSet,
-        profile: DenseCopperBalanceProfile,
-    ) -> (SiteTable, Vec<DenseCopperLatticeSite>, LatticeDensityKernel) {
-        let lattice = DenseCopperLattice {
-            origin: Point::ZERO,
-            pitch_mm: profile.pitch_mm,
-        };
+    fn panel_samples(panel: &ContourSet, lattice: DenseCopperLattice) -> SiteTable {
         let sites = lattice.sites_covering(panel.bbox);
         let mut samples = SiteTable::spanning(sites.iter());
         for site in sites {
@@ -472,9 +530,7 @@ mod tests {
                 samples.admit(site);
             }
         }
-        let evaluation = density_evaluation_sites(&samples.sites, profile);
-        let kernel = LatticeDensityKernel::new(&samples, &evaluation, lattice, profile);
-        (samples, evaluation, kernel)
+        samples
     }
 
     fn projected(values: &[f64], lower: f64, upper: f64, target: f64, guess: f64) -> Vec<f64> {
@@ -601,33 +657,133 @@ mod tests {
         assert!(partial[0] > 0 && partial[1] > 0);
     }
 
+    fn v1_lattice() -> DenseCopperLattice {
+        DenseCopperLattice {
+            origin: Point::ZERO,
+            pitch_mm: DenseCopperBalanceProfile::V1.pitch_mm,
+        }
+    }
+
     #[test]
     fn density_kernel_adjoint_matches_the_forward_operator() {
-        let profile = DenseCopperBalanceProfile::V1;
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
             res(tol::REGION_MM),
         );
-        let (samples, evaluation, kernel) = panel_kernel(&panel, profile);
+        let samples = panel_samples(&panel, v1_lattice());
+        for sigma_mm in density_scales_mm(DenseCopperBalanceProfile::V1) {
+            let kernel = LatticeDensityKernel::new(&samples, v1_lattice(), sigma_mm);
+            let source = (0..samples.sites.len())
+                .map(|index| ((index * 17 % 29) as f64 - 14.0) / 29.0)
+                .collect::<Vec<_>>();
+            let residual = (0..kernel.row_count())
+                .map(|index| ((index * 11 % 23) as f64 - 11.0) / 23.0)
+                .collect::<Vec<_>>();
+
+            let forward_inner_product = kernel
+                .smooth(&source)
+                .iter()
+                .zip(&residual)
+                .map(|(left, right)| left * right)
+                .sum::<f64>();
+            let adjoint_inner_product = source
+                .iter()
+                .zip(kernel.smooth_adjoint(&residual))
+                .map(|(left, right)| left * right)
+                .sum::<f64>();
+
+            assert!((forward_inner_product - adjoint_inner_product).abs() <= 1e-12);
+        }
+    }
+
+    /// The ladder runs from the process scale down by octaves and ends on the
+    /// tile itself: a kernel that reads every sample alone.
+    #[test]
+    fn density_scales_run_from_the_process_scale_to_the_tile() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let scales = density_scales_mm(profile);
+        assert_eq!(scales[..2], [5.0, 2.5]);
+        assert_eq!(scales.len(), 3);
+
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
+            res(tol::REGION_MM),
+        );
+        let samples = panel_samples(&panel, v1_lattice());
+        let tile = LatticeDensityKernel::new(&samples, v1_lattice(), scales[2]);
         let source = (0..samples.sites.len())
-            .map(|index| ((index * 17 % 29) as f64 - 14.0) / 29.0)
+            .map(|index| index as f64)
             .collect::<Vec<_>>();
-        let residual = (0..evaluation.len())
-            .map(|index| ((index * 11 % 23) as f64 - 11.0) / 23.0)
+        assert_eq!(tile.smooth(&source), source);
+    }
+
+    /// The solved field is the objective's one minimiser — not wherever an
+    /// iteration happened to stop — so it does not depend on where the solve
+    /// starts and solving again from it moves nothing.
+    #[test]
+    fn redistribution_is_independent_of_its_starting_field() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(60.0, 30.0)),
+            res(tol::REGION_MM),
+        );
+        let samples = panel_samples(&panel, v1_lattice());
+        let scales = density_scales_mm(profile)
+            .into_iter()
+            .map(|sigma_mm| LatticeDensityKernel::new(&samples, v1_lattice(), sigma_mm))
             .collect::<Vec<_>>();
-
-        let forward_inner_product = kernel
-            .smooth(&source)
+        // Solid fixed copper on the left third, fill everywhere else.
+        let centers = samples
+            .sites
             .iter()
-            .zip(&residual)
-            .map(|(left, right)| left * right)
-            .sum::<f64>();
-        let adjoint_inner_product = source
-            .iter()
-            .zip(kernel.smooth_adjoint(&residual))
-            .map(|(left, right)| left * right)
-            .sum::<f64>();
+            .map(|site| v1_lattice().center(*site))
+            .collect::<Vec<_>>();
+        let active_sites = (0..centers.len())
+            .filter(|site| centers[*site].x >= 20.0)
+            .collect::<Vec<_>>();
+        let base_coverage = vec![1.0; centers.len()];
+        let model = LayerDensityModel {
+            scales: &scales,
+            active_sites: &active_sites,
+            base_density: scales
+                .iter()
+                .map(|scale| scale.smooth(&base_coverage))
+                .collect(),
+            void_fraction_per_radius_squared: ROUNDED_HEXAGON_AREA_FACTOR
+                / (v1_lattice().column_pitch_mm() * profile.pitch_mm),
+        };
+        let bounds = (
+            profile.min_void_radius_mm.powi(2),
+            profile.max_void_radius_mm.powi(2),
+        );
+        let middle = 0.5 * (bounds.0 + bounds.1);
+        let pinned_sum = middle * active_sites.len() as f64;
+        let solve = |start: Vec<f64>| model.redistribute(start, 0.75, bounds, pinned_sum);
 
-        assert!((forward_inner_product - adjoint_inner_product).abs() <= 1e-12);
+        let from_uniform = solve(vec![middle; active_sites.len()]);
+        // The stark field a single-scale fit drifts toward: saturated stripes.
+        let from_stripes = solve(
+            active_sites
+                .iter()
+                .map(|site| {
+                    if (centers[*site].x / 5.0) as i64 % 2 == 0 {
+                        bounds.0
+                    } else {
+                        bounds.1
+                    }
+                })
+                .collect(),
+        );
+        let level_step = (bounds.1 - bounds.0) / (profile.void_area_levels - 1) as f64;
+        let furthest = |left: &[f64], right: &[f64]| {
+            left.iter()
+                .zip(right)
+                .map(|(left, right)| (left - right).abs())
+                .fold(0.0, f64::max)
+        };
+        assert!(furthest(&from_uniform, &from_stripes) < 0.01 * level_step);
+        assert!(furthest(&from_uniform, &solve(from_uniform.clone())) < 0.01 * level_step);
+        // It answers the copper beside it rather than staying flat.
+        assert!(furthest(&from_uniform, &vec![middle; active_sites.len()]) > level_step);
     }
 }

@@ -16,7 +16,7 @@ pub use lattice::{ROUNDED_HEXAGON_CORNER_RADIUS_RATIO, rounded_hexagonal_void};
 
 use lattice::{LatticeCandidates, ROUNDED_HEXAGON_AREA_FACTOR, SiteTable};
 use spatial::{
-    LatticeDensityKernel, LayerDensityModel, density_evaluation_sites, lattice_cell_coverage,
+    LatticeDensityKernel, LayerDensityModel, density_scales_mm, lattice_cell_coverage,
     normalized_stack_weights, spatial_result_from_squared_radii,
 };
 
@@ -746,14 +746,16 @@ pub fn generate_spatial_dense_copper_balance(
         });
     }
 
-    // The objective lives on one coarse subset of the panel lattice. Every
-    // layer scatters only its own void variables onto the full lattice, then
-    // the same normalized convolution maps those fields to the common sites.
-    let evaluation_sites = density_evaluation_sites(&samples.sites, profile);
-    let density_kernel = LatticeDensityKernel::new(&samples, &evaluation_sites, lattice, profile);
-    let smooth_coverage = |region: &ContourSet| {
-        density_kernel.smooth(&lattice_cell_coverage(&samples.sites, region, lattice))
-    };
+    // Each scale of the objective lives on its own subset of the panel
+    // lattice. Every layer scatters only its own void variables onto the full
+    // lattice, then the same normalized convolutions map those fields to the
+    // scales' sites.
+    let scales = density_scales_mm(profile)
+        .into_iter()
+        .map(|sigma_mm| LatticeDensityKernel::new(&samples, lattice, sigma_mm))
+        .collect::<Vec<_>>();
+    let tile_coverage =
+        |region: &ContourSet| lattice_cell_coverage(&samples.sites, region, lattice);
 
     let mut coverage = map_layers(
         request
@@ -766,7 +768,7 @@ pub fn generate_spatial_dense_copper_balance(
                     .iter()
                     .map(|result| &result.edge_void_emission.region),
             ),
-        smooth_coverage,
+        tile_coverage,
     )
     .into_iter();
     let fixed_density = coverage
@@ -854,14 +856,6 @@ pub fn generate_spatial_dense_copper_balance(
         })
         .collect::<Vec<_>>();
     let void_fraction_per_radius_squared = ROUNDED_HEXAGON_AREA_FACTOR / cell_area_mm2;
-    // Far below what the kernel's operator norm allows, on purpose. The
-    // objective sees only kernel-smoothed density, so its exact minimiser
-    // under the radius bounds is bang-bang: voids saturate in stark bands
-    // that smooth to the same density. A short step for a fixed number of
-    // iterations stays near the even field it starts from, the early
-    // stopping that regularises an ill-posed fit.
-    let step = 0.25 / void_fraction_per_radius_squared.powi(2);
-
     // Nothing couples the layers once the settlement has pinned their areas,
     // so each runs its whole iteration on its own thread and owns its scratch.
     // The density fields either side of it are what the moment is read from:
@@ -873,19 +867,23 @@ pub fn generate_spatial_dense_copper_balance(
         |(layer_index, (baseline, squared_radii))| {
             let available = &region_available_density[layer_regions[layer_index]];
             let partial_void = &partial_void_density[layer_index];
+            let base_coverage = fixed_density[layer_index]
+                .iter()
+                .enumerate()
+                .map(|(site, fixed)| match baseline.solution.mode {
+                    DenseCopperBalanceMode::None => *fixed,
+                    DenseCopperBalanceMode::Solid => fixed + available[site],
+                    DenseCopperBalanceMode::Perforated { .. } => {
+                        fixed + available[site] - partial_void[site]
+                    }
+                })
+                .collect::<Vec<_>>();
             let model = LayerDensityModel {
-                kernel: &density_kernel,
+                scales: &scales,
                 active_sites: &region_active_sites[layer_regions[layer_index]],
-                base_density: fixed_density[layer_index]
+                base_density: scales
                     .iter()
-                    .enumerate()
-                    .map(|(site, fixed)| match baseline.solution.mode {
-                        DenseCopperBalanceMode::None => *fixed,
-                        DenseCopperBalanceMode::Solid => fixed + available[site],
-                        DenseCopperBalanceMode::Perforated { .. } => {
-                            fixed + available[site] - partial_void[site]
-                        }
-                    })
+                    .map(|scale| scale.smooth(&base_coverage))
                     .collect(),
                 void_fraction_per_radius_squared,
             };
@@ -895,7 +893,6 @@ pub fn generate_spatial_dense_copper_balance(
                 request.layers[layer_index].target_density,
                 (lower, upper),
                 pinned_sums[layer_index],
-                step,
             );
             let result = if squared_radii.is_empty() {
                 baseline
@@ -923,7 +920,7 @@ pub fn generate_spatial_dense_copper_balance(
     // summary can say what the solve bought.
     let moment_reading = |density: &[&Vec<f64>]| {
         MomentReading::of(
-            &(0..evaluation_sites.len())
+            &(0..scales[0].row_count())
                 .map(|site| {
                     normalized_stack_weights
                         .iter()
@@ -1724,10 +1721,10 @@ mod tests {
         );
     }
 
-    /// The exact minimiser of the smoothed-density fit is bang-bang, so a
-    /// solve that converges saturates nearly every void at a radius bound in
-    /// stark bands. The field that ships answers a copper gradient with
-    /// graded voids instead.
+    /// Fitted at the process scale alone, the minimiser is bang-bang: nearly
+    /// every void saturates at a radius bound, in stark bands that only
+    /// average out over that one length. Fitted at every scale, a copper
+    /// gradient is answered with graded voids.
     #[test]
     fn spatial_solver_grades_voids_instead_of_saturating_them() {
         let panel = ContourSet::rectangle(

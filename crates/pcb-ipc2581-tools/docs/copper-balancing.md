@@ -14,8 +14,10 @@ Two physical objectives, at two different scales:
 - **Etch and plating uniformity** — local. Etchant works faster in sparse
   regions and plating current crowds onto isolated copper, so each layer's fill
   should hold the density of the boards beside it. This is the local
-  density-match term, and it works at the 10–15 mm scale of the smoothing
-  kernel.
+  density-match term. The process averages copper over some interaction
+  length — millimetres to a centimetre or so, and nobody knows it better than
+  that — so the term is matched at every length from the lattice pitch up to
+  the 10–15 mm reach of the widest smoothing kernel, not at one.
 - **Warp** — global. Copper carried asymmetrically about the stack's mid-plane
   is a thermal moment that bows the panel during lamination cooldown. Deflection
   response grows with the square of wavelength, so only the broadest variation
@@ -80,17 +82,25 @@ The void lattice doubles as the sampling grid on every copper layer. The
 staggered columns tile the plane exactly with equal-area rectangles centered on
 the sites, one column pitch wide and one pitch tall. At site `j`, the fixed
 copper's coverage of that tile is measured, and the coverage field is smoothed
-with a normalized Gaussian (`sigma = 5 mm`, truncated at `3 sigma`):
+with a normalized Gaussian (truncated at `3 sigma`):
 
 ```text
 rho_fixed_li = sum_j K(|x_i - x_j|) c_lj / sum_j K(|x_i - x_j|)
 ```
 
 The denominator normalizes panel edges instead of treating space outside the
-panel as empty copper. The resulting field varies over 10–15 mm, not at trace
-or lattice scale. The local deficit `d_l - rho_fixed_li` is what the spatial
-solve works down: positive requests more generated copper near `x_i`, negative
-requests less.
+panel as empty copper. The local deficit `d_l - rho_fixed_li` is what the
+spatial solve works down: positive requests more generated copper near `x_i`,
+negative requests less.
+
+The field is read at a ladder of interaction lengths `sigma_s`: the process
+scale `density_sigma_mm = 5 mm`, then one per octave below it for as long as
+the length still spans a lattice pitch (2.5 mm), then the lattice tile itself,
+where the kernel is the identity. One length is not enough. A fit at 5 mm alone
+is a deconvolution: it cannot see structure finer than its kernel, so its best
+answer is bands of saturated voids that average out over exactly 5 mm and are
+starkly uneven at every shorter length — which etch and plating do feel. Read
+at every length, those bands are the density errors they are.
 
 ## Through-stack balance
 
@@ -143,33 +153,44 @@ is the affine map:
 rho_l(x_l) = H(c_l + s_l - p_l - beta P_l x_l)
 ```
 
-with `H` the normalized Gaussian convolution, `P_l` the scatter of layer `l`'s
+with `H` a normalized Gaussian convolution, `P_l` the scatter of layer `l`'s
 admitted void variables onto the lattice, `p_l` the fixed clipped edge-void
 indicator, and `beta` the rounded-hex area factor over lattice-cell area. A
 layer has variables only at sites its own safe region admitted.
 
-The objective is each layer's mean squared local deficit, and the feasible set
-is a box with a pinned sum per layer:
+The objective is each layer's mean squared local deficit, summed with equal
+weight over the ladder of interaction lengths, and the feasible set is a box
+with a pinned sum per layer:
 
 ```text
-minimize   sum_l mean_i((rho_li - d_l)^2)
+minimize   sum_l sum_s mean_i((rho_lsi - d_l)^2),   rho_ls = H_s(...)
 subject to r_min^2 <= x_lk <= r_max^2
            sum_k x_lk = X_l
 ```
+
+Equal weight per octave is the expected deficit under a prior that is flat in
+the logarithm of the interaction length — the prior that says only "somewhere
+between the pitch and the process scale" — so the ladder adds no constant of
+its own. What matters most is that the tile is on it. Its kernel is the
+identity, which makes the objective strongly convex with a condition number
+near the number of scales: the minimiser is unique, it is a graded field rather
+than a saturated one, and it does not depend on where the iteration starts or
+stops.
 
 `X_l` is the layer's stepped copper area from the through-stack settlement,
 converted to squared-radius space, after subtracting already-clipped
 edge-fragment area (edge fragments keep their projected geometry; they are
 boundary constraints, not variables). Projected gradient converges on this
-convex problem; the gradient uses the exact transpose `-beta P_l^T H^T` of the
-forward operator, the step is the reciprocal of the operator's Lipschitz bound
-`beta^2 ||H||_1`, and projection onto box-with-pinned-sum is a water-filling
-shift found by safeguarded Newton. Nothing couples the layers once their areas
-are pinned, so each layer iterates on its own. For runtime, the objective is evaluated on a
-deterministic site subset spaced about one kernel sigma apart; this changes no
-safe geometry, void sites, radius constraints, or copper area. A
-constant-radius pattern is what falls out when the measured fields are
-symmetric — it is not a separate mode.
+problem in tens of iterations; the gradient uses the exact transpose
+`-beta P_l^T H_s^T` of each forward operator, the step is the reciprocal of the
+Lipschitz bound `beta^2 sum_s ||H_s||_1 / n_s`, and projection onto
+box-with-pinned-sum is a water-filling shift found by safeguarded Newton.
+Nothing couples the layers once their areas are pinned, so each layer iterates
+on its own. For runtime, each scale is evaluated on a deterministic site subset
+spaced about its own length apart — every scale then costs about the same per
+iteration; this changes no safe geometry, void sites, radius constraints, or
+copper area. A constant-radius pattern is what falls out when the measured
+fields are symmetric — it is not a separate mode.
 
 Converged radii snap to 20 uniformly spaced void-area levels. Interior sites
 use the nearest level; an admitted boundary site rounds upward so it cannot
@@ -230,7 +251,7 @@ chosen from process rules of thumb, not tuning.
 | Knob | Default | What it controls | What tuning it would trade |
 |---|---|---|---|
 | `stack_flex_density` | 0.05 | **The one deliberate trade.** How far a layer's fill may step off its own board density to flatten the stack moment. | Warp authority against etch uniformity. Zero pins every layer to its board density (no warp correction). Raising it cancels more of an asymmetric board's moment at a larger board↔frame density step; fabricators tolerate roughly 10–15 % mirrored-layer mismatch, and plating already varies by under 10 % across a panel, so 0.05 sits comfortably inside both. |
-| `density_sigma_mm` | 5.0 | Smoothing scale of the density field the local term matches. | What "local" means for etch: smaller chases finer density structure with more radius variation; larger yields flatter fill that ignores mid-scale gradients. |
+| `density_sigma_mm` | 5.0 | The process scale: the longest interaction length the local term matches, and the top of the ladder that descends by octaves to the lattice tile. | How far the fill reaches to answer a density gradient: larger spreads the answer wider and adds a rung; smaller keeps it beside the boards. |
 | `pitch_mm` | 1.35 | Void lattice pitch. | Fill resolution against feature count and solve size. Bounded below by web rules. |
 | `min_void_radius_mm` | 0.20 | Smallest manufacturable void. | Densest expressible fill (smaller voids → higher maximum density). |
 | `max_void_radius_mm` | 0.65 | Largest void; with the pitch, guarantees the inter-void web. | Sparsest expressible fill (larger voids → lower minimum density). |
