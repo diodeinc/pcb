@@ -1414,6 +1414,81 @@ limit = { minimum = "0.2 mm" }
     }
 
     #[test]
+    fn neighbouring_placements_are_measured_against_each_other_where_both_are_placed() {
+        // Copper and a mask opening reach 0.02 mm from both side edges of a
+        // 10 mm board, so boards placed edge to edge leave 0.04 mm between.
+        let rectangle = |x0: f64, x1: f64| {
+            format!(
+                r#"<Features><Contour><Polygon><PolyBegin x="{x0}" y="2"/><PolyStepSegment x="{x1}" y="2"/><PolyStepSegment x="{x1}" y="8"/><PolyStepSegment x="{x0}" y="8"/><PolyStepSegment x="{x0}" y="2"/></Polygon></Contour></Features>"#
+            )
+        };
+        let layer = |name: &str, net: &str| {
+            format!(
+                r#"<LayerFeature layerRef="{name}"><Set{net} polarity="POSITIVE">{}</Set><Set{net} polarity="POSITIVE">{}</Set></LayerFeature>"#,
+                rectangle(0.02, 3.0),
+                rectangle(7.0, 9.98),
+            )
+        };
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/>
+    <LayerRef name="TOP"/><LayerRef name="F.Mask"/>
+  </Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+    <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+    <Step name="board" type="BOARD"><Datum x="0" y="0"/>{}{}</Step>
+    <Step name="panel" type="PALLET"><Datum x="0" y="0"/>
+      <StepRepeat stepRef="board" x="0" y="0" nx="3" ny="1" dx="10" dy="0" angle="0" mirror="false"/>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#,
+            layer("TOP", r#" net="N""#),
+            layer("F.Mask", ""),
+        );
+        let pdk = r#"schema_version = 2
+default_profile = "test"
+
+[pdk]
+id = "neighbours-test"
+name = "Neighbours test"
+revision = "1"
+
+[profiles.test]
+name = "Test"
+
+[[rules.copper.clearance]]
+id = "copper"
+limit = { minimum = "0.1 mm" }
+
+[[rules.soldermask.web]]
+id = "web"
+limit = { minimum = "0.1 mm" }
+"#;
+        let results = check_with_pdk(&xml, LayoutTarget::BoardArray, pdk);
+        for rule_id in ["copper", "web"] {
+            let found = results
+                .findings
+                .iter()
+                .filter(|finding| finding.rule_id == rule_id)
+                .map(|finding| {
+                    let frame = &results.frames[finding.frame as usize];
+                    assert_eq!((frame.step.as_str(), frame.placements.len()), ("panel", 1));
+                    let point = finding.location.point.unwrap();
+                    (
+                        point.x.round(),
+                        (finding.measurement.actual_mm().unwrap() * 1e6).round() / 1e6,
+                    )
+                })
+                .collect::<Vec<_>>();
+            // One net on every board: only what lies between two boards is
+            // found, once for each pair of neighbours.
+            assert_eq!(found, [(10.0, 0.04), (20.0, 0.04)], "{rule_id}");
+        }
+    }
+
+    #[test]
     fn a_vscore_line_is_measured_once_by_the_board_it_crosses_everywhere() {
         let resolution = Resolution::default();
         // The trace's copper now ends 0.3 mm from the board's bottom edge.

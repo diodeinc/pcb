@@ -592,7 +592,7 @@ A complete report has these fields:
   rendering features; `tier` distinguishes required and preferred limits.
   `assumptions` lists profile defaults actually used while evaluating that
   rule, and is empty when no assumption was needed.
-- `findings`: violations in deterministic rule/location order.
+- `findings`: violations in deterministic rule, frame, and location order.
 - `shared_evidence`: evidence records that sites reference by index rather
   than repeat; see [findings](#findings).
 - `scene`: required native artwork for the complete checked layout; see
