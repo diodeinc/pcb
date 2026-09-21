@@ -596,7 +596,7 @@ mod tests {
         assert!(!html.contains("Array Boards:"));
         assert!(!html.contains("1 instance from 1 board step"));
         assert!(html.contains("Array Grid:"));
-        assert!(html.contains("data-board-array-overview='true'"));
+        assert!(html.contains(r#"<div class="array-overview" "#));
     }
 
     #[test]
@@ -643,10 +643,12 @@ mod tests {
         assert!(!html.contains("board-array-layer-render"));
 
         let summary_section = &html[array_summary..file_info];
-        assert!(summary_section.contains("data-board-array-overview='true'"));
-        assert!(summary_section.contains("array-layer-copper"));
-        assert!(summary_section.contains("vcut-guide"));
-        assert!(summary_section.contains("array-layer-drill"));
+        // The overview draws the array's own copper, V-score guides and
+        // drills, each as a layer in its colour.
+        assert!(summary_section.contains(r#"<div class="array-overview" "#));
+        for color in ["#d87822", "#dc2626", "#5c7cfa"] {
+            assert!(summary_section.contains(&format!("<g fill='{color}'")));
+        }
         assert!(summary_section.contains("Array Drill Holes:"));
     }
 

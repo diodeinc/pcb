@@ -755,12 +755,13 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
         crate::board_array::render_board_array_overview_svg(&accessor, &design(&ipc), resolution)
             .unwrap()
             .unwrap();
-    assert!(svg.matches("vcut-guide").count() > 24);
-    assert!(svg.contains("stroke='#dc2626'"));
-    assert!(svg.contains("stroke-width='0.12'"));
-    assert!(svg.contains("stroke-linecap='round'"));
-    assert!(!svg.contains("stroke-dasharray"));
-    assert!(!svg.contains("class='score-guide'"));
+    // Guides draw in their own layer at the score lines' own width.
+    assert!(svg.contains("<g fill='#dc2626' stroke='#dc2626' opacity='1'>"));
+    assert!(
+        svg.matches("stroke-width='0.12' stroke-linecap='round'")
+            .count()
+            > 24
+    );
     let viewbox = svg_viewbox(&svg);
     assert!(viewbox.0 + viewbox.2 > 100.0);
     // The overview draws world y up under one flip group, so the viewBox

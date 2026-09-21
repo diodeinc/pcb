@@ -229,7 +229,7 @@
         {% endif %}
     </div>
     {% if board_summary.board_array.overview_svg %}
-    <div class="array-overview">
+    <div class="array-overview" role="img" aria-label="Board array overview: {{ board_summary.board_array.grid.columns }} columns by {{ board_summary.board_array.grid.rows }} rows">
         {{ board_summary.board_array.overview_svg|safe }}
     </div>
     {% endif %}
