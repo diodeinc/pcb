@@ -54,25 +54,50 @@ impl LatticeCandidates {
             });
         }
 
-        let candidate_region = voidable.disk_dilate(profile.max_void_radius_mm)?;
-        let centers = hex_aligned_lattice_centers(candidate_region.bbox, origin, profile)
-            .into_iter()
-            .filter(|center| candidate_region.contains_point(*center))
+        // A center's depth inside the region decides most sites outright. The
+        // largest void lies inside its circumscribed disk and contains its
+        // inscribed one — rounding leaves the flats where they were — so a
+        // center deeper than the circumradius is full, one shallower than the
+        // apothem is not, and one farther outside than the circumradius
+        // cannot reach the region at all. Only the annulus between the two
+        // radii needs the hexagon itself tested. Depth does not depend on the
+        // radius tried at a site, so the same measurement serves every clip
+        // and emission that asks.
+        let circumradius = profile.max_void_radius_mm;
+        let apothem = circumradius * SQRT_3 / 2.0;
+        let centers =
+            hex_aligned_lattice_centers(voidable.bbox.expand(circumradius), origin, profile);
+        let depths_mm = center_depths_mm(voidable, &centers, circumradius);
+        let annulus = (0..centers.len())
+            .filter(|index| (apothem..circumradius).contains(&depths_mm[*index]))
             .collect::<Vec<_>>();
-        let fully_contained = fully_contained_hexagons(voidable, &centers, profile)?;
+        let annulus_centers = annulus
+            .iter()
+            .map(|index| centers[*index])
+            .collect::<Vec<_>>();
+        let mut full = depths_mm
+            .iter()
+            .map(|depth_mm| *depth_mm >= circumradius)
+            .collect::<Vec<_>>();
+        for (index, contained) in annulus.into_iter().zip(fully_contained_hexagons(
+            voidable,
+            &annulus_centers,
+            profile,
+        )?) {
+            full[index] = contained;
+        }
         let mut full_sites = Vec::new();
         let mut edge_centers = Vec::new();
-        for (center, full) in centers.into_iter().zip(fully_contained) {
+        let mut edge_depths_mm = Vec::new();
+        for ((center, depth_mm), full) in centers.into_iter().zip(depths_mm).zip(full) {
             if full {
                 let (column, row) = lattice_index(center, origin, profile);
                 full_sites.push(DenseCopperLatticeSite { column, row });
-            } else {
+            } else if depth_mm >= -circumradius {
                 edge_centers.push(center);
+                edge_depths_mm.push(depth_mm);
             }
         }
-        // A site's depth does not depend on the radius tried at it, so it is
-        // measured once here for every clip and emission that asks.
-        let edge_depths_mm = center_depths_mm(voidable, &edge_centers);
         let disk_center_region = voidable.disk_erode(profile.minimum_partial_void_inradius_mm())?;
         let activation_radii = minimum_partial_candidates(
             &disk_center_region,
@@ -280,15 +305,22 @@ fn fully_contained_hexagons(
     .collect())
 }
 
-/// How far inside `region` each center lies, negative outside it.
-fn center_depths_mm(region: &ContourSet, centers: &[Point]) -> Vec<f64> {
+/// How far inside `region` each center lies, negative outside it, resolved
+/// within `reach` of the boundary and infinite beyond.
+///
+/// One sweep settles which side every center is on and the bounded nearest
+/// query never looks past `reach`, so a center deep in a gutter costs no more
+/// than one beside the boundary.
+fn center_depths_mm(region: &ContourSet, centers: &[Point], reach: f64) -> Vec<f64> {
     let boundary = region.prepare_query();
     centers
         .iter()
-        .map(|center| {
-            boundary
-                .signed_distance(*center)
-                .map_or(f64::NEG_INFINITY, |distance| -distance.mm)
+        .zip(region.contains_points_batch(centers))
+        .map(|(center, inside)| {
+            let distance_mm = boundary
+                .nearest_within(*center, reach)
+                .map_or(f64::INFINITY, |distance| distance.mm);
+            if inside { distance_mm } else { -distance_mm }
         })
         .collect()
 }
@@ -597,12 +629,56 @@ mod tests {
         );
         let center = Point::new(0.0, 0.0);
 
-        let depth_mm = center_depths_mm(&voidable, &[center])[0];
+        let depth_mm = center_depths_mm(&voidable, &[center], profile.max_void_radius_mm)[0];
         assert!(!disk_fits(depth_mm, profile.max_void_radius_mm, &voidable));
         assert_eq!(
             fully_contained_hexagons(&voidable, &[center], profile).unwrap(),
             vec![true]
         );
+    }
+
+    /// Sorting sites by center depth has to land every one where testing its
+    /// hexagon against the region would.
+    #[test]
+    fn depth_classification_matches_testing_every_hexagon() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let resolution = res(tol::REGION_MM);
+        let plate = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(14.0, 9.0)),
+            resolution,
+        );
+        let cutout = ContourSet::from_filled_contours(
+            &[shapes::circle(3.1)
+                .unwrap()
+                .transformed(crate::geom::Affine2::translation(Point::new(4.2, 4.4)))],
+            resolution,
+        )
+        .unwrap();
+        let voidable = plate.difference(&cutout).unwrap();
+        let origin = Point::new(0.17, 0.31);
+
+        let centers = hex_aligned_lattice_centers(
+            voidable.bbox.expand(profile.max_void_radius_mm),
+            origin,
+            profile,
+        );
+        let mut expected = centers
+            .iter()
+            .zip(fully_contained_hexagons(&voidable, &centers, profile).unwrap())
+            .filter(|(_, contained)| *contained)
+            .map(|(center, _)| lattice_index(*center, origin, profile))
+            .collect::<Vec<_>>();
+        expected.sort_unstable();
+
+        let lattice = LatticeCandidates::build_lattice(&voidable, origin, profile).unwrap();
+        let mut full = lattice
+            .full_sites
+            .iter()
+            .map(|site| (site.column, site.row))
+            .collect::<Vec<_>>();
+        full.sort_unstable();
+        assert!(!full.is_empty());
+        assert_eq!(full, expected);
     }
 
     /// A center's depth is its distance to the nearest boundary of any ring,
@@ -625,10 +701,15 @@ mod tests {
             Point::new(5.0, 3.0),
             Point::new(-0.5, 3.0),
         ];
-        let depths_mm = center_depths_mm(&region, &centers);
+        let depths_mm = center_depths_mm(&region, &centers, 1.0);
         for (depth_mm, expected) in depths_mm.iter().zip([1.0, 0.75, -1.0, -0.5]) {
             assert!((depth_mm - expected).abs() <= 1e-12, "{depths_mm:?}");
         }
+        // Past the reach only the side survives.
+        assert_eq!(
+            center_depths_mm(&region, &centers, 0.6),
+            vec![f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, -0.5]
+        );
         assert!(disk_fits(depths_mm[1], 0.75, &region));
         assert!(!disk_fits(depths_mm[1], 0.76, &region));
         assert!(!disk_fits(depths_mm[2], 0.0, &region));
@@ -649,7 +730,7 @@ mod tests {
             Point::new(0.0, 0.0),
             profile,
         );
-        let depths_mm = center_depths_mm(&voidable, &centers);
+        let depths_mm = center_depths_mm(&voidable, &centers, profile.max_void_radius_mm);
         let disk_center_region = voidable
             .disk_erode(profile.minimum_partial_void_inradius_mm())
             .unwrap();
@@ -737,7 +818,7 @@ mod tests {
             Point::new(0.17, 0.31),
             profile,
         );
-        let depths_mm = center_depths_mm(&voidable, &centers);
+        let depths_mm = center_depths_mm(&voidable, &centers, profile.max_void_radius_mm);
 
         let mut accepted_anywhere = 0;
         for radius in [0.20, 0.35, 0.50, 0.65] {

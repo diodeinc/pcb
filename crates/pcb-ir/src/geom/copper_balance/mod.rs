@@ -689,11 +689,14 @@ pub fn generate_spatial_dense_copper_balance(
     .into_iter()
     .collect::<Result<Vec<_>, _>>()?;
 
-    let mut panel_samples =
-        hex_aligned_lattice_centers(request.panel_region.bbox, request.lattice_origin, profile)
-            .into_iter()
-            .filter(|point| request.panel_region.contains_point(*point))
-            .collect::<Vec<_>>();
+    let bbox_samples =
+        hex_aligned_lattice_centers(request.panel_region.bbox, request.lattice_origin, profile);
+    let in_panel = request.panel_region.contains_points_batch(&bbox_samples);
+    let mut panel_samples = bbox_samples
+        .into_iter()
+        .zip(in_panel)
+        .filter_map(|(point, inside)| inside.then_some(point))
+        .collect::<Vec<_>>();
     let mut sample_indices = panel_samples
         .iter()
         .enumerate()
