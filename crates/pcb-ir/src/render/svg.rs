@@ -15,7 +15,7 @@ use crate::render::{Drawn, LayerStyle, RenderOptions, SizeConstraint};
 /// coordinates flipped for screen display).
 pub fn svg<LayerMeta>(doc: &mask::Document<LayerMeta>, options: &RenderOptions) -> String {
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
-    let bbox = options.viewport_or(crate::render::bbox(doc, Some(&layers)));
+    let bbox = options.viewport_over(layers.iter().map(|&index| doc.layers[index].bbox));
     let title = layers
         .first()
         .and_then(|&index| doc.layers.get(index))
@@ -56,7 +56,7 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
     }
     let ids = options.id_prefix.as_str();
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
-    let bbox = options.viewport_or(crate::render::artwork_bbox(doc, Some(&layers)));
+    let bbox = options.viewport_over(layers.iter().map(|&index| doc.layers[index].bbox));
     let scales = PlacementScales::of(doc, &layers);
     // Shared geometry is written once in its own frame, so its budget is
     // what the largest placement leaves of the document's.

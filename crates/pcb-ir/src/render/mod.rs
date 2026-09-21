@@ -12,9 +12,9 @@ mod term;
 pub use png::{artwork_png, png};
 pub use svg::{artwork_svg, svg, svg_path_data};
 #[cfg(not(target_family = "wasm"))]
-pub use term::{artwork_to_terminal, can_render_to_terminal, to_terminal, write_kitty_png};
+pub use term::{artwork_to_terminal, can_render_to_terminal, write_kitty_png};
 
-use crate::dialects::{LayerRole, artwork, mask};
+use crate::dialects::LayerRole;
 use crate::geom::path::{PathCmd, PathOp};
 use crate::geom::{AccuracyError, Arc, BBox, EllipticalArc, GeometryAccuracy, Point};
 
@@ -91,18 +91,25 @@ impl RenderOptions {
             .unwrap_or_else(|| LayerStyle::of(role))
     }
 
-    pub(crate) fn viewport_or(&self, fitted: BBox) -> BBox {
-        let Some(viewport) = self.viewport else {
-            return fitted;
-        };
-        assert!(
-            viewport.is_valid()
-                && !viewport.is_empty()
-                && viewport.width() > 0.0
-                && viewport.height() > 0.0,
-            "render viewport must be finite and have positive area"
-        );
-        viewport
+    /// The viewport over layers with these bounds: the explicit one, else
+    /// the bounds padded, else a default for a document that draws nothing.
+    pub(crate) fn viewport_over(&self, layers: impl IntoIterator<Item = BBox>) -> BBox {
+        if let Some(viewport) = self.viewport {
+            assert!(
+                viewport.is_valid()
+                    && !viewport.is_empty()
+                    && viewport.width() > 0.0
+                    && viewport.height() > 0.0,
+                "render viewport must be finite and have positive area"
+            );
+            return viewport;
+        }
+        let bbox = layers.into_iter().fold(BBox::empty(), BBox::union);
+        if bbox.is_empty() {
+            BBox::new(Point::new(0.0, 0.0), Point::new(100.0, 100.0))
+        } else {
+            bbox.expand(VIEWBOX_PADDING_MM)
+        }
     }
 }
 
@@ -118,36 +125,6 @@ pub enum SizeConstraint {
     },
     /// Scale so the longer edge is at most this many pixels.
     MaxDimension(u32),
-}
-
-/// The bbox a render of these layers covers (padded; falls back to a default
-/// viewport for empty documents).
-pub fn bbox<LayerMeta>(doc: &mask::Document<LayerMeta>, layers: Option<&[usize]>) -> BBox {
-    padded_bbox(
-        layer_indices(doc.layers.len(), layers)
-            .into_iter()
-            .map(|index| doc.layers[index].bbox),
-    )
-}
-
-pub(crate) fn artwork_bbox<LayerMeta, ObjectMeta>(
-    doc: &artwork::Document<LayerMeta, ObjectMeta>,
-    layers: Option<&[usize]>,
-) -> BBox {
-    padded_bbox(
-        layer_indices(doc.layers.len(), layers)
-            .into_iter()
-            .map(|index| doc.layers[index].bbox),
-    )
-}
-
-pub(crate) fn padded_bbox(bboxes: impl IntoIterator<Item = BBox>) -> BBox {
-    let bbox = bboxes.into_iter().fold(BBox::empty(), BBox::union);
-    if bbox.is_empty() {
-        BBox::new(Point::new(0.0, 0.0), Point::new(100.0, 100.0))
-    } else {
-        bbox.expand(VIEWBOX_PADDING_MM)
-    }
 }
 
 pub(crate) fn layer_indices(layer_count: usize, layers: Option<&[usize]>) -> Vec<usize> {

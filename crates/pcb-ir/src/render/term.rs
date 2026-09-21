@@ -4,7 +4,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use terminal_size::{Width, terminal_size};
 
-use crate::dialects::mask;
 use crate::render::{RenderOptions, SizeConstraint};
 
 const KITTY_CHUNK_SIZE: usize = 4096;
@@ -29,16 +28,9 @@ fn speaks_kitty_graphics(env: impl Fn(&str) -> Option<String>) -> bool {
             || is("TERM_PROGRAM", &["ghostty", "WezTerm"]))
 }
 
-/// Render mask layers as an inline image using the kitty graphics protocol.
-/// Any size constraint in `options` is replaced by the terminal width.
-pub fn to_terminal<LayerMeta>(
-    doc: &mask::Document<LayerMeta>,
-    options: &RenderOptions,
-) -> Result<(), String> {
-    write_terminal_png(crate::render::png(doc, &terminal_options(options))?)
-}
-
-/// Render artwork layers as an inline terminal image.
+/// Render artwork layers as an inline image using the kitty graphics
+/// protocol. Any size constraint in `options` is replaced by the terminal
+/// width.
 pub fn artwork_to_terminal<LayerMeta, ObjectMeta>(
     doc: &crate::dialects::artwork::Document<LayerMeta, ObjectMeta>,
     options: &RenderOptions,

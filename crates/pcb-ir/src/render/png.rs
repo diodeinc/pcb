@@ -28,7 +28,7 @@ pub fn png<LayerMeta>(
     options: &RenderOptions,
 ) -> Result<Vec<u8>, String> {
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
-    let bbox = options.viewport_or(crate::render::bbox(doc, Some(&layers)));
+    let bbox = options.viewport_over(layers.iter().map(|&index| doc.layers[index].bbox));
     let mut canvas = Canvas::new(bbox, options.size)?;
     for &index in &layers {
         let layer = &doc.layers[index];
@@ -72,7 +72,7 @@ pub fn artwork_png<LayerMeta, ObjectMeta>(
     options: &RenderOptions,
 ) -> Result<Vec<u8>, String> {
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
-    let bbox = options.viewport_or(crate::render::artwork_bbox(doc, Some(&layers)));
+    let bbox = options.viewport_over(layers.iter().map(|&index| doc.layers[index].bbox));
     let mut canvas = Canvas::new(bbox, options.size)?;
     let placed = layers
         .iter()
