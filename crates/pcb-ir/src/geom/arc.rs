@@ -62,15 +62,22 @@ impl Arc {
             return bbox;
         }
 
+        // The same sweep flattening follows, so an arc it takes for a full
+        // circle is bounded as one.
         let start_angle = self.start.angle_from(self.center);
-        let end_angle = self.end.angle_from(self.center);
+        let sweep = self.sweep_radians();
         for angle in [
             0.0,
             std::f64::consts::FRAC_PI_2,
             std::f64::consts::PI,
             std::f64::consts::PI * 1.5,
         ] {
-            if angle_is_on_arc(start_angle, end_angle, angle, self.clockwise) {
+            let offset = if self.clockwise {
+                normalize_angle(start_angle - angle)
+            } else {
+                normalize_angle(angle - start_angle)
+            };
+            if offset <= sweep + 1e-12 {
                 bbox.include_point(Point::new(
                     self.center.x + radius * angle.cos(),
                     self.center.y + radius * angle.sin(),
@@ -305,18 +312,6 @@ impl EllipticalArc {
     }
 }
 
-fn angle_is_on_arc(start: f64, end: f64, angle: f64, clockwise: bool) -> bool {
-    if normalize_angle(end - start) <= 1e-12 {
-        return true;
-    }
-
-    if clockwise {
-        normalize_angle(start - angle) <= normalize_angle(start - end) + 1e-12
-    } else {
-        normalize_angle(angle - start) <= normalize_angle(end - start) + 1e-12
-    }
-}
-
 pub(crate) fn normalize_angle(angle: f64) -> f64 {
     angle.rem_euclid(std::f64::consts::TAU)
 }
@@ -366,5 +361,20 @@ mod tests {
         let mid = mirrored.point_at(mirrored.start_angle() + mirrored.signed_sweep_radians() / 2.0);
         assert!((mid.x + 0.5_f64.sqrt()).abs() < 1e-12);
         assert!((mid.y - 0.5_f64.sqrt()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn an_arc_flattened_as_a_full_circle_is_bounded_as_one() {
+        // The ends differ by less than a coincidence but more than the old
+        // angular slack, so the sweep is a whole turn.
+        let arc = Arc::new(
+            Point::new(1.0, 0.0),
+            Point::new(1.0, 1e-10),
+            Point::ZERO,
+            false,
+        );
+        assert!(arc.is_full_circle());
+        let bbox = arc.bbox();
+        assert!((bbox.min.x + 1.0).abs() < 1e-12 && (bbox.max.y - 1.0).abs() < 1e-12);
     }
 }

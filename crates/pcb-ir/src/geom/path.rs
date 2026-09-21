@@ -356,6 +356,14 @@ impl Segment {
 
     /// The point at parameter `t` in `[0, 1]` along the segment.
     pub fn point_at(&self, t: f64) -> Point {
+        // The ends are the stated points, not their recomputation, so slices
+        // that meet at a vertex meet exactly.
+        if t <= 0.0 {
+            return self.start();
+        }
+        if t >= 1.0 {
+            return self.end();
+        }
         match *self {
             Self::Line { start, end } => start + (end - start) * t,
             Self::Arc(arc) => {
@@ -376,15 +384,7 @@ impl Segment {
     pub fn sample_points(&self, count: usize, out: &mut Vec<Point>) {
         match *self {
             Self::Line { end, .. } => out.push(end),
-            _ => {
-                for step in 1..=count {
-                    if step == count {
-                        out.push(self.end());
-                    } else {
-                        out.push(self.point_at(step as f64 / count as f64));
-                    }
-                }
-            }
+            _ => out.extend((1..=count).map(|step| self.point_at(step as f64 / count as f64))),
         }
     }
 
@@ -711,6 +711,26 @@ mod tests {
             PathCmd::arc_to(Point::new(0.0, 5.0), Point::ZERO, false),
         ]);
         assert_eq!(exact.clone().with_consistent_arcs(), exact);
+    }
+
+    #[test]
+    fn a_segment_ends_on_its_stated_points() {
+        // Neither 1.27 + (25.4 − 1.27) nor cos/sin of the end angle gives
+        // the stated end back.
+        let line = Segment::Line {
+            start: Point::new(1.27, 0.1),
+            end: Point::new(25.4, 0.3),
+        };
+        let arc = Segment::Arc(Arc::new(
+            Point::new(3.0, 0.0),
+            Point::new(0.0, 3.0),
+            Point::ZERO,
+            false,
+        ));
+        for segment in [line, arc] {
+            assert_eq!(segment.point_at(0.0), segment.start());
+            assert_eq!(segment.point_at(1.0), segment.end());
+        }
     }
 
     #[test]
