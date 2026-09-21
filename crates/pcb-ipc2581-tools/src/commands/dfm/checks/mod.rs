@@ -37,7 +37,7 @@ use super::design::{Design, Hole, HoleClass, Slot};
 use super::pdk::SlotPlating;
 use super::report::{
     DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox,
-    ReportPoint, RuleResult, RuleStatus, Site, SourceLocator, Subject, Witness,
+    ReportPoint, RuleResult, RuleStatus, Severity, Site, SourceLocator, Subject, Witness,
 };
 use super::rules::{Comparison, Linework, Pools, Rule, RuleKind};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
@@ -224,6 +224,7 @@ pub(super) fn run(
         }
         results.rules.push(result);
     }
+    results.rules = report_uncovered(rules, std::mem::take(&mut results.rules), design);
     // Every exercised fixture also checks the reporting contract. A spatial
     // failure without a local site must never masquerade as a stackup check.
     #[cfg(test)]
@@ -348,13 +349,103 @@ fn unevaluated(rule: &Rule, design: &Design) -> Option<(RuleStatus, String)> {
     {
         return Some(blocked);
     }
-    let subjects = match rule.kind {
+    let layers = (pools.intersects(Pools::COPPER)
+        && design
+            .copper_layers
+            .iter()
+            .all(|layer| !rule.conditions.applies_to_layer(layer)))
+    .then_some("applicable copper layers")
+    .or_else(|| {
+        (pools.intersects(Pools::MASKS) && design.mask_layers.is_empty())
+            .then_some("soldermask layers")
+    })
+    .map(|what| format!("no {what} in the selected layout target"));
+    missing_subjects(rule.kind, design)
+        .or(layers)
+        .map(|reason| (RuleStatus::NotApplicable, reason))
+}
+
+/// Follow each authored rule's results with one more when its cases leave
+/// part of the design outside all of them. Cases must not overlap but need
+/// not cover: a copper layer or stackup that no case matches lies outside the
+/// capability the PDK states, so it is uncertified, never silently unchecked.
+fn report_uncovered(rules: &[Rule], results: Vec<RuleResult>, design: &Design) -> Vec<RuleResult> {
+    let mut results = results.into_iter();
+    rules
+        .chunk_by(|left, right| left.authored_id == right.authored_id)
+        .flat_map(|cases| {
+            let mut reported = results.by_ref().take(cases.len()).collect::<Vec<_>>();
+            // Cases already incomplete say why; without subjects nothing is unchecked.
+            let decidable = reported
+                .iter()
+                .all(|result| !matches!(result.status, RuleStatus::Incomplete))
+                && missing_subjects(cases[0].kind, design).is_none();
+            if let Some(reason) = decidable.then(|| uncovered(cases, design)).flatten() {
+                // The strictest tier the cases declare is the one left uncertified.
+                let tier = cases
+                    .iter()
+                    .min_by_key(|case| case.severity != Severity::Error)
+                    .expect("an authored rule lowers to at least one rule");
+                let mut result = RuleResult::new(&Rule {
+                    id: tier.authored_id.clone(),
+                    ..tier.clone()
+                });
+                result.leave_unevaluated(RuleStatus::Incomplete, reason);
+                reported.push(result);
+            }
+            reported
+        })
+        .collect()
+}
+
+/// What in the design no case of one authored rule applies to.
+fn uncovered(cases: &[Rule], design: &Design) -> Option<String> {
+    let applicable = cases
+        .iter()
+        .filter(|case| case.conditions.applies_to_design(design))
+        .collect::<Vec<_>>();
+    if applicable.is_empty() {
+        let layers = design
+            .stackup
+            .as_ref()
+            .map_or(0, |stackup| stackup.copper_layers.len());
+        return Some(format!(
+            "no case applies to a design with {layers} copper layer(s)"
+        ));
+    }
+    if !cases[0].kind.semantics().pools.intersects(Pools::COPPER) {
+        return None;
+    }
+    let layers = design
+        .copper_layers
+        .iter()
+        .filter(|layer| {
+            applicable
+                .iter()
+                .all(|case| !case.conditions.applies_to_layer(layer))
+        })
+        .map(|layer| {
+            let position = match layer.position {
+                super::pdk::LayerPosition::Outer => "outer",
+                super::pdk::LayerPosition::Inner => "inner",
+            };
+            match layer.copper_weight_oz {
+                Some(weight) => format!("'{}' ({position}, {weight:.2} oz)", layer.layer.name),
+                None => format!("'{}' ({position})", layer.layer.name),
+            }
+        })
+        .collect::<Vec<_>>();
+    (!layers.is_empty())
+        .then(|| format!("no case applies to copper layer(s) {}", layers.join(", ")))
+}
+
+/// Why a design holds nothing for a rule kind to measure, whatever case
+/// conditions select among its layers.
+fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
+    let what = match kind {
         RuleKind::CopperLayerCount => None,
         RuleKind::BoardArrayPairClearance if design.scope != ArtworkScope::ArrayFlattened => {
-            return Some((
-                RuleStatus::NotApplicable,
-                "board-array spacing requires --layout-target board-array".to_owned(),
-            ));
+            return Some("board-array spacing requires --layout-target board-array".to_owned());
         }
         RuleKind::BoardArrayPairClearance => (design.board_arrays.len() < 2)
             .then(|| "two or more direct board-array instances".to_owned()),
@@ -406,23 +497,7 @@ fn unevaluated(rule: &Rule, design: &Design) -> Option<(RuleStatus, String)> {
             .then(|| "board profile outlines".to_owned()),
         RuleKind::CopperFeatureWidth | RuleKind::CopperClearance | RuleKind::SoldermaskWeb => None,
     };
-    let pools = rule.kind.semantics().pools;
-    let layers = (pools.intersects(Pools::COPPER)
-        && design
-            .copper_layers
-            .iter()
-            .all(|layer| !rule.conditions.applies_to_layer(layer)))
-    .then(|| "applicable copper layers".to_owned())
-    .or_else(|| {
-        (pools.intersects(Pools::MASKS) && design.mask_layers.is_empty())
-            .then(|| "soldermask layers".to_owned())
-    });
-    subjects.or(layers).map(|what| {
-        (
-            RuleStatus::NotApplicable,
-            format!("no {what} in the selected layout target"),
-        )
-    })
+    what.map(|what| format!("no {what} in the selected layout target"))
 }
 
 /// A rule measuring on the copper layers a drill spans cannot be certified

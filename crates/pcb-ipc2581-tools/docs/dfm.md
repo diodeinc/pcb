@@ -133,7 +133,13 @@ Case conditions use structured ranges such as
 rules may also condition on `copper = { position = "outer", weight = "1 oz" }`.
 The parser rejects unsupported conditions and any pair of cases whose domains
 overlap. Therefore, at most one case from a rule applies to a design or copper
-layer; non-applicable case rules are reported as `not_applicable`. A condition
+layer; non-applicable case rules are reported as `not_applicable`. Cases need
+not cover every design, but what they leave out is outside the capability the
+PDK states: when the design holds subjects for the rule and no case applies to
+its stackup, or to one of its copper layers, one more result under the authored
+rule id reports `incomplete` and names what no case matched. It carries the
+strictest severity the cases declare, so an uncovered required limit fails the
+verdict instead of leaving the layer silently unchecked. A condition
 that needs stackup context leaves its rule `incomplete` when the IPC-2581 file
 has no unambiguous physical stackup. The `technologies` list remains descriptive
 metadata because imported designs do not yet state rigid, flex, and HDI
@@ -716,7 +722,9 @@ Report and scene versions are independent; the report uses integer `2` and the
 scene integer `1`. Report version 2 moved each edge-clearance site's
 `board_profile` region into the `shared_evidence` table, and split the rule
 status `skipped` (and `summary.rules_skipped`) into `not_applicable` and
-`incomplete`, the latter failing the verdict for a required rule.
+`incomplete`, the latter failing the verdict for a required rule. `rules` may
+hold one extra `incomplete` result per authored rule whose cases do not cover
+the design.
 New fields and new `kind`, `role`, `status`, rule, and method values may be
 added within a version. Unknown optional fields can be ignored; unknown required
 semantics must produce an explicit unsupported state, never a guessed rendering

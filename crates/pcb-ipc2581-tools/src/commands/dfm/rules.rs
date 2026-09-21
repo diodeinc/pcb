@@ -19,6 +19,8 @@ use super::report::{Severity, ViewRecipe};
 #[derive(Debug, Clone)]
 pub(super) struct Rule {
     pub id: String,
+    /// The PDK rule this was lowered from. Its cases and tiers share it.
+    pub authored_id: String,
     pub title: String,
     pub severity: Severity,
     pub comparison: Comparison,
@@ -577,6 +579,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         if let Some(limit) = range.minimum() {
             rules.push(Rule {
                 id: "profile.support.copper_layers.minimum".to_owned(),
+                authored_id: "profile.support.copper_layers".to_owned(),
                 title: "Profile minimum copper layer count".to_owned(),
                 severity: Severity::Error,
                 comparison: Comparison::Minimum,
@@ -588,6 +591,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         if let Some(limit) = range.maximum() {
             rules.push(Rule {
                 id: "profile.support.copper_layers.maximum".to_owned(),
+                authored_id: "profile.support.copper_layers".to_owned(),
                 title: "Profile maximum copper layer count".to_owned(),
                 severity: Severity::Error,
                 comparison: Comparison::Maximum,
@@ -787,6 +791,7 @@ fn lower_length_rule(
     match limit {
         Some(limit) => lower_limit(
             &metadata.id,
+            &metadata.id,
             limit,
             &RuleConditions::default(),
             profile,
@@ -797,6 +802,7 @@ fn lower_length_rule(
             .iter()
             .flat_map(|case| {
                 lower_limit(
+                    &metadata.id,
                     &format!("{}.{}", metadata.id, case.id),
                     &case.limit,
                     &case.when,
@@ -810,6 +816,7 @@ fn lower_length_rule(
 }
 
 fn lower_limit(
+    authored_id: &str,
     id: &str,
     limit: &LengthLimit,
     when: &RuleConditions,
@@ -820,6 +827,7 @@ fn lower_limit(
     let conditions = conditions(when, profile);
     let required = limit.minimum.as_ref().map(|minimum| Rule {
         id: id.to_owned(),
+        authored_id: authored_id.to_owned(),
         title: title.clone(),
         severity: Severity::Error,
         comparison: Comparison::Minimum,
@@ -831,6 +839,7 @@ fn lower_limit(
         .into_iter()
         .chain(limit.preferred.as_ref().map(|preferred| Rule {
             id: format!("{id}.preferred"),
+            authored_id: authored_id.to_owned(),
             title: format!("{title} (preferred)"),
             severity: Severity::Warning,
             comparison: Comparison::Minimum,
@@ -857,6 +866,7 @@ fn lower_ratio_rule(
     match limit {
         Some(limit) => vec![lower_ratio_limit(
             &metadata.id,
+            &metadata.id,
             limit,
             &RuleConditions::default(),
             profile,
@@ -867,6 +877,7 @@ fn lower_ratio_rule(
             .iter()
             .map(|case| {
                 lower_ratio_limit(
+                    &metadata.id,
                     &format!("{}.{}", metadata.id, case.id),
                     &case.limit,
                     &case.when,
@@ -880,6 +891,7 @@ fn lower_ratio_rule(
 }
 
 fn lower_ratio_limit(
+    authored_id: &str,
     id: &str,
     limit: &RatioLimit,
     when: &RuleConditions,
@@ -889,6 +901,7 @@ fn lower_ratio_limit(
 ) -> Rule {
     Rule {
         id: id.to_owned(),
+        authored_id: authored_id.to_owned(),
         title,
         severity: Severity::Error,
         comparison: Comparison::Maximum,

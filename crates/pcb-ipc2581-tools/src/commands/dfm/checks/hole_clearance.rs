@@ -360,8 +360,12 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     fn run(xml: &str, hole: &str) -> checks::Results {
+        run_pdk(xml, &pdk(hole))
+    }
+
+    fn run_pdk(xml: &str, source: &str) -> checks::Results {
         let ipc = Ipc2581::parse(xml).unwrap();
-        let pdk = Pdk::parse(&pdk(hole)).unwrap();
+        let pdk = Pdk::parse(source).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
         let design = Design::extract(
@@ -547,6 +551,62 @@ limit = {{ minimum = "0.20 mm" }}
         );
         assert_eq!(inside.findings.len(), 1);
         assert_eq!(inside.findings[0].layers[1].name, "L1");
+    }
+
+    #[test]
+    fn a_layer_or_stackup_no_case_matches_is_reported_not_left_unchecked() {
+        use crate::commands::dfm::report::RuleStatus;
+        let cased = |cases: &str| {
+            pdk("via").replace(
+                "limit = { minimum = \"0.20 mm\" }",
+                &format!("cases = [{cases}]"),
+            )
+        };
+        let outer = r#"{ id = "outer", when = { copper = { position = "outer" } }, limit = { minimum = "0.20 mm" } }"#;
+        let inner = r#"{ id = "inner", when = { copper = { position = "inner" } }, limit = { preferred = "0.20 mm" } }"#;
+        let through = board("VIA", Some((0, 2)), &[copper(0, Some("N2"), 0.8)]);
+
+        // The through via meets the inner layer, which no case limits.
+        let partial = run_pdk(&through, &cased(outer));
+        assert_eq!(partial.rules.len(), 2);
+        assert!(matches!(partial.rules[0].status, RuleStatus::Pass));
+        assert_eq!(
+            partial.rules[0].checked, 2,
+            "both outer layers are measured"
+        );
+        let coverage = &partial.rules[1];
+        assert_eq!(coverage.id, "hole-clearance");
+        assert!(
+            coverage.blocks_verdict(),
+            "the outer case is a required tier"
+        );
+        assert_eq!(
+            coverage.skip_reason.as_deref(),
+            Some("no case applies to copper layer(s) 'L1' (inner, 1.01 oz)")
+        );
+
+        let complete = run_pdk(&through, &cased(&format!("{outer}, {inner}")));
+        assert_eq!(
+            complete
+                .rules
+                .iter()
+                .map(|rule| rule.id.as_str())
+                .collect::<Vec<_>>(),
+            ["hole-clearance.outer", "hole-clearance.inner.preferred"]
+        );
+
+        // Without a via there is nothing the uncovered layer leaves unchecked.
+        let no_vias = run_pdk(&board("PLATED", Some((0, 2)), &[]), &cased(outer));
+        assert_eq!(no_vias.rules.len(), 1);
+        assert!(matches!(no_vias.rules[0].status, RuleStatus::NotApplicable));
+
+        let two_layer = r#"{ id = "two", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.20 mm" } }"#;
+        let count = run_pdk(&through, &cased(two_layer));
+        assert!(matches!(count.rules[0].status, RuleStatus::NotApplicable));
+        assert_eq!(
+            count.rules[1].skip_reason.as_deref(),
+            Some("no case applies to a design with 3 copper layer(s)")
+        );
     }
 
     #[test]
