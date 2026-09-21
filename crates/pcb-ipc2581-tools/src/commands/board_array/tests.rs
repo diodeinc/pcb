@@ -735,7 +735,9 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
     assert!(!svg.contains("class='score-guide'"));
     let viewbox = svg_viewbox(&svg);
     assert!(viewbox.0 + viewbox.2 > 100.0);
-    assert!(viewbox.1 + viewbox.3 > 100.0);
+    // The overview draws world y up under one flip group, so the viewBox
+    // starts at the negated top edge.
+    assert!(-viewbox.1 > 100.0);
     assert_eq!(
         geometry::board_array_vscore_lines(&design(&ipc))
             .unwrap()
