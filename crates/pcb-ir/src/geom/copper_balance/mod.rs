@@ -24,8 +24,6 @@ use spatial::{
 };
 
 const NUMERIC_EPSILON: f64 = 1e-9;
-const RADIUS_SOLVE_TOLERANCE_MM: f64 = 1e-4;
-const AREA_SOLVE_TOLERANCE_MM2: f64 = 1e-3;
 /// Leftover area tolerated when certifying that one region contains another.
 /// Roughly a 30 um square: three orders of magnitude below the smallest void
 /// the profile can place, and above the slivers a regularized difference
@@ -135,18 +133,23 @@ impl DenseCopperBalanceProfile {
         self.void_area_level(index).sqrt()
     }
 
-    fn quantize_void_radius_up(self, radius_mm: f64) -> f64 {
+    /// The lowest void-area level holding at least this radius.
+    fn void_area_level_up(self, radius_mm: f64) -> usize {
         let minimum = self.min_void_radius_mm.powi(2);
         let maximum = self.max_void_radius_mm.powi(2);
         if minimum == maximum {
-            return self.min_void_radius_mm;
+            return 0;
         }
         let squared = radius_mm.powi(2).clamp(minimum, maximum);
         let index = ((squared - minimum - NUMERIC_EPSILON) / (maximum - minimum)
             * (self.void_area_levels - 1) as f64)
             .ceil()
             .max(0.0) as usize;
-        self.void_area_level(index.min(self.void_area_levels - 1))
+        index.min(self.void_area_levels - 1)
+    }
+
+    fn quantize_void_radius_up(self, radius_mm: f64) -> f64 {
+        self.void_area_level(self.void_area_level_up(radius_mm))
             .sqrt()
     }
 
@@ -553,10 +556,9 @@ fn generate_dense_copper_balance_with_lattice(
         best.consider(project_perforated_geometry(
             lattice,
             profile,
-            voidable,
             usable_area_mm2,
             desired_added_area_mm2,
-        )?);
+        ));
     }
 
     let (full_voids, edge_voids) = match best.mode {
@@ -1050,73 +1052,37 @@ impl ProjectedArea {
 fn project_perforated_geometry(
     lattice: &LatticeCandidates,
     profile: DenseCopperBalanceProfile,
-    voidable: &ContourSet,
     usable_area_mm2: f64,
     desired_added_area_mm2: f64,
-) -> Result<ProjectedArea, AccuracyError> {
+) -> ProjectedArea {
     // Each edge site has an activation radius aᵢ. At nominal radius r its
-    // clipped hex uses max(r, aᵢ), making total void area monotone in r.
-    // Project the requested area onto that one-dimensional feasible set.
+    // clipped hex uses max(r, aᵢ) rounded up to a void-area level, so total
+    // void area is monotone in r: interior area linear in r², plus an edge
+    // area that steps once per level. Within a level the closest radius is a
+    // closed form, and the feasible set's projection is the best of them.
     let target_void_area_mm2 = usable_area_mm2 - desired_added_area_mm2;
-    let mut low_radius = profile.min_void_radius_mm;
-    let mut high_radius = profile.max_void_radius_mm;
-    let low_void_area = lattice.void_area(voidable, low_radius, profile)?;
-    let high_void_area = lattice.void_area(voidable, high_radius, profile)?;
-    let mut best = perforated_candidate(
-        low_radius,
-        low_void_area,
-        usable_area_mm2,
-        desired_added_area_mm2,
-    );
-    best.consider(perforated_candidate(
-        high_radius,
-        high_void_area,
-        usable_area_mm2,
-        desired_added_area_mm2,
-    ));
-
-    if target_void_area_mm2 <= low_void_area || target_void_area_mm2 >= high_void_area {
-        return Ok(best);
-    }
-
-    // Every candidate evaluation clips the boundary voids against the safe
-    // region, so the exit tolerance scales with the region: the absolute
-    // floor governs small solves exactly, while large panels stop once the
-    // area error is negligible relative to their usable area.
-    let area_tolerance_mm2 = AREA_SOLVE_TOLERANCE_MM2.max(1e-6 * usable_area_mm2);
-    let mut low_area = low_void_area;
-    let mut high_area = high_void_area;
-    while high_radius - low_radius > RADIUS_SOLVE_TOLERANCE_MM
-        && best.error_mm2 > area_tolerance_mm2
-    {
-        // Interior hex area is linear in r². Interpolate there, with a
-        // midpoint fallback that keeps convergence bracketed when clipped
-        // edge area dominates.
-        let low_squared = low_radius.powi(2);
-        let high_squared = high_radius.powi(2);
-        let fraction = (target_void_area_mm2 - low_area) / (high_area - low_area);
-        let squared_radius = if (0.1..=0.9).contains(&fraction) {
-            low_squared + fraction * (high_squared - low_squared)
-        } else {
-            (low_squared + high_squared) / 2.0
-        };
-        let radius = squared_radius.sqrt();
-        let void_area = lattice.void_area(voidable, radius, profile)?;
-        best.consider(perforated_candidate(
+    let full_area_per_radius_squared =
+        lattice.full_sites.len() as f64 * ROUNDED_HEXAGON_AREA_FACTOR;
+    let candidate = |radius: f64| {
+        perforated_candidate(
             radius,
-            void_area,
+            lattice.void_area(radius, profile),
             usable_area_mm2,
             desired_added_area_mm2,
-        ));
-        if void_area < target_void_area_mm2 {
-            low_radius = radius;
-            low_area = void_area;
-        } else {
-            high_radius = radius;
-            high_area = void_area;
-        }
+        )
+    };
+    let mut best = candidate(profile.min_void_radius_mm);
+    for level in 1..profile.void_area_levels {
+        // A level starts just past the one below, where rounding up first
+        // lands on it. A lattice of edge sites alone leaves the quotient
+        // infinite or undefined, which lands on whichever end is nearer.
+        let squared_radius = ((target_void_area_mm2 - lattice.edge_area_by_level_mm2[level])
+            / full_area_per_radius_squared)
+            .max(profile.void_area_level(level - 1) + 2.0 * NUMERIC_EPSILON)
+            .min(profile.void_area_level(level));
+        best.consider(candidate(squared_radius.sqrt()));
     }
-    Ok(best)
+    best
 }
 
 fn perforated_candidate(
@@ -1199,6 +1165,8 @@ impl From<AccuracyError> for DenseCopperBalanceError {
 mod tests {
     use super::lattice::hexagon_set_with_radii;
     use super::*;
+
+    const AREA_SOLVE_TOLERANCE_MM2: f64 = 1e-3;
     use crate::geom::{BBox, FillRule, Point, Resolution, tol};
 
     fn res(tolerance_mm: f64) -> Resolution {
@@ -1462,11 +1430,8 @@ mod tests {
         );
         let voidable = panel.disk_erode(profile.boundary_web_mm).unwrap();
         let lattice = LatticeCandidates::build_lattice(&voidable, Point::ZERO, profile).unwrap();
-        let target_density = (panel.area()
-            - lattice
-                .void_area(&voidable, profile.min_void_radius_mm, profile)
-                .unwrap())
-            / panel.area();
+        let target_density =
+            (panel.area() - lattice.void_area(profile.min_void_radius_mm, profile)) / panel.area();
         let existing = ContourSet::empty(res(tol::REGION_MM));
         let layer = SpatialCopperBalanceLayerRequest {
             safe_region: &panel,
@@ -2151,6 +2116,51 @@ mod tests {
         );
 
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    /// The closed-form area projection has to be at least as close to the
+    /// request as any radius a scan of the whole range finds, including just
+    /// either side of the steps the edge voids take from level to level.
+    #[test]
+    fn area_projection_is_the_best_radius_in_the_range() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let safe_region = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(9.0, 6.0)),
+            res(tol::REGION_MM),
+        );
+        let voidable = safe_region.disk_erode(profile.boundary_web_mm).unwrap();
+        let lattice = LatticeCandidates::build_lattice(&voidable, Point::ZERO, profile).unwrap();
+        let usable_area_mm2 = safe_region.area();
+        // Edge voids dominate a region this small, so the steps are large.
+        let steps = lattice.edge_area_by_level_mm2.windows(2);
+        assert!(steps.clone().all(|pair| pair[1] >= pair[0]));
+        assert!(steps.map(|pair| pair[1] - pair[0]).fold(0.0, f64::max) > 0.1);
+
+        let (lower, upper) = (
+            profile.min_void_radius_mm.powi(2),
+            profile.max_void_radius_mm.powi(2),
+        );
+        for request in 0..=40 {
+            let desired_added_area_mm2 = usable_area_mm2 * request as f64 / 40.0;
+            let projected = project_perforated_geometry(
+                &lattice,
+                profile,
+                usable_area_mm2,
+                desired_added_area_mm2,
+            );
+            let scanned = (0..=20_000)
+                .map(|index| (lower + (upper - lower) * index as f64 / 20_000.0).sqrt())
+                .map(|radius| {
+                    (usable_area_mm2 - lattice.void_area(radius, profile) - desired_added_area_mm2)
+                        .abs()
+                })
+                .fold(f64::MAX, f64::min);
+            assert!(
+                projected.error_mm2 <= scanned + 1e-6,
+                "request {request}: projected {} but a scan finds {scanned}",
+                projected.error_mm2
+            );
+        }
     }
 
     #[test]

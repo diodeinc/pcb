@@ -6,6 +6,7 @@ use std::f64::consts::PI;
 
 use super::{
     DenseCopperBalanceProfile, DenseCopperLattice, DenseCopperLatticeSite, DenseCopperVoid, SQRT_3,
+    map_layers,
 };
 use crate::geom::accuracy::numerical_error;
 use crate::geom::region::rings_bbox;
@@ -32,6 +33,12 @@ pub(super) struct LatticeCandidates {
     /// Where the center of a minimum partial-void disk may sit: the voidable
     /// region eroded by that disk.
     pub(super) disk_center_region: ContourSet,
+    /// Total clipped edge-void area at each void-area level. Every edge void
+    /// sits on a level — the nominal radius or its own activation radius,
+    /// rounded up — so the total depends on the nominal radius only through
+    /// the level it rounds up to, and is clipped once per level here rather
+    /// than once per radius a layer's area solve would try.
+    pub(super) edge_area_by_level_mm2: Vec<f64>,
 }
 
 impl LatticeCandidates {
@@ -51,6 +58,7 @@ impl LatticeCandidates {
                 edge_candidates: Vec::new(),
                 edge_center_depths_mm: Vec::new(),
                 disk_center_region: ContourSet::empty(voidable.resolution),
+                edge_area_by_level_mm2: vec![0.0; profile.void_area_levels],
             });
         }
 
@@ -114,13 +122,21 @@ impl LatticeCandidates {
                 Some(((DenseCopperLatticeSite { column, row }, radius?), depth_mm))
             })
             .unzip();
-        Ok(Self {
+        let mut candidates = Self {
             lattice,
             full_sites,
             edge_candidates,
             edge_center_depths_mm,
             disk_center_region,
+            edge_area_by_level_mm2: Vec::new(),
+        };
+        candidates.edge_area_by_level_mm2 = map_layers(0..profile.void_area_levels, |level| {
+            let radius = profile.void_area_level(level).sqrt();
+            Ok(candidates.partial_voids(voidable, radius, profile)?.area())
         })
+        .into_iter()
+        .collect::<Result<_, AccuracyError>>()?;
+        Ok(candidates)
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -145,7 +161,7 @@ impl LatticeCandidates {
             .collect()
     }
 
-    pub(super) fn partial_voids(
+    fn partial_voids(
         &self,
         voidable: &ContourSet,
         radius: f64,
@@ -163,13 +179,11 @@ impl LatticeCandidates {
         )
     }
 
-    pub(super) fn void_area(
-        &self,
-        voidable: &ContourSet,
-        radius: f64,
-        profile: DenseCopperBalanceProfile,
-    ) -> Result<f64, AccuracyError> {
-        Ok(self.full_void_area(radius) + self.partial_voids(voidable, radius, profile)?.area())
+    /// Total void area at one nominal radius: analytic interior hexagons plus
+    /// the clipped edge voids of the level that radius rounds up to.
+    pub(super) fn void_area(&self, radius: f64, profile: DenseCopperBalanceProfile) -> f64 {
+        self.full_void_area(radius)
+            + self.edge_area_by_level_mm2[profile.void_area_level_up(radius)]
     }
 }
 
