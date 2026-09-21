@@ -532,21 +532,43 @@ pub type OwnerRegionLayers<Owner> = Vec<Vec<(Owner, region::ContourSet)>>;
 
 /// A flash or path as one placement images it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum Primitive {
+pub(crate) enum Primitive {
     Flash(u32),
     Path(u32),
 }
 
 /// One primitive of a layer's paint, with every enclosing block instance
 /// resolved into its polarity and placement.
-struct Placed<'a, ObjectMeta> {
-    polarity: Polarity,
-    primitive: Primitive,
-    transform: Affine2,
+pub(crate) struct Placed<'a, ObjectMeta> {
+    pub(crate) polarity: Polarity,
+    pub(crate) primitive: Primitive,
+    pub(crate) transform: Affine2,
     /// Whether another placement can image the same primitive: apertures and
     /// block content are shared, a layer's own paths are not.
     shared: bool,
     meta: &'a ObjectMeta,
+}
+
+/// A layer's paint as the sequence of primitives that images it: what the
+/// region fold composes and what a raster paints, in the same order.
+pub(crate) fn placed_layer<'a, LayerMeta, ObjectMeta>(
+    doc: &'a Document<LayerMeta, ObjectMeta>,
+    layer: &Layer<LayerMeta>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<Placed<'a, ObjectMeta>> {
+    let mut placed = Vec::new();
+    for (polarity, object) in paint_ordered(layer, layer.objects.slice(&doc.objects)) {
+        // A final cutout images clear whatever its own polarity says.
+        let context = polarity.compose(object.polarity);
+        place_primitives(
+            doc,
+            object,
+            (context, Affine2::IDENTITY, doc.blocks.len()),
+            &mut placed,
+            diagnostics,
+        );
+    }
+    placed
 }
 
 /// Walk one object down to its primitives without materializing anything.
@@ -722,18 +744,7 @@ pub fn compose_owner_regions<LayerMeta, ObjectMeta, Owner: Clone + Eq + Hash>(
 
     let mut layers = Vec::with_capacity(doc.layers.len());
     for layer in &doc.layers {
-        let mut placed = Vec::new();
-        for (polarity, object) in paint_ordered(layer, layer.objects.slice(&doc.objects)) {
-            // A final cutout images clear whatever its own polarity says.
-            let context = polarity.compose(object.polarity);
-            place_primitives(
-                doc,
-                object,
-                (context, Affine2::IDENTITY, doc.blocks.len()),
-                &mut placed,
-                &mut diagnostics,
-            );
-        }
+        let placed = placed_layer(doc, layer, &mut diagnostics);
 
         // Preserve first-paint order for deterministic attributed output and
         // retain constant-time lookup for later objects of the same owner.
