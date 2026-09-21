@@ -59,8 +59,12 @@ pub(super) fn evaluate(
             // Boolean composition may quantize the cutout and the extracted
             // slot on slightly different grids. Heal their shared boundary
             // within the existing flattening uncertainty, not a fab tolerance.
+            // Only copper within the limit of the slot can bound the
+            // enclosure, so the query is prepared over that neighbourhood
+            // rather than the whole layer.
             let filled = copper
                 .image
+                .reaching(slot.outline.bbox.expand(limit_mm + 2.0 * tol::REGION_MM))
                 .union(&slot.outline.disk_dilate(tol::REGION_MM)?)?;
             let boundary = filled.prepare_query();
             let distance = slot
