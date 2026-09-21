@@ -145,15 +145,12 @@ pub(super) fn add_right_vcut_callout(
         VCUT_MARKER_STROKE_MM,
     );
 
-    // The label rides above the leader, clear of the arrowhead. Trailing it,
-    // the two reach past the gap a fabrication panel leaves beside the array
-    // and the text lands on the neighbouring array's rail.
     add_vcut_label(
         features,
         label,
         Point::new(
-            arrow_tip.x + VCUT_CALLOUT_ARROW_HEAD_MM,
-            y + VCUT_CALLOUT_TEXT_GAP_MM,
+            arrow_start.x + VCUT_CALLOUT_TEXT_GAP_MM,
+            y - 0.5 * label.height_mm,
         ),
     );
 }
