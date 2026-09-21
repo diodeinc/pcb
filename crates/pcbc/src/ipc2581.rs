@@ -55,6 +55,9 @@ enum Commands {
         /// Also write the fixture map (tested boards + contact→land bindings) as JSON
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         fixture_map: Option<PathBuf>,
+        /// Copper layers, 2 or 4; 4 adds two inner GND planes
+        #[arg(long, default_value = "2")]
+        layers: pcb_interposer::Layers,
         /// Auto-route the interposer with FreeRouting (requires Java 25+)
         #[arg(long)]
         route: bool,
@@ -374,11 +377,12 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             input,
             output,
             fixture_map,
+            layers,
             route,
             ipc,
         } => {
             use anyhow::Context as _;
-            let (pcb, pro) = pcb_interposer::generate(&input)?;
+            let (pcb, pro) = pcb_interposer::generate(&input, layers)?;
             std::fs::write(&output, pcb).with_context(|| format!("write {}", output.display()))?;
             let pro_path = output.with_extension("kicad_pro");
             std::fs::write(&pro_path, pro)

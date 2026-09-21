@@ -92,6 +92,16 @@ impl Document {
         }
     }
 
+    /// The two-layer stack plus two inner plane layers (In1.Cu = 4,
+    /// In2.Cu = 6), typed `power` so autorouters keep signals off them.
+    pub fn four_layer() -> Self {
+        let mut document = Self::two_layer();
+        document
+            .layers
+            .splice(1..1, [Layer::power(4, "In1.Cu"), Layer::power(6, "In2.Cu")]);
+        document
+    }
+
     /// Intern a net name, returning its net number.
     pub fn net(&mut self, name: &str) -> u32 {
         if let Some(index) = self.nets.iter().position(|net| net == name) {
@@ -120,6 +130,13 @@ impl Layer {
             canonical: canonical.into(),
             kind: LayerKind::Signal,
             user_name: None,
+        }
+    }
+
+    pub fn power(ordinal: u32, canonical: &str) -> Self {
+        Self {
+            kind: LayerKind::Power,
+            ..Self::signal(ordinal, canonical)
         }
     }
 
@@ -153,6 +170,8 @@ pub enum LayerKind {
 /// keeps KiCad's defaults on load.
 #[derive(Debug, Clone)]
 pub struct Setup {
+    /// Physical stackup; `None` leaves KiCad's default for the layer count.
+    pub stackup: Option<Stackup>,
     pub pad_to_mask_clearance: f64,
     pub allow_soldermask_bridges_in_footprints: bool,
 }
@@ -160,8 +179,74 @@ pub struct Setup {
 impl Default for Setup {
     fn default() -> Self {
         Self {
+            stackup: None,
             pad_to_mask_clearance: 0.0,
             allow_soldermask_bridges_in_footprints: false,
+        }
+    }
+}
+
+/// The board's physical `stackup` table, top to bottom.
+#[derive(Debug, Clone, Default)]
+pub struct Stackup {
+    pub layers: Vec<StackupLayer>,
+    pub copper_finish: Option<String>,
+}
+
+/// One `stackup` entry, mirroring KiCad's `(layer …)` node field for field.
+#[derive(Debug, Clone, Default)]
+pub struct StackupLayer {
+    /// A layer's canonical name (`F.Cu`, `F.Mask`) or `dielectric N`.
+    pub name: String,
+    /// `copper`, `core`, `prepreg`, or a technical layer's label
+    /// (`Top Solder Mask`).
+    pub kind: String,
+    pub color: Option<String>,
+    pub thickness: Option<f64>,
+    pub material: Option<String>,
+    pub epsilon_r: Option<f64>,
+    pub loss_tangent: Option<f64>,
+}
+
+impl StackupLayer {
+    pub fn copper(name: &str, thickness: f64) -> Self {
+        Self {
+            name: name.into(),
+            kind: "copper".into(),
+            thickness: Some(thickness),
+            ..Self::default()
+        }
+    }
+
+    /// The `index`-th dielectric from the top (1-based); `form` is `core`
+    /// or `prepreg`.
+    pub fn dielectric(
+        index: usize,
+        form: &str,
+        thickness: f64,
+        material: &str,
+        epsilon_r: f64,
+        loss_tangent: f64,
+    ) -> Self {
+        Self {
+            name: format!("dielectric {index}"),
+            kind: form.into(),
+            thickness: Some(thickness),
+            material: Some(material.into()),
+            epsilon_r: Some(epsilon_r),
+            loss_tangent: Some(loss_tangent),
+            ..Self::default()
+        }
+    }
+
+    /// A silkscreen, paste, or mask entry.
+    pub fn technical(name: &str, kind: &str, color: Option<&str>, thickness: Option<f64>) -> Self {
+        Self {
+            name: name.into(),
+            kind: kind.into(),
+            color: color.map(Into::into),
+            thickness,
+            ..Self::default()
         }
     }
 }

@@ -1,5 +1,6 @@
 //! End-to-end: a board-array style panel in, a parseable interposer out.
 
+use pcb_interposer::Layers;
 use pcb_sexpr::SexprKind;
 
 /// A miniature "panel": A7-sized rounded-rect profile, two NPTH tooling
@@ -160,7 +161,7 @@ fn generates_a_parseable_interposer() {
     let contacts =
         pcb_interposer::contacts::extract_contacts(&ipc, panel.height).expect("contacts");
     let plan = pcb_interposer::plan::plan(contacts, &lands, &[]).expect("plan");
-    let text = pcb_interposer::emit::board(&panel, &lands, Some(&plan));
+    let text = pcb_interposer::emit::board(&panel, &lands, Some(&plan), Layers::Two);
     let root = pcb_sexpr::parse(&text).expect("board parses");
     let SexprKind::List(items) = &root.kind else {
         panic!("root is a list");
@@ -202,13 +203,27 @@ fn generates_a_parseable_interposer() {
     // Deterministic output.
     assert_eq!(
         text,
-        pcb_interposer::emit::board(&panel, &lands, Some(&plan))
+        pcb_interposer::emit::board(&panel, &lands, Some(&plan), Layers::Two)
     );
 
     // Without a plan the board stays bare: no pogos, no planned nets.
-    let bare = pcb_interposer::emit::board(&panel, &lands, None);
+    let bare = pcb_interposer::emit::board(&panel, &lands, None, Layers::Two);
     assert!(!bare.contains("Pogo_Pad"));
     assert!(!bare.contains("B0.TP_DP.TP"));
+}
+
+#[test]
+fn four_layers_add_inner_gnd_planes() {
+    let ipc = ipc2581::Ipc2581::parse(PANEL).expect("panel fixture parses");
+    let panel = pcb_interposer::panel::extract(&ipc).expect("panel extracts");
+    let lands = pcb_interposer::pattern::oriented_s13(panel.width, panel.height);
+    let four = pcb_interposer::emit::board(&panel, &lands, None, Layers::Four);
+    pcb_sexpr::parse(&four).expect("board parses");
+    // One GND pour per copper layer, on the default 4-layer stackup.
+    for layer in ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"] {
+        assert!(four.contains(&format!("(net_name \"GND\")\n\t\t(layer \"{layer}\")")));
+    }
+    assert!(four.contains("(thickness 1.6062)"));
 }
 
 #[test]
