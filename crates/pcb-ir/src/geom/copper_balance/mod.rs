@@ -851,15 +851,54 @@ pub fn generate_spatial_dense_copper_balance(
         .map(|_| vec![0.0; panel_samples.len()])
         .collect::<Vec<_>>();
     let mut influence_scratch = void_scratch.clone();
-    // The moment field is already built every iteration, so its RMS costs a
-    // reduction. The first reading is the field the uniform selection left
-    // behind; the last trails the emitted radii by one gradient step, which at
-    // convergence is smaller than the radius quantization.
-    let mut initial_reading: Option<MomentReading> = None;
-    let mut achieved_reading = MomentReading {
-        mean: 0.0,
-        rms: 0.0,
+    // The panel's copper moment about its mid-plane for one set of radii,
+    // read before and after so the summary can say what the solve bought.
+    let modes = uniform
+        .iter()
+        .map(|result| result.solution.mode)
+        .collect::<Vec<_>>();
+    let moment_reading = |squared_radii: &[Vec<f64>]| {
+        let density = map_layers(squared_radii.iter().enumerate(), |(layer_index, radii)| {
+            let available = &region_available_density[layer_regions[layer_index]];
+            let fixed = &fixed_density[layer_index];
+            match modes[layer_index] {
+                DenseCopperBalanceMode::None => fixed.clone(),
+                DenseCopperBalanceMode::Solid => {
+                    fixed.iter().zip(available).map(|(c, s)| c + s).collect()
+                }
+                DenseCopperBalanceMode::Perforated { .. } => {
+                    let mut void_fraction = vec![0.0; panel_samples.len()];
+                    for (sample_index, radius_squared) in
+                        active_sites[layer_index].iter().zip(radii)
+                    {
+                        void_fraction[*sample_index] =
+                            void_fraction_per_radius_squared * radius_squared;
+                    }
+                    let void_density = density_kernel.smooth(&void_fraction);
+                    (0..fixed.len())
+                        .map(|site| {
+                            fixed[site] + available[site]
+                                - partial_void_density[layer_index][site]
+                                - void_density[site]
+                        })
+                        .collect::<Vec<_>>()
+                }
+            }
+        });
+        MomentReading::of(
+            &(0..evaluation_points.len())
+                .map(|site| {
+                    normalized_stack_weights
+                        .iter()
+                        .zip(&density)
+                        .map(|(weight, density)| weight * density[site])
+                        .sum::<f64>()
+                })
+                .collect::<Vec<_>>(),
+        )
     };
+    // The field the uniform selection left behind.
+    let initial_reading = stack_is_weighed.then(|| moment_reading(&squared_radii));
     for _ in 0..SPATIAL_SOLVE_ITERATIONS {
         // The modeled final copper fraction of each layer, not its distance
         // from target: the moment below is the copper the panel carries, and
@@ -902,22 +941,6 @@ pub fn generate_spatial_dense_copper_balance(
                     .collect::<Vec<_>>()
             },
         );
-        // The panel's copper moment about its mid-plane, reported before and
-        // after so the summary can say what the settlement bought.
-        let stack_moment = (0..evaluation_points.len())
-            .map(|site_index| {
-                normalized_stack_weights
-                    .iter()
-                    .enumerate()
-                    .map(|(layer_index, weight)| weight * density[layer_index][site_index])
-                    .sum::<f64>()
-            })
-            .collect::<Vec<_>>();
-        if stack_is_weighed {
-            achieved_reading = MomentReading::of(&stack_moment);
-            initial_reading.get_or_insert(achieved_reading);
-        }
-
         let proposals = map_layers(
             squared_radii
                 .iter()
@@ -968,30 +991,48 @@ pub fn generate_spatial_dense_copper_balance(
         }
     }
 
-    Ok(SpatialCopperBalance {
-        layers: uniform
-            .into_iter()
-            .enumerate()
-            .map(|(layer_index, baseline)| {
-                if squared_radii[layer_index].is_empty() {
-                    return baseline;
-                }
-                spatial_result_from_squared_radii(
-                    &region_lattices[layer_regions[layer_index]].full_sites,
-                    &squared_radii[layer_index],
-                    baseline,
-                    request.layers[layer_index],
-                    density_domain_areas[layer_index],
-                    profile,
-                )
+    let layers = uniform
+        .into_iter()
+        .enumerate()
+        .map(|(layer_index, baseline)| {
+            if squared_radii[layer_index].is_empty() {
+                return baseline;
+            }
+            spatial_result_from_squared_radii(
+                &region_lattices[layer_regions[layer_index]].full_sites,
+                &squared_radii[layer_index],
+                baseline,
+                request.layers[layer_index],
+                density_domain_areas[layer_index],
+                profile,
+            )
+        })
+        .collect::<Vec<_>>();
+    // What ships is the quantized lattice, so the achieved reading is taken
+    // from the emitted radii rather than from the iterate they were rounded
+    // from.
+    let moment_field = initial_reading.map(|initial| {
+        let emitted = layers
+            .iter()
+            .map(|result| {
+                result
+                    .full_voids
+                    .iter()
+                    .map(|void| void.radius_mm.powi(2))
+                    .collect::<Vec<_>>()
             })
-            .collect(),
-        moment_field: initial_reading.map(|initial| StackMomentField {
+            .collect::<Vec<_>>();
+        let achieved = moment_reading(&emitted);
+        StackMomentField {
             initial_mean: initial.mean,
             initial_rms: initial.rms,
-            achieved_mean: achieved_reading.mean,
-            achieved_rms: achieved_reading.rms,
-        }),
+            achieved_mean: achieved.mean,
+            achieved_rms: achieved.rms,
+        }
+    });
+    Ok(SpatialCopperBalance {
+        layers,
+        moment_field,
     })
 }
 
@@ -1964,6 +2005,49 @@ mod tests {
         // field starts well away from zero and the solve flattens it.
         assert!(weighed.initial_rms > 0.0, "{weighed:?}");
         assert!(weighed.achieved_rms < weighed.initial_rms, "{weighed:?}");
+    }
+
+    /// The lattice that ships is the quantized one, so the achieved moment has
+    /// to be read from it. With two area levels every void snaps to an extreme
+    /// and the emitted field sits far from the converged iterate; the reading
+    /// has to follow the densities the layers actually achieved.
+    #[test]
+    fn achieved_moment_is_read_from_the_emitted_radii() {
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
+            res(tol::REGION_MM),
+        );
+        let empty = ContourSet::empty(res(tol::REGION_MM));
+        let layer = |target_density, stack_weight_mm2| SpatialCopperBalanceLayerRequest {
+            safe_region: &panel,
+            existing_copper: &empty,
+            density_domain: &panel,
+            target_density,
+            stack_weight_mm2,
+        };
+        let balance = generate_spatial_dense_copper_balance(
+            DenseCopperBalanceProfile {
+                void_area_levels: 2,
+                ..DenseCopperBalanceProfile::V1
+            },
+            SpatialCopperBalanceRequest {
+                panel_region: &panel,
+                lattice_origin: Point::ZERO,
+                layers: &[layer(0.70, 1.0), layer(0.40, -1.0)],
+            },
+        )
+        .unwrap();
+
+        // Mirrored weights normalize to +/- 0.5.
+        let emitted = 0.5
+            * (balance.layers[0].solution.achieved_density
+                - balance.layers[1].solution.achieved_density);
+        let field = balance.moment_field.expect("weights were supplied");
+        assert!(
+            (field.achieved_mean - emitted).abs() <= 0.02,
+            "reported {} but emitted {emitted}",
+            field.achieved_mean
+        );
     }
 
     /// Two layers that both sit exactly on their targets can still carry a
