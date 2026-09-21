@@ -28,7 +28,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Write interposer boards with KiCad's current net syntax and without negative zeros, so pcbnew saves them back unchanged.
 - Open IPC-2581 files that carry an MD5 checksum trailer, a prefixed root element, or a commented-out closing tag.
 - Open panels saved by pcb 0.4.11 and earlier.
-- Read Allegro padstack shape offsets, and inline primitives, text and outlines inside `Features`, `UserSpecial`, `SlotCavity` and `Pad`.
+- Read inline primitives, text and outlines inside `Features`, `UserSpecial`, `SlotCavity` and `Pad`.
 - Accept `padUse="OTHER"` and the `BOARDFAB`, `COMPONENT` and `PIN` layer functions.
 - Let BOM edits add a distributor and aliases to the same part.
 - Keep every `Profile` of a rigid-flex layer and leave percentage stackup tolerances unscaled.
@@ -98,10 +98,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - A design outside every case of a DFM rule is reported instead of passing unchecked.
 - DFM finding ids survive noise-level coordinate changes; existing waiver files keep matching.
 - DFM reports list measurements that fall within measurement uncertainty.
-- The DFM report schema is now version 2.
 - Physical and DFM views of panels build several times faster, and import uses less memory.
 - DFM checks each board of an array or panel once and lists every placement in a new `frames` table; panels run many times faster.
-- DFM report schema v2 adds `frames` and a `frame` index on findings, and drops `group_key`.
+- The DFM report schema is now version 2: it adds `frames` and a `frame` index on findings, and drops `group_key`.
 - DFM minimum width and gap checks are up to 2.4× faster on dense panels.
 - PNG and terminal renders are faster and no longer go through an SVG rasterizer.
 - The board-array overview in HTML reports is smaller and uses the same layer colours as layer renders.
