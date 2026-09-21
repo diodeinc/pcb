@@ -5,7 +5,7 @@ use serde::Serialize;
 use super::pdk::Pdk;
 use super::rules::{LimitValue, Rule};
 
-pub const REPORT_SCHEMA_VERSION: u32 = 1;
+pub const REPORT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize)]
 pub struct DfmReport {
@@ -23,6 +23,9 @@ pub struct DfmReport {
     pub summary: Summary,
     pub rules: Vec<RuleResult>,
     pub findings: Vec<Finding>,
+    /// Evidence that many sites reference by index instead of repeating, such
+    /// as the board profile every edge-clearance site of one board measures to.
+    pub shared_evidence: Vec<Evidence>,
     /// Full native artwork for external diagnostic viewers.
     pub scene: Scene,
 }
@@ -656,6 +659,10 @@ pub struct Evidence {
     /// witness points, and uncertainty remain the check's authoritative data.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display: Option<EvidenceDisplay>,
+    /// For `shared` evidence, the index of its record in the report's
+    /// `shared_evidence` table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared: Option<u32>,
 }
 
 /// Compact display geometry in the report's millimeter, Y-up frame. These
@@ -718,6 +725,18 @@ impl Evidence {
             role,
             kind: "bounds",
             bounding_box: Some(bounding_box.into()),
+            ..Self::default()
+        }
+    }
+
+    /// A reference to evidence held once in the report's shared table. Until
+    /// the engine builds that table, `index` is the check's own pool index.
+    pub fn shared(role: &'static str, index: u32, bounding_box: BBox) -> Self {
+        Self {
+            role,
+            kind: "shared",
+            bounding_box: Some(bounding_box.into()),
+            shared: Some(index),
             ..Self::default()
         }
     }

@@ -169,6 +169,7 @@ pub fn check(
         summary,
         rules: checked.rules,
         findings: checked.findings,
+        shared_evidence: checked.shared_evidence,
         scene,
     })
 }

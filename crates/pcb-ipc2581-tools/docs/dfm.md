@@ -500,7 +500,7 @@ A complete report has these fields:
   step, repeat indices, and transform into the checked frame; see
   [coordinates and topology](#coordinates-and-topology).
 - `coordinate_system`: the unit, axis convention, and origin for all report
-  geometry: `mm`, `x_right_y_up`, and `ipc_2581_design` in version 1.
+  geometry: `mm`, `x_right_y_up`, and `ipc_2581_design` in versions 1 and 2.
 - `summary`: rule counts by status and finding counts by severity and
   waiver state.
 - `rules`: one result per lowered rule. A direct limit uses its authored id; a
@@ -515,6 +515,8 @@ A complete report has these fields:
   `assumptions` lists profile defaults actually used while evaluating that
   rule, and is empty when no assumption was needed.
 - `findings`: violations in deterministic rule/location order.
+- `shared_evidence`: evidence records that sites reference by index rather
+  than repeat; see [findings](#findings).
 - `scene`: required native artwork for the complete checked layout; see
   [native scene](#native-scene).
 
@@ -579,6 +581,11 @@ consumer's machine to render or validate the report.
   fields; unused fields remain `null`. `paths` contains closed region rings or
   open paths, preserving the checked material's winding and holes. Optional
   `display` retains native constructions for rendering, as specified below.
+  Evidence of kind `shared` carries only its `role`, bounds, and `shared`, the
+  index of the complete record in the report's `shared_evidence` table. The
+  board profile that every hole- and slot-to-board-edge site of one board
+  measures to is shared this way, so a report grows with its findings rather
+  than with findings times the outline.
 - `sites` retain individual failing regions or layers with their measurement,
   `measurement_kind`, `witnesses`, uncertainty, bounds, layers, subjects, and
   evidence. Nonspatial findings use `sites: []`. Site bounds describe the
@@ -687,7 +694,9 @@ replaces the current load.
 
 ### Schema evolution
 
-Report and scene versions are independent; both currently use integer `1`.
+Report and scene versions are independent; the report uses integer `2` and the
+scene integer `1`. Report version 2 moved each edge-clearance site's
+`board_profile` region into the `shared_evidence` table.
 New fields and new `kind`, `role`, `status`, rule, and method values may be
 added within a version. Unknown optional fields can be ignored; unknown required
 semantics must produce an explicit unsupported state, never a guessed rendering

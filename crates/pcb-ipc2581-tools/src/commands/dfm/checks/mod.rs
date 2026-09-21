@@ -50,6 +50,7 @@ const COMPARISON_EPSILON_MM: f64 = 1e-6;
 pub(super) struct Results {
     pub(super) rules: Vec<RuleResult>,
     pub(super) findings: Vec<Finding>,
+    pub(super) shared_evidence: Vec<Evidence>,
     pub(super) waivers: Option<WaiverOutcome>,
 }
 
@@ -235,6 +236,7 @@ pub(super) fn run(
         );
     }
     let waiver_aliases = assign_ids(&mut results.findings, &annular_rules);
+    results.shared_evidence = share_evidence(&mut results.findings, design);
     for finding in &mut results.findings {
         let instance = finding
             .subjects
@@ -269,6 +271,32 @@ pub(super) fn run(
         }
     }
     Ok(results)
+}
+
+/// Build the report's shared-evidence table. A site names its board profile
+/// by outline pool index; the table holds each referenced profile once, in
+/// pool order, so report size follows the findings rather than findings times
+/// the outline every one of them measures to.
+fn share_evidence(findings: &mut [Finding], design: &Design) -> Vec<Evidence> {
+    fn references(findings: &mut [Finding]) -> impl Iterator<Item = &mut u32> {
+        findings
+            .iter_mut()
+            .flat_map(|finding| &mut finding.sites)
+            .flat_map(|site| &mut site.evidence)
+            .filter_map(|evidence| evidence.shared.as_mut())
+    }
+    let outlines = references(findings)
+        .map(|index| *index)
+        .collect::<std::collections::BTreeSet<_>>();
+    for index in references(findings) {
+        *index = outlines.range(..*index).count() as u32;
+    }
+    outlines
+        .into_iter()
+        .map(|index| {
+            drilled_board_edge_clearance::profile_evidence(&design.board_outlines[index as usize])
+        })
+        .collect()
 }
 
 /// The one verdict: a distance violates a minimum when it is certainly

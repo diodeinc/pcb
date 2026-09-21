@@ -107,6 +107,8 @@ export interface DfmReport {
   scene: DfmScene;
   summary: DfmSummary;
   findings: DfmFinding[];
+  /** Evidence that sites reference by `shared` index instead of repeating. */
+  shared_evidence: Array<Record<string, unknown>>;
   rules: Array<{ id: string; status: "pass" | "warning" | "fail" | "skipped"; [key: string]: unknown }>;
   waivers: null | { path: string; sha256: string; applied: number; expired: string[]; unmatched: string[] };
   [key: string]: unknown;
