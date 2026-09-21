@@ -183,8 +183,8 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
         let start = point(anchor);
         let endpoint = point(end);
         let chord = endpoint - start;
-        let length = chord.length();
-        if length <= f64::EPSILON {
+        // A chord back to its own anchor has no side for a vertex to be on.
+        if start == endpoint {
             return false;
         }
         (anchor + 1..end).all(|index| {

@@ -77,12 +77,17 @@ impl ContourSet {
 
     /// Regularized union: `self ∪ other`.
     pub fn union(&self, other: &Self) -> Result<Self, AccuracyError> {
-        let budget = self.resolution.meet(other.resolution).accuracy;
-        if self.is_empty() && self.uncertainty_mm == 0.0 {
-            return other.clone().rebudget(budget);
-        }
-        if other.is_empty() && other.uncertainty_mm == 0.0 {
-            return self.clone().rebudget(budget);
+        // An empty operand that lost nothing on its way here leaves the
+        // other's rings as they are, at the resolution the two share.
+        for (empty, kept) in [(self, other), (other, self)] {
+            if empty.is_empty() && empty.uncertainty_mm == 0.0 {
+                return Self::from_regularized(
+                    kept.rings.clone(),
+                    self.resolution.meet(other.resolution),
+                    kept.uncertainty_mm,
+                )
+                .checked();
+            }
         }
         self.boolean(other, OverlayRule::Union)
     }
