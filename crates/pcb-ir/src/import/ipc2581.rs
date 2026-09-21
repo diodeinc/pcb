@@ -142,7 +142,8 @@ pub const COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME: &str =
     "diode.copper_balance_void_corner_radius_mm";
 pub const COPPER_BALANCE_LATTICE_VALUE: &str = "staggered-hex-v1";
 
-fn primary_step<'a>(ipc: &Ipc2581, steps: &'a [Step]) -> Option<&'a Step> {
+/// The job step named by Content/StepRef, falling back to CadData order.
+pub fn primary_step<'a>(ipc: &Ipc2581, steps: &'a [Step]) -> Option<&'a Step> {
     ipc.content()
         .step_refs
         .first()
@@ -724,7 +725,8 @@ fn span_for_layer(layer: &Layer, domain: FeatureDomain) -> FeatureSpan<Symbol> {
     }
 }
 
-fn side_for_layer(side: Option<ipc2581::types::ecad::Side>) -> crate::dialects::Side {
+/// Map an IPC layer side to the IR side vocabulary.
+pub fn side_for_layer(side: Option<ipc2581::types::ecad::Side>) -> crate::dialects::Side {
     match side {
         Some(ipc2581::types::ecad::Side::Top) => crate::dialects::Side::Top,
         Some(ipc2581::types::ecad::Side::Bottom) => crate::dialects::Side::Bottom,
