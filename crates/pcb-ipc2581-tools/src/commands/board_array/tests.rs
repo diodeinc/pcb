@@ -179,12 +179,10 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
 
     let input = board_fixture_with_mask_bbox_mm(13.0, 10.0);
     let source = Ipc2581::parse(&input).unwrap();
-    let (options, validation_mode, panelization) =
-        auto_board_array_options(&source, None, resolution).unwrap();
+    let (options, panelization) = auto_board_array_options(&source, None, resolution).unwrap();
     let spec = build_board_array_spec(
         &source,
         &options,
-        validation_mode,
         panelization,
         Separation::VScore,
         resolution,
@@ -250,17 +248,9 @@ fn board_array_balancing_solves_every_copper_layer() {
     let input = two_layer_board_xml();
     let ipc = Ipc2581::parse(&input).unwrap();
     let sheet = Some(AutoSheetSize::A7);
-    let (options, validation_mode, panelization) =
-        auto_board_array_options(&ipc, sheet, resolution).unwrap();
-    let spec = build_board_array_spec(
-        &ipc,
-        &options,
-        validation_mode,
-        panelization,
-        Separation::VScore,
-        resolution,
-    )
-    .unwrap();
+    let (options, panelization) = auto_board_array_options(&ipc, sheet, resolution).unwrap();
+    let spec = build_board_array_spec(&ipc, &options, panelization, Separation::VScore, resolution)
+        .unwrap();
     let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let balance =
@@ -414,17 +404,9 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
     // The smallest sheet the board fits: fiducial scoping does not depend on
     // how much panel surrounds it.
     let sheet = Some(AutoSheetSize::A6);
-    let (options, validation_mode, panelization) =
-        auto_board_array_options(&ipc, sheet, resolution).unwrap();
-    let spec = build_board_array_spec(
-        &ipc,
-        &options,
-        validation_mode,
-        panelization,
-        Separation::VScore,
-        resolution,
-    )
-    .unwrap();
+    let (options, panelization) = auto_board_array_options(&ipc, sheet, resolution).unwrap();
+    let spec = build_board_array_spec(&ipc, &options, panelization, Separation::VScore, resolution)
+        .unwrap();
     let provisional_xml = write_board_array_xml(input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let layout = geometry::extract_layout(&provisional).unwrap();
@@ -953,7 +935,6 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
     let mut spec = build_board_array_spec(
         &ipc,
         &options,
-        BoardArrayValidationMode::Manual,
         BoardArrayPanelizationMetadata {
             mode: BoardArrayPanelizationMode::Manual,
             sheet: None,
@@ -1084,7 +1065,6 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     let mut spec = build_board_array_spec(
         &ipc,
         &options,
-        BoardArrayValidationMode::Manual,
         BoardArrayPanelizationMetadata {
             mode: BoardArrayPanelizationMode::Manual,
             sheet: None,
@@ -1125,8 +1105,13 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         .iter()
         .map(|set| set.sites.len())
         .sum::<usize>();
-    spec.generated_geometry
-        .add_balance_layer(GeneratedFeatureScope::Array, "TOP", features);
+    let (templates, features) = features.into_layer_features("TOP");
+    spec.generated_geometry.user_entries = templates;
+    spec.generated_geometry.layer_features.extend(
+        features
+            .into_iter()
+            .map(|feature| (GeneratedFeatureScope::Array, feature)),
+    );
     assert!(matches!(
         balance.solution.mode,
         DenseCopperBalanceMode::Perforated { .. }
@@ -2750,7 +2735,6 @@ fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
     let spec = build_board_array_spec(
         &ipc,
         &options,
-        BoardArrayValidationMode::Manual,
         BoardArrayPanelizationMetadata {
             mode: BoardArrayPanelizationMode::Manual,
             sheet: None,

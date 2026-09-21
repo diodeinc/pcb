@@ -23,7 +23,7 @@ use ipc2581::types::{
     Units,
     ecad::{
         Fiducial, FiducialKind as IpcFiducialKind, FiducialShape, Hole, LayerFunction, Line,
-        PlatingStatus, Polarity, SetFeature, Side, StepType,
+        PlatingStatus, Polarity, SetFeature, Side,
     },
     primitives::{
         Circle, LineEnd, LineProperty, Point as IpcPoint, PolyStep, PolyStepCurve, PolyStepSegment,
@@ -242,13 +242,6 @@ pub struct BoardArrayCreation {
     pub copper_balance: Option<CopperBalanceReport>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BoardArrayValidationMode {
-    Manual,
-    Auto,
-    AutoMinimumPanel,
-}
-
 pub type BoardMarginMm = super::EdgeInsetsMm;
 
 impl BoardMarginMm {
@@ -388,28 +381,6 @@ impl BoardArrayGeneratedGeometry {
         ));
     }
 
-    /// Attach one balanced layer: its ordered generated feature sets and the
-    /// shared templates the void sets reference.
-    fn add_balance_layer(
-        &mut self,
-        scope: GeneratedFeatureScope,
-        layer_name: &str,
-        sets: crate::copper_balance::BalanceFeatureSets,
-    ) {
-        let (templates, features) = sets.into_layer_features(layer_name);
-        self.layer_features
-            .extend(features.into_iter().map(|feature| (scope, feature)));
-        for template in templates {
-            if !self
-                .user_entries
-                .iter()
-                .any(|entry| entry.id == template.id)
-            {
-                self.user_entries.push(template);
-            }
-        }
-    }
-
     fn referenced_layer_names(&self) -> impl Iterator<Item = &str> {
         self.layers.iter().map(|layer| layer.name.as_str()).chain(
             self.layer_features
@@ -471,9 +442,12 @@ pub fn execute(
 ) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
     let creation = create_board_array(&content, options, balance_copper, separation, resolution)?;
-    print_copper_balance_summary(creation.copper_balance.as_ref());
-    write_board_array_output(output, &creation.xml)?;
-    Ok(())
+    write_panel_output(
+        output,
+        &creation.xml,
+        "board array",
+        creation.copper_balance.as_ref(),
+    )
 }
 
 #[cfg(feature = "cli")]
@@ -488,30 +462,35 @@ pub fn execute_auto(
     let content = file_utils::load_ipc_file(input)?;
     let creation =
         create_auto_board_array(&content, sheet, balance_copper, separation, resolution)?;
-    print_copper_balance_summary(creation.copper_balance.as_ref());
-    write_board_array_output(output, &creation.xml)?;
-    Ok(())
+    write_panel_output(
+        output,
+        &creation.xml,
+        "board array",
+        creation.copper_balance.as_ref(),
+    )
 }
 
+/// Report the balance, then write a created panel to `output` or stdout.
 #[cfg(feature = "cli")]
-fn print_copper_balance_summary(report: Option<&CopperBalanceReport>) {
-    if let Some(report) = report {
-        for line in report.summary_lines() {
-            eprintln!("  {line}");
-        }
+pub(crate) fn write_panel_output(
+    output: &Path,
+    xml: &str,
+    what: &str,
+    copper_balance: Option<&CopperBalanceReport>,
+) -> Result<()> {
+    for line in copper_balance
+        .into_iter()
+        .flat_map(|report| report.summary_lines())
+    {
+        eprintln!("  {line}");
     }
-}
-
-#[cfg(feature = "cli")]
-fn write_board_array_output(output: &Path, content: &str) -> Result<()> {
     if output.as_os_str() == "-" {
-        pcb_ui::write_stdout(|stdout| stdout.write_all(content.as_bytes()))?;
-        eprintln!("✓ Created IPC-2581 board array on stdout");
+        pcb_ui::write_stdout(|stdout| stdout.write_all(xml.as_bytes()))?;
+        eprintln!("✓ Created IPC-2581 {what} on stdout");
     } else {
-        file_utils::save_ipc_file(output, content)?;
-        eprintln!("✓ Created IPC-2581 board array at {}", output.display());
+        file_utils::save_ipc_file(output, xml)?;
+        eprintln!("✓ Created IPC-2581 {what} at {}", output.display());
     }
-
     Ok(())
 }
 
@@ -527,7 +506,6 @@ pub fn create_board_array(
     let spec = build_board_array_spec(
         &ipc,
         options,
-        BoardArrayValidationMode::Manual,
         BoardArrayPanelizationMetadata {
             mode: BoardArrayPanelizationMode::Manual,
             sheet: None,
@@ -564,16 +542,8 @@ pub fn create_auto_board_array(
     resolution: Resolution,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let (options, validation_mode, panelization) =
-        auto_board_array_options(&ipc, sheet, resolution)?;
-    let spec = build_board_array_spec(
-        &ipc,
-        &options,
-        validation_mode,
-        panelization,
-        separation,
-        resolution,
-    )?;
+    let (options, panelization) = auto_board_array_options(&ipc, sheet, resolution)?;
+    let spec = build_board_array_spec(&ipc, &options, panelization, separation, resolution)?;
     write_board_array_creation(xml, spec, balance_copper, resolution)
 }
 
@@ -591,11 +561,7 @@ fn auto_board_array_options(
     ipc: &Ipc2581,
     sheet: Option<AutoSheetSize>,
     resolution: Resolution,
-) -> Result<(
-    BoardArrayCreateOptions,
-    BoardArrayValidationMode,
-    BoardArrayPanelizationMetadata,
-)> {
+) -> Result<(BoardArrayCreateOptions, BoardArrayPanelizationMetadata)> {
     let board = primary_board_layout(ipc)?;
     let board_margin = auto_board_margin(ipc, board.bbox, resolution)?;
     let board_width = board.bbox.width();
@@ -615,12 +581,10 @@ fn auto_board_array_options(
     Ok(match plan {
         Some((plan, mode)) => (
             options_for_auto_plan(plan),
-            BoardArrayValidationMode::Auto,
             BoardArrayPanelizationMetadata::for_auto_plan(mode, plan),
         ),
         None => (
             minimum_single_board_auto_options(board_margin),
-            BoardArrayValidationMode::AutoMinimumPanel,
             BoardArrayPanelizationMetadata {
                 mode: BoardArrayPanelizationMode::AutoMinimumPanel,
                 sheet: None,
@@ -778,14 +742,13 @@ fn write_board_array_creation(
         resolution.tolerance_mm,
     )?;
     let copper_balance = balance.report();
-
-    for layer in balance.layers {
-        spec.generated_geometry.add_balance_layer(
-            GeneratedFeatureScope::Array,
-            &layer.layer_name,
-            layer.features,
-        );
-    }
+    let (templates, features) = balance::generated_features(balance);
+    spec.generated_geometry.user_entries = templates;
+    spec.generated_geometry.layer_features.extend(
+        features
+            .into_iter()
+            .map(|feature| (GeneratedFeatureScope::Array, feature)),
+    );
 
     Ok(BoardArrayCreation {
         xml: write_board_array_xml(xml, &spec)?,
@@ -802,8 +765,12 @@ struct PrimaryBoardLayout {
 fn primary_board_layout(ipc: &Ipc2581) -> Result<PrimaryBoardLayout> {
     let layout = geometry::extract_layout(ipc)?;
     let (_, root) = root_step(&layout).context("IPC-2581 board step has no layout root")?;
-    if root.kind != LayoutStepKind::Board {
-        bail!("primary IPC-2581 layout root is not a board step");
+    match root.kind {
+        LayoutStepKind::Board => {}
+        LayoutStepKind::Panel => bail!(
+            "primary IPC-2581 step is already a board array; board array create expects a board step"
+        ),
+        _ => bail!("primary IPC-2581 step is not a board step"),
     }
     if root.bbox.is_empty() {
         bail!("primary IPC-2581 board step has no Profile outline");
@@ -824,26 +791,14 @@ fn primary_board_layout(ipc: &Ipc2581) -> Result<PrimaryBoardLayout> {
 fn build_board_array_spec(
     ipc: &Ipc2581,
     options: &BoardArrayCreateOptions,
-    validation_mode: BoardArrayValidationMode,
     panelization: BoardArrayPanelizationMetadata,
     separation: Separation,
     resolution: Resolution,
 ) -> Result<BoardArraySpec> {
-    validate_options(options, validation_mode, separation)?;
+    let mode = panelization.mode;
+    validate_options(options, mode, separation)?;
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let primary_step = crate::steps::primary_step(ipc, &ecad.cad_data.steps)
-        .context("IPC-2581 ECAD section has no Step")?;
-
-    if is_panel_step(primary_step) {
-        bail!(
-            "primary IPC-2581 step is already a board array; board array create expects a board step"
-        );
-    }
-    if !is_board_step(primary_step) {
-        bail!("primary IPC-2581 step is not a board step");
-    }
-
     let root = primary_board_layout(ipc)?;
     let board_width = root.bbox.width();
     let board_height = root.bbox.height();
@@ -864,7 +819,7 @@ fn build_board_array_spec(
         + rows as f64 * board_margin.vertical_gap()
         + edge_rail.bottom
         + edge_rail.top;
-    validate_array_dimensions(array_width, array_height, validation_mode)?;
+    validate_array_dimensions(array_width, array_height, mode)?;
     let board_repeat_x = board_margin.left - root.bbox.min.x;
     let board_repeat_y = board_margin.bottom - root.bbox.min.y;
 
@@ -979,7 +934,7 @@ fn build_board_array_spec(
         array_width_mm: array_width,
         array_height_mm: array_height,
     };
-    if validation_mode != BoardArrayValidationMode::Manual
+    if mode != BoardArrayPanelizationMode::Manual
         && board_array_tooling_orientation(&tooling_spec).is_none()
     {
         bail!(
@@ -1059,7 +1014,7 @@ fn array_stock(width_mm: f64, height_mm: f64, resolution: Resolution) -> Result<
 
 fn validate_options(
     options: &BoardArrayCreateOptions,
-    validation_mode: BoardArrayValidationMode,
+    mode: BoardArrayPanelizationMode,
     separation: Separation,
 ) -> Result<()> {
     validate_u32_range("columns", options.columns, 1, 10)?;
@@ -1068,16 +1023,15 @@ fn validate_options(
         validate_mm_min(field, value, 0.0)?;
     }
     for (field, value) in options.edge_rail_mm.edge_rail_sides() {
-        match validation_mode {
-            BoardArrayValidationMode::Manual => validate_mm_range(
+        match mode {
+            BoardArrayPanelizationMode::Manual => validate_mm_range(
                 field,
                 value,
                 MIN_EDGE_RAIL_WIDTH_MM,
                 MAX_MANUAL_EDGE_RAIL_WIDTH_MM,
             )?,
-            BoardArrayValidationMode::Auto | BoardArrayValidationMode::AutoMinimumPanel => {
-                validate_mm_min(field, value, MIN_EDGE_RAIL_WIDTH_MM)?
-            }
+            // Automatic rails take up whatever the sheet leaves over.
+            _ => validate_mm_min(field, value, MIN_EDGE_RAIL_WIDTH_MM)?,
         }
     }
     match separation {
@@ -1165,18 +1119,18 @@ fn validate_zero_or_min_mm(field: &'static str, value: f64, min: f64) -> Result<
 fn validate_array_dimensions(
     width_mm: f64,
     height_mm: f64,
-    validation_mode: BoardArrayValidationMode,
+    mode: BoardArrayPanelizationMode,
 ) -> Result<()> {
-    validate_array_dimension("width", width_mm, validation_mode)?;
-    validate_array_dimension("height", height_mm, validation_mode)
+    validate_array_dimension("width", width_mm, mode)?;
+    validate_array_dimension("height", height_mm, mode)
 }
 
 fn validate_array_dimension(
     axis: &'static str,
     value: f64,
-    validation_mode: BoardArrayValidationMode,
+    mode: BoardArrayPanelizationMode,
 ) -> Result<()> {
-    if validation_mode == BoardArrayValidationMode::AutoMinimumPanel {
+    if mode == BoardArrayPanelizationMode::AutoMinimumPanel {
         return validate_minimum_panel_array_dimension(axis, value);
     }
 
@@ -1210,16 +1164,6 @@ fn validate_minimum_panel_array_dimension(axis: &'static str, value: f64) -> Res
         }
         .into())
     }
-}
-
-fn is_panel_step(step: &ipc2581::types::ecad::Step) -> bool {
-    step.step_type == Some(StepType::Pallet)
-        || (step.step_type.is_none() && !step.step_repeats.is_empty())
-}
-
-fn is_board_step(step: &ipc2581::types::ecad::Step) -> bool {
-    step.step_type == Some(StepType::Board)
-        || (step.step_type.is_none() && step.step_repeats.is_empty())
 }
 
 fn unique_name(existing_names: &HashSet<String>, base: &str) -> String {
@@ -1326,7 +1270,7 @@ fn reserve_unique_name(used_names: &mut HashSet<String>, base: &str) -> String {
 pub mod balance;
 mod tooling;
 mod vcut;
-mod xml;
+pub(crate) mod xml;
 
 #[cfg(test)]
 mod tests;

@@ -253,22 +253,12 @@ pub fn execute(
     }
 
     let creation = create_fab_panel(&source_xml, &occurrences, spec, balance_copper, resolution)?;
-    if let Some(report) = &creation.copper_balance {
-        for line in report.summary_lines() {
-            eprintln!("  {line}");
-        }
-    }
-    if output.as_os_str() == "-" {
-        pcb_ui::write_stdout(|stdout| stdout.write_all(creation.xml.as_bytes()))?;
-        eprintln!("✓ Created IPC-2581 fabrication panel on stdout");
-    } else {
-        file_utils::save_ipc_file(output, &creation.xml)?;
-        eprintln!(
-            "✓ Created IPC-2581 fabrication panel at {}",
-            output.display()
-        );
-    }
-    Ok(())
+    crate::commands::board_array::write_panel_output(
+        output,
+        &creation.xml,
+        "fabrication panel",
+        creation.copper_balance.as_ref(),
+    )
 }
 
 #[cfg(test)]
@@ -384,8 +374,7 @@ pub fn create_fab_panel(
         &shared_stackup_layers,
         spec,
     )?;
-    let mut templates = Vec::new();
-    let (balance_features, copper_balance) = if balance_copper {
+    let (templates, balance_features, copper_balance) = if balance_copper {
         let parsed = Ipc2581::parse(&provisional)
             .context("Failed to parse provisional IPC-2581 fabrication panel")?;
         let balance = balance::generate_automatic_fab_panel_copper_balance(
@@ -394,27 +383,11 @@ pub fn create_fab_panel(
             resolution.tolerance_mm,
         )?;
         let report = balance.report();
-        let features = balance
-            .layers
-            .into_iter()
-            .flat_map(|layer| {
-                let (layer_templates, features) =
-                    layer.features.into_layer_features(&layer.layer_name);
-                for template in layer_templates {
-                    if !templates.iter().any(
-                        |entry: &crate::copper_balance::BalanceVoidTemplate| {
-                            entry.id == template.id
-                        },
-                    ) {
-                        templates.push(template);
-                    }
-                }
-                features
-            })
-            .collect::<Vec<_>>();
-        (features, Some(report))
+        let (templates, features) =
+            crate::commands::board_array::balance::generated_features(balance);
+        (templates, features, Some(report))
     } else {
-        (Vec::new(), None)
+        (Vec::new(), Vec::new(), None)
     };
 
     let units = sources

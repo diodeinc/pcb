@@ -5,7 +5,9 @@
 //! edits via [`ipc2581::edit`], leaving the rest of the file untouched.
 
 use super::*;
-use crate::generated::{GeneratedNameState, write_generated_layer_feature};
+use crate::generated::{
+    GeneratedNameState, write_generated_layer_feature, write_nonstandard_attribute,
+};
 use ipc2581::XmlWriter;
 use ipc2581::edit::{Doc, Edit};
 use ipc2581::write;
@@ -246,27 +248,15 @@ pub(super) fn write_margin_metadata(writer: &mut XmlWriter, prefix: &str, margin
 }
 
 pub(super) fn write_metadata_integer(writer: &mut XmlWriter, name: &str, value: u32) {
-    write_metadata_attribute(writer, name, "INTEGER", &value.to_string());
+    write_nonstandard_attribute(writer, name, "INTEGER", &value.to_string());
 }
 
 pub(super) fn write_metadata_double(writer: &mut XmlWriter, name: &str, value: f64) {
-    write_metadata_attribute(writer, name, "DOUBLE", &fmt_num(value));
+    write_nonstandard_attribute(writer, name, "DOUBLE", &fmt_num(value));
 }
 
 pub(super) fn write_metadata_string(writer: &mut XmlWriter, name: &str, value: &str) {
-    write_metadata_attribute(writer, name, "STRING", value);
-}
-
-pub(super) fn write_metadata_attribute(
-    writer: &mut XmlWriter,
-    name: &str,
-    property_type: &str,
-    value: &str,
-) {
-    writer.empty_element(
-        "NonstandardAttribute",
-        &[("name", name), ("type", property_type), ("value", value)],
-    );
+    write_nonstandard_attribute(writer, name, "STRING", value);
 }
 
 pub(super) fn write_generated_layer_features(
@@ -286,7 +276,7 @@ pub(super) fn write_generated_layer_features(
     Ok(())
 }
 
-pub(super) fn rectangle_polygon(width_mm: f64, height_mm: f64) -> Polygon {
+pub(crate) fn rectangle_polygon(width_mm: f64, height_mm: f64) -> Polygon {
     Polygon {
         begin: IpcPoint { x: 0.0, y: 0.0 },
         steps: vec![
@@ -395,36 +385,53 @@ pub(super) fn round_nonplated_hole_features(
         .collect()
 }
 
-pub(super) fn write_array_step_repeat(writer: &mut XmlWriter, spec: &BoardArraySpec) {
+/// One `StepRepeat` of `step_ref`: `count` placements from `origin_mm`, a
+/// `pitch_mm` apart, unmirrored.
+pub(crate) fn write_step_repeat(
+    writer: &mut XmlWriter,
+    units: Units,
+    step_ref: &str,
+    origin_mm: (f64, f64),
+    count: (u32, u32),
+    pitch_mm: (f64, f64),
+    angle: &str,
+) {
     writer.empty_element(
         "StepRepeat",
         &[
-            ("stepRef", spec.board_cell_name.as_str()),
-            ("x", fmt_units(spec.array_repeat_x_mm, spec.units).as_str()),
-            ("y", fmt_units(spec.array_repeat_y_mm, spec.units).as_str()),
-            ("nx", spec.columns.to_string().as_str()),
-            ("ny", spec.rows.to_string().as_str()),
-            ("dx", fmt_units(spec.pitch_x_mm, spec.units).as_str()),
-            ("dy", fmt_units(spec.pitch_y_mm, spec.units).as_str()),
-            ("angle", "0.00"),
+            ("stepRef", step_ref),
+            ("x", fmt_units(origin_mm.0, units).as_str()),
+            ("y", fmt_units(origin_mm.1, units).as_str()),
+            ("nx", count.0.to_string().as_str()),
+            ("ny", count.1.to_string().as_str()),
+            ("dx", fmt_units(pitch_mm.0, units).as_str()),
+            ("dy", fmt_units(pitch_mm.1, units).as_str()),
+            ("angle", angle),
             ("mirror", "false"),
         ],
     );
 }
 
+pub(super) fn write_array_step_repeat(writer: &mut XmlWriter, spec: &BoardArraySpec) {
+    write_step_repeat(
+        writer,
+        spec.units,
+        &spec.board_cell_name,
+        (spec.array_repeat_x_mm, spec.array_repeat_y_mm),
+        (spec.columns, spec.rows),
+        (spec.pitch_x_mm, spec.pitch_y_mm),
+        "0.00",
+    );
+}
+
 pub(super) fn write_board_cell_step_repeat(writer: &mut XmlWriter, spec: &BoardArraySpec) {
-    writer.empty_element(
-        "StepRepeat",
-        &[
-            ("stepRef", spec.board_name.as_str()),
-            ("x", fmt_units(spec.board_repeat_x_mm, spec.units).as_str()),
-            ("y", fmt_units(spec.board_repeat_y_mm, spec.units).as_str()),
-            ("nx", "1"),
-            ("ny", "1"),
-            ("dx", "0"),
-            ("dy", "0"),
-            ("angle", "0.00"),
-            ("mirror", "false"),
-        ],
+    write_step_repeat(
+        writer,
+        spec.units,
+        &spec.board_name,
+        (spec.board_repeat_x_mm, spec.board_repeat_y_mm),
+        (1, 1),
+        (0.0, 0.0),
+        "0.00",
     );
 }

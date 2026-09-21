@@ -6,8 +6,12 @@ use ipc2581::types::Units;
 use ipc2581::{Ipc2581, XmlWriter};
 
 use super::{FabPanelSpec, SourcePanel};
+use crate::commands::board_array::xml::{rectangle_polygon, write_step_repeat};
 use crate::commands::fab_panel::packing::Placement;
-use crate::generated::{GeneratedLayerFeature, GeneratedNameState, write_generated_layer_feature};
+use crate::generated::{
+    GeneratedLayerFeature, GeneratedNameState, units_attr, write_generated_layer_feature,
+    write_nonstandard_attribute as write_metadata,
+};
 use crate::steps::FAB_PANEL_STEP_NAME;
 
 const FAB_ROLE_ID: &str = "fab_panel_role";
@@ -211,7 +215,11 @@ pub(super) fn render_fab_panel_xml(
     );
     write_content(&mut writer, &docs, shared_stackup_layers)?;
     write_logistic_header(&mut writer);
-    write_history_record(&mut writer);
+    crate::utils::history::write_history_record(
+        &mut writer,
+        &jiff::Timestamp::now().to_string(),
+        "Created fabrication panel",
+    );
     write_ecad(
         &mut writer,
         sources,
@@ -378,39 +386,6 @@ fn write_logistic_header(writer: &mut XmlWriter) {
     writer.end_element("LogisticHeader");
 }
 
-fn write_history_record(writer: &mut XmlWriter) {
-    let now = jiff::Timestamp::now().to_string();
-    writer.start_element(
-        "HistoryRecord",
-        &[
-            ("number", "1"),
-            ("origination", now.as_str()),
-            ("software", "pcb"),
-            ("lastChange", now.as_str()),
-        ],
-    );
-    writer.start_element(
-        "FileRevision",
-        &[
-            ("fileRevisionId", "1"),
-            ("comment", "Created fabrication panel"),
-            ("label", ""),
-        ],
-    );
-    writer.start_element(
-        "SoftwarePackage",
-        &[
-            ("name", "pcb"),
-            ("vendor", "Diode"),
-            ("revision", env!("CARGO_PKG_VERSION")),
-        ],
-    );
-    writer.empty_element("Certification", &[("certificationStatus", "SELFTEST")]);
-    writer.end_element("SoftwarePackage");
-    writer.end_element("FileRevision");
-    writer.end_element("HistoryRecord");
-}
-
 fn write_ecad(
     writer: &mut XmlWriter,
     sources: &[SourcePanel],
@@ -547,59 +522,46 @@ fn write_fab_step(
     );
 
     ipc2581::write::location(writer, "Datum", 0.0, 0.0, units);
-    writer.start_element("Profile", &[]);
-    writer.start_element("Polygon", &[]);
-    ipc2581::write::location(writer, "PolyBegin", 0.0, 0.0, units);
-    ipc2581::write::location(writer, "PolyStepSegment", output.max.x, 0.0, units);
-    ipc2581::write::location(writer, "PolyStepSegment", output.max.x, output.max.y, units);
-    ipc2581::write::location(writer, "PolyStepSegment", 0.0, output.max.y, units);
-    writer.end_element("Polygon");
-    writer.end_element("Profile");
+    ipc2581::write::profile(
+        writer,
+        units,
+        &rectangle_polygon(output.max.x, output.max.y),
+    );
 
     for placement in placements {
         let source_index = occurrences[placement.item_index];
         let source = &sources[source_index];
         let target_x_mm = output_usable.min.x + f64::from(placement.x) / 1_000.0;
         let target_y_mm = output_usable.min.y + f64::from(placement.y) / 1_000.0;
-        let (x_mm, y_mm, angle) = if placement.rotated {
+        let (origin_mm, angle) = if placement.rotated {
             (
-                target_x_mm + source.bbox.max.y,
-                target_y_mm - source.bbox.min.x,
+                (
+                    target_x_mm + source.bbox.max.y,
+                    target_y_mm - source.bbox.min.x,
+                ),
                 "90",
             )
         } else {
             (
-                target_x_mm - source.bbox.min.x,
-                target_y_mm - source.bbox.min.y,
+                (
+                    target_x_mm - source.bbox.min.x,
+                    target_y_mm - source.bbox.min.y,
+                ),
                 "0",
             )
         };
-        let x = ipc2581::write::fmt_units(x_mm, units);
-        let y = ipc2581::write::fmt_units(y_mm, units);
-        writer.empty_element(
-            "StepRepeat",
-            &[
-                ("stepRef", source.root_step_name.as_str()),
-                ("x", x.as_str()),
-                ("y", y.as_str()),
-                ("nx", "1"),
-                ("ny", "1"),
-                ("dx", "0"),
-                ("dy", "0"),
-                ("angle", angle),
-                ("mirror", "false"),
-            ],
+        write_step_repeat(
+            writer,
+            units,
+            &source.root_step_name,
+            origin_mm,
+            (1, 1),
+            (0.0, 0.0),
+            angle,
         );
     }
     writer.end_element("Step");
     Ok(())
-}
-
-fn write_metadata(writer: &mut XmlWriter, name: &str, property_type: &str, value: &str) {
-    writer.empty_element(
-        "NonstandardAttribute",
-        &[("name", name), ("type", property_type), ("value", value)],
-    );
 }
 
 fn cad_header<'a>(doc: &'a Doc<'a>) -> Result<Node> {
@@ -625,15 +587,6 @@ fn children_named<'a>(doc: &'a Doc<'a>, parent: Node, name: &'a str) -> Vec<Node
         .into_iter()
         .filter(|child| doc.name(*child) == name)
         .collect()
-}
-
-fn units_attr(units: Units) -> &'static str {
-    match units {
-        Units::Millimeter => "MILLIMETER",
-        Units::Inch => "INCH",
-        Units::Micron => "MICRON",
-        Units::Mils => "MILS",
-    }
 }
 
 #[cfg(test)]

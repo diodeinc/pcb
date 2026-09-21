@@ -85,17 +85,7 @@ pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
         }
         None => {
             let mut writer = XmlWriter::new();
-            writer.start_element(
-                "HistoryRecord",
-                &[
-                    ("number", "1"),
-                    ("origination", now.as_str()),
-                    ("software", "pcb"),
-                    ("lastChange", now.as_str()),
-                ],
-            );
-            write_file_revision(&mut writer, 1, comment);
-            writer.end_element("HistoryRecord");
+            write_history_record(&mut writer, &now, comment);
             // Per the schema, HistoryRecord follows Content and LogisticHeader.
             let anchor = doc
                 .children(root)
@@ -110,6 +100,22 @@ pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
     };
 
     Ok(edits)
+}
+
+/// The first HistoryRecord of a document pcb originates at `now`, its one
+/// FileRevision recording `comment`.
+pub fn write_history_record(writer: &mut XmlWriter, now: &str, comment: &str) {
+    writer.start_element(
+        "HistoryRecord",
+        &[
+            ("number", "1"),
+            ("origination", now),
+            ("software", "pcb"),
+            ("lastChange", now),
+        ],
+    );
+    write_file_revision(writer, 1, comment);
+    writer.end_element("HistoryRecord");
 }
 
 /// Attributes for expanding a childless HistoryRecord: number stays "1",

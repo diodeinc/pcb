@@ -5,19 +5,18 @@
 //! immutable. The fabrication-panel step adds no per-layer geometry of its
 //! own, so one certified safe region serves the whole copper stack.
 
-use anyhow::{Context, Result, bail};
-use pcb_ir::dialects::ipc::ArtworkScope;
-use pcb_ir::dialects::ipc::{
-    BalancingRegionOptions, board_array_balancing_region, collect_fab_panel_balancing_input,
-};
+use anyhow::{Context, Result};
+use pcb_ir::dialects::ipc::collect_fab_panel_balancing_input;
 use pcb_ir::geom::Resolution;
-use pcb_ir::geom::copper_balance::{DenseCopperBalanceProfile, map_layers};
+use pcb_ir::geom::copper_balance::DenseCopperBalanceProfile;
 use pcb_ir::geom::{BBox, ContourSet};
 use pcb_ir::import::ipc2581::import_design;
 
+use crate::commands::board_array::balance::{
+    certified_safe_region, existing_copper, prepared_layer,
+};
 use crate::copper_balance::{
-    CERTIFICATE_AREA_TOLERANCE_MM2, CopperBalancePlan, PreparedCopperLayer,
-    physical_copper_stack_weights, solve_copper_balance,
+    CopperBalancePlan, physical_copper_stack_weights, solve_copper_balance,
 };
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
@@ -49,27 +48,13 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
     let mut input = collect_fab_panel_balancing_input(usable_region.clone(), &fabrication_profile)
         .context("failed to collect fabrication-panel balancing obstacles")?;
     let footprints = input.board_footprints.clone();
-    let footprint_area_mm2 = footprints.area();
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let layer_names = crate::layers::copper_layers(ecad)
         .iter()
         .map(|layer| ipc.resolve(layer.name).to_string())
         .collect::<Vec<_>>();
-    let extract = |layer_name: &String| {
-        imported
-            .composed_layer_image(
-                imported
-                    .layer_id(layer_name)
-                    .context("missing copper layer")?,
-                ArtworkScope::ArrayFlattened,
-                resolution,
-            )
-            .and_then(|image| Ok((layer_name.clone(), image.intersection(&usable_region)?)))
-    };
-    let copper_images = map_layers(&layer_names, extract)
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+    let copper_images = existing_copper(&imported, &layer_names, &usable_region, resolution)?;
     // Copper found outside the placed panels joins the shared obstacle set,
     // so unexpected overhang shrinks the certified safe region for every
     // layer instead of failing the solve. Each layer keeps its own overhang:
@@ -77,56 +62,39 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
     // though no generated copper may be placed there.
     let stray_copper = copper_images
         .iter()
-        .map(|(_, image)| image.difference(&footprints))
+        .map(|image| image.difference(&footprints))
         .collect::<Result<Vec<_>, _>>()?;
     for stray in &stray_copper {
         input.support_features = input.support_features.union(stray)?;
     }
 
-    let balancing_region = board_array_balancing_region(&input, BalancingRegionOptions::default())
-        .context("failed to compute fabrication-panel balancing region")?;
-    if !balancing_region
-        .certificate
-        .passes(CERTIFICATE_AREA_TOLERANCE_MM2)
-    {
-        bail!("computed fabrication-panel balancing region failed clearance certification");
-    }
-    let safe_region = balancing_region.safe_region;
-
-    // The gutters the solver may fill, plus the panels whose density set the
-    // target. Everything else inside the usable region — clearance around each
-    // placed panel, material removal, gaps too narrow for a void — can never
-    // hold generated copper and so stays out of the density denominator.
-    let panel_domain = footprints.union(&safe_region)?;
+    // The gutters the solver may fill. Everything else inside the usable
+    // region — clearance around each placed panel, material removal, gaps too
+    // narrow for a void — can never hold generated copper and so stays out of
+    // every layer's density domain.
+    let safe_region = certified_safe_region(&input, "the fabrication panel")?;
 
     let stack_weights = physical_copper_stack_weights(ipc);
-    let stack_weights_available = stack_weights.is_some();
-    let prepared = copper_images
-        .into_iter()
-        .zip(stray_copper)
-        .map(|((layer_name, existing_copper), stray)| {
-            let target_density = (existing_copper.intersection(&footprints)?.area()
-                / footprint_area_mm2)
-                .clamp(0.0, 1.0);
-            let stack_weight_mm2 = stack_weights
-                .as_ref()
-                .and_then(|weights| weights.get(&layer_name).copied())
-                .unwrap_or(0.0);
-            Ok(PreparedCopperLayer {
+    let prepared = layer_names
+        .iter()
+        .zip(copper_images)
+        .zip(&stray_copper)
+        .map(|((layer_name, existing), stray)| {
+            prepared_layer(
                 layer_name,
-                target_density,
-                stack_weight_mm2,
-                existing_copper,
-                safe_region: safe_region.clone(),
-                density_domain: panel_domain.union(&stray)?,
-            })
+                existing,
+                stray,
+                safe_region.clone(),
+                &footprints,
+                stack_weights.as_ref(),
+            )
         })
         .collect::<Result<Vec<_>>>()?;
 
     solve_copper_balance(
         &usable_region,
         footprints,
-        stack_weights_available,
+        stack_weights.is_some(),
         prepared,
     )
 }
