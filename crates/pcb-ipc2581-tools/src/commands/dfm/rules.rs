@@ -187,75 +187,40 @@ pub(super) struct Semantics {
     pub pools: Pools,
 }
 
-/// The entity pools a rule reads. Extraction builds exactly the union over
-/// the configured rules, so a rule set pays only for what it measures.
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct Pools {
-    pub stackup: bool,
-    pub drilled: bool,
-    pub copper: bool,
-    pub conductor_ownership: bool,
-    pub copper_boundaries: bool,
-    pub conductor_boundaries: bool,
-    pub hole_lands: bool,
-    pub slot_lands: bool,
-    pub resolved_drill_spans: bool,
-    pub masks: bool,
-    pub scores: bool,
-    pub board_outlines: bool,
-    pub board_arrays: bool,
+/// The entity pools a rule reads, as a set. Extraction builds exactly the
+/// union over the configured rules, so a rule set pays only for what it
+/// measures.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct Pools(u16);
+
+impl Pools {
+    pub const NONE: Self = Self(0);
+    pub const STACKUP: Self = Self(1 << 0);
+    pub const DRILLED: Self = Self(1 << 1);
+    pub const COPPER: Self = Self(1 << 2);
+    pub const CONDUCTOR_OWNERSHIP: Self = Self(1 << 3);
+    pub const COPPER_BOUNDARIES: Self = Self(1 << 4);
+    pub const CONDUCTOR_BOUNDARIES: Self = Self(1 << 5);
+    pub const HOLE_LANDS: Self = Self(1 << 6);
+    pub const SLOT_LANDS: Self = Self(1 << 7);
+    pub const RESOLVED_DRILL_SPANS: Self = Self(1 << 8);
+    pub const MASKS: Self = Self(1 << 9);
+    pub const SCORES: Self = Self(1 << 10);
+    pub const BOARD_OUTLINES: Self = Self(1 << 11);
+    pub const BOARD_ARRAYS: Self = Self(1 << 12);
+
+    pub fn intersects(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
 }
 
 impl std::ops::BitOr for Pools {
     type Output = Self;
 
     fn bitor(self, other: Self) -> Self {
-        Self {
-            stackup: self.stackup || other.stackup,
-            drilled: self.drilled || other.drilled,
-            copper: self.copper || other.copper,
-            conductor_ownership: self.conductor_ownership || other.conductor_ownership,
-            copper_boundaries: self.copper_boundaries || other.copper_boundaries,
-            conductor_boundaries: self.conductor_boundaries || other.conductor_boundaries,
-            hole_lands: self.hole_lands || other.hole_lands,
-            slot_lands: self.slot_lands || other.slot_lands,
-            resolved_drill_spans: self.resolved_drill_spans || other.resolved_drill_spans,
-            masks: self.masks || other.masks,
-            scores: self.scores || other.scores,
-            board_outlines: self.board_outlines || other.board_outlines,
-            board_arrays: self.board_arrays || other.board_arrays,
-        }
+        Self(self.0 | other.0)
     }
 }
-
-const DRILLED: Pools = Pools {
-    stackup: false,
-    drilled: true,
-    copper: false,
-    conductor_ownership: false,
-    copper_boundaries: false,
-    conductor_boundaries: false,
-    hole_lands: false,
-    slot_lands: false,
-    resolved_drill_spans: false,
-    masks: false,
-    scores: false,
-    board_outlines: false,
-    board_arrays: false,
-};
-const COPPER: Pools = Pools {
-    copper: true,
-    ..DRILLED
-};
-const COPPER_BOUNDARIES: Pools = Pools {
-    copper_boundaries: true,
-    ..COPPER
-};
-const NONE: Pools = Pools {
-    stackup: false,
-    drilled: false,
-    ..DRILLED
-};
 
 impl RuleKind {
     pub fn view_recipe(self) -> ViewRecipe {
@@ -377,10 +342,7 @@ impl RuleKind {
                 finding_title: "Copper layer count is outside the supported range".to_owned(),
                 quantity_label: "copper layer count".to_owned(),
                 witness_roles: None,
-                pools: Pools {
-                    stackup: true,
-                    ..NONE
-                },
+                pools: Pools::STACKUP,
             },
             Self::HoleDiameter(class) => Semantics {
                 subject: "hole",
@@ -389,7 +351,7 @@ impl RuleKind {
                 finding_title: format!("{} hole is below minimum diameter", class.label()),
                 quantity_label: format!("{} hole diameter", class.label()),
                 witness_roles: Some(["hole_boundary", "hole_boundary"]),
-                pools: DRILLED,
+                pools: Pools::DRILLED,
             },
             Self::HoleAspectRatio(class) => Semantics {
                 subject: "hole",
@@ -398,10 +360,7 @@ impl RuleKind {
                 finding_title: format!("{} hole exceeds maximum aspect ratio", class.label()),
                 quantity_label: format!("{} hole aspect ratio", class.label()),
                 witness_roles: None,
-                pools: Pools {
-                    stackup: true,
-                    ..DRILLED
-                },
+                pools: Pools::STACKUP | Pools::DRILLED,
             },
             Self::SlotWidth(plating) => Semantics {
                 subject: "slot",
@@ -410,7 +369,7 @@ impl RuleKind {
                 finding_title: format!("{} slot is below minimum width", slot_label(plating)),
                 quantity_label: format!("{} routed slot width", slot_label(plating)),
                 witness_roles: Some(["first_slot_boundary", "second_slot_boundary"]),
-                pools: DRILLED,
+                pools: Pools::DRILLED,
             },
             Self::HolePairClearance(first, second) => Semantics {
                 subject: "hole",
@@ -427,7 +386,7 @@ impl RuleKind {
                     second.label()
                 ),
                 witness_roles: Some(["first_hole_boundary", "second_hole_boundary"]),
-                pools: DRILLED,
+                pools: Pools::DRILLED,
             },
             Self::HoleToBoardEdgeClearance(class) => Semantics {
                 subject: "hole",
@@ -436,10 +395,7 @@ impl RuleKind {
                 finding_title: format!("{} hole is too close to the board edge", class.label()),
                 quantity_label: format!("{} hole-to-board-edge clearance", class.label()),
                 witness_roles: Some(["hole_boundary", "board_outline"]),
-                pools: Pools {
-                    board_outlines: true,
-                    ..DRILLED
-                },
+                pools: Pools::DRILLED | Pools::BOARD_OUTLINES,
             },
             Self::SlotToBoardEdgeClearance(plating) => Semantics {
                 subject: "slot",
@@ -454,10 +410,7 @@ impl RuleKind {
                     slot_label(plating)
                 ),
                 witness_roles: Some(["slot_boundary", "board_outline"]),
-                pools: Pools {
-                    board_outlines: true,
-                    ..DRILLED
-                },
+                pools: Pools::DRILLED | Pools::BOARD_OUTLINES,
             },
             Self::PlatedSlotEnclosure => Semantics {
                 subject: "slot_layer_pair",
@@ -466,12 +419,12 @@ impl RuleKind {
                 finding_title: "Plated-slot copper enclosure is below minimum".to_owned(),
                 quantity_label: "plated-slot copper enclosure".to_owned(),
                 witness_roles: Some(["slot_boundary", "copper_boundary"]),
-                pools: Pools {
-                    stackup: true,
-                    slot_lands: true,
-                    resolved_drill_spans: true,
-                    ..COPPER_BOUNDARIES
-                },
+                pools: Pools::STACKUP
+                    | Pools::DRILLED
+                    | Pools::COPPER
+                    | Pools::COPPER_BOUNDARIES
+                    | Pools::SLOT_LANDS
+                    | Pools::RESOLVED_DRILL_SPANS,
             },
             Self::AnnularRing(class) => Semantics {
                 subject: "hole_layer_pair",
@@ -480,10 +433,10 @@ impl RuleKind {
                 finding_title: format!("{} annular ring is below minimum", class.label()),
                 quantity_label: format!("{} annular ring", class.label()),
                 witness_roles: Some(["hole_boundary", "copper_boundary"]),
-                pools: Pools {
-                    hole_lands: true,
-                    ..COPPER_BOUNDARIES
-                },
+                pools: Pools::DRILLED
+                    | Pools::COPPER
+                    | Pools::COPPER_BOUNDARIES
+                    | Pools::HOLE_LANDS,
             },
             Self::HoleToCopperClearance(class) => Semantics {
                 subject: "hole_layer_pair",
@@ -498,12 +451,11 @@ impl RuleKind {
                     class.label()
                 ),
                 witness_roles: Some(["drilled_hole", "offending_copper"]),
-                pools: Pools {
-                    conductor_boundaries: true,
-                    hole_lands: true,
-                    resolved_drill_spans: true,
-                    ..COPPER
-                },
+                pools: Pools::DRILLED
+                    | Pools::COPPER
+                    | Pools::CONDUCTOR_BOUNDARIES
+                    | Pools::HOLE_LANDS
+                    | Pools::RESOLVED_DRILL_SPANS,
             },
             Self::SlotToCopperClearance(plating) => Semantics {
                 subject: "slot_layer_pair",
@@ -518,13 +470,12 @@ impl RuleKind {
                     slot_label(plating)
                 ),
                 witness_roles: Some(["routed_slot", "offending_copper"]),
-                pools: Pools {
-                    stackup: true,
-                    conductor_boundaries: true,
-                    slot_lands: true,
-                    resolved_drill_spans: true,
-                    ..COPPER
-                },
+                pools: Pools::STACKUP
+                    | Pools::DRILLED
+                    | Pools::COPPER
+                    | Pools::CONDUCTOR_BOUNDARIES
+                    | Pools::SLOT_LANDS
+                    | Pools::RESOLVED_DRILL_SPANS,
             },
             Self::LineworkToCopperClearance(Linework::VScore) => Semantics {
                 subject: "score_layer_pair",
@@ -533,11 +484,7 @@ impl RuleKind {
                 finding_title: "V-score centerline is too close to copper".to_owned(),
                 quantity_label: "V-score centerline-to-copper clearance".to_owned(),
                 witness_roles: Some(["vscore_centerline", "copper_boundary"]),
-                pools: Pools {
-                    scores: true,
-                    drilled: false,
-                    ..COPPER_BOUNDARIES
-                },
+                pools: Pools::SCORES | Pools::COPPER | Pools::COPPER_BOUNDARIES,
             },
             Self::LineworkToCopperClearance(Linework::BoardEdge) => Semantics {
                 subject: "outline_layer_pair",
@@ -546,11 +493,7 @@ impl RuleKind {
                 finding_title: "Board edge is too close to copper".to_owned(),
                 quantity_label: "board-edge-to-copper clearance".to_owned(),
                 witness_roles: Some(["board_outline", "copper_boundary"]),
-                pools: Pools {
-                    board_outlines: true,
-                    drilled: false,
-                    ..COPPER_BOUNDARIES
-                },
+                pools: Pools::BOARD_OUTLINES | Pools::COPPER | Pools::COPPER_BOUNDARIES,
             },
             Self::BoardArrayPairClearance => Semantics {
                 subject: "array_pair",
@@ -559,10 +502,7 @@ impl RuleKind {
                 finding_title: "Board arrays are too close together".to_owned(),
                 quantity_label: "board-array outline spacing".to_owned(),
                 witness_roles: Some(["first_board_array", "second_board_array"]),
-                pools: Pools {
-                    board_arrays: true,
-                    ..NONE
-                },
+                pools: Pools::BOARD_ARRAYS,
             },
             Self::CopperFeatureWidth => Semantics {
                 subject: "copper_layer",
@@ -571,10 +511,7 @@ impl RuleKind {
                 finding_title: "Copper feature is below minimum width".to_owned(),
                 quantity_label: "copper feature width".to_owned(),
                 witness_roles: Some(["first_boundary", "second_boundary"]),
-                pools: Pools {
-                    drilled: false,
-                    ..COPPER
-                },
+                pools: Pools::COPPER,
             },
             Self::CopperClearance => Semantics {
                 subject: "conductor_pair",
@@ -583,11 +520,7 @@ impl RuleKind {
                 finding_title: "Copper spacing is below minimum".to_owned(),
                 quantity_label: "copper-to-copper clearance".to_owned(),
                 witness_roles: Some(["first_conductor", "second_conductor"]),
-                pools: Pools {
-                    drilled: false,
-                    conductor_ownership: true,
-                    ..COPPER
-                },
+                pools: Pools::COPPER | Pools::CONDUCTOR_OWNERSHIP,
             },
             Self::SoldermaskWeb => Semantics {
                 subject: "soldermask_layer",
@@ -596,10 +529,7 @@ impl RuleKind {
                 finding_title: "Soldermask web is below minimum".to_owned(),
                 quantity_label: "soldermask web width".to_owned(),
                 witness_roles: Some(["first_boundary", "second_boundary"]),
-                pools: Pools {
-                    masks: true,
-                    ..NONE
-                },
+                pools: Pools::MASKS,
             },
         }
     }
@@ -609,11 +539,14 @@ pub(super) fn pools(rules: &[Rule]) -> Pools {
     rules
         .iter()
         .map(|rule| {
-            let mut pools = rule.kind.semantics().pools;
-            pools.stackup |= rule.conditions.requires_stackup();
-            pools
+            let pools = rule.kind.semantics().pools;
+            if rule.conditions.requires_stackup() {
+                pools | Pools::STACKUP
+            } else {
+                pools
+            }
         })
-        .fold(Pools::default(), |union, pools| union | pools)
+        .fold(Pools::NONE, |union, pools| union | pools)
 }
 
 /// Lower the selected profile's support envelope and typed rules. Rules with

@@ -38,7 +38,7 @@ use pcb_ir::import::ipc2581::{
 use pcb_ir::import::physical::{Association, LandId, PhysicalHole};
 
 use super::report::{DrillSpan, LayerRef, LayoutContext, LayoutOccurrence, SourceLocator};
-use super::rules::{self, Rule};
+use super::rules::{self, Pools, Rule};
 
 pub(super) struct Design<'a> {
     pub imported: &'a ImportedDesign,
@@ -90,64 +90,68 @@ impl<'a> Design<'a> {
             )
         });
         let stackup = when(
-            pools.stackup || (span_checks && !imported.stackups.is_empty()),
+            pools.intersects(Pools::STACKUP) || (span_checks && !imported.stackups.is_empty()),
             || collect_physical_stackup(imported).map(Some),
         )?;
-        let (holes, slots) = when(pools.drilled, || {
+        let (holes, slots) = when(pools.intersects(Pools::DRILLED), || {
             collect_drilled(imported, scope, stackup.as_ref(), resolution)
         })?;
-        let copper_layers = when(pools.copper, || {
+        let copper_layers = when(pools.intersects(Pools::COPPER), || {
             collect_copper_layers(
                 imported,
                 scope,
-                pools.conductor_ownership,
+                pools.intersects(Pools::CONDUCTOR_OWNERSHIP),
                 stackup.as_ref(),
                 resolution,
             )
         })?;
-        let (physical_holes, land_indices) = when(pools.hole_lands || pools.slot_lands, || {
-            let physical_holes = imported
-                .physical_holes(scope, resolution)?
-                .into_iter()
-                .map(|hole| (hole.id.0, hole))
-                .collect();
-            let land_indices = copper_layers
-                .iter()
-                .enumerate()
-                .flat_map(|(copper_index, layer)| {
-                    layer
-                        .lands
-                        .iter()
-                        .enumerate()
-                        .map(move |(land_index, land)| {
-                            (
-                                land.id,
-                                HoleLand {
-                                    copper_index: copper_index as u32,
-                                    land_index: land_index as u32,
-                                },
-                            )
-                        })
-                })
-                .collect();
-            Ok((physical_holes, land_indices))
-        })?;
-        let layout = when(pools.board_outlines || pools.board_arrays, || {
-            Ok(Some(&imported.geometry))
-        })?;
+        let (physical_holes, land_indices) = when(
+            pools.intersects(Pools::HOLE_LANDS | Pools::SLOT_LANDS),
+            || {
+                let physical_holes = imported
+                    .physical_holes(scope, resolution)?
+                    .into_iter()
+                    .map(|hole| (hole.id.0, hole))
+                    .collect();
+                let land_indices = copper_layers
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(copper_index, layer)| {
+                        layer
+                            .lands
+                            .iter()
+                            .enumerate()
+                            .map(move |(land_index, land)| {
+                                (
+                                    land.id,
+                                    HoleLand {
+                                        copper_index: copper_index as u32,
+                                        land_index: land_index as u32,
+                                    },
+                                )
+                            })
+                    })
+                    .collect();
+                Ok((physical_holes, land_indices))
+            },
+        )?;
+        let layout = when(
+            pools.intersects(Pools::BOARD_OUTLINES | Pools::BOARD_ARRAYS),
+            || Ok(Some(&imported.geometry)),
+        )?;
         let design = Self {
             imported,
             scope,
             resolution,
             stackup,
-            copper_boundaries: when(pools.copper_boundaries, || {
+            copper_boundaries: when(pools.intersects(Pools::COPPER_BOUNDARIES), || {
                 #[cfg(not(target_family = "wasm"))]
                 let layers = copper_layers.par_iter();
                 #[cfg(target_family = "wasm")]
                 let layers = copper_layers.iter();
                 Ok(layers.map(|layer| layer.image.prepare_query()).collect())
             })?,
-            conductor_boundaries: when(pools.conductor_boundaries, || {
+            conductor_boundaries: when(pools.intersects(Pools::CONDUCTOR_BOUNDARIES), || {
                 #[cfg(not(target_family = "wasm"))]
                 let layers = copper_layers.par_iter();
                 #[cfg(target_family = "wasm")]
@@ -162,33 +166,35 @@ impl<'a> Design<'a> {
                     })
                     .collect())
             })?,
-            hole_lands: when(pools.hole_lands, || {
+            hole_lands: when(pools.intersects(Pools::HOLE_LANDS), || {
                 link_lands(
                     holes.iter().map(|hole| hole.id),
                     &land_indices,
                     &physical_holes,
                 )
             })?,
-            slot_lands: when(pools.slot_lands, || {
+            slot_lands: when(pools.intersects(Pools::SLOT_LANDS), || {
                 link_lands(
                     slots.iter().map(|slot| slot.id),
                     &land_indices,
                     &physical_holes,
                 )
             })?,
-            mask_layers: when(pools.masks, || {
+            mask_layers: when(pools.intersects(Pools::MASKS), || {
                 collect_mask_layers(imported, scope, resolution)
             })?,
-            scores: when(pools.scores, || collect_scores(imported, scope))?,
+            scores: when(pools.intersects(Pools::SCORES), || {
+                collect_scores(imported, scope)
+            })?,
             board_outlines: layout
                 .as_ref()
-                .filter(|_| pools.board_outlines)
+                .filter(|_| pools.intersects(Pools::BOARD_OUTLINES))
                 .map(|layout| collect_board_outlines(imported, layout, scope, resolution))
                 .transpose()?
                 .unwrap_or_default(),
             board_arrays: layout
                 .as_ref()
-                .filter(|_| pools.board_arrays)
+                .filter(|_| pools.intersects(Pools::BOARD_ARRAYS))
                 .map(|layout| collect_board_arrays(imported, layout, resolution))
                 .transpose()?
                 .unwrap_or_default(),
@@ -196,7 +202,7 @@ impl<'a> Design<'a> {
             slots,
             copper_layers,
         };
-        if pools.resolved_drill_spans {
+        if pools.intersects(Pools::RESOLVED_DRILL_SPANS) {
             validate_drill_spans(&design, rules)?;
         }
         Ok(design)

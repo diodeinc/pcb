@@ -39,7 +39,7 @@ use super::report::{
     DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox,
     ReportPoint, RuleResult, RuleStatus, Site, SourceLocator, Subject, Witness,
 };
-use super::rules::{Comparison, Linework, Rule, RuleKind};
+use super::rules::{Comparison, Linework, Pools, Rule, RuleKind};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
 
 /// Absorbs floating-point unit conversion when a measurement sits exactly
@@ -375,14 +375,15 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
         RuleKind::CopperFeatureWidth | RuleKind::CopperClearance | RuleKind::SoldermaskWeb => None,
     };
     let pools = rule.kind.semantics().pools;
-    let layers = (pools.copper
+    let layers = (pools.intersects(Pools::COPPER)
         && design
             .copper_layers
             .iter()
             .all(|layer| !rule.conditions.applies_to_layer(layer)))
     .then(|| "applicable copper layers".to_owned())
     .or_else(|| {
-        (pools.masks && design.mask_layers.is_empty()).then(|| "soldermask layers".to_owned())
+        (pools.intersects(Pools::MASKS) && design.mask_layers.is_empty())
+            .then(|| "soldermask layers".to_owned())
     });
     subjects
         .or(layers)
