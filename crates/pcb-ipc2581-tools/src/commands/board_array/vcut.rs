@@ -132,12 +132,15 @@ pub(super) fn add_right_vcut_callout(
         VCUT_MARKER_STROKE_MM,
     );
 
+    // The label rides above the leader, clear of the arrowhead. Trailing it,
+    // the two reach past the gap a fabrication panel leaves beside the array
+    // and the text lands on the neighbouring array's rail.
     add_vcut_label(
         features,
         label,
         Point::new(
-            arrow_start.x + VCUT_CALLOUT_TEXT_GAP_MM,
-            y - 0.5 * label.height_mm,
+            arrow_tip.x + VCUT_CALLOUT_ARROW_HEAD_MM,
+            y + VCUT_CALLOUT_TEXT_GAP_MM,
         ),
     );
 }
@@ -289,7 +292,7 @@ pub(super) struct VcutLineSpec {
     pub(super) array_height_mm: f64,
 }
 
-pub(super) fn vcut_lines(spec: VcutLineSpec) -> Result<Vec<VcutLine>> {
+pub(super) fn vcut_lines(spec: VcutLineSpec) -> Vec<VcutLine> {
     let x_positions = board_edge_positions(
         spec.columns,
         spec.margin_x_mm,
@@ -297,8 +300,6 @@ pub(super) fn vcut_lines(spec: VcutLineSpec) -> Result<Vec<VcutLine>> {
         spec.board_width_mm,
         spec.array_width_mm,
     );
-    validate_vcut_line_count("X", x_positions.len())?;
-
     let y_positions = board_edge_positions(
         spec.rows,
         spec.margin_y_mm,
@@ -306,39 +307,21 @@ pub(super) fn vcut_lines(spec: VcutLineSpec) -> Result<Vec<VcutLine>> {
         spec.board_height_mm,
         spec.array_height_mm,
     );
-    validate_vcut_line_count("Y", y_positions.len())?;
-
-    let mut lines = Vec::new();
-    for x in x_positions {
-        lines.push(VcutLine {
+    x_positions
+        .into_iter()
+        .map(|x| VcutLine {
             start_x_mm: x,
             start_y_mm: 0.0,
             end_x_mm: x,
             end_y_mm: spec.array_height_mm,
-        });
-    }
-    for y in y_positions {
-        lines.push(VcutLine {
+        })
+        .chain(y_positions.into_iter().map(|y| VcutLine {
             start_x_mm: 0.0,
             start_y_mm: y,
             end_x_mm: spec.array_width_mm,
             end_y_mm: y,
-        });
-    }
-    Ok(lines)
-}
-
-pub(super) fn validate_vcut_line_count(axis: &'static str, count: usize) -> Result<()> {
-    if count <= MAX_VCUT_LINES_PER_AXIS {
-        Ok(())
-    } else {
-        Err(BoardArrayCreateValidationError::VcutLineCount {
-            axis,
-            count,
-            max: MAX_VCUT_LINES_PER_AXIS,
-        }
-        .into())
-    }
+        }))
+        .collect()
 }
 
 pub(super) fn board_edge_positions(

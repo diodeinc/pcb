@@ -972,3 +972,23 @@ fn single_panel_filling_the_usable_area_generates_no_fill() {
         "a fully covered usable area leaves no room for balance copper"
     );
 }
+
+#[test]
+fn usable_bin_never_reaches_into_the_process_margins() {
+    // 12 in less two 1 in margins is 254 mm, a hair more or less in binary.
+    // Rounded up like an item, the bin would let a panel overhang its margin.
+    for spec in [
+        FabPanelSpec::INCHES_12_X_18,
+        FabPanelSpec::INCHES_16_X_18,
+        FabPanelSpec::INCHES_18_X_24,
+        FabPanelSpec::INCHES_21_X_24,
+    ] {
+        let usable = spec.usable_bbox().unwrap();
+        let size = spec.usable_size().unwrap();
+        for (whole_um, exact_mm) in [(size.width, usable.width()), (size.height, usable.height())] {
+            let whole_mm = f64::from(whole_um) / 1_000.0;
+            assert!(whole_mm <= exact_mm, "{spec:?}");
+            assert!(exact_mm - whole_mm < 0.001, "{spec:?}");
+        }
+    }
+}

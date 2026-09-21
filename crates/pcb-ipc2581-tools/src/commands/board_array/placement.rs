@@ -174,7 +174,7 @@ pub fn analyze(xml: &str, preset: &Preset, resolution: Resolution) -> Result<Val
             .map(|ring| ring.iter().map(|p| json!([p[0], p[1]])).collect::<Vec<_>>())
             .collect::<Vec<_>>()
     };
-    let mut report = prepared.report.clone();
+    let mut report = prepared.report();
     report["phase"] = json!("tab-placement-only");
     report["source_xml_sha256"] = json!(hex::encode(sha2::Sha256::digest(xml.as_bytes())));
     report["placement"] = json!({
@@ -195,7 +195,7 @@ pub fn analyze(xml: &str, preset: &Preset, resolution: Resolution) -> Result<Val
         "rejected": sites.rejected.iter().map(|r| json!({
             "ring": r.ring, "station_mm": r.station_mm, "point": [r.point.x, r.point.y], "reason": r.reason,
         })).collect::<Vec<_>>(),
-        "tight": sites.tight.iter().map(|run| run.iter().map(|p| json!([p.x, p.y])).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        "tight": candidates::tight(substrate, preset)?.iter().map(|run| run.iter().map(|p| json!([p.x, p.y])).collect::<Vec<_>>()).collect::<Vec<_>>(),
         "selected": selection.chosen,
         "tab_count": selection.chosen.len(),
         "proven_minimal": selection.proven,

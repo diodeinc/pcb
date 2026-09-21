@@ -31,11 +31,21 @@ pub struct Rejection {
 pub struct Sites {
     pub candidates: Vec<Candidate>,
     pub rejected: Vec<Rejection>,
-    /// Outline stretches too tightly curved or too close to a corner for a
-    /// tab, as polylines, whatever the obstacle evidence says there.
-    pub tight: Vec<Vec<Point>>,
     /// Frame material beyond an outline-following slot, local to this board.
     pub frame: ContourSet,
+}
+
+const TOLERANCE: QueryTolerance = QueryTolerance {
+    boundary_mm: 0.0,
+    numerical_mm: pcb_ir::geom::tol::EPSILON_MM,
+};
+
+/// Small boards cannot keep a full keep-out from every corner.
+fn corner_keepout_mm(substrate: &ContourSet, preset: &Preset) -> f64 {
+    let bbox = substrate.bbox();
+    preset
+        .corner_keepout_mm
+        .min(bbox.width().min(bbox.height()) / 4.0)
 }
 
 pub fn find(
@@ -44,21 +54,11 @@ pub fn find(
     preset: &Preset,
     resolution: Resolution,
 ) -> Result<Sites> {
-    let boundary = BoundaryQuery::new(
-        substrate,
-        QueryTolerance {
-            boundary_mm: 0.0,
-            numerical_mm: pcb_ir::geom::tol::EPSILON_MM,
-        },
-    )?;
+    let boundary = BoundaryQuery::new(substrate, TOLERANCE)?;
     let reach = preset.routing_gap_mm + preset.frame_landing_mm;
     let frame = ContourSet::rectangle(substrate.bbox().expand(reach + 1.0), resolution)
         .difference(&substrate.disk_dilate(preset.routing_gap_mm)?)?;
-    // Small boards cannot keep a full keep-out from every corner.
-    let bbox = substrate.bbox();
-    let keepout_mm = preset
-        .corner_keepout_mm
-        .min(bbox.width().min(bbox.height()) / 4.0);
+    let keepout_mm = corner_keepout_mm(substrate, preset);
     let checker = Checker {
         substrate,
         frame: &frame,
@@ -69,7 +69,6 @@ pub fn find(
     let mut sites = Sites {
         candidates: Vec::new(),
         rejected: Vec::new(),
-        tight: Vec::new(),
         frame: ContourSet::empty(resolution),
     };
     for id in boundary
@@ -78,9 +77,6 @@ pub fn find(
     {
         let perimeter = boundary.perimeter(id)?;
         let turns = turning_angles(&substrate.rings[id.ring]);
-        sites.tight.extend(tight_runs(
-            &boundary, id, &turns, perimeter, preset, keepout_mm,
-        )?);
         for (lo, hi) in eligible_runs(intervals, id, perimeter) {
             let bins = ((hi - lo) / preset.candidate_pitch_mm).ceil().max(1.0) as usize;
             for k in 0..bins {
@@ -191,8 +187,30 @@ fn too_tight(
     None
 }
 
-/// Stretches of one ring that are too tight for a tab, sampled finely and
-/// returned as polylines for inspection.
+/// Outline stretches too tightly curved or too close to a corner for a tab,
+/// as polylines, whatever the obstacle evidence says there. For inspection
+/// only: placing tabs never asks.
+pub fn tight(substrate: &ContourSet, preset: &Preset) -> Result<Vec<Vec<Point>>> {
+    let boundary = BoundaryQuery::new(substrate, TOLERANCE)?;
+    let keepout_mm = corner_keepout_mm(substrate, preset);
+    let mut runs = Vec::new();
+    for id in boundary
+        .boundaries()
+        .filter(|id| ring_signed_area(&substrate.rings[id.ring]) > 0.0)
+    {
+        runs.extend(tight_runs(
+            &boundary,
+            id,
+            &turning_angles(&substrate.rings[id.ring]),
+            boundary.perimeter(id)?,
+            preset,
+            keepout_mm,
+        )?);
+    }
+    Ok(runs)
+}
+
+/// Stretches of one ring that are too tight for a tab, sampled finely.
 fn tight_runs(
     boundary: &BoundaryQuery<'_>,
     id: BoundaryId,

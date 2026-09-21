@@ -1834,47 +1834,6 @@ fn rejects_small_clearance_and_edge_rail() {
 }
 
 #[test]
-fn rejects_more_than_25_vcut_lines_per_axis() {
-    let x_error = vcut_lines(VcutLineSpec {
-        columns: 13,
-        rows: 1,
-        board_width_mm: 10.0,
-        board_height_mm: 10.0,
-        margin_x_mm: 5.0,
-        margin_y_mm: 5.0,
-        pitch_x_mm: 15.0,
-        pitch_y_mm: 15.0,
-        array_width_mm: 210.0,
-        array_height_mm: 25.0,
-    })
-    .unwrap_err();
-    assert!(
-        x_error
-            .to_string()
-            .contains("X-axis V-cut line count must be at most 25; got 26")
-    );
-
-    let y_error = vcut_lines(VcutLineSpec {
-        columns: 1,
-        rows: 13,
-        board_width_mm: 10.0,
-        board_height_mm: 10.0,
-        margin_x_mm: 5.0,
-        margin_y_mm: 5.0,
-        pitch_x_mm: 15.0,
-        pitch_y_mm: 15.0,
-        array_width_mm: 25.0,
-        array_height_mm: 210.0,
-    })
-    .unwrap_err();
-    assert!(
-        y_error
-            .to_string()
-            .contains("Y-axis V-cut line count must be at most 25; got 26")
-    );
-}
-
-#[test]
 fn rejects_array_dimensions_outside_limits() {
     let narrow_error = create_board_array_xml(
         board_fixture_mm(),
@@ -2797,4 +2756,38 @@ fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
             .collect::<Vec<_>>();
         assert_points_close(points(cutout), expected);
     }
+}
+
+#[test]
+fn score_callouts_fit_the_gap_a_fabrication_panel_leaves_beside_an_array() {
+    // Callouts are drawn outside the array outline, below it and to its
+    // right. A fabrication panel packs arrays by their outlines, so whatever
+    // overhangs further than the default gap lands on the neighbour's rail.
+    let array_width_mm = 100.0;
+    let lines = [
+        VcutLine {
+            start_x_mm: 40.0,
+            start_y_mm: 0.0,
+            end_x_mm: 40.0,
+            end_y_mm: 80.0,
+        },
+        VcutLine {
+            start_x_mm: 0.0,
+            start_y_mm: 30.0,
+            end_x_mm: array_width_mm,
+            end_y_mm: 30.0,
+        },
+    ];
+    let (mut right, mut below) = (0.0_f64, 0.0_f64);
+    for feature in vcut_callout_features(&lines, array_width_mm) {
+        let SetFeature::Line(line) = feature else {
+            panic!("callouts are strokes");
+        };
+        let reach = line.line_width / 2.0;
+        right = right.max(line.start_x.max(line.end_x) + reach - array_width_mm);
+        below = below.max(reach - line.start_y.min(line.end_y));
+    }
+    let gap = crate::commands::fab_panel::DEFAULT_PANEL_GAP_MM;
+    assert!(right > 0.0 && right < gap, "right overhang {right} mm");
+    assert!(below > 0.0 && below < gap, "bottom overhang {below} mm");
 }

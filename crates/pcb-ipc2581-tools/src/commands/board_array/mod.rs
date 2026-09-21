@@ -39,7 +39,6 @@ use pcb_ir::{
 const EPSILON: f64 = 1e-9;
 const MIN_BOARD_ARRAY_DIMENSION_MM: f64 = 70.0;
 const MAX_BOARD_ARRAY_DIMENSION_MM: f64 = 297.0;
-const MAX_VCUT_LINES_PER_AXIS: usize = 25;
 const MIN_VCUT_CLEARANCE_MM: f64 = 5.0;
 const MIN_EDGE_RAIL_WIDTH_MM: f64 = 5.0;
 const MAX_MANUAL_EDGE_RAIL_WIDTH_MM: f64 = 30.0;
@@ -132,11 +131,6 @@ enum BoardArrayCreateValidationError {
         value: f64,
         max: f64,
     },
-    VcutLineCount {
-        axis: &'static str,
-        count: usize,
-        max: usize,
-    },
 }
 
 impl std::fmt::Display for BoardArrayCreateValidationError {
@@ -198,12 +192,6 @@ impl std::fmt::Display for BoardArrayCreateValidationError {
                 fmt_num(*max),
                 fmt_num(*value)
             ),
-            Self::VcutLineCount { axis, count, max } => {
-                write!(
-                    f,
-                    "{axis}-axis V-cut line count must be at most {max}; got {count}"
-                )
-            }
         }
     }
 }
@@ -789,7 +777,12 @@ fn primary_board_layout(ipc: &Ipc2581) -> Result<PrimaryBoardLayout> {
         _ => bail!("primary IPC-2581 step is not a board step"),
     }
     if root.bbox.is_empty() {
-        bail!("primary IPC-2581 board step has no Profile outline");
+        bail!(
+            "board step '{}' has no Profile: the layout has no closed board outline on its \
+             edge-cuts layer, so there is nothing to derive the board's shape from; draw the \
+             outline and export again",
+            ipc.resolve(root.source_step_ref)
+        );
     }
 
     let board_width = root.bbox.width();
@@ -882,7 +875,7 @@ fn build_board_array_spec(
                 pitch_y_mm: pitch_y,
                 array_width_mm: array_width,
                 array_height_mm: array_height,
-            })?,
+            }),
         );
     }
     let tooling_hole_layer =

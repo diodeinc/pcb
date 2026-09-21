@@ -27,7 +27,7 @@ use packing::MAX_ITEM_COUNT;
 use packing::{Size, pack};
 
 const DEFAULT_EDGE_MARGIN_MM: EdgeInsetsMm = EdgeInsetsMm::new(50.8, 25.4, 50.8, 25.4);
-const DEFAULT_PANEL_GAP_MM: f64 = 7.62;
+pub(crate) const DEFAULT_PANEL_GAP_MM: f64 = 7.62;
 const MICROMETERS_PER_MM: f64 = 1_000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -97,11 +97,22 @@ impl FabPanelSpec {
         ))
     }
 
+    /// The packing bin in whole micrometres. Items round up and the bin
+    /// rounds down, so a packed panel never reaches into a process margin.
     fn usable_size(self) -> Result<Size> {
         let usable = self.usable_bbox()?;
+        let whole_um = |value_mm: f64| {
+            let value = (value_mm * MICROMETERS_PER_MM).floor();
+            if !(1.0..=f64::from(u32::MAX)).contains(&value) {
+                bail!(
+                    "usable fabrication panel dimension {value_mm} mm is outside the supported range"
+                );
+            }
+            Ok(value as u32)
+        };
         Ok(Size {
-            width: dimension_um(usable.width())?,
-            height: dimension_um(usable.height())?,
+            width: whole_um(usable.width())?,
+            height: whole_um(usable.height())?,
         })
     }
 
