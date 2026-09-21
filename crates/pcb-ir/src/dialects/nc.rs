@@ -31,7 +31,7 @@ pub struct Object<Symbol = ()> {
     pub pin: Option<Symbol>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Geometry {
     Drill {
         at: Point,

@@ -470,10 +470,20 @@ pub fn lower_to_nc<Symbol: Copy, LayerFunction>(
                     })
                     .ok_or("it is not a round hole"),
                 FeatureKind::Slot => nc_linear_slot(feature)
-                    .map(|(diameter, start, end)| nc::Geometry::Slot {
-                        diameter,
-                        start,
-                        end,
+                    .map(|(diameter, start, end)| {
+                        // An oval as wide as it is long is one plunge.
+                        if start == end {
+                            nc::Geometry::Drill {
+                                at: start,
+                                diameter,
+                            }
+                        } else {
+                            nc::Geometry::Slot {
+                                diameter,
+                                start,
+                                end,
+                            }
+                        }
                     })
                     .ok_or("it is not a simple oval slot"),
                 _ => continue,
@@ -550,7 +560,7 @@ fn nc_linear_slot<Symbol>(feature: &Feature<Symbol>) -> Option<(f64, Point, Poin
     };
     let reach = (width - height).abs() / 2.0;
     let length = along.x.hypot(along.y);
-    if diameter <= tol_epsilon() || reach <= tol_epsilon() || length <= 0.0 {
+    if diameter <= tol_epsilon() || length <= 0.0 {
         return None;
     }
     let reach = Point::new(along.x * reach / length, along.y * reach / length);

@@ -301,6 +301,41 @@ fn nc_refuses_a_square_hole_instead_of_drilling_it_round() {
 }
 
 #[test]
+fn nc_plunges_an_oval_slot_as_wide_as_it_is_long() {
+    let slot = |oval: &str| {
+        let ipc = shape_fixture(
+            "",
+            &format!(
+                r#"<SlotCavity name="S" platingStatus="NONPLATED" plusTol="0" minusTol="0">
+                     <Location x="3" y="4"/>{oval}
+                   </SlotCavity>"#
+            ),
+        );
+        let doc = extract_layer_for_view(&ipc, "DRILL", ArtworkScope::Board, Resolution::default())
+            .unwrap();
+        let mut nc = crate::dialects::nc::Document::new();
+        crate::dialects::ipc::lower_to_nc(&doc, &mut nc).unwrap();
+        nc.objects.remove(0).geometry
+    };
+
+    assert_eq!(
+        slot(r#"<Oval width="1" height="1"/>"#),
+        crate::dialects::nc::Geometry::Drill {
+            at: Point::new(3.0, 4.0),
+            diameter: 1.0,
+        }
+    );
+    assert_eq!(
+        slot(r#"<Xform rotation="90"/><Oval width="3" height="1"/>"#),
+        crate::dialects::nc::Geometry::Slot {
+            diameter: 1.0,
+            start: Point::new(3.0, 3.0),
+            end: Point::new(3.0, 5.0),
+        }
+    );
+}
+
+#[test]
 fn carries_spec_refs_fiducials_and_vcut_intent() {
     let ipc = Ipc2581::parse(
         r#"<?xml version="1.0" encoding="UTF-8"?>
