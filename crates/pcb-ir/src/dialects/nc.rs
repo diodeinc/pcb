@@ -1,4 +1,5 @@
-//! Numerically controlled drill/rout operations (millimeters).
+//! Numerically controlled drill operations (millimeters): round holes and
+//! straight slots.
 
 use crate::geom::Point;
 
@@ -41,28 +42,14 @@ pub enum Geometry {
         end: Point,
         diameter: f64,
     },
-    Route {
-        start: Point,
-        diameter: f64,
-        segments: Vec<RouteSegment>,
-    },
 }
 
 impl Geometry {
     pub fn diameter(&self) -> f64 {
         match self {
-            Self::Drill { diameter, .. }
-            | Self::Slot { diameter, .. }
-            | Self::Route { diameter, .. } => *diameter,
+            Self::Drill { diameter, .. } | Self::Slot { diameter, .. } => *diameter,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum RouteSegment {
-    Line { to: Point },
-    ClockwiseArc { to: Point, radius: f64 },
-    CounterClockwiseArc { to: Point, radius: f64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

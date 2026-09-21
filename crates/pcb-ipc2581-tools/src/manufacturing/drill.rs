@@ -5,7 +5,7 @@ use pcb_ir::dialects::nc;
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
 use crate::manufacturing::{ManufacturingFile, ManufacturingFileKind};
-use crate::xnc::{XncAttribute, XncBuilder, XncUnit, write_xnc};
+use crate::xnc::{XncAttribute, XncBuilder, write_xnc};
 
 pub(crate) fn build_xnc_drill_files_from_design(
     imported: &ImportedDesign,
@@ -67,7 +67,7 @@ fn xnc_files_from_nc(
         let file_function = xnc_file_function(&key, copper_layers);
         let builder = groups
             .entry(key)
-            .or_insert_with(|| XncBuilder::new(XncUnit::Metric, vec![file_function]));
+            .or_insert_with(|| XncBuilder::new(vec![file_function]));
         let tool_attributes = xnc_tool_attributes(object);
         let object_attributes = xnc_object_attributes(imported, object);
         match &object.geometry {
@@ -80,32 +80,6 @@ fn xnc_files_from_nc(
                 diameter,
             } => {
                 builder.add_slot(*diameter, *start, *end, tool_attributes, object_attributes)?;
-            }
-            nc::Geometry::Route {
-                start,
-                diameter,
-                segments,
-            } => {
-                builder.add_route(
-                    *diameter,
-                    *start,
-                    segments
-                        .iter()
-                        .map(|segment| match *segment {
-                            nc::RouteSegment::Line { to } => {
-                                crate::xnc::XncRouteSegment::Line { to }
-                            }
-                            nc::RouteSegment::ClockwiseArc { to, radius } => {
-                                crate::xnc::XncRouteSegment::ClockwiseArc { to, radius }
-                            }
-                            nc::RouteSegment::CounterClockwiseArc { to, radius } => {
-                                crate::xnc::XncRouteSegment::CounterClockwiseArc { to, radius }
-                            }
-                        })
-                        .collect(),
-                    tool_attributes,
-                    object_attributes,
-                )?;
             }
         }
     }
