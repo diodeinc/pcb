@@ -1098,3 +1098,34 @@ fn shaped_draws_sweep_continuously_with_recorded_accuracy() {
     assert!(!region.contains_point(Point::new(0.005, 0.0)));
     assert!(region.contains_point(Point::new(0.005, 0.04)));
 }
+
+#[test]
+fn an_aperture_hole_wider_than_its_shape_removes_material_and_adds_none() {
+    use pcb_ir::geom::Point;
+    let image = |aperture: &str| {
+        let gerber = GerberX2::parse(&format!(
+            "%FSLAX26Y26*%%MOMM*%%ADD10{aperture}*%D10*X0Y0D03*M02*"
+        ))
+        .unwrap();
+        let doc =
+            gerberx2::geometry::extract_document(&gerber, GeometryAccuracy::default()).unwrap();
+        let resolution = Resolution::default();
+        let (mut layers, _) =
+            pcb_ir::dialects::artwork::compose_owner_regions(&doc, |_| Some(()), resolution)
+                .unwrap();
+        layers.pop().unwrap().pop().map(|(_, region)| region)
+    };
+
+    // The disc covers the 1.0 x 0.4 rectangle's middle and overhangs its
+    // long edges: only the rectangle's two ends are copper.
+    let ends = image("R,1.0X0.4X0.5").unwrap();
+    assert_eq!(ends.connected_components().len(), 2);
+    assert!(ends.contains_point(Point::new(0.4, 0.0)));
+    assert!(!ends.contains_point(Point::new(0.0, 0.0)));
+    assert!(!ends.contains_point(Point::new(0.0, 0.23)));
+    // A hole swallowing its circle leaves nothing.
+    assert!(image("C,1.0X1.5").is_none());
+    // A hole that fits stays a standard aperture.
+    let ring = image("C,1.0X0.5").unwrap();
+    assert!(ring.contains_point(Point::new(0.4, 0.0)) && !ring.contains_point(Point::ZERO));
+}

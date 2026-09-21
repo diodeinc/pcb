@@ -354,7 +354,9 @@ fn extract_object(
 
 /// Convert a standard aperture template into an artwork aperture. Macro and
 /// block templates return `None`; blocks are handled as instances and macros
-/// use their parsed fallback geometry.
+/// use their parsed fallback geometry. So does a standard template whose hole
+/// reaches outside its shape: its image is the shape less the hole, which
+/// only composing the two gives.
 fn standard_aperture(template: &gerber::ApertureTemplate) -> Option<Aperture> {
     let (shape, hole_diameter) = match *template {
         gerber::ApertureTemplate::Circle {
@@ -388,10 +390,11 @@ fn standard_aperture(template: &gerber::ApertureTemplate) -> Option<Aperture> {
             return None;
         }
     };
-    Some(Aperture {
+    let aperture = Aperture {
         shape,
         hole_diameter: hole_diameter.unwrap_or(0.0),
-    })
+    };
+    aperture.hole_fits().then_some(aperture)
 }
 
 fn aperture_geometry<'a>(

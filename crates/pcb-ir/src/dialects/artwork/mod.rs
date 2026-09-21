@@ -156,6 +156,13 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
                 diagnostics.error(message);
             }
         }
+        for (index, aperture) in self.apertures.iter().enumerate() {
+            if !aperture.hole_fits() {
+                diagnostics.error(format!(
+                    "artwork aperture {index} has a hole reaching outside its shape"
+                ));
+            }
+        }
         self.arena.validate_into("artwork", &mut diagnostics);
         diagnostics.into_result()
     }
@@ -343,6 +350,8 @@ impl Geometry {
 pub struct Aperture {
     pub shape: ApertureShape,
     /// Diameter of the round hole through the aperture; `0.0` means solid.
+    /// The hole lies inside the shape ([`Aperture::hole_fits`]): the image is
+    /// the shape less the hole, which even-odd fill gives only then.
     pub hole_diameter: f64,
 }
 
@@ -419,6 +428,24 @@ impl Aperture {
             contours.extend(shapes::circle(self.hole_diameter));
         }
         contours
+    }
+
+    /// Whether the hole lies inside the shape, so that filling the two
+    /// even-odd images the shape less the hole. A hole reaching outside
+    /// would paint its overhang, so such an image is not an aperture with a
+    /// hole; its source composes it into a contour instead.
+    pub fn hole_fits(&self) -> bool {
+        let inscribed = match &self.shape {
+            ApertureShape::Circle { diameter } => *diameter,
+            ApertureShape::Rectangle { width, height }
+            | ApertureShape::Obround { width, height }
+            | ApertureShape::RoundRect { width, height, .. } => width.min(*height),
+            ApertureShape::Polygon {
+                diameter, vertices, ..
+            } => diameter * (std::f64::consts::PI / f64::from(*vertices)).cos(),
+            ApertureShape::Contour { .. } => return self.hole_diameter <= 0.0,
+        };
+        self.hole_diameter <= inscribed
     }
 
     pub fn fill_rule(&self) -> FillRule {
@@ -1235,6 +1262,36 @@ mod tests {
     use super::*;
     use crate::geom::path::PathCmd;
     use crate::geom::{LineCap, LinePattern, StrokeStyle};
+
+    #[test]
+    fn an_aperture_hole_must_lie_inside_its_shape() {
+        let holed = |shape, hole_diameter| Aperture {
+            shape,
+            hole_diameter,
+        };
+        let rectangle = |hole| {
+            let (width, height) = (1.0, 0.4);
+            holed(ApertureShape::Rectangle { width, height }, hole)
+        };
+        let hexagon = |hole| {
+            let shape = ApertureShape::Polygon {
+                diameter: 2.0,
+                vertices: 6,
+                rotation_degrees: 0.0,
+            };
+            holed(shape, hole)
+        };
+        assert!(rectangle(0.0).hole_fits() && rectangle(0.4).hole_fits());
+        assert!(!rectangle(0.5).hole_fits());
+        // A hexagon's flats sit cos 30° of the way to its vertices.
+        assert!(hexagon(1.73).hole_fits() && !hexagon(1.74).hole_fits());
+
+        let mut doc = Document::<(), ()>::new();
+        doc.push_aperture(rectangle(0.4));
+        assert!(doc.validate().is_ok());
+        doc.push_aperture(rectangle(0.5));
+        assert!(doc.validate().is_err());
+    }
 
     #[test]
     fn stores_layers_objects_and_paths_in_fat_struct_arenas() {
