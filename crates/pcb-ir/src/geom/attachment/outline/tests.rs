@@ -28,12 +28,23 @@ fn tolerance() -> QueryTolerance {
     }
 }
 
+/// Every ring of the substrate, holes included.
+fn outline(
+    substrate: &ContourSet,
+    obstacles: &[OutlineObstacle<'_>],
+    footprint: OutlineFootprint,
+    tolerance: QueryTolerance,
+) -> Result<Vec<OutlineInterval>, QueryError> {
+    let rings = (0..substrate.rings.len()).collect::<Vec<_>>();
+    eligible_outline(substrate, &rings, obstacles, footprint, tolerance)
+}
+
 fn classify(
     board: &ContourSet,
     obstacle: &ContourSet,
     footprint: OutlineFootprint,
 ) -> Vec<OutlineInterval> {
-    eligible_outline(
+    outline(
         board,
         &[OutlineObstacle {
             id: "part",
@@ -138,7 +149,7 @@ fn missing_empty_invalid_and_complete_blockage_are_distinct() {
     let board = rectangle(0.0, 0.0, 20.0, 10.0);
     let empty = ContourSet::empty(resolution());
     for region in [None, Some(&empty)] {
-        let result = eligible_outline(
+        let result = outline(
             &board,
             &[OutlineObstacle {
                 id: "missing",
@@ -154,9 +165,9 @@ fn missing_empty_invalid_and_complete_blockage_are_distinct() {
                 .all(|i| i.state != OutlineState::Eligible && i.obstacles == [0])
         );
     }
-    assert!(eligible_outline(&empty, &[], footprint(), tolerance()).is_err());
+    assert!(outline(&empty, &[], footprint(), tolerance()).is_err());
     assert!(
-        eligible_outline(
+        outline(
             &board,
             &[],
             OutlineFootprint {
@@ -168,7 +179,7 @@ fn missing_empty_invalid_and_complete_blockage_are_distinct() {
         .is_err()
     );
     let cover = rectangle(-5.0, -5.0, 25.0, 15.0);
-    let result = eligible_outline(
+    let result = outline(
         &board,
         &[
             OutlineObstacle {
@@ -205,7 +216,7 @@ fn larger_footprints_and_uncertainty_cannot_create_eligible_space() {
             outward_mm: 3.0,
         },
     );
-    let uncertain = eligible_outline(
+    let uncertain = outline(
         &board,
         &[OutlineObstacle {
             id: "part",
@@ -338,7 +349,7 @@ fn inward_landing_requires_material_across_its_entire_width() {
         inward_mm: 0.2,
         ..footprint()
     };
-    let result = eligible_outline(&board, &[], tab, tolerance()).unwrap();
+    let result = outline(&board, &[], tab, tolerance()).unwrap();
     // A right-angle join touches the adjacent edge: unresolved, not rejected.
     assert_eq!(bottom_state(&result, 0.5), OutlineState::Unknown);
     assert_eq!(bottom_state(&result, 1.0), OutlineState::Unknown);
@@ -351,7 +362,7 @@ fn inward_landing_requires_material_across_its_entire_width() {
             .iter()
             .all(|i| i.state == i.landing && i.obstacles.is_empty())
     );
-    let shallow = eligible_outline(
+    let shallow = outline(
         &board,
         &[],
         OutlineFootprint {
@@ -362,7 +373,7 @@ fn inward_landing_requires_material_across_its_entire_width() {
     )
     .unwrap();
     assert_eq!(bottom_state(&shallow, 9.0), OutlineState::Eligible);
-    let touching = eligible_outline(
+    let touching = outline(
         &board,
         &[],
         OutlineFootprint {
@@ -399,13 +410,13 @@ fn rounded_bands_cross_vertices_and_folded_offsets_are_unknown() {
         outward_mm: 0.4,
     };
     let board = polygon(5.0);
-    let result = eligible_outline(&board, &[], tab, tolerance()).unwrap();
+    let result = outline(&board, &[], tab, tolerance()).unwrap();
     assert!(
         result.iter().all(|i| i.state == OutlineState::Eligible),
         "{result:?}"
     );
     let tight = polygon(0.15);
-    let result = eligible_outline(
+    let result = outline(
         &tight,
         &[],
         OutlineFootprint {
@@ -441,7 +452,7 @@ fn closed_expanded_strip_contact_is_not_lost_to_regularization() {
     board.resolution = r;
     let mut obstacle = obstacle;
     obstacle.resolution = r;
-    let result = eligible_outline(
+    let result = outline(
         &board,
         &[OutlineObstacle {
             id: "contact",
@@ -460,19 +471,59 @@ fn closed_expanded_strip_contact_is_not_lost_to_regularization() {
 
 #[test]
 fn strip_contacts_include_all_closed_faces_and_corner_points() {
+    // Along the bottom edge of a board the outward normal points down, so a
+    // region at stations x and depths y lies at world (x, -y).
+    let probe = Probe::new(Point::new(0.0, 0.0), Point::new(20.0, 0.0));
+    let at = |x0: f64, y0: f64, x1: f64, y1: f64| rectangle(x0, -y1, x1, -y0);
     for (obstacle, expected) in [
-        (rectangle(8.0, -3.0, 11.0, -2.0), (8.0, 11.0)),
-        (rectangle(8.0, 0.5, 11.0, 3.0), (8.0, 11.0)),
-        (rectangle(-3.0, -1.0, 0.0, 0.2), (0.0, 0.0)),
-        (rectangle(20.0, -1.0, 22.0, 0.2), (20.0, 20.0)),
-        (rectangle(-1.0, -3.0, 0.0, -2.0), (0.0, 0.0)),
+        (at(8.0, -3.0, 11.0, -2.0), (8.0, 11.0)),
+        (at(8.0, 0.5, 11.0, 3.0), (8.0, 11.0)),
+        (at(-3.0, -1.0, 0.0, 0.2), (0.0, 0.0)),
+        (at(20.0, -1.0, 22.0, 0.2), (20.0, 20.0)),
+        (at(-1.0, -3.0, 0.0, -2.0), (0.0, 0.0)),
     ] {
-        let spans = strip_contacts(&obstacle, 20.0, -2.0, 0.5).unwrap();
+        let spans = probe.strip_contacts(&obstacle, -2.0, 0.5).unwrap();
         assert!(spans.contains(&expected), "{spans:?}");
     }
     assert!(
-        strip_contacts(&rectangle(8.0, -3.0, 11.0, -2.001), 20.0, -2.0, 0.5)
+        probe
+            .strip_contacts(&at(8.0, -3.0, 11.0, -2.001), -2.0, 0.5)
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn only_the_chosen_rings_are_partitioned_and_distant_obstacles_change_nothing() {
+    let board = rectangle(0.0, 0.0, 20.0, 10.0)
+        .difference(&rectangle(6.0, 3.0, 14.0, 7.0))
+        .unwrap();
+    let near = rectangle(8.0, -1.8, 11.0, -0.2);
+    let far = rectangle(200.0, 200.0, 210.0, 210.0);
+    let obstacles = [
+        OutlineObstacle {
+            id: "far",
+            region: Some(&far),
+        },
+        OutlineObstacle {
+            id: "near",
+            region: Some(&near),
+        },
+    ];
+    let all = outline(&board, &obstacles, footprint(), tolerance()).unwrap();
+    assert!(all.iter().any(|i| i.boundary.ring == 1));
+    // The hole's ring is skipped whole; the outer ring's partition is the
+    // same one, and only the obstacle within reach is ever named.
+    let outer = eligible_outline(&board, &[0], &obstacles, footprint(), tolerance()).unwrap();
+    let described = |intervals: &[OutlineInterval]| {
+        intervals
+            .iter()
+            .filter(|i| i.boundary.ring == 0)
+            .map(|i| format!("{i:?}"))
+            .collect::<Vec<_>>()
+    };
+    assert!(outer.iter().all(|i| i.boundary.ring == 0));
+    assert_eq!(described(&outer), described(&all));
+    assert!(all.iter().all(|i| !i.obstacles.contains(&0)));
+    assert!(all.iter().any(|i| i.obstacles == [1]));
 }

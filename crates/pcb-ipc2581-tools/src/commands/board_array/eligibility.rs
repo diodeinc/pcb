@@ -12,6 +12,7 @@ use pcb_ir::{
             QueryTolerance,
             outline::{OutlineFootprint, OutlineObstacle, eligible_outline},
         },
+        region::ring_signed_area,
     },
     import::ipc2581::{ImportedDesign, LayerId, import_design},
 };
@@ -130,7 +131,12 @@ pub(super) fn prepare(
         boundary_mm: 0.0,
         numerical_mm: pcb_ir::geom::tol::EPSILON_MM,
     };
-    let intervals = eligible_outline(&substrate, &obstacles, footprint, tolerance)?;
+    // Only an outer ring faces the frame a tab has to reach; a hole's ring
+    // can never carry one.
+    let outer_rings = (0..substrate.rings.len())
+        .filter(|&ring| ring_signed_area(&substrate.rings[ring]) > 0.0)
+        .collect::<Vec<_>>();
+    let intervals = eligible_outline(&substrate, &outer_rings, &obstacles, footprint, tolerance)?;
     let report = json!({
         "phase": "outline-eligibility-only",
         "manufacturing_ready": false,
@@ -794,12 +800,14 @@ mod tests {
                 .iter()
                 .any(|i| i["state"] == "Eligible")
         );
+        // The profile cutout is substrate a landing may lack, never an
+        // outline a tab could sit on.
         assert!(
             report["intervals"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|i| i["ring"] == 1)
+                .all(|i| i["ring"] == 0)
         );
         assert!(report["intervals"].as_array().unwrap().iter().any(|i| {
             i["state"] == "Blocked"
