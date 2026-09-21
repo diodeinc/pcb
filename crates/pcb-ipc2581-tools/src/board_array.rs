@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use anyhow::{Context, Result};
 use ipc2581::types::LayerFunction;
-use pcb_ir::dialects::ipc::{ArtworkScope, LayoutStep, LayoutStepKind};
+use pcb_ir::dialects::ipc::{ArtworkScope, Feature, LayoutStep, LayoutStepKind};
 use pcb_ir::geom::{Affine2, BBox, ContourBuf, Point};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 use pcb_ir::render::svg_path_data;
@@ -177,11 +177,7 @@ fn board_array_layer_overlays(
         .map(|(layer_index, layer)| {
             let doc = imported
                 .materialize_layer(LayerId(layer_index as u32), ArtworkScope::ArraySupport)?;
-            let Some(mut native) = crate::geometry::render::native_layer_document(&doc)? else {
-                return Ok(None);
-            };
-            pcb_ir::dialects::ipc::process::compose_for_rendering(&mut native, resolution)?;
-            let paths = layer_paths(&native, array_height, resolution)?;
+            let paths = layer_paths(doc, array_height, resolution)?;
             Ok::<_, anyhow::Error>((!paths.is_empty()).then_some(BoardArrayLayerOverlay {
                 function: layer.layer_function,
                 paths,
@@ -230,81 +226,57 @@ fn payload_groups_path_data(
         .collect())
 }
 
+/// Overlay paths for the features native to a single-layer document.
 fn layer_paths(
-    doc: &GeometryDocument,
+    mut doc: GeometryDocument,
     panel_height: f64,
     resolution: Resolution,
 ) -> anyhow::Result<Vec<BoardArrayLayerPath>> {
     let Some(layer) = doc.layers.first() else {
         return Ok(Vec::new());
     };
+    let (source_layer, function) = (layer.source_layer_ref, layer.layer_function);
+    let native =
+        |feature: &Feature<ipc2581::Symbol>| feature.source_layer_ref == Some(source_layer);
     let transform = y_flip_transform(panel_height);
 
     // V-score features draw as stroked guides; everything else composes
-    // through the shared layer image fold, which resolves paint polarity.
-    let features = layer.features.slice(&doc.features);
-    let mut paths = features
+    // through the shared layer image, which resolves paint polarity.
+    let mut paths = doc
+        .features
         .iter()
-        .filter(|feature| feature.is_vscore())
-        .map(|feature| feature_paths(doc, feature, transform))
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
+        .filter(|feature| native(feature) && feature.is_vscore())
+        .flat_map(|feature| vscore_paths(&doc, feature, transform))
         .collect::<Vec<_>>();
 
-    let image_features = features
-        .iter()
-        .filter(|feature| !feature.is_vscore())
-        .cloned()
-        .collect::<Vec<_>>();
-    if !image_features.is_empty() {
-        let mut image = doc.clone();
-        image.layers[0].features = pcb_ir::geom::Span::new(0, image_features.len() as u32);
-        image.features = image_features;
-        let mask = crate::geometry::render::layer_mask(
-            &image,
-            false,
-            pcb_ir::dialects::ipc::ProfileSet::RootOnly,
+    pcb_ir::dialects::ipc::process::retain_features(&mut doc, |feature| {
+        native(feature) && !feature.is_vscore()
+    });
+    if !doc.features.is_empty() {
+        let image = doc.into_layer_image(
+            0,
+            crate::layers::layer_role(function),
+            pcb_ir::dialects::Side::None,
             resolution,
         )?;
-        paths.extend(mask_paths(&mask, transform)?);
-    }
-
-    Ok(paths)
-}
-
-fn mask_paths(
-    mask: &pcb_ir::dialects::mask::Document<LayerFunction>,
-    transform: Affine2,
-) -> anyhow::Result<Vec<BoardArrayLayerPath>> {
-    let Some(layer) = mask.layers.first() else {
-        return Ok(Vec::new());
-    };
-
-    Ok(mask
-        .shapes(layer)
-        .iter()
-        .map(|shape| {
-            let contours = mask
-                .arena
-                .contour_bufs(shape.contours)
-                .into_iter()
-                .map(|contour| contour.transformed(transform))
-                .collect::<Vec<_>>();
-            let data = svg_path_data(&contours);
-            Ok::<_, anyhow::Error>((!data.is_empty()).then_some(BoardArrayLayerPath {
-                data,
-                bbox: transform_bbox(shape.bbox, transform),
+        let contours = image
+            .to_contours()
+            .into_iter()
+            .map(|contour| contour.transformed(transform))
+            .collect::<Vec<_>>();
+        if !contours.is_empty() {
+            paths.push(BoardArrayLayerPath {
+                data: svg_path_data(&contours),
+                bbox: transform_bbox(image.bbox, transform),
                 stroke_width: 0.0,
                 filled: true,
                 stroked: false,
                 vscore: false,
-            }))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect())
+            });
+        }
+    }
+
+    Ok(paths)
 }
 
 fn board_instance_paths(
@@ -385,33 +357,29 @@ fn overview_viewbox(
     bbox.expand(OVERVIEW_VIEWBOX_PADDING_MM)
 }
 
-fn feature_paths(
+fn vscore_paths(
     doc: &GeometryDocument,
-    feature: &pcb_ir::dialects::ipc::Feature<ipc2581::Symbol>,
+    feature: &Feature<ipc2581::Symbol>,
     transform: Affine2,
-) -> anyhow::Result<Vec<BoardArrayLayerPath>> {
-    Ok(feature
-        .paths
-        .indices()
-        .map(|path_index| {
-            let Some(path) = doc.arena.paths.get(path_index as usize) else {
-                return Ok(None);
-            };
-            let mut data = String::new();
-            append_transformed_path_data(&mut data, doc, path_index, transform)?;
-            Ok::<_, anyhow::Error>((!data.is_empty()).then_some(BoardArrayLayerPath {
-                data,
-                bbox: transform_bbox(path.bbox, transform),
-                stroke_width: path.stroke().map(|stroke| stroke.width).unwrap_or(0.0),
-                filled: path.is_filled(),
-                stroked: path.is_stroked(),
-                vscore: feature.is_vscore(),
-            }))
+) -> Vec<BoardArrayLayerPath> {
+    doc.placements_for_feature(feature)
+        .iter()
+        .flat_map(|&placement| {
+            let transform = transform.concat(placement);
+            feature.paths.indices().filter_map(move |path_index| {
+                let path = doc.arena.path(path_index);
+                let data = svg_path_data(&doc.transformed_path_contours(path_index, transform));
+                (!data.is_empty()).then_some(BoardArrayLayerPath {
+                    data,
+                    bbox: transform_bbox(path.bbox, transform),
+                    stroke_width: path.stroke().map_or(0.0, |stroke| stroke.width),
+                    filled: path.is_filled(),
+                    stroked: path.is_stroked(),
+                    vscore: true,
+                })
+            })
         })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect())
+        .collect()
 }
 
 fn transform_bbox(bbox: BBox, transform: Affine2) -> BBox {

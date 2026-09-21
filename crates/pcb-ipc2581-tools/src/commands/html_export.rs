@@ -438,9 +438,8 @@ fn render_extracted_layer(
     resolution: Resolution,
     ids: &str,
 ) -> anyhow::Result<()> {
-    rendered.has_native_content =
-        geometry::render::layer_has_native_content(&geometry, resolution)?;
     pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut geometry, resolution)?;
+    rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
     rendered.svg = Some(geometry::render::render_layer_svg(
         &geometry,
         true,

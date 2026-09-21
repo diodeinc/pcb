@@ -6,8 +6,10 @@ use pcb_ir::render::RenderOptions;
 pub use crate::layers::layer_role;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::artwork::{Geometry, Object, PaintOrder, PaintStage};
-use pcb_ir::dialects::ipc::{ArtworkScope, ProfileSet, profile_occurrences_for};
-use pcb_ir::dialects::{LayerRole, Side, mask};
+use pcb_ir::dialects::ipc::{
+    ArtworkScope, Feature, FeatureBucket, ProfileSet, profile_occurrences_for,
+};
+use pcb_ir::dialects::{LayerRole, Side};
 use pcb_ir::geom::{BBox, Paint, Polarity, Span, StrokeStyle};
 use pcb_ir::import::ipc2581::ImportedDesign;
 
@@ -69,40 +71,40 @@ pub fn render_layer_terminal(
     pcb_ir::render::artwork_to_terminal(&artwork, &RenderOptions::default().with_accuracy(accuracy))
 }
 
-fn layer_has_content(geometry: &GeometryDocument, resolution: Resolution) -> anyhow::Result<bool> {
-    let mask = layer_mask(geometry, false, ProfileSet::RootOnly, resolution)?;
-    Ok(mask
-        .layers
-        .first()
-        .map(|layer| !layer.shapes.is_empty() && !layer.bbox.is_empty())
-        .unwrap_or(false))
-}
-
-pub fn layer_has_native_content(
-    geometry: &GeometryDocument,
-    resolution: Resolution,
-) -> anyhow::Result<bool> {
-    let Some(mut native) = native_layer_document(geometry)? else {
-        return Ok(false);
-    };
-    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut native, resolution)?;
-    layer_has_content(&native, resolution)
-}
-
-/// Restrict a single-layer document to the features native to its source
-/// layer, dropping borrowed features. Returns `None` when nothing is native.
-pub fn native_layer_document(
-    geometry: &GeometryDocument,
-) -> anyhow::Result<Option<GeometryDocument>> {
+/// Whether a normalized single-layer document paints anything of its own.
+///
+/// Borrowed features, such as the rout slots every layer in their span
+/// carries, do not count. Normalization leaves a feature that set voids or
+/// cutouts erased without paths, so a surviving dark feature with painted
+/// paths is content. Cutouts image as themselves only where composition
+/// lets them: on a non-copper layer holding nothing else, such as a drill
+/// layer.
+pub fn layer_has_native_content(geometry: &GeometryDocument) -> bool {
     let Some(layer) = geometry.layers.first() else {
-        return Ok(None);
+        return false;
     };
-    let source_layer_ref = layer.source_layer_ref;
-    let mut native = geometry.clone();
-    pcb_ir::dialects::ipc::process::retain_features(&mut native, |feature| {
-        feature.source_layer_ref == Some(source_layer_ref)
-    });
-    Ok((!native.features.is_empty()).then_some(native))
+    let features = layer.features.slice(&geometry.features);
+    let paints = |feature: &&Feature<Symbol>| {
+        feature
+            .paths
+            .slice(&geometry.arena.paths)
+            .iter()
+            .any(|path| path.paint.is_painted() && !path.bbox.is_empty())
+    };
+    let is_cutout = |feature: &Feature<Symbol>| feature.bucket == FeatureBucket::Cutout;
+    let cutouts_image = !crate::layers::is_copper(layer.layer_function)
+        && features.iter().filter(paints).all(is_cutout);
+    features
+        .iter()
+        .filter(|feature| feature.source_layer_ref == Some(layer.source_layer_ref))
+        .filter(paints)
+        .any(|feature| {
+            if is_cutout(feature) {
+                cutouts_image
+            } else {
+                feature.polarity == Polarity::Dark
+            }
+        })
 }
 
 /// Lower a single-layer geometry document to artwork, with the display
@@ -123,18 +125,6 @@ pub fn layer_artwork(
         append_display_profiles(&mut artwork, geometry, profile_set, layer.layer_function)?;
     }
     Ok(artwork)
-}
-
-pub fn layer_mask(
-    geometry: &GeometryDocument,
-    include_profiles: bool,
-    profile_set: ProfileSet,
-    resolution: Resolution,
-) -> anyhow::Result<mask::Document<LayerFunction>> {
-    Ok(pcb_ir::dialects::artwork::compose_to_mask(
-        &layer_artwork(geometry, include_profiles, profile_set)?,
-        resolution,
-    )?)
 }
 
 fn append_display_profiles(
@@ -201,4 +191,100 @@ fn append_display_profile_path(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_content_ignores_borrowed_and_erased_features() {
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad">
+        <Circle diameter="0.4"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Cu" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+      <Layer name="In1.Cu" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="B.Cu" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
+      <Layer name="Rout" layerFunction="ROUT" side="ALL" polarity="POSITIVE">
+        <Span fromLayer="F.Cu" toLayer="B.Cu"/>
+      </Layer>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+        <PadStackDef name="top">
+          <PadstackPadDef layerRef="F.Cu" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="inner">
+          <PadstackPadDef layerRef="In1.Cu" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="F.Cu">
+          <Set>
+            <Pad padstackDefRef="top">
+              <Location x="2" y="3"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="In1.Cu">
+          <Set>
+            <Pad padstackDefRef="inner">
+              <Location x="7" y="2"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="Drill">
+          <Set>
+            <Hole name="H1" diameter="0.8" platingStatus="NONPLATED" x="4" y="4"/>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="Rout">
+          <Set>
+            <SlotCavity name="S1" platingStatus="NONPLATED" plusTol="0" minusTol="0">
+              <Location x="7" y="2"/>
+              <Oval width="3" height="1"/>
+            </SlotCavity>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let resolution = Resolution::default();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
+        let native_content = |layer| {
+            layer_has_native_content(
+                &prepare_layer(&imported, layer, ArtworkScope::Board, resolution).unwrap(),
+            )
+        };
+
+        assert!(native_content("F.Cu"), "a surviving pad is content");
+        assert!(!native_content("In1.Cu"), "the slot erases the only pad");
+        assert!(!native_content("B.Cu"), "a borrowed slot is not content");
+        assert!(native_content("Drill"), "holes image on their own layer");
+        assert!(native_content("Rout"), "slots image on their own layer");
+    }
 }
