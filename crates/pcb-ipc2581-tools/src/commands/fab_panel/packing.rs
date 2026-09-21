@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::ops::Range;
 
 pub const MAX_ITEM_COUNT: usize = 32;
 
 const SEARCH_WORK_LIMIT: usize = 100_000_000;
-const SPLITS_PER_STATE_LIMIT: usize = 200_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Size {
@@ -35,7 +35,7 @@ pub enum PackError {
     InvalidItem { item_index: usize },
     TooManyItems { count: usize, max: usize },
     NoLayout,
-    SearchLimitExceeded,
+    SearchLimitExceeded { distinct_sizes: usize },
 }
 
 impl fmt::Display for PackError {
@@ -56,9 +56,10 @@ impl fmt::Display for PackError {
                 f,
                 "no slicing layout fits the requested assembly panels in the fabrication panel"
             ),
-            Self::SearchLimitExceeded => write!(
+            Self::SearchLimitExceeded { distinct_sizes } => write!(
                 f,
-                "no layout was found before the slicing-layout search limit was reached"
+                "the slicing-layout search is too large for {distinct_sizes} distinct assembly \
+                 panel sizes; request fewer different sizes"
             ),
         }
     }
@@ -98,11 +99,23 @@ enum PlanNode {
     },
 }
 
+impl PlanNode {
+    fn size(self) -> Size {
+        match self {
+            Self::Leaf { size, .. } | Self::Join { size, .. } => size,
+        }
+    }
+}
+
 struct Solver {
     bin: Size,
     gap: u32,
     shapes: Vec<Shape>,
-    memo: HashMap<Vec<u8>, Vec<Candidate>>,
+    /// Each solved state's Pareto frontier, as a range of `candidates`.
+    memo: HashMap<Vec<u8>, Range<usize>>,
+    candidates: Vec<Candidate>,
+    /// The plans behind `candidates`. A state's frontier is interned only
+    /// once it is finished, so no dominated plan is ever kept.
     nodes: Vec<PlanNode>,
     work: usize,
     work_limit: usize,
@@ -139,18 +152,35 @@ pub fn pack(items: &[Size], bin: Size, gap: u32) -> Result<Vec<Placement>, PackE
         return Err(PackError::NoLayout);
     }
 
+    // Every sub-multiset of the items is a state, and a state enumerates every
+    // sub-multiset of itself as a split: with c copies of a size that is
+    // (c+1)(c+2)/2 per size, multiplied across sizes. Past the work limit the
+    // search cannot finish, so say so before starting it.
+    let split_work = shapes
+        .iter()
+        .map(|shape| shape.item_indices.len() as f64)
+        .map(|copies| (copies + 1.0) * (copies + 2.0) / 2.0)
+        .product::<f64>();
+    if split_work > SEARCH_WORK_LIMIT as f64 {
+        return Err(PackError::SearchLimitExceeded {
+            distinct_sizes: shapes.len(),
+        });
+    }
+
     let mut solver = Solver {
         bin,
         gap,
         shapes,
         memo: HashMap::new(),
+        candidates: Vec::new(),
         nodes: Vec::new(),
         work: 0,
         work_limit: SEARCH_WORK_LIMIT,
     };
     let frontier = solver.solve(&full_state)?;
-    let best = frontier
-        .into_iter()
+    let best = solver.candidates[frontier]
+        .iter()
+        .copied()
         .min_by_key(|candidate| {
             (
                 candidate.size.area(),
@@ -197,57 +227,52 @@ fn group_shapes(items: &[Size]) -> Vec<Shape> {
 }
 
 impl Solver {
-    fn solve(&mut self, state: &[u8]) -> Result<Vec<Candidate>, PackError> {
+    fn solve(&mut self, state: &[u8]) -> Result<Range<usize>, PackError> {
         if let Some(frontier) = self.memo.get(state) {
             return Ok(frontier.clone());
         }
 
         let item_count = state.iter().map(|count| usize::from(*count)).sum::<usize>();
-        let frontier = if item_count == 1 {
+        let plans = if item_count == 1 {
             self.leaf_frontier(state)
         } else {
             self.join_frontier(state)?
         };
+        let start = self.candidates.len();
+        for plan in plans {
+            self.candidates.push(Candidate {
+                size: plan.size(),
+                node: self.nodes.len(),
+            });
+            self.nodes.push(plan);
+        }
+        let frontier = start..self.candidates.len();
         self.memo.insert(state.to_vec(), frontier.clone());
         Ok(frontier)
     }
 
-    fn leaf_frontier(&mut self, state: &[u8]) -> Vec<Candidate> {
+    fn leaf_frontier(&self, state: &[u8]) -> Vec<PlanNode> {
         let shape_index = state
             .iter()
             .position(|count| *count == 1)
             .expect("single-item state has one shape");
         let size = self.shapes[shape_index].size;
         let mut frontier = Vec::with_capacity(2);
-        self.add_leaf_candidate(&mut frontier, shape_index, size);
-        if size.width != size.height {
-            self.add_leaf_candidate(
-                &mut frontier,
-                shape_index,
-                Size {
-                    width: size.height,
-                    height: size.width,
-                },
-            );
+        for size in [
+            size,
+            Size {
+                width: size.height,
+                height: size.width,
+            },
+        ] {
+            if size.width <= self.bin.width && size.height <= self.bin.height {
+                insert_pareto(&mut frontier, PlanNode::Leaf { shape_index, size });
+            }
         }
         frontier
     }
 
-    fn add_leaf_candidate(
-        &mut self,
-        frontier: &mut Vec<Candidate>,
-        shape_index: usize,
-        size: Size,
-    ) {
-        if size.width > self.bin.width || size.height > self.bin.height {
-            return;
-        }
-        let node = self.nodes.len();
-        self.nodes.push(PlanNode::Leaf { shape_index, size });
-        insert_pareto(frontier, Candidate { size, node });
-    }
-
-    fn join_frontier(&mut self, state: &[u8]) -> Result<Vec<Candidate>, PackError> {
+    fn join_frontier(&mut self, state: &[u8]) -> Result<Vec<PlanNode>, PackError> {
         let mut splits = Vec::new();
         let mut left = vec![0; state.len()];
         self.collect_splits(state, 0, &mut left, &mut splits)?;
@@ -276,14 +301,23 @@ impl Solver {
                 continue;
             }
             let right_frontier = self.solve(&right_state)?;
-            if right_frontier.is_empty() {
-                continue;
-            }
-            for first in &left_frontier {
-                for second in &right_frontier {
+            for first in left_frontier {
+                for second in right_frontier.clone() {
                     self.tick()?;
-                    self.add_join_candidate(&mut frontier, Axis::Horizontal, *first, *second);
-                    self.add_join_candidate(&mut frontier, Axis::Vertical, *first, *second);
+                    let (first, second) = (self.candidates[first], self.candidates[second]);
+                    for axis in [Axis::Horizontal, Axis::Vertical] {
+                        if let Some(size) = self.joined(axis, first.size, second.size) {
+                            insert_pareto(
+                                &mut frontier,
+                                PlanNode::Join {
+                                    axis,
+                                    first,
+                                    second,
+                                    size,
+                                },
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -308,9 +342,6 @@ impl Solver {
                 .map(|(total, left)| total - left)
                 .collect::<Vec<_>>();
             if &*left <= right.as_slice() {
-                if splits.len() == SPLITS_PER_STATE_LIMIT {
-                    return Err(PackError::SearchLimitExceeded);
-                }
                 splits.push(left.to_vec());
             }
             return Ok(());
@@ -323,67 +354,29 @@ impl Solver {
         Ok(())
     }
 
-    fn add_join_candidate(
-        &mut self,
-        frontier: &mut Vec<Candidate>,
-        axis: Axis,
-        first: Candidate,
-        second: Candidate,
-    ) {
+    /// The size of two plans side by side along `axis`, a gap apart, if the
+    /// bin holds it.
+    fn joined(&self, axis: Axis, first: Size, second: Size) -> Option<Size> {
+        let along = |a: u32, b: u32| a.checked_add(self.gap)?.checked_add(b);
         let size = match axis {
-            Axis::Horizontal => {
-                let Some(width) = first
-                    .size
-                    .width
-                    .checked_add(self.gap)
-                    .and_then(|width| width.checked_add(second.size.width))
-                else {
-                    return;
-                };
-                Size {
-                    width,
-                    height: first.size.height.max(second.size.height),
-                }
-            }
-            Axis::Vertical => {
-                let Some(height) = first
-                    .size
-                    .height
-                    .checked_add(self.gap)
-                    .and_then(|height| height.checked_add(second.size.height))
-                else {
-                    return;
-                };
-                Size {
-                    width: first.size.width.max(second.size.width),
-                    height,
-                }
-            }
+            Axis::Horizontal => Size {
+                width: along(first.width, second.width)?,
+                height: first.height.max(second.height),
+            },
+            Axis::Vertical => Size {
+                width: first.width.max(second.width),
+                height: along(first.height, second.height)?,
+            },
         };
-        if size.width > self.bin.width || size.height > self.bin.height {
-            return;
-        }
-        if frontier
-            .iter()
-            .any(|candidate| dominates(candidate.size, size))
-        {
-            return;
-        }
-        frontier.retain(|candidate| !dominates(size, candidate.size));
-        let node = self.nodes.len();
-        self.nodes.push(PlanNode::Join {
-            axis,
-            first,
-            second,
-            size,
-        });
-        frontier.push(Candidate { size, node });
+        (size.width <= self.bin.width && size.height <= self.bin.height).then_some(size)
     }
 
     fn tick(&mut self) -> Result<(), PackError> {
         self.work += 1;
         if self.work > self.work_limit {
-            Err(PackError::SearchLimitExceeded)
+            Err(PackError::SearchLimitExceeded {
+                distinct_sizes: self.shapes.len(),
+            })
         } else {
             Ok(())
         }
@@ -464,15 +457,15 @@ fn dominates(first: Size, second: Size) -> bool {
     first.width <= second.width && first.height <= second.height
 }
 
-fn insert_pareto(frontier: &mut Vec<Candidate>, candidate: Candidate) {
+fn insert_pareto(frontier: &mut Vec<PlanNode>, plan: PlanNode) {
     if frontier
         .iter()
-        .any(|existing| dominates(existing.size, candidate.size))
+        .any(|existing| dominates(existing.size(), plan.size()))
     {
         return;
     }
-    frontier.retain(|existing| !dominates(candidate.size, existing.size));
-    frontier.push(candidate);
+    frontier.retain(|existing| !dominates(plan.size(), existing.size()));
+    frontier.push(plan);
 }
 
 #[cfg(test)]
@@ -661,6 +654,61 @@ mod tests {
             pack(&items, USABLE_FAB_PANEL, GAP),
             Err(PackError::NoLayout)
         );
+    }
+
+    #[test]
+    fn a_search_too_large_to_finish_is_refused_before_it_starts() {
+        // Seventeen different sizes make 3^17 splits, past the whole budget.
+        let items = (0..17u32)
+            .map(|i| Size {
+                width: 20_000 + 1_000 * i,
+                height: 30_000 + 1_000 * i,
+            })
+            .collect::<Vec<_>>();
+        let error = pack(&items, USABLE_FAB_PANEL, GAP).unwrap_err();
+        assert_eq!(error, PackError::SearchLimitExceeded { distinct_sizes: 17 });
+        assert!(
+            error
+                .to_string()
+                .contains("too large for 17 distinct assembly panel sizes")
+        );
+        // The same count of one repeated size is a small search.
+        let items = vec![items[0]; 17];
+        assert_valid(&items, &pack(&items, USABLE_FAB_PANEL, GAP).unwrap());
+    }
+
+    #[test]
+    fn only_undominated_plans_are_kept() {
+        let items = (0..7u32)
+            .map(|i| Size {
+                width: 30_000 + 7_000 * i,
+                height: 50_000 + 11_000 * ((i * 5) % 7),
+            })
+            .collect::<Vec<_>>();
+        let shapes = group_shapes(&items);
+        let full_state = vec![1u8; shapes.len()];
+        let mut solver = Solver {
+            bin: USABLE_FAB_PANEL,
+            gap: GAP,
+            shapes,
+            memo: HashMap::new(),
+            candidates: Vec::new(),
+            nodes: Vec::new(),
+            work: 0,
+            work_limit: SEARCH_WORK_LIMIT,
+        };
+        solver.solve(&full_state).unwrap();
+        assert_eq!(solver.nodes.len(), solver.candidates.len());
+        assert_eq!(solver.memo.len(), (1 << 7) - 1);
+        for frontier in solver.memo.values() {
+            let frontier = &solver.candidates[frontier.clone()];
+            for (index, first) in frontier.iter().enumerate() {
+                for second in &frontier[index + 1..] {
+                    assert!(!dominates(first.size, second.size));
+                    assert!(!dominates(second.size, first.size));
+                }
+            }
+        }
     }
 
     #[test]
