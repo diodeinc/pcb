@@ -129,3 +129,32 @@ fn corner_flags_default_to_false_but_reject_malformed_values() {
     assert!(rect.shape.upper_left);
     assert!(!rect.shape.upper_right && !rect.shape.lower_left && !rect.shape.lower_right);
 }
+
+#[test]
+fn percentage_tolerances_are_not_scaled_as_lengths() {
+    let xml = fixture("", "").replace(
+        "<Step ",
+        r#"<Stackup name="s" overallThickness="0.063" tolPlus="10" tolMinus="5" tolPercent="true" whereMeasured="METAL" stackupStatus="PROPOSED">
+             <StackupGroup name="g" thickness="0.063" tolPlus="0" tolMinus="0">
+               <StackupLayer layerOrGroupRef="top" thickness="0.001" tolPlus="0.0001" tolMinus="0.0001" sequence="1.0"/>
+             </StackupGroup>
+           </Stackup><Step "#,
+    );
+    let doc = Ipc2581::parse(&xml).unwrap();
+    let stackup = &doc.ecad().unwrap().cad_data.stackups[0];
+
+    assert!(stackup.tol_percent);
+    assert_eq!(
+        (stackup.tol_plus, stackup.tol_minus),
+        (Some(10.0), Some(5.0))
+    );
+    let layer = &stackup.layers[0];
+    assert!(!layer.tol_percent);
+    assert_eq!(layer.tol_plus, Some(0.0001 * 25.4));
+    assert_eq!(layer.layer_number, Some(1));
+
+    assert_rejected(
+        &xml.replace(r#"sequence="1.0""#, r#"sequence="1.5""#),
+        "sequence",
+    );
+}

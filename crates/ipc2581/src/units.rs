@@ -16,7 +16,6 @@ pub fn to_mm(value: f64, from_units: Units) -> f64 {
 /// Convert a value from millimeters to the specified units
 ///
 /// This is the inverse of `to_mm()` and is useful for exporting data.
-#[allow(dead_code)]
 pub fn from_mm(value: f64, to_units: Units) -> f64 {
     match to_units {
         Units::Millimeter => value,

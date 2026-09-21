@@ -1384,86 +1384,42 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_surface_finish(&mut self, node: &Node) -> Result<ecad::SurfaceFinish> {
-        // Per IPC-2581C XSD, SurfaceFinish has:
-        //   - required attribute "type" (surfaceFinishType)
-        //   - optional attribute "comment"
-        //   - optional child elements "Product" (0..n)
-        //
-        // Correct format: <SurfaceFinish type="S"/>
-        // KiCad bug format: <SurfaceFinish><Finish type="S"/></SurfaceFinish>
-
-        // First, try the correct IPC-2581C format: type attribute directly on SurfaceFinish
-        if let Some(finish_type_str) = self.attr(node, "type") {
-            let finish_type =
-                ecad::FinishType::from_ipc(finish_type_str).unwrap_or(ecad::FinishType::Other);
-            let comment = self.attr(node, "comment").map(|s| self.interner.intern(s));
-
-            let mut products = Vec::new();
-            for product_node in self.element_children(node) {
-                if self.name(&product_node) == "Product"
-                    && let Some(product_name) = self.attr(&product_node, "name")
-                {
-                    let criteria = self
-                        .attr(&product_node, "criteria")
+        // IPC-2581C puts `type`, `comment` and the Products on SurfaceFinish;
+        // older KiCad nested them in a Finish child.
+        let finish = if self.attr(node, "type").is_some() {
+            *node
+        } else {
+            self.children_named(node, "Finish")
+                .next()
+                .ok_or(Ipc2581Error::MissingAttribute {
+                    element: "SurfaceFinish",
+                    attr: "type",
+                })?
+        };
+        // A finish outside the schema's list is still a finish.
+        let finish_type = self
+            .attr(&finish, "type")
+            .and_then(|finish_type| ecad::FinishType::from_ipc(finish_type).ok())
+            .unwrap_or(ecad::FinishType::Other);
+        let comment = self.optional_attr(&finish, "comment");
+        let products = self
+            .children_named(&finish, "Product")
+            .map(|product| {
+                Ok(ecad::FinishProduct {
+                    name: self.required_attr(&product, "name", "Product")?,
+                    criteria: self
+                        .attr(&product, "criteria")
                         .map(ecad::ProductCriteria::from_ipc)
-                        .transpose()?;
+                        .transpose()?,
+                })
+            })
+            .collect::<Result<_>>()?;
 
-                    products.push(ecad::FinishProduct {
-                        name: self.interner.intern(product_name),
-                        criteria,
-                    });
-                }
-            }
-
-            return Ok(ecad::SurfaceFinish {
-                finish_type,
-                comment,
-                products,
-            });
-        }
-
-        // TODO: Remove this fallback once KiCad fixes their IPC-2581 exporter.
-        // See: https://gitlab.com/kicad/code/kicad/-/issues/XXXXX
-        // Fallback: support incorrect KiCad format with nested Finish element
-        // This is non-compliant but allows parsing legacy KiCad exports
-        for child in self.element_children(node) {
-            if self.name(&child) == "Finish" {
-                let finish_type_str = self.attr(&child, "type").unwrap_or("OTHER");
-                let finish_type =
-                    ecad::FinishType::from_ipc(finish_type_str).unwrap_or(ecad::FinishType::Other);
-                let comment = self
-                    .attr(&child, "comment")
-                    .map(|s| self.interner.intern(s));
-
-                let mut products = Vec::new();
-                for product_node in self.element_children(&child) {
-                    if self.name(&product_node) == "Product"
-                        && let Some(product_name) = self.attr(&product_node, "name")
-                    {
-                        let criteria = self
-                            .attr(&product_node, "criteria")
-                            .map(ecad::ProductCriteria::from_ipc)
-                            .transpose()?;
-
-                        products.push(ecad::FinishProduct {
-                            name: self.interner.intern(product_name),
-                            criteria,
-                        });
-                    }
-                }
-
-                return Ok(ecad::SurfaceFinish {
-                    finish_type,
-                    comment,
-                    products,
-                });
-            }
-        }
-
-        // No type attribute and no Finish element found
-        Err(Ipc2581Error::MissingElement(
-            "SurfaceFinish: missing required 'type' attribute",
-        ))
+        Ok(ecad::SurfaceFinish {
+            finish_type,
+            comment,
+            products,
+        })
     }
 
     fn parse_cad_data(&mut self, node: &Node) -> Result<CadData> {
@@ -1498,8 +1454,11 @@ impl<'a> Parser<'a> {
             .attr(node, "whereMeasured")
             .map(WhereMeasured::from_ipc)
             .transpose()?;
-        let tol_plus = self.opt_mm(node, "tolPlus", units)?;
-        let tol_minus = self.opt_mm(node, "tolMinus", units)?;
+        // A percentage is not a length.
+        let tol_percent = self.parse_flag_attr(node, "tolPercent")?;
+        let tol_units = (!tol_percent).then_some(units);
+        let tol_plus = self.number(node, "tolPlus", Sign::Any, tol_units)?;
+        let tol_minus = self.number(node, "tolMinus", Sign::Any, tol_units)?;
 
         let mut layers = Vec::new();
         for child in self.element_children(node) {
@@ -1519,6 +1478,7 @@ impl<'a> Parser<'a> {
             where_measured,
             tol_plus,
             tol_minus,
+            tol_percent,
             layers,
         })
     }
@@ -1531,12 +1491,11 @@ impl<'a> Parser<'a> {
 
         let thickness = self.opt_mm(node, "thickness", units)?;
 
-        // Convert tolerances if present
-        // NOTE: IPC-2581 spec allows tolPercent attribute to indicate if these are percentages
-        // For a pure parser, we should keep the raw values and let downstream code handle interpretation
-        // Currently we convert to mm for convenience (TODO: make this a separate normalization step)
-        let tol_plus = self.opt_mm(node, "tolPlus", units)?;
-        let tol_minus = self.opt_mm(node, "tolMinus", units)?;
+        // A percentage is not a length.
+        let tol_percent = self.parse_flag_attr(node, "tolPercent")?;
+        let tol_units = (!tol_percent).then_some(units);
+        let tol_plus = self.number(node, "tolPlus", Sign::Any, tol_units)?;
+        let tol_minus = self.number(node, "tolMinus", Sign::Any, tol_units)?;
 
         // `sequence` is a double in the schema; layers are numbered with whole ones.
         let layer_number = self
@@ -1581,6 +1540,7 @@ impl<'a> Parser<'a> {
             thickness,
             tol_plus,
             tol_minus,
+            tol_percent,
             material,
             spec_ref,
             dielectric_constant,
@@ -2154,7 +2114,7 @@ impl<'a> Parser<'a> {
             .transpose()?;
 
         let mut span = None;
-        let mut profile = None;
+        let mut profiles = Vec::new();
         let mut spec_refs = Vec::new();
         for child in self.element_children(node) {
             match self.name(&child) {
@@ -2169,9 +2129,7 @@ impl<'a> Parser<'a> {
                             .map(|s| self.interner.intern(s)),
                     });
                 }
-                "Profile" => {
-                    profile = Some(self.parse_profile(&child)?);
-                }
+                "Profile" => profiles.push(self.parse_profile(&child)?),
                 _ => {}
             }
         }
@@ -2183,7 +2141,7 @@ impl<'a> Parser<'a> {
             polarity,
             span,
             spec_refs,
-            profile,
+            profiles,
         })
     }
 

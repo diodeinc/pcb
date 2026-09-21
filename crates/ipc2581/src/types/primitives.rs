@@ -412,12 +412,6 @@ pub struct BoundingBox {
     pub upper_right: Point,
 }
 
-/// Reference to a dictionary entry
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DictRef {
-    pub id: Symbol,
-}
-
 /// User-defined geometric primitives (from DictionaryUser)
 #[derive(Debug, Clone, PartialEq)]
 pub enum UserPrimitive {

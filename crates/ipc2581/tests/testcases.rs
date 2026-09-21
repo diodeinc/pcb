@@ -212,6 +212,17 @@ fn test_testcase11_full() {
     let path = Path::new("tests/data/testcase11-revc/testcase11-rdgflx-revc-full.xml");
     let doc = parse_and_validate(path);
     assert_metadata_populated(&doc, "Testcase 11");
+
+    // Rigid-flex layers carry one Profile per zone.
+    let profiles = doc
+        .ecad()
+        .unwrap()
+        .cad_data
+        .layers
+        .iter()
+        .map(|layer| layer.profiles.len())
+        .max();
+    assert_eq!(profiles, Some(3));
 }
 
 // Test Case 12: Display board w/controller

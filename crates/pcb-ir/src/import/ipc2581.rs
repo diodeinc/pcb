@@ -5906,7 +5906,7 @@ mod tests {
             polarity: None,
             span,
             spec_refs: Vec::new(),
-            profile: None,
+            profiles: Vec::new(),
         }
     }
 

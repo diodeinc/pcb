@@ -88,8 +88,10 @@ pub struct Stackup {
     pub name: Symbol,
     pub overall_thickness: Option<f64>,
     pub where_measured: Option<WhereMeasured>,
+    /// Millimeters, or percent of the thickness when `tol_percent`.
     pub tol_plus: Option<f64>,
     pub tol_minus: Option<f64>,
+    pub tol_percent: bool,
     pub layers: Vec<StackupLayer>,
 }
 
@@ -98,8 +100,10 @@ pub struct Stackup {
 pub struct StackupLayer {
     pub layer_ref: Symbol,
     pub thickness: Option<f64>,
+    /// Millimeters, or percent of the thickness when `tol_percent`.
     pub tol_plus: Option<f64>,
     pub tol_minus: Option<f64>,
+    pub tol_percent: bool,
     pub material: Option<Symbol>,
     pub spec_ref: Option<Symbol>, // Reference to Spec for looking up properties
     pub dielectric_constant: Option<f64>,
@@ -574,7 +578,8 @@ pub struct Layer {
     pub polarity: Option<Polarity>,
     pub span: Option<LayerSpan>,
     pub spec_refs: Vec<Symbol>,
-    pub profile: Option<Profile>, // Layer-specific outline (for rigid-flex)
+    /// Layer-specific outlines; a rigid-flex layer can have several.
+    pub profiles: Vec<Profile>,
 }
 
 #[derive(Debug, Clone, Copy)]
