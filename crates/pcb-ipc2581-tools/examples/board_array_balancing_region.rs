@@ -185,6 +185,8 @@ struct CoverageJson {
 #[serde(rename_all = "camelCase")]
 struct ChecksJson {
     passed: bool,
+    /// Where a boundary comes closer than the clearance; absent when none does.
+    nearest_approach_mm: Option<f64>,
     safe_outside_clearance_region_area_mm2: f64,
     regularization_violation_area_mm2: f64,
     gap_violation_area_mm2: f64,
@@ -395,6 +397,14 @@ fn main() -> Result<()> {
         .opened_candidates
         .disk_gap_violations(args.gap_radius_mm)
         .unwrap();
+    // Overlays only this harness draws: the clearance sweep, and the two
+    // properties the construction guarantees by ending on an opening with no
+    // gap violation left.
+    let swept_safe_region = safe_region.disk_dilate(args.clearance_mm)?;
+    let regularization_violations =
+        safe_region.difference(&safe_region.disk_open(args.regularization_radius_mm)?)?;
+    let gap_violations = safe_region.disk_gap_violations(args.gap_radius_mm)?;
+    let nearest_approach_mm = certificate.nearest_approach.map(|distance| distance.mm);
     let regions = Regions {
         panel_outer,
         board_footprints,
@@ -411,16 +421,17 @@ fn main() -> Result<()> {
         removed_by_regularization,
         safe_region,
         undersized_final_components,
-        clearance_certificate: certificate.swept_safe_region,
+        clearance_certificate: swept_safe_region,
         safe_outside_clearance_region: certificate.safe_outside_clearance_region,
-        regularization_violations: certificate.regularization_violations,
-        gap_violations: certificate.gap_violations,
+        regularization_violations,
+        gap_violations,
         certificate_outside_panel: certificate.outside_panel,
         certificate_obstacle_overlap: certificate.obstacle_overlap,
     };
 
     let checks = ChecksJson {
         passed: certificate_passed,
+        nearest_approach_mm,
         safe_outside_clearance_region_area_mm2: regions.safe_outside_clearance_region.area(),
         regularization_violation_area_mm2: regions.regularization_violations.area(),
         gap_violation_area_mm2: regions.gap_violations.area(),

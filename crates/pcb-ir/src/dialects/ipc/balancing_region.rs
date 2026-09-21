@@ -39,6 +39,8 @@ use crate::dialects::ipc::{
     ProfileOccurrenceRole, ProfileSet, profile_occurrences_for, relief::is_vcut_operation_feature,
 };
 use crate::geom::accuracy::{ErrorAllocation, allocate_error};
+use crate::geom::dist::Distance;
+use crate::geom::region::ring_edges;
 use crate::geom::{ContourSet, FillRule, Paint};
 use ipc2581::Symbol;
 
@@ -149,36 +151,67 @@ pub struct BoardArrayBalancingIntermediates {
     pub removed_by_gap_regularization: ContourSet,
 }
 
-/// Independent proof geometry for a computed safe region.
+/// Independent proof that a computed safe region keeps its clearance.
+///
+/// The construction offsets regions; the proof measures distances between
+/// boundaries, so neither shares the other's failure modes. Boundaries closer
+/// than the clearance, or regions that overlap outright, are the only ways
+/// generated copper can come within the clearance of what it must avoid.
+///
+/// Feature width and void-gap width need no second proof: the construction's
+/// last step is an opening, and it stops only once
+/// [`ContourSet::disk_gap_violations`] finds nothing.
 #[derive(Debug, Clone)]
 pub struct ClearanceCertificate {
-    /// Safe region dilated by the nominal requested clearance.
-    pub swept_safe_region: ContourSet,
+    /// The nearest approach of the safe region's boundary to an obstacle's or
+    /// the panel's, where it is closer than the nominal clearance.
+    pub nearest_approach: Option<Distance>,
     /// Regularized safe material outside the clearance-safe set.
     pub safe_outside_clearance_region: ContourSet,
-    /// `safe_region \ open(safe_region, region_radius)`, after denoising.
-    pub regularization_violations: ContourSet,
-    /// Two-sided components of
-    /// `close(safe_region, disk(gap_radius)) \ safe_region`. Non-empty geometry
-    /// proves a void gap narrower than twice the gap radius, including within
-    /// one connected filled component.
-    pub gap_violations: ContourSet,
-    /// Nominal-clearance sweep outside the raw panel.
+    /// Safe material outside the raw panel.
     pub outside_panel: ContourSet,
-    /// Nominal-clearance sweep intersecting raw obstacles.
+    /// Safe material on raw obstacles.
     pub obstacle_overlap: ContourSet,
 }
 
 impl ClearanceCertificate {
-    /// Whether the two-sided gap set is empty and every other violation is
+    /// Measure `safe_region` against the nominal `clearance_mm` from the
+    /// panel's exterior and from `obstacles`.
+    pub fn of(
+        safe_region: &ContourSet,
+        clearance_safe_region: &ContourSet,
+        panel_outer: &ContourSet,
+        obstacles: &ContourSet,
+        clearance_mm: f64,
+    ) -> Result<Self, AccuracyError> {
+        let forbidden = [panel_outer.prepare_query(), obstacles.prepare_query()];
+        let nearest_approach = safe_region
+            .rings
+            .iter()
+            .flat_map(ring_edges)
+            .flat_map(|(start, end)| {
+                forbidden.iter().filter_map(move |boundary| {
+                    boundary.segment_nearest_within(start, end, clearance_mm)
+                })
+            })
+            .filter(|distance| distance.mm < clearance_mm)
+            .min_by(|left, right| left.mm.total_cmp(&right.mm));
+        Ok(Self {
+            nearest_approach,
+            safe_outside_clearance_region: safe_region.difference(clearance_safe_region)?,
+            outside_panel: safe_region.difference(panel_outer)?,
+            obstacle_overlap: safe_region.intersection(obstacles)?,
+        })
+    }
+
+    /// Whether no boundary comes within the clearance and every overlap is
     /// below the supplied area tolerance.
     pub fn passes(&self, area_tolerance_mm2: f64) -> bool {
         area_tolerance_mm2.is_finite()
             && area_tolerance_mm2 >= 0.0
-            && self.gap_violations.is_empty()
+            && self.nearest_approach.is_none()
             && [
                 &self.safe_outside_clearance_region,
-                &self.regularization_violations,
                 &self.outside_panel,
                 &self.obstacle_overlap,
             ]
@@ -413,20 +446,14 @@ pub fn board_array_balancing_region(
     let removed_by_gap_regularization = gap_regularization.removed;
 
     // Certify against the nominal requirement, independently of the
-    // construction guard used above.
-    let swept_safe_region = safe_region.disk_dilate(options.clearance_mm)?;
-    let regularization_violations = safe_region
-        .difference(&safe_region.disk_open(options.regularization_radius_mm)?)?
-        .disk_open(numerical_guard_mm)?;
-    let gap_violations = safe_region.disk_gap_violations(options.gap_radius_mm)?;
-    let certificate = ClearanceCertificate {
-        safe_outside_clearance_region: safe_region.difference(&clearance_safe_region)?,
-        regularization_violations,
-        gap_violations,
-        outside_panel: swept_safe_region.difference(&input.panel_outer)?,
-        obstacle_overlap: swept_safe_region.intersection(&raw_obstacles)?,
-        swept_safe_region,
-    };
+    // construction guard and the offsets used above.
+    let certificate = ClearanceCertificate::of(
+        &safe_region,
+        &clearance_safe_region,
+        &input.panel_outer,
+        &raw_obstacles,
+        options.clearance_mm,
+    )?;
 
     Ok(BoardArrayBalancingResult {
         safe_region,
@@ -725,12 +752,37 @@ mod tests {
         assert!(!result.safe_region.is_empty());
         assert!(
             result.certificate.passes(1e-4),
-            "outside clearance-safe {:.9}, filled-feature violations {:.9}, void-gap violations {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
+            "nearest approach {:?}, outside clearance-safe {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
+            result.certificate.nearest_approach,
             result.certificate.safe_outside_clearance_region.area(),
-            result.certificate.regularization_violations.area(),
-            result.certificate.gap_violations.area(),
             result.certificate.outside_panel.area(),
             result.certificate.obstacle_overlap.area(),
+        );
+        // What the construction guarantees without a second proof: every
+        // filled feature admits the regularization disk and every two-sided
+        // void gap the gap disk.
+        let options = BalancingRegionOptions::default();
+        let opened = result
+            .safe_region
+            .disk_open(options.regularization_radius_mm)
+            .unwrap();
+        // Reopening a flattened arc shaves its chords' corners; anything a
+        // few micrometres thick is that, not a feature the disk does not fit.
+        assert!(
+            result
+                .safe_region
+                .difference(&opened)
+                .unwrap()
+                .disk_erode(0.005)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            result
+                .safe_region
+                .disk_gap_violations(options.gap_radius_mm)
+                .unwrap()
+                .is_empty()
         );
         assert!(
             result
@@ -886,7 +938,13 @@ mod tests {
             "unexpected gap trimming {:.9} mm²",
             result.intermediates.removed_by_gap_regularization.area(),
         );
-        assert!(result.certificate.gap_violations.is_empty());
+        assert!(
+            result
+                .safe_region
+                .disk_gap_violations(0.5)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -912,6 +970,61 @@ mod tests {
             blocked.intermediates.clearance_safe_region.area()
                 < baseline.intermediates.clearance_safe_region.area()
         );
+    }
+
+    /// The certificate measures; it does not take the construction's word. A
+    /// region built to a smaller clearance fails a larger one, and says where.
+    #[test]
+    fn certificate_rejects_a_region_built_to_a_smaller_clearance() {
+        let resolution = Resolution::default();
+        let input = BoardArrayBalancingInput {
+            panel_outer: ContourSet::rectangle(
+                BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 30.0)),
+                resolution,
+            ),
+            board_footprints: ContourSet::rectangle(
+                BBox::new(Point::new(10.0, 8.0), Point::new(30.0, 22.0)),
+                resolution,
+            ),
+            material_removal: ContourSet::empty(resolution),
+            support_features: ContourSet::empty(resolution),
+        };
+        let built = board_array_balancing_region(
+            &input,
+            BalancingRegionOptions {
+                clearance_mm: 0.3,
+                ..BalancingRegionOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(built.certificate.passes(1e-4));
+
+        let certificate = ClearanceCertificate::of(
+            &built.safe_region,
+            &built.intermediates.clearance_safe_region,
+            &input.panel_outer,
+            &input.board_footprints,
+            0.5,
+        )
+        .unwrap();
+        assert!(!certificate.passes(1e-4));
+        let nearest = certificate.nearest_approach.unwrap();
+        assert!((0.3..0.35).contains(&nearest.mm), "{}", nearest.mm);
+
+        // Overlap is caught even where no boundary is near another.
+        let overlapping = ClearanceCertificate::of(
+            &input.panel_outer,
+            &input.panel_outer,
+            &input.panel_outer.disk_dilate(5.0).unwrap(),
+            &ContourSet::rectangle(
+                BBox::new(Point::new(15.0, 12.0), Point::new(25.0, 18.0)),
+                resolution,
+            ),
+            0.5,
+        )
+        .unwrap();
+        assert!(overlapping.nearest_approach.is_none());
+        assert!(!overlapping.passes(1e-4));
     }
 
     #[test]

@@ -70,17 +70,23 @@ meaningful geometric progress reports an error.
 The independent nominal certificate is:
 
 ```text
-C = safe ⊕ disk(r)
-
 safe \ F_l = ∅
-safe \ open(safe, disk(q)) = ∅, after numerical denoising
-G_v(safe) = ∅
-C \ P = ∅
-C ∩ O_l = ∅
+safe \ P = ∅
+safe ∩ O_l = ∅
+dist(∂safe, ∂P ∪ ∂O_l) >= r
 ```
 
-Construction uses the guard; certification uses the nominal requirements.
-Every violation remains available as geometry for debugging.
+Construction uses the guard and offsets; certification uses the nominal
+clearance and measures boundary-to-boundary distance exactly, so the proof
+shares none of the construction's machinery. Regions that do not overlap can
+only come within `r` of each other where their boundaries do, so the four
+statements together are the clearance requirement.
+
+Filled-feature and void-gap width need no second proof. The last step of the
+construction is an opening by `disk(q)`, and it stops only once `G_v` of its
+own result is empty — that loop condition is the certificate. The harness
+still draws `safe ⊕ disk(r)`, `safe \ open(safe, disk(q))` and `G_v(safe)` as
+overlays for debugging.
 
 ## IPC boundary
 
