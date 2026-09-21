@@ -191,22 +191,26 @@ pub fn region_clearance_within(
     second_boundary: &PreparedRegion,
     maximum_mm: f64,
 ) -> Option<Distance> {
-    if first.is_empty() || second.is_empty() {
+    // Bounds are no farther apart than what they hold.
+    if first.is_empty()
+        || second.is_empty()
+        || first.bbox.distance_to(second.bbox) > maximum_mm + tol::EPSILON_MM
+    {
         return None;
     }
 
     // Every vertex starts one boundary edge, so a region's vertices inside
     // the other's bounds are among the starts of its edges meeting them.
-    let starts = |segments: Vec<(Point, Point)>| segments.into_iter().map(|(start, _)| start);
+    let starts = |(start, _): (Point, Point)| start;
     if first.bbox.intersects(second.bbox)
         && let Some(point) = contained_vertex(
-            starts(first_boundary.segments_meeting(second.bbox).collect()),
-            second,
+            first_boundary.segments_meeting(second.bbox).map(starts),
+            second_boundary,
         )
         .or_else(|| {
             contained_vertex(
-                starts(second_boundary.segments_meeting(first.bbox).collect()),
-                first,
+                second_boundary.segments_meeting(first.bbox).map(starts),
+                first_boundary,
             )
         })
     {
@@ -230,20 +234,17 @@ pub fn region_clearance_within(
         .min_by(|left, right| left.mm.total_cmp(&right.mm))
 }
 
-/// The first of a subject's `vertices` inside `container`, batched in one
-/// winding sweep.
+/// The first of a subject's `vertices` strictly inside `container`, by the
+/// winding its boundary index counts along each vertex's own height.
 fn contained_vertex(
-    vertices: impl Iterator<Item = Point>,
-    container: &ContourSet,
+    mut vertices: impl Iterator<Item = Point>,
+    container: &PreparedRegion,
 ) -> Option<Point> {
-    let vertices = vertices
-        .filter(|&point| container.bbox.contains_point(point))
-        .collect::<Vec<_>>();
-    container
-        .contains_points_batch(&vertices)
-        .into_iter()
-        .zip(vertices)
-        .find_map(|(inside, vertex)| inside.then_some(vertex))
+    vertices.find(|&vertex| {
+        container
+            .signed_distance(vertex)
+            .is_some_and(|distance| distance.mm.is_sign_negative())
+    })
 }
 
 /// A connected local clearance failure. The paths are the participating
