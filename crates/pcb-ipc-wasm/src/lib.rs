@@ -219,16 +219,18 @@ impl IpcDocument {
                 layer,
                 layout_target,
             } => {
-                let scope = layout_target.artwork_scope();
-                let geometry =
-                    geometry::render::prepare_layer(self.design()?, &layer, scope, resolution)?;
+                let view = geometry::render::layer_artwork(
+                    self.design()?,
+                    &layer,
+                    layout_target.artwork_scope(),
+                    true,
+                    resolution,
+                )?;
                 ExportFile::new(
                     format!("{}.svg", safe_name(&layer)),
                     "image/svg+xml",
-                    geometry::render::render_layer_svg(
-                        &geometry,
-                        true,
-                        scope.profile_set(),
+                    pcb_ir::render::artwork_svg(
+                        &view.artwork,
                         &pcb_ir::render::RenderOptions::default()
                             .with_accuracy(resolution.accuracy),
                     )?,
@@ -238,17 +240,20 @@ impl IpcDocument {
                 layer,
                 layout_target,
             } => {
-                let scope = layout_target.artwork_scope();
-                let geometry =
-                    geometry::render::prepare_layer(self.design()?, &layer, scope, resolution)?;
+                let view = geometry::render::layer_artwork(
+                    self.design()?,
+                    &layer,
+                    layout_target.artwork_scope(),
+                    true,
+                    resolution,
+                )?;
                 ExportFile::new(
                     format!("{}.png", safe_name(&layer)),
                     "image/png",
-                    geometry::render::render_layer_png(
-                        &geometry,
-                        true,
-                        scope.profile_set(),
-                        resolution.accuracy,
+                    pcb_ir::render::artwork_png(
+                        &view.artwork,
+                        &pcb_ir::render::RenderOptions::default()
+                            .with_accuracy(resolution.accuracy),
                     )
                     .map_err(anyhow::Error::msg)?,
                 )

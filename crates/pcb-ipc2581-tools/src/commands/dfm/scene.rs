@@ -118,9 +118,14 @@ fn native_artwork(
 ) -> Result<
     pcb_ir::dialects::artwork::Document<ipc2581::types::LayerFunction, Option<ipc2581::Symbol>>,
 > {
-    let geometry =
-        geometry::render::prepare_layer(design.imported, layer, design.scope, design.resolution)?;
-    geometry::render::layer_artwork(&geometry, false, design.scope.profile_set())
+    Ok(geometry::render::layer_artwork(
+        design.imported,
+        layer,
+        design.scope,
+        false,
+        design.resolution,
+    )?
+    .artwork)
 }
 
 pub(super) fn export(

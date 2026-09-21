@@ -1,5 +1,6 @@
 pub mod dxf;
 pub mod render;
+pub mod step_artwork;
 
 use anyhow::{Context, Result, bail};
 use ipc2581::{Symbol, types::LayerFunction};
@@ -16,8 +17,8 @@ use pcb_ir::geom::dfm::BBoxIndex;
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
+pub(crate) use pcb_ir::import::ipc2581::is_panel_step;
 pub use pcb_ir::import::ipc2581::{extract_layer, extract_layer_for_view, extract_layout};
-pub(crate) use pcb_ir::import::ipc2581::{is_panel_step, step_repeat_transform};
 
 pub(crate) type GeometryDocument =
     pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;

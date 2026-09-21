@@ -11,16 +11,15 @@ use anyhow::{Context, Result, bail};
 use gerberx2::trim_decimal;
 use gerberx2::write_layer;
 use ipc2581::types::{
-    FillProperty, LayerFunction, Side as IpcSide, StandardPrimitive,
-    ecad::{Layer, Step},
+    FillProperty, LayerFunction, Side as IpcSide, StandardPrimitive, ecad::Layer,
 };
 
 use crate::geometry;
 use gerberx2::from_artwork::lower_artwork_layer;
 use gerberx2::from_artwork::{ArtworkDocument as GerberArtwork, LayerAttributes, ObjectAttributes};
 use pcb_ir::dialects::artwork::{
-    Aperture, ApertureShape, Geometry as ArtworkGeometry, GridRepeat, Object as ArtworkObject,
-    PaintOrder, PaintStage,
+    Aperture, ApertureShape, Geometry as ArtworkGeometry, Object as ArtworkObject, PaintOrder,
+    PaintStage,
 };
 #[cfg(feature = "cli")]
 use pcb_ir::dialects::ipc::relief;
@@ -33,7 +32,7 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::{
-    Affine2, BBox, LineCap, LineJoin, LinePattern, Paint, Point, Polarity, Span, StrokeStyle,
+    Affine2, BBox, LineCap, LineJoin, LinePattern, Paint, Polarity, Span, StrokeStyle,
 };
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 #[cfg(not(target_family = "wasm"))]
@@ -450,18 +449,8 @@ impl GerberPart {
     }
 }
 
-fn primary_step(imported: &ImportedDesign) -> Result<&Step> {
-    imported
-        .content
-        .step_refs
-        .first()
-        .and_then(|step_ref| imported.steps.iter().find(|step| step.name == *step_ref))
-        .or_else(|| imported.steps.first())
-        .context("IPC-2581 ECAD section has no Step")
-}
-
 fn gerber_part_for_ipc_view(imported: &ImportedDesign, view: ArtworkScope) -> Result<GerberPart> {
-    let step = primary_step(imported)?;
+    let step = geometry::step_artwork::root_step(imported, false)?;
     Ok(
         if view == ArtworkScope::Board || !geometry::is_panel_step(step) {
             GerberPart::Single
@@ -568,14 +557,8 @@ fn artwork_from_ipc_layer(
     artwork
 }
 
-/// Preserve the reusable IPC Step graph as reusable artwork blocks.
-///
-/// Each source Step is normalized and lowered exactly once in local
-/// coordinates. The root Step's geometry lands directly on the layer while
-/// repeated child Steps become transformed block instances, so a board
-/// repeated into an assembly panel and that panel repeated into a fabrication
-/// panel remains a semantic hierarchy — and a Step without repeats lowers to
-/// plain flat artwork.
+/// One layer of the Step graph under the primary Step, each Step normalized
+/// to positive artwork and lowered once in its own coordinates.
 fn hierarchical_artwork_from_ipc_layer(
     imported: &ImportedDesign,
     standard_primitives: &StandardPrimitives,
@@ -584,158 +567,43 @@ fn hierarchical_artwork_from_ipc_layer(
     spec: GerberArtworkSpec,
     resolution: Resolution,
 ) -> Result<GerberArtwork> {
-    let root = primary_step(imported)?;
-    let mut artwork = GerberArtwork::new();
-    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
+    let header = pcb_ir::dialects::artwork::Layer {
         name: layer_name.to_string(),
         role: spec.role.ir_role(),
         side: spec.side,
         objects: Span::EMPTY,
         bbox: BBox::empty(),
         meta: spec.meta,
-    });
-    let context = HierarchicalArtworkContext {
+    };
+    geometry::step_artwork::step_graph_artwork(
         imported,
-        standard_primitives,
         layer,
-        layer_name,
-        role: spec.role,
-        side: spec.side,
-    };
-    let mut blocks = HashMap::from([(root.name, None)]);
-    let objects =
-        build_step_artwork_objects(&context, root, &mut artwork, &mut blocks, resolution)?;
-    for object in objects {
-        artwork.push_object(artwork_layer, object);
-    }
-    pcb_ir::dialects::artwork::normalize_bounds(&mut artwork);
-    artwork.validate().map_err(|error| {
-        anyhow::anyhow!("invalid hierarchical artwork for '{layer_name}': {error}")
-    })?;
-    Ok(artwork)
-}
-
-struct HierarchicalArtworkContext<'a> {
-    imported: &'a ImportedDesign,
-    standard_primitives: &'a StandardPrimitives<'a>,
-    layer: LayerId,
-    layer_name: &'a str,
-    role: GerberLayerRole,
-    side: IrSide,
-}
-
-fn build_step_artwork_block(
-    context: &HierarchicalArtworkContext<'_>,
-    step: &Step,
-    artwork: &mut GerberArtwork,
-    blocks: &mut HashMap<ipc2581::Symbol, Option<u32>>,
-    resolution: Resolution,
-) -> Result<u32> {
-    match blocks.get(&step.name).copied() {
-        Some(Some(block)) => return Ok(block),
-        Some(None) => bail!(
-            "StepRepeat cycle references Step '{}'",
-            context.imported.resolve(step.name)
-        ),
-        None => {}
-    }
-    blocks.insert(step.name, None);
-    let objects = build_step_artwork_objects(context, step, artwork, blocks, resolution)?;
-    let block = artwork.push_block();
-    for object in objects {
-        artwork.push_block_object(block, object);
-    }
-    blocks.insert(step.name, Some(block));
-    Ok(block)
-}
-
-fn build_step_artwork_objects(
-    context: &HierarchicalArtworkContext<'_>,
-    step: &Step,
-    artwork: &mut GerberArtwork,
-    blocks: &mut HashMap<ipc2581::Symbol, Option<u32>>,
-    resolution: Resolution,
-) -> Result<Vec<ArtworkObject<ObjectAttributes>>> {
-    let children = step
-        .step_repeats
-        .iter()
-        .map(|repeat| {
-            let child_step = context
-                .imported
-                .steps
-                .iter()
-                .find(|candidate| candidate.name == repeat.step_ref)
-                .with_context(|| {
-                    format!(
-                        "StepRepeat references unknown Step '{}'",
-                        context.imported.resolve(repeat.step_ref)
-                    )
-                })?;
-            let child = build_step_artwork_block(context, child_step, artwork, blocks, resolution)?;
-            Ok((child, repeat))
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let step_id = context
-        .imported
-        .step_id(step.name)
-        .context("source Step is missing from the canonical layout graph")?;
-    let mut local = context
-        .imported
-        .materialize_step_layer(step_id, context.layer)
-        .with_context(|| {
-            format!(
-                "failed to materialize IPC-2581 Step '{}' layer '{}'",
-                context.imported.resolve(step.name),
-                context.layer_name
-            )
-        })?;
-    pcb_ir::dialects::ipc::process::normalize_for_positive_artwork(&mut local, resolution)?;
-    if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&local) {
-        bail!(
-            "IPC-2581 Step '{}' layer '{}' is not artwork-ready: {error}",
-            context.imported.resolve(step.name),
-            context.layer_name
-        );
-    }
-
-    let mut lowering = GerberLowering {
-        imported: context.imported,
-        standard_primitives: context.standard_primitives,
-        doc: &local,
-        role: context.role,
-        side: context.side,
-    };
-    let mut objects = lower_layer_to_artwork_objects_with(&local, 0, artwork, &mut lowering);
-    for (child, repeat) in children {
-        if artwork.blocks[child as usize].objects.is_empty() || repeat.nx == 0 || repeat.ny == 0 {
-            continue;
-        }
-        if repeat.nx > 1 || repeat.ny > 1 {
-            objects.push(ArtworkObject::new(
-                Polarity::Dark,
-                ArtworkGeometry::GridInstance {
-                    block: child,
-                    transform: geometry::step_repeat_transform(repeat, 0, 0),
-                    repeat: GridRepeat {
-                        x_count: repeat.nx,
-                        y_count: repeat.ny,
-                        x_step: Point::new(repeat.dx, 0.0),
-                        y_step: Point::new(0.0, repeat.dy),
-                    },
-                },
-            ));
-        } else {
-            objects.push(ArtworkObject::new(
-                Polarity::Dark,
-                ArtworkGeometry::Instance {
-                    block: child,
-                    transform: geometry::step_repeat_transform(repeat, 0, 0),
-                },
-            ));
-        }
-    }
-    Ok(objects)
+        geometry::step_artwork::root_step(imported, false)?,
+        header,
+        |step, mut local, artwork| {
+            pcb_ir::dialects::ipc::process::normalize_for_positive_artwork(&mut local, resolution)?;
+            if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&local) {
+                bail!(
+                    "IPC-2581 Step '{}' layer '{layer_name}' is not artwork-ready: {error}",
+                    imported.resolve(step.name),
+                );
+            }
+            let mut lowering = GerberLowering {
+                imported,
+                standard_primitives,
+                doc: &local,
+                role: spec.role,
+                side: spec.side,
+            };
+            Ok(lower_layer_to_artwork_objects_with(
+                &local,
+                0,
+                artwork,
+                &mut lowering,
+            ))
+        },
+    )
+    .with_context(|| format!("failed to lower IPC-2581 layer '{layer_name}'"))
 }
 
 /// Gerber's source-specific half of IPC artwork lowering: standard-dictionary

@@ -70,6 +70,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Mouse-bite tab placement models the actual rail width of the array.
 - Mouse-bite array generation is several times faster on multi-board arrays.
 - Fab-panel reports a clear error up front when there are too many distinct panel sizes.
+- `pcb ipc render` and the web viewer draw each board of an array once, so panel SVGs are over 100× smaller.
 
 ## [0.4.56] - 2026-09-20
 

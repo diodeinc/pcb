@@ -74,7 +74,7 @@ pub trait ArtworkLowering<Symbol, ObjectMeta> {
 }
 
 /// The default lowering: no source catalogue, native strokes, net metadata.
-struct NetMetaLowering;
+pub struct NetMetaLowering;
 
 impl<Symbol: Clone> ArtworkLowering<Symbol, Option<Symbol>> for NetMetaLowering {
     fn object_meta(

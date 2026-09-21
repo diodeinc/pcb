@@ -430,21 +430,24 @@ fn render_layer(
     id: LayerId,
     resolution: Resolution,
 ) -> anyhow::Result<()> {
-    let mut geometry = imported.materialize_layer(id, ArtworkScope::Board)?;
-    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut geometry, resolution)?;
-    rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
-    rendered.svg = Some(geometry::render::render_layer_svg(
-        &geometry,
+    let view = geometry::render::layer_artwork(
+        imported,
+        &rendered.name,
+        ArtworkScope::Board,
         true,
-        ArtworkScope::Board.profile_set(),
+        resolution,
+    )?;
+    rendered.has_native_content = view.has_native_content;
+    rendered.svg = Some(pcb_ir::render::artwork_svg(
+        &view.artwork,
         // Every layer's SVG is inlined into one page, where element ids are
         // global, so each takes its ids from its place in the source.
         &pcb_ir::render::RenderOptions::default()
             .with_accuracy(resolution.accuracy)
             .with_id_prefix(format!("l{}-", id.0)),
     )?);
-    if !geometry.diagnostics.is_empty() {
-        rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));
+    if !view.artwork.diagnostics.is_empty() {
+        rendered.warning = Some(format!("{} warning(s)", view.artwork.diagnostics.len()));
     }
     Ok(())
 }

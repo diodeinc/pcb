@@ -1,6 +1,6 @@
 // Use pipe-safe replacements for standard printing macros in CLI output paths.
 #[cfg(feature = "cli")]
-#[macro_use(print, println, eprintln)]
+#[macro_use(println, eprintln)]
 extern crate anstream;
 
 use ipc2581::Mode;

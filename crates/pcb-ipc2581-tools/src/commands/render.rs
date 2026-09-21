@@ -26,23 +26,27 @@ pub fn execute(input_file: &Path, options: &RenderOptions, resolution: Resolutio
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let view = options.layout_target.artwork_scope();
     let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
-    let geometry = geometry::render::prepare_layer(&imported, &options.layer, view, resolution)?;
+    let artwork =
+        geometry::render::layer_artwork(&imported, &options.layer, view, true, resolution)?.artwork;
+    let render = pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy);
 
     match target {
-        RenderTarget::Svg => render_svg(&geometry, options, view, resolution)?,
-        RenderTarget::Png => render_png(&geometry, options, view, resolution)?,
+        RenderTarget::Svg => write_output(
+            options,
+            "SVG",
+            pcb_ir::render::artwork_svg(&artwork, &render)?.as_bytes(),
+        )?,
+        RenderTarget::Png => write_output(
+            options,
+            "PNG",
+            &pcb_ir::render::artwork_png(&artwork, &render).map_err(anyhow::Error::msg)?,
+        )?,
         RenderTarget::Terminal => {
-            geometry::render::render_layer_terminal(
-                &geometry,
-                true,
-                view.profile_set(),
-                resolution.accuracy,
-            )
-            .map_err(anyhow::Error::msg)?;
+            pcb_ir::render::artwork_to_terminal(&artwork, &render).map_err(anyhow::Error::msg)?
         }
     }
 
-    for diagnostic in &geometry.diagnostics {
+    for diagnostic in &artwork.diagnostics {
         eprintln!("warning: {}", diagnostic.message);
     }
 
@@ -89,56 +93,18 @@ fn infer_format_from_output(output: &Path) -> Result<RenderTarget> {
     }
 }
 
-fn render_svg(
-    geometry: &pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>,
-    options: &RenderOptions,
-    view: pcb_ir::dialects::ipc::ArtworkScope,
-    resolution: Resolution,
-) -> Result<()> {
-    let svg = geometry::render::render_layer_svg(
-        geometry,
-        true,
-        view.profile_set(),
-        &pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy),
-    )?;
-
+fn write_output(options: &RenderOptions, format: &str, contents: &[u8]) -> Result<()> {
     if let Some(output) = &options.output {
-        std::fs::write(output, svg)
-            .with_context(|| format!("Failed to write SVG to {}", output.display()))?;
+        std::fs::write(output, contents)
+            .with_context(|| format!("Failed to write {format} to {}", output.display()))?;
         println!(
             "✓ IPC-2581 layer '{}' rendered to {}",
             options.layer,
             output.display()
         );
     } else {
-        print!("{svg}");
+        pcb_ui::write_stdout(|stdout| stdout.write_all(contents))
+            .with_context(|| format!("Failed to write {format} to stdout"))?;
     }
-
-    Ok(())
-}
-
-fn render_png(
-    geometry: &pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>,
-    options: &RenderOptions,
-    view: pcb_ir::dialects::ipc::ArtworkScope,
-    resolution: Resolution,
-) -> Result<()> {
-    let png =
-        geometry::render::render_layer_png(geometry, true, view.profile_set(), resolution.accuracy)
-            .map_err(anyhow::Error::msg)?;
-
-    if let Some(output) = &options.output {
-        std::fs::write(output, png)
-            .with_context(|| format!("Failed to write PNG to {}", output.display()))?;
-        println!(
-            "✓ IPC-2581 layer '{}' rendered to {}",
-            options.layer,
-            output.display()
-        );
-    } else {
-        pcb_ui::write_stdout(|stdout| stdout.write_all(&png))
-            .context("Failed to write PNG to stdout")?;
-    }
-
     Ok(())
 }
