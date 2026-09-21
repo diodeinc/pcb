@@ -290,9 +290,7 @@ fn validate_drill_spans(design: &Design, rules: &[Rule]) -> Result<()> {
                     .iter()
                     .any(|layer| rule.conditions.applies_to_layer(layer))
         });
-        if selected
-            && (!slot.span_declared || slot.drill_span.interpretation == "assumed_whole_stack")
-        {
+        if selected && slot.drill_span.interpretation == "assumed_whole_stack" {
             bail!(
                 "routed slot on layer '{}' has no resolvable drill span; slot copper checks cannot be certified",
                 slot.layer.name
@@ -314,9 +312,7 @@ fn validate_drill_spans(design: &Design, rules: &[Rule]) -> Result<()> {
                             && rule.conditions.applies_to_layer(layer)
                     })
         });
-        if selected
-            && (!hole.span_declared || hole.drill_span.interpretation == "assumed_whole_stack")
-        {
+        if selected && hole.drill_span.interpretation == "assumed_whole_stack" {
             bail!(
                 "{} hole on layer '{}' at ({:.6}, {:.6}) has no resolvable drill span; hole-to-copper clearance cannot be certified",
                 hole.class.label(),
@@ -603,9 +599,8 @@ pub(super) struct Hole {
     pub diameter_mm: f64,
     pub bbox: BBox,
     pub layer: LayerRef,
-    pub span_declared: bool,
-    /// Inclusive indices in the same order as `Design::copper_layers`.
-    /// Through-board or unstated spans cover every copper layer.
+    /// Inclusive indices in the same order as `Design::copper_layers`. A drill
+    /// layer that declares no span is through-board, as the importer reads it.
     pub drill_span: DrillSpan,
     pub provenance: SourceLocator,
     pub step: Option<Symbol>,
@@ -629,7 +624,6 @@ pub(super) struct HoleLand {
 #[derive(Debug, Clone)]
 pub(super) struct Slot {
     pub id: FeatureOccurrenceId,
-    pub span_declared: bool,
     pub drill_span: DrillSpan,
     pub plating: PlatingKind,
     pub width: Distance,
@@ -766,10 +760,14 @@ pub(super) struct Score {
     pub provenance: SourceLocator,
 }
 
+/// The physical profile of one Step occurrence. A drilled feature is measured
+/// to the profile of the occurrence that owns it: a board's holes to the board
+/// edge, a rail's tooling holes to the edge of the array carrying the rail.
 #[derive(Debug, Clone)]
 pub(super) struct BoardOutline {
     pub name: String,
     pub instance_index: Option<u32>,
+    pub role: ProfileOccurrenceRole,
     /// Outer profile plus cutout rings.
     pub contours: Vec<Ring>,
     /// Finished board material: the filled outer profile minus every cutout.
@@ -778,6 +776,18 @@ pub(super) struct BoardOutline {
     /// Native outer and cutout contours in the checked frame.
     pub native_outline: Vec<ContourBuf>,
     pub bbox: BBox,
+}
+
+impl BoardOutline {
+    /// A product board's own edge, rather than a panel or array carrying it.
+    pub fn is_board(&self) -> bool {
+        matches!(
+            self.role,
+            ProfileOccurrenceRole::RootBoard
+                | ProfileOccurrenceRole::BoardDefinition
+                | ProfileOccurrenceRole::BoardInstance
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -843,7 +853,6 @@ fn collect_drilled(
                         diameter_mm: feature.outer_diameter,
                         bbox: BBox::from_point(feature.center).expand(feature.outer_diameter / 2.0),
                         layer: layer_ref(layer_name, source_layer.layer_function, None),
-                        span_declared: source_layer.span.is_some(),
                         drill_span: drill_span(
                             feature.intent.span,
                             &imported.layer_definitions,
@@ -878,7 +887,6 @@ fn collect_drilled(
                     slots.push(Slot {
                         id: feature_occurrence_id(feature)
                             .context("materialized slot has no occurrence identity")?,
-                        span_declared: source_layer.span.is_some(),
                         drill_span: drill_span(
                             feature.intent.span,
                             &imported.layer_definitions,
@@ -1530,16 +1538,14 @@ fn collect_board_outlines(
     scope: ArtworkScope,
     resolution: Resolution,
 ) -> anyhow::Result<Vec<BoardOutline>> {
-    Ok(profile_occurrences_for(layout, scope.profile_set())
+    // Every occurrence can own drilled features, so every placed profile is
+    // kept, nested carriers included.
+    let profiles = match scope {
+        ArtworkScope::Board => ProfileSet::BoardOutlines,
+        _ => ProfileSet::LayoutBoundaries,
+    };
+    Ok(profile_occurrences_for(layout, profiles)
         .into_iter()
-        .filter(|occurrence| {
-            matches!(
-                occurrence.role,
-                ProfileOccurrenceRole::RootBoard
-                    | ProfileOccurrenceRole::BoardDefinition
-                    | ProfileOccurrenceRole::BoardInstance
-            )
-        })
         .map(|occurrence| {
             let mut native_outline = layout
                 .transformed_path_contours(occurrence.profile.outer_path, occurrence.transform);
@@ -1566,6 +1572,7 @@ fn collect_board_outlines(
             Ok::<_, anyhow::Error>(Some(BoardOutline {
                 name,
                 instance_index: occurrence.instance,
+                role: occurrence.role,
                 contours: region.rings.clone(),
                 region,
                 boundary,

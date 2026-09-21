@@ -254,7 +254,10 @@ limit = {{ minimum = "0.20 mm" }}
                 assert!(enclosure.is_none(), "nonplated slots need no copper land");
             }
 
-            let missing = xml.replace("<Span fromLayer=\"L0\" toLayer=\"L1\"/>", "");
+            let missing = xml.replace(
+                "<Span fromLayer=\"L0\" toLayer=\"L1\"/>",
+                "<Span fromLayer=\"L0\"/>",
+            );
             assert!(
                 check(&missing, standard.source, LayoutTarget::Board)
                     .unwrap_err()
@@ -389,7 +392,10 @@ limit = {{ minimum = "0.20 mm" }}
                     .instance_index
             );
         }
-        let missing = inside.replace("<Span fromLayer=\"L0\" toLayer=\"L1\"/>", "");
+        let missing = inside.replace(
+            "<Span fromLayer=\"L0\" toLayer=\"L1\"/>",
+            "<Span fromLayer=\"L0\"/>",
+        );
         assert!(
             check(&missing, &source, LayoutTarget::Board)
                 .unwrap_err()

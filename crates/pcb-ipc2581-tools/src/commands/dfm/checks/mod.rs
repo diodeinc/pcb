@@ -369,7 +369,8 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
             .then(|| "V-score centerlines".to_owned()),
         RuleKind::LineworkToCopperClearance(Linework::BoardEdge) => design
             .board_outlines
-            .is_empty()
+            .iter()
+            .all(|outline| !outline.is_board())
             .then(|| "board profile outlines".to_owned()),
         RuleKind::CopperFeatureWidth | RuleKind::CopperClearance | RuleKind::SoldermaskWeb => None,
     };

@@ -325,13 +325,23 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
     }
 
     #[test]
+    fn a_rout_layer_without_a_span_is_through_board() {
+        let copper = copper(1.4);
+        let undeclared = check(&board(OVAL, [&copper, "", &copper], ""));
+        let declared = check(&board(OVAL, [&copper, "", &copper], THROUGH));
+        assert_eq!(undeclared.rules[0].checked, 2);
+        assert_eq!(undeclared.rules[0].checked, declared.rules[0].checked);
+        assert_eq!(undeclared.findings.len(), declared.findings.len());
+    }
+
+    #[test]
     fn missing_stackup_or_span_cannot_be_certified_even_with_adequate_copper() {
         use crate::commands::dfm::{pdk::Pdk, rules};
         use pcb_ir::dialects::ipc::ArtworkScope;
 
         let copper = copper(1.4);
         let rules = rules::lower(&Pdk::parse(PDK).unwrap(), None).unwrap();
-        for span in ["", r#"<Span fromLayer="L0"/>"#, THROUGH] {
+        for span in [r#"<Span fromLayer="L0"/>"#, THROUGH] {
             let xml = board(OVAL, [&copper, "", &copper], span);
             let mut imported =
                 import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();

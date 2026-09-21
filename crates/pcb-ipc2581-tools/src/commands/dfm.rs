@@ -1092,6 +1092,58 @@ reason = "old finding"
     }
 
     #[test]
+    fn generated_array_tooling_holes_are_measured_to_their_own_rail() {
+        let resolution = Resolution::default();
+        let array = create_board_array(
+            BOARD,
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 2,
+                board_margin_mm: EdgeInsetsMm::all(0.0),
+                edge_rail_mm: EdgeInsetsMm::all(10.0),
+            },
+            false,
+            crate::commands::board_array::Separation::VScore,
+            resolution,
+        )
+        .unwrap()
+        .xml;
+        let fab = create_fab_panel(
+            std::slice::from_ref(&array),
+            &[0, 0],
+            FabPanelSpec::default(),
+            false,
+            resolution,
+        )
+        .unwrap()
+        .xml;
+        let pdk = format!(
+            "{PDK}
+[[rules.copper.hole_clearance]]
+id = \"npth-copper\"
+select = {{ hole = \"npth\" }}
+limit = {{ minimum = \"0.2 mm\" }}
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = \"npth-edge\"
+select = {{ hole = \"npth\" }}
+limit = {{ minimum = \"0.5 mm\" }}
+"
+        );
+        for (xml, arrays) in [(&array, 1), (&fab, 2)] {
+            let results = check_with_pdk(xml, LayoutTarget::BoardArray, &pdk);
+            let tooling = rule(&results, "npth-edge").checked;
+            assert!(
+                tooling > 0 && tooling.is_multiple_of(arrays),
+                "{tooling} tooling holes"
+            );
+            // Through-board: every tooling hole meets both copper layers.
+            assert_eq!(rule(&results, "npth-copper").checked, 2 * tooling);
+            assert!(results.findings.is_empty(), "{:?}", results.findings);
+        }
+    }
+
+    #[test]
     fn one_evaluator_scales_through_board_array_and_fab_panel_lowering() {
         let resolution = Resolution::default();
 

@@ -242,9 +242,10 @@ Hole-to-copper clearance uses the same attributed composition. For a via or
 PTH, copper proven to belong to the hole's occurrence-scoped net or a resolved
 physical land is excluded; other-net, auxiliary, and unattributed functional
 copper remains an offender. For an NPTH, every final copper owner is an
-offender, including a same-named net. The rule requires a declared through or
-resolvable layer span and fails extraction when the span is unavailable rather
-than guessing which copper layers the drill intersects.
+offender, including a same-named net. A drill or rout layer that declares no
+`Span` is through-board, exactly as import reads it. A declared span that
+cannot be resolved in the physical stackup fails extraction rather than
+guessing which copper layers the drill intersects.
 
 `--layout-target board` extracts the canonical board step. `board-array`
 materializes the root layout and every nested repeat, so the same evaluators
@@ -285,7 +286,9 @@ when fewer than two exist.
   of its enclosing physical board profile. Profile cutouts are board edges.
   The profile must have the feature's exact physical occurrence, so a repeated
   board never measures against another board or its panel outline. A feature
-  crossing or outside its board material has zero clearance.
+  owned by a panel or array step, such as a rail tooling hole, is measured to
+  that panel's or array's own profile. A feature crossing or outside its
+  material has zero clearance.
 - Annular ring measures the radial copper enclosure of each via or PTH hole
   from its nominal circular geometry on every applicable layer. It is not
   tolerance-aware finished-board acceptance: drill size/position, registration,

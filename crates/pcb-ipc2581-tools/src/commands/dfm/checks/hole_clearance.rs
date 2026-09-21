@@ -551,10 +551,28 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     #[test]
+    fn a_drill_layer_without_a_span_is_through_board() {
+        // Offending copper on the bottom layer: only a through drill meets it.
+        let copper = [copper(2, Some("N2"), 0.55)];
+        let undeclared = run(&board("VIA", None, &copper), "via");
+        let declared = run(&board("VIA", Some((0, 2)), &copper), "via");
+        assert_eq!(undeclared.rules[0].checked, 3);
+        assert_eq!(undeclared.findings.len(), 1);
+        assert_eq!(undeclared.findings[0].layers[1].name, "L2");
+        assert_eq!(
+            undeclared.findings[0].measurement.actual_mm(),
+            declared.findings[0].measurement.actual_mm()
+        );
+    }
+
+    #[test]
     fn rejects_a_hole_without_a_resolvable_drill_span() {
         let resolution = Resolution::default();
 
-        let xml = board("VIA", None, &[copper(0, Some("N2"), 0.8)]);
+        let xml = board("VIA", Some((0, 1)), &[copper(0, Some("N2"), 0.8)]).replace(
+            r#"<Span fromLayer="L0" toLayer="L1"/>"#,
+            r#"<Span fromLayer="L0"/>"#,
+        );
         let ipc = Ipc2581::parse(&xml).unwrap();
         let pdk = Pdk::parse(&pdk("via")).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
