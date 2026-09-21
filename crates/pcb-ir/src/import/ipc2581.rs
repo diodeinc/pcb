@@ -4128,9 +4128,10 @@ fn push_moire_path(doc: &mut GeometryDocument, transform: Affine2, moire: &ipc25
     }
 }
 
-/// A thermal is its ring interrupted by `spoke_count` gaps of `spoke_width`
-/// (the ODB++ and Gerber thermal convention); the gaps are where the spokes
-/// of surrounding copper reach the pad. Without spokes it is the donut.
+/// IPC-2581C 3.5.9.15: a thermal is its ring with `spokeCount` spokes cut out
+/// of it, each `spokeWidth` between its sides (by default the ring's diameter
+/// difference) and the first at `spokeStartAngle` (by default 45 degrees).
+/// Without spokes it is the donut.
 fn push_thermal_path(
     doc: &mut GeometryDocument,
     transform: Affine2,
@@ -4146,33 +4147,29 @@ fn push_thermal_path(
         thermal.inner_diameter,
     );
 
-    let gap_start = doc.arena.paths.len();
-    match thermal.spoke_width.zip(thermal.spoke_start_angle) {
-        Some((spoke_width, spoke_start_angle)) => {
-            // Reaches past the corners of every outline shape.
-            let length = thermal.outer_diameter;
-            for index in 0..thermal.spoke_count {
-                let angle = spoke_start_angle + index as f64 * 360.0 / thermal.spoke_count as f64;
-                let (sin, cos) = angle.to_radians().sin_cos();
-                let gap = Affine2::placement(
-                    Point::new(length / 2.0 * cos, length / 2.0 * sin),
-                    angle,
-                    Mirror::NONE,
-                    1.0,
-                );
-                push_filled_shape(
-                    doc,
-                    transform.concat(gap),
-                    shapes::rect(length, spoke_width),
-                );
-            }
-        }
-        None if thermal.spoke_count > 0 => {
-            doc.warn("Thermal without spokeWidth and spokeStartAngle imported as an unbroken ring");
-        }
-        None => {}
+    let cut_start = doc.arena.paths.len();
+    let spoke_width = thermal
+        .spoke_width
+        .unwrap_or(thermal.outer_diameter - thermal.inner_diameter);
+    let spoke_start_angle = thermal.spoke_start_angle.unwrap_or(45.0);
+    // Reaches past the corners of every outline shape.
+    let length = thermal.outer_diameter;
+    for index in 0..thermal.spoke_count {
+        let angle = spoke_start_angle + index as f64 * 360.0 / thermal.spoke_count as f64;
+        let (sin, cos) = angle.to_radians().sin_cos();
+        let cut = Affine2::placement(
+            Point::new(length / 2.0 * cos, length / 2.0 * sin),
+            angle,
+            Mirror::NONE,
+            1.0,
+        );
+        push_filled_shape(
+            doc,
+            transform.concat(cut),
+            shapes::rect(length, spoke_width),
+        );
     }
-    subtract_trailing_paths(doc, ring_start, gap_start, resolution)
+    subtract_trailing_paths(doc, ring_start, cut_start, resolution)
 }
 
 fn circular_sector_contour(
@@ -5343,18 +5340,27 @@ mod tests {
     }
 
     #[test]
-    fn thermal_without_spoke_width_stays_whole_and_warns() {
+    fn thermal_spokes_default_to_the_ring_width_at_45_degrees() {
         let mut doc = GeometryDocument::new();
         push_thermal_path(
             &mut doc,
             Affine2::identity(),
-            &thermal(ConcentricShape::Round, 4, None),
+            &ipc2581::types::Thermal {
+                spoke_start_angle: None,
+                ..thermal(ConcentricShape::Round, 4, None)
+            },
             Resolution::default(),
         )
         .unwrap();
 
-        assert!(thermal_image(&doc).contains_point(Point::new(4.0, 0.0)));
-        assert_eq!(doc.diagnostics.len(), 1);
+        // Cuts of outer - inner = 4 mm on the diagonals leave the axes.
+        let image = thermal_image(&doc);
+        let diagonal = 4.0 * std::f64::consts::FRAC_1_SQRT_2;
+        assert!(image.contains_point(Point::new(4.0, 0.0)));
+        assert!(image.contains_point(Point::new(0.0, 4.0)));
+        assert!(!image.contains_point(Point::new(diagonal, diagonal)));
+        assert!(!image.contains_point(Point::new(diagonal - 1.2, diagonal + 1.2)));
+        assert!(doc.diagnostics.is_empty());
     }
 
     #[test]
