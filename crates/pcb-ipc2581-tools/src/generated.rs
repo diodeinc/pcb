@@ -131,7 +131,7 @@ pub(crate) fn write_generated_layer_feature(
     Ok(())
 }
 
-fn write_nonstandard_attribute(
+pub(crate) fn write_nonstandard_attribute(
     writer: &mut XmlWriter,
     name: &str,
     attribute_type: &str,
@@ -225,7 +225,7 @@ pub(crate) fn user_dictionary_edit(
     ))
 }
 
-fn units_attr(units: Units) -> &'static str {
+pub(crate) fn units_attr(units: Units) -> &'static str {
     match units {
         Units::Millimeter => "MILLIMETER",
         Units::Inch => "INCH",
