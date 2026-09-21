@@ -1,4 +1,4 @@
-use ipc2581::{Ipc2581, LayerFunction, PadUse};
+use ipc2581::{Ipc2581, Ipc2581Error, LayerFunction, PadUse};
 
 const XSD: &str = include_str!("../IPC-2581C.xsd");
 
@@ -73,4 +73,119 @@ fn every_schema_pad_use_parses() {
             PadUse::Other
         ]
     );
+}
+
+/// Every token of `simple_type` parses and is written back unchanged.
+fn assert_round_trips<T>(
+    simple_type: &str,
+    from_ipc: fn(&str) -> Result<T, Ipc2581Error>,
+    as_str: impl Fn(T) -> &'static str,
+) {
+    // `b1` (lead-free solder) has no FinishType variant; it reads as Other.
+    for value in schema_values(simple_type)
+        .into_iter()
+        .filter(|value| *value != "b1")
+    {
+        let parsed = from_ipc(value).unwrap_or_else(|error| panic!("{simple_type}: {error}"));
+        assert_eq!(as_str(parsed), value, "{simple_type}");
+    }
+    assert!(from_ipc("not a token").is_err(), "{simple_type}");
+}
+
+#[test]
+fn enum_tokens_match_the_schema() {
+    use ipc2581::*;
+
+    assert_round_trips("modeType", Mode::from_ipc, Mode::as_str);
+    assert_round_trips("unitsType", Units::from_ipc, Units::as_str);
+    assert_round_trips("lineEndType", LineEnd::from_ipc, LineEnd::as_str);
+    assert_round_trips(
+        "linePropertyType",
+        LineProperty::from_ipc,
+        LineProperty::as_str,
+    );
+    assert_round_trips(
+        "fillPropertyType",
+        FillProperty::from_ipc,
+        FillProperty::as_str,
+    );
+    assert_round_trips(
+        "butterflyShapeType",
+        ButterflyShape::from_ipc,
+        ButterflyShape::as_str,
+    );
+    assert_round_trips(
+        "donutShapeType",
+        ConcentricShape::from_ipc,
+        ConcentricShape::as_str,
+    );
+    assert_round_trips(
+        "thermalShapeType",
+        ConcentricShape::from_ipc,
+        ConcentricShape::as_str,
+    );
+    assert_round_trips(
+        "surfaceFinishType",
+        FinishType::from_ipc,
+        FinishType::as_str,
+    );
+    assert_round_trips(
+        "productCriteriaType",
+        ProductCriteria::from_ipc,
+        ProductCriteria::as_str,
+    );
+    assert_round_trips("stepType", StepType::from_ipc, StepType::as_str);
+    assert_round_trips("mountType", MountType::from_ipc, MountType::as_str);
+    assert_round_trips(
+        "layerFunctionType",
+        LayerFunction::from_ipc,
+        LayerFunction::as_str,
+    );
+    assert_round_trips("sideType", Side::from_ipc, Side::as_str);
+    assert_round_trips("polarityType", Polarity::from_ipc, Polarity::as_str);
+    assert_round_trips(
+        "whereMeasuredType",
+        WhereMeasured::from_ipc,
+        WhereMeasured::as_str,
+    );
+    assert_round_trips(
+        "platingStatusType",
+        PlatingStatus::from_ipc,
+        PlatingStatus::as_str,
+    );
+    assert_round_trips("padUseType", PadUse::from_ipc, PadUse::as_str);
+    assert_round_trips(
+        "cadPinType",
+        PackagePinType::from_ipc,
+        PackagePinType::as_str,
+    );
+    assert_round_trips(
+        "pinElectricalType",
+        PackagePinElectricalType::from_ipc,
+        PackagePinElectricalType::as_str,
+    );
+    assert_round_trips(
+        "pinMountType",
+        PackagePinMountType::from_ipc,
+        PackagePinMountType::as_str,
+    );
+    assert_round_trips(
+        "pinPolarityType",
+        PackagePinPolarity::from_ipc,
+        PackagePinPolarity::as_str,
+    );
+    assert_round_trips(
+        "bomCategoryType",
+        BomCategory::from_ipc,
+        BomCategory::as_str,
+    );
+    assert_round_trips(
+        "geometryUsageType",
+        GeometryUsage::from_ipc,
+        GeometryUsage::as_str,
+    );
+    assert_round_trips("holeShapeType", HoleShape::from_ipc, HoleShape::as_str);
+    assert_round_trips("floorLifeType", MoistureSensitivity::from_ipc, |level| {
+        level.as_str()
+    });
 }

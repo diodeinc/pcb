@@ -7,11 +7,9 @@
 
 use uppsala::XmlWriter;
 
-use crate::types::ecad::{Fiducial, FiducialKind, FiducialShape, Hole, Line, PlatingStatus};
-use crate::types::primitives::{
-    Contour, LineEnd, LineProperty, PolyStep, PolyStepCurve, Polygon, StandardPrimitive,
-};
-use crate::types::{Polarity, Side, Units};
+use crate::types::Units;
+use crate::types::ecad::{Fiducial, FiducialShape, Hole, Line};
+use crate::types::primitives::{Contour, PolyStep, PolyStepCurve, Polygon, StandardPrimitive};
 use crate::{Ipc2581Error, Result};
 
 /// Format a millimeter value in the document's units, with up to six
@@ -33,61 +31,6 @@ pub fn fmt_num(value: f64) -> String {
         text.pop();
     }
     if text == "-0" { "0".to_string() } else { text }
-}
-
-pub fn side_attr(side: Side) -> &'static str {
-    match side {
-        Side::Top => "TOP",
-        Side::Bottom => "BOTTOM",
-        Side::Both => "BOTH",
-        Side::Internal => "INTERNAL",
-        Side::All => "ALL",
-        Side::None => "NONE",
-    }
-}
-
-pub fn polarity_attr(polarity: Polarity) -> &'static str {
-    match polarity {
-        Polarity::Positive => "POSITIVE",
-        Polarity::Negative => "NEGATIVE",
-    }
-}
-
-pub fn line_end_attr(line_end: LineEnd) -> &'static str {
-    match line_end {
-        LineEnd::None => "NONE",
-        LineEnd::Round => "ROUND",
-        LineEnd::Square => "SQUARE",
-    }
-}
-
-pub fn line_property_attr(line_property: LineProperty) -> &'static str {
-    match line_property {
-        LineProperty::Solid => "SOLID",
-        LineProperty::Dotted => "DOTTED",
-        LineProperty::Dashed => "DASHED",
-        LineProperty::Center => "CENTER",
-        LineProperty::Phantom => "PHANTOM",
-        LineProperty::Erase => "ERASE",
-    }
-}
-
-pub fn plating_status_attr(plating_status: PlatingStatus) -> &'static str {
-    match plating_status {
-        PlatingStatus::Plated => "PLATED",
-        PlatingStatus::NonPlated => "NONPLATED",
-        PlatingStatus::Via => "VIA",
-        PlatingStatus::ViaCapped => "VIA_CAPPED",
-    }
-}
-
-pub fn fiducial_element_name(kind: FiducialKind) -> &'static str {
-    match kind {
-        FiducialKind::BadBoardMark => "BadBoardMark",
-        FiducialKind::Global => "GlobalFiducial",
-        FiducialKind::GoodPanelMark => "GoodPanelMark",
-        FiducialKind::Local => "LocalFiducial",
-    }
 }
 
 pub fn step_ref(writer: &mut XmlWriter, name: &str) {
@@ -143,10 +86,10 @@ pub fn line(writer: &mut XmlWriter, units: Units, line: &Line) -> Result<()> {
     let line_width = fmt_units(line_width, units);
     let mut attrs = vec![("lineWidth", line_width.as_str())];
     if let Some(line_end) = line.line_end {
-        attrs.push(("lineEnd", line_end_attr(line_end)));
+        attrs.push(("lineEnd", line_end.as_str()));
     }
     if let Some(line_property) = line.line_property {
-        attrs.push(("lineProperty", line_property_attr(line_property)));
+        attrs.push(("lineProperty", line_property.as_str()));
     }
     writer.empty_element("LineDesc", &attrs);
     writer.end_element("Line");
@@ -166,7 +109,7 @@ pub fn fiducial(writer: &mut XmlWriter, units: Units, fiducial: &Fiducial) -> Re
         ));
     };
 
-    let elem_name = fiducial_element_name(fiducial.kind);
+    let elem_name = fiducial.kind.as_str();
     writer.start_element(elem_name, &[]);
     location(
         writer,
@@ -188,7 +131,7 @@ pub fn hole(writer: &mut XmlWriter, units: Units, hole: &Hole, name: &str) {
             ("name", name),
             ("type", "CIRCLE"),
             ("diameter", fmt_units(hole.diameter, units).as_str()),
-            ("platingStatus", plating_status_attr(hole.plating_status)),
+            ("platingStatus", hole.plating_status.as_str()),
             ("plusTol", "0"),
             ("minusTol", "0"),
             ("x", fmt_units(hole.x, units).as_str()),
@@ -266,10 +209,11 @@ pub fn poly_step_curve(writer: &mut XmlWriter, units: Units, curve: &PolyStepCur
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::PlatingStatus;
 
     #[test]
     fn hole_renders_units_and_plating() {
-        assert_eq!(plating_status_attr(PlatingStatus::ViaCapped), "VIA_CAPPED");
+        assert_eq!(PlatingStatus::ViaCapped.as_str(), "VIA_CAPPED");
 
         let hole_mm = Hole {
             name: None,
@@ -340,13 +284,6 @@ mod tests {
             line_property: None,
         };
         assert!(line(&mut writer, Units::Millimeter, &bad).is_err());
-    }
-
-    #[test]
-    fn line_end_uses_ipc2581c_values() {
-        assert_eq!(line_end_attr(LineEnd::None), "NONE");
-        assert_eq!(line_end_attr(LineEnd::Round), "ROUND");
-        assert_eq!(line_end_attr(LineEnd::Square), "SQUARE");
     }
 
     #[test]

@@ -1,9 +1,12 @@
 use super::{
+    Tokens,
     ecad::PackageOutline,
+    from_token,
     primitives::{
         BoundingBox, Color, FillDesc, LineDesc, LineDescGroup, StandardPrimitive, UserPrimitive,
         UserShape,
     },
+    token,
 };
 use crate::Symbol;
 
@@ -137,4 +140,21 @@ pub enum Units {
     Inch,
     Micron,
     Mils,
+}
+
+impl Units {
+    const TOKENS: Tokens<Self> = &[
+        ("MILLIMETER", Self::Millimeter),
+        ("INCH", Self::Inch),
+        ("MICRON", Self::Micron),
+        ("MILS", Self::Mils),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "units", token)
+    }
 }

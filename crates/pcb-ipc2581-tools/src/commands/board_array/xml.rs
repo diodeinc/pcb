@@ -134,10 +134,10 @@ pub(super) fn write_generated_layer_xml(writer: &mut XmlWriter, generated_layer:
         ("layerFunction", generated_layer.layer_function.as_str()),
     ];
     if let Some(side) = generated_layer.side {
-        attrs.push(("side", write::side_attr(side)));
+        attrs.push(("side", side.as_str()));
     }
     if let Some(polarity) = generated_layer.polarity {
-        attrs.push(("polarity", write::polarity_attr(polarity)));
+        attrs.push(("polarity", polarity.as_str()));
     }
     writer.empty_element("Layer", &attrs);
 }

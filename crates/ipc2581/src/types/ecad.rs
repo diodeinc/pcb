@@ -1,7 +1,6 @@
-use super::{Units, UserPrimitive};
+use super::{Tokens, Units, UserPrimitive, from_token, token};
 use crate::Symbol;
 use std::collections::HashMap;
-use std::str::FromStr;
 
 /// CadHeader defines units and specifications for the ECAD section
 ///
@@ -132,6 +131,22 @@ pub enum StepType {
     Ic,
 }
 
+impl StepType {
+    const TOKENS: Tokens<Self> = &[
+        ("BOARD", Self::Board),
+        ("PALLET", Self::Pallet),
+        ("IC", Self::Ic),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "Step type", token)
+    }
+}
+
 /// StepRepeat places one Step within another Step, usually a board within a panel.
 #[derive(Debug, Clone)]
 pub struct StepRepeat {
@@ -209,12 +224,46 @@ pub enum PlatingStatus {
     ViaCapped,
 }
 
+impl PlatingStatus {
+    const TOKENS: Tokens<Self> = &[
+        ("PLATED", Self::Plated),
+        ("NONPLATED", Self::NonPlated),
+        ("VIA", Self::Via),
+        ("VIA_CAPPED", Self::ViaCapped),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "platingStatus", token)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PadUse {
     Regular,
     Antipad,
     Thermal,
     Other,
+}
+
+impl PadUse {
+    const TOKENS: Tokens<Self> = &[
+        ("REGULAR", Self::Regular),
+        ("ANTIPAD", Self::Antipad),
+        ("THERMAL", Self::Thermal),
+        ("OTHER", Self::Other),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "padUse", token)
+    }
 }
 
 /// Package describes a component package (land pattern + outline)
@@ -338,11 +387,43 @@ pub enum PackagePinType {
     Surface,
 }
 
+impl PackagePinType {
+    const TOKENS: Tokens<Self> = &[
+        ("THRU", Self::Through),
+        ("BLIND", Self::Blind),
+        ("SURFACE", Self::Surface),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "Pin type", token)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackagePinElectricalType {
     Electrical,
     Mechanical,
     Undefined,
+}
+
+impl PackagePinElectricalType {
+    const TOKENS: Tokens<Self> = &[
+        ("ELECTRICAL", Self::Electrical),
+        ("MECHANICAL", Self::Mechanical),
+        ("UNDEFINED", Self::Undefined),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "Pin electricalType", token)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -358,12 +439,51 @@ pub enum PackagePinMountType {
     Undefined,
 }
 
+impl PackagePinMountType {
+    const TOKENS: Tokens<Self> = &[
+        ("SURFACE_MOUNT_PIN", Self::SurfaceMountPin),
+        ("SURFACE_MOUNT_PAD", Self::SurfaceMountPad),
+        ("THROUGH_HOLE_PIN", Self::ThroughHolePin),
+        ("THROUGH_HOLE_HOLE", Self::ThroughHoleHole),
+        ("PRESSFIT", Self::PressFit),
+        ("NONBOARD", Self::NonBoard),
+        ("HOLE", Self::Hole),
+        ("WIRE_BOND", Self::WireBond),
+        ("UNDEFINED", Self::Undefined),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "Pin mountType", token)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackagePinPolarity {
     Plus,
     Minus,
     Anode,
     Cathode,
+}
+
+impl PackagePinPolarity {
+    const TOKENS: Tokens<Self> = &[
+        ("PLUS", Self::Plus),
+        ("MINUS", Self::Minus),
+        ("ANODE", Self::Anode),
+        ("CATHODE", Self::Cathode),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "pinPolarity", token)
+    }
 }
 
 /// Component instance on the board
@@ -399,6 +519,29 @@ pub enum MountType {
     Socketed,
     Formed,
     Other,
+}
+
+impl MountType {
+    const TOKENS: Tokens<Self> = &[
+        ("SMT", Self::Smt),
+        ("THMT", Self::Thmt),
+        ("EMBEDDED", Self::Embedded),
+        ("PRESSFIT", Self::PressFit),
+        ("WIRE_BONDED", Self::WireBonded),
+        ("GLUED", Self::Glued),
+        ("CLAMPED", Self::Clamped),
+        ("SOCKETED", Self::Socketed),
+        ("FORMED", Self::Formed),
+        ("OTHER", Self::Other),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "Component mountType", token)
+    }
 }
 
 /// LogicalNet represents electrical connectivity
@@ -471,19 +614,22 @@ pub enum GeometryUsage {
     None,
 }
 
-impl FromStr for GeometryUsage {
-    type Err = String;
+impl GeometryUsage {
+    const TOKENS: Tokens<Self> = &[
+        ("THIEVING", Self::Thieving),
+        ("THERMAL_RELIEF", Self::ThermalRelief),
+        ("TEXT", Self::Text),
+        ("TEARDROP", Self::Teardrop),
+        ("GRAPHIC", Self::Graphic),
+        ("NONE", Self::None),
+    ];
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "THIEVING" => Ok(Self::Thieving),
-            "THERMAL_RELIEF" => Ok(Self::ThermalRelief),
-            "TEXT" => Ok(Self::Text),
-            "TEARDROP" => Ok(Self::Teardrop),
-            "GRAPHIC" => Ok(Self::Graphic),
-            "NONE" => Ok(Self::None),
-            _ => Err(format!("Unknown geometryUsage: {}", s)),
-        }
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "geometryUsage", token)
     }
 }
 
@@ -612,6 +758,23 @@ pub enum FiducialKind {
     Local,
 }
 
+impl FiducialKind {
+    const TOKENS: Tokens<Self> = &[
+        ("BadBoardMark", Self::BadBoardMark),
+        ("GlobalFiducial", Self::Global),
+        ("GoodPanelMark", Self::GoodPanelMark),
+        ("LocalFiducial", Self::Local),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "fiducial element", token)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum FiducialShape {
     Primitive(super::StandardPrimitive),
@@ -694,6 +857,18 @@ pub struct Hole {
 pub enum HoleShape {
     Circle,
     Square,
+}
+
+impl HoleShape {
+    const TOKENS: Tokens<Self> = &[("CIRCLE", Self::Circle), ("SQUARE", Self::Square)];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "Hole type", token)
+    }
 }
 
 /// Shape definition for a SlotCavity
@@ -829,60 +1004,69 @@ pub enum LayerFunction {
 }
 
 impl LayerFunction {
+    /// `ROUTE`, `SCORE` and `BOARD_FAB` are not schema tokens but are read.
+    const TOKENS: Tokens<Self> = &[
+        ("CONDUCTOR", Self::Conductor),
+        ("CONDFILM", Self::CondFilm),
+        ("CONDFOIL", Self::CondFoil),
+        ("PLANE", Self::Plane),
+        ("SIGNAL", Self::Signal),
+        ("MIXED", Self::Mixed),
+        ("COATINGCOND", Self::CoatingCond),
+        ("COATINGNONCOND", Self::CoatingNonCond),
+        ("SOLDERMASK", Self::Soldermask),
+        ("SOLDERPASTE", Self::Solderpaste),
+        ("PASTEMASK", Self::Pastemask),
+        ("SILKSCREEN", Self::Silkscreen),
+        ("LEGEND", Self::Legend),
+        ("DRILL", Self::Drill),
+        ("ROUT", Self::Rout),
+        ("ROUTE", Self::Rout),
+        ("V_CUT", Self::VCut),
+        ("SCORE", Self::Score),
+        ("EDGE_CHAMFER", Self::EdgeChamfer),
+        ("EDGE_PLATING", Self::EdgePlating),
+        ("DIELBASE", Self::DielBase),
+        ("DIELCORE", Self::DielCore),
+        ("DIELPREG", Self::DielPreg),
+        ("DIELADHV", Self::DielAdhv),
+        ("DIELBONDPLY", Self::DielBondPly),
+        ("DIELCOVERLAY", Self::DielCoverlay),
+        ("COMPONENT", Self::Component),
+        ("COMPONENT_TOP", Self::ComponentTop),
+        ("COMPONENT_BOTTOM", Self::ComponentBottom),
+        ("COMPONENT_EMBEDDED", Self::ComponentEmbedded),
+        ("COMPONENT_FORMED", Self::ComponentFormed),
+        ("ASSEMBLY", Self::Assembly),
+        ("CONDUCTIVE_ADHESIVE", Self::ConductiveAdhesive),
+        ("GLUE", Self::Glue),
+        ("HOLEFILL", Self::HoleFill),
+        ("SOLDERBUMP", Self::SolderBump),
+        ("STIFFENER", Self::Stiffener),
+        ("CAPACITIVE", Self::Capacitive),
+        ("RESISTIVE", Self::Resistive),
+        ("DOCUMENT", Self::Document),
+        ("GRAPHIC", Self::Graphic),
+        ("BOARD_OUTLINE", Self::BoardOutline),
+        ("BOARDFAB", Self::BoardFab),
+        ("BOARD_FAB", Self::BoardFab),
+        ("REWORK", Self::Rework),
+        ("FIXTURE", Self::Fixture),
+        ("PROBE", Self::Probe),
+        ("COURTYARD", Self::Courtyard),
+        ("LANDPATTERN", Self::LandPattern),
+        ("PIN", Self::Pin),
+        ("THIEVING_KEEP_INOUT", Self::ThievingKeepInout),
+        ("STACKUP_COMPOSITE", Self::StackupComposite),
+        ("OTHER", Self::Other),
+    ];
+
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Conductor => "CONDUCTOR",
-            Self::CondFilm => "CONDFILM",
-            Self::CondFoil => "CONDFOIL",
-            Self::Plane => "PLANE",
-            Self::Signal => "SIGNAL",
-            Self::Mixed => "MIXED",
-            Self::CoatingCond => "COATINGCOND",
-            Self::CoatingNonCond => "COATINGNONCOND",
-            Self::Soldermask => "SOLDERMASK",
-            Self::Solderpaste => "SOLDERPASTE",
-            Self::Pastemask => "PASTEMASK",
-            Self::Silkscreen => "SILKSCREEN",
-            Self::Legend => "LEGEND",
-            Self::Drill => "DRILL",
-            Self::Rout => "ROUT",
-            Self::VCut => "V_CUT",
-            Self::Score => "SCORE",
-            Self::EdgeChamfer => "EDGE_CHAMFER",
-            Self::EdgePlating => "EDGE_PLATING",
-            Self::DielBase => "DIELBASE",
-            Self::DielCore => "DIELCORE",
-            Self::DielPreg => "DIELPREG",
-            Self::DielAdhv => "DIELADHV",
-            Self::DielBondPly => "DIELBONDPLY",
-            Self::DielCoverlay => "DIELCOVERLAY",
-            Self::Component => "COMPONENT",
-            Self::ComponentTop => "COMPONENT_TOP",
-            Self::ComponentBottom => "COMPONENT_BOTTOM",
-            Self::ComponentEmbedded => "COMPONENT_EMBEDDED",
-            Self::ComponentFormed => "COMPONENT_FORMED",
-            Self::Assembly => "ASSEMBLY",
-            Self::ConductiveAdhesive => "CONDUCTIVE_ADHESIVE",
-            Self::Glue => "GLUE",
-            Self::HoleFill => "HOLEFILL",
-            Self::SolderBump => "SOLDERBUMP",
-            Self::Stiffener => "STIFFENER",
-            Self::Capacitive => "CAPACITIVE",
-            Self::Resistive => "RESISTIVE",
-            Self::Document => "DOCUMENT",
-            Self::Graphic => "GRAPHIC",
-            Self::BoardOutline => "BOARD_OUTLINE",
-            Self::BoardFab => "BOARDFAB",
-            Self::Rework => "REWORK",
-            Self::Fixture => "FIXTURE",
-            Self::Probe => "PROBE",
-            Self::Courtyard => "COURTYARD",
-            Self::LandPattern => "LANDPATTERN",
-            Self::Pin => "PIN",
-            Self::ThievingKeepInout => "THIEVING_KEEP_INOUT",
-            Self::StackupComposite => "STACKUP_COMPOSITE",
-            Self::Other => "OTHER",
-        }
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "layerFunction", token)
     }
 
     pub fn is_dielectric(self) -> bool {
@@ -926,15 +1110,21 @@ pub enum Side {
 }
 
 impl Side {
+    const TOKENS: Tokens<Self> = &[
+        ("TOP", Self::Top),
+        ("BOTTOM", Self::Bottom),
+        ("BOTH", Self::Both),
+        ("INTERNAL", Self::Internal),
+        ("ALL", Self::All),
+        ("NONE", Self::None),
+    ];
+
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Top => "Top",
-            Self::Bottom => "Bottom",
-            Self::Both => "Both",
-            Self::Internal => "Internal",
-            Self::All => "All",
-            Self::None => "None",
-        }
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "side", token)
     }
 }
 
@@ -944,6 +1134,18 @@ pub enum Polarity {
     Negative,
 }
 
+impl Polarity {
+    const TOKENS: Tokens<Self> = &[("POSITIVE", Self::Positive), ("NEGATIVE", Self::Negative)];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "polarity", token)
+    }
+}
+
 /// WhereMeasured indicates where overall thickness is measured
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WhereMeasured {
@@ -951,6 +1153,23 @@ pub enum WhereMeasured {
     Mask,
     Laminate,
     Other,
+}
+
+impl WhereMeasured {
+    const TOKENS: Tokens<Self> = &[
+        ("METAL", Self::Metal),
+        ("MASK", Self::Mask),
+        ("LAMINATE", Self::Laminate),
+        ("OTHER", Self::Other),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "whereMeasured", token)
+    }
 }
 
 /// Surface finish material type according to IPC-6012
@@ -996,6 +1215,43 @@ pub enum FinishType {
     Other,
 }
 
+impl FinishType {
+    const TOKENS: Tokens<Self> = &[
+        ("S", Self::S),
+        ("T", Self::T),
+        ("X", Self::X),
+        ("TLU", Self::TLU),
+        ("ENIG-N", Self::EnigN),
+        ("ENIG-G", Self::EnigG),
+        ("ENEPIG-N", Self::EnepigN),
+        ("ENEPIG-G", Self::EnepigG),
+        ("ENEPIG-P", Self::EnepigP),
+        ("DIG", Self::Dig),
+        ("IAg", Self::IAg),
+        ("ISn", Self::ISn),
+        ("OSP", Self::Osp),
+        ("HT_OSP", Self::HtOsp),
+        ("N", Self::N),
+        ("NB", Self::NB),
+        ("C", Self::C),
+        ("G", Self::G),
+        ("GS", Self::GS),
+        ("GWB-1-G", Self::GwbOneG),
+        ("GWB-1-N", Self::GwbOneN),
+        ("GWB-2-G", Self::GwbTwoG),
+        ("GWB-2-N", Self::GwbTwoN),
+        ("OTHER", Self::Other),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "SurfaceFinish type", token)
+    }
+}
+
 /// Product criteria for surface finish product selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProductCriteria {
@@ -1004,6 +1260,24 @@ pub enum ProductCriteria {
     Preferred,
     Required,
     Chosen,
+}
+
+impl ProductCriteria {
+    const TOKENS: Tokens<Self> = &[
+        ("ALLOWED", Self::Allowed),
+        ("SUGGESTED", Self::Suggested),
+        ("PREFERRED", Self::Preferred),
+        ("REQUIRED", Self::Required),
+        ("CHOSEN", Self::Chosen),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "criteria", token)
+    }
 }
 
 /// Product specification for a surface finish

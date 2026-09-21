@@ -1,6 +1,5 @@
-use super::Xform;
+use super::{Tokens, Xform, from_token, token};
 use crate::Symbol;
-use std::str::FromStr;
 
 /// 2D point
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -108,6 +107,18 @@ pub enum ButterflyShape {
     Square,
 }
 
+impl ButterflyShape {
+    const TOKENS: Tokens<Self> = &[("ROUND", Self::Round), ("SQUARE", Self::Square)];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "butterflyShape", token)
+    }
+}
+
 /// Diamond (4-sided with equal sides)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Diamond {
@@ -129,6 +140,23 @@ pub enum ConcentricShape {
     Square,
     Hexagon,
     Octagon,
+}
+
+impl ConcentricShape {
+    const TOKENS: Tokens<Self> = &[
+        ("ROUND", Self::Round),
+        ("SQUARE", Self::Square),
+        ("HEXAGON", Self::Hexagon),
+        ("OCTAGON", Self::Octagon),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "concentricShape", token)
+    }
 }
 
 /// Ellipse
@@ -262,6 +290,22 @@ pub enum LineEnd {
     Square,
 }
 
+impl LineEnd {
+    const TOKENS: Tokens<Self> = &[
+        ("NONE", Self::None),
+        ("ROUND", Self::Round),
+        ("SQUARE", Self::Square),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "lineEnd", token)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineProperty {
     Solid,
@@ -270,6 +314,25 @@ pub enum LineProperty {
     Center,
     Phantom,
     Erase,
+}
+
+impl LineProperty {
+    const TOKENS: Tokens<Self> = &[
+        ("SOLID", Self::Solid),
+        ("DOTTED", Self::Dotted),
+        ("DASHED", Self::Dashed),
+        ("CENTER", Self::Center),
+        ("PHANTOM", Self::Phantom),
+        ("ERASE", Self::Erase),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "lineProperty", token)
+    }
 }
 
 /// Fill description (fill style and color)
@@ -291,6 +354,24 @@ pub enum FillProperty {
     Void,
     Hatch,
     Mesh,
+}
+
+impl FillProperty {
+    const TOKENS: Tokens<Self> = &[
+        ("FILL", Self::Fill),
+        ("HOLLOW", Self::Hollow),
+        ("VOID", Self::Void),
+        ("HATCH", Self::Hatch),
+        ("MESH", Self::Mesh),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "fillProperty", token)
+    }
 }
 
 /// Color (RGB)
@@ -380,31 +461,4 @@ pub enum UserShapeType {
     Text(Text),
     UserPrimitiveRef(Symbol),
     UserPrimitive(UserPrimitive),
-}
-
-// FromStr implementations for shape enums
-impl FromStr for ButterflyShape {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ROUND" => Ok(ButterflyShape::Round),
-            "SQUARE" => Ok(ButterflyShape::Square),
-            _ => Err(format!("Unknown butterflyShape: {}", s)),
-        }
-    }
-}
-
-impl FromStr for ConcentricShape {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ROUND" => Ok(ConcentricShape::Round),
-            "SQUARE" => Ok(ConcentricShape::Square),
-            "HEXAGON" => Ok(ConcentricShape::Hexagon),
-            "OCTAGON" => Ok(ConcentricShape::Octagon),
-            _ => Err(format!("Unknown concentricShape: {}", s)),
-        }
-    }
 }

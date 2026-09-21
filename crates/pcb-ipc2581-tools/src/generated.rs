@@ -64,10 +64,7 @@ pub(crate) fn write_generated_layer_feature(
         "LayerFeature",
         &[("layerRef", layer_feature.layer_name.as_str())],
     );
-    writer.start_element(
-        "Set",
-        &[("polarity", write::polarity_attr(layer_feature.polarity))],
-    );
+    writer.start_element("Set", &[("polarity", layer_feature.polarity.as_str())]);
     if let Some(kind) = layer_feature.copper_balance {
         let value = kind.attribute_value();
         writer.empty_element(

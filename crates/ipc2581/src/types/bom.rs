@@ -1,3 +1,4 @@
+use super::{Tokens, from_token, token};
 use crate::Symbol;
 
 /// BOM (Bill of Materials) section
@@ -121,6 +122,24 @@ pub enum BomCategory {
     Mechanical,
     Material,
     Document,
+}
+
+impl BomCategory {
+    const TOKENS: Tokens<Self> = &[
+        ("ELECTRICAL", Self::Electrical),
+        ("PROGRAMMABLE", Self::Programmable),
+        ("MECHANICAL", Self::Mechanical),
+        ("MATERIAL", Self::Material),
+        ("DOCUMENT", Self::Document),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        token(Self::TOKENS, self)
+    }
+
+    pub fn from_ipc(token: &str) -> crate::Result<Self> {
+        from_token(Self::TOKENS, "category", token)
+    }
 }
 
 /// Characteristics for a BOM item
