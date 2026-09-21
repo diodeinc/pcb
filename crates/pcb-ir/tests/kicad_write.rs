@@ -163,7 +163,7 @@ fn writes_a_parseable_board() {
             })
             .count()
     };
-    assert_eq!(count("net"), 3);
+    assert_eq!(count("net"), 0);
     assert_eq!(count("footprint"), 2);
     assert_eq!(count("segment"), 1);
     assert_eq!(count("via"), 1);
@@ -179,8 +179,12 @@ fn output_is_deterministic_and_kicad_shaped() {
 
     // Spot-check the exact shapes pcbnew expects.
     assert!(text.starts_with("(kicad_pcb\n\t(version 20260206)\n"));
-    assert!(text.contains("\t(net 0 \"\")\n"));
-    assert!(text.contains("\t(net 1 \"GND\")\n"));
+    // Nets are written by name where they are used; pcbnew keeps net numbers
+    // to itself, and an unconnected pad says nothing.
+    assert!(!text.contains("(net 0"));
+    assert!(!text.contains("(net 1"));
+    assert!(!text.contains("(net_name"));
+    assert!(text.contains("(net \"GND\")\n"));
     assert!(text.contains("(pad \"1\" smd circle\n"));
     assert!(text.contains("(pad \"\" np_thru_hole circle\n"));
     assert!(text.contains("(attr smd exclude_from_pos_files exclude_from_bom)"));

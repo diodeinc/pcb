@@ -81,10 +81,6 @@ pub fn write(document: &Document) -> String {
     ));
     w.close();
 
-    for (index, name) in document.nets.iter().enumerate() {
-        w.line(&format!("(net {index} {})", quote(name)));
-    }
-
     for footprint in &document.footprints {
         write_footprint(&mut w, footprint);
     }
@@ -100,7 +96,7 @@ pub fn write(document: &Document) -> String {
         w.line(&format!("(end {})", xy(segment.end)));
         w.line(&format!("(width {})", num(segment.width)));
         w.line(&format!("(layer {})", quote(&segment.layer)));
-        w.line(&format!("(net {})", segment.net));
+        w.line(&net(document, segment.net));
         w.line(&format!("(uuid {})", quote(&segment.uuid)));
         w.close();
     }
@@ -111,7 +107,7 @@ pub fn write(document: &Document) -> String {
         w.line(&format!("(end {})", xy(arc.end)));
         w.line(&format!("(width {})", num(arc.width)));
         w.line(&format!("(layer {})", quote(&arc.layer)));
-        w.line(&format!("(net {})", arc.net));
+        w.line(&net(document, arc.net));
         w.line(&format!("(uuid {})", quote(&arc.uuid)));
         w.close();
     }
@@ -125,7 +121,7 @@ pub fn write(document: &Document) -> String {
             quote(&via.layers.0),
             quote(&via.layers.1)
         ));
-        w.line(&format!("(net {})", via.net));
+        w.line(&net(document, via.net));
         w.line(&format!("(uuid {})", quote(&via.uuid)));
         w.close();
     }
@@ -214,8 +210,9 @@ fn write_pad(w: &mut Writer, pad: &Pad) {
         .collect::<Vec<_>>()
         .join(" ");
     w.line(&format!("(layers {layers})"));
-    if let Some((net, name)) = &pad.net {
-        w.line(&format!("(net {net} {})", quote(name)));
+    // An unconnected pad is on the default net, which pcbnew leaves out.
+    if let Some((_, name)) = pad.net.as_ref().filter(|(net, _)| *net > 0) {
+        w.line(&format!("(net {})", quote(name)));
     }
     if let Some(margin) = pad.solder_mask_margin {
         w.line(&format!("(solder_mask_margin {})", num(margin)));
@@ -229,8 +226,9 @@ fn write_pad(w: &mut Writer, pad: &Pad) {
 
 fn write_zone(w: &mut Writer, zone: &super::Zone) {
     w.open("zone");
-    w.line(&format!("(net {})", zone.net));
-    w.line(&format!("(net_name {})", quote(&zone.net_name)));
+    if zone.net > 0 {
+        w.line(&format!("(net {})", quote(&zone.net_name)));
+    }
     if let [layer] = zone.layers.as_slice() {
         w.line(&format!("(layer {})", quote(layer)));
     } else {
@@ -406,16 +404,20 @@ fn write_graphic(w: &mut Writer, graphic: &Graphic) {
     }
 }
 
+/// A track's net by name. Net numbers are pcbnew's own bookkeeping and no
+/// longer part of the file; an unconnected track names the empty net.
+fn net(document: &Document, net: u32) -> String {
+    let name = document.nets.get(net as usize).map_or("", String::as_str);
+    format!("(net {})", quote(name))
+}
+
 /// Format a number the way KiCad does: at most six decimals, trailing
-/// zeros trimmed, negative zero normalized.
+/// zeros trimmed, and zero never negative however it was reached.
 fn num(value: f64) -> String {
-    let value = if value == 0.0 { 0.0 } else { value };
     let formatted = format!("{value:.6}");
-    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
-    if trimmed.is_empty() || trimmed == "-" {
-        "0".into()
-    } else {
-        trimmed.into()
+    match formatted.trim_end_matches('0').trim_end_matches('.') {
+        "" | "-" | "-0" => "0".into(),
+        trimmed => trimmed.into(),
     }
 }
 
@@ -444,6 +446,7 @@ pub fn quote(value: &str) -> String {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
             _ => out.push(ch),
         }
     }

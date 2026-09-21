@@ -185,18 +185,18 @@ fn generates_a_parseable_interposer() {
     assert_eq!(
         text.matches("\"DETECT_").count(),
         12,
-        "table entry + two pads, x4"
+        "two pads + their shorting track, x4"
     );
     assert_eq!(count("gr_arc"), 4);
     assert_eq!(count("gr_line"), 4);
-    // Net table: no-net, GND, ten planned nets, four detect loops.
-    assert_eq!(count("net"), 16);
-    // GND: the table entry, 60 lands, and 2 gnd pogos.
-    assert_eq!(text.matches("(net 1 \"GND\")").count(), 63);
+    // Nets are named where they are used; the file carries no net table.
+    assert_eq!(count("net"), 0);
+    // GND: 60 lands, 2 gnd pogos, and the two zones.
+    assert_eq!(text.matches("(net \"GND\")").count(), 64);
     // Every planned net appears on both faces: its pogo pad and its land.
     for board in [0, 1] {
         let net = format!("\"B{board}.TP_DP.TP\"");
-        assert_eq!(text.matches(net.as_str()).count(), 3, "table + pogo + land");
+        assert_eq!(text.matches(net.as_str()).count(), 2, "pogo + land");
     }
     assert_eq!(text.matches("Interposer:806-22-001-30-0xx191").count(), 12);
 
