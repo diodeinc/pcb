@@ -2,7 +2,9 @@ use pcb_ir::geom::{GeometryAccuracy, Resolution};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
+use pcb_ipc2581_tools::RenderFormat;
+use pcb_ipc2581_tools::commands::render::{RenderTarget, render_artwork};
 
 #[derive(Args)]
 pub struct GerberArgs {
@@ -48,19 +50,6 @@ enum Commands {
         #[arg(short, long, default_value = "auto")]
         format: RenderFormat,
     },
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-enum RenderFormat {
-    Auto,
-    Svg,
-    Png,
-}
-
-enum RenderTarget {
-    Svg,
-    Png,
-    Terminal,
 }
 
 pub fn execute(args: GerberArgs, resolution: Resolution) -> Result<()> {
@@ -189,39 +178,14 @@ fn render(
     format: RenderFormat,
     resolution: Resolution,
 ) -> Result<()> {
-    let target = resolve_target(output, format)?;
-    let geometry = load_geometry(file, resolution.accuracy)?;
-
-    for diagnostic in &geometry.diagnostics {
-        eprintln!("warning: {}", diagnostic.message);
-    }
-
-    let options = pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy);
-    let (name, image) = match target {
-        RenderTarget::Svg => (
-            "SVG",
-            pcb_ir::render::artwork_svg(&geometry, &options)?.into_bytes(),
-        ),
-        RenderTarget::Png => (
-            "PNG",
-            pcb_ir::render::artwork_png(&geometry, &options)
-                .map_err(gerberx2::GerberError::Render)?,
-        ),
-        RenderTarget::Terminal => {
-            return Ok(pcb_ir::render::artwork_to_terminal(&geometry, &options)
-                .map_err(gerberx2::GerberError::Render)?);
-        }
-    };
-    match output {
-        Some(output) => {
-            std::fs::write(output, image)
-                .with_context(|| format!("Failed to write {name} to {}", output.display()))?;
-            println!("✓ Gerber layer rendered to {}", output.display());
-        }
-        None => pcb_ui::write_stdout(|stdout| stdout.write_all(&image))
-            .with_context(|| format!("Failed to write {name} to stdout"))?,
-    }
-    Ok(())
+    let target = RenderTarget::resolve(output, format, "Gerber layer")?;
+    render_artwork(
+        &load_geometry(file, resolution.accuracy)?,
+        target,
+        output,
+        "Gerber layer",
+        &pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy),
+    )
 }
 
 fn load_geometry(
@@ -231,38 +195,4 @@ fn load_geometry(
     let gerber = gerberx2::GerberX2::parse_file(file)
         .with_context(|| format!("Failed to parse Gerber file {}", file.display()))?;
     Ok(gerberx2::geometry::extract_document(&gerber, accuracy)?)
-}
-
-fn resolve_target(output: Option<&Path>, format: RenderFormat) -> Result<RenderTarget> {
-    match format {
-        RenderFormat::Auto => {
-            if let Some(output) = output {
-                infer_format_from_output(output)
-            } else if pcb_ir::render::can_render_to_terminal() {
-                Ok(RenderTarget::Terminal)
-            } else {
-                bail!(
-                    "Could not render Gerber layer to stdout; run from a terminal with kitty graphics (kitty, Ghostty, WezTerm) or pass --output <path>.svg or <path>.png"
-                )
-            }
-        }
-        RenderFormat::Svg => Ok(RenderTarget::Svg),
-        RenderFormat::Png => Ok(RenderTarget::Png),
-    }
-}
-
-fn infer_format_from_output(output: &Path) -> Result<RenderTarget> {
-    match output
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("svg") => Ok(RenderTarget::Svg),
-        Some("png") => Ok(RenderTarget::Png),
-        _ => bail!(
-            "Could not infer Gerber render format from {}; pass --format svg or --format png",
-            output.display()
-        ),
-    }
 }

@@ -25,90 +25,94 @@ pub fn execute(
     options: &LayerRenderOptions,
     resolution: Resolution,
 ) -> Result<()> {
-    let target = resolve_target(options)?;
+    let subject = format!("IPC-2581 layer '{}'", options.layer);
+    let target = RenderTarget::resolve(options.output.as_deref(), options.format, &subject)?;
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let view = options.layout_target.artwork_scope();
     let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
     let artwork =
         geometry::render::layer_artwork(&imported, &options.layer, view, true, resolution)?.artwork;
-    let render = pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy);
-
-    match target {
-        RenderTarget::Svg => write_output(
-            options,
-            "SVG",
-            pcb_ir::render::artwork_svg(&artwork, &render)?.as_bytes(),
-        )?,
-        RenderTarget::Png => write_output(
-            options,
-            "PNG",
-            &pcb_ir::render::artwork_png(&artwork, &render).map_err(anyhow::Error::msg)?,
-        )?,
-        RenderTarget::Terminal => {
-            pcb_ir::render::artwork_to_terminal(&artwork, &render).map_err(anyhow::Error::msg)?
-        }
-    }
-
-    for diagnostic in &artwork.diagnostics {
-        eprintln!("warning: {}", diagnostic.message);
-    }
-
-    Ok(())
+    render_artwork(
+        &artwork,
+        target,
+        options.output.as_deref(),
+        &subject,
+        &pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy),
+    )
 }
 
-enum RenderTarget {
+/// Where a render goes, settled before any geometry is loaded.
+#[derive(Debug, Clone, Copy)]
+pub enum RenderTarget {
     Svg,
     Png,
     Terminal,
 }
 
-fn resolve_target(options: &LayerRenderOptions) -> Result<RenderTarget> {
-    match options.format {
-        RenderFormat::Auto => {
-            if let Some(output) = &options.output {
-                infer_format_from_output(output)
-            } else if pcb_ir::render::can_render_to_terminal() {
-                Ok(RenderTarget::Terminal)
-            } else {
-                bail!(
-                    "Could not render IPC-2581 layer to stdout; run from a terminal with kitty graphics (kitty, Ghostty, WezTerm) or pass --output <path>.svg or <path>.png"
-                )
+impl RenderTarget {
+    /// The target `format` names, inferring it from the output's extension
+    /// or the terminal's abilities when left to `Auto`.
+    pub fn resolve(output: Option<&Path>, format: RenderFormat, subject: &str) -> Result<Self> {
+        match (format, output) {
+            (RenderFormat::Svg, _) => Ok(Self::Svg),
+            (RenderFormat::Png, _) => Ok(Self::Png),
+            (RenderFormat::Auto, Some(output)) => match output
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("svg") => Ok(Self::Svg),
+                Some("png") => Ok(Self::Png),
+                _ => bail!(
+                    "Could not infer the render format from {}; pass --format svg or --format png",
+                    output.display()
+                ),
+            },
+            (RenderFormat::Auto, None) if pcb_ir::render::can_render_to_terminal() => {
+                Ok(Self::Terminal)
             }
+            (RenderFormat::Auto, None) => bail!(
+                "Could not render {subject} to stdout; run from a terminal with kitty graphics (kitty, Ghostty, WezTerm) or pass --output <path>.svg or <path>.png"
+            ),
         }
-        RenderFormat::Svg => Ok(RenderTarget::Svg),
-        RenderFormat::Png => Ok(RenderTarget::Png),
     }
 }
 
-fn infer_format_from_output(output: &Path) -> Result<RenderTarget> {
-    match output
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("svg") => Ok(RenderTarget::Svg),
-        Some("png") => Ok(RenderTarget::Png),
-        _ => bail!(
-            "Could not infer IPC-2581 render format from {}; pass --format svg or --format png",
-            output.display()
+/// Draw `artwork` to `target`, warning of what the artwork could not carry.
+pub fn render_artwork<LayerMeta: Clone, ObjectMeta: Clone>(
+    artwork: &pcb_ir::dialects::artwork::Document<LayerMeta, ObjectMeta>,
+    target: RenderTarget,
+    output: Option<&Path>,
+    subject: &str,
+    options: &pcb_ir::render::RenderOptions,
+) -> Result<()> {
+    for diagnostic in &artwork.diagnostics {
+        eprintln!("warning: {}", diagnostic.message);
+    }
+    let (format, image) = match target {
+        RenderTarget::Svg => (
+            "SVG",
+            pcb_ir::render::artwork_svg(artwork, options)?.into_bytes(),
         ),
-    }
-}
-
-fn write_output(options: &LayerRenderOptions, format: &str, contents: &[u8]) -> Result<()> {
-    if let Some(output) = &options.output {
-        std::fs::write(output, contents)
-            .with_context(|| format!("Failed to write {format} to {}", output.display()))?;
-        println!(
-            "✓ IPC-2581 layer '{}' rendered to {}",
-            options.layer,
-            output.display()
-        );
-    } else {
-        pcb_ui::write_stdout(|stdout| stdout.write_all(contents))
-            .with_context(|| format!("Failed to write {format} to stdout"))?;
+        RenderTarget::Png => (
+            "PNG",
+            pcb_ir::render::artwork_png(artwork, options).map_err(anyhow::Error::msg)?,
+        ),
+        RenderTarget::Terminal => {
+            return pcb_ir::render::artwork_to_terminal(artwork, options)
+                .map_err(anyhow::Error::msg);
+        }
+    };
+    match output {
+        Some(output) => {
+            std::fs::write(output, image)
+                .with_context(|| format!("Failed to write {format} to {}", output.display()))?;
+            println!("✓ {subject} rendered to {}", output.display());
+        }
+        None => pcb_ui::write_stdout(|stdout| stdout.write_all(&image))
+            .with_context(|| format!("Failed to write {format} to stdout"))?,
     }
     Ok(())
 }
