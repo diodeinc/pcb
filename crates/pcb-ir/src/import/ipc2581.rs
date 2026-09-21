@@ -2476,8 +2476,11 @@ fn extract_pad(
         _ => FeatureRole::Pad,
     };
 
-    let padstack_shape = padstack.and_then(|padstack| padstack_pad_shape(padstack, layer_ref));
-    let Some(shape) = pad.feature.as_ref().or(padstack_shape.as_ref()) else {
+    let Some(shape) = pad
+        .feature
+        .as_ref()
+        .or_else(|| padstack_pad_shape(padstack?, layer_ref))
+    else {
         doc.warn(format!(
             "Skipping pad{} because it has no shape for layer '{}'",
             pad.padstack_def_ref
@@ -2490,6 +2493,10 @@ fn extract_pad(
         ));
         return Ok(None);
     };
+    // Pad Location is the final centre of this layer's shape. KiCad (ShapePos)
+    // and Allegro both fold the padstack's shape offset into it, so the pad
+    // definition's own Xform and Location describe the padstack and are not
+    // applied again.
     let placement = ipc_placement(Point::new(x, y), pad.xform);
 
     let path_start = doc.arena.paths.len() as u32;
@@ -2545,23 +2552,17 @@ fn extract_pad(
 fn padstack_pad_shape(
     padstack: &ipc2581::types::PadStackDef,
     layer_ref: Symbol,
-) -> Option<FeatureShape> {
-    let pad_def = [PadUse::Regular, PadUse::Thermal]
+) -> Option<&FeatureShape> {
+    [PadUse::Regular, PadUse::Thermal]
         .into_iter()
         .find_map(|pad_use| {
             padstack
                 .pad_defs
                 .iter()
                 .find(|pad_def| pad_def.layer_ref == layer_ref && pad_def.pad_use == pad_use)
-        })?;
-    pad_def
-        .standard_primitive_ref
-        .map(FeatureShape::StandardPrimitiveRef)
-        .or_else(|| {
-            pad_def
-                .user_primitive_ref
-                .map(FeatureShape::UserPrimitiveRef)
-        })
+        })?
+        .feature
+        .as_ref()
 }
 
 /// Lower one member of the IPC-2581C `Feature` substitution group. Warns and
@@ -6189,6 +6190,64 @@ mod tests {
         let rotated = doc.features[1].bbox;
         assert!((rotated.center().x - 40.0).abs() < 1e-9);
         assert!((rotated.center().y - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn padstack_xform_offsets_do_not_reposition_pad_locations() {
+        // Allegro writes the shape offset as a PadstackPadDef Xform, but its
+        // Pad Location is already pin origin + rotated offset. Coordinates are
+        // L44 of the Allegro testcase5 fixture: pins at x = 2.94 and 6.064.
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="land">
+        <RectCenter width="1.45" height="4.4"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="LS145X440_SP">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <Xform xOffset="0.0850"/>
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="land"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Pad padstackDefRef="LS145X440_SP">
+              <Location x="3.0250" y="45.7500"/>
+              <StandardPrimitiveRef id="land"/>
+            </Pad>
+            <Pad padstackDefRef="LS145X440_SP">
+              <Xform rotation="180.000"/>
+              <Location x="5.9790" y="45.7500"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let doc = extract_layer(&ipc, "TOP", Resolution::default()).unwrap();
+        assert_eq!(doc.features.len(), 2);
+        for (feature, x) in doc.features.iter().zip([3.025, 5.979]) {
+            let center = feature.bbox.center();
+            assert!((center.x - x).abs() < 1e-9, "{center:?}");
+            assert!((center.y - 45.75).abs() < 1e-9, "{center:?}");
+        }
     }
 
     #[test]
