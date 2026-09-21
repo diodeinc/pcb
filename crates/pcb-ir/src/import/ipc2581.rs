@@ -3,9 +3,9 @@ use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
 use ipc2581::types::{
-    FillProperty, HoleShape as IpcHoleShape, LayerFunction, LineEnd, LineProperty, PadUse,
-    PlatingStatus, Polarity, PolyStep, SlotShape, StandardPrimitive, UserPrimitive, UserShapeType,
-    Xform,
+    ConcentricShape, FillProperty, HoleShape as IpcHoleShape, LayerFunction, LineEnd, LineProperty,
+    PadUse, PlatingStatus, Polarity, PolyStep, SlotShape, StandardPrimitive, UserPrimitive,
+    UserShapeType, Xform,
     ecad::{FeatureShape, Layer, SetFeature, Step, StepRepeat, StepType},
 };
 use ipc2581::{Interner, Ipc2581, Symbol};
@@ -3346,28 +3346,16 @@ fn lower_standard_primitive(
             );
         }
         StandardPrimitive::Donut(donut) => {
-            push_donut_path(
+            push_ring_path(
                 doc,
                 transform,
+                donut.shape.shape,
                 donut.shape.outer_diameter,
                 donut.shape.inner_diameter,
             );
         }
         StandardPrimitive::Thermal(thermal) => {
-            let spoke_width = thermal
-                .shape
-                .spoke_width
-                .unwrap_or(thermal.shape.outer_diameter - thermal.shape.inner_diameter)
-                .max(0.0);
-            push_thermal_path(
-                doc,
-                transform,
-                thermal.shape.outer_diameter,
-                thermal.shape.inner_diameter,
-                spoke_width,
-                thermal.shape.spoke_count,
-                thermal.shape.spoke_start_angle.unwrap_or(45.0),
-            );
+            push_thermal_path(doc, transform, &thermal.shape, context.resolution)?;
         }
         StandardPrimitive::Contour(contour) => {
             push_contour_path(doc, contour, transform);
@@ -3470,7 +3458,10 @@ fn standard_primitive_has_no_area(primitive: &StandardPrimitive) -> bool {
             donut.shape.outer_diameter <= 0.0
                 || donut.shape.inner_diameter >= donut.shape.outer_diameter
         }
-        StandardPrimitive::Thermal(thermal) => thermal.shape.outer_diameter <= 0.0,
+        StandardPrimitive::Thermal(thermal) => {
+            thermal.shape.outer_diameter <= 0.0
+                || thermal.shape.inner_diameter >= thermal.shape.outer_diameter
+        }
         StandardPrimitive::Butterfly(_)
         | StandardPrimitive::Contour(_)
         | StandardPrimitive::Moire(_) => false,
@@ -3643,7 +3634,7 @@ fn lower_user_shape(
             *paint = PrimitivePaint::Hollow;
         }
         Some(fill_desc) if fill_desc.fill_property == FillProperty::Void => {
-            subtract_user_void(
+            subtract_trailing_paths(
                 doc,
                 primitive_start,
                 path_start as usize,
@@ -3660,23 +3651,24 @@ fn lower_user_shape(
     Ok(())
 }
 
-/// IPC-2581C §3.5.6.1: VOID clears only preceding filled shapes in its own
-/// UserSpecial, never strokes, later islands, or neighboring primitives.
-fn subtract_user_void(
+/// Subtract the fills pushed since `cutter_start` from the fills in
+/// `subject_start..cutter_start`, consuming the cutters. Subjects the cutters
+/// do not reach keep their exact source curves.
+fn subtract_trailing_paths(
     doc: &mut GeometryDocument,
-    primitive_start: usize,
-    void_start: usize,
+    subject_start: usize,
+    cutter_start: usize,
     resolution: Resolution,
 ) -> Result<()> {
     let cutters = ContourSet::from_painted_paths(
         &doc.arena,
-        doc.arena.paths[void_start..]
+        doc.arena.paths[cutter_start..]
             .iter()
             .filter(|path| path.is_filled()),
         resolution.strict(),
     )?;
-    doc.arena.paths.truncate(void_start);
-    for index in primitive_start..void_start {
+    doc.arena.paths.truncate(cutter_start);
+    for index in subject_start..cutter_start {
         let path = doc.arena.paths[index];
         let Some(rule) = path.fill_rule() else {
             continue;
@@ -3890,15 +3882,22 @@ fn push_filled_shape(doc: &mut GeometryDocument, transform: Affine2, contour: Op
     }
 }
 
-fn ellipse_contour(transform: Affine2, width: f64, height: f64) -> ContourBuf {
-    shapes::ellipse(width, height)
-        .unwrap_or_default()
-        .transformed(transform)
+/// The outline both Donut and Thermal rings are built from. Polygonal shapes
+/// follow their standalone primitives: a square by its side, a hexagon or
+/// octagon by its point-to-point diameter with a vertex pointing down.
+fn concentric_outline(shape: ConcentricShape, diameter: f64) -> Option<ContourBuf> {
+    match shape {
+        ConcentricShape::Round => shapes::circle(diameter),
+        ConcentricShape::Square => shapes::rect(diameter, diameter),
+        ConcentricShape::Hexagon => shapes::regular_polygon(diameter, 6, -90.0),
+        ConcentricShape::Octagon => shapes::regular_polygon(diameter, 8, -90.0),
+    }
 }
 
-fn push_donut_path(
+fn push_ring_path(
     doc: &mut GeometryDocument,
     transform: Affine2,
+    shape: ConcentricShape,
     outer_diameter: f64,
     inner_diameter: f64,
 ) {
@@ -3906,10 +3905,10 @@ fn push_donut_path(
         Paint::Fill {
             rule: FillRule::EvenOdd,
         },
-        [
-            ellipse_contour(transform, outer_diameter, outer_diameter),
-            ellipse_contour(transform, inner_diameter, inner_diameter),
-        ],
+        [outer_diameter, inner_diameter]
+            .into_iter()
+            .filter_map(|diameter| concentric_outline(shape, diameter))
+            .map(|outline| outline.transformed(transform)),
     );
 }
 
@@ -3952,7 +3951,13 @@ fn push_moire_path(doc: &mut GeometryDocument, transform: Affine2, moire: &ipc25
         }
 
         if inner_diameter > 0.0 {
-            push_donut_path(doc, transform, outer_diameter, inner_diameter);
+            push_ring_path(
+                doc,
+                transform,
+                ConcentricShape::Round,
+                outer_diameter,
+                inner_diameter,
+            );
         } else {
             push_filled_shape(
                 doc,
@@ -3979,36 +3984,51 @@ fn push_moire_path(doc: &mut GeometryDocument, transform: Affine2, moire: &ipc25
     }
 }
 
+/// A thermal is its ring interrupted by `spoke_count` gaps of `spoke_width`
+/// (the ODB++ and Gerber thermal convention); the gaps are where the spokes
+/// of surrounding copper reach the pad. Without spokes it is the donut.
 fn push_thermal_path(
     doc: &mut GeometryDocument,
     transform: Affine2,
-    outer_diameter: f64,
-    inner_diameter: f64,
-    spoke_width: f64,
-    spoke_count: u32,
-    spoke_start_angle: f64,
-) {
-    if spoke_count == 0 {
-        push_donut_path(doc, transform, outer_diameter, inner_diameter);
-        return;
-    }
+    thermal: &ipc2581::types::Thermal,
+    resolution: Resolution,
+) -> Result<()> {
+    let ring_start = doc.arena.paths.len();
+    push_ring_path(
+        doc,
+        transform,
+        thermal.shape,
+        thermal.outer_diameter,
+        thermal.inner_diameter,
+    );
 
-    let outer_radius = outer_diameter / 2.0;
-    let inner_radius = inner_diameter / 2.0;
-    let length = (outer_radius - inner_radius).max(0.0);
-    for index in 0..spoke_count {
-        let angle = spoke_start_angle.to_radians()
-            + index as f64 * std::f64::consts::TAU / spoke_count as f64;
-        let center_radius = inner_radius + length / 2.0;
-        let center = Point::new(center_radius * angle.cos(), center_radius * angle.sin());
-        let spoke_transform = transform.concat(Affine2::placement(
-            center,
-            angle.to_degrees(),
-            Mirror::NONE,
-            1.0,
-        ));
-        push_filled_shape(doc, spoke_transform, shapes::rect(length, spoke_width));
+    let gap_start = doc.arena.paths.len();
+    match thermal.spoke_width.zip(thermal.spoke_start_angle) {
+        Some((spoke_width, spoke_start_angle)) => {
+            // Reaches past the corners of every outline shape.
+            let length = thermal.outer_diameter;
+            for index in 0..thermal.spoke_count {
+                let angle = spoke_start_angle + index as f64 * 360.0 / thermal.spoke_count as f64;
+                let (sin, cos) = angle.to_radians().sin_cos();
+                let gap = Affine2::placement(
+                    Point::new(length / 2.0 * cos, length / 2.0 * sin),
+                    angle,
+                    Mirror::NONE,
+                    1.0,
+                );
+                push_filled_shape(
+                    doc,
+                    transform.concat(gap),
+                    shapes::rect(length, spoke_width),
+                );
+            }
+        }
+        None if thermal.spoke_count > 0 => {
+            doc.warn("Thermal without spokeWidth and spokeStartAngle imported as an unbroken ring");
+        }
+        None => {}
     }
+    subtract_trailing_paths(doc, ring_start, gap_start, resolution)
 }
 
 fn circular_sector_contour(
@@ -4940,29 +4960,126 @@ mod tests {
         }
     }
 
-    #[test]
-    fn lowers_thermal_as_spokes_without_redundant_ring() {
-        let mut doc = GeometryDocument::new();
+    fn thermal(
+        shape: ConcentricShape,
+        spoke_count: u32,
+        spoke_width: Option<f64>,
+    ) -> ipc2581::types::Thermal {
+        ipc2581::types::Thermal {
+            shape,
+            outer_diameter: 10.0,
+            inner_diameter: 6.0,
+            spoke_count,
+            spoke_width,
+            spoke_start_angle: Some(0.0),
+        }
+    }
 
-        push_thermal_path(&mut doc, Affine2::identity(), 10.0, 6.0, 2.0, 4, 0.0);
-
-        assert_eq!(doc.arena.paths.len(), 4);
-        assert!(doc.arena.paths.iter().all(|path| {
-            path.fill_rule() == Some(FillRule::NonZero) && path.contours.count == 1
-        }));
-        assert_eq!(doc.arena.paths[0].bbox.min, Point::new(3.0, -1.0));
-        assert_eq!(doc.arena.paths[0].bbox.max, Point::new(5.0, 1.0));
+    fn thermal_image(doc: &GeometryDocument) -> ContourSet {
+        ContourSet::from_painted_paths(&doc.arena, &doc.arena.paths, Resolution::default()).unwrap()
     }
 
     #[test]
-    fn lowers_spokeless_thermal_as_donut() {
+    fn lowers_thermal_as_ring_interrupted_by_spoke_gaps() {
         let mut doc = GeometryDocument::new();
+        push_thermal_path(
+            &mut doc,
+            Affine2::identity(),
+            &thermal(ConcentricShape::Round, 4, Some(2.0)),
+            Resolution::default(),
+        )
+        .unwrap();
 
-        push_thermal_path(&mut doc, Affine2::identity(), 10.0, 6.0, 2.0, 0, 0.0);
+        let image = thermal_image(&doc);
+        let diagonal = 4.0 * std::f64::consts::FRAC_1_SQRT_2;
+        assert!(image.contains_point(Point::new(diagonal, diagonal)));
+        assert!(image.contains_point(Point::new(-diagonal, diagonal)));
+        assert!(!image.contains_point(Point::new(4.0, 0.0)));
+        assert!(!image.contains_point(Point::new(0.0, -4.0)));
+        assert!(!image.contains_point(Point::new(0.0, 0.0)));
+        assert_eq!(image.connected_components().len(), 4);
+    }
 
-        assert_eq!(doc.arena.paths.len(), 1);
-        assert_eq!(doc.arena.paths[0].fill_rule(), Some(FillRule::EvenOdd));
-        assert_eq!(doc.arena.paths[0].contours.count, 2);
+    #[test]
+    fn spokeless_thermal_is_exactly_its_donut() {
+        let mut thermal_doc = GeometryDocument::new();
+        push_thermal_path(
+            &mut thermal_doc,
+            Affine2::identity(),
+            &thermal(ConcentricShape::Round, 0, Some(2.0)),
+            Resolution::default(),
+        )
+        .unwrap();
+        let mut donut_doc = GeometryDocument::new();
+        push_ring_path(
+            &mut donut_doc,
+            Affine2::identity(),
+            ConcentricShape::Round,
+            10.0,
+            6.0,
+        );
+
+        assert_eq!(thermal_doc.arena.paths, donut_doc.arena.paths);
+        assert_eq!(thermal_doc.arena.cmds, donut_doc.arena.cmds);
+        assert_eq!(
+            thermal_doc.arena.paths[0].fill_rule(),
+            Some(FillRule::EvenOdd)
+        );
+        assert_eq!(thermal_doc.arena.paths[0].contours.count, 2);
+    }
+
+    #[test]
+    fn thermal_without_spoke_width_stays_whole_and_warns() {
+        let mut doc = GeometryDocument::new();
+        push_thermal_path(
+            &mut doc,
+            Affine2::identity(),
+            &thermal(ConcentricShape::Round, 4, None),
+            Resolution::default(),
+        )
+        .unwrap();
+
+        assert!(thermal_image(&doc).contains_point(Point::new(4.0, 0.0)));
+        assert_eq!(doc.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn donut_and_thermal_rings_follow_their_shape() {
+        for (shape, corner, flat) in [
+            (ConcentricShape::Round, false, true),
+            (ConcentricShape::Square, true, true),
+            // Vertex down: the ring reaches 5 mm along Y but only 4.33 mm along X.
+            (ConcentricShape::Hexagon, false, false),
+        ] {
+            let mut doc = GeometryDocument::new();
+            push_ring_path(&mut doc, Affine2::identity(), shape, 10.0, 6.0);
+            let image = thermal_image(&doc);
+
+            assert_eq!(
+                image.contains_point(Point::new(4.5, 4.5)),
+                corner,
+                "{shape:?}"
+            );
+            assert_eq!(
+                image.contains_point(Point::new(4.8, 0.0)),
+                flat,
+                "{shape:?}"
+            );
+            assert!(image.contains_point(Point::new(0.0, -4.8)), "{shape:?}");
+            assert!(!image.contains_point(Point::new(0.0, 0.0)), "{shape:?}");
+        }
+
+        let mut doc = GeometryDocument::new();
+        push_thermal_path(
+            &mut doc,
+            Affine2::identity(),
+            &thermal(ConcentricShape::Square, 4, Some(2.0)),
+            Resolution::default(),
+        )
+        .unwrap();
+        let image = thermal_image(&doc);
+        assert!(image.contains_point(Point::new(4.5, 4.5)));
+        assert!(!image.contains_point(Point::new(4.5, 0.0)));
     }
 
     #[test]
