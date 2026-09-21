@@ -694,6 +694,28 @@ fn reads_deprecated_constructs_older_files_are_full_of() {
         gerberx2::geometry::extract_document(&gerber, GeometryAccuracy::default()).unwrap();
     assert!(close(artwork.objects[3].bbox.center().x, 12.7));
 
+    // Altium ends every region with a bare move.
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%%MOMM*%G36*X0Y0D02*G01X1000000D01*Y1000000D01*X0Y0D01*D02*G37*M02*",
+    )
+    .unwrap();
+    assert!(matches!(
+        &gerber.objects()[0].kind,
+        ObjectKind::Region { contours } if contours.len() == 1
+    ));
+
+    // An omitted arc offset is zero, and an arc with no offset at all is
+    // the straight segment: Altium leaves arc mode on after a region.
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%%MOMM*%%ADD10C,0.1*%D10*G75*G03X0Y0D02*Y1000000J500000D01*X1000000D01*M02*",
+    )
+    .unwrap();
+    assert!(matches!(
+        gerber.objects()[0].kind,
+        ObjectKind::Arc { center_offset, .. } if center_offset.x == 0.0 && center_offset.y == 0.5
+    ));
+    assert!(matches!(gerber.objects()[1].kind, ObjectKind::Draw { .. }));
+
     // G71 is `%MOMM`, and an unclosed step-repeat ends with the file.
     let gerber =
         GerberX2::parse("%FSLAX26Y26*%G71*%ADD10C,1*%D10*%SRX2Y1I5J0*%X1000000Y0D03*M02*").unwrap();

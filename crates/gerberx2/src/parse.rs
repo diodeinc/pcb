@@ -146,6 +146,18 @@ struct RegionBuilder {
     current: Option<Contour>,
 }
 
+impl RegionBuilder {
+    /// End the contour in progress. One without segments images nothing:
+    /// Altium ends every region with a bare `D02`.
+    fn end_contour(&mut self) {
+        self.contours.extend(
+            self.current
+                .take()
+                .filter(|contour| !contour.segments.is_empty()),
+        );
+    }
+}
+
 #[derive(Debug)]
 struct BlockBuilder {
     aperture_code: i32,
@@ -502,9 +514,7 @@ impl<'a> Parser<'a> {
             .region
             .take()
             .ok_or_else(|| self.syntax("G37 without matching G36"))?;
-        if let Some(contour) = region.current.take() {
-            region.contours.push(contour);
-        }
+        region.end_contour();
         if region.contours.is_empty() {
             return Err(self.syntax("empty region statement"));
         }
@@ -520,9 +530,7 @@ impl<'a> Parser<'a> {
         match code {
             OperationCode::Move => {
                 if let Some(region) = &mut self.region {
-                    if let Some(contour) = region.current.take() {
-                        region.contours.push(contour);
-                    }
+                    region.end_contour();
                     region.current = Some(Contour {
                         segments: Vec::new(),
                     });
@@ -549,16 +557,19 @@ impl<'a> Parser<'a> {
                     .state
                     .plot_mode
                     .ok_or_else(|| self.syntax("D01 plot requires G01/G02/G03 plot mode"))?;
-                let segment = match plot_mode {
-                    PlotMode::Linear => ContourSegment::Line { start, end: point },
-                    PlotMode::ClockwiseArc | PlotMode::CounterclockwiseArc => {
-                        let center_offset = self.coordinate_offset(fields)?;
-                        ContourSegment::Arc {
-                            start,
-                            end: point,
-                            center_offset,
-                            clockwise: plot_mode == PlotMode::ClockwiseArc,
-                        }
+                // An arc without a centre offset has no radius: it is the
+                // straight segment. Altium draws lines this way whenever a
+                // region leaves arc mode on.
+                let center_offset = self.coordinate_offset(fields)?;
+                let segment = if plot_mode == PlotMode::Linear || center_offset == Point::default()
+                {
+                    ContourSegment::Line { start, end: point }
+                } else {
+                    ContourSegment::Arc {
+                        start,
+                        end: point,
+                        center_offset,
+                        clockwise: plot_mode == PlotMode::ClockwiseArc,
                     }
                 };
                 if let Some(region) = &mut self.region {
@@ -615,16 +626,11 @@ impl<'a> Parser<'a> {
         Ok(Point { x, y })
     }
 
+    /// The arc centre offset; an omitted `I` or `J` is zero.
     fn coordinate_offset(&self, fields: CoordinateFields) -> Result<Point> {
-        let i = fields
-            .i
-            .ok_or_else(|| self.syntax("arc D01 requires I offset"))?;
-        let j = fields
-            .j
-            .ok_or_else(|| self.syntax("arc D01 requires J offset"))?;
         Ok(Point {
-            x: self.decode_x(i)?,
-            y: self.decode_y(j)?,
+            x: self.decode_x(fields.i.unwrap_or(0))?,
+            y: self.decode_y(fields.j.unwrap_or(0))?,
         })
     }
 
@@ -1077,11 +1083,6 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
 
 fn validate_region_contours(contours: &[Contour]) -> Result<()> {
     for contour in contours {
-        if contour.segments.is_empty() {
-            return Err(GerberError::InvalidStructure(
-                "region contour has no segments".to_string(),
-            ));
-        }
         let mut first = None;
         let mut previous = None;
         for segment in &contour.segments {
