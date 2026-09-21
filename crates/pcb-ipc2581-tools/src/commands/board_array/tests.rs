@@ -179,9 +179,16 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
 
     let input = board_fixture_with_mask_bbox_mm(13.0, 10.0);
     let source = Ipc2581::parse(&input).unwrap();
-    let (options, panelization) = auto_board_array_options(&source, None, resolution).unwrap();
+    let (options, panelization) = auto_board_array_options(
+        &source,
+        primary_board_layout(&source).unwrap(),
+        None,
+        resolution,
+    )
+    .unwrap();
     let spec = build_board_array_spec(
         &source,
+        primary_board_layout(&source).unwrap(),
         &options,
         panelization,
         Separation::VScore,
@@ -248,9 +255,18 @@ fn board_array_balancing_solves_every_copper_layer() {
     let input = two_layer_board_xml();
     let ipc = Ipc2581::parse(&input).unwrap();
     let sheet = Some(AutoSheetSize::A7);
-    let (options, panelization) = auto_board_array_options(&ipc, sheet, resolution).unwrap();
-    let spec = build_board_array_spec(&ipc, &options, panelization, Separation::VScore, resolution)
-        .unwrap();
+    let (options, panelization) =
+        auto_board_array_options(&ipc, primary_board_layout(&ipc).unwrap(), sheet, resolution)
+            .unwrap();
+    let spec = build_board_array_spec(
+        &ipc,
+        primary_board_layout(&ipc).unwrap(),
+        &options,
+        panelization,
+        Separation::VScore,
+        resolution,
+    )
+    .unwrap();
     let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let balance =
@@ -404,9 +420,18 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
     // The smallest sheet the board fits: fiducial scoping does not depend on
     // how much panel surrounds it.
     let sheet = Some(AutoSheetSize::A6);
-    let (options, panelization) = auto_board_array_options(&ipc, sheet, resolution).unwrap();
-    let spec = build_board_array_spec(&ipc, &options, panelization, Separation::VScore, resolution)
-        .unwrap();
+    let (options, panelization) =
+        auto_board_array_options(&ipc, primary_board_layout(&ipc).unwrap(), sheet, resolution)
+            .unwrap();
+    let spec = build_board_array_spec(
+        &ipc,
+        primary_board_layout(&ipc).unwrap(),
+        &options,
+        panelization,
+        Separation::VScore,
+        resolution,
+    )
+    .unwrap();
     let provisional_xml = write_board_array_xml(input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let layout = geometry::extract_layout(&provisional).unwrap();
@@ -934,6 +959,7 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
     };
     let mut spec = build_board_array_spec(
         &ipc,
+        primary_board_layout(&ipc).unwrap(),
         &options,
         BoardArrayPanelizationMetadata {
             mode: BoardArrayPanelizationMode::Manual,
@@ -1064,6 +1090,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     };
     let mut spec = build_board_array_spec(
         &ipc,
+        primary_board_layout(&ipc).unwrap(),
         &options,
         BoardArrayPanelizationMetadata {
             mode: BoardArrayPanelizationMode::Manual,
@@ -2734,6 +2761,7 @@ fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
     };
     let spec = build_board_array_spec(
         &ipc,
+        primary_board_layout(&ipc).unwrap(),
         &options,
         BoardArrayPanelizationMetadata {
             mode: BoardArrayPanelizationMode::Manual,

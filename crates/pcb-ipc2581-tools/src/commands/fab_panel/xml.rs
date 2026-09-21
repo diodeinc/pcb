@@ -18,15 +18,16 @@ const FAB_ROLE_ID: &str = "fab_panel_role";
 const FAB_ENTERPRISE_ID: &str = "fab_panel_enterprise";
 const FAB_PERSON_NAME: &str = "pcb";
 
+/// `xml`, which `doc` indexes, with every source-local name prefixed.
 pub(super) fn namespace_source(
+    doc: &Doc<'_>,
     xml: &str,
     prefix: &str,
     shared_stackup_layers: &HashSet<String>,
 ) -> Result<String> {
-    let doc = Doc::parse(xml)?;
     let root = doc.root()?;
     let mut edits = Vec::new();
-    collect_namespace_edits(&doc, root, prefix, shared_stackup_layers, &mut edits);
+    collect_namespace_edits(doc, root, prefix, shared_stackup_layers, &mut edits);
     Ok(edit::apply(xml, edits)?)
 }
 
@@ -602,7 +603,8 @@ mod tests {
   </Set>
 </IPC-2581>"#;
 
-        let namespaced = namespace_source(source, "fab_3_", &HashSet::new()).unwrap();
+        let doc = Doc::parse(source).unwrap();
+        let namespaced = namespace_source(&doc, source, "fab_3_", &HashSet::new()).unwrap();
 
         assert!(namespaced.contains("<PadStackDef name=\"fab_3_PADSTACK_10\""));
         assert!(namespaced.contains("<Set geometry=\"fab_3_PADSTACK_10\""));

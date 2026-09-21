@@ -505,6 +505,7 @@ pub fn create_board_array(
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let spec = build_board_array_spec(
         &ipc,
+        primary_board_layout(&ipc)?,
         options,
         BoardArrayPanelizationMetadata {
             mode: BoardArrayPanelizationMode::Manual,
@@ -542,8 +543,9 @@ pub fn create_auto_board_array(
     resolution: Resolution,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let (options, panelization) = auto_board_array_options(&ipc, sheet, resolution)?;
-    let spec = build_board_array_spec(&ipc, &options, panelization, separation, resolution)?;
+    let board = primary_board_layout(&ipc)?;
+    let (options, panelization) = auto_board_array_options(&ipc, board, sheet, resolution)?;
+    let spec = build_board_array_spec(&ipc, board, &options, panelization, separation, resolution)?;
     write_board_array_creation(xml, spec, balance_copper, resolution)
 }
 
@@ -559,10 +561,10 @@ fn create_auto_board_array_xml_with_sheet(
 
 fn auto_board_array_options(
     ipc: &Ipc2581,
+    board: PrimaryBoardLayout,
     sheet: Option<AutoSheetSize>,
     resolution: Resolution,
 ) -> Result<(BoardArrayCreateOptions, BoardArrayPanelizationMetadata)> {
-    let board = primary_board_layout(ipc)?;
     let board_margin = auto_board_margin(ipc, board.bbox, resolution)?;
     let board_width = board.bbox.width();
     let board_height = board.bbox.height();
@@ -689,34 +691,47 @@ fn board_courtyard_bbox(ipc: &Ipc2581, resolution: Resolution) -> Result<BBox> {
     Ok(bbox)
 }
 
-fn board_array_edited_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
+/// The source with the array spliced in. `doc` indexes `xml`: one parse
+/// serves the board-array patch and the history append of every pass, and all
+/// edits of a pass splice at once.
+fn board_array_edited_xml(
+    doc: &ipc2581::edit::Doc<'_>,
+    xml: &str,
+    spec: &BoardArraySpec,
+) -> Result<String> {
     let generated_spec_xml = write_generated_specs_xml(spec);
     let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry);
     let generated_steps_xml = write_generated_steps_xml(spec)?;
 
-    // One parse serves both the board-array patch and the history append;
-    // all edits splice in a single pass.
-    let doc = ipc2581::edit::Doc::parse(xml)?;
     let mut edits = board_array_edits(
-        &doc,
+        doc,
         spec,
         &generated_spec_xml,
         generated_layer_xml.as_deref(),
         &generated_steps_xml,
     )?;
     edits.extend(crate::utils::history::file_revision_edits(
-        &doc,
+        doc,
         "Created board array",
     )?);
     Ok(ipc2581::edit::apply(xml, edits)?)
 }
 
-fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
-    let xml = board_array_edited_xml(xml, spec)?;
+fn finished_board_array_xml(
+    doc: &ipc2581::edit::Doc<'_>,
+    xml: &str,
+    spec: &BoardArraySpec,
+) -> Result<String> {
+    let xml = board_array_edited_xml(doc, xml, spec)?;
     let xml = crate::utils::format::reformat_xml(&xml)?;
 
     Ipc2581::parse(&xml).context("Generated IPC-2581 board array XML did not parse")?;
     Ok(xml)
+}
+
+#[cfg(test)]
+fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
+    finished_board_array_xml(&ipc2581::edit::Doc::parse(xml)?, xml, spec)
 }
 
 fn write_board_array_creation(
@@ -725,16 +740,17 @@ fn write_board_array_creation(
     balance_copper: bool,
     resolution: Resolution,
 ) -> Result<BoardArrayCreation> {
+    let doc = ipc2581::edit::Doc::parse(xml)?;
     if !balance_copper {
         return Ok(BoardArrayCreation {
-            xml: write_board_array_xml(xml, &spec)?,
+            xml: finished_board_array_xml(&doc, xml, &spec)?,
             copper_balance: None,
         });
     }
 
     // The provisional array only feeds safe-region discovery; parsing it below
     // already validates it, so skip the cosmetic reformat pass.
-    let provisional_xml = board_array_edited_xml(xml, &spec)?;
+    let provisional_xml = board_array_edited_xml(&doc, xml, &spec)?;
     let provisional = Ipc2581::parse(&provisional_xml)
         .context("Failed to parse provisional IPC-2581 board array")?;
     let balance = balance::generate_automatic_board_array_copper_balance(
@@ -751,7 +767,7 @@ fn write_board_array_creation(
     );
 
     Ok(BoardArrayCreation {
-        xml: write_board_array_xml(xml, &spec)?,
+        xml: finished_board_array_xml(&doc, xml, &spec)?,
         copper_balance: Some(copper_balance),
     })
 }
@@ -790,6 +806,7 @@ fn primary_board_layout(ipc: &Ipc2581) -> Result<PrimaryBoardLayout> {
 
 fn build_board_array_spec(
     ipc: &Ipc2581,
+    root: PrimaryBoardLayout,
     options: &BoardArrayCreateOptions,
     panelization: BoardArrayPanelizationMetadata,
     separation: Separation,
@@ -799,7 +816,6 @@ fn build_board_array_spec(
     validate_options(options, mode, separation)?;
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let root = primary_board_layout(ipc)?;
     let board_width = root.bbox.width();
     let board_height = root.bbox.height();
 
