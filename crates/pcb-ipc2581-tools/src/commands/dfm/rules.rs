@@ -12,7 +12,7 @@ use super::design::HoleClass;
 use super::pdk::{
     CopperWeight, HoleKind, LayerPosition, Length, LengthCase, LengthLimit, Pdk, PlatedHoleKind,
     Profile, ProfileStatus, Ratio, RatioCase, RatioLimit, RuleConditions, RuleMetadata,
-    SlotPlating,
+    SlotPlating, copper_weight_class,
 };
 use super::report::{Severity, ViewRecipe};
 
@@ -76,7 +76,10 @@ impl Conditions {
             LayerPosition::Outer => self.assumed_outer_copper_weight_oz,
             LayerPosition::Inner => self.assumed_inner_copper_weight_oz,
         });
-        actual_oz.is_some_and(|actual| (actual - required_oz).abs() <= 0.01)
+        // A stated thickness only approximates a nominal weight, so both
+        // sides are compared as the standard weight they belong to.
+        actual_oz
+            .is_some_and(|actual| copper_weight_class(actual) == copper_weight_class(required_oz))
     }
 }
 
@@ -1011,6 +1014,42 @@ limit = { minimum = "0.30 mm" }
             RuleKind::HoleToCopperClearance(HoleClass::Via)
         ));
         assert_eq!(lowered[1].limit.length().millimeters(), 0.25);
+    }
+
+    #[test]
+    fn a_stated_thickness_matches_the_standard_weight_it_approximates() {
+        use super::super::design::CopperLayer;
+        use super::super::report::LayerRef;
+        let layer = |thickness_mm: f64| CopperLayer {
+            layer: LayerRef {
+                name: "L".to_owned(),
+                function: "SIGNAL".to_owned(),
+                side: Some("top"),
+            },
+            position: LayerPosition::Outer,
+            copper_weight_oz: Some(thickness_mm / 0.0348),
+            image: pcb_ir::geom::ContourSet::empty(pcb_ir::geom::Resolution::default()),
+            conductors: Vec::new(),
+            lands: Vec::new(),
+        };
+        let weighs = |ounces: f64, thickness_mm: f64| {
+            Conditions {
+                copper_weight_oz: Some(ounces),
+                ..Conditions::default()
+            }
+            .applies_to_layer(&layer(thickness_mm))
+        };
+        // 1.4 mil foil, 0.07 mm, and 0.5 oz as finished: none is within
+        // 0.01 oz of the nominal weight its stackup means.
+        for (ounces, thickness_mm) in [(1.0, 0.03556), (2.0, 0.07), (0.5, 0.0152)] {
+            assert!(
+                weighs(ounces, thickness_mm),
+                "{thickness_mm} mm is {ounces} oz"
+            );
+        }
+        assert!(weighs(1.0, 0.030), "1 oz as finished");
+        assert!(!weighs(1.0, 0.0152) && !weighs(0.5, 0.035) && !weighs(2.0, 0.035));
+        assert!(!weighs(1.0, 0.07) && !weighs(3.0, 0.07) && weighs(3.0, 0.105));
     }
 
     #[test]

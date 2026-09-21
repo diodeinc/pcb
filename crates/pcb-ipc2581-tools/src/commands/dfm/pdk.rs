@@ -594,7 +594,9 @@ impl CopperCondition {
     fn overlaps(&self, other: &Self) -> bool {
         self.position == other.position
             && match (&self.weight, &other.weight) {
-                (Some(left), Some(right)) => (left.ounces() - right.ounces()).abs() <= 0.02,
+                (Some(left), Some(right)) => {
+                    copper_weight_class(left.ounces()) == copper_weight_class(right.ounces())
+                }
                 _ => true,
             }
     }
@@ -1045,6 +1047,28 @@ impl TryFrom<String> for CopperWeight {
     }
 }
 
+/// The standard foil weight a copper weight belongs to, in ounces.
+///
+/// Copper is ordered in standard weights, and a stackup states a thickness
+/// that only approximates one: IPC-4562A puts 1 oz at 34.3 µm nominal with a
+/// minimum of 90 %, fabrication typically leaves about 88 %, and plating adds
+/// to outer layers. The standard bounds only the minimum, so there is no
+/// two-sided tolerance band to test a thickness against; a weight instead
+/// belongs to the nearest standard weight. Nearness is a ratio, as foil
+/// tolerances are, which puts the boundary between neighbouring weights at
+/// their geometric mean. ¾ oz is not a class: fabs do not offer it, and it
+/// would claim finished 1 oz copper.
+pub(super) fn copper_weight_class(ounces: f64) -> f64 {
+    const BELOW_ONE_OUNCE: [f64; 4] = [0.125, 0.25, 1.0 / 3.0, 0.5];
+    let whole = ounces.floor().max(1.0);
+    let distance = |class: f64| (ounces / class).ln().abs();
+    BELOW_ONE_OUNCE
+        .into_iter()
+        .chain([whole, whole + 1.0])
+        .min_by(|left, right| distance(*left).total_cmp(&distance(*right)))
+        .expect("the standard weights are not empty")
+}
+
 fn copper_weight_error(value: &str) -> String {
     format!("copper weight '{value}' must be a positive '<number> oz' value")
 }
@@ -1284,6 +1308,22 @@ limit = { minimum = "300 mil" }
                 .to_string()
                 .contains("duplicate lowered PDK rule id")
         );
+    }
+
+    #[test]
+    fn weight_cases_overlap_when_they_name_the_same_standard_weight() {
+        let outer = |weight: &str| CopperCondition {
+            position: LayerPosition::Outer,
+            weight: Some(CopperWeight::try_from(weight.to_owned()).unwrap()),
+        };
+        // A layer belongs to exactly one standard weight, so two cases naming
+        // the same one would both apply to it.
+        assert!(outer("1 oz").overlaps(&outer("1.2 oz")));
+        assert!(!outer("1 oz").overlaps(&outer("2 oz")));
+        assert!(!outer("0.5 oz").overlaps(&outer("1 oz")));
+        for (ounces, class) in [(0.437, 0.5), (1.022, 1.0), (2.011, 2.0), (0.35, 1.0 / 3.0)] {
+            assert_eq!(copper_weight_class(ounces), class);
+        }
     }
 
     #[test]

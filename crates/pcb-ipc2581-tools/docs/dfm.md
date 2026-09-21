@@ -145,6 +145,14 @@ has no unambiguous physical stackup. The `technologies` list remains descriptive
 metadata because imported designs do not yet state rigid, flex, and HDI
 technology reliably enough for qualification.
 
+A copper-weight condition names a nominal weight, while a stackup states a
+thickness that only approximates one: 1 oz is 34.3 µm nominal (IPC-4562A), is
+allowed down to 90 % as foil, typically finishes near 88 %, and plates up on
+outer layers. A layer therefore matches the condition whose standard weight
+(⅛, ¼, ⅓, ½, then whole ounces) is nearest its own as a ratio, so 1.4 mil is
+1 oz, 0.07 mm is 2 oz, and a 0.0152 mm finished inner layer is 0.5 oz. Two
+cases naming the same standard weight overlap.
+
 Layer counts are positive integers. Every dimensional minimum is a positive
 string containing a number and `mm`, `mil`, `mils`, or `um`; copper weight is a
 positive `oz` string. A hole-aspect-ratio `limit.maximum` is a positive finite
