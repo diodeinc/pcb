@@ -651,6 +651,8 @@ fn auto_board_margin(
 
 fn board_courtyard_bbox(ipc: &Ipc2581, resolution: Resolution) -> Result<BBox> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    // One import serves every courtyard layer.
+    let imported = pcb_ir::import::ipc2581::import_design(ipc, resolution)?;
     let mut bbox = BBox::empty();
 
     for layer in ecad
@@ -660,13 +662,15 @@ fn board_courtyard_bbox(ipc: &Ipc2581, resolution: Resolution) -> Result<BBox> {
         .filter(|layer| layer.layer_function == LayerFunction::Courtyard)
     {
         let layer_name = ipc.resolve(layer.name);
-        let doc = geometry::extract_layer_for_view(
-            ipc,
-            layer_name,
-            pcb_ir::dialects::ipc::ArtworkScope::Board,
-            resolution,
-        )
-        .with_context(|| format!("failed to extract IPC-2581 courtyard layer '{layer_name}'"))?;
+        let doc = imported
+            .layer_id(layer_name)
+            .with_context(|| format!("IPC-2581 layer '{layer_name}' was not found"))
+            .and_then(|id| {
+                imported.materialize_layer(id, pcb_ir::dialects::ipc::ArtworkScope::Board)
+            })
+            .with_context(|| {
+                format!("failed to extract IPC-2581 courtyard layer '{layer_name}'")
+            })?;
         for feature in doc
             .features
             .iter()
