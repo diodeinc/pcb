@@ -45,6 +45,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Correct `pcb ipc warp` bow, which was overstated about 20×.
 - Report the copper-balance stack moment of the emitted fill.
 - Weigh copper about the stack's mid-plane in warp estimates and copper balancing, which is exact for builds with mixed copper weights.
+- Mouse-bite board arrays reject board margins too small for the routed slot and tab landing instead of cutting into neighbouring boards or rail tooling.
+- Global rail fiducials no longer land on V-score lines of 12–13 mm boards.
+- Board-array creation no longer fails on sources whose `HistoryRecord` number is dotted (for example `1.0`).
+- Mouse-bite tab sites on chamfered and curved outlines are no longer rejected by rounding noise.
+- Fabrication-panel packing never lets a panel reach into a process margin.
+- V-cut callout labels fit within the default fabrication-panel gap.
 
 ### Changed
 
@@ -60,6 +66,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Write `pcb ipc outline` DXF as R12 polylines.
 - Stop reporting twist in `pcb ipc warp`, which models elastic copper-laminate mismatch only.
 - Speed up copper balancing; generated fill differs slightly from earlier releases.
+- Generated tooling/drill layers declare their span between the outer copper layers.
+- Mouse-bite tab placement models the actual rail width of the array.
+- Mouse-bite array generation is several times faster on multi-board arrays.
+- Fab-panel reports a clear error up front when there are too many distinct panel sizes.
 
 ## [0.4.56] - 2026-09-20
 
