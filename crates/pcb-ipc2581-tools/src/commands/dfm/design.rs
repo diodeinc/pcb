@@ -839,6 +839,27 @@ fn collect_drilled(
             .materialize_layer(LayerId(layer_index as u32), scope)
             .with_context(|| format!("failed to extract drill layer '{layer_name}'"))?;
         pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
+        // A slot's width runs the whole width pipeline on its outline. A panel
+        // repeats every slot per board, which made this loop most of its
+        // extraction, so the layer's slots are measured together, in order.
+        let slot_features = document
+            .features
+            .iter()
+            .filter(|feature| feature.is_drill_like() && feature.kind == FeatureKind::Slot)
+            .collect::<Vec<_>>();
+        #[cfg(not(target_family = "wasm"))]
+        let slot_features = slot_features.into_par_iter();
+        #[cfg(target_family = "wasm")]
+        let slot_features = slot_features.into_iter();
+        let mut slot_shapes = slot_features
+            .map(|feature| {
+                let contours = document.placed_feature_contours(feature);
+                let outline = ContourSet::from_filled_contours(&contours, resolution)?;
+                let width_disk = min_width_disk(&outline)?;
+                Ok((contours, outline, width_disk))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter();
         for feature in document
             .features
             .iter()
@@ -893,6 +914,9 @@ fn collect_drilled(
                     });
                 }
                 FeatureKind::Slot => {
+                    let (contours, outline, width_disk) = slot_shapes
+                        .next()
+                        .expect("every slot feature of the layer was measured");
                     let at = format!(
                         "routed slot on layer '{layer_name}' at ({:.6}, {:.6})",
                         feature.bbox.center().x,
@@ -905,9 +929,7 @@ fn collect_drilled(
                         block(Pools::SLOTS, format!("{at} has unknown plating"));
                         continue;
                     }
-                    let contours = document.placed_feature_contours(feature);
-                    let outline = ContourSet::from_filled_contours(&contours, resolution)?;
-                    let Some(width_disk) = min_width_disk(&outline)? else {
+                    let Some(width_disk) = width_disk else {
                         block(Pools::SLOTS, format!("{at} has no measurable outline"));
                         continue;
                     };
