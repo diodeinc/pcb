@@ -1670,7 +1670,10 @@ pub fn extract_step_layer_local(
     }
 
     // Resolve once, and only if a slot needs cross-layer span membership.
-    let mut slot_layer_order: Option<Vec<Symbol>> = None;
+    let mut slot_layer_order: Option<Option<Vec<Symbol>>> = None;
+    let stackups = ipc
+        .ecad()
+        .map_or(&[][..], |ecad| ecad.cad_data.stackups.as_slice());
     for layer_feature in &step.layer_features {
         let Some(source_layer) = layers
             .iter()
@@ -1711,27 +1714,14 @@ pub fn extract_step_layer_local(
                             source_layer,
                             layer,
                             || {
-                                let order = match &mut slot_layer_order {
-                                    Some(order) => order,
-                                    empty @ None => {
-                                        let ecad = ipc
-                                            .ecad()
-                                            .context("IPC-2581 file has no ECAD section")?;
-                                        empty.insert(
-                                            physical_stackup_layers(
-                                                &ecad.cad_data.stackups,
-                                                layers,
-                                            )?
-                                            .unwrap_or_else(|| {
-                                                layers.iter().map(|layer| layer.name).collect()
-                                            }),
-                                        )
-                                    }
-                                };
-                                Ok(order.as_slice())
+                                slot_layer_order
+                                    .get_or_insert_with(|| {
+                                        resolve_slot_layer_order(&mut doc, stackups, layers)
+                                    })
+                                    .as_deref()
                             },
                             slot,
-                        )? {
+                        ) {
                             continue;
                         }
                         let feature = extract_slot(
@@ -2438,32 +2428,51 @@ fn is_board_step(step: &Step) -> bool {
         || (step.step_type.is_none() && step.step_repeats.is_empty())
 }
 
+/// Physical layer order for slot spans. An absent stackup leaves declaration
+/// order; an invalid one leaves no order at all, so a spanned slot reaches
+/// only the layers its span names.
+fn resolve_slot_layer_order(
+    doc: &mut GeometryDocument,
+    stackups: &[ipc2581::types::Stackup],
+    layers: &[Layer],
+) -> Option<Vec<Symbol>> {
+    match physical_stackup_layers(stackups, layers) {
+        Ok(order) => Some(order.unwrap_or_else(|| layers.iter().map(|layer| layer.name).collect())),
+        Err(error) => {
+            doc.warn(format!(
+                "Spanned slots reach only the layers they name because the stackup is invalid: {error}"
+            ));
+            None
+        }
+    }
+}
+
 fn slot_applies_to_layer<'a>(
     source_layer: &Layer,
     target_layer: &Layer,
-    layer_order: impl FnOnce() -> Result<&'a [Symbol]>,
+    layer_order: impl FnOnce() -> Option<&'a [Symbol]>,
     slot: &ipc2581::types::Slot,
-) -> Result<bool> {
+) -> bool {
     if source_layer.name == target_layer.name {
-        return Ok(true);
+        return true;
     }
     if target_layer.layer_function.is_fabrication() || slot.z_axis_dim {
-        return Ok(false);
+        return false;
     }
 
     let Some(span) = source_layer.span else {
-        return Ok(false);
+        return false;
     };
 
-    let layer_order = layer_order()?;
-    Ok(feature_definitely_spans_layer(
+    let layer_order = layer_order();
+    feature_definitely_spans_layer(
         FeatureSpan::FromTo {
-            from: span.from_layer.or_else(|| layer_order.first().copied()),
-            to: span.to_layer.or_else(|| layer_order.last().copied()),
+            from: span.from_layer.or_else(|| layer_order?.first().copied()),
+            to: span.to_layer.or_else(|| layer_order?.last().copied()),
         },
         target_layer.name,
-        Some(layer_order),
-    ))
+        layer_order,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6190,13 +6199,13 @@ mod tests {
             }),
         );
         let layers = [l1.name, l2.name, l3.name, route.name];
-        let layer_order = || Ok(layers.as_slice());
+        let layer_order = || Some(layers.as_slice());
         let slot = test_slot(false);
 
-        assert!(slot_applies_to_layer(&route, &l1, layer_order, &slot).unwrap());
-        assert!(slot_applies_to_layer(&route, &l2, layer_order, &slot).unwrap());
-        assert!(!slot_applies_to_layer(&route, &l3, layer_order, &slot).unwrap());
-        assert!(slot_applies_to_layer(&route, &route, layer_order, &slot).unwrap());
+        assert!(slot_applies_to_layer(&route, &l1, layer_order, &slot));
+        assert!(slot_applies_to_layer(&route, &l2, layer_order, &slot));
+        assert!(!slot_applies_to_layer(&route, &l3, layer_order, &slot));
+        assert!(slot_applies_to_layer(&route, &route, layer_order, &slot));
     }
 
     #[test]
@@ -6207,8 +6216,8 @@ mod tests {
         let layer_order = || unreachable!("Z-axis slots need no layer order");
         let slot = test_slot(true);
 
-        assert!(!slot_applies_to_layer(&route, &l1, layer_order, &slot).unwrap());
-        assert!(slot_applies_to_layer(&route, &route, layer_order, &slot).unwrap());
+        assert!(!slot_applies_to_layer(&route, &l1, layer_order, &slot));
+        assert!(slot_applies_to_layer(&route, &route, layer_order, &slot));
     }
 
     #[test]
@@ -6219,8 +6228,8 @@ mod tests {
         let layer_order = || unreachable!("unspanned slots need no layer order");
         let slot = test_slot(false);
 
-        assert!(!slot_applies_to_layer(&route, &l1, layer_order, &slot).unwrap());
-        assert!(slot_applies_to_layer(&route, &route, layer_order, &slot).unwrap());
+        assert!(!slot_applies_to_layer(&route, &l1, layer_order, &slot));
+        assert!(slot_applies_to_layer(&route, &route, layer_order, &slot));
     }
 
     #[test]

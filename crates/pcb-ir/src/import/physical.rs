@@ -1701,15 +1701,19 @@ mod tests {
                 "exactly one stackup",
             ),
         ] {
+            // Import reports the unusable order and keeps going; the
+            // association query, which cannot answer without it, rejects it.
             let invalid = Ipc2581::parse(&xml.replace(from, to)).unwrap();
-            let error = import_design(&invalid, Resolution::default()).unwrap_err();
-            assert!(error.to_string().contains(message), "{error}");
-
-            // The association query must also reject unusable ordering, even when
-            // no slot extraction is needed to construct the canonical design.
-            let mut imported =
-                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
-            imported.stackups = invalid.ecad().unwrap().cad_data.stackups.clone();
+            let imported = import_design(&invalid, Resolution::default()).unwrap();
+            assert!(
+                imported
+                    .geometry
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains(message)),
+                "{:?}",
+                imported.geometry.diagnostics
+            );
             let error = imported
                 .physical_holes(ArtworkScope::Board, Resolution::default())
                 .unwrap_err();
@@ -1718,7 +1722,7 @@ mod tests {
     }
 
     #[test]
-    fn slot_extraction_ignores_irrelevant_malformed_stackup() {
+    fn slot_extraction_degrades_under_a_malformed_stackup() {
         let xml = spanned_slot_fixture(["L0", "L1", "L2"], false)
             .replace("sequence=\"1\"", "sequence=\"0\"")
             .replace(
@@ -1733,39 +1737,42 @@ mod tests {
             };
             let ipc = Ipc2581::parse(&xml).unwrap();
             let cad = &ipc.ecad().unwrap().cad_data;
-            for (name, expected_slots) in [("ROUT", 1), ("DRILL", 0), ("L1", 0)] {
+            // Without a physical order the slot reaches only the layers its
+            // span names: L0 and L2, never the L1 between them.
+            for (name, through_slots) in [("ROUT", 1), ("DRILL", 0), ("L0", 1), ("L1", 0)] {
                 let layer = cad
                     .layers
                     .iter()
                     .find(|layer| ipc.resolve(layer.name) == name)
                     .unwrap();
-                let result = crate::import::ipc2581::extract_step_layer_local(
+                let document = crate::import::ipc2581::extract_step_layer_local(
                     &ipc,
                     &cad.steps[0],
                     &cad.layers,
                     layer,
                     name,
                     Resolution::default(),
+                )
+                .expect("an invalid stackup never fails extraction");
+                let copper = name.starts_with('L');
+                assert_eq!(
+                    document
+                        .features
+                        .iter()
+                        .filter(|feature| feature.kind == FeatureKind::Slot)
+                        .count(),
+                    if z_axis && copper { 0 } else { through_slots },
+                    "{name} z_axis={z_axis}"
                 );
-                if name == "L1" && !z_axis {
-                    assert!(
-                        result
-                            .unwrap_err()
-                            .to_string()
-                            .contains("duplicate layer sequence")
-                    );
-                } else {
-                    let document = result
-                        .expect("source/fabrication/Z-axis extraction needs no physical order");
-                    assert_eq!(
-                        document
-                            .features
-                            .iter()
-                            .filter(|feature| feature.kind == FeatureKind::Slot)
-                            .count(),
-                        expected_slots
-                    );
-                }
+                assert_eq!(
+                    document
+                        .diagnostics
+                        .iter()
+                        .filter(|diagnostic| diagnostic.message.contains("stackup is invalid"))
+                        .count(),
+                    usize::from(copper && !z_axis),
+                    "{name} z_axis={z_axis}"
+                );
             }
         }
     }
