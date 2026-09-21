@@ -13,9 +13,9 @@
 
 use anyhow::{Context, Result, bail};
 use ipc2581::Ipc2581;
-use ipc2581::types::{
-    FiducialKind, LayerFunction, PlatingStatus, PolyStep, SetFeature, Side, Step,
-};
+use ipc2581::types::{FiducialKind, LayerFunction, PlatingStatus, PolyStep, SetFeature, Side};
+
+use pcb_ir::import::ipc2581::primary_step;
 
 use crate::pattern::mate_dims;
 
@@ -233,14 +233,4 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
         fids_top,
         fids_bottom,
     })
-}
-
-/// The step the file is about: the Content section's first step reference,
-/// falling back to document order.
-pub(crate) fn primary_step<'a>(ipc: &Ipc2581, steps: &'a [Step]) -> Option<&'a Step> {
-    ipc.content()
-        .step_refs
-        .first()
-        .and_then(|step_ref| steps.iter().find(|step| step.name == *step_ref))
-        .or_else(|| steps.first())
 }

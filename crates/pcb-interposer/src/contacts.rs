@@ -46,7 +46,7 @@ fn parse_role(name: &str) -> Option<Role> {
 pub fn extract_contacts(ipc: &Ipc2581, sheet_height: f64) -> Result<Vec<PanelContact>> {
     let ecad = ipc.ecad().context("panel has no ECAD section")?;
     let steps = &ecad.cad_data.steps;
-    let array = crate::panel::primary_step(ipc, steps).context("panel has no step")?;
+    let array = pcb_ir::import::ipc2581::primary_step(ipc, steps).context("panel has no step")?;
 
     // The generator's fixed shape: array step → grid repeat of the board
     // cell → the cell places the board step at a constant offset.

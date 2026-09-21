@@ -102,7 +102,7 @@ pub fn build_gerber_x2_files(
         let layer_name = imported.resolve(source_layer.name);
         let spec = GerberArtworkSpec {
             role: plan.role,
-            side: ir_side(source_layer.side),
+            side: crate::layers::ir_side(source_layer.side),
             meta: layer_attributes(plan.file_function.clone(), part, plan.role),
             view,
         };
@@ -1014,14 +1014,6 @@ fn append_profile_payloads(
             },
         },
     );
-}
-
-fn ir_side(side: Option<IpcSide>) -> IrSide {
-    match side {
-        Some(IpcSide::Top) => IrSide::Top,
-        Some(IpcSide::Bottom) => IrSide::Bottom,
-        _ => IrSide::None,
-    }
 }
 
 /// The standard-dictionary primitives the artwork dialect carries as exact
