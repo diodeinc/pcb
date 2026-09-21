@@ -273,27 +273,25 @@ fn wait_for_call(mock: &Mock<'_>) {
 
 #[test]
 fn waits_for_lifecycle_contention_before_submitting_work() {
-    for code in ["SANDBOX_NOT_READY"] {
-        let server = MockServer::start();
-        let mut busy = server.mock(|when, then| {
-            when.method(POST).path("/api/sandboxes/sbx_1/access-token");
-            then.status(503)
-                .json_body(serde_json::json!({"code": code}));
-        });
-        let read = server.mock(|when, then| {
-            when.method(GET).path("/sandboxes/sbx_1/fs/read");
-            then.status(200).body("ready");
-        });
-        let client = client_for(&server);
-        let worker = thread::spawn(move || client.read_file(SANDBOX, "/file"));
-        wait_for_call(&busy);
-        read.assert_calls(0);
-        busy.delete();
-        let mint = mock_mint(&server, "ready-token");
-        assert_eq!(worker.join().unwrap().unwrap(), b"ready");
-        mint.assert_calls(1);
-        read.assert_calls(1);
-    }
+    let server = MockServer::start();
+    let mut busy = server.mock(|when, then| {
+        when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+        then.status(503)
+            .json_body(serde_json::json!({"code": "SANDBOX_NOT_READY"}));
+    });
+    let read = server.mock(|when, then| {
+        when.method(GET).path("/sandboxes/sbx_1/fs/read");
+        then.status(200).body("ready");
+    });
+    let client = client_for(&server);
+    let worker = thread::spawn(move || client.read_file(SANDBOX, "/file"));
+    wait_for_call(&busy);
+    read.assert_calls(0);
+    busy.delete();
+    let mint = mock_mint(&server, "ready-token");
+    assert_eq!(worker.join().unwrap().unwrap(), b"ready");
+    mint.assert_calls(1);
+    read.assert_calls(1);
 }
 
 #[test]
