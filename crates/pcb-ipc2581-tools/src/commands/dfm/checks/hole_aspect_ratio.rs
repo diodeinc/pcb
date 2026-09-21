@@ -8,10 +8,15 @@
 //! aₕ = tₕ / dₕ ≤ A_max.
 //! ```
 //!
-//! Through holes use the finished total stackup thickness. A resolved blind
-//! or buried span sums only physical stackup layers between its two copper
-//! endpoints, inclusive. The selected profile's board-thickness default may
-//! replace incomplete IPC thickness only for a declared through hole.
+//! `tₕ` is the depth the drill removes. A through hole uses the finished
+//! total stackup thickness. A blind hole enters at its outer layer and
+//! terminates on its target land, so its depth runs from the capture land
+//! foil to the target land, as IPC-T-50M measures a microvia: the entry
+//! copper, the dielectric, and any intermediate copper, but not the target
+//! copper it lands on. A buried hole is drilled through its whole sub-stack,
+//! both terminal copper layers included. The selected profile's
+//! board-thickness default may replace incomplete IPC thickness only for a
+//! declared through hole.
 
 use crate::commands::dfm::design::{Design, HoleClass, SpanThickness, ThicknessSource};
 use crate::commands::dfm::report::Evidence;
@@ -364,7 +369,9 @@ cases = [
         assert_eq!(
             measurements,
             [
-                (10.0, 0.30, "ipc_2581_stackup_layer_thicknesses"),
+                // Blind TOP to INNER1: TOP copper and the dielectric, not the
+                // INNER1 copper it lands on. Buried INNER1 to INNER2: all of it.
+                (0.25 / 0.03, 0.25, "ipc_2581_stackup_layer_thicknesses"),
                 (10.0, 0.50, "ipc_2581_stackup_layer_thicknesses"),
             ]
         );
@@ -377,6 +384,20 @@ cases = [
             })
             .collect::<Vec<_>>();
         assert_eq!(spans, [(0, 1), (1, 2)]);
+
+        // Drilled from the bottom, the blind hole lands on INNER2 instead.
+        let from_bottom = run(
+            &BOARD.replace(
+                r#"<Span fromLayer="TOP" toLayer="INNER1"/>"#,
+                r#"<Span fromLayer="INNER2" toLayer="BOTTOM"/>"#,
+            ),
+            VIA_PDK_WITH_DEFAULT,
+        );
+        assert!(from_bottom.findings.iter().any(|finding| matches!(
+            finding.measurement,
+            Measurement::Ratio { drilled_span_thickness_mm, .. }
+                if (drilled_span_thickness_mm - 0.85).abs() < 1e-12
+        )));
     }
 
     #[test]

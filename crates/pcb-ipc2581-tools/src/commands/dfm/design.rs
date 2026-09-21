@@ -395,7 +395,22 @@ impl PhysicalStackup {
                             span.last_copper_index
                         )
                     })?;
-                self.layer_thicknesses(first.min(last), first.max(last))
+                let (first, last) = (first.min(last), first.max(last));
+                // Depth is what the drill removes. A blind hole enters at its
+                // outer layer and terminates on its target land, so IPC-T-50M
+                // measures it from the capture land foil to the target land:
+                // the target copper is not drilled. A buried hole is drilled
+                // through its whole sub-stack, both terminal layers included.
+                let bottom = self.copper_layers.len().saturating_sub(1);
+                let (from_top, from_bottom) = (
+                    span.first_copper_index == 0,
+                    usize::from(span.last_copper_index) == bottom,
+                );
+                match (from_top, from_bottom) {
+                    (true, false) if first < last => self.layer_thicknesses(first, last - 1),
+                    (false, true) if first < last => self.layer_thicknesses(first + 1, last),
+                    _ => self.layer_thicknesses(first, last),
+                }
             }
             _ => Err(
                 "drill span is not resolved in the physical stackup; board-thickness fallback is permitted only for a through hole"

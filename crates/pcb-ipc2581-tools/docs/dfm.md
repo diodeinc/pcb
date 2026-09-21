@@ -294,8 +294,12 @@ when fewer than two exist.
 - Hole aspect ratio is physical drilled-span thickness divided by finished
   circular hole diameter. A through hole uses IPC-2581 `overallThickness` when
   it is positive and finite, otherwise a complete sum of physical stackup
-  layer thicknesses. A resolved blind or buried hole sums only layers from its
-  first copper endpoint through its last endpoint, inclusive. Routed slots and
+  layer thicknesses. A resolved blind or buried hole sums only the depth its
+  drill removes. A blind hole enters at its outer layer and terminates on its
+  target land, so its depth runs from the capture land foil to the target land,
+  as IPC-T-50M measures a microvia: the entry copper, the dielectric, and any
+  intermediate copper, but not the target copper it lands on. A buried hole is
+  drilled through its whole sub-stack, both terminal layers included. Routed slots and
   NPTH holes are never subjects. If IPC thickness is incomplete, a selected
   profile's `defaults.board_thickness` may be assumed only for a declared
   through hole; the rule reports that assumption. An incomplete resolved span,
