@@ -1588,6 +1588,9 @@ pub fn extract_step_layer_local(
     let mut layer_bbox = BBox::empty();
     let layer_polarity = map_polarity(layer.polarity.unwrap_or(Polarity::Positive));
     let source_step_kind = layout_step_kind(step);
+    if layer_polarity == GeometryPolarity::Clear {
+        push_negative_layer_plane(&mut doc, layer_index, step, layer, &mut layer_bbox);
+    }
 
     for layer_feature in step
         .layer_features
@@ -1595,6 +1598,9 @@ pub fn extract_step_layer_local(
         .filter(|feature| feature.layer_ref == layer.name)
     {
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
+            // A Set's own polarity is absolute and an unmarked Set inherits the
+            // layer's. They do not compose: Allegro marks anti-etch on NEGATIVE
+            // planes as NEGATIVE sets, which clear like the antipads beside them.
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
             let copper_balance = set_copper_balance_metadata(ipc, set)?;
             if copper_balance.is_some_and(|metadata| metadata.void.is_some())
@@ -1752,6 +1758,59 @@ pub fn extract_step_layer_local(
     layer.bbox = layer_bbox;
 
     Ok(doc)
+}
+
+/// A NEGATIVE layer images what is removed from a plane filling the step
+/// profile. The plane is the layer's first dark feature, so every consumer
+/// composes the antipads against real material.
+fn push_negative_layer_plane(
+    doc: &mut GeometryDocument,
+    layer_index: u32,
+    step: &Step,
+    layer: &Layer,
+    layer_bbox: &mut BBox,
+) {
+    let mut source_sets = step
+        .layer_features
+        .iter()
+        .filter(|feature| feature.layer_ref == layer.name)
+        .map(|feature| feature.sets.len() as u32);
+    let Some(profile) = &step.profile else {
+        if source_sets.next().is_some() {
+            doc.warn(format!(
+                "NEGATIVE layer '{}' clears nothing because its Step has no Profile to fill",
+                doc.layers[layer_index as usize].name
+            ));
+        }
+        return;
+    };
+
+    // One past the source sets, so set-scoped voids never reach the plane.
+    let source_set_index = source_sets.max().unwrap_or(0);
+    let set_id = doc.feature_sets.len() as u32;
+    doc.feature_sets.push(FeatureSet {
+        layer: layer_index,
+        source_set_index,
+        source_geometry_ref: None,
+        component_ref: None,
+        geometry_usage: None,
+        net: None,
+        polarity: GeometryPolarity::Dark,
+        spec_refs: Span::EMPTY,
+        features: Span::new(doc.features.len() as u32, 0),
+        bbox: BBox::empty(),
+    });
+
+    let path = push_outline_path(doc, &profile.polygon, &profile.cutouts, Affine2::IDENTITY);
+    let mut feature = GeometryFeature::new(FeatureKind::Polygon, GeometryPolarity::Dark);
+    feature.source.set_index = source_set_index;
+    feature.bbox = doc.arena.paths[path as usize].bbox;
+    feature.paths = Span::single(path);
+    feature.source_step_ref = Some(step.name);
+    feature.source_step_kind = layout_step_kind(step);
+    feature.flags.lowered_to_paths = true;
+    complete_feature_intent(layer, &mut feature);
+    push_extracted_feature(doc, set_id, layer.name, None, feature, layer_bbox);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3800,26 +3859,24 @@ fn push_contour_path(
     contour: &ipc2581::types::Contour,
     transform: Affine2,
 ) {
-    let mut contours = Vec::new();
-    push_contour_payloads(&mut contours, contour, transform);
+    push_outline_path(doc, &contour.polygon, &contour.cutouts, transform);
+}
+
+/// An outline with its cutouts as one even-odd path; returns the path index.
+fn push_outline_path(
+    doc: &mut GeometryDocument,
+    outline: &ipc2581::types::Polygon,
+    cutouts: &[ipc2581::types::Polygon],
+    transform: Affine2,
+) -> u32 {
     doc.push_path(
         Paint::Fill {
             rule: FillRule::EvenOdd,
         },
-        contours,
-    );
-}
-
-fn push_contour_payloads(
-    out: &mut Vec<ContourBuf>,
-    contour: &ipc2581::types::Contour,
-    transform: Affine2,
-) {
-    out.reserve(1 + contour.cutouts.len());
-    out.push(polygon_contour(&contour.polygon).transformed(transform));
-    for cutout in &contour.cutouts {
-        out.push(polygon_contour(cutout).transformed(transform));
-    }
+        std::iter::once(outline)
+            .chain(cutouts)
+            .map(|polygon| polygon_contour(polygon).transformed(transform)),
+    )
 }
 
 fn push_filled_shape(doc: &mut GeometryDocument, transform: Affine2, contour: Option<ContourBuf>) {
@@ -5653,6 +5710,134 @@ mod tests {
         assert!(doc.layers[0].bbox.is_empty());
         assert!(doc.arena.paths.iter().all(|path| path.paint == Paint::None));
         assert!(doc.arena.cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
+    }
+
+    fn negative_plane_fixture(layer_features: &str, profile: bool) -> String {
+        let profile = if profile {
+            r#"<Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="20" y="0"/>
+            <PolyStepSegment x="20" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+          </Polygon>
+          <Cutout>
+            <PolyBegin x="16" y="4"/>
+            <PolyStepSegment x="18" y="4"/>
+            <PolyStepSegment x="18" y="6"/>
+            <PolyStepSegment x="16" y="6"/>
+          </Cutout>
+        </Profile>"#
+        } else {
+            ""
+        };
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="GND" layerFunction="PLANE" side="INTERNAL" polarity="NEGATIVE"/>
+      <Step name="board" type="BOARD">
+        {profile}
+        {layer_features}
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+        )
+    }
+
+    fn negative_plane_image(xml: &str) -> ContourSet {
+        let ipc = Ipc2581::parse(xml).unwrap();
+        let resolution = Resolution::default();
+        let imported = import_design(&ipc, resolution).unwrap();
+        imported
+            .composed_layer_image(
+                imported.layer_id("GND").unwrap(),
+                ArtworkScope::Board,
+                resolution,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn negative_layer_clears_its_features_from_the_step_profile() {
+        let image = negative_plane_image(&negative_plane_fixture(
+            r#"<LayerFeature layerRef="GND">
+          <Set>
+            <Pad><Location x="5" y="5"/><Circle diameter="2"/></Pad>
+          </Set>
+        </LayerFeature>"#,
+            true,
+        ));
+
+        // The plane fills the profile, minus its cutout and the antipad.
+        assert!(image.contains_point(Point::new(10.0, 5.0)));
+        assert!(image.contains_point(Point::new(0.5, 9.5)));
+        assert!(!image.contains_point(Point::new(5.0, 5.0)));
+        assert!(!image.contains_point(Point::new(17.0, 5.0)));
+        assert!(!image.contains_point(Point::new(21.0, 5.0)));
+        assert!((image.area() - (200.0 - 4.0 - std::f64::consts::PI)).abs() < 0.01);
+    }
+
+    #[test]
+    fn negative_layer_without_features_is_a_full_plane() {
+        let image = negative_plane_image(&negative_plane_fixture("", true));
+        assert!((image.area() - 196.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn set_polarity_is_absolute_on_a_negative_layer() {
+        // Allegro writes anti-etch as NEGATIVE sets on NEGATIVE plane layers:
+        // they remove copper like the antipads beside them. Only an explicit
+        // POSITIVE set restores material inside a clearance.
+        let image = negative_plane_image(&negative_plane_fixture(
+            r#"<LayerFeature layerRef="GND">
+          <Set>
+            <Pad><Location x="5" y="5"/><Circle diameter="4"/></Pad>
+          </Set>
+          <Set polarity="NEGATIVE">
+            <Pad><Location x="12" y="5"/><Circle diameter="2"/></Pad>
+          </Set>
+          <Set polarity="POSITIVE">
+            <Pad><Location x="5" y="5"/><Circle diameter="1"/></Pad>
+          </Set>
+        </LayerFeature>"#,
+            true,
+        ));
+
+        assert!(!image.contains_point(Point::new(12.0, 5.0)));
+        assert!(image.contains_point(Point::new(5.0, 5.0)));
+        assert!(!image.contains_point(Point::new(6.0, 5.0)));
+    }
+
+    #[test]
+    fn negative_layer_without_a_profile_reports_its_empty_image() {
+        let ipc = Ipc2581::parse(&negative_plane_fixture(
+            r#"<LayerFeature layerRef="GND">
+          <Set>
+            <Pad><Location x="5" y="5"/><Circle diameter="2"/></Pad>
+          </Set>
+        </LayerFeature>"#,
+            false,
+        ))
+        .unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+
+        assert!(
+            imported
+                .geometry
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("has no Profile to fill")),
+            "diagnostics: {:?}",
+            imported.geometry.diagnostics
+        );
     }
 
     #[test]
