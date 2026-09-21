@@ -31,7 +31,7 @@ use pcb_ir::dialects::ipc::{
     lower_layer_to_artwork_with, profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side, artwork};
-use pcb_ir::geom::dfm::{Distance, WidthDisk, min_width_disk};
+use pcb_ir::geom::dfm::{BBoxIndex, Distance, WidthDisk, min_width_disk};
 use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::{Affine2, BBox, ContourSet, Point, Polarity, PreparedRegion, Span};
 #[cfg(not(target_family = "wasm"))]
@@ -71,6 +71,9 @@ pub(super) struct Design<'a> {
     pub copper_boundaries: Vec<PreparedRegion>,
     /// One boundary index per attributed conductor on each copper layer.
     pub conductor_boundaries: Vec<Vec<PreparedRegion>>,
+    /// Each copper layer's conductors by their bounds, so a drilled feature
+    /// meets the few conductors near it rather than every one on the layer.
+    pub conductors_near: Vec<BBoxIndex>,
     /// Each hole's lands, one per copper layer it owns a land on, indexed
     /// like `holes`.
     pub hole_lands: Vec<Vec<HoleLand>>,
@@ -369,12 +372,40 @@ impl<'a> Design<'a> {
             Some(Ok(physical_holes)) => link_lands(drilled, &land_indices, physical_holes),
             _ => Ok(Vec::new()),
         };
+        let (conductor_boundaries, conductors_near) = pool(
+            wanted,
+            Pools::CONDUCTOR_BOUNDARIES,
+            Pools::COPPER,
+            &mut blockers,
+            || {
+                #[cfg(not(target_family = "wasm"))]
+                let layers = copper_layers.par_iter();
+                #[cfg(target_family = "wasm")]
+                let layers = copper_layers.iter();
+                Ok(layers
+                    .map(|layer| {
+                        let conductors = layer.conductors.iter();
+                        (
+                            conductors
+                                .clone()
+                                .map(|conductor| conductor.image.prepare_query())
+                                .collect::<Vec<_>>(),
+                            BBoxIndex::new(
+                                conductors.map(|conductor| conductor.image.bbox).collect(),
+                            ),
+                        )
+                    })
+                    .unzip())
+            },
+        );
         Self {
             imported,
             scope,
             step,
             placements,
             resolution,
+            conductor_boundaries,
+            conductors_near,
             copper_boundaries: pool(
                 wanted,
                 Pools::COPPER_BOUNDARIES,
@@ -386,27 +417,6 @@ impl<'a> Design<'a> {
                     #[cfg(target_family = "wasm")]
                     let layers = copper_layers.iter();
                     Ok(layers.map(|layer| layer.image.prepare_query()).collect())
-                },
-            ),
-            conductor_boundaries: pool(
-                wanted,
-                Pools::CONDUCTOR_BOUNDARIES,
-                Pools::COPPER,
-                &mut blockers,
-                || {
-                    #[cfg(not(target_family = "wasm"))]
-                    let layers = copper_layers.par_iter();
-                    #[cfg(target_family = "wasm")]
-                    let layers = copper_layers.iter();
-                    Ok(layers
-                        .map(|layer| {
-                            layer
-                                .conductors
-                                .iter()
-                                .map(|conductor| conductor.image.prepare_query())
-                                .collect()
-                        })
-                        .collect())
                 },
             ),
             hole_lands: pool(

@@ -53,10 +53,16 @@ pub(super) fn evaluate(
                 continue;
             }
             checked += usize::from(hole.branch.is_none());
-            let nearest = copper
-                .conductors
-                .iter()
-                .zip(&design.conductor_boundaries[copper_index])
+            // Only a conductor whose bounds reach the keepout can enter it.
+            let nearest = design.conductors_near[copper_index]
+                .query(hole.bbox.expand(limit_mm))
+                .into_iter()
+                .map(|index| {
+                    (
+                        &copper.conductors[index],
+                        &design.conductor_boundaries[copper_index][index],
+                    )
+                })
                 .filter(|(conductor, _)| spans(hole.branch, conductor.branch))
                 .filter(|(conductor, _)| class == HoleClass::Npth || !owner.owns(conductor.id))
                 .filter_map(|(conductor, boundary)| {

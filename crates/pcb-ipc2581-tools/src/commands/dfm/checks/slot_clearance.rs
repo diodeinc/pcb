@@ -3,6 +3,7 @@
 //! net ownership or canonical physical lands; proximity never implies ownership.
 
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
+use pcb_ir::geom::tol;
 
 use crate::commands::dfm::design::{Design, spans};
 use crate::commands::dfm::pdk::SlotPlating;
@@ -49,10 +50,16 @@ pub(super) fn evaluate(
                 continue;
             }
             checked += usize::from(slot.branch.is_none());
-            let nearest = copper
-                .conductors
-                .iter()
-                .zip(&design.conductor_boundaries[copper_index])
+            // Only a conductor whose bounds reach the limit can come within it.
+            let nearest = design.conductors_near[copper_index]
+                .query(slot.outline.bbox.expand(limit_mm + tol::EPSILON_MM))
+                .into_iter()
+                .map(|index| {
+                    (
+                        &copper.conductors[index],
+                        &design.conductor_boundaries[copper_index][index],
+                    )
+                })
                 .filter(|(conductor, _)| spans(slot.branch, conductor.branch))
                 .filter(|(conductor, _)| {
                     plating == SlotPlating::Nonplated || !owner.owns(conductor.id)

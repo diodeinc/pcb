@@ -7,8 +7,11 @@
 //! one owner are deliberately outside this quantity. Touching, overlapping,
 //! or contained distinct-owner regions measure zero.
 
+use std::collections::HashMap;
+
 use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
+use pcb_ir::geom::region::ring_signed_area;
 
 use crate::commands::dfm::design::{ConductorId, Design, spans};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
@@ -33,29 +36,59 @@ pub(super) fn evaluate(
         if !conditions.applies_to_layer(layer) {
             continue;
         }
+        // Every pair of connected pieces of two conductors is decided, those
+        // inside one placement in that placement's own design. A regular
+        // region has one outer ring for each piece.
+        let mut decided = 0;
+        let mut decided_in = HashMap::<u32, usize>::new();
+        for conductor in &layer.conductors {
+            let pieces = conductor
+                .image
+                .rings
+                .iter()
+                .filter(|ring| ring_signed_area(ring) > 0.0)
+                .count();
+            let inside = conductor
+                .branch
+                .map(|branch| decided_in.entry(branch).or_default());
+            checked += (decided - inside.as_deref().copied().unwrap_or(0)) * pieces;
+            decided += pieces;
+            if let Some(inside) = inside {
+                *inside += pieces;
+            }
+        }
+
+        // A conductor whose bounds come within the limit of no other's is
+        // proven clear whole; only the rest are taken apart into pieces.
+        let mut by_x = (0..layer.conductors.len()).collect::<Vec<_>>();
+        by_x.sort_by(|&left, &right| {
+            let bounds = |index: usize| layer.conductors[index].image.bbox;
+            bounds(left).min.x.total_cmp(&bounds(right).min.x)
+        });
+        let mut near = vec![false; layer.conductors.len()];
+        for (position, &left_index) in by_x.iter().enumerate() {
+            let left = &layer.conductors[left_index];
+            for &right_index in by_x[position + 1..].iter().take_while(|&&right_index| {
+                layer.conductors[right_index].image.bbox.min.x - left.image.bbox.max.x < limit_mm
+            }) {
+                let right = &layer.conductors[right_index];
+                if spans(left.branch, right.branch)
+                    && left.image.bbox.distance_to(right.image.bbox) < limit_mm
+                {
+                    near[left_index] = true;
+                    near[right_index] = true;
+                }
+            }
+        }
         let components = layer
             .conductors
             .iter()
-            .map(|conductor| conductor.image.connected_components())
+            .zip(near)
+            .map(|(conductor, near)| match near {
+                true => conductor.image.connected_components(),
+                false => Vec::new(),
+            })
             .collect::<Vec<_>>();
-        // Every pair of components of two conductors is decided, those inside
-        // one placement in that placement's own design.
-        let mut earlier = Vec::<(Option<u32>, usize)>::new();
-        for (conductor, conductor_components) in layer.conductors.iter().zip(&components) {
-            let spanned = earlier
-                .iter()
-                .filter(|(branch, _)| spans(conductor.branch, *branch))
-                .map(|(_, count)| count)
-                .sum::<usize>();
-            checked += spanned * conductor_components.len();
-            match earlier
-                .iter_mut()
-                .find(|(branch, _)| *branch == conductor.branch)
-            {
-                Some((_, count)) => *count += conductor_components.len(),
-                None => earlier.push((conductor.branch, conductor_components.len())),
-            }
-        }
 
         let mut pieces = components
             .into_iter()
