@@ -200,25 +200,6 @@ impl GeometryAccuracy {
         ))
     }
 
-    pub(crate) fn before_transform(
-        self,
-        bbox: super::BBox,
-        transform: super::Affine2,
-    ) -> Result<Self, AccuracyError> {
-        let scale = transform.max_scale();
-        if !scale.is_finite()
-            || scale <= 0.0
-            || transform.determinant() == 0.0
-            || !transform.m02.is_finite()
-            || !transform.m12.is_finite()
-        {
-            return Err(AccuracyError::InvalidGeometry(
-                "singular or non-finite transform",
-            ));
-        }
-        Self::new(self.remaining(numerical_error(bbox.transformed(transform)))? / scale)
-    }
-
     pub fn check(self, uncertainty_mm: f64) -> Result<(), AccuracyError> {
         if uncertainty_mm >= 0.0 && uncertainty_mm <= self.0 {
             Ok(())

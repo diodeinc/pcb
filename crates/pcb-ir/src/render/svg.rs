@@ -36,61 +36,75 @@ pub fn svg<LayerMeta>(doc: &mask::Document<LayerMeta>, options: &RenderOptions) 
 
 /// Render artwork layers to an SVG document.
 ///
-/// Apertures become `<defs>` shapes that flashes reference with `<use>`, so
-/// repeated geometry stays repeated instead of being copied per placement.
-/// Polarity runs paint sequentially: a clear run masks everything painted
-/// before it, which is exactly how the same artwork images in Gerber.
+/// Apertures and blocks become `<defs>` that flashes and instances reference
+/// with `<use>`, so repeated geometry stays repeated instead of being copied
+/// per placement: a panel draws its board once. Polarity runs paint
+/// sequentially: a clear run masks everything painted before it, which is
+/// exactly how the same artwork images in Gerber.
 pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
     options: &RenderOptions,
 ) -> Result<String, AccuracyError> {
-    if !doc.blocks.is_empty() {
+    // A `<use>` can only add paint, so a block that clears has no symbol.
+    let clears = |block: &artwork::Block<ObjectMeta>| {
+        block
+            .objects
+            .iter()
+            .any(|object| object.polarity == Polarity::Clear)
+    };
+    if doc.blocks.iter().any(clears) {
         return artwork_svg(&artwork::expand_instances(doc), options);
     }
-    let accuracy = options.accuracy;
     let ids = options.id_prefix.as_str();
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
     let bbox = options.viewport_or(crate::render::artwork_bbox(doc, Some(&layers)));
+    let scales = PlacementScales::of(doc, &layers);
+    // Shared geometry is written once in its own frame, so its budget is
+    // what the largest placement leaves of the document's.
+    let extent = layers
+        .iter()
+        .map(|&index| doc.layers[index].bbox)
+        .fold(BBox::empty(), BBox::union);
+    let numeric = crate::geom::accuracy::numerical_error(extent);
+    let local = |scale: f64| {
+        GeometryAccuracy::new(options.accuracy.remaining(numeric)? / scale.max(f64::MIN_POSITIVE))
+    };
+
     let mut defs = String::new();
-    let mut body = String::new();
-    let mut masks = 0;
-
-    let mut aperture_accuracy = vec![None::<GeometryAccuracy>; doc.apertures.len()];
-    for &layer_index in &layers {
-        for object in doc.layers[layer_index].objects.slice(&doc.objects) {
-            if let Geometry::Flash {
-                aperture,
-                transform,
-            } = object.geometry
-            {
-                let local = accuracy
-                    .before_transform(doc.apertures[aperture as usize].bbox(), transform)?;
-                let budget = &mut aperture_accuracy[aperture as usize];
-                *budget = Some(GeometryAccuracy::new(
-                    budget.map_or(local.max_error_mm(), |budget| {
-                        budget.max_error_mm().min(local.max_error_mm())
-                    }),
-                )?);
-            }
-        }
-    }
-
-    for (aperture_index, aperture) in doc.apertures.iter().enumerate() {
-        let Some(accuracy) = aperture_accuracy[aperture_index] else {
+    for (index, aperture) in doc.apertures.iter().enumerate() {
+        let Some(scale) = scales.apertures[index] else {
             continue;
         };
         // Colour is inherited from the referencing group so one aperture can
         // serve both a dark run and a clear run's mask; `stroke` is not, or
         // every filled shape would gain the default one-unit outline.
+        write!(defs, "    <path id='{ids}a{index}' d='").unwrap();
+        let accuracy = local(scale)?;
+        for contour in aperture.contours() {
+            check_native(contour.uncertainty_mm, accuracy)?;
+            write_contour(&mut defs, contour.cmds.iter().copied());
+        }
         writeln!(
             defs,
-            "    <path id='{ids}a{aperture_index}' d='{}' fill-rule='{}' stroke='none'/>",
-            accurate_path_data(aperture.contours(), accuracy)?,
+            "' fill-rule='{}' stroke='none'/>",
             fill_rule_name(aperture.fill_rule())
         )
         .unwrap();
     }
+    for (index, block) in doc.blocks.iter().enumerate() {
+        let Some(scale) = scales.blocks[index] else {
+            continue;
+        };
+        writeln!(defs, "    <g id='{ids}b{index}'>").unwrap();
+        let accuracy = local(scale)?;
+        for object in &block.objects {
+            write_artwork_object(&mut defs, doc, LayerRole::Other, object, accuracy, ids)?;
+        }
+        writeln!(defs, "    </g>").unwrap();
+    }
 
+    let mut body = String::new();
+    let mut masks = 0;
     for &layer_index in &layers {
         let layer = &doc.layers[layer_index];
         write_artwork_layer(&mut body, &mut defs, &mut masks, doc, layer, options)?;
@@ -106,6 +120,56 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
     Ok(close_svg(svg))
 }
 
+/// The largest scale at which each aperture and block is placed, through
+/// every chain of instances that reaches it; `None` where nothing does.
+struct PlacementScales {
+    apertures: Vec<Option<f64>>,
+    blocks: Vec<Option<f64>>,
+}
+
+impl PlacementScales {
+    fn of<LayerMeta, ObjectMeta>(
+        doc: &artwork::Document<LayerMeta, ObjectMeta>,
+        layers: &[usize],
+    ) -> Self {
+        let mut scales = Self {
+            apertures: vec![None; doc.apertures.len()],
+            blocks: vec![None; doc.blocks.len()],
+        };
+        for &layer in layers {
+            scales.place(doc.layers[layer].objects.slice(&doc.objects), 1.0);
+        }
+        // Blocks reference only earlier blocks, so one backward sweep has
+        // every block's scale settled before its children read it.
+        for index in (0..doc.blocks.len()).rev() {
+            if let Some(scale) = scales.blocks[index] {
+                scales.place(&doc.blocks[index].objects, scale);
+            }
+        }
+        scales
+    }
+
+    fn place<ObjectMeta>(&mut self, objects: &[artwork::Object<ObjectMeta>], scale: f64) {
+        for object in objects {
+            let (slot, placement) = match object.geometry {
+                Geometry::Flash {
+                    aperture,
+                    transform,
+                } => (self.apertures.get_mut(aperture as usize), transform),
+                Geometry::Instance { block, transform }
+                | Geometry::GridInstance {
+                    block, transform, ..
+                } => (self.blocks.get_mut(block as usize), transform),
+                Geometry::Stroke { .. } | Geometry::Region { .. } => continue,
+            };
+            if let Some(slot) = slot {
+                let placed = scale * placement.max_scale();
+                *slot = Some(slot.map_or(placed, |largest| largest.max(placed)));
+            }
+        }
+    }
+}
+
 fn write_artwork_layer<LayerMeta, ObjectMeta>(
     body: &mut String,
     defs: &mut String,
@@ -115,78 +179,61 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
     options: &RenderOptions,
 ) -> Result<(), AccuracyError> {
     let ids = options.id_prefix.as_str();
-    // Sequential polarity: paint dark runs in order, and fold every clear run
-    // into a mask over everything painted before it.
-    let mut painted = String::new();
-    let mut run = String::new();
-    let mut run_polarity = Polarity::Dark;
+    // Sequential polarity: dark runs paint in order, and every clear run
+    // becomes a mask over everything painted before it.
+    let mut runs: Vec<(Polarity, String)> = Vec::new();
     for (polarity, object) in artwork::paint_ordered(layer, layer.objects.slice(&doc.objects)) {
-        if polarity != run_polarity {
-            flush_run(
-                &mut painted,
-                defs,
-                masks,
-                &mut run,
-                run_polarity,
-                layer,
-                ids,
-            );
-            run_polarity = polarity;
+        if runs.last().is_none_or(|(run, _)| *run != polarity) {
+            runs.push((polarity, String::new()));
         }
-        write_artwork_object(&mut run, doc, layer.role, object, options)?;
+        let (_, run) = runs.last_mut().expect("a run was just opened");
+        write_artwork_object(run, doc, layer.role, object, options.accuracy, ids)?;
     }
-    flush_run(
-        &mut painted,
-        defs,
-        masks,
-        &mut run,
-        run_polarity,
-        layer,
-        ids,
-    );
+    // A clear run removes from what is already painted, so with nothing
+    // under it there is nothing to remove.
+    let first_dark = runs
+        .iter()
+        .position(|(polarity, _)| *polarity == Polarity::Dark)
+        .unwrap_or(runs.len());
+    let runs = &runs[first_dark..];
 
+    let bounds = layer.bbox.expand(1.0);
+    let clear_runs = runs
+        .iter()
+        .filter(|(polarity, _)| *polarity == Polarity::Clear)
+        .count();
     // One group opacity rather than per-object alpha, so overlapping objects
     // composite once instead of darkening where they touch.
     let (color, opacity) = layer_style(layer.role);
     writeln!(
         body,
-        "    <g fill='{color}' stroke='{color}' opacity='{}'>\n{painted}    </g>",
-        fmt_num(opacity)
+        "    <g fill='{color}' stroke='{color}' opacity='{}'>",
+        num(opacity)
     )
     .unwrap();
-
-    Ok(())
-}
-
-fn flush_run<LayerMeta>(
-    painted: &mut String,
-    defs: &mut String,
-    masks: &mut usize,
-    run: &mut String,
-    polarity: Polarity,
-    layer: &artwork::Layer<LayerMeta>,
-    ids: &str,
-) {
-    let run = std::mem::take(run);
-    match polarity {
-        Polarity::Dark => painted.push_str(&run),
-        // A clear run removes from what is already painted, so with nothing
-        // under it there is nothing to remove.
-        Polarity::Clear if painted.is_empty() => {}
-        Polarity::Clear => {
-            let mask_id = format!("{ids}m{masks}");
-            *masks += 1;
-            let bounds = layer.bbox.expand(1.0);
-            let (x, y) = (fmt_num(bounds.min.x), fmt_num(bounds.min.y));
-            let (width, height) = (fmt_num(bounds.width()), fmt_num(bounds.height()));
-            writeln!(
-                defs,
-                "    <mask id='{mask_id}' maskUnits='userSpaceOnUse' x='{x}' y='{y}' width='{width}' height='{height}'>\n      <rect x='{x}' y='{y}' width='{width}' height='{height}' fill='#ffffff'/>\n      <g fill='#000000' stroke='#000000'>\n{run}      </g>\n    </mask>",
-            )
-            .unwrap();
-            *painted = format!("      <g mask='url(#{mask_id})'>\n{painted}      </g>\n");
+    // Each mask wraps all paint before its clear run, so the groups open
+    // outermost-last-mask first and close one per clear run.
+    for mask in (*masks..*masks + clear_runs).rev() {
+        writeln!(body, "      <g mask='url(#{ids}m{mask})'>").unwrap();
+    }
+    for (polarity, run) in runs {
+        match polarity {
+            Polarity::Dark => body.push_str(run),
+            Polarity::Clear => {
+                let (x, y) = (num(bounds.min.x), num(bounds.min.y));
+                let (width, height) = (num(bounds.width()), num(bounds.height()));
+                writeln!(
+                    defs,
+                    "    <mask id='{ids}m{masks}' maskUnits='userSpaceOnUse' x='{x}' y='{y}' width='{width}' height='{height}'>\n      <rect x='{x}' y='{y}' width='{width}' height='{height}' fill='#ffffff'/>\n      <g fill='#000000' stroke='#000000'>\n{run}      </g>\n    </mask>",
+                )
+                .unwrap();
+                *masks += 1;
+                writeln!(body, "      </g>").unwrap();
+            }
         }
     }
+    writeln!(body, "    </g>").unwrap();
+    Ok(())
 }
 
 fn write_artwork_object<LayerMeta, ObjectMeta>(
@@ -194,9 +241,9 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
     role: LayerRole,
     object: &artwork::Object<ObjectMeta>,
-    options: &RenderOptions,
+    accuracy: GeometryAccuracy,
+    ids: &str,
 ) -> Result<(), AccuracyError> {
-    let (accuracy, ids) = (options.accuracy, options.id_prefix.as_str());
     match object.geometry {
         Geometry::Flash {
             aperture,
@@ -205,16 +252,39 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
             writeln!(
                 out,
                 "      <use href='#{ids}a{aperture}'{}/>",
-                svg_transform(transform)
+                SvgTransform(transform)
             )
             .unwrap();
         }
-        Geometry::Region { path } => {
-            let path = doc.arena.path(path);
+        Geometry::Instance { block, transform } => {
             writeln!(
                 out,
-                "      <path d='{}' fill-rule='{}' stroke='none'/>",
-                accurate_path_data(doc.arena.path_contours(path), accuracy)?,
+                "      <use href='#{ids}b{block}'{}/>",
+                SvgTransform(transform)
+            )
+            .unwrap();
+        }
+        Geometry::GridInstance {
+            block,
+            transform,
+            repeat,
+        } => {
+            for offset in repeat.offsets() {
+                writeln!(
+                    out,
+                    "      <use href='#{ids}b{block}'{}/>",
+                    SvgTransform(Affine2::translation(offset).concat(transform))
+                )
+                .unwrap();
+            }
+        }
+        Geometry::Region { path } => {
+            let path = doc.arena.path(path);
+            out.push_str("      <path d='");
+            write_native_path(out, &doc.arena, path, accuracy)?;
+            writeln!(
+                out,
+                "' fill-rule='{}' stroke='none'/>",
                 fill_rule_name(
                     path.fill_rule()
                         .expect("region geometry carries a fill paint")
@@ -245,18 +315,16 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
             } else {
                 ""
             };
+            out.push_str("      <path d='");
+            write_native_path(out, &doc.arena, doc.arena.path(path), accuracy)?;
             writeln!(
                 out,
-                "      <path d='{}' fill='none' stroke-width='{}' stroke-linecap='{}' stroke-linejoin='{}'{outline}/>",
-                accurate_path_data(doc.arena.path_contours(doc.arena.path(path)), accuracy)?,
-                fmt_num(stroke.width),
+                "' fill='none' stroke-width='{}' stroke-linecap='{}' stroke-linejoin='{}'{outline}/>",
+                num(stroke.width),
                 line_cap_name(stroke.cap),
                 line_join_name(stroke.join),
             )
             .unwrap();
-        }
-        Geometry::Instance { .. } | Geometry::GridInstance { .. } => {
-            unreachable!("artwork instances are expanded before SVG rendering")
         }
     };
     Ok(())
@@ -266,17 +334,23 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
 /// this far from its source along each axis.
 const SVG_COORDINATE_GRID_MM: f64 = 1e-6;
 
-/// Path data for contours the SVG draws natively; the approximation the
-/// contours already carry plus coordinate rounding counts against the budget.
-fn accurate_path_data(
-    contours: Vec<crate::geom::path::ContourBuf>,
+/// Whether the SVG may draw a contour natively: the approximation it already
+/// carries plus coordinate rounding counts against the budget.
+fn check_native(uncertainty_mm: f64, accuracy: GeometryAccuracy) -> Result<(), AccuracyError> {
+    accuracy.check(uncertainty_mm + SVG_COORDINATE_GRID_MM / std::f64::consts::SQRT_2)
+}
+
+fn write_native_path(
+    out: &mut String,
+    arena: &PathArena,
+    path: &Path,
     accuracy: GeometryAccuracy,
-) -> Result<String, AccuracyError> {
-    for contour in &contours {
-        accuracy
-            .check(contour.uncertainty_mm + SVG_COORDINATE_GRID_MM / std::f64::consts::SQRT_2)?;
+) -> Result<(), AccuracyError> {
+    for contour in arena.contours(path.contours) {
+        check_native(contour.uncertainty_mm, accuracy)?;
+        write_contour(out, arena.cmds(*contour).iter().copied());
     }
-    Ok(svg_path_data(&contours))
+    Ok(())
 }
 
 fn stroke_of<LayerMeta, ObjectMeta>(
@@ -305,16 +379,32 @@ fn line_join_name(join: LineJoin) -> &'static str {
     }
 }
 
-fn svg_transform(transform: Affine2) -> String {
-    format!(
-        " transform='matrix({} {} {} {} {} {})'",
-        fmt_num(transform.m00),
-        fmt_num(transform.m10),
-        fmt_num(transform.m01),
-        fmt_num(transform.m11),
-        fmt_num(transform.m02),
-        fmt_num(transform.m12),
-    )
+/// A placement as a `transform` attribute. The linear part multiplies every
+/// coordinate it places, so it keeps nine decimals where points keep six.
+struct SvgTransform(Affine2);
+
+impl std::fmt::Display for SvgTransform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Affine2 {
+            m00,
+            m01,
+            m02,
+            m10,
+            m11,
+            m12,
+        } = self.0;
+        let linear = |value| Num { value, decimals: 9 };
+        write!(
+            f,
+            " transform='matrix({} {} {} {} {} {})'",
+            linear(m00),
+            linear(m10),
+            linear(m01),
+            linear(m11),
+            num(m02),
+            num(m12),
+        )
+    }
 }
 
 fn pixel_size(options: &RenderOptions, bbox: BBox) -> Option<(u32, u32)> {
@@ -337,10 +427,10 @@ fn open_svg(bbox: &BBox, pixel_size: Option<(u32, u32)>, title: Option<&str>) ->
     writeln!(
         svg,
         "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'{size} viewBox='{} {} {} {}'>",
-        fmt_num(bbox.min.x),
-        fmt_num(-bbox.max.y),
-        fmt_num(bbox.width()),
-        fmt_num(bbox.height())
+        num(bbox.min.x),
+        num(-bbox.max.y),
+        num(bbox.width()),
+        num(bbox.height())
     )
     .unwrap();
     writeln!(svg, "  <title>{}</title>", escape_xml(title)).unwrap();
@@ -377,7 +467,7 @@ fn write_shape(svg: &mut String, arena: &PathArena, role: LayerRole, shape: &Pat
         writeln!(
             svg,
             "    <path d='{d}' fill='{color}' fill-opacity='{}' fill-rule='{}'/>",
-            fmt_num(opacity),
+            num(opacity),
             fill_rule_name(shape.fill_rule().expect("mask shapes are filled"))
         )
         .unwrap();
@@ -408,14 +498,14 @@ fn write_contour(data: &mut String, cmds: impl IntoIterator<Item = PathCmd>) {
         match cmd.op {
             PathOp::MoveTo => {
                 current = cmd.p0;
-                if !data.is_empty() {
+                if !data.ends_with('\'') && !data.is_empty() {
                     data.push(' ');
                 }
-                write!(data, "M{} {}", fmt_num(cmd.p0.x), fmt_num(cmd.p0.y)).unwrap();
+                write!(data, "M{} {}", num(cmd.p0.x), num(cmd.p0.y)).unwrap();
             }
             PathOp::LineTo => {
                 current = cmd.p0;
-                write!(data, " L{} {}", fmt_num(cmd.p0.x), fmt_num(cmd.p0.y)).unwrap();
+                write!(data, " L{} {}", num(cmd.p0.x), num(cmd.p0.y)).unwrap();
             }
             PathOp::ArcTo => {
                 write_arc(data, current, cmd);
@@ -440,12 +530,12 @@ fn write_contour(data: &mut String, cmds: impl IntoIterator<Item = PathCmd>) {
                 write!(
                     data,
                     " C{} {},{} {},{} {}",
-                    fmt_num(cmd.p0.x),
-                    fmt_num(cmd.p0.y),
-                    fmt_num(cmd.p1.x),
-                    fmt_num(cmd.p1.y),
-                    fmt_num(cmd.p2.x),
-                    fmt_num(cmd.p2.y)
+                    num(cmd.p0.x),
+                    num(cmd.p0.y),
+                    num(cmd.p1.x),
+                    num(cmd.p1.y),
+                    num(cmd.p2.x),
+                    num(cmd.p2.y)
                 )
                 .unwrap();
             }
@@ -456,69 +546,45 @@ fn write_contour(data: &mut String, cmds: impl IntoIterator<Item = PathCmd>) {
 
 fn write_arc(data: &mut String, start: Point, cmd: PathCmd) {
     let arc = Arc::new(start, cmd.p0, cmd.p1, cmd.clockwise);
-    let radius = arc.radius();
-    if radius <= POINT_EPSILON_MM {
-        write!(data, " L{} {}", fmt_num(arc.end.x), fmt_num(arc.end.y)).unwrap();
+    if arc.radius() <= POINT_EPSILON_MM {
+        write!(data, " L{} {}", num(arc.end.x), num(arc.end.y)).unwrap();
         return;
     }
-
-    let sweep_flag = if arc.clockwise { 0 } else { 1 };
-    if arc.start.distance_to(arc.end) <= POINT_EPSILON_MM {
-        // A full circle cannot be one SVG arc; split at the antipode.
-        let midpoint = arc.center * 2.0 - arc.start;
-        write_svg_arc(data, radius, 0, sweep_flag, midpoint);
-        write_svg_arc(data, radius, 0, sweep_flag, arc.end);
-        return;
-    }
-
-    let large_arc = u8::from(arc.sweep_radians() > std::f64::consts::PI);
-    write_svg_arc(data, radius, large_arc, sweep_flag, arc.end);
+    write_elliptical_arc(data, arc.to_elliptical());
 }
 
-fn write_svg_arc(data: &mut String, radius: f64, large_arc: u8, sweep_flag: u8, end: Point) {
-    write!(
-        data,
-        " A{} {} 0 {large_arc} {sweep_flag} {} {}",
-        fmt_num(radius),
-        fmt_num(radius),
-        fmt_num(end.x),
-        fmt_num(end.y)
-    )
-    .unwrap();
-}
-
-/// An elliptical arc as one or two SVG `A` commands: the principal axes and
-/// their rotation describe the ellipse, the flags pick the arc.
+/// An elliptical arc as SVG `A` commands: the principal axes and their
+/// rotation describe the ellipse, the sweep flag picks the direction.
+///
+/// An arc of more than half a turn is drawn in two halves. SVG cannot say a
+/// full turn in one command, drops an arc whose ends print alike, and picks
+/// either side of an exact half turn; two short arcs through the midpoint
+/// have none of those cases.
 fn write_elliptical_arc(data: &mut String, arc: EllipticalArc) {
     let (major, minor, rotation) = arc.principal_axes();
     if arc.is_degenerate() || minor <= POINT_EPSILON_MM {
-        write!(data, " L{} {}", fmt_num(arc.end.x), fmt_num(arc.end.y)).unwrap();
+        write!(data, " L{} {}", num(arc.end.x), num(arc.end.y)).unwrap();
         return;
     }
     let sweep_flag = if arc.clockwise { 0 } else { 1 };
     let rotation_degrees = rotation.to_degrees();
-    let mut write_piece = |large_arc: u8, end: Point| {
+    let mut write_piece = |end: Point| {
         write!(
             data,
-            " A{} {} {} {large_arc} {sweep_flag} {} {}",
-            fmt_num(major),
-            fmt_num(minor),
-            fmt_num(rotation_degrees),
-            fmt_num(end.x),
-            fmt_num(end.y)
+            " A{} {} {} 0 {sweep_flag} {} {}",
+            num(major),
+            num(minor),
+            num(rotation_degrees),
+            num(end.x),
+            num(end.y)
         )
         .unwrap();
     };
-    if arc.is_full_ellipse() {
-        // A full ellipse cannot be one SVG arc; split at the antipode.
-        write_piece(0, arc.center * 2.0 - arc.start);
-        write_piece(0, arc.end);
-        return;
+    let sweep = arc.signed_sweep_radians();
+    if sweep.abs() > std::f64::consts::PI {
+        write_piece(arc.point_at(arc.start_angle() + sweep / 2.0));
     }
-    write_piece(
-        u8::from(arc.sweep_radians() > std::f64::consts::PI),
-        arc.end,
-    );
+    write_piece(arc.end);
 }
 
 fn layer_style(role: LayerRole) -> (&'static str, f64) {
@@ -541,15 +607,41 @@ fn escape_xml(input: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-pub(crate) fn fmt_num(value: f64) -> String {
-    let mut text = format!("{value:.6}");
-    while text.contains('.') && text.ends_with('0') {
-        text.pop();
+/// A number in fixed notation with trailing zeros trimmed, written without
+/// allocating: a layer's path data is millions of these.
+struct Num {
+    value: f64,
+    decimals: u32,
+}
+
+fn num(value: f64) -> Num {
+    Num { value, decimals: 6 }
+}
+
+impl std::fmt::Display for Num {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let unit = 10_u64.pow(self.decimals);
+        let scaled = (self.value.abs() * unit as f64).round();
+        // Past the exact integers, or not a number at all.
+        if scaled.is_nan() || scaled >= 9.0e15 {
+            return write!(f, "{}", self.value);
+        }
+        let scaled = scaled as u64;
+        let (whole, mut fraction) = (scaled / unit, scaled % unit);
+        if self.value < 0.0 && scaled != 0 {
+            f.write_str("-")?;
+        }
+        write!(f, "{whole}")?;
+        if fraction != 0 {
+            let mut digits = self.decimals as usize;
+            while fraction % 10 == 0 {
+                fraction /= 10;
+                digits -= 1;
+            }
+            write!(f, ".{fraction:0digits$}")?;
+        }
+        Ok(())
     }
-    if text.ends_with('.') {
-        text.pop();
-    }
-    if text == "-0" { "0".to_string() } else { text }
 }
 
 #[cfg(test)]
@@ -842,11 +934,95 @@ mod tests {
     }
 
     #[test]
+    fn numbers_print_fixed_and_trimmed_without_negative_zero() {
+        for (value, text) in [
+            (0.0, "0"),
+            (-0.0, "0"),
+            (-0.000_000_4, "0"),
+            (1.5, "1.5"),
+            (-2.000_001, "-2.000001"),
+            (123.456_789_4, "123.456789"),
+            (0.000_001, "0.000001"),
+            (1e7, "10000000"),
+        ] {
+            assert_eq!(num(value).to_string(), text);
+        }
+        assert_eq!(
+            Num {
+                value: std::f64::consts::FRAC_1_SQRT_2,
+                decimals: 9
+            }
+            .to_string(),
+            "0.707106781"
+        );
+    }
+
+    #[test]
+    fn arcs_past_half_a_turn_draw_as_two_short_arcs() {
+        let three_quarters = ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(1.0, 0.0)),
+            PathCmd::arc_to(Point::new(0.0, -1.0), Point::ZERO, false),
+        ]);
+        assert_eq!(
+            svg_path_data(&[three_quarters]),
+            "M1 0 A1 1 0 0 1 -0.707107 0.707107 A1 1 0 0 1 0 -1"
+        );
+        let full = ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(1.0, 0.0)),
+            PathCmd::arc_to(Point::new(1.0, 0.0), Point::ZERO, true),
+        ]);
+        assert_eq!(
+            svg_path_data(&[full]),
+            "M1 0 A1 1 0 0 0 -1 0 A1 1 0 0 0 1 0"
+        );
+    }
+
+    #[test]
+    fn a_block_is_drawn_once_and_used_at_every_placement() {
+        let mut doc = artwork::Document::<(), ()>::new();
+        let block = doc.push_block();
+        let path = doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [square(1.0)],
+        );
+        doc.push_block_object(
+            block,
+            artwork::Object::new(Polarity::Dark, Geometry::Region { path }),
+        );
+        let layer = doc.push_layer(artwork::Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        doc.push_object(
+            layer,
+            artwork::Object::new(
+                Polarity::Dark,
+                Geometry::GridInstance {
+                    block,
+                    transform: Affine2::IDENTITY,
+                    repeat: artwork::GridRepeat {
+                        x_count: 3,
+                        y_count: 2,
+                        x_step: Point::new(5.0, 0.0),
+                        y_step: Point::new(0.0, 4.0),
+                    },
+                },
+            ),
+        );
+        artwork::normalize_bounds(&mut doc);
+
+        let svg = artwork_svg(&doc, &RenderOptions::default().with_id_prefix("p-")).unwrap();
+        assert_eq!(svg.matches("<g id='p-b0'>").count(), 1);
+        assert_eq!(svg.matches("M0 0 L1 0").count(), 1);
+        assert_eq!(svg.matches("<use href='#p-b0'").count(), 6);
+        assert!(svg.contains("<use href='#p-b0' transform='matrix(1 0 0 1 10 4)'/>"));
+    }
+
+    #[test]
     fn svg_charges_coordinate_rounding_against_the_budget() {
-        let contours = vec![square(1.0)];
-        assert!(accurate_path_data(contours.clone(), GeometryAccuracy::new(1e-6).unwrap()).is_ok());
+        let exact = square(1.0).uncertainty_mm;
+        assert!(check_native(exact, GeometryAccuracy::new(1e-6).unwrap()).is_ok());
         assert!(matches!(
-            accurate_path_data(contours, GeometryAccuracy::new(1e-7).unwrap()),
+            check_native(exact, GeometryAccuracy::new(1e-7).unwrap()),
             Err(AccuracyError::BudgetExceeded { .. })
         ));
     }
