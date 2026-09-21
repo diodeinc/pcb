@@ -866,7 +866,7 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
     crate::dialects::ipc::process::normalize_bounds(&mut geometry);
 
     let mut packages = Vec::new();
-    let mut package_ids = HashMap::new();
+    let mut package_ids = HashMap::<Symbol, Vec<PackageDefinitionId>>::new();
     for step in &ecad.cad_data.steps {
         let step_id = geometry
             .layout
@@ -876,7 +876,7 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
             .context("package step is missing from the layout graph")? as u32;
         for (source_index, package) in step.packages.iter().enumerate() {
             let id = PackageDefinitionId(packages.len() as u32);
-            package_ids.insert(package.name, id);
+            package_ids.entry(package.name).or_default().push(id);
             packages.push(PackageDefinition {
                 step: step_id,
                 source_index: source_index as u32,
@@ -899,9 +899,16 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
                 Point::new(component.location.x, component.location.y),
                 component.xform,
             );
-            let package = component
-                .package_ref
-                .and_then(|reference| package_ids.get(&reference).copied());
+            // A packageRef names its own Step's Package; only a name the Step
+            // lacks resolves across Steps.
+            let package = component.package_ref.and_then(|reference| {
+                let candidates = package_ids.get(&reference)?;
+                candidates
+                    .iter()
+                    .find(|id| packages[id.0 as usize].step == step_id)
+                    .or(candidates.first())
+                    .copied()
+            });
             let bom_references = component
                 .ref_des
                 .map(|reference| component_bom_references(ipc, step.name, reference))
@@ -5519,6 +5526,36 @@ mod tests {
             "shared-package"
         );
         assert_ne!(shared.step, shared_package.step);
+    }
+
+    #[test]
+    fn components_bind_to_the_package_of_their_own_step() {
+        let package = r#"<Package name="R_0402" type="OTHER" pinOneOrientation="OTHER"><Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDesc lineWidth="0.1" lineEnd="ROUND"/></Outline></Package>
+        <Component refDes="R1" packageRef="R_0402" part="r" layerRef="TOP" mountType="SMT"><Location x="1" y="1"/></Component>"#;
+        let ipc = Ipc2581::parse(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="ASSEMBLY"/><StepRef name="board-a"/><StepRef name="board-b"/></Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
+      <Step name="board-a" type="BOARD">{package}</Step>
+      <Step name="board-b" type="BOARD">{package}</Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+        ))
+        .unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+
+        assert_eq!(imported.components.len(), 2);
+        for component in &imported.components {
+            let package = imported
+                .package_definition(component.package.unwrap())
+                .unwrap();
+            assert_eq!(package.step, component.step);
+        }
     }
 
     #[test]
