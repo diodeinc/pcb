@@ -253,20 +253,11 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
     let protected = input.board.union(input.support)?;
     // Operands that share an edge, as a frame clipped to its cell shares the
     // cell's, leave residue along it no thicker than the rounding of the
-    // booleans that made it. Material is what is thicker than the caller's
-    // own tolerance: a region that thin has at most its perimeter times that
-    // tolerance in area.
+    // booleans that made it. Material is what survives eroding by the
+    // caller's own tolerance.
     let slack =
         input.tolerance.boundary_mm.max(protected.uncertainty_mm) + input.tolerance.numerical_mm;
-    let is_residue = |region: ContourSet| {
-        let perimeter: f64 = region
-            .rings
-            .iter()
-            .flat_map(super::region::ring_edges)
-            .map(|(start, end)| start.distance_to(end))
-            .sum();
-        region.area() <= perimeter * slack
-    };
+    let is_residue = |region: ContourSet| region.disk_erode(slack).map(|core| core.is_empty());
     let expected = [
         (
             input.board.connected_components().len() == 1,
@@ -277,11 +268,11 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
             "expected one connected support",
         ),
         (
-            is_residue(input.board.intersection(input.support)?),
+            is_residue(input.board.intersection(input.support)?)?,
             "expected disjoint board and support",
         ),
         (
-            is_residue(protected.difference(input.stock)?),
+            is_residue(protected.difference(input.stock)?)?,
             "expected board and support inside stock",
         ),
         (
