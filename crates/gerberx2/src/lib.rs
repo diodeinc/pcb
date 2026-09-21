@@ -9,7 +9,7 @@ use pcb_ir::geom::{AccuracyError, Span};
 pub use types::*;
 pub use write::{
     AttributeSets, AttributeValue, GerberLayer, WriterAperture, WriterApertureTemplate,
-    WriterObject, escape_attribute_field, unescape_attribute_field, write_layer,
+    WriterObject, escape_attribute_field, trim_decimal, unescape_attribute_field, write_layer,
 };
 
 use parse::Parser;

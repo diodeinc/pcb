@@ -39,7 +39,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Result, bail};
-use gerberx2::escape_attribute_field;
+use gerberx2::{escape_attribute_field, trim_decimal};
 use pcb_ir::geom::Point;
 
 /// One X2 attribute comment. Construction escapes every field, so whatever
@@ -376,20 +376,10 @@ fn quantize_mm(value: f64) -> i64 {
     (value * 1_000_000.0).round() as i64
 }
 
+/// A decimal that reads as one even when integral; zero stays `0`.
 fn format_decimal(value: f64) -> String {
-    if value.abs() < 0.0000000005 {
-        return "0".to_string();
-    }
-    let mut text = format!("{value:.6}");
-    while text.contains('.') && text.ends_with('0') {
-        text.pop();
-    }
-    if text.ends_with('.') {
-        text.pop();
-    }
-    if text == "-0" {
-        "0".to_string()
-    } else if text.contains('.') {
+    let text = trim_decimal(value, 6);
+    if text == "0" || text.contains('.') {
         text
     } else {
         format!("{text}.0")
@@ -427,6 +417,19 @@ mod tests {
         let output = write_xnc(&document).unwrap();
         assert!(output.contains("T01C0.3\n"));
         assert!(output.contains("T02C1.0\n"));
+    }
+
+    #[test]
+    fn formats_coordinates_as_trimmed_decimals() {
+        for (value, text) in [
+            (5.0, "5.0"),
+            (-2.5, "-2.5"),
+            (1.234_567_8, "1.234568"),
+            (0.0, "0"),
+            (-0.000_000_1, "0"),
+        ] {
+            assert_eq!(format_decimal(value), text);
+        }
     }
 
     #[test]

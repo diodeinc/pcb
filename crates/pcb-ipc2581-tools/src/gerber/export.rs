@@ -7,6 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+#[cfg(feature = "cli")]
+use gerberx2::trim_decimal;
 use gerberx2::write_layer;
 use ipc2581::types::{
     FillProperty, LayerFunction, Side as IpcSide, StandardPrimitive,
@@ -131,7 +133,7 @@ pub fn build_gerber_x2_files(
             if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
                 bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
             }
-            artwork_from_ipc_layer(imported, &standard_primitives, &doc, 0, spec)?
+            artwork_from_ipc_layer(imported, &standard_primitives, &doc, 0, spec)
         };
         if matches!(plan.role, GerberLayerRole::Vcut | GerberLayerRole::Score)
             && artwork.layers[0].objects.is_empty()
@@ -375,10 +377,10 @@ fn layer_output(
             "Edge_Cuts.gm1".to_string(),
             vec!["Profile".into(), "NP".into()],
         ),
-        GerberLayerRole::Vcut => fabrication_line_layer_output("V_Cut.gbr", &["Vcut"], side),
+        GerberLayerRole::Vcut => vcut_layer_output("V_Cut.gbr", side),
         // Gerber calls the scored-line data function `Vcut`; the specification
         // explicitly treats scoring as the same fabrication operation.
-        GerberLayerRole::Score => fabrication_line_layer_output("Score.gbr", &["Vcut"], side),
+        GerberLayerRole::Score => vcut_layer_output("Score.gbr", side),
     }
 }
 
@@ -412,25 +414,23 @@ fn drawing_filename(source_layer_name: &str, fallback_stem: &str) -> String {
     )
 }
 
-fn fabrication_line_layer_output(
-    filename: &str,
-    function: &[&str],
-    side: Option<IpcSide>,
-) -> (String, Vec<String>) {
-    let mut file_function = function
-        .iter()
-        .map(|field| (*field).to_string())
-        .collect::<Vec<_>>();
-    match side {
-        Some(IpcSide::Top) => file_function.push("Top".to_string()),
-        Some(IpcSide::Bottom) => file_function.push("Bot".to_string()),
+fn vcut_layer_output(filename: &str, side: Option<IpcSide>) -> (String, Vec<String>) {
+    let side = match side {
+        Some(IpcSide::Top) => Some("Top"),
+        Some(IpcSide::Bottom) => Some("Bot"),
         Some(IpcSide::Both)
         | Some(IpcSide::All)
         | Some(IpcSide::None)
         | Some(IpcSide::Internal)
-        | None => {}
-    }
-    (filename.to_string(), file_function)
+        | None => None,
+    };
+    (
+        filename.to_string(),
+        std::iter::once("Vcut")
+            .chain(side)
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -534,7 +534,7 @@ fn artwork_from_ipc_layer(
     doc: &IpcGeometryDocument,
     layer_index: usize,
     spec: GerberArtworkSpec,
-) -> Result<GerberArtwork> {
+) -> GerberArtwork {
     let layer = &doc.layers[layer_index];
     let header = pcb_ir::dialects::artwork::Layer {
         name: layer.name.clone(),
@@ -563,9 +563,9 @@ fn artwork_from_ipc_layer(
             doc,
             spec.view.profile_set(),
             ProfileGerberStyle::default(),
-        )?;
+        );
     }
-    Ok(artwork)
+    artwork
 }
 
 /// Preserve the reusable IPC Step graph as reusable artwork blocks.
@@ -838,7 +838,7 @@ fn synthetic_profile_gerber_file(
         doc,
         view.profile_set(),
         ProfileGerberStyle::default(),
-    )?;
+    );
     if artwork.layers[artwork_layer as usize].objects.is_empty() {
         return Ok(None);
     }
@@ -1001,19 +1001,19 @@ fn render_vscore_relief_debug_svg(debug: &relief::VScoreReliefDebug) -> Option<S
     writeln!(
         svg,
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{} {} {} {}' data-vscore-relief-debug='true'>",
-        debug_num(bbox.min.x - padding),
-        debug_num(-(bbox.max.y + padding)),
-        debug_num(bbox.width() + 2.0 * padding),
-        debug_num(bbox.height() + 2.0 * padding)
+        trim_decimal(bbox.min.x - padding, 6),
+        trim_decimal(-(bbox.max.y + padding), 6),
+        trim_decimal(bbox.width() + 2.0 * padding, 6),
+        trim_decimal(bbox.height() + 2.0 * padding, 6)
     )
     .unwrap();
     writeln!(
         svg,
         "  <rect x='{}' y='{}' width='{}' height='{}' fill='#ffffff'/>",
-        debug_num(bbox.min.x - padding),
-        debug_num(-(bbox.max.y + padding)),
-        debug_num(bbox.width() + 2.0 * padding),
-        debug_num(bbox.height() + 2.0 * padding)
+        trim_decimal(bbox.min.x - padding, 6),
+        trim_decimal(-(bbox.max.y + padding), 6),
+        trim_decimal(bbox.width() + 2.0 * padding, 6),
+        trim_decimal(bbox.height() + 2.0 * padding, 6)
     )
     .unwrap();
     writeln!(svg, "  <g transform='scale(1 -1)'>").unwrap();
@@ -1139,76 +1139,25 @@ fn payloads_bbox(payloads: &[ContourBuf]) -> BBox {
         .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox))
 }
 
-#[cfg(feature = "cli")]
-fn debug_num(value: f64) -> String {
-    let mut text = format!("{value:.6}");
-    while text.contains('.') && text.ends_with('0') {
-        text.pop();
-    }
-    if text.ends_with('.') {
-        text.pop();
-    }
-    if text == "-0" { "0".to_string() } else { text }
-}
-
 fn append_profile_occurrences(
     artwork: &mut GerberArtwork,
     layer: u32,
     doc: &IpcGeometryDocument,
     profile_set: ProfileSet,
     style: ProfileGerberStyle,
-) -> anyhow::Result<()> {
+) {
     for occurrence in profile_occurrences_for(doc, profile_set) {
-        append_profile_path(
-            artwork,
-            layer,
-            doc,
-            occurrence.profile.outer_path,
-            occurrence.transform,
-            style,
-        )?;
-        append_profile_cutouts(
-            artwork,
-            layer,
-            doc,
-            occurrence.profile,
-            occurrence.transform,
-            style,
-        )?;
+        let profile = occurrence.profile;
+        let cutouts = profile.cutouts.slice(&doc.profile_cutouts);
+        for path in std::iter::once(profile.outer_path).chain(cutouts.iter().map(|c| c.path)) {
+            append_profile_payloads(
+                artwork,
+                layer,
+                doc.transformed_path_contours(path, occurrence.transform),
+                style,
+            );
+        }
     }
-    Ok(())
-}
-
-fn append_profile_cutouts(
-    artwork: &mut GerberArtwork,
-    layer: u32,
-    doc: &IpcGeometryDocument,
-    profile: &pcb_ir::dialects::ipc::StepProfile,
-    transform: Affine2,
-    style: ProfileGerberStyle,
-) -> anyhow::Result<()> {
-    for cutout in profile.cutouts.slice(&doc.profile_cutouts) {
-        append_profile_path(artwork, layer, doc, cutout.path, transform, style)?;
-    }
-    Ok(())
-}
-
-fn append_profile_path(
-    artwork: &mut GerberArtwork,
-    layer: u32,
-    doc: &IpcGeometryDocument,
-    path: u32,
-    transform: Affine2,
-    style: ProfileGerberStyle,
-) -> anyhow::Result<()> {
-    append_profile_payloads(
-        artwork,
-        layer,
-        doc.transformed_path_contours(path, transform),
-        style,
-    );
-
-    Ok(())
 }
 
 fn append_profile_payloads(

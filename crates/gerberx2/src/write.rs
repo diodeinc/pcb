@@ -801,7 +801,7 @@ impl<'a> Writer<'a> {
     }
 
     fn write_decimal(&mut self, value: f64) {
-        self.output.push_str(&trim_decimal(value));
+        self.output.push_str(&trim_decimal(value, 9));
     }
 }
 
@@ -849,8 +849,10 @@ fn segment_start(segment: &ContourSegment) -> Point {
     }
 }
 
-fn trim_decimal(value: f64) -> String {
-    let mut text = format!("{value:.9}");
+/// `value` in fixed-point notation with at most `decimals` decimals and no
+/// trailing zeros.
+pub fn trim_decimal(value: f64, decimals: usize) -> String {
+    let mut text = format!("{value:.decimals$}");
     while text.contains('.') && text.ends_with('0') {
         text.pop();
     }
