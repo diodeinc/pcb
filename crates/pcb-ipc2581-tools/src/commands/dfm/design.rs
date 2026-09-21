@@ -189,19 +189,6 @@ impl<'a> Design<'a> {
                 None => steps.push((step, vec![occurrence])),
             }
         }
-        // The scope has one physical view; every design joins its own
-        // drilled features to it by the occurrence identity they share.
-        let physical = wanted
-            .intersects(Pools::HOLE_LANDS | Pools::SLOT_LANDS)
-            .then(|| {
-                Ok::<_, anyhow::Error>(
-                    imported
-                        .physical_holes(scope, resolution)?
-                        .into_iter()
-                        .map(|hole| (hole.id.0, hole))
-                        .collect::<HashMap<_, _>>(),
-                )
-            });
         let mut designs = steps
             .into_iter()
             .map(|(step, placements)| {
@@ -211,7 +198,7 @@ impl<'a> Design<'a> {
                     root: placements[0],
                     resolution,
                 };
-                Self::extract(source, step, placements, wanted, physical.as_ref())
+                Self::extract(source, step, placements, wanted)
             })
             .collect::<Vec<_>>();
         // Only copper within a rule's limit of a line is ever measured to it.
@@ -316,7 +303,6 @@ impl<'a> Design<'a> {
         step: u32,
         placements: Vec<LayoutOccurrenceId>,
         wanted: Pools,
-        physical: Option<&Result<HashMap<FeatureOccurrenceId, PhysicalHole>>>,
     ) -> Self {
         let Source {
             imported,
@@ -342,9 +328,20 @@ impl<'a> Design<'a> {
         if wanted.intersects(Pools::CONDUCTOR_OWNERSHIP) {
             blockers.extend(unattributed_copper(imported, &copper_layers));
         }
+        // The physical view of the Step's own drilled features, which join
+        // it by the occurrence identity the scope gives them.
         let lands = Pools::HOLE_LANDS | Pools::SLOT_LANDS;
+        let physical = wanted.intersects(lands).then(|| {
+            Ok::<_, anyhow::Error>(
+                imported
+                    .physical_holes_of(scope, source.root, resolution)?
+                    .into_iter()
+                    .map(|hole| (hole.id.0, hole))
+                    .collect::<HashMap<_, _>>(),
+            )
+        });
         let land_indices = pool(wanted, lands, Pools::COPPER, &mut blockers, || {
-            if let Some(Err(error)) = physical {
+            if let Some(Err(error)) = &physical {
                 bail!("{error:#}");
             }
             Ok(copper_layers
@@ -368,7 +365,7 @@ impl<'a> Design<'a> {
                 .collect::<HashMap<_, _>>())
         });
         // Without the physical view the land pools are already blocked.
-        let link = |drilled: Vec<Option<FeatureOccurrenceId>>| match physical {
+        let link = |drilled: Vec<Option<FeatureOccurrenceId>>| match &physical {
             Some(Ok(physical_holes)) => link_lands(drilled, &land_indices, physical_holes),
             _ => Ok(Vec::new()),
         };
