@@ -10,9 +10,7 @@ use anyhow::{Context, Result, bail};
 #[cfg(feature = "cli")]
 use gerberx2::trim_decimal;
 use gerberx2::write_layer;
-use ipc2581::types::{
-    LayerFunction, Side as IpcSide, StandardPrimitive, ecad::Layer,
-};
+use ipc2581::types::{LayerFunction, Side as IpcSide, StandardPrimitive, ecad::Layer};
 
 use crate::geometry;
 use gerberx2::from_artwork::lower_artwork_layer;

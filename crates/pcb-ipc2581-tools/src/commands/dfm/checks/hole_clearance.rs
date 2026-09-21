@@ -10,14 +10,14 @@
 use pcb_ir::geom::dfm::{Distance, circular_region, region_clearance_sites};
 use pcb_ir::geom::{BBox, Point};
 
-use crate::commands::dfm::design::{Design, Hole, HoleClass};
+use crate::commands::dfm::design::{Design, Hole, HoleClass, spans};
 use crate::commands::dfm::report::{Evidence, MeasurementKind};
 use crate::commands::dfm::rules::Conditions;
 
 use super::copper_clearance::conductor_subject;
 use super::{
-    Evaluation, Measured, MeasuredSite, Ownership, hole_subject, holes_of_class, layers,
-    linework_clearance, violates,
+    Evaluation, Measured, MeasuredSite, Ownership, hole_subject, layers, linework_clearance,
+    violates,
 };
 
 pub(super) fn evaluate(
@@ -29,7 +29,14 @@ pub(super) fn evaluate(
     let mut checked = 0;
     let mut measured = Vec::new();
 
-    for (hole_index, hole) in holes_of_class(design, class) {
+    // A placed hole is measured here too, against what its own Step's design
+    // does not hold: this Step's copper and that of the other placements.
+    for (hole_index, hole) in design
+        .holes
+        .iter()
+        .enumerate()
+        .filter(|(_, hole)| hole.class == class)
+    {
         let radius_mm = hole.diameter_mm / 2.0;
         let owner = Ownership::of(
             design,
@@ -45,11 +52,12 @@ pub(super) fn evaluate(
             {
                 continue;
             }
-            checked += 1;
+            checked += usize::from(hole.branch.is_none());
             let nearest = copper
                 .conductors
                 .iter()
                 .zip(&design.conductor_boundaries[copper_index])
+                .filter(|(conductor, _)| spans(hole.branch, conductor.branch))
                 .filter(|(conductor, _)| class == HoleClass::Npth || !owner.owns(conductor.id))
                 .filter_map(|(conductor, boundary)| {
                     disk_to_copper_clearance(
@@ -207,7 +215,6 @@ fn fallback_site(
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
-    use pcb_ir::dialects::ipc::ArtworkScope;
     use pcb_ir::geom::Resolution;
 
     use crate::commands::dfm::{checks, design::Design, pdk::Pdk, rules};
@@ -333,15 +340,10 @@ limit = {{ minimum = "0.20 mm" }}
         let pdk = Pdk::parse(source).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-        let design = Design::extract(
-            &imported,
-            ArtworkScope::Board,
-            &rules,
-            Resolution::default(),
-        );
+        let design = Design::board(&imported, &rules, Resolution::default());
         checks::run(
             &rules,
-            &design,
+            std::slice::from_ref(&design),
             None,
             NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
         )
@@ -647,10 +649,10 @@ limit = {{ minimum = "0.20 mm" }}
         let pdk = Pdk::parse(&pdk("via")).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution);
+        let design = Design::board(&imported, &rules, resolution);
         let results = checks::run(
             &rules,
-            &design,
+            std::slice::from_ref(&design),
             None,
             NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
         )
@@ -690,12 +692,7 @@ limit = {{ minimum = "0.20 mm" }}
                 let rules = rules::lower(&pdk, None).unwrap();
                 let imported =
                     pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-                let design = Design::extract(
-                    &imported,
-                    ArtworkScope::Board,
-                    &rules,
-                    Resolution::default(),
-                );
+                let design = Design::board(&imported, &rules, Resolution::default());
                 let mut included = design
                     .copper_layers
                     .iter()
@@ -707,7 +704,7 @@ limit = {{ minimum = "0.20 mm" }}
                 assert_eq!(included, ["L0", "L1"], "declarations {order:?}");
                 let results = checks::run(
                     &rules,
-                    &design,
+                    std::slice::from_ref(&design),
                     None,
                     NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
                 )
@@ -735,10 +732,10 @@ limit = {{ minimum = "0.20 mm" }}
         let pdk = Pdk::parse(&source).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution);
+        let design = Design::board(&imported, &rules, resolution);
         let results = checks::run(
             &rules,
-            &design,
+            std::slice::from_ref(&design),
             None,
             NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
         )

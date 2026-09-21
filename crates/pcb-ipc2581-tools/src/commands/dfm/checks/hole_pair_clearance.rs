@@ -19,11 +19,12 @@
 //! by at least `L` along x, and an axis-aligned y-interval gap test prunes
 //! the rest, so only genuinely close pairs are measured. A pruned pair is
 //! thereby *proven* clear, not left unexamined, so `checked` counts the
-//! holes entering the sweep: every hole is decided against every other.
+//! Step's own holes entering the sweep: every hole is decided against every
+//! other, a pair inside one placement in that placement's own design.
 
 use pcb_ir::geom::dfm::{circular_region, disk_clearance};
 
-use crate::commands::dfm::design::{Design, HoleClass};
+use crate::commands::dfm::design::{Design, HoleClass, spans};
 use crate::commands::dfm::report::{DisplayCircle, Evidence, EvidenceDisplay, MeasurementKind};
 
 use super::{COMPARISON_EPSILON_MM, Evaluation, Measured, MeasuredSite, hole_subject, layers};
@@ -57,6 +58,7 @@ pub(super) fn evaluate(
                             .max(0.0);
                         classes_match
                             && y_gap < reach
+                            && spans(first.branch, second.branch)
                             && first.drill_span.overlaps(&second.drill_span)
                     })
                     .map(move |second| {
@@ -144,7 +146,7 @@ pub(super) fn evaluate(
         .flatten()
         .collect();
     Ok(Evaluation {
-        checked: holes.len(),
+        checked: holes.iter().filter(|hole| hole.branch.is_none()).count(),
         measured,
     })
 }
@@ -154,7 +156,6 @@ mod tests {
     use super::*;
     use crate::commands::dfm::{pdk::Pdk, rules};
     use crate::ipc2581::Ipc2581;
-    use pcb_ir::dialects::ipc::ArtworkScope;
     use pcb_ir::geom::Resolution;
 
     #[test]
@@ -202,12 +203,7 @@ mod tests {
                 let rules = rules::lower(&pdk, None).unwrap();
                 let imported =
                     pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-                let design = Design::extract(
-                    &imported,
-                    ArtworkScope::Board,
-                    &rules,
-                    Resolution::default(),
-                );
+                let design = Design::board(&imported, &rules, Resolution::default());
                 let evaluation = evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design).unwrap();
                 assert_eq!(evaluation.checked, 2);
                 assert_eq!(
@@ -251,7 +247,7 @@ mod tests {
         .unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution);
+        let design = Design::board(&imported, &rules, resolution);
         let evaluation = evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design).unwrap();
         assert_eq!(evaluation.measured.len(), 1);
         let site = &evaluation.measured[0].sites[0];

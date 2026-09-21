@@ -84,8 +84,16 @@ export interface DfmFinding {
   subjects: Array<Record<string, unknown>>;
   evidence: unknown;
   sites: Array<{ id: string; bounding_box: DfmBounds; [key: string]: unknown }>;
-  group_key: string | null;
+  /** Index into `DfmReport.frames`: whose coordinates the finding is in, and where it occurs. */
+  frame: number;
   [key: string]: unknown;
+}
+/** One Step of the checked layout, checked once in its own coordinates. */
+export interface DfmFrame {
+  step: string;
+  /** Everywhere the layout places the Step: `instance` indexes `layout.instances`
+   * (`null` is the checked frame itself) and `transform` is `[a, b, c, d, tx, ty]`. */
+  placements: Array<{ instance: number | null; transform: [number, number, number, number, number, number] }>;
 }
 export interface DfmBounds { min: { x: number; y: number }; max: { x: number; y: number }; }
 export interface DfmScene {
@@ -107,6 +115,7 @@ export interface DfmReport {
   };
   scene: DfmScene;
   summary: DfmSummary;
+  frames: DfmFrame[];
   findings: DfmFinding[];
   /** Evidence that sites reference by `shared` index instead of repeating. */
   shared_evidence: Array<Record<string, unknown>>;

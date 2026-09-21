@@ -128,15 +128,19 @@ fn native_artwork(
     .artwork)
 }
 
+/// The scene is the whole checked layout, drawn from its root Step's design,
+/// which holds everything the layout places.
 pub(super) fn export(
-    design: &Design<'_>,
+    designs: &[Design<'_>],
     layout: &LayoutContext,
     rules: &[RuleResult],
     findings: &[Finding],
 ) -> Result<Scene> {
+    let design = &designs[0];
     let sources = scene_passes(rules, design)?;
     let mut bounds = scene_bounds(layout.bounding_box, &sources);
     for finding in findings {
+        let frame = &designs[finding.frame as usize];
         let rule = rules
             .iter()
             .find(|rule| rule.id == finding.rule_id)
@@ -153,7 +157,12 @@ pub(super) fn export(
                 "DFM site {} has invalid bounds",
                 site.id
             );
-            bounds = bounds.union(site_bounds);
+            // A site is in its Step's frame and occurs wherever that is placed.
+            bounds = frame
+                .placements
+                .iter()
+                .map(|&placement| site_bounds.transformed(frame.placement_transform(placement)))
+                .fold(bounds, BBox::union);
             for feature in rule
                 .view
                 .features
@@ -412,7 +421,7 @@ mod tests {
         let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
         let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution);
+        let design = Design::board(&imported, &rules, resolution);
         let artwork = native_artwork(&design, "F.Mask").unwrap();
         let rendered = pcb_ir::dialects::artwork::compose_to_mask(&artwork, resolution).unwrap();
         let contours = rendered
@@ -453,7 +462,7 @@ mod tests {
         let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
         let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution);
+        let design = Design::board(&imported, &rules, resolution);
         let outline = ContourSet::rectangle(
             BBox::new(Point::new(-50.0, -50.0), Point::new(50.0, 50.0)),
             resolution,

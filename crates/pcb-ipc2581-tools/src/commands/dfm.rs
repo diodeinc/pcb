@@ -112,21 +112,21 @@ pub fn check(
         })
         .transpose()?;
 
-    let design = design::Design::extract(
+    let designs = design::Design::frames(
         imported,
         request.layout_target.artwork_scope(),
         &rules,
         resolution,
-    );
+    )?;
     let checked = checks::run(
         &rules,
-        &design,
+        &designs,
         waivers.as_ref(),
         request.generated_at.date_naive(),
     )?;
     let summary = summarize(&checked);
-    let layout = design.report_layout();
-    let scene = scene::export(&design, &layout, &checked.rules, &checked.findings)?;
+    let layout = designs[0].report_layout();
+    let scene = scene::export(&designs, &layout, &checked.rules, &checked.findings)?;
     Ok(DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: request.generated_at.to_rfc3339(),
@@ -171,6 +171,7 @@ pub fn check(
             }),
         summary,
         rules: checked.rules,
+        frames: designs.iter().map(design::Design::report_frame).collect(),
         findings: checked.findings,
         shared_evidence: checked.shared_evidence,
         scene,
@@ -1274,6 +1275,131 @@ limit = {{ minimum = \"0.5 mm\" }}
             assert_eq!(rule(&results, "npth-copper").checked, 2 * tooling);
             assert!(results.findings.is_empty(), "{:?}", results.findings);
         }
+    }
+
+    /// A board with two nets 0.1 mm apart, in a cell whose own NPTH hole sits
+    /// 0.1 mm from the board's copper, in a panel of three cells whose own NPTH
+    /// hole sits 0.1 mm from the last board's copper.
+    const NESTED_PANEL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/>
+    <LayerRef name="TOP"/><LayerRef name="BOTTOM"/><LayerRef name="DRILL"/>
+  </Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+    <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+    <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
+    <Stackup name="Primary" overallThickness="0.07" tolPlus="0" tolMinus="0" whereMeasured="METAL" stackupStatus="PROPOSED">
+      <StackupGroup name="Primary_Group" thickness="0.07" tolPlus="0" tolMinus="0">
+        <StackupLayer layerOrGroupRef="TOP" thickness="0.035" tolPlus="0" tolMinus="0" sequence="0"/>
+        <StackupLayer layerOrGroupRef="BOTTOM" thickness="0.035" tolPlus="0" tolMinus="0" sequence="1"/>
+      </StackupGroup>
+    </Stackup>
+    <Step name="board" type="BOARD"><Datum x="0" y="0"/>
+      <Profile><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="10" y="0"/><PolyStepSegment x="10" y="10"/><PolyStepSegment x="0" y="10"/><PolyStepSegment x="0" y="0"/></Polygon></Profile>
+      <LayerFeature layerRef="TOP">
+        <Set net="A" polarity="POSITIVE"><Features><Contour><Polygon><PolyBegin x="2" y="2"/><PolyStepSegment x="4" y="2"/><PolyStepSegment x="4" y="8"/><PolyStepSegment x="2" y="8"/><PolyStepSegment x="2" y="2"/></Polygon></Contour></Features></Set>
+        <Set net="B" polarity="POSITIVE"><Features><Contour><Polygon><PolyBegin x="4.1" y="2"/><PolyStepSegment x="9" y="2"/><PolyStepSegment x="9" y="8"/><PolyStepSegment x="4.1" y="8"/><PolyStepSegment x="4.1" y="2"/></Polygon></Contour></Features></Set>
+      </LayerFeature>
+    </Step>
+    <Step name="cell" type="PALLET"><Datum x="0" y="0"/>
+      <StepRepeat stepRef="board" x="1" y="1" nx="1" ny="1" dx="0" dy="0" angle="0" mirror="false"/>
+      <LayerFeature layerRef="DRILL"><Set polarity="POSITIVE">
+        <Hole name="bite" diameter="0.4" platingStatus="NONPLATED" x="10.3" y="6"/>
+      </Set></LayerFeature>
+    </Step>
+    <Step name="panel" type="PALLET"><Datum x="0" y="0"/>
+      <StepRepeat stepRef="cell" x="5" y="5" nx="3" ny="1" dx="12" dy="0" angle="0" mirror="false"/>
+      <LayerFeature layerRef="DRILL"><Set polarity="POSITIVE">
+        <Hole name="tooling" diameter="1" platingStatus="NONPLATED" x="39.6" y="12"/>
+      </Set></LayerFeature>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#;
+
+    #[test]
+    fn a_measurement_is_made_once_in_the_lowest_step_holding_its_subjects() {
+        let pdk = r#"schema_version = 2
+default_profile = "test"
+
+[pdk]
+id = "frames-test"
+name = "Frames test"
+revision = "1"
+
+[profiles.test]
+name = "Test"
+
+[[rules.copper.clearance]]
+id = "copper"
+limit = { minimum = "0.2 mm" }
+
+[[rules.copper.hole_clearance]]
+id = "npth-copper"
+select = { hole = "npth" }
+limit = { minimum = "0.2 mm" }
+"#;
+        let array = check_with_pdk(NESTED_PANEL, LayoutTarget::BoardArray, pdk);
+        let placements = |step: &str| {
+            array
+                .frames
+                .iter()
+                .find(|frame| frame.step == step)
+                .unwrap()
+                .placements
+                .iter()
+                .map(|placement| (placement.instance, placement.transform[4]))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(placements("panel"), [(None, 0.0)]);
+        assert_eq!(
+            placements("cell"),
+            [(Some(0), 5.0), (Some(1), 17.0), (Some(2), 29.0)]
+        );
+        assert_eq!(
+            placements("board"),
+            [(Some(3), 6.0), (Some(4), 18.0), (Some(5), 30.0)]
+        );
+
+        let found = array
+            .findings
+            .iter()
+            .map(|finding| {
+                let point = finding.location.point.unwrap();
+                (
+                    finding.rule_id.as_str(),
+                    array.frames[finding.frame as usize].step.as_str(),
+                    (point.x * 100.0).round() / 100.0,
+                    finding
+                        .measurement
+                        .actual_mm()
+                        .map(|mm| (mm * 1e6).round() / 1e6),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            found,
+            [
+                // The two nets are the board's own: found once, in its frame,
+                // for all three boards.
+                ("copper", "board", 4.05, Some(0.1)),
+                // The tooling hole is the panel's and the copper a board's.
+                ("npth-copper", "panel", 39.05, Some(0.1)),
+                // Hole and board meet in the cell: once, in the cell's frame.
+                ("npth-copper", "cell", 10.05, Some(0.1)),
+            ]
+        );
+        // Each hole counts on both layers at every placement of its own Step.
+        assert_eq!(rule(&array, "npth-copper").checked, 2 * (1 + 3));
+
+        // The board is measured exactly as it is on its own.
+        let board = check_with_pdk(NESTED_PANEL, LayoutTarget::Board, pdk);
+        assert_eq!(board.findings.len(), 1);
+        assert_eq!(board.findings[0].id, array.findings[0].id);
+        assert_eq!(
+            serde_json::to_value(&board.findings[0].sites).unwrap(),
+            serde_json::to_value(&array.findings[0].sites).unwrap()
+        );
     }
 
     #[test]

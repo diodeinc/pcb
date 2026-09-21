@@ -14,7 +14,7 @@ use crate::commands::dfm::report::{Evidence, MeasurementKind};
 use crate::commands::dfm::rules::Conditions;
 
 use super::drilled_board_edge_clearance::slot_evidence;
-use super::{Evaluation, Measured, MeasuredSite, layers, slot_matches, slot_subject, violates};
+use super::{Evaluation, Measured, MeasuredSite, layers, slot_subject, slots_of_plating, violates};
 
 pub(super) fn evaluate(
     limit_mm: f64,
@@ -23,12 +23,7 @@ pub(super) fn evaluate(
 ) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
-    for (slot_index, slot) in design
-        .slots
-        .iter()
-        .enumerate()
-        .filter(|(_, slot)| slot_matches(slot.plating, SlotPlating::Plated))
-    {
+    for (slot_index, slot) in slots_of_plating(design, SlotPlating::Plated) {
         let mut sites = Vec::new();
         // The least enclosure on any layer, violating or not: the engine
         // judges it, so one inside its own uncertainty is not lost here.
@@ -358,7 +353,6 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
     #[test]
     fn missing_stackup_or_span_cannot_be_certified_even_with_adequate_copper() {
         use crate::commands::dfm::{pdk::Pdk, rules};
-        use pcb_ir::dialects::ipc::ArtworkScope;
 
         let copper = copper(1.4);
         let rules = rules::lower(&Pdk::parse(PDK).unwrap(), None).unwrap();
@@ -369,15 +363,10 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
             if span == THROUGH {
                 imported.stackups.clear();
             }
-            let design = Design::extract(
-                &imported,
-                ArtworkScope::Board,
-                &rules,
-                Resolution::default(),
-            );
+            let design = Design::board(&imported, &rules, Resolution::default());
             let results = crate::commands::dfm::checks::run(
                 &rules,
-                &design,
+                std::slice::from_ref(&design),
                 None,
                 chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
             )

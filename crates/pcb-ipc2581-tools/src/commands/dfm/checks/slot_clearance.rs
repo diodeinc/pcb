@@ -4,7 +4,7 @@
 
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
 
-use crate::commands::dfm::design::Design;
+use crate::commands::dfm::design::{Design, spans};
 use crate::commands::dfm::pdk::SlotPlating;
 use crate::commands::dfm::report::Evidence;
 use crate::commands::dfm::rules::Conditions;
@@ -23,6 +23,8 @@ pub(super) fn evaluate(
 ) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
+    // A placed slot is measured here too, against what its own Step's design
+    // does not hold: this Step's copper and that of the other placements.
     for (slot_index, slot) in design
         .slots
         .iter()
@@ -46,11 +48,12 @@ pub(super) fn evaluate(
             {
                 continue;
             }
-            checked += 1;
+            checked += usize::from(slot.branch.is_none());
             let nearest = copper
                 .conductors
                 .iter()
                 .zip(&design.conductor_boundaries[copper_index])
+                .filter(|(conductor, _)| spans(slot.branch, conductor.branch))
                 .filter(|(conductor, _)| {
                     plating == SlotPlating::Nonplated || !owner.owns(conductor.id)
                 })
@@ -362,7 +365,7 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     #[test]
-    fn physical_span_survives_mirrored_repeats_and_missing_span_fails_closed() {
+    fn a_mirrored_repeat_is_measured_once_and_a_missing_span_fails_closed() {
         let source = pdk("plated");
         let outside = board(
             "PLATED",
@@ -380,22 +383,19 @@ limit = {{ minimum = "0.20 mm" }}
             .replace("</CadData>", r#"<Step name="panel" type="PALLET"><StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="20" dy="0" mirror="true"/></Step></CadData>"#);
         let repeated = check(&panel, &source, LayoutTarget::BoardArray).unwrap();
         assert_eq!(repeated.rules[0].checked, 4);
-        assert_eq!(repeated.findings.len(), 2);
-        for finding in &repeated.findings {
-            assert!((finding.measurement.actual_mm().unwrap() - 0.1).abs() < 1e-8);
-            assert_eq!(
-                finding.subjects[0]
-                    .provenance
-                    .as_ref()
-                    .unwrap()
-                    .instance_index,
-                finding.subjects[1]
-                    .provenance
-                    .as_ref()
-                    .unwrap()
-                    .instance_index
-            );
-        }
+        let [finding] = repeated.findings.as_slice() else {
+            panic!("the board is measured once: {:?}", repeated.findings);
+        };
+        assert!((finding.measurement.actual_mm().unwrap() - 0.1).abs() < 1e-8);
+        let placements = &repeated.frames[finding.frame as usize].placements;
+        assert_eq!(placements.len(), 2);
+        assert!(
+            placements.iter().all(|placement| {
+                let [a, b, c, d, ..] = placement.transform;
+                a * d - b * c < 0.0
+            }),
+            "it occurs at both mirrored placements"
+        );
         let missing = inside.replace(
             "<Span fromLayer=\"L0\" toLayer=\"L1\"/>",
             "<Span fromLayer=\"L0\"/>",

@@ -10,7 +10,7 @@
 use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
 
-use crate::commands::dfm::design::{ConductorId, Design};
+use crate::commands::dfm::design::{ConductorId, Design, spans};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
 
@@ -38,10 +38,23 @@ pub(super) fn evaluate(
             .iter()
             .map(|conductor| conductor.image.connected_components())
             .collect::<Vec<_>>();
-        let mut earlier_components = 0;
-        for conductor_components in &components {
-            checked += earlier_components * conductor_components.len();
-            earlier_components += conductor_components.len();
+        // Every pair of components of two conductors is decided, those inside
+        // one placement in that placement's own design.
+        let mut earlier = Vec::<(Option<u32>, usize)>::new();
+        for (conductor, conductor_components) in layer.conductors.iter().zip(&components) {
+            let spanned = earlier
+                .iter()
+                .filter(|(branch, _)| spans(conductor.branch, *branch))
+                .map(|(_, count)| count)
+                .sum::<usize>();
+            checked += spanned * conductor_components.len();
+            match earlier
+                .iter_mut()
+                .find(|(branch, _)| *branch == conductor.branch)
+            {
+                Some((_, count)) => *count += conductor_components.len(),
+                None => earlier.push((conductor.branch, conductor_components.len())),
+            }
         }
 
         let mut pieces = components
@@ -80,6 +93,10 @@ pub(super) fn evaluate(
                     })
                     .filter(move |(_, right)| {
                         left.conductor_index != right.conductor_index
+                            && spans(
+                                layer.conductors[left.conductor_index].branch,
+                                layer.conductors[right.conductor_index].branch,
+                            )
                             && left.region.bbox.distance_to(right.region.bbox) < limit_mm
                     })
                     .map(move |(offset, _)| (left_index, left_index + 1 + offset))
@@ -213,7 +230,6 @@ mod tests {
     use std::collections::BTreeSet;
 
     use chrono::NaiveDate;
-    use pcb_ir::dialects::ipc::ArtworkScope;
 
     use crate::commands::dfm::{checks, design::Design, pdk::Pdk, rules};
     use crate::ipc2581::Ipc2581;
@@ -295,15 +311,10 @@ limit = { minimum = "0.15 mm" }
         let pdk = Pdk::parse(PDK).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-        let design = Design::extract(
-            &imported,
-            ArtworkScope::Board,
-            &rules,
-            Resolution::default(),
-        );
+        let design = Design::board(&imported, &rules, Resolution::default());
         checks::run(
             &rules,
-            &design,
+            std::slice::from_ref(&design),
             None,
             NaiveDate::from_ymd_opt(2026, 8, 25).unwrap(),
         )
@@ -360,10 +371,10 @@ limit = { minimum = "0.15 mm" }
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
 
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution);
+        let design = Design::board(&imported, &rules, resolution);
         let results = crate::commands::dfm::checks::run(
             &rules,
-            &design,
+            std::slice::from_ref(&design),
             None,
             NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
         )

@@ -1,9 +1,10 @@
 //! Minimum clearance from reference linework to copper.
 //!
 //! The reference is a set of segments `S = {s₁ … sₙ}` — a V-score tool
-//! centerline, or a board profile's outer and cutout rings — and the target
-//! is one layer's composed copper image `M`, a regularized closed filled
-//! region. The measured quantity is the Euclidean set distance
+//! centerline, or a board profile's outer and cutout rings — that the
+//! design's own Step draws, and the target is one layer's composed copper
+//! image `M`, of that Step and everything it places: a regularized closed
+//! filled region. The measured quantity is the Euclidean set distance
 //!
 //! ```text
 //! dist(S, M) = minᵢ inf { ‖x − y‖ : x ∈ sᵢ, y ∈ M },
@@ -65,6 +66,7 @@ fn linework_items(linework: Linework, design: &Design) -> LineworkPool {
         Linework::VScore => design
             .scores
             .iter()
+            .filter(|score| score.provenance.instance_index.is_none())
             .map(|score| LineworkItem {
                 segments: push(vec![(score.start, score.end)]),
                 uncertainty_mm: 0.0,
@@ -279,24 +281,19 @@ fn copper_subject(copper: &CopperLayer) -> Subject {
 }
 
 pub(super) fn outline_subject(outline: &BoardOutline, role: &'static str) -> Subject {
+    let locator = SourceLocator {
+        step: Some(outline.name.clone()),
+        layer: None,
+        set_index: None,
+        feature_index: None,
+        instance_index: None,
+    };
     Subject {
         role,
         kind: "board_outline",
         name: Some(outline.name.clone()),
-        source: Some(SourceLocator {
-            step: Some(outline.name.clone()),
-            layer: None,
-            set_index: None,
-            feature_index: None,
-            instance_index: outline.instance_index,
-        }),
-        provenance: Some(SourceLocator {
-            step: Some(outline.name.clone()),
-            layer: None,
-            set_index: None,
-            feature_index: None,
-            instance_index: outline.instance_index,
-        }),
+        source: Some(locator.clone()),
+        provenance: Some(locator),
         ..Subject::default()
     }
 }

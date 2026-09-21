@@ -16,9 +16,9 @@
 //! boundary-crossing test inside the segment-pair distance.
 //!
 //! The check requires `dist(Aᵢ, Aⱼ) ≥ L` for every unordered pair of
-//! direct board-array instances of the panel's root step. A panel-kind
-//! child that places a single board is per-board packaging, not an array,
-//! and is excluded at extraction. Bounds distance is a lower bound on
+//! board arrays the design's Step places directly. A panel-kind child that
+//! places a single board is per-board packaging, not an array, and is
+//! excluded at extraction. Bounds distance is a lower bound on
 //! region distance, so a pair whose bounds already clear `L` is proven
 //! clear without walking its boundary segments; every pair counts as
 //! checked either way.

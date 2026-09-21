@@ -19,26 +19,24 @@ pub(super) fn evaluate(
     plating: SlotPlating,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
-    let slots = design
-        .slots
-        .iter()
-        .filter(|slot| super::slot_matches(slot.plating, plating))
+    let slots = super::slots_of_plating(design, plating)
+        .filter_map(|(_, slot)| Some((slot, slot.width.as_ref()?)))
         .collect::<Vec<_>>();
     let measured = slots
         .iter()
-        .map(|&slot: &&Slot| {
+        .map(|&(slot, width): &(&Slot, _)| {
             let subject = slot_subject(design, slot, "offender");
-            let sites = if !violates(&slot.width, limit_mm) {
+            let sites = if !violates(&width.width, limit_mm) {
                 Vec::new()
-            } else if let Some(nominal) = slot.nominal_width_mm {
-                let center = slot.width_disk.center;
-                let radial = slot.width_disk.width.first - center;
+            } else if let Some(nominal) = width.nominal_mm {
+                let center = width.disk.center;
+                let radial = width.disk.width.first - center;
                 let direction = radial / radial.length();
                 let first = center - direction * (nominal / 2.0);
                 let second = center + direction * (nominal / 2.0);
                 let mut site = MeasuredSite::new(
-                    slot.width,
-                    slot.bbox.union(BBox::from_point(slot.width_disk.center).expand(limit_mm / 2.0)),
+                    width.width,
+                    slot.bbox.union(BBox::from_point(center).expand(limit_mm / 2.0)),
                     vec![slot.layer.clone()],
                     vec![
                         Evidence {
@@ -52,7 +50,7 @@ pub(super) fn evaluate(
                         },
                         Evidence::circle("nominal_width_disk", center, nominal),
                         Evidence::segment("nominal_width_dimension", first, second),
-                        Evidence::circle("required_width_disk", slot.width_disk.center, limit_mm),
+                        Evidence::circle("required_width_disk", center, limit_mm),
                     ],
                     MeasurementKind::NominalWidth,
                 );
@@ -68,7 +66,7 @@ pub(super) fn evaluate(
                     .collect()
             };
             Ok::<_, anyhow::Error>(Measured {
-            distance: slot.width,
+            distance: width.width,
             bbox: slot.bbox,
             layers: vec![slot.layer.clone()],
             subjects: vec![subject],
@@ -87,7 +85,6 @@ mod tests {
     use super::*;
     use crate::commands::dfm::{pdk::Pdk, rules};
     use crate::ipc2581::Ipc2581;
-    use pcb_ir::dialects::ipc::ArtworkScope;
     use pcb_ir::geom::Resolution;
 
     #[test]
@@ -123,7 +120,7 @@ mod tests {
         .unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution);
+        let design = Design::board(&imported, &rules, resolution);
         let evaluation = evaluate(0.8, SlotPlating::Plated, &design).unwrap();
         assert_eq!(evaluation.measured.len(), 1);
         assert_eq!(

@@ -1029,6 +1029,7 @@ limit = { minimum = "0.30 mm" }
             position: LayerPosition::Outer,
             copper_weight_oz: Some(thickness_mm / 0.0348),
             image: pcb_ir::geom::ContourSet::empty(pcb_ir::geom::Resolution::default()),
+            own_image: pcb_ir::geom::ContourSet::empty(pcb_ir::geom::Resolution::default()),
             conductors: Vec::new(),
             lands: Vec::new(),
         };

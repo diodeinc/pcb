@@ -860,6 +860,24 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
         }
         let instances = layout["instances"].as_array().unwrap();
         assert_eq!(instances.len(), instance_count);
+        // Every Step is checked once: the selected Step first, as the checked
+        // frame itself, then each Step it places, at all of its placements.
+        let frames = report["frames"].as_array().unwrap();
+        assert_eq!(frames[0]["step"], step);
+        assert_eq!(
+            frames[0]["placements"],
+            serde_json::json!([{ "instance": null, "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }])
+        );
+        assert_eq!(
+            frames
+                .iter()
+                .map(|frame| frame["placements"].as_array().unwrap().len())
+                .sum::<usize>(),
+            1 + instance_count
+        );
+        for finding in report["findings"].as_array().unwrap() {
+            assert!(finding["frame"].as_u64().unwrap() < frames.len() as u64);
+        }
         assert_eq!(
             instances
                 .iter()

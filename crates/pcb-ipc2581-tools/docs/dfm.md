@@ -270,13 +270,33 @@ offender, including a same-named net. A drill or rout layer that declares no
 cannot be resolved in the physical stackup leaves the rule `incomplete` rather
 than guessing which copper layers the drill intersects.
 
-`--layout-target board` extracts the canonical board step. `board-array`
-materializes the root layout and every nested repeat, so the same evaluators
-operate on a board array or on a fabrication panel without a second DFM code
-path. Instance transforms therefore affect only extracted coordinates and
-subject multiplicity. The board-array-spacing rule is intentionally narrower:
-it compares direct sibling array instances of a fabrication panel and skips
-when fewer than two exist.
+`--layout-target board` checks the canonical board step. `board-array` checks
+the root layout and every nested repeat. A layout is a few Step definitions
+placed many times, so every Step is checked once, in its own coordinates,
+together with everything it places: a board, the cell that carries it, the
+array of cells, the fabrication panel of arrays. A measurement belongs to the
+lowest Step that holds all of its subjects:
+
+- What one Step's content decides on its own — a hole's diameter, aspect
+  ratio, annular ring and distance to its own Step's profile, a slot's width
+  and enclosure, the width of the Step's own copper, the distance between two
+  of its features — is measured in that Step's frame, once, however often the
+  layout repeats it.
+- What takes two Steps — a rail's tooling hole against board copper, a cell's
+  mouse-bite holes or routed slots against the board they carry, copper,
+  holes or mask openings of neighbouring boards — is measured in the frame of
+  the Step that places both, between its own content and each thing it places
+  and across placements, never again inside one placement.
+- A V-score line or a board profile is measured in the frame of the Step that
+  draws it, against the copper of that Step and of everything it places.
+
+The same evaluators therefore run on a lone board, a board array or a
+fabrication panel without a second DFM code path: a lone board is a layout of
+one Step placed once. Rules are rigid-motion invariant, so a Step's findings
+hold wherever it is placed; the report lists those placements once per Step
+(see [frames](#frames)) instead of repeating findings. The
+board-array-spacing rule compares the board arrays one Step places directly
+and is not applicable when no Step places two.
 
 ## Rule semantics
 
@@ -315,8 +335,8 @@ when fewer than two exist.
 - Hole- and slot-to-board-edge clearance measure true edge-to-edge distance
   from each circular hole or materialized routed-slot outline to the boundary
   of its enclosing physical board profile. Profile cutouts are board edges.
-  The profile must have the feature's exact physical occurrence, so a repeated
-  board never measures against another board or its panel outline. A feature
+  The profile is that of the Step that owns the feature, so a repeated board
+  never measures against another board or its panel outline. A feature
   owned by a panel or array step, such as a rail tooling hole, is measured to
   that panel's or array's own profile. A feature crossing or outside its
   material has zero clearance.
@@ -384,8 +404,8 @@ when fewer than two exist.
   centerlines or profile outlines (cutouts included) to each layer's
   composed copper image.
 - Board-array spacing measures boundary-to-boundary distance between the
-  sibling board arrays a fabrication panel places; it requires
-  `--layout-target board-array` and at least two arrays.
+  sibling board arrays one Step places, as a fabrication panel does; it
+  requires `--layout-target board-array` and at least two arrays.
 
 A rule that measures nothing never reports a vacuous `pass`; `skip_reason`
 says why, under one of two statuses:
@@ -550,6 +570,8 @@ A complete report has these fields:
   geometry: `mm`, `x_right_y_up`, and `ipc_2581_design` in versions 1 and 2.
 - `summary`: rule counts by status and finding counts by severity and
   waiver state.
+- `frames`: the Steps the checked layout places, its root first; see
+  [frames](#frames).
 - `rules`: one result per lowered rule. A direct limit uses its authored id; a
   named case uses `<id>.<case>`; a preferred tier appends `.preferred` to
   either form. Each result includes severity, source and normalized limit,
@@ -557,7 +579,10 @@ A complete report has these fields:
   reason a rule was not evaluated (`skip_reason`), and the
   measurement contract shared by all of its findings — `subject` (what one
   checked unit is), `quantity`, `method`, `comparison` (`minimum` or
-  `maximum`), and `checked`, the number of measurements evaluated. `view`
+  `maximum`), and `checked`, the number of subjects decided across the
+  physical layout: each Step's own subjects count once per placement of that
+  Step. Findings are not multiplied: `finding_count` counts entries of
+  `findings`, each of which names its frame. `view`
   specifies the diagnostic family, whether it is spatial, and its semantic
   rendering features; `tier` distinguishes required and preferred limits.
   `assumptions` lists profile defaults actually used while evaluating that
@@ -569,7 +594,8 @@ A complete report has these fields:
   [native scene](#native-scene).
 
 `rule.finding_count` includes waived findings, and `waived_count` counts that
-subset. A rule whose findings are all waived reports `pass`; active findings
+subset. A rule that one Step's design could not certify is `incomplete` and
+still lists and counts what the other Steps found. A rule whose findings are all waived reports `pass`; active findings
 determine `warning` or `fail` from rule severity. Unevaluated rules retain
 `not_applicable` or `incomplete` and their reason rather than becoming a pass
 from zero counts; `summary.rules_not_applicable` and `summary.rules_incomplete`
@@ -602,9 +628,11 @@ consumer's machine to render or validate the report.
 ### Findings
 
 - `id` hashes the rule, the subjects' stable identity, the layers, and where
-  the finding is, in whole micrometres. A drilled subject is placed by where
-  the source drills it; only a finding without one is placed by its measured
-  point. Generated primitive names, padstack ids, set and feature indices, raw
+  the finding is in its frame, in whole micrometres. A drilled subject is
+  placed by where the source drills it; only a finding without one is placed
+  by its measured point. A board's findings therefore keep their ids however
+  it is panelized, and a waiver written against a board check applies to the
+  same finding in a check of its array. Generated primitive names, padstack ids, set and feature indices, raw
   floating-point coordinates, and evidence geometry never enter an id, so an
   equivalent re-export or a noise-level coordinate change does not re-key a
   finding. Moving a violation by micrometres creates a new finding; its old
@@ -631,8 +659,10 @@ consumer's machine to render or validate the report.
   determines it.
 - `subjects` preserve role, kind, component, pin, net, padstack, and source
   indices when IPC-2581 provides them. `provenance` identifies the source
-  definition and physical occurrence separately from the legacy flattened
-  `source` locator; `drill_span` records the applicable copper-layer span.
+  definition and its occurrence separately from the legacy `source` locator:
+  `instance_index` is `null` for the frame's own Step and otherwise names,
+  in `layout.instances`, the occurrence under the frame's first placement;
+  `drill_span` records the applicable copper-layer span.
   Unavailable fields remain `null` so consumers see one stable shape.
 - `evidence` records `kind`, `role`, and applicable circle, segment, or bounds
   fields; unused fields remain `null`. `paths` contains closed region rings or
@@ -651,9 +681,10 @@ consumer's machine to render or validate the report.
   therefore has zero clearance. Witness-point separation is not necessarily
   the measured width or diameter. Scalar aspect-ratio sites have no measurement
   witnesses; their circle evidence locates the hole.
-- `group_key`, when available, groups proven equivalent causes for display.
-  It does not replace the finding id or change the waiver unit. Every finding
-  and physical occurrence remains accessible.
+- `frame` is the index of the finding's [frame](#frames): the Step whose
+  coordinates the location, witnesses, sites and evidence are in, and every
+  placement at which the finding occurs. An `unresolved` measurement carries
+  the same index.
 
 Check-owned sites, measurements, witnesses, and evidence paths are authoritative.
 The optional `evidence.display` construction uses the same world millimeters:
@@ -665,7 +696,7 @@ The optional `evidence.display` construction uses the same world millimeters:
 | `circle_intersection` | `first` and `second` circles, each with `center` and `diameter` |
 | `circle_minus_layer` | `center`, `diameter`, and exact copper `layer`; subtract that layer's composed native image from the circle |
 
-Display constructions do not affect finding, site, or repeat-group identity.
+Display constructions do not affect finding or site identity.
 `circle_minus_layer` needs its named scene pass even when the pass is hidden as
 artwork. A missing required operand makes the scene invalid. Do not fit curves
 to measured polygons, invent precision by changing tessellation tolerance, or
@@ -682,8 +713,26 @@ design in a mixed fabrication panel.
 
 Each occurrence's cumulative `[a,b,c,d,tx,ty]` transform maps definition-local
 coordinates to the checked frame: `x' = a*x + c*y + tx`,
-`y' = b*x + d*y + ty`. Site, evidence, and scene coordinates are already placed;
-do not transform them again. A parent occurrence filter includes descendants.
+`y' = b*x + d*y + ty`. Scene coordinates are already placed; do not transform
+them again. A parent occurrence filter includes descendants.
+
+### Frames
+
+`frames` lists every Step the checked layout places, the checked root first.
+Each entry has the Step's `step` name and its `placements`: one per occurrence
+of that Step, with `instance`, its index in `layout.instances` (`null` for the
+checked frame itself), and the occurrence's `transform` as above. A lone board,
+or the `board` target, has one frame with the single placement
+`{instance: null, transform: [1,0,0,1,0,0]}`.
+
+A finding is measured once, in the coordinates of the Step its `frame` names,
+and occurs at every placement of that frame: its location, witnesses, site
+bounds, evidence and display constructions are all in those Step coordinates.
+To show an occurrence in the scene, apply that placement's transform; a
+`circle_minus_layer` construction subtracts the scene pass as seen through
+the same transform. The root frame's transform is the identity, so its
+findings are already placed. Waivers, ids and counts are per finding, not per
+placement.
 
 ### Native scene
 
@@ -752,7 +801,10 @@ replaces the current load.
 ### Schema evolution
 
 Report and scene versions are independent; the report uses integer `2` and the
-scene integer `1`. Report version 2 moved each edge-clearance site's
+scene integer `1`. Report version 2 checks every Step once: findings and
+unresolved measurements are in the coordinates of their `frame` and occur at
+each of its placements instead of being repeated per board, and `group_key`,
+which grouped those repeats, is gone. It also moved each edge-clearance site's
 `board_profile` region into the `shared_evidence` table, and split the rule
 status `skipped` (and `summary.rules_skipped`) into `not_applicable` and
 `incomplete`, the latter failing the verdict for a required rule. Rules list

@@ -7,6 +7,12 @@
 //! else — the verdict against the limit, finding text, witness roles, skip
 //! reasons, checked counts, finding order, stable ids, waivers, statuses —
 //! so a check only measures, and may assume its subject pools are non-empty.
+//!
+//! A check measures one [`Design`]: one Step with everything it places. It
+//! measures the Step's own subjects, and a pair of subjects unless both lie
+//! inside one placement ([`spans`](super::design::spans)), which that
+//! placement's own design measures. The engine runs every rule over every
+//! design and tells each finding which one it came from.
 
 mod annular_ring;
 mod board_array_spacing;
@@ -30,7 +36,8 @@ use chrono::NaiveDate;
 use ipc2581::Symbol;
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::geom::dfm::{COMPARISON_EPSILON_MM, Distance};
-use pcb_ir::geom::{Affine2, BBox, Point};
+use pcb_ir::geom::{BBox, Point};
+use pcb_ir::import::ipc2581::LayoutOccurrenceId;
 use sha2::{Digest, Sha256};
 
 use super::design::{Design, Hole, HoleClass, Slot};
@@ -141,7 +148,7 @@ impl From<Evaluation> for RuleEvaluation {
 
 pub(super) fn run(
     rules: &[Rule],
-    design: &Design,
+    designs: &[Design],
     waiver_file: Option<&WaiverFile>,
     today: NaiveDate,
 ) -> anyhow::Result<Results> {
@@ -153,83 +160,52 @@ pub(super) fn run(
         .collect::<HashSet<_>>();
     for rule in rules {
         let mut result = RuleResult::new(rule);
-        // A nominally populated pool can still yield nothing to measure (e.g.
-        // hole pairs with disjoint spans); an unexercised rule must not read
-        // as validated.
-        let nothing_measurable = || {
-            format!(
-                "no measurable {} subjects in the selected layout target",
-                rule.kind.semantics().subject
-            )
-        };
-        let unevaluated = match unevaluated(rule, design) {
-            Some(unevaluated) => Some(unevaluated),
-            // A measurement that fails leaves its own rule uncertified.
-            None => match evaluate(rule, design) {
-                Err(error) => Some((RuleStatus::Incomplete, format!("{error:#}"))),
-                Ok(RuleEvaluation::Distance(evaluation)) => {
-                    debug_assert_eq!(rule.comparison, Comparison::Minimum);
-                    let limit = rule.limit.length().millimeters();
-                    result.checked = evaluation.checked;
-                    for measured in evaluation.measured {
-                        match judge(&measured.distance, limit) {
-                            Judgement::Violates => results.findings.push(finding(rule, measured)),
-                            Judgement::Unresolved => result.unresolved.push(Unresolved {
-                                actual_mm: measured.distance.mm,
-                                uncertainty_mm: measured.distance.uncertainty_mm,
-                                point: measured.distance.midpoint().into(),
-                                layers: measured
-                                    .layers
-                                    .into_iter()
-                                    .map(|layer| layer.name)
-                                    .collect(),
-                            }),
-                            Judgement::Meets => {}
-                        }
-                    }
-                    (evaluation.checked == 0)
-                        .then(|| (RuleStatus::NotApplicable, nothing_measurable()))
+        // A rule is evaluated in the design of every Step. One design that
+        // cannot certify it leaves it uncertified; it measures nothing only
+        // when no design holds a subject for it.
+        let mut incomplete = Vec::new();
+        let mut not_applicable = None;
+        for (frame, design) in designs.iter().enumerate() {
+            let unevaluated = unevaluated(rule, design).or_else(|| {
+                // A measurement that fails leaves its own rule uncertified.
+                judge_in(
+                    rule,
+                    design,
+                    frame as u32,
+                    &mut result,
+                    &mut results.findings,
+                )
+                .unwrap_or_else(|error| Some((RuleStatus::Incomplete, format!("{error:#}"))))
+            });
+            match unevaluated {
+                Some((RuleStatus::Incomplete, reason)) if !incomplete.contains(&reason) => {
+                    incomplete.push(reason);
                 }
-                Ok(RuleEvaluation::Count(evaluation)) => {
-                    result.checked = 1;
-                    let limit = rule.limit.count();
-                    if violates_count(evaluation.actual, rule.comparison, limit) {
-                        results
-                            .findings
-                            .push(count_finding(rule, evaluation, limit));
-                    }
-                    None
+                Some((RuleStatus::NotApplicable, reason)) => {
+                    not_applicable.get_or_insert(reason);
                 }
-                Ok(RuleEvaluation::Ratio(evaluation)) => {
-                    debug_assert_eq!(rule.comparison, Comparison::Maximum);
-                    result.assumptions = evaluation.assumptions;
-                    match evaluation.incomplete_reason {
-                        Some(reason) => Some((RuleStatus::Incomplete, reason)),
-                        None if evaluation.checked == 0 => {
-                            Some((RuleStatus::NotApplicable, nothing_measurable()))
-                        }
-                        None => {
-                            result.checked = evaluation.checked;
-                            let maximum = rule.limit.ratio();
-                            results.findings.extend(
-                                evaluation
-                                    .measured
-                                    .into_iter()
-                                    .filter(|measured| exceeds(measured, maximum))
-                                    .map(|measured| ratio_finding(rule, measured, maximum)),
-                            );
-                            None
-                        }
-                    }
-                }
-            },
-        };
-        if let Some((status, reason)) = unevaluated {
-            result.leave_unevaluated(status, reason);
+                _ => {}
+            }
+        }
+        if !incomplete.is_empty() {
+            result.leave_unevaluated(RuleStatus::Incomplete, incomplete.join("; "));
+        } else if result.checked == 0 {
+            // A nominally populated pool can still yield nothing to measure
+            // (e.g. hole pairs with disjoint spans); an unexercised rule must
+            // not read as validated.
+            result.leave_unevaluated(
+                RuleStatus::NotApplicable,
+                not_applicable.unwrap_or_else(|| {
+                    format!(
+                        "no measurable {} subjects in the selected layout target",
+                        rule.kind.semantics().subject
+                    )
+                }),
+            );
         }
         results.rules.push(result);
     }
-    results.rules = report_uncovered(rules, std::mem::take(&mut results.rules), design);
+    results.rules = report_uncovered(rules, std::mem::take(&mut results.rules), designs);
     // Every exercised fixture also checks the reporting contract. A spatial
     // failure without a local site must never masquerade as a stackup check.
     #[cfg(test)]
@@ -245,25 +221,7 @@ pub(super) fn run(
         );
     }
     let waiver_aliases = assign_ids(&mut results.findings, &annular_rules);
-    results.shared_evidence = share_evidence(&mut results.findings, design);
-    for finding in &mut results.findings {
-        let instance = finding
-            .subjects
-            .first()
-            .and_then(|subject| subject.provenance.as_ref())
-            .and_then(|source| source.instance_index);
-        finding.group_key = instance
-            .and_then(|index| {
-                design
-                    .imported
-                    .geometry
-                    .layout
-                    .instances
-                    .get(index as usize)
-            })
-            .and_then(|instance| instance.transform.inverse())
-            .and_then(|inverse| repeat_group_key(finding, inverse));
-    }
+    results.shared_evidence = share_evidence(&mut results.findings, designs);
     results.waivers =
         waiver_file.map(|file| waivers::apply(&mut results.findings, file, &waiver_aliases, today));
 
@@ -274,36 +232,109 @@ pub(super) fn run(
         *waived += usize::from(finding.waived);
     }
     for result in &mut results.rules {
-        if result.evaluated() {
-            let (total, waived) = per_rule.get(result.id.as_str()).copied().unwrap_or((0, 0));
-            result.finish(total, waived);
-        }
+        let (total, waived) = per_rule.get(result.id.as_str()).copied().unwrap_or((0, 0));
+        result.finish(total, waived);
     }
     Ok(results)
 }
 
+/// Evaluate a rule in one design and judge what it measured: findings and
+/// unresolved measurements join the rule's, and each subject decided counts
+/// once for every placement of the design's Step. Returns why the rule stays
+/// unevaluated here, if it does.
+fn judge_in(
+    rule: &Rule,
+    design: &Design,
+    frame: u32,
+    result: &mut RuleResult,
+    findings: &mut Vec<Finding>,
+) -> anyhow::Result<Option<(RuleStatus, String)>> {
+    let first = findings.len();
+    let checked = match evaluate(rule, design)? {
+        RuleEvaluation::Distance(evaluation) => {
+            debug_assert_eq!(rule.comparison, Comparison::Minimum);
+            let limit = rule.limit.length().millimeters();
+            for measured in evaluation.measured {
+                match judge(&measured.distance, limit) {
+                    Judgement::Violates => findings.push(finding(rule, measured)),
+                    Judgement::Unresolved => result.unresolved.push(Unresolved {
+                        frame,
+                        actual_mm: measured.distance.mm,
+                        uncertainty_mm: measured.distance.uncertainty_mm,
+                        point: measured.distance.midpoint().into(),
+                        layers: measured
+                            .layers
+                            .into_iter()
+                            .map(|layer| layer.name)
+                            .collect(),
+                    }),
+                    Judgement::Meets => {}
+                }
+            }
+            evaluation.checked
+        }
+        RuleEvaluation::Count(evaluation) => {
+            let limit = rule.limit.count();
+            if violates_count(evaluation.actual, rule.comparison, limit) {
+                findings.push(count_finding(rule, evaluation, limit));
+            }
+            1
+        }
+        RuleEvaluation::Ratio(evaluation) => {
+            debug_assert_eq!(rule.comparison, Comparison::Maximum);
+            for assumption in evaluation.assumptions {
+                if !result.assumptions.contains(&assumption) {
+                    result.assumptions.push(assumption);
+                }
+            }
+            if let Some(reason) = evaluation.incomplete_reason {
+                return Ok(Some((RuleStatus::Incomplete, reason)));
+            }
+            let maximum = rule.limit.ratio();
+            findings.extend(
+                evaluation
+                    .measured
+                    .into_iter()
+                    .filter(|measured| exceeds(measured, maximum))
+                    .map(|measured| ratio_finding(rule, measured, maximum)),
+            );
+            evaluation.checked
+        }
+    };
+    for finding in &mut findings[first..] {
+        finding.frame = frame;
+    }
+    result.checked += checked * design.placements.len();
+    Ok(None)
+}
+
 /// Build the report's shared-evidence table. A site names its board profile
-/// by outline pool index; the table holds each referenced profile once, in
-/// pool order, so report size follows the findings rather than findings times
-/// the outline every one of them measures to.
-fn share_evidence(findings: &mut [Finding], design: &Design) -> Vec<Evidence> {
-    fn references(findings: &mut [Finding]) -> impl Iterator<Item = &mut u32> {
-        findings
-            .iter_mut()
-            .flat_map(|finding| &mut finding.sites)
-            .flat_map(|site| &mut site.evidence)
-            .filter_map(|evidence| evidence.shared.as_mut())
+/// by its design's outline pool index; the table holds each referenced
+/// profile once, in design and pool order, so report size follows the
+/// findings rather than findings times the outline every one measures to.
+fn share_evidence(findings: &mut [Finding], designs: &[Design]) -> Vec<Evidence> {
+    fn references(findings: &mut [Finding]) -> impl Iterator<Item = (u32, &mut u32)> {
+        findings.iter_mut().flat_map(|finding| {
+            let frame = finding.frame;
+            finding
+                .sites
+                .iter_mut()
+                .flat_map(|site| &mut site.evidence)
+                .filter_map(move |evidence| Some((frame, evidence.shared.as_mut()?)))
+        })
     }
     let outlines = references(findings)
-        .map(|index| *index)
+        .map(|(frame, index)| (frame, *index))
         .collect::<std::collections::BTreeSet<_>>();
-    for index in references(findings) {
-        *index = outlines.range(..*index).count() as u32;
+    for (frame, index) in references(findings) {
+        *index = outlines.range(..(frame, *index)).count() as u32;
     }
     outlines
         .into_iter()
-        .map(|index| {
-            drilled_board_edge_clearance::profile_evidence(&design.board_outlines[index as usize])
+        .map(|(frame, index)| {
+            drilled_board_edge_clearance::profile_evidence(
+                &designs[frame as usize].board_outlines[index as usize],
+            )
         })
         .collect()
 }
@@ -403,7 +434,13 @@ fn unevaluated(rule: &Rule, design: &Design) -> Option<(RuleStatus, String)> {
 /// part of the design outside all of them. Cases must not overlap but need
 /// not cover: a copper layer or stackup that no case matches lies outside the
 /// capability the PDK states, so it is uncertified, never silently unchecked.
-fn report_uncovered(rules: &[Rule], results: Vec<RuleResult>, design: &Design) -> Vec<RuleResult> {
+fn report_uncovered(
+    rules: &[Rule],
+    results: Vec<RuleResult>,
+    designs: &[Design],
+) -> Vec<RuleResult> {
+    // Layers and the stackup are the layout's, the same in every design.
+    let design = &designs[0];
     let mut results = results.into_iter();
     rules
         .chunk_by(|left, right| left.authored_id == right.authored_id)
@@ -413,7 +450,9 @@ fn report_uncovered(rules: &[Rule], results: Vec<RuleResult>, design: &Design) -
             let decidable = reported
                 .iter()
                 .all(|result| !matches!(result.status, RuleStatus::Incomplete))
-                && missing_subjects(cases[0].kind, design).is_none();
+                && designs
+                    .iter()
+                    .any(|design| missing_subjects(cases[0].kind, design).is_none());
             if let Some(reason) = decidable.then(|| uncovered(cases, design)).flatten() {
                 // The strictest tier the cases declare is the one left uncertified.
                 let tier = cases
@@ -477,7 +516,10 @@ fn uncovered(cases: &[Rule], design: &Design) -> Option<String> {
 /// conditions select among its layers.
 fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
     let what = match kind {
-        RuleKind::CopperLayerCount => None,
+        // The stackup is the layout's: its root Step's design measures it.
+        RuleKind::CopperLayerCount => {
+            (design.placements[0] != LayoutOccurrenceId::Root).then(|| "stackup".to_owned())
+        }
         RuleKind::BoardArrayPairClearance if design.scope != ArtworkScope::ArrayFlattened => {
             return Some("board-array spacing requires --layout-target board-array".to_owned());
         }
@@ -553,7 +595,10 @@ fn unresolved_span(rule: &Rule, design: &Design) -> Option<String> {
             .holes
             .iter()
             .find(|hole| {
-                hole.class == class && unresolved(&hole.drill_span) && applies(&hole.drill_span)
+                hole.class == class
+                    && hole.branch.is_none()
+                    && unresolved(&hole.drill_span)
+                    && applies(&hole.drill_span)
             })
             .map(|hole| {
                 format!(
@@ -572,7 +617,10 @@ fn unresolved_span(rule: &Rule, design: &Design) -> Option<String> {
                     RuleKind::SlotToCopperClearance(plating) => slot_matches(slot.plating, plating),
                     _ => slot_matches(slot.plating, SlotPlating::Plated),
                 };
-                selected && unresolved(&slot.drill_span) && applies(&slot.drill_span)
+                selected
+                    && slot.branch.is_none()
+                    && unresolved(&slot.drill_span)
+                    && applies(&slot.drill_span)
             })
             .map(|slot| {
                 format!(
@@ -735,7 +783,7 @@ fn finding(rule: &Rule, measured: Measured) -> Finding {
         subjects: measured.subjects,
         evidence: measured.evidence,
         sites,
-        group_key: None,
+        frame: 0,
     }
 }
 
@@ -769,7 +817,7 @@ fn count_finding(rule: &Rule, measured: CountEvaluation, limit: u32) -> Finding 
         subjects: measured.subjects,
         evidence: Vec::new(),
         sites: Vec::new(),
-        group_key: None,
+        frame: 0,
     }
 }
 
@@ -819,7 +867,7 @@ fn ratio_finding(rule: &Rule, measured: RatioMeasured, maximum: f64) -> Finding 
         subjects: measured.subjects,
         evidence: measured.evidence,
         sites: vec![site],
-        group_key: None,
+        frame: 0,
     }
 }
 
@@ -881,14 +929,28 @@ impl Ownership {
     }
 }
 
-/// Holes of one plating class, with their indices into the hole pool.
+/// The Step's own holes of one plating class, with their indices into the
+/// hole pool: the subjects of every rule that measures a hole on its own.
 fn holes_of_class<'a>(design: &'a Design<'a>, class: HoleClass) -> Vec<(usize, &'a Hole)> {
     design
         .holes
         .iter()
         .enumerate()
-        .filter(|(_, hole)| hole.class == class)
+        .filter(|(_, hole)| hole.class == class && hole.branch.is_none())
         .collect()
+}
+
+/// The Step's own slots of one plating class, with their indices into the
+/// slot pool.
+fn slots_of_plating<'a>(
+    design: &'a Design<'a>,
+    plating: SlotPlating,
+) -> impl Iterator<Item = (usize, &'a Slot)> {
+    design
+        .slots
+        .iter()
+        .enumerate()
+        .filter(move |(_, slot)| slot_matches(slot.plating, plating) && slot.branch.is_none())
 }
 
 /// The shared subject shape of every drilled feature (holes and slots).
@@ -1064,6 +1126,7 @@ fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) -> HashMa
     findings.sort_by(|left, right| {
         left.rule_id
             .cmp(&right.rule_id)
+            .then_with(|| left.frame.cmp(&right.frame))
             .then_with(|| compare_locations(&left.location, &right.location))
     });
     let short = |fingerprint: &[u8]| hex::encode(&Sha256::digest(fingerprint)[..6]);
@@ -1190,85 +1253,6 @@ fn released_fingerprints(finding: &Finding, annular_rules: &HashSet<&str>) -> Ve
         .collect()
 }
 
-/// Collapse only proven repeats of the same definition-local subjects, with
-/// the same measured failure geometry. Cross-occurrence or unattributed
-/// findings remain separate. This affects presentation only, never waivers.
-fn repeat_group_key(finding: &Finding, inverse: Affine2) -> Option<String> {
-    let instance = finding
-        .subjects
-        .first()?
-        .provenance
-        .as_ref()?
-        .instance_index?;
-    if finding.sites.is_empty() {
-        return None;
-    }
-    let quantize = |n: f64| {
-        let n = (n * 1_000_000.0).round() / 1_000_000.0;
-        if n == 0.0 { 0.0 } else { n }
-    };
-    let point = |p: super::report::ReportPoint| {
-        let p = inverse.transform_point(Point::new(p.x, p.y));
-        [quantize(p.x), quantize(p.y)]
-    };
-    let bounds = |b: super::report::ReportBBox| {
-        let b = b.as_bbox().transformed(inverse);
-        [
-            quantize(b.min.x),
-            quantize(b.min.y),
-            quantize(b.max.x),
-            quantize(b.max.y),
-        ]
-    };
-    let subject_identity = |subject: &Subject| {
-        let source = subject.provenance.as_ref()?;
-        if source.step.is_none() || source.instance_index != Some(instance) {
-            return None;
-        }
-        Some(serde_json::json!([
-            subject.role,
-            subject.kind,
-            subject.net,
-            subject.padstack_ref,
-            source.step,
-            source.layer,
-            source.set_index,
-            source.feature_index,
-            subject.drill_span
-        ]))
-    };
-    let subjects = finding
-        .subjects
-        .iter()
-        .map(subject_identity)
-        .collect::<Option<Vec<_>>>()?;
-    let sites = finding.sites.iter().map(|site| {
-        if site.subjects.is_empty() {
-            return None;
-        }
-        let subjects = site.subjects.iter().map(subject_identity).collect::<Option<Vec<_>>>()?;
-        let measurement = match site.measurement {
-            Measurement::Distance { actual_mm, required_mm, .. } => [quantize(actual_mm), quantize(required_mm)],
-            Measurement::Count { actual_count, required_count, .. } => [f64::from(actual_count), f64::from(required_count)],
-            Measurement::Ratio { actual_ratio, maximum_ratio, .. } => [quantize(actual_ratio), quantize(maximum_ratio)],
-        };
-        let evidence = site.evidence.iter().map(|evidence| serde_json::json!({
-            "role": evidence.role, "kind": evidence.kind,
-            "center": evidence.center.map(point), "diameter": evidence.diameter.map(quantize),
-            "start": evidence.start.map(point), "end": evidence.end.map(point),
-            "bounds": evidence.bounding_box.map(bounds),
-            "paths": evidence.paths.iter().map(|path| path.iter().copied().map(point).collect::<Vec<_>>()).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>();
-        let witnesses = site.witnesses.iter().map(|witness| serde_json::json!([witness.role, point(witness.point)])).collect::<Vec<_>>();
-        Some(serde_json::json!([site.measurement_kind, measurement, quantize(site.uncertainty_mm), site.layers, subjects, witnesses, evidence, site.note]))
-    }).collect::<Option<Vec<_>>>()?;
-    let bytes = serde_json::to_vec(&(&finding.rule_id, subjects, sites)).ok()?;
-    Some(format!(
-        "cause-{}",
-        hex::encode(&Sha256::digest(bytes)[..10])
-    ))
-}
-
 fn compare_locations(left: &Location, right: &Location) -> Ordering {
     match (left.point, right.point) {
         (Some(left), Some(right)) => left
@@ -1309,7 +1293,7 @@ mod tests {
             subjects: Vec::new(),
             evidence: Vec::new(),
             sites: Vec::new(),
-            group_key: None,
+            frame: 0,
         }
     }
 
@@ -1579,8 +1563,8 @@ mod tests {
         assert_ne!(different_hole.id, finding.id);
     }
 
-    fn repeated_hole(offset: f64, instance: u32) -> Finding {
-        let center = Point::new(1.0 + offset, 2.0);
+    fn placed_hole(instance: u32) -> Finding {
+        let center = Point::new(1.0, 2.0);
         let subject = Subject {
             role: "hole",
             kind: "via_hole",
@@ -1611,13 +1595,12 @@ mod tests {
     }
 
     #[test]
-    fn native_display_metadata_preserves_site_ids_waivers_and_repeat_groups() {
+    fn native_display_metadata_preserves_finding_and_site_ids() {
         use super::super::report::{DisplayCircle, EvidenceDisplay};
-        let mut finding = repeated_hole(0.0, 4);
+        let mut finding = placed_hole(4);
         assign_ids(std::slice::from_mut(&mut finding));
         let original_finding = finding.id.clone();
         let original_site = finding.sites[0].id.clone();
-        let original_group = repeat_group_key(&finding, Affine2::IDENTITY).unwrap();
         let circle = DisplayCircle {
             center: Point::new(1.0, 2.0).into(),
             diameter: 0.1,
@@ -1645,61 +1628,6 @@ mod tests {
             assign_ids(std::slice::from_mut(&mut finding));
             assert_eq!(finding.id, original_finding);
             assert_eq!(finding.sites[0].id, original_site);
-            assert_eq!(
-                repeat_group_key(&finding, Affine2::IDENTITY).as_deref(),
-                Some(original_group.as_str())
-            );
         }
-    }
-
-    #[test]
-    fn grouping_requires_the_same_definition_and_local_failure() {
-        let first = repeated_hole(0.0, 0);
-        let mut repeated = repeated_hole(30.0, 1);
-        let local = Affine2::translation(Point::new(-30.0, 0.0));
-        assert_eq!(
-            repeat_group_key(&first, Affine2::IDENTITY),
-            repeat_group_key(&repeated, local)
-        );
-        repeated.sites[0].subjects[0].net = Some("different contributor".into());
-        assert_ne!(
-            repeat_group_key(&first, Affine2::IDENTITY),
-            repeat_group_key(&repeated, local),
-            "local geometry alone cannot establish the same source contributors"
-        );
-        repeated.sites[0].subjects[0].net = None;
-        repeated.sites[0].subjects[0]
-            .provenance
-            .as_mut()
-            .unwrap()
-            .instance_index = Some(0);
-        assert!(
-            repeat_group_key(&repeated, local).is_none(),
-            "a secondary site's cross-occurrence subject prevents grouping"
-        );
-        repeated.sites[0].subjects[0]
-            .provenance
-            .as_mut()
-            .unwrap()
-            .instance_index = Some(1);
-        repeated.subjects[0]
-            .provenance
-            .as_mut()
-            .unwrap()
-            .feature_index = Some(5);
-        assert_ne!(
-            repeat_group_key(&first, Affine2::IDENTITY),
-            repeat_group_key(&repeated, local)
-        );
-        repeated.subjects.push(first.subjects[0].clone());
-        assert!(
-            repeat_group_key(&repeated, local).is_none(),
-            "cross-occurrence findings cannot collapse into one board cause"
-        );
-        repeated.subjects[0].provenance = None;
-        assert!(
-            repeat_group_key(&repeated, local).is_none(),
-            "missing provenance cannot be guessed from position"
-        );
     }
 }

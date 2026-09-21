@@ -1,8 +1,8 @@
 //! Minimum clearance from drilled features to their physical board edge.
 //!
 //! A hole is an analytic closed disk and a routed slot is its materialized
-//! filled outline. Each feature is paired only with a board profile from the
-//! same physical Step occurrence. The profile region is its outer boundary
+//! filled outline. Each feature is paired only with a profile of the Step that
+//! owns it. The profile region is its outer boundary
 //! minus every cutout. For a feature fully inside that region, the measured
 //! quantity is the Euclidean distance between the feature boundary and the
 //! profile boundary. A feature that crosses or lies outside its board region
@@ -17,8 +17,8 @@ use crate::commands::dfm::pdk::SlotPlating;
 use crate::commands::dfm::report::{Evidence, EvidenceDisplay, MeasurementKind};
 
 use super::{
-    Evaluation, Measured, MeasuredSite, hole_subject, linework_clearance, slot_matches,
-    slot_subject,
+    Evaluation, Measured, MeasuredSite, hole_subject, holes_of_class, linework_clearance,
+    slot_subject, slots_of_plating,
 };
 
 pub(super) fn evaluate_holes(
@@ -26,19 +26,11 @@ pub(super) fn evaluate_holes(
     class: HoleClass,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
-    let holes = design
-        .holes
-        .iter()
-        .filter(|hole| hole.class == class)
-        .collect::<Vec<_>>();
+    let holes = holes_of_class(design, class);
     let measured = holes
         .iter()
-        .map(|&hole| {
-            let outline = enclosing_outline(
-                &design.board_outlines,
-                hole.provenance.instance_index,
-                hole.center,
-            );
+        .map(|&(_, hole)| {
+            let outline = enclosing_outline(&design.board_outlines, hole.center);
             let Some((distance, outside)) =
                 hole_clearance(hole, outline.map(|(_, outline)| outline), limit_mm)
             else {
@@ -63,19 +55,11 @@ pub(super) fn evaluate_slots(
     plating: SlotPlating,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
-    let slots = design
-        .slots
-        .iter()
-        .filter(|slot| slot_matches(slot.plating, plating))
-        .collect::<Vec<_>>();
+    let slots = slots_of_plating(design, plating).collect::<Vec<_>>();
     let measured = slots
         .iter()
-        .map(|&slot| {
-            let outline = enclosing_outline(
-                &design.board_outlines,
-                slot.provenance.instance_index,
-                slot.bbox.center(),
-            );
+        .map(|&(_, slot)| {
+            let outline = enclosing_outline(&design.board_outlines, slot.bbox.center());
             let Some((distance, outside)) =
                 slot_clearance(slot, outline.map(|(_, outline)| outline), limit_mm)?
             else {
@@ -95,19 +79,14 @@ pub(super) fn evaluate_slots(
     })
 }
 
-/// Select only among profiles carrying the feature's occurrence identity.
-/// Containment breaks ties between multiple physical profiles in one Step;
-/// bounds distance gives an outside feature a deterministic related profile.
-/// The profile comes with its index in the outline pool.
-fn enclosing_outline(
-    outlines: &[BoardOutline],
-    instance_index: Option<u32>,
-    point: Point,
-) -> Option<(u32, &BoardOutline)> {
+/// The Step's own profile a feature belongs to. Containment breaks ties
+/// between multiple physical profiles in one Step; bounds distance gives an
+/// outside feature a deterministic related profile. The profile comes with
+/// its index in the outline pool.
+fn enclosing_outline(outlines: &[BoardOutline], point: Point) -> Option<(u32, &BoardOutline)> {
     outlines
         .iter()
         .enumerate()
-        .filter(|(_, outline)| outline.instance_index == instance_index)
         .map(|(index, outline)| (index as u32, outline))
         .min_by(|(_, left), (_, right)| {
             let left_outside = !left.region.contains_point(point);
@@ -651,7 +630,7 @@ limit = { minimum = "0.4 mm" }"#);
     }
 
     #[test]
-    fn repeated_features_select_their_own_board_occurrence_not_the_panel() {
+    fn a_repeated_board_is_measured_once_to_its_own_profile_not_the_panel() {
         let xml = r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
           <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/><LayerRef name="DRILL"/></Content>
           <Ecad><CadHeader units="MILLIMETER"/><CadData>
@@ -672,36 +651,45 @@ select = { hole = "pth" }
 limit = { minimum = "0.3 mm" }"#);
         let report = check(xml, &pdk, LayoutTarget::BoardArray);
 
-        assert_eq!(report.rules[0].checked, 2);
-        assert_eq!(report.findings.len(), 2);
-        let mut instances = std::collections::BTreeSet::new();
-        for finding in &report.findings {
-            assert!((actual_mm(&finding.measurement) - 0.2).abs() < 1e-8);
-            let hole_instance = finding.subjects[0]
-                .provenance
-                .as_ref()
-                .unwrap()
-                .instance_index;
-            let outline_instance = finding.subjects[1]
-                .provenance
-                .as_ref()
-                .unwrap()
-                .instance_index;
-            assert_eq!(hole_instance, outline_instance);
-            instances.insert(hole_instance.unwrap());
-            let profile = board_profile(&report, &finding.sites[0]).bounding_box;
-            assert!(
-                profile.unwrap().as_bbox().contains_point(
-                    finding
-                        .location
-                        .point
-                        .map(|p| Point::new(p.x, p.y))
-                        .unwrap()
-                ),
-                "each site resolves to its own occurrence's profile"
-            );
+        assert_eq!(report.rules[0].checked, 2, "one hole on each placed board");
+        let [finding] = report.findings.as_slice() else {
+            panic!("the board is measured once: {:?}", report.findings);
+        };
+        assert!((actual_mm(&finding.measurement) - 0.2).abs() < 1e-8);
+        let frame = &report.frames[finding.frame as usize];
+        assert_eq!(frame.step, "board");
+        assert_eq!(
+            frame
+                .placements
+                .iter()
+                .map(|placement| (placement.instance, placement.transform[4]))
+                .collect::<Vec<_>>(),
+            [(Some(0), 10.0), (Some(1), 40.0)],
+            "the finding occurs wherever the panel places the board"
+        );
+        for subject in &finding.subjects {
+            let provenance = subject.provenance.as_ref().unwrap();
+            assert_eq!(provenance.step.as_deref(), Some("board"));
+            assert_eq!(provenance.instance_index, None, "the board's own");
         }
-        assert_eq!(instances.len(), 2);
-        assert_eq!(report.shared_evidence.len(), 2);
+        let profile = board_profile(&report, &finding.sites[0])
+            .bounding_box
+            .unwrap()
+            .as_bbox();
+        assert_eq!(
+            (profile.min, profile.max),
+            (Point::new(0.0, 0.0), Point::new(10.0, 10.0)),
+            "measured to the board's profile, in the board's own frame"
+        );
+        assert!(
+            profile.contains_point(
+                finding
+                    .location
+                    .point
+                    .map(|p| Point::new(p.x, p.y))
+                    .unwrap()
+            )
+        );
+        assert_eq!(report.shared_evidence.len(), 1);
     }
 }

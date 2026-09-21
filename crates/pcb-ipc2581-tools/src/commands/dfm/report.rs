@@ -22,6 +22,9 @@ pub struct DfmReport {
     pub waivers: Option<WaiversApplied>,
     pub summary: Summary,
     pub rules: Vec<RuleResult>,
+    /// The Steps the layout places, the layout root first. Each is checked
+    /// once, in its own coordinates, wherever and however often it is placed.
+    pub frames: Vec<Frame>,
     pub findings: Vec<Finding>,
     /// Evidence that many sites reference by index instead of repeating, such
     /// as the board profile every edge-clearance site of one board measures to.
@@ -239,6 +242,23 @@ pub struct LayoutContext {
     pub instances: Vec<LayoutOccurrence>,
 }
 
+/// One Step of the checked layout and everywhere the layout places it. A
+/// finding is measured once in the Step's own coordinates and occurs at every
+/// placement: a placement's transform carries it into the checked frame.
+#[derive(Debug, Clone, Serialize)]
+pub struct Frame {
+    pub step: String,
+    pub placements: Vec<Placement>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Placement {
+    /// Index into `layout.instances`; `null` for the checked frame itself.
+    pub instance: Option<u32>,
+    /// Step-local to checked-frame affine matrix [a, b, c, d, tx, ty].
+    pub transform: [f64; 6],
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LayoutOccurrence {
     pub index: u32,
@@ -344,10 +364,15 @@ impl RuleResult {
     }
 
     /// Settle the rule's status from its finding counts: unwaived findings
-    /// carry the rule's severity, a fully waived or clean rule passes.
+    /// carry the rule's severity, a fully waived or clean rule passes. A rule
+    /// one Step's design could not certify stays incomplete, and still
+    /// counts what the others found.
     pub fn finish(&mut self, finding_count: usize, waived_count: usize) {
         self.finding_count = finding_count;
         self.waived_count = waived_count;
+        if !self.evaluated() {
+            return;
+        }
         self.status = if finding_count == waived_count {
             RuleStatus::Pass
         } else if self.severity == Severity::Warning {
@@ -391,6 +416,8 @@ pub enum RuleStatus {
 /// One measurement the limit falls inside the uncertainty band of.
 #[derive(Debug, Serialize)]
 pub struct Unresolved {
+    /// Index into the report's `frames`, as for a finding.
+    pub frame: u32,
     pub actual_mm: f64,
     pub uncertainty_mm: f64,
     pub point: ReportPoint,
@@ -442,8 +469,9 @@ pub struct Finding {
     pub evidence: Vec<Evidence>,
     /// Check-owned connected regions/layers. The finding remains the waiver unit.
     pub sites: Vec<Site>,
-    /// Presentation-only identity for proven equivalent repeated causes.
-    pub group_key: Option<String>,
+    /// Index into the report's `frames`: the Step whose own coordinates every
+    /// point of this finding is in, and every place the layout repeats it.
+    pub frame: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
