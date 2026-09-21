@@ -354,13 +354,6 @@ impl StrokedFeatureStyle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PrimitivePaint {
-    Fill,
-    Hollow,
-    Void,
-}
-
 fn populate_ipc_specs(doc: &mut GeometryDocument, ipc: &Ipc2581) {
     let Some(ecad) = ipc.ecad() else {
         return;
@@ -1986,8 +1979,8 @@ fn extract_set_feature(
             net,
             polarity,
             source,
-            primitive_ref,
-            FeaturePrimitiveKind::Standard,
+            feature_location_transform(primitive_ref.x, primitive_ref.y),
+            &FeatureShape::StandardPrimitiveRef(primitive_ref.id),
             doc,
         ),
         SetFeature::UserPrimitiveRef(primitive_ref) => extract_feature_primitive(
@@ -1995,8 +1988,8 @@ fn extract_set_feature(
             net,
             polarity,
             source,
-            primitive_ref,
-            FeaturePrimitiveKind::User,
+            feature_location_transform(primitive_ref.x, primitive_ref.y),
+            &FeatureShape::UserPrimitiveRef(primitive_ref.id),
             doc,
         ),
         SetFeature::PlacementGroup(group) => {
@@ -2666,7 +2659,7 @@ fn extract_pad(
     let placement = ipc_placement(Point::new(x, y), pad.xform);
 
     let path_start = doc.arena.paths.len() as u32;
-    let Some((paint, primitive_ref)) =
+    let Some((void, primitive_ref)) =
         lower_feature_shape(context, doc, shape, placement.transform)?
     else {
         return Ok(None);
@@ -2678,16 +2671,7 @@ fn extract_pad(
     let paths = Span::new(path_start, path_count);
     let bbox = doc.arena.paths_bbox(paths);
 
-    let mut feature = GeometryFeature::new(
-        FeatureKind::Padstack,
-        if paint == PrimitivePaint::Void {
-            GeometryPolarity::Clear
-        } else {
-            polarity
-        },
-    );
-    feature.net = net;
-    feature.source = source;
+    let mut feature = lowered_feature(FeatureKind::Padstack, polarity, void, net, source);
     feature.bbox = bbox;
     feature.paths = paths;
     feature.intent.role = role;
@@ -2699,18 +2683,48 @@ fn extract_pad(
         .map(|hole| plating_kind(hole.plating_status))
         .unwrap_or(PlatingKind::None);
     feature.flags.expanded_padstack = true;
+    feature.flags.clears_previous_in_set = void;
+    push_pin_ref(doc, &mut feature, pad.pin_ref.as_ref());
+
+    Ok(Some(feature))
+}
+
+/// A feature whose geometry is lowered to paths. A VOID shape clears whatever
+/// polarity its set paints.
+fn lowered_feature(
+    kind: FeatureKind,
+    polarity: GeometryPolarity,
+    void: bool,
+    net: Option<Symbol>,
+    source: SourceRef,
+) -> GeometryFeature {
+    let mut feature = GeometryFeature::new(
+        kind,
+        if void {
+            GeometryPolarity::Clear
+        } else {
+            polarity
+        },
+    );
+    feature.net = net;
+    feature.source = source;
     feature.flags.lowered_to_paths = true;
-    feature.flags.clears_previous_in_set = paint == PrimitivePaint::Void;
-    if let Some(pin_ref) = &pad.pin_ref {
-        feature.pin_refs = Span::new(doc.pin_refs.len() as u32, 1);
+    feature
+}
+
+fn push_pin_ref(
+    doc: &mut GeometryDocument,
+    feature: &mut GeometryFeature,
+    pin_ref: Option<&ipc2581::types::PinRef>,
+) {
+    if let Some(pin_ref) = pin_ref {
+        feature.pin_refs = Span::single(doc.pin_refs.len() as u32);
         doc.pin_refs.push(PinRef {
             component_ref: pin_ref.component_ref,
             pin: pin_ref.pin,
             title: pin_ref.title,
         });
     }
-
-    Ok(Some(feature))
 }
 
 /// The shape a padstack contributes on `layer_ref` when the pad has none of
@@ -2731,14 +2745,15 @@ fn padstack_pad_shape(
         .as_ref()
 }
 
-/// Lower one member of the IPC-2581C `Feature` substitution group. Warns and
-/// returns `None` when the shape cannot be drawn.
+/// Lower one member of the IPC-2581C `Feature` substitution group into paths
+/// and report whether it is a VOID, with the dictionary entry it came from.
+/// Warns and returns `None` when the shape cannot be drawn.
 fn lower_feature_shape(
     context: &ExtractContext<'_>,
     doc: &mut GeometryDocument,
     shape: &FeatureShape,
     transform: Affine2,
-) -> Result<Option<(PrimitivePaint, Option<PrimitiveRef<Symbol>>)>> {
+) -> Result<Option<(bool, Option<PrimitiveRef<Symbol>>)>> {
     Ok(Some(match shape {
         FeatureShape::StandardPrimitive(primitive) => (
             lower_standard_primitive(context, doc, primitive, transform)?,
@@ -2757,10 +2772,10 @@ fn lower_feature_shape(
                 Some(PrimitiveRef::Standard(*id)),
             )
         }
-        FeatureShape::UserPrimitive(primitive) => (
-            lower_user_primitive(context, doc, primitive, transform)?,
-            None,
-        ),
+        FeatureShape::UserPrimitive(primitive) => {
+            lower_user_primitive(context, doc, primitive, transform)?;
+            (false, None)
+        }
         FeatureShape::UserPrimitiveRef(id) => {
             let Some(primitive) = context.user_primitives.get(id).copied() else {
                 doc.warn(format!(
@@ -2769,16 +2784,13 @@ fn lower_feature_shape(
                 ));
                 return Ok(None);
             };
-            (
-                lower_user_primitive(context, doc, primitive, transform)?,
-                Some(PrimitiveRef::User(*id)),
-            )
+            lower_user_primitive(context, doc, primitive, transform)?;
+            (false, Some(PrimitiveRef::User(*id)))
         }
         FeatureShape::UserShape(shape) => {
-            let mut paint = PrimitivePaint::Fill;
             let primitive_start = doc.arena.paths.len();
-            lower_user_shape(context, doc, shape, transform, primitive_start, &mut paint)?;
-            (paint, None)
+            lower_user_shape(context, doc, shape, transform, primitive_start)?;
+            (false, None)
         }
         FeatureShape::Text(_) | FeatureShape::Outline(_) => {
             doc.warn("Skipping feature whose shape is text or a package outline");
@@ -2787,71 +2799,29 @@ fn lower_feature_shape(
     }))
 }
 
-#[derive(Debug, Clone, Copy)]
-enum FeaturePrimitiveKind {
-    Standard,
-    User,
+/// Set features carry only a location, never an Xform.
+fn feature_location_transform(x: f64, y: f64) -> Affine2 {
+    Affine2::placement(Point::new(x, y), 0.0, Mirror::NONE, 1.0)
 }
 
+/// A dictionary primitive placed directly as a set feature.
 #[allow(clippy::too_many_arguments)]
 fn extract_feature_primitive(
     context: &ExtractContext<'_>,
     net: Option<Symbol>,
     polarity: GeometryPolarity,
     source: SourceRef,
-    primitive_ref: &ipc2581::types::ecad::FeaturePrimitiveRef,
-    primitive_kind: FeaturePrimitiveKind,
+    transform: Affine2,
+    shape: &FeatureShape,
     doc: &mut GeometryDocument,
 ) -> Result<Vec<GeometryFeature>> {
-    let transform = Affine2::placement(
-        Point::new(primitive_ref.x, primitive_ref.y),
-        0.0,
-        Mirror::NONE,
-        1.0,
-    );
     let path_start = doc.arena.paths.len() as u32;
-    let (paint, primitive_ref) = match primitive_kind {
-        FeaturePrimitiveKind::Standard => {
-            let Some(primitive) = context.standard_primitives.get(&primitive_ref.id).copied()
-            else {
-                doc.warn(format!(
-                    "Skipping feature because standard primitive '{}' is missing",
-                    context.strings.resolve(primitive_ref.id)
-                ));
-                return Ok(Vec::new());
-            };
-            (
-                lower_standard_primitive(context, doc, primitive, transform)?,
-                PrimitiveRef::Standard(primitive_ref.id),
-            )
-        }
-        FeaturePrimitiveKind::User => {
-            let Some(primitive) = context.user_primitives.get(&primitive_ref.id).copied() else {
-                doc.warn(format!(
-                    "Skipping feature because user primitive '{}' is missing",
-                    context.strings.resolve(primitive_ref.id)
-                ));
-                return Ok(Vec::new());
-            };
-            (
-                lower_user_primitive(context, doc, primitive, transform)?,
-                PrimitiveRef::User(primitive_ref.id),
-            )
-        }
+    let Some((void, primitive_ref)) = lower_feature_shape(context, doc, shape, transform)? else {
+        return Ok(Vec::new());
     };
-
-    primitive_features_from_paths(
-        doc,
-        primitive_path_feature(
-            net,
-            polarity,
-            source,
-            transform,
-            path_start,
-            paint,
-            Some(primitive_ref),
-        ),
-    )
+    let mut feature = lowered_feature(FeatureKind::Primitive, polarity, void, net, source);
+    feature.primitive_ref = primitive_ref;
+    primitive_features_from_paths(doc, feature, transform, path_start)
 }
 
 fn extract_inline_user_primitive(
@@ -2862,47 +2832,23 @@ fn extract_inline_user_primitive(
     primitive: &ipc2581::types::ecad::FeatureUserPrimitive,
     doc: &mut GeometryDocument,
 ) -> Result<Vec<GeometryFeature>> {
-    let transform =
-        Affine2::placement(Point::new(primitive.x, primitive.y), 0.0, Mirror::NONE, 1.0);
+    let transform = feature_location_transform(primitive.x, primitive.y);
     let path_start = doc.arena.paths.len() as u32;
-    let paint = lower_user_primitive(context, doc, &primitive.primitive, transform)?;
-    primitive_features_from_paths(
-        doc,
-        primitive_path_feature(net, polarity, source, transform, path_start, paint, None),
-    )
+    lower_user_primitive(context, doc, &primitive.primitive, transform)?;
+    let feature = lowered_feature(FeatureKind::Primitive, polarity, false, net, source);
+    primitive_features_from_paths(doc, feature, transform, path_start)
 }
 
-fn primitive_path_feature(
-    net: Option<Symbol>,
-    polarity: GeometryPolarity,
-    source: SourceRef,
-    transform: Affine2,
-    path_start: u32,
-    paint: PrimitivePaint,
-    primitive_ref: Option<PrimitiveRef<Symbol>>,
-) -> GeometryFeature {
-    let mut feature = GeometryFeature::new(
-        FeatureKind::Primitive,
-        if paint == PrimitivePaint::Void {
-            GeometryPolarity::Clear
-        } else {
-            polarity
-        },
-    );
-    feature.net = net;
-    feature.source = source;
-    feature.transform = transform;
-    feature.paths = Span::new(path_start, 0);
-    feature.primitive_ref = primitive_ref;
-    feature.flags.lowered_to_paths = true;
-    feature
-}
-
+/// One feature per homogeneous run of the paths pushed since `path_start`:
+/// fills and strokes of one primitive export and render differently.
 fn primitive_features_from_paths(
     doc: &GeometryDocument,
     mut feature: GeometryFeature,
+    transform: Affine2,
+    path_start: u32,
 ) -> Result<Vec<GeometryFeature>> {
-    feature.paths.count = doc.arena.paths.len() as u32 - feature.paths.start;
+    feature.transform = transform;
+    feature.paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
     if feature.paths.is_empty() {
         return Ok(Vec::new());
     }
@@ -2924,61 +2870,36 @@ fn extract_fiducial(
         fiducial.xform,
     );
 
-    let path_start = doc.arena.paths.len() as u32;
-    let (paint, primitive_ref, outer_diameter) = match &fiducial.shape {
-        ipc2581::types::ecad::FiducialShape::Primitive(primitive) => (
-            lower_standard_primitive(context, doc, primitive, placement.transform)?,
-            None,
-            standard_primitive_outer_diameter(primitive),
-        ),
-        ipc2581::types::ecad::FiducialShape::StandardPrimitiveRef(primitive_ref) => {
-            let Some(primitive) = context.standard_primitives.get(primitive_ref).copied() else {
+    let (primitive, primitive_ref) = match &fiducial.shape {
+        ipc2581::types::ecad::FiducialShape::Primitive(primitive) => (primitive, None),
+        ipc2581::types::ecad::FiducialShape::StandardPrimitiveRef(id) => {
+            let Some(primitive) = context.standard_primitives.get(id).copied() else {
                 doc.warn(format!(
                     "Skipping fiducial because standard primitive '{}' is missing",
-                    context.strings.resolve(*primitive_ref)
+                    context.strings.resolve(*id)
                 ));
                 return Ok(None);
             };
-            (
-                lower_standard_primitive(context, doc, primitive, placement.transform)?,
-                Some(PrimitiveRef::Standard(*primitive_ref)),
-                standard_primitive_outer_diameter(primitive),
-            )
+            (primitive, Some(PrimitiveRef::Standard(*id)))
         }
     };
-
+    let path_start = doc.arena.paths.len() as u32;
+    let void = lower_standard_primitive(context, doc, primitive, placement.transform)?;
     let path_count = doc.arena.paths.len() as u32 - path_start;
     if path_count == 0 {
         return Ok(None);
     }
     let paths = Span::new(path_start, path_count);
 
-    let mut feature = GeometryFeature::new(
-        FeatureKind::Primitive,
-        if paint == PrimitivePaint::Void {
-            GeometryPolarity::Clear
-        } else {
-            polarity
-        },
-    );
-    feature.net = net;
-    feature.source = source;
+    let mut feature = lowered_feature(FeatureKind::Primitive, polarity, void, net, source);
     feature.intent.role = FeatureRole::Fiducial;
     feature.fiducial_kind = map_fiducial_kind(fiducial.kind);
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
     apply_ipc_placement(&mut feature, placement);
-    feature.outer_diameter = outer_diameter.unwrap_or_default();
+    feature.outer_diameter = standard_primitive_outer_diameter(primitive).unwrap_or_default();
     feature.primitive_ref = primitive_ref;
-    feature.flags.lowered_to_paths = true;
-    if let Some(pin_ref) = &fiducial.pin_ref {
-        feature.pin_refs = Span::new(doc.pin_refs.len() as u32, 1);
-        doc.pin_refs.push(PinRef {
-            component_ref: pin_ref.component_ref,
-            pin: pin_ref.pin,
-            title: pin_ref.title,
-        });
-    }
+    push_pin_ref(doc, &mut feature, fiducial.pin_ref.as_ref());
     Ok(Some(feature))
 }
 
@@ -3033,12 +2954,12 @@ fn extract_line(
         line.line_desc_ref,
         inline_line_desc(line.line_width, line.line_end, line.line_property),
     )?;
-    Some(push_stroked_polyline(
+    Some(push_stroked_contour(
         doc,
         StrokedFeatureStyle::new(net, polarity, source, line_desc),
         vec![
-            Point::new(line.start_x, line.start_y),
-            Point::new(line.end_x, line.end_y),
+            PathCmd::move_to(Point::new(line.start_x, line.start_y)),
+            PathCmd::line_to(Point::new(line.end_x, line.end_y)),
         ],
     ))
 }
@@ -3062,11 +2983,13 @@ fn extract_feature_polyline(
             polyline.line_property,
         ),
     )?;
-    Some(push_stroked_steps(
+    Some(push_stroked_contour(
         doc,
         StrokedFeatureStyle::new(net, polarity, source, line_desc),
-        Point::new(polyline.begin.x, polyline.begin.y),
-        &polyline.steps,
+        poly_step_commands(
+            Point::new(polyline.begin.x, polyline.begin.y),
+            &polyline.steps,
+        ),
     ))
 }
 
@@ -3085,13 +3008,17 @@ fn extract_arc(
         arc.line_desc_ref,
         inline_line_desc(arc.line_width, arc.line_end, arc.line_property),
     )?;
-    Some(push_stroked_arc(
+    Some(push_stroked_contour(
         doc,
         StrokedFeatureStyle::new(net, polarity, source, line_desc),
-        Point::new(arc.start.x, arc.start.y),
-        Point::new(arc.end.x, arc.end.y),
-        Point::new(arc.center.x, arc.center.y),
-        arc.clockwise,
+        vec![
+            PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
+            PathCmd::arc_to(
+                Point::new(arc.end.x, arc.end.y),
+                Point::new(arc.center.x, arc.center.y),
+                arc.clockwise,
+            ),
+        ],
     ))
 }
 
@@ -3237,109 +3164,38 @@ fn push_profile_polygon(doc: &mut GeometryDocument, polygon: &ipc2581::types::Po
     doc.push_path(Paint::None, [contour])
 }
 
-fn push_stroked_polyline(
-    doc: &mut GeometryDocument,
-    style: StrokedFeatureStyle,
-    points: Vec<Point>,
-) -> GeometryFeature {
-    let mut bbox = BBox::empty();
-    let mut cmds = Vec::new();
-    for (index, point) in points.iter().copied().enumerate() {
-        bbox.include_point(point);
-        cmds.push(if index == 0 {
-            PathCmd::move_to(point)
-        } else {
-            PathCmd::line_to(point)
-        });
-    }
-
-    let path_start = doc.arena.paths.len() as u32;
-    doc.push_path(stroked_paint(style), [ContourBuf::from_parts(bbox, cmds)]);
-    bbox = bbox.expand(style.width / 2.0);
-
-    let mut feature = GeometryFeature::new(FeatureKind::Trace, style.polarity);
-    feature.net = style.net;
-    feature.source = style.source;
-    feature.bbox = bbox;
-    feature.paths = Span::new(path_start, 1);
-    feature.stroke_width = style.width;
-    feature.line_cap = style.line_cap;
-    feature.flags.lowered_to_paths = true;
-    feature
-}
-
-fn push_stroked_arc(
-    doc: &mut GeometryDocument,
-    style: StrokedFeatureStyle,
-    start: Point,
-    end: Point,
-    center: Point,
-    clockwise: bool,
-) -> GeometryFeature {
-    let bbox = Arc::new(start, end, center, clockwise).bbox();
-
-    let path_start = doc.arena.paths.len() as u32;
-    doc.push_path(
-        stroked_paint(style),
-        [ContourBuf::from_parts(
-            bbox,
-            vec![
-                PathCmd::move_to(start),
-                PathCmd::arc_to(end, center, clockwise),
-            ],
-        )],
-    );
-    let bbox = bbox.expand(style.width / 2.0);
-
-    let mut feature = GeometryFeature::new(FeatureKind::Trace, style.polarity);
-    feature.net = style.net;
-    feature.source = style.source;
-    feature.bbox = bbox;
-    feature.paths = Span::new(path_start, 1);
-    feature.stroke_width = style.width;
-    feature.line_cap = style.line_cap;
-    feature.flags.lowered_to_paths = true;
-    feature
-}
-
 fn push_stroked_trace(
     doc: &mut GeometryDocument,
     style: StrokedFeatureStyle,
     trace: &ipc2581::types::Trace,
 ) -> GeometryFeature {
-    if trace.steps.is_empty() {
-        let points = trace
-            .points
-            .iter()
-            .map(|point| Point::new(point.x, point.y))
-            .collect();
-        return push_stroked_polyline(doc, style, points);
-    }
-
-    push_stroked_steps(
-        doc,
-        style,
-        Point::new(trace.points[0].x, trace.points[0].y),
-        &trace.steps,
-    )
+    let begin = Point::new(trace.points[0].x, trace.points[0].y);
+    let cmds = if trace.steps.is_empty() {
+        std::iter::once(PathCmd::move_to(begin))
+            .chain(
+                trace.points[1..]
+                    .iter()
+                    .map(|point| PathCmd::line_to(Point::new(point.x, point.y))),
+            )
+            .collect()
+    } else {
+        poly_step_commands(begin, &trace.steps)
+    };
+    push_stroked_contour(doc, style, cmds)
 }
 
-fn push_stroked_steps(
+/// One open centerline stroked as a trace feature.
+fn push_stroked_contour(
     doc: &mut GeometryDocument,
     style: StrokedFeatureStyle,
-    begin: Point,
-    steps: &[PolyStep],
+    cmds: Vec<PathCmd>,
 ) -> GeometryFeature {
-    let contour = ContourBuf::new(poly_step_commands(begin, steps));
-    let bbox = contour.bbox.expand(style.width / 2.0);
-    let path_start = doc.arena.paths.len() as u32;
-    doc.push_path(stroked_paint(style), [contour]);
-
+    let path = doc.push_path(stroked_paint(style), [ContourBuf::new(cmds)]);
     let mut feature = GeometryFeature::new(FeatureKind::Trace, style.polarity);
     feature.net = style.net;
     feature.source = style.source;
-    feature.bbox = bbox;
-    feature.paths = Span::new(path_start, 1);
+    feature.bbox = doc.arena.paths[path as usize].bbox;
+    feature.paths = Span::single(path);
     feature.stroke_width = style.width;
     feature.line_cap = style.line_cap;
     feature.flags.lowered_to_paths = true;
@@ -3434,26 +3290,25 @@ fn extract_slot(
     Ok(feature)
 }
 
+/// Lower a standard primitive into paths under `transform` and report
+/// whether it is a VOID, which clears instead of painting.
 fn lower_standard_primitive(
     context: &ExtractContext<'_>,
     doc: &mut GeometryDocument,
     primitive: &StandardPrimitive,
     transform: Affine2,
-) -> Result<PrimitivePaint> {
-    let paint = primitive_paint(context, primitive);
+) -> Result<bool> {
+    let fill = primitive_fill_property(context, primitive);
+    let void = fill == Some(FillProperty::Void);
     if standard_primitive_has_no_area(primitive) {
-        return Ok(paint);
+        return Ok(void);
     }
-    warn_patterned_fill(doc, primitive_fill_property(context, primitive));
+    warn_patterned_fill(doc, fill);
 
     let path_start = doc.arena.paths.len() as u32;
     match primitive {
         StandardPrimitive::Circle(circle) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::ellipse(circle.shape.diameter, circle.shape.diameter),
-            );
+            push_filled_shape(doc, transform, circle_outline(&circle.shape));
         }
         StandardPrimitive::Ellipse(ellipse) => {
             push_filled_shape(
@@ -3463,18 +3318,10 @@ fn lower_standard_primitive(
             );
         }
         StandardPrimitive::Oval(oval) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::obround(oval.shape.size.width, oval.shape.size.height),
-            );
+            push_filled_shape(doc, transform, oval_outline(&oval.shape));
         }
         StandardPrimitive::RectCenter(rect) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::rect(rect.shape.size.width, rect.shape.size.height),
-            );
+            push_filled_shape(doc, transform, rect_center_outline(&rect.shape));
         }
         StandardPrimitive::RectCorner(rect) => {
             let points = vec![
@@ -3503,14 +3350,14 @@ fn lower_standard_primitive(
             push_filled_shape(
                 doc,
                 transform,
-                shapes::regular_polygon(2.0 * (hexagon.shape.point_to_point / 2.0), 6, -90.0),
+                shapes::regular_polygon(hexagon.shape.point_to_point, 6, -90.0),
             );
         }
         StandardPrimitive::Octagon(octagon) => {
             push_filled_shape(
                 doc,
                 transform,
-                shapes::regular_polygon(2.0 * (octagon.shape.point_to_point / 2.0), 8, -90.0),
+                shapes::regular_polygon(octagon.shape.point_to_point, 8, -90.0),
             );
         }
         StandardPrimitive::Triangle(triangle) => {
@@ -3542,21 +3389,7 @@ fn lower_standard_primitive(
             push_contour_path(doc, contour, transform);
         }
         StandardPrimitive::RectRound(rect) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::rounded_rect(
-                    rect.shape.size.width,
-                    rect.shape.size.height,
-                    rect.shape.radius,
-                    [
-                        rect.shape.upper_right,
-                        rect.shape.lower_right,
-                        rect.shape.lower_left,
-                        rect.shape.upper_left,
-                    ],
-                ),
-            );
+            push_filled_shape(doc, transform, rect_round_outline(&rect.shape));
         }
         StandardPrimitive::RectCham(rect) => {
             push_filled_shape(
@@ -3583,23 +3416,18 @@ fn lower_standard_primitive(
         }
     }
 
-    match paint {
-        PrimitivePaint::Fill => {}
-        PrimitivePaint::Hollow => {
-            let style = primitive_style(primitive);
-            let line_desc = resolve_line_desc(
-                context,
-                doc,
-                "hollow primitive",
-                style.line_desc_ref,
-                style.line_desc,
-            );
-            paint_paths(doc, path_start, line_desc, transform);
-        }
-        PrimitivePaint::Void => {}
+    if fill == Some(FillProperty::Hollow) {
+        let style = primitive_style(primitive);
+        let line_desc = resolve_line_desc(
+            context,
+            doc,
+            "hollow primitive",
+            style.line_desc_ref,
+            style.line_desc,
+        );
+        paint_paths(doc, path_start, line_desc, transform);
     }
-
-    Ok(paint)
+    Ok(void)
 }
 
 fn standard_primitive_has_no_area(primitive: &StandardPrimitive) -> bool {
@@ -3640,9 +3468,8 @@ fn standard_primitive_has_no_area(primitive: &StandardPrimitive) -> bool {
             thermal.shape.outer_diameter <= 0.0
                 || thermal.shape.inner_diameter >= thermal.shape.outer_diameter
         }
-        StandardPrimitive::Butterfly(_)
-        | StandardPrimitive::Contour(_)
-        | StandardPrimitive::Moire(_) => false,
+        StandardPrimitive::Butterfly(butterfly) => butterfly.shape.size <= 0.0,
+        StandardPrimitive::Contour(_) | StandardPrimitive::Moire(_) => false,
     }
 }
 
@@ -3651,18 +3478,17 @@ fn lower_user_primitive(
     doc: &mut GeometryDocument,
     primitive: &UserPrimitive,
     transform: Affine2,
-) -> Result<PrimitivePaint> {
+) -> Result<()> {
     match primitive {
         UserPrimitive::UserSpecial(user_special) => {
-            let mut paint = PrimitivePaint::Fill;
             let primitive_start = doc.arena.paths.len();
             // IPC-2581C §3.5.11.2: UserSpecial combines independent shapes.
             // A Contour's Polygon and Cutouts stay together (§3.5.9.3); sibling
             // contours are additive, including KiCad zone fills and text islands.
             for shape in &user_special.shapes {
-                lower_user_shape(context, doc, shape, transform, primitive_start, &mut paint)?;
+                lower_user_shape(context, doc, shape, transform, primitive_start)?;
             }
-            Ok(paint)
+            Ok(())
         }
     }
 }
@@ -3675,49 +3501,21 @@ fn lower_user_shape(
     shape: &ipc2581::types::UserShape,
     transform: Affine2,
     primitive_start: usize,
-    paint: &mut PrimitivePaint,
 ) -> Result<()> {
     let path_start = doc.arena.paths.len() as u32;
-    let mut nested_paint = None;
     let mut strokes = false;
     match &shape.shape {
         UserShapeType::Circle(circle) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::ellipse(circle.diameter, circle.diameter),
-            );
+            push_filled_shape(doc, transform, circle_outline(circle));
         }
         UserShapeType::RectCenter(rect) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::rect(rect.size.width, rect.size.height),
-            );
+            push_filled_shape(doc, transform, rect_center_outline(rect));
         }
         UserShapeType::Oval(oval) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::obround(oval.size.width, oval.size.height),
-            );
+            push_filled_shape(doc, transform, oval_outline(oval));
         }
         UserShapeType::RectRound(rect) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::rounded_rect(
-                    rect.size.width,
-                    rect.size.height,
-                    rect.radius,
-                    [
-                        rect.upper_right,
-                        rect.lower_right,
-                        rect.lower_left,
-                        rect.upper_left,
-                    ],
-                ),
-            );
+            push_filled_shape(doc, transform, rect_round_outline(rect));
         }
         UserShapeType::Polygon(polygon) => {
             push_polygon_path(doc, polygon, transform, FillRule::NonZero);
@@ -3778,11 +3576,11 @@ fn lower_user_shape(
         // no area to image.
         UserShapeType::Text(_) | UserShapeType::Outline(_) => {}
         UserShapeType::UserPrimitive(primitive) => {
-            nested_paint = Some(lower_user_primitive(context, doc, primitive, transform)?);
+            lower_user_primitive(context, doc, primitive, transform)?;
         }
         UserShapeType::UserPrimitiveRef(primitive_ref) => {
             if let Some(primitive) = context.user_primitives.get(primitive_ref).copied() {
-                nested_paint = Some(lower_user_primitive(context, doc, primitive, transform)?);
+                lower_user_primitive(context, doc, primitive, transform)?;
             } else {
                 doc.warn(format!(
                     "Not drawing nested user primitive '{}': it is missing",
@@ -3813,22 +3611,16 @@ fn lower_user_shape(
         );
         paint_paths(doc, path_start, line_desc, transform);
     }
-    match fill_desc {
-        Some(_) if hollow => *paint = PrimitivePaint::Hollow,
-        Some(fill_desc) if fill_desc.fill_property == FillProperty::Void => {
-            subtract_trailing_paths(
-                doc,
-                primitive_start,
-                path_start as usize,
-                context.resolution,
-            )?;
-        }
-        Some(fill_desc) => warn_patterned_fill(doc, Some(fill_desc.fill_property)),
-        None => {
-            if let Some(nested_paint) = nested_paint {
-                *paint = nested_paint;
-            }
-        }
+    match fill_desc.map(|fill| fill.fill_property) {
+        // IPC-2581C §3.5.6.1: a VOID clears only the fills before it in its
+        // own UserSpecial, never strokes, later islands or other primitives.
+        Some(FillProperty::Void) => subtract_trailing_paths(
+            doc,
+            primitive_start,
+            path_start as usize,
+            context.resolution,
+        )?,
+        fill => warn_patterned_fill(doc, fill),
     }
     Ok(())
 }
@@ -3896,14 +3688,6 @@ fn push_polygon_path(
 fn warn_patterned_fill(doc: &mut GeometryDocument, fill: Option<FillProperty>) {
     if matches!(fill, Some(FillProperty::Hatch | FillProperty::Mesh)) {
         doc.warn("Painting a HATCH or MESH fill solid because patterned fills are not imported");
-    }
-}
-
-fn primitive_paint(context: &ExtractContext<'_>, primitive: &StandardPrimitive) -> PrimitivePaint {
-    match primitive_fill_property(context, primitive) {
-        Some(FillProperty::Hollow) => PrimitivePaint::Hollow,
-        Some(FillProperty::Void) => PrimitivePaint::Void,
-        _ => PrimitivePaint::Fill,
     }
 }
 
@@ -4043,6 +3827,34 @@ fn push_outline_path(
     )
 }
 
+// Outlines of the shapes standard and user primitives share.
+
+fn circle_outline(circle: &ipc2581::types::Circle) -> Option<ContourBuf> {
+    shapes::circle(circle.diameter)
+}
+
+fn rect_center_outline(rect: &ipc2581::types::RectCenter) -> Option<ContourBuf> {
+    shapes::rect(rect.size.width, rect.size.height)
+}
+
+fn oval_outline(oval: &ipc2581::types::Oval) -> Option<ContourBuf> {
+    shapes::obround(oval.size.width, oval.size.height)
+}
+
+fn rect_round_outline(rect: &ipc2581::types::RectRound) -> Option<ContourBuf> {
+    shapes::rounded_rect(
+        rect.size.width,
+        rect.size.height,
+        rect.radius,
+        [
+            rect.upper_right,
+            rect.lower_right,
+            rect.lower_left,
+            rect.upper_left,
+        ],
+    )
+}
+
 fn push_filled_shape(doc: &mut GeometryDocument, transform: Affine2, contour: Option<ContourBuf>) {
     if let Some(contour) = contour {
         doc.push_path(
@@ -4091,6 +3903,12 @@ fn push_butterfly_path(
     size: f64,
 ) {
     let radius = size / 2.0;
+    let quadrant = |x: f64, y: f64| {
+        let center = Point::new(x * radius / 2.0, y * radius / 2.0);
+        shapes::rect(radius, radius)
+            .unwrap_or_default()
+            .transformed(transform.concat(Affine2::translation(center)))
+    };
     match shape {
         ipc2581::types::ButterflyShape::Round => doc.push_path(
             Paint::Fill {
@@ -4105,10 +3923,7 @@ fn push_butterfly_path(
             Paint::Fill {
                 rule: FillRule::NonZero,
             },
-            [
-                rect_contour(transform, -radius, 0.0, 0.0, radius),
-                rect_contour(transform, 0.0, -radius, radius, 0.0),
-            ],
+            [quadrant(-1.0, 1.0), quadrant(1.0, -1.0)],
         ),
     };
 }
@@ -4214,17 +4029,6 @@ fn circular_sector_contour(
         PathCmd::move_to(Point::default()),
         PathCmd::line_to(start),
         PathCmd::arc_to(end, Point::default(), false),
-        PathCmd::close(),
-    ])
-    .transformed(transform)
-}
-
-fn rect_contour(transform: Affine2, x0: f64, y0: f64, x1: f64, y1: f64) -> ContourBuf {
-    ContourBuf::new(vec![
-        PathCmd::move_to(Point::new(x0, y0)),
-        PathCmd::line_to(Point::new(x1, y0)),
-        PathCmd::line_to(Point::new(x1, y1)),
-        PathCmd::line_to(Point::new(x0, y1)),
         PathCmd::close(),
     ])
     .transformed(transform)
@@ -4589,8 +4393,14 @@ mod tests {
             fill_desc_ref: None,
         });
 
-        assert_eq!(primitive_paint(&context, &circle), PrimitivePaint::Hollow);
-        assert_eq!(primitive_paint(&context, &rect), PrimitivePaint::Void);
+        assert_eq!(
+            primitive_fill_property(&context, &circle),
+            Some(FillProperty::Hollow)
+        );
+        assert_eq!(
+            primitive_fill_property(&context, &rect),
+            Some(FillProperty::Void)
+        );
     }
 
     #[test]
@@ -4656,10 +4466,10 @@ mod tests {
             fill_desc_ref: None,
         });
 
-        let paint =
+        let void =
             lower_standard_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
 
-        assert_eq!(paint, PrimitivePaint::Fill);
+        assert!(!void);
         assert!(doc.arena.paths.is_empty());
         assert!(doc.arena.contours.is_empty());
         assert!(doc.arena.cmds.is_empty());
@@ -4782,10 +4592,8 @@ mod tests {
             standard_primitives: HashMap::new(),
             user_primitives: HashMap::new(),
         };
-        let paint =
-            lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
+        lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
 
-        assert_eq!(paint, PrimitivePaint::Hollow);
         assert_eq!(doc.arena.paths.len(), 1);
         assert!(doc.arena.paths[0].is_stroked());
         assert!(!doc.arena.paths[0].is_filled());
@@ -4972,10 +4780,8 @@ mod tests {
             ],
         });
 
-        let paint =
-            lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
+        lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
 
-        assert_eq!(paint, PrimitivePaint::Fill);
         assert_eq!(doc.arena.paths.len(), 2);
         assert!(doc.arena.paths.iter().all(|path| path.is_stroked()));
         assert!(

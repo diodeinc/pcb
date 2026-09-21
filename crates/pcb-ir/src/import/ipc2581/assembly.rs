@@ -589,7 +589,7 @@ fn lower_standard_primitive(
         Some(types::FillProperty::Hatch | types::FillProperty::Mesh)
     );
     let mut geometry = super::GeometryDocument::new();
-    let primitive_paint =
+    let void =
         super::lower_standard_primitive(context, &mut geometry, primitive, Affine2::IDENTITY)?;
     let status = geometry_status(
         unresolved_style,
@@ -606,7 +606,7 @@ fn lower_standard_primitive(
     Ok(ir::PackageShape {
         status,
         references,
-        polarity: if primitive_paint == super::PrimitivePaint::Void {
+        polarity: if void {
             Polarity::Clear
         } else {
             Polarity::Dark
