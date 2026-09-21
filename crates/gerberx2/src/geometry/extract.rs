@@ -306,19 +306,14 @@ fn standard_aperture(template: &gerber::ApertureTemplate) -> Option<Aperture> {
             vertices,
             rotation_degrees,
             hole_diameter,
-        } => {
-            if vertices < 3 {
-                return None;
-            }
-            (
-                ApertureShape::Polygon {
-                    diameter: outer_diameter,
-                    vertices: vertices as u32,
-                    rotation_degrees: rotation_degrees.unwrap_or(0.0),
-                },
-                hole_diameter,
-            )
-        }
+        } => (
+            ApertureShape::Polygon {
+                diameter: outer_diameter,
+                vertices: vertices as u32,
+                rotation_degrees: rotation_degrees.unwrap_or(0.0),
+            },
+            hole_diameter,
+        ),
         gerber::ApertureTemplate::Macro { .. } | gerber::ApertureTemplate::Block { .. } => {
             return None;
         }

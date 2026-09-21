@@ -683,7 +683,11 @@ impl<'a> Parser<'a> {
                     required_param(&values, 0, "polygon outer diameter")?,
                     unit,
                 ),
-                vertices: required_param(&values, 1, "polygon vertices")? as i32,
+                vertices: bounded_count(
+                    required_param(&values, 1, "polygon vertices")?,
+                    "polygon vertices",
+                    POLYGON_VERTICES,
+                )? as i32,
                 rotation_degrees: values.get(2).copied(),
                 hole_diameter: values
                     .get(3)
@@ -899,16 +903,15 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
         }
         4 => {
             let exposure = macro_bool(values, 0)?;
-            let vertices = macro_value(values, 1, "macro outline vertices")? as usize;
+            let vertices = bounded_count(
+                macro_value(values, 1, "macro outline vertices")?,
+                "macro outline vertices",
+                3..=OUTLINE_MAX_VERTICES,
+            )?;
             let expected = 2 + (vertices + 1) * 2 + 1;
             if values.len() != expected {
                 return Err(GerberError::InvalidStructure(
                     "macro outline has the wrong number of parameters".to_string(),
-                ));
-            }
-            if vertices < 3 {
-                return Err(GerberError::InvalidStructure(
-                    "macro outline requires at least 3 vertices".to_string(),
                 ));
             }
             let point = |index: usize| Point {
@@ -934,7 +937,11 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
         }
         5 => {
             let exposure = macro_bool(values, 0)?;
-            let vertices = macro_value(values, 1, "macro polygon vertices")? as i32;
+            let vertices = bounded_count(
+                macro_value(values, 1, "macro polygon vertices")?,
+                "macro polygon vertices",
+                POLYGON_VERTICES,
+            )? as i32;
             let center = Point {
                 x: macro_length(values, 2, "macro polygon center x", unit)?,
                 y: macro_length(values, 3, "macro polygon center y", unit)?,
@@ -1103,29 +1110,23 @@ fn polygon_paths(
     rotation_degrees: f64,
     hole_diameter: Option<f64>,
 ) -> Vec<GeometryPath> {
-    let mut paths = Vec::new();
-    if vertices >= 3 {
-        let radius = outer_diameter / 2.0;
-        let rotation = rotation_degrees.to_radians();
-        let mut commands = Vec::new();
-        for i in 0..vertices {
-            let angle = rotation + i as f64 * std::f64::consts::TAU / vertices as f64;
-            let point = Point {
-                x: radius * angle.cos(),
-                y: radius * angle.sin(),
-            };
-            if i == 0 {
-                commands.push(PathCommand::MoveTo(point));
-            } else {
-                commands.push(PathCommand::LineTo(point));
-            }
+    let radius = outer_diameter / 2.0;
+    let rotation = rotation_degrees.to_radians();
+    let vertex = |index: i32| {
+        let angle = rotation + index as f64 * std::f64::consts::TAU / vertices as f64;
+        Point {
+            x: radius * angle.cos(),
+            y: radius * angle.sin(),
         }
-        commands.push(PathCommand::Close);
-        paths.push(GeometryPath {
-            contours: vec![GeometryContour { commands }],
-            polarity: Polarity::Dark,
-        });
-    }
+    };
+    let commands = std::iter::once(PathCommand::MoveTo(vertex(0)))
+        .chain((1..vertices).map(|index| PathCommand::LineTo(vertex(index))))
+        .chain(std::iter::once(PathCommand::Close))
+        .collect();
+    let mut paths = vec![GeometryPath {
+        contours: vec![GeometryContour { commands }],
+        polarity: Polarity::Dark,
+    }];
     if let Some(hole_diameter) = hole_diameter
         && hole_diameter > 0.0
     {
@@ -1170,6 +1171,27 @@ fn rect_path(width: f64, height: f64, polarity: Polarity) -> GeometryPath {
             ],
         }],
         polarity,
+    }
+}
+
+/// Vertex counts the format allows for regular polygons.
+const POLYGON_VERTICES: std::ops::RangeInclusive<usize> = 3..=12;
+/// Most vertices the format allows in one outline primitive.
+const OUTLINE_MAX_VERTICES: usize = 5000;
+/// The format sets no limit; this one only stops malformed input, far above
+/// any real panel.
+const STEP_REPEAT_MAX_OCCURRENCES: i64 = 1_000_000;
+
+/// A count read from the file, bounded before it sizes any loop or allocation.
+fn bounded_count(value: f64, name: &str, range: std::ops::RangeInclusive<usize>) -> Result<usize> {
+    if value.fract() == 0.0 && (*range.start() as f64..=*range.end() as f64).contains(&value) {
+        Ok(value as usize)
+    } else {
+        Err(GerberError::InvalidStructure(format!(
+            "{name} must be an integer in {}..={}, got {value}",
+            range.start(),
+            range.end()
+        )))
     }
 }
 
@@ -1656,6 +1678,15 @@ fn parse_step_repeat(rest: &str) -> Result<StepRepeat> {
     if !rest.is_empty() {
         return Err(GerberError::InvalidStructure(format!(
             "unexpected SR suffix '{rest}'"
+        )));
+    }
+    if x_repeats < 1
+        || y_repeats < 1
+        || i64::from(x_repeats) * i64::from(y_repeats) > STEP_REPEAT_MAX_OCCURRENCES
+        || !(x_step.is_finite() && y_step.is_finite())
+    {
+        return Err(GerberError::InvalidStructure(format!(
+            "SR repeats {x_repeats} x {y_repeats} must be positive, finite, and at most {STEP_REPEAT_MAX_OCCURRENCES} occurrences"
         )));
     }
     Ok(StepRepeat {

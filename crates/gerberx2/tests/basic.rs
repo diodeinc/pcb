@@ -561,6 +561,34 @@ fn expands_step_repeat_in_y_then_x_order() {
 }
 
 #[test]
+fn rejects_counts_outside_the_format_limits() {
+    for (body, message) in [
+        ("%ADD10P,1X2000000000*%", "polygon vertices"),
+        ("%ADD10P,1X2*%", "polygon vertices"),
+        ("%ADD10P,1X4.5*%", "polygon vertices"),
+        ("%AMM*5,1,13,0,0,1,0*%%ADD10M*%", "macro polygon vertices"),
+        (
+            "%AMM*4,1,100000000000000000000000000000,0,0,0*%%ADD10M*%",
+            "macro outline vertices",
+        ),
+        ("%AMM*4,1,5001,0,0,0*%%ADD10M*%", "macro outline vertices"),
+        (
+            "%AMM*4,1,2,0,0,1,0,0,0,0*%%ADD10M*%",
+            "macro outline vertices",
+        ),
+        ("%SRX100000Y100000I1J1*%", "SR repeats"),
+        ("%SRX0Y1I1J1*%", "SR repeats"),
+    ] {
+        let error = GerberX2::parse(&format!("%FSLAX26Y26*%%MOMM*%{body}M02*"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(message), "{body}: {error}");
+    }
+    // The limits themselves are valid.
+    GerberX2::parse("%FSLAX26Y26*%%MOMM*%%ADD10P,1X3*%%ADD11P,1X12*%M02*").unwrap();
+}
+
+#[test]
 fn rejects_unclosed_region_contours() {
     let err = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\nG36*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nX1000000Y1000000D01*\nG37*\nM02*\n",
