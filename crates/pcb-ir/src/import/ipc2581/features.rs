@@ -1088,7 +1088,10 @@ pub(super) fn push_stroked_contour(
     style: StrokedFeatureStyle,
     cmds: Vec<PathCmd>,
 ) -> GeometryFeature {
-    let path = doc.push_path(stroked_paint(style), [ContourBuf::new(cmds)]);
+    let path = doc.push_path(
+        stroked_paint(style),
+        [ContourBuf::new(cmds).with_consistent_arcs()],
+    );
     let mut feature = GeometryFeature::new(FeatureKind::Trace, style.polarity);
     feature.net = style.net;
     feature.source = style.source;

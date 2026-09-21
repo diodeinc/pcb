@@ -122,7 +122,8 @@ pub fn build_gerber_x2_files(
             let mut doc = imported
                 .materialize_layer(plan.layer_id, view)
                 .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
-            pcb_ir::dialects::ipc::process::normalize_for_positive_artwork(&mut doc, resolution)?;
+            pcb_ir::dialects::ipc::process::normalize_for_positive_artwork(&mut doc, resolution)
+                .with_context(|| format!("failed to normalize IPC-2581 layer '{layer_name}'"))?;
             if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
                 bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
             }

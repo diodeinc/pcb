@@ -73,6 +73,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Copper balancing no longer crashes on nearly coincident copper edges or over-trims notch corners.
 - Gerber apertures whose hole is wider than the shape no longer add copper.
 - Balance void sizes no longer all round the same way across uniform fill.
+- IPC-2581 arcs whose stated centre is microns off no longer fail the export; the disagreement counts against the accuracy budget.
 
 ### Changed
 

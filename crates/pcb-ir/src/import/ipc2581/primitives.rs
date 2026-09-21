@@ -541,7 +541,12 @@ pub(super) fn push_open_contour(
     transform: Affine2,
     cmds: Vec<PathCmd>,
 ) {
-    doc.push_path(Paint::None, [ContourBuf::new(cmds).transformed(transform)]);
+    doc.push_path(
+        Paint::None,
+        [ContourBuf::new(cmds)
+            .with_consistent_arcs()
+            .transformed(transform)],
+    );
 }
 
 pub(super) fn push_polygon_path(
@@ -668,7 +673,7 @@ pub(super) fn arc_step(
 pub(super) fn polygon_contour(polygon: &ipc2581::types::Polygon) -> ContourBuf {
     let mut cmds = poly_step_commands(Point::new(polygon.begin.x, polygon.begin.y), &polygon.steps);
     cmds.push(PathCmd::close());
-    ContourBuf::new(cmds)
+    ContourBuf::new(cmds).with_consistent_arcs()
 }
 
 pub(super) fn push_contour_path(

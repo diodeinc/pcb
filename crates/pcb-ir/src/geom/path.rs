@@ -199,6 +199,39 @@ impl ContourBuf {
         self
     }
 
+    /// The same contour with every arc one circle. A source may state a
+    /// centre its two ends are not equidistant from; neighbours meet at the
+    /// ends, so those stay and the centre moves to the nearest point of the
+    /// chord's bisector, which keeps it on its side of the chord and so keeps
+    /// the sweep. What the radii disagreed by is charged to the uncertainty.
+    pub fn with_consistent_arcs(self) -> Self {
+        let mut current = Point::default();
+        let mut start = current;
+        let mut disagreement: f64 = 0.0;
+        let cmds = self
+            .cmds
+            .into_iter()
+            .map(|mut cmd| {
+                if cmd.op == PathOp::ArcTo {
+                    let chord = cmd.p0 - current;
+                    let radii = current.distance_to(cmd.p1) - cmd.p0.distance_to(cmd.p1);
+                    if radii.abs() > crate::geom::tol::ARC_RADIUS_MM && chord.length() > 0.0 {
+                        let along = chord / chord.length();
+                        let to_middle = (current + cmd.p0) * 0.5 - cmd.p1;
+                        cmd.p1 = cmd.p1 + along * (to_middle.x * along.x + to_middle.y * along.y);
+                        disagreement = disagreement.max(radii.abs());
+                    }
+                }
+                if cmd.op == PathOp::MoveTo {
+                    start = cmd.p0;
+                }
+                current = cmd.end_point().unwrap_or(start);
+                cmd
+            })
+            .collect();
+        Self::new(cmds).with_uncertainty(self.uncertainty_mm + disagreement)
+    }
+
     /// Exact image under an affine transform. Circular arcs stay circular
     /// under similarities and become elliptical arcs otherwise; nothing is
     /// approximated. Prior uncertainty scales with the transform.
@@ -654,6 +687,30 @@ mod tests {
             ..Affine2::IDENTITY
         });
         assert!((mirrored.signed_area() + 2.0 * std::f64::consts::PI).abs() <= 1e-12);
+    }
+
+    #[test]
+    fn an_arc_whose_radii_disagree_is_recentred_between_its_ends() {
+        // A half turn from (5, 0) to (-5.002, 0) about a centre stated at the
+        // origin: the start is 5 away, the end 5.002.
+        let end = Point::new(-5.002, 0.0);
+        let contour = ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(5.0, 0.0)),
+            PathCmd::arc_to(end, Point::ZERO, false),
+        ])
+        .with_consistent_arcs();
+
+        let arc = contour.cmds[1];
+        assert_eq!(arc.p0, end, "neighbours meet at the ends");
+        assert!((arc.p1.x + 0.001).abs() < 1e-12 && arc.p1.y == 0.0);
+        assert!((contour.uncertainty_mm - 0.002).abs() < 1e-12);
+        assert!(contour.bbox.max.y > 5.0, "still the upper half turn");
+
+        let exact = ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(5.0, 0.0)),
+            PathCmd::arc_to(Point::new(0.0, 5.0), Point::ZERO, false),
+        ]);
+        assert_eq!(exact.clone().with_consistent_arcs(), exact);
     }
 
     #[test]
