@@ -85,6 +85,14 @@ const BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM: f64 = 2.0;
 const PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = 3.0;
 const SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = 7.0;
 
+// Board-cell fiducials sit at the outer edge of the margin a routed slot is
+// cut from; the smallest margin that carries them keeps the slot clear of
+// their mask openings.
+const _: () = assert!(
+    MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM - placement::PRESET.routing_gap_mm
+        >= BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM + FIDUCIAL_MASK_OPENING_DIAMETER_MM / 2.0
+);
+
 #[derive(Debug, Clone, PartialEq)]
 enum BoardArrayCreateValidationError {
     U32Range {
@@ -108,6 +116,12 @@ enum BoardArrayCreateValidationError {
         field: &'static str,
         value: f64,
         min: f64,
+    },
+    RoutedMarginMin {
+        field: &'static str,
+        value: f64,
+        slot: f64,
+        landing: f64,
     },
     ArrayDimensionMin {
         axis: &'static str,
@@ -157,6 +171,20 @@ impl std::fmt::Display for BoardArrayCreateValidationError {
                 f,
                 "{field} must be 0 mm or at least {} mm; got {} mm",
                 fmt_num(*min),
+                fmt_num(*value)
+            ),
+            Self::RoutedMarginMin {
+                field,
+                value,
+                slot,
+                landing,
+            } => write!(
+                f,
+                "{field} must be at least {} mm for mouse-bite separation: it holds the {} mm \
+                 routed slot and the {} mm of frame each tab lands on; got {} mm",
+                fmt_num(slot + landing),
+                fmt_num(*slot),
+                fmt_num(*landing),
                 fmt_num(*value)
             ),
             Self::ArrayDimensionMin { axis, value, min } => write!(
@@ -766,7 +794,7 @@ fn build_board_array_spec(
     separation: Separation,
     resolution: Resolution,
 ) -> Result<BoardArraySpec> {
-    validate_options(options, validation_mode)?;
+    validate_options(options, validation_mode, separation)?;
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let primary_step = crate::steps::primary_step(ipc, &ecad.cad_data.steps)
@@ -987,6 +1015,7 @@ fn array_stock(width_mm: f64, height_mm: f64, resolution: Resolution) -> Result<
 fn validate_options(
     options: &BoardArrayCreateOptions,
     validation_mode: BoardArrayValidationMode,
+    separation: Separation,
 ) -> Result<()> {
     validate_u32_range("columns", options.columns, 1, 10)?;
     validate_u32_range("rows", options.rows, 1, 10)?;
@@ -1006,19 +1035,40 @@ fn validate_options(
             }
         }
     }
-    if options.columns > 1 {
-        validate_zero_or_min_mm(
-            "horizontal board clearance",
-            options.board_margin_mm.horizontal_gap(),
-            MIN_VCUT_CLEARANCE_MM,
-        )?;
-    }
-    if options.rows > 1 {
-        validate_zero_or_min_mm(
-            "vertical board clearance",
-            options.board_margin_mm.vertical_gap(),
-            MIN_VCUT_CLEARANCE_MM,
-        )?;
+    match separation {
+        Separation::VScore => {
+            if options.columns > 1 {
+                validate_zero_or_min_mm(
+                    "horizontal board clearance",
+                    options.board_margin_mm.horizontal_gap(),
+                    MIN_VCUT_CLEARANCE_MM,
+                )?;
+            }
+            if options.rows > 1 {
+                validate_zero_or_min_mm(
+                    "vertical board clearance",
+                    options.board_margin_mm.vertical_gap(),
+                    MIN_VCUT_CLEARANCE_MM,
+                )?;
+            }
+        }
+        // The slot and the frame a tab lands on are cut from the board's own
+        // margin, so a routed board never reaches a neighbour's material or
+        // the tooling in the edge rails.
+        Separation::MouseBite => {
+            let preset = &placement::PRESET;
+            for (field, value) in options.board_margin_mm.board_margin_sides() {
+                if value + EPSILON < preset.routing_gap_mm + preset.frame_landing_mm {
+                    return Err(BoardArrayCreateValidationError::RoutedMarginMin {
+                        field,
+                        value,
+                        slot: preset.routing_gap_mm,
+                        landing: preset.frame_landing_mm,
+                    }
+                    .into());
+                }
+            }
+        }
     }
     Ok(())
 }

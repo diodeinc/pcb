@@ -8,9 +8,10 @@
 //! instance, the frame around it and a local window of stock; the holes and
 //! break rows are the builder's. A board's removal is its slot minus every
 //! tab neck, opened by the cutter around the necks so the fillets a router
-//! leaves beside them are part of the void's shape. The retained panel is
-//! then checked as a whole: every board connected to the frame before the
-//! break rows are cut, every board free of the frame and of each other after.
+//! leaves beside them are part of the void's shape. The emitted panel is
+//! then checked as a whole: no routed void reaches into any board, every
+//! board is connected to the frame before the break rows are cut, and every
+//! board is free of the frame and of each other after.
 
 use std::collections::HashSet;
 
@@ -46,10 +47,6 @@ pub(super) fn generate(
     preset: &Preset,
     resolution: Resolution,
 ) -> Result<Tabs> {
-    let tolerance = QueryTolerance {
-        boundary_mm: 0.0,
-        numerical_mm: pcb_ir::geom::tol::EPSILON_MM,
-    };
     // Slots follow the outer boundary; a board's own holes stay the board's.
     let substrate = &placement.prepared.substrate;
     let outer = ContourSet::from_regularized(
@@ -123,7 +120,6 @@ pub(super) fn generate(
                     stock,
                     preset,
                     resolution,
-                    tolerance,
                 );
                 match tab {
                     Ok(tab) => {
@@ -167,11 +163,12 @@ pub(super) fn generate(
             .collect::<Vec<_>>();
         check_release(
             stock,
+            &boards,
             &cutouts,
             &perforations,
             &break_rows,
             &witnesses,
-            tolerance,
+            resolution,
         )?;
         return Ok(Tabs {
             cutouts,
@@ -181,6 +178,12 @@ pub(super) fn generate(
     }
 }
 
+/// Boards and stock are the polygon model itself, with no external
+/// uncertainty beyond what their regions already carry.
+const TOLERANCE: QueryTolerance = QueryTolerance {
+    boundary_mm: 0.0,
+    numerical_mm: pcb_ir::geom::tol::EPSILON_MM,
+};
 /// How far inside the board a witness point sits.
 const WITNESS_DEPTH_MM: f64 = 1.0;
 /// Half-size of the window a tab is built in: the drill row, neck, shoulders
@@ -200,7 +203,6 @@ fn build_tab(
     stock: &ContourSet,
     preset: &Preset,
     resolution: Resolution,
-    tolerance: QueryTolerance,
 ) -> Result<TabGeometry> {
     let reach = preset.routing_gap_mm + preset.frame_landing_mm;
     let window = ContourSet::rectangle(
@@ -226,7 +228,7 @@ fn build_tab(
         .find(|piece| piece.contains_point(support_anchor))
         .context("the tab's landing is not frame material")?;
     let local_stock = stock.intersection(&window)?;
-    let query = BoundaryQuery::new(&local_board, tolerance)?;
+    let query = BoundaryQuery::new(&local_board, TOLERANCE)?;
     let projection = query
         .boundaries()
         .map(|id| query.project(id, point))
@@ -242,7 +244,7 @@ fn build_tab(
         station_mm: projection.site.station_mm,
         support_anchor,
         board_witness: point - normal * WITNESS_DEPTH_MM,
-        tolerance,
+        tolerance: TOLERANCE,
     })?)
 }
 
@@ -272,27 +274,38 @@ fn routable_components(region: &ContourSet, resolution: Resolution) -> usize {
         .count()
 }
 
-/// Every board must connect to the frame through its tabs, and cutting every
-/// break row must free every board from the frame and from each other.
+/// The router may not remove any board's material, every board must connect
+/// to the frame through its tabs, and cutting every break row must free every
+/// board from the frame and from each other.
 fn check_release(
     stock: &ContourSet,
+    boards: &[ContourSet],
     cutouts: &[ContourSet],
     perforations: &ContourSet,
     break_rows: &[ContourBuf],
     witnesses: &[Point],
-    tolerance: QueryTolerance,
+    significance: Resolution,
 ) -> Result<()> {
-    let resolution = stock.resolution.strict();
-    let retained = cutouts
-        .iter()
-        .try_fold(stock.clone(), |kept, cutout| kept.difference(cutout))?
-        .difference(perforations)?;
+    let resolution = significance.strict();
+    let routed = ContourSet::union_all(resolution, cutouts.iter().cloned())?;
+    // Voids share their inner wall with the board they free, so the overlap
+    // is judged at the caller's significance: coincident-edge residue is not
+    // a bite, anything the board's own image would keep is.
+    let bitten =
+        ContourSet::union_all(resolution, boards.iter().cloned())?.intersection(&routed)?;
+    let bitten = ContourSet::from_regularized(bitten.rings, significance, bitten.uncertainty_mm);
+    ensure!(
+        bitten.is_empty(),
+        "routed slots remove {:.3} mm² of board material",
+        bitten.area()
+    );
+    let retained = stock.difference(&routed)?.difference(perforations)?;
     let boards = 1..witnesses.len();
     let held = material_after_break(
         &retained,
         &ContourSet::empty(resolution),
         witnesses,
-        tolerance,
+        TOLERANCE,
     )?;
     ensure!(
         boards
@@ -307,7 +320,7 @@ fn check_release(
     )?
     .context("break rows have no width")?;
     let rows = ContourSet::from_filled_contours(&rows, resolution)?;
-    let released = material_after_break(&retained, &rows, witnesses, tolerance)?;
+    let released = material_after_break(&retained, &rows, witnesses, TOLERANCE)?;
     ensure!(
         boards
             .clone()
@@ -348,4 +361,40 @@ pub fn cutout_polygon(cutout: &ContourSet) -> Result<Polygon> {
             .map(|p| poly_segment(p[0], p[1]))
             .collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(x: f64, y: f64, w: f64, h: f64) -> ContourSet {
+        ContourSet::rectangle(
+            BBox::new(Point::new(x, y), Point::new(x + w, y + h)),
+            Resolution::default().strict(),
+        )
+    }
+
+    #[test]
+    fn release_check_rejects_a_void_that_reaches_into_a_board() {
+        let stock = rect(0.0, 0.0, 100.0, 40.0);
+        let boards = [rect(10.0, 10.0, 30.0, 20.0), rect(40.0, 10.0, 30.0, 20.0)];
+        // The first board's slot, cut 1.4 mm into its abutting neighbour.
+        let slot = rect(40.0, 10.0, 1.4, 20.0);
+        let error = check_release(
+            &stock,
+            &boards,
+            &[slot],
+            &ContourSet::empty(Resolution::default()),
+            &[],
+            &[Point::new(50.0, 1.0)],
+            Resolution::default(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("routed slots remove 28.000 mm² of board material"),
+            "{error}"
+        );
+    }
 }

@@ -2575,3 +2575,42 @@ fn mouse_bite_array_routes_slots_bridged_by_perforated_tabs() {
         4 * tabs_per_board
     );
 }
+
+#[test]
+fn mouse_bite_margins_must_hold_the_routed_slot_and_tab_landing() {
+    let create = |board_margin_mm| {
+        create_board_array(
+            large_board_fixture_mm(),
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 1,
+                board_margin_mm,
+                edge_rail_mm: BoardMarginMm::all(20.0),
+            },
+            false,
+            Separation::MouseBite,
+            Resolution::default(),
+        )
+    };
+    // Abutting boards are a V-score layout: a slot routed around one would be
+    // cut out of its neighbour.
+    let error = create(BoardMarginMm::all(0.0)).unwrap_err().to_string();
+    assert!(
+        error.contains("board margin top must be at least 2.4 mm for mouse-bite separation"),
+        "{error}"
+    );
+    // One short side is enough: there the slot would run into the edge rail
+    // and its tooling.
+    let error = create(BoardMarginMm {
+        left: 2.0,
+        ..BoardMarginMm::all(5.0)
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("board margin left must be at least 2.4 mm") && error.contains("got 2 mm"),
+        "{error}"
+    );
+    // The scored-array clearance rule does not apply to routed arrays.
+    create(BoardMarginMm::all(2.4)).unwrap();
+}
