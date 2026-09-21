@@ -411,12 +411,24 @@ fn rendered_source_layer(
         has_native_content: false,
     };
 
+    // Every layer's SVG is inlined into one page, where element ids are
+    // global, so each takes its ids from the layer's place in the source.
+    let ids = ipc
+        .ecad()
+        .and_then(|ecad| {
+            ecad.cad_data
+                .layers
+                .iter()
+                .position(|candidate| candidate.name == layer.name)
+        })
+        .map_or_else(String::new, |index| format!("l{index}-"));
     match geometry::extract_layer_for_view(ipc, &name, ArtworkScope::Board, resolution) {
         Ok(geometry) => render_extracted_layer(
             &mut rendered,
             geometry,
             ArtworkScope::Board.profile_set(),
             resolution,
+            &ids,
         )?,
         Err(error) => {
             rendered.warning = Some(format!("Render unavailable: {error}"));
@@ -431,6 +443,7 @@ fn render_extracted_layer(
     mut geometry: GeometryDocument,
     profile_set: ProfileSet,
     resolution: Resolution,
+    ids: &str,
 ) -> anyhow::Result<()> {
     rendered.has_native_content =
         geometry::render::layer_has_native_content(&geometry, resolution)?;
@@ -439,7 +452,9 @@ fn render_extracted_layer(
         &geometry,
         true,
         profile_set,
-        resolution.accuracy,
+        &pcb_ir::render::RenderOptions::default()
+            .with_accuracy(resolution.accuracy)
+            .with_id_prefix(ids),
     )?);
     if !geometry.diagnostics.is_empty() {
         rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));

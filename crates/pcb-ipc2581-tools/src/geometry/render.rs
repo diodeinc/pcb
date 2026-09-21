@@ -35,18 +35,15 @@ pub fn prepare_layer(
 }
 
 /// Render a prepared layer as SVG, drawing anything the target cannot carry
-/// natively within `accuracy`.
+/// natively within the options' accuracy.
 pub fn render_layer_svg(
     geometry: &GeometryDocument,
     include_profiles: bool,
     profile_set: ProfileSet,
-    accuracy: GeometryAccuracy,
+    options: &RenderOptions,
 ) -> anyhow::Result<String> {
     let artwork = layer_artwork(geometry, include_profiles, profile_set)?;
-    Ok(pcb_ir::render::artwork_svg(
-        &artwork,
-        &RenderOptions::default().with_accuracy(accuracy),
-    )?)
+    Ok(pcb_ir::render::artwork_svg(&artwork, options)?)
 }
 
 pub fn render_layer_png(

@@ -99,7 +99,7 @@ fn render_svg(
         geometry,
         true,
         view.profile_set(),
-        resolution.accuracy,
+        &pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy),
     )?;
 
     if let Some(output) = &options.output {

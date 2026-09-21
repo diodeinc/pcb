@@ -84,10 +84,13 @@ impl GeometryPass {
         }
     }
 
-    fn svg(&self, design: &Design<'_>, bounds: BBox) -> Result<String> {
+    /// `pass` numbers this render within its scene: the passes are inlined
+    /// into one page, where element ids are global.
+    fn svg(&self, design: &Design<'_>, bounds: BBox, pass: usize) -> Result<String> {
         let options = RenderOptions::default()
             .with_viewport(bounds)
-            .with_accuracy(design.resolution.accuracy);
+            .with_accuracy(design.resolution.accuracy)
+            .with_id_prefix(format!("p{pass}-"));
         match &self.source {
             GeometrySource::Layer => {
                 let layer = self.layer.as_deref().context("artwork pass has no layer")?;
@@ -174,13 +177,14 @@ pub(super) fn export(
     ensure!(bounds.is_valid(), "DFM scene has invalid bounds");
     let passes = sources
         .iter()
-        .map(|source| {
+        .enumerate()
+        .map(|(pass, source)| {
             Ok(ScenePass {
                 label: source.label.clone(),
                 feature: source.feature,
                 layer: source.layer.clone(),
                 color: source.color,
-                svg: source.svg(design, bounds)?,
+                svg: source.svg(design, bounds, pass)?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -429,7 +433,7 @@ mod tests {
             image.bbox,
         );
         let bounds = BBox::new(Point::new(-20.0, -20.0), Point::new(20.0, 20.0));
-        let svg = pass.svg(&design, bounds).unwrap();
+        let svg = pass.svg(&design, bounds, 0).unwrap();
         assert!(svg.contains("viewBox='-20 -20 40 40'"));
         assert_eq!(svg.matches("scale(1 -1)").count(), 1);
         assert!(svg.contains("<mask "));
@@ -461,7 +465,7 @@ mod tests {
         // Even a viewport wholly inside the board does not remove its distant
         // perimeter from the vector document. Panning can always reach it.
         let viewport = BBox::new(Point::new(-2.0, -2.0), Point::new(2.0, 2.0));
-        let svg = pass.svg(&design, viewport).unwrap();
+        let svg = pass.svg(&design, viewport, 0).unwrap();
         assert!(svg.contains("data-board-outline='true'"));
         assert!(svg.contains("-50"));
         assert!(svg.contains("50"));
@@ -479,7 +483,7 @@ mod tests {
             FillRule::EvenOdd,
             vec![vec![circle]],
         );
-        let svg = drill.svg(&design, outline.bbox).unwrap();
+        let svg = drill.svg(&design, outline.bbox, 0).unwrap();
         assert!(svg.contains('A'), "round drills retain analytic arcs");
         assert!(svg.contains("40.5 -30"));
     }

@@ -221,7 +221,8 @@ impl IpcDocument {
                         &geometry,
                         true,
                         scope.profile_set(),
-                        resolution.accuracy,
+                        &pcb_ir::render::RenderOptions::default()
+                            .with_accuracy(resolution.accuracy),
                     )?,
                 )
             }

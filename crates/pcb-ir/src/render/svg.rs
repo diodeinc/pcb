@@ -48,10 +48,12 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
         return artwork_svg(&artwork::expand_instances(doc), options);
     }
     let accuracy = options.accuracy;
+    let ids = options.id_prefix.as_str();
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
     let bbox = options.viewport_or(crate::render::artwork_bbox(doc, Some(&layers)));
     let mut defs = String::new();
     let mut body = String::new();
+    let mut masks = 0;
 
     let mut aperture_accuracy = vec![None::<GeometryAccuracy>; doc.apertures.len()];
     for &layer_index in &layers {
@@ -82,7 +84,7 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
         // every filled shape would gain the default one-unit outline.
         writeln!(
             defs,
-            "    <path id='a{aperture_index}' d='{}' fill-rule='{}' stroke='none'/>",
+            "    <path id='{ids}a{aperture_index}' d='{}' fill-rule='{}' stroke='none'/>",
             accurate_path_data(aperture.contours(), accuracy)?,
             fill_rule_name(aperture.fill_rule())
         )
@@ -91,7 +93,7 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
 
     for &layer_index in &layers {
         let layer = &doc.layers[layer_index];
-        write_artwork_layer(&mut body, &mut defs, doc, layer, accuracy)?;
+        write_artwork_layer(&mut body, &mut defs, &mut masks, doc, layer, options)?;
     }
 
     let title = layers
@@ -107,10 +109,12 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
 fn write_artwork_layer<LayerMeta, ObjectMeta>(
     body: &mut String,
     defs: &mut String,
+    masks: &mut usize,
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
     layer: &artwork::Layer<LayerMeta>,
-    accuracy: GeometryAccuracy,
+    options: &RenderOptions,
 ) -> Result<(), AccuracyError> {
+    let ids = options.id_prefix.as_str();
     let objects = artwork::paint_ordered(layer.objects.slice(&doc.objects));
     let has_material = objects
         .iter()
@@ -130,12 +134,28 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
             object.polarity
         };
         if polarity != run_polarity {
-            flush_run(&mut painted, defs, &mut run, run_polarity, layer);
+            flush_run(
+                &mut painted,
+                defs,
+                masks,
+                &mut run,
+                run_polarity,
+                layer,
+                ids,
+            );
             run_polarity = polarity;
         }
-        write_artwork_object(&mut run, doc, layer.role, object, accuracy)?;
+        write_artwork_object(&mut run, doc, layer.role, object, options)?;
     }
-    flush_run(&mut painted, defs, &mut run, run_polarity, layer);
+    flush_run(
+        &mut painted,
+        defs,
+        masks,
+        &mut run,
+        run_polarity,
+        layer,
+        ids,
+    );
 
     // One group opacity rather than per-object alpha, so overlapping objects
     // composite once instead of darkening where they touch.
@@ -153,9 +173,11 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
 fn flush_run<LayerMeta>(
     painted: &mut String,
     defs: &mut String,
+    masks: &mut usize,
     run: &mut String,
     polarity: Polarity,
     layer: &artwork::Layer<LayerMeta>,
+    ids: &str,
 ) {
     let run = std::mem::take(run);
     match polarity {
@@ -164,7 +186,8 @@ fn flush_run<LayerMeta>(
         // under it there is nothing to remove.
         Polarity::Clear if painted.is_empty() => {}
         Polarity::Clear => {
-            let mask_id = format!("m{}", defs.matches("<mask ").count());
+            let mask_id = format!("{ids}m{masks}");
+            *masks += 1;
             let bounds = layer.bbox.expand(1.0);
             let (x, y) = (fmt_num(bounds.min.x), fmt_num(bounds.min.y));
             let (width, height) = (fmt_num(bounds.width()), fmt_num(bounds.height()));
@@ -183,8 +206,9 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
     role: LayerRole,
     object: &artwork::Object<ObjectMeta>,
-    accuracy: GeometryAccuracy,
+    options: &RenderOptions,
 ) -> Result<(), AccuracyError> {
+    let (accuracy, ids) = (options.accuracy, options.id_prefix.as_str());
     match object.geometry {
         Geometry::Flash {
             aperture,
@@ -192,7 +216,7 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
         } => {
             writeln!(
                 out,
-                "      <use href='#a{aperture}'{}/>",
+                "      <use href='#{ids}a{aperture}'{}/>",
                 svg_transform(transform)
             )
             .unwrap();

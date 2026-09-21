@@ -40,13 +40,11 @@ fn raster_options(options: &RenderOptions, bbox: BBox) -> RenderOptions {
         } => (width_px, height_px),
     };
     RenderOptions {
-        layers: options.layers.clone(),
-        viewport: options.viewport,
-        accuracy: options.accuracy,
         size: SizeConstraint::Fixed {
             width_px,
             height_px,
         },
+        ..options.clone()
     }
 }
 

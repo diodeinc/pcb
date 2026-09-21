@@ -32,6 +32,10 @@ pub struct RenderOptions {
     /// Budget for geometry the target cannot draw natively (patterned
     /// strokes, contours already carrying approximation).
     pub accuracy: crate::geom::GeometryAccuracy,
+    /// Prefix for every element id the SVG defines. Ids are global to the
+    /// document an SVG is inlined into, so renders sharing one HTML page need
+    /// distinct prefixes or their apertures and masks resolve to each other's.
+    pub id_prefix: String,
 }
 
 impl RenderOptions {
@@ -56,6 +60,11 @@ impl RenderOptions {
 
     pub fn with_viewport(mut self, viewport: BBox) -> Self {
         self.viewport = Some(viewport);
+        self
+    }
+
+    pub fn with_id_prefix(mut self, id_prefix: impl Into<String>) -> Self {
+        self.id_prefix = id_prefix.into();
         self
     }
 
