@@ -6,9 +6,11 @@
 //! own frame. A measurement belongs to the lowest Step holding all of its
 //! subjects. Each Step therefore measures its own content once, however often
 //! the layout repeats it, and measures what it places only against its own
-//! content and across placements. A V-score line is the exception that one
-//! subject makes of many placements: every Step under the one drawing it
-//! meets the line in its own frame. A lone board is the layout of one Step.
+//! content and across placements: of the copper it places, its design holds
+//! only what a rule's limit can reach from outside the placement. A V-score
+//! line is the exception that one subject makes of many placements: every
+//! Step under the one drawing it meets the line in its own frame. A lone
+//! board is the layout of one Step.
 //!
 //! Exactly the pools the configured rules read are extracted; the rest stay
 //! empty. Pools are flat vectors; copper follows physical stackup order
@@ -33,6 +35,7 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::dialects::{LayerRole, Side, artwork};
 use pcb_ir::geom::dfm::{BBoxIndex, Distance, WidthDisk, min_width_disk};
 use pcb_ir::geom::path::ContourBuf;
+use pcb_ir::geom::region::ring_signed_area;
 use pcb_ir::geom::{Affine2, BBox, ContourSet, Point, Polarity, PreparedRegion, Span};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
@@ -134,6 +137,8 @@ struct Source<'a> {
     scope: ArtworkScope,
     root: LayoutOccurrenceId,
     resolution: Resolution,
+    /// The farthest any rule measures from a conductor to another subject.
+    conductor_reach_mm: f64,
 }
 
 impl Source<'_> {
@@ -182,13 +187,26 @@ impl<'a> Design<'a> {
         resolution: Resolution,
     ) -> Result<Vec<Self>> {
         let wanted = rules::pools(rules, !imported.stackups.is_empty());
+        let occurrences = imported.layout_occurrences(scope)?;
         let mut steps = Vec::<(u32, Vec<LayoutOccurrenceId>)>::new();
-        for (step, occurrence) in imported.layout_occurrences(scope)? {
+        for &(step, occurrence) in &occurrences {
             match steps.iter_mut().find(|(placed, _)| *placed == step) {
                 Some((_, placements)) => placements.push(occurrence),
                 None => steps.push((step, vec![occurrence])),
             }
         }
+        let conductor_reach_mm = rules
+            .iter()
+            .filter(|rule| {
+                matches!(
+                    rule.kind,
+                    rules::RuleKind::CopperClearance
+                        | rules::RuleKind::HoleToCopperClearance(_)
+                        | rules::RuleKind::SlotToCopperClearance(_)
+                )
+            })
+            .map(|rule| rule.limit.length().millimeters())
+            .fold(0.0, f64::max);
         let mut designs = steps
             .into_iter()
             .map(|(step, placements)| {
@@ -197,6 +215,7 @@ impl<'a> Design<'a> {
                     scope,
                     root: placements[0],
                     resolution,
+                    conductor_reach_mm,
                 };
                 Self::extract(source, step, placements, wanted)
             })
@@ -216,6 +235,20 @@ impl<'a> Design<'a> {
         for (design, inherited) in designs.iter_mut().zip(inherited) {
             design.inherited_scores = inherited;
         }
+        // The designs of the Steps each design places directly, by index.
+        let placed = designs
+            .iter()
+            .map(|design| {
+                occurrences
+                    .iter()
+                    .filter(|&&(_, occurrence)| {
+                        design.placed(occurrence).1 == Some(design.placements[0])
+                    })
+                    .filter_map(|&(step, _)| designs.iter().position(|held| held.step == step))
+                    .collect()
+            })
+            .collect::<Vec<Vec<_>>>();
+        count_piece_pairs(&mut designs, &placed);
         Ok(designs)
     }
 
@@ -322,8 +355,11 @@ impl<'a> Design<'a> {
             || collect_drilled(source, stackup.as_ref()),
         );
         blockers.extend(unusable);
+        let drilled = (holes.iter().map(|hole| (hole.bbox, hole.branch)))
+            .chain(slots.iter().map(|slot| (slot.bbox, slot.branch)))
+            .collect::<Vec<_>>();
         let copper_layers = pool(wanted, Pools::COPPER, Pools::NONE, &mut blockers, || {
-            collect_copper_layers(source, stackup.as_ref())
+            collect_copper_layers(source, stackup.as_ref(), &drilled)
         });
         if wanted.intersects(Pools::CONDUCTOR_OWNERSHIP) {
             blockers.extend(unattributed_copper(imported, &copper_layers));
@@ -952,8 +988,12 @@ pub(super) struct CopperLayer {
     /// image — its width, the ring it leaves a hole, its distance to a line —
     /// is measured in the design of the Step that paints it.
     pub image: ContourSet,
-    /// The final copper of every conductor, of the Step and what it places.
+    /// The final copper of the Step's own conductors, and of those it places
+    /// that come within a rule's reach of anything outside their placement.
     pub conductors: Vec<CopperConductor>,
+    /// How many pairs of connected conductor pieces the design decides: all
+    /// it places and its own, but for the pairs inside one placement.
+    pub piece_pairs: usize,
     /// The Step's own source lands, including those fully removed from the
     /// final copper image. Hole links still require these for annular-ring
     /// subjects and provenance.
@@ -1472,16 +1512,78 @@ fn copper_conductor(
     }
 }
 
-/// The composed image of the Step's own copper, and every conductor's final
-/// copper, of the Step and of everything it places.
-fn compose_attributed_copper(
-    document: &mut GeometryDocument,
+/// The placed conductors a design must hold: those that can enter one of its
+/// measurements.
+///
+/// A design measures a placed conductor only against a subject outside the
+/// conductor's placement, and only when their final images lie within the
+/// rule's limit of each other. An image stays within the accuracy budget of
+/// the features that paint it, since clears only remove copper, and a
+/// drilled feature is its own image. So two subjects within a limit have
+/// feature bounds within that limit and two budgets. A placed conductor
+/// whose features are farther than that from every feature of the Step
+/// itself and from the bounds of every other placement therefore enters no
+/// measurement here, and it changes no other conductor's image, which
+/// composition paints apart. Its own Step's design already holds it.
+///
+/// `document` is normalized for artwork: its features are the painted ones.
+fn carried_conductors(
     source: Source<'_>,
+    document: &GeometryDocument,
+    drilled: &[(BBox, Option<u32>)],
+) -> HashSet<ConductorId> {
+    let mut conductors = HashMap::<ConductorId, BBox>::new();
+    let mut placements = HashMap::<u32, BBox>::new();
+    let mut outside = Vec::new();
+    let copper = document.features.iter().map(|feature| {
+        let id = copper_conductor(source, document, feature);
+        if id.instance().is_some() {
+            let bounds = conductors.entry(id).or_insert(BBox::empty());
+            *bounds = bounds.union(feature.bbox);
+        }
+        (feature.bbox, source.branch(id.instance()))
+    });
+    for (bbox, branch) in copper.chain(drilled.iter().copied()) {
+        match branch {
+            Some(branch) => {
+                let bounds = placements.entry(branch).or_insert(BBox::empty());
+                *bounds = bounds.union(bbox);
+            }
+            None if !bbox.is_empty() => outside.push((bbox, None)),
+            None => {}
+        }
+    }
+    outside.extend(
+        placements
+            .into_iter()
+            .map(|(branch, bounds)| (bounds, Some(branch))),
+    );
+    let near = BBoxIndex::new(outside.iter().map(|&(bounds, _)| bounds).collect());
+    let reach_mm = source.conductor_reach_mm + 2.0 * source.resolution.accuracy.max_error_mm();
+    conductors
+        .into_iter()
+        .filter(|&(id, bounds)| {
+            let branch = source.branch(id.instance());
+            near.query(bounds.expand(reach_mm))
+                .into_iter()
+                .any(|subject| outside[subject].1 != branch)
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// The composed image of the Step's own copper, and the final copper of
+/// every conductor the design holds.
+fn compose_attributed_copper(
+    document: &GeometryDocument,
+    source: Source<'_>,
+    carried: &HashSet<ConductorId>,
 ) -> Result<(ContourSet, Vec<CopperConductor>)> {
     let owners = compose_attributed_owners(
         document,
         LayerRole::Copper,
         &|document, feature| copper_conductor(source, document, feature),
+        &|id| id.instance().is_none() || carried.contains(id),
         source.resolution,
     )?;
     let mut composer = pcb_ir::geom::region::PaintComposer::new(source.resolution);
@@ -1502,14 +1604,16 @@ fn compose_attributed_copper(
 
 /// Both copper and soldermask use the canonical ordered paint fold. Source
 /// ownership survives clear features and cutouts, rather than being inferred
-/// afterward from a feature's bounds or an enclosing board profile.
+/// afterward from a feature's bounds or an enclosing board profile. The
+/// document is normalized for artwork, and only the owners that `held` names
+/// are composed.
 fn compose_attributed_owners<Owner: Clone + Eq + std::hash::Hash>(
-    document: &mut GeometryDocument,
+    document: &GeometryDocument,
     role: LayerRole,
     owner: &dyn Fn(&GeometryDocument, &Feature) -> Owner,
+    held: &dyn Fn(&Owner) -> bool,
     resolution: Resolution,
 ) -> Result<artwork::OwnerImages<Owner>> {
-    pcb_ir::dialects::ipc::process::normalize_for_artwork(document, resolution)?;
     pcb_ir::dialects::ipc::validate_artwork_ready(document)
         .map_err(|error| anyhow::anyhow!("layer is not artwork-ready: {error}"))?;
     let layer = document
@@ -1533,7 +1637,7 @@ fn compose_attributed_owners<Owner: Clone + Eq + std::hash::Hash>(
     );
     let (mut layers, _) = artwork::compose_owner_regions(
         &attributed_artwork,
-        |owner| Some(owner.clone()),
+        |owner| owner.as_ref().is_none_or(held).then(|| owner.clone()),
         resolution,
     )?;
     let owners = layers
@@ -1630,6 +1734,7 @@ fn conductor_order(
 fn collect_copper_layers(
     source: Source<'_>,
     stackup: Option<&PhysicalStackup>,
+    drilled: &[(BBox, Option<u32>)],
 ) -> Result<Vec<CopperLayer>> {
     let imported = source.imported;
     let mut copper_layers = imported
@@ -1688,7 +1793,12 @@ fn collect_copper_layers(
                     provenance: feature_provenance(source, name, feature),
                 });
             }
-            let (image, mut conductors) = compose_attributed_copper(&mut document, source)?;
+            pcb_ir::dialects::ipc::process::normalize_for_artwork(
+                &mut document,
+                source.resolution,
+            )?;
+            let carried = carried_conductors(source, &document, drilled);
+            let (image, mut conductors) = compose_attributed_copper(&document, source, &carried)?;
             conductors.sort_by_key(|conductor| conductor_order(imported, conductor.id));
             // The file's side attribute is authoritative; the stackup
             // position is the fallback for files that omit it.
@@ -1704,10 +1814,64 @@ fn collect_copper_layers(
                 copper_weight_oz: copper_weight_oz(imported, layer.name),
                 image,
                 conductors,
+                piece_pairs: 0,
                 lands,
             })
         })
         .collect()
+}
+
+/// Count the pairs of connected conductor pieces each design decides on each
+/// copper layer. A regular region has one outer ring for each piece. A
+/// placement decides the pairs inside it in its own Step's design, which is
+/// also where its conductors are all composed and their pieces counted.
+fn count_piece_pairs(designs: &mut [Design<'_>], placed: &[Vec<usize>]) {
+    type Pieces = (u64, u64);
+    let add = |(count, squares): Pieces, (more, more_squares): Pieces| {
+        (count + more, squares + more_squares)
+    };
+    let pairs = |(count, squares): Pieces| (count * count - squares) / 2;
+    // Each design's own pieces on each layer, and the sum of their squares
+    // over its conductors: pieces of one conductor are no pair.
+    let own = designs
+        .iter()
+        .map(|design| {
+            (design.copper_layers.iter())
+                .map(|layer| {
+                    (layer.conductors.iter())
+                        .filter(|conductor| conductor.branch.is_none())
+                        .map(|conductor| {
+                            let rings = conductor.image.rings.iter();
+                            rings.filter(|ring| ring_signed_area(ring) > 0.0).count() as u64
+                        })
+                        .fold((0, 0), |pieces, count| add(pieces, (count, count * count)))
+                })
+                .collect::<Vec<Pieces>>()
+        })
+        .collect::<Vec<_>>();
+    fn held(design: usize, layer: usize, own: &[Vec<(u64, u64)>], placed: &[Vec<usize>]) -> Pieces {
+        let pieces = own[design].get(layer).copied().unwrap_or_default();
+        placed[design]
+            .iter()
+            .fold(pieces, |(count, squares), &step| {
+                let (more, more_squares) = held(step, layer, own, placed);
+                (count + more, squares + more_squares)
+            })
+    }
+    for (index, design) in designs.iter_mut().enumerate() {
+        for (layer_index, layer) in design.copper_layers.iter_mut().enumerate() {
+            let placements = placed[index]
+                .iter()
+                .map(|&step| held(step, layer_index, &own, placed))
+                .collect::<Vec<_>>();
+            let all = placements
+                .iter()
+                .copied()
+                .fold(own[index][layer_index], add);
+            let inside = placements.iter().copied().map(pairs).sum::<u64>();
+            layer.piece_pairs = (pairs(all) - inside) as usize;
+        }
+    }
 }
 
 /// Copper clearance is between electrical owners, so functional copper the
@@ -1802,10 +1966,12 @@ fn collect_mask_layers(source: Source<'_>) -> Result<Vec<MaskLayer>> {
                 resolution,
             )?;
             pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
+            pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut document, resolution)?;
             let owners = compose_attributed_owners(
-                &mut document,
+                &document,
                 LayerRole::Soldermask,
                 &|_, feature| (feature.source_step_ref, source.placed(feature)),
+                &|_| true,
                 resolution,
             )?;
             Ok(MaskLayer {
@@ -2040,6 +2206,7 @@ mod tests {
             scope,
             root: LayoutOccurrenceId::Root,
             resolution: Resolution::default(),
+            conductor_reach_mm: 0.0,
         }
     }
 
@@ -2119,6 +2286,93 @@ mod tests {
                 owner.image.bbox.max.x < x + 5.0,
                 "owners do not absorb neighboring repeats"
             );
+        }
+    }
+
+    #[test]
+    fn a_design_holds_the_placed_conductors_within_reach_and_counts_them_all() {
+        let resolution = Resolution::default();
+        let rectangle = |x0: f64, x1: f64| {
+            format!(
+                r#"<Features><Contour><Polygon><PolyBegin x="{x0}" y="2"/><PolyStepSegment x="{x1}" y="2"/><PolyStepSegment x="{x1}" y="8"/><PolyStepSegment x="{x0}" y="8"/><PolyStepSegment x="{x0}" y="2"/></Polygon></Contour></Features>"#
+            )
+        };
+        // EDGE reaches 0.02 mm from both side edges of a 10 mm board and
+        // INNER stays 4 mm inside, on boards placed edge to edge.
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/><LayerRef name="TOP"/></Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+    <Step name="board" type="BOARD"><Datum x="0" y="0"/>
+      <LayerFeature layerRef="TOP">
+        <Set net="EDGE" polarity="POSITIVE">{}</Set>
+        <Set net="INNER" polarity="POSITIVE">{}</Set>
+        <Set net="EDGE" polarity="POSITIVE">{}</Set>
+      </LayerFeature>
+    </Step>
+    <Step name="panel" type="PALLET"><Datum x="0" y="0"/>
+      <StepRepeat stepRef="board" x="0" y="0" nx="3" ny="1" dx="10" dy="0" angle="0" mirror="false"/>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#,
+            rectangle(0.02, 3.0),
+            rectangle(4.0, 6.0),
+            rectangle(7.0, 9.98),
+        );
+        let imported = import_design(&Ipc2581::parse(&xml).unwrap(), resolution).unwrap();
+        let frames = |limit: &str| {
+            let pdk = format!(
+                "schema_version = 2\ndefault_profile = \"test\"\n[pdk]\nid = \"held\"\nname = \"Held\"\nrevision = \"1\"\n[profiles.test]\nname = \"Test\"\n[[rules.copper.clearance]]\nid = \"copper\"\nlimit = {{ minimum = \"{limit}\" }}\n"
+            );
+            let rules = rules::lower(&super::super::pdk::Pdk::parse(&pdk).unwrap(), None).unwrap();
+            Design::frames(&imported, ArtworkScope::ArrayFlattened, &rules, resolution).unwrap()
+        };
+        let (near, all) = (frames("0.1 mm"), frames("1000 mm"));
+        let held = |designs: &[Design<'_>]| {
+            designs[0].copper_layers[0]
+                .conductors
+                .iter()
+                .map(|conductor| imported.resolve(conductor.id.net().unwrap()).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(held(&near), ["EDGE", "EDGE", "EDGE"]);
+        assert_eq!(
+            held(&all),
+            ["EDGE", "INNER", "EDGE", "INNER", "EDGE", "INNER"]
+        );
+
+        // A held conductor is composed as it would be among all the others.
+        let everything = &all[0].copper_layers[0];
+        for conductor in &near[0].copper_layers[0].conductors {
+            let same = everything
+                .conductors
+                .iter()
+                .find(|other| other.id == conductor.id);
+            assert_eq!(same.unwrap().image.rings, conductor.image.rings);
+        }
+
+        // Pairs are counted over every placed conductor, held or not.
+        let pieces = |conductor: &CopperConductor| {
+            let rings = conductor.image.rings.iter();
+            rings.filter(|ring| ring_signed_area(ring) > 0.0).count()
+        };
+        let pairs = everything
+            .conductors
+            .iter()
+            .enumerate()
+            .flat_map(|(index, left)| {
+                let later = everything.conductors[index + 1..].iter();
+                later.map(move |right| (left, right))
+            })
+            .filter(|(left, right)| spans(left.branch, right.branch))
+            .map(|(left, right)| pieces(left) * pieces(right))
+            .sum::<usize>();
+        assert_eq!(pairs, 27);
+        for designs in [&near, &all] {
+            assert_eq!(designs[0].copper_layers[0].piece_pairs, pairs);
+            assert_eq!(designs[1].copper_layers[0].piece_pairs, 2);
         }
     }
 

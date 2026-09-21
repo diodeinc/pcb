@@ -7,11 +7,8 @@
 //! one owner are deliberately outside this quantity. Touching, overlapping,
 //! or contained distinct-owner regions measure zero.
 
-use std::collections::HashMap;
-
 use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
-use pcb_ir::geom::region::ring_signed_area;
 
 use crate::commands::dfm::design::{ConductorId, Design, spans};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
@@ -37,26 +34,8 @@ pub(super) fn evaluate(
             continue;
         }
         // Every pair of connected pieces of two conductors is decided, those
-        // inside one placement in that placement's own design. A regular
-        // region has one outer ring for each piece.
-        let mut decided = 0;
-        let mut decided_in = HashMap::<u32, usize>::new();
-        for conductor in &layer.conductors {
-            let pieces = conductor
-                .image
-                .rings
-                .iter()
-                .filter(|ring| ring_signed_area(ring) > 0.0)
-                .count();
-            let inside = conductor
-                .branch
-                .map(|branch| decided_in.entry(branch).or_default());
-            checked += (decided - inside.as_deref().copied().unwrap_or(0)) * pieces;
-            decided += pieces;
-            if let Some(inside) = inside {
-                *inside += pieces;
-            }
-        }
+        // inside one placement in that placement's own design.
+        checked += layer.piece_pairs;
 
         // A conductor whose bounds come within the limit of no other's is
         // proven clear whole; only the rest are taken apart into pieces.

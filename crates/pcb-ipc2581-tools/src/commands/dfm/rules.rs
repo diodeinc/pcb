@@ -1027,6 +1027,7 @@ limit = { minimum = "0.30 mm" }
             copper_weight_oz: Some(thickness_mm / 0.0348),
             image: pcb_ir::geom::ContourSet::empty(pcb_ir::geom::Resolution::default()),
             conductors: Vec::new(),
+            piece_pairs: 0,
             lands: Vec::new(),
         };
         let weighs = |ounces: f64, thickness_mm: f64| {
