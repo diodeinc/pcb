@@ -1642,6 +1642,7 @@ pub fn extract_step_layer_local(
                     feature_index: feature_index as u32,
                     definition: None,
                 };
+                let mark = DocumentMark::of(&doc);
                 let features = extract_set_feature(
                     &context,
                     layer.name,
@@ -1651,6 +1652,7 @@ pub fn extract_step_layer_local(
                     set_feature,
                     &mut doc,
                 )?;
+                let features = keep_finite(&mut doc, mark, features, source);
                 validate_copper_balance_structure(
                     copper_balance,
                     set_feature,
@@ -1699,17 +1701,14 @@ pub fn extract_step_layer_local(
             if is_drill_layer && source_layer.name == layer.name {
                 for (feature_index, set_feature) in set.features.iter().enumerate() {
                     if let SetFeature::Hole(hole) = set_feature {
-                        let feature = extract_hole(
-                            SourceRef {
-                                set_index: set_index as u32,
-                                feature_index: feature_index as u32,
-                                definition: None,
-                            },
-                            set.geometry,
-                            hole,
-                            &mut doc,
-                        );
-                        emitted.push(feature);
+                        let source = SourceRef {
+                            set_index: set_index as u32,
+                            feature_index: feature_index as u32,
+                            definition: None,
+                        };
+                        let mark = DocumentMark::of(&doc);
+                        let feature = extract_hole(source, set.geometry, hole, &mut doc);
+                        emitted.extend(keep_finite(&mut doc, mark, vec![feature], source));
                     }
                 }
             }
@@ -1731,18 +1730,14 @@ pub fn extract_step_layer_local(
                         ) {
                             continue;
                         }
-                        let feature = extract_slot(
-                            &context,
-                            SourceRef {
-                                set_index: set_index as u32,
-                                feature_index: feature_index as u32,
-                                definition: None,
-                            },
-                            set.geometry,
-                            slot,
-                            &mut doc,
-                        )?;
-                        emitted.push(feature);
+                        let source = SourceRef {
+                            set_index: set_index as u32,
+                            feature_index: feature_index as u32,
+                            definition: None,
+                        };
+                        let mark = DocumentMark::of(&doc);
+                        let feature = extract_slot(&context, source, set.geometry, slot, &mut doc)?;
+                        emitted.extend(keep_finite(&mut doc, mark, vec![feature], source));
                     }
                 }
             }
@@ -1773,6 +1768,96 @@ pub fn extract_step_layer_local(
     layer.bbox = layer_bbox;
 
     Ok(doc)
+}
+
+/// Document lengths before one source feature was lowered, so everything it
+/// pushed can be taken back.
+#[derive(Debug, Clone, Copy)]
+struct DocumentMark {
+    paths: usize,
+    contours: usize,
+    cmds: usize,
+    placements: usize,
+    placement_groups: usize,
+    pin_refs: usize,
+    spec_refs: usize,
+}
+
+impl DocumentMark {
+    fn of(doc: &GeometryDocument) -> Self {
+        Self {
+            paths: doc.arena.paths.len(),
+            contours: doc.arena.contours.len(),
+            cmds: doc.arena.cmds.len(),
+            placements: doc.feature_placements.len(),
+            placement_groups: doc.feature_placement_groups.len(),
+            pin_refs: doc.pin_refs.len(),
+            spec_refs: doc.spec_refs.len(),
+        }
+    }
+
+    /// Whether every number pushed since the mark is finite. Path bounds
+    /// cover stroke widths, which expand them.
+    fn pushed_is_finite(self, doc: &GeometryDocument) -> bool {
+        doc.arena.cmds[self.cmds..]
+            .iter()
+            .all(|cmd| cmd.is_finite())
+            && doc.arena.paths[self.paths..]
+                .iter()
+                .all(|path| path.bbox.is_valid())
+            && doc.feature_placements[self.placements..]
+                .iter()
+                .all(|placement| affine_is_finite(*placement))
+    }
+
+    fn truncate(self, doc: &mut GeometryDocument) {
+        doc.arena.paths.truncate(self.paths);
+        doc.arena.contours.truncate(self.contours);
+        doc.arena.cmds.truncate(self.cmds);
+        doc.feature_placements.truncate(self.placements);
+        doc.feature_placement_groups.truncate(self.placement_groups);
+        doc.pin_refs.truncate(self.pin_refs);
+        doc.spec_refs.truncate(self.spec_refs);
+    }
+}
+
+fn affine_is_finite(transform: Affine2) -> bool {
+    [
+        transform.m00,
+        transform.m01,
+        transform.m02,
+        transform.m10,
+        transform.m11,
+        transform.m12,
+    ]
+    .iter()
+    .all(|value| value.is_finite())
+}
+
+/// The import boundary for non-finite numbers: a source feature whose lowered
+/// geometry carries a NaN or an infinity is dropped whole and reported, so
+/// none reaches the arena or poisons the bounds built on it.
+fn keep_finite(
+    doc: &mut GeometryDocument,
+    mark: DocumentMark,
+    features: Vec<GeometryFeature>,
+    source: SourceRef,
+) -> Vec<GeometryFeature> {
+    let finite = mark.pushed_is_finite(doc)
+        && features.iter().all(|feature| {
+            feature.bbox.is_valid()
+                && feature.center.is_finite()
+                && affine_is_finite(feature.transform)
+        });
+    if finite {
+        return features;
+    }
+    mark.truncate(doc);
+    doc.warn(format!(
+        "Dropping feature {} of set {} because its geometry is not finite",
+        source.feature_index, source.set_index
+    ));
+    Vec::new()
 }
 
 /// A NEGATIVE layer images what is removed from a plane filling the step
@@ -1816,6 +1901,7 @@ fn push_negative_layer_plane(
         bbox: BBox::empty(),
     });
 
+    let mark = DocumentMark::of(doc);
     let path = push_outline_path(doc, &profile.polygon, &profile.cutouts, Affine2::IDENTITY);
     let mut feature = GeometryFeature::new(FeatureKind::Polygon, GeometryPolarity::Dark);
     feature.source.set_index = source_set_index;
@@ -1825,7 +1911,10 @@ fn push_negative_layer_plane(
     feature.source_step_kind = layout_step_kind(step);
     feature.flags.lowered_to_paths = true;
     complete_feature_intent(layer, &mut feature);
-    push_extracted_feature(doc, set_id, layer.name, None, feature, layer_bbox);
+    let source = feature.source;
+    for feature in keep_finite(doc, mark, vec![feature], source) {
+        push_extracted_feature(doc, set_id, layer.name, None, feature, layer_bbox);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3057,6 +3146,7 @@ fn append_step_profile(doc: &mut GeometryDocument, step: &Step) -> ProfileRange 
         };
     };
 
+    let mark = DocumentMark::of(doc);
     let outer_path = push_profile_polygon(doc, &profile.polygon);
     let cutout_start = doc.profile_cutouts.len() as u32;
     for cutout in &profile.cutouts {
@@ -3065,6 +3155,16 @@ fn append_step_profile(doc: &mut GeometryDocument, step: &Step) -> ProfileRange 
             path,
             bbox: doc.arena.paths[path as usize].bbox,
         });
+    }
+    if !mark.pushed_is_finite(doc) {
+        mark.truncate(doc);
+        doc.profile_cutouts.truncate(cutout_start as usize);
+        doc.warn("Dropping a Step Profile because its geometry is not finite");
+        return ProfileRange {
+            start,
+            count: 0,
+            bbox: BBox::empty(),
+        };
     }
     let cutout_count = doc.profile_cutouts.len() as u32 - cutout_start;
     let bbox = doc.arena.paths[outer_path as usize].bbox;
@@ -5624,6 +5724,67 @@ mod tests {
             "diagnostics: {:?}",
             imported.geometry.diagnostics
         );
+    }
+
+    #[test]
+    fn non_finite_source_numbers_never_reach_the_arena() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/></Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Pad><Location x="1" y="1"/><Circle diameter="1"/></Pad>
+            <Pad><Location x="5" y="1"/><Circle diameter="1"/></Pad>
+            <Pad><Location x="9" y="1"/><Circle diameter="1"/></Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        // Other producers hand the importer a typed model no parser vetted.
+        let cad = &ipc.ecad().unwrap().cad_data;
+        let mut step = cad.steps[0].clone();
+        let [
+            SetFeature::Pad(nan),
+            SetFeature::Pad(_),
+            SetFeature::Pad(infinite),
+        ] = step.layer_features[0].sets[0].features.as_mut_slice()
+        else {
+            panic!("fixture pads");
+        };
+        nan.x = Some(f64::NAN);
+        let Some(FeatureShape::StandardPrimitive(StandardPrimitive::Circle(circle))) =
+            &mut infinite.feature
+        else {
+            panic!("fixture circle");
+        };
+        circle.shape.diameter = f64::INFINITY;
+
+        let doc = extract_step_layer_local(
+            &ipc,
+            &step,
+            &cad.layers,
+            &cad.layers[0],
+            "TOP",
+            Resolution::default(),
+        )
+        .unwrap();
+
+        assert_eq!(doc.features.len(), 1);
+        assert_eq!(doc.diagnostics.len(), 2, "{:?}", doc.diagnostics);
+        assert!(doc.arena.cmds.iter().all(|cmd| cmd.is_finite()));
+        assert_eq!(doc.arena.paths.len(), 1);
+        assert_eq!(doc.layers[0].bbox.min, Point::new(4.5, 0.5));
+        assert_eq!(doc.layers[0].bbox.max, Point::new(5.5, 1.5));
     }
 
     #[test]
