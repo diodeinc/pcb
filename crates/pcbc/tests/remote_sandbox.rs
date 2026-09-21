@@ -34,8 +34,8 @@ fn run_open_sync(interrupt_during_renewal: bool) {
         ("notes.txt", "layout notes\n"),
     ];
     let server = MockServer::start();
-    // Model the API's exclusive lifecycle lock for the duration of a mint.
-    // Sequential requests succeed; overlapping requests receive SANDBOX_BUSY.
+    // Overlapping mints while the sandbox is not ready receive SANDBOX_NOT_READY.
+    // Sequential requests succeed once it is ready.
     let endpoint = server.url("/sandbox");
     let busy_until = Mutex::new(Instant::now());
     let mut mint = server.mock(|when, then| {
@@ -51,7 +51,7 @@ fn run_open_sync(interrupt_during_renewal: bool) {
                         .body(
                             json!({
                                 "error": "Sandbox lifecycle is busy; retry shortly.",
-                                "code": "SANDBOX_BUSY",
+                                "code": "SANDBOX_NOT_READY",
                             })
                             .to_string(),
                         )
@@ -210,7 +210,7 @@ exit 1
             when.method(POST)
                 .path("/api/sandboxes/sbx_sync/access-token");
             then.status(503)
-                .json_body(json!({"code": "SANDBOX_UPDATING"}));
+                .json_body(json!({"code": "SANDBOX_NOT_READY"}));
         });
         for upload in &mut uploads {
             upload.delete();
