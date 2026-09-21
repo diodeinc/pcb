@@ -1526,10 +1526,11 @@ fn parse_aperture_code(value: &str) -> Result<i32> {
     Ok(code)
 }
 
-/// Split a leading G-code, with or without its leading zero, off a word.
+/// Split a leading G-code, with or without its leading zero, off a word. A
+/// code is two digits at most: a comment's text may start with more.
 fn split_g_code(word: &str) -> Option<(u32, &str)> {
     let rest = word.strip_prefix('G')?;
-    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let digits = rest.bytes().take(2).take_while(u8::is_ascii_digit).count();
     Some((rest[..digits].parse().ok()?, &rest[digits..]))
 }
 

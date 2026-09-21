@@ -678,7 +678,7 @@ fn reads_deprecated_constructs_older_files_are_full_of() {
     // operation, D-codes without leading zeros, coordinates that repeat the
     // last operation, and a macro variable nobody set.
     let gerber = GerberX2::parse(
-        "G04 RS-274X*\n%\nFSLAX24Y24*\nMOIN*\n%\n%IPPOS*%\n%LNTOP*%\n%INBoard, rev 2*%\n%ASAXBY*%\n%OFA0B0*%\n%SFA1.0B1.0*%\n%MIA0B0*%\n%IR0*%\n%SRX1Y1I0J0*%\n%AMDOT*\n1,1,$1,$2,0*\n%\n%ADD10C,0.0100*%\n%ADD11DOT,0.05*%\nG70*\nG90*\nG75*\nG54D10*\nG01X0Y0D02*\nX10000D01*\nY10000*\nG01X0Y10000D1*\nG54D11*\nG55X5000Y5000D3*\nX7000Y7000*\nM02*\n",
+        "G04 RS-274X*\nG042 layers*\n%\nFSLAX24Y24*\nMOIN*\n%\n%IPPOS*%\n%LNTOP*%\n%INBoard, rev 2*%\n%ASAXBY*%\n%OFA0B0*%\n%SFA1.0B1.0*%\n%MIA0B0*%\n%IR0*%\n%SRX1Y1I0J0*%\n%AMDOT*\n1,1,$1,$2,0*\n%\n%ADD10C,0.0100*%\n%ADD11DOT,0.05*%\nG70*\nG90*\nG75*\nG54D10*\nG01X0Y0D02*\nX10000D01*\nY10000*\nG01X0Y10000D1*\nG54D11*\nG55X5000Y5000D3*\nX7000Y7000*\nM02*\n",
     )
     .unwrap();
 
