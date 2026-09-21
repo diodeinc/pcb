@@ -287,8 +287,12 @@ lowest Step that holds all of its subjects:
   holes or mask openings of neighbouring boards — is measured in the frame of
   the Step that places both, between its own content and each thing it places
   and across placements, never again inside one placement.
-- A V-score line or a board profile is measured in the frame of the Step that
-  draws it, against the copper of that Step and of everything it places.
+- A V-score line crosses every board along it, so it is a reference for the
+  Step that draws it and for every Step placed under that one. Each measures
+  its own copper against the line wherever the line comes within the rule's
+  limit of that copper, in its own frame, once for all the placements the
+  line crosses alike. A board profile is measured against the copper of its
+  own Step.
 
 The same evaluators therefore run on a lone board, a board array or a
 fabrication panel without a second DFM code path: a lone board is a layout of
@@ -402,7 +406,8 @@ and is not applicable when no Step places two.
   width decides each finding.
 - V-score and board-edge clearance measure the shortest distance from the
   centerlines or profile outlines (cutouts included) to each layer's
-  composed copper image.
+  composed copper image. A centerline is measured over its drawn extent, to
+  the copper of the Step that draws it and of every Step placed under it.
 - Board-array spacing measures boundary-to-boundary distance between the
   sibling board arrays one Step places, as a fabrication panel does; it
   requires `--layout-target board-array` and at least two arrays.
@@ -661,8 +666,9 @@ consumer's machine to render or validate the report.
   indices when IPC-2581 provides them. `provenance` identifies the source
   definition and its occurrence separately from the legacy `source` locator:
   `instance_index` is `null` for the frame's own Step and otherwise names,
-  in `layout.instances`, the occurrence under the frame's first placement;
-  `drill_span` records the applicable copper-layer span.
+  in `layout.instances`, the occurrence under the frame's first placement.
+  A V-score line a Step meets from above keeps the provenance of the Step
+  that draws it. `drill_span` records the applicable copper-layer span.
   Unavailable fields remain `null` so consumers see one stable shape.
 - `evidence` records `kind`, `role`, and applicable circle, segment, or bounds
   fields; unused fields remain `null`. `paths` contains closed region rings or
@@ -723,7 +729,10 @@ Each entry has the Step's `step` name and its `placements`: one per occurrence
 of that Step, with `instance`, its index in `layout.instances` (`null` for the
 checked frame itself), and the occurrence's `transform` as above. A lone board,
 or the `board` target, has one frame with the single placement
-`{instance: null, transform: [1,0,0,1,0,0]}`.
+`{instance: null, transform: [1,0,0,1,0,0]}`. After these, a Step has a
+further frame for each smaller set of its placements that some finding holds
+at: a V-score line that crosses only the boards of one row is found at those
+placements only.
 
 A finding is measured once, in the coordinates of the Step its `frame` names,
 and occurs at every placement of that frame: its location, witnesses, site

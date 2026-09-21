@@ -46,10 +46,8 @@ pub(super) fn copper_feature_width(
     conditions: &Conditions,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
-    // Width is the Step's own copper's: what it places is measured once, in
-    // that Step's own design, however often the layout repeats it.
     let measure = |layer: &CopperLayer| {
-        thin_features(&layer.own_image, limit_mm)?
+        thin_features(&layer.image, limit_mm)?
             .into_iter()
             .map(move |piece| {
                 let mut measured = measured_piece(&piece, limit_mm, &layer.layer, "copper_image")?;

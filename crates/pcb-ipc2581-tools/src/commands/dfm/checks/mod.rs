@@ -52,6 +52,10 @@ use super::waivers::{self, WaiverFile, WaiverOutcome};
 #[derive(Default)]
 pub(super) struct Results {
     pub(super) rules: Vec<RuleResult>,
+    /// What findings name as their frame: a design, by index, and the
+    /// placements of its Step, by index, that they hold at. Each design's
+    /// frame of all its placements comes first, at the design's own index.
+    pub(super) frames: Vec<(u32, Vec<u32>)>,
     pub(super) findings: Vec<Finding>,
     pub(super) shared_evidence: Vec<Evidence>,
     pub(super) waivers: Option<WaiverOutcome>,
@@ -135,14 +139,16 @@ struct RatioEvaluation {
 }
 
 enum RuleEvaluation {
-    Distance(Evaluation),
+    /// Each evaluation with the placements of the design's Step it holds at,
+    /// by index; `None` is all of them.
+    Distance(Vec<(Option<Vec<u32>>, Evaluation)>),
     Count(CountEvaluation),
     Ratio(RatioEvaluation),
 }
 
 impl From<Evaluation> for RuleEvaluation {
     fn from(evaluation: Evaluation) -> Self {
-        Self::Distance(evaluation)
+        Self::Distance(vec![(None, evaluation)])
     }
 }
 
@@ -152,7 +158,14 @@ pub(super) fn run(
     waiver_file: Option<&WaiverFile>,
     today: NaiveDate,
 ) -> anyhow::Result<Results> {
-    let mut results = Results::default();
+    let mut results = Results {
+        frames: designs
+            .iter()
+            .enumerate()
+            .map(|(index, design)| (index as u32, (0..design.placements.len() as u32).collect()))
+            .collect(),
+        ..Results::default()
+    };
     let annular_rules = rules
         .iter()
         .filter(|rule| matches!(rule.kind, RuleKind::AnnularRing(_)))
@@ -165,17 +178,11 @@ pub(super) fn run(
         // when no design holds a subject for it.
         let mut incomplete = Vec::new();
         let mut not_applicable = None;
-        for (frame, design) in designs.iter().enumerate() {
+        for (index, design) in designs.iter().enumerate() {
             let unevaluated = unevaluated(rule, design).or_else(|| {
                 // A measurement that fails leaves its own rule uncertified.
-                judge_in(
-                    rule,
-                    design,
-                    frame as u32,
-                    &mut result,
-                    &mut results.findings,
-                )
-                .unwrap_or_else(|error| Some((RuleStatus::Incomplete, format!("{error:#}"))))
+                judge_in(rule, (index as u32, design), &mut result, &mut results)
+                    .unwrap_or_else(|error| Some((RuleStatus::Incomplete, format!("{error:#}"))))
             });
             match unevaluated {
                 Some((RuleStatus::Incomplete, reason)) if !incomplete.contains(&reason) => {
@@ -221,7 +228,7 @@ pub(super) fn run(
         );
     }
     let waiver_aliases = assign_ids(&mut results.findings, &annular_rules);
-    results.shared_evidence = share_evidence(&mut results.findings, designs);
+    results.shared_evidence = share_evidence(&mut results.findings, &results.frames, designs);
     results.waivers =
         waiver_file.map(|file| waivers::apply(&mut results.findings, file, &waiver_aliases, today));
 
@@ -238,47 +245,71 @@ pub(super) fn run(
     Ok(results)
 }
 
+/// The frame of a design at some placements of its Step, all for `None`.
+fn frame_at(frames: &mut Vec<(u32, Vec<u32>)>, design: u32, placements: Option<Vec<u32>>) -> u32 {
+    let Some(placements) = placements else {
+        return design;
+    };
+    let known = frames
+        .iter()
+        .position(|frame| (frame.0, &frame.1) == (design, &placements));
+    known.unwrap_or_else(|| {
+        frames.push((design, placements));
+        frames.len() - 1
+    }) as u32
+}
+
 /// Evaluate a rule in one design and judge what it measured: findings and
 /// unresolved measurements join the rule's, and each subject decided counts
-/// once for every placement of the design's Step. Returns why the rule stays
+/// once for every placement it is decided at. Returns why the rule stays
 /// unevaluated here, if it does.
 fn judge_in(
     rule: &Rule,
-    design: &Design,
-    frame: u32,
+    (index, design): (u32, &Design),
     result: &mut RuleResult,
-    findings: &mut Vec<Finding>,
+    results: &mut Results,
 ) -> anyhow::Result<Option<(RuleStatus, String)>> {
-    let first = findings.len();
-    let checked = match evaluate(rule, design)? {
-        RuleEvaluation::Distance(evaluation) => {
+    let Results {
+        frames, findings, ..
+    } = results;
+    match evaluate(rule, design)? {
+        RuleEvaluation::Distance(evaluations) => {
             debug_assert_eq!(rule.comparison, Comparison::Minimum);
             let limit = rule.limit.length().millimeters();
-            for measured in evaluation.measured {
-                match judge(&measured.distance, limit) {
-                    Judgement::Violates => findings.push(finding(rule, measured)),
-                    Judgement::Unresolved => result.unresolved.push(Unresolved {
-                        frame,
-                        actual_mm: measured.distance.mm,
-                        uncertainty_mm: measured.distance.uncertainty_mm,
-                        point: measured.distance.midpoint().into(),
-                        layers: measured
-                            .layers
-                            .into_iter()
-                            .map(|layer| layer.name)
-                            .collect(),
-                    }),
-                    Judgement::Meets => {}
+            for (placements, evaluation) in evaluations {
+                let frame = frame_at(frames, index, placements);
+                for measured in evaluation.measured {
+                    match judge(&measured.distance, limit) {
+                        Judgement::Violates => findings.push(Finding {
+                            frame,
+                            ..finding(rule, measured)
+                        }),
+                        Judgement::Unresolved => result.unresolved.push(Unresolved {
+                            frame,
+                            actual_mm: measured.distance.mm,
+                            uncertainty_mm: measured.distance.uncertainty_mm,
+                            point: measured.distance.midpoint().into(),
+                            layers: measured
+                                .layers
+                                .into_iter()
+                                .map(|layer| layer.name)
+                                .collect(),
+                        }),
+                        Judgement::Meets => {}
+                    }
                 }
+                result.checked += evaluation.checked * frames[frame as usize].1.len();
             }
-            evaluation.checked
         }
         RuleEvaluation::Count(evaluation) => {
             let limit = rule.limit.count();
             if violates_count(evaluation.actual, rule.comparison, limit) {
-                findings.push(count_finding(rule, evaluation, limit));
+                findings.push(Finding {
+                    frame: index,
+                    ..count_finding(rule, evaluation, limit)
+                });
             }
-            1
+            result.checked += design.placements.len();
         }
         RuleEvaluation::Ratio(evaluation) => {
             debug_assert_eq!(rule.comparison, Comparison::Maximum);
@@ -296,15 +327,14 @@ fn judge_in(
                     .measured
                     .into_iter()
                     .filter(|measured| exceeds(measured, maximum))
-                    .map(|measured| ratio_finding(rule, measured, maximum)),
+                    .map(|measured| Finding {
+                        frame: index,
+                        ..ratio_finding(rule, measured, maximum)
+                    }),
             );
-            evaluation.checked
+            result.checked += evaluation.checked * design.placements.len();
         }
-    };
-    for finding in &mut findings[first..] {
-        finding.frame = frame;
     }
-    result.checked += checked * design.placements.len();
     Ok(None)
 }
 
@@ -312,28 +342,35 @@ fn judge_in(
 /// by its design's outline pool index; the table holds each referenced
 /// profile once, in design and pool order, so report size follows the
 /// findings rather than findings times the outline every one measures to.
-fn share_evidence(findings: &mut [Finding], designs: &[Design]) -> Vec<Evidence> {
-    fn references(findings: &mut [Finding]) -> impl Iterator<Item = (u32, &mut u32)> {
+fn share_evidence(
+    findings: &mut [Finding],
+    frames: &[(u32, Vec<u32>)],
+    designs: &[Design],
+) -> Vec<Evidence> {
+    fn references<'a>(
+        findings: &'a mut [Finding],
+        frames: &'a [(u32, Vec<u32>)],
+    ) -> impl Iterator<Item = (u32, &'a mut u32)> {
         findings.iter_mut().flat_map(|finding| {
-            let frame = finding.frame;
+            let design = frames[finding.frame as usize].0;
             finding
                 .sites
                 .iter_mut()
                 .flat_map(|site| &mut site.evidence)
-                .filter_map(move |evidence| Some((frame, evidence.shared.as_mut()?)))
+                .filter_map(move |evidence| Some((design, evidence.shared.as_mut()?)))
         })
     }
-    let outlines = references(findings)
-        .map(|(frame, index)| (frame, *index))
+    let outlines = references(findings, frames)
+        .map(|(design, index)| (design, *index))
         .collect::<std::collections::BTreeSet<_>>();
-    for (frame, index) in references(findings) {
-        *index = outlines.range(..(frame, *index)).count() as u32;
+    for (design, index) in references(findings, frames) {
+        *index = outlines.range(..(design, *index)).count() as u32;
     }
     outlines
         .into_iter()
-        .map(|(frame, index)| {
+        .map(|(design, index)| {
             drilled_board_edge_clearance::profile_evidence(
-                &designs[frame as usize].board_outlines[index as usize],
+                &designs[design as usize].board_outlines[index as usize],
             )
         })
         .collect()
@@ -562,10 +599,9 @@ fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
             .iter()
             .all(|slot| !slot_matches(slot.plating, plating))
             .then(|| format!("{} routed slots", slot_plating_label(plating))),
-        RuleKind::LineworkToCopperClearance(Linework::VScore) => design
-            .scores
-            .is_empty()
-            .then(|| "V-score centerlines".to_owned()),
+        RuleKind::LineworkToCopperClearance(Linework::VScore) => (design.scores.is_empty()
+            && design.inherited_scores.is_empty())
+        .then(|| "V-score centerlines".to_owned()),
         RuleKind::LineworkToCopperClearance(Linework::BoardEdge) => design
             .board_outlines
             .iter()
@@ -662,9 +698,9 @@ fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
         RuleKind::SlotToCopperClearance(plating) => {
             slot_clearance::evaluate(limit(), plating, &rule.conditions, design)?.into()
         }
-        RuleKind::LineworkToCopperClearance(linework) => {
-            linework_clearance::evaluate(limit(), linework, &rule.conditions, design)?.into()
-        }
+        RuleKind::LineworkToCopperClearance(linework) => RuleEvaluation::Distance(
+            linework_clearance::evaluate(limit(), linework, &rule.conditions, design)?,
+        ),
         RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit(), design)?.into(),
         RuleKind::CopperFeatureWidth => {
             thin_regions::copper_feature_width(limit(), &rule.conditions, design)?.into()

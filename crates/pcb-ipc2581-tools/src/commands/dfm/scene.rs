@@ -15,7 +15,9 @@ use pcb_ir::geom::{Affine2, BBox, FillRule, Point, shapes};
 use pcb_ir::render::RenderOptions;
 
 use super::design::Design;
-use super::report::{Finding, LayerRef, LayoutContext, ReportBBox, RuleResult, Scene, ScenePass};
+use super::report::{
+    Finding, Frame, LayerRef, LayoutContext, ReportBBox, RuleResult, Scene, ScenePass,
+};
 use crate::geometry;
 
 struct GeometryPass {
@@ -134,13 +136,14 @@ pub(super) fn export(
     designs: &[Design<'_>],
     layout: &LayoutContext,
     rules: &[RuleResult],
+    frames: &[Frame],
     findings: &[Finding],
 ) -> Result<Scene> {
     let design = &designs[0];
-    let sources = scene_passes(rules, design)?;
+    let sources = scene_passes(rules, designs)?;
     let mut bounds = scene_bounds(layout.bounding_box, &sources);
     for finding in findings {
-        let frame = &designs[finding.frame as usize];
+        let frame = &frames[finding.frame as usize];
         let rule = rules
             .iter()
             .find(|rule| rule.id == finding.rule_id)
@@ -161,7 +164,17 @@ pub(super) fn export(
             bounds = frame
                 .placements
                 .iter()
-                .map(|&placement| site_bounds.transformed(frame.placement_transform(placement)))
+                .map(|placement| {
+                    let [m00, m10, m01, m11, m02, m12] = placement.transform;
+                    site_bounds.transformed(Affine2 {
+                        m00,
+                        m01,
+                        m02,
+                        m10,
+                        m11,
+                        m12,
+                    })
+                })
                 .fold(bounds, BBox::union);
             for feature in rule
                 .view
@@ -223,7 +236,8 @@ fn scene_bounds(layout: Option<ReportBBox>, sources: &[GeometryPass]) -> BBox {
     )
 }
 
-fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> anyhow::Result<Vec<GeometryPass>> {
+fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> anyhow::Result<Vec<GeometryPass>> {
+    let design = &designs[0];
     let layout = &design.imported.geometry;
     let wanted = rules
         .iter()
@@ -291,14 +305,20 @@ fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> anyhow::Result<Vec
     }
     if wanted.contains("scores") {
         let mut layers = BTreeMap::<String, Vec<Vec<ContourBuf>>>::new();
-        for score in &design.scores {
-            layers
-                .entry(score.layer.name.clone())
-                .or_default()
-                .push(vec![ContourBuf::new(vec![
-                    PathCmd::move_to(score.start),
-                    PathCmd::line_to(score.end),
-                ])]);
+        // Every Step draws its own lines, wherever the layout places it.
+        for design in designs {
+            for &placement in &design.placements {
+                let (placed, _) = design.placed(placement);
+                for score in &design.scores {
+                    layers
+                        .entry(score.layer.name.clone())
+                        .or_default()
+                        .push(vec![ContourBuf::new(vec![
+                            PathCmd::move_to(placed.transform_point(score.start)),
+                            PathCmd::line_to(placed.transform_point(score.end)),
+                        ])]);
+                }
+            }
         }
         for (layer, shapes) in layers {
             passes.push(GeometryPass::shapes(

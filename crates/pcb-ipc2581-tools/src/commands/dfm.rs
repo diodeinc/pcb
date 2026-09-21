@@ -126,7 +126,18 @@ pub fn check(
     )?;
     let summary = summarize(&checked);
     let layout = designs[0].report_layout();
-    let scene = scene::export(&designs, &layout, &checked.rules, &checked.findings)?;
+    let frames = checked
+        .frames
+        .iter()
+        .map(|(design, placements)| designs[*design as usize].report_frame(placements))
+        .collect::<Vec<_>>();
+    let scene = scene::export(
+        &designs,
+        &layout,
+        &checked.rules,
+        &frames,
+        &checked.findings,
+    )?;
     Ok(DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: request.generated_at.to_rfc3339(),
@@ -171,7 +182,7 @@ pub fn check(
             }),
         summary,
         rules: checked.rules,
-        frames: designs.iter().map(design::Design::report_frame).collect(),
+        frames,
         findings: checked.findings,
         shared_evidence: checked.shared_evidence,
         scene,
@@ -1400,6 +1411,55 @@ limit = { minimum = "0.2 mm" }
             serde_json::to_value(&board.findings[0].sites).unwrap(),
             serde_json::to_value(&array.findings[0].sites).unwrap()
         );
+    }
+
+    #[test]
+    fn a_vscore_line_is_measured_once_by_the_board_it_crosses_everywhere() {
+        let resolution = Resolution::default();
+        // The trace's copper now ends 0.3 mm from the board's bottom edge.
+        let board = BOARD.replace(
+            r#"startY="1" endX="29" endY="1""#,
+            r#"startY="0.4" endX="29" endY="0.4""#,
+        );
+        let array = create_board_array(
+            &board,
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 2,
+                board_margin_mm: EdgeInsetsMm::all(0.0),
+                edge_rail_mm: EdgeInsetsMm::all(5.0),
+            },
+            false,
+            crate::commands::board_array::Separation::VScore,
+            resolution,
+        )
+        .unwrap()
+        .xml;
+        let results = check(&array, LayoutTarget::BoardArray);
+        let vscore = results
+            .findings
+            .iter()
+            .filter(|finding| finding.rule_id == "copper.minimum_vscore_to_copper_clearance")
+            .collect::<Vec<_>>();
+        let [finding] = vscore.as_slice() else {
+            panic!("one line comes too close, to one layer: {vscore:?}");
+        };
+        assert!((finding.measurement.actual_mm().unwrap() - 0.3).abs() < 1e-8);
+        let frame = &results.frames[finding.frame as usize];
+        assert_eq!(frame.step, "board");
+        assert_eq!(frame.placements.len(), 4, "the array scores every board");
+        // The array draws the line; the board meets it in its own frame.
+        assert_eq!(
+            finding.subjects[0]
+                .provenance
+                .as_ref()
+                .unwrap()
+                .step
+                .as_deref(),
+            Some(results.frames[0].step.as_str())
+        );
+        let witness = finding.location.witnesses[0].point;
+        assert!((0.0..=30.0).contains(&witness.x) && witness.y.abs() < 1e-9);
     }
 
     #[test]

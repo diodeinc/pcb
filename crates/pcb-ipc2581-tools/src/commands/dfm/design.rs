@@ -6,7 +6,9 @@
 //! own frame. A measurement belongs to the lowest Step holding all of its
 //! subjects. Each Step therefore measures its own content once, however often
 //! the layout repeats it, and measures what it places only against its own
-//! content and across placements. A lone board is the layout of one Step.
+//! content and across placements. A V-score line is the exception that one
+//! subject makes of many placements: every Step under the one drawing it
+//! meets the line in its own frame. A lone board is the layout of one Step.
 //!
 //! Exactly the pools the configured rules read are extracted; the rest stay
 //! empty. Pools are flat vectors; copper follows physical stackup order
@@ -65,7 +67,7 @@ pub(super) struct Design<'a> {
     pub slots: Vec<Slot>,
     pub copper_layers: Vec<CopperLayer>,
     /// One boundary index per copper layer, for clearance and enclosure
-    /// queries against the composed copper.
+    /// queries against the Step's composed copper.
     pub copper_boundaries: Vec<PreparedRegion>,
     /// One boundary index per attributed conductor on each copper layer.
     pub conductor_boundaries: Vec<Vec<PreparedRegion>>,
@@ -74,7 +76,12 @@ pub(super) struct Design<'a> {
     pub hole_lands: Vec<Vec<HoleLand>>,
     pub slot_lands: Vec<Vec<HoleLand>>,
     pub mask_layers: Vec<MaskLayer>,
+    /// The V-score lines the Step draws.
     pub scores: Vec<Score>,
+    /// The lines Steps above it draw, where they reach the Step's copper, in
+    /// the Step's frame, each with the placements it does so at, by index.
+    /// A line crosses every board along it, and each measures it once.
+    pub inherited_scores: Vec<(Score, Vec<u32>)>,
     pub board_outlines: Vec<BoardOutline>,
     pub board_arrays: Vec<BoardArray>,
     /// What extraction could not build. Every pool above is usable for a
@@ -192,7 +199,7 @@ impl<'a> Design<'a> {
                         .collect::<HashMap<_, _>>(),
                 )
             });
-        Ok(steps
+        let mut designs = steps
             .into_iter()
             .map(|(step, placements)| {
                 let source = Source {
@@ -203,7 +210,102 @@ impl<'a> Design<'a> {
                 };
                 Self::extract(source, step, placements, wanted, physical.as_ref())
             })
-            .collect())
+            .collect::<Vec<_>>();
+        // Only copper within a rule's limit of a line is ever measured to it.
+        let reach_mm = rules
+            .iter()
+            .filter(|rule| {
+                rule.kind == rules::RuleKind::LineworkToCopperClearance(rules::Linework::VScore)
+            })
+            .map(|rule| rule.limit.length().millimeters())
+            .fold(0.0, f64::max);
+        let inherited = designs
+            .iter()
+            .map(|design| design.scores_from_above(&designs, reach_mm))
+            .collect::<Vec<_>>();
+        for (design, inherited) in designs.iter_mut().zip(inherited) {
+            design.inherited_scores = inherited;
+        }
+        Ok(designs)
+    }
+
+    /// The scope's placement of an occurrence, and the occurrence placing it.
+    pub fn placed(&self, occurrence: LayoutOccurrenceId) -> (Affine2, Option<LayoutOccurrenceId>) {
+        match occurrence {
+            LayoutOccurrenceId::Root => (Affine2::IDENTITY, None),
+            LayoutOccurrenceId::Instance(instance) => {
+                let instance = &self.imported.geometry.layout.instances[instance as usize];
+                let above = instance
+                    .parent_instance
+                    .map_or(LayoutOccurrenceId::Root, LayoutOccurrenceId::Instance);
+                (instance.transform, Some(above))
+            }
+        }
+    }
+
+    /// The V-score lines that the Steps placing this one draw within
+    /// `reach_mm` of its copper. Lines of different placements that coincide
+    /// within the resolution's tolerance are one line at all of them.
+    fn scores_from_above(&self, designs: &[Self], reach_mm: f64) -> Vec<(Score, Vec<u32>)> {
+        let copper = self
+            .copper_layers
+            .iter()
+            .map(|layer| layer.image.bbox)
+            .fold(BBox::empty(), BBox::union);
+        if copper.is_empty() {
+            return Vec::new();
+        }
+        let window = ContourSet::rectangle(copper.expand(reach_mm), self.resolution);
+        let layout = &self.imported.geometry.layout;
+        let mut inherited = Vec::<(Score, Vec<u32>)>::new();
+        for (index, &placement) in self.placements.iter().enumerate() {
+            let (scope_from_frame, above) = self.placed(placement);
+            let Some(frame_from_scope) = scope_from_frame.inverse() else {
+                continue;
+            };
+            for occurrence in std::iter::successors(above, |&above| self.placed(above).1) {
+                let step = match occurrence {
+                    LayoutOccurrenceId::Root => layout.root_step,
+                    LayoutOccurrenceId::Instance(instance) => {
+                        Some(layout.instances[instance as usize].child_step)
+                    }
+                };
+                let frame_from_step = frame_from_scope.concat(self.placed(occurrence).0);
+                for score in designs
+                    .iter()
+                    .filter(|design| Some(design.step) == step)
+                    .flat_map(|design| &design.scores)
+                {
+                    for (start, end) in window.segment_spans(
+                        frame_from_step.transform_point(score.start),
+                        frame_from_step.transform_point(score.end),
+                    ) {
+                        let same = |known: &Score| {
+                            let meets = |first: Point, second: Point| {
+                                first.distance_to(second) <= self.resolution.tolerance_mm
+                            };
+                            known.layer.name == score.layer.name
+                                && ((meets(known.start, start) && meets(known.end, end))
+                                    || (meets(known.start, end) && meets(known.end, start)))
+                        };
+                        match inherited.iter_mut().find(|(known, _)| same(known)) {
+                            Some((_, placements)) if placements.last() == Some(&(index as u32)) => {
+                            }
+                            Some((_, placements)) => placements.push(index as u32),
+                            None => inherited.push((
+                                Score {
+                                    start,
+                                    end,
+                                    ..score.clone()
+                                },
+                                vec![index as u32],
+                            )),
+                        }
+                    }
+                }
+            }
+        }
+        inherited
     }
 
     fn extract(
@@ -341,6 +443,7 @@ impl<'a> Design<'a> {
             scores: pool(wanted, Pools::SCORES, Pools::NONE, &mut blockers, || {
                 collect_scores(source)
             }),
+            inherited_scores: Vec::new(),
             board_outlines: pool(
                 wanted,
                 Pools::BOARD_OUTLINES,
@@ -375,33 +478,27 @@ impl<'a> Design<'a> {
         symbol.map(|symbol| self.imported.resolve(symbol).to_owned())
     }
 
-    /// The Step's affine placement in the scope's frame.
-    pub fn placement_transform(&self, placement: LayoutOccurrenceId) -> Affine2 {
-        match placement {
-            LayoutOccurrenceId::Root => Affine2::IDENTITY,
-            LayoutOccurrenceId::Instance(instance) => {
-                self.imported.geometry.layout.instances[instance as usize].transform
-            }
-        }
-    }
-
-    pub fn report_frame(&self) -> Frame {
+    /// The Step at some of its placements, by index, as a report frame.
+    pub fn report_frame(&self, placements: &[u32]) -> Frame {
+        let layout = &self.imported.geometry.layout;
         Frame {
             step: self
                 .imported
-                .resolve(self.imported.geometry.layout.steps[self.step as usize].source_step_ref)
+                .resolve(layout.steps[self.step as usize].source_step_ref)
                 .to_owned(),
-            placements: self
-                .placements
+            placements: placements
                 .iter()
-                .map(|&placement| {
-                    let t = self.placement_transform(placement);
-                    Placement {
-                        instance: match placement {
-                            LayoutOccurrenceId::Root => None,
-                            LayoutOccurrenceId::Instance(instance) => Some(instance),
-                        },
-                        transform: [t.m00, t.m10, t.m01, t.m11, t.m02, t.m12],
+                .map(|&index| match self.placements[index as usize] {
+                    LayoutOccurrenceId::Root => Placement {
+                        instance: None,
+                        transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                    },
+                    LayoutOccurrenceId::Instance(instance) => {
+                        let t = layout.instances[instance as usize].transform;
+                        Placement {
+                            instance: Some(instance),
+                            transform: [t.m00, t.m10, t.m01, t.m11, t.m02, t.m12],
+                        }
                     }
                 })
                 .collect(),
@@ -844,11 +941,11 @@ pub(super) struct CopperLayer {
     pub layer: LayerRef,
     pub position: super::pdk::LayerPosition,
     pub copper_weight_oz: Option<f64>,
-    /// The final composed copper of the Step and everything it places.
+    /// The final composed copper of the Step itself. What is measured on one
+    /// image — its width, the ring it leaves a hole, its distance to a line —
+    /// is measured in the design of the Step that paints it.
     pub image: ContourSet,
-    /// The Step's own copper alone: what is measured on its own, such as its
-    /// width, is measured once, in the design of the Step that paints it.
-    pub own_image: ContourSet,
+    /// The final copper of every conductor, of the Step and what it places.
     pub conductors: Vec<CopperConductor>,
     /// The Step's own source lands, including those fully removed from the
     /// final copper image. Hole links still require these for annular-ring
@@ -1373,34 +1470,23 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering<
     }
 }
 
-/// The layer's composed image, the image of the Step's own copper alone, and
-/// every conductor's share of the former.
+/// The composed image of the Step's own copper, and every conductor's final
+/// copper, of the Step and of everything it places.
 fn compose_attributed_copper(
     document: &mut GeometryDocument,
     source: Source<'_>,
-) -> Result<(ContourSet, ContourSet, Vec<CopperConductor>)> {
+) -> Result<(ContourSet, Vec<CopperConductor>)> {
     let owners = compose_attributed_owners(
         document,
         LayerRole::Copper,
         &mut CopperAttributionLowering(source),
         source.resolution,
     )?;
-    let compose = |own_only: bool| {
-        let mut composer = pcb_ir::geom::region::PaintComposer::new(source.resolution);
-        for (_, image) in owners
-            .iter()
-            .filter(|(id, _)| !own_only || id.instance().is_none())
-        {
-            composer.push(pcb_ir::geom::Polarity::Dark, image.clone());
-        }
-        composer.finish()
-    };
-    let image = compose(false)?;
-    let own_image = if owners.iter().all(|(id, _)| id.instance().is_none()) {
-        image.clone()
-    } else {
-        compose(true)?
-    };
+    let mut composer = pcb_ir::geom::region::PaintComposer::new(source.resolution);
+    for (_, image) in owners.iter().filter(|(id, _)| id.instance().is_none()) {
+        composer.push(pcb_ir::geom::Polarity::Dark, image.clone());
+    }
+    let image = composer.finish()?;
     let conductors = owners
         .into_iter()
         .map(|(id, rings)| CopperConductor {
@@ -1409,7 +1495,7 @@ fn compose_attributed_copper(
             image: rings,
         })
         .collect();
-    Ok((image, own_image, conductors))
+    Ok((image, conductors))
 }
 
 /// Both copper and soldermask use the canonical ordered paint fold. Source
@@ -1594,8 +1680,7 @@ fn collect_copper_layers(
                     provenance: feature_provenance(source, name, feature),
                 });
             }
-            let (image, own_image, mut conductors) =
-                compose_attributed_copper(&mut document, source)?;
+            let (image, mut conductors) = compose_attributed_copper(&mut document, source)?;
             conductors.sort_by_key(|conductor| conductor_order(imported, conductor.id));
             // The file's side attribute is authoritative; the stackup
             // position is the fallback for files that omit it.
@@ -1610,7 +1695,6 @@ fn collect_copper_layers(
                 },
                 copper_weight_oz: copper_weight_oz(imported, layer.name),
                 image,
-                own_image,
                 conductors,
                 lands,
             })
@@ -1793,6 +1877,7 @@ fn link_lands(
         .collect()
 }
 
+/// The V-score lines the Step draws itself.
 fn collect_scores(source: Source<'_>) -> Result<Vec<Score>> {
     let imported = source.imported;
     let mut scores = Vec::new();
@@ -1812,6 +1897,9 @@ fn collect_scores(source: Source<'_>) -> Result<Vec<Score>> {
         scores.extend(
             pcb_ir::dialects::ipc::relief::vscore_feature_lines_for(&document)
                 .into_iter()
+                .filter(|(feature_index, _)| {
+                    source.placed(&document.features[*feature_index]).is_none()
+                })
                 .map(|(feature_index, line)| Score {
                     start: line.start,
                     end: line.end,
