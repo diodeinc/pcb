@@ -439,14 +439,48 @@ fn summarize(checked: &checks::Results) -> report::Summary {
     }
 }
 
+/// The report as newline-terminated JSON of at most `limit` bytes.
+/// Serialization stops at the limit: a panel's report can be many times over
+/// it, and building all of that in memory only to refuse it cost gigabytes.
+#[cfg(feature = "cli")]
+fn serialize_within(report: &impl Serialize, limit: usize) -> Result<Vec<u8>> {
+    struct Capped {
+        bytes: Vec<u8>,
+        limit: usize,
+        exceeded: bool,
+    }
+    impl Write for Capped {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            if self.bytes.len() + buffer.len() > self.limit {
+                self.exceeded = true;
+                return Err(std::io::Error::other("report limit reached"));
+            }
+            self.bytes.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut capped = Capped {
+        bytes: Vec::new(),
+        limit,
+        exceeded: false,
+    };
+    let written = serde_json::to_writer_pretty(&mut capped, report)
+        .map_err(anyhow::Error::from)
+        .and_then(|()| Ok(capped.write_all(b"\n")?));
+    ensure!(
+        !capped.exceeded,
+        "DFM report exceeds the {limit} byte limit"
+    );
+    written.map(|()| capped.bytes)
+}
+
 #[cfg(feature = "cli")]
 fn write_report(options: &CheckOptions, report: &impl Serialize) -> Result<()> {
-    let mut bytes = serde_json::to_vec_pretty(report)?;
-    bytes.push(b'\n');
-    ensure!(
-        bytes.len() <= MAX_REPORT_BYTES,
-        "DFM report exceeds the {MAX_REPORT_BYTES} byte limit"
-    );
+    let bytes = serialize_within(report, MAX_REPORT_BYTES)?;
     match options.output.as_deref() {
         Some(path) => {
             // Replace only after serialization and the complete write succeed.
@@ -1051,6 +1085,27 @@ reason = "old finding"
         assert!(error.to_string().contains("serialization failed"));
         assert_eq!(std::fs::read(output).unwrap(), b"previous report");
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn serialization_stops_at_the_report_limit() {
+        let report = serde_json::json!({"verdict": "fail", "findings": vec!["x"; 64]});
+        let whole = serialize_within(&report, usize::MAX).unwrap();
+        assert_eq!(whole.last(), Some(&b'\n'));
+        assert_eq!(
+            whole[..whole.len() - 1],
+            serde_json::to_vec_pretty(&report).unwrap()
+        );
+        // The limit is inclusive of the trailing newline.
+        assert_eq!(serialize_within(&report, whole.len()).unwrap(), whole);
+        for limit in [whole.len() - 1, 16, 0] {
+            let error = serialize_within(&report, limit).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("DFM report exceeds the {limit} byte limit")
+            );
+        }
     }
 
     #[cfg(feature = "cli")]
