@@ -868,9 +868,12 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
             frames[0]["placements"],
             serde_json::json!([{ "instance": null, "transform": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }])
         );
+        let mut steps = std::collections::BTreeSet::new();
         assert_eq!(
             frames
                 .iter()
+                // A Step's first frame holds all of its placements.
+                .filter(|frame| steps.insert(frame["step"].as_str().unwrap()))
                 .map(|frame| frame["placements"].as_array().unwrap().len())
                 .sum::<usize>(),
             1 + instance_count
