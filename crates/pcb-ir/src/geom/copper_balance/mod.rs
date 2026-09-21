@@ -425,22 +425,34 @@ pub struct EdgeVoidEmission {
 }
 
 impl EdgeVoidEmission {
+    /// `edge_voids` are `lattice`'s edge candidates at their solved radii, in
+    /// candidate order.
     fn build_emission(
-        lattice: DenseCopperLattice,
+        lattice: &LatticeCandidates,
         voidable: &ContourSet,
         edge_voids: &[DenseCopperVoid],
         profile: DenseCopperBalanceProfile,
     ) -> Result<Self, AccuracyError> {
-        let (instanced, crossing): (Vec<DenseCopperVoid>, Vec<DenseCopperVoid>) = edge_voids
+        let (instanced, crossing): (Vec<_>, Vec<_>) = edge_voids
             .iter()
-            .partition(|void| voidable.contains_disk(lattice.center(void.site), void.radius_mm));
+            .zip(&lattice.edge_center_depths_mm)
+            .partition(|(void, depth_mm)| lattice::disk_fits(**depth_mm, void.radius_mm, voidable));
+        let instanced = instanced
+            .into_iter()
+            .map(|(void, _)| *void)
+            .collect::<Vec<_>>();
+        let (crossing, crossing_depths_mm): (Vec<DenseCopperVoid>, Vec<f64>) = crossing
+            .into_iter()
+            .map(|(void, depth_mm)| (*void, *depth_mm))
+            .unzip();
         let clipped = lattice::emission_partial_voids(
             voidable,
-            &lattice.void_candidates(&crossing),
+            &lattice.lattice.void_candidates(&crossing),
+            &crossing_depths_mm,
             profile,
         )?;
         let region =
-            lattice::void_set(&instanced, lattice, voidable.resolution)?.union(&clipped)?;
+            lattice::void_set(&instanced, lattice.lattice, voidable.resolution)?.union(&clipped)?;
         Ok(Self {
             instanced,
             clipped,
@@ -563,7 +575,7 @@ fn generate_dense_copper_balance_with_lattice(
     // Account generated copper from the emitted geometry, not the solve's
     // projection, so achieved density is truthful to the output.
     let edge_void_emission =
-        EdgeVoidEmission::build_emission(lattice.lattice, voidable, &edge_voids, profile)?;
+        EdgeVoidEmission::build_emission(lattice, voidable, &edge_voids, profile)?;
     let generated_area_mm2 = match best.mode {
         DenseCopperBalanceMode::None => 0.0,
         DenseCopperBalanceMode::Solid => usable_area_mm2,
