@@ -3276,6 +3276,7 @@ fn lower_standard_primitive(
     if standard_primitive_has_no_area(primitive) {
         return Ok(paint);
     }
+    warn_patterned_fill(doc, primitive_fill_property(context, primitive));
 
     let path_start = doc.arena.paths.len() as u32;
     match primitive {
@@ -3649,7 +3650,7 @@ fn lower_user_shape(
                 context.resolution,
             )?;
         }
-        Some(_) => {}
+        Some(fill_desc) => warn_patterned_fill(doc, Some(fill_desc.fill_property)),
         None => {
             if let Some(nested_paint) = nested_paint {
                 *paint = nested_paint;
@@ -3716,6 +3717,13 @@ fn push_polygon_path(
 ) {
     let contour = polygon_contour(polygon).transformed(transform);
     doc.push_path(Paint::Fill { rule: fill_rule }, [contour]);
+}
+
+/// HATCH and MESH fills are painted solid, which overstates their copper.
+fn warn_patterned_fill(doc: &mut GeometryDocument, fill: Option<FillProperty>) {
+    if matches!(fill, Some(FillProperty::Hatch | FillProperty::Mesh)) {
+        doc.warn("Painting a HATCH or MESH fill solid because patterned fills are not imported");
+    }
 }
 
 fn primitive_paint(context: &ExtractContext<'_>, primitive: &StandardPrimitive) -> PrimitivePaint {
@@ -4400,6 +4408,39 @@ mod tests {
 
         assert_eq!(primitive_paint(&context, &circle), PrimitivePaint::Hollow);
         assert_eq!(primitive_paint(&context, &rect), PrimitivePaint::Void);
+    }
+
+    #[test]
+    fn patterned_fills_are_painted_solid_with_a_warning() {
+        let ipc = Ipc2581::parse(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
+        )
+        .unwrap();
+        let context = ExtractContext {
+            strings: ipc.interner(),
+            resolution: Resolution::default(),
+            padstacks: HashMap::new(),
+            line_descs: HashMap::new(),
+            fill_descs: HashMap::new(),
+            standard_primitives: HashMap::new(),
+            user_primitives: HashMap::new(),
+        };
+        for fill_property in [FillProperty::Hatch, FillProperty::Mesh] {
+            let mut doc = GeometryDocument::new();
+            let primitive = StandardPrimitive::Circle(ipc2581::types::Styled {
+                shape: ipc2581::types::Circle { diameter: 1.0 },
+                fill_property: Some(fill_property),
+                line_desc: None,
+                line_desc_ref: None,
+                fill_desc: None,
+                fill_desc_ref: None,
+            });
+
+            lower_standard_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
+
+            assert!(doc.arena.paths[0].is_filled());
+            assert_eq!(doc.diagnostics.len(), 1, "{fill_property:?}");
+        }
     }
 
     #[test]
