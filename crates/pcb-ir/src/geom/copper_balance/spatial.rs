@@ -10,13 +10,6 @@ use super::{
 use crate::geom::{BBox, ContourSet, Point};
 
 const DENSITY_KERNEL_TRUNCATION: f64 = 3.0;
-// A cap, not a schedule: a layer stops when its radii stop moving. What runs
-// this long is the radius field drifting along shapes a few kernel widths
-// across, which the smoothing all but hides from the objective.
-const SPATIAL_SOLVE_ITERATIONS: usize = 512;
-// Updates below this leave every radius well inside half a quantization step
-// of its converged value, so the emitted lattice is already final.
-const SPATIAL_SOLVE_CONVERGENCE_MM2: f64 = 1e-6;
 
 pub(super) fn normalized_stack_weights(
     layers: &[SpatialCopperBalanceLayerRequest<'_>],
@@ -129,6 +122,16 @@ impl LatticeDensityKernel {
         column_sums.into_iter().fold(0.0, f64::max)
     }
 
+    /// `||H e_i||^2` for every sample: how strongly a change at that sample
+    /// alone registers across the evaluation field.
+    pub(super) fn column_square_sums(&self) -> Vec<f64> {
+        let mut column_sums = vec![0.0; self.sample_count];
+        for (sample_index, weight) in self.sample_indices.iter().zip(&self.weights) {
+            column_sums[*sample_index as usize] += weight * weight;
+        }
+        column_sums
+    }
+
     pub(super) fn smooth(&self, values: &[f64]) -> Vec<f64> {
         let mut result = vec![0.0; self.row_count()];
         self.smooth_into(values, &mut result);
@@ -211,53 +214,114 @@ impl LayerDensityModel<'_> {
         density
     }
 
-    /// Projected gradient on the layer's own squared density error, over
-    /// `{x : lower <= x <= upper, sum(x) = pinned_sum}`.
+    /// What rounding the radii to their levels costs the objective, in
+    /// expectation.
+    ///
+    /// A squared radius anywhere within half a level of an emitted one is
+    /// emitted the same, so the solve cannot be held to displacements any
+    /// finer. Spread independently and evenly over one level, `spacing`, they
+    /// have variance `spacing^2 / 12`, and each reaches the objective
+    /// `||rho - target||^2 / 2` through its own kernel column, so together
+    /// they cost `(beta spacing)^2 / 24` times the summed `||H e_i||^2` of the
+    /// layer's sites.
+    pub(super) fn rounding_floor(&self, column_square_sums: &[f64], level_spacing: f64) -> f64 {
+        (self.void_fraction_per_radius_squared * level_spacing).powi(2) / 24.0
+            * self
+                .active_sites
+                .iter()
+                .map(|sample_index| column_square_sums[*sample_index])
+                .sum::<f64>()
+    }
+
+    /// Accelerated projected gradient (FISTA) on the layer's own squared
+    /// density error, over `C = {x : lower <= x <= upper, sum(x) = pinned_sum}`,
+    /// with `step` the reciprocal of the gradient's Lipschitz constant.
     ///
     /// The moment is not in the objective: the settlement already spent what
     /// the stack was owed, and pinning the sum keeps the layer redistributing
     /// within the panel rather than spending against the stack.
+    ///
+    /// It stops on a certificate rather than a tolerance. The objective is
+    /// convex, so `f* >= f(y) + min over C of <g, z - y>` with `g` its gradient
+    /// at the look-ahead point `y`, and the step taken from there lands within
+    /// `f(y) + <g, x - y> + ||x - y||^2 / (2 step)`. Their difference bounds
+    /// everything the new iterate `x` has left to gain, and once that is under
+    /// `rounding_floor` no further iterate is one the emitted levels could
+    /// tell from this one. Plain projected gradient does not get there: the
+    /// smoothing leaves the problem so ill-conditioned that its bound is still
+    /// several floors up after a thousand steps, where momentum certifies in a
+    /// few hundred.
     pub(super) fn redistribute(
         &self,
-        mut squared_radii: Vec<f64>,
+        squared_radii: Vec<f64>,
         target_density: f64,
         (lower, upper): (f64, f64),
         pinned_sum: f64,
         step: f64,
+        rounding_floor: f64,
     ) -> Vec<f64> {
         let mut void_fraction = vec![0.0; self.kernel.sample_count];
         let mut influence = vec![0.0; self.kernel.sample_count];
         let mut residual = vec![0.0; self.kernel.row_count()];
-        let mut proposal = squared_radii.clone();
-        let mut shift = 0.0;
-        for _ in 0..SPATIAL_SOLVE_ITERATIONS {
-            self.density_into(&squared_radii, &mut void_fraction, &mut residual);
+        let mut gradient = vec![0.0; squared_radii.len()];
+        let mut iterate = squared_radii;
+        let mut lookahead = iterate.clone();
+        let mut proposal = iterate.clone();
+        let (mut momentum, mut shift) = (1.0_f64, 0.0);
+        // The safety bound is the method's own guarantee,
+        // `f(x_k) - f* <= 2 ||x_0 - x*||^2 / (step (k + 1)^2)`, with no radius
+        // farther from its optimum than the box is wide: past it the floor is
+        // met whether or not the certificate has caught up. A single level
+        // leaves `0 / 0` and nothing to iterate, which is what the cast makes
+        // of it.
+        let cap = (2.0 * iterate.len() as f64 * (upper - lower).powi(2) / (step * rounding_floor))
+            .sqrt()
+            .ceil() as usize;
+        for _ in 0..cap {
+            self.density_into(&lookahead, &mut void_fraction, &mut residual);
             for residual in &mut residual {
                 *residual -= target_density;
             }
             self.kernel.smooth_adjoint_into(&residual, &mut influence);
-            for ((proposal, radius_squared), sample_index) in proposal
+            for (((gradient, proposal), lookahead), sample_index) in gradient
                 .iter_mut()
-                .zip(&squared_radii)
+                .zip(&mut proposal)
+                .zip(&lookahead)
                 .zip(self.active_sites)
             {
-                *proposal = radius_squared
-                    + step * self.void_fraction_per_radius_squared * influence[*sample_index];
+                *gradient = -self.void_fraction_per_radius_squared * influence[*sample_index];
+                *proposal = lookahead - step * *gradient;
             }
             // Successive proposals differ by one small gradient step, so the
             // last shift is nearly this one.
             shift = project_box_sum(&mut proposal, lower, upper, pinned_sum, shift);
-            let update = squared_radii
-                .iter()
-                .zip(&proposal)
-                .map(|(before, after)| (before - after).abs())
-                .fold(0.0_f64, f64::max);
-            std::mem::swap(&mut squared_radii, &mut proposal);
-            if update < SPATIAL_SOLVE_CONVERGENCE_MM2 {
+
+            let (along, moved) = gradient.iter().zip(&proposal).zip(&lookahead).fold(
+                (0.0, 0.0),
+                |(along, moved), ((gradient, proposal), lookahead)| {
+                    (
+                        along + gradient * proposal,
+                        moved + (proposal - lookahead).powi(2),
+                    )
+                },
+            );
+            let left_to_gain = along - least_inner_product(&mut gradient, lower, upper, pinned_sum)
+                + moved / (2.0 * step);
+
+            let next_momentum = (1.0 + (1.0 + 4.0 * momentum * momentum).sqrt()) / 2.0;
+            let carry = (momentum - 1.0) / next_momentum;
+            for ((lookahead, proposal), iterate) in
+                lookahead.iter_mut().zip(&proposal).zip(&iterate)
+            {
+                *lookahead = proposal + carry * (proposal - iterate);
+            }
+            momentum = next_momentum;
+            std::mem::swap(&mut iterate, &mut proposal);
+            if left_to_gain <= rounding_floor {
                 break;
             }
         }
-        squared_radii
+        iterate
     }
 }
 
@@ -403,6 +467,34 @@ pub(super) fn project_box_sum(
         *value = (*value - shift).clamp(lower, upper);
     }
     shift
+}
+
+/// `min <weights, z>` over `{z : lower <= z <= upper, sum(z) = target}`, the
+/// linear program behind the duality gap. Reorders `weights`.
+///
+/// Every value starts at `lower` and the rest of the sum is spent where it
+/// costs least: whole box widths on the smallest weights, the remainder on the
+/// next. The target saturates at what the box can reach, as it does in
+/// [`project_box_sum`].
+pub(super) fn least_inner_product(weights: &mut [f64], lower: f64, upper: f64, target: f64) -> f64 {
+    let count = weights.len();
+    let width = upper - lower;
+    let total = weights.iter().sum::<f64>();
+    // Box widths the sum has to spend above the floor of the box.
+    let raised = if width > 0.0 {
+        ((target - count as f64 * lower) / width).clamp(0.0, count as f64)
+    } else {
+        0.0
+    };
+    let whole = raised.floor() as usize;
+    if whole < count {
+        weights.select_nth_unstable_by(whole, f64::total_cmp);
+    }
+    let spent = weights[..whole].iter().sum::<f64>()
+        + weights
+            .get(whole)
+            .map_or(0.0, |next| (raised - whole as f64) * next);
+    lower * total + width * spent
 }
 
 pub(super) fn spatial_result_from_squared_radii(
@@ -566,6 +658,101 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The cheapest feasible point is a vertex of the box, so spending the sum
+    /// on the smallest weights in sorted order has to agree, whole widths,
+    /// remainder and unreachable targets alike.
+    #[test]
+    fn least_inner_product_spends_the_sum_on_the_smallest_weights() {
+        let weights = (0..23)
+            .map(|index| ((index * 7919) % 101) as f64 / 101.0 - 0.4)
+            .collect::<Vec<_>>();
+        let (lower, upper) = (0.04, 0.4225);
+        let sorted = {
+            let mut sorted = weights.clone();
+            sorted.sort_by(f64::total_cmp);
+            sorted
+        };
+        for raised in [-3.0, 0.0, 0.25, 1.0, 7.5, 22.99, 23.0, 40.0_f64] {
+            let target = weights.len() as f64 * lower + raised * (upper - lower);
+            let mut left = raised.clamp(0.0, weights.len() as f64);
+            let expected = sorted
+                .iter()
+                .map(|weight| {
+                    let share = left.min(1.0);
+                    left -= share;
+                    weight * (lower + share * (upper - lower))
+                })
+                .sum::<f64>();
+            let actual = least_inner_product(&mut weights.clone(), lower, upper, target);
+            assert!((actual - expected).abs() <= 1e-12, "{raised}: {actual}");
+        }
+        // One level leaves the box a point.
+        let pinned = least_inner_product(&mut weights.clone(), lower, lower, 1.0);
+        assert!((pinned - lower * weights.iter().sum::<f64>()).abs() <= 1e-12);
+        assert_eq!(least_inner_product(&mut [], lower, upper, 1.0), 0.0);
+    }
+
+    /// The solve stops on its own certificate, so the certificate has to be
+    /// true: a solve held to a ten-thousandth of the floor may not find more
+    /// than one floor's worth that the ordinary one left behind.
+    #[test]
+    fn redistribution_stops_within_the_rounding_floor_of_the_optimum() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(60.0, 40.0)),
+            res(tol::REGION_MM),
+        );
+        let lattice = DenseCopperLattice {
+            origin: Point::ZERO,
+            pitch_mm: profile.pitch_mm,
+        };
+        let (samples, evaluation, kernel) = panel_kernel(&panel, profile);
+        let active_sites = (0..samples.sites.len()).collect::<Vec<_>>();
+        let cell_area_mm2 = lattice.column_pitch_mm() * lattice.pitch_mm;
+        // A plane whose copper thins from left to right, with a bare patch.
+        let model = LayerDensityModel {
+            kernel: &kernel,
+            active_sites: &active_sites,
+            base_density: evaluation
+                .iter()
+                .map(|site| {
+                    let center = lattice.center(*site);
+                    1.0 - 0.3 * center.x / 60.0 - 0.4 * f64::from(center.y > 28.0)
+                })
+                .collect(),
+            void_fraction_per_radius_squared: ROUNDED_HEXAGON_AREA_FACTOR / cell_area_mm2,
+        };
+        let (lower, upper) = (
+            profile.min_void_radius_mm.powi(2),
+            profile.max_void_radius_mm.powi(2),
+        );
+        let objective = |squared_radii: &[f64]| {
+            model
+                .density(squared_radii)
+                .iter()
+                .map(|density| (density - 0.5).powi(2) / 2.0)
+                .sum::<f64>()
+        };
+        let floor = model.rounding_floor(
+            &kernel.column_square_sums(),
+            profile.void_area_level(1) - profile.void_area_level(0),
+        );
+        assert!(floor > 0.0);
+        let start = vec![(lower + upper) / 2.0; active_sites.len()];
+        let pinned_sum = start.iter().sum::<f64>();
+        let step = 1.0 / (model.void_fraction_per_radius_squared.powi(2) * kernel.max_column_sum());
+        let solve = |floor: f64| {
+            let solved =
+                model.redistribute(start.clone(), 0.5, (lower, upper), pinned_sum, step, floor);
+            assert!(solved.iter().all(|value| (lower..=upper).contains(value)));
+            assert!((solved.iter().sum::<f64>() - pinned_sum).abs() <= 1e-9 * pinned_sum);
+            objective(&solved)
+        };
+        let (stopped, exhaustive) = (solve(floor), solve(floor * 1e-4));
+        assert!(objective(&start) - stopped > 100.0 * floor);
+        assert!(stopped >= exhaustive - 1e-12 && stopped - exhaustive <= floor);
     }
 
     /// Tile coverage is an area, so a region cutting through tiles at any
