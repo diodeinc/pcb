@@ -161,7 +161,8 @@ pub const COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME: &str =
     "diode.copper_balance_void_corner_radius_mm";
 pub const COPPER_BALANCE_LATTICE_VALUE: &str = "staggered-hex-v1";
 
-/// The job step named by Content/StepRef, falling back to CadData order.
+/// The Step a file is about: the first the Content references, else the
+/// first declared.
 pub fn primary_step<'a>(ipc: &Ipc2581, steps: &'a [Step]) -> Option<&'a Step> {
     ipc.content()
         .step_refs
@@ -183,21 +184,30 @@ pub fn is_copper(function: LayerFunction) -> bool {
 }
 
 pub fn layer_role(function: LayerFunction) -> crate::dialects::LayerRole {
+    layer_class(function).0
+}
+
+/// A layer function's rendering role and the finer fabrication domain of the
+/// features on it.
+fn layer_class(function: LayerFunction) -> (crate::dialects::LayerRole, FeatureDomain) {
     use crate::dialects::LayerRole;
-    if is_copper(function) {
-        return LayerRole::Copper;
-    }
     match function {
-        LayerFunction::Solderpaste | LayerFunction::Pastemask => LayerRole::Paste,
-        LayerFunction::Soldermask => LayerRole::Soldermask,
-        LayerFunction::Silkscreen | LayerFunction::Legend => LayerRole::Legend,
-        LayerFunction::Drill => LayerRole::Drill,
-        LayerFunction::Rout
-        | LayerFunction::VCut
-        | LayerFunction::Score
-        | LayerFunction::EdgeChamfer
-        | LayerFunction::EdgePlating
-        | LayerFunction::BoardOutline => LayerRole::Profile,
+        function if is_copper(function) => (LayerRole::Copper, FeatureDomain::Copper),
+        LayerFunction::Solderpaste | LayerFunction::Pastemask => {
+            (LayerRole::Paste, FeatureDomain::Paste)
+        }
+        LayerFunction::Soldermask => (LayerRole::Soldermask, FeatureDomain::Soldermask),
+        LayerFunction::Silkscreen | LayerFunction::Legend => {
+            (LayerRole::Legend, FeatureDomain::Legend)
+        }
+        LayerFunction::Drill => (LayerRole::Drill, FeatureDomain::Drill),
+        LayerFunction::Rout => (LayerRole::Profile, FeatureDomain::Rout),
+        LayerFunction::VCut => (LayerRole::Profile, FeatureDomain::VCut),
+        LayerFunction::Score => (LayerRole::Profile, FeatureDomain::Score),
+        LayerFunction::BoardOutline => (LayerRole::Profile, FeatureDomain::Profile),
+        LayerFunction::EdgeChamfer | LayerFunction::EdgePlating => {
+            (LayerRole::Profile, FeatureDomain::Other)
+        }
         LayerFunction::Assembly
         | LayerFunction::BoardFab
         | LayerFunction::Courtyard
@@ -205,8 +215,8 @@ pub fn layer_role(function: LayerFunction) -> crate::dialects::LayerRole {
         | LayerFunction::Graphic
         | LayerFunction::Fixture
         | LayerFunction::Probe
-        | LayerFunction::Rework => LayerRole::Mechanical,
-        _ => LayerRole::Other,
+        | LayerFunction::Rework => (LayerRole::Mechanical, FeatureDomain::Mechanical),
+        _ => (LayerRole::Other, FeatureDomain::Other),
     }
 }
 
@@ -719,7 +729,7 @@ fn complete_feature_intent(layer: &Layer, feature: &mut GeometryFeature) {
 }
 
 fn intent_for_layer(layer: &Layer) -> FeatureIntent<Symbol> {
-    let domain = domain_for_layer(layer.layer_function);
+    let domain = layer_class(layer.layer_function).1;
     FeatureIntent {
         domain,
         role: FeatureRole::Unknown,
@@ -728,31 +738,6 @@ fn intent_for_layer(layer: &Layer) -> FeatureIntent<Symbol> {
         plating: PlatingKind::Unknown,
         span: span_for_layer(layer, domain),
         side: side_for_layer(layer.side),
-    }
-}
-
-fn domain_for_layer(function: LayerFunction) -> FeatureDomain {
-    if is_copper(function) {
-        return FeatureDomain::Copper;
-    }
-    match function {
-        LayerFunction::Soldermask => FeatureDomain::Soldermask,
-        LayerFunction::Solderpaste | LayerFunction::Pastemask => FeatureDomain::Paste,
-        LayerFunction::Silkscreen | LayerFunction::Legend => FeatureDomain::Legend,
-        LayerFunction::Drill => FeatureDomain::Drill,
-        LayerFunction::Rout => FeatureDomain::Rout,
-        LayerFunction::VCut => FeatureDomain::VCut,
-        LayerFunction::Score => FeatureDomain::Score,
-        LayerFunction::BoardOutline => FeatureDomain::Profile,
-        LayerFunction::Assembly
-        | LayerFunction::BoardFab
-        | LayerFunction::Courtyard
-        | LayerFunction::Document
-        | LayerFunction::Graphic
-        | LayerFunction::Fixture
-        | LayerFunction::Probe
-        | LayerFunction::Rework => FeatureDomain::Mechanical,
-        _ => FeatureDomain::Other,
     }
 }
 
@@ -817,7 +802,8 @@ fn span_for_layer(layer: &Layer, domain: FeatureDomain) -> FeatureSpan<Symbol> {
     }
 }
 
-/// Map an IPC layer side to the IR side vocabulary.
+/// An IPC layer side in the IR's vocabulary; a layer on both or neither
+/// outer side has none.
 pub fn side_for_layer(side: Option<ipc2581::types::ecad::Side>) -> crate::dialects::Side {
     match side {
         Some(ipc2581::types::ecad::Side::Top) => crate::dialects::Side::Top,
@@ -864,21 +850,17 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
 
     // The layout traversal only needs reachable steps, while the canonical
     // document retains every source step definition.
-    for step in &ecad.cad_data.steps {
-        ensure_layout_step_for_step(&mut geometry, step);
-    }
+    let step_ids = ecad
+        .cad_data
+        .steps
+        .iter()
+        .map(|step| ensure_layout_step_for_step(&mut geometry, step))
+        .collect::<Vec<_>>();
 
     let mut context = ExtractContext::for_layers(ipc, resolution, &mut geometry);
     let mut step_layers = Vec::new();
-    for step in &ecad.cad_data.steps {
+    for (step, &step_id) in ecad.cad_data.steps.iter().zip(&step_ids) {
         context.enter_step(step);
-        let step_id = geometry
-            .layout
-            .steps
-            .iter()
-            .position(|candidate| candidate.source_step_ref == step.name)
-            .context("imported IPC step is missing from the layout graph")?
-            as u32;
         for (layer_index, source_layer) in ecad.cad_data.layers.iter().enumerate() {
             let feature_start = geometry.features.len() as u32;
             let Some(document_layer) = append_step_layer(
@@ -914,13 +896,7 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
 
     let mut packages = Vec::new();
     let mut package_ids = HashMap::<Symbol, Vec<PackageDefinitionId>>::new();
-    for step in &ecad.cad_data.steps {
-        let step_id = geometry
-            .layout
-            .steps
-            .iter()
-            .position(|candidate| candidate.source_step_ref == step.name)
-            .context("package step is missing from the layout graph")? as u32;
+    for (step, &step_id) in ecad.cad_data.steps.iter().zip(&step_ids) {
         for (source_index, package) in step.packages.iter().enumerate() {
             let id = PackageDefinitionId(packages.len() as u32);
             package_ids.entry(package.name).or_default().push(id);
@@ -933,14 +909,7 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
     }
 
     let mut components = Vec::new();
-    for step in &ecad.cad_data.steps {
-        let step_id = geometry
-            .layout
-            .steps
-            .iter()
-            .position(|candidate| candidate.source_step_ref == step.name)
-            .context("component step is missing from the layout graph")?
-            as u32;
+    for (step, &step_id) in ecad.cad_data.steps.iter().zip(&step_ids) {
         for (source_index, component) in step.components.iter().enumerate() {
             let placement = ipc_placement(
                 Point::new(component.location.x, component.location.y),
@@ -1152,52 +1121,19 @@ impl ImportedDesign {
     /// manufacturing lowerings.
     pub fn materialize_step_layer(&self, step: u32, layer: LayerId) -> Result<GeometryDocument> {
         let definition = self
-            .layer_definition(layer)
-            .context("layer id is outside the imported design")?;
-        let step_definition = self
             .geometry
             .layout
             .steps
             .get(step as usize)
             .context("step id is outside the imported design")?;
-        let step_layer = self
-            .step_layers
-            .iter()
-            .find(|candidate| candidate.step == step && candidate.layer == layer);
-
-        let mut target = GeometryDocument::new();
-        self.copy_step_layout_sidecar(&mut target, step);
-        target.diagnostics = self.geometry.diagnostics.clone();
-        target.specs = self.geometry.specs.clone();
-        target.spec_items = self.geometry.spec_items.clone();
-        target.spec_properties = self.geometry.spec_properties.clone();
-
-        let bbox = if let Some(step_layer) = step_layer {
-            append_transformed_layer(
-                &mut target,
-                &self.geometry,
-                step_layer.document_layer as usize,
-                Affine2::IDENTITY,
-                0,
-                None,
-                0,
-            )?
-        } else {
-            BBox::empty()
+        let alone = StepOccurrence {
+            step,
+            layout: LayoutOccurrenceId::Root,
+            root_from_step: Affine2::IDENTITY,
+            board: (definition.kind == LayoutStepKind::Board).then_some(LayoutOccurrenceId::Root),
+            root_from_board: Affine2::IDENTITY,
         };
-        let spec_refs = push_spec_refs(&mut target, &definition.spec_refs);
-        target.layers.push(GeometryLayer {
-            name: self.resolve(definition.name).to_owned(),
-            source_layer_ref: definition.name,
-            layer_function: definition.layer_function,
-            spec_refs,
-            sets: Span::new(0, target.feature_sets.len() as u32),
-            features: Span::new(0, target.features.len() as u32),
-            bbox,
-        });
-        target.layout.steps[0].source_step_ref = step_definition.source_step_ref;
-        crate::dialects::ipc::process::normalize_bounds(&mut target);
-        Ok(target)
+        self.materialize(layer, &[alone], Some(step))
     }
 
     pub fn feature_occurrences(
@@ -1323,28 +1259,38 @@ impl ImportedDesign {
         layer: LayerId,
         scope: ArtworkScope,
     ) -> Result<GeometryDocument> {
+        let occurrences = self.step_occurrences(scope)?;
+        // A single-step view carries only that step's layout.
+        let alone = matches!(scope, ArtworkScope::Board | ArtworkScope::ArrayLocal)
+            .then(|| occurrences[0].step);
+        self.materialize(layer, &occurrences, alone)
+    }
+
+    /// One layer's definitions copied into every given step occurrence, with
+    /// the layout of `alone` when the view is that single step and the whole
+    /// layout graph otherwise.
+    fn materialize(
+        &self,
+        layer: LayerId,
+        occurrences: &[StepOccurrence],
+        alone: Option<u32>,
+    ) -> Result<GeometryDocument> {
         let definition = self
-            .layer_definitions
-            .get(layer.0 as usize)
+            .layer_definition(layer)
             .context("layer id is outside the imported design")?;
-        let step_occurrences = self.step_occurrences(scope)?;
         let mut target = GeometryDocument::new();
-        if matches!(scope, ArtworkScope::Board | ArtworkScope::ArrayLocal) {
-            if let Some(occurrence) = step_occurrences.first() {
-                self.copy_step_layout_sidecar(&mut target, occurrence.step);
-            }
-        } else {
-            self.copy_layout_sidecar(&mut target);
+        match alone {
+            Some(step) => self.copy_step_layout_sidecar(&mut target, step),
+            None => self.copy_layout_sidecar(&mut target),
         }
         target.diagnostics = self.geometry.diagnostics.clone();
         target.specs = self.geometry.specs.clone();
         target.spec_items = self.geometry.spec_items.clone();
         target.spec_properties = self.geometry.spec_properties.clone();
-        let feature_start = 0;
-        let set_start = 0;
+
         let mut bbox = BBox::empty();
         let mut source_set_offset = 0;
-        for occurrence in &step_occurrences {
+        for occurrence in occurrences {
             let Some(step_layer) = self
                 .step_layers
                 .iter()
@@ -1372,8 +1318,8 @@ impl ImportedDesign {
             source_layer_ref: definition.name,
             layer_function: definition.layer_function,
             spec_refs,
-            sets: Span::new(set_start, target.feature_sets.len() as u32),
-            features: Span::new(feature_start, target.features.len() as u32),
+            sets: Span::new(0, target.feature_sets.len() as u32),
+            features: Span::new(0, target.features.len() as u32),
             bbox,
         });
         crate::dialects::ipc::process::normalize_bounds(&mut target);
@@ -1381,26 +1327,19 @@ impl ImportedDesign {
     }
 
     fn copy_layout_sidecar(&self, target: &mut GeometryDocument) {
-        let mut copied_paths = HashMap::new();
-        let mut copy_path = |source: u32, target: &mut GeometryDocument| {
-            *copied_paths.entry(source).or_insert_with(|| {
-                target
-                    .arena
-                    .append_path_from(&self.geometry.arena, source, Affine2::IDENTITY)
-            })
-        };
-
+        let arena = &self.geometry.arena;
         target.profiles = self.geometry.profiles.clone();
         target.profile_cutouts = self.geometry.profile_cutouts.clone();
-        for profile_index in 0..target.profiles.len() {
-            let source = target.profiles[profile_index].outer_path;
-            let copied = copy_path(source, target);
-            target.profiles[profile_index].outer_path = copied;
+        for profile in &mut target.profiles {
+            profile.outer_path =
+                target
+                    .arena
+                    .append_path_from(arena, profile.outer_path, Affine2::IDENTITY);
         }
-        for cutout_index in 0..target.profile_cutouts.len() {
-            let source = target.profile_cutouts[cutout_index].path;
-            let copied = copy_path(source, target);
-            target.profile_cutouts[cutout_index].path = copied;
+        for cutout in &mut target.profile_cutouts {
+            cutout.path = target
+                .arena
+                .append_path_from(arena, cutout.path, Affine2::IDENTITY);
         }
         target.layout = self.geometry.layout.clone();
     }

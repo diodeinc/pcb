@@ -8,10 +8,10 @@ use crate::geom::Resolution;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::{Context, Result, bail, ensure};
+use ipc2581::Symbol;
 use ipc2581::types::{
     LayerFunction, PackagePinElectricalType, PackagePinMountType, PackagePinType,
 };
-use ipc2581::{Symbol, types::Side as IpcSide};
 
 use crate::dialects::Side;
 use crate::dialects::artwork;
@@ -23,7 +23,7 @@ use crate::geom::dfm::BBoxIndex;
 use crate::geom::{BBox, ContourSet, Point, Polarity, Span, tol};
 use crate::import::ipc2581::{
     ComponentOccurrenceId, FeatureOccurrenceId, ImportedDesign, LayerId, LayoutOccurrenceId,
-    PopulationState, feature_occurrence_id, is_copper, layer_role,
+    PopulationState, feature_occurrence_id, is_copper, layer_role, side_for_layer,
 };
 
 /// A relationship whose uncertainty is part of the result rather than hidden
@@ -328,7 +328,7 @@ impl ImportedDesign {
                 continue;
             }
             let layer_id = LayerId(layer_index as u32);
-            let side = physical_side(layer.side);
+            let side = side_for_layer(layer.side);
             // Associations need source lands even when composition removes
             // their entire copper image. Share identity extraction below.
             let images = if source_geometry {
@@ -408,7 +408,7 @@ impl ImportedDesign {
                 .iter()
                 .find(|layer| layer.name == definition.source.layer_ref)
                 .and_then(|layer| layer.side)
-                .map(|side| physical_side(Some(side)))
+                .map(|side| side_for_layer(Some(side)))
                 .unwrap_or(Side::None);
             terminations.push(PhysicalTermination {
                 id: PhysicalTerminationId(0),
@@ -496,7 +496,7 @@ impl ImportedDesign {
                 continue;
             }
             let layer_id = LayerId(layer_index as u32);
-            let side = physical_side(layer.side);
+            let side = side_for_layer(layer.side);
             for (occurrence, image) in
                 self.attributed_feature_images(layer_id, scope, resolution)?
             {
@@ -559,7 +559,7 @@ impl ImportedDesign {
             .layer_definitions
             .iter()
             .filter(|layer| layer.layer_function == LayerFunction::Soldermask)
-            .map(|layer| physical_side(layer.side))
+            .map(|layer| side_for_layer(layer.side))
             .collect::<HashSet<_>>()
             .into_iter()
             .map(|side| {
@@ -578,7 +578,7 @@ impl ImportedDesign {
                 continue;
             }
             let layer_id = LayerId(layer_index as u32);
-            let side = physical_side(layer.side);
+            let side = side_for_layer(layer.side);
             for (occurrence, image) in
                 self.attributed_feature_images(layer_id, scope, resolution)?
             {
@@ -904,7 +904,7 @@ impl ImportedDesign {
         let header = artwork::Layer {
             name: document.layers[0].name.clone(),
             role: layer_role(definition.layer_function),
-            side: physical_side(definition.side),
+            side: side_for_layer(definition.side),
             objects: Span::EMPTY,
             bbox: document.layers[0].bbox,
             meta: definition.layer_function,
@@ -1258,15 +1258,6 @@ impl<'a> TerminationIndex<'a> {
     }
 }
 
-fn physical_side(side: Option<IpcSide>) -> Side {
-    match side {
-        Some(IpcSide::Top) => Side::Top,
-        Some(IpcSide::Bottom) => Side::Bottom,
-        Some(IpcSide::Internal) => Side::Inner,
-        Some(IpcSide::Both | IpcSide::All | IpcSide::None) | None => Side::None,
-    }
-}
-
 fn protection_side_compatible(assembly_side: Side, protection_side: Side) -> bool {
     protection_side == Side::None
         || (assembly_side != Side::None && assembly_side == protection_side)
@@ -1369,7 +1360,7 @@ fn span_range_in_stackup(span: [Symbol; 2], stackup: &[Symbol]) -> Option<(usize
 
 /// Resolve physical order, distinguishing absent, invalid, and ambiguous stacks.
 /// Unnumbered stacks retain their source order, as in the canonical IPC view.
-pub(super) fn physical_stackup_layers(
+pub fn physical_stackup_layers(
     stackups: &[ipc2581::types::Stackup],
     declarations: &[ipc2581::types::Layer],
 ) -> Result<Option<Vec<Symbol>>> {
