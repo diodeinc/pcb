@@ -19,10 +19,11 @@ use crate::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureDomain, FeatureKind,
     FeatureSpan, HoleShape, PlatingKind, lower_layer_to_artwork_with,
 };
-use crate::geom::{ContourSet, Point, Polarity, Span, tol};
+use crate::geom::dfm::BBoxIndex;
+use crate::geom::{BBox, ContourSet, Point, Polarity, Span, tol};
 use crate::import::ipc2581::{
-    ComponentOccurrence, ComponentOccurrenceId, FeatureOccurrenceId, ImportedDesign, LayerId,
-    LayoutOccurrenceId, PopulationState, feature_occurrence_id, is_copper, layer_role,
+    ComponentOccurrenceId, FeatureOccurrenceId, ImportedDesign, LayerId, LayoutOccurrenceId,
+    PopulationState, feature_occurrence_id, is_copper, layer_role,
 };
 
 /// A relationship whose uncertainty is part of the result rather than hidden
@@ -234,7 +235,7 @@ impl ImportedDesign {
         scope: ArtworkScope,
         resolution: Resolution,
     ) -> Result<Vec<PhysicalLand>> {
-        let components = self.component_occurrences(scope)?;
+        let components = self.component_index(scope)?;
         self.derive_physical_lands(scope, &components, true, resolution)
     }
 
@@ -245,7 +246,7 @@ impl ImportedDesign {
         scope: ArtworkScope,
         resolution: Resolution,
     ) -> Result<Vec<PhysicalLand>> {
-        let components = self.component_occurrences(scope)?;
+        let components = self.component_index(scope)?;
         self.derive_physical_lands(scope, &components, false, resolution)
     }
 
@@ -278,7 +279,7 @@ impl ImportedDesign {
         scope: ArtworkScope,
         resolution: Resolution,
     ) -> Result<PhysicalView> {
-        let components = self.component_occurrences(scope)?;
+        let components = self.component_index(scope)?;
         let lands = self.derive_physical_lands(scope, &components, false, resolution)?;
         let terminations = self.derive_physical_terminations(&lands);
         let paste_islands = self.paste_islands(scope, &components, &terminations, resolution)?;
@@ -296,10 +297,28 @@ impl ImportedDesign {
         })
     }
 
+    /// Component occurrences of `scope` by the designator IPC evidence names
+    /// them with, in occurrence order.
+    fn component_index(&self, scope: ArtworkScope) -> Result<ComponentIndex> {
+        let mut index = ComponentIndex::new();
+        for occurrence in self.component_occurrences(scope)? {
+            if let Some(designator) = self
+                .component_definition(occurrence.id.component)
+                .and_then(|definition| definition.source.ref_des)
+            {
+                index
+                    .entry((occurrence.id.layout, designator))
+                    .or_default()
+                    .push(occurrence.id);
+            }
+        }
+        Ok(index)
+    }
+
     fn derive_physical_lands(
         &self,
         scope: ArtworkScope,
-        components: &[ComponentOccurrence],
+        components: &ComponentIndex,
         source_geometry: bool,
         resolution: Resolution,
     ) -> Result<Vec<PhysicalLand>> {
@@ -343,7 +362,7 @@ impl ImportedDesign {
                     at,
                     image: image.map_or_else(|| self.feature_region(occurrence, resolution), Ok)?,
                     board: occurrence.board,
-                    component: self.component_association(source, &evidence, components),
+                    component: component_association(source, &evidence, components),
                     component_refs: evidence.component_refs.clone(),
                     pin: evidence.pin,
                     padstack: feature.padstack_ref,
@@ -450,10 +469,24 @@ impl ImportedDesign {
     fn paste_islands(
         &self,
         scope: ArtworkScope,
-        components: &[ComponentOccurrence],
+        components: &ComponentIndex,
         terminations: &[PhysicalTermination],
         resolution: Resolution,
     ) -> Result<Vec<PasteIsland>> {
+        let termination_by_identity = terminations
+            .iter()
+            .map(|termination| {
+                (
+                    PhysicalTerminationKey::new(
+                        termination.component,
+                        termination.pin,
+                        termination.padstack,
+                        termination.at,
+                    ),
+                    termination.id,
+                )
+            })
+            .collect::<HashMap<_, _>>();
         let mut islands = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if !matches!(
@@ -474,19 +507,23 @@ impl ImportedDesign {
                 let evidence = self.feature_evidence(source);
                 let board = occurrence.board;
                 let at = occurrence.root_from_local.transform_point(feature.center);
-                let component = self.component_association(source, &evidence, components);
+                let component = component_association(source, &evidence, components);
                 let population = component
                     .resolved()
                     .and_then(|component| self.component_definition(component.component))
                     .map(|component| component.population)
                     .unwrap_or_default();
-                let termination = exact_termination(
-                    at,
-                    evidence.pin,
-                    feature.padstack_ref,
-                    &component,
-                    terminations,
-                );
+                // Present only under the exact identity its termination was
+                // keyed by.
+                let termination = component
+                    .resolved()
+                    .zip(evidence.pin)
+                    .zip(feature.padstack_ref)
+                    .and_then(|((component, pin), padstack)| {
+                        termination_by_identity
+                            .get(&PhysicalTerminationKey::new(*component, pin, padstack, at))
+                            .copied()
+                    });
                 for (island, image) in image.connected_components().into_iter().enumerate() {
                     islands.push(PasteIsland {
                         id: PasteIslandId {
@@ -517,19 +554,24 @@ impl ImportedDesign {
         lands: &[PhysicalLand],
         resolution: Resolution,
     ) -> Result<Vec<MaskOpening>> {
-        let mut lands_by_context = HashMap::<_, Vec<_>>::new();
-        for land in lands {
-            lands_by_context
-                .entry((land.board, land.side))
-                .or_default()
-                .push(land);
-            if land.side != Side::None {
-                lands_by_context
-                    .entry((land.board, Side::None))
-                    .or_default()
-                    .push(land);
-            }
-        }
+        // One index per mask side; an unsided mask layer may open any land.
+        let lands_by_side = self
+            .layer_definitions
+            .iter()
+            .filter(|layer| layer.layer_function == LayerFunction::Soldermask)
+            .map(|layer| physical_side(layer.side))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .map(|side| {
+                let index = LandIndex::new(
+                    lands
+                        .iter()
+                        .filter(|land| side == Side::None || land.side == side)
+                        .collect(),
+                );
+                (side, index)
+            })
+            .collect::<HashMap<_, _>>();
         let mut openings = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if layer.layer_function != LayerFunction::Soldermask {
@@ -543,9 +585,7 @@ impl ImportedDesign {
                 let source = occurrence.id;
                 let evidence = self.feature_evidence(source);
                 let board = occurrence.board;
-                let candidates = lands_by_context
-                    .get(&(board, side))
-                    .map_or(&[][..], Vec::as_slice);
+                let candidates = &lands_by_side[&side];
                 for (island, image) in image.connected_components().into_iter().enumerate() {
                     openings.push(MaskOpening {
                         id: MaskOpeningId {
@@ -556,14 +596,7 @@ impl ImportedDesign {
                         side,
                         image: image.clone(),
                         board,
-                        lands: associate_land_candidates(
-                            &image,
-                            board,
-                            side,
-                            &evidence,
-                            &Association::Unresolved,
-                            candidates,
-                        )?,
+                        lands: associate_lands(&image, board, side, &evidence, candidates)?,
                     });
                 }
             }
@@ -589,6 +622,10 @@ impl ImportedDesign {
         for land in lands {
             lands_by_layer.entry(land.layer).or_default().push(land);
         }
+        let lands_by_layer = lands_by_layer
+            .into_iter()
+            .map(|(layer, lands)| (layer, LandIndex::new(lands)))
+            .collect::<BTreeMap<_, _>>();
         let mut holes = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if !matches!(
@@ -616,12 +653,11 @@ impl ImportedDesign {
                     ) {
                         continue;
                     }
-                    let land = associate_land_candidates(
+                    let land = associate_lands(
                         &image,
                         occurrence.board,
                         Side::None,
                         &evidence,
-                        &Association::Unresolved,
                         candidates,
                     )?;
                     layer_lands.push(LayerLandAssociation {
@@ -672,20 +708,16 @@ impl ImportedDesign {
         resolution: Resolution,
     ) -> Result<()> {
         let stackup = physical_stackup_layers(&self.stackups, &self.layer_definitions)?;
-        let land_by_id = lands
-            .iter()
-            .map(|land| (land.id, land))
-            .collect::<HashMap<_, _>>();
+        let terminations = TerminationIndex::new(self, lands, terminations);
         for hole in holes.iter_mut() {
             let evidence = self.feature_evidence(hole.id.0);
             let (termination, basis) = self.hole_termination_association(
                 hole,
                 &evidence,
-                terminations,
-                &land_by_id,
+                &terminations,
                 stackup.as_deref(),
             )?;
-            if let Some(side) = association_side(&termination, terminations) {
+            if let Some(side) = terminations.common_side(&termination) {
                 hole.assembly_side = side;
             }
             hole.termination = termination;
@@ -698,62 +730,42 @@ impl ImportedDesign {
         &self,
         hole: &PhysicalHole,
         evidence: &FeatureEvidence,
-        terminations: &[PhysicalTermination],
-        land_by_id: &HashMap<LandId, &PhysicalLand>,
+        terminations: &TerminationIndex<'_>,
         stackup: Option<&[Symbol]>,
     ) -> Result<(Association<PhysicalTerminationId>, Option<AssociationBasis>)> {
         if !evidence.component_refs.is_empty() || evidence.pin.is_some() {
-            let candidates = terminations
-                .iter()
-                .filter(|termination| termination.component.layout == hole.id.0.layout)
-                .filter(|termination| {
-                    evidence.pin.is_none() || evidence.pin == Some(termination.pin)
-                })
-                .filter(|termination| {
-                    evidence.component_refs.is_empty()
-                        || self
-                            .component_definition(termination.component.component)
-                            .and_then(|component| component.source.ref_des)
-                            .is_some_and(|reference| evidence.component_refs.contains(&reference))
-                })
-                .map(|termination| termination.id)
-                .collect::<BTreeSet<_>>();
             return Ok((
-                association_from_candidates(candidates, true),
+                association_from_candidates(terminations.claimed(hole.id.0.layout, evidence), true),
                 Some(AssociationBasis::SourceIdentity),
             ));
         }
 
-        let mut candidate_lands = Vec::new();
-        for termination in terminations {
-            for land in &termination.lands {
-                let land = land_by_id[land];
-                if termination.side != Side::None
-                    && land.board == hole.board
-                    && land.side == termination.side
-                    && feature_definitely_spans_layer(
-                        hole.span,
-                        self.layer_definitions[land.layer.0 as usize].name,
-                        stackup,
-                    )
-                    && land.image.bbox().intersects(hole.image.bbox())
-                    && land.image.intersection(&hole.image)?.area() > tol::REGION_MM.powi(2)
-                {
-                    candidate_lands.push((land.id, termination.id));
-                }
+        let mut candidates = Vec::new();
+        for entry in terminations.lands_meeting(hole.image.bbox()) {
+            let land = entry.land;
+            if land.board == hole.board
+                && feature_definitely_spans_layer(
+                    hole.span,
+                    self.layer_definitions[land.layer.0 as usize].name,
+                    stackup,
+                )
+                && land.image.intersection(&hole.image)?.area() > tol::REGION_MM.powi(2)
+            {
+                candidates.push(entry.termination);
             }
         }
-        Ok(match candidate_lands.as_slice() {
+        Ok(match candidates.as_slice() {
             [] => (Association::Unresolved, None),
-            [(_, termination)] => (
+            [termination] => (
                 Association::Resolved(*termination),
                 Some(AssociationBasis::ExactGeometry),
             ),
+            // Several overlapping lands stay ambiguous even when they belong
+            // to one termination.
             _ => (
                 Association::Ambiguous(
-                    candidate_lands
+                    candidates
                         .into_iter()
-                        .map(|(_, termination)| termination)
                         .collect::<BTreeSet<_>>()
                         .into_iter()
                         .collect(),
@@ -770,6 +782,7 @@ impl ImportedDesign {
         stackup: Option<&[Symbol]>,
         resolution: Resolution,
     ) -> Result<()> {
+        let hole_bounds = BBoxIndex::new(holes.iter().map(|hole| hole.image.bbox()).collect());
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if !matches!(
                 layer.layer_function,
@@ -794,13 +807,11 @@ impl ImportedDesign {
                     span: feature.intent.span,
                     spec_refs: self.feature_spec_refs(layer, feature),
                 };
-                for hole in holes
-                    .iter_mut()
-                    .filter(|hole| hole.board == occurrence.board)
-                {
-                    if protection_side_compatible(hole.assembly_side, evidence.side)
+                for hole in hole_bounds.query(image.bbox()) {
+                    let hole = &mut holes[hole];
+                    if hole.board == occurrence.board
+                        && protection_side_compatible(hole.assembly_side, evidence.side)
                         && feature_spans_overlap(hole.span, evidence.span, stackup)
-                        && hole.image.bbox().intersects(image.bbox())
                         && hole.image.intersection(&image)?.area() > tol::REGION_MM.powi(2)
                     {
                         hole.protection.push(evidence.clone());
@@ -959,35 +970,6 @@ impl ImportedDesign {
                 .or(feature.padstack_ref),
         }
     }
-
-    fn component_association(
-        &self,
-        occurrence: FeatureOccurrenceId,
-        evidence: &FeatureEvidence,
-        components: &[ComponentOccurrence],
-    ) -> Association<ComponentOccurrenceId> {
-        if evidence.component_refs.is_empty() {
-            return Association::Unresolved;
-        }
-        let candidates = components
-            .iter()
-            .filter(|component| component.id.layout == occurrence.layout)
-            .filter(|component| {
-                self.component_definition(component.id.component)
-                    .and_then(|definition| definition.source.ref_des)
-                    .is_some_and(|reference| evidence.component_refs.contains(&reference))
-            })
-            .map(|component| component.id)
-            .collect::<Vec<_>>();
-        if evidence.component_refs.len() > 1 {
-            return Association::Conflicting(candidates);
-        }
-        match candidates.as_slice() {
-            [] => Association::Unresolved,
-            [component] => Association::Resolved(*component),
-            _ => Association::Ambiguous(candidates),
-        }
-    }
 }
 
 struct OccurrenceAttribution;
@@ -1017,108 +999,263 @@ fn association_from_candidates<T: Copy + Ord>(
     }
 }
 
-fn association_side(
-    association: &Association<PhysicalTerminationId>,
-    terminations: &[PhysicalTermination],
-) -> Option<Side> {
-    let ids = match association {
-        Association::Resolved(id) => std::slice::from_ref(id),
-        Association::Ambiguous(ids) | Association::Conflicting(ids) => ids,
-        Association::Unresolved => return None,
-    };
-    let first = ids.first()?;
-    let side = terminations
-        .iter()
-        .find(|termination| termination.id == *first)?
-        .side;
-    (side != Side::None
-        && ids.iter().all(|id| {
-            terminations
+/// Component occurrences by `(layout occurrence, designator)`.
+type ComponentIndex = HashMap<(LayoutOccurrenceId, Symbol), Vec<ComponentOccurrenceId>>;
+
+fn component_association(
+    occurrence: FeatureOccurrenceId,
+    evidence: &FeatureEvidence,
+    components: &ComponentIndex,
+) -> Association<ComponentOccurrenceId> {
+    let candidates = match evidence.component_refs.as_slice() {
+        [] => return Association::Unresolved,
+        [designator] => components
+            .get(&(occurrence.layout, *designator))
+            .cloned()
+            .unwrap_or_default(),
+        designators => {
+            // Conflicting evidence lists every claimed component in
+            // occurrence order, which is component then layout order.
+            let mut candidates = designators
                 .iter()
-                .find(|termination| termination.id == *id)
-                .is_some_and(|termination| termination.side == side)
-        }))
-    .then_some(side)
+                .filter_map(|designator| components.get(&(occurrence.layout, *designator)))
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            candidates.sort_by_key(|candidate| candidate.component);
+            return Association::Conflicting(candidates);
+        }
+    };
+    match candidates.as_slice() {
+        [] => Association::Unresolved,
+        [component] => Association::Resolved(*component),
+        _ => Association::Ambiguous(candidates),
+    }
 }
 
-fn exact_termination(
-    at: Point,
-    pin: Option<Symbol>,
-    padstack: Option<Symbol>,
-    component: &Association<ComponentOccurrenceId>,
-    terminations: &[PhysicalTermination],
-) -> Option<PhysicalTerminationId> {
-    let component = component.resolved()?;
-    let (pin, padstack) = (pin?, padstack?);
-    terminations
-        .iter()
-        .find(|termination| {
-            termination.component == *component
-                && termination.pin == pin
-                && termination.padstack == padstack
-                && termination.at == at
-        })
-        .map(|termination| termination.id)
+/// Lands of one association context in view order, indexed once by image
+/// bounds and by the identities IPC evidence can name.
+struct LandIndex<'a> {
+    lands: Vec<&'a PhysicalLand>,
+    bounds: BBoxIndex,
+    by_component_ref: HashMap<Symbol, Vec<u32>>,
+    by_padstack: HashMap<Symbol, Vec<u32>>,
 }
 
-fn associate_land_candidates(
+impl<'a> LandIndex<'a> {
+    fn new(lands: Vec<&'a PhysicalLand>) -> Self {
+        let mut by_component_ref = HashMap::<_, Vec<u32>>::new();
+        let mut by_padstack = HashMap::<_, Vec<u32>>::new();
+        for (id, land) in lands.iter().enumerate() {
+            for reference in &land.component_refs {
+                by_component_ref
+                    .entry(*reference)
+                    .or_default()
+                    .push(id as u32);
+            }
+            if let Some(padstack) = land.padstack {
+                by_padstack.entry(padstack).or_default().push(id as u32);
+            }
+        }
+        Self {
+            bounds: BBoxIndex::new(lands.iter().map(|land| land.image.bbox()).collect()),
+            lands,
+            by_component_ref,
+            by_padstack,
+        }
+    }
+
+    /// Ascending ids of a superset of the lands `evidence` names, through
+    /// its most selective identity.
+    fn claimed(&self, evidence: &FeatureEvidence) -> Vec<u32> {
+        if !evidence.component_refs.is_empty() {
+            let mut ids = evidence
+                .component_refs
+                .iter()
+                .filter_map(|reference| self.by_component_ref.get(reference))
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        } else if let Some(padstack) = evidence.geometry_ref {
+            self.by_padstack.get(&padstack).cloned().unwrap_or_default()
+        } else {
+            (0..self.lands.len() as u32).collect()
+        }
+    }
+}
+
+fn associate_lands(
     image: &ContourSet,
     board: Option<LayoutOccurrenceId>,
     side: Side,
     evidence: &FeatureEvidence,
-    component: &Association<ComponentOccurrenceId>,
-    lands: &[&PhysicalLand],
+    index: &LandIndex<'_>,
 ) -> Result<Association<LandId>> {
-    let same_context = lands
-        .iter()
-        .copied()
-        .filter(|land| land.board == board)
-        .filter(|land| side == Side::None || land.side == side)
-        .collect::<Vec<_>>();
     let has_explicit_evidence = !evidence.component_refs.is_empty()
         || evidence.pin.is_some()
         || evidence.geometry_ref.is_some();
-    let explicit = same_context
-        .iter()
-        .copied()
-        .filter(|land| {
-            evidence.component_refs.is_empty()
-                || land_component_refs(land)
+    // Every source identity the feature carries must agree with the land's.
+    let claims = |land: &PhysicalLand| {
+        land.board == board
+            && (side == Side::None || land.side == side)
+            && (evidence.pin.is_none() || land.pin == evidence.pin)
+            && (evidence.geometry_ref.is_none() || land.padstack == evidence.geometry_ref)
+            && (evidence.component_refs.is_empty()
+                || land
+                    .component_refs
                     .iter()
-                    .any(|reference| evidence.component_refs.contains(reference))
-        })
-        .filter(|land| evidence.pin.is_none() || land.pin == evidence.pin)
-        .filter(|land| evidence.geometry_ref.is_none() || land.padstack == evidence.geometry_ref)
-        .collect::<Vec<_>>();
-    let pool = if has_explicit_evidence {
-        explicit.as_slice()
-    } else {
-        same_context.as_slice()
+                    .any(|reference| evidence.component_refs.contains(reference)))
     };
     let mut overlapping = Vec::new();
-    for land in pool {
-        if land.image.bbox().intersects(image.bbox())
-            && land.image.intersection(image)?.area() > tol::REGION_MM.powi(2)
-        {
+    for id in index.bounds.query(image.bbox()) {
+        let land = index.lands[id];
+        if claims(land) && land.image.intersection(image)?.area() > tol::REGION_MM.powi(2) {
             overlapping.push(land.id);
         }
     }
 
-    if matches!(component, Association::Conflicting(_)) {
-        return Ok(Association::Conflicting(overlapping));
-    }
     Ok(match overlapping.as_slice() {
         [land] => Association::Resolved(*land),
         [_, _, ..] => Association::Ambiguous(overlapping),
-        [] if has_explicit_evidence && !explicit.is_empty() => {
-            Association::Conflicting(explicit.iter().map(|land| land.id).collect())
+        // Named lands that the image misses contradict the source.
+        [] if has_explicit_evidence => {
+            let claimed = index
+                .claimed(evidence)
+                .into_iter()
+                .map(|id| index.lands[id as usize])
+                .filter(|land| claims(land))
+                .map(|land| land.id)
+                .collect::<Vec<_>>();
+            if claimed.is_empty() {
+                Association::Unresolved
+            } else {
+                Association::Conflicting(claimed)
+            }
         }
         [] => Association::Unresolved,
     })
 }
 
-fn land_component_refs(land: &PhysicalLand) -> Vec<Symbol> {
-    land.component_refs.clone()
+/// One land of a sided termination, for exact-geometry hole association.
+struct TerminationLand<'a> {
+    termination: PhysicalTerminationId,
+    land: &'a PhysicalLand,
+}
+
+/// Terminations of one physical view by id, by the identities hole evidence
+/// can name, and by the bounds of their lands.
+struct TerminationIndex<'a> {
+    terminations: &'a [PhysicalTermination],
+    by_layout: HashMap<LayoutOccurrenceId, Vec<u32>>,
+    by_designator: HashMap<(LayoutOccurrenceId, Symbol), Vec<u32>>,
+    /// In termination then land order, so bounds queries keep that order.
+    lands: Vec<TerminationLand<'a>>,
+    land_bounds: BBoxIndex,
+}
+
+impl<'a> TerminationIndex<'a> {
+    fn new(
+        design: &ImportedDesign,
+        lands: &'a [PhysicalLand],
+        terminations: &'a [PhysicalTermination],
+    ) -> Self {
+        let land_by_id = lands
+            .iter()
+            .map(|land| (land.id, land))
+            .collect::<HashMap<_, _>>();
+        let mut by_layout = HashMap::<_, Vec<u32>>::new();
+        let mut by_designator = HashMap::<_, Vec<u32>>::new();
+        for (index, termination) in terminations.iter().enumerate() {
+            let layout = termination.component.layout;
+            by_layout.entry(layout).or_default().push(index as u32);
+            if let Some(designator) = design
+                .component_definition(termination.component.component)
+                .and_then(|component| component.source.ref_des)
+            {
+                by_designator
+                    .entry((layout, designator))
+                    .or_default()
+                    .push(index as u32);
+            }
+        }
+        let termination_lands = terminations
+            .iter()
+            .filter(|termination| termination.side != Side::None)
+            .flat_map(|termination| {
+                let land_by_id = &land_by_id;
+                termination.lands.iter().filter_map(move |land| {
+                    let land = land_by_id[land];
+                    (land.side == termination.side).then_some(TerminationLand {
+                        termination: termination.id,
+                        land,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        Self {
+            terminations,
+            by_layout,
+            by_designator,
+            land_bounds: BBoxIndex::new(
+                termination_lands
+                    .iter()
+                    .map(|entry| entry.land.image.bbox())
+                    .collect(),
+            ),
+            lands: termination_lands,
+        }
+    }
+
+    /// Terminations of `layout` agreeing with every identity in `evidence`.
+    fn claimed(
+        &self,
+        layout: LayoutOccurrenceId,
+        evidence: &FeatureEvidence,
+    ) -> BTreeSet<PhysicalTerminationId> {
+        let named = evidence
+            .component_refs
+            .iter()
+            .filter_map(|designator| self.by_designator.get(&(layout, *designator)));
+        let unnamed = evidence
+            .component_refs
+            .is_empty()
+            .then(|| self.by_layout.get(&layout))
+            .flatten();
+        named
+            .chain(unnamed)
+            .flatten()
+            .map(|&index| &self.terminations[index as usize])
+            .filter(|termination| evidence.pin.is_none() || evidence.pin == Some(termination.pin))
+            .map(|termination| termination.id)
+            .collect()
+    }
+
+    /// Termination lands whose image bounds meet `bbox`, in index order.
+    fn lands_meeting(&self, bbox: BBox) -> impl Iterator<Item = &TerminationLand<'a>> {
+        self.land_bounds
+            .query(bbox)
+            .into_iter()
+            .map(|id| &self.lands[id])
+    }
+
+    /// The side every termination of `association` mounts on, if they agree.
+    fn common_side(&self, association: &Association<PhysicalTerminationId>) -> Option<Side> {
+        let ids = match association {
+            Association::Resolved(id) => std::slice::from_ref(id),
+            Association::Ambiguous(ids) | Association::Conflicting(ids) => ids,
+            Association::Unresolved => return None,
+        };
+        // Ids are positions: terminations are numbered in their sorted order.
+        let side = |id: &PhysicalTerminationId| {
+            let termination = self.terminations.get(id.0 as usize)?;
+            (termination.id == *id).then_some(termination.side)
+        };
+        let first = side(ids.first()?)?;
+        (first != Side::None && ids.iter().all(|id| side(id) == Some(first))).then_some(first)
+    }
 }
 
 fn physical_side(side: Option<IpcSide>) -> Side {
