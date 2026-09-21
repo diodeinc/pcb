@@ -1,4 +1,3 @@
-use ipc2581::types::{Layer, LayerFunction};
 use serde::{Deserialize, Serialize};
 
 use super::IpcAccessor;
@@ -38,14 +37,12 @@ impl<'a> IpcAccessor<'a> {
     pub fn layer_stats(&self) -> Option<LayerStats> {
         let ecad = self.ecad()?;
 
-        let copper_count = count_layers_by_function(
-            &ecad.cad_data.layers,
-            &[
-                LayerFunction::Conductor,
-                LayerFunction::Signal,
-                LayerFunction::Plane,
-            ],
-        );
+        let copper_count = ecad
+            .cad_data
+            .layers
+            .iter()
+            .filter(|layer| crate::layers::is_copper(layer.layer_function))
+            .count();
 
         Some(LayerStats::new(copper_count, ecad.cad_data.layers.len()))
     }
@@ -59,10 +56,34 @@ impl<'a> IpcAccessor<'a> {
     }
 }
 
-/// Count layers by specific functions
-fn count_layers_by_function(layers: &[Layer], functions: &[LayerFunction]) -> usize {
-    layers
-        .iter()
-        .filter(|layer| functions.contains(&layer.layer_function))
-        .count()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_copper_function_counts_as_a_copper_layer() {
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="L1" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="L2" layerFunction="MIXED" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="L3" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="L4" layerFunction="CONDFOIL" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let stats = IpcAccessor::new(&ipc).layer_stats().unwrap();
+
+        assert_eq!((stats.copper_count, stats.total_count), (4, 5));
+    }
 }
