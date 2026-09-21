@@ -15,9 +15,11 @@ use crate::{
 };
 use pcb_ir::dialects::artwork::legalize::bake_aperture_basis;
 use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
-use pcb_ir::geom::path::ContourBuf;
+use pcb_ir::geom::path::{ContourBuf, PathOp, StrokeToFillStyle, stroke_to_fill};
 use pcb_ir::geom::region::{self, Ring};
-use pcb_ir::geom::{Affine2, FillRule, Point, Polarity, Segment, StrokePatternMark};
+use pcb_ir::geom::{
+    Affine2, FillRule, LineCap, Point, Polarity, Segment, StrokePatternMark, StrokeStyle,
+};
 
 const GERBER_GEOMETRY_GRID_MM: f64 = 0.001;
 const GERBER_OUTLINE_MAX_VERTICES: usize = 5000;
@@ -313,14 +315,36 @@ fn lower_artwork_object(
                 )
             })?;
             let stroke_width = stroke.width * transform.m00.hypot(transform.m10);
-            let aperture =
-                apertures.define(Aperture::circle(stroke_width), aperture_function, accuracy)?;
             for contour in layer
                 .arena
                 .path_contours(artwork_path)
                 .into_iter()
                 .map(|contour| contour.transformed(transform))
             {
+                // A draw images the round aperture at both of its ends, so
+                // any other cap that shows is outlined instead.
+                if stroke.cap != LineCap::Round && images_caps(&contour, stroke) {
+                    let style = StrokeToFillStyle {
+                        width: stroke_width,
+                        line_cap: stroke.cap,
+                        line_join: stroke.join,
+                        pattern: stroke.pattern,
+                    };
+                    objects.extend(region_objects(
+                        &stroke_to_fill(&[contour], style, accuracy)?.unwrap_or_default(),
+                        FillRule::NonZero,
+                        polarity,
+                        &lower_aperture_function(aperture_function),
+                        &attributes,
+                        accuracy,
+                    )?);
+                    continue;
+                }
+                let aperture = apertures.define(
+                    Aperture::circle(stroke_width),
+                    aperture_function,
+                    accuracy,
+                )?;
                 let segments = contour_segments(&contour, accuracy)?;
                 for mark in
                     pcb_ir::geom::stroke_pattern_marks(&segments, stroke.pattern, stroke_width)
@@ -368,6 +392,13 @@ fn lower_artwork_object(
         }
     }
     Ok(objects)
+}
+
+/// Whether a stroked contour shows any line end: an open subpath, or the
+/// dashes of a pattern.
+fn images_caps(contour: &ContourBuf, stroke: StrokeStyle) -> bool {
+    let count = |op| contour.cmds.iter().filter(|cmd| cmd.op == op).count();
+    !stroke.is_solid() || count(PathOp::MoveTo) > count(PathOp::Close)
 }
 
 fn lower_stroke_segment(segment: Segment, aperture: i32) -> ObjectKind {
@@ -703,8 +734,25 @@ fn lower_region_objects(
         .into_iter()
         .map(|contour| contour.transformed(transform))
         .collect::<Vec<_>>();
-    let fill_rule = artwork_path.fill_rule().unwrap_or(FillRule::NonZero);
-    Ok(prepare_on_grid(&contours, fill_rule, accuracy)?
+    region_objects(
+        &contours,
+        artwork_path.fill_rule().unwrap_or(FillRule::NonZero),
+        polarity,
+        aperture_attributes,
+        attributes,
+        accuracy,
+    )
+}
+
+fn region_objects(
+    contours: &[ContourBuf],
+    fill_rule: FillRule,
+    polarity: Polarity,
+    aperture_attributes: &[AttributeValue],
+    attributes: &[AttributeValue],
+    accuracy: GeometryAccuracy,
+) -> Result<Vec<WriterObject>> {
+    Ok(prepare_on_grid(contours, fill_rule, accuracy)?
         .iter()
         .map(|ring| WriterObject {
             aperture_attributes: aperture_attributes.to_vec(),
@@ -1306,26 +1354,73 @@ mod tests {
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse repeated clear arcs");
         let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
-        fn image<M>(mask: &pcb_ir::dialects::mask::Document<M>) -> pcb_ir::geom::ContourSet {
-            let accuracy = GeometryAccuracy::default();
+        let symmetric_difference = image_difference(&artwork, &geometry);
+        assert!(symmetric_difference < 0.01, "{symmetric_difference}");
+    }
 
-            let layer = &mask.layers[0];
+    /// Area by which two artwork documents' composed first layers differ.
+    fn image_difference<LA: Clone, OA: Clone, LB: Clone, OB: Clone>(
+        a: &pcb_ir::dialects::artwork::Document<LA, OA>,
+        b: &pcb_ir::dialects::artwork::Document<LB, OB>,
+    ) -> f64 {
+        fn image<L: Clone, O: Clone>(
+            doc: &pcb_ir::dialects::artwork::Document<L, O>,
+        ) -> pcb_ir::geom::ContourSet {
+            let mask =
+                pcb_ir::dialects::artwork::compose_to_mask(doc, Resolution::default()).unwrap();
             pcb_ir::geom::ContourSet::from_painted_paths(
                 &mask.arena,
-                mask.shapes(layer),
-                Resolution::new(pcb_ir::geom::tol::REGION_MM, accuracy),
+                mask.shapes(&mask.layers[0]),
+                Resolution::new(pcb_ir::geom::tol::REGION_MM, GeometryAccuracy::default()),
             )
             .unwrap()
         }
-        let expected = image(
-            &pcb_ir::dialects::artwork::compose_to_mask(&artwork, Resolution::default()).unwrap(),
-        );
-        let actual = image(
-            &pcb_ir::dialects::artwork::compose_to_mask(&geometry, Resolution::default()).unwrap(),
-        );
-        let symmetric_difference = expected.difference(&actual).unwrap().area()
-            + actual.difference(&expected).unwrap().area();
-        assert!(symmetric_difference < 0.01, "{symmetric_difference}");
+        let (a, b) = (image(a), image(b));
+        a.difference(&b).unwrap().area() + b.difference(&a).unwrap().area()
+    }
+
+    #[test]
+    fn non_round_caps_image_as_their_outline() {
+        let accuracy = GeometryAccuracy::default();
+        for cap in [LineCap::Butt, LineCap::Square] {
+            let mut artwork = ArtworkDocument::new();
+            let layer = artwork.push_layer(IrArtworkDocument {
+                name: "F.Cu".to_string(),
+                role: LayerRole::Copper,
+                side: Side::Top,
+                objects: Span::EMPTY,
+                bbox: BBox::empty(),
+                meta: LayerAttributes::default(),
+            });
+            let path = artwork.push_path(
+                Paint::Stroke(StrokeStyle::new(0.25, cap)),
+                vec![ContourBuf::new(vec![
+                    PathCmd::move_to(Point::new(0.0, 0.0)),
+                    PathCmd::line_to(Point::new(2.0, 0.0)),
+                ])],
+            );
+            artwork.push_object(
+                layer,
+                ArtworkObject {
+                    polarity: Polarity::Dark,
+                    order: Default::default(),
+                    geometry: ArtworkGeometry::Stroke { path },
+                    bbox: artwork.path_bbox(path),
+                    meta: ObjectAttributes::default(),
+                },
+            );
+
+            let contents =
+                crate::write_layer(&lower_artwork_layer(&artwork, accuracy).unwrap()).unwrap();
+            assert_external_parser_accepts(&contents);
+            let parsed = crate::GerberX2::parse(&contents).unwrap();
+            let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
+            let difference = image_difference(&artwork, &geometry);
+            assert!(
+                difference < 0.001,
+                "{cap:?} cap differs by {difference} mm2"
+            );
+        }
     }
 
     #[test]
