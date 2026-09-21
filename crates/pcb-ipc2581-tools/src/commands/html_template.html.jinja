@@ -233,6 +233,9 @@
         {{ board_summary.board_array.overview_svg|safe }}
     </div>
     {% endif %}
+    {% if board_summary.board_array.overview_warning %}
+    <div class="layer-warning">{{ board_summary.board_array.overview_warning }}</div>
+    {% endif %}
     {% endif %}
 
     <div class="file-info">

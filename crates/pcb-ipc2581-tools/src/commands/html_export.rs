@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use minijinja::{Environment, context};
-use pcb_ir::dialects::ipc::{ArtworkScope, ProfileSet};
+use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 use serde::Serialize;
 
@@ -14,9 +14,6 @@ use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishIn
 use crate::geometry;
 #[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
-
-type GeometryDocument =
-    pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 #[cfg(feature = "cli")]
 pub fn execute(
@@ -68,7 +65,7 @@ pub fn generate_html(
     // Extract data
     let board_summary = extract_board_summary(accessor, imported, unit_format, resolution)?;
     let stackup = extract_stackup_data(accessor, unit_format);
-    let rendered_layers = extract_rendered_layers(imported, resolution)?;
+    let rendered_layers = extract_rendered_layers(imported, resolution);
     let version = env!("CARGO_PKG_VERSION");
 
     // Extract file metadata
@@ -130,6 +127,7 @@ struct BoardArraySummary {
     grid: Option<BoardArrayGridSummary>,
     drill_holes: Option<String>,
     overview_svg: Option<String>,
+    overview_warning: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -205,8 +203,12 @@ fn extract_board_summary(
 ) -> Result<BoardSummary> {
     let layout = accessor.board_layout_info();
     let design_name = layout.as_ref().and_then(|layout| layout.board_name.clone());
-    let array_overview_svg =
-        crate::board_array::render_board_array_overview_svg(accessor, imported, resolution)?;
+    // Like a layer, an overview that cannot render is reported in place.
+    let (overview_svg, overview_warning) =
+        match crate::board_array::render_board_array_overview_svg(accessor, imported, resolution) {
+            Ok(svg) => (svg, None),
+            Err(error) => (None, Some(format!("Overview unavailable: {error:#}"))),
+        };
 
     let (width, height) = if let Some(dims) = layout
         .as_ref()
@@ -242,7 +244,8 @@ fn extract_board_summary(
                 }),
                 drill_holes: drill_stats(imported, ArtworkScope::ArrayLocal)?
                     .and_then(format_drill_count),
-                overview_svg: array_overview_svg,
+                overview_svg,
+                overview_warning,
             })
         })
         .transpose()?;
@@ -319,10 +322,7 @@ fn formatted_dimensions(
     }
 }
 
-fn extract_rendered_layers(
-    imported: &ImportedDesign,
-    resolution: Resolution,
-) -> Result<RenderedLayers> {
+fn extract_rendered_layers(imported: &ImportedDesign, resolution: Resolution) -> RenderedLayers {
     let layer_ids = imported
         .layer_definitions
         .iter()
@@ -349,7 +349,7 @@ fn extract_rendered_layers(
                 id,
                 stackup_layer.layer_number.map(|number| number.to_string()),
                 resolution,
-            )?;
+            );
             if function.is_coating() && !rendered.has_native_content {
                 continue;
             }
@@ -369,7 +369,7 @@ fn extract_rendered_layers(
                 LayerId(index as u32),
                 None,
                 resolution,
-            )?);
+            ));
         }
     }
 
@@ -380,16 +380,16 @@ fn extract_rendered_layers(
             continue;
         }
 
-        let rendered = rendered_source_layer(imported, LayerId(index as u32), None, resolution)?;
+        let rendered = rendered_source_layer(imported, LayerId(index as u32), None, resolution);
         if rendered.has_native_content {
             non_stackup_layers.push(rendered);
         }
     }
 
-    Ok(RenderedLayers {
+    RenderedLayers {
         stackup: stackup_layers,
         non_stackup: non_stackup_layers,
-    })
+    }
 }
 
 fn rendered_source_layer(
@@ -397,7 +397,7 @@ fn rendered_source_layer(
     id: LayerId,
     sequence: Option<String>,
     resolution: Resolution,
-) -> anyhow::Result<RenderedLayer> {
+) -> RenderedLayer {
     let layer = &imported.layer_definitions[id.0 as usize];
     let mut rendered = RenderedLayer {
         name: imported.resolve(layer.name).to_string(),
@@ -413,44 +413,37 @@ fn rendered_source_layer(
         has_native_content: false,
     };
 
-    match imported.materialize_layer(id, ArtworkScope::Board) {
-        Ok(geometry) => render_extracted_layer(
-            &mut rendered,
-            geometry,
-            ArtworkScope::Board.profile_set(),
-            resolution,
-            // Every layer's SVG is inlined into one page, where element ids
-            // are global, so each takes its ids from its place in the source.
-            &format!("l{}-", id.0),
-        )?,
-        Err(error) => {
-            rendered.warning = Some(format!("Render unavailable: {error}"));
-        }
+    // One layer that cannot render is listed with its error rather than
+    // hidden as empty; the rest of the report stands.
+    if let Err(error) = render_layer(&mut rendered, imported, id, resolution) {
+        rendered.warning = Some(format!("Render unavailable: {error:#}"));
+        rendered.has_native_content = true;
     }
-
-    Ok(rendered)
+    rendered
 }
 
-fn render_extracted_layer(
+fn render_layer(
     rendered: &mut RenderedLayer,
-    mut geometry: GeometryDocument,
-    profile_set: ProfileSet,
+    imported: &ImportedDesign,
+    id: LayerId,
     resolution: Resolution,
-    ids: &str,
 ) -> anyhow::Result<()> {
+    let mut geometry = imported.materialize_layer(id, ArtworkScope::Board)?;
     pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut geometry, resolution)?;
     rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
     rendered.svg = Some(geometry::render::render_layer_svg(
         &geometry,
         true,
-        profile_set,
+        ArtworkScope::Board.profile_set(),
+        // Every layer's SVG is inlined into one page, where element ids are
+        // global, so each takes its ids from its place in the source.
         &pcb_ir::render::RenderOptions::default()
             .with_accuracy(resolution.accuracy)
-            .with_id_prefix(ids),
+            .with_id_prefix(format!("l{}-", id.0)),
     )?);
     if !geometry.diagnostics.is_empty() {
         rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));
-    };
+    }
     Ok(())
 }
 
@@ -651,6 +644,92 @@ mod tests {
         assert!(summary_section.contains("vcut-guide"));
         assert!(summary_section.contains("array-layer-drill"));
         assert!(summary_section.contains("Array Drill Holes:"));
+    }
+
+    #[test]
+    fn a_layer_that_cannot_render_is_marked_and_the_rest_still_render() {
+        // SVG coordinates round on a nanometre grid. A budget that barely
+        // covers that rounding leaves nothing for flattening, so only the
+        // layer whose pad the slot cuts fails; exact lines still draw.
+        let resolution = Resolution::default()
+            .with_accuracy(pcb_ir::geom::GeometryAccuracy::new(7.2e-7).unwrap());
+        let ipc = ipc2581::Ipc2581::parse(cut_pad_fixture()).unwrap();
+
+        let html = report(&ipc, resolution);
+
+        let section = |name: &str| {
+            let start = html.find(&format!("<span>{name}</span>")).unwrap();
+            let end = html[start..].find("</section>").unwrap();
+            &html[start..start + end]
+        };
+        assert!(section("F.Cu").contains("<svg "));
+        assert!(!section("F.Cu").contains("layer-warning"));
+        assert!(!section("B.Cu").contains("<svg "));
+        assert!(section("B.Cu").contains("Render unavailable: "));
+    }
+
+    fn cut_pad_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad">
+        <Circle diameter="1"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Cu" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+      <Layer name="B.Cu" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="Rout" layerFunction="ROUT" side="ALL" polarity="POSITIVE">
+        <Span fromLayer="B.Cu" toLayer="B.Cu"/>
+      </Layer>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="B.Cu" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="F.Cu">
+          <Set>
+            <Features>
+              <Line startX="1" startY="1" endX="9" endY="1">
+                <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="B.Cu">
+          <Set>
+            <Pad padstackDefRef="padstack">
+              <Location x="5" y="2.5"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="Rout">
+          <Set>
+            <SlotCavity name="S1" platingStatus="NONPLATED" plusTol="0" minusTol="0">
+              <Location x="5.5" y="2.5"/>
+              <Oval width="2" height="0.4"/>
+            </SlotCavity>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
     }
 
     fn report(ipc: &ipc2581::Ipc2581, resolution: Resolution) -> String {
