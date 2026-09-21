@@ -118,29 +118,25 @@ fn object_attributes(
     gerber: &crate::GerberX2,
     meta: &crate::geometry::GerberObjectMeta,
 ) -> ObjectAttributes {
+    let fields = |set, attribute: &str| {
+        gerber
+            .attributes(set)
+            .iter()
+            .find(|candidate| gerber.resolve(candidate.name) == attribute)
+            .map(|attribute| resolve_fields(gerber, attribute))
+    };
     // Names are free-form text here and are escaped again on the way out.
     let name = |attribute: &str, index: usize| {
-        attribute_fields(gerber, &meta.object_attributes, attribute)
+        fields(meta.object_attributes, attribute)
             .and_then(|fields| fields.into_iter().nth(index))
             .map(|field| crate::unescape_attribute_field(&field))
     };
     ObjectAttributes {
-        aperture_function: attribute_fields(gerber, &meta.aperture_attributes, ".AperFunction"),
+        aperture_function: fields(meta.aperture_attributes, ".AperFunction"),
         net: name(".N", 0),
         component: name(".C", 0).or_else(|| name(".P", 0)),
         pin: name(".P", 1),
     }
-}
-
-fn attribute_fields(
-    gerber: &crate::GerberX2,
-    attributes: &[crate::types::Attribute],
-    name: &str,
-) -> Option<Vec<String>> {
-    attributes
-        .iter()
-        .find(|attribute| gerber.resolve(attribute.name) == name)
-        .map(|attribute| resolve_fields(gerber, attribute))
 }
 
 fn resolve_fields(gerber: &crate::GerberX2, attribute: &crate::types::Attribute) -> Vec<String> {

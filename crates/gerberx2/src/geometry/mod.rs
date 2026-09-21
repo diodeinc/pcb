@@ -1,8 +1,6 @@
 mod extract;
 
-pub use extract::{
-    GerberArtworkDocument, GerberObjectMeta, ObjectClass, SourceKind, extract_document,
-};
+pub use extract::{GerberArtworkDocument, GerberObjectMeta, extract_document};
 
 use pcb_ir::dialects::{LayerRole, Side};
 

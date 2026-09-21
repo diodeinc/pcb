@@ -17,36 +17,12 @@ use pcb_ir::geom::{Affine2, Arc, BBox, FillRule, Paint, Point, Polarity, Span, S
 
 pub type GerberArtworkDocument = Document<Vec<String>, GerberObjectMeta>;
 
-/// Which Gerber operation produced an object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceKind {
-    Flash,
-    Draw,
-    Arc,
-    Region,
-}
-
-/// Coarse fabrication classification of a Gerber object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObjectClass {
-    Pad,
-    Trace,
-    Fill,
-    Cutout,
-}
-
-#[derive(Debug, Clone, PartialEq)]
+/// The X2 attribute sets an extracted object was imaged under, in
+/// [`GerberX2::attributes`].
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GerberObjectMeta {
-    pub kind: SourceKind,
-    pub class: ObjectClass,
-    pub polarity: Polarity,
-    pub aperture: Option<i32>,
-    pub object_index: u32,
-    pub aperture_attributes: Vec<gerber::Attribute>,
-    pub object_attributes: Vec<gerber::Attribute>,
-    pub mirroring: gerber::Mirroring,
-    pub rotation_degrees: f64,
-    pub scaling: f64,
+    pub aperture_attributes: Span,
+    pub object_attributes: Span,
 }
 
 pub fn extract_document(
@@ -205,16 +181,14 @@ fn extract_objects(
     objects: &[gerber::GraphicalObject],
     tables: &Tables<'_>,
 ) -> std::result::Result<(), AccuracyError> {
-    for (object_index, object) in objects.iter().enumerate() {
-        extract_object(doc, target, object_index, object, tables)?;
-    }
-    Ok(())
+    objects
+        .iter()
+        .try_for_each(|object| extract_object(doc, target, object, tables))
 }
 
 fn extract_object(
     doc: &mut GerberArtworkDocument,
     target: ArtworkTarget,
-    object_index: usize,
     object: &gerber::GraphicalObject,
     tables: &Tables<'_>,
 ) -> std::result::Result<(), AccuracyError> {
@@ -227,8 +201,6 @@ fn extract_object(
                 return Ok(());
             }
             let transform = object_transform(object, point(*at));
-            let mut meta = meta_from_object(object, object_index, SourceKind::Flash);
-            meta.aperture = Some(*aperture);
             let geometry = if let Some(&block) = tables.blocks.get(aperture) {
                 Geometry::Instance { block, transform }
             } else if let Some(&aperture) = tables.flashes.get(aperture) {
@@ -243,11 +215,11 @@ fn extract_object(
             target.push(
                 doc,
                 Object {
-                    polarity: meta.polarity,
+                    polarity: object.polarity,
                     order: Default::default(),
                     geometry,
                     bbox: BBox::empty(),
-                    meta,
+                    meta: meta_from_object(object),
                 },
             );
         }
@@ -256,13 +228,11 @@ fn extract_object(
             end,
             aperture,
         } => {
-            let mut meta = meta_from_object(object, object_index, SourceKind::Draw);
-            meta.aperture = Some(*aperture);
             if let Some(width) = circular_aperture_diameter(apertures, *aperture) {
                 push_flattened_paths(
                     doc,
                     target,
-                    meta,
+                    object,
                     vec![line_path(
                         point(*start),
                         point(*end),
@@ -274,7 +244,7 @@ fn extract_object(
                 push_flattened_paths(
                     doc,
                     target,
-                    meta,
+                    object,
                     swept_aperture(
                         &[point(*start), point(*end)],
                         0.0,
@@ -295,15 +265,13 @@ fn extract_object(
             clockwise,
             aperture,
         } => {
-            let mut meta = meta_from_object(object, object_index, SourceKind::Arc);
-            meta.aperture = Some(*aperture);
             let start = point(*start);
             let center = Point::new(start.x + center_offset.x, start.y + center_offset.y);
             if let Some(width) = circular_aperture_diameter(apertures, *aperture) {
                 push_flattened_paths(
                     doc,
                     target,
-                    meta,
+                    object,
                     vec![arc_path(
                         start,
                         point(*end),
@@ -317,7 +285,7 @@ fn extract_object(
                 push_flattened_paths(
                     doc,
                     target,
-                    meta,
+                    object,
                     arc_sweep(
                         start,
                         point(*end),
@@ -334,8 +302,7 @@ fn extract_object(
             }
         }
         gerber::ObjectKind::Region { contours } => {
-            let meta = meta_from_object(object, object_index, SourceKind::Region);
-            push_flattened_paths(doc, target, meta, region_paths(contours), accuracy)?;
+            push_flattened_paths(doc, target, object, region_paths(contours), accuracy)?;
         }
     };
     Ok(())
@@ -404,33 +371,10 @@ fn file_function(gerber: &GerberX2) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn meta_from_object(
-    object: &gerber::GraphicalObject,
-    object_index: usize,
-    kind: SourceKind,
-) -> GerberObjectMeta {
+fn meta_from_object(object: &gerber::GraphicalObject) -> GerberObjectMeta {
     GerberObjectMeta {
-        kind,
-        class: classify(object, kind),
-        polarity: object.polarity,
-        aperture: None,
-        object_index: object_index as u32,
-        aperture_attributes: object.aperture_attributes.clone(),
-        object_attributes: object.object_attributes.clone(),
-        mirroring: object.mirroring,
-        rotation_degrees: object.rotation_degrees,
-        scaling: object.scaling,
-    }
-}
-
-fn classify(object: &gerber::GraphicalObject, kind: SourceKind) -> ObjectClass {
-    if object.polarity == Polarity::Clear {
-        return ObjectClass::Cutout;
-    }
-    match kind {
-        SourceKind::Region => ObjectClass::Fill,
-        SourceKind::Draw | SourceKind::Arc => ObjectClass::Trace,
-        SourceKind::Flash => ObjectClass::Pad,
+        aperture_attributes: object.aperture_attributes,
+        object_attributes: object.object_attributes,
     }
 }
 
@@ -459,7 +403,7 @@ struct ExtractedPath {
 fn push_flattened_paths(
     doc: &mut GerberArtworkDocument,
     target: ArtworkTarget,
-    meta: GerberObjectMeta,
+    object: &gerber::GraphicalObject,
     paths: Vec<ExtractedPath>,
     accuracy: GeometryAccuracy,
 ) -> std::result::Result<(), AccuracyError> {
@@ -474,7 +418,7 @@ fn push_flattened_paths(
         target.push(
             doc,
             Object {
-                polarity: meta.polarity,
+                polarity: object.polarity,
                 order: Default::default(),
                 geometry: if is_stroked {
                     Geometry::Stroke { path }
@@ -482,7 +426,7 @@ fn push_flattened_paths(
                     Geometry::Region { path }
                 },
                 bbox: doc.path_bbox(path),
-                meta,
+                meta: meta_from_object(object),
             },
         );
         return Ok(());
@@ -502,11 +446,11 @@ fn push_flattened_paths(
     target.push(
         doc,
         Object {
-            polarity: meta.polarity,
+            polarity: object.polarity,
             order: Default::default(),
             geometry: Geometry::Region { path },
             bbox: doc.path_bbox(path),
-            meta,
+            meta: meta_from_object(object),
         },
     );
 

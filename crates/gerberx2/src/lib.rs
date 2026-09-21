@@ -5,7 +5,7 @@ pub mod types;
 pub mod write;
 
 pub use pcb_intern::{Interner, Symbol};
-use pcb_ir::geom::AccuracyError;
+use pcb_ir::geom::{AccuracyError, Span};
 pub use types::*;
 pub use write::{
     AttributeValue, GerberLayer, WriterAperture, WriterApertureTemplate, WriterObject,
@@ -44,8 +44,8 @@ pub struct GerberX2 {
     interner: Interner,
     commands: Vec<Command>,
     file_attributes: Vec<Attribute>,
-    aperture_attributes: Vec<Attribute>,
-    object_attributes: Vec<Attribute>,
+    /// Every attribute set an aperture or object refers to.
+    attributes: Vec<Attribute>,
     aperture_definitions: Vec<ApertureDefinition>,
     aperture_macros: Vec<ApertureMacro>,
     objects: Vec<GraphicalObject>,
@@ -72,12 +72,9 @@ impl GerberX2 {
         &self.file_attributes
     }
 
-    pub fn aperture_attributes(&self) -> &[Attribute] {
-        &self.aperture_attributes
-    }
-
-    pub fn object_attributes(&self) -> &[Attribute] {
-        &self.object_attributes
+    /// The attribute set an aperture definition or object refers to.
+    pub fn attributes(&self, set: Span) -> &[Attribute] {
+        set.slice(&self.attributes)
     }
 
     pub fn aperture_definitions(&self) -> &[ApertureDefinition] {

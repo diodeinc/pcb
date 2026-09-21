@@ -1,5 +1,5 @@
 use crate::Symbol;
-use pcb_ir::geom::{Mirror, Polarity};
+use pcb_ir::geom::{Mirror, Polarity, Span};
 
 /// Gerber load-mirroring state (`LM`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,8 +46,9 @@ pub struct ApertureDefinition {
     pub code: i32,
     pub template: ApertureTemplate,
     pub geometry: Option<ApertureGeometry>,
-    /// Aperture attributes active at definition time.
-    pub attributes: Vec<Attribute>,
+    /// Aperture attributes active at definition time, in
+    /// [`crate::GerberX2::attributes`].
+    pub attributes: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -265,8 +266,10 @@ pub struct GraphicalObject {
     pub mirroring: Mirroring,
     pub rotation_degrees: f64,
     pub scaling: f64,
-    pub aperture_attributes: Vec<Attribute>,
-    pub object_attributes: Vec<Attribute>,
+    /// Attribute sets in [`crate::GerberX2::attributes`]. Objects imaged
+    /// under one dictionary state share one set.
+    pub aperture_attributes: Span,
+    pub object_attributes: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]

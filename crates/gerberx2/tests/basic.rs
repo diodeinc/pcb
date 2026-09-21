@@ -147,10 +147,50 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
     ));
     assert_eq!(parsed.objects()[0].object_attributes.len(), 3);
     assert!(
-        parsed.objects()[3]
-            .aperture_attributes
+        parsed
+            .attributes(parsed.objects()[3].aperture_attributes)
             .iter()
             .any(|attribute| parsed.resolve(attribute.name) == ".AperFunction")
+    );
+}
+
+#[test]
+fn objects_share_attribute_sets_until_the_dictionary_changes() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%%MOMM*%%ADD10C,1*%D10*%TO.N,A*%%TO.C,R1*%X0Y0D03*X1D03*%TD.C*%X2D03*%TO.N,B*%X3D03*%TD*%X4D03*M02*",
+    )
+    .unwrap();
+    let sets = gerber
+        .objects()
+        .iter()
+        .map(|object| {
+            gerber
+                .attributes(object.object_attributes)
+                .iter()
+                .map(|attribute| {
+                    let fields = attribute.fields.iter().map(|field| gerber.resolve(*field));
+                    format!(
+                        "{}={}",
+                        gerber.resolve(attribute.name),
+                        fields.collect::<Vec<_>>().join(",")
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sets,
+        [
+            vec![".N=A", ".C=R1"],
+            vec![".N=A", ".C=R1"],
+            vec![".N=A"],
+            vec![".N=B"],
+            vec![],
+        ]
+    );
+    assert_eq!(
+        gerber.objects()[0].object_attributes,
+        gerber.objects()[1].object_attributes
     );
 }
 

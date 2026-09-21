@@ -1,7 +1,7 @@
 use crate::types::Mirroring;
 use crate::types::*;
 use crate::{GerberError, GerberX2, Interner, Result, Symbol};
-use pcb_ir::geom::Polarity;
+use pcb_ir::geom::{Polarity, Span};
 use std::collections::HashMap;
 
 pub struct Parser<'a> {
@@ -10,8 +10,10 @@ pub struct Parser<'a> {
     interner: Interner,
     commands: Vec<Command>,
     file_attributes: Vec<Attribute>,
-    aperture_attributes: HashMap<Symbol, Attribute>,
-    object_attributes: HashMap<Symbol, Attribute>,
+    aperture_attributes: AttributeDictionary,
+    object_attributes: AttributeDictionary,
+    /// Arena of the attribute sets objects and apertures refer to.
+    attributes: Vec<Attribute>,
     aperture_definitions: Vec<ApertureDefinition>,
     aperture_lookup: HashMap<i32, usize>,
     macro_lookup: HashMap<Symbol, ApertureMacro>,
@@ -22,6 +24,45 @@ pub struct Parser<'a> {
     step_repeat: Option<StepRepeatBuilder>,
     state: GraphicsState,
     saw_m02: bool,
+}
+
+/// One X2 attribute dictionary. A handful of entries at most, so a vector in
+/// insertion order is both faster than hashing and deterministic.
+#[derive(Debug, Default)]
+struct AttributeDictionary {
+    entries: Vec<Attribute>,
+    /// The arena copy of `entries`, until the dictionary next changes.
+    set: Option<Span>,
+}
+
+impl AttributeDictionary {
+    fn insert(&mut self, attribute: Attribute) {
+        match self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.name == attribute.name)
+        {
+            Some(entry) => *entry = attribute,
+            None => self.entries.push(attribute),
+        }
+        self.set = None;
+    }
+
+    /// Delete one attribute, or all of them.
+    fn remove(&mut self, name: Option<Symbol>) {
+        self.entries
+            .retain(|entry| name.is_some_and(|name| entry.name != name));
+        self.set = None;
+    }
+
+    /// The current entries as a set in `arena`, copied once per change.
+    fn set(&mut self, arena: &mut Vec<Attribute>) -> Span {
+        *self.set.get_or_insert_with(|| {
+            let set = Span::new(arena.len() as u32, self.entries.len() as u32);
+            arena.extend_from_slice(&self.entries);
+            set
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -50,8 +91,9 @@ impl<'a> Parser<'a> {
             interner: Interner::new(),
             commands: Vec::new(),
             file_attributes: Vec::new(),
-            aperture_attributes: HashMap::new(),
-            object_attributes: HashMap::new(),
+            aperture_attributes: AttributeDictionary::default(),
+            object_attributes: AttributeDictionary::default(),
+            attributes: Vec::new(),
             aperture_definitions: Vec::new(),
             aperture_lookup: HashMap::new(),
             macro_lookup: HashMap::new(),
@@ -101,14 +143,11 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        let aperture_attributes = self.aperture_attributes.values().cloned().collect();
-        let object_attributes = self.object_attributes.values().cloned().collect();
         Ok(GerberX2 {
             interner: std::mem::take(&mut self.interner),
             commands: std::mem::take(&mut self.commands),
             file_attributes: std::mem::take(&mut self.file_attributes),
-            aperture_attributes,
-            object_attributes,
+            attributes: std::mem::take(&mut self.attributes),
             aperture_definitions: std::mem::take(&mut self.aperture_definitions),
             aperture_macros: std::mem::take(&mut self.aperture_macros),
             objects: std::mem::take(&mut self.objects),
@@ -255,7 +294,7 @@ impl<'a> Parser<'a> {
                     code: block.aperture_code,
                     template: ApertureTemplate::Block { objects },
                     geometry: None,
-                    attributes: self.aperture_attributes.values().cloned().collect(),
+                    attributes: self.aperture_attributes.set(&mut self.attributes),
                 };
                 self.aperture_lookup
                     .insert(aperture.code, self.aperture_definitions.len());
@@ -319,29 +358,22 @@ impl<'a> Parser<'a> {
 
         if let Some(rest) = word.strip_prefix("TA") {
             let attr = self.parse_attribute(rest)?;
-            self.aperture_attributes.insert(attr.name, attr.clone());
+            self.aperture_attributes.insert(attr.clone());
             self.commands.push(Command::ApertureAttribute(attr));
             return Ok(());
         }
 
         if let Some(rest) = word.strip_prefix("TO") {
             let attr = self.parse_attribute(rest)?;
-            self.object_attributes.insert(attr.name, attr.clone());
+            self.object_attributes.insert(attr.clone());
             self.commands.push(Command::ObjectAttribute(attr));
             return Ok(());
         }
 
         if let Some(rest) = word.strip_prefix("TD") {
-            let name = if rest.is_empty() {
-                self.aperture_attributes.clear();
-                self.object_attributes.clear();
-                None
-            } else {
-                let name = self.interner.intern(rest);
-                self.aperture_attributes.remove(&name);
-                self.object_attributes.remove(&name);
-                Some(name)
-            };
+            let name = (!rest.is_empty()).then(|| self.interner.intern(rest));
+            self.aperture_attributes.remove(name);
+            self.object_attributes.remove(name);
             self.commands.push(Command::DeleteAttribute(name));
             return Ok(());
         }
@@ -399,9 +431,9 @@ impl<'a> Parser<'a> {
                     return Err(self.syntax("empty region statement"));
                 }
                 validate_region_contours(&region.contours)?;
-                self.objects.push(self.graphical_object(ObjectKind::Region {
+                self.push_object(ObjectKind::Region {
                     contours: region.contours,
-                }));
+                });
                 self.commands.push(Command::EndRegion);
                 return Ok(());
             }
@@ -444,10 +476,10 @@ impl<'a> Parser<'a> {
                     return Err(self.syntax("D03 flash is not allowed inside a region"));
                 }
                 let aperture = self.current_aperture()?;
-                self.objects.push(self.graphical_object(ObjectKind::Flash {
+                self.push_object(ObjectKind::Flash {
                     at: point,
                     aperture,
-                }));
+                });
                 self.state.current_point = Some(point);
             }
             OperationCode::Plot => {
@@ -500,7 +532,7 @@ impl<'a> Parser<'a> {
                             aperture,
                         },
                     };
-                    self.objects.push(self.graphical_object(kind));
+                    self.push_object(kind);
                 }
                 self.state.current_point = Some(point);
             }
@@ -574,7 +606,8 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| self.syntax("operation requires current aperture"))
     }
 
-    fn graphical_object(&self, kind: ObjectKind) -> GraphicalObject {
+    /// Append an object imaged under the current graphics state.
+    fn push_object(&mut self, kind: ObjectKind) {
         let aperture_attributes = match &kind {
             ObjectKind::Draw { aperture, .. }
             | ObjectKind::Arc { aperture, .. }
@@ -582,19 +615,19 @@ impl<'a> Parser<'a> {
                 .aperture_lookup
                 .get(aperture)
                 .and_then(|&index| self.aperture_definitions.get(index))
-                .map(|definition| definition.attributes.clone())
-                .unwrap_or_default(),
-            ObjectKind::Region { .. } => self.aperture_attributes.values().cloned().collect(),
+                .map_or(Span::EMPTY, |definition| definition.attributes),
+            ObjectKind::Region { .. } => self.aperture_attributes.set(&mut self.attributes),
         };
-        GraphicalObject {
+        let object_attributes = self.object_attributes.set(&mut self.attributes);
+        self.objects.push(GraphicalObject {
             kind,
             polarity: self.state.polarity,
             mirroring: self.state.mirroring,
             rotation_degrees: self.state.rotation_degrees,
             scaling: self.state.scaling,
             aperture_attributes,
-            object_attributes: self.object_attributes.values().cloned().collect(),
-        }
+            object_attributes,
+        });
     }
 
     fn parse_attribute(&mut self, rest: &str) -> Result<Attribute> {
@@ -623,7 +656,7 @@ impl<'a> Parser<'a> {
             code,
             template,
             geometry,
-            attributes: self.aperture_attributes.values().cloned().collect(),
+            attributes: self.aperture_attributes.set(&mut self.attributes),
         })
     }
 
