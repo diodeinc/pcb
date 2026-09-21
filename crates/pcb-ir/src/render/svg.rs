@@ -9,7 +9,7 @@ use crate::geom::path::PathCmd;
 use crate::geom::{
     Affine2, BBox, FillRule, LineCap, LineJoin, Path, PathArena, Point, Polarity, StrokeStyle,
 };
-use crate::render::{Drawn, RenderOptions, SizeConstraint, layer_style};
+use crate::render::{Drawn, LayerStyle, RenderOptions, SizeConstraint};
 
 /// Render mask layers to an SVG document (millimeter units, y-up source
 /// coordinates flipped for screen display).
@@ -24,8 +24,9 @@ pub fn svg<LayerMeta>(doc: &mask::Document<LayerMeta>, options: &RenderOptions) 
 
     for &layer_index in &layers {
         let layer = &doc.layers[layer_index];
+        let style = options.style(layer_index, layer.role);
         for shape in doc.shapes(layer) {
-            write_shape(&mut svg, &doc.arena, layer.role, shape);
+            write_shape(&mut svg, &doc.arena, layer.role, style, shape);
         }
     }
 
@@ -101,8 +102,7 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
     let mut body = String::new();
     let mut masks = 0;
     for &layer_index in &layers {
-        let layer = &doc.layers[layer_index];
-        write_artwork_layer(&mut body, &mut defs, &mut masks, doc, layer, options)?;
+        write_artwork_layer(&mut body, &mut defs, &mut masks, doc, layer_index, options)?;
     }
 
     let title = layers
@@ -170,9 +170,10 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
     defs: &mut String,
     masks: &mut usize,
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
-    layer: &artwork::Layer<LayerMeta>,
+    layer_index: usize,
     options: &RenderOptions,
 ) -> Result<(), AccuracyError> {
+    let layer = &doc.layers[layer_index];
     let ids = options.id_prefix.as_str();
     // Sequential polarity: dark runs paint in order, and every clear run
     // becomes a mask over everything painted before it.
@@ -199,7 +200,7 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
         .count();
     // One group opacity rather than per-object alpha, so overlapping objects
     // composite once instead of darkening where they touch.
-    let (color, opacity) = layer_style(layer.role);
+    let LayerStyle { color, opacity } = options.style(layer_index, layer.role);
     writeln!(
         body,
         "    <g fill='#{color:06x}' stroke='#{color:06x}' opacity='{}'>",
@@ -446,16 +447,21 @@ fn fill_rule_name(rule: FillRule) -> &'static str {
     }
 }
 
-fn write_shape(svg: &mut String, arena: &PathArena, role: LayerRole, shape: &Path) {
+fn write_shape(
+    svg: &mut String,
+    arena: &PathArena,
+    role: LayerRole,
+    LayerStyle { color, opacity }: LayerStyle,
+    shape: &Path,
+) {
     let d = path_data(arena, shape);
     if d.is_empty() {
         return;
     }
-    let (color, opacity) = layer_style(role);
     if role == LayerRole::Profile {
         writeln!(
             svg,
-            "    <path d='{d}' fill='none' stroke='#000000' stroke-width='0.1' stroke-linejoin='round' data-board-outline='true'/>",
+            "    <path d='{d}' fill='none' stroke='#{color:06x}' stroke-width='0.1' stroke-linejoin='round' data-board-outline='true'/>",
         )
         .unwrap();
     } else {

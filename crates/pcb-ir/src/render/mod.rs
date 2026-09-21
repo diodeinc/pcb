@@ -38,6 +38,10 @@ pub struct RenderOptions {
     /// document an SVG is inlined into, so renders sharing one HTML page need
     /// distinct prefixes or their apertures and masks resolve to each other's.
     pub id_prefix: String,
+    /// Styles by layer index. A layer without one draws in its role's, so a
+    /// fabrication layer looks the same in every render; drawings whose
+    /// layers are not fabrication layers bring their own.
+    pub styles: Vec<LayerStyle>,
 }
 
 impl RenderOptions {
@@ -73,6 +77,18 @@ impl RenderOptions {
     pub fn with_accuracy(mut self, accuracy: crate::geom::GeometryAccuracy) -> Self {
         self.accuracy = accuracy;
         self
+    }
+
+    pub fn with_styles(mut self, styles: impl Into<Vec<LayerStyle>>) -> Self {
+        self.styles = styles.into();
+        self
+    }
+
+    pub(crate) fn style(&self, layer: usize, role: LayerRole) -> LayerStyle {
+        self.styles
+            .get(layer)
+            .copied()
+            .unwrap_or_else(|| LayerStyle::of(role))
     }
 
     pub(crate) fn viewport_or(&self, fitted: BBox) -> BBox {
@@ -164,15 +180,26 @@ pub(crate) fn local_accuracy(
     GeometryAccuracy::new(accuracy.remaining(numeric)? / scale.max(f64::MIN_POSITIVE))
 }
 
-/// A layer's `0xRRGGBB` colour and the opacity its whole image composites at.
-pub(crate) fn layer_style(role: LayerRole) -> (u32, f64) {
-    match role {
-        LayerRole::Copper => (0xd87822, 0.9),
-        LayerRole::Soldermask => (0x159447, 0.55),
-        LayerRole::Paste => (0xaeb4bb, 0.9),
-        LayerRole::Legend => (0x000000, 0.95),
-        LayerRole::Profile => (0x000000, 1.0),
-        LayerRole::Drill | LayerRole::Mechanical | LayerRole::Other => (0x5c7cfa, 0.85),
+/// How a layer draws: one colour, and the opacity its whole image
+/// composites at, so overlapping objects never darken each other.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerStyle {
+    /// `0xRRGGBB`.
+    pub color: u32,
+    pub opacity: f64,
+}
+
+impl LayerStyle {
+    pub fn of(role: LayerRole) -> Self {
+        let (color, opacity) = match role {
+            LayerRole::Copper => (0xd87822, 0.9),
+            LayerRole::Soldermask => (0x159447, 0.55),
+            LayerRole::Paste => (0xaeb4bb, 0.9),
+            LayerRole::Legend => (0x000000, 0.95),
+            LayerRole::Profile => (0x000000, 1.0),
+            LayerRole::Drill | LayerRole::Mechanical | LayerRole::Other => (0x5c7cfa, 0.85),
+        };
+        Self { color, opacity }
     }
 }
 

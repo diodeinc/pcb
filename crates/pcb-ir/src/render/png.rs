@@ -16,7 +16,7 @@ use crate::geom::{
     AccuracyError, Affine2, BBox, EllipticalArc, FillRule, GeometryAccuracy, LineCap, LineJoin,
     Paint, Point, Polarity, StrokeStyle,
 };
-use crate::render::{Drawn, RenderOptions, SizeConstraint, layer_style};
+use crate::render::{Drawn, LayerStyle, RenderOptions, SizeConstraint};
 
 /// Width of the outline a composed profile layer draws as.
 const PROFILE_STROKE_MM: f64 = 0.1;
@@ -32,6 +32,7 @@ pub fn png<LayerMeta>(
     let mut canvas = Canvas::new(bbox, options.size)?;
     for &index in &layers {
         let layer = &doc.layers[index];
+        let style = options.style(index, layer.role);
         let ink = |rule| match layer.role {
             LayerRole::Profile => Ink::Stroke(Stroke {
                 width: PROFILE_STROKE_MM as f32,
@@ -51,12 +52,12 @@ pub fn png<LayerMeta>(
                 canvas.paint(
                     &Shape { path, ink },
                     Polarity::Dark,
-                    layer.role,
+                    style,
                     Affine2::IDENTITY,
                 );
             }
         }
-        canvas.composite(layer.role);
+        canvas.composite(style);
     }
     canvas.encode()
 }
@@ -84,13 +85,13 @@ pub fn artwork_png<LayerMeta, ObjectMeta>(
     let shapes = Shapes::build(doc, &placed, extent, canvas.px_per_mm(), options.accuracy)
         .map_err(|error| error.to_string())?;
     for (&index, placed) in layers.iter().zip(&placed) {
-        let role = doc.layers[index].role;
+        let style = options.style(index, doc.layers[index].role);
         for placed in placed {
             if let Some(shape) = shapes.of(placed.primitive) {
-                canvas.paint(shape, placed.polarity, role, placed.transform);
+                canvas.paint(shape, placed.polarity, style, placed.transform);
             }
         }
-        canvas.composite(role);
+        canvas.composite(style);
     }
     canvas.encode()
 }
@@ -142,11 +143,11 @@ impl Canvas {
 
     /// Paint one placement of a shape into the open layer: dark lays the
     /// layer's colour over it, clear erases what the layer holds there.
-    fn paint(&mut self, shape: &Shape, polarity: Polarity, role: LayerRole, placement: Affine2) {
+    fn paint(&mut self, shape: &Shape, polarity: Polarity, style: LayerStyle, placement: Affine2) {
         let mut paint = tiny_skia::Paint::default();
         match polarity {
             Polarity::Dark => {
-                let [_, red, green, blue] = layer_style(role).0.to_be_bytes();
+                let [_, red, green, blue] = style.color.to_be_bytes();
                 paint.set_color_rgba8(red, green, blue, u8::MAX);
             }
             Polarity::Clear => paint.blend_mode = BlendMode::DestinationOut,
@@ -176,11 +177,11 @@ impl Canvas {
         }
     }
 
-    /// Lay the painted layer over the image at its role's opacity and open
-    /// an empty one.
-    fn composite(&mut self, role: LayerRole) {
+    /// Lay the painted layer over the image at its opacity and open an
+    /// empty one.
+    fn composite(&mut self, style: LayerStyle) {
         let paint = PixmapPaint {
-            opacity: layer_style(role).1 as f32,
+            opacity: style.opacity as f32,
             ..PixmapPaint::default()
         };
         self.image.draw_pixmap(
@@ -635,6 +636,29 @@ mod tests {
         assert_eq!(copper.alpha(), 230);
         assert!(copper.red().abs_diff(0xd8) <= 1 && copper.green().abs_diff(0x78) <= 1);
         assert!(masked.alpha() > copper.alpha() && masked.red() < copper.red());
+    }
+
+    #[test]
+    fn a_layer_style_overrides_its_role_in_both_backends() {
+        let mut doc = copper_artwork();
+        let pour = fill(&mut doc, square(10.0));
+        doc.push_object(0, artwork::Object::new(Polarity::Dark, pour));
+        artwork::normalize_bounds(&mut doc);
+        let options = RenderOptions::default()
+            .with_size(SizeConstraint::MaxDimension(10))
+            .with_styles([LayerStyle {
+                color: 0x204060,
+                opacity: 1.0,
+            }]);
+
+        let svg = crate::render::artwork_svg(&doc, &options).unwrap();
+        assert!(svg.contains("<g fill='#204060' stroke='#204060' opacity='1'>"));
+        let image = Pixmap::decode_png(&artwork_png(&doc, &options).unwrap()).unwrap();
+        let pixel = image.pixel(5, 5).unwrap();
+        assert_eq!(
+            [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()],
+            [0x20, 0x40, 0x60, 0xff]
+        );
     }
 
     #[test]
