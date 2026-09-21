@@ -708,9 +708,11 @@ fn painted_path_region_unions_fills_and_native_strokes() {
     )
     .unwrap();
 
+    // The stroke's round cap is flattened, so its extent is only as exact
+    // as the region says it is.
     assert!((region.bbox.min.x - 0.0).abs() <= 1e-9);
     assert!((region.bbox.min.y - 0.0).abs() <= 1e-9);
-    assert!((region.bbox.max.x - 4.5).abs() <= 1e-9);
+    assert!((region.bbox.max.x - 4.5).abs() <= region.uncertainty_mm);
     assert!((region.bbox.max.y - 1.0).abs() <= 1e-9);
     assert!(region.area() > 3.5);
     assert!(region.area() < 4.0);

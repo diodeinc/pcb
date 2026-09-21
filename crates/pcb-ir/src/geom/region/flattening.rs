@@ -1,45 +1,53 @@
 //! Conversion between curved contours and polygon rings.
 
 use super::{ContourSet, Ring};
-use crate::geom::accuracy::{ErrorAllocation, allocate_error};
-use crate::geom::path::{ContourBuf, PathCmd};
-use crate::geom::{BBox, Point};
+use crate::geom::path::{ContourBuf, PathCmd, PathOp};
+use crate::geom::{AccuracyError, BBox, Point};
 
-pub(super) fn flatten_contours(contours: &[ContourBuf], accuracy: f64) -> (Vec<Ring>, f64) {
-    // Arc-to-cubic conversion is cheap in error and reported exactly, so it
-    // gets a small target and chord flattening takes the rest. Source error
-    // the conversion reports, such as a mismatched arc radius, is charged on
-    // top rather than squeezed out of the chord tolerance, so an inconsistent
-    // arc fails its budget instead of being flattened without bound.
-    let conversion_target = allocate_error(accuracy, ErrorAllocation::CurveConversion);
-    let (bez_path, conversion_error) =
-        crate::geom::path::contours_to_kurbo(contours, conversion_target);
-    let curved = bez_path
-        .elements()
-        .iter()
-        .any(|el| matches!(el, kurbo::PathEl::CurveTo(..) | kurbo::PathEl::QuadTo(..)));
-    let flatten_error = if curved {
-        accuracy - conversion_target
-    } else {
-        0.0
-    };
+/// Flatten contours to polygon rings with every curve within `tolerance` of
+/// its chords, returning the rings and the largest deviation incurred.
+pub(super) fn flatten_contours(
+    contours: &[ContourBuf],
+    tolerance: f64,
+) -> Result<(Vec<Ring>, f64), AccuracyError> {
     let mut rings = Vec::new();
-    let mut current = Vec::new();
-    crate::geom::path::flatten_path(bez_path, flatten_error.max(f64::MIN_POSITIVE), |element| {
-        match element {
-            kurbo::PathEl::MoveTo(point) => {
-                push_ring(&mut rings, &mut current);
-                current.push([point.x, point.y]);
-            }
-            kurbo::PathEl::LineTo(point) => current.push([point.x, point.y]),
-            kurbo::PathEl::ClosePath => push_ring(&mut rings, &mut current),
-            kurbo::PathEl::QuadTo(..) | kurbo::PathEl::CurveTo(..) => {
-                unreachable!("kurbo::flatten emits lines")
+    let mut ring = Ring::new();
+    let mut deviation: f64 = 0.0;
+    for contour in contours {
+        let mut current = None;
+        let mut first = None;
+        for cmd in &contour.cmds {
+            match cmd.op {
+                PathOp::MoveTo => {
+                    push_ring(&mut rings, &mut ring);
+                    ring.push([cmd.p0.x, cmd.p0.y]);
+                    first = Some(cmd.p0);
+                    current = first;
+                }
+                PathOp::Close => {
+                    push_ring(&mut rings, &mut ring);
+                    // Drawing that continues after a close starts where the
+                    // closed ring did.
+                    ring.extend(first.map(|point| [point.x, point.y]));
+                    current = first;
+                }
+                _ => {
+                    let Some(segment) = cmd.segment_from(current) else {
+                        continue;
+                    };
+                    if ring.is_empty() {
+                        ring.push([segment.start().x, segment.start().y]);
+                    }
+                    let (points, strayed) = segment.chords(tolerance)?;
+                    ring.extend(points.into_iter().map(|point| [point.x, point.y]));
+                    deviation = deviation.max(strayed);
+                    current = Some(segment.end());
+                }
             }
         }
-    });
-    push_ring(&mut rings, &mut current);
-    (rings, conversion_error + flatten_error)
+        push_ring(&mut rings, &mut ring);
+    }
+    Ok((rings, deviation))
 }
 
 /// Convert polygon rings back into closed line contours.

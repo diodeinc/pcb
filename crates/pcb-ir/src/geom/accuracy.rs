@@ -268,16 +268,14 @@ impl std::error::Error for AccuracyError {}
 
 pub(crate) enum ErrorAllocation {
     Operation,
-    CurveConversion,
     ConstructionGuard,
 }
 
 /// Allocate approximation targets and construction separation together.
 ///
 /// An operation receives a quarter of the remaining budget, leaving room for
-/// later composition and certification. Curve conversion receives an eighth
-/// of that operation allowance; chord flattening gets the rest. The balancing
-/// construction guard is half the total budget: its two construction offsets
+/// later composition and certification. The balancing construction guard is
+/// half the total budget: its two construction offsets
 /// each target at most a quarter, separating construction from nominal checks.
 /// These fractions interact; increasing the operation share alone can break
 /// balancing certification.
@@ -290,7 +288,6 @@ pub(crate) enum ErrorAllocation {
 pub(crate) fn allocate_error(budget_mm: f64, allocation: ErrorAllocation) -> f64 {
     match allocation {
         ErrorAllocation::Operation => budget_mm / 4.0,
-        ErrorAllocation::CurveConversion => budget_mm / 8.0,
         ErrorAllocation::ConstructionGuard => budget_mm / 2.0,
     }
 }

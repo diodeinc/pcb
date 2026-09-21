@@ -1261,8 +1261,9 @@ mod tests {
         assert_eq!(doc.features[0].paths.len(), 1);
         let path = &doc.arena.paths[doc.features[0].paths.start as usize];
         assert!(path.is_filled());
-        assert_eq!(path.bbox.min, Point::new(-1.0, -1.0));
-        assert_eq!(path.bbox.max, Point::new(11.0, 1.0));
+        let flattening = Resolution::default().accuracy.max_error_mm();
+        assert!(path.bbox.min.distance_to(Point::new(-1.0, -1.0)) <= flattening);
+        assert!(path.bbox.max.distance_to(Point::new(11.0, 1.0)) <= flattening);
     }
 
     #[test]
@@ -1637,8 +1638,9 @@ mod tests {
         let path = &doc.arena.paths[trace.paths.start as usize];
         assert!(path.is_filled());
         assert!(path.contours.len() >= 2);
-        assert_eq!(path.bbox.min.x, -0.5);
-        assert_eq!(path.bbox.max.x, 4.5);
+        let flattening = Resolution::default().accuracy.max_error_mm();
+        assert!((path.bbox.min.x + 0.5).abs() <= flattening);
+        assert!((path.bbox.max.x - 4.5).abs() <= flattening);
     }
 
     #[test]
@@ -1823,8 +1825,9 @@ mod tests {
         assert_eq!(doc.features[0].paths.len(), 1);
         let path = &doc.arena.paths[doc.features[0].paths.start as usize];
         assert!(path.is_filled());
-        assert_eq!(path.bbox.min, Point::new(-0.5, -0.5));
-        assert_eq!(path.bbox.max, Point::new(5.5, 0.5));
+        let flattening = Resolution::default().accuracy.max_error_mm();
+        assert!(path.bbox.min.distance_to(Point::new(-0.5, -0.5)) <= flattening);
+        assert!(path.bbox.max.distance_to(Point::new(5.5, 0.5)) <= flattening);
     }
 
     #[test]

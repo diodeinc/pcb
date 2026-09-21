@@ -269,7 +269,7 @@ fn circles_and_ellipses_survive_arena_copies_and_affine_placement_exactly() {
 }
 
 #[test]
-fn stroke_expansion_carries_its_own_round_cap_floor() {
+fn stroke_expansion_is_exact_so_only_flattening_spends_the_budget() {
     use pcb_ir::geom::{PathCmd, StrokeStyle};
     let line = ContourBuf::new(vec![
         PathCmd::move_to(Point::ZERO),
@@ -287,14 +287,13 @@ fn stroke_expansion_carries_its_own_round_cap_floor() {
         let angle = std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * i as f64 / 1023.0;
         assert!(distance(&fine, Point::new(angle.cos(), angle.sin()) * 0.1) <= fine.uncertainty_mm);
     }
-    assert!(
-        ContourSet::from_placed_painted_paths(
-            &arena,
-            [(arena.path(path), Affine2::IDENTITY)],
-            Resolution::new(0.0, accuracy(0.000001))
-        )
-        .is_err()
-    );
+    let finest = ContourSet::from_placed_painted_paths(
+        &arena,
+        [(arena.path(path), Affine2::IDENTITY)],
+        Resolution::new(0.0, accuracy(0.000001)),
+    )
+    .unwrap();
+    assert!(finest.uncertainty_mm <= 0.000001);
 }
 
 #[test]
@@ -354,12 +353,14 @@ fn stroke_budget_reserves_and_records_coordinate_error() {
     ])
     .with_uncertainty(0.00005);
     let style = StrokeToFillStyle::new(0.2, LineCap::Round, LineJoin::Round);
-    assert!(stroke_to_fill(std::slice::from_ref(&line), style, accuracy(0.0001)).is_err());
+    // The outline is exact in exact arithmetic; out here the coordinates
+    // themselves round by more than the first budget leaves.
+    assert!(stroke_to_fill(std::slice::from_ref(&line), style, accuracy(0.00006)).is_err());
     let outlines = stroke_to_fill(&[line], style, accuracy(0.0002))
         .unwrap()
         .unwrap();
     for outline in outlines {
-        assert!(outline.uncertainty_mm >= 0.00005 + 0.00004 + 64.0 * f64::EPSILON * 1e9);
+        assert!(outline.uncertainty_mm >= 0.00005 + 64.0 * f64::EPSILON * 1e9);
         assert!(outline.uncertainty_mm <= 0.0002);
     }
 }

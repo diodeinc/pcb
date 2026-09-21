@@ -52,7 +52,7 @@ pub fn flatten_within(
     {
         return Err(AccuracyError::SubdivisionLimit);
     }
-    let (rings, added) = flatten_contours(contours, remaining);
+    let (rings, added) = flatten_contours(contours, remaining)?;
     Ok((rings, prior + added + numeric))
 }
 

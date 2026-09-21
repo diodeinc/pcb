@@ -27,6 +27,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Speed up Gerber export, Gerber compare, and DFM on board arrays.
+- Outline strokes exactly and flatten arcs directly: faster layer composition and smaller Gerber outline apertures at the same accuracy.
 
 ## [0.4.56] - 2026-09-20
 

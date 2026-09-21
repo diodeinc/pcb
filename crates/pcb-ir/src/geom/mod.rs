@@ -19,6 +19,7 @@ mod point;
 pub mod region;
 pub mod shapes;
 mod store;
+mod stroke;
 mod style;
 pub mod tol;
 pub mod warp;

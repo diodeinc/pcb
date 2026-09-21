@@ -80,6 +80,36 @@ impl Arc {
         bbox
     }
 
+    /// Chord end points approximating the arc within `tolerance`, excluding
+    /// its start, and how far the chords stray from it.
+    ///
+    /// Every vertex lies on the arc, so the polygon stays inside a convex
+    /// curve. Copper flattened this way never reaches past its true outline,
+    /// which matters wherever source data adjoins a curve with its own
+    /// approximation of it: a pad set into a pour's polygonal cutout must not
+    /// weave across that cutout.
+    pub fn chords(&self, tolerance: f64) -> (Vec<Point>, f64) {
+        let radius = self.radius();
+        let mismatch = (radius - self.end.distance_to(self.center)).abs();
+        let sweep = self.sweep_radians();
+        if radius <= 0.0 || sweep <= 0.0 {
+            return (vec![self.end], mismatch);
+        }
+        // A chord spanning `step` sags `radius · (1 − cos(step / 2))`.
+        let widest = 2.0 * (1.0 - (tolerance / radius).min(1.0)).acos();
+        let count = (sweep / widest).ceil().max(1.0);
+        let step = sweep / count;
+        let sag = radius * (1.0 - (step / 2.0).cos());
+
+        let start_angle = self.start.angle_from(self.center);
+        let signed_step = if self.clockwise { -step } else { step };
+        let points = (1..count as usize)
+            .map(|index| self.point_at(start_angle + signed_step * index as f64))
+            .chain([self.end])
+            .collect();
+        (points, sag + mismatch)
+    }
+
     pub fn reversed(&self) -> Self {
         Self {
             start: self.end,
