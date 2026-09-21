@@ -332,7 +332,7 @@ fn append_contour_line_segments(cmds: &[PathCmd], lines: &mut Vec<VScoreLine>) {
                 }
                 current = first;
             }
-            PathOp::ArcTo | PathOp::EllipseTo | PathOp::CubicTo => current = cmd.end_point(),
+            PathOp::ArcTo | PathOp::EllipseTo => current = cmd.end_point(),
         }
     }
 }

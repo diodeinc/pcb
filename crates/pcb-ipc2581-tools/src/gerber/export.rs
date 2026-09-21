@@ -29,7 +29,7 @@ use pcb_ir::dialects::ipc::{
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::ContourBuf;
-use pcb_ir::geom::{BBox, LineCap, LineJoin, LinePattern, Paint, Polarity, Span, StrokeStyle};
+use pcb_ir::geom::{BBox, LineCap, Paint, Polarity, Span, StrokeStyle};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
@@ -55,7 +55,6 @@ pub struct GerberExportOptions {
 struct ProfileGerberStyle {
     stroke_width_mm: f64,
     line_cap: LineCap,
-    line_join: LineJoin,
 }
 
 impl Default for ProfileGerberStyle {
@@ -63,7 +62,6 @@ impl Default for ProfileGerberStyle {
         Self {
             stroke_width_mm: 0.05,
             line_cap: LineCap::Round,
-            line_join: LineJoin::Round,
         }
     }
 }
@@ -632,13 +630,6 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
             )
     }
 
-    fn stroke_style(&mut self, stroke: StrokeStyle) -> StrokeStyle {
-        StrokeStyle {
-            join: LineJoin::Round,
-            ..stroke
-        }
-    }
-
     /// Gerber orders removals rather than imaging them as clears, so every
     /// drilled or routed feature stages last regardless of its bucket.
     fn paint_order(&mut self, feature: &Feature<ipc2581::Symbol>) -> PaintOrder {
@@ -1029,12 +1020,7 @@ fn append_profile_payloads(
     style: ProfileGerberStyle,
 ) {
     let path = artwork.push_path(
-        Paint::Stroke(StrokeStyle {
-            width: style.stroke_width_mm,
-            cap: style.line_cap,
-            join: style.line_join,
-            pattern: LinePattern::Solid,
-        }),
+        Paint::Stroke(StrokeStyle::new(style.stroke_width_mm, style.line_cap)),
         payloads,
     );
     let bbox = artwork.path_bbox(path);

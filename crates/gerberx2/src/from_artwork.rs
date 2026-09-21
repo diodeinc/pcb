@@ -15,7 +15,7 @@ use crate::{
 };
 use pcb_ir::dialects::artwork::legalize::bake_aperture_basis;
 use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
-use pcb_ir::geom::path::{ContourBuf, PathOp, StrokeToFillStyle, stroke_to_fill};
+use pcb_ir::geom::path::{ContourBuf, PathOp, stroke_to_fill};
 use pcb_ir::geom::region::{self, Ring};
 use pcb_ir::geom::{
     Affine2, FillRule, LineCap, Point, Polarity, Segment, StrokePatternMark, StrokeStyle,
@@ -328,11 +328,9 @@ fn lower_artwork_object(
                 // A draw images the round aperture at both of its ends, so
                 // any other cap that shows is outlined instead.
                 if stroke.cap != LineCap::Round && images_caps(&contour, stroke) {
-                    let style = StrokeToFillStyle {
+                    let style = StrokeStyle {
                         width: stroke_width,
-                        line_cap: stroke.cap,
-                        line_join: stroke.join,
-                        pattern: stroke.pattern,
+                        ..stroke
                     };
                     objects.extend(region_objects(
                         &stroke_to_fill(&[contour], style, accuracy)?.unwrap_or_default(),
@@ -429,7 +427,7 @@ fn lower_stroke_segment(segment: Segment, aperture: i32) -> ObjectKind {
             clockwise: arc.clockwise,
             aperture,
         },
-        Segment::Cubic { .. } | Segment::Ellipse(_) => {
+        Segment::Ellipse(_) => {
             unreachable!("contour_segments flattens curves")
         }
     }

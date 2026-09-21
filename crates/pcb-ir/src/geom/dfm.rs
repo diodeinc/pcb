@@ -490,7 +490,7 @@ pub fn linework_envelope(
         .collect::<Vec<_>>();
     let band = stroke_to_fill(
         &contours,
-        StrokeStyle::round(2.0 * radius_mm).into(),
+        StrokeStyle::round(2.0 * radius_mm),
         resolution.accuracy,
     )?
     .unwrap_or_default();

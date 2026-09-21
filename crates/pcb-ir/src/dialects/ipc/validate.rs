@@ -115,7 +115,6 @@ fn validate_path_arcs<Symbol, LayerFunction>(
                     current = cmd.p0;
                 }
                 PathOp::EllipseTo => current = cmd.p0,
-                PathOp::CubicTo => current = cmd.p2,
                 PathOp::Close => {}
             }
         }

@@ -319,9 +319,8 @@ pub enum LineCap {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LineJoin {
+    /// Every stroke is the sweep of a disc, so every join is round.
     Round,
-    Miter,
-    Bevel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -709,14 +708,6 @@ pub enum PathCommand {
         center_x: f64,
         center_y: f64,
         clockwise: bool,
-    },
-    CubicTo {
-        control_1_x: f64,
-        control_1_y: f64,
-        control_2_x: f64,
-        control_2_y: f64,
-        x: f64,
-        y: f64,
     },
     /// An elliptical arc: `center` plus the images of the unit x and y axes
     /// describe the ellipse, `clockwise` its geometric winding.

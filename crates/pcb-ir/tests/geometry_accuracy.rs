@@ -344,16 +344,13 @@ fn fine_artwork_budgets_reach_flashes_and_instanced_arcs() {
 
 #[test]
 fn stroke_budget_reserves_and_records_coordinate_error() {
-    use pcb_ir::geom::{
-        LineCap, LineJoin, PathCmd,
-        path::{StrokeToFillStyle, stroke_to_fill},
-    };
+    use pcb_ir::geom::{LineCap, PathCmd, StrokeStyle, path::stroke_to_fill};
     let line = ContourBuf::new(vec![
         PathCmd::move_to(Point::new(1e9, 0.0)),
         PathCmd::line_to(Point::new(1e9 + 1.0, 0.0)),
     ])
     .with_uncertainty(0.00005);
-    let style = StrokeToFillStyle::new(0.2, LineCap::Round, LineJoin::Round);
+    let style = StrokeStyle::new(0.2, LineCap::Round);
     // The outline is exact in exact arithmetic; out here the coordinates
     // themselves round by more than the first budget leaves.
     assert!(stroke_to_fill(std::slice::from_ref(&line), style, accuracy(0.00006)).is_err());
@@ -389,16 +386,13 @@ fn tiny_rings_do_not_suppress_clearance_findings() {
 #[test]
 fn stroke_preparation_uses_the_total_inherited_error_budget() {
     use pcb_ir::dialects::{LayerRole, Side, artwork};
-    use pcb_ir::geom::{LineCap, LineJoin, PathCmd, Polarity, StrokeStyle};
+    use pcb_ir::geom::{LineCap, PathCmd, Polarity, StrokeStyle};
     let source = ContourBuf::new(vec![
         PathCmd::move_to(Point::ZERO),
         PathCmd::line_to(Point::new(1.0, 0.0)),
     ])
     .with_uncertainty(0.008);
-    let paint = Paint::Stroke(StrokeStyle {
-        join: LineJoin::Miter,
-        ..StrokeStyle::new(0.2, LineCap::Butt)
-    });
+    let paint = Paint::Stroke(StrokeStyle::new(0.2, LineCap::Butt));
     let mut doc = artwork::Document::<(), ()>::new();
     let layer = doc.push_layer(artwork::Layer::new("F.Cu", LayerRole::Copper, Side::Top));
     let path = doc.push_path(paint, vec![source]);

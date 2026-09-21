@@ -4329,7 +4329,6 @@ dependencies = [
  "i_overlay",
  "i_triangle",
  "ipc2581",
- "kurbo",
  "libm",
  "pcb-sexpr",
  "rayon",

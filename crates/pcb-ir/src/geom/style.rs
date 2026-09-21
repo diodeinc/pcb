@@ -12,13 +12,6 @@ pub enum LineCap {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LineJoin {
-    Round,
-    Miter,
-    Bevel,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LinePattern {
     Solid,
     Dotted,
@@ -52,7 +45,6 @@ impl Polarity {
 pub struct StrokeStyle {
     pub width: f64,
     pub cap: LineCap,
-    pub join: LineJoin,
     pub pattern: LinePattern,
 }
 
@@ -61,7 +53,6 @@ impl StrokeStyle {
         Self {
             width,
             cap,
-            join: LineJoin::Round,
             pattern: LinePattern::Solid,
         }
     }

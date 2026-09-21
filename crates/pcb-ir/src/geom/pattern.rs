@@ -86,9 +86,7 @@ fn measured_segments(segments: &[Segment]) -> Vec<MeasuredSegment> {
     let mut measured = Vec::with_capacity(segments.len());
     let mut cursor = 0.0;
     for &segment in segments {
-        if let Segment::Cubic { start, .. } | Segment::Ellipse(EllipticalArc { start, .. }) =
-            segment
-        {
+        if let Segment::Ellipse(EllipticalArc { start, .. }) = segment {
             const STEPS: usize = 32;
             let mut points = Vec::with_capacity(STEPS);
             segment.sample_points(STEPS, &mut points);
@@ -128,7 +126,7 @@ fn segment_length(segment: Segment) -> f64 {
     match segment {
         Segment::Line { start, end } => start.distance_to(end),
         Segment::Arc(arc) => arc.radius() * arc.sweep_radians(),
-        Segment::Cubic { .. } | Segment::Ellipse(_) => {
+        Segment::Ellipse(_) => {
             unreachable!("curved segments are flattened before measurement")
         }
     }
@@ -177,7 +175,7 @@ fn segment_slice(segment: Segment, start_t: f64, end_t: f64) -> Segment {
             arc.center,
             arc.clockwise,
         )),
-        Segment::Cubic { .. } | Segment::Ellipse(_) => Segment::Line {
+        Segment::Ellipse(_) => Segment::Line {
             start: segment_point(segment, start_t),
             end: segment_point(segment, end_t),
         },

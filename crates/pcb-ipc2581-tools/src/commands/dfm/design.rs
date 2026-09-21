@@ -2186,12 +2186,7 @@ mod tests {
             native
                 .iter()
                 .flat_map(|contour| &contour.cmds)
-                .any(|command| {
-                    matches!(
-                        command.op,
-                        pcb_ir::geom::path::PathOp::ArcTo | pcb_ir::geom::path::PathOp::CubicTo
-                    )
-                }),
+                .any(|command| { command.op == pcb_ir::geom::path::PathOp::ArcTo }),
             "native slot outlines retain source curves"
         );
         assert_eq!(
@@ -2246,12 +2241,7 @@ mod tests {
                 .native_outline
                 .iter()
                 .flat_map(|contour| &contour.cmds)
-                .all(|command| {
-                    !matches!(
-                        command.op,
-                        pcb_ir::geom::path::PathOp::ArcTo | pcb_ir::geom::path::PathOp::CubicTo
-                    )
-                }),
+                .all(|command| command.op != pcb_ir::geom::path::PathOp::ArcTo),
             "actual source polygons must not be smoothed into curves"
         );
     }

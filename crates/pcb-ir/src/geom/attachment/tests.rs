@@ -1,7 +1,6 @@
 use super::*;
 use crate::geom::{
-    BBox, ContourBuf, FillRule, GeometryAccuracy, LineCap, LineJoin, Mirror, PathCmd, Resolution,
-    StrokeToFillStyle,
+    BBox, ContourBuf, FillRule, GeometryAccuracy, LineCap, Mirror, PathCmd, Resolution, StrokeStyle,
 };
 
 const RESOLUTION: Resolution = Resolution {
@@ -84,23 +83,6 @@ fn curved_contours_use_explicit_polygon_model() {
         1e-10,
     );
     assert!(p.distance.uncertainty_mm > region.uncertainty_mm);
-    let cubic = ContourBuf::new(vec![
-        PathCmd::move_to(Point::ZERO),
-        PathCmd::cubic_to(
-            Point::new(0.0, 4.0),
-            Point::new(4.0, 4.0),
-            Point::new(4.0, 0.0),
-        ),
-        PathCmd::close(),
-    ]);
-    let region = ContourSet::from_contours(&[cubic], FillRule::EvenOdd, RESOLUTION).unwrap();
-    let query = BoundaryQuery::new(&region, tolerance).unwrap();
-    let id = query.boundaries().next().unwrap();
-    close(
-        query.project(id, Point::new(2.0, 4.0)).unwrap().distance.mm,
-        1.0,
-        0.006,
-    );
 }
 
 #[test]
@@ -270,7 +252,7 @@ fn supplied_break_sweep_separates_only_when_last_ligament_is_removed() {
     ]);
     let sweep = crate::geom::path::stroke_to_fill(
         &[path],
-        StrokeToFillStyle::new(0.4, LineCap::Round, LineJoin::Round),
+        StrokeStyle::new(0.4, LineCap::Round),
         RESOLUTION.accuracy,
     )
     .unwrap()

@@ -17,7 +17,7 @@ use crate::dialects::ipc::{Document, relief};
 use crate::dialects::{LayerRole, Side};
 use crate::dialects::{artwork, nc};
 use crate::geom::path::ContourBuf;
-use crate::geom::{Affine2, BBox, ContourSet, FillRule, Paint, Point, Polarity, Span, StrokeStyle};
+use crate::geom::{Affine2, BBox, ContourSet, FillRule, Paint, Point, Polarity, Span};
 
 /// How one artwork object was expressed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,12 +54,6 @@ pub trait ArtworkLowering<Symbol, ObjectMeta> {
     /// lowers through its own paths.
     fn flashes(&mut self, _feature: &Feature<Symbol>) -> bool {
         true
-    }
-
-    /// Rewrite a stroke into what the target can express. Gerber traces, for
-    /// example, are round-joined by construction.
-    fn stroke_style(&mut self, stroke: StrokeStyle) -> StrokeStyle {
-        stroke
     }
 
     /// Which paint stage a feature belongs to. Override where the target
@@ -287,11 +281,11 @@ fn lower_feature_artwork<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
                                 artwork::Geometry::Region { path }
                             })
                         }
-                        Paint::Stroke(stroke) => (
-                            Paint::Stroke(lowering.stroke_style(stroke)),
-                            ArtworkObjectKind::Stroke,
-                            |path| artwork::Geometry::Stroke { path },
-                        ),
+                        Paint::Stroke(stroke) => {
+                            (Paint::Stroke(stroke), ArtworkObjectKind::Stroke, |path| {
+                                artwork::Geometry::Stroke { path }
+                            })
+                        }
                         Paint::None => return None,
                     };
                 let path_id = out.push_path(paint, doc.arena.path_contours(path));

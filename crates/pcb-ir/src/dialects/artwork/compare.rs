@@ -316,9 +316,9 @@ mod tests {
     }
 
     #[test]
-    fn compares_cubic_curve_shape_not_just_endpoint() {
-        let reference = cubic_doc(Point::new(0.25, 1.0), Point::new(0.75, 1.0));
-        let candidate = cubic_doc(Point::new(0.25, 0.0), Point::new(0.75, 0.0));
+    fn compares_curve_shape_not_just_endpoints() {
+        let reference = arc_doc(true);
+        let candidate = arc_doc(false);
 
         let report = compare_documents(
             &reference,
@@ -437,7 +437,8 @@ mod tests {
         doc
     }
 
-    fn cubic_doc(c1: Point, c2: Point) -> Document<Vec<String>, ()> {
+    /// A half disc on the unit segment, bulging up or down.
+    fn arc_doc(clockwise: bool) -> Document<Vec<String>, ()> {
         let mut doc = Document::new();
         let layer = doc.push_layer(gerber_layer("Top"));
         let path = doc.push_path(
@@ -446,8 +447,7 @@ mod tests {
             },
             vec![ContourBuf::new(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::cubic_to(c1, c2, Point::new(1.0, 0.0)),
-                PathCmd::line_to(Point::new(0.0, 1.0)),
+                PathCmd::arc_to(Point::new(1.0, 0.0), Point::new(0.5, 0.0), clockwise),
                 PathCmd::close(),
             ])],
         );

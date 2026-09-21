@@ -191,7 +191,7 @@ impl ContourSet {
                 Paint::Stroke(stroke) => {
                     let local =
                         GeometryAccuracy::new(accuracy.max_error_mm() / placement.max_scale())?;
-                    stroke_to_fill(&contours, stroke.into(), local)?.unwrap_or_default()
+                    stroke_to_fill(&contours, stroke, local)?.unwrap_or_default()
                 }
                 Paint::None => continue,
             };

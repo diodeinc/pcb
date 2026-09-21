@@ -7,7 +7,7 @@ use crate::dialects::mask;
 use crate::geom::path::PathCmd;
 
 use crate::geom::{
-    Affine2, BBox, FillRule, LineCap, LineJoin, Path, PathArena, Point, Polarity, StrokeStyle,
+    Affine2, BBox, FillRule, LineCap, Path, PathArena, Point, Polarity, StrokeStyle,
 };
 use crate::render::{Drawn, LayerStyle, RenderOptions, SizeConstraint};
 
@@ -293,7 +293,7 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
         Geometry::Stroke { path } if !stroke_of(doc, path).is_solid() => {
             let contours = crate::geom::path::stroke_to_fill(
                 &doc.arena.path_contours(doc.arena.path(path)),
-                stroke_of(doc, path).into(),
+                stroke_of(doc, path),
                 accuracy,
             )?
             .unwrap_or_default();
@@ -315,10 +315,9 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
             write_native_path(out, &doc.arena, doc.arena.path(path), accuracy)?;
             writeln!(
                 out,
-                "' fill='none' stroke-width='{}' stroke-linecap='{}' stroke-linejoin='{}'{outline}/>",
+                "' fill='none' stroke-width='{}' stroke-linecap='{}' stroke-linejoin='round'{outline}/>",
                 num(stroke.width),
                 line_cap_name(stroke.cap),
-                line_join_name(stroke.join),
             )
             .unwrap();
         }
@@ -364,14 +363,6 @@ fn line_cap_name(cap: LineCap) -> &'static str {
         LineCap::Round => "round",
         LineCap::Square => "square",
         LineCap::Butt => "butt",
-    }
-}
-
-fn line_join_name(join: LineJoin) -> &'static str {
-    match join {
-        LineJoin::Round => "round",
-        LineJoin::Bevel => "bevel",
-        LineJoin::Miter => "miter",
     }
 }
 
@@ -504,17 +495,6 @@ fn write_contour(data: &mut String, cmds: impl IntoIterator<Item = PathCmd>) {
             }
             Drawn::Line(to) => write!(data, " L{} {}", num(to.x), num(to.y)).unwrap(),
             Drawn::Arc(arc) => write_elliptical_arc(data, arc),
-            Drawn::Cubic(c1, c2, to) => write!(
-                data,
-                " C{} {},{} {},{} {}",
-                num(c1.x),
-                num(c1.y),
-                num(c2.x),
-                num(c2.y),
-                num(to.x),
-                num(to.y)
-            )
-            .unwrap(),
             Drawn::Close => data.push_str(" Z"),
         }
     }
@@ -632,16 +612,12 @@ pub(crate) mod tests {
         let contour = ContourBuf::new(vec![
             PathCmd::move_to(Point::new(12.0, -20.0)),
             PathCmd::arc_to(Point::new(8.0, -20.0), Point::new(10.0, -20.0), false),
-            PathCmd::cubic_to(
-                Point::new(7.0, -19.0),
-                Point::new(7.0, -21.0),
-                Point::new(8.0, -22.0),
-            ),
+            PathCmd::line_to(Point::new(8.0, -22.0)),
             PathCmd::close(),
         ]);
         assert_eq!(
             svg_path_data(&[contour]),
-            "M12 -20 A2 2 0 0 1 8 -20 C7 -19,7 -21,8 -22 Z"
+            "M12 -20 A2 2 0 0 1 8 -20 L8 -22 Z"
         );
     }
 

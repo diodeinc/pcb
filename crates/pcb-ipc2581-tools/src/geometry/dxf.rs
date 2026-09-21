@@ -131,7 +131,7 @@ fn contour_vertices(contour: &ContourBuf) -> Vec<DxfVertex> {
                 let sweep = if arc.clockwise { -sweep } else { sweep };
                 vertices.push(vertex(arc.start, (sweep / 4.0).tan()));
             }
-            Segment::Cubic { .. } | Segment::Ellipse(_) => {
+            Segment::Ellipse(_) => {
                 unreachable!("curves are flattened before polyline conversion")
             }
         }

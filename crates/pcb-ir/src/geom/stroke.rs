@@ -20,49 +20,18 @@ use crate::geom::arc::Arc;
 use crate::geom::path::{ContourBuf, PathCmd, PathOp, Segment};
 use crate::geom::pattern::{StrokePatternMark, stroke_pattern_marks};
 use crate::geom::point::Point;
-use crate::geom::style::{LineCap, LineJoin, LinePattern, StrokeStyle};
+use crate::geom::style::{LineCap, LinePattern, StrokeStyle};
 use crate::geom::{AccuracyError, GeometryAccuracy, shapes};
-
-/// Style for converting a stroked centerline into filled geometry.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct StrokeToFillStyle {
-    pub width: f64,
-    pub line_cap: LineCap,
-    pub line_join: LineJoin,
-    pub pattern: LinePattern,
-}
-
-impl StrokeToFillStyle {
-    pub fn new(width: f64, line_cap: LineCap, line_join: LineJoin) -> Self {
-        Self {
-            width,
-            line_cap,
-            line_join,
-            pattern: LinePattern::Solid,
-        }
-    }
-}
-
-impl From<StrokeStyle> for StrokeToFillStyle {
-    fn from(stroke: StrokeStyle) -> Self {
-        Self {
-            width: stroke.width,
-            line_cap: stroke.cap,
-            line_join: stroke.join,
-            pattern: stroke.pattern,
-        }
-    }
-}
 
 /// Convert stroked centerlines into filled contours.
 ///
-/// Lines and circular arcs outline exactly. Elliptical arcs and cubics have
-/// no circular offset, so they are flattened within `accuracy` first and the
+/// Lines and circular arcs outline exactly. Elliptical arcs have no
+/// circular offset, so they are flattened within `accuracy` first and the
 /// returned contours record what that cost. The pieces overlap: fill them
 /// under the nonzero rule or union them.
 pub fn stroke_to_fill(
     contours: &[ContourBuf],
-    style: StrokeToFillStyle,
+    style: StrokeStyle,
     accuracy: GeometryAccuracy,
 ) -> Result<Option<Vec<ContourBuf>>, AccuracyError> {
     if !style.width.is_finite()
@@ -178,8 +147,8 @@ enum End {
 }
 
 impl End {
-    fn cap(style: StrokeToFillStyle) -> Self {
-        match style.line_cap {
+    fn cap(style: StrokeStyle) -> Self {
+        match style.cap {
             LineCap::Round => Self::Round,
             LineCap::Butt => Self::Flat { extension: 0.0 },
             LineCap::Square => Self::Flat {
@@ -189,7 +158,7 @@ impl End {
     }
 }
 
-fn subpath_outline(subpath: &Subpath, style: StrokeToFillStyle) -> Vec<ContourBuf> {
+fn subpath_outline(subpath: &Subpath, style: StrokeStyle) -> Vec<ContourBuf> {
     let drawn = subpath
         .segments
         .iter()
@@ -201,7 +170,7 @@ fn subpath_outline(subpath: &Subpath, style: StrokeToFillStyle) -> Vec<ContourBu
     if drawn.is_empty() {
         // A stroke of no length still images its cap, as it does in SVG and
         // as a zero-length Gerber draw does.
-        return dot(style.line_cap, style.width, first.start());
+        return dot(style.cap, style.width, first.start());
     }
     let joined = End::Flat { extension: 0.0 };
     let last = drawn.len() - 1;
@@ -384,7 +353,7 @@ mod tests {
     use super::*;
     use crate::geom::{BBox, ContourSet, FillRule, Resolution};
 
-    fn image(contours: &[ContourBuf], style: StrokeToFillStyle) -> ContourSet {
+    fn image(contours: &[ContourBuf], style: StrokeStyle) -> ContourSet {
         let fill = stroke_to_fill(contours, style, GeometryAccuracy::default())
             .unwrap()
             .expect("the stroke paints");
@@ -407,8 +376,8 @@ mod tests {
         );
     }
 
-    fn round(width: f64) -> StrokeToFillStyle {
-        StrokeToFillStyle::new(width, LineCap::Round, LineJoin::Round)
+    fn round(width: f64) -> StrokeStyle {
+        StrokeStyle::new(width, LineCap::Round)
     }
 
     fn polyline(points: &[(f64, f64)]) -> ContourBuf {
@@ -437,7 +406,7 @@ mod tests {
         assert!(
             fill.iter()
                 .flat_map(|contour| &contour.cmds)
-                .all(|cmd| cmd.op != PathOp::CubicTo && cmd.op != PathOp::EllipseTo)
+                .all(|cmd| cmd.op != PathOp::EllipseTo)
         );
         // A stadium: the rectangle plus one disk.
         assert_area(&image(&source, round(2.0)), 20.0 + PI);
@@ -447,14 +416,8 @@ mod tests {
     fn caps_finish_only_the_open_ends() {
         let source = [polyline(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)])];
         let width = 2.0;
-        let butt = image(
-            &source,
-            StrokeToFillStyle::new(width, LineCap::Butt, LineJoin::Round),
-        );
-        let square = image(
-            &source,
-            StrokeToFillStyle::new(width, LineCap::Square, LineJoin::Round),
-        );
+        let butt = image(&source, StrokeStyle::new(width, LineCap::Butt));
+        let square = image(&source, StrokeStyle::new(width, LineCap::Square));
         // Two 10×2 rectangles overlapping in a unit square, plus the outer
         // quarter disk of the round join.
         let joined = 40.0 - 1.0 + PI / 4.0;
@@ -469,10 +432,7 @@ mod tests {
     fn closed_paths_join_every_vertex_and_cap_none() {
         let mut square = polyline(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
         square.cmds.push(PathCmd::close());
-        let butt = image(
-            &[square],
-            StrokeToFillStyle::new(2.0, LineCap::Butt, LineJoin::Round),
-        );
+        let butt = image(&[square], StrokeStyle::new(2.0, LineCap::Butt));
         // A 12×12 rounded square minus the 8×8 opening.
         let expected = 144.0 - (4.0 - PI) - 64.0;
         assert_area(&butt, expected);
@@ -490,10 +450,7 @@ mod tests {
                 PathCmd::move_to(start),
                 PathCmd::arc_to(end, Point::ZERO, clockwise),
             ]);
-            let butt = image(
-                &[quarter],
-                StrokeToFillStyle::new(2.0, LineCap::Butt, LineJoin::Round),
-            );
+            let butt = image(&[quarter], StrokeStyle::new(2.0, LineCap::Butt));
             let expected = PI / 4.0 * (36.0 - 16.0);
             assert_area(&butt, expected);
         }
@@ -523,15 +480,12 @@ mod tests {
         let at = Point::new(1.0, 2.0);
         let source = [polyline(&[(at.x, at.y), (at.x, at.y)])];
         assert_area(&image(&source, round(0.2)), PI * 0.01);
-        let square = image(
-            &source,
-            StrokeToFillStyle::new(0.2, LineCap::Square, LineJoin::Round),
-        );
+        let square = image(&source, StrokeStyle::new(0.2, LineCap::Square));
         assert_eq!(
             square.bbox,
             BBox::new(Point::new(0.9, 1.9), Point::new(1.1, 2.1))
         );
-        let butt = StrokeToFillStyle::new(0.2, LineCap::Butt, LineJoin::Round);
+        let butt = StrokeStyle::new(0.2, LineCap::Butt);
         assert!(
             stroke_to_fill(&source, butt, GeometryAccuracy::default())
                 .unwrap()
@@ -563,13 +517,9 @@ mod tests {
         let source = vec![line_contour(Point::new(0.0, 0.0), Point::new(1.0, 0.0))];
 
         assert!(
-            stroke_to_fill(
-                &source,
-                StrokeToFillStyle::new(0.0, LineCap::Round, LineJoin::Round),
-                accuracy
-            )
-            .unwrap()
-            .is_none()
+            stroke_to_fill(&source, StrokeStyle::new(0.0, LineCap::Round), accuracy)
+                .unwrap()
+                .is_none()
         );
     }
 
@@ -578,13 +528,9 @@ mod tests {
         let accuracy = GeometryAccuracy::default();
 
         let source = vec![line_contour(Point::new(0.0, 0.0), Point::new(10.0, 0.0))];
-        let fill = stroke_to_fill(
-            &source,
-            StrokeToFillStyle::new(2.0, LineCap::Butt, LineJoin::Round),
-            accuracy,
-        )
-        .unwrap()
-        .expect("stroke should expand to fill geometry");
+        let fill = stroke_to_fill(&source, StrokeStyle::new(2.0, LineCap::Butt), accuracy)
+            .unwrap()
+            .expect("stroke should expand to fill geometry");
         let bbox = fill
             .iter()
             .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox));
@@ -604,7 +550,7 @@ mod tests {
     #[test]
     fn patterned_strokes_preserve_input_error() {
         let source = line_contour(Point::ZERO, Point::new(20.0, 0.0)).with_uncertainty(0.001);
-        let mut style = StrokeToFillStyle::new(1.0, LineCap::Round, LineJoin::Round);
+        let mut style = StrokeStyle::new(1.0, LineCap::Round);
         style.pattern = LinePattern::Phantom;
         let fill = stroke_to_fill(&[source], style, GeometryAccuracy::default())
             .unwrap()
@@ -625,7 +571,7 @@ mod tests {
                 m12: 0.0,
             });
         assert!(ellipse.cmds.iter().any(|cmd| cmd.op == PathOp::EllipseTo));
-        let mut style = StrokeToFillStyle::new(0.2, LineCap::Round, LineJoin::Round);
+        let mut style = StrokeStyle::new(0.2, LineCap::Round);
         style.pattern = LinePattern::Dashed;
         let accuracy = GeometryAccuracy::default();
         let dashes = stroke_to_fill(&[ellipse], style, accuracy)

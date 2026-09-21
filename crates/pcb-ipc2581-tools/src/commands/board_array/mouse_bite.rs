@@ -17,7 +17,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use ipc2581::types::Polygon;
 use pcb_ir::geom::{
-    Affine2, BBox, ContourBuf, ContourSet, LineCap, LineJoin, Point, Resolution, StrokeToFillStyle,
+    Affine2, BBox, ContourBuf, ContourSet, LineCap, Point, Resolution, StrokeStyle,
     attachment::{BoundaryQuery, QueryTolerance, material_after_break, transform_region},
     mouse_bite::{Attachment, Npth, SparkFunShallow, TabGeometry, build, routed_void},
     path::stroke_to_fill,
@@ -340,7 +340,7 @@ fn check_release(
     );
     let rows = stroke_to_fill(
         break_rows,
-        StrokeToFillStyle::new(BREAK_PROBE_MM, LineCap::Round, LineJoin::Round),
+        StrokeStyle::new(BREAK_PROBE_MM, LineCap::Round),
         resolution.accuracy,
     )?
     .context("break rows have no width")?;

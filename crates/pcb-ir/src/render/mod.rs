@@ -185,7 +185,6 @@ impl LayerStyle {
 pub(crate) enum Drawn {
     Move(Point),
     Line(Point),
-    Cubic(Point, Point, Point),
     Arc(EllipticalArc),
     Close,
 }
@@ -196,7 +195,6 @@ pub(crate) fn drawn(cmds: impl IntoIterator<Item = PathCmd>) -> impl Iterator<It
     cmds.into_iter().map(move |cmd| {
         let start = current;
         current = match cmd.op {
-            PathOp::CubicTo => cmd.p2,
             PathOp::Close => subpath,
             _ => cmd.p0,
         };
@@ -206,7 +204,6 @@ pub(crate) fn drawn(cmds: impl IntoIterator<Item = PathCmd>) -> impl Iterator<It
                 return Drawn::Move(cmd.p0);
             }
             PathOp::LineTo => return Drawn::Line(cmd.p0),
-            PathOp::CubicTo => return Drawn::Cubic(cmd.p0, cmd.p1, cmd.p2),
             PathOp::Close => return Drawn::Close,
             PathOp::ArcTo => Arc::new(start, cmd.p0, cmd.p1, cmd.clockwise).to_elliptical(),
             PathOp::EllipseTo => EllipticalArc {

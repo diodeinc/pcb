@@ -9,8 +9,8 @@ use pcb_ir::dialects::assembly as ir;
 use pcb_ir::dialects::ipc::{FeatureSpan, LayoutStepKind, PlatingKind};
 use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
 use pcb_ir::geom::{
-    Affine2, BBox, FillRule as IrFillRule, LineCap as IrLineCap, LineJoin as IrLineJoin,
-    LinePattern as IrLinePattern, Paint, Point as IrPoint, Polarity as IrPolarity,
+    Affine2, BBox, FillRule as IrFillRule, LineCap as IrLineCap, LinePattern as IrLinePattern,
+    Paint, Point as IrPoint, Polarity as IrPolarity,
 };
 use pcb_ir::import::ipc2581::{ImportedDesign, LayoutOccurrenceId};
 use pcb_ir::import::physical::{
@@ -1369,11 +1369,7 @@ fn path_paint(paint: Paint) -> report::PathPaint {
                 IrLineCap::Square => report::LineCap::Square,
                 IrLineCap::Butt => report::LineCap::Butt,
             },
-            join: match stroke.join {
-                IrLineJoin::Round => report::LineJoin::Round,
-                IrLineJoin::Miter => report::LineJoin::Miter,
-                IrLineJoin::Bevel => report::LineJoin::Bevel,
-            },
+            join: report::LineJoin::Round,
             pattern: match stroke.pattern {
                 IrLinePattern::Solid => report::LinePattern::Solid,
                 IrLinePattern::Dotted => report::LinePattern::Dotted,
@@ -1550,14 +1546,6 @@ fn path_command(value: PathCmd) -> report::PathCommand {
             center_x: canonical_number(value.p1.x),
             center_y: canonical_number(value.p1.y),
             clockwise: value.clockwise,
-        },
-        PathOp::CubicTo => report::PathCommand::CubicTo {
-            control_1_x: canonical_number(value.p0.x),
-            control_1_y: canonical_number(value.p0.y),
-            control_2_x: canonical_number(value.p1.x),
-            control_2_y: canonical_number(value.p1.y),
-            x: canonical_number(value.p2.x),
-            y: canonical_number(value.p2.y),
         },
         PathOp::EllipseTo => report::PathCommand::EllipseTo {
             x: canonical_number(value.p0.x),

@@ -680,7 +680,6 @@ fn lowers_hollow_user_circle_as_stroked_path() {
     assert_eq!(doc.arena.paths[0].bbox.min, Point::new(-0.75, -0.75));
     assert_eq!(doc.arena.paths[0].bbox.max, Point::new(0.75, 0.75));
     assert!(doc.arena.cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
-    assert!(!doc.arena.cmds.iter().any(|cmd| cmd.op == PathOp::CubicTo));
 }
 
 #[test]
@@ -2395,7 +2394,6 @@ fn rounded_rect_preserves_arcs_when_transform_preserves_circles() {
     let cmds = contour.cmds.slice(&doc.arena.cmds);
 
     assert_eq!(cmds.iter().filter(|cmd| cmd.op == PathOp::ArcTo).count(), 4);
-    assert!(!cmds.iter().any(|cmd| cmd.op == PathOp::CubicTo));
 }
 
 #[test]
@@ -2425,11 +2423,7 @@ fn rounded_rect_uses_elliptical_arcs_when_transform_distorts_circles() {
             .count(),
         4
     );
-    assert!(
-        !cmds
-            .iter()
-            .any(|cmd| matches!(cmd.op, PathOp::ArcTo | PathOp::CubicTo))
-    );
+    assert!(!cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
 }
 
 #[test]

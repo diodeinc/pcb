@@ -576,9 +576,6 @@ fn ipc_polygon_from_contour(contour: &ContourBuf) -> Result<Polygon> {
                 }));
             }
             PathOp::Close if begin.is_some() => {}
-            PathOp::CubicTo => {
-                bail!("generated copper balance polygon contains an unsupported cubic segment")
-            }
             _ => bail!("generated copper balance polygon contains multiple or missing contours"),
         }
     }

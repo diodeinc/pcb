@@ -1,5 +1,4 @@
 use crate::geom::{AccuracyError, GeometryAccuracy};
-use kurbo::{BezPath, PathEl};
 
 use crate::geom::affine::Affine2;
 use crate::geom::arc::{Arc, EllipticalArc};
@@ -13,7 +12,6 @@ pub enum PathOp {
     LineTo,
     ArcTo,
     EllipseTo,
-    CubicTo,
     Close,
 }
 
@@ -24,7 +22,6 @@ pub enum PathOp {
 /// - `EllipseTo`: `p0` is the arc end, `p1` the center, `p2` and `p3` the
 ///   images of the unit x and y axes, `clockwise` the direction. This is the
 ///   affine image of a circular arc; see [`EllipticalArc`].
-/// - `CubicTo`: `p0`/`p1` are control points, `p2` the end point.
 /// - `Close`: no points.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PathCmd {
@@ -81,16 +78,6 @@ impl PathCmd {
         }
     }
 
-    pub fn cubic_to(p1: Point, p2: Point, p3: Point) -> Self {
-        Self {
-            op: PathOp::CubicTo,
-            p0: p1,
-            p1: p2,
-            p2: p3,
-            ..Self::default()
-        }
-    }
-
     pub fn close() -> Self {
         Self {
             op: PathOp::Close,
@@ -101,7 +88,6 @@ impl PathCmd {
     pub fn end_point(self) -> Option<Point> {
         match self.op {
             PathOp::MoveTo | PathOp::LineTo | PathOp::ArcTo | PathOp::EllipseTo => Some(self.p0),
-            PathOp::CubicTo => Some(self.p2),
             PathOp::Close => None,
         }
     }
@@ -112,7 +98,7 @@ impl PathCmd {
 
     /// Whether this command is a curve rather than a line or a move.
     pub fn is_curve(self) -> bool {
-        matches!(self.op, PathOp::ArcTo | PathOp::EllipseTo | PathOp::CubicTo)
+        matches!(self.op, PathOp::ArcTo | PathOp::EllipseTo)
     }
 
     /// The elliptical arc of an `EllipseTo` command starting at `start`.
@@ -141,12 +127,6 @@ impl PathCmd {
             PathOp::LineTo => Segment::Line { start, end },
             PathOp::ArcTo => Segment::Arc(Arc::new(start, end, self.p1, self.clockwise)),
             PathOp::EllipseTo => Segment::Ellipse(self.elliptical_arc(start)),
-            PathOp::CubicTo => Segment::Cubic {
-                start,
-                c1: self.p0,
-                c2: self.p1,
-                end,
-            },
         })
     }
 
@@ -155,12 +135,6 @@ impl PathCmd {
         match self.op {
             PathOp::MoveTo | PathOp::LineTo => Self {
                 p0: transform.transform_point(self.p0),
-                ..self
-            },
-            PathOp::CubicTo => Self {
-                p0: transform.transform_point(self.p0),
-                p1: transform.transform_point(self.p1),
-                p2: transform.transform_point(self.p2),
                 ..self
             },
             PathOp::ArcTo => {
@@ -266,8 +240,8 @@ impl ContourBuf {
         self.segments().map(segment_signed_double_area).sum::<f64>() / 2.0
     }
 
-    /// The same contour with elliptical arcs and cubics replaced by chords
-    /// within `accuracy`, for writers that only carry lines and circular arcs.
+    /// The same contour with elliptical arcs replaced by chords within
+    /// `accuracy`, for writers that only carry lines and circular arcs.
     pub fn flattened_curves(&self, accuracy: GeometryAccuracy) -> Result<Self, AccuracyError> {
         let allowance = accuracy.allowance(self.uncertainty_mm)?;
         let mut cmds = Vec::with_capacity(self.cmds.len());
@@ -276,18 +250,8 @@ impl ContourBuf {
         let mut added: f64 = 0.0;
         for cmd in &self.cmds {
             match cmd.op {
-                PathOp::EllipseTo | PathOp::CubicTo => {
-                    let start = current;
-                    let segment = if cmd.op == PathOp::EllipseTo {
-                        Segment::Ellipse(cmd.elliptical_arc(start))
-                    } else {
-                        Segment::Cubic {
-                            start,
-                            c1: cmd.p0,
-                            c2: cmd.p1,
-                            end: cmd.p2,
-                        }
-                    };
+                PathOp::EllipseTo => {
+                    let segment = Segment::Ellipse(cmd.elliptical_arc(current));
                     let (points, error) = segment.chords(allowance)?;
                     added = added.max(error);
                     cmds.extend(points.into_iter().map(PathCmd::line_to));
@@ -306,24 +270,15 @@ impl ContourBuf {
 /// A resolved geometric segment of a contour, with explicit start points.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Segment {
-    Line {
-        start: Point,
-        end: Point,
-    },
+    Line { start: Point, end: Point },
     Arc(Arc),
     Ellipse(EllipticalArc),
-    Cubic {
-        start: Point,
-        c1: Point,
-        c2: Point,
-        end: Point,
-    },
 }
 
 impl Segment {
     pub fn start(&self) -> Point {
         match *self {
-            Self::Line { start, .. } | Self::Cubic { start, .. } => start,
+            Self::Line { start, .. } => start,
             Self::Arc(arc) => arc.start,
             Self::Ellipse(arc) => arc.start,
         }
@@ -331,14 +286,14 @@ impl Segment {
 
     pub fn end(&self) -> Point {
         match *self {
-            Self::Line { end, .. } | Self::Cubic { end, .. } => end,
+            Self::Line { end, .. } => end,
             Self::Arc(arc) => arc.end,
             Self::Ellipse(arc) => arc.end,
         }
     }
 
     /// Command continuing a path from this segment's start (or end when reversed).
-    /// Reversal preserves curves, changing arc direction and cubic control order.
+    /// Reversal preserves curves, changing arc direction.
     pub fn to_path_cmd(self, reverse: bool) -> PathCmd {
         let end = if reverse { self.start() } else { self.end() };
         match self {
@@ -351,13 +306,6 @@ impl Segment {
                 arc.y_axis,
                 arc.clockwise ^ reverse,
             ),
-            Self::Cubic { c1, c2, .. } => {
-                if reverse {
-                    PathCmd::cubic_to(c2, c1, end)
-                } else {
-                    PathCmd::cubic_to(c1, c2, end)
-                }
-            }
         }
     }
 
@@ -370,13 +318,6 @@ impl Segment {
             }
             Self::Arc(arc) => arc.bbox(),
             Self::Ellipse(arc) => arc.bbox(),
-            Self::Cubic { start, c1, c2, end } => {
-                let mut bbox = BBox::from_point(start);
-                bbox.include_point(c1);
-                bbox.include_point(c2);
-                bbox.include_point(end);
-                bbox
-            }
         }
     }
 
@@ -394,13 +335,6 @@ impl Segment {
                 arc.point_at(start_angle + signed_sweep * t)
             }
             Self::Ellipse(arc) => arc.point_at(arc.start_angle() + arc.signed_sweep_radians() * t),
-            Self::Cubic { start, c1, c2, end } => {
-                let u = 1.0 - t;
-                start * (u * u * u)
-                    + c1 * (3.0 * u * u * t)
-                    + c2 * (3.0 * u * t * t)
-                    + end * (t * t * t)
-            }
         }
     }
 
@@ -449,21 +383,6 @@ impl Segment {
                 let error = 2.0 * scale * (sweep / count as f64 / 4.0).sin().powi(2);
                 Ok((points, error))
             }
-            Self::Cubic { start, c1, c2, end } => {
-                let mut path = BezPath::new();
-                path.move_to(kurbo_point(start));
-                path.curve_to(kurbo_point(c1), kurbo_point(c2), kurbo_point(end));
-                let mut points = Vec::new();
-                flatten_path(path, max_error_mm.max(f64::MIN_POSITIVE), |el| {
-                    if let PathEl::LineTo(point) = el {
-                        points.push(ir_point(point));
-                    }
-                });
-                if points.len() > 1_000_000 {
-                    return Err(AccuracyError::SubdivisionLimit);
-                }
-                Ok((points, max_error_mm))
-            }
         }
     }
 }
@@ -488,15 +407,6 @@ fn segment_signed_double_area(segment: Segment) -> f64 {
         Segment::Ellipse(arc) => {
             cross(arc.center, arc.end - arc.start)
                 + cross(arc.x_axis, arc.y_axis) * arc.signed_sweep_radians()
-        }
-        Segment::Cubic { start, c1, c2, end } => {
-            // Integrate x·dy - y·dx over the cubic in power-basis form.
-            let d = start;
-            let c = (c1 - start) * 3.0;
-            let b = (c2 - c1 * 2.0 + start) * 3.0;
-            let a = end - c2 * 3.0 + c1 * 3.0 - start;
-            cross(d, c) + cross(d, b) + (cross(d, a) * 3.0 + cross(c, b)) / 3.0 + cross(c, a) / 2.0
-                - cross(a, b) / 5.0
         }
     }
 }
@@ -532,7 +442,7 @@ impl Iterator for Segments<'_> {
                     self.first = Some(cmd.p0);
                     self.current = Some(cmd.p0);
                 }
-                PathOp::LineTo | PathOp::ArcTo | PathOp::EllipseTo | PathOp::CubicTo => {
+                PathOp::LineTo | PathOp::ArcTo | PathOp::EllipseTo => {
                     let segment = cmd.segment_from(self.current)?;
                     self.current = Some(segment.end());
                     return Some(segment);
@@ -551,7 +461,7 @@ impl Iterator for Segments<'_> {
     }
 }
 
-pub use crate::geom::stroke::{StrokeToFillStyle, stroke_to_fill};
+pub use crate::geom::stroke::stroke_to_fill;
 
 pub fn contour_bbox(cmds: &[PathCmd]) -> BBox {
     let mut bbox = BBox::empty();
@@ -574,12 +484,6 @@ pub fn contour_bbox(cmds: &[PathCmd]) -> BBox {
                 bbox = bbox.union(cmd.elliptical_arc(current).bbox());
                 current = cmd.p0;
             }
-            PathOp::CubicTo => {
-                bbox.include_point(cmd.p0);
-                bbox.include_point(cmd.p1);
-                bbox.include_point(cmd.p2);
-                current = cmd.p2;
-            }
             PathOp::Close => current = start,
         }
     }
@@ -598,67 +502,6 @@ pub(crate) fn validate_cmd_points(name: &str, cmds: &[PathCmd]) -> Result<(), St
     Ok(())
 }
 
-pub(crate) fn kurbo_point(point: Point) -> kurbo::Point {
-    kurbo::Point::new(point.x, point.y)
-}
-
-// Kurbo 0.13's cubic flattener can emit sample n as well as the stored
-// endpoint when n * (sum / n) rounds below sum. Convert to quadratics first:
-// their flattener enumerates only integer interior samples, then the endpoint.
-// The two approximation budgets add to the requested tolerance.
-pub(crate) fn flatten_path(
-    path: impl IntoIterator<Item = PathEl>,
-    tolerance: f64,
-    callback: impl FnMut(PathEl),
-) {
-    let mut previous = None;
-    let mut subpath_start = None;
-    let mut closed = false;
-    let quadratics = path.into_iter().flat_map(|element| {
-        let mut elements = Vec::new();
-        // Kurbo resets its current point on close. Restore it explicitly only
-        // when drawing continues without a new MoveTo.
-        if closed
-            && !matches!(element, PathEl::MoveTo(_) | PathEl::ClosePath)
-            && let Some(start) = subpath_start
-        {
-            elements.push(PathEl::MoveTo(start));
-        }
-        closed = matches!(element, PathEl::ClosePath);
-        match element {
-            PathEl::CurveTo(p1, p2, p3) => {
-                if let Some(p0) = previous {
-                    let cubic = kurbo::CubicBez::new(p0, p1, p2, p3);
-                    let mut pieces = cubic.to_quads(tolerance * 0.1).peekable();
-                    while let Some((_, _, quad)) = pieces.next() {
-                        let end = if pieces.peek().is_none() { p3 } else { quad.p2 };
-                        elements.push(PathEl::QuadTo(quad.p1, end));
-                    }
-                }
-                previous = Some(p3);
-            }
-            _ => {
-                previous = match element {
-                    PathEl::MoveTo(p) => {
-                        subpath_start = Some(p);
-                        Some(p)
-                    }
-                    PathEl::LineTo(p) | PathEl::QuadTo(_, p) => Some(p),
-                    PathEl::ClosePath => subpath_start,
-                    _ => None,
-                };
-                elements.push(element);
-            }
-        }
-        elements
-    });
-    kurbo::flatten(quadratics, tolerance * 0.9, callback);
-}
-
-pub(crate) fn ir_point(point: kurbo::Point) -> Point {
-    Point::new(point.x, point.y)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,11 +517,6 @@ mod tests {
                 Point::new(3.0, 0.0),
                 Point::new(0.0, 1.0),
                 false,
-            ),
-            PathCmd::cubic_to(
-                Point::new(2.0, 4.0),
-                Point::new(-1.0, 2.0),
-                Point::new(4.0, -2.0),
             ),
         ] {
             let source = ContourBuf::new(vec![PathCmd::move_to(Point::new(3.0, 0.0)), command]);
@@ -771,31 +609,6 @@ mod tests {
     }
 
     #[test]
-    fn cubic_after_close_starts_at_the_closed_subpath_start() {
-        let start = kurbo::Point::new(2.0, 3.0);
-        let first = PathEl::CurveTo((3.0, 4.0).into(), (4.0, 4.0).into(), (4.0, 3.0).into());
-        let second = PathEl::CurveTo((1.0, 4.0).into(), (0.0, 4.0).into(), (0.0, 3.0).into());
-        let flatten = |path: Vec<PathEl>| {
-            let mut result = Vec::new();
-            flatten_path(path, 0.001, |el| result.push(el));
-            result
-        };
-        let actual = flatten(vec![
-            PathEl::MoveTo(start),
-            first,
-            PathEl::ClosePath,
-            second,
-        ]);
-        let close = actual
-            .iter()
-            .position(|el| *el == PathEl::ClosePath)
-            .unwrap();
-        let expected = flatten(vec![PathEl::MoveTo(start), second]);
-        assert!(expected.len() > 2);
-        assert_eq!(&actual[close + 1..], expected);
-    }
-
-    #[test]
     fn prepared_small_circles_have_no_numerical_join_edges() {
         use crate::geom::{ContourSet, Resolution};
         for (diameter, prior) in [0.381, 20.0]
@@ -841,17 +654,6 @@ mod tests {
             ..Affine2::IDENTITY
         });
         assert!((mirrored.signed_area() + 2.0 * std::f64::consts::PI).abs() <= 1e-12);
-
-        let curved = ContourBuf::new(vec![
-            PathCmd::move_to(Point::ZERO),
-            PathCmd::cubic_to(
-                Point::new(0.0, 1.0),
-                Point::new(1.0, 1.0),
-                Point::new(1.0, 0.0),
-            ),
-            PathCmd::close(),
-        ]);
-        assert!((curved.signed_area() + 0.6).abs() <= 1e-12);
     }
 
     #[test]

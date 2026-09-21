@@ -13,8 +13,8 @@ use crate::dialects::artwork::{self, Placed, Primitive};
 use crate::dialects::{LayerRole, mask};
 use crate::geom::path::PathCmd;
 use crate::geom::{
-    AccuracyError, Affine2, BBox, EllipticalArc, FillRule, GeometryAccuracy, LineCap, LineJoin,
-    Paint, Point, Polarity, StrokeStyle,
+    AccuracyError, Affine2, BBox, EllipticalArc, FillRule, GeometryAccuracy, LineCap, Paint, Point,
+    Polarity, StrokeStyle,
 };
 use crate::render::{Drawn, LayerStyle, RenderOptions, SizeConstraint};
 
@@ -314,12 +314,9 @@ fn path_shape<LayerMeta, ObjectMeta>(
         // A raster stroke has no notion of IPC line patterns, so a patterned
         // stroke images through the same expansion the region fold uses.
         Paint::Stroke(stroke) if !stroke.is_solid() => {
-            let dashes = crate::geom::path::stroke_to_fill(
-                &arena.path_contours(path),
-                stroke.into(),
-                accuracy,
-            )?
-            .unwrap_or_default();
+            let dashes =
+                crate::geom::path::stroke_to_fill(&arena.path_contours(path), stroke, accuracy)?
+                    .unwrap_or_default();
             let cmds = dashes.iter().map(|contour| &contour.cmds[..]);
             return Ok(shape(
                 outline(cmds, px_per_unit),
@@ -352,11 +349,7 @@ fn stroke_style(stroke: StrokeStyle) -> Stroke {
             LineCap::Square => tiny_skia::LineCap::Square,
             LineCap::Butt => tiny_skia::LineCap::Butt,
         },
-        line_join: match stroke.join {
-            LineJoin::Round => tiny_skia::LineJoin::Round,
-            LineJoin::Bevel => tiny_skia::LineJoin::Bevel,
-            LineJoin::Miter => tiny_skia::LineJoin::Miter,
-        },
+        line_join: tiny_skia::LineJoin::Round,
         ..Stroke::default()
     }
 }
@@ -373,7 +366,6 @@ fn outline<'a>(
             match drawn {
                 Drawn::Move(to) => path.move_to(to.x as f32, to.y as f32),
                 Drawn::Line(to) => path.line_to(to.x as f32, to.y as f32),
-                Drawn::Cubic(c1, c2, to) => cubic_to(&mut path, c1, c2, to),
                 Drawn::Arc(arc) => arc_to(&mut path, arc, px_per_unit),
                 Drawn::Close => path.close(),
             }

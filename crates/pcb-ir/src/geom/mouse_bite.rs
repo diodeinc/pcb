@@ -9,8 +9,8 @@ use super::attachment::{
     check_footprint, material_after_break, validate_region,
 };
 use super::{
-    AccuracyError, Affine2, ContourBuf, ContourSet, LineCap, LineJoin, PathCmd, Point, Resolution,
-    StrokeToFillStyle,
+    AccuracyError, Affine2, ContourBuf, ContourSet, LineCap, PathCmd, Point, Resolution,
+    StrokeStyle,
 };
 
 /// Opinionated, experimental shallow-intrusion adaptation of SparkFun's pattern.
@@ -112,7 +112,7 @@ pub fn routed_void(void: &ContourSet, necks: &ContourSet) -> Result<ContourSet, 
 fn stroke(path: &ContourBuf, width: f64, resolution: Resolution) -> Result<ContourSet, QueryError> {
     let contours = super::path::stroke_to_fill(
         std::slice::from_ref(path),
-        StrokeToFillStyle::new(width, LineCap::Round, LineJoin::Round),
+        StrokeStyle::new(width, LineCap::Round),
         resolution.accuracy,
     )?
     .ok_or(QueryError::InvalidInput("expected positive stroke width"))?;

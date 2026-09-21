@@ -873,7 +873,7 @@ fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(
             continue;
         };
         let source = doc.arena.path_contours(&path);
-        let contours = crate::geom::path::stroke_to_fill(&source, stroke.into(), accuracy)?;
+        let contours = crate::geom::path::stroke_to_fill(&source, stroke, accuracy)?;
         let Some(contours) = contours else {
             continue;
         };
@@ -1728,7 +1728,6 @@ mod tests {
         let stroke = StrokeStyle {
             width: 0.1,
             cap: LineCap::Round,
-            join: crate::geom::LineJoin::Round,
             pattern: LinePattern::Phantom,
         };
         let path = Path::stroked(stroke);
