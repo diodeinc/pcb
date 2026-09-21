@@ -185,11 +185,19 @@ pub struct PadstackHoleDef {
 pub struct PadstackPadDef {
     pub layer_ref: Symbol,
     pub pad_use: PadUse,
+    /// Transform of the layer shape about the padstack origin, offsets in
+    /// millimeters. Allegro writes the shape offset here and leaves
+    /// `Location` at the origin; KiCad does the opposite.
+    pub xform: Option<super::Xform>,
     /// Shape offset from the padstack origin, in millimeters. The pad's
     /// `Xform` rotates and mirrors this offset together with the shape.
     pub x: f64,
     pub y: f64,
+    /// The layer shape: a dictionary reference or any inline `Feature`.
+    pub feature: Option<FeatureShape>,
+    /// `feature` when it is a `StandardPrimitiveRef`.
     pub standard_primitive_ref: Option<Symbol>,
+    /// `feature` when it is a `UserPrimitiveRef`.
     pub user_primitive_ref: Option<Symbol>,
 }
 

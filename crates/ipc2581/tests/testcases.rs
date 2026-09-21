@@ -153,6 +153,21 @@ fn test_testcase5_full() {
     let path = Path::new("tests/data/testcase5-revc/testcase5-revc-full.xml");
     let doc = parse_and_validate(path);
     assert_metadata_populated(&doc, "Testcase 5");
+
+    // Allegro offsets these trace-shaped pads through PadstackPadDef/Xform.
+    let pad_def = doc
+        .ecad()
+        .unwrap()
+        .cad_data
+        .steps
+        .iter()
+        .flat_map(|step| &step.padstack_defs)
+        .find(|padstack| doc.resolve(padstack.name) == "L3_5842X089FS_TRACE")
+        .map(|padstack| &padstack.pad_defs[0])
+        .expect("padstack should exist");
+    assert_eq!(pad_def.xform.map(|xform| xform.x_offset), Some(2.8987));
+    assert_eq!((pad_def.x, pad_def.y), (0.0, 0.0));
+    assert!(pad_def.standard_primitive_ref.is_some());
 }
 
 #[test]

@@ -3614,42 +3614,40 @@ impl<'a> Parser<'a> {
         let pad_use_str = self.required_attr(node, "padUse", "PadstackPadDef")?;
         let pad_use = self.parse_pad_use(self.interner.resolve(pad_use_str))?;
 
-        // The optional Location is the layer shape's offset from the
-        // padstack origin.
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
-        let location = self
-            .element_children(node)
-            .find(|n| self.name(n) == "Location");
-        let coordinate = |axis: &str| {
-            location
-                .as_ref()
-                .and_then(|n| self.attr(n, axis))
+        let coordinate = |value: Option<&str>| {
+            value
                 .and_then(|value| value.parse::<f64>().ok())
                 .map(|value| crate::units::to_mm(value, units))
                 .unwrap_or(0.0)
         };
-        let x = coordinate("x");
-        let y = coordinate("y");
-
-        // Parse StandardPrimitiveRef if present
-        let standard_primitive_ref = self
-            .element_children(node)
-            .find(|n| self.name(n) == "StandardPrimitiveRef")
-            .and_then(|n| self.attr(&n, "id"))
-            .map(|id| self.interner.intern(id));
-
-        // Parse UserPrimitiveRef if present
-        let user_primitive_ref = self
-            .element_children(node)
-            .find(|n| self.name(n) == "UserPrimitiveRef")
-            .and_then(|n| self.attr(&n, "id"))
-            .map(|id| self.interner.intern(id));
+        let (mut x, mut y) = (0.0, 0.0);
+        let mut xform = None;
+        let mut feature = None;
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "Xform" => xform = Some(self.parse_xform(&child, units)?),
+                "Location" => {
+                    x = coordinate(self.attr(&child, "x"));
+                    y = coordinate(self.attr(&child, "y"));
+                }
+                _ if feature.is_none() => feature = self.parse_feature_shape(&child, units)?,
+                _ => {}
+            }
+        }
+        let (standard_primitive_ref, user_primitive_ref) = match feature {
+            Some(FeatureShape::StandardPrimitiveRef(id)) => (Some(id), None),
+            Some(FeatureShape::UserPrimitiveRef(id)) => (None, Some(id)),
+            _ => (None, None),
+        };
 
         Ok(PadstackPadDef {
             layer_ref,
             pad_use,
+            xform,
             x,
             y,
+            feature,
             standard_primitive_ref,
             user_primitive_ref,
         })
