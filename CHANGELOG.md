@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.57] - 2026-09-21
+
 ### Added
 
 - Added `pcb ipc interposer --layers 4` for inner GND planes.
@@ -1997,7 +1999,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.56...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.57...HEAD
+[0.4.57]: https://github.com/diodeinc/pcb/compare/v0.4.56...v0.4.57
 [0.4.56]: https://github.com/diodeinc/pcb/compare/v0.4.55...v0.4.56
 [0.4.55]: https://github.com/diodeinc/pcb/compare/v0.4.54...v0.4.55
 [0.4.54]: https://github.com/diodeinc/pcb/compare/v0.4.53...v0.4.54
