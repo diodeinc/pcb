@@ -251,6 +251,22 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
                 })
     };
     let protected = input.board.union(input.support)?;
+    // Operands that share an edge, as a frame clipped to its cell shares the
+    // cell's, leave residue along it no thicker than the rounding of the
+    // booleans that made it. Material is what is thicker than the caller's
+    // own tolerance: a region that thin has at most its perimeter times that
+    // tolerance in area.
+    let slack =
+        input.tolerance.boundary_mm.max(protected.uncertainty_mm) + input.tolerance.numerical_mm;
+    let is_residue = |region: ContourSet| {
+        let perimeter: f64 = region
+            .rings
+            .iter()
+            .flat_map(super::region::ring_edges)
+            .map(|(start, end)| start.distance_to(end))
+            .sum();
+        region.area() <= perimeter * slack
+    };
     let expected = [
         (
             input.board.connected_components().len() == 1,
@@ -261,11 +277,11 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
             "expected one connected support",
         ),
         (
-            input.board.intersection(input.support)?.is_empty(),
+            is_residue(input.board.intersection(input.support)?),
             "expected disjoint board and support",
         ),
         (
-            protected.difference(input.stock)?.is_empty(),
+            is_residue(protected.difference(input.stock)?),
             "expected board and support inside stock",
         ),
         (

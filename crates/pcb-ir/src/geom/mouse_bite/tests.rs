@@ -158,6 +158,33 @@ fn missing_ligament_and_bad_stock_are_not_successful_tabs() {
 }
 
 #[test]
+fn support_flush_with_the_stock_edge_is_inside_it() {
+    // A frame clipped to its cell shares the cell's edge, and the booleans
+    // that clip it may leave that edge a rounding step outside. Anything
+    // thicker than the query tolerance is still outside.
+    let (board, _, stock) = fixture(false);
+    let flush = |beyond: f64| {
+        ContourSet::from_regularized(
+            vec![vec![
+                [-10.0, 3.0],
+                [10.0, 3.0],
+                [10.0, 13.0 + beyond],
+                [-10.0, 13.0 + beyond],
+            ]],
+            Resolution::default().strict(),
+            0.0,
+        )
+    };
+    assert!(tab(&board, &flush(7e-15), &stock).is_ok());
+    assert!(matches!(
+        tab(&board, &flush(1e-6), &stock),
+        Err(QueryError::InvalidInput(
+            "expected board and support inside stock"
+        ))
+    ));
+}
+
+#[test]
 fn witnesses_must_be_interior_to_the_original_regions() {
     let (board, support, stock) = fixture(false);
     let query = BoundaryQuery::new(&board, TOL).unwrap();
