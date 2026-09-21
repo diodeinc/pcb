@@ -497,6 +497,56 @@ pub(super) fn least_inner_product(weights: &mut [f64], lower: f64, upper: f64, t
     lower * total + width * spent
 }
 
+/// The void-area level each site is emitted at, as a squared radius.
+///
+/// Squared radius is what gets quantized because rounded-hex area is
+/// proportional to it, so uniform levels are uniform area increments. Rounding
+/// each site on its own would round a locally uniform field the same way
+/// everywhere, moving its copper density by up to half a level's worth, so the
+/// error of each rounding is handed to sites still to come and every
+/// neighbourhood keeps the void area the solve gave it.
+///
+/// Sites arrive column by column, rows ascending, as
+/// [`DenseCopperLattice::sites_covering`] enumerates them. A site's six
+/// nearest neighbours all lie one pitch away, and the three still to come are
+/// the one above it and the two in the next column, so the error is split
+/// evenly among those of them this layer has. A site with none ahead drops
+/// its error, which is at most half a level at the few sites closing off the
+/// trailing edge of a region.
+pub(super) fn diffuse_to_levels(
+    sites: &[DenseCopperLatticeSite],
+    squared_radii: &[f64],
+    profile: DenseCopperBalanceProfile,
+) -> Vec<f64> {
+    let mut table = SiteTable::spanning(sites.iter());
+    for site in sites {
+        table.admit(*site);
+    }
+    let mut carried = vec![0.0; sites.len()];
+    sites
+        .iter()
+        .zip(squared_radii)
+        .enumerate()
+        .map(|(index, (site, radius_squared))| {
+            let owed = radius_squared + carried[index];
+            let level = profile.nearest_void_area_level(owed);
+            let parity = site.column.rem_euclid(2);
+            let ahead = [
+                (site.column, site.row + 1),
+                (site.column + 1, site.row + parity - 1),
+                (site.column + 1, site.row + parity),
+            ]
+            .map(|(column, row)| table.sample(DenseCopperLatticeSite { column, row }));
+            let heirs = ahead.iter().flatten().count() as f64;
+            for heir in ahead.into_iter().flatten() {
+                debug_assert!(heir > index, "sites must arrive in scan order");
+                carried[heir] += (owed - level) / heirs;
+            }
+            level
+        })
+        .collect()
+}
+
 pub(super) fn spatial_result_from_squared_radii(
     sites: &[DenseCopperLatticeSite],
     squared_radii: &[f64],
@@ -505,14 +555,12 @@ pub(super) fn spatial_result_from_squared_radii(
     density_domain_area_mm2: f64,
     profile: DenseCopperBalanceProfile,
 ) -> DenseCopperBalanceResult {
-    // Quantize squared radius directly: rounded-hex area is proportional to
-    // this variable, so uniform levels represent uniform area increments.
     let full_voids = sites
         .iter()
-        .zip(squared_radii)
-        .map(|(site, radius_squared)| DenseCopperVoid {
+        .zip(diffuse_to_levels(sites, squared_radii, profile))
+        .map(|(site, level)| DenseCopperVoid {
             site: *site,
-            radius_mm: profile.quantize_void_radius(radius_squared.sqrt()),
+            radius_mm: level.sqrt(),
         })
         .collect::<Vec<_>>();
     let full_void_area_mm2 = ROUNDED_HEXAGON_AREA_FACTOR
@@ -753,6 +801,66 @@ mod tests {
         let (stopped, exhaustive) = (solve(floor), solve(floor * 1e-4));
         assert!(objective(&start) - stopped > 100.0 * floor);
         assert!(stopped >= exhaustive - 1e-12 && stopped - exhaustive <= floor);
+    }
+
+    /// A solved field that is locally uniform is the worst case for rounding:
+    /// every site rounds the same way. Just under half a level off, rounding
+    /// each site alone moves the copper density by a percent and a half
+    /// everywhere, while handing the error on keeps the total void area to
+    /// within the one site that has nowhere to hand it, and the smoothed
+    /// density to a small fraction of the rounding bias.
+    #[test]
+    fn a_uniform_field_keeps_its_void_area_through_quantization() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(60.0, 40.0)),
+            res(tol::REGION_MM),
+        );
+        let (samples, _, kernel) = panel_kernel(&panel, profile);
+        let sites = &samples.sites;
+        let spacing = profile.void_area_level(1) - profile.void_area_level(0);
+        let solved = vec![profile.void_area_level(7) + 0.45 * spacing; sites.len()];
+        let lattice = DenseCopperLattice {
+            origin: Point::ZERO,
+            pitch_mm: profile.pitch_mm,
+        };
+        let void_fraction_per_radius_squared =
+            ROUNDED_HEXAGON_AREA_FACTOR / (lattice.column_pitch_mm() * lattice.pitch_mm);
+        // Worst copper-density error at the scale the objective sees.
+        let density_error = |emitted: &[f64]| {
+            let error = emitted
+                .iter()
+                .zip(&solved)
+                .map(|(emitted, solved)| void_fraction_per_radius_squared * (emitted - solved))
+                .collect::<Vec<_>>();
+            kernel
+                .smooth(&error)
+                .into_iter()
+                .fold(0.0_f64, |worst, error| worst.max(error.abs()))
+        };
+
+        let rounded = solved
+            .iter()
+            .map(|radius_squared| profile.nearest_void_area_level(*radius_squared))
+            .collect::<Vec<_>>();
+        assert!(
+            density_error(&rounded) > 0.014,
+            "{}",
+            density_error(&rounded)
+        );
+
+        let diffused = diffuse_to_levels(sites, &solved, profile);
+        let is_level = |value: f64| {
+            (0..profile.void_area_levels).any(|level| value == profile.void_area_level(level))
+        };
+        assert!(diffused.iter().all(|value| is_level(*value)));
+        let drift = diffused.iter().sum::<f64>() - solved.iter().sum::<f64>();
+        assert!(drift.abs() <= spacing / 2.0, "{drift}");
+        assert!(
+            density_error(&diffused) < density_error(&rounded) / 20.0,
+            "{}",
+            density_error(&diffused)
+        );
     }
 
     /// Tile coverage is an area, so a region cutting through tiles at any
