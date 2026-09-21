@@ -131,8 +131,8 @@ pub struct StackLayer {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThermalStack {
     layers: Vec<StackLayer>,
-    /// Height of each layer's mid-surface above the stiffness-weighted neutral
-    /// axis, millimeters.
+    /// Height of each layer's mid-surface above the geometric mid-plane,
+    /// millimeters.
     lever_arms_mm: Vec<f64>,
     flexural_rigidity_gpa_mm3: f64,
     /// Stiffness-weighted Poisson ratio, used to convert moment to curvature.
@@ -147,8 +147,8 @@ pub struct ThermalStack {
 /// fraction.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConductorWeight {
-    /// `z_l`, the layer's height above the neutral axis in millimeters. Signed
-    /// by which side of it the layer sits on.
+    /// `z_l`, the layer's height above the mid-plane in millimeters. Signed by
+    /// which side of it the layer sits on.
     pub lever_arm_mm: f64,
     /// `t_l z_l`, millimeters squared: the moment a fully copper-covered layer
     /// contributes, carrying the same sign.
@@ -158,10 +158,16 @@ pub struct ConductorWeight {
 impl ThermalStack {
     /// Build from layers given in stack order, outermost first.
     ///
-    /// The neutral axis is the stiffness-weighted centroid rather than the
-    /// geometric midplane: copper is roughly five times stiffer than laminate,
-    /// so an asymmetric copper distribution moves the axis, and lever arms
-    /// measured from the geometric middle are wrong for mixed copper weights.
+    /// Rigidity is assembled about the neutral axis, the stiffness-weighted
+    /// centroid: copper is roughly five times stiffer than laminate, so mixed
+    /// copper weights pull the axis off the middle. The arms that weigh each
+    /// layer's copper are measured from the geometric mid-plane instead. What
+    /// bends a free plate is `sum Q (a - a_panel) t z` over every layer, which
+    /// does not depend on where `z` is measured from; copper coverage enters
+    /// it through the conductor layers alone only when the laminate's own
+    /// share, `Q_d (a_d - a_panel) sum t z`, vanishes, and the mid-plane is
+    /// where `sum t z` does. About that plane the copper field cancels
+    /// exactly when the panel stays flat, at any coverage.
     ///
     /// The axis, the rigidity and the membrane expansion are evaluated for
     /// fully present layers, and the response is linearized in copper fraction
@@ -202,15 +208,16 @@ impl ThermalStack {
         // read.
         let lever_arms_mm = centers_mm
             .iter()
-            .map(|center| neutral_axis_mm - center)
+            .map(|center| total_thickness_mm / 2.0 - center)
             .collect::<Vec<_>>();
 
         // Parallel-axis assembly: each layer contributes its own bending
         // stiffness plus the far larger term from its offset.
         let flexural_rigidity_gpa_mm3 = layers
             .iter()
-            .zip(&lever_arms_mm)
-            .map(|(layer, arm)| {
+            .zip(&centers_mm)
+            .map(|(layer, center)| {
+                let arm = neutral_axis_mm - center;
                 layer.material.flexural_modulus_gpa()
                     * (layer.thickness_mm * arm * arm + layer.thickness_mm.powi(3) / 12.0)
             })
@@ -266,9 +273,8 @@ impl ThermalStack {
     /// expand alike cannot bend the panel however unevenly they are
     /// distributed, and this vanishes when they do.
     ///
-    /// Exact to first order for a build symmetric about its mid-plane. An
-    /// asymmetric build also carries the nominal stack's own thermal moment,
-    /// which the copper field does not contain.
+    /// The expansion `a` is the nominal stack's, so the scale is first order
+    /// in coverage; where the copper field cancels it does so exactly.
     ///
     /// Units are GPa per kelvin; combined with a temperature drop and the
     /// geometric field's mm^2 it yields a moment resultant in GPa mm^2 per
@@ -281,7 +287,7 @@ impl ThermalStack {
         misfit_stress_gpa_per_k(Material::COPPER) - misfit_stress_gpa_per_k(displaced)
     }
 
-    /// Per-conductor moment arms `t_l z_l`, signed about the neutral axis.
+    /// Per-conductor moment arms `t_l z_l`, signed about the mid-plane.
     ///
     /// The copper-balance solver draws its stack weights from here, so the
     /// moment it flattens is the moment the warp estimate measures.
@@ -706,23 +712,55 @@ mod tests {
         BBox::new(Point::new(0.0, 0.0), Point::new(400.0, 500.0))
     }
 
-    /// Copper is far stiffer than laminate, so putting it all on one face pulls
-    /// the neutral axis toward that face rather than leaving it in the middle.
+    /// The exact laminate curvature of a free plate, up to its rigidity:
+    /// `M_T - (B / A) N_T` with every layer at its actual copper coverage.
+    fn exact_bending_drive(layers: &[StackLayer], coverage: &[f64]) -> f64 {
+        let total = layers.iter().map(|layer| layer.thickness_mm).sum::<f64>();
+        let mut fractions = coverage.iter();
+        let (mut a, mut b, mut n, mut m) = (0.0, 0.0, 0.0, 0.0);
+        let mut top = 0.0;
+        for layer in layers {
+            let z = total / 2.0 - (top + layer.thickness_mm / 2.0);
+            top += layer.thickness_mm;
+            let copper = if layer.is_conductor {
+                *fractions.next().unwrap()
+            } else {
+                0.0
+            };
+            let (metal, resin) = (layer.material, Material::LAMINATE);
+            let q =
+                copper * metal.biaxial_modulus_gpa() + (1.0 - copper) * resin.biaxial_modulus_gpa();
+            let qa = copper * metal.thermal_stress_gpa_per_k()
+                + (1.0 - copper) * resin.thermal_stress_gpa_per_k();
+            a += q * layer.thickness_mm;
+            b += q * layer.thickness_mm * z;
+            n += qa * layer.thickness_mm;
+            m += qa * layer.thickness_mm * z;
+        }
+        m - b / a * n
+    }
+
+    /// Mixed copper weights move the neutral axis, but the coverage that
+    /// leaves the panel flat is the one that cancels about the mid-plane.
     #[test]
-    fn heavier_copper_on_one_face_moves_the_neutral_axis() {
-        let geometric = ThermalStack::new(vec![copper(0.035), laminate(1.0), copper(0.035)])
+    fn the_copper_field_cancels_exactly_where_an_asymmetric_build_stays_flat() {
+        let layers = vec![copper(0.105), laminate(1.0), copper(0.035)];
+        let weights = ThermalStack::new(layers.clone())
             .unwrap()
             .conductor_weights();
-        let lopsided = ThermalStack::new(vec![copper(0.105), laminate(1.0), copper(0.035)])
-            .unwrap()
-            .conductor_weights();
+        // Thin the heavy foil until the field cancels against a full light one.
+        let heavy = -weights[1].moment_arm_mm2 / weights[0].moment_arm_mm2;
+        assert!(heavy > 0.0 && heavy < 1.0);
+
+        let full = exact_bending_drive(&layers, &[1.0, 1.0]).abs();
+        let balanced = exact_bending_drive(&layers, &[heavy, 1.0]).abs();
+        assert!(balanced <= 1e-12 * full, "{balanced} of {full}");
 
         // Balanced foils sit symmetrically about the middle.
-        assert!((geometric[0].moment_arm_mm2 + geometric[1].moment_arm_mm2).abs() <= 1e-12);
-        // Tripling one foil draws the axis toward it, shortening its own arm
-        // relative to the thickness it gained.
-        assert!(lopsided[0].moment_arm_mm2.abs() < 3.0 * geometric[0].moment_arm_mm2.abs());
-        assert!(lopsided[1].moment_arm_mm2.abs() > geometric[1].moment_arm_mm2.abs());
+        let even = ThermalStack::new(vec![copper(0.035), laminate(1.0), copper(0.035)])
+            .unwrap()
+            .conductor_weights();
+        assert!((even[0].moment_arm_mm2 + even[1].moment_arm_mm2).abs() <= 1e-12);
     }
 
     /// Equal copper on mirrored layers cancels: the field is zero and so is the

@@ -44,6 +44,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Count every copper layer function in `pcb ipc info`, report copper weights for non-KiCad layer names, and read components and nets from the board step of array files.
 - Correct `pcb ipc warp` bow, which was overstated about 20×.
 - Report the copper-balance stack moment of the emitted fill.
+- Weigh copper about the stack's mid-plane in warp estimates and copper balancing, which is exact for builds with mixed copper weights.
 
 ### Changed
 

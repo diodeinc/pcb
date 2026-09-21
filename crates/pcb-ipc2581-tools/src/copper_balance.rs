@@ -481,7 +481,7 @@ fn void_sets(
 }
 
 /// Signed first-moment weight `t * z` per copper layer, arms measured from
-/// the stackup's stiffness-weighted neutral axis, positive out of the top
+/// the stackup's geometric mid-plane, positive out of the top
 /// face. `None` when the stackup cannot locate every copper layer.
 ///
 /// Derived from the same [`pcb_ir::geom::warp::ThermalStack`] the warp

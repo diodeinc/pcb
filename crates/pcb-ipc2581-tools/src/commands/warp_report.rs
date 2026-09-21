@@ -121,7 +121,7 @@ fn results(html: &mut String, analysis: &WarpAnalysis) {
     );
 }
 
-/// The stack, paired about the neutral axis. Mirrored layers carry opposite
+/// The stack, paired about the mid-plane. Mirrored layers carry opposite
 /// arms, so their coverage difference is what survives into the moment — which
 /// is the quantity fabricators put a rule of thumb on.
 fn stack_table(html: &mut String, analysis: &WarpAnalysis) {
@@ -150,7 +150,7 @@ fn stack_table(html: &mut String, analysis: &WarpAnalysis) {
     let _ = write!(
         html,
         r#"<section><h2>2&emsp;Through the stack</h2>
-<p class="blurb">Lever arms run from the stiffness-weighted neutral axis, so mirrored layers
+<p class="blurb">Lever arms run from the mid-plane of the stack, so mirrored layers
 carry equal and opposite values and equal copper on them cancels. The last column is each pair's
 coverage difference, which is what survives into the moment; fabricators advise keeping it under
 {:.0}&nbsp;%.</p>
@@ -204,7 +204,7 @@ fn field_figures(html: &mut String, analysis: &WarpAnalysis) {
 <div class="figures">
 <figure><figcaption><b>Fig 1</b>&emsp;Predicted panel shape, levelled onto the corners.
 Warm high, cool low.</figcaption>{}</figure>
-<figure><figcaption><b>Fig 2</b>&emsp;Copper moment about the neutral axis. Warm is copper
+<figure><figcaption><b>Fig 2</b>&emsp;Copper moment about the mid-plane. Warm is copper
 weighted above it, cool below, neutral is balanced.</figcaption>{}</figure>
 </div></section>"#,
         diverging(
@@ -215,7 +215,7 @@ weighted above it, cool below, neutral is balanced.</figcaption>{}</figure>
         diverging(
             &analysis.moment,
             analysis,
-            "moment about the neutral axis, mm\u{b2}"
+            "moment about the mid-plane, mm\u{b2}"
         ),
     );
 }
