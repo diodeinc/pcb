@@ -9,7 +9,7 @@
 pub mod compare;
 pub mod legalize;
 
-use crate::geom::{AccuracyError, GeometryAccuracy, Resolution};
+use crate::geom::{AccuracyError, Resolution};
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -504,25 +504,6 @@ pub fn normalize_bounds<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, Obj
     }
 }
 
-/// Rewrite flashes and strokes into filled region objects.
-///
-/// Flashes and instances are exact; stroke outlines are the one
-/// approximation, prepared within `accuracy`.
-pub fn expand_native_geometry_to_regions<LayerMeta: Clone, ObjectMeta: Clone>(
-    doc: Document<LayerMeta, ObjectMeta>,
-    accuracy: GeometryAccuracy,
-) -> Result<Document<LayerMeta, ObjectMeta>, AccuracyError> {
-    let mut doc = if doc.blocks.is_empty() {
-        doc
-    } else {
-        expand_instances(&doc)
-    };
-    expand_strokes_to_regions(&mut doc, accuracy)?;
-    expand_flashes_to_regions(&mut doc);
-    normalize_bounds(&mut doc);
-    Ok(doc)
-}
-
 /// A layer's objects in paint order, each with the polarity it images with.
 ///
 /// Objects paint in source order, then the final cutouts. A final cutout
@@ -854,68 +835,6 @@ pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta>(
 
     mask.diagnostics.extend(diagnostics);
     Ok(mask)
-}
-
-fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(
-    doc: &mut Document<LayerMeta, ObjectMeta>,
-    accuracy: GeometryAccuracy,
-) -> Result<(), AccuracyError> {
-    for object_index in 0..doc.objects.len() {
-        let Geometry::Stroke { path: path_index } = doc.objects[object_index].geometry else {
-            continue;
-        };
-        let Some(path) = doc.arena.paths.get(path_index as usize).copied() else {
-            doc.warn("Skipping artwork stroke with invalid path reference");
-            continue;
-        };
-        let Some(stroke) = path.stroke() else {
-            doc.warn("Skipping artwork stroke with fill paint");
-            continue;
-        };
-        let source = doc.arena.path_contours(&path);
-        let contours = crate::geom::path::stroke_to_fill(&source, stroke, accuracy)?;
-        let Some(contours) = contours else {
-            continue;
-        };
-        let path_id = doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            contours,
-        );
-        doc.objects[object_index].geometry = Geometry::Region { path: path_id };
-        doc.objects[object_index].bbox = doc.path_bbox(path_id);
-    }
-    Ok(())
-}
-
-fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
-    for object_index in 0..doc.objects.len() {
-        let Geometry::Flash {
-            aperture,
-            transform,
-        } = doc.objects[object_index].geometry
-        else {
-            continue;
-        };
-        let Some(aperture) = doc.apertures.get(aperture as usize).cloned() else {
-            doc.warn("Skipping artwork flash with invalid aperture reference");
-            continue;
-        };
-        let contours = aperture
-            .contours()
-            .into_iter()
-            .map(|contour| contour.transformed(transform))
-            .collect::<Vec<_>>();
-        let path_id = doc.push_path(
-            Paint::Fill {
-                rule: aperture.fill_rule(),
-            },
-            contours,
-        );
-        doc.objects[object_index].geometry = Geometry::Region { path: path_id };
-        doc.objects[object_index].bbox = doc.path_bbox(path_id);
-    }
 }
 
 fn geometry_bbox<LayerMeta, ObjectMeta>(

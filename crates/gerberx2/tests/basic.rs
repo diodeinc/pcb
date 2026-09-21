@@ -924,14 +924,17 @@ fn extraction_flips_mirrored_aperture_arc_direction() {
     .unwrap();
 
     let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
-    assert!(matches!(
-        geometry.objects[0].geometry,
-        pcb_ir::dialects::artwork::Geometry::Flash { .. }
-    ));
-    let expanded =
-        pcb_ir::dialects::artwork::expand_native_geometry_to_regions(geometry, accuracy).unwrap();
-    let arc = expanded
-        .arena
+    let pcb_ir::dialects::artwork::Geometry::Flash {
+        aperture,
+        transform,
+    } = geometry.objects[0].geometry
+    else {
+        panic!("a flash stays a flash");
+    };
+    let placed = geometry.apertures[aperture as usize].contours()[0]
+        .clone()
+        .transformed(transform);
+    let arc = placed
         .cmds
         .iter()
         .find(|cmd| cmd.op == pcb_ir::geom::PathOp::ArcTo)
