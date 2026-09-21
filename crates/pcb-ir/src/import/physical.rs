@@ -1193,19 +1193,24 @@ fn feature_spans_overlap(
     let Some(right) = span_endpoints(right) else {
         return false;
     };
-    if left.iter().any(|layer| right.contains(layer)) {
-        return true;
+    let ranges = stackup.and_then(|layers| {
+        Some((
+            span_range_in_stackup(left, layers)?,
+            span_range_in_stackup(right, layers)?,
+        ))
+    });
+    match ranges {
+        // A span occupies the depth between its terminal layers, so spans that
+        // only meet at a shared terminal layer, such as stacked microvias,
+        // share none. A single-layer span has no depth of its own and meets
+        // every span that reaches its layer.
+        Some((left, right)) => {
+            let (first, last) = (left.0.max(right.0), left.1.min(right.1));
+            first < last || (first == last && (left.0 == left.1 || right.0 == right.1))
+        }
+        // Without a resolved order, a shared terminal layer is the only evidence.
+        None => left.iter().any(|layer| right.contains(layer)),
     }
-    let Some(layers) = stackup else {
-        return false;
-    };
-    let Some(left) = span_range_in_stackup(left, layers) else {
-        return false;
-    };
-    let Some(right) = span_range_in_stackup(right, layers) else {
-        return false;
-    };
-    left.0 <= right.1 && right.0 <= left.1
 }
 
 fn span_endpoints(span: FeatureSpan<Symbol>) -> Option<[Symbol; 2]> {
@@ -1288,6 +1293,33 @@ mod tests {
     use crate::geom::path::{ContourBuf, PathCmd};
     use crate::geom::{LineCap, Paint, StrokeStyle};
     use crate::import::ipc2581::import_design;
+
+    #[test]
+    fn stacked_spans_share_no_depth_but_single_layer_spans_meet_their_layer() {
+        let mut interner = ipc2581::Interner::default();
+        let layers = ["L1", "D1", "L2", "D2", "L3"].map(|name| interner.intern(name));
+        let [l1, _, l2, _, l3] = layers;
+        let span = |from, to| FeatureSpan::FromTo {
+            from: Some(from),
+            to: Some(to),
+        };
+        let overlap = |left, right| feature_spans_overlap(left, right, Some(&layers));
+        assert!(!overlap(span(l1, l2), span(l2, l3)), "stacked microvias");
+        assert!(overlap(span(l1, l3), span(l2, l3)), "nested spans");
+        assert!(
+            overlap(span(l1, l2), FeatureSpan::Layer(l2)),
+            "terminal layer"
+        );
+        assert!(
+            overlap(span(l1, l3), FeatureSpan::Layer(l2)),
+            "interior layer"
+        );
+        assert!(!overlap(span(l1, l2), FeatureSpan::Layer(l3)));
+        assert!(
+            feature_spans_overlap(span(l1, l2), span(l2, l3), None),
+            "an unresolved order keeps the shared terminal layer as evidence"
+        );
+    }
 
     #[test]
     fn physical_associations_propagate_geometry_budget_errors() {
