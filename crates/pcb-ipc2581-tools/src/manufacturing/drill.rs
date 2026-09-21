@@ -4,7 +4,7 @@ use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::dialects::nc;
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
-use crate::manufacturing::{ManufacturingFile, ManufacturingFileKind};
+use crate::manufacturing::ManufacturingFile;
 use crate::xnc::{XncAttribute, XncBuilder, write_xnc};
 
 pub(crate) fn build_xnc_drill_files_from_design(
@@ -93,7 +93,6 @@ fn xnc_files_from_nc(
         .map(|(key, document)| {
             Ok(ManufacturingFile {
                 filename: xnc_filename(&key),
-                kind: ManufacturingFileKind::Xnc,
                 contents: write_xnc(&document)?,
             })
         })

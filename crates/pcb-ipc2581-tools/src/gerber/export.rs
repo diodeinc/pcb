@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use gerberx2::{GerberLayer, write_layer};
+use gerberx2::write_layer;
 use ipc2581::types::{
     FillProperty, LayerFunction, Side as IpcSide, StandardPrimitive,
     ecad::{Layer, Step},
@@ -42,7 +42,6 @@ type IpcGeometryDocument = pcb_ir::dialects::ipc::Document<ipc2581::Symbol, Laye
 #[derive(Debug, Clone)]
 pub struct GerberX2File {
     pub filename: String,
-    pub layer: GerberLayer,
     pub contents: String,
 }
 
@@ -129,11 +128,9 @@ pub fn build_gerber_x2_files(
         if plan.role == GerberLayerRole::Profile && layer.objects.is_empty() {
             return Ok(None);
         }
-        let contents = write_layer(&layer)?;
         Ok(Some(GerberX2File {
             filename: plan.filename.clone(),
-            layer,
-            contents,
+            contents: write_layer(&layer)?,
         }))
     };
     #[cfg(not(target_family = "wasm"))]
@@ -825,12 +822,9 @@ fn synthetic_profile_gerber_file(
         return Ok(None);
     }
 
-    let layer = lower_artwork_layer(&artwork, accuracy)?;
-    let contents = write_layer(&layer)?;
     Ok(Some(GerberX2File {
         filename: "Edge_Cuts.gm1".to_string(),
-        layer,
-        contents,
+        contents: write_layer(&lower_artwork_layer(&artwork, accuracy)?)?,
     }))
 }
 
@@ -934,12 +928,9 @@ fn profile_gerber_file(
         return Ok(None);
     }
 
-    let layer = lower_artwork_layer(&artwork, accuracy)?;
-    let contents = write_layer(&layer)?;
     Ok(Some(GerberX2File {
         filename: filename.to_string(),
-        layer,
-        contents,
+        contents: write_layer(&lower_artwork_layer(&artwork, accuracy)?)?,
     }))
 }
 
@@ -1498,8 +1489,7 @@ mod tests {
     use super::*;
     use crate::ipc2581 as ipc;
     use crate::manufacturing::{
-        ManufacturingExportOptions, ManufacturingFileKind, ManufacturingPackage,
-        build_manufacturing_package,
+        ManufacturingExportOptions, ManufacturingPackage, build_manufacturing_package,
     };
     use ipc2581::Ipc2581;
     use pcb_ir::import::ipc2581::import_design;
@@ -2763,7 +2753,6 @@ mod tests {
                 .any(|file| file.filename == "PTH_Slots.drl")
         );
 
-        assert!(matches!(pth.kind, ManufacturingFileKind::Xnc));
         assert!(
             pth.contents
                 .contains("; #@! TF.FileFunction,Plated,1,2,PTH")
@@ -3090,11 +3079,6 @@ mod tests {
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
         assert!(top.contents.contains("%TF.Part,Array*%"));
-        assert_eq!(
-            top.layer.objects.len(),
-            3,
-            "the three panel placements each retain one board grid"
-        );
         assert!(!top.contents.contains("%ABD"));
         assert_eq!(top.contents.matches("%SRX2Y1I14J0*%").count(), 1);
         assert_eq!(top.contents.matches("%SR*%").count(), 1);
@@ -3103,7 +3087,11 @@ mod tests {
         assert!(!top.contents.contains("%LR"));
         assert!(!top.contents.contains("%LS"));
         let parsed = gerberx2::GerberX2::parse(&top.contents).unwrap();
-        assert_eq!(parsed.objects().len(), 3);
+        assert_eq!(
+            parsed.objects().len(),
+            3,
+            "the three panel placements each retain one board grid"
+        );
         let artwork = gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
         assert_eq!(artwork.blocks.len(), 1);
         assert_eq!(

@@ -330,10 +330,7 @@ fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
         let artwork =
             gerberx2::geometry::extract_document(&parsed_gerber, resolution.accuracy).unwrap();
         assert_bbox_close(artwork.layers[0].bbox, expected_bbox);
-        let crate::manufacturing::ManufacturingFileKind::GerberX2(layer) = &file.kind else {
-            panic!("{filename} is not a Gerber layer");
-        };
-        assert!(!layer.objects.is_empty());
+        assert!(!parsed_gerber.objects().is_empty());
     }
     assert_eq!(
         package
