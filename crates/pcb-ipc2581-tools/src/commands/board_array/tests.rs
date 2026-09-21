@@ -2614,3 +2614,34 @@ fn mouse_bite_margins_must_hold_the_routed_slot_and_tab_landing() {
     // The scored-array clearance rule does not apply to routed arrays.
     create(BoardMarginMm::all(2.4)).unwrap();
 }
+
+#[test]
+fn generated_drill_layer_spans_the_outer_copper_layers() {
+    let xml = create_board_array_xml(
+        large_board_fixture_mm(),
+        &BoardArrayCreateOptions {
+            columns: 1,
+            rows: 1,
+            board_margin_mm: BoardMarginMm::all(5.0),
+            edge_rail_mm: BoardMarginMm::all(5.0),
+        },
+    )
+    .unwrap();
+    assert!(xml.contains(r#"<Span fromLayer="TOP" toLayer="BOTTOM"/>"#));
+
+    // The importer resolves tooling holes to that span, as it does for the
+    // source's own drill layers, instead of assuming the whole stack.
+    let ipc = Ipc2581::parse(&xml).unwrap();
+    let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
+    let layer = imported.layer_id("Board_Array_Drill").unwrap();
+    let doc = imported
+        .materialize_layer(layer, ArtworkScope::ArrayFlattened)
+        .unwrap();
+    assert!(!doc.features.is_empty());
+    for feature in &doc.features {
+        assert_eq!(
+            resolved_feature_span(&ipc, feature.intent.span),
+            "FromTo(TOP,BOTTOM)"
+        );
+    }
+}

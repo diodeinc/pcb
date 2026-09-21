@@ -139,7 +139,14 @@ pub(super) fn write_generated_layer_xml(writer: &mut XmlWriter, generated_layer:
     if let Some(polarity) = generated_layer.polarity {
         attrs.push(("polarity", polarity.as_str()));
     }
-    writer.empty_element("Layer", &attrs);
+    match &generated_layer.span {
+        Some((from, to)) => {
+            writer.start_element("Layer", &attrs);
+            writer.empty_element("Span", &[("fromLayer", from), ("toLayer", to)]);
+            writer.end_element("Layer");
+        }
+        None => writer.empty_element("Layer", &attrs),
+    }
 }
 
 pub(super) fn write_generated_steps_xml(spec: &BoardArraySpec) -> Result<String> {

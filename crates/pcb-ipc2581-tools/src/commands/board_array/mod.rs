@@ -426,6 +426,8 @@ struct GeneratedLayer {
     layer_function: LayerFunction,
     side: Option<Side>,
     polarity: Option<Polarity>,
+    /// The layers a drill layer's holes run between, from and to.
+    span: Option<(String, String)>,
 }
 
 impl GeneratedLayer {
@@ -440,6 +442,7 @@ impl GeneratedLayer {
             layer_function,
             side,
             polarity,
+            span: None,
         }
     }
 }
@@ -879,6 +882,8 @@ fn build_board_array_spec(
             })?,
         );
     }
+    let tooling_hole_layer =
+        add_tooling_hole_layer(&mut generated_geometry, &mut used_layer_names, ipc, ecad);
     let (profile_cutouts, tabs_per_board) = match separation {
         Separation::VScore => (Vec::new(), 0),
         Separation::MouseBite => {
@@ -896,11 +901,9 @@ fn build_board_array_spec(
                 })
                 .collect::<Vec<_>>();
             let tabs = mouse_bite::generate(&placement, &stock, &offsets, preset, resolution)?;
-            let layer =
-                ensure_tooling_hole_layer_name(&mut generated_geometry, &mut used_layer_names);
             generated_geometry.add_layer_feature(
                 GeneratedFeatureScope::Array,
-                layer,
+                tooling_hole_layer.as_str(),
                 Polarity::Positive,
                 round_nonplated_hole_features(
                     tabs.holes.iter().map(|hole| (hole.center.x, hole.center.y)),
@@ -918,7 +921,7 @@ fn build_board_array_spec(
     };
     add_board_array_corner_tooling(
         &mut generated_geometry,
-        &mut used_layer_names,
+        &tooling_hole_layer,
         array_width,
         array_height,
     );
@@ -946,7 +949,7 @@ fn build_board_array_spec(
         &mut generated_geometry,
         ipc,
         ecad,
-        &mut used_layer_names,
+        &tooling_hole_layer,
         tooling_spec,
     )?;
     add_board_cell_fiducials(
@@ -1243,24 +1246,32 @@ fn board_outline_layer_names(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Vec<
         .collect()
 }
 
-fn ensure_tooling_hole_layer_name(
+/// The drill layer every generated hole goes on. Its holes run through the
+/// whole board, declared the way the source's own drill layers declare it:
+/// as a span between the outer copper layers.
+fn add_tooling_hole_layer(
     generated_geometry: &mut BoardArrayGeneratedGeometry,
     used_layer_names: &mut HashSet<String>,
+    ipc: &Ipc2581,
+    ecad: &ipc2581::types::Ecad,
 ) -> String {
-    if let Some(layer) = generated_geometry.layers.iter().find(|layer| {
-        layer.layer_function == LayerFunction::Drill
-            && layer.name.starts_with(TOOLING_HOLE_LAYER_BASE_NAME)
-    }) {
-        return layer.name.clone();
-    }
-
+    let copper = crate::layers::copper_layers(ecad);
+    let outer = |side| {
+        copper
+            .iter()
+            .find(|layer| layer.side == side)
+            .map(|layer| ipc.resolve(layer.name).to_string())
+    };
     let layer_name = reserve_unique_name(used_layer_names, TOOLING_HOLE_LAYER_BASE_NAME);
-    generated_geometry.add_layer(GeneratedLayer::new(
-        layer_name.clone(),
-        LayerFunction::Drill,
-        Some(Side::All),
-        Some(Polarity::Positive),
-    ));
+    generated_geometry.add_layer(GeneratedLayer {
+        span: outer(pcb_ir::dialects::Side::Top).zip(outer(pcb_ir::dialects::Side::Bottom)),
+        ..GeneratedLayer::new(
+            layer_name.clone(),
+            LayerFunction::Drill,
+            Some(Side::All),
+            Some(Polarity::Positive),
+        )
+    });
     layer_name
 }
 

@@ -70,15 +70,12 @@ pub(super) fn add_board_array_tooling(
     generated_geometry: &mut BoardArrayGeneratedGeometry,
     ipc: &Ipc2581,
     ecad: &ipc2581::types::Ecad,
-    used_layer_names: &mut HashSet<String>,
+    tooling_hole_layer_name: &str,
     spec: BoardArrayToolingSpec,
 ) -> Result<()> {
     let Some(orientation) = board_array_tooling_orientation(&spec) else {
         return Ok(());
     };
-
-    let tooling_hole_layer_name =
-        ensure_tooling_hole_layer_name(generated_geometry, used_layer_names);
 
     let (top_fiducials, bottom_fiducials) = board_array_tooling_fiducials(&spec, orientation);
     add_two_sided_fiducials(
@@ -105,12 +102,10 @@ pub(super) fn add_board_array_tooling(
 
 pub(super) fn add_board_array_corner_tooling(
     generated_geometry: &mut BoardArrayGeneratedGeometry,
-    used_layer_names: &mut HashSet<String>,
+    tooling_hole_layer_name: &str,
     array_width_mm: f64,
     array_height_mm: f64,
 ) {
-    let tooling_hole_layer_name =
-        ensure_tooling_hole_layer_name(generated_geometry, used_layer_names);
     generated_geometry.add_layer_feature(
         GeneratedFeatureScope::Array,
         tooling_hole_layer_name,
