@@ -10,7 +10,7 @@ use std::ops::Range;
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
 use crate::geom::path::{ContourBuf, PathCmd, contour_bbox, validate_cmd_points};
-use crate::geom::style::{FillRule, Paint, StrokeStyle};
+use crate::geom::style::{FillRule, LineCap, Paint, StrokeStyle};
 
 /// A half-open range of `u32` indices into one of a document's flat arenas.
 ///
@@ -352,6 +352,10 @@ impl PathArena {
 
 fn painted_bbox(bbox: BBox, paint: Paint) -> BBox {
     match paint.stroke() {
+        // A square cap on a diagonal end reaches its corner, not its side.
+        Some(stroke) if stroke.cap == LineCap::Square => {
+            bbox.expand(stroke.width * std::f64::consts::FRAC_1_SQRT_2)
+        }
         Some(stroke) => bbox.expand(stroke.width / 2.0),
         None => bbox,
     }

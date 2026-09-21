@@ -16,8 +16,8 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use crate::dialects::ipc::Document;
-use crate::dialects::ipc::document::Layer;
 use crate::dialects::ipc::feature::{Feature, FeatureBucket, FeatureIntent, FeatureKind};
+use crate::geom::dfm::BBoxIndex;
 use crate::geom::path::ContourBuf;
 use crate::geom::region::{self};
 use crate::geom::{
@@ -743,27 +743,37 @@ where
 
 /// Resolve IPC set-void semantics: a feature flagged `clears_previous_in_set`
 /// subtracts its image from earlier positive features of the same set.
+///
+/// Only sets that hold a void are visited, in document order, and each is
+/// painted in the order its features stand in the document.
 pub fn resolve_set_voids<S, L>(
     doc: &mut Document<S, L>,
     resolution: Resolution,
 ) -> Result<(), AccuracyError>
 where
     S: Clone,
-    L: Clone,
 {
     let is_void = |feature: &Feature<S>| feature.flags.clears_previous_in_set;
     materialize_for_cutters(doc, is_void);
-    for layer_index in 0..doc.layers.len() {
-        let layer = doc.layers[layer_index].clone();
-        for mut set in layer_features_by_set(doc, &layer).into_values() {
-            set.sort_by_key(|&index| doc.features[index].source.feature_index);
-            set.retain(|&index| {
+    let mut sets = doc
+        .features
+        .iter()
+        .filter(|feature| is_void(feature))
+        .filter_map(|feature| feature.set)
+        .collect::<Vec<_>>();
+    sets.sort_unstable();
+    sets.dedup();
+    for set in sets {
+        let order = doc.feature_sets[set as usize]
+            .features
+            .range()
+            .filter(|&index| {
                 let feature = &doc.features[index];
                 feature.bucket != FeatureBucket::Cutout
                     && (is_void(feature) || feature.polarity == Polarity::Dark)
-            });
-            resolve_clears(doc, &set, is_void, resolution)?;
-        }
+            })
+            .collect::<Vec<_>>();
+        resolve_clears(doc, &order, is_void, resolution)?;
     }
     Ok(())
 }
@@ -991,20 +1001,6 @@ fn lattice_tiles<S, L>(doc: &Document<S, L>, run: impl Iterator<Item = usize>) -
         .collect()
 }
 
-fn layer_features_by_set<S, L>(
-    doc: &Document<S, L>,
-    layer: &Layer<S, L>,
-) -> HashMap<u32, Vec<usize>> {
-    let mut features_by_set = HashMap::new();
-    for feature_index in layer.features.range() {
-        features_by_set
-            .entry(doc.features[feature_index].source.set_index)
-            .or_insert_with(Vec::new)
-            .push(feature_index);
-    }
-    features_by_set
-}
-
 /// Split a lowered-primitive feature into per-paint-kind runs so each run can
 /// become a homogeneous feature.
 pub fn split_primitive_feature_path_runs<S: Clone, L>(
@@ -1120,9 +1116,16 @@ fn cut_features<S, L>(
     subjects: impl IntoIterator<Item = usize>,
     cutters: &ContourSet,
 ) -> Result<(), AccuracyError> {
+    // Imaging a subject outlines its strokes and regularizes its fills, so a
+    // subject no cutter ring can reach is settled by its bounds alone: slots
+    // in two corners of a board must not image every trace between them.
+    let cutter_bounds = BBoxIndex::new(cutters.ring_bounds.clone());
     for index in subjects {
         let subject = &doc.features[index];
-        if !doc.arena.paths_bbox(subject.paths).intersects(cutters.bbox) {
+        if cutter_bounds
+            .query(doc.arena.paths_bbox(subject.paths))
+            .is_empty()
+        {
             continue;
         }
         let image = feature_painted_region(doc, subject, cutters.resolution)?;
@@ -1209,6 +1212,7 @@ fn feature_set_span_bbox<S, L>(doc: &Document<S, L>, set_index: usize) -> BBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialects::ipc::document::Layer;
     use crate::dialects::ipc::feature::{
         FeatureDomain, FeatureMaterial, FeatureOperation, FeaturePlacementGroup, FeatureRole,
         FeatureSet, PrimitiveRef, SourceRef,
@@ -2001,6 +2005,21 @@ mod tests {
             ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
+        doc.feature_sets.push(crate::dialects::ipc::FeatureSet {
+            layer: 0,
+            source_set_index: 0,
+            source_geometry_ref: None,
+            component_ref: None,
+            geometry_usage: None,
+            net: None,
+            polarity: Polarity::Dark,
+            spec_refs: Span::EMPTY,
+            features: Span::new(0, 2),
+            bbox: BBox::empty(),
+        });
+        for feature in &mut doc.features {
+            feature.set = Some(0);
+        }
 
         compose_for_rendering(&mut doc, Resolution::default()).unwrap();
 
