@@ -2,13 +2,14 @@ use crate::types::*;
 use crate::{GerberError, Result};
 use pcb_ir::geom::Polarity;
 use pcb_ir::geom::region::Ring;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 /// String-backed X2 attribute used by the Gerber writer.
 ///
 /// Attribute names should include the leading X2 dot, for example
 /// `.FileFunction`, `.AperFunction`, `.N`, `.C`, or `.P`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AttributeValue {
     pub name: String,
     pub fields: Vec<String>,
@@ -72,12 +73,55 @@ pub fn unescape_attribute_field(field: &str) -> String {
     String::from_utf16_lossy(&units)
 }
 
-/// One aperture definition plus X2 aperture attributes active while defining it.
+/// The distinct X2 attribute sets of one layer. Apertures and objects name
+/// their set by id, so the handful of sets a layer uses is stored once and
+/// equal sets compare as one integer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttributeSets {
+    sets: Vec<Vec<AttributeValue>>,
+    ids: HashMap<Vec<AttributeValue>, u32>,
+}
+
+impl AttributeSets {
+    /// The set without attributes, present in every layer.
+    pub const EMPTY: u32 = 0;
+
+    pub fn intern(&mut self, set: Vec<AttributeValue>) -> u32 {
+        if let Some(&id) = self.ids.get(&set) {
+            return id;
+        }
+        let id = self.sets.len() as u32;
+        self.sets.push(set.clone());
+        self.ids.insert(set, id);
+        id
+    }
+
+    pub fn get(&self, id: u32) -> Option<&[AttributeValue]> {
+        self.sets.get(id as usize).map(Vec::as_slice)
+    }
+
+    /// Every set, indexed by id.
+    pub fn sets(&self) -> &[Vec<AttributeValue>] {
+        &self.sets
+    }
+}
+
+impl Default for AttributeSets {
+    fn default() -> Self {
+        Self {
+            sets: vec![Vec::new()],
+            ids: HashMap::from([(Vec::new(), Self::EMPTY)]),
+        }
+    }
+}
+
+/// One aperture definition plus the X2 aperture attributes active while
+/// defining it, as a set of [`GerberLayer::attribute_sets`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriterAperture {
     pub code: i32,
     pub template: WriterApertureTemplate,
-    pub attributes: Vec<AttributeValue>,
+    pub attributes: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,30 +151,31 @@ pub enum WriterApertureTemplate {
     Outline { outlines: Vec<Ring> },
 }
 
-/// One ordered graphical object plus X2 object attributes active while emitting it.
+/// One ordered graphical object plus the X2 object attributes active while
+/// emitting it, as a set of [`GerberLayer::attribute_sets`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriterObject {
     pub kind: ObjectKind,
     pub polarity: Polarity,
     pub repeat: Option<StepRepeat>,
     /// Aperture attributes attached directly to a region object.
-    pub aperture_attributes: Vec<AttributeValue>,
-    pub attributes: Vec<AttributeValue>,
+    pub aperture_attributes: u32,
+    pub attributes: u32,
 }
 
 impl WriterObject {
-    pub fn new(kind: ObjectKind, polarity: Polarity, attributes: Vec<AttributeValue>) -> Self {
+    pub fn new(kind: ObjectKind, polarity: Polarity, attributes: u32) -> Self {
         Self {
             kind,
             polarity,
             repeat: None,
-            aperture_attributes: Vec::new(),
+            aperture_attributes: AttributeSets::EMPTY,
             attributes,
         }
     }
 
     pub fn dark(kind: ObjectKind) -> Self {
-        Self::new(kind, Polarity::Dark, Vec::new())
+        Self::new(kind, Polarity::Dark, AttributeSets::EMPTY)
     }
 }
 
@@ -146,6 +191,7 @@ pub struct GerberLayer {
     pub unit: Unit,
     pub coordinate_format: CoordinateFormat,
     pub file_attributes: Vec<AttributeValue>,
+    pub attribute_sets: AttributeSets,
     pub apertures: Vec<WriterAperture>,
     pub objects: Vec<WriterObject>,
 }
@@ -161,6 +207,7 @@ impl Default for GerberLayer {
                 y_decimal_digits: 6,
             },
             file_attributes: Vec::new(),
+            attribute_sets: AttributeSets::default(),
             apertures: Vec::new(),
             objects: Vec::new(),
         }
@@ -188,8 +235,11 @@ struct Writer<'a> {
     /// Where the previous object's draw ended, while no other operation has
     /// intervened.
     stroke_end: Option<(i64, i64)>,
-    current_aperture_attributes: Vec<AttributeValue>,
-    current_object_attributes: Vec<AttributeValue>,
+    /// The aperture and object attribute sets of the last object, whose
+    /// attributes are the file's dictionary at this point.
+    current_attribute_sets: (u32, u32),
+    current_aperture_attributes: &'a [AttributeValue],
+    current_object_attributes: &'a [AttributeValue],
 }
 
 impl<'a> Writer<'a> {
@@ -204,9 +254,16 @@ impl<'a> Writer<'a> {
             current_coordinates: None,
             current_point: None,
             stroke_end: None,
-            current_aperture_attributes: Vec::new(),
-            current_object_attributes: Vec::new(),
+            current_attribute_sets: (AttributeSets::EMPTY, AttributeSets::EMPTY),
+            current_aperture_attributes: &[],
+            current_object_attributes: &[],
         }
+    }
+
+    fn attribute_set(&self, id: u32) -> Result<&'a [AttributeValue]> {
+        self.layer.attribute_sets.get(id).ok_or_else(|| {
+            GerberError::InvalidStructure(format!("attribute set {id} is not in the layer"))
+        })
     }
 
     fn write_layer(&mut self) -> Result<()> {
@@ -226,11 +283,12 @@ impl<'a> Writer<'a> {
         }
 
         for aperture in &self.layer.apertures {
-            for attr in &aperture.attributes {
+            let attributes = self.attribute_set(aperture.attributes)?;
+            for attr in attributes {
                 self.write_attribute("TA", attr)?;
             }
             self.write_aperture(aperture)?;
-            if !aperture.attributes.is_empty() {
+            if !attributes.is_empty() {
                 self.output.push_str("%TD*%\n");
             }
         }
@@ -423,7 +481,7 @@ impl<'a> Writer<'a> {
             && self.current_aperture == Some(aperture)
             && self.current_polarity == object.polarity
             && self.current_repeat == object.repeat
-            && self.current_object_attributes == object.attributes;
+            && self.current_attribute_sets.1 == object.attributes;
         let after = next.is_some_and(|next| {
             let continues = match next.kind {
                 ObjectKind::Draw {
@@ -454,7 +512,7 @@ impl<'a> Writer<'a> {
         }
 
         self.set_polarity(object.polarity);
-        self.set_attributes(&object.aperture_attributes, &object.attributes)?;
+        self.set_attributes(object.aperture_attributes, object.attributes)?;
         self.open_step_repeat(object.repeat)?;
 
         match &object.kind {
@@ -537,16 +595,12 @@ impl<'a> Writer<'a> {
         }
     }
 
-    fn set_attributes(
-        &mut self,
-        aperture_attributes: &[AttributeValue],
-        object_attributes: &[AttributeValue],
-    ) -> Result<()> {
-        if self.current_aperture_attributes == aperture_attributes
-            && self.current_object_attributes == object_attributes
-        {
+    fn set_attributes(&mut self, aperture_set: u32, object_set: u32) -> Result<()> {
+        if self.current_attribute_sets == (aperture_set, object_set) {
             return Ok(());
         }
+        let aperture_attributes = self.attribute_set(aperture_set)?;
+        let object_attributes = self.attribute_set(object_set)?;
         let dropped_aperture = self.current_aperture_attributes.iter().any(|current| {
             !aperture_attributes
                 .iter()
@@ -559,8 +613,8 @@ impl<'a> Writer<'a> {
         });
         if dropped_aperture || dropped_object {
             self.output.push_str("%TD*%\n");
-            self.current_aperture_attributes.clear();
-            self.current_object_attributes.clear();
+            self.current_aperture_attributes = &[];
+            self.current_object_attributes = &[];
         }
         for attribute in aperture_attributes {
             if !self.current_aperture_attributes.contains(attribute) {
@@ -572,8 +626,9 @@ impl<'a> Writer<'a> {
                 self.write_attribute("TO", attribute)?;
             }
         }
-        self.current_aperture_attributes = aperture_attributes.to_vec();
-        self.current_object_attributes = object_attributes.to_vec();
+        self.current_attribute_sets = (aperture_set, object_set);
+        self.current_aperture_attributes = aperture_attributes;
+        self.current_object_attributes = object_attributes;
         Ok(())
     }
 
@@ -854,7 +909,7 @@ mod tests {
                     diameter: 0.1,
                     hole_diameter: None,
                 },
-                attributes: Vec::new(),
+                attributes: AttributeSets::EMPTY,
             }],
             objects: vec![
                 draw(point(0.0, 0.0), point(1.0, 0.0)),
@@ -897,7 +952,7 @@ mod tests {
                         diameter: 0.1,
                         hole_diameter: None,
                     },
-                    attributes: Vec::new(),
+                    attributes: AttributeSets::EMPTY,
                 })
                 .to_vec(),
             objects,
@@ -973,32 +1028,40 @@ mod tests {
 
     #[test]
     fn object_attributes_persist_across_objects() {
-        let flash = |x: f64, attributes: Vec<AttributeValue>| WriterObject {
-            kind: ObjectKind::Flash {
-                at: Point { x, y: 0.0 },
-                aperture: 10,
-            },
-            polarity: Polarity::Dark,
-            repeat: None,
-            aperture_attributes: Vec::new(),
-            attributes,
+        let mut attribute_sets = AttributeSets::default();
+        let mut flash = |x: f64, net: Option<&str>| {
+            WriterObject::new(
+                ObjectKind::Flash {
+                    at: Point { x, y: 0.0 },
+                    aperture: 10,
+                },
+                Polarity::Dark,
+                attribute_sets.intern(
+                    net.map(|net| AttributeValue::new(".N", [net]))
+                        .into_iter()
+                        .collect(),
+                ),
+            )
         };
-        let net = |name: &str| AttributeValue::new(".N", [name]);
+        let objects = vec![
+            flash(0.0, Some("GND")),
+            flash(1.0, Some("GND")),
+            flash(2.0, Some("V3V3")),
+            flash(3.0, None),
+        ];
+        assert_eq!(objects[0].attributes, objects[1].attributes);
+        assert_eq!(objects[3].attributes, AttributeSets::EMPTY);
         let layer = GerberLayer {
+            attribute_sets,
             apertures: vec![WriterAperture {
                 code: 10,
                 template: WriterApertureTemplate::Circle {
                     diameter: 1.0,
                     hole_diameter: None,
                 },
-                attributes: Vec::new(),
+                attributes: AttributeSets::EMPTY,
             }],
-            objects: vec![
-                flash(0.0, vec![net("GND")]),
-                flash(1.0, vec![net("GND")]),
-                flash(2.0, vec![net("V3V3")]),
-                flash(3.0, Vec::new()),
-            ],
+            objects,
             ..GerberLayer::default()
         };
 

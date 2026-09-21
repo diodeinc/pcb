@@ -8,8 +8,8 @@ pub use pcb_intern::{Interner, Symbol};
 use pcb_ir::geom::{AccuracyError, Span};
 pub use types::*;
 pub use write::{
-    AttributeValue, GerberLayer, WriterAperture, WriterApertureTemplate, WriterObject,
-    escape_attribute_field, unescape_attribute_field, write_layer,
+    AttributeSets, AttributeValue, GerberLayer, WriterAperture, WriterApertureTemplate,
+    WriterObject, escape_attribute_field, unescape_attribute_field, write_layer,
 };
 
 use parse::Parser;

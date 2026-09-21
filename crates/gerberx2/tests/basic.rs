@@ -1,6 +1,7 @@
 use gerberx2::{
-    ApertureTemplate, AttributeValue, Contour, ContourSegment, GerberLayer, GerberX2, ObjectKind,
-    PathCommand, Point, StepRepeat, WriterAperture, WriterApertureTemplate, WriterObject,
+    ApertureTemplate, AttributeSets, AttributeValue, Contour, ContourSegment, GerberLayer,
+    GerberX2, ObjectKind, PathCommand, Point, StepRepeat, WriterAperture, WriterApertureTemplate,
+    WriterObject,
 };
 use pcb_ir::geom::Polarity;
 use pcb_ir::geom::{GeometryAccuracy, Resolution};
@@ -34,12 +35,25 @@ fn parses_basic_x2_layer() {
 
 #[test]
 fn writes_idiomatic_x2_layer_from_object_ir() {
+    let mut attribute_sets = AttributeSets::default();
+    let conductor =
+        attribute_sets.intern(vec![AttributeValue::new(".AperFunction", ["Conductor"])]);
+    let smd_pad = attribute_sets.intern(vec![AttributeValue::new(
+        ".AperFunction",
+        ["SMDPad", "CuDef"],
+    )]);
+    let pin = attribute_sets.intern(vec![
+        AttributeValue::new(".N", ["GND"]),
+        AttributeValue::new(".C", ["U1"]),
+        AttributeValue::new(".P", ["U1", "1"]),
+    ]);
     let mut layer = GerberLayer {
         file_attributes: vec![
             AttributeValue::new(".FileFunction", ["Copper", "L1", "Top"]),
             AttributeValue::new(".Part", ["Single"]),
             AttributeValue::new(".SameCoordinates", std::iter::empty::<&str>()),
         ],
+        attribute_sets,
         apertures: vec![
             WriterAperture {
                 code: 10,
@@ -47,7 +61,7 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
                     diameter: 0.2,
                     hole_diameter: None,
                 },
-                attributes: vec![AttributeValue::new(".AperFunction", ["Conductor"])],
+                attributes: conductor,
             },
             WriterAperture {
                 code: 11,
@@ -56,7 +70,7 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
                     height: 1.5,
                     hole_diameter: None,
                 },
-                attributes: vec![AttributeValue::new(".AperFunction", ["SMDPad", "CuDef"])],
+                attributes: smd_pad,
             },
         ],
         ..GerberLayer::default()
@@ -69,12 +83,8 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
             },
             polarity: Polarity::Dark,
             repeat: None,
-            aperture_attributes: Vec::new(),
-            attributes: vec![
-                AttributeValue::new(".N", ["GND"]),
-                AttributeValue::new(".C", ["U1"]),
-                AttributeValue::new(".P", ["U1", "1"]),
-            ],
+            aperture_attributes: AttributeSets::EMPTY,
+            attributes: pin,
         },
         WriterObject::dark(ObjectKind::Draw {
             start: Point { x: 1.0, y: 2.0 },
@@ -109,8 +119,8 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
             },
             polarity: Polarity::Dark,
             repeat: None,
-            aperture_attributes: vec![AttributeValue::new(".AperFunction", ["Conductor"])],
-            attributes: Vec::new(),
+            aperture_attributes: conductor,
+            attributes: AttributeSets::EMPTY,
         },
     ];
 
@@ -195,7 +205,7 @@ fn writes_standard_step_repeat() {
                 diameter: 1.0,
                 hole_diameter: None,
             },
-            attributes: Vec::new(),
+            attributes: AttributeSets::EMPTY,
         }],
         objects: vec![WriterObject {
             kind: ObjectKind::Flash {
@@ -209,8 +219,8 @@ fn writes_standard_step_repeat() {
                 x_step: 10.0,
                 y_step: 20.0,
             }),
-            aperture_attributes: Vec::new(),
-            attributes: Vec::new(),
+            aperture_attributes: AttributeSets::EMPTY,
+            attributes: AttributeSets::EMPTY,
         }],
         ..GerberLayer::default()
     };
@@ -234,28 +244,31 @@ fn coalesces_compatible_step_repeats() {
         x_step: 10.0,
         y_step: 0.0,
     };
-    let repeated_flash = |x: f64, y: f64, attributes: Vec<AttributeValue>| WriterObject {
+    let repeated_flash = |x: f64, y: f64, attributes: u32| WriterObject {
         kind: ObjectKind::Flash {
             at: Point { x, y },
             aperture: 10,
         },
         polarity: Polarity::Dark,
         repeat: Some(repeat),
-        aperture_attributes: Vec::new(),
+        aperture_attributes: AttributeSets::EMPTY,
         attributes,
     };
+    let mut attribute_sets = AttributeSets::default();
+    let ground = attribute_sets.intern(vec![AttributeValue::new(".N", ["GND"])]);
     let layer = GerberLayer {
+        attribute_sets,
         apertures: vec![WriterAperture {
             code: 10,
             template: WriterApertureTemplate::Circle {
                 diameter: 1.0,
                 hole_diameter: None,
             },
-            attributes: Vec::new(),
+            attributes: AttributeSets::EMPTY,
         }],
         objects: vec![
-            repeated_flash(2.0, 3.0, Vec::new()),
-            repeated_flash(2.0, 4.0, vec![AttributeValue::new(".N", ["GND"])]),
+            repeated_flash(2.0, 3.0, AttributeSets::EMPTY),
+            repeated_flash(2.0, 4.0, ground),
             WriterObject::dark(ObjectKind::Flash {
                 at: Point { x: 2.0, y: 4.0 },
                 aperture: 10,
@@ -289,8 +302,8 @@ fn preserves_polarity_order_across_step_repeats() {
         },
         polarity,
         repeat: Some(repeat),
-        aperture_attributes: Vec::new(),
-        attributes: Vec::new(),
+        aperture_attributes: AttributeSets::EMPTY,
+        attributes: AttributeSets::EMPTY,
     };
     let layer = GerberLayer {
         apertures: vec![WriterAperture {
@@ -299,7 +312,7 @@ fn preserves_polarity_order_across_step_repeats() {
                 diameter: 4.0,
                 hole_diameter: None,
             },
-            attributes: Vec::new(),
+            attributes: AttributeSets::EMPTY,
         }],
         objects: vec![
             repeated_flash(0.0, Polarity::Dark),
@@ -343,7 +356,7 @@ fn writes_modal_coordinates_with_explicit_operations() {
                 diameter: 1.0,
                 hole_diameter: None,
             },
-            attributes: Vec::new(),
+            attributes: AttributeSets::EMPTY,
         }],
         objects: vec![
             flash(1.0, 2.0),
@@ -996,7 +1009,7 @@ fn writes_polygon_hole_with_explicit_zero_rotation() {
                 rotation_degrees: None,
                 hole_diameter: Some(0.5),
             },
-            attributes: Vec::new(),
+            attributes: AttributeSets::EMPTY,
         }],
         objects: vec![WriterObject::dark(ObjectKind::Flash {
             at: Point { x: 0.0, y: 0.0 },

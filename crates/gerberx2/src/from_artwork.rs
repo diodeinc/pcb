@@ -9,7 +9,7 @@ use pcb_ir::geom::{AccuracyError, GeometryAccuracy};
 use std::collections::HashMap;
 
 use crate::{
-    AttributeValue, Contour, ContourSegment, GerberError, GerberLayer, ObjectKind,
+    AttributeSets, AttributeValue, Contour, ContourSegment, GerberError, GerberLayer, ObjectKind,
     Point as GerberPoint, Result, WriterAperture, WriterApertureTemplate, WriterObject,
     escape_attribute_field,
 };
@@ -153,6 +153,7 @@ pub fn lower_artwork_layer(
 ) -> Result<GerberLayer> {
     let layer = pcb_ir::dialects::artwork::expand_instances_preserving_grids(layer);
     let mut apertures = ApertureTable::default();
+    let mut attribute_sets = AttributeSets::default();
     let mut plan = GerberPlan::default();
     let layer_attributes = layer
         .layers
@@ -188,6 +189,7 @@ pub fn lower_artwork_layer(
                     placement,
                     polarity,
                     &mut apertures,
+                    &mut attribute_sets,
                     accuracy,
                 )?;
                 for object in &mut objects {
@@ -197,10 +199,11 @@ pub fn lower_artwork_layer(
             }
         }
     }
-    let objects = plan.into_ordered_objects();
+    let objects = plan.into_ordered_objects(&attribute_sets);
 
     Ok(GerberLayer {
         file_attributes: lower_layer_attributes(&layer_attributes),
+        attribute_sets,
         apertures: apertures.apertures,
         objects,
         ..GerberLayer::default()
@@ -287,10 +290,13 @@ fn lower_artwork_object(
     transform: Affine2,
     polarity: Polarity,
     apertures: &mut ApertureTable,
+    attribute_sets: &mut AttributeSets,
     accuracy: GeometryAccuracy,
 ) -> Result<Vec<WriterObject>> {
-    let attributes = lower_object_attributes(&object.meta);
-    let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
+    let attributes = attribute_sets.intern(lower_object_attributes(&object.meta));
+    let aperture_function = attribute_sets.intern(lower_aperture_function(
+        object.meta.aperture_function.as_deref().unwrap_or_default(),
+    ));
     let mut objects = Vec::new();
     match object.geometry {
         ArtworkGeometry::Region { path } => {
@@ -299,8 +305,8 @@ fn lower_artwork_object(
                 path,
                 transform,
                 polarity,
-                &lower_aperture_function(aperture_function),
-                &attributes,
+                aperture_function,
+                attributes,
                 accuracy,
             )?);
         }
@@ -331,8 +337,8 @@ fn lower_artwork_object(
                         &stroke_to_fill(&[contour], style, accuracy)?.unwrap_or_default(),
                         FillRule::NonZero,
                         polarity,
-                        &lower_aperture_function(aperture_function),
-                        &attributes,
+                        aperture_function,
+                        attributes,
                         accuracy,
                     )?);
                     continue;
@@ -355,7 +361,7 @@ fn lower_artwork_object(
                                 WriterObject::new(
                                     lower_stroke_segment(segment, aperture),
                                     polarity,
-                                    attributes.clone(),
+                                    attributes,
                                 )
                             }));
                         }
@@ -365,7 +371,7 @@ fn lower_artwork_object(
                                 aperture,
                             },
                             polarity,
-                            attributes.clone(),
+                            attributes,
                         )),
                     }
                 }
@@ -442,12 +448,14 @@ struct GerberObjectGroup {
 
 /// Emission order for commuting groups: stage first, then object attributes
 /// and aperture so identical writer state runs together. A group's objects
-/// all lower from one artwork object and share attributes.
-fn group_order(group: &GerberObjectGroup) -> (PaintStage, &[AttributeValue], i32) {
+/// all lower from one artwork object and share attributes. `rank` orders the
+/// attribute sets by value, which keeps the output independent of the order
+/// the sets were first seen in.
+fn group_order(group: &GerberObjectGroup, rank: &[u32]) -> (PaintStage, u32, i32) {
     let first = group.objects.first();
     (
         group.stage,
-        first.map_or(&[], |object| object.attributes.as_slice()),
+        first.map_or(0, |object| rank[object.attributes as usize]),
         first.map_or(i32::MAX, |object| match object.kind {
             ObjectKind::Draw { aperture, .. }
             | ObjectKind::Arc { aperture, .. }
@@ -469,7 +477,15 @@ impl GerberPlan {
         });
     }
 
-    fn into_ordered_objects(self) -> Vec<WriterObject> {
+    fn into_ordered_objects(self, attribute_sets: &AttributeSets) -> Vec<WriterObject> {
+        let sets = attribute_sets.sets();
+        let mut by_value = (0..sets.len() as u32).collect::<Vec<_>>();
+        by_value.sort_by_key(|&id| &sets[id as usize]);
+        let mut rank = vec![0; sets.len()];
+        for (position, &id) in by_value.iter().enumerate() {
+            rank[id as usize] = position as u32;
+        }
+
         // Dark paint commutes with dark paint and clear with clear, but not
         // across a polarity change: stage ordering (fills before pads) may
         // only permute groups within each maximal same-polarity run. Within
@@ -488,7 +504,7 @@ impl GerberPlan {
             while end < painted.len() && painted[end].polarity == polarity {
                 end += 1;
             }
-            painted[start..end].sort_by(|a, b| group_order(a).cmp(&group_order(b)));
+            painted[start..end].sort_by_key(|group| group_order(group, &rank));
             start = end;
         }
         painted
@@ -508,7 +524,8 @@ struct ApertureTable {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ApertureKey {
     template: ApertureTemplateKey,
-    function: Vec<String>,
+    /// The attribute set carrying the aperture function.
+    function: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -554,7 +571,7 @@ impl ApertureTable {
         layer: &ArtworkDocument,
         source: u32,
         transform: Affine2,
-        function: &[String],
+        function: u32,
         accuracy: GeometryAccuracy,
     ) -> Result<Option<i32>> {
         let basis = Affine2 {
@@ -570,7 +587,7 @@ impl ApertureTable {
                 basis: [basis.m00, basis.m01, basis.m10, basis.m11]
                     .map(|value| (value * 1e9).round() as i64),
             },
-            function: function.to_vec(),
+            function,
         };
         if let Some(code) = self.by_key.get(&key) {
             return Ok(Some(*code));
@@ -598,7 +615,7 @@ impl ApertureTable {
     fn define(
         &mut self,
         aperture: Aperture,
-        function: &[String],
+        function: u32,
         accuracy: GeometryAccuracy,
     ) -> Result<Option<i32>> {
         let bounds = aperture.bbox();
@@ -689,7 +706,7 @@ impl ApertureTable {
         };
         let key = ApertureKey {
             template: template_key,
-            function: function.to_vec(),
+            function,
         };
         if let Some(code) = self.by_key.get(&key) {
             return Ok(Some(*code));
@@ -699,7 +716,7 @@ impl ApertureTable {
         self.apertures.push(WriterAperture {
             code,
             template,
-            attributes: lower_aperture_function(function),
+            attributes: function,
         });
         Ok(Some(code))
     }
@@ -733,8 +750,8 @@ fn lower_region_objects(
     path_index: u32,
     transform: Affine2,
     polarity: Polarity,
-    aperture_attributes: &[AttributeValue],
-    attributes: &[AttributeValue],
+    aperture_attributes: u32,
+    attributes: u32,
     accuracy: GeometryAccuracy,
 ) -> Result<Vec<WriterObject>> {
     let artwork_path = &layer.arena.paths[path_index as usize];
@@ -758,20 +775,20 @@ fn region_objects(
     contours: &[ContourBuf],
     fill_rule: FillRule,
     polarity: Polarity,
-    aperture_attributes: &[AttributeValue],
-    attributes: &[AttributeValue],
+    aperture_attributes: u32,
+    attributes: u32,
     accuracy: GeometryAccuracy,
 ) -> Result<Vec<WriterObject>> {
     Ok(prepare_on_grid(contours, fill_rule, accuracy)?
         .iter()
         .map(|ring| WriterObject {
-            aperture_attributes: aperture_attributes.to_vec(),
+            aperture_attributes,
             ..WriterObject::new(
                 ObjectKind::Region {
                     contours: vec![lower_ring(ring)],
                 },
                 polarity,
-                attributes.to_vec(),
+                attributes,
             )
         })
         .collect())
@@ -990,7 +1007,15 @@ mod tests {
             meta: ObjectAttributes::default(),
         };
         let lower = |object: &ArtworkObject<ObjectAttributes>, basis, table: &mut ApertureTable| {
-            lower_artwork_object(&artwork, object, basis, Polarity::Dark, table, accuracy)
+            lower_artwork_object(
+                &artwork,
+                object,
+                basis,
+                Polarity::Dark,
+                table,
+                &mut AttributeSets::default(),
+                accuracy,
+            )
         };
         let first = lower(&flash, Affine2::IDENTITY, &mut table).unwrap();
         let ObjectKind::Flash { aperture: code, .. } = first[0].kind else {
@@ -1040,7 +1065,7 @@ mod tests {
                 aperture: invalid,
                 basis: [1_000_000_000, 0, 0, 1_000_000_000],
             },
-            function: Vec::new(),
+            function: AttributeSets::EMPTY,
         }));
         // A new export/table must check its own, finer accuracy budget.
         flash.geometry = ArtworkGeometry::Flash {
@@ -1054,6 +1079,7 @@ mod tests {
                 Affine2::IDENTITY,
                 Polarity::Dark,
                 &mut ApertureTable::default(),
+                &mut AttributeSets::default(),
                 GeometryAccuracy::new(0.0001).unwrap(),
             )
             .is_err()
@@ -2486,27 +2512,21 @@ mod tests {
                 ) && object.polarity == Polarity::Dark
             })
             .expect("base pour should emit a dark region");
+        let on_trace = |object: &WriterObject| {
+            gerber.attribute_sets.get(object.attributes).unwrap()
+                == [AttributeValue::new(".N", ["TRACE"])]
+        };
         let trace_index = gerber
             .objects
             .iter()
-            .position(|object| {
-                object
-                    .attributes
-                    .iter()
-                    .any(|attr| attr.name == ".N" && attr.fields == ["TRACE"])
-            })
+            .position(on_trace)
             .expect("dark-only multi-contour trace should keep its net attribute");
 
         assert!(pour_index < trace_index);
         assert!(
             gerber.objects[trace_index..]
                 .iter()
-                .filter(|object| {
-                    object
-                        .attributes
-                        .iter()
-                        .any(|attr| attr.name == ".N" && attr.fields == ["TRACE"])
-                })
+                .filter(|object| on_trace(object))
                 .all(|object| object.polarity == Polarity::Dark)
         );
         assert!(

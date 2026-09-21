@@ -20,7 +20,7 @@ fn layer(arc: Arc, region: bool) -> GerberLayer {
                 diameter: 0.1,
                 hole_diameter: None,
             },
-            attributes: vec![],
+            attributes: gerberx2::AttributeSets::EMPTY,
         }],
         objects: vec![WriterObject::dark(if region {
             let mut segments = vec![ContourSegment::Arc {
