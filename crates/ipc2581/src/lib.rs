@@ -1,5 +1,6 @@
 // Pure IPC-2581 parser modules
 mod checksum;
+mod dom;
 pub mod edit;
 mod parse;
 pub mod types;
@@ -116,18 +117,15 @@ impl Ipc2581 {
 
     /// Parse IPC-2581 from XML string
     pub fn parse(xml: &str) -> Result<Self> {
-        // Parse XML with Uppsala's arena-backed DOM.
-        let doc = checksum::parse_document(xml)?;
-
-        // Validate namespace
-        let root = doc
-            .document_element()
-            .ok_or(Ipc2581Error::MissingElement("IPC-2581"))?;
-        let root_name = doc.element(root).expect("root is an element").name.clone();
-        if root_name.namespace_uri.as_deref() != Some("http://webstds.ipc.org/2581") {
+        let (xml, digest) = checksum::split_trailer(xml);
+        let doc = dom::Dom::parse(xml)?;
+        if let Some(digest) = digest {
+            checksum::verify(&xml[doc.root_range()], digest)?;
+        }
+        if doc.root_namespace() != Some("http://webstds.ipc.org/2581") {
             return Err(Ipc2581Error::InvalidStructure(format!(
                 "Expected IPC-2581 namespace, got {:?}",
-                root_name.namespace_uri
+                doc.root_namespace()
             )));
         }
 

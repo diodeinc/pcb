@@ -1,6 +1,6 @@
+use crate::dom::{Dom, Node};
 use crate::types::*;
 use crate::{Interner, Ipc2581Error, Result, Symbol};
-use uppsala::{Document, NodeId as Node};
 
 /// The `LineDescGroup` and `FillDescGroup` children of a shape.
 #[derive(Default)]
@@ -37,7 +37,7 @@ pub struct Parser<'a> {
     ecad_units: Option<Units>,
     /// Specs from CadHeader (set when parsing CadHeader, used by StackupLayer parsing)
     specs: std::collections::HashMap<Symbol, ecad::Spec>,
-    doc: Option<&'a Document<'a>>,
+    doc: Option<&'a Dom<'a>>,
 }
 
 impl<'a> Parser<'a> {
@@ -50,29 +50,22 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn doc(&self) -> &'a Document<'a> {
+    fn doc(&self) -> &'a Dom<'a> {
         self.doc.expect("parser document is set while parsing")
     }
 
     fn name<'n>(&self, node: &'n Node) -> &'a str {
-        self.doc()
-            .element(*node)
-            .expect("expected XML element")
-            .name
-            .local_name
-            .as_ref()
+        self.doc().name(*node)
     }
 
     fn attr<'n>(&self, node: &'n Node, attr: &str) -> Option<&'a str> {
-        self.doc().get_attribute(*node, attr)
+        self.doc().attr(*node, attr)
     }
 
     /// Child elements in document order. The iterator borrows the document,
     /// not the parser, so its items can be parsed as they come.
     fn element_children(&self, node: &Node) -> impl Iterator<Item = Node> + use<'a> {
-        let doc = self.doc();
-        doc.children_iter(*node)
-            .filter(move |child| doc.element(*child).is_some())
+        self.doc().children(*node)
     }
 
     fn children_named(
@@ -81,17 +74,13 @@ impl<'a> Parser<'a> {
         name: &'static str,
     ) -> impl Iterator<Item = Node> + use<'a> {
         let doc = self.doc();
-        self.element_children(node).filter(move |child| {
-            doc.element(*child)
-                .is_some_and(|element| element.name.local_name == name)
-        })
+        doc.children(*node)
+            .filter(move |child| doc.name(*child) == name)
     }
 
-    pub fn parse_document(&mut self, doc: &'a Document<'a>) -> Result<ParsedIpc2581> {
+    pub fn parse_document(&mut self, doc: &'a Dom<'a>) -> Result<ParsedIpc2581> {
         self.doc = Some(doc);
-        let root = doc
-            .document_element()
-            .ok_or(Ipc2581Error::MissingElement("IPC-2581"))?;
+        let root = doc.root();
 
         // Verify root element
         if self.name(&root) != "IPC-2581" {
@@ -3136,22 +3125,13 @@ fn parse_f64(value: &str, attr: &str, sign: Sign, units: Option<Units>) -> Resul
         .ok_or_else(|| invalid("is not finite"))
 }
 
-fn has_z_axis_dim(doc: &Document, node: &Node) -> bool {
-    doc.children_iter(*node)
-        .filter(|child| doc.element(*child).is_some())
-        .any(|child| {
-            let name = doc.element(child).unwrap().name.local_name.as_ref();
-            matches!(name, "MaterialCut" | "MaterialLeft")
-                || (matches!(name, "Z_AxisDim" | "ZAxisDim")
-                    && doc
-                        .children_iter(child)
-                        .filter(|grandchild| doc.element(*grandchild).is_some())
-                        .any(|grandchild| {
-                            let grandchild_name =
-                                doc.element(grandchild).unwrap().name.local_name.as_ref();
-                            matches!(grandchild_name, "MaterialCut" | "MaterialLeft")
-                        }))
-        })
+fn has_z_axis_dim(doc: &Dom, node: &Node) -> bool {
+    let cuts = |node: Node| matches!(doc.name(node), "MaterialCut" | "MaterialLeft");
+    doc.children(*node).any(|child| {
+        cuts(child)
+            || (matches!(doc.name(child), "Z_AxisDim" | "ZAxisDim")
+                && doc.children(child).any(cuts))
+    })
 }
 
 fn parse_optional_bool(value: &str) -> Option<bool> {
@@ -3206,24 +3186,22 @@ mod tests {
 
     #[test]
     fn detects_slot_cavity_z_axis_substitution_children() {
-        let doc = uppsala::parse(
+        let doc = Dom::parse(
             r#"<SlotCavity><Location x="0" y="0"/><MaterialCut depth="0.1"/></SlotCavity>"#,
         )
         .unwrap();
-        let root = doc.document_element().unwrap();
 
-        assert!(has_z_axis_dim(&doc, &root));
+        assert!(has_z_axis_dim(&doc, &doc.root()));
     }
 
     #[test]
     fn detects_wrapped_slot_cavity_z_axis_dimensions() {
-        let doc = uppsala::parse(
+        let doc = Dom::parse(
             r#"<SlotCavity><Location x="0" y="0"/><ZAxisDim><MaterialLeft thickness="0.1"/></ZAxisDim></SlotCavity>"#,
         )
         .unwrap();
-        let root = doc.document_element().unwrap();
 
-        assert!(has_z_axis_dim(&doc, &root));
+        assert!(has_z_axis_dim(&doc, &doc.root()));
     }
 
     #[test]
