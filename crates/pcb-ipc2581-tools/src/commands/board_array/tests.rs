@@ -2708,3 +2708,31 @@ fn generated_drill_layer_spans_the_outer_copper_layers() {
         );
     }
 }
+
+#[test]
+fn tabs_land_on_the_narrowest_rail_the_array_leaves() {
+    let gap = placement::PRESET.routing_gap_mm;
+    let options = |columns, rows, margin, rail| BoardArrayCreateOptions {
+        columns,
+        rows,
+        board_margin_mm: BoardMarginMm::all(margin),
+        edge_rail_mm: BoardMarginMm::all(rail),
+    };
+    // One board: only the strip to the array edge, less its one slot.
+    assert!(close(narrowest_rail_mm(&options(1, 1, 5.0, 5.0), gap), 8.6));
+    // Between boards a slot is routed on both sides of the shared strip.
+    assert!(close(narrowest_rail_mm(&options(2, 1, 5.0, 5.0), gap), 7.2));
+    assert!(close(
+        narrowest_rail_mm(&options(1, 2, 2.4, 20.0), gap),
+        2.0
+    ));
+    // A short side counts even where nothing is repeated.
+    let lopsided = BoardArrayCreateOptions {
+        board_margin_mm: BoardMarginMm {
+            left: 2.4,
+            ..BoardMarginMm::all(10.0)
+        },
+        ..options(1, 1, 10.0, 5.0)
+    };
+    assert!(close(narrowest_rail_mm(&lopsided, gap), 6.0));
+}

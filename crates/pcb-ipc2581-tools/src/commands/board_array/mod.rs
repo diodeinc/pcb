@@ -648,6 +648,39 @@ fn minimum_single_board_auto_options(board_margin: BoardMarginMm) -> BoardArrayC
     }
 }
 
+/// The tightest array automatic panelization produces: the smallest margin
+/// around every board and the narrowest edge rails.
+fn minimum_auto_options(columns: u32, rows: u32) -> BoardArrayCreateOptions {
+    BoardArrayCreateOptions {
+        columns,
+        rows,
+        ..minimum_single_board_auto_options(BoardMarginMm::all(MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM))
+    }
+}
+
+/// The narrowest rail a tab of this array lands on once a slot of
+/// `routing_gap_mm` is routed around every board: the strip between two
+/// boards, or between an outer board and the array edge.
+fn narrowest_rail_mm(options: &BoardArrayCreateOptions, routing_gap_mm: f64) -> f64 {
+    let (margin, rail) = (options.board_margin_mm, options.edge_rail_mm);
+    let outer = [
+        rail.top + margin.top,
+        rail.right + margin.right,
+        rail.bottom + margin.bottom,
+        rail.left + margin.left,
+    ]
+    .map(|width| width - routing_gap_mm);
+    let between = [
+        (options.columns > 1).then(|| margin.horizontal_gap()),
+        (options.rows > 1).then(|| margin.vertical_gap()),
+    ]
+    .map(|gap| gap.map(|gap| gap - 2.0 * routing_gap_mm));
+    outer
+        .into_iter()
+        .chain(between.into_iter().flatten())
+        .fold(f64::INFINITY, f64::min)
+}
+
 fn auto_board_margin(
     ipc: &Ipc2581,
     board_bbox: BBox,
@@ -887,7 +920,12 @@ fn build_board_array_spec(
         Separation::VScore => (Vec::new(), 0),
         Separation::MouseBite => {
             let preset = &placement::PRESET;
-            let placement = placement::place(ipc, preset, resolution)?;
+            let placement = placement::place(
+                ipc,
+                preset,
+                narrowest_rail_mm(options, preset.routing_gap_mm),
+                resolution,
+            )?;
             let stock = array_stock(array_width, array_height, resolution)?;
             let offsets = (0..rows)
                 .flat_map(|row| {

@@ -25,20 +25,19 @@ pub struct Physics {
     /// reduced by perforation.
     pub neck_width_mm: f64,
     pub neck_perforation_factor: f64,
-    /// The rail a tab lands on: a strip of the board's thickness, held where
-    /// cross rails meet it.
-    pub rail_width_mm: f64,
     /// Point load that may act anywhere on the board, N.
     pub load_n: f64,
     /// Allowed deflection under that load, mm.
     pub deflection_limit_mm: f64,
 }
 
-/// Stiffnesses derived for one board's thickness, span and slot.
+/// Stiffnesses derived for one board's thickness, slot and rails.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Model {
     pub thickness_mm: f64,
-    /// Distance between the cross rails holding the rail a tab lands on.
+    /// The rail a tab lands on: a strip of the board's thickness, this wide
+    /// and held where cross rails meet it, this far apart.
+    pub rail_width_mm: f64,
     pub rail_span_mm: f64,
     /// Plate flexural rigidity D = E t³ / 12(1 − ν²), N·mm.
     pub rigidity_n_mm: f64,
@@ -66,6 +65,7 @@ const BENDING_SPREAD: f64 = 6.0;
 impl Model {
     pub fn new(
         thickness_mm: f64,
+        rail_width_mm: f64,
         rail_span_mm: f64,
         neck_length_mm: f64,
         physics: Physics,
@@ -77,7 +77,6 @@ impl Model {
             poisson_ratio: nu,
             neck_width_mm: w,
             neck_perforation_factor: f,
-            rail_width_mm,
             load_n,
             deflection_limit_mm,
         } = physics;
@@ -95,6 +94,7 @@ impl Model {
         let rigidity_n_mm = e * t.powi(3) / (12.0 * (1.0 - nu * nu));
         Self {
             thickness_mm,
+            rail_width_mm,
             rail_span_mm,
             rigidity_n_mm,
             tab_transverse_n_per_mm: neck_transverse,
@@ -529,13 +529,25 @@ mod tests {
         poisson_ratio: 0.13,
         neck_width_mm: 2.0,
         neck_perforation_factor: 0.5,
-        rail_width_mm: 6.0,
         load_n: 5.0,
         deflection_limit_mm: 0.25,
     };
 
     fn model(thickness_mm: f64) -> Model {
-        Model::new(thickness_mm, 60.0, 2.0, FR4, 10.0)
+        Model::new(thickness_mm, 6.0, 60.0, 2.0, FR4, 10.0)
+    }
+
+    #[test]
+    fn a_narrow_rail_softens_the_hinge_a_tab_makes() {
+        // The rail twists under a tab's bending moment, and its torsion
+        // constant falls faster than its width: the rail two 2.4 mm margins
+        // leave is about a quarter as stiff a hinge as a 6 mm one.
+        let wide = model(1.6);
+        let narrow = Model::new(1.6, 2.0, 60.0, 2.0, FR4, 10.0);
+        let ratio = narrow.tab_bending_n_mm / wide.tab_bending_n_mm;
+        assert!((0.15..0.3).contains(&ratio), "{ratio}");
+        assert!(narrow.tab_twist_n_mm < wide.tab_twist_n_mm);
+        assert_eq!(narrow.tab_transverse_n_per_mm, wide.tab_transverse_n_per_mm);
     }
 
     /// Rectangle `w` by `h` at the origin, sampled every mm along the outline,

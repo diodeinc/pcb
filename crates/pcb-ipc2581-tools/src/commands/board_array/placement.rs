@@ -74,9 +74,6 @@ pub const PRESET: Preset = Preset {
         // Perforation halves the neck's section.
         neck_width_mm: SparkFunShallow::NECK_WIDTH_MM,
         neck_perforation_factor: 0.5,
-        // Below what two default 5 mm board margins leave once a slot is
-        // routed on each side.
-        rail_width_mm: 6.0,
         // A finger or placement nozzle anywhere on the board, and the sag that
         // still leaves the surface flat enough for placement.
         load_n: 5.0,
@@ -105,8 +102,14 @@ pub(super) struct Placement {
     pub selection: select::Selection,
 }
 
-/// Place tabs on the canonical board of `ipc`.
-pub(super) fn place(ipc: &Ipc2581, preset: &Preset, resolution: Resolution) -> Result<Placement> {
+/// Place tabs on the canonical board of `ipc`, landing on rails at least
+/// `rail_width_mm` wide.
+pub(super) fn place(
+    ipc: &Ipc2581,
+    preset: &Preset,
+    rail_width_mm: f64,
+    resolution: Resolution,
+) -> Result<Placement> {
     let prepared = eligibility::prepare(
         ipc,
         preset.footprint(),
@@ -127,6 +130,7 @@ pub(super) fn place(ipc: &Ipc2581, preset: &Preset, resolution: Resolution) -> R
     // held that far apart at worst.
     let model = Model::new(
         prepared.thickness_mm.unwrap_or(preset.default_thickness_mm),
+        rail_width_mm,
         bbox.width().max(bbox.height()),
         preset.routing_gap_mm,
         preset.physics,
@@ -146,10 +150,14 @@ pub(super) fn place(ipc: &Ipc2581, preset: &Preset, resolution: Resolution) -> R
     })
 }
 
-/// Analyze one canonical board: eligibility plus tab placement, as JSON.
+/// Analyze one canonical board: eligibility plus tab placement, as JSON. No
+/// array exists yet, so tabs land on the rails the smallest automatic array
+/// would leave.
 pub fn analyze(xml: &str, preset: &Preset, resolution: Resolution) -> Result<Value> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let placement = place(&ipc, preset, resolution)?;
+    let rail_width_mm =
+        super::narrowest_rail_mm(&super::minimum_auto_options(2, 2), preset.routing_gap_mm);
+    let placement = place(&ipc, preset, rail_width_mm, resolution)?;
     let Placement {
         prepared,
         sites,
