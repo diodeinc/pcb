@@ -23,6 +23,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Fix batched point containment for points whose heights differ by rounding noise.
 - Image zero-length round and square strokes as dots in composed layer images, matching Gerber output.
 - Report IPC-2581 import warnings for features that had to be dropped.
+- Stop painting slots and routed cutouts back as copper in exported Gerber copper layers.
 
 ### Changed
 

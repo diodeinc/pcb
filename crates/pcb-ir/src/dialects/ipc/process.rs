@@ -4,10 +4,10 @@
 //! standard pipelines cover the common targets:
 //!
 //! - [`normalize_preserving`]: structure-preserving cleanup only.
-//! - [`normalize_for_artwork`]: additionally resolves IPC paint semantics
-//!   (set voids, layer cutouts) for artwork export.
-//! - [`normalize_for_positive_artwork`]: additionally resolves negative
-//!   polarity, for targets whose consumers pay for every clear object.
+//! - [`normalize_for_artwork`]: additionally resolves IPC set voids, which
+//!   ordered artwork cannot express.
+//! - [`normalize_for_positive_artwork`]: additionally resolves layer cutouts
+//!   and negative polarity, for targets that image only dark objects.
 //! - [`compose_for_rendering`]: destructive image composition (outlines
 //!   strokes, unions fills) for final rendering targets.
 
@@ -42,25 +42,23 @@ where
 
 /// Resolve IPC-specific paint semantics while preserving native artwork shapes.
 ///
-/// IPC feature-set voids and layer cutouts are semantic operators on source
-/// features, not generic ordered artwork objects. Resolve those before
-/// lowering to source-independent artwork, but do not outline strokes or
-/// flatten unrelated positive features. Negative-polarity features stay
-/// native: ordered artwork carries per-object polarity with exactly IPC's
-/// sequential paint semantics, so resolving them here would only flatten
-/// repeated clear instances into unshareable boundary geometry.
+/// A set void clears only the earlier features of its own set, which no
+/// ordered artwork object can say, so it is resolved here. Everything else
+/// stays native: ordered artwork carries per-object polarity with exactly
+/// IPC's sequential paint semantics and stages cutouts after all material,
+/// so resolving either here would only flatten shared pads and repeated
+/// clear instances into unshareable boundary geometry.
 pub fn normalize_for_artwork<S: Copy + Eq + Hash, L: Clone>(
     doc: &mut Document<S, L>,
     resolution: Resolution,
 ) -> Result<(), AccuracyError> {
     normalize_preserving(doc);
     resolve_set_voids(doc, resolution)?;
-    subtract_layer_cutouts(doc, resolution)?;
     finish_artwork_normalization(doc, resolution)
 }
 
-/// [`normalize_for_artwork`] that also resolves negative polarity, so the
-/// artwork is dark-only.
+/// [`normalize_for_artwork`] that also resolves layer cutouts and negative
+/// polarity, so the artwork is dark-only.
 ///
 /// CAM importers composite every clear object against all copper beneath it,
 /// so a dense clear lattice that is compact on disk is the most expensive
@@ -789,7 +787,10 @@ where
     Ok(())
 }
 
-/// Subtract cutout features from every other feature on their layer.
+/// Subtract cutout features from every other feature on their layer. Once
+/// cut, the material carries the whole effect, so the cutouts leave the
+/// layer; on a layer of nothing but cutouts, such as a drill or rout layer,
+/// they are the image and stay.
 pub fn subtract_layer_cutouts<S, L>(
     doc: &mut Document<S, L>,
     resolution: Resolution,
@@ -805,8 +806,14 @@ where
             .features
             .range()
             .partition(|&index| is_cutout(&doc.features[index]));
-        let cutters = painted_union(doc, cutouts, resolution)?;
+        if subjects.is_empty() {
+            continue;
+        }
+        let cutters = painted_union(doc, cutouts.iter().copied(), resolution)?;
         cut_features(doc, subjects, &cutters)?;
+        for index in cutouts {
+            clear_feature_paths(doc, index);
+        }
     }
     Ok(())
 }
@@ -1599,11 +1606,61 @@ mod tests {
         }
         doc.layers.push(test_layer(Span::new(0, 3)));
 
-        normalize_for_artwork(&mut doc, Resolution::default()).unwrap();
+        normalize_for_positive_artwork(&mut doc, Resolution::default()).unwrap();
 
         let trace = feature_painted_region(&doc, &doc.features[0], Resolution::default());
         assert!((trace.unwrap().area() - 5.0).abs() < 1e-6);
         assert_eq!(doc.features[1].primitive_ref, Some(PrimitiveRef::User(7)));
+        // The material now carries the cut, so nothing is left to paint it
+        // back as a dark object.
+        assert!(doc.features[2].paths.is_empty());
+    }
+
+    #[test]
+    fn cutouts_stay_native_for_artwork_and_are_the_image_of_a_cutout_only_layer() {
+        let fill = Paint::Fill {
+            rule: FillRule::NonZero,
+        };
+        let mut cutout = Feature::new(FeatureKind::Slot, Polarity::Dark);
+        cutout.bucket = FeatureBucket::Cutout;
+
+        // Beside material, ordered artwork stages the cutout after it, so the
+        // pad keeps its native shape and composition still removes the slot.
+        let mut doc = TestDoc::new();
+        doc.push_path(fill, [rect_contour(0.0, 0.0, 4.0, 4.0)]);
+        doc.push_path(fill, [rect_contour(1.0, 1.0, 2.0, 2.0)]);
+        let mut pad = Feature::new(FeatureKind::Primitive, Polarity::Dark);
+        pad.primitive_ref = Some(PrimitiveRef::User(7));
+        for (path, feature) in [pad, cutout.clone()].into_iter().enumerate() {
+            doc.features.push(Feature {
+                paths: Span::new(path as u32, 1),
+                ..feature
+            });
+        }
+        doc.layers.push(test_layer(Span::new(0, 2)));
+        normalize_for_artwork(&mut doc, Resolution::default()).unwrap();
+        assert_eq!(doc.features[0].primitive_ref, Some(PrimitiveRef::User(7)));
+        let image = doc
+            .clone()
+            .into_layer_image(
+                0,
+                crate::dialects::LayerRole::Copper,
+                crate::dialects::Side::Top,
+                Resolution::default(),
+            )
+            .unwrap();
+        assert!((image.area() - 15.0).abs() < 1e-9);
+
+        // Alone on its layer, a cutout is what the layer images.
+        let mut drill = TestDoc::new();
+        drill.push_path(fill, [rect_contour(1.0, 1.0, 2.0, 2.0)]);
+        drill.features.push(Feature {
+            paths: Span::new(0, 1),
+            ..cutout
+        });
+        drill.layers.push(test_layer(Span::new(0, 1)));
+        normalize_for_positive_artwork(&mut drill, Resolution::default()).unwrap();
+        assert_eq!(drill.features[0].paths.len(), 1);
     }
 
     #[test]
@@ -2058,7 +2115,7 @@ mod tests {
         let resolution = Resolution::default()
             .with_accuracy(crate::geom::GeometryAccuracy::new(0.001).unwrap())
             .strict();
-        normalize_for_artwork(&mut doc, resolution).unwrap();
+        normalize_for_positive_artwork(&mut doc, resolution).unwrap();
         let image = feature_filled_region(&doc, &doc.features[0], resolution).unwrap();
         assert!(!image.is_empty());
         assert!(image.uncertainty_mm <= 0.001);
