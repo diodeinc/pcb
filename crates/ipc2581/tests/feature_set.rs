@@ -224,3 +224,23 @@ fn slot_cavity_and_pad_take_any_inline_standard_primitive() {
         (None, None)
     );
 }
+
+#[test]
+fn feature_line_width_is_absent_without_an_inline_line_desc() {
+    let doc = Ipc2581::parse(&fixture(
+        r#"<Set>
+             <Features><Line startX="0" startY="0" endX="1" endY="0"><LineDescRef id="thin"/></Line></Features>
+             <Features><Line startX="0" startY="0" endX="1" endY="0"><LineDesc lineEnd="SQUARE" lineWidth="0.2"/></Line></Features>
+           </Set>"#,
+    ))
+    .unwrap();
+    let [SetFeature::Line(by_ref), SetFeature::Line(inline)] = set_features(&doc) else {
+        panic!("expected two lines");
+    };
+
+    assert_eq!(by_ref.line_desc_ref.map(|id| doc.resolve(id)), Some("thin"));
+    assert_eq!((by_ref.line_width, by_ref.line_end), (None, None));
+    assert_eq!(inline.line_desc_ref, None);
+    assert_eq!(inline.line_width, Some(0.2));
+    assert_eq!(inline.line_end, Some(ipc2581::LineEnd::Square));
+}

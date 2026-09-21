@@ -42,7 +42,7 @@ pub(super) fn vcut_line_feature(line: VcutLine) -> SetFeature {
         end_x: line.end_x_mm,
         end_y: line.end_y_mm,
         line_desc_ref: None,
-        line_width: VCUT_MARKER_STROKE_MM,
+        line_width: Some(VCUT_MARKER_STROKE_MM),
         line_end: Some(LineEnd::Round),
         line_property: Some(LineProperty::Solid),
     })
@@ -270,7 +270,7 @@ pub(super) fn add_vcut_annotation_line(
         end_x: end.x,
         end_y: end.y,
         line_desc_ref: None,
-        line_width,
+        line_width: Some(line_width),
         line_end: Some(LineEnd::Round),
         line_property: Some(LineProperty::Solid),
     }));

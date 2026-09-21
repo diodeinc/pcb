@@ -124,11 +124,11 @@ pub fn circle(writer: &mut XmlWriter, units: Units, diameter_mm: f64) {
 /// Write a `Line` feature with an inline `LineDesc`. Lines that reference a
 /// dictionary `LineDescRef` cannot be written as standalone fragments.
 pub fn line(writer: &mut XmlWriter, units: Units, line: &Line) -> Result<()> {
-    if line.line_desc_ref.is_some() {
+    let (None, Some(line_width)) = (line.line_desc_ref, line.line_width) else {
         return Err(Ipc2581Error::InvalidStructure(
-            "Line with a LineDescRef cannot be written standalone; inline LineDesc required".into(),
+            "Line without an inline LineDesc cannot be written standalone".into(),
         ));
-    }
+    };
 
     writer.start_element(
         "Line",
@@ -140,7 +140,7 @@ pub fn line(writer: &mut XmlWriter, units: Units, line: &Line) -> Result<()> {
         ],
     );
 
-    let line_width = fmt_units(line.line_width, units);
+    let line_width = fmt_units(line_width, units);
     let mut attrs = vec![("lineWidth", line_width.as_str())];
     if let Some(line_end) = line.line_end {
         attrs.push(("lineEnd", line_end_attr(line_end)));
@@ -335,7 +335,7 @@ mod tests {
             end_x: 1.0,
             end_y: 0.0,
             line_desc_ref: Some(interner.intern("ref")),
-            line_width: 0.1,
+            line_width: Some(0.1),
             line_end: None,
             line_property: None,
         };

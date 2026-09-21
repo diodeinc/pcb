@@ -2873,7 +2873,7 @@ fn extract_arc(
 fn resolve_feature_line_style(
     context: &ExtractContext<'_>,
     line_desc_ref: Option<Symbol>,
-    inline_width: f64,
+    inline_width: Option<f64>,
     inline_end: Option<LineEnd>,
     inline_property: Option<LineProperty>,
 ) -> (f64, LineCap, LinePattern) {
@@ -2881,7 +2881,8 @@ fn resolve_feature_line_style(
         line_desc_ref.and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
     let width = line_desc
         .map(|desc| desc.line_width)
-        .unwrap_or(inline_width);
+        .or(inline_width)
+        .unwrap_or(0.25);
     let line_cap = line_desc
         .map(|desc| map_line_cap(desc.line_end))
         .or_else(|| inline_end.map(map_line_cap))
@@ -4382,7 +4383,7 @@ mod tests {
                 clockwise: false,
             })],
             line_desc_ref: None,
-            line_width: 0.2,
+            line_width: Some(0.2),
             line_end: Some(LineEnd::Round),
             line_property: None,
         };

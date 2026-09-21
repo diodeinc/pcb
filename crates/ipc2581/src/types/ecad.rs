@@ -634,7 +634,9 @@ pub struct Line {
     pub end_x: f64,
     pub end_y: f64,
     pub line_desc_ref: Option<Symbol>,
-    pub line_width: f64,
+    /// Width of the inline `LineDesc`; `None` when the style comes from
+    /// `line_desc_ref` or is missing.
+    pub line_width: Option<f64>,
     pub line_end: Option<super::LineEnd>,
     pub line_property: Option<super::LineProperty>,
 }
@@ -645,7 +647,9 @@ pub struct FeaturePolyline {
     pub begin: super::Point,
     pub steps: Vec<super::PolyStep>,
     pub line_desc_ref: Option<Symbol>,
-    pub line_width: f64,
+    /// Width of the inline `LineDesc`; `None` when the style comes from
+    /// `line_desc_ref` or is missing.
+    pub line_width: Option<f64>,
     pub line_end: Option<super::LineEnd>,
     pub line_property: Option<super::LineProperty>,
 }
@@ -658,7 +662,9 @@ pub struct FeatureArc {
     pub center: super::Point,
     pub clockwise: bool,
     pub line_desc_ref: Option<Symbol>,
-    pub line_width: f64,
+    /// Width of the inline `LineDesc`; `None` when the style comes from
+    /// `line_desc_ref` or is missing.
+    pub line_width: Option<f64>,
     pub line_end: Option<super::LineEnd>,
     pub line_property: Option<super::LineProperty>,
 }

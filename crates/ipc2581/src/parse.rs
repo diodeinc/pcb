@@ -2911,7 +2911,7 @@ impl<'a> Parser<'a> {
         };
 
         let line_desc_ref = stroked.line_desc_ref;
-        let line_width = stroked.line_desc.map_or(0.25, |desc| desc.line_width);
+        let line_width = stroked.line_desc.map(|desc| desc.line_width);
         let line_end = stroked.line_desc.map(|desc| desc.line_end);
         let line_property = stroked.line_desc.and_then(|desc| desc.line_property);
         let moved = |point: Point| Point {
