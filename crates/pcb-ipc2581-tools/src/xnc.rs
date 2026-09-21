@@ -237,6 +237,8 @@ impl XncBuilder {
             | XncObject::Route { tool, .. }) = object;
             *tool = renumbered[tool];
         }
+        // One pass per tool, keeping source order within it.
+        objects.sort_by_key(XncObject::tool);
         XncDocument {
             unit: self.unit,
             file_attributes: self.file_attributes,
@@ -559,6 +561,19 @@ mod tests {
         let output = write_xnc(&document).unwrap();
         assert!(output.contains("T01C0.3\n"));
         assert!(output.contains("T02C1.0\n"));
+    }
+
+    #[test]
+    fn hits_group_by_tool_in_source_order() {
+        let mut builder = XncBuilder::new(XncUnit::Metric, vec![]);
+        for (diameter, x) in [(1.0, 1.0), (0.3, 2.0), (1.0, 3.0), (0.3, 4.0)] {
+            builder
+                .add_drill(diameter, Point::new(x, 5.0), vec![], vec![])
+                .unwrap();
+        }
+
+        let output = write_xnc(&builder.finish()).unwrap();
+        assert!(output.contains("%\nT01\nG05\nX2.0Y5.0\nX4.0Y5.0\nT02\nX1.0Y5.0\nX3.0Y5.0\nM30\n"));
     }
 
     #[test]
