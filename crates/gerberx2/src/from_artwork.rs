@@ -49,7 +49,8 @@ pub type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerAttributes, 
 ///
 /// This is the normalize pipeline: extract the parsed layer into artwork,
 /// carry its X2 attributes across, and lower it back to idiomatic Gerber.
-/// Source flashes survive as flashes; block instances are expanded.
+/// Source flashes survive as flashes and step-repeats as step-repeats;
+/// block instances are expanded.
 pub fn normalize_layer(gerber: &crate::GerberX2, accuracy: GeometryAccuracy) -> Result<String> {
     let annotated =
         annotate_for_export(gerber, crate::geometry::extract_document(gerber, accuracy)?);
