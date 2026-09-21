@@ -31,11 +31,9 @@ const AREA_SOLVE_TOLERANCE_MM2: f64 = 1e-3;
 /// the profile can place, and above the slivers a regularized difference
 /// leaves where its operands share an edge.
 const CONTAINMENT_AREA_TOLERANCE_MM2: f64 = 1e-3;
-// Gradient information travels about one kernel support per iteration under
-// the fixed conservative step, so the radius field needs a few hundred
-// iterations to equilibrate across a panel; measured objectives plateau by
-// roughly 500 at both board-array and fabrication-panel scale. Iterations are
-// cheap next to lattice coverage sampling.
+// A cap, not a schedule: the solve stops on convergence, and at the step the
+// operator allows its slowest modes — a few kernel widths across, which the
+// smoothing all but hides from the objective — are what would run this long.
 const SPATIAL_SOLVE_ITERATIONS: usize = 512;
 const SQRT_3: f64 = 1.732_050_807_568_877_2;
 
@@ -837,7 +835,10 @@ pub fn generate_spatial_dense_copper_balance(
         })
         .collect::<Vec<_>>();
     let void_fraction_per_radius_squared = ROUNDED_HEXAGON_AREA_FACTOR / cell_area_mm2;
-    let step = 0.25 / void_fraction_per_radius_squared.powi(2);
+    // The objective's gradient is Lipschitz with constant `beta^2 ||H||_2^2`,
+    // and its reciprocal is the longest step projected gradient is guaranteed
+    // to descend with. `H` has unit row sums, so `||H||_2^2 <= ||H||_1`.
+    let step = 1.0 / (void_fraction_per_radius_squared.powi(2) * density_kernel.max_column_sum());
 
     // Updates below this leave every radius well inside half a quantization
     // step of its converged value, so the emitted lattice is already final.

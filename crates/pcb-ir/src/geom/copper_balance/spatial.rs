@@ -119,6 +119,19 @@ impl LatticeDensityKernel {
         self.row_offsets.len() - 1
     }
 
+    /// `||H||_1`, the most any one sample contributes across all rows.
+    ///
+    /// Every row sums to one, so `||H||_inf = 1` and this bounds the squared
+    /// operator norm: `||H||_2^2 <= ||H||_1 ||H||_inf`. Each evaluation site is
+    /// one of its own samples, so the sum is never zero.
+    pub(super) fn max_column_sum(&self) -> f64 {
+        let mut column_sums = vec![0.0; self.sample_count];
+        for (sample_index, weight) in self.sample_indices.iter().zip(&self.weights) {
+            column_sums[*sample_index as usize] += weight;
+        }
+        column_sums.into_iter().fold(0.0, f64::max)
+    }
+
     pub(super) fn smooth(&self, values: &[f64]) -> Vec<f64> {
         let mut result = vec![0.0; self.row_count()];
         self.smooth_into(values, &mut result);
@@ -326,6 +339,40 @@ mod tests {
         assert!(low.iter().all(|v| (v - lower).abs() <= 1e-9));
         let high = project_box_sum(&values, lower, upper, 10.0);
         assert!(high.iter().all(|v| (v - upper).abs() <= 1e-9));
+    }
+
+    /// The gradient step is the reciprocal of this bound, so the bound has to
+    /// hold: no field may come out of the kernel with more energy than the
+    /// largest column sum allows. It also has to be far tighter than treating
+    /// the kernel as dense, or the step it licenses converges no faster.
+    #[test]
+    fn max_column_sum_bounds_the_kernel_operator_norm() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(60.0, 40.0)),
+            res(tol::REGION_MM),
+        );
+        let samples = hex_aligned_lattice_centers(panel.bbox, Point::ZERO, profile)
+            .into_iter()
+            .filter(|point| panel.contains_point(*point))
+            .collect::<Vec<_>>();
+        let evaluation = density_evaluation_points(&samples, Point::ZERO, profile);
+        let kernel = LatticeDensityKernel::new(&samples, &evaluation, Point::ZERO, profile);
+        let bound = kernel.max_column_sum();
+        assert!(bound > 0.0 && bound < 0.5, "{bound}");
+
+        // Power iteration on `H^T H` climbs to the squared operator norm from
+        // below, so every iterate has to respect the bound.
+        let mut field = (0..samples.len())
+            .map(|index| 1.0 + ((index * 17 % 29) as f64) / 29.0)
+            .collect::<Vec<_>>();
+        for _ in 0..50 {
+            let image = kernel.smooth_adjoint(&kernel.smooth(&field));
+            let gain = image.iter().map(|v| v * v).sum::<f64>().sqrt()
+                / field.iter().map(|v| v * v).sum::<f64>().sqrt();
+            assert!(gain <= bound * (1.0 + 1e-12), "{gain} > {bound}");
+            field = image;
+        }
     }
 
     #[test]
