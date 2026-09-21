@@ -854,10 +854,13 @@ pub fn generate_spatial_dense_copper_balance(
         })
         .collect::<Vec<_>>();
     let void_fraction_per_radius_squared = ROUNDED_HEXAGON_AREA_FACTOR / cell_area_mm2;
-    // The objective's gradient is Lipschitz with constant `beta^2 ||H||_2^2`,
-    // and its reciprocal is the longest step projected gradient is guaranteed
-    // to descend with. `H` has unit row sums, so `||H||_2^2 <= ||H||_1`.
-    let step = 1.0 / (void_fraction_per_radius_squared.powi(2) * density_kernel.max_column_sum());
+    // Far below what the kernel's operator norm allows, on purpose. The
+    // objective sees only kernel-smoothed density, so its exact minimiser
+    // under the radius bounds is bang-bang: voids saturate in stark bands
+    // that smooth to the same density. A short step for a fixed number of
+    // iterations stays near the even field it starts from, the early
+    // stopping that regularises an ill-posed fit.
+    let step = 0.25 / void_fraction_per_radius_squared.powi(2);
 
     // Nothing couples the layers once the settlement has pinned their areas,
     // so each runs its whole iteration on its own thread and owns its scratch.

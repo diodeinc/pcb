@@ -10,9 +10,9 @@ use super::{
 use crate::geom::{BBox, ContourSet, Point};
 
 const DENSITY_KERNEL_TRUNCATION: f64 = 3.0;
-// A cap, not a schedule: a layer stops when its radii stop moving. What runs
-// this long is the radius field drifting along shapes a few kernel widths
-// across, which the smoothing all but hides from the objective.
+// Part of the method, not a safety cap: with the solve's short step this many
+// iterations carry gradient information across a panel without letting the
+// field drift toward the saturated minimiser the smoothing hides.
 const SPATIAL_SOLVE_ITERATIONS: usize = 512;
 // Updates below this leave every radius well inside half a quantization step
 // of its converged value, so the emitted lattice is already final.
@@ -114,19 +114,6 @@ impl LatticeDensityKernel {
 
     pub(super) fn row_count(&self) -> usize {
         self.row_offsets.len() - 1
-    }
-
-    /// `||H||_1`, the most any one sample contributes across all rows.
-    ///
-    /// Every row sums to one, so `||H||_inf = 1` and this bounds the squared
-    /// operator norm: `||H||_2^2 <= ||H||_1 ||H||_inf`. Each evaluation site is
-    /// one of its own samples, so the sum is never zero.
-    pub(super) fn max_column_sum(&self) -> f64 {
-        let mut column_sums = vec![0.0; self.sample_count];
-        for (sample_index, weight) in self.sample_indices.iter().zip(&self.weights) {
-            column_sums[*sample_index as usize] += weight;
-        }
-        column_sums.into_iter().fold(0.0, f64::max)
     }
 
     pub(super) fn smooth(&self, values: &[f64]) -> Vec<f64> {
@@ -612,35 +599,6 @@ mod tests {
             }
         }
         assert!(partial[0] > 0 && partial[1] > 0);
-    }
-
-    /// The gradient step is the reciprocal of this bound, so the bound has to
-    /// hold: no field may come out of the kernel with more energy than the
-    /// largest column sum allows. It also has to be far tighter than treating
-    /// the kernel as dense, or the step it licenses converges no faster.
-    #[test]
-    fn max_column_sum_bounds_the_kernel_operator_norm() {
-        let profile = DenseCopperBalanceProfile::V1;
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(60.0, 40.0)),
-            res(tol::REGION_MM),
-        );
-        let (samples, _, kernel) = panel_kernel(&panel, profile);
-        let bound = kernel.max_column_sum();
-        assert!(bound > 0.0 && bound < 0.5, "{bound}");
-
-        // Power iteration on `H^T H` climbs to the squared operator norm from
-        // below, so every iterate has to respect the bound.
-        let mut field = (0..samples.sites.len())
-            .map(|index| 1.0 + ((index * 17 % 29) as f64) / 29.0)
-            .collect::<Vec<_>>();
-        for _ in 0..50 {
-            let image = kernel.smooth_adjoint(&kernel.smooth(&field));
-            let gain = image.iter().map(|v| v * v).sum::<f64>().sqrt()
-                / field.iter().map(|v| v * v).sum::<f64>().sqrt();
-            assert!(gain <= bound * (1.0 + 1e-12), "{gain} > {bound}");
-            field = image;
-        }
     }
 
     #[test]
