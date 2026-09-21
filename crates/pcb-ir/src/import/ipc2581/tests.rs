@@ -1250,6 +1250,52 @@ fn donut_and_thermal_rings_follow_their_shape() {
 }
 
 #[test]
+fn a_board_cell_placed_once_is_a_simple_array_whatever_pitch_it_states() {
+    let cell_array = |pitch: &str| {
+        let ipc = ipc2581::Ipc2581::parse(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="array"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile><Polygon>
+          <PolyBegin x="0" y="0"/><PolyStepSegment x="10" y="0"/>
+          <PolyStepSegment x="10" y="5"/><PolyStepSegment x="0" y="5"/>
+        </Polygon></Profile>
+      </Step>
+      <Step name="cell" type="PALLET">
+        <Profile><Polygon>
+          <PolyBegin x="0" y="0"/><PolyStepSegment x="12" y="0"/>
+          <PolyStepSegment x="12" y="7"/><PolyStepSegment x="0" y="7"/>
+        </Polygon></Profile>
+        <StepRepeat stepRef="board" x="1" y="1" nx="1" ny="1" {pitch}/>
+      </Step>
+      <Step name="array" type="PALLET">
+        <Profile><Polygon>
+          <PolyBegin x="0" y="0"/><PolyStepSegment x="34" y="0"/>
+          <PolyStepSegment x="34" y="17"/><PolyStepSegment x="0" y="17"/>
+        </Polygon></Profile>
+        <StepRepeat stepRef="cell" x="5" y="5" nx="2" ny="1" dx="12" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+        ))
+        .unwrap();
+        simple_board_array_layout(&extract_layout(&ipc).unwrap()).map(|array| array.columns)
+    };
+
+    assert_eq!(cell_array(r#"dx="0" dy="0""#), Some(2));
+    assert_eq!(cell_array(r#"dx="10" dy="5""#), Some(2));
+}
+
+#[test]
 fn extracts_panel_and_repeated_layer_instances() {
     let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
         .expect("synthetic panel fixture should parse");

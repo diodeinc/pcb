@@ -287,11 +287,10 @@ fn simple_board_cell_array(
     let (first_cell_instance, _) = layout_repeat_instances(doc, repeat).next()?;
     let mut board_repeats = layout_child_repeats(doc, repeat.child_step, Some(first_cell_instance));
     let (board_repeat_index, board_repeat) = board_repeats.next()?;
+    // A single placement has no pitch, whatever its `dx` and `dy` say.
     if board_repeats.next().is_some()
         || board_repeat.nx != 1
         || board_repeat.ny != 1
-        || !simple_array_nearly_zero(board_repeat.dx)
-        || !simple_array_nearly_zero(board_repeat.dy)
         || !simple_array_nearly_zero(board_repeat.angle)
         || board_repeat.mirror
     {
