@@ -546,6 +546,68 @@ impl ImportedDesign {
         self.materialize(layer, &occurrences, alone)
     }
 
+    /// The Step occurrences `scope` materializes, each with the layout Step it
+    /// places. An occurrence precedes everything it places.
+    pub fn layout_occurrences(
+        &self,
+        scope: ArtworkScope,
+    ) -> Result<Vec<(u32, LayoutOccurrenceId)>> {
+        Ok(self
+            .step_occurrences(scope)?
+            .into_iter()
+            .map(|occurrence| (occurrence.step, occurrence.layout))
+            .collect())
+    }
+
+    /// One layer of the part of `scope` that its Step occurrence `root`
+    /// places, itself included, in that Step's own frame. Features keep the
+    /// occurrence identity they have in `scope`, so they still join its
+    /// physical view; the layout is the root Step's alone.
+    pub fn materialize_occurrence_layer(
+        &self,
+        layer: LayerId,
+        scope: ArtworkScope,
+        root: LayoutOccurrenceId,
+    ) -> Result<GeometryDocument> {
+        let occurrences = self.step_occurrences(scope)?;
+        let start = occurrences
+            .iter()
+            .position(|occurrence| occurrence.layout == root)
+            .context("layout occurrence is outside the materialized scope")?;
+        let instances = &self.geometry.layout.instances;
+        let placed_by_root = |occurrence: &&StepOccurrence| {
+            std::iter::successors(Some(occurrence.layout), |layout| {
+                let instance = instances.get(layout.source_instance()? as usize)?;
+                Some(
+                    instance
+                        .parent_instance
+                        .map_or(LayoutOccurrenceId::Root, LayoutOccurrenceId::Instance),
+                )
+            })
+            .any(|layout| layout == root)
+        };
+        let frame_from_root = occurrences[start]
+            .root_from_step
+            .inverse()
+            .context("layout occurrence has a singular placement")?;
+        // Traversal order keeps an occurrence's placements right behind it.
+        let placed = occurrences[start..]
+            .iter()
+            .take_while(placed_by_root)
+            .map(|occurrence| StepOccurrence {
+                // The root is where its own frame says it is, exactly.
+                root_from_step: if occurrence.layout == root {
+                    Affine2::IDENTITY
+                } else {
+                    frame_from_root.concat(occurrence.root_from_step)
+                },
+                root_from_board: frame_from_root.concat(occurrence.root_from_board),
+                ..*occurrence
+            })
+            .collect::<Vec<_>>();
+        self.materialize(layer, &placed, Some(occurrences[start].step))
+    }
+
     /// One layer's definitions copied into every given step occurrence, with
     /// the layout of `alone` when the view is that single step and the whole
     /// layout graph otherwise.

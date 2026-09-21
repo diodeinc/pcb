@@ -2058,6 +2058,71 @@ fn nested_panel_layer_extraction_materializes_descendant_board_features() {
     assert_eq!(board_instance_count(&doc), 4);
 }
 
+#[test]
+fn an_occurrence_layer_is_its_part_of_the_scope_in_its_own_frame() {
+    use LayoutOccurrenceId::{Instance, Root};
+    let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
+        .expect("synthetic nested panel fixture should parse");
+    let design = import_design(&ipc, Resolution::default()).unwrap();
+    let layer = design.layer_id("TOP").unwrap();
+    let scope = ArtworkScope::ArrayFlattened;
+    assert_eq!(
+        design
+            .layout_occurrences(scope)
+            .unwrap()
+            .into_iter()
+            .map(|(step, occurrence)| (
+                design.resolve(design.geometry.layout.steps[step as usize].source_step_ref),
+                occurrence
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("panel", Root),
+            ("subpanel", Instance(0)),
+            ("board", Instance(2)),
+            ("board", Instance(3)),
+            ("subpanel", Instance(1)),
+            ("board", Instance(4)),
+            ("board", Instance(5)),
+        ]
+    );
+    let placed = |root| {
+        let document = design
+            .materialize_occurrence_layer(layer, scope, root)
+            .unwrap();
+        document
+            .features
+            .iter()
+            .map(|feature| (feature.center, feature.source_instance))
+            .collect::<Vec<_>>()
+    };
+    let flattened = design.materialize_layer(layer, scope).unwrap();
+    assert_eq!(
+        placed(Root),
+        flattened
+            .features
+            .iter()
+            .map(|feature| (feature.center, feature.source_instance))
+            .collect::<Vec<_>>(),
+        "the root places the whole scope"
+    );
+    assert_eq!(
+        placed(Instance(1)),
+        [
+            (Point::new(2.0, 3.0), Some(4)),
+            (Point::new(17.0, 3.0), Some(5))
+        ],
+        "a subpanel places its own boards, where its own frame has them"
+    );
+    assert_eq!(placed(Instance(5)), [(Point::new(2.0, 3.0), Some(5))]);
+    assert!(
+        design
+            .materialize_occurrence_layer(layer, ArtworkScope::Board, Instance(5))
+            .is_err(),
+        "the board scope holds the board alone, as its root"
+    );
+}
+
 /// The reported fabrication-panel bug: a render of a nested panel has to
 /// carry every descendant board's copper, not just the root step's own
 /// support geometry.
