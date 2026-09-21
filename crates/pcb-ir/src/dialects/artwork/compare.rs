@@ -6,10 +6,8 @@
 //! streams are reported for diagnostics only.
 
 use crate::dialects::artwork::{self, Document};
-use crate::dialects::mask;
-use crate::geom::BBox;
-use crate::geom::region::{self, Ring, Shape};
-use crate::geom::{AccuracyError, Resolution};
+use crate::geom::region::{self, Shape};
+use crate::geom::{AccuracyError, BBox, ContourSet, Resolution};
 
 /// Tolerances for comparing two layer images.
 ///
@@ -84,8 +82,10 @@ where
     A: Clone,
     B: Clone,
 {
-    let reference_summary = summarize(reference, resolution)?;
-    let candidate_summary = summarize(candidate, resolution)?;
+    let reference_image = layer_image(reference, resolution)?;
+    let candidate_image = layer_image(candidate, resolution)?;
+    let reference_summary = image_summary(reference, &reference_image);
+    let candidate_summary = image_summary(candidate, &candidate_image);
     let mut mismatches = Vec::new();
 
     if reference_summary.file_function != candidate_summary.file_function {
@@ -111,7 +111,7 @@ where
         ));
     }
 
-    let difference = difference_summary(reference, candidate, resolution)?;
+    let difference = difference_summary(reference_image, candidate_image);
     if difference.symmetric_area_mm2 > tolerance.area_mm2 {
         mismatches.push(format!(
             "symmetric difference area is {:.6} mm², tolerance={:.6}",
@@ -131,22 +131,37 @@ pub fn summarize<A: Clone>(
     doc: &Document<Vec<String>, A>,
     resolution: Resolution,
 ) -> Result<Summary, AccuracyError> {
-    let mask = artwork::compose_to_mask(doc, resolution)?;
-    Ok(Summary {
+    Ok(image_summary(doc, &layer_image(doc, resolution)?))
+}
+
+fn image_summary<A>(doc: &Document<Vec<String>, A>, image: &ContourSet) -> Summary {
+    Summary {
         file_function: doc
             .layers
             .first()
             .map(|layer| layer.meta.clone())
             .unwrap_or_default(),
-        bbox: mask
-            .layers
-            .first()
-            .map(|layer| layer.bbox)
-            .unwrap_or_else(BBox::empty),
-        area_mm2: region::rings_area(&document_image_rings(&mask, resolution)?),
+        bbox: image.bbox,
+        area_mm2: image.area(),
         object_count: doc.objects.len(),
         path_count: doc.arena.paths.len(),
-    })
+    }
+}
+
+/// The composed image of the document's first layer.
+fn layer_image<A: Clone>(
+    doc: &Document<Vec<String>, A>,
+    resolution: Resolution,
+) -> Result<ContourSet, AccuracyError> {
+    let (mut layers, _) = artwork::compose_owner_regions(doc, |_| Some(()), resolution.strict())?;
+    layers.truncate(1);
+    Ok(layers
+        .pop()
+        .and_then(|mut owners| owners.pop())
+        .map_or_else(
+            || ContourSet::empty(resolution.strict()),
+            |(_, image)| image,
+        ))
 }
 
 fn compare_bbox(
@@ -182,36 +197,21 @@ fn compare_bbox(
     }
 }
 
-fn difference_summary<A, B>(
-    reference: &Document<Vec<String>, A>,
-    candidate: &Document<Vec<String>, B>,
-    resolution: Resolution,
-) -> Result<DifferenceSummary, AccuracyError>
-where
-    A: Clone,
-    B: Clone,
-{
-    let reference = document_image_rings(
-        &artwork::compose_to_mask(reference, resolution)?,
-        resolution,
-    )?;
-    let candidate = document_image_rings(
-        &artwork::compose_to_mask(candidate, resolution)?,
-        resolution,
-    )?;
-    let reference_only = directional_difference_summary(reference.clone(), candidate.clone());
-    let candidate_only = directional_difference_summary(candidate, reference);
+fn difference_summary(reference: ContourSet, candidate: ContourSet) -> DifferenceSummary {
+    let reference_only =
+        directional_difference_summary(reference.rings.clone(), candidate.rings.clone());
+    let candidate_only = directional_difference_summary(candidate.rings, reference.rings);
     let symmetric_area_mm2 = reference_only.area_mm2 + candidate_only.area_mm2;
-    Ok(DifferenceSummary {
+    DifferenceSummary {
         reference_only,
         candidate_only,
         symmetric_area_mm2,
-    })
+    }
 }
 
 fn directional_difference_summary(
-    subject: Vec<Ring>,
-    cutters: Vec<Ring>,
+    subject: Vec<region::Ring>,
+    cutters: Vec<region::Ring>,
 ) -> DirectionalDifferenceSummary {
     let mut components = region::difference_shapes(subject, cutters)
         .into_iter()
@@ -240,16 +240,6 @@ fn difference_component_summary(shape: Shape) -> Option<DifferenceComponentSumma
         bbox: region::rings_bbox(&shape),
         area_mm2,
     })
-}
-
-fn document_image_rings<LayerMeta>(
-    mask: &mask::Document<LayerMeta>,
-    resolution: Resolution,
-) -> Result<Vec<Ring>, AccuracyError> {
-    let Some(layer) = mask.layers.first() else {
-        return Ok(Vec::new());
-    };
-    Ok(mask.layer_region(layer, resolution.strict())?.rings)
 }
 
 #[cfg(test)]
