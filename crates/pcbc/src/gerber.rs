@@ -242,7 +242,7 @@ fn resolve_target(output: Option<&Path>, format: RenderFormat) -> Result<RenderT
                 Ok(RenderTarget::Terminal)
             } else {
                 bail!(
-                    "Could not render Gerber layer to stdout; run from an interactive terminal or pass --output <path>.svg or <path>.png"
+                    "Could not render Gerber layer to stdout; run from a terminal with kitty graphics (kitty, Ghostty, WezTerm) or pass --output <path>.svg or <path>.png"
                 )
             }
         }

@@ -64,7 +64,7 @@ fn resolve_target(options: &RenderOptions) -> Result<RenderTarget> {
                 Ok(RenderTarget::Terminal)
             } else {
                 bail!(
-                    "Could not render IPC-2581 layer to stdout; run from an interactive terminal or pass --output <path>.svg or <path>.png"
+                    "Could not render IPC-2581 layer to stdout; run from a terminal with kitty graphics (kitty, Ghostty, WezTerm) or pass --output <path>.svg or <path>.png"
                 )
             }
         }
