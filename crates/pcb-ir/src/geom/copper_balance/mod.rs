@@ -6,20 +6,17 @@
 //! and generates a deterministic perforated plane.
 
 use crate::geom::AccuracyError;
-use std::collections::HashMap;
 
-use crate::geom::{ContourSet, GeometryAccuracy, Point};
+use crate::geom::{BBox, ContourSet, GeometryAccuracy, Point};
 
 mod lattice;
 mod spatial;
 
 pub use lattice::{ROUNDED_HEXAGON_CORNER_RADIUS_RATIO, rounded_hexagonal_void};
 
-use lattice::{
-    LatticeCandidates, ROUNDED_HEXAGON_AREA_FACTOR, hex_aligned_lattice_centers, lattice_index,
-};
+use lattice::{LatticeCandidates, ROUNDED_HEXAGON_AREA_FACTOR, SiteTable};
 use spatial::{
-    LatticeDensityKernel, LayerDensityModel, density_evaluation_points, lattice_cell_coverage,
+    LatticeDensityKernel, LayerDensityModel, density_evaluation_sites, lattice_cell_coverage,
     normalized_stack_weights, spatial_result_from_squared_radii,
 };
 
@@ -107,10 +104,6 @@ impl DenseCopperBalanceProfile {
         stack_flex_density: 0.05,
         accuracy: GeometryAccuracy::micrometres(50),
     };
-
-    pub fn lattice_column_pitch_mm(self) -> f64 {
-        self.pitch_mm * SQRT_3 / 2.0
-    }
 
     fn void_area_level(self, index: usize) -> f64 {
         let minimum = self.min_void_radius_mm.powi(2);
@@ -331,6 +324,29 @@ impl DenseCopperLattice {
         let row = ((point.y - row_origin) / self.pitch_mm).round() as i64;
         let site = DenseCopperLatticeSite { column, row };
         (site, self.center(site))
+    }
+
+    /// Every site whose center may lie in `bbox`, column by column.
+    ///
+    /// Hexagon vertices are at 0°, 60°, ...; nearest-neighbor center vectors
+    /// are at 30°, 90°, ... so parallel flats face each other, and odd columns
+    /// sit half a pitch up.
+    fn sites_covering(self, bbox: BBox) -> Vec<DenseCopperLatticeSite> {
+        let first_column = ((bbox.min.x - self.origin.x) / self.column_pitch_mm()).floor() as i64;
+        let last_column = ((bbox.max.x - self.origin.x) / self.column_pitch_mm()).ceil() as i64;
+        (first_column..=last_column)
+            .flat_map(|column| {
+                let column_origin_y =
+                    self.origin.y + column.rem_euclid(2) as f64 * self.pitch_mm / 2.0;
+                let first_row = ((bbox.min.y - column_origin_y) / self.pitch_mm).floor() as i64;
+                let last_row = ((bbox.max.y - column_origin_y) / self.pitch_mm).ceil() as i64;
+                (first_row..=last_row).map(move |row| DenseCopperLatticeSite { column, row })
+            })
+            .collect()
+    }
+
+    fn centers(self, sites: &[DenseCopperLatticeSite]) -> Vec<Point> {
+        sites.iter().map(|site| self.center(*site)).collect()
     }
 
     /// The `(center, radius)` candidate tuples geometry helpers consume.
@@ -691,46 +707,39 @@ pub fn generate_spatial_dense_copper_balance(
     .into_iter()
     .collect::<Result<Vec<_>, _>>()?;
 
-    let bbox_samples =
-        hex_aligned_lattice_centers(request.panel_region.bbox, request.lattice_origin, profile);
-    let in_panel = request.panel_region.contains_points_batch(&bbox_samples);
-    let mut panel_samples = bbox_samples
-        .into_iter()
+    // Sites are the key everywhere below: one dense table turns a site into
+    // its sample, and a center is only ever derived from its site.
+    let lattice = DenseCopperLattice {
+        origin: request.lattice_origin,
+        pitch_mm: profile.pitch_mm,
+    };
+    let bbox_sites = lattice.sites_covering(request.panel_region.bbox);
+    let in_panel = request
+        .panel_region
+        .contains_points_batch(&lattice.centers(&bbox_sites));
+    let full_sites = || region_lattices.iter().flat_map(|region| &region.full_sites);
+    let mut samples = SiteTable::spanning(bbox_sites.iter().chain(full_sites()));
+    for (site, _) in bbox_sites
+        .iter()
         .zip(in_panel)
-        .filter_map(|(point, inside)| inside.then_some(point))
-        .collect::<Vec<_>>();
-    let mut sample_indices = panel_samples
+        .filter(|(_, inside)| *inside)
+    {
+        samples.admit(*site);
+    }
+    // Full centers lie in eroded safe regions inside the panel; admitting any
+    // the strict point test left out keeps sample membership structural
+    // rather than tolerance-dependent.
+    let region_active_sites = region_lattices
         .iter()
-        .enumerate()
-        .map(|(index, point)| {
-            (
-                lattice_index(*point, request.lattice_origin, profile),
-                index,
-            )
-        })
-        .collect::<HashMap<_, _>>();
-    // Full centers lie in eroded safe regions inside the panel; appending any
-    // center the tolerance-bound point test missed keeps sample membership
-    // structural rather than tolerance-dependent.
-    let active_sites = layer_regions
-        .iter()
-        .map(|region_index| {
-            region_lattices[*region_index]
+        .map(|region| {
+            region
                 .full_sites
                 .iter()
-                .map(|site| {
-                    let center = region_lattices[*region_index].lattice.center(*site);
-                    *sample_indices
-                        .entry((site.column, site.row))
-                        .or_insert_with(|| {
-                            panel_samples.push(center);
-                            panel_samples.len() - 1
-                        })
-                })
+                .map(|site| samples.admit(*site))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    if active_sites.iter().all(Vec::is_empty) {
+    if region_active_sites.iter().all(Vec::is_empty) {
         return Ok(SpatialCopperBalance {
             layers: uniform,
             moment_field: None,
@@ -740,21 +749,10 @@ pub fn generate_spatial_dense_copper_balance(
     // The objective lives on one coarse subset of the panel lattice. Every
     // layer scatters only its own void variables onto the full lattice, then
     // the same normalized convolution maps those fields to the common sites.
-    let evaluation_points =
-        density_evaluation_points(&panel_samples, request.lattice_origin, profile);
-    let density_kernel = LatticeDensityKernel::new(
-        &panel_samples,
-        &evaluation_points,
-        request.lattice_origin,
-        profile,
-    );
+    let evaluation_sites = density_evaluation_sites(&samples.sites, profile);
+    let density_kernel = LatticeDensityKernel::new(&samples, &evaluation_sites, lattice, profile);
     let smooth_coverage = |region: &ContourSet| {
-        density_kernel.smooth(&lattice_cell_coverage(
-            &panel_samples,
-            region,
-            request.lattice_origin,
-            profile,
-        ))
+        density_kernel.smooth(&lattice_cell_coverage(&samples.sites, region, lattice))
     };
 
     let mut coverage = map_layers(
@@ -791,7 +789,7 @@ pub fn generate_spatial_dense_copper_balance(
         .enumerate()
         .map(|(layer_index, result)| match result.solution.mode {
             DenseCopperBalanceMode::Perforated { void_radius_mm } => {
-                vec![void_radius_mm.powi(2); active_sites[layer_index].len()]
+                vec![void_radius_mm.powi(2); region_active_sites[layer_regions[layer_index]].len()]
             }
             DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => Vec::new(),
         })
@@ -874,7 +872,7 @@ pub fn generate_spatial_dense_copper_balance(
             let partial_void = &partial_void_density[layer_index];
             let model = LayerDensityModel {
                 kernel: &density_kernel,
-                active_sites: &active_sites[layer_index],
+                active_sites: &region_active_sites[layer_regions[layer_index]],
                 base_density: fixed_density[layer_index]
                     .iter()
                     .enumerate()
@@ -922,7 +920,7 @@ pub fn generate_spatial_dense_copper_balance(
     // summary can say what the solve bought.
     let moment_reading = |density: &[&Vec<f64>]| {
         MomentReading::of(
-            &(0..evaluation_points.len())
+            &(0..evaluation_sites.len())
                 .map(|site| {
                     normalized_stack_weights
                         .iter()

@@ -1,13 +1,11 @@
 //! Spatial copper-redistribution machinery: normalized lattice convolution,
 //! exact lattice-tile coverage, and sum-preserving box projection.
 
-use std::collections::HashMap;
-
-use super::lattice::{ROUNDED_HEXAGON_AREA_FACTOR, lattice_index};
+use super::lattice::{ROUNDED_HEXAGON_AREA_FACTOR, SiteTable};
 use super::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceResult,
-    DenseCopperBalanceSolution, DenseCopperLatticeSite, DenseCopperVoid, NUMERIC_EPSILON,
-    SpatialCopperBalanceLayerRequest,
+    DenseCopperBalanceSolution, DenseCopperLattice, DenseCopperLatticeSite, DenseCopperVoid,
+    NUMERIC_EPSILON, SpatialCopperBalanceLayerRequest,
 };
 use crate::geom::{BBox, ContourSet, Point};
 
@@ -53,33 +51,23 @@ pub(super) struct LatticeDensityKernel {
 
 impl LatticeDensityKernel {
     pub(super) fn new(
-        samples: &[Point],
-        evaluation_points: &[Point],
-        origin: Point,
+        samples: &SiteTable,
+        evaluation_sites: &[DenseCopperLatticeSite],
+        lattice: DenseCopperLattice,
         profile: DenseCopperBalanceProfile,
     ) -> Self {
-        let index = |point| lattice_index(point, origin, profile);
-        let sample_indices = samples
-            .iter()
-            .enumerate()
-            .map(|(sample_index, point)| (index(*point), sample_index))
-            .collect::<HashMap<_, _>>();
-        let evaluation_sites = evaluation_points
-            .iter()
-            .map(|point| index(*point))
-            .collect::<Vec<_>>();
         let support_mm = DENSITY_KERNEL_TRUNCATION * profile.density_sigma_mm;
         let inverse_two_sigma_squared = 0.5 / profile.density_sigma_mm.powi(2);
-        let column_span = (support_mm / profile.lattice_column_pitch_mm()).ceil() as i64;
-        let row_span = (support_mm / profile.pitch_mm).ceil() as i64 + 1;
+        let column_span = (support_mm / lattice.column_pitch_mm()).ceil() as i64;
+        let row_span = (support_mm / lattice.pitch_mm).ceil() as i64 + 1;
         let offsets = [0_i64, 1_i64].map(|parity| {
             (-column_span..=column_span)
                 .flat_map(|column| {
                     (-row_span..=row_span).filter_map(move |row| {
                         let neighbor_parity = (parity + column).rem_euclid(2);
-                        let dx = column as f64 * profile.lattice_column_pitch_mm();
+                        let dx = column as f64 * lattice.column_pitch_mm();
                         let dy = (row as f64 + (neighbor_parity - parity) as f64 / 2.0)
-                            * profile.pitch_mm;
+                            * lattice.pitch_mm;
                         let distance_squared = dx * dx + dy * dy;
                         (distance_squared <= support_mm.powi(2)).then(|| {
                             (
@@ -96,13 +84,15 @@ impl LatticeDensityKernel {
         let mut csr_sample_indices = Vec::new();
         let mut weights = Vec::new();
         row_offsets.push(0_u32);
-        for &(column, row) in &evaluation_sites {
+        for site in evaluation_sites {
             let row_start = weights.len();
-            for &(column_offset, row_offset, weight) in &offsets[column.rem_euclid(2) as usize] {
-                if let Some(sample_index) =
-                    sample_indices.get(&(column + column_offset, row + row_offset))
-                {
-                    csr_sample_indices.push(*sample_index as u32);
+            for &(column_offset, row_offset, weight) in &offsets[site.column.rem_euclid(2) as usize]
+            {
+                if let Some(sample_index) = samples.sample(DenseCopperLatticeSite {
+                    column: site.column + column_offset,
+                    row: site.row + row_offset,
+                }) {
+                    csr_sample_indices.push(sample_index as u32);
                     weights.push(weight);
                 }
             }
@@ -115,7 +105,7 @@ impl LatticeDensityKernel {
             row_offsets.push(weights.len() as u32);
         }
         Self {
-            sample_count: samples.len(),
+            sample_count: samples.sites.len(),
             row_offsets,
             sample_indices: csr_sample_indices,
             weights,
@@ -273,24 +263,22 @@ impl LayerDensityModel<'_> {
 
 /// Sample the 5 mm-scale objective on a deterministic subset of the 1.35 mm
 /// fabrication lattice. Geometry and output stay on the full lattice.
-pub(super) fn density_evaluation_points(
-    samples: &[Point],
-    origin: Point,
+pub(super) fn density_evaluation_sites(
+    samples: &[DenseCopperLatticeSite],
     profile: DenseCopperBalanceProfile,
-) -> Vec<Point> {
+) -> Vec<DenseCopperLatticeSite> {
     let stride = (profile.density_sigma_mm / profile.pitch_mm)
         .round()
         .max(1.0) as i64;
     // Anchoring the coarse grid on the first sample keeps the result nonempty
     // for every nonempty input.
-    let (anchor_column, anchor_row) = lattice_index(samples[0], origin, profile);
+    let anchor = samples[0];
     samples
         .iter()
         .copied()
-        .filter(|point| {
-            let (column, row) = lattice_index(*point, origin, profile);
-            (column - anchor_column).rem_euclid(stride) == 0
-                && (row - anchor_row).rem_euclid(stride) == 0
+        .filter(|site| {
+            (site.column - anchor.column).rem_euclid(stride) == 0
+                && (site.row - anchor.row).rem_euclid(stride) == 0
         })
         .collect()
 }
@@ -305,18 +293,14 @@ pub(super) fn density_evaluation_points(
 /// parities, and a lattice of voids — periodic at the very pitch any sampling
 /// would share — is measured rather than aliased.
 pub(super) fn lattice_cell_coverage(
-    points: &[Point],
+    sites: &[DenseCopperLatticeSite],
     region: &ContourSet,
-    origin: Point,
-    profile: DenseCopperBalanceProfile,
+    lattice: DenseCopperLattice,
 ) -> Vec<f64> {
     // Column, and the lower of the two half-rows, of each site's tile.
-    let tiles = points
+    let tiles = sites
         .iter()
-        .map(|point| {
-            let (column, row) = lattice_index(*point, origin, profile);
-            (column, 2 * row - 1 + column.rem_euclid(2))
-        })
+        .map(|site| (site.column, 2 * site.row - 1 + site.column.rem_euclid(2)))
         .collect::<Vec<_>>();
     let span = |values: &mut dyn Iterator<Item = i64>| {
         values.fold((i64::MAX, i64::MIN), |(low, high), value| {
@@ -328,11 +312,11 @@ pub(super) fn lattice_cell_coverage(
     }
     let (first_column, last_column) = span(&mut tiles.iter().map(|tile| tile.0));
     let (first_half_row, last_half_row) = span(&mut tiles.iter().map(|tile| tile.1));
-    let (width, height) = (profile.lattice_column_pitch_mm(), profile.pitch_mm / 2.0);
+    let (width, height) = (lattice.column_pitch_mm(), lattice.pitch_mm / 2.0);
     let corner = |column: i64, half_row: i64| {
         Point::new(
-            origin.x + (column as f64 - 0.5) * width,
-            origin.y + half_row as f64 * height,
+            lattice.origin.x + (column as f64 - 0.5) * width,
+            lattice.origin.y + half_row as f64 * height,
         )
     };
     let columns = (last_column - first_column + 1) as usize;
@@ -479,12 +463,31 @@ pub(super) fn spatial_result_from_squared_radii(
 
 #[cfg(test)]
 mod tests {
-    use super::super::lattice::hex_aligned_lattice_centers;
     use super::*;
     use crate::geom::{BBox, ContourSet, Point, Resolution, tol};
 
     fn res(tolerance_mm: f64) -> Resolution {
         Resolution::default().with_tolerance(tolerance_mm)
+    }
+
+    fn panel_kernel(
+        panel: &ContourSet,
+        profile: DenseCopperBalanceProfile,
+    ) -> (SiteTable, Vec<DenseCopperLatticeSite>, LatticeDensityKernel) {
+        let lattice = DenseCopperLattice {
+            origin: Point::ZERO,
+            pitch_mm: profile.pitch_mm,
+        };
+        let sites = lattice.sites_covering(panel.bbox);
+        let mut samples = SiteTable::spanning(sites.iter());
+        for site in sites {
+            if panel.contains_point(lattice.center(site)) {
+                samples.admit(site);
+            }
+        }
+        let evaluation = density_evaluation_sites(&samples.sites, profile);
+        let kernel = LatticeDensityKernel::new(&samples, &evaluation, lattice, profile);
+        (samples, evaluation, kernel)
     }
 
     fn projected(values: &[f64], lower: f64, upper: f64, target: f64, guess: f64) -> Vec<f64> {
@@ -571,20 +574,24 @@ mod tests {
     #[test]
     fn lattice_cell_coverage_is_each_tiles_exact_overlap() {
         let profile = DenseCopperBalanceProfile::V1;
-        let origin = Point::new(0.4, -0.3);
         let bounds = BBox::new(Point::new(-2.0, -3.0), Point::new(11.0, 8.0));
-        let samples = hex_aligned_lattice_centers(bounds, origin, profile);
+        let lattice = DenseCopperLattice {
+            origin: Point::new(0.4, -0.3),
+            pitch_mm: profile.pitch_mm,
+        };
+        let sites = lattice.sites_covering(bounds);
         let cut = BBox::new(Point::new(1.23, -0.71), Point::new(7.9, 4.56));
         let region = ContourSet::rectangle(cut, res(tol::REGION_MM));
 
-        let (width, height) = (profile.lattice_column_pitch_mm(), profile.pitch_mm);
+        let (width, height) = (lattice.column_pitch_mm(), lattice.pitch_mm);
         let overlap = |low: f64, high: f64, cut_low: f64, cut_high: f64| {
             (high.min(cut_high) - low.max(cut_low)).max(0.0)
         };
-        let coverage = lattice_cell_coverage(&samples, &region, origin, profile);
-        assert_eq!(coverage.len(), samples.len());
+        let coverage = lattice_cell_coverage(&sites, &region, lattice);
+        assert_eq!(coverage.len(), sites.len());
         let mut partial = [0, 0];
-        for (sample, coverage) in samples.iter().zip(coverage) {
+        for (site, coverage) in sites.iter().zip(coverage) {
+            let sample = lattice.center(*site);
             let expected = overlap(
                 sample.x - width / 2.0,
                 sample.x + width / 2.0,
@@ -601,8 +608,7 @@ mod tests {
                 "{sample:?}: {coverage} != {expected}"
             );
             if expected > 0.0 && expected < 1.0 {
-                let (column, _) = lattice_index(*sample, origin, profile);
-                partial[column.rem_euclid(2) as usize] += 1;
+                partial[site.column.rem_euclid(2) as usize] += 1;
             }
         }
         assert!(partial[0] > 0 && partial[1] > 0);
@@ -619,18 +625,13 @@ mod tests {
             BBox::new(Point::new(0.0, 0.0), Point::new(60.0, 40.0)),
             res(tol::REGION_MM),
         );
-        let samples = hex_aligned_lattice_centers(panel.bbox, Point::ZERO, profile)
-            .into_iter()
-            .filter(|point| panel.contains_point(*point))
-            .collect::<Vec<_>>();
-        let evaluation = density_evaluation_points(&samples, Point::ZERO, profile);
-        let kernel = LatticeDensityKernel::new(&samples, &evaluation, Point::ZERO, profile);
+        let (samples, _, kernel) = panel_kernel(&panel, profile);
         let bound = kernel.max_column_sum();
         assert!(bound > 0.0 && bound < 0.5, "{bound}");
 
         // Power iteration on `H^T H` climbs to the squared operator norm from
         // below, so every iterate has to respect the bound.
-        let mut field = (0..samples.len())
+        let mut field = (0..samples.sites.len())
             .map(|index| 1.0 + ((index * 17 % 29) as f64) / 29.0)
             .collect::<Vec<_>>();
         for _ in 0..50 {
@@ -649,13 +650,8 @@ mod tests {
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
             res(tol::REGION_MM),
         );
-        let samples = hex_aligned_lattice_centers(panel.bbox, Point::ZERO, profile)
-            .into_iter()
-            .filter(|point| panel.contains_point(*point))
-            .collect::<Vec<_>>();
-        let evaluation = density_evaluation_points(&samples, Point::ZERO, profile);
-        let kernel = LatticeDensityKernel::new(&samples, &evaluation, Point::ZERO, profile);
-        let source = (0..samples.len())
+        let (samples, evaluation, kernel) = panel_kernel(&panel, profile);
+        let source = (0..samples.sites.len())
             .map(|index| ((index * 17 % 29) as f64 - 14.0) / 29.0)
             .collect::<Vec<_>>();
         let residual = (0..evaluation.len())

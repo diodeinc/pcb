@@ -11,7 +11,7 @@ use super::{
 use crate::geom::accuracy::numerical_error;
 use crate::geom::region::rings_bbox;
 use crate::geom::shapes;
-use crate::geom::{BBox, ContourBuf, ContourSet, FillRule, Point, tol};
+use crate::geom::{ContourBuf, ContourSet, FillRule, Point, tol};
 
 pub const ROUNDED_HEXAGON_CORNER_RADIUS_RATIO: f64 = 0.15;
 // A sharp regular hexagon has area 3√3 R² / 2. Rounding each 120° corner
@@ -73,8 +73,8 @@ impl LatticeCandidates {
         // and emission that asks.
         let circumradius = profile.max_void_radius_mm;
         let apothem = circumradius * SQRT_3 / 2.0;
-        let centers =
-            hex_aligned_lattice_centers(voidable.bbox.expand(circumradius), origin, profile);
+        let sites = lattice.sites_covering(voidable.bbox.expand(circumradius));
+        let centers = lattice.centers(&sites);
         let depths_mm = center_depths_mm(voidable, &centers, circumradius);
         let annulus = (0..centers.len())
             .filter(|index| (apothem..circumradius).contains(&depths_mm[*index]))
@@ -95,32 +95,28 @@ impl LatticeCandidates {
             full[index] = contained;
         }
         let mut full_sites = Vec::new();
-        let mut edge_centers = Vec::new();
+        let mut edge_sites = Vec::new();
         let mut edge_depths_mm = Vec::new();
-        for ((center, depth_mm), full) in centers.into_iter().zip(depths_mm).zip(full) {
+        for ((site, depth_mm), full) in sites.into_iter().zip(depths_mm).zip(full) {
             if full {
-                let (column, row) = lattice_index(center, origin, profile);
-                full_sites.push(DenseCopperLatticeSite { column, row });
+                full_sites.push(site);
             } else if depth_mm >= -circumradius {
-                edge_centers.push(center);
+                edge_sites.push(site);
                 edge_depths_mm.push(depth_mm);
             }
         }
         let disk_center_region = voidable.disk_erode(profile.minimum_partial_void_inradius_mm())?;
         let activation_radii = minimum_partial_candidates(
             &disk_center_region,
-            &edge_centers,
+            &lattice.centers(&edge_sites),
             &edge_depths_mm,
             profile,
         )?;
-        let (edge_candidates, edge_center_depths_mm) = edge_centers
+        let (edge_candidates, edge_center_depths_mm) = edge_sites
             .into_iter()
             .zip(activation_radii)
             .zip(edge_depths_mm)
-            .filter_map(|((center, radius), depth_mm)| {
-                let (column, row) = lattice_index(center, origin, profile);
-                Some(((DenseCopperLatticeSite { column, row }, radius?), depth_mm))
-            })
+            .filter_map(|((site, radius), depth_mm)| Some(((site, radius?), depth_mm)))
             .unzip();
         let mut candidates = Self {
             lattice,
@@ -185,40 +181,6 @@ impl LatticeCandidates {
         self.full_void_area(radius)
             + self.edge_area_by_level_mm2[profile.void_area_level_up(radius)]
     }
-}
-
-pub(super) fn hex_aligned_lattice_centers(
-    bbox: BBox,
-    origin: Point,
-    profile: DenseCopperBalanceProfile,
-) -> Vec<Point> {
-    // Hexagon vertices are at 0°, 60°, ...; nearest-neighbor center vectors
-    // are at 30°, 90°, ... so parallel flats face each other.
-    let column_pitch = profile.lattice_column_pitch_mm();
-    let first_column = ((bbox.min.x - origin.x) / column_pitch).floor() as i64;
-    let last_column = ((bbox.max.x - origin.x) / column_pitch).ceil() as i64;
-    let mut centers = Vec::new();
-
-    for column in first_column..=last_column {
-        let x = origin.x + column as f64 * column_pitch;
-        let column_offset = if column.rem_euclid(2) == 0 {
-            0.0
-        } else {
-            profile.pitch_mm / 2.0
-        };
-        let column_origin_y = origin.y + column_offset;
-        let first_row = ((bbox.min.y - column_origin_y) / profile.pitch_mm).floor() as i64;
-        let last_row = ((bbox.max.y - column_origin_y) / profile.pitch_mm).ceil() as i64;
-
-        for row in first_row..=last_row {
-            centers.push(Point::new(
-                x,
-                column_origin_y + row as f64 * profile.pitch_mm,
-            ));
-        }
-    }
-
-    centers
 }
 
 /// The smallest radius at which each center's clipped void holds the minimum
@@ -600,15 +562,81 @@ pub(super) fn void_set(
     hexagon_set_with_radii(&candidates, resolution)
 }
 
-pub(super) fn lattice_index(
-    point: Point,
-    origin: Point,
-    profile: DenseCopperBalanceProfile,
-) -> (i64, i64) {
-    let column = ((point.x - origin.x) / profile.lattice_column_pitch_mm()).round() as i64;
-    let column_offset = column.rem_euclid(2) as f64 * profile.pitch_mm / 2.0;
-    let row = ((point.y - origin.y - column_offset) / profile.pitch_mm).round() as i64;
-    (column, row)
+/// Sample sites in admission order, with a dense `(column, row) -> sample`
+/// table over the range they were sized for.
+pub(super) struct SiteTable {
+    pub(super) sites: Vec<DenseCopperLatticeSite>,
+    first: DenseCopperLatticeSite,
+    columns: i64,
+    rows: i64,
+    samples: Vec<u32>,
+}
+
+impl SiteTable {
+    const VACANT: u32 = u32::MAX;
+
+    /// An empty table able to admit any site in the bounding range of `span`.
+    pub(super) fn spanning<'a>(span: impl Iterator<Item = &'a DenseCopperLatticeSite>) -> Self {
+        let (first, last) = span.fold(
+            (
+                DenseCopperLatticeSite {
+                    column: i64::MAX,
+                    row: i64::MAX,
+                },
+                DenseCopperLatticeSite {
+                    column: i64::MIN,
+                    row: i64::MIN,
+                },
+            ),
+            |(first, last), site| {
+                (
+                    DenseCopperLatticeSite {
+                        column: first.column.min(site.column),
+                        row: first.row.min(site.row),
+                    },
+                    DenseCopperLatticeSite {
+                        column: last.column.max(site.column),
+                        row: last.row.max(site.row),
+                    },
+                )
+            },
+        );
+        // No sites at all leaves an inverted range and an empty table.
+        let columns = last
+            .column
+            .saturating_sub(first.column)
+            .saturating_add(1)
+            .max(0);
+        let rows = last.row.saturating_sub(first.row).saturating_add(1).max(0);
+        Self {
+            sites: Vec::new(),
+            first,
+            columns,
+            rows,
+            samples: vec![Self::VACANT; (columns * rows) as usize],
+        }
+    }
+
+    fn slot(&self, site: DenseCopperLatticeSite) -> Option<usize> {
+        let (column, row) = (site.column - self.first.column, site.row - self.first.row);
+        ((0..self.columns).contains(&column) && (0..self.rows).contains(&row))
+            .then(|| (column * self.rows + row) as usize)
+    }
+
+    /// The site's sample, making it the next one if it is not a sample yet.
+    pub(super) fn admit(&mut self, site: DenseCopperLatticeSite) -> usize {
+        let slot = self.slot(site).expect("site lies in the spanned range");
+        if self.samples[slot] == Self::VACANT {
+            self.samples[slot] = self.sites.len() as u32;
+            self.sites.push(site);
+        }
+        self.samples[slot] as usize
+    }
+
+    pub(super) fn sample(&self, site: DenseCopperLatticeSite) -> Option<usize> {
+        let sample = self.samples[self.slot(site)?];
+        (sample != Self::VACANT).then_some(sample as usize)
+    }
 }
 
 #[cfg(test)]
@@ -620,6 +648,29 @@ mod tests {
 
     use crate::geom::tol;
     use crate::geom::{BBox, ContourSet, PathOp, Point};
+
+    fn lattice_at(origin: Point) -> DenseCopperLattice {
+        DenseCopperLattice {
+            origin,
+            pitch_mm: DenseCopperBalanceProfile::V1.pitch_mm,
+        }
+    }
+
+    /// Samples are numbered in admission order, once each, and a site that was
+    /// never admitted — inside the spanned range or beyond it — has none.
+    #[test]
+    fn site_table_numbers_sites_in_admission_order() {
+        let site = |column, row| DenseCopperLatticeSite { column, row };
+        let mut table = SiteTable::spanning([site(-2, 5), site(3, -1)].iter());
+        assert_eq!(table.admit(site(3, 5)), 0);
+        assert_eq!(table.admit(site(-2, -1)), 1);
+        assert_eq!(table.admit(site(3, 5)), 0);
+        assert_eq!(table.sites, vec![site(3, 5), site(-2, -1)]);
+        assert_eq!(table.sample(site(-2, -1)), Some(1));
+        assert_eq!(table.sample(site(0, 0)), None);
+        assert_eq!(table.sample(site(4, 5)), None);
+        assert_eq!(table.sample(site(3, -2)), None);
+    }
 
     #[test]
     fn rejects_partial_voids_that_cannot_hold_the_minimum_disk() {
@@ -671,16 +722,14 @@ mod tests {
         let voidable = plate.difference(&cutout).unwrap();
         let origin = Point::new(0.17, 0.31);
 
-        let centers = hex_aligned_lattice_centers(
-            voidable.bbox.expand(profile.max_void_radius_mm),
-            origin,
-            profile,
-        );
-        let mut expected = centers
+        let sites =
+            lattice_at(origin).sites_covering(voidable.bbox.expand(profile.max_void_radius_mm));
+        let centers = lattice_at(origin).centers(&sites);
+        let mut expected = sites
             .iter()
             .zip(fully_contained_hexagons(&voidable, &centers, profile).unwrap())
             .filter(|(_, contained)| *contained)
-            .map(|(center, _)| lattice_index(*center, origin, profile))
+            .map(|(site, _)| (site.column, site.row))
             .collect::<Vec<_>>();
         expected.sort_unstable();
 
@@ -736,14 +785,9 @@ mod tests {
             BBox::new(Point::new(0.0, 0.0), Point::new(4.0, 4.0)),
             res(tol::REGION_MM),
         );
-        let centers = hex_aligned_lattice_centers(
-            voidable
-                .disk_dilate(profile.max_void_radius_mm)
-                .unwrap()
-                .bbox,
-            Point::new(0.0, 0.0),
-            profile,
-        );
+        let lattice = lattice_at(Point::ZERO);
+        let centers = lattice
+            .centers(&lattice.sites_covering(voidable.bbox.expand(profile.max_void_radius_mm)));
         let depths_mm = center_depths_mm(&voidable, &centers, profile.max_void_radius_mm);
         let disk_center_region = voidable
             .disk_erode(profile.minimum_partial_void_inradius_mm())
@@ -824,14 +868,9 @@ mod tests {
         let voidable = plate.difference(&cutouts).unwrap();
         let minimum_radius = profile.minimum_partial_void_inradius_mm();
         let disk_center_region = voidable.disk_erode(minimum_radius).unwrap();
-        let centers = hex_aligned_lattice_centers(
-            voidable
-                .disk_dilate(profile.max_void_radius_mm)
-                .unwrap()
-                .bbox,
-            Point::new(0.17, 0.31),
-            profile,
-        );
+        let lattice = lattice_at(Point::new(0.17, 0.31));
+        let centers = lattice
+            .centers(&lattice.sites_covering(voidable.bbox.expand(profile.max_void_radius_mm)));
         let depths_mm = center_depths_mm(&voidable, &centers, profile.max_void_radius_mm);
 
         let mut accepted_anywhere = 0;
@@ -870,11 +909,12 @@ mod tests {
     /// individually prepared hexagons gives.
     #[test]
     fn placed_templates_match_the_union_of_prepared_hexagons() {
-        let profile = DenseCopperBalanceProfile::V1;
         let resolution = res(tol::REGION_MM);
         let bounds = BBox::new(Point::new(-3.0, -2.0), Point::new(9.0, 7.0));
         let radii = [0.2, 0.41, 0.65];
-        let candidates = hex_aligned_lattice_centers(bounds, Point::new(0.3, -0.1), profile)
+        let lattice = lattice_at(Point::new(0.3, -0.1));
+        let candidates = lattice
+            .centers(&lattice.sites_covering(bounds))
             .into_iter()
             .enumerate()
             .map(|(index, center)| (center, radii[index % radii.len()]))
