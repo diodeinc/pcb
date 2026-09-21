@@ -565,15 +565,11 @@ impl<'a> Parser<'a> {
             match self.name(&child) {
                 "LineDesc" => line_desc = Some(self.parse_line_desc(&child, units)?),
                 "LineDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        line_desc_ref = Some(self.interner.intern(id));
-                    }
+                    line_desc_ref = Some(self.required_attr(&child, "id", "LineDescRef")?)
                 }
                 "FillDesc" => fill_desc = Some(self.parse_fill_desc(&child, units)?),
                 "FillDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        fill_desc_ref = Some(self.interner.intern(id));
-                    }
+                    fill_desc_ref = Some(self.required_attr(&child, "id", "FillDescRef")?)
                 }
                 _ => {}
             }
@@ -673,10 +669,10 @@ impl<'a> Parser<'a> {
                         )?,
                     },
                     radius: self.parse_f64_attr_with_units(node, "radius", "RectRound", units)?,
-                    upper_right: self.parse_bool_attr(node, "upperRight").unwrap_or(false),
-                    upper_left: self.parse_bool_attr(node, "upperLeft").unwrap_or(false),
-                    lower_right: self.parse_bool_attr(node, "lowerRight").unwrap_or(false),
-                    lower_left: self.parse_bool_attr(node, "lowerLeft").unwrap_or(false),
+                    upper_right: self.parse_flag_attr(node, "upperRight")?,
+                    upper_left: self.parse_flag_attr(node, "upperLeft")?,
+                    lower_right: self.parse_flag_attr(node, "lowerRight")?,
+                    lower_left: self.parse_flag_attr(node, "lowerLeft")?,
                 },
                 units,
             )?)),
@@ -689,10 +685,10 @@ impl<'a> Parser<'a> {
                             self.parse_f64_attr_with_units(node, "height", "RectCham", units)?,
                     },
                     chamfer: self.parse_f64_attr_with_units(node, "chamfer", "RectCham", units)?,
-                    upper_right: self.parse_bool_attr(node, "upperRight").unwrap_or(false),
-                    upper_left: self.parse_bool_attr(node, "upperLeft").unwrap_or(false),
-                    lower_right: self.parse_bool_attr(node, "lowerRight").unwrap_or(false),
-                    lower_left: self.parse_bool_attr(node, "lowerLeft").unwrap_or(false),
+                    upper_right: self.parse_flag_attr(node, "upperRight")?,
+                    upper_left: self.parse_flag_attr(node, "upperLeft")?,
+                    lower_right: self.parse_flag_attr(node, "lowerRight")?,
+                    lower_left: self.parse_flag_attr(node, "lowerLeft")?,
                 },
                 units,
             )?)),
@@ -809,7 +805,12 @@ impl<'a> Parser<'a> {
                 diameter: self.parse_f64_attr_with_units(node, "diameter", "Moire", units)?,
                 ring_width: self.parse_f64_attr_with_units(node, "ringWidth", "Moire", units)?,
                 ring_gap: self.parse_f64_attr_with_units(node, "ringGap", "Moire", units)?,
-                ring_number: self.parse_u32_attr(node, "ringNumber", "Moire")?,
+                ring_number: self
+                    .parse_optional_count_attr(node, "ringNumber", MAX_MOIRE_RINGS)?
+                    .ok_or(Ipc2581Error::MissingAttribute {
+                        element: "Moire",
+                        attr: "ringNumber",
+                    })?,
                 line_width: self.parse_optional_f64_attr_with_units(node, "lineWidth", units)?,
                 line_length: self.parse_optional_f64_attr_with_units(node, "lineLength", units)?,
                 line_angle: self.parse_optional_f64_attr(node, "lineAngle")?,
@@ -843,8 +844,9 @@ impl<'a> Parser<'a> {
                                 "Thermal",
                                 units,
                             )?,
+                            // IPC-2581C spokeCountType.
                             spoke_count: self
-                                .parse_optional_u32_attr(node, "spokeCount")?
+                                .parse_optional_count_attr(node, "spokeCount", 4)?
                                 .unwrap_or(4),
                             spoke_width: self.parse_optional_f64_attr_with_units(
                                 node,
@@ -1310,20 +1312,6 @@ impl<'a> Parser<'a> {
         Ok(parsed)
     }
 
-    fn parse_f64_attr(
-        &self,
-        node: &Node,
-        attr: &'static str,
-        element: &'static str,
-    ) -> Result<f64> {
-        let attr_val = self
-            .attr(node, attr)
-            .ok_or(Ipc2581Error::MissingAttribute { element, attr })?;
-        attr_val
-            .parse()
-            .map_err(|_| Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {}", attr)))
-    }
-
     /// Parse an f64 attribute and convert it to millimeters (canonical unit)
     ///
     /// This function takes the source units and converts the value to mm.
@@ -1335,8 +1323,8 @@ impl<'a> Parser<'a> {
         element: &'static str,
         units: Units,
     ) -> Result<f64> {
-        let value = self.parse_f64_attr(node, attr, element)?;
-        Ok(crate::units::to_mm(value, units))
+        self.parse_optional_f64_attr_with_units(node, attr, units)?
+            .ok_or(Ipc2581Error::MissingAttribute { element, attr })
     }
 
     fn parse_non_negative_f64_attr_with_units(
@@ -1346,9 +1334,8 @@ impl<'a> Parser<'a> {
         element: &'static str,
         units: Units,
     ) -> Result<f64> {
-        let value = self.parse_f64_attr(node, attr, element)?;
-        self.validate_non_negative_f64(value, attr)?;
-        Ok(crate::units::to_mm(value, units))
+        self.parse_optional_non_negative_f64_attr_with_units(node, attr, units)?
+            .ok_or(Ipc2581Error::MissingAttribute { element, attr })
     }
 
     fn parse_u8_attr(&self, node: &Node, attr: &'static str, element: &'static str) -> Result<u8> {
@@ -1360,46 +1347,43 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_u32_attr(
+    fn number(
         &self,
         node: &Node,
         attr: &'static str,
-        element: &'static str,
-    ) -> Result<u32> {
-        let attr_val = self
-            .attr(node, attr)
-            .ok_or(Ipc2581Error::MissingAttribute { element, attr })?;
-        attr_val.parse().map_err(|_| {
-            Ipc2581Error::InvalidAttribute(format!("Invalid u32 value for {} in {}", attr, element))
-        })
-    }
-
-    /// Parse an f64 from a string value and convert to mm using the given units
-    fn parse_f64_str_with_units(&self, s: &str, units: Units) -> Result<f64> {
-        let value = s
-            .parse::<f64>()
-            .map_err(|_| Ipc2581Error::InvalidAttribute("Invalid f64 value".to_string()))?;
-        Ok(crate::units::to_mm(value, units))
+        sign: Sign,
+        units: Option<Units>,
+    ) -> Result<Option<f64>> {
+        self.attr(node, attr)
+            .map(|value| parse_f64(value, attr, sign, units))
+            .transpose()
     }
 
     /// Parse optional f64 attribute (no unit conversion)
     fn parse_optional_f64_attr(&self, node: &Node, attr: &'static str) -> Result<Option<f64>> {
-        self.attr(node, attr)
-            .map(|v| {
-                v.parse::<f64>().map_err(|_| {
-                    Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {}", attr))
-                })
-            })
-            .transpose()
+        self.number(node, attr, Sign::Any, None)
     }
 
-    /// Parse optional u32 attribute
-    fn parse_optional_u32_attr(&self, node: &Node, attr: &'static str) -> Result<Option<u32>> {
+    /// Parse an optional count, which the importer loops over, within the
+    /// bounds the schema gives it.
+    fn parse_optional_count_attr(
+        &self,
+        node: &Node,
+        attr: &'static str,
+        max: u32,
+    ) -> Result<Option<u32>> {
         self.attr(node, attr)
-            .map(|v| {
-                v.parse::<u32>().map_err(|_| {
-                    Ipc2581Error::InvalidAttribute(format!("Invalid u32 value for {}", attr))
-                })
+            .map(|value| {
+                value
+                    .trim()
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|count| *count <= max)
+                    .ok_or_else(|| {
+                        Ipc2581Error::InvalidAttribute(format!(
+                            "Value for {attr} is not an integer in 0..={max}: {value}"
+                        ))
+                    })
             })
             .transpose()
     }
@@ -1411,9 +1395,7 @@ impl<'a> Parser<'a> {
         attr: &'static str,
         units: Units,
     ) -> Result<Option<f64>> {
-        self.attr(node, attr)
-            .map(|v| self.parse_f64_str_with_units(v, units))
-            .transpose()
+        self.number(node, attr, Sign::Any, Some(units))
     }
 
     fn parse_optional_non_negative_f64_attr_with_units(
@@ -1422,15 +1404,7 @@ impl<'a> Parser<'a> {
         attr: &'static str,
         units: Units,
     ) -> Result<Option<f64>> {
-        self.attr(node, attr)
-            .map(|source| {
-                let value = source.parse::<f64>().map_err(|_| {
-                    Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {attr}"))
-                })?;
-                self.validate_non_negative_f64(value, attr)?;
-                Ok(crate::units::to_mm(value, units))
-            })
-            .transpose()
+        self.number(node, attr, Sign::NonNegative, Some(units))
     }
 
     fn parse_optional_non_negative_f64_attr(
@@ -1438,23 +1412,16 @@ impl<'a> Parser<'a> {
         node: &Node,
         attr: &'static str,
     ) -> Result<Option<f64>> {
-        self.attr(node, attr)
-            .map(|source| {
-                let value = source.parse::<f64>().map_err(|_| {
-                    Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {attr}"))
-                })?;
-                self.validate_non_negative_f64(value, attr)
-            })
-            .transpose()
+        self.number(node, attr, Sign::NonNegative, None)
     }
 
-    fn validate_non_negative_f64(&self, value: f64, attr: &str) -> Result<f64> {
-        if !value.is_finite() || !(0.0..=3.4e38).contains(&value) {
-            return Err(Ipc2581Error::InvalidAttribute(format!(
-                "Value for {attr} is outside the IPC-2581C non-negative range"
-            )));
-        }
-        Ok(value)
+    /// An optional boolean attribute: absent is `false`, malformed an error.
+    fn parse_flag_attr(&self, node: &Node, attr: &'static str) -> Result<bool> {
+        Ok(self
+            .attr(node, attr)
+            .map(|value| parse_xsd_bool(value, attr))
+            .transpose()?
+            .unwrap_or(false))
     }
 
     fn parse_bool_attr(&self, node: &Node, attr: &'static str) -> Result<bool> {
@@ -1533,7 +1500,11 @@ impl<'a> Parser<'a> {
 
         // Parse child elements for material and dielectric properties
         for child in self.element_children(node) {
-            items.push(self.parse_spec_item(&child));
+            let item = self.parse_spec_item(&child)?;
+            let values = item
+                .properties
+                .iter()
+                .filter_map(|property| Some((property.value?, property.unit)));
             match self.name(&child) {
                 "General" if self.attr(&child, "type") == Some("MATERIAL") => {
                     // Look for Property, ColorTerm, and Color elements
@@ -1577,40 +1548,31 @@ impl<'a> Parser<'a> {
                     }
                 }
                 "Dielectric" => {
-                    let dielectric_type = self.attr(&child, "type");
-                    // Look for Property with value attribute
-                    for prop in self.element_children(&child) {
-                        if self.name(&prop) == "Property"
-                            && let Some(value_str) = self.attr(&prop, "value")
-                            && let Ok(value) = value_str.parse::<f64>()
-                        {
-                            match dielectric_type {
-                                Some("DIELECTRIC_CONSTANT") => dielectric_constant = Some(value),
-                                Some("LOSS_TANGENT") => loss_tangent = Some(value),
-                                _ => {}
-                            }
+                    let value = values.map(|(value, _)| value).next_back();
+                    match self.attr(&child, "type") {
+                        Some("DIELECTRIC_CONSTANT") => {
+                            dielectric_constant = value.or(dielectric_constant)
                         }
+                        Some("LOSS_TANGENT") => loss_tangent = value.or(loss_tangent),
+                        _ => {}
                     }
                 }
                 "Conductor" if self.attr(&child, "type") == Some("WEIGHT") => {
-                    for prop in self.element_children(&child) {
-                        if self.name(&prop) == "Property"
-                            && let Some(value_str) = self.attr(&prop, "value")
-                            && let Ok(value) = value_str.parse::<f64>()
-                        {
-                            // Check unit - should be OZ
-                            let unit = self.attr(&prop, "unit").unwrap_or("OZ");
-                            if unit.to_uppercase() == "OZ" {
-                                copper_weight_oz = Some(value);
-                            }
-                        }
-                    }
+                    // The weight is in ounces unless a unit says otherwise.
+                    copper_weight_oz = values
+                        .filter(|(_, unit)| {
+                            unit.is_none_or(|unit| {
+                                self.interner.resolve(unit).eq_ignore_ascii_case("OZ")
+                            })
+                        })
+                        .map(|(value, _)| value)
+                        .next_back()
+                        .or(copper_weight_oz);
                 }
-                "SurfaceFinish" => {
-                    surface_finish = self.parse_surface_finish(&child).ok();
-                }
+                "SurfaceFinish" => surface_finish = Some(self.parse_surface_finish(&child)?),
                 _ => {}
             }
+            items.push(item);
         }
 
         Ok(ecad::Spec {
@@ -1627,7 +1589,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_spec_item(&mut self, node: &Node) -> ecad::SpecItem {
+    fn parse_spec_item(&mut self, node: &Node) -> Result<ecad::SpecItem> {
         let element_name = self.name(node).to_string();
         let element = self.interner.intern(&element_name);
         let item_type = self.attr(node, "type").map(|s| self.interner.intern(s));
@@ -1639,32 +1601,29 @@ impl<'a> Parser<'a> {
         let properties = property_nodes
             .into_iter()
             .map(|child| self.parse_spec_property(&child))
-            .collect();
+            .collect::<Result<_>>()?;
 
-        ecad::SpecItem {
+        Ok(ecad::SpecItem {
             element,
             kind: spec_item_kind(&element_name),
             item_type,
             comment,
             properties,
-        }
+        })
     }
 
-    fn parse_spec_property(&mut self, node: &Node) -> ecad::SpecProperty {
-        ecad::SpecProperty {
-            value: self
-                .attr(node, "value")
-                .and_then(|value| value.parse::<f64>().ok()),
+    fn parse_spec_property(&mut self, node: &Node) -> Result<ecad::SpecProperty> {
+        Ok(ecad::SpecProperty {
+            value: self.parse_optional_f64_attr(node, "value")?,
             text: self.attr(node, "text").map(|s| self.interner.intern(s)),
             unit: self.attr(node, "unit").map(|s| self.interner.intern(s)),
-            plus_tol: self
-                .attr(node, "plusTol")
-                .and_then(|value| value.parse::<f64>().ok()),
-            minus_tol: self
-                .attr(node, "minusTol")
-                .and_then(|value| value.parse::<f64>().ok()),
-            tol_percent: self.attr(node, "tolPercent").and_then(parse_optional_bool),
-        }
+            plus_tol: self.parse_optional_f64_attr(node, "plusTol")?,
+            minus_tol: self.parse_optional_f64_attr(node, "minusTol")?,
+            tol_percent: self
+                .attr(node, "tolPercent")
+                .map(|value| parse_xsd_bool(value, "tolPercent"))
+                .transpose()?,
+        })
     }
 
     fn parse_surface_finish(&mut self, node: &Node) -> Result<ecad::SurfaceFinish> {
@@ -1688,7 +1647,8 @@ impl<'a> Parser<'a> {
                 {
                     let criteria = self
                         .attr(&product_node, "criteria")
-                        .and_then(|s| self.parse_product_criteria(s).ok());
+                        .map(|s| self.parse_product_criteria(s))
+                        .transpose()?;
 
                     products.push(ecad::FinishProduct {
                         name: self.interner.intern(product_name),
@@ -1723,7 +1683,8 @@ impl<'a> Parser<'a> {
                     {
                         let criteria = self
                             .attr(&product_node, "criteria")
-                            .and_then(|s| self.parse_product_criteria(s).ok());
+                            .map(|s| self.parse_product_criteria(s))
+                            .transpose()?;
 
                         products.push(ecad::FinishProduct {
                             name: self.interner.intern(product_name),
@@ -1816,27 +1777,14 @@ impl<'a> Parser<'a> {
 
         let name = self.required_attr(node, "name", "Stackup")?;
 
-        // Convert overall thickness if present
-        let overall_thickness = self
-            .attr(node, "overallThickness")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
-
-        // Parse whereMeasured attribute
+        let overall_thickness =
+            self.parse_optional_f64_attr_with_units(node, "overallThickness", units)?;
         let where_measured = self
             .attr(node, "whereMeasured")
-            .and_then(|s| self.parse_where_measured(s).ok());
-
-        // Parse tolerances
-        let tol_plus = self
-            .attr(node, "tolPlus")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
-
-        let tol_minus = self
-            .attr(node, "tolMinus")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
+            .map(|s| self.parse_where_measured(s))
+            .transpose()?;
+        let tol_plus = self.parse_optional_f64_attr_with_units(node, "tolPlus", units)?;
+        let tol_minus = self.parse_optional_f64_attr_with_units(node, "tolMinus", units)?;
 
         let mut layers = Vec::new();
         for child in self.element_children(node) {
@@ -1866,27 +1814,28 @@ impl<'a> Parser<'a> {
 
         let layer_ref = self.required_attr(node, "layerOrGroupRef", "StackupLayer")?;
 
-        // Convert thickness if present
-        let thickness = self
-            .attr(node, "thickness")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
+        let thickness = self.parse_optional_f64_attr_with_units(node, "thickness", units)?;
 
         // Convert tolerances if present
         // NOTE: IPC-2581 spec allows tolPercent attribute to indicate if these are percentages
         // For a pure parser, we should keep the raw values and let downstream code handle interpretation
         // Currently we convert to mm for convenience (TODO: make this a separate normalization step)
-        let tol_plus = self
-            .attr(node, "tolPlus")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
+        let tol_plus = self.parse_optional_f64_attr_with_units(node, "tolPlus", units)?;
+        let tol_minus = self.parse_optional_f64_attr_with_units(node, "tolMinus", units)?;
 
-        let tol_minus = self
-            .attr(node, "tolMinus")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
-
-        let layer_number = self.attr(node, "sequence").and_then(|s| s.parse().ok());
+        // `sequence` is a double in the schema; layers are numbered with whole ones.
+        let layer_number = self
+            .parse_optional_non_negative_f64_attr(node, "sequence")?
+            .map(|sequence| {
+                (sequence.fract() == 0.0 && sequence <= f64::from(u32::MAX))
+                    .then_some(sequence as u32)
+                    .ok_or_else(|| {
+                        Ipc2581Error::InvalidAttribute(format!(
+                            "StackupLayer sequence is not a whole number: {sequence}"
+                        ))
+                    })
+            })
+            .transpose()?;
 
         // Look up material and dielectric properties from Spec via SpecRef
         let mut material = None;
@@ -1996,8 +1945,13 @@ impl<'a> Parser<'a> {
         let y = self
             .parse_optional_f64_attr_with_units(node, "y", units)?
             .unwrap_or(0.0);
-        let nx = self.parse_optional_u32_attr(node, "nx")?.unwrap_or(1);
-        let ny = self.parse_optional_u32_attr(node, "ny")?.unwrap_or(1);
+        // The importer bounds the expanded instance count.
+        let nx = self
+            .parse_optional_count_attr(node, "nx", u32::MAX)?
+            .unwrap_or(1);
+        let ny = self
+            .parse_optional_count_attr(node, "ny", u32::MAX)?
+            .unwrap_or(1);
         let dx = self
             .parse_optional_f64_attr_with_units(node, "dx", units)?
             .unwrap_or(0.0);
@@ -2480,11 +2434,7 @@ impl<'a> Parser<'a> {
                 "SlotCavityRef" => {
                     slot_cavity_ref = self.optional_attr(&child, "id");
                 }
-                "SpecRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        spec_refs.push(self.interner.intern(id));
-                    }
-                }
+                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
                 _ => {}
             }
         }
@@ -2580,11 +2530,7 @@ impl<'a> Parser<'a> {
         let mut spec_refs = Vec::new();
         for child in self.element_children(node) {
             match self.name(&child) {
-                "SpecRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        spec_refs.push(self.interner.intern(id));
-                    }
-                }
+                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
                 "Span" => {
                     span = Some(ecad::LayerSpan {
                         from_layer: self
@@ -2639,12 +2585,10 @@ impl<'a> Parser<'a> {
             .map(|s| self.parse_enum_attr::<GeometryUsage>(s))
             .transpose()?;
 
-        // Parse polarity attribute
-        let polarity = self.attr(node, "polarity").and_then(|s| match s {
-            "POSITIVE" => Some(Polarity::Positive),
-            "NEGATIVE" => Some(Polarity::Negative),
-            _ => None,
-        });
+        let polarity = self
+            .attr(node, "polarity")
+            .map(|s| self.parse_polarity(s))
+            .transpose()?;
 
         let mut features = Vec::new();
         let mut spec_refs = Vec::new();
@@ -2652,11 +2596,7 @@ impl<'a> Parser<'a> {
 
         for child in self.element_children(node) {
             match self.name(&child) {
-                "SpecRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        spec_refs.push(self.interner.intern(id));
-                    }
-                }
+                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
                 "Hole" => {
                     let hole = self.parse_hole(&child)?;
                     features.push(ecad::SetFeature::Hole(hole));
@@ -2683,9 +2623,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 "NonstandardAttribute" => {
-                    if let Ok(attr) = self.parse_nonstandard_attribute(&child) {
-                        nonstandard_attributes.push(attr);
-                    }
+                    nonstandard_attributes.push(self.parse_nonstandard_attribute(&child)?);
                 }
                 _ => {}
             }
@@ -2943,11 +2881,7 @@ impl<'a> Parser<'a> {
         let mut spec_refs = Vec::new();
         for child in self.element_children(node) {
             match self.name(&child) {
-                "SpecRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        spec_refs.push(self.interner.intern(id));
-                    }
-                }
+                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
                 "Xform" => xform = Some(self.parse_xform(&child, units)?),
                 _ => {}
             }
@@ -3029,13 +2963,8 @@ impl<'a> Parser<'a> {
             .map(|s| self.interner.intern(s));
 
         // x and y attributes are a legacy form of the Location child.
-        let coordinate = |value: Option<&str>| {
-            value
-                .and_then(|s| s.parse::<f64>().ok())
-                .map(|v| crate::units::to_mm(v, units))
-        };
-        let mut x = coordinate(self.attr(node, "x"));
-        let mut y = coordinate(self.attr(node, "y"));
+        let mut x = self.parse_optional_f64_attr_with_units(node, "x", units)?;
+        let mut y = self.parse_optional_f64_attr_with_units(node, "y", units)?;
 
         let mut xform = None;
         let mut feature = None;
@@ -3043,8 +2972,8 @@ impl<'a> Parser<'a> {
         for child in self.element_children(node) {
             match self.name(&child) {
                 "Location" => {
-                    x = coordinate(self.attr(&child, "x"));
-                    y = coordinate(self.attr(&child, "y"));
+                    let location = self.parse_location(&child, units)?;
+                    (x, y) = (Some(location.x), Some(location.y));
                 }
                 "Xform" => xform = Some(self.parse_xform(&child, units)?),
                 "PinRef" => pin_ref = Some(self.parse_pin_ref(&child)?),
@@ -3114,9 +3043,7 @@ impl<'a> Parser<'a> {
                     }));
                 }
                 "LineDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        line_desc_ref = Some(self.interner.intern(id));
-                    }
+                    line_desc_ref = Some(self.required_attr(&child, "id", "LineDescRef")?)
                 }
                 _ => {}
             }
@@ -3201,7 +3128,10 @@ impl<'a> Parser<'a> {
             // Composite
             "STACKUP_COMPOSITE" => Ok(LayerFunction::StackupComposite),
 
-            _ => Ok(LayerFunction::Other),
+            "OTHER" => Ok(LayerFunction::Other),
+            _ => Err(Ipc2581Error::InvalidAttribute(format!(
+                "Unknown layerFunction: {s}"
+            ))),
         }
     }
 
@@ -3298,12 +3228,6 @@ impl<'a> Parser<'a> {
         let pad_use = self.parse_pad_use(self.interner.resolve(pad_use_str))?;
 
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
-        let coordinate = |value: Option<&str>| {
-            value
-                .and_then(|value| value.parse::<f64>().ok())
-                .map(|value| crate::units::to_mm(value, units))
-                .unwrap_or(0.0)
-        };
         let (mut x, mut y) = (0.0, 0.0);
         let mut xform = None;
         let mut feature = None;
@@ -3311,8 +3235,8 @@ impl<'a> Parser<'a> {
             match self.name(&child) {
                 "Xform" => xform = Some(self.parse_xform(&child, units)?),
                 "Location" => {
-                    x = coordinate(self.attr(&child, "x"));
-                    y = coordinate(self.attr(&child, "y"));
+                    let location = self.parse_location(&child, units)?;
+                    (x, y) = (location.x, location.y);
                 }
                 _ if feature.is_none() => feature = self.parse_feature_shape(&child, units)?,
                 _ => {}
@@ -3659,8 +3583,7 @@ impl<'a> Parser<'a> {
         let datetime = self.required_attr(node, "datetime", "AvlHeader")?;
 
         let version = self
-            .attr(node, "version")
-            .and_then(|s| s.parse().ok())
+            .parse_optional_count_attr(node, "version", u32::MAX)?
             .unwrap_or(1);
 
         let comment = self.optional_attr(node, "comment");
@@ -3686,11 +3609,7 @@ impl<'a> Parser<'a> {
         for child in self.element_children(node) {
             match self.name(&child) {
                 "AvlVmpn" => vmpn_list.push(self.parse_avl_vmpn(&child)?),
-                "SpecRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        spec_refs.push(self.interner.intern(id));
-                    }
-                }
+                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
                 _ => {}
             }
         }
@@ -3740,13 +3659,16 @@ impl<'a> Parser<'a> {
     fn parse_avl_mpn(&mut self, node: &Node) -> Result<AvlMpn> {
         let name = self.required_attr(node, "name", "AvlMpn")?;
 
-        let rank = self.attr(node, "rank").and_then(|s| s.parse().ok());
-
-        let cost = self.attr(node, "cost").and_then(|s| s.parse().ok());
-
+        let rank = self.parse_optional_count_attr(node, "rank", u32::MAX)?;
+        let cost = self.parse_optional_f64_attr(node, "cost")?;
         let moisture_sensitivity = self
             .attr(node, "moistureSensitivity")
-            .and_then(MoistureSensitivity::parse);
+            .map(|value| {
+                MoistureSensitivity::parse(value).ok_or_else(|| {
+                    Ipc2581Error::InvalidAttribute(format!("Unknown moistureSensitivity: {value}"))
+                })
+            })
+            .transpose()?;
 
         let availability = self
             .attr(node, "availability")
@@ -3772,42 +3694,22 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_xform(&self, node: &Node, units: Units) -> Result<Xform> {
-        let x_offset = self
-            .attr(node, "xOffset")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|value| crate::units::to_mm(value, units))
-            .unwrap_or(0.0);
-        let y_offset = self
-            .attr(node, "yOffset")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|value| crate::units::to_mm(value, units))
-            .unwrap_or(0.0);
-        let rotation = self
-            .attr(node, "rotation")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
-        let mirror = self
-            .attr(node, "mirror")
-            .map(|value| parse_xsd_bool(value, "mirror"))
-            .transpose()?
-            .unwrap_or(false);
-        let face_up = self
-            .attr(node, "faceUp")
-            .map(|value| parse_xsd_bool(value, "faceUp"))
-            .transpose()?
-            .unwrap_or(false);
-        let scale = self
-            .attr(node, "scale")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1.0);
-
+        let identity = Xform::default();
         Ok(Xform {
-            x_offset,
-            y_offset,
-            rotation,
-            mirror,
-            face_up,
-            scale,
+            x_offset: self
+                .parse_optional_f64_attr_with_units(node, "xOffset", units)?
+                .unwrap_or(identity.x_offset),
+            y_offset: self
+                .parse_optional_f64_attr_with_units(node, "yOffset", units)?
+                .unwrap_or(identity.y_offset),
+            rotation: self
+                .parse_optional_f64_attr(node, "rotation")?
+                .unwrap_or(identity.rotation),
+            mirror: self.parse_flag_attr(node, "mirror")?,
+            face_up: self.parse_flag_attr(node, "faceUp")?,
+            scale: self
+                .parse_optional_f64_attr(node, "scale")?
+                .unwrap_or(identity.scale),
         })
     }
 
@@ -3817,6 +3719,37 @@ impl<'a> Parser<'a> {
             .map(|n| self.parse_xform(&n, units))
             .transpose()
     }
+}
+
+/// The schema leaves `ringNumber` unbounded; a target has a handful of rings
+/// and the importer images each one.
+const MAX_MOIRE_RINGS: u32 = 256;
+
+#[derive(Clone, Copy)]
+enum Sign {
+    Any,
+    /// IPC-2581C `nonNegativeDoubleType`.
+    NonNegative,
+}
+
+/// The one place attribute text becomes an `f64`. `NaN` and `INF` are valid
+/// `xsd:double`s that no geometry can use, and a finite source value can still
+/// overflow once scaled to millimeters.
+fn parse_f64(value: &str, attr: &str, sign: Sign, units: Option<Units>) -> Result<f64> {
+    let invalid =
+        |why: &str| Ipc2581Error::InvalidAttribute(format!("Value for {attr} {why}: {value}"));
+    let parsed = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| invalid("is not a number"))?;
+    if matches!(sign, Sign::NonNegative) && !(0.0..=3.4e38).contains(&parsed) {
+        return Err(invalid("is outside the IPC-2581C non-negative range"));
+    }
+    let scaled = units.map_or(parsed, |units| crate::units::to_mm(parsed, units));
+    scaled
+        .is_finite()
+        .then_some(scaled)
+        .ok_or_else(|| invalid("is not finite"))
 }
 
 fn has_z_axis_dim(doc: &Document, node: &Node) -> bool {

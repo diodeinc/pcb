@@ -4108,7 +4108,7 @@ mod tests {
   <Ecad>
     <CadHeader units="MILLIMETER"/>
     <CadData>
-      <Layer name="TOP" layerFunction="SILK_SCREEN" side="TOP"/>
+      <Layer name="TOP" layerFunction="SILKSCREEN" side="TOP"/>
       <Step name="board" type="BOARD">
         <LayerFeature layerRef="TOP">
           <Set>
