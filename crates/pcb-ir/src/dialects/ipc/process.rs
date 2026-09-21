@@ -31,7 +31,6 @@ where
     S: Copy + Eq + Hash,
     L: Clone,
 {
-    normalize_bounds(doc);
     prune_unpainted_paths(doc);
     compose_feature_paths(doc);
     normalize_bounds(doc);
@@ -321,7 +320,10 @@ pub fn expand_feature_placement_groups<S: Clone, L>(doc: &mut Document<S, L>) {
 type ExpandedFeatures<S> = (Vec<Feature<S>>, Vec<Span>);
 
 fn materialize_placement_groups<S: Clone, L>(doc: &mut Document<S, L>) -> ExpandedFeatures<S> {
-    let mut old_features = doc.features.iter().cloned().map(Some).collect::<Vec<_>>();
+    let mut old_features = std::mem::take(&mut doc.features)
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
     let mut expanded = Vec::with_capacity(old_features.len());
     let mut mapping = vec![Span::EMPTY; old_features.len()];
 
