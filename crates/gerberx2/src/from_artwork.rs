@@ -340,11 +340,14 @@ fn lower_artwork_object(
                     )?);
                     continue;
                 }
-                let aperture = apertures.define(
+                let Some(aperture) = apertures.define(
                     Aperture::circle(stroke_width),
                     aperture_function,
                     accuracy,
-                )?;
+                )?
+                else {
+                    continue;
+                };
                 let segments = contour_segments(&contour, accuracy)?;
                 for mark in
                     pcb_ir::geom::stroke_pattern_marks(&segments, stroke.pattern, stroke_width)
@@ -376,16 +379,20 @@ fn lower_artwork_object(
             transform: placement,
         } => {
             let transform = transform.concat(placement);
-            let aperture =
-                apertures.flash(layer, aperture, transform, aperture_function, accuracy)?;
-            objects.push(WriterObject::new(
-                ObjectKind::Flash {
-                    at: lower_point(Point::new(transform.m02, transform.m12)),
-                    aperture,
-                },
-                polarity,
-                attributes,
-            ));
+            objects.extend(
+                apertures
+                    .flash(layer, aperture, transform, aperture_function, accuracy)?
+                    .map(|aperture| {
+                        WriterObject::new(
+                            ObjectKind::Flash {
+                                at: lower_point(Point::new(transform.m02, transform.m12)),
+                                aperture,
+                            },
+                            polarity,
+                            attributes,
+                        )
+                    }),
+            );
         }
         ArtworkGeometry::Instance { .. } | ArtworkGeometry::GridInstance { .. } => {
             unreachable!("instance expansion leaves only primitive geometry")
@@ -539,7 +546,8 @@ enum ApertureTemplateKey {
 }
 
 impl ApertureTable {
-    /// The aperture imaging `source` under the linear part of `transform`.
+    /// The aperture imaging `source` under the linear part of `transform`,
+    /// or `None` when it images nothing.
     ///
     /// Gerber's own `%LR`/`%LM`/`%LS` are never used: JLCPCB shifts
     /// off-origin custom apertures under `%LR`, so every basis is baked
@@ -551,7 +559,7 @@ impl ApertureTable {
         transform: Affine2,
         function: &[String],
         accuracy: GeometryAccuracy,
-    ) -> Result<i32> {
+    ) -> Result<Option<i32>> {
         let basis = Affine2 {
             m02: 0.0,
             m12: 0.0,
@@ -568,7 +576,7 @@ impl ApertureTable {
             function: function.to_vec(),
         };
         if let Some(code) = self.by_key.get(&key) {
-            return Ok(*code);
+            return Ok(Some(*code));
         }
         let aperture = layer.apertures.get(source as usize).ok_or_else(|| {
             GerberError::InvalidStructure(format!(
@@ -576,11 +584,15 @@ impl ApertureTable {
             ))
         })?;
         let code = self.define(bake_aperture_basis(aperture, basis), function, accuracy)?;
-        self.by_key.insert(key, code);
+        if let Some(code) = code {
+            self.by_key.insert(key, code);
+        }
         Ok(code)
     }
 
-    /// Define an aperture, reusing an identical definition.
+    /// Define an aperture, reusing an identical definition. An aperture
+    /// without area defines nothing: it paints nothing here, as a zero-width
+    /// stroke or an empty flash does in every other consumer.
     ///
     /// The four standard templates stay standard. Every other shape is one
     /// flattened outline macro: JLCPCB renders primitive 21 rounded
@@ -591,13 +603,16 @@ impl ApertureTable {
         aperture: Aperture,
         function: &[String],
         accuracy: GeometryAccuracy,
-    ) -> Result<i32> {
+    ) -> Result<Option<i32>> {
         let bounds = aperture.bbox();
-        if !(bounds.width() > 0.0 && bounds.height() > 0.0) {
+        if !bounds.is_valid() {
             return Err(GerberError::InvalidStructure(format!(
-                "cannot export empty Gerber aperture {:?}",
+                "cannot export malformed Gerber aperture {:?}",
                 aperture.shape
             )));
+        }
+        if bounds.is_empty() || bounds.width() == 0.0 || bounds.height() == 0.0 {
+            return Ok(None);
         }
         let hole_diameter = (aperture.hole_diameter > 0.0).then_some(aperture.hole_diameter);
         let hole_nm = hole_diameter.map_or(0, quantize_mm);
@@ -658,9 +673,7 @@ impl ApertureTable {
                 let outlines =
                     prepare_on_grid(&aperture.contours(), aperture.fill_rule(), accuracy)?;
                 if outlines.is_empty() {
-                    return Err(GerberError::InvalidStructure(
-                        "cannot export an empty Gerber aperture outline".to_string(),
-                    ));
+                    return Ok(None);
                 }
                 (
                     ApertureTemplateKey::Outline(
@@ -682,7 +695,7 @@ impl ApertureTable {
             function: function.to_vec(),
         };
         if let Some(code) = self.by_key.get(&key) {
-            return Ok(*code);
+            return Ok(Some(*code));
         }
         let code = 10 + self.apertures.len() as i32;
         self.by_key.insert(key, code);
@@ -691,7 +704,7 @@ impl ApertureTable {
             template,
             attributes: lower_aperture_function(function),
         });
-        Ok(code)
+        Ok(Some(code))
     }
 }
 
@@ -1377,6 +1390,55 @@ mod tests {
         }
         let (a, b) = (image(a), image(b));
         a.difference(&b).unwrap().area() + b.difference(&a).unwrap().area()
+    }
+
+    #[test]
+    fn strokes_and_flashes_without_area_paint_nothing() {
+        let mut artwork = ArtworkDocument::new();
+        let layer = artwork.push_layer(IrArtworkDocument {
+            name: "F.Cu".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+        for cap in [LineCap::Round, LineCap::Butt] {
+            let path = artwork.push_path(
+                Paint::Stroke(StrokeStyle::new(0.0, cap)),
+                vec![ContourBuf::new(vec![
+                    PathCmd::move_to(Point::new(0.0, 0.0)),
+                    PathCmd::line_to(Point::new(2.0, 0.0)),
+                ])],
+            );
+            artwork.push_object(
+                layer,
+                ArtworkObject::new(Polarity::Dark, ArtworkGeometry::Stroke { path }),
+            );
+        }
+        for diameter in [0.0, 1.0] {
+            let aperture = artwork.push_aperture(Aperture::circle(diameter));
+            artwork.push_object(
+                layer,
+                ArtworkObject::new(
+                    Polarity::Dark,
+                    ArtworkGeometry::Flash {
+                        aperture,
+                        transform: Affine2::IDENTITY,
+                    },
+                ),
+            );
+        }
+
+        let gerber = lower_artwork_layer(&artwork, GeometryAccuracy::default()).unwrap();
+        assert_eq!(gerber.apertures.len(), 1);
+        assert!(matches!(
+            gerber.objects.as_slice(),
+            [WriterObject {
+                kind: ObjectKind::Flash { .. },
+                ..
+            }]
+        ));
     }
 
     #[test]
