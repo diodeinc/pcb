@@ -152,6 +152,39 @@ impl PreparedRegion {
             .min_by(|left, right| left.mm.total_cmp(&right.mm))
     }
 
+    /// Whether some boundary segment lies within `distance_mm` of the query
+    /// segment, without the slack [`Self::segment_nearest_within`] allows.
+    pub(crate) fn has_segment_within(&self, start: Point, end: Point, distance_mm: f64) -> bool {
+        self.segment_ids_near(start, end, distance_mm)
+            .into_iter()
+            .any(|id| {
+                let (a, b) = self.segments[id];
+                dist::segments(start, end, a, b).0 <= distance_mm
+            })
+    }
+
+    /// Bounds of the prepared boundary.
+    pub(crate) fn bounds(&self) -> BBox {
+        self.nodes.first().map_or(BBox::empty(), |root| root.bounds)
+    }
+
+    /// Winding number of the boundary around `point`, with the half-open
+    /// crossing rule every other winding count in this module uses.
+    pub(crate) fn winding(&self, point: Point) -> i32 {
+        let mut query = Query {
+            point,
+            distance: f64::NEG_INFINITY,
+            found: false,
+            boundary: Point::ZERO,
+            winding: 0,
+            needs_winding: true,
+        };
+        if !self.nodes.is_empty() {
+            self.visit(0, &mut query);
+        }
+        query.winding
+    }
+
     /// Boundary segments whose bounds meet `bounds`, once each in source order.
     pub fn segments_meeting(&self, bounds: BBox) -> impl Iterator<Item = (Point, Point)> + '_ {
         self.segment_ids_meeting(bounds)

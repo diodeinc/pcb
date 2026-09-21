@@ -642,14 +642,11 @@ fn measure_component(
     // Preserve the source-boundary index: candidate axes use the
     // nearby subset, while validation sees every (including short)
     // source edge through `complete_boundary`.
-    let sites = boundary
-        .segment_ids_meeting(component.bbox.expand(reach))
-        .into_iter()
-        .map(|id| segments[id])
-        .collect::<Vec<_>>();
     let axis = component_axis(
-        &sites,
-        &component,
+        &boundary.segment_ids_meeting(component.bbox.expand(reach)),
+        segments,
+        boundary,
+        &component.prepare_query(),
         complete_boundary,
         reach,
         radius_cap,
@@ -667,13 +664,13 @@ fn measure_component(
 fn validate_pair(
     first_wall: (Point, Point),
     second_wall: (Point, Point),
-    component: &ContourSet,
+    component: &PreparedRegion,
     complete_boundary: &PreparedRegion,
     radius_cap: f64,
     contact_index: &ContactIndex,
 ) -> Vec<WidthAxis> {
     let mut validated = Vec::new();
-    for axis in WidthAxis::between(first_wall, second_wall, component.bbox) {
+    for axis in WidthAxis::between(first_wall, second_wall, component.bounds()) {
         validated.extend(axis.in_region_with_contact_index(
             component,
             complete_boundary,
@@ -686,10 +683,14 @@ fn validate_pair(
 
 /// Enumerate exact bisectors of every reachable pair of nonincident walls,
 /// then let the analytic axis clip and validate itself against the residue
-/// and the complete source boundary.
+/// and the complete source boundary. `sites` are the ids, ascending, of the
+/// `segments` near the component, and `boundary` indexes all of `segments`.
+#[allow(clippy::too_many_arguments)]
 fn component_axis(
-    sites: &[OrientedBoundarySegment],
-    component: &ContourSet,
+    sites: &[usize],
+    segments: &[OrientedBoundarySegment],
+    boundary: &PreparedRegion,
+    component: &PreparedRegion,
     complete_boundary: &PreparedRegion,
     reach: f64,
     radius_cap: f64,
@@ -698,10 +699,8 @@ fn component_axis(
     if sites.len() < 2 {
         return Vec::new();
     }
-    let error = numerical_error(component.bbox);
-    let incident = |i: usize, j: usize| {
-        let a = &sites[i];
-        let b = &sites[j];
+    let error = numerical_error(component.bounds());
+    let incident = |a: &OrientedBoundarySegment, b: &OrientedBoundarySegment| {
         if a.topology.ring == b.topology.ring {
             boundary_segments_are_incident(a.topology, b.topology)
         } else {
@@ -710,56 +709,52 @@ fn component_axis(
                 .any(|point| [b.start, b.end].contains(point))
         }
     };
-    let component_edges = component
-        .rings
-        .iter()
-        .flat_map(ring_edges)
-        .collect::<Vec<_>>();
     // A component disk is no larger than its clearance to its nearest
     // source site. The farthest component vertex from that site is an exact
     // upper bound, so walls farther from the component cannot participate.
-    let farthest_vertex = |site: &OrientedBoundarySegment| {
+    // A site with any vertex beyond the bound so far cannot lower it.
+    let farthest_vertex_below = |bound: f64, site: &OrientedBoundarySegment| {
         component
-            .rings
+            .segments
             .iter()
-            .flat_map(|ring| ring.iter())
-            .map(|&[x, y]| dist::point_segment(Point::new(x, y), site.start, site.end).0)
-            .fold(0.0, f64::max)
-    };
-    let clearance_bound = sites
-        .iter()
-        .map(farthest_vertex)
-        .fold(f64::INFINITY, f64::min)
-        + error;
-    let within_reach = sites
-        .iter()
-        .map(|site| {
-            component_edges.iter().any(|&(start, end)| {
-                dist::segments(start, end, site.start, site.end).0 <= clearance_bound
+            .try_fold(0.0, |farthest: f64, &(vertex, _)| {
+                let distance = dist::point_segment(vertex, site.start, site.end).0;
+                (distance < bound).then_some(farthest.max(distance))
             })
-        })
+    };
+    let clearance_bound = sites.iter().fold(f64::INFINITY, |bound, &site| {
+        farthest_vertex_below(bound, &segments[site]).unwrap_or(bound)
+    }) + error;
+    let reachable = sites
+        .iter()
+        .map(|&site| &segments[site])
+        .map(|site| component.has_segment_within(site.start, site.end, clearance_bound))
         .collect::<Vec<_>>();
+    let reachable = reachable.as_slice();
     let candidate_diameter = 2.0 * reach + error;
 
-    let mut axes = Vec::new();
     // Passing wall pairs, in first-major order. Validation is the expensive
     // part; it runs in parallel below while preserving this order exactly.
-    let mut passing = Vec::new();
-    for first in 0..sites.len() {
-        for second in first + 1..sites.len() {
-            if !within_reach[first] || !within_reach[second] || incident(first, second) {
-                continue;
-            }
-            let first_wall = (sites[first].start, sites[first].end);
-            let second_wall = (sites[second].start, sites[second].end);
-            let separation =
-                dist::segments(first_wall.0, first_wall.1, second_wall.0, second_wall.1).0;
-            if separation > candidate_diameter {
-                continue;
-            }
-            passing.push((first_wall, second_wall));
-        }
-    }
+    let passing = sites
+        .iter()
+        .enumerate()
+        .filter(|&(first, _)| reachable[first])
+        .flat_map(|(first, &site)| {
+            let wall = &segments[site];
+            boundary
+                .segment_ids_near(wall.start, wall.end, candidate_diameter)
+                .into_iter()
+                .filter_map(|id| sites.binary_search(&id).ok())
+                .filter(move |&second| second > first && reachable[second])
+                .map(|second| &segments[sites[second]])
+                .filter(move |partner| {
+                    !incident(wall, partner)
+                        && dist::segments(wall.start, wall.end, partner.start, partner.end).0
+                            <= candidate_diameter
+                })
+                .map(move |partner| ((wall.start, wall.end), (partner.start, partner.end)))
+        })
+        .collect::<Vec<_>>();
     // Validate pairs in parallel; the ordered collect keeps axis order
     // identical to the sequential loop. Rayon has no threads on wasm, so the
     // wasm target below runs the same closure sequentially.
@@ -774,16 +769,13 @@ fn component_axis(
         )
     };
     #[cfg(not(target_family = "wasm"))]
-    let validated_all = {
+    let validated = {
         use rayon::prelude::*;
         passing.into_par_iter().map(validate).collect::<Vec<_>>()
     };
     #[cfg(target_family = "wasm")]
-    let validated_all = passing.into_iter().map(validate).collect::<Vec<_>>();
-    for validated in validated_all {
-        axes.extend(validated);
-    }
-    axes
+    let validated = passing.into_iter().map(validate).collect::<Vec<_>>();
+    validated.into_iter().flatten().collect()
 }
 
 /// The closing residue kept only where two distinct source-boundary
@@ -809,17 +801,13 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
         .connected_components()
         .into_iter()
         .filter(|component| {
+            let edges = component.prepare_query();
             let contacts = boundary
                 .segment_ids_meeting(component.bbox.expand(contact_tolerance))
                 .into_iter()
                 .map(|id| &source_segments[id])
                 .filter(|segment| {
-                    region_boundary_within_distance(
-                        component,
-                        segment.start,
-                        segment.end,
-                        contact_tolerance,
-                    )
+                    edges.has_segment_within(segment.start, segment.end, contact_tolerance)
                 })
                 .collect::<Vec<_>>();
             contacts.iter().enumerate().any(|(index, left)| {
@@ -845,23 +833,6 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
         residual.resolution,
         residual.uncertainty_mm,
     )
-}
-
-fn region_boundary_within_distance(
-    region: &ContourSet,
-    start: Point,
-    end: Point,
-    distance: f64,
-) -> bool {
-    let expanded = BBox::spanning(start, end).expand(distance);
-    region
-        .rings
-        .iter()
-        .flat_map(ring_edges)
-        .any(|(other_start, other_end)| {
-            expanded.intersects(BBox::spanning(other_start, other_end))
-                && dist::segments(start, end, other_start, other_end).0 <= distance
-        })
 }
 
 fn boundary_tangents_oppose(
