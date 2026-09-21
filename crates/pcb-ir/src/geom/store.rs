@@ -74,9 +74,8 @@ impl Span {
         let end = self.start as usize + self.count as usize;
         if self.start as usize > len || end > len {
             Err(format!(
-                "{name} range for item {index} is out of bounds: {}..{} of {len}",
+                "{name} range for item {index} is out of bounds: {}..{end} of {len}",
                 self.start,
-                self.end(),
             ))
         } else {
             Ok(())

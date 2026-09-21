@@ -75,6 +75,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Balance void sizes no longer all round the same way across uniform fill.
 - IPC-2581 arcs whose stated centre is microns off no longer fail the export; the disagreement counts against the accuracy budget.
 - `pcb ipc warp` works on a single board instead of failing with "panel has no outline".
+- A `Polyline` placed directly in a `Set` keeps its inline `LineDesc`.
+- Generated square holes are written as `SQUARE`, and values written to inch documents keep nanometre precision.
 
 ### Changed
 
@@ -108,6 +110,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb ipc warp` evaluates the stack at its measured copper and solves the panel as a free plate; bow estimates rise about 1.2–3×.
 - The warp report drops the deflection-by-shape table.
 - Copper balancing converges to a certified density match and is faster on board arrays.
+- IPC-2581 files parse with about a third of the peak memory, and Allegro files with a quarter; panel editing commands use much less memory.
 
 ## [0.4.56] - 2026-09-20
 
