@@ -823,6 +823,64 @@ fn ratio_finding(rule: &Rule, measured: RatioMeasured, maximum: f64) -> Finding 
     }
 }
 
+/// The copper a plated drilled feature owns, for holes and slots alike.
+///
+/// A canonical land link can mean unique overlap rather than identity, and
+/// proximity never implies ownership: a linked land is the feature's own only
+/// with the same stated padstack and no contradicting net. The feature then
+/// owns, within its Step occurrence, its net and the nets of those lands on
+/// any layer, and the netless pads that are those lands.
+pub(super) struct Ownership {
+    step: Option<Symbol>,
+    instance: Option<u32>,
+    nets: Vec<Symbol>,
+    lands: Vec<pcb_ir::import::physical::LandId>,
+}
+
+impl Ownership {
+    pub(super) fn of(
+        design: &Design,
+        net: Option<Symbol>,
+        padstack: Option<Symbol>,
+        step: Option<Symbol>,
+        instance: Option<u32>,
+        links: &[super::design::HoleLand],
+    ) -> Self {
+        let lands = links
+            .iter()
+            .map(|link| {
+                &design.copper_layers[link.copper_index as usize].lands[link.land_index as usize]
+            })
+            .filter(|land| padstack == Some(land.padstack))
+            .filter(|land| net.zip(land.net).is_none_or(|(own, land)| own == land))
+            .collect::<Vec<_>>();
+        Self {
+            step,
+            instance,
+            nets: net
+                .into_iter()
+                .chain(lands.iter().filter_map(|land| land.net))
+                .collect(),
+            lands: lands.iter().map(|land| land.id).collect(),
+        }
+    }
+
+    pub(super) fn owns(&self, conductor: super::design::ConductorId) -> bool {
+        use super::design::ConductorId;
+        match conductor {
+            ConductorId::Net {
+                step,
+                instance,
+                net,
+            } => step == self.step && instance == self.instance && self.nets.contains(&net),
+            ConductorId::Isolated { occurrence, .. } => {
+                self.lands.iter().any(|land| land.0 == occurrence)
+            }
+            ConductorId::Auxiliary { .. } | ConductorId::Unattributed { .. } => false,
+        }
+    }
+}
+
 /// Holes of one plating class, with their indices into the hole pool.
 fn holes_of_class<'a>(design: &'a Design<'a>, class: HoleClass) -> Vec<(usize, &'a Hole)> {
     design

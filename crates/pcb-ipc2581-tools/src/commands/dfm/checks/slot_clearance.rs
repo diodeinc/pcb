@@ -4,14 +4,16 @@
 
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
 
-use crate::commands::dfm::design::{ConductorId, Design};
+use crate::commands::dfm::design::Design;
 use crate::commands::dfm::pdk::SlotPlating;
 use crate::commands::dfm::report::Evidence;
 use crate::commands::dfm::rules::Conditions;
 
 use super::copper_clearance::conductor_subject;
-use super::hole_clearance::land_owns_conductor;
-use super::{Evaluation, Measured, layers, linework_clearance, slot_matches, slot_subject};
+use super::{
+    Evaluation, Measured, Ownership, layers, linework_clearance, slot_matches, slot_subject,
+    violates,
+};
 
 pub(super) fn evaluate(
     limit_mm: f64,
@@ -28,11 +30,14 @@ pub(super) fn evaluate(
         .filter(|(_, slot)| slot_matches(slot.plating, plating))
     {
         let boundary = slot.outline.prepare_query();
-        let owner = slot.net.map(|net| ConductorId::Net {
-            step: slot.step,
-            instance: slot.provenance.instance_index,
-            net,
-        });
+        let owner = Ownership::of(
+            design,
+            slot.net,
+            slot.padstack,
+            slot.step,
+            slot.provenance.instance_index,
+            &design.slot_lands[slot_index],
+        );
         for (copper_index, copper) in design.copper_layers.iter().enumerate() {
             // Extraction orders copper layers and drill spans by the same
             // validated physical stackup.
@@ -42,29 +47,12 @@ pub(super) fn evaluate(
                 continue;
             }
             checked += 1;
-            // A canonical link can mean unique overlap, not identity. Exempt
-            // a land only with stated padstack identity and no conflicting net.
-            let own_lands = design.slot_lands[slot_index]
-                .iter()
-                .filter(|link| link.copper_index as usize == copper_index)
-                .map(|link| &copper.lands[link.land_index as usize])
-                .filter(|land| slot.padstack == Some(land.padstack))
-                .filter(|land| {
-                    slot.net
-                        .zip(land.net)
-                        .is_none_or(|(slot_net, land_net)| slot_net == land_net)
-                })
-                .collect::<Vec<_>>();
             let nearest = copper
                 .conductors
                 .iter()
                 .zip(&design.conductor_boundaries[copper_index])
                 .filter(|(conductor, _)| {
-                    plating == SlotPlating::Nonplated
-                        || !(owner == Some(conductor.id)
-                            || own_lands
-                                .iter()
-                                .any(|land| land_owns_conductor(land, conductor.id)))
+                    plating == SlotPlating::Nonplated || !owner.owns(conductor.id)
                 })
                 .filter_map(|(conductor, copper_boundary)| {
                     region_clearance_within(
@@ -89,25 +77,30 @@ pub(super) fn evaluate(
                 Evidence::region("routed_slot", &slot.outline),
                 Evidence::bounds("offending_copper", offender.image.bbox),
             ];
-            let sites = region_clearance_sites_with_index(
-                &slot.outline,
-                &offender.image,
-                copper_boundary,
-                limit_mm,
-            )?
-            .into_iter()
-            .map(|geometry| {
-                let mut site = linework_clearance::report_site(
-                    geometry,
-                    finding_layers.clone(),
+            // Sites describe a violation; a clear candidate needs none.
+            let sites = if violates(&distance, limit_mm) {
+                region_clearance_sites_with_index(
+                    &slot.outline,
+                    &offender.image,
+                    copper_boundary,
                     limit_mm,
-                    design.resolution,
-                )?;
-                site.subjects = subjects.clone();
-                site.evidence.extend(evidence.clone());
-                Ok(site)
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+                )?
+                .into_iter()
+                .map(|geometry| {
+                    let mut site = linework_clearance::report_site(
+                        geometry,
+                        finding_layers.clone(),
+                        limit_mm,
+                        design.resolution,
+                    )?;
+                    site.subjects = subjects.clone();
+                    site.evidence.extend(evidence.clone());
+                    Ok(site)
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+            } else {
+                Vec::new()
+            };
             measured.push(Measured {
                 distance,
                 bbox: slot

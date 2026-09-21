@@ -520,6 +520,34 @@ limit = { minimum = "0.3 mm", preferred = "0.4 mm" }"#);
     }
 
     #[test]
+    fn a_square_hole_is_never_measured_as_a_disk() {
+        // A disk of the side length misses the corners by 41 % of the radius.
+        let xml = board(
+            r#"<LayerFeature layerRef="DRILL"><Set>
+              <Hole name="round" diameter="1" platingStatus="NONPLATED" x="5" y="5"/>
+              <Hole name="square" type="SQUARE" diameter="1" platingStatus="NONPLATED" x="5" y="2"/>
+            </Set></LayerFeature>"#,
+            "",
+        );
+        let pdk = pdk(r#"[[rules.drilling.hole_to_board_edge_clearance]]
+id = "npth-edge"
+select = { hole = "npth" }
+limit = { minimum = "0.3 mm" }"#);
+        let report = check(&xml, &pdk, LayoutTarget::Board);
+
+        assert!(matches!(report.verdict, Verdict::Fail));
+        assert!(matches!(report.rules[0].status, RuleStatus::Incomplete));
+        assert!(
+            report.rules[0]
+                .skip_reason
+                .as_deref()
+                .unwrap()
+                .contains("square")
+        );
+        assert!(report.findings.is_empty());
+    }
+
+    #[test]
     fn crossing_and_outside_holes_have_zero_clearance() {
         let xml = board(
             r#"<LayerFeature layerRef="DRILL"><Set>

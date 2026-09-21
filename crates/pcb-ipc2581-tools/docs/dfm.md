@@ -288,9 +288,11 @@ when fewer than two exist.
   width rules measure routed slots of the selected plating class. A slot's width is settled
   at extraction: the stated primitive width when present — exact, and
   verified against the materialized outline — and otherwise the outline's
-  narrowest local width. A hole whose plating class or diameter is missing, or
-  a slot whose stated width its outline contradicts, is never silently
-  discarded: it leaves every hole rule, or every slot rule, `incomplete`.
+  narrowest local width. A hole whose plating class or diameter is missing, a
+  square hole, which no circular measurement describes, or a slot whose stated
+  width its outline contradicts, is never silently discarded or measured as
+  something it is not: it leaves every hole rule, or every slot rule,
+  `incomplete`.
 - Hole aspect ratio is physical drilled-span thickness divided by finished
   circular hole diameter. A through hole uses IPC-2581 `overallThickness` when
   it is positive and finite, otherwise a complete sum of physical stackup
@@ -350,8 +352,11 @@ when fewer than two exist.
 - Hole-to-copper clearance measures the edge-to-edge distance from each
   circular drill to the nearest unrelated final copper owner on every copper
   layer in its declared span. Via and PTH copper is exempt only when net or
-  physical-land identity proves that it belongs to the hole. NPTH copper is
-  never exempt. An unresolvable drill span leaves the rule `incomplete`.
+  physical-land identity proves that it belongs to the hole, by the same rule
+  as plated slots: its own occurrence-scoped net, or a resolved land with the
+  same stated padstack and no contradictory net, whose net it then owns on
+  every layer. A land linked only because the drill overlaps it proves nothing,
+  so a drill through foreign copper is reported. NPTH copper is never exempt. An unresolvable drill span leaves the rule `incomplete`.
 - Slot-to-copper clearance (`rules.copper.slot_clearance`) measures the true
   materialized filled slot outline, including its ends, against unrelated
   final copper on its physical span. Touching or overlapping copper has zero

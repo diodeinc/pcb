@@ -18,13 +18,12 @@ use ipc2581::Symbol;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureDomain, FeatureKind,
-    FeatureSpan, LayoutPurpose, LayoutStepKind, PlatingKind, ProfileOccurrenceRole, ProfileSet,
-    lower_layer_to_artwork_with, profile_occurrences_for,
+    FeatureSpan, HoleShape, LayoutPurpose, LayoutStepKind, PlatingKind, ProfileOccurrenceRole,
+    ProfileSet, lower_layer_to_artwork_with, profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side, artwork};
 use pcb_ir::geom::dfm::{Distance, WidthDisk, min_width_disk};
 use pcb_ir::geom::path::ContourBuf;
-use pcb_ir::geom::region::Ring;
 use pcb_ir::geom::{BBox, ContourSet, Point, Polarity, PreparedRegion, Span};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
@@ -778,8 +777,6 @@ pub(super) struct BoardOutline {
     pub name: String,
     pub instance_index: Option<u32>,
     pub role: ProfileOccurrenceRole,
-    /// Outer profile plus cutout rings.
-    pub contours: Vec<Ring>,
     /// Finished board material: the filled outer profile minus every cutout.
     pub region: ContourSet,
     pub boundary: PreparedRegion,
@@ -864,6 +861,15 @@ fn collect_drilled(
                         block(Pools::HOLES, format!("{at} has unknown plating"));
                         continue;
                     };
+                    // Every hole rule measures a disk of the stated diameter,
+                    // which a square hole's corners extend beyond.
+                    if feature.hole_shape == HoleShape::Square {
+                        block(
+                            Pools::HOLES,
+                            format!("{at} is square, not a circular drill"),
+                        );
+                        continue;
+                    }
                     holes.push(Hole {
                         id: feature_occurrence_id(feature)
                             .context("materialized hole has no occurrence identity")?,
@@ -1613,7 +1619,6 @@ fn collect_board_outlines(
                 name,
                 instance_index: occurrence.instance,
                 role: occurrence.role,
-                contours: region.rings.clone(),
                 region,
                 boundary,
                 native_outline,

@@ -10,16 +10,14 @@
 use pcb_ir::geom::dfm::{Distance, circular_region, region_clearance_sites};
 use pcb_ir::geom::{BBox, Point};
 
-use crate::commands::dfm::design::{
-    ConductorId, CopperLayer, Design, Hole, HoleClass, HoleLand, Land,
-};
+use crate::commands::dfm::design::{Design, Hole, HoleClass};
 use crate::commands::dfm::report::{Evidence, MeasurementKind};
 use crate::commands::dfm::rules::Conditions;
 
 use super::copper_clearance::conductor_subject;
 use super::{
-    Evaluation, Measured, MeasuredSite, hole_subject, holes_of_class, layers, linework_clearance,
-    violates,
+    Evaluation, Measured, MeasuredSite, Ownership, hole_subject, holes_of_class, layers,
+    linework_clearance, violates,
 };
 
 pub(super) fn evaluate(
@@ -33,6 +31,14 @@ pub(super) fn evaluate(
 
     for (hole_index, hole) in holes_of_class(design, class) {
         let radius_mm = hole.diameter_mm / 2.0;
+        let owner = Ownership::of(
+            design,
+            hole.net,
+            hole.padstack,
+            hole.step,
+            hole.provenance.instance_index,
+            &design.hole_lands[hole_index],
+        );
         for (copper_index, copper) in design.copper_layers.iter().enumerate() {
             if !hole.drill_span.contains_copper(copper_index)
                 || !conditions.applies_to_layer(copper)
@@ -40,15 +46,11 @@ pub(super) fn evaluate(
                 continue;
             }
             checked += 1;
-            let own_lands = design.hole_lands[hole_index]
-                .iter()
-                .filter(|land| land.copper_index as usize == copper_index)
-                .collect::<Vec<_>>();
             let nearest = copper
                 .conductors
                 .iter()
                 .zip(&design.conductor_boundaries[copper_index])
-                .filter(|(conductor, _)| !owned_by_hole(hole, copper, &own_lands, conductor.id))
+                .filter(|(conductor, _)| class == HoleClass::Npth || !owner.owns(conductor.id))
                 .filter_map(|(conductor, boundary)| {
                     disk_to_copper_clearance(
                         hole.center,
@@ -167,43 +169,6 @@ fn disk_to_copper_clearance(
         nearest.second,
         nearest.uncertainty_mm,
     ))
-}
-
-fn owned_by_hole(
-    hole: &Hole,
-    copper: &CopperLayer,
-    links: &[&HoleLand],
-    conductor: ConductorId,
-) -> bool {
-    if hole.class == HoleClass::Npth {
-        return false;
-    }
-    let hole_owner = hole.net.map(|net| ConductorId::Net {
-        step: hole.step,
-        instance: hole.provenance.instance_index,
-        net,
-    });
-    if hole_owner == Some(conductor) {
-        return true;
-    }
-    links.iter().any(|link| {
-        let land = &copper.lands[link.land_index as usize];
-        land_owns_conductor(land, conductor)
-    })
-}
-
-pub(super) fn land_owns_conductor(land: &Land, conductor: ConductorId) -> bool {
-    match conductor {
-        ConductorId::Net {
-            step,
-            instance,
-            net,
-        } => {
-            land.net == Some(net) && step == land.step && instance == land.provenance.instance_index
-        }
-        ConductorId::Auxiliary { .. } | ConductorId::Unattributed { .. } => false,
-        ConductorId::Isolated { occurrence, .. } => land.id.0 == occurrence,
-    }
 }
 
 fn fallback_site(
@@ -502,6 +467,52 @@ limit = {{ minimum = "0.20 mm" }}
                 .feature_index,
             Some(1)
         );
+    }
+
+    #[test]
+    fn a_drill_through_a_foreign_land_is_not_exempted_by_overlapping_it() {
+        // The hole is N1 with its own padstack; the only land it overlaps is
+        // N2 copper of another padstack. Overlap links them, identity does not.
+        let replace = |xml: String, from: &str, to: &str| {
+            assert!(xml.contains(from), "fixture no longer contains {from}");
+            xml.replace(from, to)
+        };
+        let xml = replace(
+            board_with_unowned_land(false),
+            r#"<PadStackDef name="land-stack">"#,
+            r#"<PadStackDef name="other-stack">
+        <PadstackPadDef layerRef="L0" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+      </PadStackDef>
+      <PadStackDef name="land-stack">"#,
+        );
+        let xml = replace(
+            xml,
+            r#"<LayerFeature layerRef="L0"><Set polarity="POSITIVE">
+        <Pad padstackDefRef="land-stack">"#,
+            r#"<LayerFeature layerRef="L0"><Set net="N2" polarity="POSITIVE">
+        <Pad padstackDefRef="other-stack">"#,
+        );
+        // With or without a stated padstack on the drill, which is what
+        // decides whether import links the two by overlap alone.
+        for drill in [
+            r#"<Set geometry="land-stack" net="N1" polarity="POSITIVE">"#,
+            r#"<Set net="N1" polarity="POSITIVE">"#,
+        ] {
+            let xml = replace(
+                xml.clone(),
+                r#"<Set geometry="land-stack" polarity="POSITIVE">"#,
+                drill,
+            );
+            let results = run(&xml, "pth");
+            assert_eq!(
+                results.findings.len(),
+                1,
+                "{drill}: {:?}",
+                results.rules[0].skip_reason
+            );
+            assert_eq!(results.findings[0].measurement.actual_mm(), Some(0.0));
+            assert_eq!(results.findings[0].subjects[1].net.as_deref(), Some("N2"));
+        }
     }
 
     #[test]

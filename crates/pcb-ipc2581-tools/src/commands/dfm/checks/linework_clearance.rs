@@ -84,7 +84,7 @@ fn linework_items(linework: Linework, design: &Design) -> LineworkPool {
             .iter()
             .filter(|outline| outline.is_board())
             .map(|outline| LineworkItem {
-                segments: push(outline.contours.iter().flat_map(ring_edges).collect()),
+                segments: push(outline.region.rings.iter().flat_map(ring_edges).collect()),
                 uncertainty_mm: outline.region.uncertainty_mm,
                 layer: None,
                 subject: outline_subject(outline, "reference"),
