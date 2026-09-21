@@ -43,52 +43,68 @@ pub type Ring = Vec<[f64; 2]>;
 /// One connected polygon: an outer ring plus hole rings.
 pub type Shape = Vec<Ring>;
 
-/// Parameter intervals of a segment inside a filled region. Boundary
-/// crossings supply exact split points in the flattened representation;
-/// midpoint containment then decides each interval, including cutouts.
+/// Parameter intervals of `start..end` the region covers, in query direction.
+///
+/// The region boundary is covered; point-only contacts are omitted. Boundary
+/// crossings supply the split stations in the flattened representation and
+/// midpoint containment decides each interval, including cutouts. Stations
+/// and intervals within the region tolerance of each other are one.
 pub(crate) fn segment_inside_intervals(
     region: &ContourSet,
     start: Point,
     end: Point,
 ) -> Vec<(f64, f64)> {
     let delta = end - start;
-    let length_squared = delta.x * delta.x + delta.y * delta.y;
-    if length_squared <= tol::EPSILON_MM * tol::EPSILON_MM {
+    let length = delta.length();
+    if region.is_empty() || !start.is_finite() || !end.is_finite() || length == 0.0 {
         return Vec::new();
     }
+    let epsilon = region.tolerance().max(tol::EPSILON_MM);
+    let slack = (epsilon / length).min(1.0);
     let cross = |a: Point, b: Point| a.x * b.y - a.y * b.x;
+    let station = |t: f64| {
+        (-slack..=1.0 + slack)
+            .contains(&t)
+            .then_some(t.clamp(0.0, 1.0))
+    };
     let mut stations = vec![0.0, 1.0];
     for (a, b) in region.rings.iter().flat_map(ring_edges) {
         let edge = b - a;
+        let offset = a - start;
         let denominator = cross(delta, edge);
-        if denominator.abs() > tol::EPSILON_MM * delta.length().max(edge.length()) {
-            let t = cross(a - start, edge) / denominator;
-            let u = cross(a - start, delta) / denominator;
-            if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
-                stations.push(t);
+        if denominator.abs() <= f64::EPSILON * length * edge.length() * 8.0 {
+            // A coincident edge contributes both ends of its overlap, and
+            // midpoint containment then includes that stretch of boundary.
+            if cross(delta, offset).abs() <= epsilon * length {
+                stations.extend([a, b].into_iter().filter_map(|point| {
+                    let relative = point - start;
+                    station((relative.x * delta.x + relative.y * delta.y) / (length * length))
+                }));
             }
-        } else if cross(a - start, delta).abs() <= tol::EPSILON_MM * delta.length() {
-            for point in [a, b] {
-                let relative = point - start;
-                let t = (relative.x * delta.x + relative.y * delta.y) / length_squared;
-                if (0.0..=1.0).contains(&t) {
-                    stations.push(t);
-                }
+        } else {
+            let along_edge = cross(offset, delta) / denominator;
+            let edge_slack = epsilon / edge.length();
+            if (-edge_slack..=1.0 + edge_slack).contains(&along_edge) {
+                stations.extend(station(cross(offset, edge) / denominator));
             }
         }
     }
     stations.sort_by(f64::total_cmp);
-    stations.dedup_by(|left, right| (*left - *right).abs() <= f64::EPSILON);
-    let midpoints = stations
-        .windows(2)
-        .map(|pair| start + delta * ((pair[0] + pair[1]) / 2.0))
-        .collect::<Vec<_>>();
-    region
-        .contains_points_batch(&midpoints)
-        .into_iter()
-        .zip(stations.windows(2))
-        .filter_map(|(inside, pair)| inside.then_some((pair[0], pair[1])))
-        .collect()
+    stations.dedup_by(|next, kept| *next - *kept <= slack);
+    // Whatever survived nearest the end stands for the end itself.
+    *stations.last_mut().expect("both ends are stations") = 1.0;
+    let mut intervals: Vec<(f64, f64)> = Vec::new();
+    for pair in stations.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        if !region.contains_point(start + delta * from.midpoint(to)) {
+            continue;
+        }
+        match intervals.last_mut() {
+            Some(previous) if previous.1 == from => previous.1 = to,
+            _ => intervals.push((from, to)),
+        }
+    }
+    intervals
 }
 
 pub(crate) fn rings_bbox(rings: &[Ring]) -> BBox {
@@ -218,82 +234,55 @@ impl ContourSet {
         rings_area(&self.rings)
     }
 
-    /// Whether the region contains each point, as a one-or-zero indicator.
+    /// Test many points against the same region in one sweep.
     ///
     /// Testing points one at a time walks every edge per point. This sweeps
     /// them instead: sort by height, and at each height solve the edge
-    /// crossings once and share them across every point on that line. Sampling
-    /// a region's coverage means asking about tens of thousands of points at
-    /// once, where the difference is the difference between usable and not.
-    fn contains_points(&self, points: &[Point]) -> Vec<f64> {
-        let mut result = vec![0.0; points.len()];
-        if self.is_empty() {
-            return result;
-        }
-        // Only a ring whose bounds reach the query line crosses it, and a
-        // ring wholly to one side of every point on the line contributes
-        // crossings that balance to nothing, so those rings are skipped.
-        let crossings_at = |y: f64, min_x: f64, max_x: f64| {
-            self.rings
+    /// crossings once and share them across every point on that line. Unlike
+    /// [`Self::contains_point`] it tests the strict interior by winding
+    /// number: points on or within tolerance of the boundary may land on
+    /// either side. A caller that keeps a [`PreparedRegion`] asks its
+    /// [`PreparedRegion::winding`] instead, which agrees point for point.
+    pub fn contains_points_batch(&self, points: &[Point]) -> Vec<bool> {
+        let mut inside = vec![false; points.len()];
+        let mut by_height = (0..points.len()).collect::<Vec<_>>();
+        by_height.sort_by(|&left, &right| {
+            let (left, right) = (points[left], points[right]);
+            left.y.total_cmp(&right.y).then(left.x.total_cmp(&right.x))
+        });
+        for line in
+            by_height.chunk_by(|&left, &right| points[left].y.total_cmp(&points[right].y).is_eq())
+        {
+            let (first, last) = (points[line[0]], points[line[line.len() - 1]]);
+            let y = first.y;
+            // Only a ring whose bounds reach the line crosses it, and a ring
+            // wholly to one side of every point on the line winds around
+            // none of them.
+            let mut crossings = self
+                .rings
                 .iter()
                 .zip(&self.ring_bounds)
-                .filter(move |(_, bounds)| {
+                .filter(|(_, bounds)| {
                     bounds.min.y <= y
                         && y <= bounds.max.y
-                        && bounds.min.x <= max_x + tol::EPSILON_MM
-                        && min_x - tol::EPSILON_MM <= bounds.max.x
+                        && bounds.min.x <= last.x
+                        && first.x <= bounds.max.x
                 })
                 .flat_map(|(ring, _)| ring_edges(ring))
-                .filter_map(move |(start, end)| horizontal_crossing(start, end, y))
-        };
-        let mut by_height = (0..points.len()).collect::<Vec<_>>();
-        by_height.sort_by(|left, right| {
-            points[*left]
-                .y
-                .total_cmp(&points[*right].y)
-                .then_with(|| points[*left].x.total_cmp(&points[*right].x))
-        });
-
-        let mut first = 0;
-        while first < by_height.len() {
-            let y = points[by_height[first]].y;
-            let mut last = first + 1;
-            while last < by_height.len() && (points[by_height[last]].y - y).abs() <= tol::EPSILON_MM
-            {
-                last += 1;
-            }
-            // Heights within tolerance share this line, so height order is
-            // not yet x order along it, which the crossing walk relies on.
-            by_height[first..last]
-                .sort_by(|left, right| points[*left].x.total_cmp(&points[*right].x));
-            let (min_x, max_x) = (points[by_height[first]].x, points[by_height[last - 1]].x);
-            let mut crossings = crossings_at(y, min_x, max_x).collect::<Vec<_>>();
+                .filter_map(|(start, end)| horizontal_crossing(start, end, y))
+                .collect::<Vec<_>>();
             crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
             let mut crossing = 0;
             let mut winding = 0;
-            for &point in &by_height[first..last] {
+            for &point in line {
                 while crossing < crossings.len() && crossings[crossing].0 <= points[point].x {
                     winding += crossings[crossing].1;
                     crossing += 1;
                 }
-                result[point] = f64::from(winding != 0);
+                inside[point] = winding != 0;
             }
-            first = last;
         }
-        result
-    }
-
-    /// Test many points against the same region in one sweep.
-    ///
-    /// This is substantially cheaper than repeated [`Self::contains_point`]
-    /// calls for geometry checks over thousands of drill locations. Unlike
-    /// `contains_point` it tests the strict interior by winding number:
-    /// points on or within tolerance of the boundary may land on either side.
-    pub fn contains_points_batch(&self, points: &[Point]) -> Vec<bool> {
-        self.contains_points(points)
-            .into_iter()
-            .map(|coverage| coverage > 0.0)
-            .collect()
+        inside
     }
 
     /// What fraction of each cell of a regular grid over `bounds` the region
@@ -342,103 +331,6 @@ impl ContourSet {
         areas.iter().map(|area| area / (width * height)).collect()
     }
 
-    /// What fraction of each cell the region covers.
-    ///
-    /// Cells are centred on `centers` and share one `(width, height)`. Coverage
-    /// is estimated by stratified subsampling rather than by intersecting
-    /// geometry, so a trace narrower than a cell contributes its true share
-    /// instead of aliasing to nothing or to everything.
-    pub fn cell_coverage(&self, centers: &[Point], cell: (f64, f64)) -> Vec<f64> {
-        const STRATA: usize = 3;
-        let offset = |index: usize, span: f64| ((index as f64 + 0.5) / STRATA as f64 - 0.5) * span;
-        let subsamples = centers
-            .iter()
-            .flat_map(|center| {
-                (0..STRATA).flat_map(move |row| {
-                    (0..STRATA).map(move |column| {
-                        Point::new(
-                            center.x + offset(column, cell.0),
-                            center.y + offset(row, cell.1),
-                        )
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
-        let coverage = self.contains_points(&subsamples);
-        let (tiles, _) = coverage.as_chunks::<{ STRATA * STRATA }>();
-        tiles
-            .iter()
-            .map(|tile| tile.iter().sum::<f64>() / (STRATA * STRATA) as f64)
-            .collect()
-    }
-
-    /// Portions of `start..end` covered by the region, in query direction.
-    ///
-    /// The region boundary is covered. Point-only contacts are omitted.
-    pub fn segment_spans(&self, start: Point, end: Point) -> Vec<(Point, Point)> {
-        let direction = end - start;
-        let length = direction.length();
-        if self.is_empty() || !start.is_finite() || !end.is_finite() || length == 0.0 {
-            return Vec::new();
-        }
-
-        let epsilon = self.tolerance().max(tol::EPSILON_MM);
-        let parameter_epsilon = (epsilon / length).min(1.0);
-        let cross = |left: Point, right: Point| left.x * right.y - left.y * right.x;
-        let mut breaks = vec![0.0, 1.0];
-        for (edge_start, edge_end) in self.rings.iter().flat_map(ring_edges) {
-            let edge = edge_end - edge_start;
-            let offset = edge_start - start;
-            let denominator = cross(direction, edge);
-            let parallel_epsilon = f64::EPSILON * length * edge.length() * 8.0;
-            if denominator.abs() <= parallel_epsilon {
-                // A coincident edge contributes both ends of its overlap. The
-                // midpoint classification below then includes that boundary.
-                if cross(direction, offset).abs() <= epsilon * length {
-                    let length_squared = length * length;
-                    for point in [edge_start, edge_end] {
-                        let t = ((point - start).x * direction.x + (point - start).y * direction.y)
-                            / length_squared;
-                        if t >= -parameter_epsilon && t <= 1.0 + parameter_epsilon {
-                            breaks.push(t.clamp(0.0, 1.0));
-                        }
-                    }
-                }
-                continue;
-            }
-
-            let t = cross(offset, edge) / denominator;
-            let u = cross(offset, direction) / denominator;
-            if t >= -parameter_epsilon
-                && t <= 1.0 + parameter_epsilon
-                && u >= -parameter_epsilon
-                && u <= 1.0 + parameter_epsilon
-            {
-                breaks.push(t.clamp(0.0, 1.0));
-            }
-        }
-
-        breaks.sort_by(f64::total_cmp);
-        breaks.dedup_by(|left, right| (*left - *right).abs() <= parameter_epsilon);
-        let point_at = |t: f64| start + direction * t;
-        let mut spans: Vec<(Point, Point)> = Vec::new();
-        for interval in breaks.windows(2) {
-            let (from, to) = (interval[0], interval[1]);
-            if to - from <= parameter_epsilon || !self.contains_point(point_at((from + to) / 2.0)) {
-                continue;
-            }
-            let next = (point_at(from), point_at(to));
-            if let Some(previous) = spans.last_mut()
-                && previous.1.distance_to(next.0) <= epsilon
-            {
-                previous.1 = next.1;
-            } else {
-                spans.push(next);
-            }
-        }
-        spans
-    }
-
     /// Whether the regularized region contains the point, including its boundary.
     pub fn contains_point(&self, point: Point) -> bool {
         if self.is_empty()
@@ -467,34 +359,6 @@ impl ContourSet {
             .map(|ring| ring_winding(ring, point))
             .sum::<i32>()
             != 0
-    }
-
-    /// Whether a closed disk is fully contained in the regularized region.
-    ///
-    /// The boundary check is exact for the flattened representation used by
-    /// `ContourSet` boolean operations.
-    pub fn contains_disk(&self, center: Point, radius: f64) -> bool {
-        if !radius.is_finite() || radius < 0.0 || !center.is_finite() {
-            return false;
-        }
-        if !self.contains_point(center) {
-            return false;
-        }
-        if radius == 0.0 {
-            return true;
-        }
-        if center.x - radius < self.bbox.min.x
-            || center.x + radius > self.bbox.max.x
-            || center.y - radius < self.bbox.min.y
-            || center.y + radius > self.bbox.max.y
-        {
-            return false;
-        }
-
-        let epsilon = self.tolerance().max(tol::EPSILON_MM);
-        self.rings
-            .iter()
-            .all(|ring| ring_boundary_distance(ring, center) + epsilon >= radius)
     }
 }
 

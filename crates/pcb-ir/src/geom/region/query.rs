@@ -170,7 +170,7 @@ impl PreparedRegion {
 
     /// Winding number of the boundary around `point`, with the half-open
     /// crossing rule every other winding count in this module uses.
-    pub(crate) fn winding(&self, point: Point) -> i32 {
+    pub fn winding(&self, point: Point) -> i32 {
         let mut query = Query {
             point,
             distance: f64::NEG_INFINITY,

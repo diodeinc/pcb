@@ -171,9 +171,6 @@ fn containment_observes_boundaries_and_holes() {
     assert!(region.contains_point(Point::new(2.0, 2.0)));
     assert!(region.contains_point(Point::new(0.0, 5.0)));
     assert!(!region.contains_point(Point::new(5.0, 5.0)));
-    assert!(region.contains_disk(Point::new(2.0, 2.0), 2.0));
-    assert!(!region.contains_disk(Point::new(2.0, 2.0), 2.01));
-    assert!(!region.contains_disk(Point::new(3.5, 5.0), 0.6));
 }
 
 type ExpectedSpan = ((f64, f64), (f64, f64));
@@ -189,6 +186,14 @@ fn batched_containment_survives_heights_that_differ_by_an_ulp() {
     let above = f64::from_bits(2.0_f64.to_bits() + 1);
     let points = [Point::new(6.0, 2.0), Point::new(2.0, above)];
     assert_eq!(square.contains_points_batch(&points), [false, true]);
+}
+
+/// The covered portions of `start..end` as points.
+fn segment_spans(region: &ContourSet, start: Point, end: Point) -> Vec<(Point, Point)> {
+    segment_inside_intervals(region, start, end)
+        .into_iter()
+        .map(|(from, to)| (start + (end - start) * from, start + (end - start) * to))
+        .collect()
 }
 
 fn assert_spans(actual: Vec<(Point, Point)>, expected: &[ExpectedSpan]) {
@@ -212,11 +217,11 @@ fn segment_spans_preserve_holes_and_clip_to_the_query() {
     let ring = outer.difference(&hole).unwrap();
 
     assert_spans(
-        ring.segment_spans(Point::new(-2.0, 5.0), Point::new(12.0, 5.0)),
+        segment_spans(&ring, Point::new(-2.0, 5.0), Point::new(12.0, 5.0)),
         &[((0.0, 5.0), (4.0, 5.0)), ((6.0, 5.0), (10.0, 5.0))],
     );
     assert_spans(
-        ring.segment_spans(Point::new(2.0, 5.0), Point::new(9.0, 5.0)),
+        segment_spans(&ring, Point::new(2.0, 5.0), Point::new(9.0, 5.0)),
         &[((2.0, 5.0), (4.0, 5.0)), ((6.0, 5.0), (9.0, 5.0))],
     );
 }
@@ -238,9 +243,11 @@ fn segment_spans_preserve_disconnected_and_concave_regions() {
     )
     .unwrap();
     assert_spans(
-        left.union(&concave)
-            .unwrap()
-            .segment_spans(Point::new(-1.0, 1.5), Point::new(9.0, 1.5)),
+        segment_spans(
+            &left.union(&concave).unwrap(),
+            Point::new(-1.0, 1.5),
+            Point::new(9.0, 1.5),
+        ),
         &[((0.0, 1.5), (2.0, 1.5)), ((4.0, 1.5), (5.0, 1.5))],
     );
 }
@@ -249,7 +256,7 @@ fn segment_spans_preserve_disconnected_and_concave_regions() {
 fn segment_spans_follow_reversed_arbitrary_direction() {
     let square = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), res(tol::REGION_MM));
     assert_spans(
-        square.segment_spans(Point::new(6.0, 6.0), Point::new(-2.0, -2.0)),
+        segment_spans(&square, Point::new(6.0, 6.0), Point::new(-2.0, -2.0)),
         &[((4.0, 4.0), (0.0, 0.0))],
     );
 }
@@ -258,31 +265,54 @@ fn segment_spans_follow_reversed_arbitrary_direction() {
 fn segment_spans_include_boundary_but_not_tangencies() {
     let square = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), res(tol::REGION_MM));
     assert_spans(
-        square.segment_spans(Point::new(-1.0, 0.0), Point::new(3.0, 0.0)),
+        segment_spans(&square, Point::new(-1.0, 0.0), Point::new(3.0, 0.0)),
         &[((0.0, 0.0), (3.0, 0.0))],
     );
-    assert!(
-        square
-            .segment_spans(Point::new(-1.0, 1.0), Point::new(1.0, -1.0))
-            .is_empty()
+    assert!(segment_spans(&square, Point::new(-1.0, 1.0), Point::new(1.0, -1.0)).is_empty());
+}
+
+#[test]
+fn segment_spans_survive_a_slope_of_one_ulp() {
+    // Every midpoint lies within an ulp of one height, in descending x.
+    let region = ContourSet::rectangle(rect(-5.0, 0.0, 5.0, 10.0), res(tol::REGION_MM));
+    let above = f64::from_bits(5.0_f64.to_bits() + 1);
+    assert_spans(
+        segment_spans(&region, Point::new(10.0, 5.0), Point::new(0.0, above)),
+        &[((5.0, 5.0), (0.0, 5.0))],
+    );
+}
+
+#[test]
+fn segment_spans_keep_a_fifty_micron_gap_open() {
+    let region = ContourSet::from_contours(
+        &[
+            shapes::circle(0.6).unwrap(),
+            shapes::circle(0.2).unwrap(),
+            shapes::circle(0.2)
+                .unwrap()
+                .transformed(Affine2::translation(Point::new(0.45, 0.0))),
+        ],
+        FillRule::EvenOdd,
+        Resolution::new(1e-6, GeometryAccuracy::new(0.0001).unwrap()),
+    )
+    .unwrap();
+    assert_spans(
+        segment_spans(&region, Point::new(-1.0, 0.0), Point::new(1.0, 0.0)),
+        &[
+            ((-0.3, 0.0), (-0.1, 0.0)),
+            ((0.1, 0.0), (0.3, 0.0)),
+            ((0.35, 0.0), (0.55, 0.0)),
+        ],
     );
 }
 
 #[test]
 fn segment_spans_omit_degenerate_and_sub_tolerance_intervals() {
     let square = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), res(tol::EPSILON_MM));
-    assert!(
-        square
-            .segment_spans(Point::new(1.0, 1.0), Point::new(1.0, 1.0))
-            .is_empty()
-    );
-    assert!(
-        square
-            .segment_spans(Point::new(-1e-10, 2.0), Point::new(0.0, 2.0))
-            .is_empty()
-    );
+    assert!(segment_spans(&square, Point::new(1.0, 1.0), Point::new(1.0, 1.0)).is_empty());
+    assert!(segment_spans(&square, Point::new(-1e-10, 2.0), Point::new(0.0, 2.0)).is_empty());
     assert_spans(
-        square.segment_spans(Point::new(-1e-5, 2.0), Point::new(1e-5, 2.0)),
+        segment_spans(&square, Point::new(-1e-5, 2.0), Point::new(1e-5, 2.0)),
         &[((0.0, 2.0), (1e-5, 2.0))],
     );
 }
