@@ -515,6 +515,27 @@ fn generated_board_array_xml_validates_with_existing_history_and_callouts() {
 }
 
 #[test]
+fn board_array_of_a_source_with_a_dotted_history_number_reads_back() {
+    let input = schema_valid_board_fixture_mm().replace(
+        r#"<HistoryRecord number="1""#,
+        r#"<HistoryRecord number="1.0""#,
+    );
+    let xml = create_board_array_xml(
+        &input,
+        &BoardArrayCreateOptions {
+            columns: 6,
+            rows: 6,
+            board_margin_mm: board_margin(5.0, 5.0),
+            edge_rail_mm: BoardMarginMm::all(5.0),
+        },
+    )
+    .unwrap();
+
+    assert!(xml.contains(r#"<HistoryRecord number="1.1""#));
+    crate::ipc2581::validate(&xml).expect("generated board array XML should validate");
+}
+
+#[test]
 fn auto_create_projects_board_to_a7_array() {
     let xml = create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(13.0, 10.0)).unwrap();
 
