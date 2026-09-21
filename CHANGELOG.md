@@ -19,98 +19,21 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Wait while a sandbox is starting, restoring, or updating, and stop when the API says it is archived or failed.
 ### Fixed
 
-- Keep each layer's pads and cutouts its own in the IPC-2581 HTML report.
-- Fix batched point containment for points whose heights differ by rounding noise.
-- Image zero-length round and square strokes as dots in composed layer images, matching Gerber output.
-- Report IPC-2581 import warnings for features that had to be dropped.
 - Stop painting slots and routed cutouts back as copper in exported Gerber copper layers.
-- Keep IPC-2581 paint order when a repeated feature group mixes dark and clear shapes.
-- Write interposer boards with KiCad's current net syntax and without negative zeros, so pcbnew saves them back unchanged.
-- Open IPC-2581 files that carry an MD5 checksum trailer, a prefixed root element, or a commented-out closing tag.
-- Open panels saved by pcb 0.4.11 and earlier.
-- Read inline primitives, text and outlines inside `Features`, `UserSpecial`, `SlotCavity` and `Pad`.
-- Accept `padUse="OTHER"` and the `BOARDFAB`, `COMPONENT` and `PIN` layer functions.
-- Let BOM edits add a distributor and aliases to the same part.
-- Keep every `Profile` of a rigid-flex layer and leave percentage stackup tolerances unscaled.
-- Place Gerber macro primitives that combine an off-origin centre with a rotation.
-- Export butt and square line ends to Gerber as drawn instead of rounded.
-- Export zero-width lines, empty pads, and net, refdes or pin names with non-ASCII or reserved characters without failing the manufacturing package.
-- Stop drill-file attributes leaking from a pin hole onto later holes.
-- Report malformed Gerber counts as errors instead of exhausting memory.
-- Read `.xml.zst` input in `pcb ipc cpl`, `ict`, `assembly` and `warp`.
-- Draw the HTML report's board-array overview for panels not placed at the origin, and keep the report when one layer cannot render.
-- Only draw to the terminal where kitty graphics display.
-- Keep the final arc of an outline in `pcb ipc outline` DXF.
-- Count every copper layer function in `pcb ipc info`, report copper weights for non-KiCad layer names, and read components and nets from the board step of array files.
-- Correct `pcb ipc warp` bow, which was overstated about 20×.
-- Report the copper-balance stack moment of the emitted fill.
-- Weigh copper about the stack's mid-plane in warp estimates and copper balancing, which is exact for builds with mixed copper weights.
-- Mouse-bite board arrays reject board margins too small for the routed slot and tab landing instead of cutting into neighbouring boards or rail tooling.
-- Global rail fiducials no longer land on V-score lines of 12–13 mm boards.
-- Board-array creation no longer fails on sources whose `HistoryRecord` number is dotted (for example `1.0`).
-- Mouse-bite tab sites on chamfered and curved outlines are no longer rejected by rounding noise.
-- Fabrication-panel packing never lets a panel reach into a process margin.
-- V-cut callout labels fit within the default fabrication-panel gap.
-- DFM no longer aborts or fails arrays made by `board-array create` on their own rail tooling holes.
-- DFM no longer reports vias stacked on a shared layer as overlapping drills.
-- One unusable feature no longer aborts a DFM run.
-- DFM copper-weight conditions match real stackup thicknesses.
-- DFM blind-via aspect ratio no longer counts the copper it lands on.
-- DFM reports a drill through foreign copper even when only overlap links them.
-- DFM no longer measures square holes as round.
-- DFM aspect ratios sitting exactly on their maximum no longer fail.
-- IPC-2581 negative plane layers no longer import empty.
-- IPC-2581 pads with inline shapes or no padstack reference are no longer dropped.
-- Square, hexagon and octagon donuts and thermals are no longer drawn round, and thermal spokes are cut from the ring.
-- An invalid IPC-2581 stackup no longer fails the whole import.
-- IPC-2581 strokes without a line description no longer get a made-up width.
-- Panels honor a repeated step's Datum.
-- IPC-2581 exports no longer fail on a KiCad arc that collapsed to a point.
-- Donut fiducials keep their hole, scaled fiducials keep their size, and fiducials cut by a slot image cut.
-- Drill export reports a square hole instead of drilling it round.
-- `pcb ipc dfm check` no longer fails with a report over the size limit on board arrays and fabrication panels.
-- DFM width and gap checks no longer panic on copper whose hole touches its outline.
-- Copper balancing no longer crashes on nearly coincident copper edges or over-trims notch corners.
-- Gerber apertures whose hole is wider than the shape no longer add copper.
-- Balance void sizes no longer all round the same way across uniform fill.
-- IPC-2581 arcs whose stated centre is microns off no longer fail the export; the disagreement counts against the accuracy budget.
-- `pcb ipc warp` works on a single board instead of failing with "panel has no outline".
-- A `Polyline` placed directly in a `Set` keeps its inline `LineDesc`.
-- Generated square holes are written as `SQUARE`, and values written to inch documents keep nanometre precision.
+- Fix IPC-2581 import of negative planes, inline pad shapes, donuts and thermals, imprecise arcs, and files with an MD5 trailer.
+- Fix donut, scaled and slot-cut fiducials, and stop drilling square holes round.
+- Fix DFM false positives on stacked vias and array tooling holes, and failures on one bad feature or a large panel report.
+- Fix mouse-bite arrays cutting into neighbouring boards or rail tooling, and rail fiducials landing on V-score lines.
+- Correct `pcb ipc warp` bow, overstated about 20×, and support single boards.
+- Fix Gerber macro rotation, non-round line ends and attribute escaping.
 
 ### Changed
 
-- Speed up Gerber export, Gerber compare, and DFM on board arrays.
-- Outline strokes exactly and flatten arcs directly: faster layer composition and smaller Gerber outline apertures at the same accuracy.
-- Report malformed numbers, booleans and unknown enum values in IPC-2581 files as errors instead of defaulting them.
-- Load large IPC-2581 files with roughly half the memory.
-- Read common legacy Gerber constructs in `pcb gerber`: fused G-codes, modal coordinates, identity image commands and Altium region quirks.
-- Group drill hits by tool and omit repeated attributes.
-- Omit zero-length draws from Gerber polylines.
-- Keep macro pads as flashes and step-repeats as step-repeats in `pcb gerber normalize`, and draw `pcb gerber render` natively.
-- Speed up `pcb ipc html`, `pcb ipc info` and `pcb ipc view --mode fabrication`.
-- Write `pcb ipc outline` DXF as R12 polylines.
-- Stop reporting twist in `pcb ipc warp`, which models elastic copper-laminate mismatch only.
-- Speed up copper balancing; generated fill differs slightly from earlier releases.
-- Generated tooling/drill layers declare their span between the outer copper layers.
-- Mouse-bite tab placement models the actual rail width of the array.
-- Mouse-bite array generation is several times faster on multi-board arrays.
-- Fab-panel reports a clear error up front when there are too many distinct panel sizes.
-- `pcb ipc render` and the web viewer draw each board of an array once, so panel SVGs are over 100× smaller.
-- A required DFM rule that cannot be evaluated fails the verdict as `incomplete`; `skipped` becomes `not_applicable`.
-- A design outside every case of a DFM rule is reported instead of passing unchecked.
-- DFM finding ids survive noise-level coordinate changes; existing waiver files keep matching.
-- DFM reports list measurements that fall within measurement uncertainty.
-- Physical and DFM views of panels build several times faster, and import uses less memory.
-- DFM checks each board of an array or panel once and lists every placement in a new `frames` table; panels run many times faster.
-- The DFM report schema is now version 2: it adds `frames` and a `frame` index on findings, and drops `group_key`.
-- DFM minimum width and gap checks are up to 2.4× faster on dense panels.
-- PNG and terminal renders are faster and no longer go through an SVG rasterizer.
-- The board-array overview in HTML reports is smaller and uses the same layer colours as layer renders.
-- `pcb ipc warp` evaluates the stack at its measured copper and solves the panel as a free plate; bow estimates rise about 1.2–3×.
-- The warp report drops the deflection-by-shape table.
-- Copper balancing converges to a certified density match and is faster on board arrays.
-- IPC-2581 files parse with about a third of the peak memory, and Allegro files with a quarter; panel editing commands use much less memory.
+- Check each board of an array once in DFM: panels run in seconds, reports use schema v2 with a `frames` table, finding ids survive coordinate noise, and required rules that cannot be evaluated fail the verdict.
+- Speed up Gerber export and compare, renders, HTML reports, copper balancing and array generation; parse IPC-2581 with a third of the memory.
+- Draw each board of an array once in `pcb ipc render` and the web viewer, shrinking panel SVGs over 100×.
+- Model warp at measured copper as a free plate and stop reporting twist; copper-balance fill differs slightly from earlier releases.
+- Report malformed IPC-2581 attribute values as errors instead of defaulting them.
 
 ## [0.4.56] - 2026-09-20
 
