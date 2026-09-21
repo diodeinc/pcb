@@ -134,7 +134,7 @@ impl<LayerMeta, ObjectMeta: Default> StepGraph<'_, LayerMeta, ObjectMeta> {
             .iter()
             .map(|repeat| {
                 let child = find_step(self.imported, repeat.step_ref)?;
-                Ok((self.step_blocks(child)?, repeat))
+                Ok((self.step_blocks(child)?, child, repeat))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -156,13 +156,13 @@ impl<LayerMeta, ObjectMeta: Default> StepGraph<'_, LayerMeta, ObjectMeta> {
                 .into_iter()
                 .partition(|object| object.order.stage == PaintStage::FinalCutout);
         let mut staged = [painted, cutouts];
-        for (blocks, repeat) in children {
+        for (blocks, child, repeat) in children {
             if repeat.nx == 0 || repeat.ny == 0 {
                 continue;
             }
             for (stage, block) in blocks.into_iter().enumerate() {
                 let Some(block) = block else { continue };
-                let mut object = Object::new(Polarity::Dark, placement(block, repeat));
+                let mut object = Object::new(Polarity::Dark, placement(block, child, repeat));
                 if stage == 1 {
                     object.order.stage = PaintStage::FinalCutout;
                 }
@@ -173,8 +173,8 @@ impl<LayerMeta, ObjectMeta: Default> StepGraph<'_, LayerMeta, ObjectMeta> {
     }
 }
 
-fn placement(block: u32, repeat: &StepRepeat) -> Geometry {
-    let transform = step_repeat_transform(repeat, 0, 0);
+fn placement(block: u32, child: &Step, repeat: &StepRepeat) -> Geometry {
+    let transform = step_repeat_transform(child, repeat, 0, 0);
     if repeat.nx > 1 || repeat.ny > 1 {
         Geometry::GridInstance {
             block,

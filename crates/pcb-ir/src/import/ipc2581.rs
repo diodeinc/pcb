@@ -2109,7 +2109,15 @@ fn validate_copper_balance_void_shape(
     Ok(())
 }
 
-pub fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
+/// Placement of one StepRepeat instance of `child` in its parent step.
+///
+/// A Step's Datum is its point of origin, and x/y plus the grid pitch say
+/// where that point goes (IPC-2581C 8.2.3.3 and 8.2.3.5, as in ODB++
+/// step-and-repeat): the child turns and mirrors about its datum.
+pub fn step_repeat_transform(child: &Step, repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
+    let datum = child
+        .datum
+        .unwrap_or(ipc2581::types::ecad::Datum { x: 0.0, y: 0.0 });
     ipc_placement(
         Point::new(
             repeat.x + ix as f64 * repeat.dx,
@@ -2118,6 +2126,8 @@ pub fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
         Some(Xform {
             rotation: repeat.angle,
             mirror: repeat.mirror,
+            x_offset: -datum.x,
+            y_offset: -datum.y,
             ..Xform::default()
         }),
     )
@@ -2355,9 +2365,10 @@ fn append_layout_repeats(
         let mut pending_panel_instances = Vec::new();
         for iy in 0..repeat.ny {
             for ix in 0..repeat.nx {
-                let transform = parent
-                    .transform
-                    .concat(step_repeat_transform(repeat, ix, iy));
+                let transform =
+                    parent
+                        .transform
+                        .concat(step_repeat_transform(source_step, repeat, ix, iy));
                 let layout_instance = push_layout_instance(
                     doc,
                     LayoutInstanceSpec {
@@ -6030,6 +6041,51 @@ mod tests {
                 assert!(result.unwrap_err().to_string().contains("limit"));
             }
         }
+    }
+
+    #[test]
+    fn step_repeat_places_the_child_datum() {
+        // The panel of IPC-2581C 8.2.3.5: a 200 x 100 board whose datum is
+        // (10, 10), turned 90 degrees onto (110, 20) and stepped by (120, 207).
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/></Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
+      <Step name="board" type="BOARD">
+        <Datum x="10" y="10"/>
+        <Profile><Polygon>
+          <PolyBegin x="0" y="0"/><PolyStepSegment x="200" y="0"/>
+          <PolyStepSegment x="200" y="100"/><PolyStepSegment x="0" y="100"/>
+        </Polygon></Profile>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <Datum x="0" y="0"/>
+        <StepRepeat stepRef="board" x="110" y="20" nx="2" ny="2" dx="120" dy="207" angle="90" mirror="false"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let layout = extract_layout(&ipc).unwrap().layout;
+
+        let placed = |instance: usize, point: Point| {
+            let placed = layout.instances[instance].transform.transform_point(point);
+            (
+                (placed.x * 1e9).round() / 1e9,
+                (placed.y * 1e9).round() / 1e9,
+            )
+        };
+        assert_eq!(placed(0, Point::new(10.0, 10.0)), (110.0, 20.0));
+        // The four boards sit symmetrically on the 260 x 427 panel.
+        assert_eq!(placed(0, Point::new(0.0, 0.0)), (120.0, 10.0));
+        assert_eq!(placed(0, Point::new(200.0, 100.0)), (20.0, 210.0));
+        assert_eq!(placed(3, Point::new(0.0, 0.0)), (240.0, 217.0));
+        assert_eq!(placed(3, Point::new(200.0, 100.0)), (140.0, 417.0));
     }
 
     #[test]
