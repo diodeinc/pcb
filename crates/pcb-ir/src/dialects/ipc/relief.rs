@@ -248,7 +248,10 @@ pub fn vscore_feature_lines_for(doc: &Document) -> Vec<(usize, VScoreLine)> {
 /// arrows and stroke-font labels. Those features inherit V-cut layer intent,
 /// but only operation geometry references a specification containing a
 /// `V_Cut` process item.
-pub fn is_vcut_operation_feature(doc: &Document, feature: &crate::dialects::ipc::Feature) -> bool {
+pub(crate) fn is_vcut_operation_feature(
+    doc: &Document,
+    feature: &crate::dialects::ipc::Feature,
+) -> bool {
     feature.is_vcut() && feature_has_vcut_spec(doc, feature)
 }
 

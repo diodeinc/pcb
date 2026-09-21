@@ -1,11 +1,10 @@
 //! Pass pipelines over IPC documents.
 //!
-//! Passes are plain functions that mutate a [`Document`] in place. Three
+//! Passes are plain functions that mutate a [`Document`] in place. Two
 //! standard pipelines cover the common targets:
 //!
-//! - [`normalize_preserving`]: structure-preserving cleanup only.
-//! - [`normalize_for_artwork`]: additionally resolves IPC set voids, which
-//!   ordered artwork cannot express.
+//! - [`normalize_for_artwork`]: structure-preserving cleanup, plus IPC set
+//!   voids, which ordered artwork cannot express.
 //! - [`normalize_for_positive_artwork`]: additionally resolves layer cutouts
 //!   and negative polarity, for targets that image only dark objects.
 
@@ -20,12 +19,9 @@ use crate::geom::{
     Affine2, BBox, ContourSet, FillRule, Paint, PaintKind, Path, PathArena, Point, Polarity, Span,
 };
 
-/// Run only structure-preserving cleanup passes.
-///
-/// This keeps source vector geometry, strokes, feature polarity, and layer
-/// object ordering intact. Use this before targets that can still carry rich
-/// vector artwork semantics.
-pub fn normalize_preserving(doc: &mut Document) {
+/// The structure-preserving cleanup every pipeline starts with: source vector
+/// geometry, strokes, feature polarity, and layer object ordering stay intact.
+fn normalize_preserving(doc: &mut Document) {
     prune_unpainted_paths(doc);
     compose_feature_paths(doc);
     normalize_bounds(doc);

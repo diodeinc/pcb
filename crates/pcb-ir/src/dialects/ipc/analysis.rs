@@ -96,7 +96,7 @@ pub fn layout_steps_by_kind(
         .filter_map(move |(index, step)| (step.kind == kind).then_some((index as u32, step)))
 }
 
-pub fn layout_instances_by_kind(
+fn layout_instances_by_kind(
     doc: &Document,
     kind: LayoutStepKind,
 ) -> impl Iterator<Item = (u32, &LayoutInstance)> {
@@ -110,7 +110,7 @@ pub fn layout_instances_by_kind(
         })
 }
 
-pub fn layout_child_repeats(
+fn layout_child_repeats(
     doc: &Document,
     parent_step: u32,
     parent_instance: Option<u32>,
@@ -125,7 +125,7 @@ pub fn layout_child_repeats(
         })
 }
 
-pub fn layout_repeat_instances<'a>(
+fn layout_repeat_instances<'a>(
     doc: &'a Document,
     repeat: &LayoutRepeat,
 ) -> impl Iterator<Item = (u32, &'a LayoutInstance)> {
@@ -663,7 +663,7 @@ fn instance_profile_role(kind: LayoutStepKind) -> ProfileOccurrenceRole {
     }
 }
 
-pub(crate) fn instance_depth(doc: &Document, instance_index: u32) -> u32 {
+fn instance_depth(doc: &Document, instance_index: u32) -> u32 {
     let mut depth = 1;
     let mut remaining = doc.layout.instances.len();
     let mut parent = doc

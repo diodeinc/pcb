@@ -19,18 +19,14 @@ pub mod surface_layers;
 pub mod validate;
 
 pub use analysis::{
-    ArtworkScope, ProfileOccurrence, ProfileOccurrenceRole, ProfileSet, SimpleBoardArrayLayout,
-    board_bbox, board_instance_count, board_step_count, layout_child_repeats,
-    layout_instances_by_kind, layout_repeat_instances, layout_steps_by_kind, panel_bbox,
-    panel_step_count, profile_occurrences_for, root_panel_step, root_step,
-    simple_board_array_layout,
+    ArtworkScope, ProfileOccurrenceRole, ProfileSet, SimpleBoardArrayLayout, board_bbox,
+    board_instance_count, board_step_count, layout_steps_by_kind, panel_bbox, panel_step_count,
+    profile_occurrences_for, root_panel_step, root_step, simple_board_array_layout,
 };
 pub use balancing_region::{
-    BalancingRegionError, BalancingRegionOptions, BoardArrayBalancingCollection,
-    BoardArrayBalancingInput, BoardArrayBalancingIntermediates, BoardArrayBalancingResult,
-    BoardArrayCopperLayer, BoardArrayCopperReach, BoardArrayScopedObstacle,
-    BoardArraySupportDocument, BoardArraySupportLayerGeometry, BoardArraySupportLayerPolicy,
-    ClearanceCertificate, DEFAULT_BALANCING_CLEARANCE_MM, DEFAULT_BALANCING_GAP_RADIUS_MM,
+    BalancingRegionOptions, BoardArrayBalancingInput, BoardArrayBalancingResult,
+    BoardArrayCopperLayer, BoardArraySupportDocument, BoardArraySupportLayerGeometry,
+    BoardArraySupportLayerPolicy, DEFAULT_BALANCING_CLEARANCE_MM, DEFAULT_BALANCING_GAP_RADIUS_MM,
     DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM, board_array_balancing_region,
     collect_board_array_balancing_input, collect_fab_panel_balancing_input,
     inspect_board_array_balancing_input,
@@ -42,8 +38,8 @@ pub use feature::{
     FiducialKind, GeometryUsage, PinRef, PlatingKind, PrimitiveRef, SimpleShape, SourceRef,
 };
 pub use layout::{
-    LayoutGraph, LayoutInstance, LayoutMargins, LayoutPurpose, LayoutRepeat, LayoutStep,
-    LayoutStepKind, StepProfile, StepProfileCutout,
+    LayoutInstance, LayoutMargins, LayoutPurpose, LayoutRepeat, LayoutStep, LayoutStepKind,
+    StepProfile, StepProfileCutout,
 };
 pub use lower::{
     ArtworkTarget, BoardArrayFabricationProfile, BoardArrayReliefFeatures,

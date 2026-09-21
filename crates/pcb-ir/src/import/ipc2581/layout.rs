@@ -274,10 +274,6 @@ pub(super) fn push_or_update_layout_step(
         source_step_ref: step.name,
         kind: layout_step_kind(step),
         purpose: LayoutPurpose::Product,
-        datum: step
-            .datum
-            .map(|datum| Point::new(datum.x, datum.y))
-            .unwrap_or_default(),
         profiles: Span::new(profiles.start, profiles.count),
         bbox: profiles.bbox,
     });

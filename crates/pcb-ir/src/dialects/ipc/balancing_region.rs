@@ -1399,7 +1399,6 @@ mod tests {
             source_step_ref: sym(1),
             kind: LayoutStepKind::Panel,
             purpose: LayoutPurpose::Product,
-            datum: Point::default(),
             profiles: Span::single(0),
             bbox: bbox(0.0, 0.0, 20.0, 10.0),
         });
@@ -1407,7 +1406,6 @@ mod tests {
             source_step_ref: sym(2),
             kind: LayoutStepKind::Board,
             purpose: LayoutPurpose::Product,
-            datum: Point::default(),
             profiles: Span::single(1),
             bbox: bbox(0.0, 0.0, 4.0, 3.0),
         });

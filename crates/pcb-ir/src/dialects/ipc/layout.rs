@@ -1,4 +1,4 @@
-use crate::geom::{Affine2, BBox, Point, Span};
+use crate::geom::{Affine2, BBox, Span};
 use ipc2581::Symbol;
 
 /// Canonical IPC layout graph.
@@ -43,7 +43,6 @@ pub struct LayoutStep {
     pub source_step_ref: Symbol,
     pub kind: LayoutStepKind,
     pub purpose: LayoutPurpose,
-    pub datum: Point,
     /// Spans `doc.profiles`.
     pub profiles: Span,
     pub bbox: BBox,
