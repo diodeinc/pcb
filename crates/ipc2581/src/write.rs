@@ -14,18 +14,24 @@ use crate::types::primitives::{
 };
 use crate::{Ipc2581Error, Result};
 
-/// Format a millimeter value in the document's units, with up to six
-/// decimals and trailing zeros trimmed.
+/// Format a millimeter value in the document's units on a grid of a
+/// nanometre or finer, with trailing zeros trimmed. Six decimals of an inch
+/// would be 25 nm.
 pub fn fmt_units(value_mm: f64, units: Units) -> String {
-    fmt_num(crate::units::from_mm(value_mm, units))
+    let decimals = if units == Units::Inch { 8 } else { 6 };
+    fmt_decimals(crate::units::from_mm(value_mm, units), decimals)
 }
 
 /// Format a numeric value with up to six decimals, trimming trailing zeros.
 pub fn fmt_num(value: f64) -> String {
+    fmt_decimals(value, 6)
+}
+
+fn fmt_decimals(value: f64, decimals: usize) -> String {
     if value.abs() < 1e-9 {
         return "0".to_string();
     }
-    let mut text = format!("{value:.6}");
+    let mut text = format!("{value:.decimals$}");
     while text.contains('.') && text.ends_with('0') {
         text.pop();
     }
@@ -148,13 +154,19 @@ pub fn fiducial(writer: &mut XmlWriter, units: Units, fiducial: &Fiducial) -> Re
     Ok(())
 }
 
-/// Write a round `Hole` with the given name and zero tolerances.
-pub fn hole(writer: &mut XmlWriter, units: Units, hole: &Hole, name: &str) {
+/// Write a `Hole` under the given name with zero tolerances. A hole with an
+/// `Xform` or spec refs cannot be written standalone.
+pub fn hole(writer: &mut XmlWriter, units: Units, hole: &Hole, name: &str) -> Result<()> {
+    if hole.xform.is_some() || !hole.spec_refs.is_empty() {
+        return Err(Ipc2581Error::InvalidStructure(
+            "hole with Xform or SpecRef cannot be written standalone".into(),
+        ));
+    }
     writer.empty_element(
         "Hole",
         &[
             ("name", name),
-            ("type", "CIRCLE"),
+            ("type", hole.shape.as_str()),
             ("diameter", fmt_units(hole.diameter, units).as_str()),
             ("platingStatus", hole.plating_status.as_str()),
             ("plusTol", "0"),
@@ -163,6 +175,7 @@ pub fn hole(writer: &mut XmlWriter, units: Units, hole: &Hole, name: &str) {
             ("y", fmt_units(hole.y, units).as_str()),
         ],
     );
+    Ok(())
 }
 
 pub fn profile(writer: &mut XmlWriter, units: Units, polygon: &Polygon) {
@@ -257,10 +270,29 @@ mod tests {
             y: -0.25,
         };
         let mut writer = XmlWriter::new();
-        hole(&mut writer, Units::Millimeter, &hole_mm, "tooling_0");
+        hole(&mut writer, Units::Millimeter, &hole_mm, "tooling_0").unwrap();
+        let square = Hole {
+            shape: crate::types::HoleShape::Square,
+            ..hole_mm.clone()
+        };
+        hole(&mut writer, Units::Millimeter, &square, "tooling_1").unwrap();
         assert_eq!(
             writer.into_string(),
-            r#"<Hole name="tooling_0" type="CIRCLE" diameter="2" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="1.5" y="-0.25"/>"#
+            r#"<Hole name="tooling_0" type="CIRCLE" diameter="2" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="1.5" y="-0.25"/><Hole name="tooling_1" type="SQUARE" diameter="2" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="1.5" y="-0.25"/>"#
+        );
+
+        let placed = Hole {
+            xform: Some(crate::types::Xform::default()),
+            ..hole_mm
+        };
+        assert!(
+            hole(
+                &mut XmlWriter::new(),
+                Units::Millimeter,
+                &placed,
+                "tooling_2"
+            )
+            .is_err()
         );
     }
 
@@ -358,6 +390,9 @@ mod tests {
     fn fmt_units_converts_and_trims() {
         assert_eq!(fmt_units(25.4, Units::Inch), "1");
         assert_eq!(fmt_units(1.0, Units::Millimeter), "1");
+        // A nanometre survives in either unit.
+        assert_eq!(fmt_units(10.000001, Units::Millimeter), "10.000001");
+        assert_eq!(fmt_units(10.000001, Units::Inch), "0.39370083");
         assert_eq!(fmt_num(-0.0000000001), "0");
     }
 }

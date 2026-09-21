@@ -1734,9 +1734,9 @@ fn writes_generated_board_array_values_in_cad_header_units() {
     )
     .unwrap();
 
-    assert!(xml.contains(r#"<PolyStepSegment x="0" y="2.88189"/>"#));
+    assert!(xml.contains(r#"<PolyStepSegment x="0" y="2.88188976"/>"#));
     assert!(xml.contains(
-        r#"<PolyStepCurve x="0.11811" y="3" centerX="0.11811" centerY="2.88189" clockwise="true"/>"#
+        r#"<PolyStepCurve x="0.11811024" y="3" centerX="0.11811024" centerY="2.88188976" clockwise="true"/>"#
     ));
     assert!(xml.contains(
         r#"<StepRepeat stepRef="board_cell" x="1" y="1" nx="1" ny="1" dx="1" dy="1" angle="0.00" mirror="false"/>"#

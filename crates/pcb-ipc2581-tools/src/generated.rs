@@ -170,7 +170,7 @@ fn write_set_features(
                 write::fiducial(writer, units, fiducial)?;
             }
             SetFeature::Hole(hole) => {
-                write::hole(writer, units, hole, &names.next_hole_name());
+                write::hole(writer, units, hole, &names.next_hole_name())?;
             }
             _ => bail!("generated layer feature has unsupported feature kind"),
         }
