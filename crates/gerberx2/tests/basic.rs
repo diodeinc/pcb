@@ -659,6 +659,74 @@ fn rejects_counts_outside_the_format_limits() {
 }
 
 #[test]
+fn reads_deprecated_constructs_older_files_are_full_of() {
+    // Words on their own lines inside one block, identity image commands, an
+    // SR preamble that is never closed, G70/G90, G-codes fused with their
+    // operation, D-codes without leading zeros, coordinates that repeat the
+    // last operation, and a macro variable nobody set.
+    let gerber = GerberX2::parse(
+        "G04 RS-274X*\n%\nFSLAX24Y24*\nMOIN*\n%\n%IPPOS*%\n%LNTOP*%\n%INBoard, rev 2*%\n%ASAXBY*%\n%OFA0B0*%\n%SFA1.0B1.0*%\n%MIA0B0*%\n%IR0*%\n%SRX1Y1I0J0*%\n%AMDOT*\n1,1,$1,$2,0*\n%\n%ADD10C,0.0100*%\n%ADD11DOT,0.05*%\nG70*\nG90*\nG75*\nG54D10*\nG01X0Y0D02*\nX10000D01*\nY10000*\nG01X0Y10000D1*\nG54D11*\nG55X5000Y5000D3*\nX7000Y7000*\nM02*\n",
+    )
+    .unwrap();
+
+    let objects = gerber.objects();
+    assert_eq!(objects.len(), 5);
+    assert!(matches!(
+        objects[1].kind,
+        ObjectKind::Draw { start, end, aperture: 10 }
+            if close(start.x, 25.4) && close(start.y, 0.0) && close(end.x, 25.4) && close(end.y, 25.4)
+    ));
+    assert!(matches!(
+        objects[2].kind,
+        ObjectKind::Draw { end, .. } if close(end.x, 0.0) && close(end.y, 25.4)
+    ));
+    assert!(matches!(
+        objects[3].kind,
+        ObjectKind::Flash { at, aperture: 11 } if close(at.x, 12.7) && close(at.y, 12.7)
+    ));
+    assert!(matches!(
+        objects[4].kind,
+        ObjectKind::Flash { at, aperture: 11 } if close(at.x, 17.78) && close(at.y, 17.78)
+    ));
+    assert!(gerber.step_repeats().is_empty());
+    // The unset `$2` centred the macro's circle on the origin.
+    let artwork =
+        gerberx2::geometry::extract_document(&gerber, GeometryAccuracy::default()).unwrap();
+    assert!(close(artwork.objects[3].bbox.center().x, 12.7));
+
+    // G71 is `%MOMM`, and an unclosed step-repeat ends with the file.
+    let gerber =
+        GerberX2::parse("%FSLAX26Y26*%G71*%ADD10C,1*%D10*%SRX2Y1I5J0*%X1000000Y0D03*M02*").unwrap();
+    assert!(matches!(
+        gerber.objects()[0].kind,
+        ObjectKind::Flash { at, .. } if close(at.x, 1.0)
+    ));
+    assert_eq!(gerber.step_repeats().len(), 1);
+}
+
+#[test]
+fn rejects_deprecated_constructs_that_would_change_the_image() {
+    for (body, message) in [
+        ("G74*", "single-quadrant"),
+        ("G91*", "incremental"),
+        ("%IPNEG*%", "changes the image"),
+        ("%ASAYBX*%", "changes the image"),
+        ("%OFA1B0*%", "changes the image"),
+        ("%SFA2B2*%", "changes the image"),
+        ("%MIA1B0*%", "changes the image"),
+        ("%IR90*%", "changes the image"),
+        ("%ADD10C,1*%D10*X0Y0*", "require a previous operation"),
+        ("%ADD10C,1*%D10*X0Y0D04*", "invalid D-code"),
+        ("%ADD10C,1*%X0Y0D10*", "invalid D-code"),
+    ] {
+        let error = GerberX2::parse(&format!("%FSLAX26Y26*%%MOMM*%{body}M02*"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(message), "{body}: {error}");
+    }
+}
+
+#[test]
 fn rejects_unclosed_region_contours() {
     let err = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\nG36*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nX1000000Y1000000D01*\nG37*\nM02*\n",

@@ -115,6 +115,8 @@ struct GraphicsState {
     current_point: Option<Point>,
     current_aperture: Option<i32>,
     plot_mode: Option<PlotMode>,
+    /// The last D01/D02/D03, which coordinates without a D-code repeat.
+    operation: Option<OperationCode>,
     polarity: Polarity,
     mirroring: Mirroring,
     rotation_degrees: f64,
@@ -129,6 +131,7 @@ impl Default for GraphicsState {
             current_point: None,
             current_aperture: None,
             plot_mode: None,
+            operation: None,
             polarity: Polarity::Dark,
             mirroring: Mirroring::None,
             rotation_degrees: 0.0,
@@ -208,11 +211,6 @@ impl<'a> Parser<'a> {
                 "AB block aperture was not closed before M02".to_string(),
             ));
         }
-        if self.step_repeat.is_some() {
-            return Err(GerberError::InvalidStructure(
-                "SR step-repeat was not closed before M02".to_string(),
-            ));
-        }
 
         Ok(GerberX2 {
             interner: std::mem::take(&mut self.interner),
@@ -263,17 +261,17 @@ impl<'a> Parser<'a> {
         Ok(&self.source[start..self.pos])
     }
 
+    /// Words may sit on their own lines inside one `%...%` block.
     fn parse_extended_command(&mut self, command: &'a str) -> Result<()> {
+        let command = command.trim();
         if command.starts_with("AM") {
             return self.parse_extended_word(command.trim_end_matches('*'));
         }
-        for word in command.split_terminator('*') {
-            if word.is_empty() {
-                continue;
-            }
-            self.parse_extended_word(word)?;
-        }
-        Ok(())
+        command
+            .split_terminator('*')
+            .map(str::trim)
+            .filter(|word| !word.is_empty())
+            .try_for_each(|word| self.parse_extended_word(word))
     }
 
     fn parse_extended_word(&mut self, word: &'a str) -> Result<()> {
@@ -374,29 +372,13 @@ impl<'a> Parser<'a> {
             if self.block.is_some() {
                 return Err(self.syntax("SR is not allowed inside an AB block aperture"));
             }
-            if rest.is_empty() {
-                let step = self
-                    .step_repeat
-                    .take()
-                    .ok_or_else(|| self.syntax("SR close without matching SR open"))?;
-                let objects = Span::new(
-                    step.object_start as u32,
-                    (self.objects.len() - step.object_start) as u32,
-                );
-                // A single occurrence is the run itself.
-                if !objects.is_empty() && (step.repeat.x_repeats > 1 || step.repeat.y_repeats > 1) {
-                    self.step_repeats.push(StepRepeatBlock {
-                        repeat: step.repeat,
-                        objects,
-                    });
-                }
-            } else {
-                let sr = parse_step_repeat(rest)?;
-                if self.step_repeat.is_some() {
-                    return Err(self.syntax("nested SR statements are not supported"));
-                }
+            // Any SR command ends the block in progress, whether or not it
+            // opens another: older files never close their last block, nor
+            // the `%SRX1Y1I0J0*%` they open with.
+            self.close_step_repeat();
+            if !rest.is_empty() {
                 self.step_repeat = Some(StepRepeatBuilder {
-                    repeat: sr,
+                    repeat: parse_step_repeat(rest)?,
                     object_start: self.objects.len(),
                 });
             }
@@ -428,69 +410,108 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
 
-        Err(self.syntax(format!("unsupported extended command '{word}'")))
+        match legacy_image_command(word) {
+            Some(true) => Ok(()),
+            Some(false) => Err(self.syntax(format!(
+                "deprecated command '{word}' changes the image and is not supported"
+            ))),
+            None => Err(self.syntax(format!("unsupported extended command '{word}'"))),
+        }
+    }
+
+    fn close_step_repeat(&mut self) {
+        let Some(step) = self.step_repeat.take() else {
+            return;
+        };
+        let objects = Span::new(
+            step.object_start as u32,
+            (self.objects.len() - step.object_start) as u32,
+        );
+        // A single occurrence is the run itself.
+        if !objects.is_empty() && (step.repeat.x_repeats > 1 || step.repeat.y_repeats > 1) {
+            self.step_repeats.push(StepRepeatBlock {
+                repeat: step.repeat,
+                objects,
+            });
+        }
     }
 
     fn parse_word_command(&mut self, command: &'a str) -> Result<()> {
-        let word = command.strip_suffix('*').unwrap_or(command);
-        if word.starts_with("G04") {
-            return Ok(());
+        let mut word = command.strip_suffix('*').unwrap_or(command).trim();
+        // Older files fuse G-codes with the operation they precede
+        // (`G01X0Y0D01`, `G54D10`), so each leading code applies in turn to
+        // whatever follows it.
+        while let Some((code, rest)) = split_g_code(word) {
+            match code {
+                1 => self.state.plot_mode = Some(PlotMode::Linear),
+                2 => self.state.plot_mode = Some(PlotMode::ClockwiseArc),
+                3 => self.state.plot_mode = Some(PlotMode::CounterclockwiseArc),
+                // A comment runs to the end of the word.
+                4 => return Ok(()),
+                36 => {
+                    if self.region.is_some() {
+                        return Err(self.syntax("nested region statements are not allowed"));
+                    }
+                    self.region = Some(RegionBuilder::default());
+                }
+                37 => self.end_region()?,
+                // Deprecated spellings of `%MO`.
+                70 => self.state.unit = Some(Unit::Inch),
+                71 => self.state.unit = Some(Unit::Millimeter),
+                // What this parser assumes anyway: the select-aperture and
+                // prepare-to-flash prefixes, multi-quadrant arcs, absolute
+                // coordinates.
+                54 | 55 | 75 | 90 => {}
+                74 => return Err(self.syntax("G74 single-quadrant arcs are not supported")),
+                91 => return Err(self.syntax("G91 incremental coordinates are not supported")),
+                _ => return Err(self.syntax(format!("unsupported G-code in '{word}'"))),
+            }
+            word = rest;
         }
-
         match word {
-            "G01" => {
-                self.state.plot_mode = Some(PlotMode::Linear);
-                return Ok(());
-            }
-            "G02" => {
-                self.state.plot_mode = Some(PlotMode::ClockwiseArc);
-                return Ok(());
-            }
-            "G03" => {
-                self.state.plot_mode = Some(PlotMode::CounterclockwiseArc);
-                return Ok(());
-            }
-            "G75" => {
-                return Ok(());
-            }
-            "G36" => {
-                if self.region.is_some() {
-                    return Err(self.syntax("nested region statements are not allowed"));
-                }
-                self.region = Some(RegionBuilder::default());
-                return Ok(());
-            }
-            "G37" => {
-                let mut region = self
-                    .region
-                    .take()
-                    .ok_or_else(|| self.syntax("G37 without matching G36"))?;
-                if let Some(contour) = region.current.take() {
-                    region.contours.push(contour);
-                }
-                if region.contours.is_empty() {
-                    return Err(self.syntax("empty region statement"));
-                }
-                validate_region_contours(&region.contours)?;
-                self.push_object(ObjectKind::Region {
-                    contours: region.contours,
-                });
-                return Ok(());
-            }
+            "" => Ok(()),
             "M02" => {
+                self.close_step_repeat();
                 self.saw_m02 = true;
-                return Ok(());
+                Ok(())
             }
-            _ => {}
+            _ => {
+                let (fields, d_code) = parse_operation(word)?;
+                let operation = match d_code {
+                    Some(1) => OperationCode::Plot,
+                    Some(2) => OperationCode::Move,
+                    Some(3) => OperationCode::Flash,
+                    Some(aperture) if aperture >= 10 && fields == CoordinateFields::default() => {
+                        self.state.current_aperture = Some(aperture);
+                        return Ok(());
+                    }
+                    Some(_) => return Err(self.syntax(format!("invalid D-code in '{word}'"))),
+                    // Coordinates without a D-code repeat the last operation.
+                    None => self.state.operation.ok_or_else(|| {
+                        self.syntax("coordinates without a D-code require a previous operation")
+                    })?,
+                };
+                self.state.operation = Some(operation);
+                self.interpret_operation(fields, operation)
+            }
         }
+    }
 
-        if let Some(code) = parse_set_aperture(word) {
-            self.state.current_aperture = Some(code);
-            return Ok(());
+    fn end_region(&mut self) -> Result<()> {
+        let mut region = self
+            .region
+            .take()
+            .ok_or_else(|| self.syntax("G37 without matching G36"))?;
+        if let Some(contour) = region.current.take() {
+            region.contours.push(contour);
         }
-
-        let (fields, code) = parse_operation(word)?;
-        self.interpret_operation(fields, code)?;
+        if region.contours.is_empty() {
+            return Err(self.syntax("empty region statement"));
+        }
+        validate_region_contours(&region.contours)?;
+        self.push_object(ObjectKind::Region {
+            contours: region.contours,
+        });
         Ok(())
     }
 
@@ -807,7 +828,7 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(ApertureMacro {
-            name: self.interner.intern(name),
+            name: self.interner.intern(name.trim()),
             primitives,
         })
     }
@@ -902,13 +923,13 @@ fn lower_macro_aperture(
                 variable,
                 expression,
             } => {
-                vars.insert(*variable, eval_macro_expr(expression, &vars)?);
+                vars.insert(*variable, eval_macro_expr(expression, &vars));
             }
             MacroPrimitive::Shape { code, parameters } => {
                 let values = parameters
                     .iter()
                     .map(|expr| eval_macro_expr(expr, &vars))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Vec<_>>();
                 paths.extend(lower_macro_shape(*code, &values, unit)?);
             }
         }
@@ -1280,26 +1301,19 @@ fn macro_bool(values: &[f64], index: usize) -> Result<Polarity> {
     })
 }
 
-fn eval_macro_expr(expr: &MacroExpression, vars: &HashMap<usize, f64>) -> Result<f64> {
-    Ok(match expr {
+/// Evaluate a macro expression. A variable no parameter or definition has
+/// set is zero, as the format specifies.
+fn eval_macro_expr(expr: &MacroExpression, vars: &HashMap<usize, f64>) -> f64 {
+    let eval = |expr| eval_macro_expr(expr, vars);
+    match expr {
         MacroExpression::Number(value) => *value,
-        MacroExpression::Variable(index) => *vars.get(index).ok_or_else(|| {
-            GerberError::InvalidStructure(format!("macro variable ${index} used before definition"))
-        })?,
-        MacroExpression::UnaryMinus(inner) => -eval_macro_expr(inner, vars)?,
-        MacroExpression::Add(left, right) => {
-            eval_macro_expr(left, vars)? + eval_macro_expr(right, vars)?
-        }
-        MacroExpression::Subtract(left, right) => {
-            eval_macro_expr(left, vars)? - eval_macro_expr(right, vars)?
-        }
-        MacroExpression::Multiply(left, right) => {
-            eval_macro_expr(left, vars)? * eval_macro_expr(right, vars)?
-        }
-        MacroExpression::Divide(left, right) => {
-            eval_macro_expr(left, vars)? / eval_macro_expr(right, vars)?
-        }
-    })
+        MacroExpression::Variable(index) => vars.get(index).copied().unwrap_or(0.0),
+        MacroExpression::UnaryMinus(inner) => -eval(inner),
+        MacroExpression::Add(left, right) => eval(left) + eval(right),
+        MacroExpression::Subtract(left, right) => eval(left) - eval(right),
+        MacroExpression::Multiply(left, right) => eval(left) * eval(right),
+        MacroExpression::Divide(left, right) => eval(left) / eval(right),
+    }
 }
 
 fn repolarity(mut path: GeometryPath, polarity: Polarity) -> GeometryPath {
@@ -1511,25 +1525,50 @@ fn parse_aperture_code(value: &str) -> Result<i32> {
     Ok(code)
 }
 
-fn parse_set_aperture(word: &str) -> Option<i32> {
-    let code = word.strip_prefix('D')?.parse::<i32>().ok()?;
-    (code >= 10).then_some(code)
+/// Split a leading G-code, with or without its leading zero, off a word.
+fn split_g_code(word: &str) -> Option<(u32, &str)> {
+    let rest = word.strip_prefix('G')?;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    Some((rest[..digits].parse().ok()?, &rest[digits..]))
 }
 
-fn parse_operation(word: &str) -> Result<(CoordinateFields, OperationCode)> {
-    let (body, code) = if let Some(body) = word.strip_suffix("D01") {
-        (body, OperationCode::Plot)
-    } else if let Some(body) = word.strip_suffix("D02") {
-        (body, OperationCode::Move)
-    } else if let Some(body) = word.strip_suffix("D03") {
-        (body, OperationCode::Flash)
-    } else {
-        return Err(GerberError::InvalidStructure(format!(
-            "unsupported word command '{word}'"
-        )));
+/// Deprecated image-level commands. Older files carry them everywhere at
+/// values that change nothing; `Some(false)` is a value that would change
+/// the image, which this parser does not model.
+fn legacy_image_command(word: &str) -> Option<bool> {
+    let (code, value) = word.split_at_checked(2)?;
+    let both_axes = |identity: f64| {
+        value
+            .split(['A', 'B'])
+            .filter(|axis| !axis.is_empty())
+            .all(|axis| axis.parse() == Ok(identity))
     };
+    Some(match code {
+        // Layer and image names.
+        "LN" | "IN" => true,
+        "IP" => value == "POS",
+        "AS" => value == "AXBY",
+        "IR" => value.parse() == Ok(0.0),
+        "OF" | "MI" => both_axes(0.0),
+        "SF" => both_axes(1.0),
+        _ => return None,
+    })
+}
 
-    Ok((parse_coordinate_fields(body)?, code))
+/// The coordinate fields of an operation and its D-code, with or without
+/// leading zeros, if it carries one.
+fn parse_operation(word: &str) -> Result<(CoordinateFields, Option<i32>)> {
+    let (body, d_code) = match word.rsplit_once('D') {
+        Some((body, code)) => (
+            body,
+            Some(
+                code.parse()
+                    .map_err(|_| GerberError::InvalidNumber(word.to_string()))?,
+            ),
+        ),
+        None => (word, None),
+    };
+    Ok((parse_coordinate_fields(body)?, d_code))
 }
 
 fn parse_coordinate_fields(mut body: &str) -> Result<CoordinateFields> {
