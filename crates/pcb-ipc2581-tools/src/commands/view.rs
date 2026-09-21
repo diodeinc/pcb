@@ -1,8 +1,6 @@
 #[cfg(feature = "cli")]
 use std::path::Path;
 
-#[cfg(feature = "cli")]
-use anyhow::Context;
 use anyhow::Result;
 #[cfg(feature = "cli")]
 use ipc2581::Ipc2581;
@@ -92,10 +90,15 @@ pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
     )?);
     let filtered_xml = crate::utils::format::reformat_xml(&edit::apply(&content, edits)?)?;
     if matches!(mode, ViewMode::Fabrication) {
-        Ipc2581::validate(&filtered_xml)
-            .context("fabrication view failed IPC-2581C schema validation")?;
-        Ipc2581::parse(&filtered_xml)
-            .context("fabrication view was not accepted by the IPC-2581 parser")?;
+        Ipc2581::parse_validated(&filtered_xml).map_err(|error| {
+            let context = match error {
+                ipc2581::Ipc2581Error::SchemaValidation(_) => {
+                    "fabrication view failed IPC-2581C schema validation"
+                }
+                _ => "fabrication view was not accepted by the IPC-2581 parser",
+            };
+            anyhow::Error::new(error).context(context)
+        })?;
     }
 
     file_utils::save_ipc_file(output, &filtered_xml)?;
