@@ -3,10 +3,11 @@
 //! IPC-2581 carries all of its data in attributes, so text, comments and
 //! processing instructions are not kept. A general DOM spends about 200 bytes
 //! per node and makes a node of every whitespace run between elements, which
-//! is a gigabyte for a 60 MB file; this keeps 40 bytes per element and 48 per
-//! attribute, and 12 more per element for the source offsets an editor asks
-//! for. Well-formedness, namespaces, entities and the depth and expansion
-//! limits are the pull parser's, exactly as for `uppsala::parse`.
+//! is a gigabyte for a 60 MB file. Names and values are nearly always slices
+//! of the source, so this keeps 24 bytes per element and 16 per attribute, and
+//! 12 more per element for the source offsets an editor asks for.
+//! Well-formedness, namespaces, entities and the depth and expansion limits
+//! are the pull parser's, exactly as for `uppsala::parse`.
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -38,8 +39,18 @@ struct SourceSpan {
     end: u32,
 }
 
-struct Element<'a> {
-    name: Cow<'a, str>,
+/// A name or value: `len` bytes of the source from `start`, or entry `start`
+/// of `Dom::rewritten` when `len` is [`REWRITTEN`].
+#[derive(Clone, Copy)]
+struct Text {
+    start: u32,
+    len: u32,
+}
+
+const REWRITTEN: u32 = u32::MAX;
+
+struct Element {
+    name: Text,
     /// Start and length of the element's run in `Dom::attributes`.
     attributes: (u32, u32),
     first_child: u32,
@@ -47,10 +58,14 @@ struct Element<'a> {
 }
 
 pub(crate) struct Dom<'a> {
+    xml: &'a str,
     /// In document order; the root element is first.
-    elements: Vec<Element<'a>>,
+    elements: Vec<Element>,
     /// Local name and value, grouped by element.
-    attributes: Vec<(Cow<'a, str>, Cow<'a, str>)>,
+    attributes: Vec<(Text, Text)>,
+    /// Values the parser could not borrow: entities and line ends in them
+    /// are replaced.
+    rewritten: Vec<String>,
     /// Parallel to `elements` under [`Keep::SourceSpans`], else empty.
     spans: Vec<SourceSpan>,
     root_namespace: Option<Cow<'a, str>>,
@@ -75,18 +90,18 @@ impl<'a> Dom<'a> {
                 .filter(|pair| pair[0] == first && second(pair[1]))
                 .count()
         };
+        // Offsets are kept in 32 bits.
+        index(xml.len())?;
         let elements = pairs(b'<', |next| !matches!(next, b'/' | b'!' | b'?'));
         let spans = match keep {
             Keep::Tree => 0,
-            Keep::SourceSpans => {
-                // Offsets are kept in 32 bits.
-                index(xml.len())?;
-                elements
-            }
+            Keep::SourceSpans => elements,
         };
         let mut dom = Self {
+            xml,
             elements: Vec::with_capacity(elements),
             attributes: Vec::with_capacity(pairs(b'=', |next| matches!(next, b'"' | b'\''))),
+            rewritten: Vec::new(),
             spans: Vec::with_capacity(spans),
             root_namespace: None,
             root_range: 0..0,
@@ -117,13 +132,16 @@ impl<'a> Dom<'a> {
                     }
                     let first_attribute = index(dom.attributes.len())?;
                     let count = index(attributes.len())?;
-                    dom.attributes.extend(
-                        attributes
-                            .into_iter()
-                            .map(|attribute| (attribute.name.local_name, attribute.value)),
-                    );
+                    for attribute in attributes {
+                        let pair = (
+                            dom.keep(attribute.name.local_name),
+                            dom.keep(attribute.value),
+                        );
+                        dom.attributes.push(pair);
+                    }
+                    let name = dom.keep(name.local_name);
                     dom.elements.push(Element {
-                        name: name.local_name,
+                        name,
                         attributes: (first_attribute, count),
                         first_child: NONE,
                         next_sibling: NONE,
@@ -164,6 +182,32 @@ impl<'a> Dom<'a> {
         Ok(dom)
     }
 
+    fn keep(&mut self, text: Cow<'a, str>) -> Text {
+        match text {
+            // A borrowed string is a slice of the source; its address says where.
+            Cow::Borrowed(text) if self.xml.as_bytes().as_ptr_range().contains(&text.as_ptr()) => {
+                Text {
+                    start: (text.as_ptr() as usize - self.xml.as_ptr() as usize) as u32,
+                    len: text.len() as u32,
+                }
+            }
+            text => {
+                self.rewritten.push(text.into_owned());
+                Text {
+                    start: (self.rewritten.len() - 1) as u32,
+                    len: REWRITTEN,
+                }
+            }
+        }
+    }
+
+    fn text(&self, text: Text) -> &str {
+        match text.len {
+            REWRITTEN => &self.rewritten[text.start as usize],
+            len => &self.xml[text.start as usize..(text.start + len) as usize],
+        }
+    }
+
     pub(crate) fn root(&self) -> Node {
         Node(0)
     }
@@ -179,21 +223,27 @@ impl<'a> Dom<'a> {
 
     /// Local name of an element.
     pub(crate) fn name(&self, node: Node) -> &str {
-        &self.elements[node.0 as usize].name
+        self.text(self.elements[node.0 as usize].name)
     }
 
     /// Attribute value by local name.
     pub(crate) fn attr(&self, node: Node, name: &str) -> Option<&str> {
-        self.attrs(node)
-            .find_map(|(candidate, value)| (candidate == name).then_some(value))
+        self.attribute_run(node)
+            .iter()
+            .find(|(candidate, _)| self.text(*candidate) == name)
+            .map(|(_, value)| self.text(*value))
     }
 
     /// Attributes of an element as (local name, value) pairs, in source order.
     pub(crate) fn attrs(&self, node: Node) -> impl Iterator<Item = (&str, &str)> {
-        let (start, count) = self.elements[node.0 as usize].attributes;
-        self.attributes[start as usize..(start + count) as usize]
+        self.attribute_run(node)
             .iter()
-            .map(|(name, value)| (&**name, &**value))
+            .map(|(name, value)| (self.text(*name), self.text(*value)))
+    }
+
+    fn attribute_run(&self, node: Node) -> &[(Text, Text)] {
+        let (start, count) = self.elements[node.0 as usize].attributes;
+        &self.attributes[start as usize..][..count as usize]
     }
 
     /// Every element, in document order.
@@ -250,6 +300,8 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(names, ["b", "c"]);
         assert_eq!(dom.attr(children[0], "k"), Some("a & b"));
+        // Only the value with an entity is a copy.
+        assert_eq!(dom.rewritten, ["a & b"]);
         assert_eq!(dom.children(children[0]).count(), 0);
         let grandchildren = dom.children(children[1]).map(|node| dom.name(node));
         assert_eq!(grandchildren.collect::<Vec<_>>(), ["d"]);
