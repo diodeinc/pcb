@@ -2,7 +2,7 @@ use crate::geom::{AccuracyError, EllipticalArc, GeometryAccuracy};
 use std::fmt::Write;
 
 use crate::dialects::LayerRole;
-use crate::dialects::artwork::{self, Geometry, PaintStage};
+use crate::dialects::artwork::{self, Geometry};
 use crate::dialects::mask;
 use crate::geom::path::{PathCmd, PathOp};
 
@@ -115,24 +115,12 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
     options: &RenderOptions,
 ) -> Result<(), AccuracyError> {
     let ids = options.id_prefix.as_str();
-    let objects = artwork::paint_ordered(layer.objects.slice(&doc.objects));
-    let has_material = objects
-        .iter()
-        .any(|object| object.order.stage != PaintStage::FinalCutout);
-
     // Sequential polarity: paint dark runs in order, and fold every clear run
     // into a mask over everything painted before it.
     let mut painted = String::new();
     let mut run = String::new();
     let mut run_polarity = Polarity::Dark;
-    for object in objects {
-        let polarity = if object.order.stage == PaintStage::FinalCutout
-            && (has_material || layer.role == LayerRole::Copper)
-        {
-            Polarity::Clear
-        } else {
-            object.polarity
-        };
+    for (polarity, object) in artwork::paint_ordered(layer, layer.objects.slice(&doc.objects)) {
         if polarity != run_polarity {
             flush_run(
                 &mut painted,
@@ -567,6 +555,7 @@ pub(crate) fn fmt_num(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialects::artwork::PaintStage;
     use crate::dialects::{Side, mask::Layer};
     use crate::geom::path::ContourBuf;
     use crate::geom::{BBox, Paint, Resolution};

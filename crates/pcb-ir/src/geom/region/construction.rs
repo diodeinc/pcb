@@ -6,7 +6,7 @@ use crate::geom::accuracy::numerical_error;
 use crate::geom::path::{ContourBuf, Segment, stroke_to_fill};
 use crate::geom::store::{Path, PathArena};
 use crate::geom::{
-    AccuracyError, Affine2, BBox, FillRule, GeometryAccuracy, Paint, Polarity, Resolution,
+    AccuracyError, Affine2, BBox, FillRule, GeometryAccuracy, Paint, Point, Polarity, Resolution,
 };
 
 /// A closed polygon boundary, flattened to line segments.
@@ -206,6 +206,35 @@ impl ContourSet {
             );
         }
         composer.finish()
+    }
+
+    /// The same region moved by `offset`. A polygon translates exactly, so
+    /// only the sums' own rounding is charged.
+    pub fn translated(&self, offset: Point) -> Result<Self, AccuracyError> {
+        let shift = |bbox: BBox| {
+            if bbox.is_empty() {
+                bbox
+            } else {
+                BBox::new(bbox.min + offset, bbox.max + offset)
+            }
+        };
+        let bbox = shift(self.bbox);
+        Self {
+            bbox,
+            rings: self
+                .rings
+                .iter()
+                .map(|ring| {
+                    ring.iter()
+                        .map(|&[x, y]| [x + offset.x, y + offset.y])
+                        .collect()
+                })
+                .collect(),
+            ring_bounds: self.ring_bounds.iter().copied().map(shift).collect(),
+            resolution: self.resolution,
+            uncertainty_mm: self.uncertainty_mm + numerical_error(bbox),
+        }
+        .checked()
     }
 
     pub fn rectangle(bbox: BBox, resolution: Resolution) -> Self {
