@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 #[cfg(feature = "cli")]
 use ipc2581::Ipc2581;
-use ipc2581::edit::{self, Doc, Edit};
+use ipc2581::edit::{Doc, Edit};
 use ipc2581::{Mode, XmlWriter};
 
 use crate::ViewMode;
@@ -88,7 +88,7 @@ pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
         &doc,
         &format!("Filtered to {} view", mode.as_str()),
     )?);
-    let filtered_xml = crate::utils::format::reformat_xml(&edit::apply(&content, edits)?)?;
+    let filtered_xml = crate::utils::format::reformat_xml(&doc.apply(edits)?)?;
     if matches!(mode, ViewMode::Fabrication) {
         Ipc2581::parse_validated(&filtered_xml).map_err(|error| {
             let context = match error {
@@ -110,7 +110,7 @@ pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
 /// Project XML to a function mode, preserving retained content without adding a history record.
 pub fn filter_by_mode(xml: &str, mode: ViewMode) -> Result<String> {
     let doc = Doc::parse(xml)?;
-    Ok(edit::apply(xml, mode_edits(&doc, mode)?)?)
+    Ok(doc.apply(mode_edits(&doc, mode)?)?)
 }
 
 /// The edits that project a parsed document to a function mode.

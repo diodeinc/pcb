@@ -683,14 +683,10 @@ fn board_courtyard_bbox(ipc: &Ipc2581, resolution: Resolution) -> Result<BBox> {
     Ok(bbox)
 }
 
-/// The source with the array spliced in. `doc` indexes `xml`: one parse
-/// serves the board-array patch and the history append of every pass, and all
-/// edits of a pass splice at once.
-fn board_array_edited_xml(
-    doc: &ipc2581::edit::Doc<'_>,
-    xml: &str,
-    spec: &BoardArraySpec,
-) -> Result<String> {
+/// The source `doc` indexes with the array spliced in: one parse serves the
+/// board-array patch and the history append of every pass, and all edits of a
+/// pass splice at once.
+fn board_array_edited_xml(doc: &ipc2581::edit::Doc<'_>, spec: &BoardArraySpec) -> Result<String> {
     let generated_spec_xml = write_generated_specs_xml(spec);
     let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry);
     let generated_steps_xml = write_generated_steps_xml(spec)?;
@@ -706,15 +702,11 @@ fn board_array_edited_xml(
         doc,
         "Created board array",
     )?);
-    Ok(ipc2581::edit::apply(xml, edits)?)
+    Ok(doc.apply(edits)?)
 }
 
-fn finished_board_array_xml(
-    doc: &ipc2581::edit::Doc<'_>,
-    xml: &str,
-    spec: &BoardArraySpec,
-) -> Result<String> {
-    let xml = board_array_edited_xml(doc, xml, spec)?;
+fn finished_board_array_xml(doc: &ipc2581::edit::Doc<'_>, spec: &BoardArraySpec) -> Result<String> {
+    let xml = board_array_edited_xml(doc, spec)?;
     let xml = crate::utils::format::reformat_xml(&xml)?;
 
     Ipc2581::parse(&xml).context("Generated IPC-2581 board array XML did not parse")?;
@@ -723,7 +715,7 @@ fn finished_board_array_xml(
 
 #[cfg(test)]
 fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
-    finished_board_array_xml(&ipc2581::edit::Doc::parse(xml)?, xml, spec)
+    finished_board_array_xml(&ipc2581::edit::Doc::parse(xml)?, spec)
 }
 
 fn write_board_array_creation(
@@ -735,14 +727,14 @@ fn write_board_array_creation(
     let doc = ipc2581::edit::Doc::parse(xml)?;
     if !balance_copper {
         return Ok(BoardArrayCreation {
-            xml: finished_board_array_xml(&doc, xml, &spec)?,
+            xml: finished_board_array_xml(&doc, &spec)?,
             copper_balance: None,
         });
     }
 
     // The provisional array only feeds safe-region discovery; parsing it below
     // already validates it, so skip the cosmetic reformat pass.
-    let provisional_xml = board_array_edited_xml(&doc, xml, &spec)?;
+    let provisional_xml = board_array_edited_xml(&doc, &spec)?;
     let provisional = Ipc2581::parse(&provisional_xml)
         .context("Failed to parse provisional IPC-2581 board array")?;
     let balance = balance::generate_automatic_board_array_copper_balance(
@@ -759,7 +751,7 @@ fn write_board_array_creation(
     );
 
     Ok(BoardArrayCreation {
-        xml: finished_board_array_xml(&doc, xml, &spec)?,
+        xml: finished_board_array_xml(&doc, &spec)?,
         copper_balance: Some(copper_balance),
     })
 }

@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use ipc2581::XmlWriter;
-use ipc2581::edit::{self, Doc, Edit, Node};
+use ipc2581::edit::{Doc, Edit, Node};
 
 /// PCB tool version from Cargo.toml
 const PCB_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,7 +25,7 @@ const PCB_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String> {
     let doc = Doc::parse(original_xml)?;
     let edits = file_revision_edits(&doc, comment)?;
-    Ok(edit::apply(original_xml, edits)?)
+    Ok(doc.apply(edits)?)
 }
 
 /// The edits behind [`append_file_revision`], for composing with other edits

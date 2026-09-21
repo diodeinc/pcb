@@ -5,9 +5,9 @@
 //! splices against the original source. A [`Doc`] indexes the source with the
 //! same flat element tree [`crate::Ipc2581::parse`] reads, each element
 //! carrying its exact byte range; navigation locates the elements to change
-//! and the `Edit` constructors turn them into splices. [`apply`] then rebuilds
-//! the document in a single pass, leaving everything outside the edited
-//! ranges byte-for-byte intact.
+//! and the `Edit` constructors turn them into splices. [`Doc::apply`] then
+//! rebuilds the document in a single pass, leaving everything outside the
+//! edited ranges byte-for-byte intact.
 
 use std::ops::Range;
 
@@ -157,53 +157,54 @@ impl<'a> Doc<'a> {
     pub fn span(&self, node: Node) -> Range<usize> {
         self.dom.range(node.0)
     }
-}
 
-/// Apply a set of non-overlapping edits to `source` in one pass.
-///
-/// Edits are ordered by position; insertions at the same position keep the
-/// order in which they were created and land before any deletion starting
-/// there (so inserting at an element and replacing it compose). Appends into
-/// the same self-closing element share its expansion. A checksum trailer is
-/// dropped because it describes the unedited text.
-pub fn apply(source: &str, mut edits: Vec<Edit>) -> Result<String> {
-    let (source, _) = crate::checksum::split_trailer(source);
-    edits.sort_by_key(|edit| (edit.at, edit.delete > 0));
+    /// Apply a set of non-overlapping edits to the source in one pass.
+    ///
+    /// Edits are ordered by position; insertions at the same position keep the
+    /// order in which they were created and land before any deletion starting
+    /// there (so inserting at an element and replacing it compose). Appends
+    /// into the same self-closing element share its expansion. A checksum
+    /// trailer is dropped because it describes the unedited text.
+    pub fn apply(&self, mut edits: Vec<Edit>) -> Result<String> {
+        let (source, _) = crate::checksum::split_trailer(self.source);
+        edits.sort_by_key(|edit| (edit.at, edit.delete > 0));
 
-    let grows: usize = edits
-        .iter()
-        .map(|edit| edit.insert.len() + edit.end_tag.as_ref().map_or(0, |tag| tag.len() + 1))
-        .sum();
-    let mut out = String::with_capacity(source.len() + grows);
-    let mut cursor = 0usize;
-    // The self-closing element being appended into, and the end tag it is owed.
-    let mut expanded: Option<(usize, &str)> = None;
-    for edit in &edits {
-        let same_element = edit.end_tag.is_some() && expanded.is_some_and(|(at, _)| at == edit.at);
-        if !same_element {
-            if let Some((_, end_tag)) = expanded.take() {
-                out.push_str(end_tag);
+        let grows: usize = edits
+            .iter()
+            .map(|edit| edit.insert.len() + edit.end_tag.as_ref().map_or(0, |tag| tag.len() + 1))
+            .sum();
+        let mut out = String::with_capacity(source.len() + grows);
+        let mut cursor = 0usize;
+        // The self-closing element being appended into, and the end tag it is owed.
+        let mut expanded: Option<(usize, &str)> = None;
+        for edit in &edits {
+            let same_element =
+                edit.end_tag.is_some() && expanded.is_some_and(|(at, _)| at == edit.at);
+            if !same_element {
+                if let Some((_, end_tag)) = expanded.take() {
+                    out.push_str(end_tag);
+                }
+                if edit.at < cursor {
+                    return Err(Ipc2581Error::InvalidStructure(format!(
+                        "overlapping edits at byte {}",
+                        edit.at
+                    )));
+                }
+                out.push_str(&source[cursor..edit.at]);
+                cursor = edit.at + edit.delete;
+                if let Some(end_tag) = &edit.end_tag {
+                    out.push('>');
+                    expanded = Some((edit.at, end_tag));
+                }
             }
-            if edit.at < cursor {
-                return Err(Ipc2581Error::InvalidStructure(format!(
-                    "overlapping edits at byte {}",
-                    edit.at
-                )));
-            }
-            out.push_str(&source[cursor..edit.at]);
-            cursor = edit.at + edit.delete;
-            if let Some(end_tag) = &edit.end_tag {
-                out.push('>');
-                expanded = Some((edit.at, end_tag));
-            }
+            out.push_str(&edit.insert);
         }
-        out.push_str(&edit.insert);
+        if let Some((_, end_tag)) = expanded {
+            out.push_str(end_tag);
+        }
+        out.push_str(&source[cursor..]);
+        Ok(out)
     }
-    if let Some((_, end_tag)) = expanded {
-        out.push_str(end_tag);
-    }
-    out.push_str(&source[cursor..]);
-    Ok(out)
 }
 
 /// Length of the opening tag: everything through the first `>` that is not
@@ -270,7 +271,7 @@ mod tests {
             doc.insert_after(function_mode, "<BomRef name=\"bom\"/>"),
             doc.delete(step_ref),
         ];
-        let out = apply(XML, edits).unwrap();
+        let out = doc.apply(edits).unwrap();
 
         assert!(out.contains("<FunctionMode mode=\"FABRICATION\"/><BomRef name=\"bom\"/>"));
         assert!(!out.contains("StepRef"));
@@ -287,7 +288,7 @@ mod tests {
         let cad_header = doc.child(ecad, "CadHeader").unwrap();
 
         let edit = doc.append_inside(cad_header, "<Spec name=\"vcut\"/>");
-        let out = apply(XML, vec![edit]).unwrap();
+        let out = doc.apply(vec![edit]).unwrap();
 
         assert!(out.contains("<CadHeader units=\"MILLIMETER\"><Spec name=\"vcut\"/></CadHeader>"));
     }
@@ -308,7 +309,7 @@ mod tests {
             doc.append_inside(characteristics, "<Textual name=\"alias\"/>"),
             doc.delete(tail),
         ];
-        let out = apply(xml, edits).unwrap();
+        let out = doc.apply(edits).unwrap();
 
         assert_eq!(
             out,
@@ -320,7 +321,7 @@ mod tests {
             doc.append_inside(step, "<Datum/>"),
             doc.replace(step, "<Step/>"),
         ];
-        assert!(apply(xml, conflict).is_err());
+        assert!(doc.apply(conflict).is_err());
     }
 
     #[test]
@@ -347,7 +348,7 @@ mod tests {
         let cad_data = doc.child(ecad, "CadData").unwrap();
 
         let edit = doc.append_inside(cad_data, "<Step name=\"panel\"/>");
-        let out = apply(XML, vec![edit]).unwrap();
+        let out = doc.apply(vec![edit]).unwrap();
 
         assert!(out.contains("</Step>\n    <Step name=\"panel\"/></CadData>"));
 
@@ -359,7 +360,7 @@ mod tests {
             .map(|name| doc.append_inside(doc.child(root, name).unwrap(), "<N/>"))
             .to_vec();
         assert_eq!(
-            apply(xml, edits).unwrap(),
+            doc.apply(edits).unwrap(),
             "<R><A><B/>text<!-- c --><N/></A><E><N/></E></R>"
         );
     }
@@ -375,7 +376,7 @@ mod tests {
             doc.append_inside(cad_data, "<A/>"),
             doc.append_inside(cad_data, "<B/>"),
         ];
-        let out = apply(XML, edits).unwrap();
+        let out = doc.apply(edits).unwrap();
 
         assert!(out.contains("<A/><B/>"));
     }
@@ -390,7 +391,7 @@ mod tests {
             doc.delete(content),
             doc.delete(doc.child(content, "StepRef").unwrap()),
         ];
-        assert!(apply(XML, edits).is_err());
+        assert!(doc.apply(edits).is_err());
     }
 
     #[test]
@@ -404,7 +405,7 @@ mod tests {
         let doc = Doc::parse(&source).unwrap();
         let content = doc.child(doc.root().unwrap(), "Content").unwrap();
 
-        let out = apply(&source, vec![doc.delete(content)]).unwrap();
+        let out = doc.apply(vec![doc.delete(content)]).unwrap();
 
         assert!(out.ends_with("</Ecad>\n</IPC-2581>"));
         assert!(matches!(
@@ -422,7 +423,7 @@ mod tests {
         assert_eq!(doc.attr(record, "note"), Some("a > b"));
 
         let edit = doc.replace_start_tag(record, "<HistoryRecord number=\"2\">");
-        let out = apply(xml, vec![edit]).unwrap();
+        let out = doc.apply(vec![edit]).unwrap();
 
         assert!(out.contains("<HistoryRecord number=\"2\"><FileRevision fileRevisionId=\"1\"/>"));
     }

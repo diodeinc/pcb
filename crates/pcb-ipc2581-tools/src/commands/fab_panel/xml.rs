@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result, bail};
-use ipc2581::edit::{self, Doc, Edit, Node};
+use ipc2581::edit::{Doc, Edit, Node};
 use ipc2581::types::Units;
 use ipc2581::{Ipc2581, XmlWriter};
 
@@ -18,17 +18,16 @@ const FAB_ROLE_ID: &str = "fab_panel_role";
 const FAB_ENTERPRISE_ID: &str = "fab_panel_enterprise";
 const FAB_PERSON_NAME: &str = "pcb";
 
-/// `xml`, which `doc` indexes, with every source-local name prefixed.
+/// The source `doc` indexes, with every source-local name prefixed.
 pub(super) fn namespace_source(
     doc: &Doc<'_>,
-    xml: &str,
     prefix: &str,
     shared_stackup_layers: &HashSet<String>,
 ) -> Result<String> {
     let root = doc.root()?;
     let mut edits = Vec::new();
     collect_namespace_edits(doc, root, prefix, shared_stackup_layers, &mut edits);
-    Ok(edit::apply(xml, edits)?)
+    Ok(doc.apply(edits)?)
 }
 
 fn collect_namespace_edits(
@@ -267,7 +266,7 @@ pub(super) fn write_fab_panel_xml(
         edits.extend(crate::generated::user_dictionary_edit(
             &doc, units, templates,
         )?);
-        edit::apply(provisional, edits)?
+        doc.apply(edits)?
     };
     let xml = crate::utils::format::reformat_xml(&xml)?;
     // Schema validation lives in the fab-panel tests; on documents this size
@@ -604,7 +603,7 @@ mod tests {
 </IPC-2581>"#;
 
         let doc = Doc::parse(source).unwrap();
-        let namespaced = namespace_source(&doc, source, "fab_3_", &HashSet::new()).unwrap();
+        let namespaced = namespace_source(&doc, "fab_3_", &HashSet::new()).unwrap();
 
         assert!(namespaced.contains("<PadStackDef name=\"fab_3_PADSTACK_10\""));
         assert!(namespaced.contains("<Set geometry=\"fab_3_PADSTACK_10\""));

@@ -560,7 +560,7 @@ fn write_avl(
     edits.extend(bom_hydration_edits(&doc, bom_hydrations)?);
     edits.push(avl_section_edit(&doc, avl.to_xml(interner))?);
 
-    let updated_xml = ipc2581::edit::apply(content, edits)?;
+    let updated_xml = doc.apply(edits)?;
     let updated_xml = crate::utils::format::reformat_xml(&updated_xml)?;
     file_utils::save_ipc_file(output, &updated_xml)
 }
@@ -840,7 +840,7 @@ mod tests {
     fn patch_avl(original: &str, new_avl: &str) -> String {
         let doc = ipc2581::edit::Doc::parse(original).unwrap();
         let edit = avl_section_edit(&doc, new_avl.to_string()).unwrap();
-        ipc2581::edit::apply(original, vec![edit]).unwrap()
+        doc.apply(vec![edit]).unwrap()
     }
 
     fn schema_valid_hydration_ipc() -> &'static str {

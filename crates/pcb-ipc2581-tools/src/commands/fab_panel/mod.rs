@@ -334,12 +334,9 @@ pub fn create_fab_panel(
         .map(|layer| layer.name.clone())
         .collect::<HashSet<_>>();
 
-    let sources = per_source(
-        parsed.iter().zip(&source_xml).collect(),
-        |source_index, ((ipc, doc), xml)| {
-            prepare_source_panel(ipc, doc, xml, source_index, &shared_stackup_layers)
-        },
-    )?;
+    let sources = per_source(parsed.iter().collect(), |source_index, (ipc, doc)| {
+        prepare_source_panel(ipc, doc, source_index, &shared_stackup_layers)
+    })?;
     // Nothing below reads the sources again, and their parses are large.
     drop(parsed);
     let first = sources
@@ -437,7 +434,6 @@ fn per_source<T: Send, R: Send>(
 fn prepare_source_panel(
     ipc: &Ipc2581,
     doc: &Doc<'_>,
-    xml: &str,
     source_index: usize,
     shared_stackup_layers: &HashSet<String>,
 ) -> Result<SourcePanel> {
@@ -474,7 +470,7 @@ fn prepare_source_panel(
 
     let prefix = format!("fab_{source_index}_");
     Ok(SourcePanel {
-        namespaced_xml: xml::namespace_source(doc, xml, &prefix, shared_stackup_layers)?,
+        namespaced_xml: xml::namespace_source(doc, &prefix, shared_stackup_layers)?,
         root_step_name: format!("{prefix}{}", ipc.resolve(root.source_step_ref)),
         bbox: root.bbox,
         units: ecad.cad_header.units,

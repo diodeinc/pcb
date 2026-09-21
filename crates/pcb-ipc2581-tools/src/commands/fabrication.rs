@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use anyhow::{Context, Result};
 use ipc2581::XmlWriter;
-use ipc2581::edit::{self, Doc, Edit, Node};
+use ipc2581::edit::{Doc, Edit, Node};
 
 const EXCLUDED_STEP_CHILDREN: &[&str] =
     &["Package", "Component", "LogicalNet", "Port", "Model", "Dfx"];
@@ -69,7 +69,7 @@ struct DictionaryReference {
 /// retained when it can affect the manufactured board.
 pub(crate) fn strip_non_manufacturing(xml: &str) -> Result<String> {
     let doc = Doc::parse(xml)?;
-    Ok(edit::apply(xml, fabrication_edits(&doc)?)?)
+    Ok(doc.apply(fabrication_edits(&doc)?)?)
 }
 
 /// The edits behind [`strip_non_manufacturing`], against one parsed document.
