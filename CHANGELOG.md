@@ -51,6 +51,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Mouse-bite tab sites on chamfered and curved outlines are no longer rejected by rounding noise.
 - Fabrication-panel packing never lets a panel reach into a process margin.
 - V-cut callout labels fit within the default fabrication-panel gap.
+- DFM no longer aborts or fails arrays made by `board-array create` on their own rail tooling holes.
+- DFM no longer reports vias stacked on a shared layer as overlapping drills.
+- One unusable feature no longer aborts a DFM run.
+- DFM copper-weight conditions match real stackup thicknesses.
+- DFM blind-via aspect ratio no longer counts the copper it lands on.
+- DFM reports a drill through foreign copper even when only overlap links them.
+- DFM no longer measures square holes as round.
+- DFM aspect ratios sitting exactly on their maximum no longer fail.
 
 ### Changed
 
@@ -71,6 +79,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Mouse-bite array generation is several times faster on multi-board arrays.
 - Fab-panel reports a clear error up front when there are too many distinct panel sizes.
 - `pcb ipc render` and the web viewer draw each board of an array once, so panel SVGs are over 100× smaller.
+- A required DFM rule that cannot be evaluated fails the verdict as `incomplete`; `skipped` becomes `not_applicable`.
+- A design outside every case of a DFM rule is reported instead of passing unchecked.
+- DFM finding ids survive noise-level coordinate changes; existing waiver files keep matching.
+- DFM reports list measurements that fall within measurement uncertainty.
+- The DFM report schema is now version 2.
 
 ## [0.4.56] - 2026-09-20
 
