@@ -1,6 +1,6 @@
 //! One layer of the IPC Step graph as artwork, every Step lowered once.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use ipc2581::Symbol;
@@ -76,6 +76,11 @@ pub fn step_graph_artwork<LayerMeta, ObjectMeta: Default>(
         graph.artwork.push_object(artwork_layer, object);
     }
     let mut artwork = graph.artwork;
+    // Every Step's document repeats the design's import diagnostics.
+    let mut seen = HashSet::new();
+    artwork
+        .diagnostics
+        .retain(|diagnostic| seen.insert(diagnostic.message.clone()));
     normalize_bounds(&mut artwork);
     artwork
         .validate()

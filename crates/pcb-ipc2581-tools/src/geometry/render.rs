@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use anyhow::Context;
 use ipc2581::Symbol;
 use pcb_ir::geom::Resolution;
@@ -80,11 +78,6 @@ pub fn layer_artwork(
             ))
         },
     )?;
-    // Every Step's document repeats the design's import diagnostics.
-    let mut seen = HashSet::new();
-    artwork
-        .diagnostics
-        .retain(|diagnostic| seen.insert(diagnostic.message.clone()));
     if include_profiles {
         append_display_profiles(
             &mut artwork,
