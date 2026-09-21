@@ -73,8 +73,9 @@ pub fn builtin_pdks() -> &'static [BuiltinPdk] {
 
 /// Run DFM in memory, reusing the canonical imported design.
 ///
-/// Manufacturing violations are successful results with a `fail` verdict;
-/// only invalid inputs or geometry that cannot be checked return an error.
+/// Manufacturing violations are successful results with a `fail` verdict, and
+/// so is a required rule that could not be evaluated: it is reported as
+/// `incomplete`, never passed. Only invalid inputs return an error.
 pub fn check(
     imported: &ImportedDesign,
     request: CheckRequest<'_>,
@@ -116,7 +117,7 @@ pub fn check(
         request.layout_target.artwork_scope(),
         &rules,
         resolution,
-    )?;
+    );
     let checked = checks::run(
         &rules,
         &design,
@@ -129,7 +130,9 @@ pub fn check(
     Ok(DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: request.generated_at.to_rfc3339(),
-        verdict: if summary.errors > 0 {
+        verdict: if summary.errors > 0
+            || checked.rules.iter().any(report::RuleResult::blocks_verdict)
+        {
             report::Verdict::Fail
         } else {
             report::Verdict::Pass
@@ -254,7 +257,17 @@ pub fn execute_check(
     write_report(options, &report)?;
 
     let summary = &report.summary;
-    if summary.errors > 0 {
+    // A rule that could not be evaluated is named, never just counted.
+    for rule in &report.rules {
+        if matches!(rule.status, report::RuleStatus::Incomplete) {
+            eprintln!(
+                "not evaluated: {}: {}",
+                rule.id,
+                rule.skip_reason.as_deref().unwrap_or_default()
+            );
+        }
+    }
+    if matches!(report.verdict, report::Verdict::Fail) {
         return Ok(CheckOutcome::Failed(anyhow::anyhow!(
             "DFM check failed with {} error finding(s){}",
             summary.errors,
@@ -354,8 +367,14 @@ fn build_report(file: &Path, options: &CheckOptions, resolution: Resolution) -> 
 #[cfg(feature = "cli")]
 fn annotations(summary: &report::Summary) -> String {
     let mut notes = String::new();
-    if summary.rules_skipped > 0 {
-        notes.push_str(&format!(", {} skipped", summary.rules_skipped));
+    if summary.rules_incomplete > 0 {
+        notes.push_str(&format!(", {} not evaluated", summary.rules_incomplete));
+    }
+    if summary.rules_not_applicable > 0 {
+        notes.push_str(&format!(
+            ", {} not applicable",
+            summary.rules_not_applicable
+        ));
     }
     if summary.warnings > 0 {
         notes.push_str(&format!(", {} warning(s)", summary.warnings));
@@ -390,7 +409,10 @@ fn summarize(checked: &checks::Results) -> report::Summary {
         rules_passed: status_count(|status| matches!(status, report::RuleStatus::Pass)),
         rules_warned: status_count(|status| matches!(status, report::RuleStatus::Warning)),
         rules_failed: status_count(|status| matches!(status, report::RuleStatus::Fail)),
-        rules_skipped: status_count(|status| matches!(status, report::RuleStatus::Skipped)),
+        rules_not_applicable: status_count(|status| {
+            matches!(status, report::RuleStatus::NotApplicable)
+        }),
+        rules_incomplete: status_count(|status| matches!(status, report::RuleStatus::Incomplete)),
         findings: checked.findings.len(),
         errors: checked
             .findings
@@ -452,7 +474,6 @@ fn sha256(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
-    use pcb_ir::dialects::ipc::ArtworkScope;
 
     use super::*;
     use crate::commands::EdgeInsetsMm;
@@ -1068,27 +1089,37 @@ reason = "old finding"
     }
 
     #[test]
-    fn profile_support_rejects_an_incomplete_physical_stackup() {
-        let resolution = Resolution::default();
-
-        let ipc = Ipc2581::parse(&BOARD.replace(
-            "layerOrGroupRef=\"BOTTOM\"",
-            "layerOrGroupRef=\"DIELECTRIC\"",
-        ))
-        .unwrap();
-        let pdk = pdk::Pdk::parse(PDK).unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = import_design(&ipc, resolution).unwrap();
-
-        let error = design::Design::extract(&imported, ArtworkScope::Board, &rules, resolution)
-            .err()
-            .unwrap();
-
-        assert!(
-            error
-                .to_string()
-                .contains("omits declared copper layer(s): BOTTOM")
+    fn an_incomplete_physical_stackup_blocks_only_the_rules_that_read_it() {
+        let results = check(
+            &BOARD.replace(
+                "layerOrGroupRef=\"BOTTOM\"",
+                "layerOrGroupRef=\"DIELECTRIC\"",
+            ),
+            LayoutTarget::Board,
         );
+
+        // Layer-count support cannot be certified, so the verdict fails closed.
+        assert!(matches!(results.verdict, report::Verdict::Fail));
+        assert_eq!(results.summary.errors, 0);
+        assert_eq!(results.summary.rules_incomplete, 2);
+        for id in [
+            "profile.support.copper_layers.minimum",
+            "profile.support.copper_layers.maximum",
+        ] {
+            let support = rule(&results, id);
+            assert!(matches!(support.status, report::RuleStatus::Incomplete));
+            assert!(
+                support
+                    .skip_reason
+                    .as_deref()
+                    .unwrap()
+                    .contains("omits declared copper layer(s): BOTTOM")
+            );
+        }
+        // A rule that reads no stackup is still evaluated and reported.
+        let edge = rule(&results, "copper.minimum_board_edge_clearance");
+        assert!(matches!(edge.status, report::RuleStatus::Pass));
+        assert_eq!(edge.checked, 2);
     }
 
     #[test]

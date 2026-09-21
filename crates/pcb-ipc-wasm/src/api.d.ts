@@ -72,7 +72,8 @@ export interface PdkIdentity {
 }
 export interface DfmSummary {
   rules_configured: number; rules_passed: number; rules_warned: number;
-  rules_failed: number; rules_skipped: number; findings: number;
+  rules_failed: number; rules_not_applicable: number; rules_incomplete: number;
+  findings: number;
   errors: number; warnings: number; waived: number;
 }
 export interface DfmFinding {
@@ -109,7 +110,7 @@ export interface DfmReport {
   findings: DfmFinding[];
   /** Evidence that sites reference by `shared` index instead of repeating. */
   shared_evidence: Array<Record<string, unknown>>;
-  rules: Array<{ id: string; status: "pass" | "warning" | "fail" | "skipped"; [key: string]: unknown }>;
+  rules: Array<{ id: string; status: "pass" | "warning" | "fail" | "not_applicable" | "incomplete"; [key: string]: unknown }>;
   waivers: null | { path: string; sha256: string; applied: number; expired: string[]; unmatched: string[] };
   [key: string]: unknown;
 }

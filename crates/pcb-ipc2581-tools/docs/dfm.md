@@ -133,9 +133,9 @@ Case conditions use structured ranges such as
 rules may also condition on `copper = { position = "outer", weight = "1 oz" }`.
 The parser rejects unsupported conditions and any pair of cases whose domains
 overlap. Therefore, at most one case from a rule applies to a design or copper
-layer; non-applicable case rules are reported as skipped. A condition that
-needs stackup context fails extraction when the IPC-2581 file has no
-unambiguous physical stackup. The `technologies` list remains descriptive
+layer; non-applicable case rules are reported as `not_applicable`. A condition
+that needs stackup context leaves its rule `incomplete` when the IPC-2581 file
+has no unambiguous physical stackup. The `technologies` list remains descriptive
 metadata because imported designs do not yet state rigid, flex, and HDI
 technology reliably enough for qualification.
 
@@ -244,8 +244,8 @@ physical land is excluded; other-net, auxiliary, and unattributed functional
 copper remains an offender. For an NPTH, every final copper owner is an
 offender, including a same-named net. A drill or rout layer that declares no
 `Span` is through-board, exactly as import reads it. A declared span that
-cannot be resolved in the physical stackup fails extraction rather than
-guessing which copper layers the drill intersects.
+cannot be resolved in the physical stackup leaves the rule `incomplete` rather
+than guessing which copper layers the drill intersects.
 
 `--layout-target board` extracts the canonical board step. `board-array`
 materializes the root layout and every nested repeat, so the same evaluators
@@ -259,15 +259,15 @@ when fewer than two exist.
 
 - Profile copper-layer qualification requires exactly one physical stackup.
   Every declared copper layer must occur exactly once in it; missing or
-  ambiguous stackup data fails extraction rather than guessing from artwork
-  layer names.
+  ambiguous stackup data leaves every rule that reads the stackup `incomplete`
+  rather than guessing from artwork layer names.
 - Hole diameter rules measure every drilled hole of the rule's class. Slot
   width rules measure routed slots of the selected plating class. A slot's width is settled
   at extraction: the stated primitive width when present — exact, and
   verified against the materialized outline — and otherwise the outline's
-  narrowest local width. Drill extraction fails rather than silently
-  discarding a hole whose plating class or diameter is missing, or a slot
-  whose stated width its outline contradicts.
+  narrowest local width. A hole whose plating class or diameter is missing, or
+  a slot whose stated width its outline contradicts, is never silently
+  discarded: it leaves every hole rule, or every slot rule, `incomplete`.
 - Hole aspect ratio is physical drilled-span thickness divided by finished
   circular hole diameter. A through hole uses IPC-2581 `overallThickness` when
   it is positive and finite, otherwise a complete sum of physical stackup
@@ -276,8 +276,8 @@ when fewer than two exist.
   NPTH holes are never subjects. If IPC thickness is incomplete, a selected
   profile's `defaults.board_thickness` may be assumed only for a declared
   through hole; the rule reports that assumption. An incomplete resolved span,
-  or an incomplete through span without that default, skips the rule with the
-  precise missing-data reason rather than claiming a pass.
+  or an incomplete through span without that default, leaves the rule
+  `incomplete` with the precise missing-data reason rather than claiming a pass.
 - Hole-to-hole clearance measures edge-to-edge distance between hole pairs
   whose drill spans share board depth. Blind and buried vias on disjoint
   spans do not interact, and neither do vias stacked on a shared terminal
@@ -307,8 +307,8 @@ when fewer than two exist.
   asymmetric and curved outlines, not a circular or bounding-box proxy. Within
   the slot's span, terminal layers and matching physical source lands require
   copper; an intermediate layer without a land or copper meeting the slot is exempt.
-  The rule requires one physical stackup and a declared, resolvable slot span;
-  missing data fails extraction rather than assuming a passing whole-stack check.
+  The rule requires one physical stackup and a resolvable slot span; missing
+  data leaves it `incomplete` rather than assuming a passing whole-stack check.
   Layers use physical stackup order, not XML declaration order. Copper is
   required around the opening, not inside the routed cavity:
   the query fills that cavity, then measures the minimum distance from the slot
@@ -324,7 +324,7 @@ when fewer than two exist.
   circular drill to the nearest unrelated final copper owner on every copper
   layer in its declared span. Via and PTH copper is exempt only when net or
   physical-land identity proves that it belongs to the hole. NPTH copper is
-  never exempt. Missing drill-span identity makes the check incomplete.
+  never exempt. An unresolvable drill span leaves the rule `incomplete`.
 - Slot-to-copper clearance (`rules.copper.slot_clearance`) measures the true
   materialized filled slot outline, including its ends, against unrelated
   final copper on its physical span. Touching or overlapping copper has zero
@@ -333,17 +333,17 @@ when fewer than two exist.
   with matching stated padstack identity and no contradictory stated net;
   netless functional and foreign copper remain offenders. Nonplated slots
   exempt nothing. The rule requires one unambiguous physical stackup and a
-  declared through or resolvable layer span; missing data fails extraction.
-  This eligibility requirement also applies to preferred warning tiers: missing
-  data is an incomplete check, not a geometric shortfall or a valid pass.
+  resolvable layer span; missing data leaves it `incomplete`. This eligibility
+  requirement also applies to preferred warning tiers: missing data is an
+  incomplete check, not a geometric shortfall or a valid pass.
   Copper layer declaration order does not determine the physical span.
 - Copper feature-width rules report narrow copper piece by piece after final
   polarity composition. Copper-clearance rules measure the shortest
   boundary distance between distinct final conductor images. Same-net
   notches and same-net islands are not clearance subjects; touching or
   overlapping distinct conductors have zero clearance. Functional copper
-  without a net fails extraction when this rule is configured instead of
-  being guessed into an electrical domain. Fiducials, copper-balance
+  without a net leaves this rule `incomplete` instead of being guessed into an
+  electrical domain; rules that measure the composed image are unaffected. Fiducials, copper-balance
   support, and netless pads remain explicit auxiliary conductors.
 - Soldermask-web rules report mask webs — gaps between mask openings —
   narrower than the limit. Morphology finds candidates; the medial-axis
@@ -355,10 +355,19 @@ when fewer than two exist.
   sibling board arrays a fabrication panel places; it requires
   `--layout-target board-array` and at least two arrays.
 
-A rule that measures nothing reports `skipped` with a reason instead of a
-vacuous `pass` — whether its subject pool is empty (no holes of its class,
-no copper layers, no V-score lines) or the pool yields no eligible
-measurements (`checked` would be zero).
+A rule that measures nothing never reports a vacuous `pass`; `skip_reason`
+says why, under one of two statuses:
+
+- `not_applicable`: the design holds nothing for the rule to measure — its
+  subject pool is empty (no holes of its class, no copper layers, no V-score
+  lines), its case conditions do not match this stackup, or the pool yields no
+  eligible measurements (`checked` would be zero).
+- `incomplete`: the rule applies, or might, but something it reads could not be
+  built, resolved, or measured. The problem is local: it blocks the rules that
+  read the affected data and every other rule is still evaluated and reported.
+  An `incomplete` rule of error severity fails the verdict, because a limit
+  that was not measured is never reported as met. The CLI names each one as
+  `not evaluated: <rule>: <reason>`.
 
 ## Waivers
 
@@ -472,7 +481,8 @@ Reports over 16 MiB or encoded URLs over 900 KiB must be selected in the
 viewer manually.
 
 A completed report is written before the command returns a failing status.
-Only unwaived error findings fail its verdict. Preparation and output errors
+Unwaived error findings fail its verdict, and so does a required rule that
+could not be evaluated. Preparation and output errors
 also return a failing status. Preparation errors emit an explicit
 [incomplete report](#incomplete-reports). File output is replaced atomically,
 including incomplete reports. I/O, serialization, or size-limit failures can
@@ -511,7 +521,8 @@ A complete report has these fields:
 - `rules`: one result per lowered rule. A direct limit uses its authored id; a
   named case uses `<id>.<case>`; a preferred tier appends `.preferred` to
   either form. Each result includes severity, source and normalized limit,
-  status (`pass`, `warning`, `fail`, or `skipped`), skip reason, and the
+  status (`pass`, `warning`, `fail`, `not_applicable`, or `incomplete`), the
+  reason a rule was not evaluated (`skip_reason`), and the
   measurement contract shared by all of its findings — `subject` (what one
   checked unit is), `quantity`, `method`, `comparison` (`minimum` or
   `maximum`), and `checked`, the number of measurements evaluated. `view`
@@ -527,11 +538,13 @@ A complete report has these fields:
 
 `rule.finding_count` includes waived findings, and `waived_count` counts that
 subset. A rule whose findings are all waived reports `pass`; active findings
-determine `warning` or `fail` from rule severity. Skipped rules retain `skipped`
-and their reason rather than becoming a pass from zero counts. Similarly,
-`summary.findings` includes all findings, `summary.waived` counts the waived
-subset, and `summary.errors`/`warnings` count only unwaived findings. A complete
-verdict fails exactly when `summary.errors > 0`.
+determine `warning` or `fail` from rule severity. Unevaluated rules retain
+`not_applicable` or `incomplete` and their reason rather than becoming a pass
+from zero counts; `summary.rules_not_applicable` and `summary.rules_incomplete`
+count them. Similarly, `summary.findings` includes all findings,
+`summary.waived` counts the waived subset, and `summary.errors`/`warnings` count
+only unwaived findings. A complete verdict fails exactly when
+`summary.errors > 0` or a rule of error severity is `incomplete`.
 
 ### Source identity
 
@@ -701,7 +714,9 @@ replaces the current load.
 
 Report and scene versions are independent; the report uses integer `2` and the
 scene integer `1`. Report version 2 moved each edge-clearance site's
-`board_profile` region into the `shared_evidence` table.
+`board_profile` region into the `shared_evidence` table, and split the rule
+status `skipped` (and `summary.rules_skipped`) into `not_applicable` and
+`incomplete`, the latter failing the verdict for a required rule.
 New fields and new `kind`, `role`, `status`, rule, and method values may be
 added within a version. Unknown optional fields can be ignored; unknown required
 semantics must produce an explicit unsupported state, never a guessed rendering

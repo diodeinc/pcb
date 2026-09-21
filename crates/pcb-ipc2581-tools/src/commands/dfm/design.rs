@@ -5,9 +5,10 @@
 //! empty. Pools are flat vectors; copper follows physical stackup order
 //! when available, otherwise declaration order. Derived facts that
 //! relate pools (a hole's lands, a copper layer's boundary index) are side
-//! tables indexed like their primary pool. Extraction fails closed: a
-//! drilled feature whose plating, diameter, or outline the file does not
-//! state is an error, never a quietly dropped subject.
+//! tables indexed like their primary pool. Extraction fails closed without
+//! failing whole: a drilled feature whose plating, diameter, or outline the
+//! file does not state is never a quietly dropped subject — it blocks the
+//! rules that would have measured it, and every other rule still runs.
 
 use pcb_ir::geom::Resolution;
 use std::collections::{HashMap, HashSet};
@@ -63,11 +64,43 @@ pub(super) struct Design<'a> {
     pub scores: Vec<Score>,
     pub board_outlines: Vec<BoardOutline>,
     pub board_arrays: Vec<BoardArray>,
+    /// What extraction could not build. Every pool above is usable for a
+    /// rule that no blocker names.
+    pub blockers: Vec<Blocker>,
 }
 
-/// Build a pool only when a rule reads it.
-fn when<T: Default>(wanted: bool, build: impl FnOnce() -> Result<T>) -> Result<T> {
-    if wanted { build() } else { Ok(T::default()) }
+/// Why a pool could not be built, and the pools it leaves unusable. A rule
+/// reading any of them is reported as not evaluated; every other rule runs.
+#[derive(Debug)]
+pub(super) struct Blocker {
+    pub pools: Pools,
+    pub reason: String,
+}
+
+/// Build a pool only when a rule reads it. A pool that cannot be built stays
+/// empty and blocks exactly the rules that read it, never the whole run. A
+/// pool derived from blocked `inputs` is not attempted: every rule reading it
+/// reads those inputs too, so its failure would only restate theirs.
+fn pool<T: Default>(
+    wanted: Pools,
+    pools: Pools,
+    inputs: Pools,
+    blockers: &mut Vec<Blocker>,
+    build: impl FnOnce() -> Result<T>,
+) -> T {
+    let inputs_blocked = blockers
+        .iter()
+        .any(|blocker| blocker.pools.intersects(inputs));
+    if !wanted.intersects(pools) || inputs_blocked {
+        return T::default();
+    }
+    build().unwrap_or_else(|error| {
+        blockers.push(Blocker {
+            pools,
+            reason: format!("{error:#}"),
+        });
+        T::default()
+    })
 }
 
 impl<'a> Design<'a> {
@@ -76,136 +109,140 @@ impl<'a> Design<'a> {
         scope: ArtworkScope,
         rules: &[Rule],
         resolution: Resolution,
-    ) -> Result<Self> {
-        let pools = rules::pools(rules);
-        // Circular drill checks must use the declared physical order even
-        // when no thickness or layer-count rule requests the stackup pool.
-        // Keep the legacy declaration-order fallback for files without one.
-        let span_checks = rules.iter().any(|rule| {
-            matches!(
-                rule.kind,
-                rules::RuleKind::HoleToCopperClearance(_)
-                    | rules::RuleKind::AnnularRing(_)
-                    | rules::RuleKind::HolePairClearance(_, _)
-            )
+    ) -> Self {
+        let wanted = rules::pools(rules, !imported.stackups.is_empty());
+        let mut blockers = Vec::new();
+        let stackup = pool(wanted, Pools::STACKUP, Pools::NONE, &mut blockers, || {
+            collect_physical_stackup(imported).map(Some)
         });
-        let stackup = when(
-            pools.intersects(Pools::STACKUP) || (span_checks && !imported.stackups.is_empty()),
-            || collect_physical_stackup(imported).map(Some),
-        )?;
-        let (holes, slots) = when(pools.intersects(Pools::DRILLED), || {
-            collect_drilled(imported, scope, stackup.as_ref(), resolution)
-        })?;
-        let copper_layers = when(pools.intersects(Pools::COPPER), || {
-            collect_copper_layers(
-                imported,
-                scope,
-                pools.intersects(Pools::CONDUCTOR_OWNERSHIP),
-                stackup.as_ref(),
-                resolution,
-            )
-        })?;
-        let (physical_holes, land_indices) = when(
-            pools.intersects(Pools::HOLE_LANDS | Pools::SLOT_LANDS),
-            || {
-                let physical_holes = imported
-                    .physical_holes(scope, resolution)?
-                    .into_iter()
-                    .map(|hole| (hole.id.0, hole))
-                    .collect();
-                let land_indices = copper_layers
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(copper_index, layer)| {
-                        layer
-                            .lands
-                            .iter()
-                            .enumerate()
-                            .map(move |(land_index, land)| {
-                                (
-                                    land.id,
-                                    HoleLand {
-                                        copper_index: copper_index as u32,
-                                        land_index: land_index as u32,
-                                    },
-                                )
-                            })
-                    })
-                    .collect();
-                Ok((physical_holes, land_indices))
-            },
-        )?;
-        let layout = when(
-            pools.intersects(Pools::BOARD_OUTLINES | Pools::BOARD_ARRAYS),
-            || Ok(Some(&imported.geometry)),
-        )?;
-        let design = Self {
+        let (holes, slots, unusable) = pool(
+            wanted,
+            Pools::HOLES | Pools::SLOTS,
+            Pools::NONE,
+            &mut blockers,
+            || collect_drilled(imported, scope, stackup.as_ref(), resolution),
+        );
+        blockers.extend(unusable);
+        let copper_layers = pool(wanted, Pools::COPPER, Pools::NONE, &mut blockers, || {
+            collect_copper_layers(imported, scope, stackup.as_ref(), resolution)
+        });
+        if wanted.intersects(Pools::CONDUCTOR_OWNERSHIP) {
+            blockers.extend(unattributed_copper(imported, &copper_layers));
+        }
+        let lands = Pools::HOLE_LANDS | Pools::SLOT_LANDS;
+        let physical = pool(wanted, lands, Pools::COPPER, &mut blockers, || {
+            let physical_holes = imported
+                .physical_holes(scope, resolution)?
+                .into_iter()
+                .map(|hole| (hole.id.0, hole))
+                .collect::<HashMap<_, _>>();
+            let land_indices = copper_layers
+                .iter()
+                .enumerate()
+                .flat_map(|(copper_index, layer)| {
+                    layer
+                        .lands
+                        .iter()
+                        .enumerate()
+                        .map(move |(land_index, land)| {
+                            (
+                                land.id,
+                                HoleLand {
+                                    copper_index: copper_index as u32,
+                                    land_index: land_index as u32,
+                                },
+                            )
+                        })
+                })
+                .collect::<HashMap<_, _>>();
+            Ok(Some((physical_holes, land_indices)))
+        });
+        // Without the physical view the land pools are already blocked.
+        let link = |ids: Vec<FeatureOccurrenceId>| match &physical {
+            Some((physical_holes, land_indices)) => {
+                link_lands(ids.into_iter(), land_indices, physical_holes)
+            }
+            None => Ok(Vec::new()),
+        };
+        let layout = &imported.geometry;
+        Self {
             imported,
             scope,
             resolution,
-            stackup,
-            copper_boundaries: when(pools.intersects(Pools::COPPER_BOUNDARIES), || {
-                #[cfg(not(target_family = "wasm"))]
-                let layers = copper_layers.par_iter();
-                #[cfg(target_family = "wasm")]
-                let layers = copper_layers.iter();
-                Ok(layers.map(|layer| layer.image.prepare_query()).collect())
-            })?,
-            conductor_boundaries: when(pools.intersects(Pools::CONDUCTOR_BOUNDARIES), || {
-                #[cfg(not(target_family = "wasm"))]
-                let layers = copper_layers.par_iter();
-                #[cfg(target_family = "wasm")]
-                let layers = copper_layers.iter();
-                Ok(layers
-                    .map(|layer| {
-                        layer
-                            .conductors
-                            .iter()
-                            .map(|conductor| conductor.image.prepare_query())
-                            .collect()
-                    })
-                    .collect())
-            })?,
-            hole_lands: when(pools.intersects(Pools::HOLE_LANDS), || {
-                link_lands(
-                    holes.iter().map(|hole| hole.id),
-                    &land_indices,
-                    &physical_holes,
-                )
-            })?,
-            slot_lands: when(pools.intersects(Pools::SLOT_LANDS), || {
-                link_lands(
-                    slots.iter().map(|slot| slot.id),
-                    &land_indices,
-                    &physical_holes,
-                )
-            })?,
-            mask_layers: when(pools.intersects(Pools::MASKS), || {
+            copper_boundaries: pool(
+                wanted,
+                Pools::COPPER_BOUNDARIES,
+                Pools::COPPER,
+                &mut blockers,
+                || {
+                    #[cfg(not(target_family = "wasm"))]
+                    let layers = copper_layers.par_iter();
+                    #[cfg(target_family = "wasm")]
+                    let layers = copper_layers.iter();
+                    Ok(layers.map(|layer| layer.image.prepare_query()).collect())
+                },
+            ),
+            conductor_boundaries: pool(
+                wanted,
+                Pools::CONDUCTOR_BOUNDARIES,
+                Pools::COPPER,
+                &mut blockers,
+                || {
+                    #[cfg(not(target_family = "wasm"))]
+                    let layers = copper_layers.par_iter();
+                    #[cfg(target_family = "wasm")]
+                    let layers = copper_layers.iter();
+                    Ok(layers
+                        .map(|layer| {
+                            layer
+                                .conductors
+                                .iter()
+                                .map(|conductor| conductor.image.prepare_query())
+                                .collect()
+                        })
+                        .collect())
+                },
+            ),
+            hole_lands: pool(
+                wanted,
+                Pools::HOLE_LANDS,
+                Pools::COPPER | Pools::HOLES,
+                &mut blockers,
+                || link(holes.iter().map(|hole| hole.id).collect()),
+            ),
+            slot_lands: pool(
+                wanted,
+                Pools::SLOT_LANDS,
+                Pools::COPPER | Pools::SLOTS,
+                &mut blockers,
+                || link(slots.iter().map(|slot| slot.id).collect()),
+            ),
+            mask_layers: pool(wanted, Pools::MASKS, Pools::NONE, &mut blockers, || {
                 collect_mask_layers(imported, scope, resolution)
-            })?,
-            scores: when(pools.intersects(Pools::SCORES), || {
+            }),
+            scores: pool(wanted, Pools::SCORES, Pools::NONE, &mut blockers, || {
                 collect_scores(imported, scope)
-            })?,
-            board_outlines: layout
-                .as_ref()
-                .filter(|_| pools.intersects(Pools::BOARD_OUTLINES))
-                .map(|layout| collect_board_outlines(imported, layout, scope, resolution))
-                .transpose()?
-                .unwrap_or_default(),
-            board_arrays: layout
-                .as_ref()
-                .filter(|_| pools.intersects(Pools::BOARD_ARRAYS))
-                .map(|layout| collect_board_arrays(imported, layout, resolution))
-                .transpose()?
-                .unwrap_or_default(),
+            }),
+            board_outlines: pool(
+                wanted,
+                Pools::BOARD_OUTLINES,
+                Pools::NONE,
+                &mut blockers,
+                || collect_board_outlines(imported, layout, scope, resolution),
+            ),
+            board_arrays: pool(
+                wanted,
+                Pools::BOARD_ARRAYS,
+                Pools::NONE,
+                &mut blockers,
+                || collect_board_arrays(imported, layout, resolution),
+            ),
+            stackup,
             holes,
             slots,
             copper_layers,
-        };
-        if pools.intersects(Pools::RESOLVED_DRILL_SPANS) {
-            validate_drill_spans(&design, rules)?;
+            blockers,
         }
-        Ok(design)
     }
 
     pub fn resolve(&self, symbol: Option<Symbol>) -> Option<String> {
@@ -281,54 +318,6 @@ impl<'a> Design<'a> {
             },
         }
     }
-}
-
-fn validate_drill_spans(design: &Design, rules: &[Rule]) -> Result<()> {
-    for slot in &design.slots {
-        let selected = rules.iter().any(|rule| {
-            (matches!(rule.kind, rules::RuleKind::SlotToCopperClearance(plating)
-                if super::checks::slot_matches(slot.plating, plating))
-                || (rule.kind == rules::RuleKind::PlatedSlotEnclosure
-                    && slot.plating == PlatingKind::Plated))
-                && rule.conditions.applies_to_design(design)
-                && design
-                    .copper_layers
-                    .iter()
-                    .any(|layer| rule.conditions.applies_to_layer(layer))
-        });
-        if selected && slot.drill_span.interpretation == "assumed_whole_stack" {
-            bail!(
-                "routed slot on layer '{}' has no resolvable drill span; slot copper checks cannot be certified",
-                slot.layer.name
-            );
-        }
-    }
-    for hole in &design.holes {
-        let selected = rules.iter().any(|rule| {
-            matches!(
-                rule.kind,
-                rules::RuleKind::HoleToCopperClearance(class) if class == hole.class
-            ) && rule.conditions.applies_to_design(design)
-                && design
-                    .copper_layers
-                    .iter()
-                    .enumerate()
-                    .any(|(index, layer)| {
-                        hole.drill_span.contains_copper(index)
-                            && rule.conditions.applies_to_layer(layer)
-                    })
-        });
-        if selected && hole.drill_span.interpretation == "assumed_whole_stack" {
-            bail!(
-                "{} hole on layer '{}' at ({:.6}, {:.6}) has no resolvable drill span; hole-to-copper clearance cannot be certified",
-                hole.class.label(),
-                hole.layer.name,
-                hole.center.x,
-                hole.center.y
-            );
-        }
-    }
-    Ok(())
 }
 
 fn step_kind(kind: LayoutStepKind) -> &'static str {
@@ -808,7 +797,7 @@ fn collect_drilled(
     scope: ArtworkScope,
     stackup: Option<&PhysicalStackup>,
     resolution: Resolution,
-) -> Result<(Vec<Hole>, Vec<Slot>)> {
+) -> Result<(Vec<Hole>, Vec<Slot>, Vec<Blocker>)> {
     let copper_count = imported
         .layer_definitions
         .iter()
@@ -817,6 +806,10 @@ fn collect_drilled(
     let whole_stack = (0, copper_count.max(1) as u16 - 1);
     let mut holes = Vec::new();
     let mut slots = Vec::new();
+    // A feature that cannot be classed or measured could belong to any rule
+    // of its family, so it blocks the family rather than the run.
+    let mut unusable = Vec::new();
+    let mut block = |pools, reason: String| unusable.push(Blocker { pools, reason });
     for (layer_index, source_layer) in
         imported
             .layer_definitions
@@ -846,10 +839,15 @@ fn collect_drilled(
                         feature.center.x, feature.center.y
                     );
                     if !(feature.outer_diameter > 0.0 && feature.outer_diameter.is_finite()) {
-                        bail!("{at} has no positive finite diameter");
+                        block(
+                            Pools::HOLES,
+                            format!("{at} has no positive finite diameter"),
+                        );
+                        continue;
                     }
                     let Some(class) = hole_class(feature.intent.plating) else {
-                        bail!("{at} has unknown plating; DFM rules cannot certify it");
+                        block(Pools::HOLES, format!("{at} has unknown plating"));
+                        continue;
                     };
                     holes.push(Hole {
                         id: feature_occurrence_id(feature)
@@ -883,12 +881,21 @@ fn collect_drilled(
                         feature.intent.plating,
                         PlatingKind::Plated | PlatingKind::NonPlated
                     ) {
-                        bail!("{at} has unknown plating; DFM rules cannot certify it");
+                        block(Pools::SLOTS, format!("{at} has unknown plating"));
+                        continue;
                     }
                     let contours = document.placed_feature_contours(feature);
                     let outline = ContourSet::from_filled_contours(&contours, resolution)?;
                     let Some(width_disk) = min_width_disk(&outline)? else {
-                        bail!("{at} has no measurable outline");
+                        block(Pools::SLOTS, format!("{at} has no measurable outline"));
+                        continue;
+                    };
+                    let width = match slot_width(feature.outer_diameter, width_disk.width) {
+                        Ok(width) => width,
+                        Err(error) => {
+                            block(Pools::SLOTS, format!("{at} {error}"));
+                            continue;
+                        }
                     };
                     slots.push(Slot {
                         id: feature_occurrence_id(feature)
@@ -900,8 +907,7 @@ fn collect_drilled(
                             stackup,
                         ),
                         plating: feature.intent.plating,
-                        width: slot_width(feature.outer_diameter, width_disk.width)
-                            .with_context(|| at)?,
+                        width,
                         width_disk,
                         nominal_width_mm: (feature.outer_diameter > 0.0
                             && feature.outer_diameter.is_finite())
@@ -940,7 +946,7 @@ fn collect_drilled(
             .then_with(|| left.bbox.max.x.total_cmp(&right.bbox.max.x))
             .then_with(|| left.bbox.max.y.total_cmp(&right.bbox.max.y))
     });
-    Ok((holes, slots))
+    Ok((holes, slots, unusable))
 }
 
 /// A slot's width: the stated primitive width when the source gives one,
@@ -1271,7 +1277,6 @@ fn conductor_order(
 fn collect_copper_layers(
     imported: &ImportedDesign,
     scope: ArtworkScope,
-    require_conductor_ownership: bool,
     stackup: Option<&PhysicalStackup>,
     resolution: Resolution,
 ) -> Result<Vec<CopperLayer>> {
@@ -1300,7 +1305,8 @@ fn collect_copper_layers(
         .map(|(ordinal, (layer_index, layer))| {
             let name = imported.resolve(layer.name);
             let mut document = imported
-                .materialize_layer(LayerId(layer_index as u32), scope).with_context(|| format!("failed to extract IPC-2581 copper layer '{name}'"))?;
+                .materialize_layer(LayerId(layer_index as u32), scope)
+                .with_context(|| format!("failed to extract IPC-2581 copper layer '{name}'"))?;
             pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
             let mut lands = Vec::new();
             for feature in document.features.iter().filter(|feature| {
@@ -1331,22 +1337,6 @@ fn collect_copper_layers(
             }
             let (image, mut conductors) = compose_attributed_copper(&mut document, resolution)?;
             conductors.sort_by_key(|conductor| conductor_order(imported, conductor.id));
-            if require_conductor_ownership
-                && let Some(conductor) = conductors
-                    .iter()
-                    .find(|conductor| conductor.id.is_unattributed())
-            {
-                let id = conductor.id;
-                bail!(
-                    "IPC-2581 copper layer '{name}' has final functional copper without net attribution in Step '{}'{}; copper clearance cannot be certified",
-                    id.step()
-                        .map(|step| imported.resolve(step))
-                        .unwrap_or("<root>"),
-                    id.instance()
-                        .map(|instance| format!(", layout instance {instance}"))
-                        .unwrap_or_default()
-                );
-            }
             // The file's side attribute is authoritative; the stackup
             // position is the fallback for files that omit it.
             let side =
@@ -1362,6 +1352,35 @@ fn collect_copper_layers(
                 image,
                 conductors,
                 lands,
+            })
+        })
+        .collect()
+}
+
+/// Copper clearance is between electrical owners, so functional copper the
+/// file attributes to no net leaves that rule uncertifiable. Other copper
+/// rules measure the composed image and are unaffected.
+fn unattributed_copper(imported: &ImportedDesign, layers: &[CopperLayer]) -> Vec<Blocker> {
+    layers
+        .iter()
+        .filter_map(|layer| {
+            let id = layer
+                .conductors
+                .iter()
+                .map(|conductor| conductor.id)
+                .find(|id| id.is_unattributed())?;
+            Some(Blocker {
+                pools: Pools::CONDUCTOR_OWNERSHIP,
+                reason: format!(
+                    "copper layer '{}' has final functional copper without net attribution in Step '{}'{}",
+                    layer.layer.name,
+                    id.step()
+                        .map(|step| imported.resolve(step))
+                        .unwrap_or("<root>"),
+                    id.instance()
+                        .map(|instance| format!(", layout instance {instance}"))
+                        .unwrap_or_default()
+                ),
             })
         })
         .collect()
@@ -1785,7 +1804,7 @@ mod tests {
               <Oval width="1.8" height="0.6"/>"#,
         );
         let oval = import_design(&oval, resolution).unwrap();
-        let (_, slots) = collect_drilled(&oval, ArtworkScope::Board, None, resolution).unwrap();
+        let (_, slots, _) = collect_drilled(&oval, ArtworkScope::Board, None, resolution).unwrap();
         assert_eq!(slots.len(), 1);
         assert!((slots[0].width.mm - 0.6).abs() < 1e-9);
         assert_eq!(
@@ -1840,7 +1859,8 @@ mod tests {
               </Outline>"#,
         );
         let outline = import_design(&outline, resolution).unwrap();
-        let (_, slots) = collect_drilled(&outline, ArtworkScope::Board, None, resolution).unwrap();
+        let (_, slots, _) =
+            collect_drilled(&outline, ArtworkScope::Board, None, resolution).unwrap();
         assert_eq!(slots.len(), 1);
         let width = slots[0].width;
         assert!(

@@ -196,7 +196,8 @@ pub(super) struct Pools(u16);
 impl Pools {
     pub const NONE: Self = Self(0);
     pub const STACKUP: Self = Self(1 << 0);
-    pub const DRILLED: Self = Self(1 << 1);
+    pub const HOLES: Self = Self(1 << 1);
+    pub const SLOTS: Self = Self(1 << 13);
     pub const COPPER: Self = Self(1 << 2);
     pub const CONDUCTOR_OWNERSHIP: Self = Self(1 << 3);
     pub const COPPER_BOUNDARIES: Self = Self(1 << 4);
@@ -351,7 +352,7 @@ impl RuleKind {
                 finding_title: format!("{} hole is below minimum diameter", class.label()),
                 quantity_label: format!("{} hole diameter", class.label()),
                 witness_roles: Some(["hole_boundary", "hole_boundary"]),
-                pools: Pools::DRILLED,
+                pools: Pools::HOLES,
             },
             Self::HoleAspectRatio(class) => Semantics {
                 subject: "hole",
@@ -360,7 +361,7 @@ impl RuleKind {
                 finding_title: format!("{} hole exceeds maximum aspect ratio", class.label()),
                 quantity_label: format!("{} hole aspect ratio", class.label()),
                 witness_roles: None,
-                pools: Pools::STACKUP | Pools::DRILLED,
+                pools: Pools::STACKUP | Pools::HOLES,
             },
             Self::SlotWidth(plating) => Semantics {
                 subject: "slot",
@@ -369,7 +370,7 @@ impl RuleKind {
                 finding_title: format!("{} slot is below minimum width", slot_label(plating)),
                 quantity_label: format!("{} routed slot width", slot_label(plating)),
                 witness_roles: Some(["first_slot_boundary", "second_slot_boundary"]),
-                pools: Pools::DRILLED,
+                pools: Pools::SLOTS,
             },
             Self::HolePairClearance(first, second) => Semantics {
                 subject: "hole",
@@ -386,7 +387,7 @@ impl RuleKind {
                     second.label()
                 ),
                 witness_roles: Some(["first_hole_boundary", "second_hole_boundary"]),
-                pools: Pools::DRILLED,
+                pools: Pools::HOLES,
             },
             Self::HoleToBoardEdgeClearance(class) => Semantics {
                 subject: "hole",
@@ -395,7 +396,7 @@ impl RuleKind {
                 finding_title: format!("{} hole is too close to the board edge", class.label()),
                 quantity_label: format!("{} hole-to-board-edge clearance", class.label()),
                 witness_roles: Some(["hole_boundary", "board_outline"]),
-                pools: Pools::DRILLED | Pools::BOARD_OUTLINES,
+                pools: Pools::HOLES | Pools::BOARD_OUTLINES,
             },
             Self::SlotToBoardEdgeClearance(plating) => Semantics {
                 subject: "slot",
@@ -410,7 +411,7 @@ impl RuleKind {
                     slot_label(plating)
                 ),
                 witness_roles: Some(["slot_boundary", "board_outline"]),
-                pools: Pools::DRILLED | Pools::BOARD_OUTLINES,
+                pools: Pools::SLOTS | Pools::BOARD_OUTLINES,
             },
             Self::PlatedSlotEnclosure => Semantics {
                 subject: "slot_layer_pair",
@@ -420,7 +421,7 @@ impl RuleKind {
                 quantity_label: "plated-slot copper enclosure".to_owned(),
                 witness_roles: Some(["slot_boundary", "copper_boundary"]),
                 pools: Pools::STACKUP
-                    | Pools::DRILLED
+                    | Pools::SLOTS
                     | Pools::COPPER
                     | Pools::COPPER_BOUNDARIES
                     | Pools::SLOT_LANDS
@@ -433,10 +434,7 @@ impl RuleKind {
                 finding_title: format!("{} annular ring is below minimum", class.label()),
                 quantity_label: format!("{} annular ring", class.label()),
                 witness_roles: Some(["hole_boundary", "copper_boundary"]),
-                pools: Pools::DRILLED
-                    | Pools::COPPER
-                    | Pools::COPPER_BOUNDARIES
-                    | Pools::HOLE_LANDS,
+                pools: Pools::HOLES | Pools::COPPER | Pools::COPPER_BOUNDARIES | Pools::HOLE_LANDS,
             },
             Self::HoleToCopperClearance(class) => Semantics {
                 subject: "hole_layer_pair",
@@ -451,7 +449,7 @@ impl RuleKind {
                     class.label()
                 ),
                 witness_roles: Some(["drilled_hole", "offending_copper"]),
-                pools: Pools::DRILLED
+                pools: Pools::HOLES
                     | Pools::COPPER
                     | Pools::CONDUCTOR_BOUNDARIES
                     | Pools::HOLE_LANDS
@@ -471,7 +469,7 @@ impl RuleKind {
                 ),
                 witness_roles: Some(["routed_slot", "offending_copper"]),
                 pools: Pools::STACKUP
-                    | Pools::DRILLED
+                    | Pools::SLOTS
                     | Pools::COPPER
                     | Pools::CONDUCTOR_BOUNDARIES
                     | Pools::SLOT_LANDS
@@ -535,17 +533,30 @@ impl RuleKind {
     }
 }
 
-pub(super) fn pools(rules: &[Rule]) -> Pools {
+impl Rule {
+    /// Every pool this rule depends on. Drill-span checks must use the
+    /// declared physical order whenever the file carries a stackup, even
+    /// though they measure no thickness; so must stackup-conditioned cases.
+    pub fn pools(&self, has_stackup: bool) -> Pools {
+        let spans = matches!(
+            self.kind,
+            RuleKind::HoleToCopperClearance(_)
+                | RuleKind::AnnularRing(_)
+                | RuleKind::HolePairClearance(_, _)
+        );
+        let pools = self.kind.semantics().pools;
+        if self.conditions.requires_stackup() || (spans && has_stackup) {
+            pools | Pools::STACKUP
+        } else {
+            pools
+        }
+    }
+}
+
+pub(super) fn pools(rules: &[Rule], has_stackup: bool) -> Pools {
     rules
         .iter()
-        .map(|rule| {
-            let pools = rule.kind.semantics().pools;
-            if rule.conditions.requires_stackup() {
-                pools | Pools::STACKUP
-            } else {
-                pools
-            }
-        })
+        .map(|rule| rule.pools(has_stackup))
         .fold(Pools::NONE, |union, pools| union | pools)
 }
 

@@ -300,8 +300,7 @@ limit = { minimum = "0.15 mm" }
             ArtworkScope::Board,
             &rules,
             Resolution::default(),
-        )
-        .unwrap();
+        );
         checks::run(
             &rules,
             &design,
@@ -352,7 +351,7 @@ limit = { minimum = "0.15 mm" }
     }
 
     #[test]
-    fn rejects_surviving_functional_copper_without_net_ownership() {
+    fn surviving_functional_copper_without_net_ownership_leaves_the_rule_incomplete() {
         let resolution = Resolution::default();
 
         let xml = BOARD.replace("<Set net=\"N2\">", "<Set>");
@@ -361,15 +360,30 @@ limit = { minimum = "0.15 mm" }
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
 
-        let error = Design::extract(&imported, ArtworkScope::Board, &rules, resolution)
-            .err()
-            .expect("unattributed copper must fail closed");
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution);
+        let results = crate::commands::dfm::checks::run(
+            &rules,
+            &design,
+            None,
+            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+        )
+        .unwrap();
+        let rule = &results.rules[0];
+        assert!(matches!(
+            rule.status,
+            crate::commands::dfm::report::RuleStatus::Incomplete
+        ));
         assert!(
-            error
-                .to_string()
-                .contains("final functional copper without net attribution"),
-            "{error:#}"
+            rule.blocks_verdict(),
+            "unattributed copper must fail closed"
         );
+        assert!(
+            rule.skip_reason
+                .as_deref()
+                .unwrap()
+                .contains("final functional copper without net attribution")
+        );
+        assert!(results.findings.is_empty());
     }
 
     #[test]

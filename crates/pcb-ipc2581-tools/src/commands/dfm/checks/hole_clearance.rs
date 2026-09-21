@@ -369,8 +369,7 @@ limit = {{ minimum = "0.20 mm" }}
             ArtworkScope::Board,
             &rules,
             Resolution::default(),
-        )
-        .unwrap();
+        );
         checks::run(
             &rules,
             &design,
@@ -577,10 +576,22 @@ limit = {{ minimum = "0.20 mm" }}
         let pdk = Pdk::parse(&pdk("via")).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let error = Design::extract(&imported, ArtworkScope::Board, &rules, resolution)
-            .err()
-            .expect("an unknown span must fail closed");
-        assert!(error.to_string().contains("no resolvable drill span"));
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution);
+        let results = checks::run(
+            &rules,
+            &design,
+            None,
+            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+        )
+        .unwrap();
+        let rule = &results.rules[0];
+        assert!(rule.blocks_verdict(), "an unknown span must fail closed");
+        assert!(
+            rule.skip_reason
+                .as_deref()
+                .unwrap()
+                .contains("no resolvable drill span")
+        );
     }
 
     #[test]
@@ -613,8 +624,7 @@ limit = {{ minimum = "0.20 mm" }}
                     ArtworkScope::Board,
                     &rules,
                     Resolution::default(),
-                )
-                .unwrap();
+                );
                 let mut included = design
                     .copper_layers
                     .iter()
@@ -654,7 +664,7 @@ limit = {{ minimum = "0.20 mm" }}
         let pdk = Pdk::parse(&source).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution);
         let results = checks::run(
             &rules,
             &design,
@@ -665,7 +675,7 @@ limit = {{ minimum = "0.20 mm" }}
 
         assert!(matches!(
             results.rules[0].status,
-            crate::commands::dfm::report::RuleStatus::Skipped
+            crate::commands::dfm::report::RuleStatus::NotApplicable
         ));
         assert_eq!(
             results.rules[0].skip_reason.as_deref(),

@@ -207,8 +207,7 @@ mod tests {
                     ArtworkScope::Board,
                     &rules,
                     Resolution::default(),
-                )
-                .unwrap();
+                );
                 let evaluation = evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design).unwrap();
                 assert_eq!(evaluation.checked, 2);
                 assert_eq!(
@@ -252,7 +251,7 @@ mod tests {
         .unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution);
         let evaluation = evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design).unwrap();
         assert_eq!(evaluation.measured.len(), 1);
         let site = &evaluation.measured[0].sites[0];

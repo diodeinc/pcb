@@ -364,8 +364,7 @@ limit = { minimum = "0.2 mm" }
             ArtworkScope::Board,
             std::slice::from_ref(&rule),
             Resolution::default(),
-        )
-        .unwrap();
+        );
         evaluate(
             rule.limit.length().millimeters(),
             HoleClass::Pth,

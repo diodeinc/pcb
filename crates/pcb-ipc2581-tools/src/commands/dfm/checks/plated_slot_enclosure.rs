@@ -348,19 +348,34 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
             if span == THROUGH {
                 imported.stackups.clear();
             }
-            let error = Design::extract(
+            let design = Design::extract(
                 &imported,
                 ArtworkScope::Board,
                 &rules,
                 Resolution::default(),
+            );
+            let results = crate::commands::dfm::checks::run(
+                &rules,
+                &design,
+                None,
+                chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
             )
-            .err()
             .unwrap();
-            assert!(error.to_string().contains(if span == THROUGH {
-                "physical stackup"
-            } else {
-                "no resolvable drill span"
-            }));
+            assert!(results.findings.is_empty());
+            for rule in &results.rules {
+                assert!(matches!(rule.status, RuleStatus::Incomplete));
+                assert!(
+                    rule.skip_reason
+                        .as_deref()
+                        .unwrap()
+                        .contains(if span == THROUGH {
+                            "physical stackup"
+                        } else {
+                            "no resolvable drill span"
+                        })
+                );
+            }
+            assert!(results.rules[0].blocks_verdict());
         }
     }
 }

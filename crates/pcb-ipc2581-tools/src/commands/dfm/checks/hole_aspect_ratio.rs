@@ -322,14 +322,15 @@ cases = [
     }
 
     #[test]
-    fn through_hole_with_missing_thickness_and_no_default_is_skipped() {
+    fn through_hole_with_missing_thickness_and_no_default_is_incomplete() {
         let xml = BOARD.replace(" overallThickness=\"1.6\"", "").replace(
             "layerOrGroupRef=\"D1\" thickness=\"0.20\"",
             "layerOrGroupRef=\"D1\"",
         );
         let report = run(&xml, PTH_PDK);
         let rule = only_rule(&report);
-        assert!(matches!(rule.status, RuleStatus::Skipped));
+        assert!(matches!(report.verdict, Verdict::Fail));
+        assert!(matches!(rule.status, RuleStatus::Incomplete));
         assert_eq!(rule.checked, 0);
         assert!(
             rule.skip_reason
@@ -379,15 +380,17 @@ cases = [
     }
 
     #[test]
-    fn missing_blind_span_thickness_skips_instead_of_using_board_default() {
+    fn missing_blind_span_thickness_is_incomplete_instead_of_using_board_default() {
         let xml = BOARD.replace(
             "layerOrGroupRef=\"D2\" thickness=\"0.40\"",
             "layerOrGroupRef=\"D2\"",
         );
         let report = run(&xml, VIA_PDK_WITH_DEFAULT);
         let rule = only_rule(&report);
-        assert!(matches!(report.verdict, Verdict::Pass));
-        assert!(matches!(rule.status, RuleStatus::Skipped));
+        // A required limit that could not be measured never reads as a pass.
+        assert!(matches!(report.verdict, Verdict::Fail));
+        assert_eq!(report.summary.rules_incomplete, 1);
+        assert!(matches!(rule.status, RuleStatus::Incomplete));
         assert_eq!(rule.checked, 0);
         assert!(rule.assumptions.is_empty());
         assert!(

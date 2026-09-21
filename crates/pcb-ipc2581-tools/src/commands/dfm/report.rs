@@ -269,9 +269,13 @@ pub struct Summary {
     pub rules_passed: usize,
     pub rules_warned: usize,
     pub rules_failed: usize,
-    pub rules_skipped: usize,
+    /// Rules with nothing to measure in this design.
+    pub rules_not_applicable: usize,
+    /// Rules that apply but could not be evaluated. One of error severity
+    /// fails the verdict: what was not measured is never reported as passing.
+    pub rules_incomplete: usize,
     pub findings: usize,
-    /// Unwaived error-severity findings; the verdict fails on these alone.
+    /// Unwaived error-severity findings.
     pub errors: usize,
     /// Unwaived warning-severity findings.
     pub warnings: usize,
@@ -297,6 +301,7 @@ pub struct RuleResult {
     pub checked: usize,
     pub finding_count: usize,
     pub waived_count: usize,
+    /// Why a `not_applicable` or `incomplete` rule was not evaluated.
     pub skip_reason: Option<String>,
     /// Input assumptions actually used while evaluating this rule.
     pub assumptions: Vec<String>,
@@ -345,8 +350,21 @@ impl RuleResult {
         };
     }
 
-    pub fn skip(&mut self, reason: impl Into<String>) {
-        self.status = RuleStatus::Skipped;
+    /// Whether findings were judged against the limit.
+    pub fn evaluated(&self) -> bool {
+        !matches!(
+            self.status,
+            RuleStatus::NotApplicable | RuleStatus::Incomplete
+        )
+    }
+
+    /// Whether this rule leaves a required limit uncertified.
+    pub fn blocks_verdict(&self) -> bool {
+        matches!(self.status, RuleStatus::Incomplete) && self.severity == Severity::Error
+    }
+
+    pub fn leave_unevaluated(&mut self, status: RuleStatus, reason: impl Into<String>) {
+        self.status = status;
         self.skip_reason = Some(reason.into());
     }
 }
@@ -357,7 +375,10 @@ pub enum RuleStatus {
     Pass,
     Warning,
     Fail,
-    Skipped,
+    /// The design holds nothing this rule measures.
+    NotApplicable,
+    /// The rule applies, but its subjects could not be measured.
+    Incomplete,
 }
 
 #[derive(Debug, Serialize)]

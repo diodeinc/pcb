@@ -157,54 +157,53 @@ pub(super) fn run(
         .collect::<HashSet<_>>();
     for rule in rules {
         let mut result = RuleResult::new(rule);
-        match skip_reason(rule, design) {
-            Some(reason) => result.skip(reason),
-            None => {
-                let evaluation = evaluate(rule, design)?;
-                match evaluation {
-                    RuleEvaluation::Distance(evaluation) => {
-                        debug_assert_eq!(rule.comparison, Comparison::Minimum);
-                        let limit = rule.limit.length().millimeters();
-                        match evaluation.checked {
-                            // A nominally populated pool can still yield nothing to
-                            // measure (e.g. hole pairs with disjoint spans); an
-                            // unexercised rule must not read as validated.
-                            0 => result.skip(format!(
-                                "no measurable {} subjects in the selected layout target",
-                                rule.kind.semantics().subject
-                            )),
-                            checked => {
-                                result.checked = checked;
-                                results.findings.extend(
-                                    evaluation
-                                        .measured
-                                        .into_iter()
-                                        .filter(|measured| violates(&measured.distance, limit))
-                                        .map(|measured| finding(rule, measured)),
-                                );
-                            }
-                        }
+        // A nominally populated pool can still yield nothing to measure (e.g.
+        // hole pairs with disjoint spans); an unexercised rule must not read
+        // as validated.
+        let nothing_measurable = || {
+            format!(
+                "no measurable {} subjects in the selected layout target",
+                rule.kind.semantics().subject
+            )
+        };
+        let unevaluated = match unevaluated(rule, design) {
+            Some(unevaluated) => Some(unevaluated),
+            // A measurement that fails leaves its own rule uncertified.
+            None => match evaluate(rule, design) {
+                Err(error) => Some((RuleStatus::Incomplete, format!("{error:#}"))),
+                Ok(RuleEvaluation::Distance(evaluation)) => {
+                    debug_assert_eq!(rule.comparison, Comparison::Minimum);
+                    let limit = rule.limit.length().millimeters();
+                    result.checked = evaluation.checked;
+                    results.findings.extend(
+                        evaluation
+                            .measured
+                            .into_iter()
+                            .filter(|measured| violates(&measured.distance, limit))
+                            .map(|measured| finding(rule, measured)),
+                    );
+                    (evaluation.checked == 0)
+                        .then(|| (RuleStatus::NotApplicable, nothing_measurable()))
+                }
+                Ok(RuleEvaluation::Count(evaluation)) => {
+                    result.checked = 1;
+                    let limit = rule.limit.count();
+                    if violates_count(evaluation.actual, rule.comparison, limit) {
+                        results
+                            .findings
+                            .push(count_finding(rule, evaluation, limit));
                     }
-                    RuleEvaluation::Count(evaluation) => {
-                        result.checked = 1;
-                        let limit = rule.limit.count();
-                        if violates_count(evaluation.actual, rule.comparison, limit) {
-                            results
-                                .findings
-                                .push(count_finding(rule, evaluation, limit));
+                    None
+                }
+                Ok(RuleEvaluation::Ratio(evaluation)) => {
+                    debug_assert_eq!(rule.comparison, Comparison::Maximum);
+                    result.assumptions = evaluation.assumptions;
+                    match evaluation.incomplete_reason {
+                        Some(reason) => Some((RuleStatus::Incomplete, reason)),
+                        None if evaluation.checked == 0 => {
+                            Some((RuleStatus::NotApplicable, nothing_measurable()))
                         }
-                    }
-                    RuleEvaluation::Ratio(evaluation) => {
-                        debug_assert_eq!(rule.comparison, Comparison::Maximum);
-                        result.assumptions = evaluation.assumptions;
-                        if let Some(reason) = evaluation.incomplete_reason {
-                            result.skip(reason);
-                        } else if evaluation.checked == 0 {
-                            result.skip(format!(
-                                "no measurable {} subjects in the selected layout target",
-                                rule.kind.semantics().subject
-                            ));
-                        } else {
+                        None => {
                             result.checked = evaluation.checked;
                             let maximum = rule.limit.ratio();
                             results.findings.extend(
@@ -214,10 +213,14 @@ pub(super) fn run(
                                     .filter(|measured| measured.actual_ratio > maximum)
                                     .map(|measured| ratio_finding(rule, measured, maximum)),
                             );
+                            None
                         }
                     }
                 }
-            }
+            },
+        };
+        if let Some((status, reason)) = unevaluated {
+            result.leave_unevaluated(status, reason);
         }
         results.rules.push(result);
     }
@@ -265,7 +268,7 @@ pub(super) fn run(
         *waived += usize::from(finding.waived);
     }
     for result in &mut results.rules {
-        if !matches!(result.status, RuleStatus::Skipped) {
+        if result.evaluated() {
             let (total, waived) = per_rule.get(result.id.as_str()).copied().unwrap_or((0, 0));
             result.finish(total, waived);
         }
@@ -313,16 +316,45 @@ fn violates_count(actual: u32, comparison: Comparison, limit: u32) -> bool {
     }
 }
 
-/// The one skip policy: a rule is skipped when its subject pool or a
-/// required layer pool is empty for the selected layout target.
-fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
+/// The one policy for a rule that is not evaluated, in order of what can be
+/// known. `Incomplete`: the rule applies, or might, but something it reads
+/// could not be built or resolved, so its limit is not certified.
+/// `NotApplicable`: the design holds nothing for it to measure.
+fn unevaluated(rule: &Rule, design: &Design) -> Option<(RuleStatus, String)> {
+    let pools = rule.pools(!design.imported.stackups.is_empty());
+    let blocked = |pools: Pools| {
+        let reasons = design
+            .blockers
+            .iter()
+            .filter(|blocker| blocker.pools.intersects(pools))
+            .map(|blocker| blocker.reason.as_str())
+            .collect::<Vec<_>>();
+        (!reasons.is_empty()).then(|| (RuleStatus::Incomplete, reasons.join("; ")))
+    };
+    // Conditions on the stackup cannot be decided without one.
+    if pools.intersects(Pools::STACKUP)
+        && let Some(blocked) = blocked(Pools::STACKUP)
+    {
+        return Some(blocked);
+    }
     if !rule.conditions.applies_to_design(design) {
-        return Some("rule conditions do not apply to this stackup".to_owned());
+        return Some((
+            RuleStatus::NotApplicable,
+            "rule conditions do not apply to this stackup".to_owned(),
+        ));
+    }
+    if let Some(blocked) = blocked(pools)
+        .or_else(|| unresolved_span(rule, design).map(|reason| (RuleStatus::Incomplete, reason)))
+    {
+        return Some(blocked);
     }
     let subjects = match rule.kind {
         RuleKind::CopperLayerCount => None,
         RuleKind::BoardArrayPairClearance if design.scope != ArtworkScope::ArrayFlattened => {
-            return Some("board-array spacing requires --layout-target board-array".to_owned());
+            return Some((
+                RuleStatus::NotApplicable,
+                "board-array spacing requires --layout-target board-array".to_owned(),
+            ));
         }
         RuleKind::BoardArrayPairClearance => (design.board_arrays.len() < 2)
             .then(|| "two or more direct board-array instances".to_owned()),
@@ -385,9 +417,62 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
         (pools.intersects(Pools::MASKS) && design.mask_layers.is_empty())
             .then(|| "soldermask layers".to_owned())
     });
-    subjects
-        .or(layers)
-        .map(|what| format!("no {what} in the selected layout target"))
+    subjects.or(layers).map(|what| {
+        (
+            RuleStatus::NotApplicable,
+            format!("no {what} in the selected layout target"),
+        )
+    })
+}
+
+/// A rule measuring on the copper layers a drill spans cannot be certified
+/// for a drill whose declared span does not resolve in the physical stackup:
+/// which layers it meets would be a guess.
+fn unresolved_span(rule: &Rule, design: &Design) -> Option<String> {
+    let unresolved = |span: &DrillSpan| span.interpretation == "assumed_whole_stack";
+    let applies = |span: &DrillSpan| {
+        design
+            .copper_layers
+            .iter()
+            .enumerate()
+            .any(|(index, layer)| {
+                span.contains_copper(index) && rule.conditions.applies_to_layer(layer)
+            })
+    };
+    match rule.kind {
+        RuleKind::HoleToCopperClearance(class) => design
+            .holes
+            .iter()
+            .find(|hole| {
+                hole.class == class && unresolved(&hole.drill_span) && applies(&hole.drill_span)
+            })
+            .map(|hole| {
+                format!(
+                    "{} hole on layer '{}' at ({:.6}, {:.6}) has no resolvable drill span",
+                    hole.class.label(),
+                    hole.layer.name,
+                    hole.center.x,
+                    hole.center.y
+                )
+            }),
+        RuleKind::SlotToCopperClearance(_) | RuleKind::PlatedSlotEnclosure => design
+            .slots
+            .iter()
+            .find(|slot| {
+                let selected = match rule.kind {
+                    RuleKind::SlotToCopperClearance(plating) => slot_matches(slot.plating, plating),
+                    _ => slot_matches(slot.plating, SlotPlating::Plated),
+                };
+                selected && unresolved(&slot.drill_span) && applies(&slot.drill_span)
+            })
+            .map(|slot| {
+                format!(
+                    "routed slot on layer '{}' has no resolvable drill span",
+                    slot.layer.name
+                )
+            }),
+        _ => None,
+    }
 }
 
 fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {

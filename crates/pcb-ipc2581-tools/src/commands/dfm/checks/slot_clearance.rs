@@ -258,10 +258,21 @@ limit = {{ minimum = "0.20 mm" }}
                 "<Span fromLayer=\"L0\" toLayer=\"L1\"/>",
                 "<Span fromLayer=\"L0\"/>",
             );
+            let unresolved = check(&missing, standard.source, LayoutTarget::Board).unwrap();
+            let slot_rule = unresolved
+                .rules
+                .iter()
+                .find(|rule| {
+                    rule.id
+                        .contains(&format!(".{}_slot_clearance", plating.to_lowercase()))
+                })
+                .unwrap();
+            assert!(matches!(slot_rule.status, report::RuleStatus::Incomplete));
             assert!(
-                check(&missing, standard.source, LayoutTarget::Board)
-                    .unwrap_err()
-                    .to_string()
+                slot_rule
+                    .skip_reason
+                    .as_deref()
+                    .unwrap()
                     .contains("no resolvable drill span")
             );
         }
@@ -396,10 +407,14 @@ limit = {{ minimum = "0.20 mm" }}
             "<Span fromLayer=\"L0\" toLayer=\"L1\"/>",
             "<Span fromLayer=\"L0\"/>",
         );
+        let unresolved = check(&missing, &source, LayoutTarget::Board).unwrap();
+        assert!(matches!(unresolved.verdict, report::Verdict::Fail));
+        assert!(unresolved.findings.is_empty());
         assert!(
-            check(&missing, &source, LayoutTarget::Board)
-                .unwrap_err()
-                .to_string()
+            unresolved.rules[0]
+                .skip_reason
+                .as_deref()
+                .unwrap()
                 .contains("no resolvable drill span")
         );
         let inactive = source.replace("limit = { minimum = \"0.20 mm\" }", "cases = [{ id = \"two\", when = { copper_layers = { exact = 2 } }, limit = { minimum = \"0.20 mm\" } }]");
@@ -408,7 +423,7 @@ limit = {{ minimum = "0.20 mm" }}
                 .unwrap()
                 .rules[0]
                 .status,
-            report::RuleStatus::Skipped
+            report::RuleStatus::NotApplicable
         ));
     }
 }
