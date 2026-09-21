@@ -138,17 +138,13 @@ fn collect_drill_info(doc: &GeometryDocument, collector: &mut DrillStatsCollecto
 fn drill_hole(
     feature: &pcb_ir::dialects::ipc::Feature<ipc2581::Symbol>,
 ) -> Option<(f64, DrillHoleType)> {
-    if !feature.is_drill_like()
-        || feature.kind != FeatureKind::Hole
-        || feature.outer_diameter <= 0.0
-    {
+    if !feature.is_drill_like() || feature.kind != FeatureKind::Hole {
         return None;
     }
-
-    Some((
-        feature.outer_diameter,
-        drill_hole_type(feature.intent.plating),
-    ))
+    let size = feature
+        .shape
+        .and_then(pcb_ir::dialects::ipc::SimpleShape::hole_size)?;
+    (size > 0.0).then_some((size, drill_hole_type(feature.intent.plating)))
 }
 
 fn drill_hole_type(plating: PlatingKind) -> DrillHoleType {

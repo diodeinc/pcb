@@ -28,15 +28,6 @@ pub fn validate_artwork_ready<Symbol, LayerFunction>(
     diagnostics.into_result()
 }
 
-/// Check that every feature's paths agree on one paint kind.
-pub fn validate_homogeneous_features<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Result<(), Diagnostics> {
-    let mut diagnostics = Diagnostics::default();
-    validate_homogeneous_features_into(doc, &mut diagnostics);
-    diagnostics.into_result()
-}
-
 fn validate_homogeneous_features_into<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     diagnostics: &mut Diagnostics,

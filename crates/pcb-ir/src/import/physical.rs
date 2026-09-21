@@ -17,7 +17,7 @@ use crate::dialects::Side;
 use crate::dialects::artwork;
 use crate::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureDomain, FeatureKind,
-    FeatureSpan, HoleShape, PlatingKind, lower_layer_to_artwork_with,
+    FeatureSpan, PlatingKind, SimpleShape, lower_layer_to_artwork_with,
 };
 use crate::geom::dfm::BBoxIndex;
 use crate::geom::{BBox, ContourSet, Point, Polarity, Span, tol};
@@ -669,17 +669,16 @@ impl ImportedDesign {
                     id: HoleId(occurrence.id),
                     layer: layer_id,
                     source_name: feature.source_name,
-                    kind: match feature.kind {
-                        FeatureKind::Hole => match feature.hole_shape {
-                            HoleShape::Round => PhysicalHoleKind::Round,
-                            HoleShape::Square => PhysicalHoleKind::Square,
-                        },
-                        FeatureKind::Slot => PhysicalHoleKind::Slot,
+                    kind: match (feature.kind, feature.shape) {
+                        (FeatureKind::Hole, Some(SimpleShape::Square { .. })) => {
+                            PhysicalHoleKind::Square
+                        }
+                        (FeatureKind::Hole, _) => PhysicalHoleKind::Round,
+                        (FeatureKind::Slot, _) => PhysicalHoleKind::Slot,
                         _ => unreachable!("physical opening is a hole or slot"),
                     },
                     at: occurrence.root_from_local.transform_point(feature.center),
-                    finished_diameter: (feature.kind == FeatureKind::Hole)
-                        .then_some(feature.outer_diameter),
+                    finished_diameter: feature.shape.and_then(SimpleShape::hole_size),
                     assembly_side: feature.intent.side,
                     image,
                     board: occurrence.board,

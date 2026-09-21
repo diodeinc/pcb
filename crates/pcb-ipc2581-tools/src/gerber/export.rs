@@ -646,7 +646,7 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
     /// Gerber orders removals rather than imaging them as clears, so every
     /// drilled or routed feature stages last regardless of its bucket.
     fn paint_order(&mut self, feature: &Feature<ipc2581::Symbol>) -> PaintOrder {
-        let stage = if feature.intent.role == FeatureRole::Cutout || feature.is_drill_like() {
+        let stage = if feature.is_drill_like() {
             PaintStage::FinalCutout
         } else if feature.bucket == FeatureBucket::Fill {
             PaintStage::Base
@@ -1261,9 +1261,6 @@ fn aperture_function(
         }
         FeatureRole::Slot => {
             return Some(vec!["Other".to_string(), "Slot".to_string()]);
-        }
-        FeatureRole::Cutout => {
-            return Some(vec!["Other".to_string(), "Cutout".to_string()]);
         }
         FeatureRole::ArraySeparation if feature.is_vcut() => {
             return Some(vec!["Other".to_string(), "Vcut".to_string()]);

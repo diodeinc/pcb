@@ -66,6 +66,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - IPC-2581 strokes without a line description no longer get a made-up width.
 - Panels honor a repeated step's Datum.
 - IPC-2581 exports no longer fail on a KiCad arc that collapsed to a point.
+- Donut fiducials keep their hole, scaled fiducials keep their size, and fiducials cut by a slot image cut.
+- Drill export reports a square hole instead of drilling it round.
 
 ### Changed
 

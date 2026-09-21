@@ -168,6 +168,138 @@ fn preserves_inline_feature_line_property() {
     assert_eq!(path.stroke().unwrap().pattern, LinePattern::Phantom);
 }
 
+/// One board with `features` on its TOP copper and `drills` on its drill layer.
+fn shape_fixture(features: &str, drills: &str) -> Ipc2581 {
+    Ipc2581::parse(&format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+      <Layer name="BOTTOM" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE">
+        <Span fromLayer="TOP" toLayer="BOTTOM"/>
+      </Layer>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="TOP"><Set>{features}</Set></LayerFeature>
+        <LayerFeature layerRef="DRILL"><Set>{drills}</Set></LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    ))
+    .unwrap()
+}
+
+/// The area TOP images as artwork, and how many of its objects are flashes.
+fn top_artwork_area_and_flashes(ipc: &Ipc2581) -> (f64, usize) {
+    let resolution = Resolution::default();
+    let mut doc = extract_layer_for_view(ipc, "TOP", ArtworkScope::Board, resolution).unwrap();
+    crate::dialects::ipc::process::normalize_for_positive_artwork(&mut doc, resolution).unwrap();
+    let artwork = crate::dialects::ipc::lower_layer_to_artwork(
+        &doc,
+        0,
+        crate::dialects::LayerRole::Copper,
+        crate::dialects::Side::Top,
+    );
+    let flashes = artwork
+        .objects
+        .iter()
+        .filter(|object| {
+            matches!(
+                object.geometry,
+                crate::dialects::artwork::Geometry::Flash { .. }
+            )
+        })
+        .count();
+    let (images, _) =
+        crate::dialects::artwork::compose_owner_regions(&artwork, |_| Some(()), resolution)
+            .unwrap();
+    (
+        images[0].iter().map(|(_, image)| image.area()).sum(),
+        flashes,
+    )
+}
+
+#[test]
+fn a_fiducial_flashes_only_the_circle_it_is() {
+    let pi = std::f64::consts::PI;
+    let fiducial = |shape: &str| {
+        shape_fixture(
+            &format!(r#"<GlobalFiducial><Location x="5" y="5"/>{shape}</GlobalFiducial>"#),
+            "",
+        )
+    };
+
+    let (area, flashes) = top_artwork_area_and_flashes(&fiducial(r#"<Circle diameter="2"/>"#));
+    assert_eq!(flashes, 1);
+    assert!(
+        (area / pi - 1.0).abs() < 0.01,
+        "a 2 mm disc, not {area} mm²"
+    );
+
+    let (area, flashes) =
+        top_artwork_area_and_flashes(&fiducial(r#"<Xform scale="2"/><Circle diameter="2"/>"#));
+    assert_eq!(flashes, 1);
+    assert!(
+        (area / (4.0 * pi) - 1.0).abs() < 0.01,
+        "a 4 mm disc, not {area} mm²"
+    );
+
+    let (area, flashes) = top_artwork_area_and_flashes(&fiducial(
+        r#"<Donut shape="ROUND" outerDiameter="2" innerDiameter="1"/>"#,
+    ));
+    assert_eq!(flashes, 0, "a ring is not a disc aperture");
+    assert!(
+        (area / (0.75 * pi) - 1.0).abs() < 0.01,
+        "a ring, not {area} mm²"
+    );
+}
+
+#[test]
+fn a_fiducial_a_slot_cuts_images_cut() {
+    let ipc = shape_fixture(
+        r#"<GlobalFiducial><Location x="5" y="5"/><Circle diameter="2"/></GlobalFiducial>"#,
+        r#"<SlotCavity name="S" platingStatus="NONPLATED" plusTol="0" minusTol="0">
+             <Location x="5" y="5"/><RectCenter width="4" height="1"/>
+           </SlotCavity>"#,
+    );
+    let (area, flashes) = top_artwork_area_and_flashes(&ipc);
+    assert_eq!(flashes, 0);
+    assert!(
+        area < 0.5 * std::f64::consts::PI,
+        "the slot's band is gone, not {area} mm²"
+    );
+}
+
+#[test]
+fn nc_refuses_a_square_hole_instead_of_drilling_it_round() {
+    let hole = |shape: &str| {
+        let ipc = shape_fixture(
+            "",
+            &format!(
+                r#"<Hole name="H" diameter="1" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="3" y="4"{shape}/>"#
+            ),
+        );
+        let doc = extract_layer_for_view(&ipc, "DRILL", ArtworkScope::Board, Resolution::default())
+            .unwrap();
+        let mut nc = crate::dialects::nc::Document::new();
+        crate::dialects::ipc::lower_to_nc(&doc, &mut nc).map(|()| nc.objects.len())
+    };
+
+    assert_eq!(hole(""), Ok(1));
+    assert!(
+        hole(r#" type="SQUARE""#)
+            .unwrap_err()
+            .contains("not a round hole")
+    );
+}
+
 #[test]
 fn carries_spec_refs_fiducials_and_vcut_intent() {
     let ipc = Ipc2581::parse(
@@ -2286,7 +2418,6 @@ fn rotated_slot_cavity_xform_orients_route_slot() {
 
     let slot = &doc.features[0];
     assert_eq!(slot.kind, FeatureKind::Slot);
-    assert!((slot.rotation_degrees - 90.0).abs() < 1e-9);
     assert!(
         slot.bbox.height() > slot.bbox.width(),
         "expected rotated slot to be vertical, got bbox {:?}",

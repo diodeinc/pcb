@@ -388,11 +388,7 @@ fn materialize_feature_placement<S>(
     feature.transform = placement.concat(feature.transform);
     feature.center = placement.transform_point(feature.center);
     feature.paths = paths;
-    // Absolute image sizes follow the placement; width/height/radius stay in
-    // the local frame consumers map through `transform`.
-    feature.stroke_width *= scale;
-    feature.outer_diameter *= scale;
-    feature.inner_diameter *= scale;
+    feature.shape = feature.shape.map(|shape| shape.scaled(scale));
     feature.bbox = arena.paths_bbox(paths);
 }
 
@@ -817,12 +813,14 @@ fn replace_feature_with_path<S, L>(
     let feature = &mut doc.features[feature_index];
     feature.paths = Span::single(path_id);
     feature.primitive_ref = None;
+    feature.shape = None;
 }
 
 fn clear_feature_paths<S, L>(doc: &mut Document<S, L>, feature_index: usize) {
     let feature = &mut doc.features[feature_index];
     feature.paths = Span::EMPTY;
     feature.primitive_ref = None;
+    feature.shape = None;
 }
 
 /// Subtract `cutters` from every subject they actually cut. A subject the
@@ -1290,7 +1288,6 @@ mod tests {
         );
         let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         feature.paths = Span::new(0, 2);
-        feature.flags.lowered_to_paths = true;
 
         let features = split_primitive_feature_path_runs(&doc, feature).unwrap();
 

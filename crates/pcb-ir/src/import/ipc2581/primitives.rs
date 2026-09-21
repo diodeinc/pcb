@@ -32,8 +32,6 @@ pub(super) fn ipc_placement(location: Point, xform: Option<Xform>) -> IpcPlaceme
 pub(super) fn apply_ipc_placement(feature: &mut GeometryFeature, placement: IpcPlacement) {
     feature.transform = placement.transform;
     feature.center = placement.center;
-    feature.rotation_degrees = placement.xform.rotation;
-    feature.scale = placement.xform.scale;
 }
 
 /// Lower one member of the IPC-2581C `Feature` substitution group into paths

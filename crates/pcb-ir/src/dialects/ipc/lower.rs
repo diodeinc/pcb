@@ -10,7 +10,7 @@ use crate::dialects::ipc::analysis::{
 };
 use crate::dialects::ipc::feature::{
     Feature, FeatureBucket, FeatureKind, FeatureOperation, FeatureRole, FeatureSpan, PlatingKind,
-    PrimitiveRef,
+    PrimitiveRef, SimpleShape,
 };
 use crate::dialects::ipc::layout::{LayoutPurpose, StepProfile};
 use crate::dialects::ipc::{Document, relief};
@@ -408,16 +408,17 @@ fn circle_flash<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     feature: &Feature<Symbol>,
 ) -> Option<(Point, f64)> {
-    if feature.outer_diameter <= 0.0 || feature.paths.len() != 1 {
+    let Some(SimpleShape::Circle { diameter }) = feature.shape else {
         return None;
-    }
-    if !feature.paths.slice(&doc.arena.paths)[0].is_filled() {
+    };
+    let [path] = feature.paths.slice(&doc.arena.paths) else {
         return None;
-    }
-    (feature.is_fiducial()
-        || feature.intent.role == FeatureRole::Hole
-        || feature.intent.operation == FeatureOperation::Drill)
-        .then_some((feature.center, feature.outer_diameter))
+    };
+    (path.is_filled()
+        && (feature.is_fiducial()
+            || feature.intent.role == FeatureRole::Hole
+            || feature.intent.operation == FeatureOperation::Drill))
+        .then_some((feature.center, diameter))
 }
 
 /// Rotation plus translation, without mirroring or scaling.
@@ -459,34 +460,32 @@ pub fn lower_to_nc<Symbol: Copy, LayerFunction>(
 ) -> Result<(), String> {
     for layer in &doc.layers {
         for feature in layer.features.slice(&doc.features) {
-            match feature.kind {
-                FeatureKind::Hole if feature.outer_diameter > 0.0 => {
-                    nc.objects.push(nc_object_from_feature(
-                        doc,
-                        feature,
-                        nc::Geometry::Drill {
-                            at: feature.center,
-                            diameter: feature.outer_diameter,
-                        },
-                    )?);
-                }
-                FeatureKind::Slot => {
-                    let Some((diameter, start, end)) = nc_linear_slot(feature) else {
-                        return Err(format!(
-                            "cannot export slot on layer '{}' to NC because it is not a simple oval slot",
-                            layer.name
-                        ));
-                    };
-                    let geometry = nc::Geometry::Slot {
+            let geometry = match feature.kind {
+                FeatureKind::Hole => feature
+                    .shape
+                    .and_then(SimpleShape::drill_diameter)
+                    .map(|diameter| nc::Geometry::Drill {
+                        at: feature.center,
+                        diameter,
+                    })
+                    .ok_or("it is not a round hole"),
+                FeatureKind::Slot => nc_linear_slot(feature)
+                    .map(|(diameter, start, end)| nc::Geometry::Slot {
                         diameter,
                         start,
                         end,
-                    };
-                    nc.objects
-                        .push(nc_object_from_feature(doc, feature, geometry)?);
-                }
-                _ => {}
-            }
+                    })
+                    .ok_or("it is not a simple oval slot"),
+                _ => continue,
+            };
+            let geometry = geometry.map_err(|reason| {
+                format!(
+                    "cannot export a {:?} on layer '{}' to NC because {reason}",
+                    feature.kind, layer.name
+                )
+            })?;
+            nc.objects
+                .push(nc_object_from_feature(doc, feature, geometry)?);
         }
     }
     Ok(())
@@ -535,28 +534,30 @@ fn nc_object_from_feature<Symbol: Copy, LayerFunction>(
 
 /// Interpret a slot feature as a round-tool linear slot: `(diameter, start, end)`.
 fn nc_linear_slot<Symbol>(feature: &Feature<Symbol>) -> Option<(f64, Point, Point)> {
-    if feature.width <= 0.0 || feature.height <= 0.0 || feature.scale <= 0.0 {
+    let Some(SimpleShape::Oval { width, height }) = feature.shape else {
         return None;
-    }
-    let diameter = feature.width.min(feature.height) * feature.scale;
-    if diameter <= tol_epsilon() {
-        return None;
-    }
-    let long = feature.width.max(feature.height);
-    let short = feature.width.min(feature.height);
-    let centerline = (long - short).max(0.0) / 2.0;
-    if centerline <= tol_epsilon() {
-        return None;
-    }
-    let (start, end) = if feature.width >= feature.height {
-        (Point::new(-centerline, 0.0), Point::new(centerline, 0.0))
-    } else {
-        (Point::new(0.0, -centerline), Point::new(0.0, centerline))
     };
+    let (diameter, along) = if width >= height {
+        (
+            height,
+            Point::new(feature.transform.m00, feature.transform.m10),
+        )
+    } else {
+        (
+            width,
+            Point::new(feature.transform.m01, feature.transform.m11),
+        )
+    };
+    let reach = (width - height).abs() / 2.0;
+    let length = along.x.hypot(along.y);
+    if diameter <= tol_epsilon() || reach <= tol_epsilon() || length <= 0.0 {
+        return None;
+    }
+    let reach = Point::new(along.x * reach / length, along.y * reach / length);
     Some((
         diameter,
-        feature.transform.transform_point(start),
-        feature.transform.transform_point(end),
+        Point::new(feature.center.x - reach.x, feature.center.y - reach.y),
+        Point::new(feature.center.x + reach.x, feature.center.y + reach.y),
     ))
 }
 

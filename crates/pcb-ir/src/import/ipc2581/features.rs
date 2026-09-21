@@ -501,7 +501,6 @@ pub(super) fn push_negative_layer_plane(
     feature.paths = Span::single(path);
     feature.source_step_ref = Some(step.name);
     feature.source_step_kind = layout_step_kind(step);
-    feature.flags.lowered_to_paths = true;
     complete_feature_intent(layer, &mut feature);
     let source = feature.source;
     for feature in keep_finite(doc, mark, vec![feature], source) {
@@ -762,7 +761,6 @@ pub(super) fn extract_pad(
         .and_then(|padstack| padstack.hole_def.as_ref())
         .map(|hole| plating_kind(hole.plating_status))
         .unwrap_or(PlatingKind::None);
-    feature.flags.expanded_padstack = true;
     feature.flags.clears_previous_in_set = void;
     push_pin_ref(doc, &mut feature, pad.pin_ref.as_ref());
 
@@ -788,7 +786,6 @@ pub(super) fn lowered_feature(
     );
     feature.net = net;
     feature.source = source;
-    feature.flags.lowered_to_paths = true;
     feature
 }
 
@@ -922,8 +919,13 @@ pub(super) fn extract_fiducial(
     feature.fiducial_kind = map_fiducial_kind(fiducial.kind);
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
+    feature.shape = match primitive {
+        StandardPrimitive::Circle(circle) => Some(SimpleShape::Circle {
+            diameter: circle.shape.diameter * placement.xform.scale,
+        }),
+        _ => None,
+    };
     apply_ipc_placement(&mut feature, placement);
-    feature.outer_diameter = standard_primitive_outer_diameter(primitive).unwrap_or_default();
     feature.primitive_ref = primitive_ref;
     push_pin_ref(doc, &mut feature, fiducial.pin_ref.as_ref());
     Ok(Some(feature))
@@ -935,14 +937,6 @@ pub(super) fn map_fiducial_kind(kind: ipc2581::types::ecad::FiducialKind) -> Fid
         ipc2581::types::ecad::FiducialKind::Global => FiducialKind::Global,
         ipc2581::types::ecad::FiducialKind::GoodPanelMark => FiducialKind::GoodPanel,
         ipc2581::types::ecad::FiducialKind::Local => FiducialKind::Local,
-    }
-}
-
-pub(super) fn standard_primitive_outer_diameter(primitive: &StandardPrimitive) -> Option<f64> {
-    match primitive {
-        StandardPrimitive::Circle(circle) => Some(circle.shape.diameter),
-        StandardPrimitive::Donut(donut) => Some(donut.shape.outer_diameter),
-        _ => None,
     }
 }
 
@@ -1065,7 +1059,6 @@ pub(super) fn extract_polygon(
     feature.source = source;
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
-    feature.flags.lowered_to_paths = true;
     feature
 }
 
@@ -1101,9 +1094,6 @@ pub(super) fn push_stroked_contour(
     feature.source = style.source;
     feature.bbox = doc.arena.paths[path as usize].bbox;
     feature.paths = Span::single(path);
-    feature.stroke_width = style.width;
-    feature.line_cap = style.line_cap;
-    feature.flags.lowered_to_paths = true;
     feature
 }
 
@@ -1141,15 +1131,14 @@ pub(super) fn extract_hole(
     feature.spec_refs = push_spec_refs(doc, &hole.spec_refs);
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
+    let size = hole.diameter * placement.xform.scale;
+    feature.shape = Some(match hole.shape {
+        IpcHoleShape::Circle => SimpleShape::Circle { diameter: size },
+        IpcHoleShape::Square => SimpleShape::Square { side: size },
+    });
     apply_ipc_placement(&mut feature, placement);
-    feature.hole_shape = match hole.shape {
-        IpcHoleShape::Circle => HoleShape::Round,
-        IpcHoleShape::Square => HoleShape::Square,
-    };
-    feature.outer_diameter = hole.diameter * feature.scale;
     feature.padstack_ref = padstack_ref;
     feature.intent.plating = plating_kind(hole.plating_status);
-    feature.flags.lowered_to_paths = true;
     feature
 }
 
@@ -1162,7 +1151,7 @@ pub(super) fn extract_slot(
 ) -> Result<GeometryFeature> {
     let placement = ipc_placement(Point::new(slot.x, slot.y), slot.xform);
     let path_start = doc.arena.paths.len() as u32;
-    let mut primitive_size = None;
+    let mut shape = None;
 
     match &slot.shape {
         SlotShape::Outline(polygon) => {
@@ -1170,7 +1159,10 @@ pub(super) fn extract_slot(
         }
         SlotShape::Primitive(primitive) => {
             if let StandardPrimitive::Oval(oval) = primitive {
-                primitive_size = Some((oval.shape.size.width, oval.shape.size.height));
+                shape = Some(SimpleShape::Oval {
+                    width: oval.shape.size.width * placement.xform.scale,
+                    height: oval.shape.size.height * placement.xform.scale,
+                });
             }
             let _ = lower_standard_primitive(context, doc, primitive, placement.transform)?;
         }
@@ -1182,15 +1174,9 @@ pub(super) fn extract_slot(
     feature.source_name = slot.name;
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
+    feature.shape = shape;
     apply_ipc_placement(&mut feature, placement);
-    if let Some((width, height)) = primitive_size {
-        feature.width = width;
-        feature.height = height;
-        feature.outer_diameter = width.min(height) * feature.scale;
-        feature.stroke_width = feature.outer_diameter;
-    }
     feature.padstack_ref = padstack_ref;
     feature.intent.plating = plating_kind(slot.plating_status);
-    feature.flags.lowered_to_paths = true;
     Ok(feature)
 }

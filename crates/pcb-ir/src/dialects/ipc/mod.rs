@@ -39,7 +39,7 @@ pub use document::{Document, Layer};
 pub use feature::{
     CopperBalanceVoid, Feature, FeatureBucket, FeatureDomain, FeatureFlags, FeatureIntent,
     FeatureKind, FeatureMaterial, FeatureOperation, FeaturePlacementGroup, FeatureRole, FeatureSet,
-    FeatureSpan, FiducialKind, GeometryUsage, HoleShape, PinRef, PlatingKind, PrimitiveRef,
+    FeatureSpan, FiducialKind, GeometryUsage, PinRef, PlatingKind, PrimitiveRef, SimpleShape,
     SourceRef,
 };
 pub use layout::{
@@ -56,4 +56,4 @@ pub use spec::{Spec, SpecItem, SpecItemKind, SpecProperty, SpecRef};
 pub use surface_layers::{
     PhysicalLayer, SurfaceLayerError, TwoSidedSurfaceLayers, resolve_two_sided_surface_layers,
 };
-pub use validate::{validate_artwork_ready, validate_homogeneous_features};
+pub use validate::validate_artwork_ready;

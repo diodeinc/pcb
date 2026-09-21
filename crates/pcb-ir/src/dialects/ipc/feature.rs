@@ -1,17 +1,11 @@
 use crate::dialects::Side;
 use crate::dialects::ipc::layout::LayoutStepKind;
-use crate::geom::{Affine2, BBox, FillRule, LineCap, PaintKind, Point, Polarity, Span};
+use crate::geom::{Affine2, BBox, PaintKind, Point, Polarity, Span};
 
 /// One extracted layer feature.
 ///
-/// Geometry lives in `paths` (a span of `doc.arena.paths`); the scalar shape
-/// fields (`center`, `width`, `radius`, ...) preserve the source primitive's
-/// parameters and are meaningful only for the [`FeatureKind`] that set them:
-///
-/// - `Hole`/`Slot`: `center`, `width`/`height` (slot ends), `radius`.
-/// - `Padstack`/`Primitive`: `center`, `width`, `height`, `rotation_degrees`,
-///   `scale`, and `outer_diameter`/`inner_diameter` for annular shapes.
-/// - `Trace`: `stroke_width`, `line_cap`.
+/// Geometry lives in `paths` (a span of `doc.arena.paths`), already placed by
+/// `transform` unless the feature belongs to a placement group.
 #[derive(Debug, Clone)]
 pub struct Feature<Symbol> {
     pub kind: FeatureKind,
@@ -48,18 +42,8 @@ pub struct Feature<Symbol> {
     pub paths: Span,
 
     pub center: Point,
-    pub width: f64,
-    pub height: f64,
-    pub radius: f64,
-    pub outer_diameter: f64,
-    pub inner_diameter: f64,
-    pub stroke_width: f64,
-    pub rotation_degrees: f64,
-    pub scale: f64,
-
-    pub line_cap: LineCap,
-    pub fill_rule: FillRule,
-    pub hole_shape: HoleShape,
+    /// The simple shape the geometry is exactly, when it is one.
+    pub shape: Option<SimpleShape>,
     pub padstack_ref: Option<Symbol>,
     pub primitive_ref: Option<PrimitiveRef<Symbol>>,
     /// Spans `doc.pin_refs`.
@@ -108,17 +92,7 @@ impl<Symbol> Feature<Symbol> {
             bbox: BBox::empty(),
             paths: Span::EMPTY,
             center: Point::default(),
-            width: 0.0,
-            height: 0.0,
-            radius: 0.0,
-            outer_diameter: 0.0,
-            inner_diameter: 0.0,
-            stroke_width: 0.0,
-            rotation_degrees: 0.0,
-            scale: 1.0,
-            line_cap: LineCap::Round,
-            fill_rule: FillRule::NonZero,
-            hole_shape: HoleShape::Round,
+            shape: None,
             padstack_ref: None,
             primitive_ref: None,
             pin_refs: Span::EMPTY,
@@ -181,6 +155,7 @@ impl<Symbol: Clone> Feature<Symbol> {
         let mut feature = self.clone();
         feature.bucket = bucket;
         feature.bbox = bbox;
+        feature.shape = self.shape.filter(|_| paths == self.paths);
         feature.paths = paths;
         feature
     }
@@ -196,10 +171,64 @@ pub enum FeatureKind {
     Trace,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HoleShape {
-    Round,
-    Square,
+/// A shape a target may have to name rather than trace: a flash aperture, a
+/// drill tool, a routed slot. It is centered on [`Feature::center`], sized in
+/// layer units, and turned by [`Feature::transform`]. A feature carries one
+/// only while its paths are exactly that shape, so a pass that rewrites the
+/// paths clears it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SimpleShape {
+    Circle {
+        diameter: f64,
+    },
+    Square {
+        side: f64,
+    },
+    /// A stadium `width` along the transform's x axis by `height` along y.
+    Oval {
+        width: f64,
+        height: f64,
+    },
+}
+
+impl SimpleShape {
+    pub fn scaled(self, scale: f64) -> Self {
+        match self {
+            Self::Circle { diameter } => Self::Circle {
+                diameter: diameter * scale,
+            },
+            Self::Square { side } => Self::Square { side: side * scale },
+            Self::Oval { width, height } => Self::Oval {
+                width: width * scale,
+                height: height * scale,
+            },
+        }
+    }
+
+    /// The diameter of the round tool that drills this shape, if one does.
+    pub fn drill_diameter(self) -> Option<f64> {
+        match self {
+            Self::Circle { diameter } => Some(diameter),
+            Self::Square { .. } | Self::Oval { .. } => None,
+        }
+    }
+
+    /// The width a routed slot states: the diameter of the tool that routs it.
+    pub fn slot_width(self) -> Option<f64> {
+        match self {
+            Self::Oval { width, height } => Some(width.min(height)),
+            Self::Circle { .. } | Self::Square { .. } => None,
+        }
+    }
+
+    /// The size a hole table states: a round hole's diameter or a square
+    /// hole's side.
+    pub fn hole_size(self) -> Option<f64> {
+        match self {
+            Self::Circle { diameter: size } | Self::Square { side: size } => Some(size),
+            Self::Oval { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,7 +260,6 @@ impl FeatureBucket {
                     PlatingKind::Plated | PlatingKind::NonPlated => Self::Pth,
                     PlatingKind::Unknown | PlatingKind::None => Self::Smd,
                 },
-                FeatureRole::Cutout => Self::Cutout,
                 _ => match kind {
                     FeatureKind::Trace => Self::Trace,
                     _ => Self::Fill,
@@ -304,7 +332,6 @@ pub enum FeatureRole {
     BoardOutline,
     ArraySeparation,
     Route,
-    Cutout,
     Other,
 }
 
@@ -367,8 +394,6 @@ pub enum FiducialKind {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FeatureFlags {
-    pub expanded_padstack: bool,
-    pub lowered_to_paths: bool,
     pub clears_previous_in_set: bool,
     /// Generated copper balancing inherited from the source IPC feature set.
     pub copper_balance: bool,

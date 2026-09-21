@@ -18,8 +18,8 @@ use ipc2581::Symbol;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureDomain, FeatureKind,
-    FeatureSpan, HoleShape, LayoutPurpose, LayoutStepKind, PlatingKind, ProfileOccurrenceRole,
-    ProfileSet, lower_layer_to_artwork_with, profile_occurrences_for,
+    FeatureSpan, LayoutPurpose, LayoutStepKind, PlatingKind, ProfileOccurrenceRole, ProfileSet,
+    SimpleShape, lower_layer_to_artwork_with, profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side, artwork};
 use pcb_ir::geom::dfm::{Distance, WidthDisk, min_width_disk};
@@ -871,20 +871,22 @@ fn collect_drilled(
                         "drilled hole on layer '{layer_name}' at ({:.6}, {:.6})",
                         feature.center.x, feature.center.y
                     );
-                    if !(feature.outer_diameter > 0.0 && feature.outer_diameter.is_finite()) {
+                    let size = feature.shape.and_then(SimpleShape::hole_size);
+                    let Some(diameter_mm) = size.filter(|size| *size > 0.0 && size.is_finite())
+                    else {
                         block(
                             Pools::HOLES,
                             format!("{at} has no positive finite diameter"),
                         );
                         continue;
-                    }
+                    };
                     let Some(class) = hole_class(feature.intent.plating) else {
                         block(Pools::HOLES, format!("{at} has unknown plating"));
                         continue;
                     };
                     // Every hole rule measures a disk of the stated diameter,
                     // which a square hole's corners extend beyond.
-                    if feature.hole_shape == HoleShape::Square {
+                    if matches!(feature.shape, Some(SimpleShape::Square { .. })) {
                         block(
                             Pools::HOLES,
                             format!("{at} is square, not a circular drill"),
@@ -896,8 +898,8 @@ fn collect_drilled(
                             .context("materialized hole has no occurrence identity")?,
                         class,
                         center: feature.center,
-                        diameter_mm: feature.outer_diameter,
-                        bbox: BBox::from_point(feature.center).expand(feature.outer_diameter / 2.0),
+                        diameter_mm,
+                        bbox: BBox::from_point(feature.center).expand(diameter_mm / 2.0),
                         layer: layer_ref(layer_name, source_layer.layer_function, None),
                         drill_span: drill_span(
                             feature.intent.span,
@@ -933,7 +935,11 @@ fn collect_drilled(
                         block(Pools::SLOTS, format!("{at} has no measurable outline"));
                         continue;
                     };
-                    let width = match slot_width(feature.outer_diameter, width_disk.width) {
+                    let stated = feature
+                        .shape
+                        .and_then(SimpleShape::slot_width)
+                        .filter(|width| *width > 0.0 && width.is_finite());
+                    let width = match slot_width(stated, width_disk.width) {
                         Ok(width) => width,
                         Err(error) => {
                             block(Pools::SLOTS, format!("{at} {error}"));
@@ -952,9 +958,7 @@ fn collect_drilled(
                         plating: feature.intent.plating,
                         width,
                         width_disk,
-                        nominal_width_mm: (feature.outer_diameter > 0.0
-                            && feature.outer_diameter.is_finite())
-                        .then_some(feature.outer_diameter),
+                        nominal_width_mm: stated,
                         outline,
                         native_outline: contours,
                         provenance: feature_provenance(imported, layer_name, feature),
@@ -996,10 +1000,10 @@ fn collect_drilled(
 /// otherwise the outline's measured minimum width. A stated width is exact,
 /// and the outline must agree with it within the measurement's uncertainty;
 /// a file that states one width and draws another is inconsistent.
-fn slot_width(stated_mm: f64, measured: Distance) -> Result<Distance> {
-    if !(stated_mm > 0.0 && stated_mm.is_finite()) {
+fn slot_width(stated_mm: Option<f64>, measured: Distance) -> Result<Distance> {
+    let Some(stated_mm) = stated_mm else {
         return Ok(measured);
-    }
+    };
     if (measured.mm - stated_mm).abs() > measured.uncertainty_mm {
         bail!(
             "states width {stated_mm:.6} mm but its outline measures {:.6} mm",
@@ -1942,6 +1946,6 @@ mod tests {
             .unwrap()
             .1
             .remove(0);
-        assert!(slot_width(0.9, oval.width).is_err());
+        assert!(slot_width(Some(0.9), oval.width).is_err());
     }
 }

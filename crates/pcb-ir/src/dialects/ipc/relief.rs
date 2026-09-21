@@ -232,13 +232,12 @@ pub fn vscore_feature_lines_for<Symbol: PartialEq, LayerFunction>(
                 for contour in doc.arena.contours(path.contours) {
                     append_contour_line_segments(doc.arena.cmds(*contour), &mut feature_lines);
                 }
-                let scale = placement.m00.hypot(placement.m10);
+                let width = path.paint.stroke().map_or(0.0, |stroke| stroke.width)
+                    * placement.m00.hypot(placement.m10);
                 for line in &mut feature_lines[line_start..] {
                     line.start = placement.transform_point(line.start);
                     line.end = placement.transform_point(line.end);
-                    if feature.stroke_width > 0.0 {
-                        line.width = feature.stroke_width * scale;
-                    }
+                    line.width = width;
                 }
             }
         }
@@ -793,7 +792,6 @@ mod tests {
         let mut feature = Feature::new(FeatureKind::Trace, Polarity::Dark);
         feature.paths = Span::single(path);
         feature.set = Some(0);
-        feature.stroke_width = 0.1;
         feature.intent.domain = FeatureDomain::VCut;
         feature.intent.role = FeatureRole::ArraySeparation;
         feature.placement_group = Some(0);
