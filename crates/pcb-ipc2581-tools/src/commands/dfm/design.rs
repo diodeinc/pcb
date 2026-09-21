@@ -137,20 +137,87 @@ struct Source<'a> {
     scope: ArtworkScope,
     root: LayoutOccurrenceId,
     resolution: Resolution,
-    /// The farthest any rule measures from a conductor to another subject.
-    conductor_reach_mm: f64,
-    /// The farthest a soldermask web rule reads from the walls of a web.
-    web_reach_mm: f64,
+    /// The largest limit of any rule measuring from a conductor to another
+    /// subject.
+    conductor_limit_mm: f64,
+    /// The farthest a soldermask web rule reads the image from a web's walls.
+    web_context_mm: f64,
 }
 
 impl Source<'_> {
+    /// How far apart the feature bounds of two subjects can lie when their
+    /// images lie within `limit_mm`: an image stays within the accuracy
+    /// budget of the features that paint it.
+    fn bounds_reach_mm(&self, limit_mm: f64) -> f64 {
+        limit_mm + 2.0 * self.resolution.accuracy.max_error_mm()
+    }
+
+    fn conductor_reach_mm(&self) -> f64 {
+        self.bounds_reach_mm(self.conductor_limit_mm)
+    }
+
+    fn web_reach_mm(&self) -> f64 {
+        self.bounds_reach_mm(self.web_context_mm)
+    }
+
     /// One layer of the Step and everything it places, in the Step's frame.
     fn layer(&self, layer_index: usize) -> Result<GeometryDocument> {
-        self.imported.materialize_occurrence_layer(
-            LayerId(layer_index as u32),
-            self.scope,
-            self.root,
-        )
+        self.layer_of(layer_index, &|_| true)
+    }
+
+    /// One layer of the Step alone.
+    fn own_layer(&self, layer_index: usize) -> Result<GeometryDocument> {
+        self.layer_of(layer_index, &|occurrence| occurrence == self.root)
+    }
+
+    fn layer_of(
+        &self,
+        layer_index: usize,
+        held: &dyn Fn(LayoutOccurrenceId) -> bool,
+    ) -> Result<GeometryDocument> {
+        let layer = LayerId(layer_index as u32);
+        self.imported
+            .materialize_occurrence_layer(layer, self.scope, self.root, held)
+    }
+
+    /// One layer of the Step and of the occurrences it places that hold
+    /// anything within `reach_mm` of something outside their placement: of
+    /// the Step's own features, of `others`, or of another placement. What
+    /// an occurrence left out holds lies beyond that reach of all of those.
+    fn layer_within(
+        &self,
+        layer_index: usize,
+        reach_mm: f64,
+        others: &[(BBox, Option<u32>)],
+    ) -> Result<GeometryDocument> {
+        let own = self.own_layer(layer_index)?;
+        let placed = self
+            .imported
+            .occurrence_layer_bounds(LayerId(layer_index as u32), self.scope, self.root)?
+            .into_iter()
+            .filter_map(|(occurrence, bounds)| match occurrence {
+                LayoutOccurrenceId::Instance(instance) if occurrence != self.root => {
+                    Some((occurrence, bounds, self.branch(Some(instance))))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let outside = Outside::of(
+            (own.features.iter().map(|feature| (feature.bbox, None)))
+                .chain(others.iter().copied())
+                .chain(placed.iter().map(|&(_, bounds, branch)| (bounds, branch))),
+        );
+        let held = placed
+            .into_iter()
+            .filter(|&(_, bounds, branch)| outside.reaches(bounds, branch, reach_mm))
+            .map(|(occurrence, ..)| occurrence)
+            .collect::<HashSet<_>>();
+        if held.is_empty() {
+            return Ok(own);
+        }
+        self.layer_of(layer_index, &|occurrence| {
+            occurrence == self.root || held.contains(&occurrence)
+        })
     }
 
     /// The occurrence holding a feature, as the frame names it: `None` for
@@ -197,7 +264,7 @@ impl<'a> Design<'a> {
                 None => steps.push((step, vec![occurrence])),
             }
         }
-        let conductor_reach_mm = rules
+        let conductor_limit_mm = rules
             .iter()
             .filter(|rule| {
                 matches!(
@@ -209,7 +276,7 @@ impl<'a> Design<'a> {
             })
             .map(|rule| rule.limit.length().millimeters())
             .fold(0.0, f64::max);
-        let web_reach_mm = rules
+        let web_context_mm = rules
             .iter()
             .filter(|rule| rule.kind == rules::RuleKind::SoldermaskWeb)
             .map(|rule| thin_gaps_reach_mm(rule.limit.length().millimeters(), resolution))
@@ -222,8 +289,8 @@ impl<'a> Design<'a> {
                     scope,
                     root: placements[0],
                     resolution,
-                    conductor_reach_mm,
-                    web_reach_mm,
+                    conductor_limit_mm,
+                    web_context_mm,
                 };
                 Self::extract(source, step, placements, wanted)
             })
@@ -1593,7 +1660,7 @@ fn carried_conductors(
         (feature.bbox, source.branch(id.instance()))
     });
     let outside = Outside::of(copper.chain(drilled.iter().copied()));
-    let reach_mm = source.conductor_reach_mm + 2.0 * source.resolution.accuracy.max_error_mm();
+    let reach_mm = source.conductor_reach_mm();
     conductors
         .into_iter()
         .filter(|&(id, bounds)| outside.reaches(bounds, source.branch(id.instance()), reach_mm))
@@ -1791,7 +1858,7 @@ fn collect_copper_layers(
         .map(|(ordinal, (layer_index, layer))| {
             let name = imported.resolve(layer.name);
             let mut document = source
-                .layer(layer_index)
+                .layer_within(layer_index, source.conductor_reach_mm(), drilled)
                 .with_context(|| format!("failed to extract IPC-2581 copper layer '{name}'"))?;
             pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
             let mut lands = Vec::new();
@@ -2002,7 +2069,7 @@ fn webbed_openings(source: Source<'_>, document: &GeometryDocument) -> BBoxIndex
             placements.entry(branch).or_default().push(bbox);
         }
     }
-    let reach_mm = source.web_reach_mm + 2.0 * source.resolution.accuracy.max_error_mm();
+    let reach_mm = source.web_reach_mm();
     let webbed = placements.into_iter().flat_map(|(branch, openings)| {
         let mut held = openings
             .iter()
@@ -2052,7 +2119,7 @@ fn collect_mask_layers(source: Source<'_>) -> Result<Vec<MaskLayer>> {
         .map(|(layer_index, layer)| {
             let name = imported.resolve(layer.name);
             let mut document = source
-                .layer(layer_index)
+                .layer_within(layer_index, source.web_reach_mm(), &[])
                 .with_context(|| format!("failed to extract soldermask layer '{name}'"))?;
             let webbed = webbed_openings(source, &document);
             pcb_ir::dialects::ipc::process::retain_features(&mut document, |feature| {
@@ -2154,13 +2221,10 @@ fn collect_scores(source: Source<'_>) -> Result<Vec<Score>> {
                 )
             })
     {
-        let document = source.layer(layer_index)?;
+        let document = source.own_layer(layer_index)?;
         scores.extend(
             pcb_ir::dialects::ipc::relief::vscore_feature_lines_for(&document)
                 .into_iter()
-                .filter(|(feature_index, _)| {
-                    source.placed(&document.features[*feature_index]).is_none()
-                })
                 .map(|(feature_index, line)| Score {
                     start: line.start,
                     end: line.end,
@@ -2307,8 +2371,8 @@ mod tests {
             scope,
             root: LayoutOccurrenceId::Root,
             resolution: Resolution::default(),
-            conductor_reach_mm: 0.0,
-            web_reach_mm: 0.0,
+            conductor_limit_mm: 0.0,
+            web_context_mm: 0.0,
         }
     }
 
@@ -2365,7 +2429,7 @@ mod tests {
             .unwrap();
         // The repeats stand 6 mm apart: within this reach, all of both is held.
         let source = Source {
-            web_reach_mm: 10.0,
+            web_context_mm: 10.0,
             ..root(&imported, ArtworkScope::ArrayFlattened)
         };
         let layer = collect_mask_layers(source).unwrap().remove(0);
@@ -2423,7 +2487,7 @@ mod tests {
         );
         let imported = import_design(&Ipc2581::parse(&xml).unwrap(), resolution).unwrap();
         let source = Source {
-            web_reach_mm: thin_gaps_reach_mm(0.1, resolution),
+            web_context_mm: thin_gaps_reach_mm(0.1, resolution),
             ..root(&imported, ArtworkScope::ArrayFlattened)
         };
         let layer = collect_mask_layers(source).unwrap().remove(0);
@@ -2446,17 +2510,15 @@ mod tests {
         assert_eq!((layer.owners.len(), owned(0), owned(1)), (2, 2, 1));
     }
 
-    #[test]
-    fn a_design_holds_the_placed_conductors_within_reach_and_counts_them_all() {
-        let resolution = Resolution::default();
+    /// Three 10 mm boards placed `pitch` apart, whose net EDGE reaches
+    /// 0.02 mm from both side edges and whose net INNER stays 4 mm inside.
+    fn edge_panel(pitch: f64) -> String {
         let rectangle = |x0: f64, x1: f64| {
             format!(
                 r#"<Features><Contour><Polygon><PolyBegin x="{x0}" y="2"/><PolyStepSegment x="{x1}" y="2"/><PolyStepSegment x="{x1}" y="8"/><PolyStepSegment x="{x0}" y="8"/><PolyStepSegment x="{x0}" y="2"/></Polygon></Contour></Features>"#
             )
         };
-        // EDGE reaches 0.02 mm from both side edges of a 10 mm board and
-        // INNER stays 4 mm inside, on boards placed edge to edge.
-        let xml = format!(
+        format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/><LayerRef name="TOP"/></Content>
@@ -2470,15 +2532,47 @@ mod tests {
       </LayerFeature>
     </Step>
     <Step name="panel" type="PALLET"><Datum x="0" y="0"/>
-      <StepRepeat stepRef="board" x="0" y="0" nx="3" ny="1" dx="10" dy="0" angle="0" mirror="false"/>
+      <StepRepeat stepRef="board" x="0" y="0" nx="3" ny="1" dx="{pitch}" dy="0" angle="0" mirror="false"/>
     </Step>
   </CadData></Ecad>
 </IPC-2581>"#,
             rectangle(0.02, 3.0),
             rectangle(4.0, 6.0),
             rectangle(7.0, 9.98),
+        )
+    }
+
+    #[test]
+    fn a_layer_leaves_out_the_occurrences_beyond_reach_of_all_outside_them() {
+        let resolution = Resolution::default();
+        let imported =
+            import_design(&Ipc2581::parse(&edge_panel(12.0)).unwrap(), resolution).unwrap();
+        let source = root(&imported, ArtworkScope::ArrayFlattened);
+        let top = imported.layer_id("TOP").unwrap().0 as usize;
+        let held = |reach_mm: f64, others: &[(BBox, Option<u32>)]| {
+            let document = source.layer_within(top, reach_mm, others).unwrap();
+            let features = document.features.iter();
+            features
+                .map(|feature| feature.source_instance.unwrap())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        // The boards' copper stands 2.04 mm apart.
+        assert!(held(2.0, &[]).is_empty());
+        assert_eq!(held(2.1, &[]).into_iter().collect::<Vec<_>>(), [0, 1, 2]);
+        // Something of the panel's own 0.07 mm past the last board's copper.
+        let own = BBox::new(Point::new(34.05, 4.0), Point::new(35.0, 5.0));
+        assert_eq!(
+            held(0.1, &[(own, None)]).into_iter().collect::<Vec<_>>(),
+            [2]
         );
-        let imported = import_design(&Ipc2581::parse(&xml).unwrap(), resolution).unwrap();
+        assert!(held(0.05, &[(own, None)]).is_empty());
+    }
+
+    #[test]
+    fn a_design_holds_the_placed_conductors_within_reach_and_counts_them_all() {
+        let resolution = Resolution::default();
+        let imported =
+            import_design(&Ipc2581::parse(&edge_panel(10.0)).unwrap(), resolution).unwrap();
         let frames = |limit: &str| {
             let pdk = format!(
                 "schema_version = 2\ndefault_profile = \"test\"\n[pdk]\nid = \"held\"\nname = \"Held\"\nrevision = \"1\"\n[profiles.test]\nname = \"Test\"\n[[rules.copper.clearance]]\nid = \"copper\"\nlimit = {{ minimum = \"{limit}\" }}\n"
