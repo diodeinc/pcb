@@ -2971,7 +2971,7 @@ fn extract_trace(
     if trace.points.is_empty() {
         return None;
     }
-    let line_desc = resolve_line_desc(context, doc, "trace", trace.line_desc_ref, None)?;
+    let line_desc = require_line_desc(context, doc, "trace", trace.line_desc_ref, None)?;
     Some(push_stroked_trace(
         doc,
         StrokedFeatureStyle::new(net, polarity, source, line_desc),
@@ -3056,10 +3056,10 @@ fn extract_arc(
     ))
 }
 
-/// The line description a stroke names: the dictionary entry behind its
-/// `LineDescRef`, else its inline `LineDesc`. Warns and returns `None` when
-/// neither yields one, so the caller leaves the stroke out rather than invent
-/// a width.
+/// The line description an outline names: the dictionary entry behind its
+/// `LineDescRef`, else its inline `LineDesc`. A reference the dictionary
+/// lacks is reported; naming none is legitimate for a hollow outline, which
+/// then has nothing to draw (KiCad writes zero-width outlines that way).
 fn resolve_line_desc(
     context: &ExtractContext<'_>,
     doc: &mut GeometryDocument,
@@ -3067,20 +3067,33 @@ fn resolve_line_desc(
     reference: Option<Symbol>,
     inline: Option<ipc2581::types::LineDesc>,
 ) -> Option<ipc2581::types::LineDesc> {
-    let resolved = match reference {
-        Some(reference) => context.line_descs.get(&reference).copied(),
-        None => inline,
+    let Some(reference) = reference else {
+        return inline;
     };
+    let resolved = context.line_descs.get(&reference).copied();
     if resolved.is_none() {
-        doc.warn(match reference {
-            Some(reference) => format!(
-                "Not drawing {what}: LineDesc '{}' is missing",
-                context.strings.resolve(reference)
-            ),
-            None => format!("Not drawing {what}: it has no line description"),
-        });
+        doc.warn(format!(
+            "Not drawing {what}: LineDesc '{}' is missing",
+            context.strings.resolve(reference)
+        ));
     }
     resolved
+}
+
+/// [`resolve_line_desc`] for geometry that is nothing but its stroke, where
+/// naming no description leaves no width to draw and is reported rather than
+/// invented.
+fn require_line_desc(
+    context: &ExtractContext<'_>,
+    doc: &mut GeometryDocument,
+    what: &str,
+    reference: Option<Symbol>,
+    inline: Option<ipc2581::types::LineDesc>,
+) -> Option<ipc2581::types::LineDesc> {
+    if reference.is_none() && inline.is_none() {
+        doc.warn(format!("Not drawing {what}: it has no line description"));
+    }
+    resolve_line_desc(context, doc, what, reference, inline)
 }
 
 /// A stroked set feature's inline description, present when it states a width.
@@ -3747,7 +3760,12 @@ fn lower_user_shape(
     });
     let hollow = fill_desc.is_some_and(|fill| fill.fill_property == FillProperty::Hollow);
     if strokes || hollow {
-        let line_desc = resolve_line_desc(
+        let resolve = if strokes {
+            require_line_desc
+        } else {
+            resolve_line_desc
+        };
+        let line_desc = resolve(
             context,
             doc,
             "user shape outline",
@@ -3957,19 +3975,32 @@ fn push_contour_path(
 }
 
 /// An outline with its cutouts as one even-odd path; returns the path index.
+///
+/// Even-odd imaging equals outline minus cutouts only while every cutout
+/// stays inside the outline and clear of its siblings. Overlapping siblings
+/// take a boolean to find; a cutout leaving the outline's bounds is certain
+/// and paints outside it, so that much is reported.
 fn push_outline_path(
     doc: &mut GeometryDocument,
     outline: &ipc2581::types::Polygon,
     cutouts: &[ipc2581::types::Polygon],
     transform: Affine2,
 ) -> u32 {
+    let contours = std::iter::once(outline)
+        .chain(cutouts)
+        .map(|polygon| polygon_contour(polygon).transformed(transform))
+        .collect::<Vec<_>>();
+    let bounds = contours[0].bbox.expand(tol::REGION_MM);
+    if contours[1..].iter().any(|cutout| {
+        !bounds.contains_point(cutout.bbox.min) || !bounds.contains_point(cutout.bbox.max)
+    }) {
+        doc.warn("A Contour cutout reaches outside its outline and paints there");
+    }
     doc.push_path(
         Paint::Fill {
             rule: FillRule::EvenOdd,
         },
-        std::iter::once(outline)
-            .chain(cutouts)
-            .map(|polygon| polygon_contour(polygon).transformed(transform)),
+        contours,
     )
 }
 
@@ -4972,6 +5003,21 @@ mod tests {
         assert_eq!(feature.bucket, FeatureBucket::Trace);
         assert_eq!(feature.paths.count, 1);
         assert!(doc.arena.paths[feature.paths.start as usize].is_stroked());
+    }
+
+    #[test]
+    fn contour_cutout_outside_its_outline_is_reported() {
+        let mut doc = GeometryDocument::new();
+        let mut contour = ipc2581::types::Contour {
+            polygon: rect_polygon(0.0, 0.0, 10.0, 10.0),
+            cutouts: vec![rect_polygon(2.0, 2.0, 4.0, 4.0)],
+        };
+        push_contour_path(&mut doc, &contour, Affine2::identity());
+        assert!(doc.diagnostics.is_empty());
+
+        contour.cutouts.push(rect_polygon(8.0, 8.0, 12.0, 9.0));
+        push_contour_path(&mut doc, &contour, Affine2::identity());
+        assert_eq!(doc.diagnostics.len(), 1);
     }
 
     #[test]
