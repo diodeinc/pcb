@@ -294,6 +294,14 @@ lowest Step that holds all of its subjects:
   line crosses alike. A board profile is measured against the copper of its
   own Step.
 
+A frame holds of what its Step places only what such a measurement can reach:
+placed copper within the largest conductor clearance limit of something
+outside its placement, and placed mask openings within the web check's reach
+of something outside theirs, together with the openings that chain to them.
+Bounds decide this conservatively, so nothing a rule could measure is left
+out; everything else a Step places is measured in its own frame and only
+counted here.
+
 The same evaluators therefore run on a lone board, a board array or a
 fabrication panel without a second DFM code path: a lone board is a layout of
 one Step placed once. Rules are rigid-motion invariant, so a Step's findings
