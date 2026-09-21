@@ -1,11 +1,12 @@
 //! Lower parsed Gerber into a pcb-ir artwork document.
 //!
-//! Standard-aperture flashes and aperture-block instances are preserved so
-//! round trips keep both pad identity and reusable hierarchy. Macro flashes
-//! and shaped draws are flattened only where pcb-ir has no native equivalent.
+//! Flashes stay flashes, of a standard aperture or of a macro composed once
+//! into a contour aperture, and aperture-block instances stay instances, so
+//! round trips keep both pad identity and reusable hierarchy. Only draws
+//! through a shaped aperture are flattened: pcb-ir has no native equivalent.
 
 use pcb_ir::geom::{AccuracyError, GeometryAccuracy, Resolution};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::GerberX2;
 use crate::types as gerber;
@@ -62,38 +63,125 @@ pub fn extract_document(
         bbox: BBox::empty(),
         meta: file_function,
     });
-    let apertures = gerber
-        .aperture_definitions()
-        .iter()
-        .map(|aperture| (aperture.code, aperture))
-        .collect::<HashMap<_, _>>();
-    let mut blocks = HashMap::<i32, u32>::new();
+    let mut tables = Tables {
+        definitions: gerber
+            .aperture_definitions()
+            .iter()
+            .map(|aperture| (aperture.code, aperture))
+            .collect(),
+        flashes: flash_apertures(gerber, &mut doc, accuracy)?,
+        blocks: HashMap::new(),
+        accuracy,
+    };
     for definition in gerber.aperture_definitions() {
         let gerber::ApertureTemplate::Block { objects } = &definition.template else {
             continue;
         };
         let block = doc.push_block();
-        extract_objects(
-            &mut doc,
-            ArtworkTarget::Block(block),
-            objects,
-            &apertures,
-            &blocks,
-            accuracy,
-        )?;
-        blocks.insert(definition.code, block);
+        extract_objects(&mut doc, ArtworkTarget::Block(block), objects, &tables)?;
+        tables.blocks.insert(definition.code, block);
     }
     extract_objects(
         &mut doc,
         ArtworkTarget::Layer(layer),
         gerber.objects(),
-        &apertures,
-        &blocks,
-        accuracy,
+        &tables,
     )?;
 
     artwork::normalize_bounds(&mut doc);
     Ok(doc)
+}
+
+/// Per-file lookups shared by every extracted object.
+struct Tables<'a> {
+    definitions: HashMap<i32, &'a gerber::ApertureDefinition>,
+    /// The artwork aperture of every flashed standard or macro aperture.
+    flashes: HashMap<i32, u32>,
+    /// The artwork block of every block aperture defined so far.
+    blocks: HashMap<i32, u32>,
+    accuracy: GeometryAccuracy,
+}
+
+/// Every object of the file, inside block apertures or not.
+fn all_objects(gerber: &GerberX2) -> impl Iterator<Item = &gerber::GraphicalObject> {
+    gerber
+        .aperture_definitions()
+        .iter()
+        .filter_map(|definition| match &definition.template {
+            gerber::ApertureTemplate::Block { objects } => Some(objects),
+            _ => None,
+        })
+        .flatten()
+        .chain(gerber.objects())
+}
+
+/// Define the artwork aperture of every standard or macro aperture the file
+/// flashes, so each macro is composed once however often it is flashed.
+fn flash_apertures(
+    gerber: &GerberX2,
+    doc: &mut GerberArtworkDocument,
+    accuracy: GeometryAccuracy,
+) -> std::result::Result<HashMap<i32, u32>, AccuracyError> {
+    let flashed = all_objects(gerber)
+        .filter_map(|object| match object.kind {
+            gerber::ObjectKind::Flash { aperture, .. } => Some(aperture),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    // A macro is composed in aperture space, so its budget shrinks by the
+    // largest scale a flash can image it under: `%LS`, compounded once
+    // through a block aperture.
+    let max_scale = all_objects(gerber)
+        .map(|object| object.scaling.abs())
+        .fold(1.0, f64::max);
+    let local = GeometryAccuracy::new(accuracy.max_error_mm() / (max_scale * max_scale))?;
+    let mut apertures = HashMap::new();
+    for definition in gerber
+        .aperture_definitions()
+        .iter()
+        .filter(|definition| flashed.contains(&definition.code))
+    {
+        let aperture = match (
+            standard_aperture(&definition.template),
+            &definition.geometry,
+        ) {
+            (Some(standard), _) => Some(standard),
+            (None, Some(geometry)) => macro_aperture(geometry, local)?,
+            (None, None) => None,
+        };
+        if let Some(aperture) = aperture {
+            apertures.insert(definition.code, doc.push_aperture(aperture));
+        }
+    }
+    Ok(apertures)
+}
+
+/// Compose a macro's primitives into one contour aperture. An exposure-off
+/// primitive erases only what the macro imaged before it, never the layer
+/// under a flash, so the composition is the aperture's whole image.
+fn macro_aperture(
+    geometry: &gerber::ApertureGeometry,
+    accuracy: GeometryAccuracy,
+) -> std::result::Result<Option<Aperture>, AccuracyError> {
+    let paths = aperture_paths(geometry, Affine2::IDENTITY);
+    let contours = match paths.as_slice() {
+        [path] if path.polarity == Polarity::Dark => path.contours.clone(),
+        _ => compose_paths(paths, accuracy)?,
+    };
+    let uncertainty_mm = contours
+        .iter()
+        .map(|contour| contour.uncertainty_mm)
+        .fold(0.0, f64::max);
+    let cmds = contours
+        .into_iter()
+        .flat_map(|contour| contour.cmds)
+        .collect::<Vec<_>>();
+    Ok((!cmds.is_empty()).then(|| {
+        Aperture::solid(ApertureShape::Contour {
+            outline: ContourBuf::new(cmds).with_uncertainty(uncertainty_mm),
+            fill_rule: FillRule::NonZero,
+        })
+    }))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -115,20 +203,10 @@ fn extract_objects(
     doc: &mut GerberArtworkDocument,
     target: ArtworkTarget,
     objects: &[gerber::GraphicalObject],
-    apertures: &HashMap<i32, &gerber::ApertureDefinition>,
-    blocks: &HashMap<i32, u32>,
-    accuracy: GeometryAccuracy,
+    tables: &Tables<'_>,
 ) -> std::result::Result<(), AccuracyError> {
     for (object_index, object) in objects.iter().enumerate() {
-        extract_object(
-            doc,
-            target,
-            object_index,
-            object,
-            apertures,
-            blocks,
-            accuracy,
-        )?;
+        extract_object(doc, target, object_index, object, tables)?;
     }
     Ok(())
 }
@@ -138,59 +216,40 @@ fn extract_object(
     target: ArtworkTarget,
     object_index: usize,
     object: &gerber::GraphicalObject,
-    apertures: &HashMap<i32, &gerber::ApertureDefinition>,
-    blocks: &HashMap<i32, u32>,
-    accuracy: GeometryAccuracy,
+    tables: &Tables<'_>,
 ) -> std::result::Result<(), AccuracyError> {
+    let apertures = &tables.definitions;
+    let accuracy = tables.accuracy;
     match &object.kind {
         gerber::ObjectKind::Flash { at, aperture } => {
-            let Some(definition) = apertures.get(aperture) else {
+            if !apertures.contains_key(aperture) {
                 doc.warn(format!("flash references undefined aperture D{aperture}"));
                 return Ok(());
-            };
+            }
             let transform = object_transform(object, point(*at));
             let mut meta = meta_from_object(object, object_index, SourceKind::Flash);
             meta.aperture = Some(*aperture);
-
-            if let Some(&block) = blocks.get(aperture) {
-                target.push(
-                    doc,
-                    Object {
-                        polarity: meta.polarity,
-                        order: Default::default(),
-                        geometry: Geometry::Instance { block, transform },
-                        bbox: BBox::empty(),
-                        meta,
-                    },
-                );
-            } else if let Some(standard) = standard_aperture(&definition.template) {
-                let aperture_id = doc.push_aperture(standard);
-                target.push(
-                    doc,
-                    Object {
-                        polarity: meta.polarity,
-                        order: Default::default(),
-                        geometry: Geometry::Flash {
-                            aperture: aperture_id,
-                            transform,
-                        },
-                        bbox: BBox::empty(),
-                        meta,
-                    },
-                );
-            } else if let Some(geometry) = &definition.geometry {
-                push_flattened_paths(
-                    doc,
-                    target,
-                    meta,
-                    aperture_paths(geometry, transform),
-                    accuracy,
-                )?;
+            let geometry = if let Some(&block) = tables.blocks.get(aperture) {
+                Geometry::Instance { block, transform }
+            } else if let Some(&aperture) = tables.flashes.get(aperture) {
+                Geometry::Flash {
+                    aperture,
+                    transform,
+                }
             } else {
-                doc.warn(format!(
-                    "flash aperture D{aperture} has no lowered geometry"
-                ));
-            }
+                // The aperture images nothing.
+                return Ok(());
+            };
+            target.push(
+                doc,
+                Object {
+                    polarity: meta.polarity,
+                    order: Default::default(),
+                    geometry,
+                    bbox: BBox::empty(),
+                    meta,
+                },
+            );
         }
         gerber::ObjectKind::Draw {
             start,
@@ -429,19 +488,7 @@ fn push_flattened_paths(
         return Ok(());
     }
 
-    let resolution = Resolution::new(0.0, accuracy);
-    let mut composer = PaintComposer::new(resolution);
-    for extracted in paths {
-        composer.push(
-            extracted.polarity,
-            region::ContourSet::from_contours(
-                &extracted.contours,
-                extracted.paint.fill_rule().unwrap_or(FillRule::NonZero),
-                resolution,
-            )?,
-        );
-    }
-    let contours = composer.finish()?.to_contours();
+    let contours = compose_paths(paths, accuracy)?;
     if contours.is_empty() {
         return Ok(());
     }
@@ -464,6 +511,26 @@ fn push_flattened_paths(
     );
 
     Ok(())
+}
+
+/// Paint the pieces in order into one non-zero filled image.
+fn compose_paths(
+    paths: Vec<ExtractedPath>,
+    accuracy: GeometryAccuracy,
+) -> std::result::Result<Vec<ContourBuf>, AccuracyError> {
+    let resolution = Resolution::new(0.0, accuracy);
+    let mut composer = PaintComposer::new(resolution);
+    for extracted in paths {
+        composer.push(
+            extracted.polarity,
+            region::ContourSet::from_contours(
+                &extracted.contours,
+                extracted.paint.fill_rule().unwrap_or(FillRule::NonZero),
+                resolution,
+            )?,
+        );
+    }
+    Ok(composer.finish()?.to_contours())
 }
 
 fn aperture_paths(geometry: &gerber::ApertureGeometry, transform: Affine2) -> Vec<ExtractedPath> {

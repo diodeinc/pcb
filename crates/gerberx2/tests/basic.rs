@@ -694,6 +694,35 @@ fn extraction_preserves_ordered_aperture_path_polarity() {
 }
 
 #[test]
+fn macro_flashes_share_one_composed_aperture() {
+    let accuracy = GeometryAccuracy::default();
+    // KiCad's rounded rectangle: an outline, four corner circles and four
+    // edge lines, minus an exposure-off hole that only the macro may see.
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%AMRoundRect*\n4,1,4,0.4,-0.5,0.4,0.5,-0.4,0.5,-0.4,-0.5,0.4,-0.5,0*\n1,1,0.2,0.4,0.5*\n1,1,0.2,-0.4,0.5*\n1,1,0.2,-0.4,-0.5*\n1,1,0.2,0.4,-0.5*\n20,1,0.2,0.4,0.5,-0.4,0.5,0*\n20,1,0.2,-0.4,0.5,-0.4,-0.5,0*\n20,1,0.2,-0.4,-0.5,0.4,-0.5,0*\n20,1,0.2,0.4,-0.5,0.4,0.5,0*\n21,0,0.2,0.2,0,0,0*\n%\n%ADD10R,4X4*%\n%ADD11RoundRect*%\nD10*\nX1000000Y0D03*\nD11*\nX0Y0D03*\n%LR90*%\nX2000000Y0D03*\n%LPC*%\n%LR0*%\nX1000000Y1000000D03*\nM02*\n",
+    )
+    .unwrap();
+
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+    assert_eq!(geometry.apertures.len(), 2);
+    assert!(geometry.objects.iter().all(|object| matches!(
+        object.geometry,
+        pcb_ir::dialects::artwork::Geometry::Flash { .. }
+    )));
+    // The dark flashes lie inside the square; the clear one removes its own
+    // image but not the square showing through its hole.
+    let pad = 1.0 * 1.2 - (4.0 - std::f64::consts::PI) * 0.01 - 0.04;
+    let area = pcb_ir::dialects::artwork::compare::summarize(&geometry, Resolution::default())
+        .unwrap()
+        .area_mm2;
+    assert!((area - (16.0 - pad)).abs() < 0.001, "area was {area}");
+
+    let normalized = gerberx2::from_artwork::normalize_layer(&gerber, accuracy).unwrap();
+    assert_eq!(normalized.matches("D03*").count(), 4);
+    assert!(!normalized.contains("G36*"));
+}
+
+#[test]
 fn extraction_applies_scaling_to_circular_draw_width() {
     let accuracy = GeometryAccuracy::default();
 
