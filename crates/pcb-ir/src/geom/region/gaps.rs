@@ -1,5 +1,6 @@
 //! Two-sided morphology residues, local widths, and void-gap regularization.
 
+use super::simplification::integer_shapes_on_grid;
 use super::widths::{ContactIndex, WidthAxis};
 use super::{
     ContourSet, PreparedRegion, Ring, horizontal_crossing, ring_edges, ring_signed_area,
@@ -18,6 +19,7 @@ use boostvoronoi::prelude::{
     VoronoiVisualUtils,
 };
 use boostvoronoi::utils::visual_utils::SimpleAffine;
+use i_overlay::core::overlay::IntOverlayOptions;
 
 /// Result of enforcing a minimum width for every two-sided void gap.
 #[derive(Debug, Clone)]
@@ -874,13 +876,42 @@ fn narrow_void_medial_axis_keep_out(
         return Ok(ContourSet::empty(source.resolution));
     }
     let accuracy = source.budget();
+    // The diagram takes integer segments that meet only at their ends.
+    // Rounding each vertex on its own can swap walls a few nanometres
+    // apart, so the material near the voids is resolved on the diagram's
+    // grid instead, which keeps a vertex at every contact it creates.
+    let walls = ContourSet::from_regularized(
+        integer_shapes_on_grid(
+            source.reaching(narrow_voids.bbox.expand(radius)).rings,
+            FillRule::NonZero,
+            1.0 / VORONOI_COORDINATES_PER_MM,
+            IntOverlayOptions::keep_output_points(),
+        )
+        .into_iter()
+        .flatten()
+        .map(|ring| {
+            let millimetres = |units: i64| units as f64 / VORONOI_COORDINATES_PER_MM;
+            ring.into_iter()
+                .map(|point| [millimetres(point.x), millimetres(point.y)])
+                .collect()
+        })
+        .collect(),
+        source.resolution,
+        source.uncertainty_mm,
+    );
+    // Walls are numbered as every other judgement of incidence numbers
+    // them, so two that meet across a sub-tolerance edge stay adjacent.
+    let walls_segments = source_boundary_segments(&walls);
     let boundary = PreparedRegion::from_segments(
-        source.rings.iter().flat_map(ring_edges).collect(),
+        walls_segments
+            .iter()
+            .map(|wall| (wall.start, wall.end))
+            .collect(),
         source.uncertainty_mm,
     );
     // A closing residual is within the disk radius of its nearest source boundary.
     let void_boundary = narrow_voids.prepare_query();
-    let relevant = narrow_voids
+    let mut relevant = narrow_voids
         .ring_bounds
         .iter()
         .flat_map(|bounds| boundary.segment_ids_meeting(bounds.expand(radius)))
@@ -890,36 +921,21 @@ fn narrow_void_medial_axis_keep_out(
                 .segment_nearest_within(start, end, radius)
                 .is_some()
         })
-        .collect::<std::collections::HashSet<_>>();
-    let mut source_index = 0;
-    let origin = Point::new(source.bbox.min.x, source.bbox.min.y);
-    let mut segments = Vec::<VoronoiLine<i32>>::new();
-    let mut boundary_segments = Vec::new();
-    for (ring_id, ring) in source.rings.iter().enumerate() {
-        for index in 0..ring.len() {
-            let needed = relevant.contains(&source_index);
-            source_index += 1;
-            if !needed {
-                continue;
-            }
-            let [start_x, start_y] = ring[index];
-            let [end_x, end_y] = ring[(index + 1) % ring.len()];
-            if (end_x - start_x).hypot(end_y - start_y) <= source.tolerance() {
-                continue;
-            }
-            let start = quantize_voronoi_point(ring[index], origin)?;
-            let end = quantize_voronoi_point(ring[(index + 1) % ring.len()], origin)?;
-            if start == end {
-                continue;
-            }
-            segments.push(VoronoiLine::new(start, end));
-            boundary_segments.push(BoundarySegment {
-                ring: ring_id,
-                index,
-                ring_len: ring.len(),
-            });
-        }
-    }
+        .collect::<Vec<_>>();
+    relevant.sort_unstable();
+    relevant.dedup();
+    let origin = walls.bbox.min;
+    let (segments, boundary_segments): (Vec<_>, Vec<_>) = relevant
+        .into_iter()
+        .map(|id| &walls_segments[id])
+        .map(|wall| {
+            let start = quantize_voronoi_point(wall.start, origin)?;
+            let end = quantize_voronoi_point(wall.end, origin)?;
+            Ok((VoronoiLine::new(start, end), wall.topology))
+        })
+        .collect::<Result<Vec<_>, GapRegularizationError>>()?
+        .into_iter()
+        .unzip();
 
     let diagram = VoronoiBuilder::<i32>::default()
         .with_segments(segments.iter())
@@ -1032,7 +1048,7 @@ fn boundary_segments_are_incident(left: BoundarySegment, right: BoundarySegment)
 }
 
 fn quantize_voronoi_point(
-    [x, y]: [f64; 2],
+    point: Point,
     origin: Point,
 ) -> Result<VoronoiPoint<i32>, GapRegularizationError> {
     fn coordinate(value: f64, origin: f64) -> Result<i32, GapRegularizationError> {
@@ -1046,8 +1062,8 @@ fn quantize_voronoi_point(
     }
 
     Ok(VoronoiPoint::new(
-        coordinate(x, origin.x)?,
-        coordinate(y, origin.y)?,
+        coordinate(point.x, origin.x)?,
+        coordinate(point.y, origin.y)?,
     ))
 }
 
@@ -1336,6 +1352,58 @@ mod tests {
         assert_eq!(outers, [0, 1]);
         assert_eq!(components, [0, 1]);
         assert!(region.facing_components(0.3, 0.3, 1.0).is_ok());
+    }
+
+    fn notch(corner: &[[f64; 2]]) -> ContourSet {
+        let mut ring = vec![
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [5.4, 10.0],
+            [5.4, 3.0],
+        ];
+        ring.extend_from_slice(corner);
+        ring.extend([[4.6, 10.0], [0.0, 10.0]]);
+        ContourSet::from_rings(vec![ring], FillRule::NonZero, res(tol::REGION_MM)).unwrap()
+    }
+
+    #[test]
+    fn a_sub_tolerance_edge_at_a_corner_leaves_its_walls_incident() {
+        // Debris a quarter of a micron long chamfers one corner at the foot
+        // of the notch. The walls it separates still meet there, so their
+        // bisector is a corner spoke and no part of the medial axis.
+        let keep_out = |region: &ContourSet| {
+            let narrow_voids = region.disk_gap_violations(0.5).unwrap();
+            narrow_void_medial_axis_keep_out(region, &narrow_voids, 0.525).unwrap()
+        };
+        let clean = keep_out(&notch(&[[4.6, 3.0]]));
+        let chamfered = keep_out(&notch(&[[4.6002, 3.0], [4.6, 3.0002]]));
+        assert!(clean.area() > 1.0);
+        assert!(
+            (chamfered.area() - clean.area()).abs() < 1e-3,
+            "{} mm² against {} mm²",
+            chamfered.area(),
+            clean.area()
+        );
+    }
+
+    #[test]
+    fn walls_that_cross_once_rounded_still_have_a_medial_axis() {
+        // The upper wall clears the lower by under a nanometre at x = 6, and
+        // rounding each vertex to the diagram's grid on its own would swap
+        // them there.
+        let lower = vec![
+            [0.0, -1.0],
+            [10.0, -1.0],
+            [10.0, 0.0000151],
+            [0.0, 0.0000049],
+        ];
+        let upper = vec![[2.0, 0.00002], [6.0, 0.0000114], [6.0, 1.0], [2.0, 1.0]];
+        let region =
+            ContourSet::from_rings(vec![lower, upper], FillRule::NonZero, res(0.0)).unwrap();
+        assert_eq!(region.rings.len(), 2);
+        let narrow_voids = region.disk_gap_violations(0.5).unwrap();
+        assert!(narrow_void_medial_axis_keep_out(&region, &narrow_voids, 0.525).is_ok());
     }
 
     #[test]
