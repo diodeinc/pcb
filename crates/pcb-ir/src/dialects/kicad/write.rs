@@ -43,6 +43,34 @@ pub fn write(document: &Document) -> String {
     w.close();
 
     w.open("setup");
+    if let Some(stackup) = &document.setup.stackup {
+        w.open("stackup");
+        for layer in &stackup.layers {
+            w.open_with("layer", &quote(&layer.name));
+            w.line(&format!("(type {})", quote(&layer.kind)));
+            if let Some(color) = &layer.color {
+                w.line(&format!("(color {})", quote(color)));
+            }
+            if let Some(thickness) = layer.thickness {
+                w.line(&format!("(thickness {})", num(thickness)));
+            }
+            if let Some(material) = &layer.material {
+                w.line(&format!("(material {})", quote(material)));
+            }
+            if let Some(epsilon_r) = layer.epsilon_r {
+                w.line(&format!("(epsilon_r {})", num(epsilon_r)));
+            }
+            if let Some(loss_tangent) = layer.loss_tangent {
+                w.line(&format!("(loss_tangent {})", num(loss_tangent)));
+            }
+            w.close();
+        }
+        if let Some(finish) = &stackup.copper_finish {
+            w.line(&format!("(copper_finish {})", quote(finish)));
+        }
+        w.line("(dielectric_constraints no)");
+        w.close();
+    }
     w.line(&format!(
         "(pad_to_mask_clearance {})",
         num(document.setup.pad_to_mask_clearance)

@@ -10,11 +10,12 @@
 //! face at every tested contact, and the plan's nets bound on both the
 //! pogo and its mate land — so the unrouted airwires are exactly the
 //! routing pass's work list. Without a plan (no ICT contacts), GND
-//! lands join the pour and everything else stays un-netted.
+//! lands join the pour and everything else stays un-netted. The
+//! four-layer variant adds two inner layers carrying the same GND pour.
 
 use pcb_ir::dialects::kicad::{
-    At, Document, Footprint, FootprintAttrs, Graphic, Mount, Pad, PadKind, PadShape, Property,
-    Segment, Stroke, UuidGen, Zone, ZoneConnect, ZoneFill,
+    At, Document, Footprint, FootprintAttrs, Graphic, LayerKind, Mount, Pad, PadKind, PadShape,
+    Property, Segment, Setup, Stackup, StackupLayer, Stroke, UuidGen, Zone, ZoneConnect, ZoneFill,
 };
 use pcb_ir::geom::Point;
 
@@ -28,9 +29,43 @@ use crate::pogo::PogoTemplate;
 /// gap left between neighbors.
 const LAND_DIA_MM: f64 = 1.5;
 
+/// Copper layer count of the generated board.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Layers {
+    #[default]
+    Two,
+    /// Two inner GND planes on the stdlib's default 4-layer stackup.
+    Four,
+}
+
+impl std::str::FromStr for Layers {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "2" => Ok(Self::Two),
+            "4" => Ok(Self::Four),
+            _ => Err("expected 2 or 4".into()),
+        }
+    }
+}
+
 /// Build the `.kicad_pcb` source.
-pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>) -> String {
-    let mut doc = Document::two_layer();
+pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>, layers: Layers) -> String {
+    let mut doc = match layers {
+        Layers::Two => Document::two_layer(),
+        Layers::Four => {
+            let stackup = base_4l_stackup();
+            Document {
+                thickness_mm: stackup.layers.iter().filter_map(|l| l.thickness).sum(),
+                setup: Setup {
+                    stackup: Some(stackup),
+                    ..Setup::default()
+                },
+                ..Document::four_layer()
+            }
+        }
+    };
     doc.generator = "pcb-interposer".into();
     let mut uuids = UuidGen::new();
     let gnd = doc.net("GND");
@@ -127,11 +162,17 @@ pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>) -> String {
         }
     }
 
-    for layer in ["F.Cu", "B.Cu"] {
+    let copper: Vec<String> = doc
+        .layers
+        .iter()
+        .filter(|layer| layer.kind != LayerKind::User)
+        .map(|layer| layer.canonical.clone())
+        .collect();
+    for layer in copper {
         doc.zones.push(Zone {
             net: gnd,
             net_name: "GND".into(),
-            layers: vec![layer.into()],
+            layers: vec![layer],
             uuid: uuids.next_uuid(),
             name: None,
             priority: None,
@@ -154,6 +195,30 @@ pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>) -> String {
     }
 
     pcb_ir::dialects::kicad::write(&doc)
+}
+
+/// The stdlib's `BASE_4L_STACKUP` (`lib/std/board_config.zen`): 1.6 mm,
+/// 1 oz outer / 0.5 oz inner copper.
+fn base_4l_stackup() -> Stackup {
+    let prepreg = |index| StackupLayer::dielectric(index, "prepreg", 0.2104, "Prepreg", 4.4, 0.025);
+    Stackup {
+        layers: vec![
+            StackupLayer::technical("F.SilkS", "Top Silk Screen", Some("White"), None),
+            StackupLayer::technical("F.Paste", "Top Solder Paste", None, None),
+            StackupLayer::technical("F.Mask", "Top Solder Mask", Some("Black"), Some(0.01)),
+            StackupLayer::copper("F.Cu", 0.035),
+            prepreg(1),
+            StackupLayer::copper("In1.Cu", 0.0152),
+            StackupLayer::dielectric(2, "core", 1.065, "FR4-Core", 4.6, 0.025),
+            StackupLayer::copper("In2.Cu", 0.0152),
+            prepreg(3),
+            StackupLayer::copper("B.Cu", 0.035),
+            StackupLayer::technical("B.Mask", "Bottom Solder Mask", Some("Black"), Some(0.01)),
+            StackupLayer::technical("B.Paste", "Bottom Solder Paste", None, None),
+            StackupLayer::technical("B.SilkS", "Bottom Silk Screen", Some("White"), None),
+        ],
+        copper_finish: Some("ENIG".into()),
+    }
 }
 
 fn hidden_properties(uuids: &mut UuidGen, reference: &str, top: bool) -> Vec<Property> {

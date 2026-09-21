@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added `pcb ipc interposer --layers 4` for inner GND planes.
+
 ### Changed
 
 - Wait while a sandbox is starting, restoring, or updating, and stop when the API says it is archived or failed.

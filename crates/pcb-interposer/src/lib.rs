@@ -30,14 +30,19 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+pub use emit::Layers;
+
 /// Generate the interposer board for a panel file, returning the
 /// `.kicad_pcb` and `.kicad_pro` sources. When the panel carries ICT
 /// contacts, the board is populated from the fixture plan: pogo pads on
 /// the top face for every tested contact, and nets bound on both ends —
 /// the unrouted airwires are the routing pass's specification.
-pub fn generate(panel_xml: &Path) -> Result<(String, String)> {
+pub fn generate(panel_xml: &Path, layers: Layers) -> Result<(String, String)> {
     let (panel, lands, plan) = build(panel_xml)?;
-    Ok((emit::board(&panel, &lands, plan.as_ref()), emit::project()))
+    Ok((
+        emit::board(&panel, &lands, plan.as_ref(), layers),
+        emit::project(),
+    ))
 }
 
 /// Compute the fixture map for a panel file: which boards one insertion
