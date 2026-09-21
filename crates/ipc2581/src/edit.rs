@@ -35,7 +35,7 @@ pub struct Edit {
 
 impl<'a> Doc<'a> {
     pub fn parse(source: &'a str) -> Result<Self> {
-        let dom = uppsala::parse(source).map_err(|err| Ipc2581Error::XmlParse(err.to_string()))?;
+        let dom = crate::checksum::parse_document(source)?;
         Ok(Self { source, dom })
     }
 
@@ -207,8 +207,10 @@ impl<'a> Doc<'a> {
 ///
 /// Edits are ordered by position; insertions at the same position keep the
 /// order in which they were created and land before any deletion starting
-/// there (so inserting at an element and replacing it compose).
+/// there (so inserting at an element and replacing it compose). A checksum
+/// trailer is dropped because it describes the unedited text.
 pub fn apply(source: &str, mut edits: Vec<Edit>) -> Result<String> {
+    let (source, _) = crate::checksum::split_trailer(source);
     edits.sort_by_key(|edit| (edit.at, edit.delete > 0));
 
     let grows: usize = edits.iter().map(|edit| edit.insert.len()).sum();
@@ -355,6 +357,26 @@ mod tests {
             doc.delete(doc.child(content, "StepRef").unwrap()),
         ];
         assert!(apply(XML, edits).is_err());
+    }
+
+    #[test]
+    fn checksum_trailer_is_accepted_and_dropped() {
+        use base64::Engine as _;
+        use md5::Digest as _;
+
+        let root = &XML[XML.find("<IPC-2581").unwrap()..];
+        let digest = base64::engine::general_purpose::STANDARD.encode(md5::Md5::digest(root));
+        let source = format!("{XML}\n{digest}\n");
+        let doc = Doc::parse(&source).unwrap();
+        let content = doc.child(doc.root().unwrap(), "Content").unwrap();
+
+        let out = apply(&source, vec![doc.delete(content)]).unwrap();
+
+        assert!(out.ends_with("</Ecad>\n</IPC-2581>"));
+        assert!(matches!(
+            Doc::parse(&format!("{XML}\nAAAAAAAAAAAAAAAAAAAAAA==\n")),
+            Err(Ipc2581Error::ChecksumMismatch { .. })
+        ));
     }
 
     #[test]

@@ -10,7 +10,6 @@ pub use pcb_intern::{Interner, Symbol};
 pub use types::*;
 pub use uppsala::XmlWriter;
 
-use checksum::validate_checksum;
 use parse::Parser;
 #[cfg(not(target_family = "wasm"))]
 use std::path::Path;
@@ -66,6 +65,7 @@ pub fn validate(xml: &str) -> Result<()> {
     let validator = IPC_2581C_VALIDATOR
         .as_ref()
         .map_err(|err| Ipc2581Error::SchemaValidation(err.clone()))?;
+    let (xml, _) = checksum::split_trailer(xml);
     let doc = uppsala::parse(xml).map_err(|err| Ipc2581Error::SchemaValidation(err.to_string()))?;
 
     let errors = validator.validate(&doc);
@@ -116,11 +116,8 @@ impl Ipc2581 {
 
     /// Parse IPC-2581 from XML string
     pub fn parse(xml: &str) -> Result<Self> {
-        // Validate checksum if present
-        validate_checksum(xml)?;
-
         // Parse XML with Uppsala's arena-backed DOM.
-        let doc = uppsala::parse(xml).map_err(|err| Ipc2581Error::XmlParse(err.to_string()))?;
+        let doc = checksum::parse_document(xml)?;
 
         // Validate namespace
         let root = doc
@@ -263,6 +260,26 @@ mod tests {
         let doc = result.unwrap();
         assert_eq!(doc.revision(), "C");
         assert_eq!(doc.resolve(doc.content().role_ref), "Owner");
+    }
+
+    #[test]
+    fn parses_checksummed_and_prefixed_documents() {
+        use base64::Engine as _;
+        use md5::Digest as _;
+
+        let plain = r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="ASSEMBLY"/></Content></IPC-2581 >"#;
+        let prefixed = r#"<ipc:IPC-2581 revision="C" xmlns:ipc="http://webstds.ipc.org/2581"><ipc:Content roleRef="Owner"><ipc:FunctionMode mode="ASSEMBLY"/></ipc:Content></ipc:IPC-2581>"#;
+        for root in [plain, prefixed] {
+            let digest = base64::engine::general_purpose::STANDARD.encode(md5::Md5::digest(root));
+            let xml = format!("<?xml version=\"1.0\"?>\n<!--</IPC-2581>-->\n{root}\n{digest}\n");
+
+            let doc = Ipc2581::parse(&xml).expect("checksummed document parses");
+            assert_eq!(doc.content().function_mode.mode, Mode::Assembly);
+            assert!(matches!(
+                Ipc2581::parse(&xml.replace("Owner", "Other")),
+                Err(Ipc2581Error::ChecksumMismatch { .. })
+            ));
+        }
     }
 
     #[test]
