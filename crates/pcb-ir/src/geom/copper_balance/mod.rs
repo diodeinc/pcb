@@ -1724,6 +1724,56 @@ mod tests {
         );
     }
 
+    /// The exact minimiser of the smoothed-density fit is bang-bang, so a
+    /// solve that converges saturates nearly every void at a radius bound in
+    /// stark bands. The field that ships answers a copper gradient with
+    /// graded voids instead.
+    #[test]
+    fn spatial_solver_grades_voids_instead_of_saturating_them() {
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(80.0, 40.0)),
+            res(tol::REGION_MM),
+        );
+        let existing = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(30.0, 40.0)),
+            res(tol::REGION_MM),
+        );
+        let safe = ContourSet::rectangle(
+            BBox::new(Point::new(30.0, 0.0), Point::new(80.0, 40.0)),
+            res(tol::REGION_MM),
+        );
+        let profile = DenseCopperBalanceProfile::V1;
+        let result = generate_spatial_dense_copper_balance(
+            profile,
+            SpatialCopperBalanceRequest {
+                panel_region: &panel,
+                lattice_origin: Point::ZERO,
+                layers: &[SpatialCopperBalanceLayerRequest {
+                    safe_region: &safe,
+                    existing_copper: &existing,
+                    density_domain: &panel,
+                    target_density: 0.75,
+                    stack_weight_mm2: 0.0,
+                }],
+            },
+        )
+        .unwrap()
+        .layers
+        .pop()
+        .unwrap();
+        let at_a_bound = |radius: f64| {
+            (radius - profile.min_void_radius_mm).abs() < 1e-9
+                || (radius - profile.max_void_radius_mm).abs() < 1e-9
+        };
+        let saturated = result
+            .full_voids
+            .iter()
+            .filter(|void| at_a_bound(void.radius_mm))
+            .count() as f64
+            / result.full_voids.len() as f64;
+        assert!(saturated < 0.5, "{saturated} of the voids sit at a bound");
+    }
+
     /// A layer saturated to a solid pour has no lattice and brings no step to
     /// the trade, but the moment it creates is still there to answer: only its
     /// mirror can counterweight, within that layer's own bound.
