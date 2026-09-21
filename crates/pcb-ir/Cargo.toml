@@ -23,7 +23,7 @@ kurbo = { workspace = true }
 libm = { workspace = true }
 rayon = { workspace = true }
 rustc-hash = { workspace = true }
-resvg = { workspace = true }
+tiny-skia = { workspace = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 base64 = { workspace = true }

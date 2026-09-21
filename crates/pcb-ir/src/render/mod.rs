@@ -14,11 +14,13 @@ pub use svg::{artwork_svg, svg, svg_path_data};
 #[cfg(not(target_family = "wasm"))]
 pub use term::{artwork_to_terminal, can_render_to_terminal, to_terminal, write_kitty_png};
 
-use crate::dialects::{artwork, mask};
-use crate::geom::{BBox, Point};
+use crate::dialects::{LayerRole, artwork, mask};
+use crate::geom::path::{PathCmd, PathOp};
+use crate::geom::{AccuracyError, Arc, BBox, EllipticalArc, GeometryAccuracy, Point};
 
 pub(crate) const VIEWBOX_PADDING_MM: f64 = 1.0;
 pub(crate) const DEFAULT_MAX_DIMENSION_PX: u32 = 3200;
+const POINT_EPSILON_MM: f64 = 1e-9;
 
 #[derive(Debug, Clone, Default)]
 pub struct RenderOptions {
@@ -149,4 +151,74 @@ pub(crate) fn pixel_size(bbox: BBox, max_dimension_px: u32) -> (u32, u32) {
         (bbox.width() * scale).ceil().max(1.0) as u32,
         (bbox.height() * scale).ceil().max(1.0) as u32,
     )
+}
+
+/// The budget shared geometry has in its own frame: what the largest scale
+/// it is placed at leaves of the document's.
+pub(crate) fn local_accuracy(
+    accuracy: GeometryAccuracy,
+    extent: BBox,
+    scale: f64,
+) -> Result<GeometryAccuracy, AccuracyError> {
+    let numeric = crate::geom::accuracy::numerical_error(extent);
+    GeometryAccuracy::new(accuracy.remaining(numeric)? / scale.max(f64::MIN_POSITIVE))
+}
+
+/// A layer's `0xRRGGBB` colour and the opacity its whole image composites at.
+pub(crate) fn layer_style(role: LayerRole) -> (u32, f64) {
+    match role {
+        LayerRole::Copper => (0xd87822, 0.9),
+        LayerRole::Soldermask => (0x159447, 0.55),
+        LayerRole::Paste => (0xaeb4bb, 0.9),
+        LayerRole::Legend => (0x000000, 0.95),
+        LayerRole::Profile => (0x000000, 1.0),
+        LayerRole::Drill | LayerRole::Mechanical | LayerRole::Other => (0x5c7cfa, 0.85),
+    }
+}
+
+/// A path command as a backend draws it: an arc knows where it starts, and
+/// one too small to curve is the line to its end.
+pub(crate) enum Drawn {
+    Move(Point),
+    Line(Point),
+    Cubic(Point, Point, Point),
+    Arc(EllipticalArc),
+    Close,
+}
+
+pub(crate) fn drawn(cmds: impl IntoIterator<Item = PathCmd>) -> impl Iterator<Item = Drawn> {
+    let mut subpath = Point::default();
+    let mut current = Point::default();
+    cmds.into_iter().map(move |cmd| {
+        let start = current;
+        current = match cmd.op {
+            PathOp::CubicTo => cmd.p2,
+            PathOp::Close => subpath,
+            _ => cmd.p0,
+        };
+        let arc = match cmd.op {
+            PathOp::MoveTo => {
+                subpath = cmd.p0;
+                return Drawn::Move(cmd.p0);
+            }
+            PathOp::LineTo => return Drawn::Line(cmd.p0),
+            PathOp::CubicTo => return Drawn::Cubic(cmd.p0, cmd.p1, cmd.p2),
+            PathOp::Close => return Drawn::Close,
+            PathOp::ArcTo => Arc::new(start, cmd.p0, cmd.p1, cmd.clockwise).to_elliptical(),
+            PathOp::EllipseTo => EllipticalArc {
+                start,
+                end: cmd.p0,
+                center: cmd.p1,
+                x_axis: cmd.p2,
+                y_axis: cmd.p3,
+                clockwise: cmd.clockwise,
+            },
+        };
+        let (_, minor, _) = arc.principal_axes();
+        if arc.is_degenerate() || minor <= POINT_EPSILON_MM {
+            Drawn::Line(arc.end)
+        } else {
+            Drawn::Arc(arc)
+        }
+    })
 }

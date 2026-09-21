@@ -4,14 +4,12 @@ use std::fmt::Write;
 use crate::dialects::LayerRole;
 use crate::dialects::artwork::{self, Geometry};
 use crate::dialects::mask;
-use crate::geom::path::{PathCmd, PathOp};
+use crate::geom::path::PathCmd;
 
 use crate::geom::{
-    Affine2, Arc, BBox, FillRule, LineCap, LineJoin, Path, PathArena, Point, Polarity, StrokeStyle,
+    Affine2, BBox, FillRule, LineCap, LineJoin, Path, PathArena, Point, Polarity, StrokeStyle,
 };
-use crate::render::{RenderOptions, SizeConstraint};
-
-const POINT_EPSILON_MM: f64 = 1e-9;
+use crate::render::{Drawn, RenderOptions, SizeConstraint, layer_style};
 
 /// Render mask layers to an SVG document (millimeter units, y-up source
 /// coordinates flipped for screen display).
@@ -65,10 +63,7 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
         .iter()
         .map(|&index| doc.layers[index].bbox)
         .fold(BBox::empty(), BBox::union);
-    let numeric = crate::geom::accuracy::numerical_error(extent);
-    let local = |scale: f64| {
-        GeometryAccuracy::new(options.accuracy.remaining(numeric)? / scale.max(f64::MIN_POSITIVE))
-    };
+    let local = |scale: f64| crate::render::local_accuracy(options.accuracy, extent, scale);
 
     let mut defs = String::new();
     for (index, aperture) in doc.apertures.iter().enumerate() {
@@ -207,7 +202,7 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
     let (color, opacity) = layer_style(layer.role);
     writeln!(
         body,
-        "    <g fill='{color}' stroke='{color}' opacity='{}'>",
+        "    <g fill='#{color:06x}' stroke='#{color:06x}' opacity='{}'>",
         num(opacity)
     )
     .unwrap();
@@ -466,7 +461,7 @@ fn write_shape(svg: &mut String, arena: &PathArena, role: LayerRole, shape: &Pat
     } else {
         writeln!(
             svg,
-            "    <path d='{d}' fill='{color}' fill-opacity='{}' fill-rule='{}'/>",
+            "    <path d='{d}' fill='#{color:06x}' fill-opacity='{}' fill-rule='{}'/>",
             num(opacity),
             fill_rule_name(shape.fill_rule().expect("mask shapes are filled"))
         )
@@ -493,64 +488,30 @@ fn path_data(arena: &PathArena, shape: &Path) -> String {
 }
 
 fn write_contour(data: &mut String, cmds: impl IntoIterator<Item = PathCmd>) {
-    let mut current = Point::default();
-    for cmd in cmds {
-        match cmd.op {
-            PathOp::MoveTo => {
-                current = cmd.p0;
+    for drawn in crate::render::drawn(cmds) {
+        match drawn {
+            Drawn::Move(to) => {
                 if !data.ends_with('\'') && !data.is_empty() {
                     data.push(' ');
                 }
-                write!(data, "M{} {}", num(cmd.p0.x), num(cmd.p0.y)).unwrap();
+                write!(data, "M{} {}", num(to.x), num(to.y)).unwrap();
             }
-            PathOp::LineTo => {
-                current = cmd.p0;
-                write!(data, " L{} {}", num(cmd.p0.x), num(cmd.p0.y)).unwrap();
-            }
-            PathOp::ArcTo => {
-                write_arc(data, current, cmd);
-                current = cmd.p0;
-            }
-            PathOp::EllipseTo => {
-                write_elliptical_arc(
-                    data,
-                    EllipticalArc {
-                        start: current,
-                        end: cmd.p0,
-                        center: cmd.p1,
-                        x_axis: cmd.p2,
-                        y_axis: cmd.p3,
-                        clockwise: cmd.clockwise,
-                    },
-                );
-                current = cmd.p0;
-            }
-            PathOp::CubicTo => {
-                current = cmd.p2;
-                write!(
-                    data,
-                    " C{} {},{} {},{} {}",
-                    num(cmd.p0.x),
-                    num(cmd.p0.y),
-                    num(cmd.p1.x),
-                    num(cmd.p1.y),
-                    num(cmd.p2.x),
-                    num(cmd.p2.y)
-                )
-                .unwrap();
-            }
-            PathOp::Close => data.push_str(" Z"),
+            Drawn::Line(to) => write!(data, " L{} {}", num(to.x), num(to.y)).unwrap(),
+            Drawn::Arc(arc) => write_elliptical_arc(data, arc),
+            Drawn::Cubic(c1, c2, to) => write!(
+                data,
+                " C{} {},{} {},{} {}",
+                num(c1.x),
+                num(c1.y),
+                num(c2.x),
+                num(c2.y),
+                num(to.x),
+                num(to.y)
+            )
+            .unwrap(),
+            Drawn::Close => data.push_str(" Z"),
         }
     }
-}
-
-fn write_arc(data: &mut String, start: Point, cmd: PathCmd) {
-    let arc = Arc::new(start, cmd.p0, cmd.p1, cmd.clockwise);
-    if arc.radius() <= POINT_EPSILON_MM {
-        write!(data, " L{} {}", num(arc.end.x), num(arc.end.y)).unwrap();
-        return;
-    }
-    write_elliptical_arc(data, arc.to_elliptical());
 }
 
 /// An elliptical arc as SVG `A` commands: the principal axes and their
@@ -562,10 +523,6 @@ fn write_arc(data: &mut String, start: Point, cmd: PathCmd) {
 /// have none of those cases.
 fn write_elliptical_arc(data: &mut String, arc: EllipticalArc) {
     let (major, minor, rotation) = arc.principal_axes();
-    if arc.is_degenerate() || minor <= POINT_EPSILON_MM {
-        write!(data, " L{} {}", num(arc.end.x), num(arc.end.y)).unwrap();
-        return;
-    }
     let sweep_flag = if arc.clockwise { 0 } else { 1 };
     let rotation_degrees = rotation.to_degrees();
     let mut write_piece = |end: Point| {
@@ -585,17 +542,6 @@ fn write_elliptical_arc(data: &mut String, arc: EllipticalArc) {
         write_piece(arc.point_at(arc.start_angle() + sweep / 2.0));
     }
     write_piece(arc.end);
-}
-
-fn layer_style(role: LayerRole) -> (&'static str, f64) {
-    match role {
-        LayerRole::Copper => ("#d87822", 0.9),
-        LayerRole::Soldermask => ("#159447", 0.55),
-        LayerRole::Paste => ("#aeb4bb", 0.9),
-        LayerRole::Legend => ("#000000", 0.95),
-        LayerRole::Profile => ("#000000", 1.0),
-        LayerRole::Drill | LayerRole::Mechanical | LayerRole::Other => ("#5c7cfa", 0.85),
-    }
 }
 
 fn escape_xml(input: &str) -> String {
@@ -645,14 +591,14 @@ impl std::fmt::Display for Num {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::dialects::artwork::PaintStage;
     use crate::dialects::{Side, mask::Layer};
     use crate::geom::path::ContourBuf;
     use crate::geom::{BBox, Paint, Resolution};
 
-    fn square(size: f64) -> ContourBuf {
+    pub(crate) fn square(size: f64) -> ContourBuf {
         ContourBuf::new(vec![
             PathCmd::move_to(Point::new(0.0, 0.0)),
             PathCmd::line_to(Point::new(size, 0.0)),
@@ -662,7 +608,7 @@ mod tests {
         ])
     }
 
-    fn copper_artwork() -> artwork::Document<(), ()> {
+    pub(crate) fn copper_artwork() -> artwork::Document<(), ()> {
         let mut doc = artwork::Document::new();
         doc.push_layer(artwork::Layer {
             name: "F.Cu".to_string(),
@@ -722,7 +668,7 @@ mod tests {
                     height_px: 800,
                 });
         let png = crate::render::png(&doc, &options).unwrap();
-        let raster = resvg::tiny_skia::Pixmap::decode_png(&png).unwrap();
+        let raster = tiny_skia::Pixmap::decode_png(&png).unwrap();
         for (point, filled) in [
             (Point::ZERO, false),
             (Point::new(0.5, 0.0), false),
@@ -742,7 +688,7 @@ mod tests {
         }
     }
 
-    fn assert_native_and_composed_samples(
+    pub(crate) fn assert_native_and_composed_samples(
         doc: &artwork::Document<(), ()>,
         viewport: BBox,
         samples: &[(Point, bool)],
@@ -761,7 +707,7 @@ mod tests {
         )
         .unwrap();
         for (name, png) in [("native", native), ("composed", composed)] {
-            let raster = resvg::tiny_skia::Pixmap::decode_png(&png).unwrap();
+            let raster = tiny_skia::Pixmap::decode_png(&png).unwrap();
             for &(at, filled) in samples {
                 let x = (800.0 * (at.x - viewport.min.x) / viewport.width()) as u32;
                 let y = (800.0 * (viewport.max.y - at.y) / viewport.height()) as u32;
@@ -1028,7 +974,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_and_instanced_svg_enforce_the_same_contour_budget() {
+    fn direct_and_instanced_renders_enforce_the_same_contour_budget() {
         let accuracy = GeometryAccuracy::new(0.001).unwrap();
         for contour in [
             square(1.0).with_uncertainty(0.02),
@@ -1076,18 +1022,18 @@ mod tests {
                         doc.push_object(0, object);
                     }
                     artwork::normalize_bounds(&mut doc);
-                    assert_eq!(
-                        artwork_svg(
-                            &doc,
-                            &RenderOptions {
-                                accuracy,
-                                ..RenderOptions::default()
-                            }
-                        )
-                        .is_ok(),
-                        refinable,
-                        "geometry={geometry:?}, instanced={instanced}, refinable={refinable}"
-                    );
+                    let options = RenderOptions::default()
+                        .with_accuracy(accuracy)
+                        .with_size(SizeConstraint::MaxDimension(64));
+                    for (backend, drawn) in [
+                        ("svg", artwork_svg(&doc, &options).is_ok()),
+                        ("png", crate::render::artwork_png(&doc, &options).is_ok()),
+                    ] {
+                        assert_eq!(
+                            drawn, refinable,
+                            "{backend}: geometry={geometry:?}, instanced={instanced}"
+                        );
+                    }
                 }
             }
         }
