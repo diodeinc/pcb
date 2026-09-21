@@ -754,9 +754,10 @@ pub(crate) mod tests {
         }
         artwork::normalize_bounds(&mut doc);
 
-        // The nested mask is a real paint operation, not a black outline or
-        // a layer-colored disk: the center and the cleared annulus are empty,
-        // while copper painted after the first clear operation survives.
+        // A clear is a real paint operation, not a black outline or a
+        // layer-colored disk: the center and the cleared annulus are empty,
+        // while copper painted after the first clear operation survives. The
+        // raster erases; the SVG below says the same with one mask per run.
         assert_native_and_composed_samples(
             &doc,
             BBox::new(Point::ZERO, Point::new(20.0, 20.0)),
