@@ -658,31 +658,32 @@ pub fn generate_spatial_dense_copper_balance(
 
     // Layers frequently share one safe region — a fab panel's every copper
     // layer, a board array's layers with equal support scope — so erode and
-    // classify each distinct region once.
+    // classify each distinct region once, and the distinct ones side by side.
     let mut region_sources: Vec<&ContourSet> = Vec::new();
-    let mut region_voidable: Vec<ContourSet> = Vec::new();
-    let mut region_lattices: Vec<LatticeCandidates> = Vec::new();
     let layer_regions = request
         .layers
         .iter()
         .map(|layer| {
-            if let Some(index) = region_sources
+            region_sources
                 .iter()
                 .position(|region| region.rings == layer.safe_region.rings)
-            {
-                return Ok(index);
-            }
-            let voidable = layer.safe_region.disk_erode(profile.boundary_web_mm)?;
-            region_lattices.push(LatticeCandidates::build_lattice(
-                &voidable,
-                request.lattice_origin,
-                profile,
-            )?);
-            region_voidable.push(voidable);
-            region_sources.push(layer.safe_region);
-            Ok::<_, AccuracyError>(region_sources.len() - 1)
+                .unwrap_or_else(|| {
+                    region_sources.push(layer.safe_region);
+                    region_sources.len() - 1
+                })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Vec<_>>();
+    let (region_voidable, region_lattices): (Vec<ContourSet>, Vec<LatticeCandidates>) =
+        map_layers(region_sources.iter().copied(), |safe_region| {
+            let voidable = safe_region.disk_erode(profile.boundary_web_mm)?;
+            let lattice =
+                LatticeCandidates::build_lattice(&voidable, request.lattice_origin, profile)?;
+            Ok::<_, AccuracyError>((voidable, lattice))
+        })
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .unzip();
     let uniform = map_layers(
         request
             .layers
