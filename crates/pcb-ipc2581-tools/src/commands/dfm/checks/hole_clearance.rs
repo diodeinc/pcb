@@ -17,7 +17,7 @@ use crate::commands::dfm::rules::Conditions;
 use super::copper_clearance::conductor_subject;
 use super::{
     Evaluation, Measured, MeasuredSite, Ownership, hole_subject, layers, linework_clearance,
-    violates,
+    spanned_layers, violates,
 };
 
 pub(super) fn evaluate(
@@ -46,12 +46,7 @@ pub(super) fn evaluate(
             hole.provenance.instance_index,
             &design.hole_lands[hole_index],
         );
-        for (copper_index, copper) in design.copper_layers.iter().enumerate() {
-            if !hole.drill_span.contains_copper(copper_index)
-                || !conditions.applies_to_layer(copper)
-            {
-                continue;
-            }
+        for (copper_index, copper) in spanned_layers(design, &hole.drill_span, conditions) {
             checked += usize::from(hole.branch.is_none());
             // Only a conductor whose bounds reach the keepout can enter it.
             let nearest = design.conductors_near[copper_index]

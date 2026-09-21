@@ -92,24 +92,19 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> anyhow::Result<Evaluat
 }
 
 fn board_array_subject(array: &BoardArray, role: &'static str) -> Subject {
+    let locator = SourceLocator {
+        step: Some(array.name.clone()),
+        layer: None,
+        set_index: None,
+        feature_index: None,
+        instance_index: Some(array.instance_index),
+    };
     Subject {
         role,
         kind: "board_array_outline",
         name: Some(array.name.clone()),
-        source: Some(SourceLocator {
-            step: Some(array.name.clone()),
-            layer: None,
-            set_index: None,
-            feature_index: None,
-            instance_index: Some(array.instance_index),
-        }),
-        provenance: Some(SourceLocator {
-            step: Some(array.name.clone()),
-            layer: None,
-            set_index: None,
-            feature_index: None,
-            instance_index: Some(array.instance_index),
-        }),
+        source: Some(locator.clone()),
+        provenance: Some(locator),
         ..Subject::default()
     }
 }

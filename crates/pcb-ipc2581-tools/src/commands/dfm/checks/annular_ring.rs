@@ -44,7 +44,10 @@ use crate::commands::dfm::report::{
 };
 use crate::commands::dfm::rules::Conditions;
 
-use super::{Evaluation, Measured, MeasuredSite, hole_subject, holes_of_class, layers, violates};
+use super::{
+    Evaluation, Measured, MeasuredSite, hole_subject, holes_of_class, layers, spanned_layers,
+    violates,
+};
 
 /// One copper layer on which a hole has a ring to measure.
 struct RingSubject<'a> {
@@ -102,11 +105,7 @@ pub(super) fn evaluate(
         .enumerate()
         .map(|(position, &(hole_index, hole))| {
             let radius = hole.diameter_mm / 2.0;
-            let enclosures = copper_layers
-                .iter()
-                .enumerate()
-                .filter(|(copper_index, _)| hole.drill_span.contains_copper(*copper_index))
-                .filter(|(_, copper)| conditions.applies_to_layer(copper))
+            let enclosures = spanned_layers(design, &hole.drill_span, conditions)
                 .filter_map(|(copper_index, copper)| {
                     let land = hole_lands[hole_index]
                         .iter()

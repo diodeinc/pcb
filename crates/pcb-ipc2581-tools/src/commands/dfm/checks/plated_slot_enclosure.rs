@@ -14,7 +14,10 @@ use crate::commands::dfm::report::{Evidence, MeasurementKind};
 use crate::commands::dfm::rules::Conditions;
 
 use super::drilled_board_edge_clearance::slot_evidence;
-use super::{Evaluation, Measured, MeasuredSite, layers, slot_subject, slots_of_plating, violates};
+use super::{
+    Evaluation, Measured, MeasuredSite, layers, slot_subject, slots_of_plating, spanned_layers,
+    violates,
+};
 
 pub(super) fn evaluate(
     limit_mm: f64,
@@ -28,14 +31,7 @@ pub(super) fn evaluate(
         // The least enclosure on any layer, violating or not: the engine
         // judges it, so one inside its own uncertainty is not lost here.
         let mut least: Option<(pcb_ir::geom::dfm::Distance, Vec<_>)> = None;
-        for (index, copper) in design
-            .copper_layers
-            .iter()
-            .enumerate()
-            .filter(|(index, copper)| {
-                slot.drill_span.contains_copper(*index) && conditions.applies_to_layer(copper)
-            })
-        {
+        for (index, copper) in spanned_layers(design, &slot.drill_span, conditions) {
             let required = slot.drill_span.terminates_on(index)
                 || design.slot_lands[slot_index]
                     .iter()

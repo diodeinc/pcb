@@ -965,6 +965,22 @@ impl Ownership {
     }
 }
 
+/// The copper layers a drilled span meets that a rule's conditions apply to,
+/// with their indices into the copper pool.
+fn spanned_layers<'a>(
+    design: &'a Design<'a>,
+    span: &'a DrillSpan,
+    conditions: &'a super::rules::Conditions,
+) -> impl Iterator<Item = (usize, &'a super::design::CopperLayer)> {
+    design
+        .copper_layers
+        .iter()
+        .enumerate()
+        .filter(move |(index, copper)| {
+            span.contains_copper(*index) && conditions.applies_to_layer(copper)
+        })
+}
+
 /// The Step's own holes of one plating class, with their indices into the
 /// hole pool: the subjects of every rule that measures a hole on its own.
 fn holes_of_class<'a>(design: &'a Design<'a>, class: HoleClass) -> Vec<(usize, &'a Hole)> {

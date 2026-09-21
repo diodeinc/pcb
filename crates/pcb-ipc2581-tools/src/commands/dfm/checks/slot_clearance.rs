@@ -13,7 +13,7 @@ use crate::commands::dfm::rules::Conditions;
 use super::copper_clearance::conductor_subject;
 use super::{
     Evaluation, Measured, Ownership, layers, linework_clearance, slot_matches, slot_subject,
-    violates,
+    spanned_layers, violates,
 };
 
 pub(super) fn evaluate(
@@ -41,14 +41,9 @@ pub(super) fn evaluate(
             slot.provenance.instance_index,
             &design.slot_lands[slot_index],
         );
-        for (copper_index, copper) in design.copper_layers.iter().enumerate() {
-            // Extraction orders copper layers and drill spans by the same
-            // validated physical stackup.
-            if !slot.drill_span.contains_copper(copper_index)
-                || !conditions.applies_to_layer(copper)
-            {
-                continue;
-            }
+        // Extraction orders copper layers and drill spans by the same
+        // validated physical stackup.
+        for (copper_index, copper) in spanned_layers(design, &slot.drill_span, conditions) {
             checked += usize::from(slot.branch.is_none());
             // Only a conductor whose bounds reach the limit can come within it.
             let nearest = design.conductors_near[copper_index]
