@@ -7,7 +7,7 @@
 
 use std::f64::consts::FRAC_PI_2;
 
-use tiny_skia::{BlendMode, PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
+use tiny_skia::{BlendMode, PathBuilder, Pixmap, Stroke, Transform};
 
 use crate::dialects::artwork::{self, Placed, Primitive};
 use crate::dialects::{LayerRole, mask};
@@ -177,22 +177,28 @@ impl Canvas {
         }
     }
 
-    /// Lay the painted layer over the image at its opacity and open an
-    /// empty one.
+    /// Lay the painted layer over the image at its opacity and leave it
+    /// empty for the next.
+    ///
+    /// Both pixmaps hold premultiplied colour, so every channel, alpha
+    /// included, composites alike: `layer·opacity + image·(1 − layer
+    /// alpha·opacity)`. Most of a layer is empty and is skipped.
     fn composite(&mut self, style: LayerStyle) {
-        let paint = PixmapPaint {
-            opacity: style.opacity as f32,
-            ..PixmapPaint::default()
-        };
-        self.image.draw_pixmap(
-            0,
-            0,
-            self.layer.as_ref(),
-            &paint,
-            Transform::identity(),
-            None,
-        );
-        self.layer.fill(tiny_skia::Color::TRANSPARENT);
+        let faded: [u8; 256] =
+            std::array::from_fn(|value| (value as f64 * style.opacity).round() as u8);
+        let (image, _) = self.image.data_mut().as_chunks_mut::<4>();
+        let (layer, _) = self.layer.data_mut().as_chunks_mut::<4>();
+        for (image, layer) in image.iter_mut().zip(layer) {
+            if layer[3] == 0 {
+                continue;
+            }
+            let kept = 255 - u32::from(faded[usize::from(layer[3])]);
+            for (image, layer) in image.iter_mut().zip(layer) {
+                *image =
+                    faded[usize::from(*layer)] + ((u32::from(*image) * kept + 127) / 255) as u8;
+                *layer = 0;
+            }
+        }
     }
 
     fn encode(self) -> Result<Vec<u8>, String> {
