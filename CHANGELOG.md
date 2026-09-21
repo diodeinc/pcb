@@ -17,6 +17,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Wait while a sandbox is starting, restoring, or updating, and stop when the API says it is archived or failed.
+### Fixed
+
+### Changed
+
+- Speed up Gerber export, Gerber compare, and DFM on board arrays.
 
 ## [0.4.56] - 2026-09-20
 

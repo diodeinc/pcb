@@ -871,11 +871,7 @@ fn resolve_clears<S, L>(
             .filter(|subject| doc.arena.paths_bbox(subject.paths).intersects(tiles_bbox))
             .map(|subject| {
                 let image = feature_painted_region(doc, subject, resolution.strict())?;
-                Ok(match near_cutters(&image, &blockers) {
-                    Some(near) => image.difference(&near)?,
-                    None => image,
-                }
-                .prepare_query())
+                Ok(image.difference(&blockers)?.prepare_query())
             })
             .collect::<Result<Vec<_>, AccuracyError>>()?;
         let (tiled, untiled): (Vec<_>, Vec<_>) = tiles.into_iter().partition(|tile| {
@@ -1123,13 +1119,10 @@ fn cut_features<S, L>(
             continue;
         }
         let image = feature_painted_region(doc, subject, cutters.resolution)?;
-        let Some(near) = near_cutters(&image, cutters) else {
-            continue;
-        };
-        if image.intersection(&near)?.is_empty() {
+        if image.intersection(cutters)?.is_empty() {
             continue;
         }
-        let contours = image.difference(&near)?.to_contours();
+        let contours = image.difference(cutters)?.to_contours();
         if contours.is_empty() {
             clear_feature_paths(doc, index);
         } else {
@@ -1144,21 +1137,6 @@ fn cut_features<S, L>(
         }
     }
     Ok(())
-}
-
-/// The cutters whose bounds reach `subject`, if any. Most features on a layer
-/// are nowhere near any cutter, and dense generated cutter sets (balance void
-/// lattices) would otherwise make every subtraction sweep the whole set.
-fn near_cutters(subject: &ContourSet, cutters: &ContourSet) -> Option<ContourSet> {
-    let near = cutters
-        .rings
-        .iter()
-        .zip(&cutters.ring_bounds)
-        .filter(|(_, bounds)| bounds.intersects(subject.bbox))
-        .map(|(ring, _)| ring.clone())
-        .collect::<Vec<_>>();
-    (!near.is_empty())
-        .then(|| ContourSet::from_regularized(near, cutters.resolution, cutters.uncertainty_mm))
 }
 
 /// The union of the features' painted images.

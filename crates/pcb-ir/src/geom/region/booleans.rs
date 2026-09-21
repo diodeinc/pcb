@@ -1,8 +1,9 @@
 //! Set operations and ordered dark/clear paint composition.
 
-use super::{ContourSet, Ring, Shape, flatten_shapes, rings_bbox, simplify_rings, simplify_shapes};
+use super::simplification::{resolve_groups, untagged};
+use super::{ContourSet, Ring, Shape, flatten_shapes, rings_bbox, simplify_shapes};
 use crate::geom::accuracy::numerical_error;
-use crate::geom::{AccuracyError, FillRule, Polarity, Resolution};
+use crate::geom::{AccuracyError, BBox, FillRule, Polarity, Resolution};
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::simplify::SimplifyShape;
@@ -16,13 +17,49 @@ pub(crate) fn difference_shapes(subject: Vec<Ring>, cutters: Vec<Ring>) -> Vec<S
     subject.overlay_as::<i64>(&cutters, OverlayRule::Difference, OverlayFillRule::NonZero)
 }
 
-/// Union of regularized operands. Each operand winds once over its own
-/// interior and not at all outside, so their sum is nonzero exactly on the
-/// union: one simplification, which partitions disjoint features, replaces
-/// the pairwise overlay.
-fn union_rings(mut left: Vec<Ring>, mut right: Vec<Ring>) -> Vec<Ring> {
-    left.append(&mut right);
-    simplify_rings(left, FillRule::NonZero)
+/// Rings tagged with the regularized source they belong to.
+fn sourced(rings: Vec<Ring>, source: u32) -> impl Iterator<Item = (Ring, u32)> {
+    rings.into_iter().map(move |ring| (ring, source))
+}
+
+/// Union of regularized sources. Each source winds once over its own interior
+/// and not at all outside, so their sum is nonzero exactly on the union and
+/// one simplification replaces the pairwise overlay. A group drawn from a
+/// single source is already regular and passes through untouched, so adding
+/// to a large image costs only the neighbourhoods the addition reaches.
+fn union_rings(rings: Vec<(Ring, u32)>) -> Vec<Ring> {
+    resolve_groups(rings, |group| {
+        let source = group[0].1;
+        let regular = group.iter().all(|(_, other)| *other == source);
+        let rings = untagged(group);
+        if regular {
+            rings
+        } else {
+            flatten_shapes(rings.simplify_shape_as::<i64>(OverlayFillRule::NonZero))
+        }
+    })
+}
+
+/// Difference or intersection of two regularized operands. A group holding
+/// only one operand needs no overlay: subject rings no clip ring reaches
+/// survive a difference verbatim, and everything else contributes nothing.
+fn overlay_rings(subject: Vec<Ring>, clip: Vec<Ring>, rule: OverlayRule) -> Vec<Ring> {
+    let rings = sourced(subject, 0).chain(sourced(clip, 1)).collect();
+    resolve_groups(rings, |group| {
+        let (subject, clip): (Vec<_>, Vec<_>) =
+            group.into_iter().partition(|(_, source)| *source == 0);
+        let (subject, clip) = (untagged(subject), untagged(clip));
+        if subject.is_empty() {
+            Vec::new()
+        } else if clip.is_empty() {
+            match rule {
+                OverlayRule::Difference => subject,
+                _ => Vec::new(),
+            }
+        } else {
+            flatten_shapes(subject.overlay_as::<i64>(&clip, rule, OverlayFillRule::NonZero))
+        }
+    })
 }
 
 impl ContourSet {
@@ -71,18 +108,44 @@ impl ContourSet {
     /// rounding. The result takes the tighter budget and fails when the
     /// operands' history does not fit it.
     fn boolean(&self, other: &Self, rule: OverlayRule) -> Result<Self, AccuracyError> {
+        let numeric = numerical_error(self.bbox.union(other.bbox));
+        // Only rings that reach the other operand can change the result, so
+        // cutting a small subject out of a panel-sized region never copies
+        // the panel.
         let rings = match rule {
-            OverlayRule::Union => union_rings(self.rings.clone(), other.rings.clone()),
-            _ => flatten_shapes(self.rings.overlay_as::<i64>(
-                &other.rings,
+            OverlayRule::Union => union_rings(
+                sourced(self.rings.clone(), 0)
+                    .chain(sourced(other.rings.clone(), 1))
+                    .collect(),
+            ),
+            OverlayRule::Difference => overlay_rings(
+                self.rings.clone(),
+                other.reaching(self.bbox.expand(numeric)).rings,
                 rule,
-                OverlayFillRule::NonZero,
-            )),
+            ),
+            _ => overlay_rings(
+                self.reaching(other.bbox.expand(numeric)).rings,
+                other.reaching(self.bbox.expand(numeric)).rings,
+                rule,
+            ),
         };
-        let uncertainty = self.uncertainty_mm.max(other.uncertainty_mm)
-            + numerical_error(self.bbox.union(other.bbox));
+        let uncertainty = self.uncertainty_mm.max(other.uncertainty_mm) + numeric;
         Self::from_regularized(rings, self.resolution.meet(other.resolution), uncertainty).checked()
     }
+    /// The rings whose bounds reach `window`: everything that can matter to
+    /// an operation or query confined to it. A hole lies within its outer
+    /// ring's bounds, so a kept hole always keeps the material around it.
+    pub fn reaching(&self, window: BBox) -> Self {
+        let rings = self
+            .rings
+            .iter()
+            .zip(&self.ring_bounds)
+            .filter(|(_, bounds)| bounds.intersects(window))
+            .map(|(ring, _)| ring.clone())
+            .collect();
+        Self::from_regularized(rings, self.resolution, self.uncertainty_mm)
+    }
+
     /// Connected components, each retaining its own hole rings.
     pub fn connected_components(&self) -> Vec<Self> {
         simplify_shapes(self.rings.clone(), FillRule::NonZero)
@@ -100,7 +163,10 @@ impl ContourSet {
 #[derive(Debug)]
 pub struct PaintComposer {
     image: Vec<Ring>,
-    run: Vec<Ring>,
+    /// The pending same-polarity run, each ring tagged with the pushed
+    /// region it came from; the image itself is source zero.
+    run: Vec<(Ring, u32)>,
+    run_sources: u32,
     run_polarity: Option<Polarity>,
     resolution: Resolution,
     uncertainty_mm: f64,
@@ -111,13 +177,14 @@ impl PaintComposer {
         Self {
             image: Vec::new(),
             run: Vec::new(),
+            run_sources: 0,
             run_polarity: None,
             resolution,
             uncertainty_mm: 0.0,
         }
     }
 
-    pub fn push(&mut self, polarity: Polarity, mut region: ContourSet) {
+    pub fn push(&mut self, polarity: Polarity, region: ContourSet) {
         // An empty input still contributes its history: material within its
         // uncertainty band may have been lost before it arrived here.
         self.uncertainty_mm = self.uncertainty_mm.max(region.uncertainty_mm);
@@ -129,7 +196,8 @@ impl PaintComposer {
             self.flush_run();
             self.run_polarity = Some(polarity);
         }
-        self.run.append(&mut region.rings);
+        self.run_sources += 1;
+        self.run.extend(sourced(region.rings, self.run_sources));
     }
 
     /// The composed image, checked against its budget.
@@ -142,16 +210,17 @@ impl PaintComposer {
         let Some(polarity) = self.run_polarity.take() else {
             return;
         };
-        self.uncertainty_mm +=
-            numerical_error(rings_bbox(&self.image).union(rings_bbox(&self.run)));
         let run = std::mem::take(&mut self.run);
+        let image = std::mem::take(&mut self.image);
+        self.run_sources = 0;
+        self.uncertainty_mm += numerical_error(
+            run.iter()
+                .map(|(ring, _)| rings_bbox(std::slice::from_ref(ring)))
+                .fold(rings_bbox(&image), |bbox, ring| bbox.union(ring)),
+        );
         self.image = match polarity {
-            Polarity::Dark => union_rings(std::mem::take(&mut self.image), run),
-            Polarity::Clear => flatten_shapes(self.image.overlay_as::<i64>(
-                &run,
-                OverlayRule::Difference,
-                OverlayFillRule::NonZero,
-            )),
+            Polarity::Dark => union_rings(sourced(image, 0).chain(run).collect()),
+            Polarity::Clear => overlay_rings(image, untagged(run), OverlayRule::Difference),
         };
     }
 }
