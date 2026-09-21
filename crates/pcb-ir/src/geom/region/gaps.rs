@@ -270,9 +270,9 @@ impl ContourSet {
     /// clearance. The guard keeps every checked quantity strictly separated
     /// from every constructed one: a cut leaves a `2 (gap_radius + guard)`
     /// void, so construction noise cannot push a trimmed gap back under the
-    /// nominal test. `T` only removes material, so iterating from the source
-    /// converges; a step that removes almost nothing is reported as an error
-    /// instead of a silent stall.
+    /// nominal test. An opening lies within what it opens, so `T` only removes
+    /// material and iterating from the source converges; a step that removes
+    /// almost nothing is reported as an error instead of a silent stall.
     pub fn disk_regularize_gaps(
         &self,
         gap_radius: f64,
@@ -296,7 +296,8 @@ impl ContourSet {
 
         let mut kept = self.clone();
         while let Some(next) = kept.narrow_gap_trim(gap_radius, filled_radius, guard)? {
-            if kept.difference(&next)?.area() <= self.tolerance().powi(2) {
+            // `next` lies within `kept`, so what the step removed is the area lost.
+            if kept.area() - next.area() <= self.tolerance().powi(2) {
                 return Err(GapRegularizationError(format!(
                     "gap regularization stalled with {:.9} mm² of void-gap violations",
                     kept.disk_gap_violations(gap_radius)?.area()
@@ -884,14 +885,17 @@ fn narrow_void_keep_out(
     narrow_voids: &ContourSet,
     radius: f64,
 ) -> Result<ContourSet, GapRegularizationError> {
-    let axis_keep_out = narrow_void_medial_axis_keep_out(source, narrow_voids, radius)?;
-    let mut keep_out = axis_keep_out.clone();
+    let mut keep_out = vec![narrow_void_medial_axis_keep_out(
+        source,
+        narrow_voids,
+        radius,
+    )?];
     for component in narrow_voids.connected_components() {
-        if component.intersection(&axis_keep_out)?.is_empty() {
-            keep_out = keep_out.union(&component.disk_dilate(radius)?)?;
+        if component.intersection(&keep_out[0])?.is_empty() {
+            keep_out.push(component.disk_dilate(radius)?);
         }
     }
-    Ok(keep_out)
+    Ok(ContourSet::union_all(source.resolution, keep_out)?)
 }
 
 fn narrow_void_medial_axis_keep_out(

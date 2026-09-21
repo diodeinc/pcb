@@ -1,8 +1,8 @@
 //! Disk offsets, opening, and closing within the region's budget.
 
-use super::{ContourSet, decimate_rings_inward, flatten_shapes, ring_edges, simplify_rings};
+use super::{ContourSet, decimate_rings_inward, flatten_shapes, ring_edges};
+use crate::geom::AccuracyError;
 use crate::geom::accuracy::numerical_error;
-use crate::geom::{AccuracyError, FillRule};
 use i_overlay::mesh::outline::offset::OutlineOffset;
 use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 
@@ -85,9 +85,11 @@ impl ContourSet {
                     .collect::<Vec<_>>()
             })
             .fold(0.0, f64::max);
-        let simplified = decimate_rings_inward(&rings, numeric);
+        // The backend resolves the offset contours against each other, so its
+        // outline is already regular, and decimating within `numeric` moves
+        // the boundary by less than the rounding that outline carries.
         Self::from_regularized(
-            simplify_rings(simplified, FillRule::NonZero),
+            decimate_rings_inward(&rings, numeric),
             self.resolution,
             inherited + added + numeric,
         )
