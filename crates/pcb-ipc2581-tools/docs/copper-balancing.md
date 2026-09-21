@@ -192,11 +192,16 @@ iteration; this changes no safe geometry, void sites, radius constraints, or
 copper area. A constant-radius pattern is what falls out when the measured
 fields are symmetric — it is not a separate mode.
 
-Converged radii snap to 20 uniformly spaced void-area levels. Interior sites
-use the nearest level; an admitted boundary site rounds upward so it cannot
-lose the minimum disk that made it manufacturable. The whole layer therefore
-uses at most 20 exact rounded-hex templates rather than thousands of unique
-shapes.
+Converged radii snap to 20 uniformly spaced void-area levels, so the whole
+layer uses at most 20 exact rounded-hex templates rather than thousands of
+unique shapes. The solved field is smooth, so rounding each site alone would
+round whole neighbourhoods the same way — moving local density by up to half a
+level at every scale the solve just matched, and the layer's pinned area by
+percents. Each interior site's rounding error is instead handed to the
+neighbours still to come, which keeps every neighbourhood's and the layer's
+void area and leaves the error between adjacent voids one level apart. An
+admitted boundary site rounds upward so it cannot lose the minimum disk that
+made it manufacturable.
 
 ## Fill geometry
 
