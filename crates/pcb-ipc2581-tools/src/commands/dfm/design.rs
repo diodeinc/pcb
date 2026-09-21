@@ -6,11 +6,11 @@
 //! own frame. A measurement belongs to the lowest Step holding all of its
 //! subjects. Each Step therefore measures its own content once, however often
 //! the layout repeats it, and measures what it places only against its own
-//! content and across placements: of the copper it places, its design holds
-//! only what a rule's limit can reach from outside the placement. A V-score
-//! line is the exception that one subject makes of many placements: every
-//! Step under the one drawing it meets the line in its own frame. A lone
-//! board is the layout of one Step.
+//! content and across placements: of the copper and mask openings it places,
+//! its design holds only what a rule can reach from outside the placement.
+//! A V-score line is the exception that one subject makes of many placements:
+//! every Step under the one drawing it meets the line in its own frame. A
+//! lone board is the layout of one Step.
 //!
 //! Exactly the pools the configured rules read are extracted; the rest stay
 //! empty. Pools are flat vectors; copper follows physical stackup order
@@ -28,12 +28,12 @@ use anyhow::{Context, Result, bail};
 use ipc2581::Symbol;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::{
-    ArtworkScope, ArtworkTarget, Feature, FeatureDomain, FeatureKind, FeatureSpan, LayoutPurpose,
-    LayoutStepKind, PlatingKind, ProfileSet, SimpleShape, lower_layer_to_artwork_with,
-    profile_occurrences_for,
+    ArtworkScope, ArtworkTarget, Feature, FeatureBucket, FeatureDomain, FeatureKind, FeatureSpan,
+    LayoutPurpose, LayoutStepKind, PlatingKind, ProfileSet, SimpleShape,
+    lower_layer_to_artwork_with, profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side, artwork};
-use pcb_ir::geom::dfm::{BBoxIndex, Distance, WidthDisk, min_width_disk};
+use pcb_ir::geom::dfm::{BBoxIndex, Distance, WidthDisk, min_width_disk, thin_gaps_reach_mm};
 use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::region::ring_signed_area;
 use pcb_ir::geom::{Affine2, BBox, ContourSet, Point, Polarity, PreparedRegion, Span};
@@ -139,6 +139,8 @@ struct Source<'a> {
     resolution: Resolution,
     /// The farthest any rule measures from a conductor to another subject.
     conductor_reach_mm: f64,
+    /// The farthest a soldermask web rule reads from the walls of a web.
+    web_reach_mm: f64,
 }
 
 impl Source<'_> {
@@ -207,6 +209,11 @@ impl<'a> Design<'a> {
             })
             .map(|rule| rule.limit.length().millimeters())
             .fold(0.0, f64::max);
+        let web_reach_mm = rules
+            .iter()
+            .filter(|rule| rule.kind == rules::RuleKind::SoldermaskWeb)
+            .map(|rule| thin_gaps_reach_mm(rule.limit.length().millimeters(), resolution))
+            .fold(0.0, f64::max);
         let mut designs = steps
             .into_iter()
             .map(|(step, placements)| {
@@ -216,6 +223,7 @@ impl<'a> Design<'a> {
                     root: placements[0],
                     resolution,
                     conductor_reach_mm,
+                    web_reach_mm,
                 };
                 Self::extract(source, step, placements, wanted)
             })
@@ -1070,7 +1078,8 @@ pub(super) struct CopperConductor {
 #[derive(Debug)]
 pub(super) struct MaskLayer {
     pub layer: LayerRef,
-    /// The composed image of the mask openings.
+    /// The composed image of the Step's own mask openings, and of those it
+    /// places that can shape a web walled from outside their placement.
     pub image: ContourSet,
     /// Final openings grouped by their physical source occurrence. A web is
     /// the complement of these images, so its two walls can have two owners.
@@ -1512,6 +1521,48 @@ fn copper_conductor(
     }
 }
 
+/// What a placed subject can meet outside its own placement: the Step's own
+/// subjects one by one, and every placement by the bounds of all it holds.
+struct Outside {
+    bounds: Vec<(BBox, Option<u32>)>,
+    near: BBoxIndex,
+}
+
+impl Outside {
+    /// From the bounds of every subject and the placement that holds it.
+    fn of(subjects: impl Iterator<Item = (BBox, Option<u32>)>) -> Self {
+        let mut placements = HashMap::<u32, BBox>::new();
+        let mut bounds = Vec::new();
+        for (bbox, branch) in subjects.filter(|(bbox, _)| !bbox.is_empty()) {
+            match branch {
+                Some(branch) => {
+                    let held = placements.entry(branch).or_insert(BBox::empty());
+                    *held = held.union(bbox);
+                }
+                None => bounds.push((bbox, None)),
+            }
+        }
+        bounds.extend(
+            placements
+                .into_iter()
+                .map(|(branch, held)| (held, Some(branch))),
+        );
+        Self {
+            near: BBoxIndex::new(bounds.iter().map(|&(bbox, _)| bbox).collect()),
+            bounds,
+        }
+    }
+
+    /// Whether anything outside the placement `branch` comes within
+    /// `reach_mm` of `bounds`.
+    fn reaches(&self, bounds: BBox, branch: Option<u32>, reach_mm: f64) -> bool {
+        self.near
+            .query(bounds.expand(reach_mm))
+            .into_iter()
+            .any(|subject| self.bounds[subject].1 != branch)
+    }
+}
+
 /// The placed conductors a design must hold: those that can enter one of its
 /// measurements.
 ///
@@ -1533,8 +1584,6 @@ fn carried_conductors(
     drilled: &[(BBox, Option<u32>)],
 ) -> HashSet<ConductorId> {
     let mut conductors = HashMap::<ConductorId, BBox>::new();
-    let mut placements = HashMap::<u32, BBox>::new();
-    let mut outside = Vec::new();
     let copper = document.features.iter().map(|feature| {
         let id = copper_conductor(source, document, feature);
         if id.instance().is_some() {
@@ -1543,31 +1592,11 @@ fn carried_conductors(
         }
         (feature.bbox, source.branch(id.instance()))
     });
-    for (bbox, branch) in copper.chain(drilled.iter().copied()) {
-        match branch {
-            Some(branch) => {
-                let bounds = placements.entry(branch).or_insert(BBox::empty());
-                *bounds = bounds.union(bbox);
-            }
-            None if !bbox.is_empty() => outside.push((bbox, None)),
-            None => {}
-        }
-    }
-    outside.extend(
-        placements
-            .into_iter()
-            .map(|(branch, bounds)| (bounds, Some(branch))),
-    );
-    let near = BBoxIndex::new(outside.iter().map(|&(bounds, _)| bounds).collect());
+    let outside = Outside::of(copper.chain(drilled.iter().copied()));
     let reach_mm = source.conductor_reach_mm + 2.0 * source.resolution.accuracy.max_error_mm();
     conductors
         .into_iter()
-        .filter(|&(id, bounds)| {
-            let branch = source.branch(id.instance());
-            near.query(bounds.expand(reach_mm))
-                .into_iter()
-                .any(|subject| outside[subject].1 != branch)
-        })
+        .filter(|&(id, bounds)| outside.reaches(bounds, source.branch(id.instance()), reach_mm))
         .map(|(id, _)| id)
         .collect()
 }
@@ -1937,6 +1966,72 @@ fn stack_side(ordinal: usize, total: usize) -> &'static str {
     }
 }
 
+/// Whether a mask feature opens the mask, rather than closing what others open.
+fn opens_mask(feature: &Feature) -> bool {
+    feature.polarity == Polarity::Dark
+        && !feature.clears_previous_in_set
+        && feature.bucket != FeatureBucket::Cutout
+}
+
+/// The bounds of the placed mask openings a design must hold: those that can
+/// shape a web it reports.
+///
+/// A design reports a web only when its walls span placements, so each wall
+/// is an opening within the web limit of an opening outside its placement,
+/// and their feature bounds lie within the limit and two accuracy budgets of
+/// each other. The piece reported with such a web is one connected residue,
+/// whose walls chain from opening to opening within the limit, and the
+/// closing reads the image no farther than `web_reach_mm` from the bounds of
+/// those walls. So the design holds the placed openings within that reach of
+/// anything outside their placement, and then every opening within it of one
+/// it holds: what it leaves out lies beyond the reach of everything it
+/// keeps, and the image is whole wherever a reported piece is read. A web
+/// left out is walled by one placement alone, whose own Step's design
+/// reports it.
+fn webbed_openings(source: Source<'_>, document: &GeometryDocument) -> BBoxIndex {
+    let openings = document
+        .features
+        .iter()
+        .filter(|feature| opens_mask(feature) && !feature.bbox.is_empty())
+        .map(|feature| (feature.bbox, source.branch(source.placed(feature))))
+        .collect::<Vec<_>>();
+    let outside = Outside::of(openings.iter().copied());
+    let mut placements = HashMap::<u32, Vec<BBox>>::new();
+    for (bbox, branch) in openings {
+        if let Some(branch) = branch {
+            placements.entry(branch).or_default().push(bbox);
+        }
+    }
+    let reach_mm = source.web_reach_mm + 2.0 * source.resolution.accuracy.max_error_mm();
+    let webbed = placements.into_iter().flat_map(|(branch, openings)| {
+        let mut held = openings
+            .iter()
+            .map(|&bounds| outside.reaches(bounds, Some(branch), reach_mm))
+            .collect::<Vec<_>>();
+        let mut frontier = (0..openings.len())
+            .filter(|&opening| held[opening])
+            .collect::<Vec<_>>();
+        // Whatever reaches into another placement is held from there.
+        let near = BBoxIndex::new(if frontier.is_empty() {
+            Vec::new()
+        } else {
+            openings.clone()
+        });
+        while let Some(opening) = frontier.pop() {
+            for other in near.query(openings[opening].expand(reach_mm)) {
+                if !std::mem::replace(&mut held[other], true) {
+                    frontier.push(other);
+                }
+            }
+        }
+        openings
+            .into_iter()
+            .zip(held)
+            .filter_map(|(bounds, held)| held.then_some(bounds))
+    });
+    BBoxIndex::new(webbed.collect())
+}
+
 fn collect_mask_layers(source: Source<'_>) -> Result<Vec<MaskLayer>> {
     let Source {
         imported,
@@ -1959,6 +2054,12 @@ fn collect_mask_layers(source: Source<'_>) -> Result<Vec<MaskLayer>> {
             let mut document = source
                 .layer(layer_index)
                 .with_context(|| format!("failed to extract soldermask layer '{name}'"))?;
+            let webbed = webbed_openings(source, &document);
+            pcb_ir::dialects::ipc::process::retain_features(&mut document, |feature| {
+                source.placed(feature).is_none()
+                    || !opens_mask(feature)
+                    || !webbed.query(feature.bbox).is_empty()
+            });
             let image = document.clone().into_layer_image(
                 0,
                 LayerRole::Soldermask,
@@ -2207,6 +2308,7 @@ mod tests {
             root: LayoutOccurrenceId::Root,
             resolution: Resolution::default(),
             conductor_reach_mm: 0.0,
+            web_reach_mm: 0.0,
         }
     }
 
@@ -2261,9 +2363,12 @@ mod tests {
                 resolution,
             )
             .unwrap();
-        let layer = collect_mask_layers(root(&imported, ArtworkScope::ArrayFlattened))
-            .unwrap()
-            .remove(0);
+        // The repeats stand 6 mm apart: within this reach, all of both is held.
+        let source = Source {
+            web_reach_mm: 10.0,
+            ..root(&imported, ArtworkScope::ArrayFlattened)
+        };
+        let layer = collect_mask_layers(source).unwrap().remove(0);
         assert_eq!(
             layer.image.rings, previous.rings,
             "source attribution must not change the measured image"
@@ -2287,6 +2392,58 @@ mod tests {
                 "owners do not absorb neighboring repeats"
             );
         }
+    }
+
+    #[test]
+    fn a_design_holds_the_placed_openings_that_chain_to_another_placement() {
+        let resolution = Resolution::default();
+        // Four openings across a 10 mm board: one 0.02 mm from each side
+        // edge, one 0.05 mm before the right one, and one alone in the middle.
+        let openings = [(0.02, 1.0), (4.0, 5.0), (8.0, 8.85), (8.9, 9.98)]
+            .map(|(x0, x1)| {
+                format!(
+                    r#"<Set polarity="POSITIVE"><Features><Contour><Polygon><PolyBegin x="{x0}" y="2"/><PolyStepSegment x="{x1}" y="2"/><PolyStepSegment x="{x1}" y="8"/><PolyStepSegment x="{x0}" y="8"/><PolyStepSegment x="{x0}" y="2"/></Polygon></Contour></Features></Set>"#
+                )
+            })
+            .concat();
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/><LayerRef name="F.Mask"/></Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+    <Step name="board" type="BOARD"><Datum x="0" y="0"/>
+      <LayerFeature layerRef="F.Mask">{openings}</LayerFeature>
+    </Step>
+    <Step name="panel" type="PALLET"><Datum x="0" y="0"/>
+      <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="10" dy="0" angle="0" mirror="false"/>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#
+        );
+        let imported = import_design(&Ipc2581::parse(&xml).unwrap(), resolution).unwrap();
+        let source = Source {
+            web_reach_mm: thin_gaps_reach_mm(0.1, resolution),
+            ..root(&imported, ArtworkScope::ArrayFlattened)
+        };
+        let layer = collect_mask_layers(source).unwrap().remove(0);
+        // The first board's right opening faces the second board's left one,
+        // and the opening before it chains to it. Every other web is walled
+        // by one board alone.
+        let mut held = layer
+            .image
+            .connected_components()
+            .iter()
+            .map(|opening| (opening.bbox.min.x, opening.bbox.max.x))
+            .collect::<Vec<_>>();
+        held.sort_by(|left, right| left.0.total_cmp(&right.0));
+        assert_eq!(held, [(8.0, 8.85), (8.9, 9.98), (10.02, 11.0)]);
+        let owned = |instance: u32| {
+            let mut owners = layer.owners.iter();
+            let owner = owners.find(|owner| owner.instance_index == Some(instance));
+            owner.unwrap().image.connected_components().len()
+        };
+        assert_eq!((layer.owners.len(), owned(0), owned(1)), (2, 2, 1));
     }
 
     #[test]
