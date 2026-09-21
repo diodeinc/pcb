@@ -57,32 +57,6 @@ fn cyclic_projection_and_material_normals_preserve_hole_identity() {
 }
 
 #[test]
-fn intervals_retain_every_narrow_window_and_hole_split() {
-    let material = rect(0.0, 0.0, 10.0, 3.0);
-    let query = BoundaryQuery::new(&material, TOL).unwrap();
-    let id = query.boundaries().next().unwrap();
-    // More windows than a typical candidate cap, each much smaller than a
-    // plausible sampling step. The hole removes a central part of one window.
-    let windows = (0..80).fold(ContourSet::empty(RESOLUTION), |r, i| {
-        r.union(&rect(0.1 + i as f64 * 0.1, -0.1, 0.0001, 0.2))
-            .unwrap()
-    });
-    let windows = windows
-        .difference(&rect(0.10004, -0.05, 0.00002, 0.1))
-        .unwrap();
-    let intervals = query.usable_intervals(id, &windows).unwrap();
-    assert_eq!(intervals.len(), 81);
-    close(
-        intervals.iter().map(|i| i.end_mm - i.start_mm).sum(),
-        0.00798,
-        1e-6,
-    );
-    for interval in intervals {
-        assert!(windows.contains_point(query.interval_site(interval).unwrap().point));
-    }
-}
-
-#[test]
 fn curved_contours_use_explicit_polygon_model() {
     let circle = ContourBuf::new(vec![
         PathCmd::move_to(Point::new(5.0, 0.0)),
@@ -110,13 +84,6 @@ fn curved_contours_use_explicit_polygon_model() {
         1e-10,
     );
     assert!(p.distance.uncertainty_mm > region.uncertainty_mm);
-    let intervals = query
-        .usable_intervals(id, &rect(4.0, -1.0, 2.0, 2.0))
-        .unwrap();
-    assert!(!intervals.is_empty());
-    for interval in intervals {
-        assert!(query.interval_site(interval).unwrap().point.x > 4.0);
-    }
     let cubic = ContourBuf::new(vec![
         PathCmd::move_to(Point::ZERO),
         PathCmd::cubic_to(
@@ -153,9 +120,8 @@ fn concavity_and_affine_reflection_keep_outward_normals_and_clearance() {
         assert!(moved.contains_point(site.point - site.outward_normal * 0.01));
     }
     let attachment = transform_region(&rect(3.0, 3.0, 1.0, 1.0), transform).unwrap();
-    let checks = check_footprints(
+    let checks = check_footprint(
         &attachment,
-        &ContourSet::empty(RESOLUTION),
         &[Obstacle {
             id: "concave board",
             region: &moved,
@@ -169,24 +135,22 @@ fn concavity_and_affine_reflection_keep_outward_normals_and_clearance() {
 }
 
 #[test]
-fn complete_footprints_detect_crossings_containment_shoulders_and_holes() {
+fn complete_footprints_detect_crossings_containment_and_holes() {
     let attachment = rect(-3.0, -0.25, 6.0, 0.5);
-    let shoulder = rect(2.5, -1.0, 1.0, 2.0);
     // Crossing is far from attachment center; no attachment vertex is inside.
     let overhang = rect(1.0, -2.0, 0.5, 4.0);
-    let shoulder_obstacle = rect(3.2, 0.5, 0.2, 0.2);
+    let clear = rect(3.2, 0.5, 0.2, 0.2);
     let hole = rect(-2.0, -0.1, 0.1, 0.1);
-    let checks = check_footprints(
+    let checks = check_footprint(
         &attachment,
-        &shoulder,
         &[
             Obstacle {
                 id: "overhang",
                 region: &overhang,
             },
             Obstacle {
-                id: "shoulder only",
-                region: &shoulder_obstacle,
+                id: "clear",
+                region: &clear,
             },
             Obstacle {
                 id: "existing hole",
@@ -197,21 +161,20 @@ fn complete_footprints_detect_crossings_containment_shoulders_and_holes() {
         TOL,
     )
     .unwrap();
-    assert_eq!(checks.len(), 6);
-    for index in [0, 3, 4] {
+    assert_eq!(checks.len(), 3);
+    for index in [0, 2] {
         assert_eq!(
             checks[index].decision,
             Decision::Rejected(GeometricRejection::FootprintOverlap)
         );
         assert!(checks[index].overlap.area() > 0.0);
     }
-    assert_eq!(checks[3].part, FootprintPart::RouterShoulder);
-    assert_eq!(checks[3].obstacle, "shoulder only");
+    assert_eq!(checks[1].obstacle, "clear");
+    assert_eq!(checks[1].decision, Decision::Admissible);
     let enclosing = rect(-10.0, -10.0, 20.0, 20.0);
     assert_eq!(
-        check_footprints(
+        check_footprint(
             &attachment,
-            &shoulder,
             &[Obstacle {
                 id: "enclosing",
                 region: &enclosing
@@ -225,9 +188,8 @@ fn complete_footprints_detect_crossings_containment_shoulders_and_holes() {
     );
     let annulus = enclosing.difference(&rect(-5.0, -5.0, 10.0, 10.0)).unwrap();
     assert_eq!(
-        check_footprints(
+        check_footprint(
             &attachment,
-            &shoulder,
             &[Obstacle {
                 id: "free hole",
                 region: &annulus
@@ -250,9 +212,8 @@ fn tolerance_ambiguity_is_not_geometric_rejection() {
         ..TOL
     };
     let check = |clearance| {
-        check_footprints(
+        check_footprint(
             &attachment,
-            &ContourSet::empty(RESOLUTION),
             &[Obstacle {
                 id: "near",
                 region: &obstacle,
@@ -271,8 +232,7 @@ fn tolerance_ambiguity_is_not_geometric_rejection() {
         Decision::Rejected(GeometricRejection::InsufficientClearance { .. })
     ));
     assert!(matches!(
-        check_footprints(
-            &attachment,
+        check_footprint(
             &attachment,
             &[Obstacle {
                 id: "same",
@@ -285,46 +245,6 @@ fn tolerance_ambiguity_is_not_geometric_rejection() {
             .decision,
         Decision::Unresolved(_)
     ));
-}
-
-#[test]
-fn cutter_reachability_detects_closed_holes_and_radius_limited_necks() {
-    let workspace = rect(-5.0, -5.0, 10.0, 10.0);
-    let ring = rect(-3.0, -3.0, 6.0, 6.0)
-        .difference(&rect(-1.0, -1.0, 2.0, 2.0))
-        .unwrap();
-    let reach = cutter_reachability(
-        &workspace,
-        &ring,
-        0.2,
-        &[Point::new(-4.0, 0.0)],
-        &[Point::new(4.0, 0.0), Point::ZERO],
-        TOL,
-    )
-    .unwrap();
-    assert_eq!(reach.targets[0], Decision::Admissible);
-    assert_eq!(
-        reach.targets[1],
-        Decision::Rejected(GeometricRejection::Unreachable { target: 1 })
-    );
-    let free = rect(0.0, 0.0, 3.0, 4.0)
-        .union(&rect(3.0, 1.7, 4.0, 0.6))
-        .unwrap()
-        .union(&rect(7.0, 0.0, 3.0, 4.0))
-        .unwrap();
-    let empty = ContourSet::empty(RESOLUTION);
-    for (radius, reachable) in [(0.2, true), (0.4, false)] {
-        let result = cutter_reachability(
-            &free,
-            &empty,
-            radius,
-            &[Point::new(1.0, 2.0)],
-            &[Point::new(9.0, 2.0)],
-            TOL,
-        )
-        .unwrap();
-        assert_eq!(result.targets[0] == Decision::Admissible, reachable);
-    }
 }
 
 #[test]
@@ -372,7 +292,7 @@ fn supplied_break_sweep_separates_only_when_last_ligament_is_removed() {
 }
 
 #[test]
-fn boundary_witnesses_are_unresolved_not_access_or_separation() {
+fn boundary_witnesses_are_unresolved_not_separation() {
     let region = rect(0.0, 0.0, 4.0, 4.0);
     let empty = ContourSet::empty(RESOLUTION);
     let points = [
@@ -389,80 +309,6 @@ fn boundary_witnesses_are_unresolved_not_access_or_separation() {
     assert_eq!(topology.witnesses[2], RegionMembership::BoundaryBand);
     assert_eq!(topology.connected(0, 1).unwrap(), None);
     assert_eq!(topology.connected(0, 2).unwrap(), None);
-    let tolerance = QueryTolerance {
-        boundary_mm: 0.001,
-        ..TOL
-    };
-    let reach = cutter_reachability(
-        &region,
-        &empty,
-        0.5,
-        &[Point::new(0.5, 2.0)],
-        &points,
-        tolerance,
-    )
-    .unwrap();
-    assert_eq!(reach.entries, vec![RegionMembership::BoundaryBand]);
-    assert!(matches!(reach.targets[0], Decision::Unresolved(_)));
-    assert_eq!(
-        reach.targets[1],
-        Decision::Rejected(GeometricRejection::OutsideCutterSpace { point: 1 })
-    );
-    let multiple_entries = cutter_reachability(
-        &region,
-        &empty,
-        0.5,
-        &[Point::new(0.5, 2.0), points[0]],
-        &points[..1],
-        tolerance,
-    )
-    .unwrap();
-    assert_eq!(multiple_entries.targets[0], Decision::Admissible);
-}
-
-#[test]
-fn uncertain_cutter_entries_affect_only_adjacent_components() {
-    let workspace = rect(0.0, 0.0, 4.0, 4.0)
-        .union(&rect(4.2, 0.0, 4.0, 4.0))
-        .unwrap()
-        .union(&rect(20.0, 0.0, 4.0, 4.0))
-        .unwrap();
-    let empty = ContourSet::empty(RESOLUTION);
-    let targets = [
-        Point::new(2.0, 2.0),
-        Point::new(6.0, 2.0),
-        Point::new(22.0, 2.0),
-    ];
-    // The first entry borders only the left component; the second borders
-    // both nearby components. Neither can reach the distant third component.
-    for (entry, second_uncertain) in [(Point::new(0.1, 2.0), false), (Point::new(4.1, 2.0), true)] {
-        let reach = cutter_reachability(
-            &workspace,
-            &empty,
-            0.1,
-            &[entry],
-            &targets,
-            QueryTolerance {
-                boundary_mm: 0.15,
-                ..TOL
-            },
-        )
-        .unwrap();
-        assert_eq!(reach.entries, vec![RegionMembership::BoundaryBand]);
-        assert!(matches!(reach.targets[0], Decision::Unresolved(_)));
-        if second_uncertain {
-            assert!(matches!(reach.targets[1], Decision::Unresolved(_)));
-        } else {
-            assert_eq!(
-                reach.targets[1],
-                Decision::Rejected(GeometricRejection::Unreachable { target: 1 })
-            );
-        }
-        assert_eq!(
-            reach.targets[2],
-            Decision::Rejected(GeometricRejection::Unreachable { target: 2 })
-        );
-    }
 }
 
 #[test]
@@ -477,9 +323,8 @@ fn preparation_uncertainty_and_budget_survive_queries_and_transforms() {
     assert!(transformed.uncertainty_mm >= 0.004);
     assert_eq!(transformed.resolution, RESOLUTION);
     let obstacle = rect(1.003, 0.0, 1.0, 1.0);
-    let checks = check_footprints(
+    let checks = check_footprint(
         &prepared,
-        &ContourSet::empty(RESOLUTION),
         &[Obstacle {
             id: "near",
             region: &obstacle,
@@ -527,29 +372,6 @@ fn stored_membership_uncertainty_keeps_additive_numerical_guard() {
     let topology =
         material_after_break(&material, &empty, &[Point::new(0.0025, 2.0)], tolerance).unwrap();
     assert_eq!(topology.witnesses, vec![RegionMembership::BoundaryBand]);
-    let baseline = cutter_reachability(
-        &material,
-        &empty,
-        0.5,
-        &[Point::new(2.0, 2.0)],
-        &[],
-        tolerance,
-    )
-    .unwrap();
-    let band_point = Point::new(
-        baseline.center_space.bbox.min.x + baseline.center_space.uncertainty_mm + 0.0005,
-        2.0,
-    );
-    let result = cutter_reachability(
-        &material,
-        &empty,
-        0.5,
-        &[Point::new(2.0, 2.0)],
-        &[band_point],
-        tolerance,
-    )
-    .unwrap();
-    assert!(matches!(result.targets[0], Decision::Unresolved(_)));
 }
 
 #[test]
@@ -561,9 +383,8 @@ fn numerical_overlap_requires_a_deep_interior_witness() {
     };
     for (depth, rejected) in [(0.0005, false), (0.001, false), (0.01, true)] {
         let obstacle = rect(1.0 - depth, 0.0, 1.0, 1.0);
-        let checks = check_footprints(
+        let checks = check_footprint(
             &footprint,
-            &ContourSet::empty(RESOLUTION),
             &[Obstacle {
                 id: "overlap",
                 region: &obstacle,
@@ -625,7 +446,6 @@ fn invalid_queries_are_errors_not_geometric_rejections() {
             )
             .is_err()
     );
-    assert!(cutter_reachability(&region, &region, -1.0, &[Point::ZERO], &[], TOL).is_err());
     assert!(
         transform_region(
             &region,

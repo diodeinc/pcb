@@ -1,6 +1,6 @@
 use super::*;
 use crate::geom::BBox;
-use crate::geom::attachment::{Decision, cutter_reachability};
+use crate::geom::attachment::transform_region;
 
 const TOL: QueryTolerance = QueryTolerance {
     boundary_mm: 0.0,
@@ -56,7 +56,7 @@ fn tab(
 }
 
 #[test]
-fn straight_and_curved_retention_release_intrusion_and_cutter_access() -> Result<(), QueryError> {
+fn straight_and_curved_retention_release_intrusion_and_cutter_fit() -> Result<(), QueryError> {
     for curved in [false, true] {
         let (board, support, stock) = fixture(curved);
         let tab = tab(&board, &support, &stock).unwrap();
@@ -121,33 +121,24 @@ fn straight_and_curved_retention_release_intrusion_and_cutter_access() -> Result
             );
             assert_eq!(after.components.len(), 2, "no loose shoulder islands");
         }
-        assert!(tab.shoulders.area() > 0.05);
-        // Both shoulder approaches must be reachable with a 1mm cutter, from
-        // explicit side entries. Targets are deliberately off contact surfaces.
-        let access = cutter_reachability(
-            &rect(-12.0, -22.0, 24.0, 37.0),
-            &tab.retained_substrate,
-            0.5,
-            &[Point::new(-11.0, 1.5), Point::new(11.0, 1.5)],
-            &[Point::new(-1.6, 0.6), Point::new(1.6, 0.6)],
-            TOL,
-        )
-        .unwrap();
-        assert_eq!(
-            access.targets,
-            vec![Decision::Admissible, Decision::Admissible]
-        );
-        // A larger cutter must not inherit the small-cutter shoulder approval.
-        let large = cutter_reachability(
-            &rect(-12.0, -22.0, 24.0, 37.0),
-            &tab.retained_substrate,
-            0.8,
-            &[Point::new(-11.0, 1.5), Point::new(11.0, 1.5)],
-            &[Point::new(-1.6, 0.6), Point::new(1.6, 0.6)],
-            TOL,
-        )
-        .unwrap();
-        assert!(large.targets.iter().all(|d| *d != Decision::Admissible));
+        // The router leaves rounded shoulders where the neck meets the walls.
+        let shoulders = stock
+            .difference(&tab.routed_removal)?
+            .difference(&protected.union(&tab.neck)?)?;
+        assert!(shoulders.area() > 0.05);
+        // The cutter that made them fits everything it is said to remove
+        // around the neck, to within the flattening of its own arcs; a larger
+        // one does not inherit that.
+        let around_neck = rect(-3.0, -1.0, 6.0, 5.0);
+        let unreached = |radius: f64| -> Result<f64, QueryError> {
+            Ok(tab
+                .routed_removal
+                .difference(&tab.routed_removal.disk_open(radius)?)?
+                .intersection(&around_neck)?
+                .area())
+        };
+        assert!(unreached(SparkFunShallow::CUTTER_RADIUS_MM)? < 0.005);
+        assert!(unreached(0.8)? > 0.05);
     }
     Ok(())
 }

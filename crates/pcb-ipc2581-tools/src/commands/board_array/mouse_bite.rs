@@ -6,9 +6,9 @@
 //!
 //! Each tab comes from the single-tab builder in pcb-ir, given the board
 //! instance, the frame around it and a local window of stock; the holes and
-//! break rows are the builder's. A board's removal is its slot minus every
-//! tab neck, opened by the cutter around the necks so the fillets a router
-//! leaves beside them are part of the void's shape. The emitted panel is
+//! break rows are the builder's. A board's removal is the builder's own routed
+//! void of its slot around every tab neck, so the panel emits the construction
+//! each tab was certified with. The emitted panel is
 //! then checked as a whole: no routed void reaches into any board, every
 //! board is connected to the frame before the break rows are cut, and every
 //! board is free of the frame and of each other after.
@@ -20,7 +20,7 @@ use ipc2581::types::Polygon;
 use pcb_ir::geom::{
     Affine2, BBox, ContourBuf, ContourSet, LineCap, LineJoin, Point, Resolution, StrokeToFillStyle,
     attachment::{BoundaryQuery, QueryTolerance, material_after_break, transform_region},
-    mouse_bite::{Attachment, Npth, SparkFunShallow, TabGeometry, build},
+    mouse_bite::{Attachment, Npth, SparkFunShallow, TabGeometry, build, routed_void},
     path::stroke_to_fill,
     region::ring_signed_area,
 };
@@ -75,7 +75,6 @@ pub(super) fn generate(
         "the rails between routed slots do not form one connected frame"
     );
     let candidates = &placement.sites.candidates;
-    let radius = SparkFunShallow::CUTTER_RADIUS_MM;
     let mut excluded = HashSet::new();
     let mut dropped = Vec::new();
     loop {
@@ -140,14 +139,8 @@ pub(super) fn generate(
                     }
                 }
             }
-            // The router clears the slot except where necks bridge it. Its
-            // disk cannot reach into the corners where a neck meets the slot
-            // walls, so the void is opened by the cutter around the necks and
-            // follows the outline exactly everywhere else.
-            let void = slot.difference(board)?.difference(&necks)?;
-            let removal = void
-                .disk_open(radius)?
-                .union(&void.difference(&necks.disk_dilate(2.0 * radius)?)?)?;
+            // The router clears the slot except where necks bridge it.
+            let removal = routed_void(&slot.difference(board)?, &necks)?;
             cutouts.extend(removal.connected_components());
         }
         if let Some((c, reason)) = rejected {

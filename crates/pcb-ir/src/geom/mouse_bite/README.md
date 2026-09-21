@@ -37,20 +37,23 @@ tool's jaw access, support shape, or curved-tab compatibility.
 
 ## Geometry contract and limits
 
-The straight 2 mm neck connects the explicit anchor to the supplied site. Opening
-the ideal routing void with the 0.5 mm cutter disk leaves rounded shoulders.
+The straight 2 mm neck connects the explicit anchor to the supplied site.
+`routed_void` owns what the router removes: the ideal void less the necks,
+opened with the 0.5 mm cutter disk around them, which leaves rounded shoulders,
+and exact along its walls everywhere else. The builder certifies that
+construction locally and a panel generator emits the same one.
 The board's outward disk offset supplies a cyclic polygon break row, preserving
 all intervening vertices, with five centers each one straight pitch from the
 last along it. This avoids inventing smooth-curve tangents, curvature
 thresholds, or arc-length error bounds, and keeps the web between holes a
 straight-line distance on curves.
 
-Outputs keep retained substrate, routed removal, full drill masks, analytic
-NPTH centers/diameters, attachment footprint and shoulder material distinct.
-Routed removal and full drill masks may overlap intentionally. Material is stock
-minus their union. `shoulders` is retained material, **not** the full router sweep;
-use routed removal for routing-footprint obstacle checks. Adapters must map NPTH
-to existing manufacturing tooling with appropriate layer/provenance data.
+Outputs keep retained substrate, routed removal, full drill masks, the straight
+neck and analytic NPTH centers/diameters distinct. Routed removal and full drill
+masks may overlap intentionally. Material is stock minus their union. Shoulders
+are retained material, **not** the full router sweep; use routed removal for
+routing-footprint obstacle checks. Adapters must map NPTH to existing
+manufacturing tooling with appropriate layer/provenance data.
 
 Construction rejects disconnected stock results, missing/uncertain inter-hole
 ligaments, and incomplete release under a 0.002 mm virtual break sweep. All-pairs
@@ -63,9 +66,9 @@ Validated synthetic cases are a straight edge and a convex 10 mm-radius source
 circle represented by canonical flattened polygons, with a 3 mm board/support
 gap. Arbitrary concave, oblique, tight-radius, holed or obstructed attachments are
 not manufacturing-qualified. The builder's checks do not replace full-panel
-`check_footprints` / `cutter_reachability` with explicit obstacles and entry points.
-Disk opening establishes a local swept-disk shape, not a globally reachable
-toolpath. Check actual fixture and tool Z access separately.
+obstacle and release checks. Disk opening establishes a local swept-disk shape,
+not a globally reachable toolpath. Check actual fixture and tool Z access
+separately.
 
 Canonical preparation, offsets and stroke expansion inherit each input region's
 `Resolution` and fallible `GeometryAccuracy` budget. Generated geometry uses the

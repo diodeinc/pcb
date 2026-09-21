@@ -57,6 +57,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &[Point::new(0.0, -5.0), Point::new(0.0, 5.0)],
             tolerance,
         )?;
+        // Retained material that is neither board, support nor the straight
+        // neck: what disk-opening the routing void leaves beside the neck.
+        let shoulders = stock
+            .difference(&tab.routed_removal)?
+            .difference(&board.union(&support)?.union(&tab.neck)?)?;
         let mut drills = String::from("x_mm,y_mm,diameter_mm,plating\n");
         for hole in &tab.npth {
             writeln!(
@@ -73,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for (id, region, color) in [
                 ("routed-removal", &tab.routed_removal, "#e5e7eb"),
                 ("retained-substrate", &tab.retained_substrate, "#b5d9bd"),
-                ("rounded-shoulders", &tab.shoulders, "#6eaf86"),
+                ("rounded-shoulders", &shoulders, "#6eaf86"),
                 ("npth", &tab.perforations, "#ffffff"),
             ] {
                 writeln!(

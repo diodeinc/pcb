@@ -1,9 +1,9 @@
 //! Policy-free attachment geometry on the canonical regularized polygon model.
 //!
 //! All lengths are millimeters. Callers supply material, complete footprints,
-//! obstacles (including component overhangs and forbidden holes), cutter entry
-//! points, and swept break-removal regions. This module selects no tab pattern,
-//! support count, fixture, or fracture model.
+//! obstacles (including component overhangs and forbidden holes), and swept
+//! break-removal regions. This module selects no tab pattern, support count,
+//! fixture, or fracture model.
 //!
 //! # Scope of guarantees
 //! Boundary stations and topology refer to the supplied [`ContourSet`], not its
@@ -13,8 +13,8 @@
 //! predicates. Missing features already discarded by a caller's region
 //! tolerance cannot be recovered. [`QueryTolerance`] is an explicit uncertainty
 //! budget, not an independently certified bound on that backend. In particular,
-//! [`PolygonTopology`] and [`CutterReachability`] are model results, **not**
-//! certified source-curve topology, toolpath generation, or physical separation.
+//! [`PolygonTopology`] is a model result, **not** certified source-curve
+//! topology or physical separation.
 
 pub mod outline;
 
@@ -77,7 +77,7 @@ impl From<AccuracyError> for QueryError {
     }
 }
 
-fn validate_region(region: &ContourSet) -> Result<(), QueryError> {
+pub(crate) fn validate_region(region: &ContourSet) -> Result<(), QueryError> {
     region.budget().check(region.uncertainty_mm)?;
     if !region.tolerance().is_finite()
         || region.tolerance() < 0.0
@@ -126,15 +126,6 @@ pub struct BoundarySite {
 pub struct BoundaryProjection {
     pub site: BoundarySite,
     pub distance: Distance,
-}
-
-/// Non-wrapping polygon arc interval. An interval through the cyclic seam is
-/// returned as two intervals, so no small interval needs to be dropped.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct UsableInterval {
-    pub boundary: BoundaryId,
-    pub start_mm: f64,
-    pub end_mm: f64,
 }
 
 /// Arc-length index borrowing the canonical geometry, not another polygon
@@ -257,61 +248,6 @@ impl<'a> BoundaryQuery<'a> {
             },
         })
     }
-
-    /// Intersect every boundary edge with a caller-supplied admissible *site*
-    /// region. Crossings, not a sampling grid, delimit intervals. These are
-    /// polygon-model intervals; endpoints near uncertainty bands and source
-    /// curve arc lengths are not certified. Isolated tangencies have no usable
-    /// positive-length interval. Full-footprint clearance is a separate query.
-    pub fn usable_intervals(
-        &self,
-        id: BoundaryId,
-        admissible: &ContourSet,
-    ) -> Result<Vec<UsableInterval>, QueryError> {
-        let stations = self.index(id)?;
-        validate_region(admissible)?;
-        let mut result: Vec<UsableInterval> = Vec::new();
-        for (edge, (a, b)) in ring_edges(&self.region.rings[id.ring]).enumerate() {
-            let length = stations[edge + 1] - stations[edge];
-            for (start, end) in segment_inside_intervals(admissible, a, b) {
-                let start_mm = stations[edge] + start * length;
-                let end_mm = stations[edge] + end * length;
-                if end_mm <= start_mm {
-                    return Err(QueryError::Numerical(
-                        "usable interval below arc-length resolution",
-                    ));
-                }
-                if let Some(previous) = result
-                    .last_mut()
-                    .filter(|previous| previous.end_mm == start_mm)
-                {
-                    previous.end_mm = end_mm;
-                } else {
-                    result.push(UsableInterval {
-                        boundary: id,
-                        start_mm,
-                        end_mm,
-                    });
-                }
-            }
-        }
-        Ok(result)
-    }
-
-    /// One representative midpoint per interval, with no truncation. This is
-    /// not an enumeration of all feasible placements or an optimization grid.
-    pub fn interval_site(&self, interval: UsableInterval) -> Result<BoundarySite, QueryError> {
-        if interval.start_mm < 0.0
-            || interval.end_mm > self.perimeter(interval.boundary)?
-            || interval.start_mm >= interval.end_mm
-        {
-            return Err(QueryError::InvalidInput("invalid boundary interval"));
-        }
-        self.site(
-            interval.boundary,
-            interval.start_mm + (interval.end_mm - interval.start_mm) / 2.0,
-        )
-    }
 }
 
 /// Transform the polygon model with the existing IR affine convention. Rebuild
@@ -346,8 +282,6 @@ pub fn transform_region(region: &ContourSet, transform: Affine2) -> Result<Conto
 pub enum GeometricRejection {
     FootprintOverlap,
     InsufficientClearance { required_mm: f64, measured_mm: f64 },
-    OutsideCutterSpace { point: usize },
-    Unreachable { target: usize },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -365,15 +299,8 @@ pub struct Obstacle<'a> {
     pub region: &'a ContourSet,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FootprintPart {
-    Attachment,
-    RouterShoulder,
-}
-
 #[derive(Debug, Clone)]
 pub struct FootprintCheck<'a> {
-    pub part: FootprintPart,
     pub obstacle: &'a str,
     pub decision: Decision,
     pub boundary_distance: Option<Distance>,
@@ -381,41 +308,37 @@ pub struct FootprintCheck<'a> {
     pub overlap: ContourSet,
 }
 
-/// Check both complete filled footprints against every supplied obstacle. No
+/// Check one complete filled footprint against every supplied obstacle. No
 /// center-only or vertex-only acceptance; containment, holes and intersecting
 /// edges are checked by filled-region intersection and all-edge distance.
-/// Empty shoulders/obstacles are allowed; an empty attachment is invalid.
+/// Empty obstacles are allowed; an empty footprint is invalid.
 /// Touching within the numerical guard is unresolved, even for zero clearance.
 /// A source-uncertain overlap is unresolved rather than a claim that flattened
 /// curves prove collision. Supply holes as obstacles when occupying them is
 /// forbidden; holes *in* an obstacle are free space under ContourSet semantics.
-pub fn check_footprints<'a>(
-    attachment: &ContourSet,
-    router_shoulder: &ContourSet,
+pub fn check_footprint<'a>(
+    footprint: &ContourSet,
     obstacles: &[Obstacle<'a>],
     clearance_mm: f64,
     tolerance: QueryTolerance,
 ) -> Result<Vec<FootprintCheck<'a>>, QueryError> {
     tolerance.validate()?;
-    if !clearance_mm.is_finite() || clearance_mm < 0.0 || attachment.is_empty() {
+    if !clearance_mm.is_finite() || clearance_mm < 0.0 || footprint.is_empty() {
         return Err(QueryError::InvalidInput(
-            "expected nonempty attachment and nonnegative clearance",
+            "expected nonempty footprint and nonnegative clearance",
         ));
     }
-    validate_region(attachment)?;
-    validate_region(router_shoulder)?;
-    let mut checks = Vec::new();
-    for obstacle in obstacles {
-        validate_region(obstacle.region)?;
-        let prepared = obstacle.region.prepare_query();
-        for (part, footprint) in [
-            (FootprintPart::Attachment, attachment),
-            (FootprintPart::RouterShoulder, router_shoulder),
-        ] {
+    validate_region(footprint)?;
+    let footprint_query = footprint.prepare_query();
+    obstacles
+        .iter()
+        .map(|obstacle| {
+            validate_region(obstacle.region)?;
+            let prepared = obstacle.region.prepare_query();
             let overlap = unfiltered(footprint).intersection(&unfiltered(obstacle.region))?;
             let bounds = footprint.bbox().union(obstacle.region.bbox());
             let reach = bounds.width().hypot(bounds.height());
-            if !reach.is_finite() && !footprint.is_empty() && !obstacle.region.is_empty() {
+            if !reach.is_finite() && !obstacle.region.is_empty() {
                 return Err(QueryError::Numerical("footprint bounds overflow"));
             }
             let distance = footprint
@@ -443,10 +366,7 @@ pub fn check_footprints<'a>(
                     // collision certificate. Verify an interior witness
                     // against both original input boundaries.
                     let guard = tolerance.numerical_mm + overlap.uncertainty_mm;
-                    let footprint_query = footprint.prepare_query();
-                    let penetrates =
-                        has_penetration_witness(&overlap, [&footprint_query, &prepared], guard);
-                    if penetrates {
+                    if has_penetration_witness(&overlap, [&footprint_query, &prepared], guard) {
                         Decision::Rejected(GeometricRejection::FootprintOverlap)
                     } else {
                         Decision::Unresolved(
@@ -470,21 +390,19 @@ pub fn check_footprints<'a>(
                         "clearance lies within the boundary/numerical uncertainty band",
                     )
                 }
-            } else if footprint.is_empty() || obstacle.region.is_empty() {
+            } else if obstacle.region.is_empty() {
                 Decision::Admissible
             } else {
                 return Err(QueryError::Numerical("missing footprint distance"));
             };
-            checks.push(FootprintCheck {
-                part,
+            Ok(FootprintCheck {
                 obstacle: obstacle.id,
                 decision,
                 boundary_distance: distance,
                 overlap,
-            });
-        }
-    }
-    Ok(checks)
+            })
+        })
+        .collect()
 }
 
 /// Enumerate every horizontal vertex slab and every filled span, including
@@ -525,9 +443,8 @@ pub enum RegionMembership {
     BoundaryBand,
 }
 
-/// Polygon component membership with a guard at boundaries. This is shared by
-/// cutter-space and retained-material queries; boundary witnesses never silently
-/// count as material or provide a zero-width connecting ligament.
+/// Polygon component membership with a guard at boundaries: boundary witnesses
+/// never silently count as material or provide a zero-width connecting ligament.
 fn membership(
     components: &[PreparedRegion],
     point: Point,
@@ -552,100 +469,6 @@ fn membership(
         }
     }
     Ok(RegionMembership::Outside)
-}
-
-#[derive(Debug, Clone)]
-pub struct CutterReachability {
-    /// Explicit approximate disk-offset model, including all disconnected voids.
-    pub center_space: ContourSet,
-    /// Every supplied entry is classified; outside and uncertain entries do
-    /// not silently become access points.
-    pub entries: Vec<RegionMembership>,
-    /// One decision for each target, in caller order.
-    pub targets: Vec<Decision>,
-    pub tolerance: QueryTolerance,
-}
-
-/// A disk cutter can translate between points in the same connected component
-/// of free space eroded by its radius. `workspace` is a supplied bounded access
-/// envelope, **not** automatically the board outline; obstacles include retained
-/// material and other forbidden volumes projected into this 2D model. At least
-/// one explicit entry is required. This checks planar translation only, not
-/// plunge access, Z collision, shoulder shape, or a generated machining path.
-/// Disk offsets and topology use the existing approximate region backend; the
-/// returned center_space is reviewable and is not a certified exact disk erosion.
-pub fn cutter_reachability(
-    workspace: &ContourSet,
-    obstacles: &ContourSet,
-    radius_mm: f64,
-    entries: &[Point],
-    targets: &[Point],
-    tolerance: QueryTolerance,
-) -> Result<CutterReachability, QueryError> {
-    tolerance.validate()?;
-    validate_region(workspace)?;
-    validate_region(obstacles)?;
-    if !radius_mm.is_finite() || radius_mm <= 0.0 || entries.is_empty() {
-        return Err(QueryError::InvalidInput(
-            "expected positive cutter radius and explicit entries",
-        ));
-    }
-    let center_space = unfiltered(workspace)
-        .difference(&unfiltered(obstacles))?
-        .disk_erode(radius_mm)?;
-    let components = center_space
-        .connected_components()
-        .iter()
-        .map(ContourSet::prepare_query)
-        .collect::<Vec<_>>();
-    let entry_components = entries
-        .iter()
-        .map(|&p| membership(&components, p, tolerance))
-        .collect::<Result<Vec<_>, _>>()?;
-    // An uncertain entry may border several components, but cannot provide
-    // possible access to remote ones. Retain all adjacent candidates rather
-    // than only the first boundary found by the aggregate membership query.
-    let mut uncertain_access = vec![false; components.len()];
-    for (&entry, classification) in entries.iter().zip(&entry_components) {
-        if *classification == RegionMembership::BoundaryBand {
-            for (index, component) in components.iter().enumerate() {
-                uncertain_access[index] |=
-                    membership(std::slice::from_ref(component), entry, tolerance)?
-                        == RegionMembership::BoundaryBand;
-            }
-        }
-    }
-    let targets = targets
-        .iter()
-        .enumerate()
-        .map(|(target, &p)| {
-            Ok(match membership(&components, p, tolerance)? {
-                RegionMembership::Component(component)
-                    if entry_components.contains(&RegionMembership::Component(component)) =>
-                {
-                    Decision::Admissible
-                }
-                RegionMembership::Component(component) if uncertain_access[component] => {
-                    Decision::Unresolved("entry is within the cutter-space uncertainty band")
-                }
-                RegionMembership::Component(_) => {
-                    Decision::Rejected(GeometricRejection::Unreachable { target })
-                }
-                RegionMembership::Outside => {
-                    Decision::Rejected(GeometricRejection::OutsideCutterSpace { point: target })
-                }
-                RegionMembership::BoundaryBand => {
-                    Decision::Unresolved("target is within the cutter-space uncertainty band")
-                }
-            })
-        })
-        .collect::<Result<Vec<_>, QueryError>>()?;
-    Ok(CutterReachability {
-        center_space,
-        entries: entry_components,
-        targets,
-        tolerance,
-    })
 }
 
 /// Connectivity of the regularized retained polygon material, not a source-curve
