@@ -160,16 +160,18 @@ pub(super) fn integer_shapes_on_grid(
 /// Decimate rings so the region only shrinks: the result covers no point the
 /// source did not, and no source vertex ends farther than `deviation_mm`
 /// from the decimated boundary.
-pub(crate) fn decimate_rings_inward(rings: &[Ring], deviation_mm: f64) -> Vec<Ring> {
+pub(crate) fn decimate_rings_inward<'a>(
+    rings: impl Iterator<Item = &'a [[f64; 2]]>,
+    deviation_mm: f64,
+) -> Vec<Ring> {
     rings
-        .iter()
         .map(|ring| decimate_ring_inward(ring, deviation_mm))
         .collect()
 }
 
-fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
+fn decimate_ring_inward(ring: &[[f64; 2]], deviation_mm: f64) -> Ring {
     if ring.len() < 4 {
-        return ring.clone();
+        return ring.to_vec();
     }
     let point = |index: usize| {
         let [x, y] = ring[index % ring.len()];
@@ -210,7 +212,7 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
         anchor = end;
     }
     if kept.len() < 3 {
-        return ring.clone();
+        return ring.to_vec();
     }
     kept
 }
@@ -227,7 +229,7 @@ impl ContourSet {
     pub fn decimate_inward(&self) -> Result<Self, AccuracyError> {
         let inherited = self.uncertainty_mm + numerical_error(self.bbox);
         let deviation_mm = self.budget().allowance(inherited)?;
-        let decimated = decimate_rings_inward(&self.rings, deviation_mm);
+        let decimated = decimate_rings_inward(self.rings(), deviation_mm);
         Ok(Self::from_regularized(
             flatten_shapes(regularize(decimated, OverlayFillRule::Positive)),
             self.resolution,

@@ -3,8 +3,8 @@
 use super::simplification::integer_shapes_on_grid;
 use super::widths::{ContactIndex, WidthAxis};
 use super::{
-    ContourSet, PreparedRegion, Ring, horizontal_crossing, ring_edges, ring_signed_area,
-    ring_winding, simplify_rings,
+    ContourSet, PreparedRegion, edges_of, horizontal_crossing, ring_winding, signed_area_of,
+    simplify_rings,
 };
 use crate::geom::accuracy::numerical_error;
 use crate::geom::dist;
@@ -69,23 +69,23 @@ impl ContourSet {
     /// not regularized input and bounds a component of its own, so every
     /// ring has one.
     pub(crate) fn ring_components(&self) -> (Vec<usize>, Vec<usize>) {
-        let areas = self.rings.iter().map(ring_signed_area).collect::<Vec<_>>();
-        let mut outers = (0..self.rings.len())
+        let areas = self.rings().map(signed_area_of).collect::<Vec<_>>();
+        let mut outers = (0..self.ring_count())
             .filter(|&ring| areas[ring] > 0.0)
             .collect::<Vec<_>>();
         outers.sort_by(|&left, &right| areas[left].total_cmp(&areas[right]));
-        let mut components = vec![usize::MAX; self.rings.len()];
+        let mut components = vec![usize::MAX; self.ring_count()];
         for (component, &outer) in outers.iter().enumerate() {
             components[outer] = component;
         }
         let enclosing = outers.len();
-        for hole in (0..self.rings.len()).filter(|&ring| areas[ring] <= 0.0) {
+        for hole in (0..self.ring_count()).filter(|&ring| areas[ring] <= 0.0) {
             let larger = outers[..enclosing].partition_point(|&outer| areas[outer] <= -areas[hole]);
             let outer =
-                ring_interior_point(&self.rings[hole], self.ring_bounds[hole]).and_then(|point| {
+                ring_interior_point(self.ring(hole), self.ring_bounds(hole)).and_then(|point| {
                     outers[larger..enclosing].iter().copied().find(|&outer| {
-                        self.ring_bounds[outer].contains_point(point)
-                            && ring_winding(&self.rings[outer], point) != 0
+                        self.ring_bounds(outer).contains_point(point)
+                            && ring_winding(self.ring(outer), point) != 0
                     })
                 });
             components[hole] = outer.map_or(outers.len(), |outer| components[outer]);
@@ -178,7 +178,7 @@ impl ContourSet {
                 facing[other] = true;
             }
         }
-        let mut kept = vec![false; self.rings.len()];
+        let mut kept = vec![false; self.ring_count()];
         let mut windows = Vec::new();
         for segment in segments
             .iter()
@@ -202,11 +202,10 @@ impl ContourSet {
             }
         }
         let material = Self::from_regularized(
-            self.rings
-                .iter()
+            self.rings()
                 .zip(&kept)
                 .filter(|&(_, &keep)| keep)
-                .map(|(ring, _)| ring.clone())
+                .map(|(ring, _)| ring.to_vec())
                 .collect(),
             self.resolution,
             self.uncertainty_mm,
@@ -419,9 +418,9 @@ impl ContourSet {
 /// widest span the ring covers along the horizontal line at its mid-height.
 /// That line runs strictly between the ring's lowest and highest vertices,
 /// so it passes through the ring's interior.
-fn ring_interior_point(ring: &Ring, bounds: BBox) -> Option<Point> {
+fn ring_interior_point(ring: &[[f64; 2]], bounds: BBox) -> Option<Point> {
     let y = bounds.min.y.midpoint(bounds.max.y);
-    let mut crossings = ring_edges(ring)
+    let mut crossings = edges_of(ring)
         .filter_map(|(start, end)| horizontal_crossing(start, end, y))
         .collect::<Vec<_>>();
     crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
@@ -466,8 +465,7 @@ fn closing_residual(region: &ContourSet, radius: f64) -> Result<ContourSet, Accu
 /// across a dropped sub-tolerance edge remain adjacent.
 fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment> {
     source
-        .rings
-        .iter()
+        .rings()
         .enumerate()
         .flat_map(|(ring_id, ring)| {
             let metric = RingArcLength::new(ring);
@@ -478,7 +476,7 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
                 .max(source.tolerance())
                 .max(numerical_error(source.bbox))
                 .min(metric.perimeter() / 8.0);
-            let kept = ring_edges(ring)
+            let kept = edges_of(ring)
                 .enumerate()
                 .filter(|(_, (start, end))| start.distance_to(*end) > source.tolerance())
                 .collect::<Vec<_>>();
@@ -505,14 +503,14 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
 /// Canonical arc-length parameterization of a closed polygonal ring.
 /// Consecutive entries are the stations at the ends of each source edge.
 struct RingArcLength<'a> {
-    ring: &'a Ring,
+    ring: &'a [[f64; 2]],
     stations: Vec<f64>,
 }
 
 impl<'a> RingArcLength<'a> {
-    fn new(ring: &'a Ring) -> Self {
+    fn new(ring: &'a [[f64; 2]]) -> Self {
         let stations = std::iter::once(0.0)
-            .chain(ring_edges(ring).scan(0.0, |station, (start, end)| {
+            .chain(edges_of(ring).scan(0.0, |station, (start, end)| {
                 *station += start.distance_to(end);
                 Some(*station)
             }))
@@ -828,7 +826,7 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
                 })
             })
         })
-        .flat_map(|component| component.rings)
+        .flat_map(ContourSet::into_rings)
         .collect();
     ContourSet::from_regularized(
         simplify_rings(rings, FillRule::NonZero),
@@ -882,7 +880,9 @@ fn narrow_void_medial_axis_keep_out(
     // grid instead, which keeps a vertex at every contact it creates.
     let walls = ContourSet::from_regularized(
         integer_shapes_on_grid(
-            source.reaching(narrow_voids.bbox.expand(radius)).rings,
+            source
+                .reaching(narrow_voids.bbox.expand(radius))
+                .into_rings(),
             FillRule::NonZero,
             1.0 / VORONOI_COORDINATES_PER_MM,
             IntOverlayOptions::keep_output_points(),
@@ -912,9 +912,8 @@ fn narrow_void_medial_axis_keep_out(
     // A closing residual is within the disk radius of its nearest source boundary.
     let void_boundary = narrow_voids.prepare_query();
     let mut relevant = narrow_voids
-        .ring_bounds
-        .iter()
-        .flat_map(|bounds| boundary.segment_ids_meeting(bounds.expand(radius)))
+        .bounded_rings()
+        .flat_map(|(_, bounds)| boundary.segment_ids_meeting(bounds.expand(radius)))
         .filter(|&id| {
             let (start, end) = boundary.segments[id];
             void_boundary

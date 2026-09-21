@@ -222,15 +222,17 @@ impl ContourSet {
         Self {
             bbox,
             rings: self
-                .rings
-                .iter()
+                .rings()
                 .map(|ring| {
                     ring.iter()
                         .map(|&[x, y]| [x + offset.x, y + offset.y])
                         .collect()
                 })
                 .collect(),
-            ring_bounds: self.ring_bounds.iter().copied().map(shift).collect(),
+            ring_bounds: self
+                .bounded_rings()
+                .map(|(_, bounds)| shift(bounds))
+                .collect(),
             resolution: self.resolution,
             uncertainty_mm: self.uncertainty_mm + numerical_error(bbox),
         }

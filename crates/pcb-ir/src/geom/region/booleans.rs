@@ -82,7 +82,7 @@ impl ContourSet {
         for (empty, kept) in [(self, other), (other, self)] {
             if empty.is_empty() && empty.uncertainty_mm == 0.0 {
                 return Self::from_regularized(
-                    kept.rings.clone(),
+                    kept.to_rings(),
                     self.resolution.meet(other.resolution),
                     kept.uncertainty_mm,
                 )
@@ -119,18 +119,18 @@ impl ContourSet {
         // the panel.
         let rings = match rule {
             OverlayRule::Union => union_rings(
-                sourced(self.rings.clone(), 0)
-                    .chain(sourced(other.rings.clone(), 1))
+                sourced(self.to_rings(), 0)
+                    .chain(sourced(other.to_rings(), 1))
                     .collect(),
             ),
             OverlayRule::Difference => overlay_rings(
-                self.rings.clone(),
-                other.reaching(self.bbox.expand(numeric)).rings,
+                self.to_rings(),
+                other.reaching(self.bbox.expand(numeric)).into_rings(),
                 rule,
             ),
             _ => overlay_rings(
-                self.reaching(other.bbox.expand(numeric)).rings,
-                other.reaching(self.bbox.expand(numeric)).rings,
+                self.reaching(other.bbox.expand(numeric)).into_rings(),
+                other.reaching(self.bbox.expand(numeric)).into_rings(),
                 rule,
             ),
         };
@@ -142,18 +142,16 @@ impl ContourSet {
     /// ring's bounds, so a kept hole always keeps the material around it.
     pub fn reaching(&self, window: BBox) -> Self {
         let rings = self
-            .rings
-            .iter()
-            .zip(&self.ring_bounds)
+            .bounded_rings()
             .filter(|(_, bounds)| bounds.intersects(window))
-            .map(|(ring, _)| ring.clone())
+            .map(|(ring, _)| ring.to_vec())
             .collect();
         Self::from_regularized(rings, self.resolution, self.uncertainty_mm)
     }
 
     /// Connected components, each retaining its own hole rings.
     pub fn connected_components(&self) -> Vec<Self> {
-        simplify_shapes(self.rings.clone(), FillRule::NonZero)
+        simplify_shapes(self.to_rings(), FillRule::NonZero)
             .into_iter()
             .map(|shape| Self::from_regularized(shape, self.resolution, self.uncertainty_mm))
             .collect()
@@ -202,7 +200,8 @@ impl PaintComposer {
             self.run_polarity = Some(polarity);
         }
         self.run_sources += 1;
-        self.run.extend(sourced(region.rings, self.run_sources));
+        self.run
+            .extend(sourced(region.into_rings(), self.run_sources));
     }
 
     /// The composed image, checked against its budget.

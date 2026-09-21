@@ -68,7 +68,7 @@ pub(crate) fn segment_inside_intervals(
             .then_some(t.clamp(0.0, 1.0))
     };
     let mut stations = vec![0.0, 1.0];
-    for (a, b) in region.rings.iter().flat_map(ring_edges) {
+    for (a, b) in region.edges() {
         let edge = b - a;
         let offset = a - start;
         let denominator = cross(delta, edge);
@@ -119,6 +119,16 @@ pub(crate) fn rings_bbox(rings: &[Ring]) -> BBox {
 
 /// The closed edge cycle of one ring, as start/end point pairs.
 pub fn ring_edges(ring: &Ring) -> impl Iterator<Item = (Point, Point)> + '_ {
+    edges_of(ring)
+}
+
+/// Signed area of one ring (positive when counter-clockwise).
+pub fn ring_signed_area(ring: &Ring) -> f64 {
+    signed_area_of(ring)
+}
+
+/// [`ring_edges`] of vertices however they are stored.
+fn edges_of(ring: &[[f64; 2]]) -> impl Iterator<Item = (Point, Point)> + '_ {
     let point = |[x, y]: [f64; 2]| Point::new(x, y);
     ring.iter()
         .copied()
@@ -126,8 +136,8 @@ pub fn ring_edges(ring: &Ring) -> impl Iterator<Item = (Point, Point)> + '_ {
         .map(move |(start, end)| (point(start), point(end)))
 }
 
-/// Signed area of one ring (positive when counter-clockwise).
-pub fn ring_signed_area(ring: &Ring) -> f64 {
+/// [`ring_signed_area`] of vertices however they are stored.
+fn signed_area_of(ring: &[[f64; 2]]) -> f64 {
     if ring.len() < 3 {
         return 0.0;
     }
@@ -196,7 +206,49 @@ impl ContourSet {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.rings.is_empty()
+        self.ring_count() == 0
+    }
+
+    pub fn ring_count(&self) -> usize {
+        self.rings.len()
+    }
+
+    /// The vertices of one ring.
+    pub fn ring(&self, index: usize) -> &[[f64; 2]] {
+        &self.rings[index]
+    }
+
+    /// The vertices of every ring, in ring order.
+    pub fn rings(&self) -> impl ExactSizeIterator<Item = &[[f64; 2]]> + Clone {
+        self.rings.iter().map(Vec::as_slice)
+    }
+
+    /// Every boundary edge, ring after ring.
+    pub fn edges(&self) -> impl Iterator<Item = (Point, Point)> + '_ {
+        self.rings().flat_map(edges_of)
+    }
+
+    /// The rings as owned polygons, for interfaces that take them so.
+    pub fn to_rings(&self) -> Vec<Ring> {
+        self.rings().map(<[_]>::to_vec).collect()
+    }
+
+    pub fn into_rings(self) -> Vec<Ring> {
+        self.rings
+    }
+
+    pub(crate) fn ring_bounds(&self, index: usize) -> BBox {
+        self.ring_bounds[index]
+    }
+
+    /// Every ring with its bounds.
+    pub(crate) fn bounded_rings(&self) -> impl Iterator<Item = (&[[f64; 2]], BBox)> {
+        self.rings().zip(self.ring_bounds.iter().copied())
+    }
+
+    /// The rings as the overlay reads them.
+    fn overlay_source(&self) -> &[Ring] {
+        &self.rings
     }
 
     pub fn bbox(&self) -> BBox {
@@ -205,7 +257,7 @@ impl ContourSet {
 
     /// Net enclosed area.
     pub fn area(&self) -> f64 {
-        rings_area(&self.rings)
+        self.rings().map(signed_area_of).sum::<f64>().abs()
     }
 
     /// Test many points against the same region in one sweep.
@@ -233,16 +285,14 @@ impl ContourSet {
             // wholly to one side of every point on the line winds around
             // none of them.
             let mut crossings = self
-                .rings
-                .iter()
-                .zip(&self.ring_bounds)
+                .bounded_rings()
                 .filter(|(_, bounds)| {
                     bounds.min.y <= y
                         && y <= bounds.max.y
                         && bounds.min.x <= last.x
                         && first.x <= bounds.max.x
                 })
-                .flat_map(|(ring, _)| ring_edges(ring))
+                .flat_map(|(ring, _)| edges_of(ring))
                 .filter_map(|(start, end)| horizontal_crossing(start, end, y))
                 .collect::<Vec<_>>();
             crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
@@ -293,12 +343,10 @@ impl ContourSet {
         let mut rises = vec![0.0; stride * rows];
         let mut cuts = Vec::new();
         for (ring, _) in self
-            .rings
-            .iter()
-            .zip(&self.ring_bounds)
+            .bounded_rings()
             .filter(|(_, ring_bounds)| ring_bounds.intersects(bounds))
         {
-            for (start, end) in ring_edges(ring).filter(|(start, end)| start.y != end.y) {
+            for (start, end) in edges_of(ring).filter(|(start, end)| start.y != end.y) {
                 let delta = end - start;
                 cuts.clear();
                 cuts.extend([(0.0, start), (1.0, end)]);
@@ -357,9 +405,7 @@ impl ContourSet {
 
         let epsilon = self.tolerance().max(tol::EPSILON_MM);
         let rings_near = |reach: f64| {
-            self.rings
-                .iter()
-                .zip(&self.ring_bounds)
+            self.bounded_rings()
                 .filter(move |(_, bounds)| bounds.expand(reach).contains_point(point))
                 .map(|(ring, _)| ring)
         };
@@ -400,8 +446,8 @@ pub(crate) fn horizontal_crossing(start: Point, end: Point, y: f64) -> Option<(f
 }
 
 /// The winding number of one ring around a point.
-fn ring_winding(ring: &Ring, point: Point) -> i32 {
-    ring_edges(ring)
+fn ring_winding(ring: &[[f64; 2]], point: Point) -> i32 {
+    edges_of(ring)
         .filter_map(|(start, end)| horizontal_crossing(start, end, point.y))
         .filter_map(|(x, direction)| (x <= point.x).then_some(direction))
         .sum()
@@ -411,8 +457,8 @@ fn flatten_shapes(shapes: Vec<Shape>) -> Vec<Ring> {
     shapes.into_iter().flatten().collect()
 }
 
-fn ring_boundary_distance(ring: &Ring, point: Point) -> f64 {
-    ring_edges(ring)
+fn ring_boundary_distance(ring: &[[f64; 2]], point: Point) -> f64 {
+    edges_of(ring)
         .map(|(start, end)| dist::point_segment(point, start, end).0)
         .fold(f64::INFINITY, f64::min)
 }

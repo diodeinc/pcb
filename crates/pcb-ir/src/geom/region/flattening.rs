@@ -57,7 +57,7 @@ pub fn rings_to_contours(rings: Vec<Ring>) -> Vec<ContourBuf> {
 
 impl ContourSet {
     pub fn to_contours(&self) -> Vec<ContourBuf> {
-        rings_to_contours(self.rings.clone())
+        rings_to_contours(self.to_rings())
             .into_iter()
             .map(|c| c.with_uncertainty(self.uncertainty_mm))
             .collect()

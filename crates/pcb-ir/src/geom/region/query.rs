@@ -1,4 +1,4 @@
-use super::{ContourSet, horizontal_crossing, ring_edges, ring_signed_area};
+use super::{ContourSet, edges_of, horizontal_crossing, signed_area_of};
 use crate::geom::dist::{self, Distance};
 use crate::geom::{BBox, Point, tol};
 use std::ops::Range;
@@ -48,10 +48,9 @@ impl ContourSet {
     /// ```
     pub fn prepare_query(&self) -> PreparedRegion {
         PreparedRegion::from_segments(
-            self.rings
-                .iter()
-                .filter(|ring| ring_signed_area(ring) != 0.0)
-                .flat_map(ring_edges)
+            self.rings()
+                .filter(|ring| signed_area_of(ring) != 0.0)
+                .flat_map(edges_of)
                 .collect(),
             self.uncertainty_mm,
         )
