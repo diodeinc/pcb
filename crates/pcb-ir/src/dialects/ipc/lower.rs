@@ -683,11 +683,14 @@ fn compose_board_array_fabrication_profile(
     // Store M as a `ContourSet` until the end so every contribution is merged
     // with the same regularized Boolean union.
     let resolution = resolution.with_tolerance(relief::DEFAULT_RELIEF_TOLERANCE_MM);
-    let mut material_removal = ContourSet::empty(resolution);
-
-    for contours in &input.source_material_removal {
-        material_removal.union_assign(&ContourSet::from_filled_contours(contours, resolution)?)?;
-    }
+    let mut material_removal = ContourSet::union_all(
+        resolution,
+        input
+            .source_material_removal
+            .iter()
+            .map(|contours| ContourSet::from_filled_contours(contours, resolution))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
 
     let mut relief_debug = relief::VScoreReliefDebug::default();
     if !score_lines.is_empty() && !input.board_boundaries.is_empty() {

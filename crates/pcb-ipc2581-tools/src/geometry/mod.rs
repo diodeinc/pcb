@@ -67,8 +67,7 @@ pub fn board_array_fabrication_profile(
     score_lines: &[VScoreLine],
     resolution: Resolution,
 ) -> Result<BoardArrayFabricationProfile> {
-    let (profile, _) =
-        board_array_fabrication_profile_with_debug(imported, layout, score_lines, resolution)?;
+    let (profile, _) = fabrication_profile(imported, layout, score_lines, resolution, false)?;
     Ok(profile)
 }
 
@@ -81,13 +80,26 @@ pub fn board_array_fabrication_profile_with_debug(
     BoardArrayFabricationProfile,
     pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
 )> {
+    fabrication_profile(imported, layout, score_lines, resolution, true)
+}
+
+fn fabrication_profile(
+    imported: &ImportedDesign,
+    layout: &GeometryDocument,
+    score_lines: &[VScoreLine],
+    resolution: Resolution,
+    debug: bool,
+) -> Result<(
+    BoardArrayFabricationProfile,
+    pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
+)> {
     let relief_features = board_array_relief_features(imported, score_lines, resolution)?;
     Ok(pcb_ir::dialects::ipc::board_array_fabrication_profile(
         layout,
         score_lines,
         pcb_ir::dialects::ipc::FabricationProfileOptions {
             relief_features,
-            debug: true,
+            debug,
         },
         resolution,
     )?)
