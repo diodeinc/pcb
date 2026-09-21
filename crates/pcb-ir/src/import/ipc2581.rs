@@ -804,34 +804,19 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
             .context("imported IPC step is missing from the layout graph")?
             as u32;
         for (layer_index, source_layer) in ecad.cad_data.layers.iter().enumerate() {
-            let layer_name = ipc.resolve(source_layer.name);
-            let mut local = extract_step_layer_local(
+            let feature_start = geometry.features.len() as u32;
+            let Some(document_layer) = append_step_layer(
                 ipc,
+                &mut geometry,
                 step,
                 &ecad.cad_data.layers,
                 source_layer,
-                layer_name,
+                ipc.resolve(source_layer.name),
                 resolution,
-            )?;
-            // Extraction warns into its scratch document. A layer whose every
-            // feature was dropped is exactly the one that must still report.
-            geometry.diagnostics.append(&mut local.diagnostics);
-            if local.features.is_empty() {
+            )?
+            else {
                 continue;
-            }
-
-            let document_layer = geometry.layers.len() as u32;
-            let set_start = geometry.feature_sets.len() as u32;
-            let feature_start = geometry.features.len() as u32;
-            let bbox = append_transformed_layer(
-                &mut geometry,
-                &local,
-                0,
-                Affine2::IDENTITY,
-                0,
-                None,
-                document_layer,
-            )?;
+            };
             for definition in feature_start..geometry.features.len() as u32 {
                 let feature = &mut geometry.features[definition as usize];
                 feature.source.definition = Some(definition);
@@ -843,19 +828,6 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
                     );
                 }
             }
-            let spec_refs = push_spec_refs(&mut geometry, &source_layer.spec_refs);
-            geometry.layers.push(GeometryLayer {
-                name: layer_name.to_owned(),
-                source_layer_ref: source_layer.name,
-                layer_function: source_layer.layer_function,
-                spec_refs,
-                sets: Span::new(set_start, geometry.feature_sets.len() as u32 - set_start),
-                features: Span::new(
-                    feature_start,
-                    geometry.features.len() as u32 - feature_start,
-                ),
-                bbox,
-            });
             step_layers.push(StepLayer {
                 step: step_id,
                 layer: LayerId(layer_index as u32),
@@ -1552,6 +1524,7 @@ pub fn extract_layout(ipc: &Ipc2581) -> Result<GeometryDocument> {
     Ok(doc)
 }
 
+/// One step's features on one layer, as a document of their own.
 pub fn extract_step_layer_local(
     ipc: &Ipc2581,
     step: &Step,
@@ -1560,6 +1533,23 @@ pub fn extract_step_layer_local(
     layer_name: &str,
     resolution: Resolution,
 ) -> Result<GeometryDocument> {
+    let mut doc = GeometryDocument::new();
+    append_step_layer(ipc, &mut doc, step, layers, layer, layer_name, resolution)?;
+    Ok(doc)
+}
+
+/// Append `step`'s features on `layer` to `doc` as a new layer and return its
+/// index. A step with nothing on the layer appends nothing but the warnings
+/// for what it had to drop.
+fn append_step_layer(
+    ipc: &Ipc2581,
+    doc: &mut GeometryDocument,
+    step: &Step,
+    layers: &[Layer],
+    layer: &Layer,
+    layer_name: &str,
+    resolution: Resolution,
+) -> Result<Option<u32>> {
     let content = ipc.content();
     let context = ExtractContext {
         strings: ipc.interner(),
@@ -1595,10 +1585,10 @@ pub fn extract_step_layer_local(
             .collect(),
     };
 
-    let mut doc = GeometryDocument::new();
+    let mark = DocumentMark::of(doc);
     let feature_start = doc.features.len() as u32;
     let set_start = doc.feature_sets.len() as u32;
-    let spec_refs = push_spec_refs(&mut doc, &layer.spec_refs);
+    let spec_refs = push_spec_refs(doc, &layer.spec_refs);
     let layer_index = doc.layers.len() as u32;
     doc.layers.push(GeometryLayer {
         name: layer_name.to_string(),
@@ -1614,7 +1604,7 @@ pub fn extract_step_layer_local(
     let layer_polarity = map_polarity(layer.polarity.unwrap_or(Polarity::Positive));
     let source_step_kind = layout_step_kind(step);
     if layer_polarity == GeometryPolarity::Clear {
-        push_negative_layer_plane(&mut doc, layer_index, step, layer, &mut layer_bbox);
+        push_negative_layer_plane(doc, layer_index, step, layer, &mut layer_bbox);
     }
 
     for layer_feature in step
@@ -1633,8 +1623,7 @@ pub fn extract_step_layer_local(
             {
                 bail!("copper-balance full_void set must contain exactly one feature group");
             }
-            let set_id =
-                push_feature_set_record(&mut doc, layer_index, set_index as u32, set, polarity);
+            let set_id = push_feature_set_record(doc, layer_index, set_index as u32, set, polarity);
 
             for (feature_index, set_feature) in set.features.iter().enumerate() {
                 let source = SourceRef {
@@ -1642,7 +1631,7 @@ pub fn extract_step_layer_local(
                     feature_index: feature_index as u32,
                     definition: None,
                 };
-                let mark = DocumentMark::of(&doc);
+                let mark = DocumentMark::of(doc);
                 let features = extract_set_feature(
                     &context,
                     layer.name,
@@ -1650,14 +1639,14 @@ pub fn extract_step_layer_local(
                     polarity,
                     source,
                     set_feature,
-                    &mut doc,
+                    doc,
                 )?;
-                let features = keep_finite(&mut doc, mark, features, source);
+                let features = keep_finite(doc, mark, features, source);
                 validate_copper_balance_structure(
                     copper_balance,
                     set_feature,
                     &features,
-                    &doc,
+                    doc,
                     resolution,
                 )?;
 
@@ -1666,7 +1655,7 @@ pub fn extract_step_layer_local(
                     feature.source_step_kind = source_step_kind;
                     complete_feature_intent(layer, &mut feature);
                     push_extracted_feature(
-                        &mut doc,
+                        doc,
                         set_id,
                         layer_feature.layer_ref,
                         copper_balance,
@@ -1706,9 +1695,9 @@ pub fn extract_step_layer_local(
                             feature_index: feature_index as u32,
                             definition: None,
                         };
-                        let mark = DocumentMark::of(&doc);
-                        let feature = extract_hole(source, set.geometry, hole, &mut doc);
-                        emitted.extend(keep_finite(&mut doc, mark, vec![feature], source));
+                        let mark = DocumentMark::of(doc);
+                        let feature = extract_hole(source, set.geometry, hole, doc);
+                        emitted.extend(keep_finite(doc, mark, vec![feature], source));
                     }
                 }
             }
@@ -1722,7 +1711,7 @@ pub fn extract_step_layer_local(
                             || {
                                 slot_layer_order
                                     .get_or_insert_with(|| {
-                                        resolve_slot_layer_order(&mut doc, stackups, layers)
+                                        resolve_slot_layer_order(doc, stackups, layers)
                                     })
                                     .as_deref()
                             },
@@ -1735,22 +1724,22 @@ pub fn extract_step_layer_local(
                             feature_index: feature_index as u32,
                             definition: None,
                         };
-                        let mark = DocumentMark::of(&doc);
-                        let feature = extract_slot(&context, source, set.geometry, slot, &mut doc)?;
-                        emitted.extend(keep_finite(&mut doc, mark, vec![feature], source));
+                        let mark = DocumentMark::of(doc);
+                        let feature = extract_slot(&context, source, set.geometry, slot, doc)?;
+                        emitted.extend(keep_finite(doc, mark, vec![feature], source));
                     }
                 }
             }
 
             if !emitted.is_empty() {
                 let set_id =
-                    push_feature_set_record(&mut doc, layer_index, set_index as u32, set, polarity);
+                    push_feature_set_record(doc, layer_index, set_index as u32, set, polarity);
                 for mut feature in emitted {
                     feature.source_step_ref = Some(step.name);
                     feature.source_step_kind = source_step_kind;
                     complete_feature_intent(source_layer, &mut feature);
                     push_extracted_feature(
-                        &mut doc,
+                        doc,
                         set_id,
                         layer_feature.layer_ref,
                         copper_balance,
@@ -1762,12 +1751,17 @@ pub fn extract_step_layer_local(
         }
     }
 
+    if doc.features.len() as u32 == feature_start {
+        mark.truncate(doc);
+        doc.feature_sets.truncate(set_start as usize);
+        doc.layers.truncate(layer_index as usize);
+        return Ok(None);
+    }
     let layer = &mut doc.layers[layer_index as usize];
     layer.features.count = doc.features.len() as u32 - feature_start;
     layer.sets.count = doc.feature_sets.len() as u32 - set_start;
     layer.bbox = layer_bbox;
-
-    Ok(doc)
+    Ok(Some(layer_index))
 }
 
 /// Document lengths before one source feature was lowered, so everything it
@@ -2224,20 +2218,16 @@ fn append_transformed_layer(
             } else {
                 None
             };
-            let path_start = target.arena.paths.len() as u32;
-            for path_index in feature.paths.indices() {
-                target.arena.append_path_from(
-                    &source.arena,
-                    path_index,
-                    if target_placement_group.is_some() {
-                        Affine2::IDENTITY
-                    } else {
-                        transform
-                    },
-                );
-            }
-            let path_count = target.arena.paths.len() as u32 - path_start;
-            let paths = Span::new(path_start, path_count);
+            // Grouped geometry stays local; its placements carry the transform.
+            let paths = target.arena.append_paths_from(
+                &source.arena,
+                feature.paths,
+                if target_placement_group.is_some() {
+                    Affine2::IDENTITY
+                } else {
+                    transform
+                },
+            );
             let bbox = if target_placement_group.is_some() {
                 feature.bbox.transformed(transform)
             } else {
