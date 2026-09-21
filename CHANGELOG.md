@@ -59,6 +59,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - DFM reports a drill through foreign copper even when only overlap links them.
 - DFM no longer measures square holes as round.
 - DFM aspect ratios sitting exactly on their maximum no longer fail.
+- IPC-2581 negative plane layers no longer import empty.
+- IPC-2581 pads with inline shapes or no padstack reference are no longer dropped.
+- Square, hexagon and octagon donuts and thermals are no longer drawn round, and thermal spokes are cut from the ring.
+- An invalid IPC-2581 stackup no longer fails the whole import.
+- IPC-2581 strokes without a line description no longer get a made-up width.
+- Panels honor a repeated step's Datum.
 
 ### Changed
 
@@ -84,6 +90,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - DFM finding ids survive noise-level coordinate changes; existing waiver files keep matching.
 - DFM reports list measurements that fall within measurement uncertainty.
 - The DFM report schema is now version 2.
+- Physical and DFM views of panels build several times faster, and import uses less memory.
 
 ## [0.4.56] - 2026-09-20
 
