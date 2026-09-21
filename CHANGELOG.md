@@ -26,11 +26,39 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Stop painting slots and routed cutouts back as copper in exported Gerber copper layers.
 - Keep IPC-2581 paint order when a repeated feature group mixes dark and clear shapes.
 - Write interposer boards with KiCad's current net syntax and without negative zeros, so pcbnew saves them back unchanged.
+- Open IPC-2581 files that carry an MD5 checksum trailer, a prefixed root element, or a commented-out closing tag.
+- Open panels saved by pcb 0.4.11 and earlier.
+- Read Allegro padstack shape offsets, and inline primitives, text and outlines inside `Features`, `UserSpecial`, `SlotCavity` and `Pad`.
+- Accept `padUse="OTHER"` and the `BOARDFAB`, `COMPONENT` and `PIN` layer functions.
+- Let BOM edits add a distributor and aliases to the same part.
+- Keep every `Profile` of a rigid-flex layer and leave percentage stackup tolerances unscaled.
+- Place Gerber macro primitives that combine an off-origin centre with a rotation.
+- Export butt and square line ends to Gerber as drawn instead of rounded.
+- Export zero-width lines, empty pads, and net, refdes or pin names with non-ASCII or reserved characters without failing the manufacturing package.
+- Stop drill-file attributes leaking from a pin hole onto later holes.
+- Report malformed Gerber counts as errors instead of exhausting memory.
+- Read `.xml.zst` input in `pcb ipc cpl`, `ict`, `assembly` and `warp`.
+- Draw the HTML report's board-array overview for panels not placed at the origin, and keep the report when one layer cannot render.
+- Only draw to the terminal where kitty graphics display.
+- Keep the final arc of an outline in `pcb ipc outline` DXF.
+- Count every copper layer function in `pcb ipc info`, report copper weights for non-KiCad layer names, and read components and nets from the board step of array files.
+- Correct `pcb ipc warp` bow, which was overstated about 20×.
+- Report the copper-balance stack moment of the emitted fill.
 
 ### Changed
 
 - Speed up Gerber export, Gerber compare, and DFM on board arrays.
 - Outline strokes exactly and flatten arcs directly: faster layer composition and smaller Gerber outline apertures at the same accuracy.
+- Report malformed numbers, booleans and unknown enum values in IPC-2581 files as errors instead of defaulting them.
+- Load large IPC-2581 files with roughly half the memory.
+- Read common legacy Gerber constructs in `pcb gerber`: fused G-codes, modal coordinates, identity image commands and Altium region quirks.
+- Group drill hits by tool and omit repeated attributes.
+- Omit zero-length draws from Gerber polylines.
+- Keep macro pads as flashes and step-repeats as step-repeats in `pcb gerber normalize`, and draw `pcb gerber render` natively.
+- Speed up `pcb ipc html`, `pcb ipc info` and `pcb ipc view --mode fabrication`.
+- Write `pcb ipc outline` DXF as R12 polylines.
+- Stop reporting twist in `pcb ipc warp`, which models elastic copper-laminate mismatch only.
+- Speed up copper balancing; generated fill differs slightly from earlier releases.
 
 ## [0.4.56] - 2026-09-20
 
