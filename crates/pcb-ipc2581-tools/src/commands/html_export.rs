@@ -680,6 +680,99 @@ mod tests {
         assert!(!html.contains("<b>Cuts"));
     }
 
+    #[test]
+    fn inlined_layers_share_no_ids_and_leave_no_reference_dangling() {
+        let ipc = ipc2581::Ipc2581::parse(shared_ids_fixture()).unwrap();
+
+        let html = report(&ipc, Resolution::default());
+
+        // Text between `prefix` and the quote or parenthesis that closes it.
+        let values = |prefix: &str, close: char| {
+            html.match_indices(prefix)
+                .map(|(start, _)| {
+                    let value = &html[start + prefix.len()..];
+                    &value[..value.find(close).unwrap()]
+                })
+                .collect::<Vec<_>>()
+        };
+        let ids = values(" id='", '\'');
+        let unique = ids.iter().collect::<HashSet<_>>();
+        assert_eq!(unique.len(), ids.len(), "duplicate element ids: {ids:?}");
+
+        // Every copper layer flashes a fiducial and masks the slot, and the
+        // drill layer flashes its holes, so each writes its own a0 and m0.
+        let references = [values("href='#", '\''), values("url(#", ')')].concat();
+        assert!(ids.iter().filter(|id| id.ends_with("a0")).count() >= 3);
+        assert!(ids.iter().filter(|id| id.ends_with("m0")).count() >= 2);
+        assert!(references.len() >= 5);
+        for reference in references {
+            assert!(
+                unique.contains(&reference),
+                "dangling reference #{reference}"
+            );
+        }
+    }
+
+    fn shared_ids_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Cu" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+      <Layer name="B.Cu" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
+      <Layer name="Rout" layerFunction="ROUT" side="ALL" polarity="POSITIVE">
+        <Span fromLayer="F.Cu" toLayer="B.Cu"/>
+      </Layer>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="F.Cu">
+          <Set>
+            <LocalFiducial>
+              <Location x="1" y="1"/>
+              <Circle diameter="1"/>
+            </LocalFiducial>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="B.Cu">
+          <Set>
+            <LocalFiducial>
+              <Location x="9" y="4"/>
+              <Circle diameter="0.5"/>
+            </LocalFiducial>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="Drill">
+          <Set>
+            <Hole name="H1" diameter="0.8" platingStatus="NONPLATED" x="3" y="4"/>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="Rout">
+          <Set>
+            <SlotCavity name="S1" platingStatus="NONPLATED" plusTol="0" minusTol="0">
+              <Location x="6" y="2"/>
+              <Oval width="3" height="1"/>
+            </SlotCavity>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
     fn cut_pad_fixture() -> &'static str {
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
