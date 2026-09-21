@@ -635,9 +635,9 @@ fn generate_dense_copper_balance_with_lattice(
 /// only its admitted variables onto one panel lattice, and one normalized
 /// convolution maps every layer to the same evaluation sites. The stack's
 /// copper moment is settled first, in closed form, as a bounded shift of each
-/// layer's copper area. Accelerated projected gradient then minimizes each
-/// layer's own local density error while preserving that area and the radius
-/// bounds, so the layers iterate independently of one another.
+/// layer's copper area. Projected gradient then minimizes each layer's own
+/// local density error while preserving that area and the radius bounds, so
+/// the layers iterate independently of one another.
 ///
 /// For a perforated layer, `rho = H(c + s - p - beta P x)`: `c` and `s` are
 /// fixed-copper and safe-region indicators, `p` is the clipped edge-void
@@ -855,12 +855,9 @@ pub fn generate_spatial_dense_copper_balance(
         .collect::<Vec<_>>();
     let void_fraction_per_radius_squared = ROUNDED_HEXAGON_AREA_FACTOR / cell_area_mm2;
     // The objective's gradient is Lipschitz with constant `beta^2 ||H||_2^2`,
-    // and its reciprocal is the longest step a projected gradient method is
-    // guaranteed to descend with. `H` has unit row sums, so
-    // `||H||_2^2 <= ||H||_1`.
+    // and its reciprocal is the longest step projected gradient is guaranteed
+    // to descend with. `H` has unit row sums, so `||H||_2^2 <= ||H||_1`.
     let step = 1.0 / (void_fraction_per_radius_squared.powi(2) * density_kernel.max_column_sum());
-    let column_square_sums = density_kernel.column_square_sums();
-    let level_spacing = profile.void_area_level(1) - profile.void_area_level(0);
 
     // Nothing couples the layers once the settlement has pinned their areas,
     // so each runs its whole iteration on its own thread and owns its scratch.
@@ -896,7 +893,6 @@ pub fn generate_spatial_dense_copper_balance(
                 (lower, upper),
                 pinned_sums[layer_index],
                 step,
-                model.rounding_floor(&column_square_sums, level_spacing),
             );
             let result = if squared_radii.is_empty() {
                 baseline
