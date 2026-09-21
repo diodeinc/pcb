@@ -160,9 +160,6 @@ impl<'a> BoundaryQuery<'a> {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let (components, _) = region.ring_components();
-        if components.contains(&usize::MAX) {
-            return Err(QueryError::InvalidInput("unassigned boundary component"));
-        }
         Ok(Self {
             region,
             tolerance,
