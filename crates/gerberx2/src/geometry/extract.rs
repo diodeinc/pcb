@@ -1,8 +1,9 @@
 //! Lower parsed Gerber into a pcb-ir artwork document.
 //!
 //! Flashes stay flashes, of a standard aperture or of a macro composed once
-//! into a contour aperture, and aperture-block instances stay instances, so
-//! round trips keep both pad identity and reusable hierarchy. Only draws
+//! into a contour aperture; block apertures stay block instances and
+//! step-repeats stay grids of one block. Round trips so keep both pad
+//! identity and reusable hierarchy, and a panel costs one board. Only draws
 //! through a shaped aperture are flattened: pcb-ir has no native equivalent.
 
 use pcb_ir::geom::{AccuracyError, GeometryAccuracy, Resolution};
@@ -10,7 +11,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::GerberX2;
 use crate::types as gerber;
-use pcb_ir::dialects::artwork::{self, Aperture, ApertureShape, Document, Geometry, Layer, Object};
+use pcb_ir::dialects::artwork::{
+    self, Aperture, ApertureShape, Document, Geometry, GridRepeat, Layer, Object,
+};
 use pcb_ir::geom::path::{ContourBuf, PathCmd};
 use pcb_ir::geom::region::{self, PaintComposer};
 use pcb_ir::geom::{Affine2, Arc, BBox, FillRule, Paint, Point, Polarity, Span, StrokeStyle};
@@ -19,7 +22,7 @@ pub type GerberArtworkDocument = Document<Vec<String>, GerberObjectMeta>;
 
 /// The X2 attribute sets an extracted object was imaged under, in
 /// [`GerberX2::attributes`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GerberObjectMeta {
     pub aperture_attributes: Span,
     pub object_attributes: Span,
@@ -57,15 +60,56 @@ pub fn extract_document(
         extract_objects(&mut doc, ArtworkTarget::Block(block), objects, &tables)?;
         tables.blocks.insert(definition.code, block);
     }
-    extract_objects(
-        &mut doc,
-        ArtworkTarget::Layer(layer),
-        gerber.objects(),
-        &tables,
-    )?;
+    // The stream lands on the layer in order, each step-repeated run as one
+    // block on a grid.
+    let target = ArtworkTarget::Layer(layer);
+    let mut next = 0;
+    for step in gerber.step_repeats() {
+        let run = step.objects.range();
+        extract_objects(
+            &mut doc,
+            target,
+            &gerber.objects()[next..run.start],
+            &tables,
+        )?;
+        let block = doc.push_block();
+        extract_objects(
+            &mut doc,
+            ArtworkTarget::Block(block),
+            &gerber.objects()[run.clone()],
+            &tables,
+        )?;
+        target.push(
+            &mut doc,
+            Object {
+                polarity: Polarity::Dark,
+                order: Default::default(),
+                geometry: Geometry::GridInstance {
+                    block,
+                    transform: Affine2::IDENTITY,
+                    repeat: grid_repeat(step.repeat),
+                },
+                bbox: BBox::empty(),
+                meta: GerberObjectMeta::default(),
+            },
+        );
+        next = run.end;
+    }
+    extract_objects(&mut doc, target, &gerber.objects()[next..], &tables)?;
 
     artwork::normalize_bounds(&mut doc);
     Ok(doc)
+}
+
+/// Gerber images a step-repeat column by column, so its Y axis is the
+/// grid's fast one; the order only shows where occurrences overlap.
+fn grid_repeat(repeat: gerber::StepRepeat) -> GridRepeat {
+    GridRepeat {
+        x_count: repeat.y_repeats as u32,
+        x_step: Point::new(0.0, repeat.y_step),
+        y_count: repeat.x_repeats as u32,
+        y_step: Point::new(repeat.x_step, 0.0),
+    }
 }
 
 /// Per-file lookups shared by every extracted object.

@@ -227,7 +227,11 @@ fn writes_standard_step_repeat() {
     assert_external_parser_accepts(&output);
     assert!(output.contains("%SRX3Y2I10J20*%"));
     assert!(output.contains("%SR*%"));
-    assert_eq!(GerberX2::parse(&output).unwrap().objects().len(), 6);
+    // The parsed stream holds the run once; imaging it repeats it.
+    let parsed = GerberX2::parse(&output).unwrap();
+    assert_eq!(parsed.objects().len(), 1);
+    assert_eq!(parsed.step_repeats().len(), 1);
+    assert_eq!(imaged(&parsed).len(), 6);
 }
 
 #[test]
@@ -275,7 +279,7 @@ fn coalesces_compatible_step_repeats() {
     assert!(output.contains(
         "X2000000Y3000000D03*\n%TO.N,GND*%\nY4000000D03*\n%SR*%\n%TD*%\nX2000000Y4000000D03*"
     ));
-    assert_eq!(GerberX2::parse(&output).unwrap().objects().len(), 7);
+    assert_eq!(imaged(&GerberX2::parse(&output).unwrap()).len(), 7);
 }
 
 #[test]
@@ -316,7 +320,7 @@ fn preserves_polarity_order_across_step_repeats() {
     assert_external_parser_accepts(&output);
     assert_eq!(output.matches("%SRX2Y1I10J0*%").count(), 2);
 
-    let objects = GerberX2::parse(&output).unwrap().objects().to_vec();
+    let objects = imaged(&GerberX2::parse(&output).unwrap());
     assert_eq!(objects.len(), 4);
     assert_eq!(
         objects
@@ -583,21 +587,56 @@ fn preserves_block_apertures_with_flash_transform() {
 }
 
 #[test]
-fn expands_step_repeat_in_y_then_x_order() {
+fn images_step_repeat_in_y_then_x_order() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\nD10*\n%SRX2Y2I1.0J2.0*%\nX0Y0D03*\n%SR*%\nM02*\n",
     )
     .unwrap();
 
-    let points = gerber
-        .objects()
+    let points = imaged(&gerber)
         .iter()
-        .map(|object| match object.kind {
-            ObjectKind::Flash { at, .. } => (at.x, at.y),
+        .map(|object| match object.geometry {
+            pcb_ir::dialects::artwork::Geometry::Flash { transform, .. } => {
+                (transform.m02, transform.m12)
+            }
             _ => unreachable!(),
         })
         .collect::<Vec<_>>();
     assert_eq!(points, vec![(0.0, 0.0), (0.0, 2.0), (1.0, 0.0), (1.0, 2.0)]);
+}
+
+#[test]
+fn step_repeats_stay_one_block_on_a_grid() {
+    let accuracy = GeometryAccuracy::default();
+    // A panel-sized repeat costs one seed run, and a lone occurrence or an
+    // empty block costs nothing.
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%%MOMM*%%ADD10C,0.5*%D10*X0Y0D03*%SRX300Y200I1J1*%X0Y0D03*G01*X0Y0D02*X500000D01*%SR*%%SRX1Y1I0J0*%X0Y500000D03*%SR*%%SRX2Y2I1J1*%%SR*%M02*",
+    )
+    .unwrap();
+    assert_eq!(gerber.objects().len(), 4);
+    assert_eq!(gerber.step_repeats().len(), 1);
+
+    let artwork = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+    assert_eq!(artwork.blocks.len(), 1);
+    assert_eq!(artwork.blocks[0].objects.len(), 2);
+    assert_eq!(artwork.objects.len(), 3);
+    assert!(matches!(
+        artwork.objects[1].geometry,
+        pcb_ir::dialects::artwork::Geometry::GridInstance { block: 0, .. }
+    ));
+    assert!((artwork.layers[0].bbox.width() - 300.0).abs() < 1e-9);
+    assert!((artwork.layers[0].bbox.height() - 199.5).abs() < 1e-9);
+
+    // Re-emitting keeps the repeat instead of writing it out.
+    let normalized = gerberx2::from_artwork::normalize_layer(&gerber, accuracy).unwrap();
+    assert!(normalized.contains("%SRX300Y200I1J1*%"), "{normalized}");
+    assert_eq!(normalized.matches("D03*").count(), 3);
+
+    let error = GerberX2::parse("%FSLAX26Y26*%%MOMM*%%ABD20*%%SRX2Y2I1J1*%%SR*%%AB*%M02*")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("SR is not allowed inside an AB"), "{error}");
 }
 
 #[test]
@@ -898,6 +937,15 @@ fn writes_polygon_hole_with_explicit_zero_rotation() {
             ..
         } if close(rotation, 0.0) && close(hole, 0.5)
     ));
+}
+
+/// The layer's objects with every step-repeat and block aperture imaged out.
+fn imaged(
+    gerber: &GerberX2,
+) -> Vec<pcb_ir::dialects::artwork::Object<gerberx2::geometry::GerberObjectMeta>> {
+    let artwork =
+        gerberx2::geometry::extract_document(gerber, GeometryAccuracy::default()).unwrap();
+    pcb_ir::dialects::artwork::expand_instances(&artwork).objects
 }
 
 /// Independent syntax oracle: the MakerPnP `gerber_parser` crate must accept

@@ -19,6 +19,7 @@ pub struct Parser<'a> {
     macro_lookup: HashMap<Symbol, ApertureMacro>,
     aperture_macros: Vec<ApertureMacro>,
     objects: Vec<GraphicalObject>,
+    step_repeats: Vec<StepRepeatBlock>,
     region: Option<RegionBuilder>,
     block: Option<BlockBuilder>,
     step_repeat: Option<StepRepeatBuilder>,
@@ -99,6 +100,7 @@ impl<'a> Parser<'a> {
             macro_lookup: HashMap::new(),
             aperture_macros: Vec::new(),
             objects: Vec::new(),
+            step_repeats: Vec::new(),
             region: None,
             block: None,
             step_repeat: None,
@@ -151,6 +153,7 @@ impl<'a> Parser<'a> {
             aperture_definitions: std::mem::take(&mut self.aperture_definitions),
             aperture_macros: std::mem::take(&mut self.aperture_macros),
             objects: std::mem::take(&mut self.objects),
+            step_repeats: std::mem::take(&mut self.step_repeats),
             final_state: self.state.clone(),
         })
     }
@@ -315,25 +318,25 @@ impl<'a> Parser<'a> {
         }
 
         if let Some(rest) = word.strip_prefix("SR") {
+            if self.block.is_some() {
+                return Err(self.syntax("SR is not allowed inside an AB block aperture"));
+            }
             if rest.is_empty() {
                 let step = self
                     .step_repeat
                     .take()
                     .ok_or_else(|| self.syntax("SR close without matching SR open"))?;
-                let seed = self.objects.split_off(step.object_start);
-                let mut expanded = Vec::new();
-                for ix in 0..step.repeat.x_repeats {
-                    for iy in 0..step.repeat.y_repeats {
-                        let dx = ix as f64 * step.repeat.x_step;
-                        let dy = iy as f64 * step.repeat.y_step;
-                        expanded.extend(
-                            seed.iter()
-                                .cloned()
-                                .map(|object| translate_object(object, dx, dy)),
-                        );
-                    }
+                let objects = Span::new(
+                    step.object_start as u32,
+                    (self.objects.len() - step.object_start) as u32,
+                );
+                // A single occurrence is the run itself.
+                if !objects.is_empty() && (step.repeat.x_repeats > 1 || step.repeat.y_repeats > 1) {
+                    self.step_repeats.push(StepRepeatBlock {
+                        repeat: step.repeat,
+                        objects,
+                    });
                 }
-                self.objects.extend(expanded);
                 self.commands.push(Command::EndStepRepeat);
             } else {
                 let sr = parse_step_repeat(rest)?;
@@ -1329,155 +1332,6 @@ fn map_path(mut path: GeometryPath, map: impl Fn(Point) -> Point) -> GeometryPat
         }
     }
     path
-}
-
-fn translate_object(object: GraphicalObject, dx: f64, dy: f64) -> GraphicalObject {
-    transform_object(object, LinearTransform::identity(), Point { x: dx, y: dy })
-}
-
-fn transform_object(
-    mut object: GraphicalObject,
-    outer: LinearTransform,
-    origin: Point,
-) -> GraphicalObject {
-    let flips_orientation = outer.determinant() < 0.0;
-    match &mut object.kind {
-        ObjectKind::Draw { start, end, .. } => {
-            *start = outer.transform_point(*start, origin);
-            *end = outer.transform_point(*end, origin);
-        }
-        ObjectKind::Arc {
-            start,
-            end,
-            center_offset,
-            clockwise,
-            ..
-        } => {
-            *start = outer.transform_point(*start, origin);
-            *end = outer.transform_point(*end, origin);
-            *center_offset = outer.transform_vector(*center_offset);
-            *clockwise ^= flips_orientation;
-        }
-        ObjectKind::Flash { at, .. } => *at = outer.transform_point(*at, origin),
-        ObjectKind::Region { contours } => {
-            for contour in contours {
-                for segment in &mut contour.segments {
-                    match segment {
-                        ContourSegment::Line { start, end } => {
-                            *start = outer.transform_point(*start, origin);
-                            *end = outer.transform_point(*end, origin);
-                        }
-                        ContourSegment::Arc {
-                            start,
-                            end,
-                            center_offset,
-                            clockwise,
-                        } => {
-                            *start = outer.transform_point(*start, origin);
-                            *end = outer.transform_point(*end, origin);
-                            *center_offset = outer.transform_vector(*center_offset);
-                            *clockwise ^= flips_orientation;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let modifiers = outer.compose(LinearTransform::from_parts(
-        object.mirroring,
-        object.rotation_degrees,
-        object.scaling,
-    ));
-    let (mirroring, rotation_degrees, scaling) = modifiers.decompose();
-    object.mirroring = mirroring;
-    object.rotation_degrees = rotation_degrees;
-    object.scaling = scaling;
-    object
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LinearTransform {
-    m00: f64,
-    m01: f64,
-    m10: f64,
-    m11: f64,
-}
-
-impl LinearTransform {
-    fn identity() -> Self {
-        Self {
-            m00: 1.0,
-            m01: 0.0,
-            m10: 0.0,
-            m11: 1.0,
-        }
-    }
-
-    fn from_parts(mirroring: Mirroring, rotation_degrees: f64, scale: f64) -> Self {
-        let sx = match mirroring {
-            Mirroring::X | Mirroring::XY => -scale,
-            _ => scale,
-        };
-        let sy = match mirroring {
-            Mirroring::Y | Mirroring::XY => -scale,
-            _ => scale,
-        };
-        let (sin, cos) = rotation_degrees.to_radians().sin_cos();
-        Self {
-            m00: cos * sx,
-            m01: -sin * sy,
-            m10: sin * sx,
-            m11: cos * sy,
-        }
-    }
-
-    fn transform_point(self, point: Point, origin: Point) -> Point {
-        let vector = self.transform_vector(point);
-        Point {
-            x: origin.x + vector.x,
-            y: origin.y + vector.y,
-        }
-    }
-
-    fn transform_vector(self, point: Point) -> Point {
-        Point {
-            x: self.m00 * point.x + self.m01 * point.y,
-            y: self.m10 * point.x + self.m11 * point.y,
-        }
-    }
-
-    fn compose(self, rhs: Self) -> Self {
-        Self {
-            m00: self.m00 * rhs.m00 + self.m01 * rhs.m10,
-            m01: self.m00 * rhs.m01 + self.m01 * rhs.m11,
-            m10: self.m10 * rhs.m00 + self.m11 * rhs.m10,
-            m11: self.m10 * rhs.m01 + self.m11 * rhs.m11,
-        }
-    }
-
-    fn determinant(self) -> f64 {
-        self.m00 * self.m11 - self.m01 * self.m10
-    }
-
-    fn decompose(self) -> (Mirroring, f64, f64) {
-        let scale = self.m00.hypot(self.m10);
-        if scale == 0.0 {
-            return (Mirroring::None, 0.0, 0.0);
-        }
-        let mirroring = if self.determinant() < 0.0 {
-            Mirroring::X
-        } else {
-            Mirroring::None
-        };
-        let sx = if mirroring == Mirroring::X {
-            -scale
-        } else {
-            scale
-        };
-        let cos = self.m00 / sx;
-        let sin = self.m10 / sx;
-        (mirroring, sin.atan2(cos).to_degrees(), scale)
-    }
 }
 
 fn translate_point(point: Point, dx: f64, dy: f64) -> Point {

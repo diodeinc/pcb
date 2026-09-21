@@ -2165,10 +2165,15 @@ mod tests {
         assert!(!array_fab.contents.contains("%ABD"));
         assert!(array_fab.contents.contains("%SRX2Y1I30J0*%"));
         let parsed = gerberx2::GerberX2::parse(&array_fab.contents).unwrap();
-        assert_eq!(parsed.objects().len(), 8);
+        assert_eq!(parsed.objects().len(), 4);
         let artwork = gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
-        assert!(artwork.blocks.is_empty());
-        assert_eq!(artwork.objects.len(), 8);
+        assert_eq!(artwork.blocks.len(), 1);
+        assert_eq!(
+            pcb_ir::dialects::artwork::expand_instances(&artwork)
+                .objects
+                .len(),
+            8
+        );
     }
 
     #[test]
@@ -3098,10 +3103,15 @@ mod tests {
         assert!(!top.contents.contains("%LR"));
         assert!(!top.contents.contains("%LS"));
         let parsed = gerberx2::GerberX2::parse(&top.contents).unwrap();
-        assert_eq!(parsed.objects().len(), 6);
+        assert_eq!(parsed.objects().len(), 3);
         let artwork = gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
-        assert!(artwork.blocks.is_empty());
-        assert_eq!(artwork.objects.len(), 6);
+        assert_eq!(artwork.blocks.len(), 1);
+        assert_eq!(
+            pcb_ir::dialects::artwork::expand_instances(&artwork)
+                .objects
+                .len(),
+            6
+        );
     }
 
     #[test]

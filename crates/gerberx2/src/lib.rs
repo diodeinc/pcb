@@ -49,6 +49,7 @@ pub struct GerberX2 {
     aperture_definitions: Vec<ApertureDefinition>,
     aperture_macros: Vec<ApertureMacro>,
     objects: Vec<GraphicalObject>,
+    step_repeats: Vec<StepRepeatBlock>,
     final_state: GraphicsState,
 }
 
@@ -85,8 +86,15 @@ impl GerberX2 {
         &self.aperture_macros
     }
 
+    /// The object stream in file order. A step-repeated run appears once;
+    /// [`Self::step_repeats`] says where it repeats.
     pub fn objects(&self) -> &[GraphicalObject] {
         &self.objects
+    }
+
+    /// The step-repeated runs of [`Self::objects`], in stream order.
+    pub fn step_repeats(&self) -> &[StepRepeatBlock] {
+        &self.step_repeats
     }
 
     pub fn final_state(&self) -> &GraphicsState {

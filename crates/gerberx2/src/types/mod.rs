@@ -201,6 +201,15 @@ pub struct StepRepeat {
     pub y_step: f64,
 }
 
+/// One `%SR` block: a run of the object stream imaged at every position of
+/// a regular grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StepRepeatBlock {
+    pub repeat: StepRepeat,
+    /// The repeated run within [`crate::GerberX2::objects`].
+    pub objects: Span,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphicsState {
     pub unit: Option<Unit>,
