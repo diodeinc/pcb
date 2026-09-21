@@ -6,7 +6,6 @@ mod options;
 const TYPESCRIPT: &str = include_str!("api.d.ts");
 
 use pcb_ir::geom::Resolution;
-use std::cell::OnceCell;
 use std::io::{Cursor, Read};
 
 use anyhow::{Context, Result, bail};
@@ -29,37 +28,44 @@ pub fn start() {
     console_log::init_with_level(log::Level::Warn).ok();
 }
 
-/// Parsed source with lazily cached geometry shared by exports and DFM.
+/// Parsed source with the imported geometry every export and DFM share.
+///
+/// The three representations answer different calls: the source text is what
+/// `validate` and IPC-2581 export return, the typed model backs info, BOM and
+/// outlines, and the imported design backs everything geometric. A file that
+/// parses but cannot import, such as one without a Step, keeps the first two
+/// and reports the import error from the calls that need geometry.
 #[wasm_bindgen]
 pub struct IpcDocument {
     xml: String,
     ipc: Ipc2581,
     input: dfm::report::FileIdentity,
-    imported: OnceCell<ImportedDesign>,
+    imported: Result<ImportedDesign, String>,
 }
 
 #[wasm_bindgen]
 impl IpcDocument {
     #[wasm_bindgen(constructor)]
     pub fn new(
-        xml: &str,
+        xml: String,
         #[wasm_bindgen(unchecked_optional_param_type = "ImportOptions")] options: Option<JsValue>,
     ) -> Result<IpcDocument, JsError> {
-        Self::parse(xml.to_owned(), xml.as_bytes(), read_options(options)?).map_err(js_error)
+        let ImportOptions { name, validate } = read_options(options)?;
+        let input = input_identity(name, xml.as_bytes());
+        Self::parse(xml, input, validate).map_err(js_error)
     }
 
     /// Accept UTF-8 XML or Zstandard, detected from bytes rather than the name.
     #[wasm_bindgen(js_name = fromBytes)]
     pub fn from_bytes(
-        bytes: &[u8],
+        bytes: Vec<u8>,
         #[wasm_bindgen(unchecked_optional_param_type = "ImportOptions")] options: Option<JsValue>,
     ) -> Result<IpcDocument, JsError> {
-        Self::parse(
-            decode_xml(bytes).map_err(js_error)?,
-            bytes,
-            read_options(options)?,
-        )
-        .map_err(js_error)
+        let ImportOptions { name, validate } = read_options(options)?;
+        // The report identifies the bytes as given; decoding then consumes
+        // them, so plain XML becomes the source text without a copy.
+        let input = input_identity(name, &bytes);
+        Self::parse(decode_xml(bytes).map_err(js_error)?, input, validate).map_err(js_error)
     }
 
     /// Validate the source against the bundled IPC-2581C schema.
@@ -72,7 +78,7 @@ impl IpcDocument {
     pub fn info(&self) -> Result<JsValue, JsError> {
         to_js(
             &self
-                .design(Resolution::default())
+                .design()
                 .and_then(|design| commands::info::info_json(&self.accessor(), design))
                 .map_err(js_error)?,
         )
@@ -127,7 +133,7 @@ impl IpcDocument {
         };
         to_js(
             &dfm::check(
-                self.design(resolution).map_err(js_error)?,
+                self.design().map_err(js_error)?,
                 dfm::CheckRequest {
                     input: self.input.clone(),
                     pdk,
@@ -146,18 +152,25 @@ impl IpcDocument {
 }
 
 impl IpcDocument {
-    fn parse(xml: String, original: &[u8], options: ImportOptions) -> Result<Self> {
-        if options.validate {
-            Ipc2581::validate(&xml).context("IPC-2581 schema validation failed")?;
+    fn parse(xml: String, input: dfm::report::FileIdentity, validate: bool) -> Result<Self> {
+        let ipc = if validate {
+            Ipc2581::parse_validated(&xml)
+        } else {
+            Ipc2581::parse(&xml)
         }
+        .map_err(|error| match error {
+            ipc2581::Ipc2581Error::SchemaValidation(_) => {
+                anyhow::Error::new(error).context("IPC-2581 schema validation failed")
+            }
+            error => anyhow::Error::new(error).context("failed to parse IPC-2581 XML"),
+        })?;
+        let imported = import_design(&ipc, Resolution::default())
+            .map_err(|error| format!("failed to import physical PCB design: {error:#}"));
         Ok(Self {
-            ipc: Ipc2581::parse(&xml).context("failed to parse IPC-2581 XML")?,
-            input: dfm::report::FileIdentity::new(
-                options.name.unwrap_or_else(|| "board.xml".into()),
-                original,
-            ),
             xml,
-            imported: OnceCell::new(),
+            ipc,
+            input,
+            imported,
         })
     }
 
@@ -165,13 +178,10 @@ impl IpcDocument {
         IpcAccessor::new(&self.ipc)
     }
 
-    fn design(&self, resolution: Resolution) -> Result<&ImportedDesign> {
-        if self.imported.get().is_none() {
-            let imported = import_design(&self.ipc, resolution)
-                .context("failed to import physical PCB design")?;
-            let _ = self.imported.set(imported);
-        }
-        Ok(self.imported.get().expect("design was initialized"))
+    fn design(&self) -> Result<&ImportedDesign> {
+        self.imported
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!("{error}"))
     }
 
     fn export_data(&self, options: ExportOptions) -> Result<Vec<ExportFile>> {
@@ -188,7 +198,7 @@ impl IpcDocument {
             ),
             ExportOptions::Gerber { layout_target, zip } => {
                 let package = manufacturing::build_manufacturing_package(
-                    self.design(resolution)?,
+                    self.design()?,
                     &manufacturing::ManufacturingExportOptions {
                         view: layout_target.artwork_scope(),
                         relief_debug_dir: None,
@@ -210,12 +220,8 @@ impl IpcDocument {
                 layout_target,
             } => {
                 let scope = layout_target.artwork_scope();
-                let geometry = geometry::render::prepare_layer(
-                    self.design(resolution)?,
-                    &layer,
-                    scope,
-                    resolution,
-                )?;
+                let geometry =
+                    geometry::render::prepare_layer(self.design()?, &layer, scope, resolution)?;
                 ExportFile::new(
                     format!("{}.svg", safe_name(&layer)),
                     "image/svg+xml",
@@ -233,12 +239,8 @@ impl IpcDocument {
                 layout_target,
             } => {
                 let scope = layout_target.artwork_scope();
-                let geometry = geometry::render::prepare_layer(
-                    self.design(resolution)?,
-                    &layer,
-                    scope,
-                    resolution,
-                )?;
+                let geometry =
+                    geometry::render::prepare_layer(self.design()?, &layer, scope, resolution)?;
                 ExportFile::new(
                     format!("{}.png", safe_name(&layer)),
                     "image/png",
@@ -262,8 +264,7 @@ impl IpcDocument {
                 serde_json::to_vec_pretty(&commands::bom::extract_bom_lines(&self.accessor()))?,
             ),
             ExportOptions::Cpl { side, exclude_dnp } => {
-                let placements =
-                    placement::extract_single_board_placements(self.design(resolution)?)?;
+                let placements = placement::extract_single_board_placements(self.design()?)?;
                 ExportFile::new(
                     "placements.csv",
                     "text/csv",
@@ -281,11 +282,7 @@ impl IpcDocument {
                 "ict.csv",
                 "text/csv",
                 commands::ict::emit_ict_csv(
-                    &commands::ict::extract_contacts(
-                        &self.ipc,
-                        self.design(resolution)?,
-                        resolution,
-                    )?,
+                    &commands::ict::extract_contacts(&self.ipc, self.design()?, resolution)?,
                     side,
                 ),
             ),
@@ -294,7 +291,7 @@ impl IpcDocument {
                 "text/html",
                 commands::html_export::generate_html(
                     &self.accessor(),
-                    self.design(resolution)?,
+                    self.design()?,
                     UnitFormat::Mm,
                     resolution,
                 )?,
@@ -302,6 +299,10 @@ impl IpcDocument {
         };
         Ok(vec![file])
     }
+}
+
+fn input_identity(name: Option<String>, bytes: &[u8]) -> dfm::report::FileIdentity {
+    dfm::report::FileIdentity::new(name.unwrap_or_else(|| "board.xml".into()), bytes)
 }
 
 #[wasm_bindgen(js_name = builtinPdks, unchecked_return_type = "BuiltinPdk[]")]
@@ -370,8 +371,9 @@ fn safe_name(name: &str) -> String {
         .collect()
 }
 
-fn decode_xml(bytes: &[u8]) -> Result<String> {
-    if is_zstd_frame(bytes) || is_skippable_frame(bytes) {
+fn decode_xml(bytes: Vec<u8>) -> Result<String> {
+    if is_zstd_frame(&bytes) || is_skippable_frame(&bytes) {
+        let bytes = bytes.as_slice();
         let mut input = Cursor::new(bytes);
         let mut decoded = Vec::new();
         while (input.position() as usize) < bytes.len() {
@@ -421,7 +423,7 @@ fn decode_xml(bytes: &[u8]) -> Result<String> {
         }
         String::from_utf8(decoded).context("IPC XML is not UTF-8")
     } else {
-        String::from_utf8(bytes.to_vec()).context("IPC XML is not UTF-8")
+        String::from_utf8(bytes).context("IPC XML is not UTF-8")
     }
 }
 
@@ -447,4 +449,53 @@ fn current_time() -> Result<chrono::DateTime<chrono::Utc>> {
 #[cfg(not(target_arch = "wasm32"))]
 fn current_time() -> Result<chrono::DateTime<chrono::Utc>> {
     Ok(chrono::Utc::now())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn document(xml: &str) -> IpcDocument {
+        IpcDocument::parse(xml.to_owned(), input_identity(None, xml.as_bytes()), false).unwrap()
+    }
+
+    #[test]
+    fn a_document_without_geometry_still_answers_what_needs_none() {
+        let document = document(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="BOM"/>
+  </Content>
+</IPC-2581>"#,
+        );
+
+        let error = document.design().unwrap_err().to_string();
+        assert!(
+            error.contains("failed to import physical PCB design"),
+            "{error}"
+        );
+        assert!(document.export_data(ExportOptions::Bom {}).is_ok());
+        assert!(
+            document
+                .export_data(ExportOptions::Ipc2581 { mode: None })
+                .is_ok()
+        );
+        assert!(document.export_data(ExportOptions::Html {}).is_err());
+    }
+
+    #[test]
+    fn plain_bytes_decode_without_a_copy_and_keep_their_identity() {
+        let xml = include_str!("../tests/board.xml");
+        let input = input_identity(Some("fixture.xml".into()), xml.as_bytes());
+        assert_eq!(input.size_bytes, xml.len() as u64);
+
+        let bytes = xml.as_bytes().to_vec();
+        let pointer = bytes.as_ptr();
+        let decoded = decode_xml(bytes).unwrap();
+        assert_eq!(decoded.as_ptr(), pointer);
+
+        let document = IpcDocument::parse(decoded, input, true).unwrap();
+        assert!(document.design().is_ok());
+    }
 }
