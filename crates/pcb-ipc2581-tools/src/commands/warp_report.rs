@@ -52,7 +52,6 @@ pub fn render(analysis: &WarpAnalysis) -> String {
     masthead(&mut html, analysis);
     results(&mut html, analysis);
     stack_table(&mut html, analysis);
-    mode_table(&mut html, analysis);
     field_figures(&mut html, analysis);
     layer_figures(&mut html, analysis);
     html.push_str(FOOT);
@@ -87,7 +86,7 @@ stackup is firmer by a wide margin, since the constant multiplies both and cance
         analysis.layers.len(),
         analysis.response.flexural_rigidity_gpa_mm3(),
         analysis.temperature_drop_k,
-        analysis.samples.len(),
+        analysis.moment.values.len(),
     );
 }
 
@@ -109,13 +108,18 @@ fn results(html: &mut String, analysis: &WarpAnalysis) {
     let _ = write!(
         html,
         r#"<section><h2>1&emsp;Result</h2>
+<p class="blurb">The panel is solved as a free plate carrying the thermal moment of Fig&nbsp;2, and
+bow is its largest departure from the plane through its corners. No twist is estimated: a thermal
+moment is the same in every direction, so it does no work on the twist shape and a free panel
+keeps its four corners in one plane however the copper is distributed. Twist on a real panel comes
+from weave skew and unbalanced layup, which this model does not contain.</p>
 <table class="numeric"><thead><tr>
 <th>Quantity</th><th>mm</th><th>%</th><th>Limit %</th><th>Assessment</th>
 </tr></thead><tbody>
 <tr><td>Bow</td><td>{:.3}</td><td>{:.3}</td><td>{SURFACE_MOUNT_LIMIT_PERCENT:.2}</td>
 <td>{verdict}</td></tr>
 <tr><td>Twist</td><td>&mdash;</td><td>&mdash;</td><td>{SURFACE_MOUNT_LIMIT_PERCENT:.2}</td>
-<td class="muted">not driven by copper, see &sect;3</td></tr>
+<td class="muted">not driven by copper</td></tr>
 </tbody></table></section>"#,
         warp.bow_mm, warp.bow_percent,
     );
@@ -162,45 +166,10 @@ coverage difference, which is what survives into the moment; fabricators advise 
     );
 }
 
-fn mode_table(html: &mut String, analysis: &WarpAnalysis) {
-    let total = analysis
-        .warp
-        .modes
-        .iter()
-        .map(|mode| mode.deflection_mm)
-        .sum::<f64>()
-        .max(f64::MIN_POSITIVE);
-    let mut rows = String::new();
-    for mode in &analysis.warp.modes {
-        let share = 100.0 * mode.deflection_mm / total;
-        let _ = write!(
-            rows,
-            r#"<tr><td>{}</td><td>{:+.5}</td><td>{:.4}</td>
-<td class="bar"><span style="width:{share:.1}%"></span></td><td>{share:.1}</td></tr>"#,
-            mode.mode.name(),
-            mode.amplitude,
-            mode.deflection_mm,
-        );
-    }
-    let _ = write!(
-        html,
-        r#"<section><h2>3&emsp;Deflection by shape</h2>
-<p class="blurb">The moment field resolved into low-order shapes. Deflection grows with the
-square of wavelength, so the broadest shapes dominate and copper detail finer than the panel
-contributes almost nothing. No shape here twists the panel: a thermal moment is the same in every
-direction, so it does no work on the twist shape and a free panel keeps its four corners in one
-plane however the copper is distributed. Twist on a real panel comes from weave skew and
-unbalanced layup, which this model does not contain, so none is estimated.</p>
-<table class="numeric"><thead><tr>
-<th>Shape</th><th>Amplitude mm&#178;</th><th>Deflection mm</th><th>Share</th><th>%</th>
-</tr></thead><tbody>{rows}</tbody></table></section>"#
-    );
-}
-
 fn field_figures(html: &mut String, analysis: &WarpAnalysis) {
     let _ = write!(
         html,
-        r#"<section><h2>4&emsp;Fields</h2>
+        r#"<section><h2>3&emsp;Fields</h2>
 <div class="figures">
 <figure><figcaption><b>Fig 1</b>&emsp;Predicted panel shape, levelled onto the corners.
 Warm high, cool low.</figcaption>{}</figure>
@@ -238,7 +207,7 @@ fn layer_figures(html: &mut String, analysis: &WarpAnalysis) {
     }
     let _ = write!(
         html,
-        r#"<section><h2>5&emsp;Copper by layer</h2>
+        r#"<section><h2>4&emsp;Copper by layer</h2>
 <p class="blurb">One plate per copper layer, top of the stack first, drawn in panel
 coordinates. Each cell is one {:.2}&nbsp;mm sample and its darkness is the fraction of that cell
 covered by copper, on a scale shared by every plate so the plates compare directly; the number
@@ -312,16 +281,10 @@ fn blend(from: [f64; 3], to: [f64; 3], amount: f64) -> String {
 
 /// One cell per sample, in panel coordinates.
 fn map(analysis: &WarpAnalysis, cells: &[String]) -> String {
-    let bounds = analysis.bounds;
-    let columns = analysis
-        .samples
-        .iter()
-        .filter(|point| (point.y - analysis.samples[0].y).abs() < 1e-9)
-        .count()
-        .max(1);
-    let rows = analysis.samples.len().div_ceil(columns);
-    let width = bounds.width() / columns as f64;
-    let height = bounds.height() / rows as f64;
+    let field = &analysis.moment;
+    let bounds = field.bounds;
+    let width = bounds.width() / field.columns as f64;
+    let height = bounds.height() / field.rows as f64;
     let mut svg = format!(
         r#"<svg viewBox="{} {} {} {}" preserveAspectRatio="xMidYMid meet">"#,
         bounds.min.x,
@@ -329,13 +292,14 @@ fn map(analysis: &WarpAnalysis, cells: &[String]) -> String {
         bounds.width(),
         bounds.height()
     );
-    for (point, colour) in analysis.samples.iter().zip(cells) {
+    for (index, colour) in cells.iter().enumerate() {
+        let center = field.cell_center(index);
         // Panel y runs up, SVG y runs down; mirror about the panel centre.
         let _ = write!(
             svg,
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{colour}"/>"#,
-            point.x - width / 2.0,
-            bounds.min.y + bounds.max.y - point.y - height / 2.0,
+            center.x - width / 2.0,
+            bounds.min.y + bounds.max.y - center.y - height / 2.0,
             width,
             height,
         );

@@ -9,7 +9,7 @@ use pcb_ir::geom::warp::{
     LAMINATE_RELAXATION_DROP_K, Material, PanelField, PlateResponse, StackLayer, ThermalStack,
     WarpEstimate, estimate_warp,
 };
-use pcb_ir::geom::{BBox, ContourSet, Point};
+use pcb_ir::geom::{BBox, ContourSet};
 
 use crate::ipc2581::Ipc2581;
 use pcb_ir::dialects::ipc::ArtworkScope;
@@ -45,8 +45,6 @@ pub struct WarpAnalysis {
     pub stack: ThermalStack,
     /// The stack's response at each layer's mean coverage.
     pub response: PlateResponse,
-    /// Sample positions shared by every field below.
-    pub samples: Vec<Point>,
     pub bounds: BBox,
     pub layers: Vec<LayerCoverage>,
     /// `sum_l t_l z_l rho_l(x)`, the geometric copper moment.
@@ -70,7 +68,6 @@ pub fn analyze(ipc: &Ipc2581, resolution: Resolution) -> Result<WarpAnalysis> {
         (bounds.width().max(bounds.height()) / SAMPLES_ACROSS).max(MIN_SAMPLE_PITCH_MM);
     let columns = (bounds.width() / sample_pitch_mm).ceil().max(1.0) as usize;
     let rows = (bounds.height() / sample_pitch_mm).ceil().max(1.0) as usize;
-    let samples = grid(bounds, columns, rows);
 
     let layers = copper_names
         .iter()
@@ -94,7 +91,7 @@ pub fn analyze(ipc: &Ipc2581, resolution: Resolution) -> Result<WarpAnalysis> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let values = (0..samples.len())
+    let values = (0..columns * rows)
         .map(|sample| {
             layers
                 .iter()
@@ -104,7 +101,7 @@ pub fn analyze(ipc: &Ipc2581, resolution: Resolution) -> Result<WarpAnalysis> {
         })
         .collect::<Vec<f64>>();
     let moment =
-        PanelField::new(samples.clone(), values, bounds).context("panel has no area to sample")?;
+        PanelField::new(bounds, columns, rows, values).context("panel has no area to sample")?;
 
     let means = layers.iter().map(|layer| layer.mean).collect::<Vec<_>>();
     let response = stack
@@ -114,7 +111,6 @@ pub fn analyze(ipc: &Ipc2581, resolution: Resolution) -> Result<WarpAnalysis> {
     Ok(WarpAnalysis {
         stack,
         response,
-        samples,
         bounds,
         layers,
         moment,
@@ -211,18 +207,4 @@ fn panel_bounds(ipc: &Ipc2581, imported: &ImportedDesign, resolution: Resolution
         bail!("panel has no outline to measure");
     }
     Ok(outline.bbox)
-}
-
-/// Centres of the cells [`ContourSet::grid_coverage`] measures.
-fn grid(bounds: BBox, columns: usize, rows: usize) -> Vec<Point> {
-    (0..rows)
-        .flat_map(|row| {
-            (0..columns).map(move |column| {
-                Point::new(
-                    bounds.min.x + bounds.width() * (column as f64 + 0.5) / columns as f64,
-                    bounds.min.y + bounds.height() * (row as f64 + 0.5) / rows as f64,
-                )
-            })
-        })
-        .collect()
 }

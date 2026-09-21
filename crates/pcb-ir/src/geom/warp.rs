@@ -13,39 +13,35 @@
 //!    geometric field `m(x) = sum_l t_l z_l rho_l(x)` scaled by one material
 //!    constant, and the plate that answers it is the stack at the copper each
 //!    layer carries on average. See [`ThermalStack::response`].
-//! 3. Curvature follows the moment pointwise, `kappa = M / (D (1 + nu))` in
-//!    each direction. This is exact for a uniform moment on a free plate and a
-//!    quasi-static approximation for a slowly varying one.
-//! 4. Deflection is the second integral of curvature. Integrating twice is what
+//! 3. The panel is a free plate carrying that thermal moment, and its surface
+//!    is the plate's equilibrium: bending energy against the work the moment
+//!    does on curvature, minimized over polynomial surfaces. Free edges are
+//!    the natural boundary conditions of that minimization, so the edges are
+//!    part of the solution rather than ignored by it. See [`estimate_warp`].
+//! 4. Deflection answers the moment through two integrations. That is what
 //!    introduces the wavelength-squared weighting that makes long-wavelength
 //!    imbalance dominate warp — the reason a flat norm over the moment field
 //!    misreads the problem.
 //!
-//! Step 4 determines the surface only up to a harmonic function. Constants and
-//! tilts leave with the corner plane. The `xy` term does not, and it is exactly
-//! what a twist reading measures, so equilibrium fixes it rather than a choice
-//! of particular solution. A free panel carries no load, so its moment
-//! resultants do no work on any virtual deflection, and taking `xy` as that
-//! deflection leaves `integral(M_xy) = 0` over the panel. A thermal moment is
-//! isotropic and has no `xy` component, which makes this `integral(w_xy) = 0`
-//! for the surface itself — and the integral of `w_xy` over a rectangle is
-//! identically the alternating sum of its corner heights, the quantity 2.4.22
-//! reads as twist. Copper therefore cannot twist a free panel at this order
-//! however it is distributed, and no twist is estimated. What twists real
-//! panels is weave skew and unbalanced layup, which make the plate itself
-//! anisotropic and are outside this model.
-//!
-//! The pointwise free-edge conditions cannot stand in for that integral. No
-//! low-order surface meets them all — the saddle leaves an edge shear whatever
-//! its `xy` term — and imposing the corner-force condition alone while the rest
-//! stay violated moves the reading as far the other way as ignoring it does.
+//! No twist is estimated, because equilibrium leaves none. A free panel
+//! carries no load, so its moment resultants do no work on any virtual
+//! deflection, and taking `xy` as that deflection leaves `integral(M_xy) = 0`
+//! over the panel. A thermal moment is isotropic and has no `xy` component,
+//! which makes this `integral(w_xy) = 0` for the surface itself — and the
+//! integral of `w_xy` over a rectangle is identically the alternating sum of
+//! its corner heights, the quantity 2.4.22 reads as twist. The solved surface
+//! inherits this exactly, `xy` being one of its polynomials. Copper therefore
+//! cannot twist a free panel at this order however it is distributed. What
+//! twists real panels is weave skew and unbalanced layup, which make the plate
+//! itself anisotropic and are outside this model.
 //!
 //! The model is **verified, not validated**: the tests below check it against
 //! closed forms, symmetry, and linearity. Nothing here has been compared
 //! against a measured panel, so results are estimates whose absolute scale
 //! carries the uncertainty of the assumed temperature drop and moduli. Ratios
 //! between panelizations of one stackup are far more trustworthy than absolute
-//! values, because the material constant is common to both and cancels.
+//! values, because the temperature drop and the moduli are common to both and
+//! all but cancel.
 //!
 //! What is modelled is the elastic expansion mismatch between copper and
 //! laminate below the glass transition, and nothing else. That mismatch is
@@ -335,147 +331,47 @@ impl ThermalStack {
     }
 }
 
-/// A scalar field sampled on the panel.
+/// A scalar field over the panel: the mean of each cell of a regular grid,
+/// row-major from the bottom-left cell, the way
+/// [`ContourSet::grid_coverage`](crate::geom::ContourSet::grid_coverage)
+/// measures copper.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelField {
-    pub samples: Vec<Point>,
-    pub values: Vec<f64>,
     pub bounds: BBox,
+    pub columns: usize,
+    pub rows: usize,
+    pub values: Vec<f64>,
 }
 
 impl PanelField {
-    /// Requires a panel with extent in both directions and one value per
-    /// sample. Guaranteeing that here is what lets everything downstream divide
-    /// by the span, normalise coordinates and fit shapes without re-checking.
-    pub fn new(samples: Vec<Point>, values: Vec<f64>, bounds: BBox) -> Option<Self> {
+    /// Requires a panel with extent in both directions and one value per cell.
+    /// Guaranteeing that here is what lets everything downstream divide by the
+    /// sides and index the grid without re-checking.
+    pub fn new(bounds: BBox, columns: usize, rows: usize, values: Vec<f64>) -> Option<Self> {
         let sized = bounds.is_valid() && bounds.width() > 0.0 && bounds.height() > 0.0;
-        (sized && !samples.is_empty() && samples.len() == values.len()).then_some(Self {
-            samples,
-            values,
+        (sized && columns > 0 && rows > 0 && values.len() == columns * rows).then_some(Self {
             bounds,
+            columns,
+            rows,
+            values,
         })
     }
 
-    /// The length normalized coordinates are measured in: half the panel's
-    /// longer side.
-    fn half_span_mm(&self) -> f64 {
-        self.bounds.width().max(self.bounds.height()) / 2.0
-    }
-
-    /// Panel coordinates in units of the half-span, centered on the panel.
-    ///
-    /// Both axes carry the same scale. The mode deflections solve
-    /// `laplacian(w) = phi` in these coordinates, and that operator only keeps
-    /// its form under a change of variables that scales both axes alike —
-    /// stretching each to its own side would leave a different operator on
-    /// every panel shape. So the longer side spans `[-1, 1]` and the shorter one
-    /// spans less.
-    fn normalized(&self, point: Point) -> (f64, f64) {
-        let center = self.bounds.center();
-        let half_span_mm = self.half_span_mm();
-        (
-            (point.x - center.x) / half_span_mm,
-            (point.y - center.y) / half_span_mm,
+    /// Centre of the cell `values[index]` belongs to.
+    pub fn cell_center(&self, index: usize) -> Point {
+        let (column, row) = (index % self.columns, index / self.columns);
+        Point::new(
+            self.bounds.min.x + self.bounds.width() * (column as f64 + 0.5) / self.columns as f64,
+            self.bounds.min.y + self.bounds.height() * (row as f64 + 0.5) / self.rows as f64,
         )
     }
 }
 
-/// The low-order shapes a moment field is decomposed into.
-///
-/// Deflection response grows with the square of wavelength and the acceptance
-/// criteria are low-order shapes of the surface, so the warp a field produces
-/// is carried almost entirely by these. Higher-order content is mechanically
-/// inert by comparison, which is exactly why a flat norm over the field
-/// misreads it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PanelMode {
-    /// Constant. Drives spherical bow, and dominates warp in practice.
-    Uniform,
-    TiltX,
-    TiltY,
-    /// `xy`. Opposite corners heavy the same way.
-    Saddle,
-    /// `x^2 - y^2`. Cylindrical rather than spherical curvature.
-    Astigmatic,
-    /// `x^2 + y^2`. Curvature that varies from center to edge.
-    ///
-    /// Not mean-free: no fixed constant is, on a panel of any shape. The
-    /// uniform mode carries the mean, which is what it is for.
-    Domed,
-}
-
-impl PanelMode {
-    pub const ALL: [Self; 6] = [
-        Self::Uniform,
-        Self::TiltX,
-        Self::TiltY,
-        Self::Saddle,
-        Self::Astigmatic,
-        Self::Domed,
-    ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Uniform => "uniform",
-            Self::TiltX => "tilt-x",
-            Self::TiltY => "tilt-y",
-            Self::Saddle => "saddle",
-            Self::Astigmatic => "astigmatic",
-            Self::Domed => "domed",
-        }
-    }
-
-    /// The basis shape at normalized panel coordinates.
-    fn evaluate(self, x: f64, y: f64) -> f64 {
-        match self {
-            Self::Uniform => 1.0,
-            Self::TiltX => x,
-            Self::TiltY => y,
-            Self::Saddle => x * y,
-            Self::Astigmatic => x * x - y * y,
-            Self::Domed => x * x + y * y,
-        }
-    }
-
-    /// A solution of `laplacian(w) = phi` in normalized coordinates, on a
-    /// panel reaching `edge` from its centre.
-    ///
-    /// Deflection is the second integral of curvature, and this is that
-    /// integral mode by mode. Any harmonic function may be added. Constants
-    /// and tilts leave with the corner plane, and the `xy` term is the one the
-    /// module documentation fixes: its mean `w_xy` over the panel is zero.
-    /// Only the saddle has any to remove.
-    fn deflection(self, x: f64, y: f64, edge: (f64, f64)) -> f64 {
-        match self {
-            Self::Uniform => (x * x + y * y) / 4.0,
-            Self::TiltX => x * x * x / 6.0,
-            Self::TiltY => y * y * y / 6.0,
-            // `(x^3 y + x y^3) / 12` is symmetric in x and y, so turning the
-            // panel turns the surface with it. Its `w_xy = (x^2 + y^2) / 4`
-            // averages a twelfth of the squared corner distance, which the
-            // `xy` term takes back out.
-            Self::Saddle => x * y * (x * x + y * y - edge.0 * edge.0 - edge.1 * edge.1) / 12.0,
-            Self::Astigmatic => (x.powi(4) - y.powi(4)) / 12.0,
-            Self::Domed => (x.powi(4) + y.powi(4)) / 12.0,
-        }
-    }
-}
-
-/// How much of a field each low-order shape accounts for.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ModeAmplitude {
-    pub mode: PanelMode,
-    /// Least-squares coefficient of this shape in the field's own units.
-    pub amplitude: f64,
-    /// Peak-to-valley deflection this shape alone would produce, millimeters.
-    pub deflection_mm: f64,
-}
-
-/// Bow as IPC-TM-650 2.4.22 defines it, plus the field it came from.
+/// Bow as IPC-TM-650 2.4.22 defines it, plus the surface it came from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WarpEstimate {
-    /// Deflection sampled at the same points as the moment field, millimeters,
-    /// measured from the plane through the panel corners.
+    /// Height of the surface at the centre of each cell of the moment field,
+    /// millimeters, measured from the plane through the panel corners.
     pub deflection: PanelField,
     /// Largest single departure from that plane, millimeters. A surface that
     /// rises along one axis and dips along the other reports the larger lobe,
@@ -483,8 +379,24 @@ pub struct WarpEstimate {
     pub bow_mm: f64,
     /// Bow as a percentage of the panel dimension it is worst against.
     pub bow_percent: f64,
-    pub modes: Vec<ModeAmplitude>,
 }
+
+/// Highest total degree of the polynomial surfaces the deflection is sought
+/// among.
+///
+/// Truncation leaves out what the omitted shapes would have deflected, and
+/// deflection is the moment integrated twice: a moment rippling `n` half-waves
+/// across a side deflects `8 / (pi n)^2` of what the same amplitude spread
+/// evenly does. A polynomial spends about `pi / 2` of its degrees on each
+/// half-wave, so degree 12 carries ripples to `n = 8`, and what it leaves out
+/// deflects under 1.3 % of its own amplitude's even bow. On copper that changes
+/// abruptly -- a heavy half, a heavy corner, rails around a striped array --
+/// bow lands within 0.3 % of a degree-28 surface's, which the tests hold it
+/// to. The response this surface is scaled by is itself good only to several
+/// percent wherever coverage departs from its mean, so a richer surface would
+/// resolve detail the model does not have. The solve is dense in
+/// `(12 + 1) (12 + 2) / 2 - 3 = 88` unknowns.
+const SURFACE_DEGREE: usize = 12;
 
 /// Estimate warp from the geometric copper moment field.
 ///
@@ -493,64 +405,37 @@ pub struct WarpEstimate {
 /// coverage of those same layers. `temperature_drop_k` is the effective
 /// excursion from where the laminate stops relaxing down to room temperature,
 /// which is the single largest source of uncertainty in the absolute result.
+///
+/// The surface is the Ritz solution of the free plate: over every polynomial
+/// `w` up to [`SURFACE_DEGREE`], the one that leaves the plate's bending
+/// energy, `D/2 (w_xx + w_yy)^2 - D (1 - nu) (w_xx w_yy - w_xy^2)`, less the
+/// moment's work on its curvature, `M (w_xx + w_yy)`, stationary over the
+/// panel, with `M` the thermal moment held constant over each cell. Free edges
+/// are that functional's natural boundary conditions, so nothing is imposed
+/// on the boundary, and a uniform moment returns its spherical cap exactly
+/// because the cap is one of the polynomials.
 pub fn estimate_warp(
     response: &PlateResponse,
     moment_field: &PanelField,
     temperature_drop_k: f64,
 ) -> WarpEstimate {
-    // GPa/K * K * mm^2 -> GPa mm^2, a moment resultant per unit width. An
-    // equibiaxial moment `M` bends a free plate into a spherical cap of
-    // curvature `M / (D (1 + nu))` in each direction, and the deflection
-    // integral takes the Laplacian, their sum, as its source. The second
-    // integral of curvature then picks up the squared half-span on the way
-    // back to millimetres, since normalized coordinates are measured in
-    // half-spans.
+    let bounds = moment_field.bounds;
+    let half_sides_mm = [bounds.width() / 2.0, bounds.height() / 2.0];
+    // GPa/K * K * mm^2 -> GPa mm^2, a moment resultant per unit width.
     let moment_scale = response.moment_coefficient_gpa_per_k * temperature_drop_k;
-    let half_span_mm = moment_field.half_span_mm();
-    let deflection_scale =
-        moment_scale * 2.0 / response.spherical_rigidity_gpa_mm3 * half_span_mm * half_span_mm;
+    let surface = PlateSurface::solve(
+        response,
+        half_sides_mm,
+        moment_field,
+        moment_scale,
+        SURFACE_DEGREE,
+    );
 
-    let amplitudes = fit(moment_field, &moment_field.values, mode_shapes);
-    let edge = moment_field.normalized(moment_field.bounds.max);
-
-    // 2.4.22 measures from the plane the panel seats on: through its corners.
-    // Each mode's deflection is known in closed form, so its corner plane is
-    // too. No mode leaves an alternating corner residual, so the plane passes
-    // through all four.
-    let mut corner_planes = [[0.0_f64; 3]; PanelMode::ALL.len()];
-    for (index, (mode, amplitude)) in PanelMode::ALL.iter().zip(&amplitudes).enumerate() {
-        let corner = |x: f64, y: f64| deflection_scale * amplitude * mode.deflection(x, y, edge);
-        let (pp, pm, mp, mm) = (
-            corner(edge.0, edge.1),
-            corner(edge.0, -edge.1),
-            corner(-edge.0, edge.1),
-            corner(-edge.0, -edge.1),
-        );
-        corner_planes[index] = [
-            (pp + pm + mp + mm) / 4.0,
-            (pp + pm - mp - mm) / (4.0 * edge.0),
-            (pp - pm + mp - mm) / (4.0 * edge.1),
-        ];
-    }
-
-    // One pass over the samples: the total corner-levelled surface and each
-    // mode's own extremes.
-    let mut deflection = Vec::with_capacity(moment_field.samples.len());
-    let mut extremes = [(f64::MAX, f64::MIN); PanelMode::ALL.len()];
-    for point in &moment_field.samples {
-        let (x, y) = moment_field.normalized(*point);
-        let mut total = 0.0;
-        for (index, (mode, amplitude)) in PanelMode::ALL.iter().zip(&amplitudes).enumerate() {
-            let plane = corner_planes[index];
-            let levelled = deflection_scale * amplitude * mode.deflection(x, y, edge)
-                - (plane[0] + plane[1] * x + plane[2] * y);
-            extremes[index].0 = extremes[index].0.min(levelled);
-            extremes[index].1 = extremes[index].1.max(levelled);
-            total += levelled;
-        }
-        deflection.push(total);
-    }
-
+    // Read at every cell's edges and centre, in both directions: the panel's
+    // corners, its edges and its middle are all among the stations whatever
+    // the cell count, and those are where a bowed panel peaks.
+    let stations = [moment_field.columns, moment_field.rows].map(|cells| 2 * cells + 1);
+    let heights = surface.heights(stations);
     // Bow is the largest departure a corner-seated panel makes from the table,
     // normalized by the dimension it is measured along — the shorter one gives
     // the larger percentage, so that is the one reported. The corners sit at
@@ -558,110 +443,328 @@ pub fn estimate_warp(
     // largest magnitude on either side, not its range: a surface rising along
     // one axis and dipping along the other seats on whichever lobe it rests
     // and shows the other.
-    let bow_mm = deflection
+    let bow_mm = heights
         .iter()
         .fold(0.0_f64, |bow, height| bow.max(height.abs()));
-    let bow_percent = 100.0 * bow_mm
-        / moment_field
-            .bounds
-            .width()
-            .min(moment_field.bounds.height());
+    let bow_percent = 100.0 * bow_mm / bounds.width().min(bounds.height());
 
-    let modes = PanelMode::ALL
-        .iter()
-        .zip(&amplitudes)
-        .zip(&extremes)
-        .map(|((mode, amplitude), (low, high))| ModeAmplitude {
-            mode: *mode,
-            amplitude: *amplitude,
-            deflection_mm: high - low,
+    let deflection = (0..moment_field.rows)
+        .flat_map(|row| {
+            let heights = &heights;
+            (0..moment_field.columns)
+                .map(move |column| heights[(2 * row + 1) * stations[0] + 2 * column + 1])
         })
         .collect();
-
     WarpEstimate {
         deflection: PanelField {
-            samples: moment_field.samples.clone(),
             values: deflection,
-            bounds: moment_field.bounds,
+            ..*moment_field
         },
         bow_mm,
         bow_percent,
-        modes,
     }
 }
 
-/// The six low-order shapes at a normalised panel position.
-fn mode_shapes(x: f64, y: f64) -> [f64; PanelMode::ALL.len()] {
-    PanelMode::ALL.map(|mode| mode.evaluate(x, y))
+/// A polynomial deflection surface, `sum c_ij P_i(x) P_j(y)` in Legendre
+/// polynomials of each side's own `[-1, 1]` coordinate.
+///
+/// Legendre products rather than monomials because they are orthogonal over
+/// the rectangle, which is what keeps the stiffness matrix well conditioned at
+/// this degree.
+struct PlateSurface {
+    degree: usize,
+    /// `c_ij` at `i * (degree + 1) + j`, millimeters; zero past the total
+    /// degree.
+    coefficients: Vec<f64>,
 }
 
-/// Least-squares amplitudes of `shapes` in `values`, over the field's samples.
-///
-/// The shapes are orthogonal over a continuous rectangle but not over a finite
-/// sample set, and a panel samples only the region inside its process margins,
-/// which is neither. Projecting each shape independently would leak one into
-/// another -- a uniform field picking up a spurious domed component. Solving
-/// the normal equations is exact for any sample distribution.
-fn fit<const N: usize>(
-    field: &PanelField,
-    values: &[f64],
-    shapes: impl Fn(f64, f64) -> [f64; N],
-) -> [f64; N] {
-    let mut gram = [[0.0_f64; N]; N];
-    let mut projection = [0.0_f64; N];
-    for (point, value) in field.samples.iter().zip(values) {
-        let (x, y) = field.normalized(*point);
-        let shape = shapes(x, y);
-        for row in 0..N {
-            projection[row] += shape[row] * value;
-            for column in 0..N {
-                gram[row][column] += shape[row] * shape[column];
-            }
-        }
-    }
-    solve(gram, projection)
-}
+impl PlateSurface {
+    /// The free plate's equilibrium under `moment_scale * moment_field`,
+    /// seated on its corners.
+    fn solve(
+        response: &PlateResponse,
+        half_sides_mm: [f64; 2],
+        moment_field: &PanelField,
+        moment_scale: f64,
+        degree: usize,
+    ) -> Self {
+        let order = degree + 1;
+        let [a, b] = half_sides_mm;
+        // Constants and tilts bend nothing, so they carry no energy and the
+        // moment does no work on them: equilibrium leaves them free, and they
+        // are kept for the corner plane below.
+        let shapes = (0..order)
+            .flat_map(|i| (0..order - i).map(move |j| (i, j)))
+            .filter(|(i, j)| i + j >= 2)
+            .collect::<Vec<_>>();
 
-/// Gaussian elimination with partial pivoting.
-///
-/// A shape no sample distinguishes from the others leaves a negligible pivot.
-/// Its amplitude is genuinely undetermined, so it is reported as zero and the
-/// remaining shapes are still solved for.
-fn solve<const N: usize>(mut matrix: [[f64; N]; N], mut rhs: [f64; N]) -> [f64; N] {
-    const NEGLIGIBLE: f64 = 1e-12;
-    let mut solution = [0.0; N];
-    for pivot in 0..N {
-        let best = (pivot..N)
-            .max_by(|left, right| {
-                matrix[*left][pivot]
-                    .abs()
-                    .total_cmp(&matrix[*right][pivot].abs())
+        // Energy: `D (u_xx v_xx + u_yy v_yy) + D nu (u_xx v_yy + u_yy v_xx)
+        // + 2 D (1 - nu) u_xy v_xy`, which separates into products of one
+        // Gram matrix per side. `x = a xi` brings a power of the half-side
+        // with every derivative, and the area element one of each.
+        let grams = LegendreGrams::new(degree);
+        let bend = response.flexural_rigidity_gpa_mm3();
+        let cross =
+            (response.spherical_rigidity_gpa_mm3 - response.deviatoric_rigidity_gpa_mm3) / 2.0;
+        let twist = 2.0 * response.deviatoric_rigidity_gpa_mm3;
+        let stiffness = shapes
+            .iter()
+            .flat_map(|&(i, j)| {
+                let grams = &grams;
+                shapes.iter().map(move |&(k, l)| {
+                    bend * (b / a.powi(3) * grams.curvature[i][k] * grams.mass[j][l]
+                        + a / b.powi(3) * grams.mass[i][k] * grams.curvature[j][l])
+                        + (cross
+                            * (grams.curvature_mass[i][k] * grams.curvature_mass[l][j]
+                                + grams.curvature_mass[k][i] * grams.curvature_mass[j][l])
+                            + twist * grams.slope[i][k] * grams.slope[j][l])
+                            / (a * b)
+                })
             })
-            .expect("the range starts at the pivot row");
-        if matrix[best][pivot].abs() <= NEGLIGIBLE {
-            continue;
+            .collect::<Vec<_>>();
+
+        // Work of the moment on each shape's curvature, exact for a moment
+        // held constant over each cell: `integral(P'')` over a cell is the
+        // step in `P'` across it. Columns are summed first, so the double sum
+        // over cells costs one pass per side.
+        let columns = AxisCells::new(degree, moment_field.columns);
+        let rows = AxisCells::new(degree, moment_field.rows);
+        let along_columns = |table: &[Vec<f64>]| {
+            table
+                .iter()
+                .map(|weights| {
+                    moment_field
+                        .values
+                        .chunks_exact(moment_field.columns)
+                        .map(|row| row.iter().zip(weights).map(|(m, w)| m * w).sum::<f64>())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let (row_steps, row_areas) = (
+            along_columns(&columns.slope_steps),
+            along_columns(&columns.areas),
+        );
+        let dot =
+            |left: &[f64], right: &[f64]| left.iter().zip(right).map(|(l, r)| l * r).sum::<f64>();
+        let work = shapes
+            .iter()
+            .map(|&(i, j)| {
+                moment_scale
+                    * (b / a * dot(&row_steps[i], &rows.areas[j])
+                        + a / b * dot(&row_areas[i], &rows.slope_steps[j]))
+            })
+            .collect::<Vec<_>>();
+
+        let mut coefficients = vec![0.0; order * order];
+        for ((i, j), amplitude) in shapes.iter().zip(solve_positive_definite(stiffness, work)) {
+            coefficients[i * order + j] = amplitude;
         }
-        matrix.swap(pivot, best);
-        rhs.swap(pivot, best);
-        let (pivot_row, pivot_rhs) = (matrix[pivot], rhs[pivot]);
-        for row in pivot + 1..N {
-            let factor = matrix[row][pivot] / pivot_row[pivot];
-            for (target, source) in matrix[row].iter_mut().zip(&pivot_row).skip(pivot) {
-                *target -= factor * source;
+
+        // 2.4.22 measures from the plane the panel seats on: through its
+        // corners. `P_i(+-1) = (+-1)^i`, so the corner heights are signed sums
+        // of the coefficients, and the free constant and tilts are exactly
+        // that plane. The `xy` shape is in the basis and the moment does no
+        // work on it, so the fourth corner lies in the plane of the other
+        // three.
+        let corner = |sx: f64, sy: f64| {
+            (0..order)
+                .flat_map(|i| (0..order).map(move |j| (i, j)))
+                .map(|(i, j)| coefficients[i * order + j] * sx.powi(i as i32) * sy.powi(j as i32))
+                .sum::<f64>()
+        };
+        let (pp, pm, mp, mm) = (
+            corner(1.0, 1.0),
+            corner(1.0, -1.0),
+            corner(-1.0, 1.0),
+            corner(-1.0, -1.0),
+        );
+        coefficients[0] = -(pp + pm + mp + mm) / 4.0;
+        coefficients[order] = -(pp + pm - mp - mm) / 4.0;
+        coefficients[1] = -(pp - pm + mp - mm) / 4.0;
+        Self {
+            degree,
+            coefficients,
+        }
+    }
+
+    /// Heights on a lattice of evenly spaced stations spanning each side, edge
+    /// to edge, row-major from the bottom-left corner.
+    fn heights(&self, stations: [usize; 2]) -> Vec<f64> {
+        let order = self.degree + 1;
+        let [across, up] = stations.map(|count| {
+            (0..count)
+                .map(|station| {
+                    legendre(self.degree, 2.0 * station as f64 / (count - 1) as f64 - 1.0).0
+                })
+                .collect::<Vec<_>>()
+        });
+        up.iter()
+            .flat_map(|y| {
+                // Collapse the y direction once per row of stations.
+                let along = (0..order)
+                    .map(|i| {
+                        (0..order)
+                            .map(|j| self.coefficients[i * order + j] * y[j])
+                            .sum::<f64>()
+                    })
+                    .collect::<Vec<_>>();
+                across
+                    .iter()
+                    .map(move |x| along.iter().zip(x).map(|(c, p)| c * p).sum::<f64>())
+            })
+            .collect()
+    }
+}
+
+/// `P_0..=P_degree` and their first derivatives at `x`, by the three-term
+/// recurrences.
+fn legendre(degree: usize, x: f64) -> (Vec<f64>, Vec<f64>) {
+    let mut values = vec![1.0, x];
+    let mut slopes = vec![0.0, 1.0];
+    for n in 1..degree {
+        let weight = n as f64;
+        values
+            .push(((2.0 * weight + 1.0) * x * values[n] - weight * values[n - 1]) / (weight + 1.0));
+        slopes.push(slopes[n - 1] + (2.0 * weight + 1.0) * values[n]);
+    }
+    values.truncate(degree + 1);
+    slopes.truncate(degree + 1);
+    (values, slopes)
+}
+
+/// What a moment held constant over each cell needs of the Legendre
+/// polynomials along one side split into `cells`. Row `i` belongs to `P_i`.
+struct AxisCells {
+    /// `integral(P_i)` over each cell.
+    areas: Vec<Vec<f64>>,
+    /// `integral(P_i'')` over each cell: the step in `P_i'` across it.
+    slope_steps: Vec<Vec<f64>>,
+}
+
+impl AxisCells {
+    fn new(degree: usize, cells: usize) -> Self {
+        // `(2 i + 1) integral(P_i) = P_(i+1) - P_(i-1)`, and `P_1` for `P_0`.
+        let (primitives, slopes): (Vec<_>, Vec<_>) = (0..=cells)
+            .map(|edge| {
+                let (values, slopes) = legendre(degree + 1, 2.0 * edge as f64 / cells as f64 - 1.0);
+                let primitives = (0..=degree)
+                    .map(|i| match i {
+                        0 => values[1],
+                        _ => (values[i + 1] - values[i - 1]) / (2 * i + 1) as f64,
+                    })
+                    .collect::<Vec<_>>();
+                (primitives, slopes)
+            })
+            .unzip();
+        let steps = |at_edges: &[Vec<f64>]| {
+            (0..=degree)
+                .map(|i| {
+                    at_edges
+                        .windows(2)
+                        .map(|pair| pair[1][i] - pair[0][i])
+                        .collect()
+                })
+                .collect()
+        };
+        Self {
+            areas: steps(&primitives),
+            slope_steps: steps(&slopes),
+        }
+    }
+}
+
+/// Integrals over `[-1, 1]` of products of Legendre polynomials and their
+/// derivatives, exact.
+///
+/// `P_n' = sum (2 k + 1) P_k` over `k = n - 1, n - 3, ...`, so every
+/// derivative is itself a Legendre series with integer coefficients, and
+/// orthogonality, `integral(P_k^2) = 2 / (2 k + 1)`, turns each product
+/// integral into a sum over those coefficients. No quadrature is involved.
+struct LegendreGrams {
+    /// `integral(P_i P_j)`.
+    mass: Vec<Vec<f64>>,
+    /// `integral(P_i' P_j')`.
+    slope: Vec<Vec<f64>>,
+    /// `integral(P_i'' P_j'')`.
+    curvature: Vec<Vec<f64>>,
+    /// `integral(P_i'' P_j)`.
+    curvature_mass: Vec<Vec<f64>>,
+}
+
+impl LegendreGrams {
+    fn new(degree: usize) -> Self {
+        let order = degree + 1;
+        let series = |of: &dyn Fn(usize, usize) -> f64| {
+            (0..order)
+                .map(|n| (0..order).map(|k| of(n, k)).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        };
+        let value = series(&|n, k| f64::from(n == k));
+        let first = series(&|n, k| {
+            if k < n && (n - k) % 2 == 1 {
+                (2 * k + 1) as f64
+            } else {
+                0.0
             }
-            rhs[row] -= factor * pivot_rhs;
+        });
+        let second = series(&|n, k| (0..order).map(|m| first[n][m] * first[m][k]).sum());
+        let gram = |left: &[Vec<f64>], right: &[Vec<f64>]| {
+            series(&|i, j| {
+                (0..order)
+                    .map(|k| left[i][k] * right[j][k] * 2.0 / (2 * k + 1) as f64)
+                    .sum()
+            })
+        };
+        Self {
+            mass: gram(&value, &value),
+            slope: gram(&first, &first),
+            curvature: gram(&second, &second),
+            curvature_mass: gram(&second, &value),
         }
     }
-    for row in (0..N).rev() {
-        if matrix[row][row].abs() <= NEGLIGIBLE {
-            continue;
+}
+
+/// Solve `matrix x = rhs` for a symmetric positive-definite `matrix`, stored
+/// row-major.
+///
+/// Cholesky factorization, after scaling the matrix to a unit diagonal: the
+/// shapes' energies span many orders of magnitude, and that spread is
+/// conditioning the scaling removes for free.
+fn solve_positive_definite(mut matrix: Vec<f64>, mut rhs: Vec<f64>) -> Vec<f64> {
+    let n = rhs.len();
+    let scale = (0..n)
+        .map(|i| 1.0 / matrix[i * n + i].sqrt())
+        .collect::<Vec<_>>();
+    for i in 0..n {
+        rhs[i] *= scale[i];
+        for j in 0..n {
+            matrix[i * n + j] *= scale[i] * scale[j];
         }
-        let known = (row + 1..N)
-            .map(|column| matrix[row][column] * solution[column])
-            .sum::<f64>();
-        solution[row] = (rhs[row] - known) / matrix[row][row];
     }
-    solution
+    // `L` overwrites the lower triangle a column at a time.
+    for j in 0..n {
+        for k in 0..j {
+            let factor = matrix[j * n + k];
+            for i in j..n {
+                matrix[i * n + j] -= matrix[i * n + k] * factor;
+            }
+        }
+        let pivot = matrix[j * n + j].sqrt();
+        for i in j..n {
+            matrix[i * n + j] /= pivot;
+        }
+    }
+    // `L y = rhs`, then `L^T x = y`.
+    for i in 0..n {
+        let known = (0..i).map(|k| matrix[i * n + k] * rhs[k]).sum::<f64>();
+        rhs[i] = (rhs[i] - known) / matrix[i * n + i];
+    }
+    for i in (0..n).rev() {
+        let known = (i + 1..n).map(|k| matrix[k * n + i] * rhs[k]).sum::<f64>();
+        rhs[i] = (rhs[i] - known) / matrix[i * n + i];
+    }
+    rhs.iter().zip(scale).map(|(x, scale)| x * scale).collect()
 }
 
 #[cfg(test)]
@@ -697,18 +800,25 @@ mod tests {
         .unwrap()
     }
 
+    /// A field over `columns x rows` cells, from its value at each cell's
+    /// centre in the panel's own `[-1, 1]` coordinates.
+    fn field(
+        bounds: BBox,
+        (columns, rows): (usize, usize),
+        value: impl Fn(f64, f64) -> f64,
+    ) -> PanelField {
+        let along = |cell: usize, cells: usize| (2 * cell + 1) as f64 / cells as f64 - 1.0;
+        let values = (0..rows)
+            .flat_map(|row| {
+                let value = &value;
+                (0..columns).map(move |column| value(along(column, columns), along(row, rows)))
+            })
+            .collect();
+        PanelField::new(bounds, columns, rows, values).unwrap()
+    }
+
     fn uniform_field(bounds: BBox, value: f64) -> PanelField {
-        let mut samples = Vec::new();
-        let mut values = Vec::new();
-        for row in 0..21 {
-            for column in 0..21 {
-                let x = bounds.min.x + bounds.width() * column as f64 / 20.0;
-                let y = bounds.min.y + bounds.height() * row as f64 / 20.0;
-                samples.push(Point::new(x, y));
-                values.push(value);
-            }
-        }
-        PanelField::new(samples, values, bounds).unwrap()
+        field(bounds, (20, 20), |_, _| value)
     }
 
     /// A conventional 1.6 mm six-layer build: six 1 oz foils, thin outer
@@ -785,9 +895,9 @@ mod tests {
                 thermal[row] += stress * weight;
             }
         }
-        let [_, _, curvature_x, curvature_y] = solve(system, thermal);
-        assert!((curvature_x - curvature_y).abs() <= 1e-12 * curvature_x.abs());
-        curvature_x
+        let strains = solve_positive_definite(system.concat(), thermal.to_vec());
+        assert!((strains[2] - strains[3]).abs() <= 1e-12 * strains[2].abs());
+        strains[2]
     }
 
     fn model_curvature_per_k(layers: &[StackLayer], displaced: Material, coverage: &[f64]) -> f64 {
@@ -933,49 +1043,41 @@ mod tests {
         assert!(warp.bow_percent <= 1e-12);
     }
 
-    /// A uniform moment bends the panel into a spherical cap: all the
-    /// deflection lands in the uniform mode.
-    #[test]
-    fn a_uniform_moment_produces_pure_bow() {
-        let stack = symmetric_four_layer();
-        let field = uniform_field(panel(), 0.01);
-        let warp = estimate_warp(&whole(&stack), &field, 150.0);
-
-        assert!(warp.bow_mm > 0.0);
-        let uniform = warp
-            .modes
-            .iter()
-            .find(|mode| mode.mode == PanelMode::Uniform)
-            .unwrap();
-        assert!((uniform.amplitude - 0.01).abs() <= 1e-9);
-        for mode in &warp.modes {
-            if mode.mode != PanelMode::Uniform {
-                assert!(mode.amplitude.abs() <= 1e-9, "{mode:?}");
-            }
-        }
-    }
-
     /// A uniform moment bends a panel of any shape into the same spherical cap,
-    /// so bow follows from the curvature and the panel's own diagonal alone.
-    /// Nothing about the fit may reintroduce the panel's aspect ratio.
+    /// so the surface follows from the curvature alone and bow from the
+    /// panel's own diagonal. The cap is one of the polynomials, so the solve
+    /// has to return it exactly, and the stations bow is read at have to catch
+    /// its middle whether the cell counts are even or odd.
     #[test]
-    fn a_rectangular_panel_bows_to_the_spherical_cap_its_curvature_implies() {
+    fn a_uniform_moment_bends_any_panel_to_its_spherical_cap() {
         let response = whole(&symmetric_four_layer());
         let moment = 0.01;
-        for (width, height) in [(400.0, 400.0), (400.0, 800.0), (800.0, 200.0)] {
-            let bounds = BBox::new(Point::new(0.0, 0.0), Point::new(width, height));
-            let warp = estimate_warp(&response, &uniform_field(bounds, moment), 150.0);
+        let curvature = response.moment_coefficient_gpa_per_k * 150.0 * moment
+            / response.spherical_rigidity_gpa_mm3;
+        for (width, height, cells) in [
+            (400.0, 400.0, (20, 20)),
+            (400.0, 800.0, (7, 13)),
+            (800.0, 200.0, (96, 24)),
+        ] {
+            let bounds = BBox::new(
+                Point::new(10.0, -20.0),
+                Point::new(10.0 + width, height - 20.0),
+            );
+            let warp = estimate_warp(&response, &field(bounds, cells, |_, _| moment), 150.0);
 
             // w = kappa (X^2 + Y^2) / 2 levelled onto the corners rises from the
             // centre to the corners by an eighth of the squared diagonal.
-            let curvature = response.moment_coefficient_gpa_per_k * 150.0 * moment
-                / response.spherical_rigidity_gpa_mm3;
             let expected = curvature * (width * width + height * height) / 8.0;
             assert!(
                 (warp.bow_mm - expected).abs() <= 1e-9 * expected,
                 "{width} x {height}: {} != {expected}",
                 warp.bow_mm,
             );
+            for (index, height) in warp.deflection.values.iter().enumerate() {
+                let offset = warp.deflection.cell_center(index) - bounds.center();
+                let cap = curvature * (offset.x * offset.x + offset.y * offset.y) / 2.0 - expected;
+                assert!((height - cap).abs() <= 1e-9 * expected, "{offset:?}");
+            }
         }
     }
 
@@ -984,18 +1086,9 @@ mod tests {
     /// a seated panel actually shows -- not the two lobes summed.
     #[test]
     fn an_astigmatic_surface_reports_its_larger_lobe_as_bow() {
-        let stack = symmetric_four_layer();
         let bounds = BBox::new(Point::new(0.0, 0.0), Point::new(400.0, 400.0));
-        let mut field = uniform_field(bounds, 0.0);
-        field.values = field
-            .samples
-            .iter()
-            .map(|point| {
-                let (x, y) = field.normalized(*point);
-                0.01 * (x * x - y * y)
-            })
-            .collect();
-        let warp = estimate_warp(&whole(&stack), &field, 150.0);
+        let moment = field(bounds, (20, 20), |x, y| 0.01 * (x * x - y * y));
+        let warp = estimate_warp(&whole(&symmetric_four_layer()), &moment, 150.0);
 
         let (low, high) = warp
             .deflection
@@ -1004,34 +1097,39 @@ mod tests {
             .fold((f64::MAX, f64::MIN), |(low, high), value| {
                 (low.min(*value), high.max(*value))
             });
-        // On a square panel the two lobes match, so the range is twice the bow.
+        // On a square panel the two lobes mirror each other, and both peak on
+        // an edge, half a cell past the outermost cell centres.
         assert!(warp.bow_mm > 0.0);
-        assert!(
-            (warp.bow_mm - high.max(-low)).abs() <= 1e-12,
-            "{} != {}",
-            warp.bow_mm,
-            high.max(-low)
-        );
-        assert!(
-            ((high - low) - 2.0 * warp.bow_mm).abs() <= 1e-9 * warp.bow_mm,
-            "range {} vs bow {}",
-            high - low,
-            warp.bow_mm
-        );
+        assert!((high + low).abs() <= 1e-9 * warp.bow_mm, "{low} {high}");
+        assert!(high <= warp.bow_mm && high > 0.8 * warp.bow_mm, "{high}");
     }
 
-    /// The integral of `w_xy` over the panel is the alternating sum of its
-    /// corner heights, and equilibrium makes it zero for any isotropic thermal
-    /// moment. Every mode has to leave the four corners in one plane, on a
-    /// panel of any shape, so that no copper distribution reads as twist.
+    /// A free panel carries no load, so its moments do no work on the twist
+    /// shape `xy`, and a thermal moment has no twisting component to do any
+    /// either. The integral of `w_xy` over the panel is therefore zero, and
+    /// that integral is the alternating sum of the corner heights: however
+    /// the copper is distributed, the fourth corner seats with the other
+    /// three.
     #[test]
-    fn no_mode_lifts_a_corner_out_of_the_plane_of_the_other_three() {
-        for edge in [(1.0, 1.0), (1.0, 0.4), (0.25, 1.0)] {
-            for mode in PanelMode::ALL {
-                let corner = |x: f64, y: f64| mode.deflection(x * edge.0, y * edge.1, edge);
-                let lift =
-                    corner(1.0, 1.0) + corner(-1.0, -1.0) - corner(1.0, -1.0) - corner(-1.0, 1.0);
-                assert!(lift.abs() <= 1e-15, "{mode:?} on {edge:?}: {lift}");
+    fn no_copper_distribution_lifts_a_corner_off_the_plane_of_the_other_three() {
+        let response = whole(&symmetric_four_layer());
+        for (width, height) in [(400.0, 400.0), (500.0, 200.0), (100.0, 400.0)] {
+            let bounds = BBox::new(Point::new(0.0, 0.0), Point::new(width, height));
+            // Lopsided every way at once: a heavy quadrant, a diagonal ramp.
+            let moment = field(bounds, (24, 18), |x, y| {
+                0.01 * (f64::from(x > 0.2 && y < -0.1) + 0.5 * x * y + 0.3 * x - 0.2 * y * y * y)
+            });
+            let surface = PlateSurface::solve(
+                &response,
+                [width / 2.0, height / 2.0],
+                &moment,
+                1.0,
+                SURFACE_DEGREE,
+            );
+            let bow = bow_of(&surface);
+            assert!(bow > 0.0);
+            for corner in surface.heights([2, 2]) {
+                assert!(corner.abs() <= 1e-10 * bow, "{width} x {height}: {corner}");
             }
         }
     }
@@ -1040,53 +1138,21 @@ mod tests {
     /// them. Turning the panel a quarter turn turns the saddle with it, so the
     /// bow has to come out the same.
     #[test]
-    fn a_saddle_imbalance_bows_between_coplanar_corners() {
-        let stack = symmetric_four_layer();
-        let saddle = |bounds| {
-            let mut field = uniform_field(bounds, 0.0);
-            field.values = field
-                .samples
-                .iter()
-                .map(|point| {
-                    let (x, y) = field.normalized(*point);
-                    0.01 * x * y
-                })
-                .collect();
-            estimate_warp(&whole(&stack), &field, 150.0)
+    fn a_saddle_imbalance_bows_the_same_whichever_way_the_panel_is_turned() {
+        let response = whole(&symmetric_four_layer());
+        let saddle = |width: f64, height: f64, cells| {
+            let bounds = BBox::new(Point::new(0.0, 0.0), Point::new(width, height));
+            estimate_warp(&response, &field(bounds, cells, |x, y| 0.01 * x * y), 150.0).bow_mm
         };
-        let warp = saddle(panel());
-
-        let upright = saddle(BBox::new(Point::new(0.0, 0.0), Point::new(400.0, 800.0)));
-        let turned = saddle(BBox::new(Point::new(0.0, 0.0), Point::new(800.0, 400.0)));
-        assert!(
-            (upright.bow_mm - turned.bow_mm).abs() <= 1e-9 * upright.bow_mm,
-            "{} != {}",
-            upright.bow_mm,
-            turned.bow_mm
+        let (upright, turned) = (
+            saddle(400.0, 800.0, (16, 32)),
+            saddle(800.0, 400.0, (32, 16)),
         );
-
-        assert!(warp.bow_mm > 0.0);
-        let bounds = warp.deflection.bounds;
-        for (point, height) in warp.deflection.samples.iter().zip(&warp.deflection.values) {
-            let on_corner = (point.x == bounds.min.x || point.x == bounds.max.x)
-                && (point.y == bounds.min.y || point.y == bounds.max.y);
-            assert!(
-                !on_corner || height.abs() <= 1e-12 * warp.bow_mm,
-                "{point:?}"
-            );
-        }
-        let saddle = warp
-            .modes
-            .iter()
-            .find(|mode| mode.mode == PanelMode::Saddle)
-            .unwrap();
-        assert!((saddle.amplitude - 0.01).abs() <= 1e-9);
-        let uniform = warp
-            .modes
-            .iter()
-            .find(|mode| mode.mode == PanelMode::Uniform)
-            .unwrap();
-        assert!(uniform.amplitude.abs() <= 1e-9);
+        assert!(upright > 0.0);
+        assert!(
+            (upright - turned).abs() <= 1e-9 * upright,
+            "{upright} != {turned}"
+        );
     }
 
     /// Long-wavelength imbalance deflects far more than short-wavelength
@@ -1094,26 +1160,92 @@ mod tests {
     /// the moment field the wrong thing to minimize.
     #[test]
     fn long_wavelength_imbalance_dominates_deflection() {
-        let stack = symmetric_four_layer();
-        let bounds = panel();
+        let response = whole(&symmetric_four_layer());
         let ripple = |cycles: f64| {
-            let mut field = uniform_field(bounds, 0.0);
-            for (point, value) in field.samples.iter().zip(&mut field.values) {
-                let phase =
-                    std::f64::consts::TAU * cycles * (point.x - bounds.min.x) / bounds.width();
-                *value = 0.01 * phase.cos();
-            }
-            estimate_warp(&whole(&stack), &field, 150.0).bow_mm
+            let moment = field(panel(), (80, 100), |x, _| {
+                0.01 * (std::f64::consts::PI * cycles * (x + 1.0)).cos()
+            });
+            estimate_warp(&response, &moment, 150.0).bow_mm
         };
 
-        // One cycle across the panel against five: same amplitude, far more
-        // deflection from the longer wave.
+        // One cycle across the panel against three: same amplitude, and the
+        // deflection falls with the square of the wavelength.
         assert!(
-            ripple(1.0) > 5.0 * ripple(5.0),
+            ripple(1.0) > 5.0 * ripple(3.0),
             "{} {}",
             ripple(1.0),
-            ripple(5.0)
+            ripple(3.0)
         );
+    }
+
+    fn bow_of(surface: &PlateSurface) -> f64 {
+        surface
+            .heights([193, 193])
+            .into_iter()
+            .fold(0.0_f64, |bow, height| bow.max(height.abs()))
+    }
+
+    /// Moments that vary across the panel have no closed form on a free plate,
+    /// so the assembly is held to bows an independent Ritz solve of the same
+    /// plate returned: five by three, `nu = 0.3`, unit `M / D`, shapes in units
+    /// of the longer half-side. A particular integral of
+    /// `laplacian(w) = 2 M / (D (1 + nu))` that ignores the free edges puts the
+    /// tilt at 0.098 and the saddle at 0.030, so these tell the two apart.
+    #[test]
+    fn low_order_imbalances_bow_a_free_plate_as_an_independent_solve_found() {
+        let response = PlateResponse {
+            moment_coefficient_gpa_per_k: 1.0,
+            spherical_rigidity_gpa_mm3: 1.3,
+            deviatoric_rigidity_gpa_mm3: 0.7,
+        };
+        let bounds = BBox::new(Point::new(-1.0, -0.6), Point::new(1.0, 0.6));
+        let shapes: [fn(f64, f64) -> f64; 4] = [
+            |x, _| x,
+            |x, y| x * x - 0.36 * y * y,
+            |x, y| x * x + 0.36 * y * y,
+            |x, y| 0.6 * x * y,
+        ];
+        for (shape, expected) in shapes.into_iter().zip([0.105, 0.075, 0.163, 0.016]) {
+            let moment = field(bounds, (200, 120), shape);
+            let bow = bow_of(&PlateSurface::solve(
+                &response,
+                [1.0, 0.6],
+                &moment,
+                1.0,
+                SURFACE_DEGREE,
+            ));
+            assert!((bow - expected).abs() <= 5e-4, "{bow} != {expected}");
+        }
+    }
+
+    /// The polynomials are a truncation, so what they leave out has to be
+    /// small on the fields that are hardest on them: copper that changes
+    /// abruptly, the way it does between a board and the rail beside it.
+    #[test]
+    fn abrupt_copper_bows_as_a_far_richer_surface_says_it_does() {
+        let response = whole(&symmetric_four_layer());
+        let fields = [
+            // One heavy half, one heavy corner, and rails around a striped array.
+            field(panel(), (96, 96), |x, _| f64::from(x > 0.0)),
+            field(panel(), (96, 96), |x, y| f64::from(x > 0.3 && y > 0.5)),
+            field(panel(), (96, 96), |x, y| {
+                f64::from(x.abs() > 0.9 || y.abs() > 0.92)
+                    + 0.5 * f64::from((4.0 * x).rem_euclid(2.0) > 1.0)
+            }),
+        ];
+        for moment in &fields {
+            let bow = |degree| {
+                bow_of(&PlateSurface::solve(
+                    &response,
+                    [200.0, 250.0],
+                    moment,
+                    1.0,
+                    degree,
+                ))
+            };
+            let (chosen, rich) = (bow(SURFACE_DEGREE), bow(28));
+            assert!((chosen - rich).abs() <= 3e-3 * rich, "{chosen} != {rich}");
+        }
     }
 
     /// Materials that expand alike cannot bend a panel however unevenly they
@@ -1245,16 +1377,9 @@ mod tests {
             .unwrap()
         };
         let shaped = |scale: f64| {
-            let mut field = uniform_field(panel(), 0.0);
-            field.values = field
-                .samples
-                .iter()
-                .map(|point| {
-                    let (x, y) = field.normalized(*point);
-                    scale * (0.01 + 0.004 * x - 0.003 * x * y + 0.002 * y * y)
-                })
-                .collect();
-            field
+            field(panel(), (20, 20), |x, y| {
+                scale * (0.01 + 0.004 * x - 0.003 * x * y + 0.002 * y * y)
+            })
         };
 
         let response =
