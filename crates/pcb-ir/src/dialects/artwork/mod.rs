@@ -1294,6 +1294,30 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_length_round_stroke_images_as_a_dot() {
+        let mut doc = Document::<(), ()>::new();
+        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        let at = Point::new(1.0, 2.0);
+        let path = doc.push_path(
+            Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round)),
+            vec![ContourBuf::new(vec![
+                PathCmd::move_to(at),
+                PathCmd::line_to(at),
+            ])],
+        );
+        doc.push_object(
+            layer,
+            Object::new(Polarity::Dark, Geometry::Stroke { path }),
+        );
+
+        let (mut layers, _) =
+            compose_owner_regions(&doc, |_| Some(()), Resolution::default()).unwrap();
+        let (_, image) = layers.remove(0).pop().expect("the dot paints material");
+        assert!((image.area() - std::f64::consts::PI * 0.01).abs() < 1e-3);
+        assert!(image.contains_point(at));
+    }
+
+    #[test]
     fn composition_stages_overlays_over_base_clears_and_final_cutouts_last() {
         let mut doc = Document::<(), ()>::new();
         let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));

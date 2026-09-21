@@ -747,6 +747,23 @@ fn solid_stroke_to_fill(
             contour.bbox = contour_bbox(&contour.cmds);
         }
     }
+    // A stroke of no length still images its cap, as it does in SVG and as a
+    // zero-length Gerber draw does; the outliner sees no segment to offset.
+    out.extend(contours.iter().filter_map(|contour| {
+        let drawn = contour.segments().next().is_some();
+        let at = contour.bbox.min;
+        (drawn && contour.bbox.max == at)
+            .then(|| match style.line_cap {
+                LineCap::Round => crate::geom::shapes::circle(style.width),
+                LineCap::Square => crate::geom::shapes::rect(style.width, style.width),
+                LineCap::Butt => None,
+            })
+            .flatten()
+            .map(|cap| {
+                cap.with_uncertainty(contour.uncertainty_mm)
+                    .transformed(Affine2::translation(at))
+            })
+    }));
     (!out.is_empty()).then_some(out)
 }
 

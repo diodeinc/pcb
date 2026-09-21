@@ -21,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Keep each layer's pads and cutouts its own in the IPC-2581 HTML report.
 - Fix batched point containment for points whose heights differ by rounding noise.
+- Image zero-length round and square strokes as dots in composed layer images, matching Gerber output.
 
 ### Changed
 
