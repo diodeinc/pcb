@@ -85,7 +85,7 @@ stackup is firmer by a wide margin, since the constant multiplies both and cance
         analysis.bounds.height(),
         stack.total_thickness_mm(),
         analysis.layers.len(),
-        stack.flexural_rigidity_gpa_mm3(),
+        analysis.response.flexural_rigidity_gpa_mm3(),
         analysis.temperature_drop_k,
         analysis.samples.len(),
     );

@@ -6,8 +6,8 @@
 use anyhow::{Context, Result, bail};
 use pcb_ir::geom::Resolution;
 use pcb_ir::geom::warp::{
-    LAMINATE_RELAXATION_DROP_K, Material, PanelField, StackLayer, ThermalStack, WarpEstimate,
-    estimate_warp,
+    LAMINATE_RELAXATION_DROP_K, Material, PanelField, PlateResponse, StackLayer, ThermalStack,
+    WarpEstimate, estimate_warp,
 };
 use pcb_ir::geom::{BBox, ContourSet, Point};
 
@@ -43,6 +43,8 @@ pub struct LayerCoverage {
 /// Everything the report needs about one panel.
 pub struct WarpAnalysis {
     pub stack: ThermalStack,
+    /// The stack's response at each layer's mean coverage.
+    pub response: PlateResponse,
     /// Sample positions shared by every field below.
     pub samples: Vec<Point>,
     pub bounds: BBox,
@@ -104,14 +106,14 @@ pub fn analyze(ipc: &Ipc2581, resolution: Resolution) -> Result<WarpAnalysis> {
     let moment =
         PanelField::new(samples.clone(), values, bounds).context("panel has no area to sample")?;
 
-    let warp = estimate_warp(
-        &stack,
-        Material::LAMINATE,
-        &moment,
-        LAMINATE_RELAXATION_DROP_K,
-    );
+    let means = layers.iter().map(|layer| layer.mean).collect::<Vec<_>>();
+    let response = stack
+        .response(Material::LAMINATE, &means)
+        .context("physical stackup has no bending stiffness")?;
+    let warp = estimate_warp(&response, &moment, LAMINATE_RELAXATION_DROP_K);
     Ok(WarpAnalysis {
         stack,
+        response,
         samples,
         bounds,
         layers,

@@ -11,7 +11,8 @@
 //!    rule, which is the right average for phases sharing in-plane strain.
 //! 2. The copper-driven thermal moment is linear in that fraction, leaving a
 //!    geometric field `m(x) = sum_l t_l z_l rho_l(x)` scaled by one material
-//!    constant. See [`ThermalStack::moment_coefficient`].
+//!    constant, and the plate that answers it is the stack at the copper each
+//!    layer carries on average. See [`ThermalStack::response`].
 //! 3. Curvature follows the moment pointwise, `kappa = M / (D (1 + nu))` in
 //!    each direction. This is exact for a uniform moment on a free plate and a
 //!    quasi-static approximation for a slowly varying one.
@@ -96,18 +97,21 @@ impl Material {
         cte_ppm_per_k: 16.0,
     };
 
-    /// Plane-stress stiffness `E / (1 - nu)`, in GPa.
+    /// Stiffness against equal strain in both directions, `E / (1 - nu)`, in
+    /// GPa.
     ///
     /// This is the constant relating a fully constrained equibiaxial thermal
     /// strain to the stress it produces, which is what a misfit between layers
-    /// generates.
+    /// generates, and the one a spherical curvature bends against.
     fn biaxial_modulus_gpa(self) -> f64 {
         self.modulus_gpa / (1.0 - self.poisson)
     }
 
-    /// Plane-strain bending stiffness `E / (1 - nu^2)`, in GPa.
-    fn flexural_modulus_gpa(self) -> f64 {
-        self.modulus_gpa / (1.0 - self.poisson * self.poisson)
+    /// Stiffness against equal and opposite strains, `E / (1 + nu)`, in GPa:
+    /// twice the shear modulus. Cylindrical-difference and twist curvatures
+    /// bend against this one.
+    fn deviatoric_modulus_gpa(self) -> f64 {
+        self.modulus_gpa / (1.0 + self.poisson)
     }
 
     /// Thermal stress per kelvin, `E alpha / (1 - nu)`, in GPa per kelvin.
@@ -134,12 +138,6 @@ pub struct ThermalStack {
     /// Height of each layer's mid-surface above the geometric mid-plane,
     /// millimeters.
     lever_arms_mm: Vec<f64>,
-    flexural_rigidity_gpa_mm3: f64,
-    /// Stiffness-weighted Poisson ratio, used to convert moment to curvature.
-    poisson: f64,
-    /// In-plane expansion of the free nominal stack, per kelvin: the mean of
-    /// its layers' expansions weighted by biaxial stiffness.
-    membrane_cte_per_k: f64,
     total_thickness_mm: f64,
 }
 
@@ -155,97 +153,69 @@ pub struct ConductorWeight {
     pub moment_arm_mm2: f64,
 }
 
+/// How the free panel answers its copper moment, at the copper it carries.
+///
+/// Every layer here is isotropic, so the laminate's stretching, coupling and
+/// bending stiffnesses share their principal shapes: equal strain in both
+/// directions, which meets `E / (1 - nu)`, and equal and opposite strain,
+/// which meets `E / (1 + nu)`. Each shape bends about its own neutral axis,
+/// leaving `D - B^2 / A` assembled from its own modulus, and those two
+/// rigidities are the whole plate: `D (1 + nu)` and `D (1 - nu)` of the
+/// equivalent homogeneous one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlateResponse {
+    /// Thermal moment per kelvin per unit of the geometric copper field
+    /// `sum_l t_l z_l rho_l`, in GPa per kelvin. With a temperature drop and
+    /// the field's mm^2 it is a moment resultant in GPa mm^2 per unit width.
+    pub moment_coefficient_gpa_per_k: f64,
+    /// Moment per unit of spherical curvature, `D (1 + nu)`, in GPa mm^3. A
+    /// thermal moment is the same in every direction and drives this alone.
+    pub spherical_rigidity_gpa_mm3: f64,
+    /// Moment per unit of cylindrical-difference or twist curvature,
+    /// `D (1 - nu)`, in GPa mm^3.
+    pub deviatoric_rigidity_gpa_mm3: f64,
+}
+
+impl PlateResponse {
+    /// `D` of the equivalent homogeneous plate, in GPa mm^3.
+    pub fn flexural_rigidity_gpa_mm3(&self) -> f64 {
+        (self.spherical_rigidity_gpa_mm3 + self.deviatoric_rigidity_gpa_mm3) / 2.0
+    }
+}
+
 impl ThermalStack {
     /// Build from layers given in stack order, outermost first.
     ///
-    /// Rigidity is assembled about the neutral axis, the stiffness-weighted
-    /// centroid: copper is roughly five times stiffer than laminate, so mixed
-    /// copper weights pull the axis off the middle. The arms that weigh each
-    /// layer's copper are measured from the geometric mid-plane instead. What
-    /// bends a free plate is `sum Q (a - a_panel) t z` over every layer, which
-    /// does not depend on where `z` is measured from; copper coverage enters
-    /// it through the conductor layers alone only when the laminate's own
-    /// share, `Q_d (a_d - a_panel) sum t z`, vanishes, and the mid-plane is
-    /// where `sum t z` does. About that plane the copper field cancels
-    /// exactly when the panel stays flat, at any coverage.
-    ///
-    /// The axis, the rigidity and the membrane expansion are evaluated for
-    /// fully present layers, and the response is linearized in copper fraction
-    /// about that nominal stack, which is valid while copper fractions vary
-    /// modestly — the regime balancing operates in. At first order the rigidity
-    /// holds its nominal value. The bending-stretching coupling does not, and
-    /// [`Self::moment_coefficient`] carries its variation.
+    /// The arms that weigh each layer's copper are measured from the geometric
+    /// mid-plane, not the neutral axis. What bends a free plate is
+    /// `sum Q (a - a_panel) t z` over every layer, which does not depend on
+    /// where `z` is measured from; copper coverage enters it through the
+    /// conductor layers alone only when the laminate's own share,
+    /// `Q_d (a_d - a_panel) sum t z`, vanishes, and the mid-plane is where
+    /// `sum t z` does. About that plane the copper field cancels exactly when
+    /// the panel stays flat, at any coverage, so the arms are geometry alone.
     pub fn new(layers: Vec<StackLayer>) -> Option<Self> {
         let usable = |thickness: f64| thickness.is_finite() && thickness > 0.0;
         if layers.is_empty() || !layers.iter().all(|layer| usable(layer.thickness_mm)) {
             return None;
         }
-        let mut centers_mm = Vec::with_capacity(layers.len());
-        let mut cursor_mm = 0.0;
-        for layer in &layers {
-            centers_mm.push(cursor_mm + layer.thickness_mm / 2.0);
-            cursor_mm += layer.thickness_mm;
-        }
-        let total_thickness_mm = cursor_mm;
-
-        let stiffness =
-            |layer: &StackLayer| layer.material.flexural_modulus_gpa() * layer.thickness_mm;
-        let total_stiffness = layers.iter().map(stiffness).sum::<f64>();
-        if !usable(total_stiffness) {
-            return None;
-        }
-        let neutral_axis_mm = layers
+        let total_thickness_mm = layers.iter().map(|layer| layer.thickness_mm).sum::<f64>();
+        // Layers arrive outermost first, so depth runs *down* from the top
+        // face. Measuring the arm the other way puts positive z up, out of the
+        // top of the board: copper on the top face then carries a positive
+        // moment, which is the convention the balance solver and the report
+        // both read.
+        let lever_arms_mm = layers
             .iter()
-            .zip(&centers_mm)
-            .map(|(layer, center)| stiffness(layer) * center)
-            .sum::<f64>()
-            / total_stiffness;
-
-        // Layers arrive outermost first, so the cursor above runs *down* from the
-        // top face. Measuring the arm the other way puts positive z up, out of
-        // the top of the board: copper on the top face then carries a positive
-        // moment, which is the convention the balance solver and the report both
-        // read.
-        let lever_arms_mm = centers_mm
-            .iter()
-            .map(|center| total_thickness_mm / 2.0 - center)
-            .collect::<Vec<_>>();
-
-        // Parallel-axis assembly: each layer contributes its own bending
-        // stiffness plus the far larger term from its offset.
-        let flexural_rigidity_gpa_mm3 = layers
-            .iter()
-            .zip(&centers_mm)
-            .map(|(layer, center)| {
-                let arm = neutral_axis_mm - center;
-                layer.material.flexural_modulus_gpa()
-                    * (layer.thickness_mm * arm * arm + layer.thickness_mm.powi(3) / 12.0)
+            .scan(0.0, |depth_mm, layer| {
+                let center_mm = *depth_mm + layer.thickness_mm / 2.0;
+                *depth_mm += layer.thickness_mm;
+                Some(total_thickness_mm / 2.0 - center_mm)
             })
-            .sum::<f64>();
-
-        let poisson = layers
-            .iter()
-            .map(|layer| stiffness(layer) * layer.material.poisson)
-            .sum::<f64>()
-            / total_stiffness;
-
-        // `N_T / A`: the free stack stretches as one membrane, and only
-        // expansion relative to that stretch strains a layer.
-        let membrane_cte_per_k = layers
-            .iter()
-            .map(|layer| layer.material.thermal_stress_gpa_per_k() * layer.thickness_mm)
-            .sum::<f64>()
-            / layers
-                .iter()
-                .map(|layer| layer.material.biaxial_modulus_gpa() * layer.thickness_mm)
-                .sum::<f64>();
-
+            .collect();
         Some(Self {
             layers,
             lever_arms_mm,
-            flexural_rigidity_gpa_mm3,
-            poisson,
-            membrane_cte_per_k,
             total_thickness_mm,
         })
     }
@@ -254,43 +224,104 @@ impl ThermalStack {
         self.total_thickness_mm
     }
 
-    pub fn flexural_rigidity_gpa_mm3(&self) -> f64 {
-        self.flexural_rigidity_gpa_mm3
-    }
-
-    /// The material constant multiplying the geometric copper field.
+    /// The plate's response with each conductor at its measured mean copper
+    /// fraction, `coverage`, in stack order, and `displaced` filling what the
+    /// copper leaves of its layer.
     ///
-    /// A free plate answers a temperature change with a membrane strain and a
+    /// Each layer is homogenized at that fraction under the Voigt rule, and a
+    /// free plate answers a temperature change with a membrane strain and a
     /// curvature, `[N_T; M_T] = [A B; B D] [e0; kappa]`, which leaves
-    /// `kappa (D - B^2 / A) = M_T - (B / A) N_T`. Trading laminate for copper
-    /// at height `z` moves both terms on the right at first order: the
-    /// thermal moment by `Q_c a_c - Q_d a_d` per unit `t z`, and the coupling
-    /// `B` by `Q_c - Q_d`, which the membrane expansion `N_T / A = a dT` turns
-    /// into a moment of its own. `B` is zero for the nominal stack about its
-    /// neutral axis, so `B^2 / A` is second order and what remains is
-    /// `Q_c (a_c - a) - Q_d (a_d - a)`: each material's thermal stress against
-    /// the panel's own expansion, not against a rigid frame. Materials that
-    /// expand alike cannot bend the panel however unevenly they are
-    /// distributed, and this vanishes when they do.
+    /// `kappa (D - B^2 / A) = M_T - (B / A) N_T`. With `a = N_T / (A dT)`, the
+    /// expansion of the free stack as one membrane, the right side is each
+    /// layer's thermal stress against that expansion rather than against a
+    /// rigid frame, `dT sum Q (a_l - a) t z`, and under the Voigt rule that is
+    /// `Q_c (a_c - a) - Q_d (a_d - a)` times the geometric copper field, plus
+    /// the share of the build with its copper taken out: one dielectric
+    /// throughout, `Q_d (a_d - a) sum t z`, which vanishes about the
+    /// mid-plane. Materials that expand alike cannot bend the panel however
+    /// unevenly they are distributed, and the coefficient vanishes when they
+    /// do.
     ///
-    /// The expansion `a` is the nominal stack's, so the scale is first order
-    /// in coverage; where the copper field cancels it does so exactly.
+    /// Nothing in that is linearized: for copper spread evenly over each
+    /// layer it is lamination theory exactly, at any coverage and for builds
+    /// that are not symmetric. What is held fixed is the stiffness and the
+    /// membrane expansion *across* the panel, at the panel's means, while the
+    /// copper field varies. The curvature scale `coefficient / rigidity` falls
+    /// by 9-12 % for each tenth of coverage added to every layer of a
+    /// conventional six-layer build, so a region that far from the mean has
+    /// its own share of the curvature misjudged by that much. The error is
+    /// the product of two departures from the mean -- coverage and moment --
+    /// and second order in the bow.
     ///
-    /// Units are GPa per kelvin; combined with a temperature drop and the
-    /// geometric field's mm^2 it yields a moment resultant in GPa mm^2 per
-    /// unit width.
-    pub fn moment_coefficient(&self, displaced: Material) -> f64 {
+    /// `None` when `coverage` does not name every conductor or the materials
+    /// leave the plate without stiffness.
+    pub fn response(&self, displaced: Material, coverage: &[f64]) -> Option<PlateResponse> {
+        if coverage.len()
+            != self
+                .layers
+                .iter()
+                .filter(|layer| layer.is_conductor)
+                .count()
+        {
+            return None;
+        }
+        // Dielectric layers are wholly their own material.
+        let mut coverage = coverage.iter();
+        let present = self
+            .layers
+            .iter()
+            .map(|layer| match layer.is_conductor {
+                true => coverage.next().map_or(0.0, |cover| cover.clamp(0.0, 1.0)),
+                false => 1.0,
+            })
+            .collect::<Vec<_>>();
+        // `[A, B, D]` of one property through the thickness, about the
+        // mid-plane: its resultant, first moment, and second moment with each
+        // layer's own `t^3 / 12`.
+        let resultants = |property: fn(Material) -> f64| {
+            self.layers
+                .iter()
+                .zip(&self.lever_arms_mm)
+                .zip(&present)
+                .fold([0.0; 3], |[a, b, d], ((layer, arm), present)| {
+                    let sheet = (present * property(layer.material)
+                        + (1.0 - present) * property(displaced))
+                        * layer.thickness_mm;
+                    [
+                        a + sheet,
+                        b + sheet * arm,
+                        d + sheet * (arm * arm + layer.thickness_mm.powi(2) / 12.0),
+                    ]
+                })
+        };
+        let about_neutral_axis = |[a, b, d]: [f64; 3]| d - b * b / a;
+        let biaxial = resultants(Material::biaxial_modulus_gpa);
+        let membrane_cte_per_k = resultants(Material::thermal_stress_gpa_per_k)[0] / biaxial[0];
         let misfit_stress_gpa_per_k = |material: Material| {
             material.thermal_stress_gpa_per_k()
-                - material.biaxial_modulus_gpa() * self.membrane_cte_per_k
+                - material.biaxial_modulus_gpa() * membrane_cte_per_k
         };
-        misfit_stress_gpa_per_k(Material::COPPER) - misfit_stress_gpa_per_k(displaced)
+        let response = PlateResponse {
+            moment_coefficient_gpa_per_k: misfit_stress_gpa_per_k(Material::COPPER)
+                - misfit_stress_gpa_per_k(displaced),
+            spherical_rigidity_gpa_mm3: about_neutral_axis(biaxial),
+            deviatoric_rigidity_gpa_mm3: about_neutral_axis(resultants(
+                Material::deviatoric_modulus_gpa,
+            )),
+        };
+        let stiff = |rigidity: f64| rigidity.is_finite() && rigidity > 0.0;
+        (response.moment_coefficient_gpa_per_k.is_finite()
+            && stiff(response.spherical_rigidity_gpa_mm3)
+            && stiff(response.deviatoric_rigidity_gpa_mm3))
+        .then_some(response)
     }
 
     /// Per-conductor moment arms `t_l z_l`, signed about the mid-plane.
     ///
     /// The copper-balance solver draws its stack weights from here, so the
-    /// moment it flattens is the moment the warp estimate measures.
+    /// moment it flattens is the moment the warp estimate measures. They are
+    /// geometry alone: no material constant and no coverage enters them, and
+    /// the field they weigh is zero exactly where the panel stays flat.
     pub fn conductor_weights(&self) -> Vec<ConductorWeight> {
         self.layers
             .iter()
@@ -301,18 +332,6 @@ impl ThermalStack {
                 moment_arm_mm2: layer.thickness_mm * arm,
             })
             .collect()
-    }
-
-    /// Laplacian of the deflection surface per unit moment resultant,
-    /// `2 / (D (1 + nu))`.
-    ///
-    /// An equibiaxial moment `M` on a free plate bends it into a spherical cap:
-    /// `M = D (kappa_x + nu kappa_y)` with `kappa_x = kappa_y` gives
-    /// `kappa = M / (D (1 + nu))` in each direction. The deflection integral
-    /// takes the Laplacian as its source, and that is the sum of the two
-    /// curvatures rather than either one of them.
-    pub fn surface_laplacian_per_moment(&self) -> f64 {
-        2.0 / (self.flexural_rigidity_gpa_mm3 * (1.0 + self.poisson))
     }
 }
 
@@ -470,23 +489,26 @@ pub struct WarpEstimate {
 /// Estimate warp from the geometric copper moment field.
 ///
 /// `moment_field` is `sum_l t_l z_l rho_l(x)` in mm^2 — the quantity the copper
-/// balance solver already computes. `temperature_drop_k` is the effective
+/// balance solver already computes — and `response` is the stack's at the mean
+/// coverage of those same layers. `temperature_drop_k` is the effective
 /// excursion from where the laminate stops relaxing down to room temperature,
 /// which is the single largest source of uncertainty in the absolute result.
 pub fn estimate_warp(
-    stack: &ThermalStack,
-    displaced: Material,
+    response: &PlateResponse,
     moment_field: &PanelField,
     temperature_drop_k: f64,
 ) -> WarpEstimate {
-    // GPa/K * K * mm^2 -> GPa mm^2, a moment resultant per unit width. The
-    // second integral of curvature then picks up the squared half-span on the
-    // way back to millimetres, since normalized coordinates are measured in
+    // GPa/K * K * mm^2 -> GPa mm^2, a moment resultant per unit width. An
+    // equibiaxial moment `M` bends a free plate into a spherical cap of
+    // curvature `M / (D (1 + nu))` in each direction, and the deflection
+    // integral takes the Laplacian, their sum, as its source. The second
+    // integral of curvature then picks up the squared half-span on the way
+    // back to millimetres, since normalized coordinates are measured in
     // half-spans.
-    let moment_scale = stack.moment_coefficient(displaced) * temperature_drop_k;
+    let moment_scale = response.moment_coefficient_gpa_per_k * temperature_drop_k;
     let half_span_mm = moment_field.half_span_mm();
     let deflection_scale =
-        moment_scale * stack.surface_laplacian_per_moment() * half_span_mm * half_span_mm;
+        moment_scale * 2.0 / response.spherical_rigidity_gpa_mm3 * half_span_mm * half_span_mm;
 
     let amplitudes = fit(moment_field, &moment_field.values, mode_shapes);
     let edge = moment_field.normalized(moment_field.bounds.max);
@@ -712,49 +734,185 @@ mod tests {
         BBox::new(Point::new(0.0, 0.0), Point::new(400.0, 500.0))
     }
 
-    /// The exact laminate curvature of a free plate, up to its rigidity:
-    /// `M_T - (B / A) N_T` with every layer at its actual copper coverage.
-    fn exact_bending_drive(layers: &[StackLayer], coverage: &[f64]) -> f64 {
+    /// Every conductor whole, the laminate filling nothing.
+    fn whole(stack: &ThermalStack) -> PlateResponse {
+        let conductors = stack.conductor_weights().len();
+        stack
+            .response(Material::LAMINATE, &vec![1.0; conductors])
+            .unwrap()
+    }
+
+    /// Curvature per kelvin of a free plate with each conductor evenly covered,
+    /// from classical lamination theory solved outright: every layer's plane
+    /// stress stiffness `Q11`, `Q12` mixed by area, the full `[A B; B D]`
+    /// system in both directions, and the thermal resultants on its right.
+    fn exact_curvature_per_k(layers: &[StackLayer], displaced: Material, coverage: &[f64]) -> f64 {
         let total = layers.iter().map(|layer| layer.thickness_mm).sum::<f64>();
-        let mut fractions = coverage.iter();
-        let (mut a, mut b, mut n, mut m) = (0.0, 0.0, 0.0, 0.0);
+        let mut coverage = coverage.iter();
+        let mut system = [[0.0; 4]; 4];
+        let mut thermal = [0.0; 4];
         let mut top = 0.0;
         for layer in layers {
-            let z = total / 2.0 - (top + layer.thickness_mm / 2.0);
-            top += layer.thickness_mm;
-            let copper = if layer.is_conductor {
-                *fractions.next().unwrap()
+            let (t, z) = (
+                layer.thickness_mm,
+                total / 2.0 - (top + layer.thickness_mm / 2.0),
+            );
+            top += t;
+            let present = if layer.is_conductor {
+                *coverage.next().unwrap()
             } else {
-                0.0
+                1.0
             };
-            let (metal, resin) = (layer.material, Material::LAMINATE);
-            let q =
-                copper * metal.biaxial_modulus_gpa() + (1.0 - copper) * resin.biaxial_modulus_gpa();
-            let qa = copper * metal.thermal_stress_gpa_per_k()
-                + (1.0 - copper) * resin.thermal_stress_gpa_per_k();
-            a += q * layer.thickness_mm;
-            b += q * layer.thickness_mm * z;
-            n += qa * layer.thickness_mm;
-            m += qa * layer.thickness_mm * z;
+            let mixed = |property: fn(Material) -> f64| {
+                present * property(layer.material) + (1.0 - present) * property(displaced)
+            };
+            let q11 = mixed(|m| m.modulus_gpa / (1.0 - m.poisson * m.poisson));
+            let q12 = mixed(|m| m.poisson * m.modulus_gpa / (1.0 - m.poisson * m.poisson));
+            let stress = mixed(|m| m.modulus_gpa * m.cte_ppm_per_k * 1e-6 / (1.0 - m.poisson));
+            // Blocks A, B, B and D, each `[[Q11, Q12], [Q12, Q11]]`.
+            for (row, column, weight) in [
+                (0, 0, t),
+                (0, 2, t * z),
+                (2, 0, t * z),
+                (2, 2, t * (z * z + t * t / 12.0)),
+            ] {
+                system[row][column] += q11 * weight;
+                system[row + 1][column + 1] += q11 * weight;
+                system[row][column + 1] += q12 * weight;
+                system[row + 1][column] += q12 * weight;
+            }
+            for (row, weight) in [(0, t), (1, t), (2, t * z), (3, t * z)] {
+                thermal[row] += stress * weight;
+            }
         }
-        m - b / a * n
+        let [_, _, curvature_x, curvature_y] = solve(system, thermal);
+        assert!((curvature_x - curvature_y).abs() <= 1e-12 * curvature_x.abs());
+        curvature_x
+    }
+
+    fn model_curvature_per_k(layers: &[StackLayer], displaced: Material, coverage: &[f64]) -> f64 {
+        let stack = ThermalStack::new(layers.to_vec()).unwrap();
+        let response = stack.response(displaced, coverage).unwrap();
+        let field = stack
+            .conductor_weights()
+            .iter()
+            .zip(coverage)
+            .map(|(weight, cover)| weight.moment_arm_mm2 * cover)
+            .sum::<f64>();
+        response.moment_coefficient_gpa_per_k * field / response.spherical_rigidity_gpa_mm3
+    }
+
+    /// Copper spread evenly over each layer is the case lamination theory
+    /// solves in closed form, and the response evaluated at that copper has to
+    /// reproduce it: sparse or dense, balanced or not, symmetric build or not.
+    #[test]
+    fn evenly_covered_layers_bend_exactly_as_lamination_theory_says() {
+        let six = vec![
+            copper(0.035),
+            laminate(0.2),
+            copper(0.035),
+            laminate(0.3),
+            copper(0.035),
+            laminate(0.39),
+            copper(0.035),
+            laminate(0.3),
+            copper(0.035),
+            laminate(0.2),
+            copper(0.035),
+        ];
+        let lopsided = vec![
+            copper(0.105),
+            laminate(0.3),
+            copper(0.035),
+            laminate(1.0),
+            copper(0.035),
+        ];
+        let resin = Material {
+            cte_ppm_per_k: 60.0,
+            ..Material::LAMINATE
+        };
+        for displaced in [Material::LAMINATE, resin] {
+            for level in [0.2, 0.35, 0.5, 0.7, 0.9] {
+                for (layers, tilt) in [
+                    (&six, vec![0.1, -0.05, 0.0, 0.02, 0.0, -0.1]),
+                    (&six, vec![0.1, 0.1, 0.1, 0.0, 0.0, 0.0]),
+                    (&lopsided, vec![0.0, 0.1, -0.1]),
+                    (&lopsided, vec![-0.1, 0.0, 0.1]),
+                ] {
+                    let layers = layers
+                        .iter()
+                        .map(|layer| StackLayer {
+                            material: if layer.is_conductor {
+                                layer.material
+                            } else {
+                                displaced
+                            },
+                            ..*layer
+                        })
+                        .collect::<Vec<_>>();
+                    let coverage = tilt.iter().map(|tilt| level + tilt).collect::<Vec<_>>();
+                    let exact = exact_curvature_per_k(&layers, displaced, &coverage);
+                    let model = model_curvature_per_k(&layers, displaced, &coverage);
+                    assert!(exact.abs() > 1e-9, "{level} {tilt:?}: nothing to compare");
+                    assert!(
+                        (model - exact).abs() <= 1e-9 * exact.abs(),
+                        "{level} {tilt:?}: {model} != {exact}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// What the response holds fixed across a panel is how far the curvature
+    /// scale moves with coverage, so that is the figure its documentation
+    /// quotes: about a tenth per tenth of coverage on a conventional build.
+    #[test]
+    fn the_curvature_scale_falls_about_a_tenth_per_tenth_of_coverage() {
+        let stack = six_layer_panel();
+        let scale = |level: f64| {
+            let response = stack.response(Material::LAMINATE, &[level; 6]).unwrap();
+            response.moment_coefficient_gpa_per_k / response.spherical_rigidity_gpa_mm3
+        };
+        for level in [0.2, 0.4, 0.6, 0.8] {
+            let step = scale(level + 0.1) / scale(level);
+            assert!((0.87..0.92).contains(&step), "{level}: {step}");
+        }
+        // Which is why the response is evaluated at the measured copper: whole
+        // foils would understate a half-covered panel's curvature by a third.
+        assert!(scale(1.0) / scale(0.5) < 0.65);
     }
 
     /// Mixed copper weights move the neutral axis, but the coverage that
-    /// leaves the panel flat is the one that cancels about the mid-plane.
+    /// leaves the panel flat is the one that cancels about the mid-plane, at
+    /// any coverage and whatever the dielectric: the arms balancing draws on
+    /// are geometry alone.
     #[test]
     fn the_copper_field_cancels_exactly_where_an_asymmetric_build_stays_flat() {
-        let layers = vec![copper(0.105), laminate(1.0), copper(0.035)];
-        let weights = ThermalStack::new(layers.clone())
-            .unwrap()
-            .conductor_weights();
-        // Thin the heavy foil until the field cancels against a full light one.
-        let heavy = -weights[1].moment_arm_mm2 / weights[0].moment_arm_mm2;
-        assert!(heavy > 0.0 && heavy < 1.0);
+        let resin = Material {
+            cte_ppm_per_k: 60.0,
+            ..Material::LAMINATE
+        };
+        for dielectric in [Material::LAMINATE, resin] {
+            let core = StackLayer {
+                thickness_mm: 1.0,
+                material: dielectric,
+                is_conductor: false,
+            };
+            let layers = vec![copper(0.105), core, copper(0.035)];
+            let weights = ThermalStack::new(layers.clone())
+                .unwrap()
+                .conductor_weights();
+            // Thin the heavy foil until the field cancels against the light one.
+            let heavy = -weights[1].moment_arm_mm2 / weights[0].moment_arm_mm2;
+            assert!(heavy > 0.0 && heavy < 1.0);
 
-        let full = exact_bending_drive(&layers, &[1.0, 1.0]).abs();
-        let balanced = exact_bending_drive(&layers, &[heavy, 1.0]).abs();
-        assert!(balanced <= 1e-12 * full, "{balanced} of {full}");
+            let whole = exact_curvature_per_k(&layers, dielectric, &[1.0, 1.0]).abs();
+            for light in [0.3, 0.6, 1.0] {
+                let balanced =
+                    exact_curvature_per_k(&layers, dielectric, &[heavy * light, light]).abs();
+                assert!(balanced <= 1e-12 * whole, "{light}: {balanced} of {whole}");
+            }
+        }
 
         // Balanced foils sit symmetrically about the middle.
         let even = ThermalStack::new(vec![copper(0.035), laminate(1.0), copper(0.035)])
@@ -769,7 +927,7 @@ mod tests {
     fn a_balanced_panel_is_predicted_flat() {
         let stack = symmetric_four_layer();
         let field = uniform_field(panel(), 0.0);
-        let warp = estimate_warp(&stack, Material::LAMINATE, &field, 150.0);
+        let warp = estimate_warp(&whole(&stack), &field, 150.0);
 
         assert!(warp.bow_mm <= 1e-12, "{:?}", warp.bow_mm);
         assert!(warp.bow_percent <= 1e-12);
@@ -781,7 +939,7 @@ mod tests {
     fn a_uniform_moment_produces_pure_bow() {
         let stack = symmetric_four_layer();
         let field = uniform_field(panel(), 0.01);
-        let warp = estimate_warp(&stack, Material::LAMINATE, &field, 150.0);
+        let warp = estimate_warp(&whole(&stack), &field, 150.0);
 
         assert!(warp.bow_mm > 0.0);
         let uniform = warp
@@ -802,24 +960,16 @@ mod tests {
     /// Nothing about the fit may reintroduce the panel's aspect ratio.
     #[test]
     fn a_rectangular_panel_bows_to_the_spherical_cap_its_curvature_implies() {
-        let stack = symmetric_four_layer();
+        let response = whole(&symmetric_four_layer());
         let moment = 0.01;
         for (width, height) in [(400.0, 400.0), (400.0, 800.0), (800.0, 200.0)] {
             let bounds = BBox::new(Point::new(0.0, 0.0), Point::new(width, height));
-            let warp = estimate_warp(
-                &stack,
-                Material::LAMINATE,
-                &uniform_field(bounds, moment),
-                150.0,
-            );
+            let warp = estimate_warp(&response, &uniform_field(bounds, moment), 150.0);
 
             // w = kappa (X^2 + Y^2) / 2 levelled onto the corners rises from the
             // centre to the corners by an eighth of the squared diagonal.
-            let curvature = stack.moment_coefficient(Material::LAMINATE)
-                * 150.0
-                * moment
-                * stack.surface_laplacian_per_moment()
-                / 2.0;
+            let curvature = response.moment_coefficient_gpa_per_k * 150.0 * moment
+                / response.spherical_rigidity_gpa_mm3;
             let expected = curvature * (width * width + height * height) / 8.0;
             assert!(
                 (warp.bow_mm - expected).abs() <= 1e-9 * expected,
@@ -845,7 +995,7 @@ mod tests {
                 0.01 * (x * x - y * y)
             })
             .collect();
-        let warp = estimate_warp(&stack, Material::LAMINATE, &field, 150.0);
+        let warp = estimate_warp(&whole(&stack), &field, 150.0);
 
         let (low, high) = warp
             .deflection
@@ -902,7 +1052,7 @@ mod tests {
                     0.01 * x * y
                 })
                 .collect();
-            estimate_warp(&stack, Material::LAMINATE, &field, 150.0)
+            estimate_warp(&whole(&stack), &field, 150.0)
         };
         let warp = saddle(panel());
 
@@ -953,7 +1103,7 @@ mod tests {
                     std::f64::consts::TAU * cycles * (point.x - bounds.min.x) / bounds.width();
                 *value = 0.01 * phase.cos();
             }
-            estimate_warp(&stack, Material::LAMINATE, &field, 150.0).bow_mm
+            estimate_warp(&whole(&stack), &field, 150.0).bow_mm
         };
 
         // One cycle across the panel against five: same amplitude, far more
@@ -988,12 +1138,14 @@ mod tests {
             copper(0.035),
         ])
         .unwrap();
-        assert!(stack.moment_coefficient(matched).abs() <= 1e-15);
-
         let outer_arm = stack.conductor_weights()[0].moment_arm_mm2;
         for mismatch in [0.1, 0.5, 1.0] {
+            let response = stack
+                .response(matched, &[1.0, 1.0, 1.0 - mismatch])
+                .unwrap();
+            assert!(response.moment_coefficient_gpa_per_k.abs() <= 1e-15);
             let field = uniform_field(panel(), mismatch * outer_arm);
-            let warp = estimate_warp(&stack, matched, &field, LAMINATE_RELAXATION_DROP_K);
+            let warp = estimate_warp(&response, &field, LAMINATE_RELAXATION_DROP_K);
             assert!(warp.bow_mm <= 1e-9, "{mismatch}: {}", warp.bow_mm);
         }
     }
@@ -1009,13 +1161,9 @@ mod tests {
             ThermalStack::new(vec![copper(foil_mm), laminate(core_mm), copper(foil_mm)]).unwrap();
         let bounds = panel();
         // Top foil whole, bottom foil etched away.
+        let response = stack.response(Material::LAMINATE, &[1.0, 0.0]).unwrap();
         let field = uniform_field(bounds, stack.conductor_weights()[0].moment_arm_mm2);
-        let warp = estimate_warp(
-            &stack,
-            Material::LAMINATE,
-            &field,
-            LAMINATE_RELAXATION_DROP_K,
-        );
+        let warp = estimate_warp(&response, &field, LAMINATE_RELAXATION_DROP_K);
 
         let (film, substrate) = (Material::COPPER, Material::LAMINATE);
         let stoney = 6.0
@@ -1046,10 +1194,14 @@ mod tests {
         let stack = six_layer_panel();
         let outer_arm = stack.conductor_weights()[0].moment_arm_mm2;
         let bounds = BBox::new(Point::new(0.0, 0.0), Point::new(457.2, 609.6));
+        // Half copper throughout, the outer pair split evenly about it.
         let bow_at = |mismatch: f64| {
+            let (top, bottom) = (0.5 + mismatch / 2.0, 0.5 - mismatch / 2.0);
+            let response = stack
+                .response(Material::LAMINATE, &[top, 0.5, 0.5, 0.5, 0.5, bottom])
+                .unwrap();
             estimate_warp(
-                &stack,
-                Material::LAMINATE,
+                &response,
                 &uniform_field(bounds, mismatch * outer_arm),
                 LAMINATE_RELAXATION_DROP_K,
             )
@@ -1059,9 +1211,10 @@ mod tests {
         // An outer foil whole on one face and absent from the other is the
         // most a mirrored pair can differ by, and it stays under the limit.
         assert!(bow_at(1.0) < 0.75, "{} %", bow_at(1.0));
-        // The chain is linear in copper, so the advised band sits as far under
-        // the limit as it sits under total mismatch.
-        assert!((bow_at(0.15) - 0.15 * bow_at(1.0)).abs() <= 1e-12);
+        // Imbalance only softens the plate, by pulling its neutral axis off
+        // the middle, so the advised band sits at least as far under the limit
+        // as it sits under total mismatch.
+        assert!(bow_at(0.15) > 0.0 && bow_at(0.15) <= 0.15 * bow_at(1.0));
     }
 
     /// On a build symmetric about its mid-plane the material constant scales
@@ -1104,13 +1257,14 @@ mod tests {
             field
         };
 
+        let response =
+            |dielectric: Material| build(dielectric).response(dielectric, &[0.5; 4]).unwrap();
         let ratio = |dielectric: Material| {
-            let stack = build(dielectric);
-            let bow = |field| estimate_warp(&stack, dielectric, &field, 110.0).bow_mm;
+            let bow = |field| estimate_warp(&response(dielectric), &field, 110.0).bow_mm;
             bow(shaped(0.4)) / bow(shaped(1.0))
         };
         // Two constants well apart, or the comparison shows nothing.
-        let coefficient = |dielectric: Material| build(dielectric).moment_coefficient(dielectric);
+        let coefficient = |dielectric: Material| response(dielectric).moment_coefficient_gpa_per_k;
         assert!(coefficient(resin).abs() > 10.0 * coefficient(Material::LAMINATE).abs());
         assert!((ratio(Material::LAMINATE) - ratio(resin)).abs() <= 1e-9);
         assert_eq!(
