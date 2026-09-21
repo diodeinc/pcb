@@ -86,12 +86,111 @@ fn grid_coverage_measures_partly_covered_cells_exactly() {
             0.5,  1.0, 0.5,
             0.25, 0.5, 0.25,
         ];
-    for (measured, expected) in coverage.iter().zip(expected) {
-        assert!(
-            (measured - expected).abs() < 1e-12,
-            "{measured} != {expected}"
-        );
+    assert_eq!(coverage, expected);
+
+    // Only what lies within the grid counts, on every side of it.
+    let inner = square.grid_coverage(rect(1.0, 1.0, 2.0, 3.0), 1, 2);
+    assert_eq!(inner, [1.0, 0.5]);
+    let beside = square.grid_coverage(rect(3.0, 0.0, 5.0, 3.0), 2, 3);
+    assert_eq!(beside, [0.0; 6]);
+}
+
+/// The measure every cell must reproduce: the ring clipped to the cell by
+/// four half-planes, and the signed area of what is left.
+fn grid_coverage_by_clipping(
+    region: &ContourSet,
+    bounds: BBox,
+    columns: usize,
+    rows: usize,
+) -> Vec<f64> {
+    fn clip(ring: &Ring, inside: impl Fn([f64; 2]) -> f64) -> Ring {
+        let mut clipped = Ring::new();
+        for index in 0..ring.len() {
+            let start = ring[index];
+            let end = ring[(index + 1) % ring.len()];
+            let (from, to) = (inside(start), inside(end));
+            if (from < 0.0) != (to < 0.0) {
+                let step = from / (from - to);
+                clipped.push([
+                    start[0] + step * (end[0] - start[0]),
+                    start[1] + step * (end[1] - start[1]),
+                ]);
+            }
+            if to >= 0.0 {
+                clipped.push(end);
+            }
+        }
+        clipped
     }
+    let width = bounds.width() / columns as f64;
+    let height = bounds.height() / rows as f64;
+    (0..rows)
+        .flat_map(|row| (0..columns).map(move |column| (row, column)))
+        .map(|(row, column)| {
+            let left = bounds.min.x + column as f64 * width;
+            let floor = bounds.min.y + row as f64 * height;
+            let area: f64 = region
+                .rings
+                .iter()
+                .map(|ring| {
+                    let ring = clip(ring, |point| point[0] - left);
+                    let ring = clip(&ring, |point| left + width - point[0]);
+                    let ring = clip(&ring, |point| point[1] - floor);
+                    ring_signed_area(&clip(&ring, |point| floor + height - point[1]))
+                })
+                .sum();
+            area / (width * height)
+        })
+        .collect()
+}
+
+#[test]
+fn grid_coverage_agrees_with_clipping_every_cell() {
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    let mut next = |scale: f64| {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (state >> 11) as f64 / (1_u64 << 53) as f64 * scale
+    };
+    let mut partial = 0;
+    for case in 0..300 {
+        // Star-shaped rings around random centres overlap, nest and leave
+        // holes once regularized, and reach past the grid on every side.
+        let rings = (0..1 + case % 4)
+            .map(|_| {
+                let (x, y, radius) = (next(10.0), next(10.0), 0.5 + next(6.0));
+                let vertices = 3 + next(12.0) as usize;
+                (0..vertices)
+                    .map(|vertex| {
+                        let angle = std::f64::consts::TAU * vertex as f64 / vertices as f64;
+                        let reach = radius * (0.2 + next(0.8));
+                        [x + reach * angle.cos(), y + reach * angle.sin()]
+                    })
+                    .collect()
+            })
+            .collect();
+        let rule = [FillRule::NonZero, FillRule::EvenOdd][case % 2];
+        let region = ContourSet::from_rings(rings, rule, res(0.0)).unwrap();
+        let bounds = rect(1.0, 2.0, 9.0, 8.5);
+        let (columns, rows) = (1 + case % 7, 1 + case % 5);
+        let measured = region.grid_coverage(bounds, columns, rows);
+        let expected = grid_coverage_by_clipping(&region, bounds, columns, rows);
+        assert_eq!(measured.len(), expected.len());
+        for (measured, expected) in measured.iter().zip(&expected) {
+            assert!(
+                (measured - expected).abs() <= 1e-12 * expected.abs().max(1.0),
+                "case {case}: {measured} != {expected}"
+            );
+            // A boundary that only passes a cell by leaves no trace in it.
+            assert!(
+                *expected != 0.0 || *measured == 0.0,
+                "case {case}: {measured}"
+            );
+            partial += usize::from((0.01..0.99).contains(expected));
+        }
+    }
+    assert!(partial > 1000, "the fixture must cut through cells");
 }
 
 /// Holes are separate rings wound against their outer, and the cell they

@@ -141,32 +141,6 @@ pub fn ring_signed_area(ring: &Ring) -> f64 {
     area / 2.0
 }
 
-/// Sutherland-Hodgman clip of a closed ring against a half-plane, kept where
-/// `inside` is non-negative.
-///
-/// A concave ring can come back with edges doubled back along the cut. They
-/// enclose nothing, so the signed area of the result is the true clipped area,
-/// which is all this is used for.
-fn clip_half_plane(ring: &Ring, inside: impl Fn([f64; 2]) -> f64) -> Ring {
-    let mut clipped = Ring::new();
-    for index in 0..ring.len() {
-        let start = ring[index];
-        let end = ring[(index + 1) % ring.len()];
-        let (from, to) = (inside(start), inside(end));
-        if (from < 0.0) != (to < 0.0) {
-            let step = from / (from - to);
-            clipped.push([
-                start[0] + step * (end[0] - start[0]),
-                start[1] + step * (end[1] - start[1]),
-            ]);
-        }
-        if to >= 0.0 {
-            clipped.push(end);
-        }
-    }
-    clipped
-}
-
 /// Net enclosed area of a regularized ring set (holes are wound opposite the
 /// outer boundary, so summing signed areas subtracts them).
 pub fn rings_area(rings: &[Ring]) -> f64 {
@@ -292,43 +266,82 @@ impl ContourSet {
     /// thieving lattice — beats against any sampling pitch and comes back as a
     /// moire pattern that is an artefact of the sampling and not of the copper.
     ///
-    /// Area is additive over the rings of a regularized region, holes included
-    /// with their sign, so each ring is clipped to the cells its bounds reach
-    /// and its signed area accumulated there. Clipping runs a row at a time so a
-    /// ring meets only the columns of the band it actually crosses.
+    /// The area a cell shares with the region is `∮ clamp(x - left, 0, width)
+    /// dy` along the part of the boundary within the cell's row. An edge is
+    /// cut where it crosses grid lines, and a piece inside one cell adds the
+    /// trapezoid between itself and the cell's left side there and its whole
+    /// rise times the cell width to every cell left of it, which one running
+    /// sum per row hands out at the end. Holes are wound against their outer
+    /// ring, so their sign takes them out. A rise is the difference of the
+    /// heights a piece ends at, grid lines and vertices exactly, so the rises
+    /// of a boundary that passes a cell by cancel to nothing, not nearly.
     pub fn grid_coverage(&self, bounds: BBox, columns: usize, rows: usize) -> Vec<f64> {
         assert!(columns > 0 && rows > 0, "a grid needs at least one cell");
         let width = bounds.width() / columns as f64;
         let height = bounds.height() / rows as f64;
-        let index = |value: f64, origin: f64, span: f64, count: usize| {
-            ((value - origin) / span)
-                .floor()
-                .clamp(0.0, count as f64 - 1.0) as usize
+        // Grid lines strictly between two coordinates, by position.
+        let lines_between = |from: f64, to: f64, origin: f64, span: f64, count: usize| {
+            let first = ((from.min(to) - origin) / span).floor() + 1.0;
+            let last = ((from.max(to) - origin) / span).ceil() - 1.0;
+            (first.max(0.0) as usize..(last.min(count as f64) + 1.0).max(0.0) as usize)
+                .map(move |line| origin + line as f64 * span)
         };
-        let mut areas = vec![0.0; columns * rows];
-        for (ring, &ring_bbox) in self.rings.iter().zip(&self.ring_bounds) {
-            for row in index(ring_bbox.min.y, bounds.min.y, height, rows)
-                ..=index(ring_bbox.max.y, bounds.min.y, height, rows)
-            {
-                let floor = bounds.min.y + row as f64 * height;
-                let band =
-                    clip_half_plane(&clip_half_plane(ring, |point| point[1] - floor), |point| {
-                        floor + height - point[1]
-                    });
-                let band_bbox = rings_bbox(std::slice::from_ref(&band));
-                for column in index(band_bbox.min.x, bounds.min.x, width, columns)
-                    ..=index(band_bbox.max.x, bounds.min.x, width, columns)
-                {
-                    let left = bounds.min.x + column as f64 * width;
-                    let cell = clip_half_plane(
-                        &clip_half_plane(&band, |point| point[0] - left),
-                        |point| left + width - point[0],
-                    );
-                    areas[row * columns + column] += ring_signed_area(&cell);
+        // Column `columns` stands for everything right of the grid, whose
+        // rise still reaches every cell of its row.
+        let stride = columns + 1;
+        let mut trapezoids = vec![0.0; columns * rows];
+        let mut rises = vec![0.0; stride * rows];
+        let mut cuts = Vec::new();
+        for (ring, _) in self
+            .rings
+            .iter()
+            .zip(&self.ring_bounds)
+            .filter(|(_, ring_bounds)| ring_bounds.intersects(bounds))
+        {
+            for (start, end) in ring_edges(ring).filter(|(start, end)| start.y != end.y) {
+                let delta = end - start;
+                cuts.clear();
+                cuts.extend([(0.0, start), (1.0, end)]);
+                cuts.extend(
+                    lines_between(start.y, end.y, bounds.min.y, height, rows).map(|y| {
+                        let along = (y - start.y) / delta.y;
+                        (along, Point::new(start.x + along * delta.x, y))
+                    }),
+                );
+                cuts.extend(
+                    lines_between(start.x, end.x, bounds.min.x, width, columns).map(|x| {
+                        let along = (x - start.x) / delta.x;
+                        (along, Point::new(x, start.y + along * delta.y))
+                    }),
+                );
+                cuts.sort_by(|left, right| left.0.total_cmp(&right.0));
+                for piece in cuts.windows(2) {
+                    let (from, to) = (piece[0].1, piece[1].1);
+                    let middle = from.midpoint(to);
+                    let row = ((middle.y - bounds.min.y) / height).floor();
+                    let column = ((middle.x - bounds.min.x) / width).floor();
+                    if !(0.0..rows as f64).contains(&row) || column < 0.0 {
+                        continue;
+                    }
+                    let (row, column) = (row as usize, (column as usize).min(columns));
+                    let rise = to.y - from.y;
+                    rises[row * stride + column] += rise;
+                    if column < columns {
+                        trapezoids[row * columns + column] +=
+                            rise * (middle.x - (bounds.min.x + column as f64 * width));
+                    }
                 }
             }
         }
-        areas.iter().map(|area| area / (width * height)).collect()
+        let mut coverage = trapezoids;
+        for (row, rises) in coverage.chunks_mut(columns).zip(rises.chunks(stride)) {
+            let mut right = rises[columns];
+            for (area, rise) in row.iter_mut().zip(rises).rev() {
+                *area = (*area + width * right) / (width * height);
+                right += rise;
+            }
+        }
+        coverage
     }
 
     /// Whether the regularized region contains the point, including its boundary.
