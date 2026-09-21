@@ -18,9 +18,10 @@
 
 pub mod outline;
 
+use super::accuracy::numerical_error;
 use super::dist::{self, Distance};
 use super::region::{ring_edges, segment_inside_intervals};
-use super::{AccuracyError, Affine2, ContourSet, FillRule, Point, PreparedRegion};
+use super::{AccuracyError, Affine2, ContourSet, Point, PreparedRegion};
 
 /// Caller-supplied position uncertainty for each input boundary, and numerical
 /// guard for comparisons. Stored region uncertainty is always a floor;
@@ -250,11 +251,14 @@ impl<'a> BoundaryQuery<'a> {
     }
 }
 
-/// Transform the polygon model with the existing IR affine convention. Rebuild
-/// winding after reflections and scale stored uncertainty without widening the
-/// preparation budget. Callers must separately scale any larger external
-/// QueryTolerance by the largest singular value. Arbitrary affine transforms
-/// do not preserve stations, angles, or circular cutters.
+/// Transform the polygon model with the existing IR affine convention. An
+/// invertible affine map takes a regularized polygon to a regularized polygon,
+/// so vertices are mapped as they are and a reflection only reverses each
+/// ring's winding: nothing is flattened or regularized again. Stored
+/// uncertainty scales without widening the preparation budget. Callers must
+/// separately scale any larger external QueryTolerance by the largest singular
+/// value. Arbitrary affine transforms do not preserve stations, angles, or
+/// circular cutters.
 pub fn transform_region(region: &ContourSet, transform: Affine2) -> Result<ContourSet, QueryError> {
     validate_region(region)?;
     if transform.inverse().is_none() || !transform.m02.is_finite() || !transform.m12.is_finite() {
@@ -262,18 +266,27 @@ pub fn transform_region(region: &ContourSet, transform: Affine2) -> Result<Conto
             "singular or non-finite affine transform",
         ));
     }
-    let contours = region
-        .to_contours()
-        .into_iter()
-        .map(|contour| contour.transformed(transform))
-        .collect::<Vec<_>>();
+    let rings = region
+        .rings
+        .iter()
+        .map(|ring| {
+            let mapped = ring.iter().map(|&[x, y]| {
+                let p = transform.transform_point(Point::new(x, y));
+                [p.x, p.y]
+            });
+            if transform.determinant() < 0.0 {
+                mapped.rev().collect()
+            } else {
+                mapped.collect()
+            }
+        })
+        .collect::<Vec<Vec<_>>>();
+    let uncertainty = region.uncertainty_mm * transform.max_scale()
+        + numerical_error(super::region::rings_bbox(&rings));
+    // Significance was applied when the region was prepared.
     let mut transformed =
-        ContourSet::from_contours(&contours, FillRule::NonZero, region.resolution.strict())?;
+        ContourSet::from_regularized(rings, region.resolution.strict(), uncertainty);
     transformed.resolution = region.resolution;
-    // Empty results have no contour on which to carry preparation history.
-    transformed.uncertainty_mm = transformed
-        .uncertainty_mm
-        .max(region.uncertainty_mm * transform.max_scale());
     transformed.budget().check(transformed.uncertainty_mm)?;
     Ok(transformed)
 }

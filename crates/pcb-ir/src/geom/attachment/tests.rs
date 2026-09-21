@@ -1,6 +1,6 @@
 use super::*;
 use crate::geom::{
-    BBox, ContourBuf, GeometryAccuracy, LineCap, LineJoin, Mirror, PathCmd, Resolution,
+    BBox, ContourBuf, FillRule, GeometryAccuracy, LineCap, LineJoin, Mirror, PathCmd, Resolution,
     StrokeToFillStyle,
 };
 
@@ -342,6 +342,44 @@ fn preparation_uncertainty_and_budget_survive_queries_and_transforms() {
         ),
         Err(QueryError::Accuracy(AccuracyError::BudgetExceeded { .. }))
     ));
+}
+
+#[test]
+fn transforms_map_vertices_and_keep_each_ring_winding() {
+    let region = rect(0.0, 0.0, 4.0, 2.0)
+        .difference(&rect(1.0, 0.5, 1.0, 1.0))
+        .unwrap();
+    assert_eq!(region.rings.len(), 2);
+    // A translation is the same polygon, vertex for vertex.
+    let moved = transform_region(&region, Affine2::translation(Point::new(10.0, -3.0))).unwrap();
+    for (ring, moved) in region.rings.iter().zip(&moved.rings) {
+        let expected = ring
+            .iter()
+            .map(|p| [p[0] + 10.0, p[1] - 3.0])
+            .collect::<Vec<_>>();
+        assert_eq!(*moved, expected);
+    }
+    // A reflection keeps material outside counter-clockwise and holes
+    // clockwise without being regularized again.
+    let mirrored = transform_region(
+        &region,
+        Affine2::placement(Point::new(5.0, 1.0), 30.0, Mirror::X, 1.0),
+    )
+    .unwrap();
+    for (ring, mirrored) in region.rings.iter().zip(&mirrored.rings) {
+        close(
+            crate::geom::region::ring_signed_area(mirrored),
+            crate::geom::region::ring_signed_area(ring),
+            1e-9,
+        );
+    }
+    close(mirrored.area(), region.area(), 1e-9);
+    assert!(
+        mirrored.contains_point(
+            Affine2::placement(Point::new(5.0, 1.0), 30.0, Mirror::X, 1.0)
+                .transform_point(Point::new(3.5, 1.0))
+        )
+    );
 }
 
 #[test]

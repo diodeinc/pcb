@@ -937,7 +937,12 @@ fn build_board_array_spec(
                     })
                 })
                 .collect::<Vec<_>>();
-            let tabs = mouse_bite::generate(&placement, &stock, &offsets, preset, resolution)?;
+            let cell = BBox::new(
+                root.bbox.min - Point::new(board_margin.left, board_margin.bottom),
+                root.bbox.max + Point::new(board_margin.right, board_margin.top),
+            );
+            let tabs =
+                mouse_bite::generate(&placement, cell, &stock, &offsets, preset, resolution)?;
             generated_geometry.add_layer_feature(
                 GeneratedFeatureScope::Array,
                 tooling_hole_layer.as_str(),

@@ -2736,3 +2736,53 @@ fn tabs_land_on_the_narrowest_rail_the_array_leaves() {
     };
     assert!(close(narrowest_rail_mm(&lopsided, gap), 6.0));
 }
+
+#[test]
+fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
+    let resolution = Resolution::default();
+    let ipc = Ipc2581::parse(large_board_fixture_mm()).unwrap();
+    let options = BoardArrayCreateOptions {
+        columns: 3,
+        rows: 2,
+        board_margin_mm: BoardMarginMm::all(5.0),
+        edge_rail_mm: BoardMarginMm::all(10.0),
+    };
+    let spec = build_board_array_spec(
+        &ipc,
+        &options,
+        BoardArrayValidationMode::Manual,
+        BoardArrayPanelizationMetadata {
+            mode: BoardArrayPanelizationMode::Manual,
+            sheet: None,
+            sheet_target_mm: None,
+        },
+        Separation::MouseBite,
+        resolution,
+    )
+    .unwrap();
+    let points = |polygon: &Polygon| {
+        std::iter::once(polygon.begin)
+            .chain(polygon.steps.iter().map(|step| match step {
+                PolyStep::Segment(segment) => segment.point,
+                PolyStep::Curve(curve) => curve.point,
+            }))
+            .map(|p| (p.x, p.y))
+            .collect::<Vec<_>>()
+    };
+    // One void per tab per board, board by board along each row: every
+    // board's are the first board's moved by whole pitches.
+    let per_board = spec.tabs_per_board;
+    assert_eq!(spec.profile_cutouts.len(), 6 * per_board);
+    for (index, cutout) in spec.profile_cutouts.iter().enumerate() {
+        let (board, void) = (index / per_board, index % per_board);
+        let shift = (
+            (board % 3) as f64 * spec.pitch_x_mm,
+            (board / 3) as f64 * spec.pitch_y_mm,
+        );
+        let expected = points(&spec.profile_cutouts[void])
+            .into_iter()
+            .map(|(x, y)| (x + shift.0, y + shift.1))
+            .collect::<Vec<_>>();
+        assert_points_close(points(cutout), expected);
+    }
+}
