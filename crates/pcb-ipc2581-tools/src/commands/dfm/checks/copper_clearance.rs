@@ -9,8 +9,10 @@
 
 use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
+#[cfg(not(target_family = "wasm"))]
+use rayon::prelude::*;
 
-use crate::commands::dfm::design::{ConductorId, Design, spans};
+use crate::commands::dfm::design::{ConductorId, CopperLayer, Design, spans};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
 
@@ -26,17 +28,7 @@ pub(super) fn evaluate(
     conditions: &Conditions,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
-    let mut checked = 0;
-    let mut measured = Vec::new();
-
-    for layer in &design.copper_layers {
-        if !conditions.applies_to_layer(layer) {
-            continue;
-        }
-        // Every pair of connected pieces of two conductors is decided, those
-        // inside one placement in that placement's own design.
-        checked += layer.piece_pairs;
-
+    let measure = |layer: &CopperLayer| {
         // A conductor whose bounds come within the limit of no other's is
         // proven clear whole; only the rest are taken apart into pieces.
         let mut by_x = (0..layer.conductors.len()).collect::<Vec<_>>();
@@ -115,7 +107,7 @@ pub(super) fn evaluate(
             })
             .collect::<Vec<_>>();
 
-        for (left_index, right_index) in pairs {
+        let measure_pair = |(left_index, right_index): (usize, usize)| {
             let (left, right) = (&pieces[left_index], &pieces[right_index]);
             let right_boundary = &boundaries[right_index];
             let Some(distance) = region_clearance_within(
@@ -125,14 +117,14 @@ pub(super) fn evaluate(
                 right_boundary,
                 limit_mm,
             ) else {
-                continue;
+                return Ok(None);
             };
 
             let left_id = layer.conductors[left.conductor_index].id;
             let right_id = layer.conductors[right.conductor_index].id;
             let mut bbox = BBox::from_point(distance.first);
             bbox.include_point(distance.second);
-            measured.push(Measured {
+            Ok::<_, anyhow::Error>(Some(Measured {
                 distance,
                 bbox,
                 layers: vec![layer.layer.clone()],
@@ -161,16 +153,42 @@ pub(super) fn evaluate(
                         )
                     })
                     .collect::<anyhow::Result<Vec<_>>>()?
-                    .into_iter()
-                    .collect()
                 } else {
                     Vec::new()
                 },
-            });
-        }
-    }
+            }))
+        };
+        #[cfg(not(target_family = "wasm"))]
+        let pairs = pairs.into_par_iter();
+        #[cfg(target_family = "wasm")]
+        let pairs = pairs.into_iter();
+        pairs.map(measure_pair).collect::<anyhow::Result<Vec<_>>>()
+    };
 
-    Ok(Evaluation { checked, measured })
+    // Layers are independent, and so are the pairs on one.
+    #[cfg(not(target_family = "wasm"))]
+    let layers = design.copper_layers.par_iter();
+    #[cfg(target_family = "wasm")]
+    let layers = design.copper_layers.iter();
+    let measured = layers
+        .filter(|layer| conditions.applies_to_layer(layer))
+        .map(measure)
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect();
+    Ok(Evaluation {
+        // Every pair of connected pieces of two conductors is decided, those
+        // inside one placement in that placement's own design.
+        checked: design
+            .copper_layers
+            .iter()
+            .filter(|layer| conditions.applies_to_layer(layer))
+            .map(|layer| layer.piece_pairs)
+            .sum(),
+        measured,
+    })
 }
 
 pub(super) fn conductor_subject(
