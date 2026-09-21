@@ -283,13 +283,15 @@ fn image_feature(
         return;
     }
 
-    for path in feature.paths.slice(&doc.arena.paths) {
-        let geometry: fn(u32) -> artwork::Geometry = match path.paint {
+    for path in feature.paths.indices() {
+        let geometry: fn(u32) -> artwork::Geometry = match doc.arena.path(path).paint {
             Paint::Fill { .. } => |path| artwork::Geometry::Region { path },
             Paint::Stroke(_) => |path| artwork::Geometry::Stroke { path },
             Paint::None => continue,
         };
-        let path_id = out.push_path(path.paint, doc.arena.path_contours(path));
+        let path_id = out
+            .arena
+            .append_path_from(&doc.arena, path, Affine2::IDENTITY);
         objects.push(object(geometry(path_id), out.path_bbox(path_id)));
     }
 }
