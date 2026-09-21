@@ -512,12 +512,15 @@ pub struct UserSpecial {
 }
 
 /// A shape within a UserSpecial, with optional line and fill descriptions
+///
+/// A zone fill is a `UserSpecial` of thousands of contours, so what few of
+/// them carry is boxed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserShape {
     pub shape: UserShapeType,
     pub line_desc: Option<LineDesc>,
     pub line_desc_ref: Option<Symbol>,
-    pub fill_desc: Option<FillDesc>,
+    pub fill_desc: Option<Box<FillDesc>>,
     pub fill_desc_ref: Option<Symbol>,
 }
 
@@ -531,14 +534,14 @@ pub enum UserShapeType {
     RectRound(RectRound),
     Contour(Contour),
     /// Any standard primitive without a variant of its own above.
-    StandardPrimitive(StandardPrimitive),
+    StandardPrimitive(Box<StandardPrimitive>),
     StandardPrimitiveRef(Symbol),
     Polygon(Polygon),
     Line(Line),
     Arc(Arc),
     Polyline(Polyline),
-    Outline(super::PackageOutline),
-    Text(Text),
+    Outline(Box<super::PackageOutline>),
+    Text(Box<Text>),
     UserPrimitiveRef(Symbol),
     UserPrimitive(UserPrimitive),
 }

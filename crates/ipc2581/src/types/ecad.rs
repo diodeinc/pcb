@@ -1271,11 +1271,13 @@ mod tests {
     use super::*;
 
     /// Allegro writes a `Set` and a `Pad` per pad, a hundred thousand on a
-    /// board, so what each costs is the size of the model.
+    /// board, and KiCad a shape per zone-fill island, so what each costs is
+    /// the size of the model.
     #[test]
-    fn per_pad_records_stay_small() {
+    fn per_feature_records_stay_small() {
         assert!(size_of::<FeatureSet>() <= 56);
         assert!(size_of::<SetFeature>() <= 128);
         assert!(size_of::<FeatureShape>() <= 16);
+        assert!(size_of::<crate::types::UserShape>() <= 112);
     }
 }

@@ -853,7 +853,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_user_special(&mut self, node: &Node, units: Units) -> Result<UserPrimitive> {
-        let mut shapes = Vec::new();
+        let mut shapes = Vec::with_capacity(self.element_children(node).count());
         for child in self.element_children(node) {
             let shape = self.parse_feature_shape(&child, units)?.ok_or_else(|| {
                 Ipc2581Error::InvalidStructure(format!(
@@ -898,13 +898,13 @@ impl<'a> Parser<'a> {
                     style_node = self.children_named(node, "Polygon").next().unwrap_or(*node);
                     UserShapeType::Contour(contour)
                 }
-                primitive => UserShapeType::StandardPrimitive(primitive),
+                primitive => UserShapeType::StandardPrimitive(Box::new(primitive)),
             },
             FeatureShape::StandardPrimitiveRef(id) => UserShapeType::StandardPrimitiveRef(id),
             FeatureShape::UserPrimitive(primitive) => UserShapeType::UserPrimitive(*primitive),
             FeatureShape::UserPrimitiveRef(id) => UserShapeType::UserPrimitiveRef(id),
-            FeatureShape::Text(text) => UserShapeType::Text(*text),
-            FeatureShape::Outline(outline) => UserShapeType::Outline(*outline),
+            FeatureShape::Text(text) => UserShapeType::Text(text),
+            FeatureShape::Outline(outline) => UserShapeType::Outline(outline),
         };
         let style = self.parse_fill_and_line_desc(&style_node, units)?;
         Ok(user_shape(shape, style))
@@ -3048,7 +3048,7 @@ fn user_shape(shape: UserShapeType, style: ShapeStyle) -> UserShape {
         shape,
         line_desc: style.line_desc,
         line_desc_ref: style.line_desc_ref,
-        fill_desc: style.fill_desc,
+        fill_desc: style.fill_desc.map(Box::new),
         fill_desc_ref: style.fill_desc_ref,
     }
 }

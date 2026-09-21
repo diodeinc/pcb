@@ -434,7 +434,7 @@ pub(super) fn lower_user_shape(
         }
     }
 
-    let fill_desc = shape.fill_desc.or_else(|| {
+    let fill_desc = shape.fill_desc.as_deref().copied().or_else(|| {
         shape
             .fill_desc_ref
             .and_then(|id| context.fill_descs.get(&id).copied())

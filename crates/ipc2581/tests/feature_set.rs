@@ -119,9 +119,7 @@ fn features_accepts_every_member_of_the_feature_group() {
     ));
     assert!(matches!(
         shapes[1].1[..],
-        [UserShapeType::StandardPrimitive(StandardPrimitive::Donut(
-            _
-        ))]
+        [UserShapeType::StandardPrimitive(primitive)] if matches!(**primitive, StandardPrimitive::Donut(_))
     ));
     assert!(matches!(shapes[2].1[..], [UserShapeType::Outline(_)]));
     assert!(matches!(shapes[3].1[..], [UserShapeType::Text(_)]));
@@ -157,13 +155,16 @@ fn user_special_retains_every_member_of_the_feature_group() {
         shape_types(&glyphs.primitive)[..],
         [
             UserShapeType::Outline(_),
-            UserShapeType::StandardPrimitive(StandardPrimitive::Hexagon(_)),
+            UserShapeType::StandardPrimitive(primitive),
             UserShapeType::StandardPrimitiveRef(_),
             UserShapeType::RectCenter(_),
-        ]
+        ] if matches!(**primitive, StandardPrimitive::Hexagon(_))
     ));
     assert_eq!(
-        special.shapes[1].fill_desc.map(|fill| fill.fill_property),
+        special.shapes[1]
+            .fill_desc
+            .as_ref()
+            .map(|fill| fill.fill_property),
         Some(ipc2581::FillProperty::Void)
     );
     assert!(matches!(

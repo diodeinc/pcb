@@ -621,7 +621,7 @@ fn lowers_hollow_user_circle_as_stroked_path() {
                 line_property: None,
             }),
             line_desc_ref: None,
-            fill_desc: Some(ipc2581::types::FillDesc {
+            fill_desc: Some(Box::new(ipc2581::types::FillDesc {
                 fill_property: FillProperty::Hollow,
                 line_width: None,
                 pitch1: None,
@@ -629,7 +629,7 @@ fn lowers_hollow_user_circle_as_stroked_path() {
                 angle1: None,
                 angle2: None,
                 color: None,
-            }),
+            })),
             fill_desc_ref: None,
         }],
     });
