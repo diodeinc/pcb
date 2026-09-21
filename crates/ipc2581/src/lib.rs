@@ -283,29 +283,31 @@ mod tests {
     }
 
     #[test]
-    fn rejects_multiple_file_revisions_in_history_record() {
+    fn keeps_the_first_file_revision_of_a_history_record() {
+        // pcb up to 0.4.11 appended a FileRevision per save, and the schema
+        // allows dotted revision numbers.
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
     <FunctionMode mode="FABRICATION"/>
   </Content>
-  <HistoryRecord number="2" origination="2026-01-01T00:00:00Z" software="pcb" lastChange="2026-01-02T00:00:00Z">
+  <HistoryRecord number="2.1.3" origination="2026-01-01T00:00:00Z" software="pcb" lastChange="2026-01-02T00:00:00Z">
     <FileRevision fileRevisionId="1" comment="Initial">
-      <SoftwarePackage name="pcb" revision="1" vendor="Diode">
-        <Certification certificationStatus="SELFTEST"/>
-      </SoftwarePackage>
+      <SoftwarePackage name="KiCad" revision="10.0.4" vendor="KiCad EDA"/>
     </FileRevision>
-    <FileRevision fileRevisionId="2" comment="Invalid second revision">
-      <SoftwarePackage name="pcb" revision="1" vendor="Diode">
-        <Certification certificationStatus="SELFTEST"/>
-      </SoftwarePackage>
+    <FileRevision fileRevisionId="2" comment="Created board array">
+      <SoftwarePackage name="pcb" revision="0.4.11" vendor="Diode"/>
     </FileRevision>
   </HistoryRecord>
 </IPC-2581>"#;
 
-        let error =
-            Ipc2581::parse(xml).expect_err("multiple FileRevision children must be rejected");
-        assert!(error.to_string().contains("exactly one FileRevision"));
+        let doc = Ipc2581::parse(xml).unwrap();
+        let history = doc.history_record().unwrap();
+        assert_eq!(history.number, 2);
+        let revision = history.file_revision.as_ref().unwrap();
+        assert_eq!(doc.resolve(revision.file_revision), "1");
+        let package = revision.software_package.as_ref().unwrap();
+        assert_eq!(doc.resolve(package.name), "KiCad");
     }
 
     #[test]

@@ -1199,98 +1199,42 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_history_record(&mut self, node: &Node) -> Result<HistoryRecord> {
-        // Parse number as f64 first, then convert to u32 (some files use "1.0")
-        let number = match self.attr(node, "number") {
-            Some(s) => {
-                if let Ok(f) = s.parse::<f64>() {
-                    f as u32
-                } else {
-                    return Err(Ipc2581Error::InvalidAttribute(format!(
-                        "Invalid number value: {}",
-                        s
-                    )));
-                }
-            }
-            None => {
-                return Err(Ipc2581Error::MissingAttribute {
-                    element: "HistoryRecord",
-                    attr: "number",
-                });
-            }
-        };
+        // historyNumberType is a dotted revision such as "2" or "1.2.3"; the
+        // leading component counts the saves.
+        let number = self
+            .attr(node, "number")
+            .ok_or(Ipc2581Error::MissingAttribute {
+                element: "HistoryRecord",
+                attr: "number",
+            })?;
+        let number = number
+            .split('.')
+            .next()
+            .and_then(|major| major.trim().parse().ok())
+            .ok_or_else(|| {
+                Ipc2581Error::InvalidAttribute(format!("Invalid number value: {number}"))
+            })?;
 
         let origination = self.required_attr(node, "origination", "HistoryRecord")?;
         let software = self.optional_attr(node, "software");
         let last_change = self.required_attr(node, "lastChange", "HistoryRecord")?;
 
-        // HistoryRecordType is FileRevision followed by zero or more ChangeRec
-        // elements. Keep the typed parser strict here so it cannot silently
-        // accept the invalid repeated-FileRevision structure emitted by older
-        // writers.
-        let mut file_revision = None;
-        let mut saw_change_record = false;
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "FileRevision" => {
-                    if saw_change_record {
-                        return Err(Ipc2581Error::InvalidStructure(
-                            "FileRevision must precede ChangeRec in HistoryRecord".to_string(),
-                        ));
-                    }
-                    if file_revision.is_some() {
-                        return Err(Ipc2581Error::InvalidStructure(
-                            "HistoryRecord allows exactly one FileRevision".to_string(),
-                        ));
-                    }
-                    file_revision = Some(self.parse_file_revision(&child)?);
-                }
-                "ChangeRec" => {
-                    if file_revision.is_none() {
-                        return Err(Ipc2581Error::InvalidStructure(
-                            "ChangeRec must follow FileRevision in HistoryRecord".to_string(),
-                        ));
-                    }
-                    self.validate_change_record(&child)?;
-                    saw_change_record = true;
-                }
-                name => {
-                    return Err(Ipc2581Error::InvalidStructure(format!(
-                        "Unexpected {name} in HistoryRecord"
-                    )));
-                }
-            }
-        }
-        let file_revision = file_revision.ok_or(Ipc2581Error::MissingElement(
-            "FileRevision in HistoryRecord",
-        ))?;
+        // The schema allows one FileRevision, but pcb up to 0.4.11 appended
+        // one per save. The first is the file's own; saving again turns the
+        // rest into ChangeRec entries.
+        let file_revision = self
+            .element_children(node)
+            .find(|child| self.name(child) == "FileRevision")
+            .map(|child| self.parse_file_revision(&child))
+            .transpose()?;
 
         Ok(HistoryRecord {
             number,
             origination,
             software,
             last_change,
-            file_revision: Some(file_revision),
+            file_revision,
         })
-    }
-
-    fn validate_change_record(&mut self, node: &Node) -> Result<()> {
-        self.required_attr(node, "datetime", "ChangeRec")?;
-        self.required_attr(node, "personRef", "ChangeRec")?;
-        self.required_attr(node, "application", "ChangeRec")?;
-        self.required_attr(node, "change", "ChangeRec")?;
-
-        for child in self.element_children(node) {
-            if self.name(&child) != "Approval" {
-                return Err(Ipc2581Error::InvalidStructure(format!(
-                    "Unexpected {} in ChangeRec",
-                    self.name(&child)
-                )));
-            }
-            self.required_attr(&child, "datetime", "Approval")?;
-            self.required_attr(&child, "personRef", "Approval")?;
-        }
-
-        Ok(())
     }
 
     fn parse_file_revision(&mut self, node: &Node) -> Result<metadata::FileRevision> {
