@@ -177,7 +177,7 @@ fn creates_rounded_panel_step_from_board_bbox() {
 fn generated_board_array_has_a_certified_safe_balancing_region() {
     let resolution = Resolution::default();
 
-    let input = board_fixture_with_mask_bbox_mm(12.0, 10.0);
+    let input = board_fixture_with_mask_bbox_mm(13.0, 10.0);
     let source = Ipc2581::parse(&input).unwrap();
     let (options, validation_mode, panelization) =
         auto_board_array_options(&source, None, resolution).unwrap();
@@ -516,10 +516,10 @@ fn generated_board_array_xml_validates_with_existing_history_and_callouts() {
 
 #[test]
 fn auto_create_projects_board_to_a7_array() {
-    let xml = create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(12.0, 10.0)).unwrap();
+    let xml = create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(13.0, 10.0)).unwrap();
 
     assert!(xml.contains(
-        r#"<StepRepeat stepRef="board_cell" x="8.5" y="7" nx="4" ny="3" dx="22" dy="20" angle="0.00" mirror="false"/>"#
+        r#"<StepRepeat stepRef="board_cell" x="6.5" y="7" nx="4" ny="3" dx="23" dy="20" angle="0.00" mirror="false"/>"#
     ));
     assert!(xml.contains(
         r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto"/>"#
@@ -534,7 +534,7 @@ fn auto_create_projects_board_to_a7_array() {
         r#"<NonstandardAttribute name="diode.panelize.sheet_height_mm" type="DOUBLE" value="74"/>"#
     ));
     assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.edge_rail_left_mm" type="DOUBLE" value="8.5"/>"#
+        r#"<NonstandardAttribute name="diode.panelize.edge_rail_left_mm" type="DOUBLE" value="6.5"/>"#
     ));
     assert!(xml.contains(
         r#"<NonstandardAttribute name="diode.panelize.edge_rail_top_mm" type="DOUBLE" value="7"/>"#
@@ -551,13 +551,13 @@ fn auto_create_projects_board_to_a7_array() {
 #[test]
 fn auto_create_projects_board_to_requested_a5_array() {
     let xml = create_auto_board_array_xml_with_sheet(
-        &board_fixture_with_mask_bbox_mm(12.0, 10.0),
+        &board_fixture_with_mask_bbox_mm(13.0, 10.0),
         Some(AutoSheetSize::A5),
     )
     .unwrap();
 
     assert!(xml.contains(
-        r#"<StepRepeat stepRef="board_cell" x="8" y="5" nx="6" ny="10" dx="22" dy="20" angle="0.00" mirror="false"/>"#
+        r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="6" ny="10" dx="23" dy="20" angle="0.00" mirror="false"/>"#
     ));
     assert!(xml.contains(
         r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto_sheet"/>"#
@@ -599,7 +599,7 @@ fn auto_create_derives_board_margin_from_courtyard_overhang() {
 
     let xml = create_auto_board_array_xml(input).unwrap();
     assert!(xml.contains(
-        r#"<StepRepeat stepRef="board_cell" x="12" y="6.5" nx="2" ny="4" dx="25" dy="23" angle="0.00" mirror="false"/>"#
+        r#"<StepRepeat stepRef="board_cell" x="11" y="6.5" nx="2" ny="4" dx="26" dy="23" angle="0.00" mirror="false"/>"#
     ));
     assert!(xml.contains(
         r#"<StepRepeat stepRef="board" x="7" y="6" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
@@ -1342,14 +1342,14 @@ fn board_array_creation_uses_declared_surface_layers_regardless_of_name() {
 
 #[test]
 fn board_array_creation_adds_default_tooling_at_multi_column_min_width() {
-    let input = board_fixture_with_mask_bbox_mm(12.0, 40.0);
+    let input = board_fixture_with_mask_bbox_mm(13.0, 40.0);
     let xml = create_board_array_xml(
         &input,
         &BoardArrayCreateOptions {
             columns: 2,
             rows: 1,
             board_margin_mm: board_margin(5.0, 0.0),
-            edge_rail_mm: edge_rail(18.0, 15.0),
+            edge_rail_mm: edge_rail(18.0, 16.0),
         },
     )
     .unwrap();
@@ -1366,14 +1366,56 @@ fn board_array_creation_adds_default_tooling_at_multi_column_min_width() {
     assert_eq!(mask_fiducials.len(), 4);
     assert_eq!(corner_holes.len(), 4);
     assert_eq!(rail_holes.len(), 4);
-    assert_corner_holes(&corner_holes, 70.0, 70.0);
+    assert_corner_holes(&corner_holes, 72.0, 72.0);
     assert_points_close(
         fiducial_points(&top_fiducials),
-        vec![(28.5, 66.15), (41.5, 66.15), (32.5, 3.85), (37.5, 3.85)],
+        vec![(28.5, 68.15), (43.5, 68.15), (32.5, 3.85), (39.5, 3.85)],
     );
     assert_points_close(
         hole_points(&rail_holes),
-        vec![(23.0, 67.5), (47.0, 67.5), (27.0, 2.5), (43.0, 2.5)],
+        vec![(23.0, 69.5), (49.0, 69.5), (27.0, 2.5), (45.0, 2.5)],
+    );
+    // The array is scored along every board edge, through the rails. No
+    // fiducial's mask opening may reach a score line, on either side.
+    let score_x = [20.5, 33.5, 38.5, 51.5];
+    for line in score_x {
+        assert!(xml.contains(&format!(
+            r#"<Line startX="{line}" startY="0" endX="{line}" endY="72">"#
+        )));
+    }
+    for layer in ["TOP", "BOTTOM"] {
+        for (x, _) in fiducial_points(&fiducials_on_layer(&ipc, step, layer)) {
+            for line in score_x {
+                assert!(
+                    (x - line).abs() + 1e-9 >= FIDUCIAL_MASK_OPENING_DIAMETER_MM / 2.0,
+                    "{layer} fiducial at x={x} reaches the score line at x={line}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn rail_tooling_needs_room_between_the_score_lines_of_an_outer_board() {
+    // 12 mm is the deepest fiducial inset: there it would sit on the score
+    // line along the far edge of the outer board.
+    let spec = |board_width_mm| BoardArrayToolingSpec {
+        columns: 2,
+        rows: 1,
+        board_width_mm,
+        board_height_mm: 10.0,
+        margin_x_mm: 20.5,
+        margin_y_mm: 15.0,
+        pitch_x_mm: board_width_mm + 5.0,
+        pitch_y_mm: 10.0,
+        array_width_mm: 2.0 * board_width_mm + 46.0,
+        array_height_mm: 40.0,
+    };
+    assert_eq!(board_array_tooling_orientation(&spec(12.0)), None);
+    assert_eq!(board_array_tooling_orientation(&spec(12.99)), None);
+    assert_eq!(
+        board_array_tooling_orientation(&spec(13.0)),
+        Some(BoardArrayToolingOrientation::TopBottom)
     );
 }
 
@@ -1414,7 +1456,7 @@ fn board_array_creation_places_array_tooling_on_left_right_for_landscape_arrays(
 
 #[test]
 fn board_array_tooling_falls_back_to_the_other_rail_pair() {
-    let input = board_fixture_with_mask_bbox_mm(11.99, 40.0);
+    let input = board_fixture_with_mask_bbox_mm(12.99, 40.0);
     let xml = create_board_array_xml(
         &input,
         &BoardArrayCreateOptions {
@@ -1434,11 +1476,11 @@ fn board_array_tooling_falls_back_to_the_other_rail_pair() {
 
     assert_points_close(
         fiducial_points(&top_fiducials),
-        vec![(3.85, 52.0), (3.85, 28.0), (67.13, 48.0), (67.13, 32.0)],
+        vec![(3.85, 52.0), (3.85, 28.0), (69.13, 48.0), (69.13, 32.0)],
     );
     assert_points_close(
         hole_points(&rail_holes),
-        vec![(2.5, 57.5), (2.5, 22.5), (68.48, 53.5), (68.48, 26.5)],
+        vec![(2.5, 57.5), (2.5, 22.5), (70.48, 53.5), (70.48, 26.5)],
     );
 }
 
@@ -1454,7 +1496,7 @@ fn auto_create_errors_when_rail_tooling_cannot_fit() {
 
 #[test]
 fn board_array_tooling_skips_when_no_rail_pair_fits() {
-    let input = board_fixture_with_mask_bbox_mm(11.99, 27.99);
+    let input = board_fixture_with_mask_bbox_mm(12.99, 27.99);
     let xml = create_board_array_xml(
         &input,
         &BoardArrayCreateOptions {
@@ -1482,7 +1524,7 @@ fn board_array_tooling_skips_when_no_rail_pair_fits() {
             .iter()
             .all(|hole| close(hole.diameter, CORNER_TOOLING_HOLE_DIAMETER_MM))
     );
-    assert_corner_holes(&tooling_holes, 70.98, 70.99);
+    assert_corner_holes(&tooling_holes, 72.98, 70.99);
 }
 
 #[test]
@@ -2241,8 +2283,8 @@ fn board_fixture_with_courtyard_overhang_mm() -> &'static str {
     <Profile>
       <Polygon>
         <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="12" y="0"/>
-        <PolyStepSegment x="12" y="10"/>
+        <PolyStepSegment x="13" y="0"/>
+        <PolyStepSegment x="13" y="10"/>
         <PolyStepSegment x="0" y="10"/>
         <PolyStepSegment x="0" y="0"/>
       </Polygon>
@@ -2252,8 +2294,8 @@ fn board_fixture_with_courtyard_overhang_mm() -> &'static str {
         <Features>
           <Polygon>
             <PolyBegin x="-2" y="-1"/>
-            <PolyStepSegment x="13" y="-1"/>
-            <PolyStepSegment x="13" y="12"/>
+            <PolyStepSegment x="14" y="-1"/>
+            <PolyStepSegment x="14" y="12"/>
             <PolyStepSegment x="-2" y="12"/>
             <PolyStepSegment x="-2" y="-1"/>
           </Polygon>
@@ -2288,8 +2330,8 @@ fn board_fixture_with_large_courtyard_overhang_mm() -> &'static str {
     <Profile>
       <Polygon>
         <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="12" y="0"/>
-        <PolyStepSegment x="12" y="10"/>
+        <PolyStepSegment x="13" y="0"/>
+        <PolyStepSegment x="13" y="10"/>
         <PolyStepSegment x="0" y="10"/>
         <PolyStepSegment x="0" y="0"/>
       </Polygon>
@@ -2299,8 +2341,8 @@ fn board_fixture_with_large_courtyard_overhang_mm() -> &'static str {
         <Features>
           <Polygon>
             <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="31" y="0"/>
-            <PolyStepSegment x="31" y="10"/>
+            <PolyStepSegment x="32" y="0"/>
+            <PolyStepSegment x="32" y="10"/>
             <PolyStepSegment x="0" y="10"/>
             <PolyStepSegment x="0" y="0"/>
           </Polygon>
@@ -2363,8 +2405,8 @@ fn board_fixture_with_top_line_mm() -> &'static str {
     <Profile>
       <Polygon>
         <PolyBegin x="-2" y="-3"/>
-        <PolyStepSegment x="10" y="-3"/>
-        <PolyStepSegment x="10" y="7"/>
+        <PolyStepSegment x="11" y="-3"/>
+        <PolyStepSegment x="11" y="7"/>
         <PolyStepSegment x="-2" y="7"/>
         <PolyStepSegment x="-2" y="-3"/>
       </Polygon>

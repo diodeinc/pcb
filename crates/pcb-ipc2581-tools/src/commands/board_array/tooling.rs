@@ -58,10 +58,13 @@ fn board_array_tooling_span_eligible(
         BoardArrayToolingOrientation::TopBottom => (spec.columns, spec.board_width_mm),
         BoardArrayToolingOrientation::LeftRight => (spec.rows, spec.board_height_mm),
     };
+    // Each side's pair sits over its own outer board, and the array is scored
+    // along both edges of that board: the deepest fiducial has to stop its
+    // mask opening short of the far one.
     let min_span = if span_count == 1 {
         SINGLE_BOARD_TOOLING_MIN_SPAN_MM
     } else {
-        MULTI_BOARD_TOOLING_MIN_SPAN_MM
+        SECONDARY_FIDUCIAL_SPAN_INSET_MM + FIDUCIAL_MASK_OPENING_DIAMETER_MM / 2.0
     };
     board_span + EPSILON >= min_span
 }
@@ -196,8 +199,10 @@ fn add_two_sided_fiducials(
 /// Span rules:
 /// - one board in the tooling axis requires at least 28 mm board span: 12 mm
 ///   deepest fiducial inset from each side plus 4 mm center spacing;
-/// - multiple boards in the tooling axis require at least 12 mm board span,
-///   because each side's pair sits over a different outer board;
+/// - multiple boards in the tooling axis require at least 13 mm board span:
+///   each side's pair sits over a different outer board, and the 12 mm deepest
+///   fiducial keeps its 1 mm mask opening off the score line along that
+///   board's far edge;
 /// - primary rail centers use 2.5 mm tooling, 8 mm top-fiducial, and 9 mm
 ///   bottom-fiducial span insets;
 /// - secondary rail centers use 6.5 mm tooling, 12 mm top-fiducial, and 11 mm
