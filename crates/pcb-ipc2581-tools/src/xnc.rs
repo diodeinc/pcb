@@ -303,15 +303,31 @@ pub fn write_xnc(doc: &XncDocument) -> Result<String> {
 
     let mut mode = XncMode::Unknown;
     let mut selected_tool = None;
+    // Object attributes persist until deleted, so only the difference from
+    // the previous object is written and a dropped attribute resets them.
+    let mut current_attributes: &[XncAttribute] = &[];
     for object in &doc.objects {
         let tool = object.tool();
         if selected_tool != Some(tool) {
             out.push_str(&format!("T{tool:02}\n"));
             selected_tool = Some(tool);
         }
-        for attribute in object.attributes() {
-            attribute.write_line(&mut out);
+        let attributes = object.attributes();
+        let dropped = current_attributes.iter().any(|current| {
+            !attributes
+                .iter()
+                .any(|attribute| attribute.command == current.command)
+        });
+        if dropped {
+            out.push_str("; #@! TD\n");
+            current_attributes = &[];
         }
+        for attribute in attributes {
+            if !current_attributes.contains(attribute) {
+                attribute.write_line(&mut out);
+            }
+        }
+        current_attributes = attributes;
         match object {
             XncObject::Drill { at, .. } => {
                 if mode != XncMode::Drill {
@@ -546,6 +562,38 @@ mod tests {
     }
 
     #[test]
+    fn object_attributes_never_leak_into_later_holes() {
+        let mut builder = XncBuilder::new(XncUnit::Metric, vec![]);
+        let net = |name: &str| XncAttribute::object("N", [name]);
+        let pin = vec![
+            net("VCC"),
+            XncAttribute::object("C", ["J1"]),
+            XncAttribute::object("P", ["J1", "1"]),
+        ];
+        for (x, attributes) in [
+            (1.0, pin.clone()),
+            (2.0, pin),
+            (3.0, vec![net("GND")]),
+            (4.0, vec![net("V3V3")]),
+        ] {
+            builder
+                .add_drill(0.3, Point::new(x, 5.0), vec![], attributes)
+                .unwrap();
+        }
+
+        let output = write_xnc(&builder.finish()).unwrap();
+        // The repeated pin rides existing state, the via drops the pin's
+        // component attributes, and a changed net overrides in place.
+        assert!(
+            output.contains(
+                "; #@! TO.N,VCC\n; #@! TO.C,J1\n; #@! TO.P,J1,1\nG05\nX1.0Y5.0\nX2.0Y5.0\n\
+                 ; #@! TD\n; #@! TO.N,GND\nX3.0Y5.0\n; #@! TO.N,V3V3\nX4.0Y5.0\n"
+            ),
+            "{output}"
+        );
+    }
+
+    #[test]
     fn free_form_names_stay_printable_ascii() {
         let mut builder = XncBuilder::new(XncUnit::Metric, vec![]);
         builder
@@ -618,7 +666,7 @@ mod tests {
         assert!(output.contains("; #@! TF.FileFunction,Plated,1,4,PTH\n"));
         assert!(output.contains("; #@! TA.AperFunction,Plated,PTH,ViaDrill\nT01C0.3\n"));
         assert!(output.contains("T01\n; #@! TO.N,GND\nG05\nX1.0Y-2.5\n"));
-        assert!(output.contains("T02\nX3.0Y4.0G85X3.0Y5.1\nG05\n"));
+        assert!(output.contains("T02\n; #@! TD\nX3.0Y4.0G85X3.0Y5.1\nG05\n"));
         assert!(output.contains("T03\nG00X4.0Y4.0\nM15\nG01X5.0Y4.0\nM16\n"));
         assert!(output.ends_with("M30\n"));
     }
