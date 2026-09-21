@@ -1039,11 +1039,7 @@ pub(super) fn extract_arc(
         StrokedFeatureStyle::new(net, polarity, source, line_desc),
         vec![
             PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
-            PathCmd::arc_to(
-                Point::new(arc.end.x, arc.end.y),
-                Point::new(arc.center.x, arc.center.y),
-                arc.clockwise,
-            ),
+            arc_step(arc.end, arc.center, arc.clockwise),
         ],
     ))
 }

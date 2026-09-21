@@ -65,6 +65,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - An invalid IPC-2581 stackup no longer fails the whole import.
 - IPC-2581 strokes without a line description no longer get a made-up width.
 - Panels honor a repeated step's Datum.
+- IPC-2581 exports no longer fail on a KiCad arc that collapsed to a point.
 
 ### Changed
 

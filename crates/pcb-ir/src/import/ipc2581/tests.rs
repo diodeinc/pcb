@@ -388,6 +388,22 @@ fn zero_area_standard_primitive_emits_no_paths() {
 }
 
 #[test]
+fn a_curve_step_onto_its_own_center_lowers_as_a_straight_step() {
+    let point = ipc2581::types::Point { x: 2.0, y: 1.0 };
+    let cmds = poly_step_commands(
+        Point::new(2.0, 1.0),
+        &[PolyStep::Curve(ipc2581::types::PolyStepCurve {
+            point,
+            center: point,
+            clockwise: false,
+        })],
+    );
+
+    assert!(cmds.iter().all(|cmd| cmd.op != PathOp::ArcTo));
+    assert_eq!(cmds.last().map(|cmd| cmd.p0), Some(Point::new(2.0, 1.0)));
+}
+
+#[test]
 fn lowers_trace_poly_step_curves_as_arcs() {
     let mut doc = GeometryDocument::new();
     let trace = ipc2581::types::Trace {

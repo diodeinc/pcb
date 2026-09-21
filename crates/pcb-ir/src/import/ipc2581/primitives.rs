@@ -410,11 +410,7 @@ pub(super) fn lower_user_shape(
                 transform,
                 vec![
                     PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
-                    PathCmd::arc_to(
-                        Point::new(arc.end.x, arc.end.y),
-                        Point::new(arc.center.x, arc.center.y),
-                        arc.clockwise,
-                    ),
+                    arc_step(arc.end, arc.center, arc.clockwise),
                 ],
             );
         }
@@ -650,13 +646,25 @@ pub(super) fn poly_step_commands(begin: Point, steps: &[PolyStep]) -> Vec<PathCm
             PolyStep::Segment(segment) => {
                 PathCmd::line_to(Point::new(segment.point.x, segment.point.y))
             }
-            PolyStep::Curve(curve) => PathCmd::arc_to(
-                Point::new(curve.point.x, curve.point.y),
-                Point::new(curve.center.x, curve.center.y),
-                curve.clockwise,
-            ),
+            PolyStep::Curve(curve) => arc_step(curve.point, curve.center, curve.clockwise),
         }))
         .collect()
+}
+
+/// A circular step to `end` about `center`. A step onto its own center has
+/// no radius to sweep — KiCad writes one where an arc collapses to a point —
+/// so it is reached straight, and a stroke of it images its cap.
+pub(super) fn arc_step(
+    end: ipc2581::types::Point,
+    center: ipc2581::types::Point,
+    clockwise: bool,
+) -> PathCmd {
+    let (end, center) = (Point::new(end.x, end.y), Point::new(center.x, center.y));
+    if end == center {
+        PathCmd::line_to(end)
+    } else {
+        PathCmd::arc_to(end, center, clockwise)
+    }
 }
 
 pub(super) fn polygon_contour(polygon: &ipc2581::types::Polygon) -> ContourBuf {
