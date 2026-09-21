@@ -584,7 +584,7 @@ fn ipc_polygon_from_contour(contour: &ContourBuf) -> Result<Polygon> {
     if steps.len() < 2 {
         bail!("generated copper balance polygon has fewer than three vertices");
     }
-    Ok(Polygon { begin, steps })
+    Ok(Polygon::new(begin, steps))
 }
 
 #[cfg(test)]
@@ -705,8 +705,7 @@ mod tests {
                     template
                         .contour
                         .polygon
-                        .steps
-                        .iter()
+                        .steps()
                         .any(|step| matches!(step, PolyStep::Curve(_)))
                 })
         );

@@ -1,5 +1,6 @@
 use super::{Tokens, Xform, from_token, token};
 use crate::Symbol;
+use std::fmt;
 
 /// 2D point
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -215,10 +216,99 @@ pub struct Contour {
 }
 
 /// `Polygon`, `Cutout` or `Polyline`: a begin point and the steps from it.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// A zone fill is tens of thousands of straight steps, so the points are one
+/// table and the few curved steps a sparse one beside it.
+#[derive(Clone, PartialEq)]
 pub struct Polygon {
-    pub begin: PolyBegin,
-    pub steps: Vec<PolyStep>,
+    /// `PolyBegin`, then the end point of every step.
+    pub(crate) points: Vec<Point>,
+    /// The curved steps, by ascending `point`.
+    pub(crate) curves: Vec<PolyCurve>,
+}
+
+/// The arc that ends at `points[point]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PolyCurve {
+    pub(crate) point: u32,
+    pub(crate) clockwise: bool,
+    pub(crate) center: Point,
+}
+
+impl Polygon {
+    pub fn new(begin: Point, steps: impl IntoIterator<Item = PolyStep>) -> Self {
+        let steps = steps.into_iter();
+        let mut polygon = Self {
+            points: Vec::with_capacity(steps.size_hint().0 + 1),
+            curves: Vec::new(),
+        };
+        polygon.points.push(begin);
+        for step in steps {
+            let point = match step {
+                PolyStep::Segment(segment) => segment.point,
+                PolyStep::Curve(curve) => {
+                    polygon.curves.push(PolyCurve {
+                        point: polygon.points.len() as u32,
+                        clockwise: curve.clockwise,
+                        center: curve.center,
+                    });
+                    curve.point
+                }
+            };
+            polygon.points.push(point);
+        }
+        polygon
+    }
+
+    pub fn begin(&self) -> Point {
+        self.points[0]
+    }
+
+    /// `begin`, then the end point of every step.
+    pub fn points(&self) -> &[Point] {
+        &self.points
+    }
+
+    pub fn steps(&self) -> impl Iterator<Item = PolyStep> + '_ {
+        let mut curves = self.curves.iter().peekable();
+        (1..self.points.len()).map(move |index| {
+            let point = self.points[index];
+            match curves.next_if(|curve| curve.point as usize == index) {
+                Some(curve) => PolyStep::Curve(PolyStepCurve {
+                    point,
+                    center: curve.center,
+                    clockwise: curve.clockwise,
+                }),
+                None => PolyStep::Segment(PolyStepSegment { point }),
+            }
+        })
+    }
+
+    pub(crate) fn translate(&mut self, offset: Point) {
+        let centers = self.curves.iter_mut().map(|curve| &mut curve.center);
+        for point in self.points.iter_mut().chain(centers) {
+            point.x += offset.x;
+            point.y += offset.y;
+        }
+    }
+}
+
+/// Prints the begin point and each step, however they are stored.
+impl fmt::Debug for Polygon {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Steps<'a>(&'a Polygon);
+
+        impl fmt::Debug for Steps<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_list().entries(self.0.steps()).finish()
+            }
+        }
+
+        f.debug_struct("Polygon")
+            .field("begin", &self.begin())
+            .field("steps", &Steps(self))
+            .finish()
+    }
 }
 
 /// Polygon starting point
@@ -451,4 +541,50 @@ pub enum UserShapeType {
     Text(Text),
     UserPrimitiveRef(Symbol),
     UserPrimitive(UserPrimitive),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_polygon_yields_the_steps_it_was_made_of() {
+        let point = |x, y| Point { x, y };
+        let curve = |x, y, clockwise| {
+            PolyStep::Curve(PolyStepCurve {
+                point: point(x, y),
+                center: point(x, 0.0),
+                clockwise,
+            })
+        };
+        let segment = |x, y| PolyStep::Segment(PolyStepSegment { point: point(x, y) });
+        let steps = [
+            curve(1.0, 1.0, true),
+            segment(2.0, 0.0),
+            segment(3.0, 0.0),
+            curve(4.0, 1.0, false),
+            curve(5.0, 1.0, true),
+        ];
+
+        let mut polygon = Polygon::new(point(0.0, 0.0), steps);
+        assert_eq!(polygon.begin(), point(0.0, 0.0));
+        assert_eq!(polygon.points().len(), 6);
+        assert_eq!(polygon.steps().collect::<Vec<_>>(), steps);
+        assert_eq!(
+            format!("{:?}", Polygon::new(point(0.0, 0.0), [segment(2.0, 0.0)])),
+            "Polygon { begin: Point { x: 0.0, y: 0.0 }, steps: [Segment(PolyStepSegment { point: Point { x: 2.0, y: 0.0 } })] }"
+        );
+
+        polygon.translate(point(10.0, 20.0));
+        assert_eq!(polygon.begin(), point(10.0, 20.0));
+        assert_eq!(
+            polygon.steps().next(),
+            Some(PolyStep::Curve(PolyStepCurve {
+                point: point(11.0, 21.0),
+                center: point(11.0, 20.0),
+                clockwise: true,
+            }))
+        );
+        assert_eq!(Polygon::new(point(1.0, 2.0), []).steps().count(), 0);
+    }
 }

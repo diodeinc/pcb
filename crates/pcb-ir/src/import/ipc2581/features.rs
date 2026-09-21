@@ -976,13 +976,7 @@ pub(super) fn extract_stroke(
                 arc_step(arc.end, arc.center, arc.clockwise),
             ],
         ),
-        StrokePath::Polyline(polyline) => (
-            "polyline",
-            poly_step_commands(
-                Point::new(polyline.begin.x, polyline.begin.y),
-                &polyline.steps,
-            ),
-        ),
+        StrokePath::Polyline(polyline) => ("polyline", poly_step_commands(polyline)),
     };
     let (reference, inline) = match stroke.line_desc {
         Some(LineDescGroup::Ref(reference)) => (Some(reference), None),

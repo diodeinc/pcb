@@ -76,12 +76,15 @@ fn parse_and_validate(path: &Path) -> Ipc2581 {
                 );
             }
             StandardPrimitive::Contour(contour) => {
-                assert!(!contour.polygon.steps.is_empty(), "Contour must have steps");
+                assert!(
+                    contour.polygon.steps().next().is_some(),
+                    "Contour must have steps"
+                );
                 assert!(
                     contour
                         .cutouts
                         .iter()
-                        .all(|cutout| !cutout.steps.is_empty()),
+                        .all(|cutout| cutout.steps().next().is_some()),
                     "Cutouts must have steps"
                 );
             }
@@ -336,25 +339,18 @@ fn validate_testcase1_metadata(doc: &Ipc2581) {
         let total_plated = via_drills + plated_drills;
 
         let (board_width_mm, board_height_mm) = if let Some(profile) = &step.profile {
-            let polygon = &profile.polygon;
+            let points = profile.polygon.points();
+            let span = |coordinate: fn(&ipc2581::Point) -> f64| {
+                let (min, max) = points
+                    .iter()
+                    .map(coordinate)
+                    .fold((f64::MAX, f64::MIN), |(min, max), value| {
+                        (min.min(value), max.max(value))
+                    });
+                max - min
+            };
 
-            let mut min_x = polygon.begin.x;
-            let mut max_x = polygon.begin.x;
-            let mut min_y = polygon.begin.y;
-            let mut max_y = polygon.begin.y;
-
-            for step in &polygon.steps {
-                let (x, y) = match step {
-                    ipc2581::PolyStep::Segment(s) => (s.point.x, s.point.y),
-                    ipc2581::PolyStep::Curve(c) => (c.point.x, c.point.y),
-                };
-                min_x = min_x.min(x);
-                max_x = max_x.max(x);
-                min_y = min_y.min(y);
-                max_y = max_y.max(y);
-            }
-
-            (max_x - min_x, max_y - min_y)
+            (span(|point| point.x), span(|point| point.y))
         } else {
             (0.0, 0.0)
         };

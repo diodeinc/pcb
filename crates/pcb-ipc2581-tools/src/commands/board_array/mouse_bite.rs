@@ -375,17 +375,16 @@ pub fn cutout_polygon(cutout: &ContourSet) -> Result<Polygon> {
         ring_signed_area(ring) > 0.0 && ring.len() >= 3,
         "a routed void has no area"
     );
-    Ok(Polygon {
-        begin: ipc2581::types::Point {
+    Ok(Polygon::new(
+        ipc2581::types::Point {
             x: ring[0][0],
             y: ring[0][1],
         },
-        steps: ring[1..]
+        ring[1..]
             .iter()
             .chain(std::iter::once(&ring[0]))
-            .map(|p| poly_segment(p[0], p[1]))
-            .collect(),
-    })
+            .map(|p| poly_segment(p[0], p[1])),
+    ))
 }
 
 #[cfg(test)]

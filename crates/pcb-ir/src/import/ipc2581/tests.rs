@@ -557,14 +557,14 @@ fn zero_area_standard_primitive_emits_no_paths() {
 #[test]
 fn a_curve_step_onto_its_own_center_lowers_as_a_straight_step() {
     let point = ipc2581::types::Point { x: 2.0, y: 1.0 };
-    let cmds = poly_step_commands(
-        Point::new(2.0, 1.0),
-        &[PolyStep::Curve(ipc2581::types::PolyStepCurve {
+    let cmds = poly_step_commands(&ipc2581::types::Polygon::new(
+        point,
+        [PolyStep::Curve(ipc2581::types::PolyStepCurve {
             point,
             center: point,
             clockwise: false,
         })],
-    );
+    ));
 
     assert!(cmds.iter().all(|cmd| cmd.op != PathOp::ArcTo));
     assert_eq!(cmds.last().map(|cmd| cmd.p0), Some(Point::new(2.0, 1.0)));
@@ -574,14 +574,14 @@ fn a_curve_step_onto_its_own_center_lowers_as_a_straight_step() {
 fn lowers_stroke_poly_step_curves_as_arcs() {
     let mut doc = GeometryDocument::new();
     let stroke = ipc2581::types::Stroke {
-        path: StrokePath::Polyline(ipc2581::types::Polyline {
-            begin: ipc2581::types::Point { x: 1.0, y: 0.0 },
-            steps: vec![PolyStep::Curve(ipc2581::types::PolyStepCurve {
+        path: StrokePath::Polyline(ipc2581::types::Polyline::new(
+            ipc2581::types::Point { x: 1.0, y: 0.0 },
+            [PolyStep::Curve(ipc2581::types::PolyStepCurve {
                 point: ipc2581::types::Point { x: 0.0, y: 1.0 },
                 center: ipc2581::types::Point { x: 0.0, y: 0.0 },
                 clockwise: false,
             })],
-        }),
+        )),
         line_desc: Some(LineDescGroup::Inline(ipc2581::types::LineDesc {
             line_width: 0.2,
             line_end: LineEnd::Round,
@@ -802,14 +802,14 @@ fn lowers_user_special_lines_polylines_and_line_desc_refs() {
                 fill_desc_ref: None,
             },
             ipc2581::types::UserShape {
-                shape: UserShapeType::Polyline(ipc2581::types::Polyline {
-                    begin: ipc2581::types::Point { x: 1.0, y: 0.0 },
-                    steps: vec![PolyStep::Curve(ipc2581::types::PolyStepCurve {
+                shape: UserShapeType::Polyline(ipc2581::types::Polyline::new(
+                    ipc2581::types::Point { x: 1.0, y: 0.0 },
+                    [PolyStep::Curve(ipc2581::types::PolyStepCurve {
                         point: ipc2581::types::Point { x: 0.0, y: 1.0 },
                         center: ipc2581::types::Point { x: 0.0, y: 0.0 },
                         clockwise: false,
                     })],
-                }),
+                )),
                 line_desc: None,
                 line_desc_ref: Some(entry.id),
                 fill_desc: None,
@@ -1099,9 +1099,9 @@ fn lowers_butterfly_with_removed_quadrants() {
 }
 
 fn rect_polygon(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ipc2581::types::Polygon {
-    ipc2581::types::Polygon {
-        begin: ipc2581::types::Point { x: min_x, y: min_y },
-        steps: vec![
+    ipc2581::types::Polygon::new(
+        ipc2581::types::Point { x: min_x, y: min_y },
+        [
             PolyStep::Segment(ipc2581::types::PolyStepSegment {
                 point: ipc2581::types::Point { x: max_x, y: min_y },
             }),
@@ -1115,7 +1115,7 @@ fn rect_polygon(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ipc2581::type
                 point: ipc2581::types::Point { x: min_x, y: min_y },
             }),
         ],
-    }
+    )
 }
 
 fn thermal(

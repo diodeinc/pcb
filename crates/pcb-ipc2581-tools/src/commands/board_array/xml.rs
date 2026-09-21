@@ -277,22 +277,22 @@ pub(super) fn write_generated_layer_features(
 }
 
 pub(crate) fn rectangle_polygon(width_mm: f64, height_mm: f64) -> Polygon {
-    Polygon {
-        begin: IpcPoint { x: 0.0, y: 0.0 },
-        steps: vec![
+    Polygon::new(
+        IpcPoint { x: 0.0, y: 0.0 },
+        [
             poly_segment(width_mm, 0.0),
             poly_segment(width_mm, height_mm),
             poly_segment(0.0, height_mm),
         ],
-    }
+    )
 }
 
 pub(super) fn rounded_rectangle_polygon(width_mm: f64, height_mm: f64, radius_mm: f64) -> Polygon {
     let radius = radius_mm.min(width_mm / 2.0).min(height_mm / 2.0);
     let begin = IpcPoint { x: 0.0, y: radius };
-    Polygon {
+    Polygon::new(
         begin,
-        steps: vec![
+        [
             poly_segment(0.0, height_mm - radius),
             poly_curve(radius, height_mm, radius, height_mm - radius),
             poly_segment(width_mm - radius, height_mm),
@@ -307,7 +307,7 @@ pub(super) fn rounded_rectangle_polygon(width_mm: f64, height_mm: f64, radius_mm
             poly_segment(radius, 0.0),
             poly_curve(0.0, radius, radius, radius),
         ],
-    }
+    )
 }
 
 pub(super) fn poly_segment(x: f64, y: f64) -> PolyStep {

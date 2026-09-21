@@ -462,8 +462,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(profile.cutouts.len(), 2);
-        assert_eq!(profile.cutouts[0].begin, Point { x: 2.0, y: 3.0 });
-        assert_eq!(profile.cutouts[1].begin, Point { x: 8.0, y: 3.0 });
+        assert_eq!(profile.cutouts[0].begin(), Point { x: 2.0, y: 3.0 });
+        assert_eq!(profile.cutouts[1].begin(), Point { x: 8.0, y: 3.0 });
     }
 
     #[test]
@@ -596,7 +596,7 @@ mod tests {
         let ecad::StrokePath::Polyline(curved) = &curved.path else {
             panic!("expected a polyline: {curved:?}");
         };
-        assert!(matches!(curved.steps[0], PolyStep::Curve(_)));
+        assert!(matches!(curved.steps().next(), Some(PolyStep::Curve(_))));
     }
 
     #[test]
@@ -694,8 +694,8 @@ mod tests {
             panic!("expected a polyline: {stroke:?}");
         };
         assert!(matches!(stroke.line_desc, Some(LineDescGroup::Ref(_))));
-        assert_eq!(polyline.begin, Point { x: 11.0, y: 20.0 });
-        assert!(matches!(polyline.steps[0], PolyStep::Curve(_)));
+        assert_eq!(polyline.begin(), Point { x: 11.0, y: 20.0 });
+        assert!(matches!(polyline.steps().next(), Some(PolyStep::Curve(_))));
     }
 
     #[test]
@@ -748,13 +748,13 @@ mod tests {
         else {
             panic!("expected a polygon and an inline user primitive");
         };
-        assert_eq!(polygon.begin, Point { x: 10.0, y: 20.0 });
+        assert_eq!(polygon.begin(), Point { x: 10.0, y: 20.0 });
         assert!(matches!(
-            polygon.steps[1],
-            PolyStep::Curve(PolyStepCurve {
+            polygon.steps().nth(1),
+            Some(PolyStep::Curve(PolyStepCurve {
                 center: Point { x: 10.0, y: 20.0 },
                 ..
-            })
+            }))
         ));
         assert_eq!(user_primitive.x, 10.0);
         assert_eq!(user_primitive.y, 20.0);
@@ -762,7 +762,7 @@ mod tests {
         let UserShapeType::Contour(contour) = &user_special.shapes[0].shape else {
             panic!("expected contour");
         };
-        assert_eq!(contour.polygon.begin, Point { x: 2.0, y: 0.0 });
+        assert_eq!(contour.polygon.begin(), Point { x: 2.0, y: 0.0 });
     }
 
     #[test]
@@ -1133,7 +1133,7 @@ mod tests {
         assert_eq!(package.height, Some(2.54));
         assert_eq!(package.negative_body_extension, Some(0.254));
         let outline = package.outline.as_ref().unwrap();
-        assert_eq!(outline.polygon.begin.x, -2.54);
+        assert_eq!(outline.polygon.begin().x, -2.54);
         assert_eq!(outline.polygon_xform.unwrap().x_offset, 0.254);
         assert!(outline.polygon_xform.unwrap().mirror);
         assert_eq!(outline.polygon_line_desc.unwrap().line_width, 0.0762);

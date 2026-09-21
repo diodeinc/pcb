@@ -401,14 +401,7 @@ pub(super) fn lower_user_shape(
         }
         UserShapeType::Polyline(polyline) => {
             strokes = true;
-            push_open_contour(
-                doc,
-                transform,
-                poly_step_commands(
-                    Point::new(polyline.begin.x, polyline.begin.y),
-                    &polyline.steps,
-                ),
-            );
+            push_open_contour(doc, transform, poly_step_commands(polyline));
         }
         UserShapeType::StandardPrimitive(primitive) => {
             void = lower_standard_primitive(context, doc, primitive, transform)?;
@@ -630,9 +623,10 @@ pub(super) fn paint_paths(
     }
 }
 
-pub(super) fn poly_step_commands(begin: Point, steps: &[PolyStep]) -> Vec<PathCmd> {
-    std::iter::once(PathCmd::move_to(begin))
-        .chain(steps.iter().map(|step| match step {
+pub(super) fn poly_step_commands(polygon: &ipc2581::types::Polygon) -> Vec<PathCmd> {
+    let begin = polygon.begin();
+    std::iter::once(PathCmd::move_to(Point::new(begin.x, begin.y)))
+        .chain(polygon.steps().map(|step| match step {
             PolyStep::Segment(segment) => {
                 PathCmd::line_to(Point::new(segment.point.x, segment.point.y))
             }
@@ -658,7 +652,7 @@ pub(super) fn arc_step(
 }
 
 pub(super) fn polygon_contour(polygon: &ipc2581::types::Polygon) -> ContourBuf {
-    let mut cmds = poly_step_commands(Point::new(polygon.begin.x, polygon.begin.y), &polygon.steps);
+    let mut cmds = poly_step_commands(polygon);
     cmds.push(PathCmd::close());
     ContourBuf::new(cmds).with_consistent_arcs()
 }

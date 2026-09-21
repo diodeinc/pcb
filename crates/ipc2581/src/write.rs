@@ -206,8 +206,9 @@ fn polygon_element(writer: &mut XmlWriter, name: &str, units: Units, polygon: &P
 
 /// Write the `PolyBegin` and steps of a polygon or polyline.
 fn poly_steps(writer: &mut XmlWriter, units: Units, polygon: &Polygon) {
-    location(writer, "PolyBegin", polygon.begin.x, polygon.begin.y, units);
-    for step in &polygon.steps {
+    let begin = polygon.begin();
+    location(writer, "PolyBegin", begin.x, begin.y, units);
+    for step in polygon.steps() {
         match step {
             PolyStep::Segment(segment) => {
                 location(
@@ -218,7 +219,7 @@ fn poly_steps(writer: &mut XmlWriter, units: Units, polygon: &Polygon) {
                     units,
                 );
             }
-            PolyStep::Curve(curve) => poly_step_curve(writer, units, curve),
+            PolyStep::Curve(curve) => poly_step_curve(writer, units, &curve),
         }
     }
 }
@@ -266,9 +267,9 @@ mod tests {
     #[test]
     fn contour_writes_polygon_and_cutout() {
         let contour = Contour {
-            polygon: Polygon {
-                begin: crate::types::Point { x: 0.0, y: 0.0 },
-                steps: vec![
+            polygon: Polygon::new(
+                crate::types::Point { x: 0.0, y: 0.0 },
+                [
                     PolyStep::Segment(crate::types::PolyStepSegment {
                         point: crate::types::Point { x: 2.0, y: 0.0 },
                     }),
@@ -276,10 +277,10 @@ mod tests {
                         point: crate::types::Point { x: 0.0, y: 0.0 },
                     }),
                 ],
-            },
-            cutouts: vec![Polygon {
-                begin: crate::types::Point { x: 0.5, y: 0.0 },
-                steps: vec![
+            ),
+            cutouts: vec![Polygon::new(
+                crate::types::Point { x: 0.5, y: 0.0 },
+                [
                     PolyStep::Segment(crate::types::PolyStepSegment {
                         point: crate::types::Point { x: 1.0, y: 0.0 },
                     }),
@@ -287,7 +288,7 @@ mod tests {
                         point: crate::types::Point { x: 0.5, y: 0.0 },
                     }),
                 ],
-            }],
+            )],
         };
         let mut writer = XmlWriter::new();
 
@@ -320,12 +321,12 @@ mod tests {
                 center: point(0.0, 0.0),
                 clockwise: false,
             }),
-            StrokePath::Polyline(Polygon {
-                begin: point(0.0, 0.0),
-                steps: vec![PolyStep::Segment(crate::types::PolyStepSegment {
+            StrokePath::Polyline(Polygon::new(
+                point(0.0, 0.0),
+                [PolyStep::Segment(crate::types::PolyStepSegment {
                     point: point(0.0, 2.0),
                 })],
-            }),
+            )),
         ];
         let mut writer = XmlWriter::new();
         for path in &paths {

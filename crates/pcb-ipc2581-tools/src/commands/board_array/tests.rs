@@ -2734,11 +2734,9 @@ fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
     )
     .unwrap();
     let points = |polygon: &Polygon| {
-        std::iter::once(polygon.begin)
-            .chain(polygon.steps.iter().map(|step| match step {
-                PolyStep::Segment(segment) => segment.point,
-                PolyStep::Curve(curve) => curve.point,
-            }))
+        polygon
+            .points()
+            .iter()
             .map(|p| (p.x, p.y))
             .collect::<Vec<_>>()
     };

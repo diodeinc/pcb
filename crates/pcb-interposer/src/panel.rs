@@ -63,8 +63,9 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
 
     // Sheet dimensions from the profile bounding box; the generator anchors
     // the array at the origin.
-    let mut points: Vec<[f64; 2]> = vec![[profile.polygon.begin.x, profile.polygon.begin.y]];
-    for poly_step in &profile.polygon.steps {
+    let begin = profile.polygon.begin();
+    let mut points: Vec<[f64; 2]> = vec![[begin.x, begin.y]];
+    for poly_step in profile.polygon.steps() {
         match poly_step {
             PolyStep::Segment(segment) => points.push([segment.point.x, segment.point.y]),
             PolyStep::Curve(curve) => points.push([curve.point.x, curve.point.y]),
@@ -99,8 +100,8 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
     let flip = |p: [f64; 2]| [p[0], height - p[1]];
 
     let mut outline = Vec::new();
-    let mut cursor = [profile.polygon.begin.x, profile.polygon.begin.y];
-    for poly_step in &profile.polygon.steps {
+    let mut cursor = [begin.x, begin.y];
+    for poly_step in profile.polygon.steps() {
         match poly_step {
             PolyStep::Segment(segment) => {
                 let end = [segment.point.x, segment.point.y];

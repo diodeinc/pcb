@@ -13,8 +13,7 @@ struct ShapeStyle {
 
 /// A `Polygon`, `Polyline` or `Cutout` read in one pass over its children.
 struct Poly {
-    begin: Point,
-    steps: Vec<PolyStep>,
+    polygon: Polygon,
     xform: Option<Xform>,
     style: ShapeStyle,
 }
@@ -771,33 +770,39 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_polygon(&mut self, node: &Node, units: Units) -> Result<Polygon> {
-        let Poly { begin, steps, .. } = self.parse_poly(node, units, "PolyBegin")?;
-        Ok(Polygon { begin, steps })
+        Ok(self.parse_poly(node, units, "PolyBegin")?.polygon)
     }
 
     fn parse_poly(&mut self, node: &Node, units: Units, missing: &'static str) -> Result<Poly> {
+        // Nearly every child is a point, so their count sizes the table once.
+        let mut points = Vec::with_capacity(self.element_children(node).count());
+        let mut curves = Vec::new();
         let mut begin = None;
-        let mut steps = Vec::new();
         let mut xform = None;
         let mut style = ShapeStyle::default();
+        // `PolyBegin` comes first in every file seen but is accepted anywhere.
+        points.push(Point { x: 0.0, y: 0.0 });
         for child in self.element_children(node) {
             match self.name(&child) {
                 "PolyBegin" => begin = Some(self.point(&child, "x", "y", "PolyBegin", units)?),
-                "PolyStepSegment" => steps.push(PolyStep::Segment(PolyStepSegment {
-                    point: self.point(&child, "x", "y", "PolyStepSegment", units)?,
-                })),
-                "PolyStepCurve" => steps.push(PolyStep::Curve(PolyStepCurve {
-                    point: self.point(&child, "x", "y", "PolyStepCurve", units)?,
-                    center: self.point(&child, "centerX", "centerY", "PolyStepCurve", units)?,
-                    clockwise: self.parse_bool_attr(&child, "clockwise")?,
-                })),
+                "PolyStepSegment" => {
+                    points.push(self.point(&child, "x", "y", "PolyStepSegment", units)?)
+                }
+                "PolyStepCurve" => {
+                    curves.push(PolyCurve {
+                        point: points.len() as u32,
+                        clockwise: self.parse_bool_attr(&child, "clockwise")?,
+                        center: self.point(&child, "centerX", "centerY", "PolyStepCurve", units)?,
+                    });
+                    points.push(self.point(&child, "x", "y", "PolyStepCurve", units)?);
+                }
                 "Xform" => xform = Some(self.parse_xform(&child, units)?),
                 _ => self.parse_style_child(&child, units, &mut style)?,
             }
         }
+        points[0] = begin.ok_or(Ipc2581Error::MissingElement(missing))?;
         Ok(Poly {
-            begin: begin.ok_or(Ipc2581Error::MissingElement(missing))?,
-            steps,
+            polygon: Polygon { points, curves },
             xform,
             style,
         })
@@ -910,22 +915,13 @@ impl<'a> Parser<'a> {
     fn parse_user_shape(&mut self, node: &Node, units: Units) -> Result<Option<UserShape>> {
         let (shape, style) = match self.name(node) {
             "Polygon" => {
-                let Poly {
-                    begin,
-                    steps,
-                    style,
-                    ..
-                } = self.parse_poly(node, units, "PolyBegin")?;
-                (UserShapeType::Polygon(Polygon { begin, steps }), style)
+                let Poly { polygon, style, .. } = self.parse_poly(node, units, "PolyBegin")?;
+                (UserShapeType::Polygon(polygon), style)
             }
             "Polyline" => {
-                let Poly {
-                    begin,
-                    steps,
-                    style,
-                    ..
-                } = self.parse_poly(node, units, "PolyBegin in Polyline")?;
-                (UserShapeType::Polyline(Polyline { begin, steps }), style)
+                let Poly { polygon, style, .. } =
+                    self.parse_poly(node, units, "PolyBegin in Polyline")?;
+                (UserShapeType::Polyline(polygon), style)
             }
             "Line" => (
                 UserShapeType::Line(Line {
@@ -1707,15 +1703,14 @@ impl<'a> Parser<'a> {
             .next()
             .ok_or(Ipc2581Error::MissingElement("Polygon in Package Outline"))?;
         let Poly {
-            begin,
-            steps,
+            polygon,
             xform,
             style,
         } = self.parse_poly(&polygon_node, units, "PolyBegin")?;
         let line_desc =
             self.parse_line_desc_group(node, units, "LineDescGroup in Package Outline")?;
         Ok(PackageOutline {
-            polygon: Polygon { begin, steps },
+            polygon,
             polygon_xform: xform,
             polygon_line_desc: style.line_desc,
             polygon_line_desc_ref: style.line_desc_ref,
@@ -2364,10 +2359,9 @@ impl<'a> Parser<'a> {
             y: point.y + y,
         };
         let path = match stroked.shape {
-            UserShapeType::Polygon(polygon) => {
-                return Ok(ecad::SetFeature::Polygon(Self::translate_polygon(
-                    polygon, at,
-                )));
+            UserShapeType::Polygon(mut polygon) => {
+                polygon.translate(at);
+                return Ok(ecad::SetFeature::Polygon(polygon));
             }
             UserShapeType::Line(line) => ecad::StrokePath::Line(Line {
                 start: moved(line.start),
@@ -2379,24 +2373,13 @@ impl<'a> Parser<'a> {
                 center: moved(arc.center),
                 clockwise: arc.clockwise,
             }),
-            UserShapeType::Polyline(polyline) => {
-                ecad::StrokePath::Polyline(Self::translate_polygon(polyline, at))
+            UserShapeType::Polyline(mut polyline) => {
+                polyline.translate(at);
+                ecad::StrokePath::Polyline(polyline)
             }
             _ => unreachable!("parse_user_shape yields only stroked shapes and polygons"),
         };
         Ok(ecad::SetFeature::Stroke(ecad::Stroke { path, line_desc }))
-    }
-
-    fn translate_polygon(mut polygon: Polygon, offset: Point) -> Polygon {
-        let points = polygon.steps.iter_mut().flat_map(|step| match step {
-            PolyStep::Segment(segment) => [Some(&mut segment.point), None],
-            PolyStep::Curve(curve) => [Some(&mut curve.point), Some(&mut curve.center)],
-        });
-        for point in points.flatten().chain([&mut polygon.begin]) {
-            point.x += offset.x;
-            point.y += offset.y;
-        }
-        polygon
     }
 
     fn parse_hole(&mut self, node: &Node) -> Result<Hole> {
@@ -2528,18 +2511,13 @@ impl<'a> Parser<'a> {
     /// in an attribute.
     fn parse_set_polyline(&mut self, node: &Node) -> Result<ecad::Stroke> {
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
-        let Poly {
-            begin,
-            steps,
-            style,
-            ..
-        } = self.parse_poly(node, units, "PolyBegin in Polyline")?;
+        let Poly { polygon, style, .. } = self.parse_poly(node, units, "PolyBegin in Polyline")?;
         let reference = style
             .line_desc_ref
             .or_else(|| self.optional_attr(node, "lineDescRef"));
         let line_desc = line_desc_group(reference, style.line_desc);
         Ok(ecad::Stroke {
-            path: ecad::StrokePath::Polyline(Polyline { begin, steps }),
+            path: ecad::StrokePath::Polyline(polygon),
             line_desc,
         })
     }
