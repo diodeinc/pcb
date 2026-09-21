@@ -5557,7 +5557,7 @@ mod tests {
                 ArtworkScope::ArrayFlattened,
             )
             .expect("panel layer should extract");
-        crate::dialects::ipc::process::compose_for_rendering(&mut doc, Resolution::default())
+        crate::dialects::ipc::process::normalize_for_artwork(&mut doc, Resolution::default())
             .unwrap();
 
         let layer = &doc.layers[0];

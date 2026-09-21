@@ -194,7 +194,6 @@ pub enum FeatureKind {
     Polygon,
     Slot,
     Trace,
-    FlattenedBucket,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

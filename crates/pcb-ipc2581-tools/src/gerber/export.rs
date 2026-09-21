@@ -2832,8 +2832,8 @@ mod tests {
         for (function, filename) in [("SIGNAL", "F_Cu.gtl"), ("LEGEND", "F_SilkS.gto")] {
             let ipc = ipc::Ipc2581::parse(&source.replace("SIGNAL", function)).unwrap();
 
-            // Check source import and both normalization paths before exporting.
-            let doc = pcb_ir::import::ipc2581::extract_layer(&ipc, "TOP", resolution).unwrap();
+            // Check source import and normalization before exporting.
+            let mut doc = pcb_ir::import::ipc2581::extract_layer(&ipc, "TOP", resolution).unwrap();
             let image = |doc: &pcb_ir::import::ipc2581::GeometryDocument| {
                 pcb_ir::geom::ContourSet::from_painted_paths(
                     &doc.arena,
@@ -2844,21 +2844,13 @@ mod tests {
                 )
                 .unwrap()
             };
-            for (mut doc, rendering) in [(doc.clone(), false), (doc, true)] {
-                assert!((image(&doc).area() - 31.0).abs() < 1e-6);
-                if rendering {
-                    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut doc, resolution)
-                        .unwrap();
-                } else {
-                    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc, resolution)
-                        .unwrap();
-                }
-                let region = image(&doc);
-                assert!((region.area() - 31.0).abs() < 1e-6);
-                assert!(!region.contains_point(pcb_ir::geom::Point::new(1.5, 2.5)));
-                assert!(region.contains_point(pcb_ir::geom::Point::new(2.5, 2.5)));
-                assert!(region.contains_point(pcb_ir::geom::Point::new(4.5, 1.0)));
-            }
+            assert!((image(&doc).area() - 31.0).abs() < 1e-6);
+            pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc, resolution).unwrap();
+            let region = image(&doc);
+            assert!((region.area() - 31.0).abs() < 1e-6);
+            assert!(!region.contains_point(pcb_ir::geom::Point::new(1.5, 2.5)));
+            assert!(region.contains_point(pcb_ir::geom::Point::new(2.5, 2.5)));
+            assert!(region.contains_point(pcb_ir::geom::Point::new(4.5, 1.0)));
 
             let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
             let layer = files.iter().find(|file| file.filename == filename).unwrap();
@@ -3239,7 +3231,7 @@ mod tests {
         }
 
         let mut layer = geometry::extract_layer(&ipc, "F.Cu", resolution).unwrap();
-        pcb_ir::dialects::ipc::process::compose_for_rendering(&mut layer, resolution).unwrap();
+        pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut layer, resolution).unwrap();
         let artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
             &layer,
             0,
@@ -3251,22 +3243,6 @@ mod tests {
         mask.validate().unwrap();
         assert!(
             pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::layer(0)).contains("<svg")
-        );
-
-        pcb_ir::dialects::ipc::process::flatten_layers_to_masks(&mut layer, resolution).unwrap();
-        let flat_artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
-            &layer,
-            0,
-            LayerRole::Copper,
-            pcb_ir::dialects::Side::Top,
-        );
-        flat_artwork.validate().unwrap();
-        let flat_mask =
-            pcb_ir::dialects::artwork::compose_to_mask(&flat_artwork, resolution).unwrap();
-        flat_mask.validate().unwrap();
-        assert!(
-            pcb_ir::render::svg(&flat_mask, &pcb_ir::render::RenderOptions::layer(0))
-                .contains("<svg")
         );
     }
 }
