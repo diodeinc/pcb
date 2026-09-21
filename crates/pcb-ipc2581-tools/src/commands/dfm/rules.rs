@@ -12,7 +12,7 @@ use super::design::HoleClass;
 use super::pdk::{
     CopperWeight, HoleKind, LayerPosition, Length, LengthCase, LengthLimit, Pdk, PlatedHoleKind,
     Profile, ProfileStatus, Ratio, RatioCase, RatioLimit, RuleConditions, RuleMetadata,
-    SlotPlating, copper_weight_class,
+    SelectingRule, SlotPlating, copper_weight_class,
 };
 use super::report::{Severity, ViewRecipe};
 
@@ -605,21 +605,42 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         }
     }
 
-    for rule in &pdk.rules.drilling.hole_diameter {
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
-            format!(
-                "Minimum {} hole diameter",
-                hole_class(rule.select.hole).label()
-            ),
-            RuleKind::HoleDiameter(hole_class(rule.select.hole)),
-        ));
+    // Every selecting family lowers alike; what a rule selects names its
+    // kind and its title.
+    fn selecting<Select>(
+        family: &[SelectingRule<Select>],
+        (profile_name, profile): (&str, &Profile),
+        describe: impl Fn(&Select) -> (String, RuleKind),
+    ) -> Vec<Rule> {
+        family
+            .iter()
+            .flat_map(|rule| {
+                let (title, kind) = describe(&rule.select);
+                lower_length_rule(
+                    &rule.metadata,
+                    rule.limit.as_ref(),
+                    &rule.cases,
+                    profile_name,
+                    profile,
+                    title,
+                    kind,
+                )
+            })
+            .collect()
     }
-    for rule in &pdk.rules.drilling.hole_aspect_ratio {
+    let (drilling, copper, selected) = (
+        &pdk.rules.drilling,
+        &pdk.rules.copper,
+        (profile_name, profile),
+    );
+    rules.extend(selecting(&drilling.hole_diameter, selected, |select| {
+        let class = hole_class(select.hole);
+        (
+            format!("Minimum {} hole diameter", class.label()),
+            RuleKind::HoleDiameter(class),
+        )
+    }));
+    for rule in &drilling.hole_aspect_ratio {
         let class = plated_hole_class(rule.select.hole);
         rules.extend(lower_ratio_rule(
             &rule.metadata,
@@ -631,101 +652,77 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
             RuleKind::HoleAspectRatio(class),
         ));
     }
-    for rule in &pdk.rules.drilling.slot_width {
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
-            format!(
-                "Minimum {} routed slot width",
-                slot_label(rule.select.plating)
-            ),
-            RuleKind::SlotWidth(rule.select.plating),
-        ));
-    }
-    for rule in &pdk.rules.drilling.hole_to_hole_clearance {
-        let first = hole_class(rule.select.first_hole);
-        let second = hole_class(rule.select.second_hole);
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
-            format!(
-                "Minimum {}-to-{} hole clearance",
-                first.label(),
-                second.label()
-            ),
-            RuleKind::HolePairClearance(first, second),
-        ));
-    }
-    for rule in &pdk.rules.drilling.hole_to_board_edge_clearance {
-        let class = hole_class(rule.select.hole);
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
-            format!("Minimum {} hole-to-board-edge clearance", class.label()),
-            RuleKind::HoleToBoardEdgeClearance(class),
-        ));
-    }
-    for rule in &pdk.rules.drilling.slot_to_board_edge_clearance {
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
-            format!(
-                "Minimum {} routed-slot-to-board-edge clearance",
-                slot_label(rule.select.plating)
-            ),
-            RuleKind::SlotToBoardEdgeClearance(rule.select.plating),
-        ));
-    }
-    for rule in &pdk.rules.copper.annular_ring {
-        let class = plated_hole_class(rule.select.hole);
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
+    rules.extend(selecting(&drilling.slot_width, selected, |select| {
+        (
+            format!("Minimum {} routed slot width", slot_label(select.plating)),
+            RuleKind::SlotWidth(select.plating),
+        )
+    }));
+    rules.extend(selecting(
+        &drilling.hole_to_hole_clearance,
+        selected,
+        |select| {
+            let (first, second) = (
+                hole_class(select.first_hole),
+                hole_class(select.second_hole),
+            );
+            (
+                format!(
+                    "Minimum {}-to-{} hole clearance",
+                    first.label(),
+                    second.label()
+                ),
+                RuleKind::HolePairClearance(first, second),
+            )
+        },
+    ));
+    rules.extend(selecting(
+        &drilling.hole_to_board_edge_clearance,
+        selected,
+        |select| {
+            let class = hole_class(select.hole);
+            (
+                format!("Minimum {} hole-to-board-edge clearance", class.label()),
+                RuleKind::HoleToBoardEdgeClearance(class),
+            )
+        },
+    ));
+    rules.extend(selecting(
+        &drilling.slot_to_board_edge_clearance,
+        selected,
+        |select| {
+            (
+                format!(
+                    "Minimum {} routed-slot-to-board-edge clearance",
+                    slot_label(select.plating)
+                ),
+                RuleKind::SlotToBoardEdgeClearance(select.plating),
+            )
+        },
+    ));
+    rules.extend(selecting(&copper.annular_ring, selected, |select| {
+        let class = plated_hole_class(select.hole);
+        (
             format!("Minimum {} annular ring", class.label()),
             RuleKind::AnnularRing(class),
-        ));
-    }
-    for rule in &pdk.rules.copper.hole_clearance {
-        let class = hole_class(rule.select.hole);
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
+        )
+    }));
+    rules.extend(selecting(&copper.hole_clearance, selected, |select| {
+        let class = hole_class(select.hole);
+        (
             format!("Minimum {} hole-to-copper clearance", class.label()),
             RuleKind::HoleToCopperClearance(class),
-        ));
-    }
-    for rule in &pdk.rules.copper.slot_clearance {
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
+        )
+    }));
+    rules.extend(selecting(&copper.slot_clearance, selected, |select| {
+        (
             format!(
                 "Minimum {} slot-to-copper clearance",
-                slot_label(rule.select.plating)
+                slot_label(select.plating)
             ),
-            RuleKind::SlotToCopperClearance(rule.select.plating),
-        ));
-    }
+            RuleKind::SlotToCopperClearance(select.plating),
+        )
+    }));
     for (ruleset, title, kind) in [
         (
             &pdk.rules.copper.plated_slot_enclosure,

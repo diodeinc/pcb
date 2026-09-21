@@ -71,7 +71,7 @@ impl Pdk {
             "profile.support.copper_layers.maximum".to_owned(),
         ]);
         for rule in self.rules.all() {
-            let metadata = rule.metadata();
+            let metadata = rule.metadata;
             if metadata.id.trim().is_empty() {
                 bail!("PDK rule ids must not be empty");
             }
@@ -300,186 +300,89 @@ pub struct Rules {
 
 impl Rules {
     fn all(&self) -> impl Iterator<Item = RuleDefinition<'_>> {
-        self.drilling
-            .hole_diameter
-            .iter()
-            .map(RuleDefinition::HoleDiameter)
+        fn selecting<'a, Select: 'a>(
+            rules: &'a [SelectingRule<Select>],
+            copper_conditions: bool,
+        ) -> impl Iterator<Item = RuleDefinition<'a>> {
+            rules.iter().map(move |rule| RuleDefinition {
+                metadata: &rule.metadata,
+                limits: Limits::Length(rule.limit.as_ref(), &rule.cases),
+                copper_conditions,
+            })
+        }
+        fn lengths(
+            rules: &[LengthRule],
+            copper_conditions: bool,
+        ) -> impl Iterator<Item = RuleDefinition<'_>> {
+            rules.iter().map(move |rule| RuleDefinition {
+                metadata: &rule.metadata,
+                limits: Limits::Length(rule.limit.as_ref(), &rule.cases),
+                copper_conditions,
+            })
+        }
+        let (drilling, copper) = (&self.drilling, &self.copper);
+        selecting(&drilling.hole_diameter, false)
             .chain(
-                self.drilling
+                drilling
                     .hole_aspect_ratio
                     .iter()
-                    .map(RuleDefinition::HoleAspectRatio),
+                    .map(|rule| RuleDefinition {
+                        metadata: &rule.metadata,
+                        limits: Limits::Ratio(rule.limit.as_ref(), &rule.cases),
+                        copper_conditions: false,
+                    }),
             )
-            .chain(
-                self.drilling
-                    .slot_width
-                    .iter()
-                    .map(RuleDefinition::SlotWidth),
-            )
-            .chain(
-                self.drilling
-                    .hole_to_hole_clearance
-                    .iter()
-                    .map(RuleDefinition::HolePair),
-            )
-            .chain(
-                self.drilling
-                    .hole_to_board_edge_clearance
-                    .iter()
-                    .map(RuleDefinition::HoleToBoardEdge),
-            )
-            .chain(
-                self.drilling
-                    .slot_to_board_edge_clearance
-                    .iter()
-                    .map(RuleDefinition::SlotToBoardEdge),
-            )
-            .chain(
-                self.copper
-                    .plated_slot_enclosure
-                    .iter()
-                    .map(RuleDefinition::CopperLength),
-            )
-            .chain(
-                self.copper
-                    .annular_ring
-                    .iter()
-                    .map(RuleDefinition::AnnularRing),
-            )
-            .chain(
-                self.copper
-                    .hole_clearance
-                    .iter()
-                    .map(RuleDefinition::HoleClearance),
-            )
-            .chain(
-                self.copper
-                    .slot_clearance
-                    .iter()
-                    .map(RuleDefinition::SlotClearance),
-            )
-            .chain(
-                self.copper
-                    .feature_width
-                    .iter()
-                    .map(RuleDefinition::CopperLength),
-            )
-            .chain(
-                self.copper
-                    .clearance
-                    .iter()
-                    .map(RuleDefinition::CopperLength),
-            )
-            .chain(
-                self.copper
-                    .board_edge_clearance
-                    .iter()
-                    .map(RuleDefinition::CopperLength),
-            )
-            .chain(
-                self.copper
-                    .vscore_clearance
-                    .iter()
-                    .map(RuleDefinition::CopperLength),
-            )
-            .chain(self.soldermask.web.iter().map(RuleDefinition::OtherLength))
-            .chain(
-                self.panelization
-                    .board_spacing
-                    .iter()
-                    .map(RuleDefinition::OtherLength),
-            )
+            .chain(selecting(&drilling.slot_width, false))
+            .chain(selecting(&drilling.hole_to_hole_clearance, false))
+            .chain(selecting(&drilling.hole_to_board_edge_clearance, false))
+            .chain(selecting(&drilling.slot_to_board_edge_clearance, false))
+            .chain(lengths(&copper.plated_slot_enclosure, true))
+            .chain(selecting(&copper.annular_ring, true))
+            .chain(selecting(&copper.hole_clearance, true))
+            .chain(selecting(&copper.slot_clearance, true))
+            .chain(lengths(&copper.feature_width, true))
+            .chain(lengths(&copper.clearance, true))
+            .chain(lengths(&copper.board_edge_clearance, true))
+            .chain(lengths(&copper.vscore_clearance, true))
+            .chain(lengths(&self.soldermask.web, false))
+            .chain(lengths(&self.panelization.board_spacing, false))
     }
 }
 
-enum RuleDefinition<'a> {
-    HoleDiameter(&'a HoleDiameterRule),
-    HoleAspectRatio(&'a HoleAspectRatioRule),
-    SlotWidth(&'a SlotWidthRule),
-    HolePair(&'a HolePairRule),
-    HoleToBoardEdge(&'a HoleToBoardEdgeClearanceRule),
-    SlotToBoardEdge(&'a SlotToBoardEdgeClearanceRule),
-    AnnularRing(&'a AnnularRingRule),
-    HoleClearance(&'a HoleClearanceRule),
-    SlotClearance(&'a SlotClearanceRule),
-    CopperLength(&'a LengthRule),
-    OtherLength(&'a LengthRule),
+/// What validation reads of any authored rule, whatever its kind.
+struct RuleDefinition<'a> {
+    metadata: &'a RuleMetadata,
+    limits: Limits<'a>,
+    /// Whether cases may condition on the copper layer measured.
+    copper_conditions: bool,
+}
+
+enum Limits<'a> {
+    Length(Option<&'a LengthLimit>, &'a [LengthCase]),
+    Ratio(Option<&'a RatioLimit>, &'a [RatioCase]),
 }
 
 impl RuleDefinition<'_> {
-    fn metadata(&self) -> &RuleMetadata {
-        match self {
-            Self::HoleDiameter(rule) => &rule.metadata,
-            Self::HoleAspectRatio(rule) => &rule.metadata,
-            Self::SlotWidth(rule) => &rule.metadata,
-            Self::HolePair(rule) => &rule.metadata,
-            Self::HoleToBoardEdge(rule) => &rule.metadata,
-            Self::SlotToBoardEdge(rule) => &rule.metadata,
-            Self::AnnularRing(rule) => &rule.metadata,
-            Self::HoleClearance(rule) => &rule.metadata,
-            Self::SlotClearance(rule) => &rule.metadata,
-            Self::CopperLength(rule) | Self::OtherLength(rule) => &rule.metadata,
-        }
-    }
-
-    fn limits(&self) -> (Option<&LengthLimit>, &[LengthCase]) {
-        match self {
-            Self::HoleDiameter(rule) => (rule.limit.as_ref(), &rule.cases),
-            Self::HoleAspectRatio(_) => {
-                unreachable!("an aspect-ratio rule has no length limits")
-            }
-            Self::SlotWidth(rule) => (rule.limit.as_ref(), &rule.cases),
-            Self::HolePair(rule) => (rule.limit.as_ref(), &rule.cases),
-            Self::HoleToBoardEdge(rule) => (rule.limit.as_ref(), &rule.cases),
-            Self::SlotToBoardEdge(rule) => (rule.limit.as_ref(), &rule.cases),
-            Self::AnnularRing(rule) => (rule.limit.as_ref(), &rule.cases),
-            Self::HoleClearance(rule) => (rule.limit.as_ref(), &rule.cases),
-            Self::SlotClearance(rule) => (rule.limit.as_ref(), &rule.cases),
-            Self::CopperLength(rule) | Self::OtherLength(rule) => {
-                (rule.limit.as_ref(), &rule.cases)
-            }
-        }
-    }
-
     fn validate(&self) -> Result<()> {
-        let metadata = self.metadata();
-        if let Self::HoleAspectRatio(rule) = self {
-            return validate_ratio_limits(metadata, rule.limit.as_ref(), &rule.cases);
+        match self.limits {
+            Limits::Length(limit, cases) => {
+                validate_limits(self.metadata, limit, cases, self.copper_conditions)
+            }
+            Limits::Ratio(limit, cases) => validate_ratio_limits(self.metadata, limit, cases),
         }
-        let (limit, cases) = self.limits();
-        validate_limits(
-            metadata,
-            limit,
-            cases,
-            matches!(
-                self,
-                Self::AnnularRing(_)
-                    | Self::HoleClearance(_)
-                    | Self::SlotClearance(_)
-                    | Self::CopperLength(_)
-            ),
-        )
     }
 
     fn configured_ids(&self) -> Vec<String> {
-        let metadata = self.metadata();
-        if let Self::HoleAspectRatio(rule) = self {
-            return if rule.limit.is_some() {
-                vec![metadata.id.clone()]
-            } else {
-                rule.cases
-                    .iter()
-                    .map(|case| format!("{}.{}", metadata.id, case.id))
-                    .collect()
-            };
-        }
-        let (limit, cases) = self.limits();
-        match limit {
-            Some(limit) => limit.ids(&metadata.id),
-            None => cases
+        let id = &self.metadata.id;
+        let case_id = |case: &str| format!("{id}.{case}");
+        match self.limits {
+            Limits::Length(Some(limit), _) => limit.ids(id),
+            Limits::Length(None, cases) => cases
                 .iter()
-                .flat_map(|case| case.limit.ids(&format!("{}.{}", metadata.id, case.id)))
+                .flat_map(|case| case.limit.ids(&case_id(&case.id)))
                 .collect(),
+            Limits::Ratio(Some(_), _) => vec![id.clone()],
+            Limits::Ratio(None, cases) => cases.iter().map(|case| case_id(&case.id)).collect(),
         }
     }
 }
@@ -488,17 +391,17 @@ impl RuleDefinition<'_> {
 #[serde(deny_unknown_fields)]
 pub struct DrillingRules {
     #[serde(default)]
-    pub hole_diameter: Vec<HoleDiameterRule>,
+    pub hole_diameter: Vec<SelectingRule<HoleSelector>>,
     #[serde(default)]
-    pub hole_aspect_ratio: Vec<HoleAspectRatioRule>,
+    pub hole_aspect_ratio: Vec<SelectingRule<PlatedHoleSelector, RatioLimit, RatioCase>>,
     #[serde(default)]
-    pub slot_width: Vec<SlotWidthRule>,
+    pub slot_width: Vec<SelectingRule<SlotSelector>>,
     #[serde(default)]
-    pub hole_to_hole_clearance: Vec<HolePairRule>,
+    pub hole_to_hole_clearance: Vec<SelectingRule<HolePairSelector>>,
     #[serde(default)]
-    pub hole_to_board_edge_clearance: Vec<HoleToBoardEdgeClearanceRule>,
+    pub hole_to_board_edge_clearance: Vec<SelectingRule<HoleSelector>>,
     #[serde(default)]
-    pub slot_to_board_edge_clearance: Vec<SlotToBoardEdgeClearanceRule>,
+    pub slot_to_board_edge_clearance: Vec<SelectingRule<SlotSelector>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -507,11 +410,11 @@ pub struct CopperRules {
     #[serde(default)]
     pub plated_slot_enclosure: Vec<LengthRule>,
     #[serde(default)]
-    pub annular_ring: Vec<AnnularRingRule>,
+    pub annular_ring: Vec<SelectingRule<PlatedHoleSelector>>,
     #[serde(default)]
-    pub hole_clearance: Vec<HoleClearanceRule>,
+    pub hole_clearance: Vec<SelectingRule<HoleSelector>>,
     #[serde(default)]
-    pub slot_clearance: Vec<SlotClearanceRule>,
+    pub slot_clearance: Vec<SelectingRule<SlotSelector>>,
     #[serde(default)]
     pub feature_width: Vec<LengthRule>,
     #[serde(default)]
@@ -758,112 +661,21 @@ fn validate_cases<'a>(
     Ok(())
 }
 
+/// A rule over the subjects it selects: what every selecting rule kind
+/// states, whatever it selects and however it is limited.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HoleDiameterRule {
+#[serde(bound(
+    deserialize = "Select: Deserialize<'de>, Limit: Deserialize<'de>, Case: Deserialize<'de>"
+))]
+pub struct SelectingRule<Select, Limit = LengthLimit, Case = LengthCase> {
     #[serde(flatten)]
     pub metadata: RuleMetadata,
-    pub select: HoleSelector,
+    pub select: Select,
     #[serde(default)]
-    pub limit: Option<LengthLimit>,
+    pub limit: Option<Limit>,
     #[serde(default)]
-    pub cases: Vec<LengthCase>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HoleAspectRatioRule {
-    #[serde(flatten)]
-    pub metadata: RuleMetadata,
-    pub select: PlatedHoleSelector,
-    #[serde(default)]
-    pub limit: Option<RatioLimit>,
-    #[serde(default)]
-    pub cases: Vec<RatioCase>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SlotWidthRule {
-    #[serde(flatten)]
-    pub metadata: RuleMetadata,
-    pub select: SlotSelector,
-    #[serde(default)]
-    pub limit: Option<LengthLimit>,
-    #[serde(default)]
-    pub cases: Vec<LengthCase>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HolePairRule {
-    #[serde(flatten)]
-    pub metadata: RuleMetadata,
-    pub select: HolePairSelector,
-    #[serde(default)]
-    pub limit: Option<LengthLimit>,
-    #[serde(default)]
-    pub cases: Vec<LengthCase>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HoleToBoardEdgeClearanceRule {
-    #[serde(flatten)]
-    pub metadata: RuleMetadata,
-    pub select: HoleSelector,
-    #[serde(default)]
-    pub limit: Option<LengthLimit>,
-    #[serde(default)]
-    pub cases: Vec<LengthCase>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SlotToBoardEdgeClearanceRule {
-    #[serde(flatten)]
-    pub metadata: RuleMetadata,
-    pub select: SlotSelector,
-    #[serde(default)]
-    pub limit: Option<LengthLimit>,
-    #[serde(default)]
-    pub cases: Vec<LengthCase>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AnnularRingRule {
-    #[serde(flatten)]
-    pub metadata: RuleMetadata,
-    pub select: PlatedHoleSelector,
-    #[serde(default)]
-    pub limit: Option<LengthLimit>,
-    #[serde(default)]
-    pub cases: Vec<LengthCase>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HoleClearanceRule {
-    #[serde(flatten)]
-    pub metadata: RuleMetadata,
-    pub select: HoleSelector,
-    #[serde(default)]
-    pub limit: Option<LengthLimit>,
-    #[serde(default)]
-    pub cases: Vec<LengthCase>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SlotClearanceRule {
-    #[serde(flatten)]
-    pub metadata: RuleMetadata,
-    pub select: SlotSelector,
-    #[serde(default)]
-    pub limit: Option<LengthLimit>,
-    #[serde(default)]
-    pub cases: Vec<LengthCase>,
+    pub cases: Vec<Case>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
