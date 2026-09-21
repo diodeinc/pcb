@@ -999,6 +999,10 @@ fn validate_spatial_request(
             }
             certified.push((layer.density_domain, layer.safe_region));
         }
+    }
+    // What is left weighs each layer's whole fixed copper against its own
+    // regions, which no other layer shares, so the layers check side by side.
+    map_layers(request.layers, |layer| {
         if !contains(layer.density_domain, layer.existing_copper)? {
             return Err(DenseCopperBalanceError::InvalidInput(
                 "existing copper must be contained by the density domain".to_string(),
@@ -1021,9 +1025,10 @@ fn validate_spatial_request(
             existing_copper_area_mm2: layer.existing_copper.area(),
             target_density: layer.target_density,
             lattice_origin: request.lattice_origin,
-        })?;
-    }
-    Ok(())
+        })
+    })
+    .into_iter()
+    .collect()
 }
 
 #[derive(Debug, Clone, Copy)]
