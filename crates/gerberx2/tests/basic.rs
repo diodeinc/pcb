@@ -427,6 +427,45 @@ fn lowers_aperture_macro_primitives_to_geometry_paths() {
 }
 
 #[test]
+fn macro_primitives_rotate_about_the_macro_origin() {
+    let accuracy = GeometryAccuracy::default();
+    // Each primitive sits at (2, 0) and turns 90° about the macro origin, so
+    // it must image around (0, 2) with its own axes turned as well.
+    for (primitive, width, height) in [
+        ("1,1,0.5,2,0,90", 0.5, 0.5),
+        ("20,1,0.2,1.5,0,2.5,0,90", 0.2, 1.0),
+        ("21,1,1.0,0.2,2,0,90", 0.2, 1.0),
+        (
+            "4,1,4,1.5,-0.1,2.5,-0.1,2.5,0.1,1.5,0.1,1.5,-0.1,90",
+            0.2,
+            1.0,
+        ),
+        ("5,1,4,2,0,1.0,90", 1.0, 1.0),
+        ("7,2,0,1.0,0.5,0.1,90", 1.0, 1.0),
+    ] {
+        let gerber = GerberX2::parse(&format!(
+            "%FSLAX26Y26*%\n%MOMM*%\n%AMMAC*\n{primitive}*\n%\n%ADD10MAC*%\nD10*\nX10000000Y20000000D03*\nM02*\n"
+        ))
+        .unwrap();
+        let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+        let bbox = geometry.objects[0].bbox;
+        // The thermal's gaps clip its extreme points by a few microns.
+        let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+        assert!(
+            near(bbox.center().x, 10.0) && near(bbox.center().y, 22.0),
+            "{primitive}: imaged around {:?}",
+            bbox.center()
+        );
+        assert!(
+            near(bbox.width(), width) && near(bbox.height(), height),
+            "{primitive}: imaged {} x {}",
+            bbox.width(),
+            bbox.height()
+        );
+    }
+}
+
+#[test]
 fn normalizes_inch_macro_aperture_geometry_to_mm() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOIN*%\n%AMMAC*\n1,1,$1,0,0,0*\n%\n%ADD10MAC,0.1*%\nD10*\nX0Y0D03*\nM02*\n",

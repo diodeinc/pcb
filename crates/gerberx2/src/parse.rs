@@ -846,8 +846,10 @@ fn lower_macro_aperture(
     Ok(Some(ApertureGeometry { paths }))
 }
 
+/// Lower one macro primitive. Every primitive is built unrotated at its own
+/// position and then rotated about the macro origin, as the format specifies.
 fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<GeometryPath>> {
-    match code {
+    let (paths, rotation) = match code {
         1 => {
             let exposure = macro_bool(values, 0)?;
             let diameter = macro_length(values, 1, "macro circle diameter", unit)?;
@@ -856,11 +858,13 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
                 y: macro_length(values, 3, "macro circle center y", unit)?,
             };
             let rotation = values.get(4).copied().unwrap_or(0.0);
-            Ok(vec![transform_path(
-                circle_path(diameter / 2.0, exposure),
-                center,
+            (
+                vec![translate_path(
+                    circle_path(diameter / 2.0, exposure),
+                    center,
+                )],
                 rotation,
-            )])
+            )
         }
         20 => {
             let exposure = macro_bool(values, 0)?;
@@ -874,9 +878,10 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
                 y: macro_length(values, 5, "macro vector line end y", unit)?,
             };
             let rotation = macro_value(values, 6, "macro vector line rotation")?;
-            Ok(vec![vector_line_path(
-                start, end, width, exposure, rotation,
-            )])
+            (
+                vec![vector_line_path(start, end, width, exposure)],
+                rotation,
+            )
         }
         21 => {
             let exposure = macro_bool(values, 0)?;
@@ -887,11 +892,10 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
                 y: macro_length(values, 4, "macro center line y", unit)?,
             };
             let rotation = macro_value(values, 5, "macro center line rotation")?;
-            Ok(vec![transform_path(
-                rect_path(width, height, exposure),
-                center,
+            (
+                vec![translate_path(rect_path(width, height, exposure), center)],
                 rotation,
-            )])
+            )
         }
         4 => {
             let exposure = macro_bool(values, 0)?;
@@ -907,40 +911,26 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
                     "macro outline requires at least 3 vertices".to_string(),
                 ));
             }
-            let rotation = values[expected - 1];
-            let first = Point {
-                x: values[2],
-                y: values[3],
+            let point = |index: usize| Point {
+                x: scale_length(values[2 + index * 2], unit),
+                y: scale_length(values[3 + index * 2], unit),
             };
-            let last = Point {
-                x: values[2 + vertices * 2],
-                y: values[3 + vertices * 2],
-            };
-            if !points_close(first, last) {
+            if !points_close(point(0), point(vertices)) {
                 return Err(GerberError::InvalidStructure(
                     "macro outline last vertex must equal first vertex".to_string(),
                 ));
             }
-            let mut commands = Vec::new();
-            for index in 0..=vertices {
-                let point = rotate_point(
-                    Point {
-                        x: scale_length(values[2 + index * 2], unit),
-                        y: scale_length(values[3 + index * 2], unit),
-                    },
-                    rotation,
-                );
-                if index == 0 {
-                    commands.push(PathCommand::MoveTo(point));
-                } else {
-                    commands.push(PathCommand::LineTo(point));
-                }
-            }
-            commands.push(PathCommand::Close);
-            Ok(vec![GeometryPath {
-                contours: vec![GeometryContour { commands }],
-                polarity: exposure,
-            }])
+            let commands = std::iter::once(PathCommand::MoveTo(point(0)))
+                .chain((1..=vertices).map(|index| PathCommand::LineTo(point(index))))
+                .chain(std::iter::once(PathCommand::Close))
+                .collect();
+            (
+                vec![GeometryPath {
+                    contours: vec![GeometryContour { commands }],
+                    polarity: exposure,
+                }],
+                values[expected - 1],
+            )
         }
         5 => {
             let exposure = macro_bool(values, 0)?;
@@ -951,10 +941,13 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
             };
             let diameter = macro_length(values, 4, "macro polygon diameter", unit)?;
             let rotation = macro_value(values, 5, "macro polygon rotation")?;
-            Ok(polygon_paths(diameter, vertices, rotation, None)
-                .into_iter()
-                .map(|path| transform_path(repolarity(path, exposure), center, 0.0))
-                .collect())
+            (
+                polygon_paths(diameter, vertices, 0.0, None)
+                    .into_iter()
+                    .map(|path| translate_path(repolarity(path, exposure), center))
+                    .collect(),
+                rotation,
+            )
         }
         7 => {
             let center = Point {
@@ -968,15 +961,24 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
             let mut paths = circle_paths(outer, Some(inner));
             paths.push(rect_path(outer, gap, Polarity::Clear));
             paths.push(rect_path(gap, outer, Polarity::Clear));
-            Ok(paths
-                .into_iter()
-                .map(|path| transform_path(path, center, rotation))
-                .collect())
+            (
+                paths
+                    .into_iter()
+                    .map(|path| translate_path(path, center))
+                    .collect(),
+                rotation,
+            )
         }
-        _ => Err(GerberError::InvalidStructure(format!(
-            "unsupported aperture macro primitive {code}"
-        ))),
-    }
+        _ => {
+            return Err(GerberError::InvalidStructure(format!(
+                "unsupported aperture macro primitive {code}"
+            )));
+        }
+    };
+    Ok(paths
+        .into_iter()
+        .map(|path| map_path(path, |point| rotate_point(point, rotation)))
+        .collect())
 }
 
 fn validate_region_contours(contours: &[Contour]) -> Result<()> {
@@ -1217,22 +1219,16 @@ fn repolarity(mut path: GeometryPath, polarity: Polarity) -> GeometryPath {
     path
 }
 
-fn vector_line_path(
-    start: Point,
-    end: Point,
-    width: f64,
-    polarity: Polarity,
-    rotation: f64,
-) -> GeometryPath {
+fn vector_line_path(start: Point, end: Point, width: f64, polarity: Polarity) -> GeometryPath {
     let dx = end.x - start.x;
     let dy = end.y - start.y;
     let len = (dx * dx + dy * dy).sqrt();
     if len == 0.0 {
-        return transform_path(rect_path(0.0, width, polarity), start, rotation);
+        return translate_path(rect_path(0.0, width, polarity), start);
     }
     let nx = -dy / len * width / 2.0;
     let ny = dx / len * width / 2.0;
-    let mut path = GeometryPath {
+    GeometryPath {
         contours: vec![GeometryContour {
             commands: vec![
                 PathCommand::MoveTo(Point {
@@ -1255,26 +1251,26 @@ fn vector_line_path(
             ],
         }],
         polarity,
-    };
-    if rotation != 0.0 {
-        path = transform_path(path, Point { x: 0.0, y: 0.0 }, rotation);
     }
-    path
 }
 
-fn transform_path(mut path: GeometryPath, offset: Point, rotation: f64) -> GeometryPath {
-    for contour in &mut path.contours {
-        for command in &mut contour.commands {
-            match command {
-                PathCommand::MoveTo(point) | PathCommand::LineTo(point) => {
-                    *point = translate_point(rotate_point(*point, rotation), offset.x, offset.y);
-                }
-                PathCommand::ArcTo { end, center, .. } => {
-                    *end = translate_point(rotate_point(*end, rotation), offset.x, offset.y);
-                    *center = translate_point(rotate_point(*center, rotation), offset.x, offset.y);
-                }
-                PathCommand::Close => {}
+fn translate_path(path: GeometryPath, offset: Point) -> GeometryPath {
+    map_path(path, |point| translate_point(point, offset.x, offset.y))
+}
+
+fn map_path(mut path: GeometryPath, map: impl Fn(Point) -> Point) -> GeometryPath {
+    for command in path
+        .contours
+        .iter_mut()
+        .flat_map(|contour| &mut contour.commands)
+    {
+        match command {
+            PathCommand::MoveTo(point) | PathCommand::LineTo(point) => *point = map(*point),
+            PathCommand::ArcTo { end, center, .. } => {
+                *end = map(*end);
+                *center = map(*center);
             }
+            PathCommand::Close => {}
         }
     }
     path
