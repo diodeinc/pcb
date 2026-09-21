@@ -3,7 +3,7 @@
 //! Copper balancing is implicitly minimizing the thermal moment resultant of
 //! classical lamination theory. This module makes that explicit: it turns a
 //! stackup plus per-layer copper density fields into an estimated deflection
-//! surface, and reads bow and twist off it the way IPC-TM-650 2.4.22 does.
+//! surface, and reads bow off it the way IPC-TM-650 2.4.22 does.
 //!
 //! The chain, and the assumptions at each link:
 //!
@@ -19,6 +19,25 @@
 //!    introduces the wavelength-squared weighting that makes long-wavelength
 //!    imbalance dominate warp — the reason a flat norm over the moment field
 //!    misreads the problem.
+//!
+//! Step 4 determines the surface only up to a harmonic function. Constants and
+//! tilts leave with the corner plane. The `xy` term does not, and it is exactly
+//! what a twist reading measures, so equilibrium fixes it rather than a choice
+//! of particular solution. A free panel carries no load, so its moment
+//! resultants do no work on any virtual deflection, and taking `xy` as that
+//! deflection leaves `integral(M_xy) = 0` over the panel. A thermal moment is
+//! isotropic and has no `xy` component, which makes this `integral(w_xy) = 0`
+//! for the surface itself — and the integral of `w_xy` over a rectangle is
+//! identically the alternating sum of its corner heights, the quantity 2.4.22
+//! reads as twist. Copper therefore cannot twist a free panel at this order
+//! however it is distributed, and no twist is estimated. What twists real
+//! panels is weave skew and unbalanced layup, which make the plate itself
+//! anisotropic and are outside this model.
+//!
+//! The pointwise free-edge conditions cannot stand in for that integral. No
+//! low-order surface meets them all — the saddle leaves an edge shear whatever
+//! its `xy` term — and imposing the corner-force condition alone while the rest
+//! stay violated moves the reading as far the other way as ignoring it does.
 //!
 //! The model is **verified, not validated**: the tests below check it against
 //! closed forms, symmetry, and linearity. Nothing here has been compared
@@ -349,7 +368,7 @@ pub enum PanelMode {
     Uniform,
     TiltX,
     TiltY,
-    /// `xy`. The saddle shape twist is read from.
+    /// `xy`. Opposite corners heavy the same way.
     Saddle,
     /// `x^2 - y^2`. Cylindrical rather than spherical curvature.
     Astigmatic,
@@ -393,26 +412,24 @@ impl PanelMode {
         }
     }
 
-    /// A particular solution of `laplacian(w) = phi`, in normalized
-    /// coordinates.
+    /// A solution of `laplacian(w) = phi` in normalized coordinates, on a
+    /// panel reaching `edge` from its centre.
     ///
     /// Deflection is the second integral of curvature, and this is that
-    /// integral mode by mode. The choice is not unique — any harmonic function
-    /// may be added — but the ambiguity is entirely in constant, tilt and
-    /// saddle terms, and fitting a plane through the panel corners removes the
-    /// first two. The saddle ambiguity is a real limit of this model rather
-    /// than a bookkeeping artifact, and it means the twist figure is the
-    /// weakest number here.
-    fn deflection(self, x: f64, y: f64) -> f64 {
+    /// integral mode by mode. Any harmonic function may be added. Constants
+    /// and tilts leave with the corner plane, and the `xy` term is the one the
+    /// module documentation fixes: its mean `w_xy` over the panel is zero.
+    /// Only the saddle has any to remove.
+    fn deflection(self, x: f64, y: f64, edge: (f64, f64)) -> f64 {
         match self {
             Self::Uniform => (x * x + y * y) / 4.0,
             Self::TiltX => x * x * x / 6.0,
             Self::TiltY => y * y * y / 6.0,
-            // Symmetric in x and y. The asymmetric x^3 y / 6 solves the same
-            // equation, but the two differ by a harmonic function, and picking
-            // one axis over the other would make twist depend on which way the
-            // panel happens to be turned.
-            Self::Saddle => (x * x * x * y + x * y * y * y) / 12.0,
+            // `(x^3 y + x y^3) / 12` is symmetric in x and y, so turning the
+            // panel turns the surface with it. Its `w_xy = (x^2 + y^2) / 4`
+            // averages a twelfth of the squared corner distance, which the
+            // `xy` term takes back out.
+            Self::Saddle => x * y * (x * x + y * y - edge.0 * edge.0 - edge.1 * edge.1) / 12.0,
             Self::Astigmatic => (x.powi(4) - y.powi(4)) / 12.0,
             Self::Domed => (x.powi(4) + y.powi(4)) / 12.0,
         }
@@ -429,8 +446,7 @@ pub struct ModeAmplitude {
     pub deflection_mm: f64,
 }
 
-/// Bow and twist as IPC-TM-650 2.4.22 defines them, plus the field they came
-/// from.
+/// Bow as IPC-TM-650 2.4.22 defines it, plus the field it came from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WarpEstimate {
     /// Deflection sampled at the same points as the moment field, millimeters,
@@ -442,11 +458,6 @@ pub struct WarpEstimate {
     pub bow_mm: f64,
     /// Bow as a percentage of the panel dimension it is worst against.
     pub bow_percent: f64,
-    /// Rise of the fourth corner above the plane of the other three,
-    /// millimeters.
-    pub twist_mm: f64,
-    /// Twist as a percentage, normalized by twice the diagonal per 2.4.22.
-    pub twist_percent: f64,
     pub modes: Vec<ModeAmplitude>,
 }
 
@@ -472,82 +483,61 @@ pub fn estimate_warp(
         moment_scale * stack.surface_laplacian_per_moment() * half_span_mm * half_span_mm;
 
     let amplitudes = fit(moment_field, &moment_field.values, mode_shapes);
-    let (edge_x, edge_y) = moment_field.normalized(moment_field.bounds.max);
+    let edge = moment_field.normalized(moment_field.bounds.max);
 
     // 2.4.22 measures from the plane the panel seats on: through its corners.
     // Each mode's deflection is known in closed form, so its corner plane is
-    // too — the least-squares plane through the four corner heights, whose
-    // residual is the alternating combination no plane can remove. That
-    // residual is twist, read below from the same four corners.
+    // too. No mode leaves an alternating corner residual, so the plane passes
+    // through all four.
     let mut corner_planes = [[0.0_f64; 3]; PanelMode::ALL.len()];
     for (index, (mode, amplitude)) in PanelMode::ALL.iter().zip(&amplitudes).enumerate() {
-        let corner = |x: f64, y: f64| deflection_scale * amplitude * mode.deflection(x, y);
+        let corner = |x: f64, y: f64| deflection_scale * amplitude * mode.deflection(x, y, edge);
         let (pp, pm, mp, mm) = (
-            corner(edge_x, edge_y),
-            corner(edge_x, -edge_y),
-            corner(-edge_x, edge_y),
-            corner(-edge_x, -edge_y),
+            corner(edge.0, edge.1),
+            corner(edge.0, -edge.1),
+            corner(-edge.0, edge.1),
+            corner(-edge.0, -edge.1),
         );
         corner_planes[index] = [
             (pp + pm + mp + mm) / 4.0,
-            (pp + pm - mp - mm) / (4.0 * edge_x),
-            (pp - pm + mp - mm) / (4.0 * edge_y),
+            (pp + pm - mp - mm) / (4.0 * edge.0),
+            (pp - pm + mp - mm) / (4.0 * edge.1),
         ];
     }
 
-    // One pass over the samples: the total corner-levelled surface, the same
-    // surface without the saddle (bow), and each mode's own extremes.
+    // One pass over the samples: the total corner-levelled surface and each
+    // mode's own extremes.
     let mut deflection = Vec::with_capacity(moment_field.samples.len());
-    let mut bowed = (f64::MAX, f64::MIN);
     let mut extremes = [(f64::MAX, f64::MIN); PanelMode::ALL.len()];
     for point in &moment_field.samples {
         let (x, y) = moment_field.normalized(*point);
         let mut total = 0.0;
-        let mut without_saddle = 0.0;
         for (index, (mode, amplitude)) in PanelMode::ALL.iter().zip(&amplitudes).enumerate() {
             let plane = corner_planes[index];
-            let levelled = deflection_scale * amplitude * mode.deflection(x, y)
+            let levelled = deflection_scale * amplitude * mode.deflection(x, y, edge)
                 - (plane[0] + plane[1] * x + plane[2] * y);
             extremes[index].0 = extremes[index].0.min(levelled);
             extremes[index].1 = extremes[index].1.max(levelled);
             total += levelled;
-            if *mode != PanelMode::Saddle {
-                without_saddle += levelled;
-            }
         }
         deflection.push(total);
-        bowed = (bowed.0.min(without_saddle), bowed.1.max(without_saddle));
     }
 
-    // 2.4.22 separates the two: bow is the largest departure a corner-seated
-    // panel makes from the table, normalized by the dimension it is measured
-    // along — the shorter one gives the larger percentage, so that is the one
-    // reported. The corners sit at zero by construction, so that departure is
-    // the levelled surface's largest magnitude on either side, not its range:
-    // a saddle-free surface rising along one axis and dipping along the other
-    // seats on whichever lobe it rests and shows the other. Twist is the
-    // corner that will not stay down: the rise of the fourth corner above the
-    // plane of the other three is four times the alternating corner residual,
-    // normalized by twice the diagonal.
-    let bow_mm = bowed.1.max(-bowed.0);
-    let width = moment_field.bounds.width();
-    let height = moment_field.bounds.height();
-    let bow_percent = 100.0 * bow_mm / width.min(height);
-
-    let corner = |x: f64, y: f64| {
-        deflection_scale
-            * PanelMode::ALL
-                .iter()
-                .zip(&amplitudes)
-                .map(|(mode, amplitude)| amplitude * mode.deflection(x, y))
-                .sum::<f64>()
-    };
-    let twist_mm = (corner(edge_x, edge_y) + corner(-edge_x, -edge_y)
-        - corner(edge_x, -edge_y)
-        - corner(-edge_x, edge_y))
-    .abs();
-    let diagonal = (width * width + height * height).sqrt();
-    let twist_percent = 100.0 * twist_mm / (2.0 * diagonal);
+    // Bow is the largest departure a corner-seated panel makes from the table,
+    // normalized by the dimension it is measured along — the shorter one gives
+    // the larger percentage, so that is the one reported. The corners sit at
+    // zero by construction, so that departure is the levelled surface's
+    // largest magnitude on either side, not its range: a surface rising along
+    // one axis and dipping along the other seats on whichever lobe it rests
+    // and shows the other.
+    let bow_mm = deflection
+        .iter()
+        .fold(0.0_f64, |bow, height| bow.max(height.abs()));
+    let bow_percent = 100.0 * bow_mm
+        / moment_field
+            .bounds
+            .width()
+            .min(moment_field.bounds.height());
 
     let modes = PanelMode::ALL
         .iter()
@@ -568,8 +558,6 @@ pub fn estimate_warp(
         },
         bow_mm,
         bow_percent,
-        twist_mm,
-        twist_percent,
         modes,
     }
 }
@@ -747,11 +735,10 @@ mod tests {
 
         assert!(warp.bow_mm <= 1e-12, "{:?}", warp.bow_mm);
         assert!(warp.bow_percent <= 1e-12);
-        assert!(warp.twist_percent <= 1e-12);
     }
 
     /// A uniform moment bends the panel into a spherical cap: all the
-    /// deflection lands in the uniform mode, and none in the saddle.
+    /// deflection lands in the uniform mode.
     #[test]
     fn a_uniform_moment_produces_pure_bow() {
         let stack = symmetric_four_layer();
@@ -759,7 +746,6 @@ mod tests {
         let warp = estimate_warp(&stack, Material::LAMINATE, &field, 150.0);
 
         assert!(warp.bow_mm > 0.0);
-        assert!(warp.twist_mm <= 1e-9, "{:?}", warp.twist_mm);
         let uniform = warp
             .modes
             .iter()
@@ -846,11 +832,27 @@ mod tests {
         );
     }
 
-    /// A saddle-shaped imbalance is what twist reads, and it produces no bow
-    /// once the corner plane is removed. Turning the panel a quarter turn turns
-    /// the saddle with it, so the twist it reads has to come out the same.
+    /// The integral of `w_xy` over the panel is the alternating sum of its
+    /// corner heights, and equilibrium makes it zero for any isotropic thermal
+    /// moment. Every mode has to leave the four corners in one plane, on a
+    /// panel of any shape, so that no copper distribution reads as twist.
     #[test]
-    fn a_saddle_imbalance_reads_as_twist() {
+    fn no_mode_lifts_a_corner_out_of_the_plane_of_the_other_three() {
+        for edge in [(1.0, 1.0), (1.0, 0.4), (0.25, 1.0)] {
+            for mode in PanelMode::ALL {
+                let corner = |x: f64, y: f64| mode.deflection(x * edge.0, y * edge.1, edge);
+                let lift =
+                    corner(1.0, 1.0) + corner(-1.0, -1.0) - corner(1.0, -1.0) - corner(-1.0, 1.0);
+                assert!(lift.abs() <= 1e-15, "{mode:?} on {edge:?}: {lift}");
+            }
+        }
+    }
+
+    /// A saddle-shaped imbalance seats on all four corners and bows between
+    /// them. Turning the panel a quarter turn turns the saddle with it, so the
+    /// bow has to come out the same.
+    #[test]
+    fn a_saddle_imbalance_bows_between_coplanar_corners() {
         let stack = symmetric_four_layer();
         let saddle = |bounds| {
             let mut field = uniform_field(bounds, 0.0);
@@ -869,13 +871,22 @@ mod tests {
         let upright = saddle(BBox::new(Point::new(0.0, 0.0), Point::new(400.0, 800.0)));
         let turned = saddle(BBox::new(Point::new(0.0, 0.0), Point::new(800.0, 400.0)));
         assert!(
-            (upright.twist_mm - turned.twist_mm).abs() <= 1e-9 * upright.twist_mm,
+            (upright.bow_mm - turned.bow_mm).abs() <= 1e-9 * upright.bow_mm,
             "{} != {}",
-            upright.twist_mm,
-            turned.twist_mm
+            upright.bow_mm,
+            turned.bow_mm
         );
 
-        assert!(warp.twist_mm > 0.0);
+        assert!(warp.bow_mm > 0.0);
+        let bounds = warp.deflection.bounds;
+        for (point, height) in warp.deflection.samples.iter().zip(&warp.deflection.values) {
+            let on_corner = (point.x == bounds.min.x || point.x == bounds.max.x)
+                && (point.y == bounds.min.y || point.y == bounds.max.y);
+            assert!(
+                !on_corner || height.abs() <= 1e-12 * warp.bow_mm,
+                "{point:?}"
+            );
+        }
         let saddle = warp
             .modes
             .iter()
@@ -1057,19 +1068,13 @@ mod tests {
 
         let ratio = |dielectric: Material| {
             let stack = build(dielectric);
-            let warp = |field| estimate_warp(&stack, dielectric, &field, 110.0);
-            let (before, after) = (warp(shaped(1.0)), warp(shaped(0.4)));
-            (
-                after.bow_mm / before.bow_mm,
-                after.twist_mm / before.twist_mm,
-            )
+            let bow = |field| estimate_warp(&stack, dielectric, &field, 110.0).bow_mm;
+            bow(shaped(0.4)) / bow(shaped(1.0))
         };
-        let (laminate_ratio, resin_ratio) = (ratio(Material::LAMINATE), ratio(resin));
         // Two constants well apart, or the comparison shows nothing.
         let coefficient = |dielectric: Material| build(dielectric).moment_coefficient(dielectric);
         assert!(coefficient(resin).abs() > 10.0 * coefficient(Material::LAMINATE).abs());
-        assert!((laminate_ratio.0 - resin_ratio.0).abs() <= 1e-9);
-        assert!((laminate_ratio.1 - resin_ratio.1).abs() <= 1e-9);
+        assert!((ratio(Material::LAMINATE) - ratio(resin)).abs() <= 1e-9);
         assert_eq!(
             build(Material::LAMINATE).conductor_weights(),
             build(resin).conductor_weights()

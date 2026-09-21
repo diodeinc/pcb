@@ -168,7 +168,7 @@ enum Commands {
         #[command(subcommand)]
         command: DfmCommands,
     },
-    /// Estimate panel bow and twist from the through-stack copper distribution
+    /// Estimate panel bow from the through-stack copper distribution
     Warp {
         /// IPC-2581 XML file to analyze
         #[arg(value_hint = clap::ValueHint::FilePath)]

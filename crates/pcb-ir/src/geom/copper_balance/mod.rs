@@ -355,12 +355,13 @@ pub struct DenseCopperVoid {
 /// What the panel's copper-moment field measured before the spatial solve
 /// redistributed anything, and after it settled.
 ///
-/// The field's mean is the panel's bow and its variation is twist, so an RMS
-/// carries both: a falling RMS means the field flattened, not merely that a
-/// positive lobe found a negative one to cancel against. Both readings come
-/// from the same field over the same sites, so the pair can be compared — a
-/// mean that drops while the RMS holds has moved bow into twist, and that
-/// reading is only trustworthy because neither number was measured its own way.
+/// The field's mean bends the panel into a spherical cap and its variation
+/// into every other shape, so an RMS carries both: a falling RMS means the
+/// field flattened, not merely that a positive lobe found a negative one to
+/// cancel against. Both readings come from the same field over the same sites,
+/// so the pair can be compared — a mean that drops while the RMS holds has
+/// moved the bow into another shape, and that reading is only trustworthy
+/// because neither number was measured its own way.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StackMomentField {
     pub initial_mean: f64,

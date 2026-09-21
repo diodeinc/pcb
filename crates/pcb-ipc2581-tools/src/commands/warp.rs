@@ -1,4 +1,4 @@
-//! Report estimated panel bow and twist.
+//! Report estimated panel bow.
 
 #[cfg(feature = "cli")]
 use pcb_ir::geom::Resolution;
@@ -61,10 +61,11 @@ pub fn summary_lines(analysis: &WarpAnalysis) -> Vec<String> {
          for surface mount",
         warp.bow_mm, warp.bow_percent,
     ));
-    lines.push(format!(
-        "estimated twist {:.3} mm ({:.3} %)",
-        warp.twist_mm, warp.twist_percent,
-    ));
+    lines.push(
+        "no twist estimated: copper cannot twist a free panel at first order, weave skew and \
+         unbalanced layup can"
+            .to_string(),
+    );
     lines.push(format!(
         "modelled from the stackup and copper distribution at a {:.0} K drop, not measured",
         analysis.temperature_drop_k,

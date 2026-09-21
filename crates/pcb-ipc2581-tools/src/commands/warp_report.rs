@@ -1,9 +1,9 @@
 //! A self-contained field report for [`crate::warp`].
 //!
-//! Bow and twist are the last step of the chain and they discard everything
-//! before them. Per-layer copper, the moment field and the deflection surface
-//! are all fields over the panel, all computed on the way to those two numbers,
-//! so the report renders the fields and leaves the scalars as a summary.
+//! Bow is the last step of the chain and it discards everything before it.
+//! Per-layer copper, the moment field and the deflection surface are all fields
+//! over the panel, all computed on the way to that one number, so the report
+//! renders the fields and leaves the scalar as a summary.
 //!
 //! Laid out as a technical report rather than a dashboard: numbered sections
 //! and figures, units in every heading, tabular figures throughout, rules
@@ -65,8 +65,8 @@ fn masthead(html: &mut String, analysis: &WarpAnalysis) {
         html,
         r#"<header>
 <h1>Panel warp analysis</h1>
-<p class="standfirst">Bow and twist estimated from the through-stack copper distribution,
-reported after the method of IPC-TM-650 2.4.22.</p>
+<p class="standfirst">Bow estimated from the through-stack copper distribution, reported after
+the method of IPC-TM-650 2.4.22.</p>
 <dl class="params">
 <div><dt>Panel</dt><dd>{:.1} &times; {:.1} mm</dd></div>
 <div><dt>Stack</dt><dd>{:.3} mm &middot; {} Cu</dd></div>
@@ -114,10 +114,10 @@ fn results(html: &mut String, analysis: &WarpAnalysis) {
 </tr></thead><tbody>
 <tr><td>Bow</td><td>{:.3}</td><td>{:.3}</td><td>{SURFACE_MOUNT_LIMIT_PERCENT:.2}</td>
 <td>{verdict}</td></tr>
-<tr><td>Twist</td><td>{:.3}</td><td>{:.3}</td><td>{SURFACE_MOUNT_LIMIT_PERCENT:.2}</td>
-<td class="muted">weakly determined, see &sect;3</td></tr>
+<tr><td>Twist</td><td>&mdash;</td><td>&mdash;</td><td>{SURFACE_MOUNT_LIMIT_PERCENT:.2}</td>
+<td class="muted">not driven by copper, see &sect;3</td></tr>
 </tbody></table></section>"#,
-        warp.bow_mm, warp.bow_percent, warp.twist_mm, warp.twist_percent,
+        warp.bow_mm, warp.bow_percent,
     );
 }
 
@@ -187,9 +187,10 @@ fn mode_table(html: &mut String, analysis: &WarpAnalysis) {
         r#"<section><h2>3&emsp;Deflection by shape</h2>
 <p class="blurb">The moment field resolved into low-order shapes. Deflection grows with the
 square of wavelength, so the broadest shapes dominate and copper detail finer than the panel
-contributes almost nothing. Twist reads off the saddle term, which the second integral of
-curvature fixes only up to a harmonic function; it is the least trustworthy number here, and a
-cross-ply layup gives copper no way to drive twist in any case.</p>
+contributes almost nothing. No shape here twists the panel: a thermal moment is the same in every
+direction, so it does no work on the twist shape and a free panel keeps its four corners in one
+plane however the copper is distributed. Twist on a real panel comes from weave skew and
+unbalanced layup, which this model does not contain, so none is estimated.</p>
 <table class="numeric"><thead><tr>
 <th>Shape</th><th>Amplitude mm&#178;</th><th>Deflection mm</th><th>Share</th><th>%</th>
 </tr></thead><tbody>{rows}</tbody></table></section>"#

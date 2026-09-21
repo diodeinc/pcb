@@ -28,9 +28,9 @@ term is minimised, the through-stack correction is a bounded step settled in
 closed form, and the bound between them is the one deliberate trade
 (see [Knobs](#knobs)).
 
-`pcbc ipc2581 warp` closes the loop: it estimates a panel's bow and twist from
-the same stackup and copper distribution, so the effect of any balancing change
-is measurable in seconds. The figure is the elastic copper-laminate mismatch
+`pcbc ipc2581 warp` closes the loop: it estimates a panel's bow from the same
+stackup and copper distribution, so the effect of any balancing change is
+measurable in seconds. The figure is the elastic copper-laminate mismatch
 alone and is for comparing panelizations, not for clearing a panel against the
 IPC-6012 limit.
 

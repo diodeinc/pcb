@@ -249,9 +249,9 @@ pub struct CopperBalanceReport {
     pub panel_area_mm2: f64,
     pub footprint_area_mm2: f64,
     pub stack_weights_available: bool,
-    /// RMS of the copper-moment field before and after the spatial solve.
-    /// Carries bow and twist together, where
-    /// [`CopperBalanceReport::stack_moments`] carries bow alone.
+    /// Mean and RMS of the copper-moment field before and after the spatial
+    /// solve. The mean is spherical bow alone; the RMS carries every shape the
+    /// field bends the panel into.
     pub moment_field: Option<StackMomentFieldReport>,
     pub layers: Vec<CopperBalanceLayerReport>,
 }
