@@ -2,7 +2,8 @@
 
 use super::widths::{ContactIndex, WidthAxis};
 use super::{
-    ContourSet, PreparedRegion, Ring, ring_edges, ring_signed_area, ring_winding, simplify_rings,
+    ContourSet, PreparedRegion, Ring, horizontal_crossing, ring_edges, ring_signed_area,
+    ring_winding, simplify_rings,
 };
 use crate::geom::accuracy::numerical_error;
 use crate::geom::dist;
@@ -55,10 +56,16 @@ impl From<AccuracyError> for GapRegularizationError {
 }
 
 impl ContourSet {
-    /// The component of each ring, by ring index, and the outer ring of
-    /// each component. Regularized rings nest without crossing and holes
-    /// are wound opposite their outer ring, so a hole belongs to the
-    /// smallest outer ring around it.
+    /// The component of each ring, by ring index, and the ring bounding each
+    /// component. Regularized rings nest without crossing and holes are
+    /// wound opposite their outer ring, so a hole belongs to the smallest
+    /// outer ring that is larger than it and contains a point of its
+    /// interior. A vertex of the hole would not do: it may be a contact with
+    /// the outer ring, where winding decides nothing. A point of the hole's
+    /// interior may in turn lie in an island within the hole, but any such
+    /// island is smaller than the hole. A clockwise ring nothing encloses is
+    /// not regularized input and bounds a component of its own, so every
+    /// ring has one.
     pub(crate) fn ring_components(&self) -> (Vec<usize>, Vec<usize>) {
         let areas = self.rings.iter().map(ring_signed_area).collect::<Vec<_>>();
         let mut outers = (0..self.rings.len())
@@ -69,19 +76,19 @@ impl ContourSet {
         for (component, &outer) in outers.iter().enumerate() {
             components[outer] = component;
         }
-        for (index, ring) in self.rings.iter().enumerate() {
-            if areas[index] > 0.0 {
-                continue;
-            }
-            let Some(&[x, y]) = ring.first() else {
-                continue;
-            };
-            let point = Point::new(x, y);
-            if let Some(&outer) = outers.iter().find(|&&outer| {
-                self.ring_bounds[outer].contains_point(point)
-                    && ring_winding(&self.rings[outer], point) != 0
-            }) {
-                components[index] = components[outer];
+        let enclosing = outers.len();
+        for hole in (0..self.rings.len()).filter(|&ring| areas[ring] <= 0.0) {
+            let larger = outers[..enclosing].partition_point(|&outer| areas[outer] <= -areas[hole]);
+            let outer =
+                ring_interior_point(&self.rings[hole], self.ring_bounds[hole]).and_then(|point| {
+                    outers[larger..enclosing].iter().copied().find(|&outer| {
+                        self.ring_bounds[outer].contains_point(point)
+                            && ring_winding(&self.rings[outer], point) != 0
+                    })
+                });
+            components[hole] = outer.map_or(outers.len(), |outer| components[outer]);
+            if outer.is_none() {
+                outers.push(hole);
             }
         }
         (components, outers)
@@ -407,6 +414,27 @@ impl ContourSet {
         let components = two_sided_residual_components(self, &residue, radius, minimum_mm);
         Ok(components)
     }
+}
+
+/// A point strictly inside a ring that encloses area: the middle of the
+/// widest span the ring covers along the horizontal line at its mid-height.
+/// That line runs strictly between the ring's lowest and highest vertices,
+/// so it passes through the ring's interior.
+fn ring_interior_point(ring: &Ring, bounds: BBox) -> Option<Point> {
+    let y = bounds.min.y.midpoint(bounds.max.y);
+    let mut crossings = ring_edges(ring)
+        .filter_map(|(start, end)| horizontal_crossing(start, end, y))
+        .collect::<Vec<_>>();
+    crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
+    crossings
+        .windows(2)
+        .scan(0, |winding, pair| {
+            *winding += pair[0].1;
+            Some((*winding != 0).then_some((pair[0].0, pair[1].0)))
+        })
+        .flatten()
+        .max_by(|left, right| (left.1 - left.0).total_cmp(&(right.1 - right.0)))
+        .map(|(from, to)| Point::new(from.midpoint(to), y))
 }
 
 const VORONOI_COORDINATES_PER_MM: f64 = 100_000.0;
@@ -1312,6 +1340,31 @@ mod tests {
         assert_ne!(component_of(0.0), component_of(3.0));
         assert_ne!(component_of(0.0), component_of(20.0));
         assert_ne!(component_of(3.0), component_of(20.0));
+    }
+
+    #[test]
+    fn a_hole_touching_its_outer_ring_at_its_first_vertex_joins_that_component() {
+        // The hole starts at its contact with the outer ring's top edge, where
+        // the half-open winding rule sees no edge of the outer ring at all.
+        let outer = vec![[0.0, 0.0], [20.0, 0.0], [20.0, 15.0], [0.0, 15.0]];
+        let hole = vec![[5.0, 15.0], [8.0, 14.0], [8.0, 12.0]];
+        let region = ContourSet::from_regularized(vec![outer, hole], res(tol::REGION_MM), 0.0);
+        assert_eq!(region.ring_components(), (vec![0, 0], vec![0]));
+        // The hole's walls face the outer wall they touch, which brings the
+        // hole's component along.
+        let facing = region.facing_components(0.0, 0.3, 1.0).unwrap();
+        assert!(!facing.is_empty());
+    }
+
+    #[test]
+    fn a_clockwise_ring_nothing_encloses_is_its_own_component() {
+        let island = vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]];
+        let orphan = vec![[10.0, 0.0], [10.0, 4.0], [10.2, 4.0], [10.2, 0.0]];
+        let region = ContourSet::from_regularized(vec![island, orphan], res(tol::REGION_MM), 0.0);
+        let (components, outers) = region.ring_components();
+        assert_eq!(outers, [0, 1]);
+        assert_eq!(components, [0, 1]);
+        assert!(region.facing_components(0.3, 0.3, 1.0).is_ok());
     }
 
     #[test]
