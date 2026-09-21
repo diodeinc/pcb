@@ -181,6 +181,8 @@ fn print_difference_components(
     }
 }
 
+/// Render the extracted artwork as it is: flashes, strokes and polarity runs
+/// draw natively, so viewing a layer never composes it.
 fn render(
     file: &Path,
     output: Option<&Path>,
@@ -194,38 +196,31 @@ fn render(
         eprintln!("warning: {}", diagnostic.message);
     }
 
-    match target {
-        RenderTarget::Svg => {
-            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, resolution)?;
-            let svg = pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::default());
-            if let Some(output) = output {
-                std::fs::write(output, svg)
-                    .with_context(|| format!("Failed to write SVG to {}", output.display()))?;
-                println!("✓ Gerber layer rendered to {}", output.display());
-            } else {
-                print!("{svg}");
-            }
-        }
-        RenderTarget::Png => {
-            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, resolution)?;
-            let png = pcb_ir::render::png(&mask, &pcb_ir::render::RenderOptions::default())
-                .map_err(gerberx2::GerberError::Render)?;
-            if let Some(output) = output {
-                std::fs::write(output, png)
-                    .with_context(|| format!("Failed to write PNG to {}", output.display()))?;
-                println!("✓ Gerber layer rendered to {}", output.display());
-            } else {
-                pcb_ui::write_stdout(|stdout| stdout.write_all(&png))
-                    .context("Failed to write PNG to stdout")?;
-            }
-        }
+    let options = pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy);
+    let (name, image) = match target {
+        RenderTarget::Svg => (
+            "SVG",
+            pcb_ir::render::artwork_svg(&geometry, &options)?.into_bytes(),
+        ),
+        RenderTarget::Png => (
+            "PNG",
+            pcb_ir::render::artwork_png(&geometry, &options)
+                .map_err(gerberx2::GerberError::Render)?,
+        ),
         RenderTarget::Terminal => {
-            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, resolution)?;
-            pcb_ir::render::to_terminal(&mask, &pcb_ir::render::RenderOptions::default())
-                .map_err(gerberx2::GerberError::Render)?;
+            return Ok(pcb_ir::render::artwork_to_terminal(&geometry, &options)
+                .map_err(gerberx2::GerberError::Render)?);
         }
+    };
+    match output {
+        Some(output) => {
+            std::fs::write(output, image)
+                .with_context(|| format!("Failed to write {name} to {}", output.display()))?;
+            println!("✓ Gerber layer rendered to {}", output.display());
+        }
+        None => pcb_ui::write_stdout(|stdout| stdout.write_all(&image))
+            .with_context(|| format!("Failed to write {name} to stdout"))?,
     }
-
     Ok(())
 }
 
