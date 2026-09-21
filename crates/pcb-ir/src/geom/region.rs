@@ -260,6 +260,16 @@ impl ContourSet {
         self.rings().map(signed_area_of).sum::<f64>().abs()
     }
 
+    /// Portions of `start..end` the region covers, in query direction. The
+    /// region boundary is covered; point-only contacts are omitted.
+    pub fn segment_spans(&self, start: Point, end: Point) -> Vec<(Point, Point)> {
+        let delta = end - start;
+        segment_inside_intervals(self, start, end)
+            .into_iter()
+            .map(|(from, to)| (start + delta * from, start + delta * to))
+            .collect()
+    }
+
     /// Test many points against the same region in one sweep.
     ///
     /// Testing points one at a time walks every edge per point. This sweeps
