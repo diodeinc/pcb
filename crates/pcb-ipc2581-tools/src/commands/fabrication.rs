@@ -68,227 +68,168 @@ struct DictionaryReference {
 /// documentation, logical-net, and DFX sections. Optional fabrication data is
 /// retained when it can affect the manufactured board.
 pub(crate) fn strip_non_manufacturing(xml: &str) -> Result<String> {
-    let normalized = normalize_layer_functions(xml)?;
-    let filtered = filter_sections_and_layers(&normalized)?;
-    let filtered = strip_component_associations(&filtered)?;
-    let filtered = prune_unreferenced_definitions(&filtered)?;
-    rewrite_function_mode(&filtered)
+    let doc = Doc::parse(xml)?;
+    Ok(edit::apply(xml, fabrication_edits(&doc)?)?)
 }
 
-fn normalize_layer_functions(xml: &str) -> Result<String> {
-    let doc = Doc::parse(xml)?;
-    let mut edits = Vec::new();
-    for layer in doc.find_all("Layer") {
-        let Some(normalized) =
-            doc.attr(layer, "layerFunction")
-                .and_then(|function| match function {
-                    // These aliases are accepted by the internal parser, but IPC-2581C
-                    // names the schema values ROUT and V_CUT.
-                    "ROUTE" => Some("ROUT"),
-                    "SCORE" => Some("V_CUT"),
-                    _ => None,
-                })
-        else {
-            continue;
-        };
-        let attrs = doc
-            .attrs(layer)
-            .map(|(name, value)| {
-                (
-                    name.to_string(),
-                    if name == "layerFunction" {
-                        normalized.to_string()
-                    } else {
-                        value.to_string()
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut writer = XmlWriter::new();
-        if doc.source(layer).ends_with("/>") {
-            writer.empty_element_with("Layer", attrs);
-        } else {
-            writer.start_element_with("Layer", attrs);
-        }
-        edits.push(doc.replace_start_tag(layer, writer.into_string()));
-    }
-    Ok(edit::apply(xml, edits)?)
-}
-
-fn filter_sections_and_layers(xml: &str) -> Result<String> {
-    let doc = Doc::parse(xml)?;
+/// The edits behind [`strip_non_manufacturing`], against one parsed document.
+///
+/// The projection runs in stages, each deciding from what the stages before
+/// it left alive: excluded sections and layers go first, then the pad stacks
+/// and specs nothing surviving references, then the dictionary entries
+/// nothing surviving reaches. Deletions only mark elements; the splices are
+/// emitted once at the end, so nested removals never overlap.
+pub(crate) fn fabrication_edits(doc: &Doc<'_>) -> Result<Vec<Edit>> {
     let root = doc.root()?;
-
-    let layers = doc
-        .find_all("Layer")
+    let elements = descendants(doc, root)
         .into_iter()
-        .filter_map(|node| {
-            Some((
-                doc.attr(node, "name")?,
-                doc.attr(node, "layerFunction")?,
-                node,
-            ))
-        })
+        .map(|node| (node, doc.span(node)))
         .collect::<Vec<_>>();
-    let known_layers = layers
+    let mut deleted = vec![false; elements.len()];
+
+    mark_excluded_sections_and_layers(doc, root, &elements, &mut deleted);
+    let alive = alive_elements(&elements, &deleted);
+    mark_unreferenced_definitions(doc, &elements, &alive, &mut deleted);
+    let alive = alive_elements(&elements, &deleted);
+    mark_unreferenced_dictionary_entries(doc, root, &elements, &alive, &mut deleted)?;
+    let alive = alive_elements(&elements, &deleted);
+
+    let survivors = || {
+        elements
+            .iter()
+            .zip(&alive)
+            .filter_map(|((node, _), alive)| alive.then_some(*node))
+    };
+    let section_key = section_key(doc, survivors());
+
+    let mut edits = Vec::new();
+    let mut deleted_end = 0;
+    for (index, (node, span)) in elements.iter().enumerate() {
+        if span.start < deleted_end {
+            continue;
+        }
+        if deleted[index] {
+            deleted_end = span.end;
+            edits.push(doc.delete(*node));
+        } else if let Some(edit) = rewritten_start_tag(doc, *node, &section_key) {
+            edits.push(edit);
+        }
+    }
+    Ok(edits)
+}
+
+/// Elements that are neither deleted nor inside a deleted element. Elements
+/// are in document order, so a deleted subtree is one contiguous run.
+fn alive_elements(elements: &[(Node, Range<usize>)], deleted: &[bool]) -> Vec<bool> {
+    let mut deleted_end = 0;
+    elements
         .iter()
-        .map(|(name, _, _)| *name)
-        .collect::<HashSet<_>>();
+        .zip(deleted)
+        .map(|((_, span), &deleted)| {
+            if span.start >= deleted_end && deleted {
+                deleted_end = span.end;
+            }
+            span.start >= deleted_end
+        })
+        .collect()
+}
+
+fn mark_excluded_sections_and_layers(
+    doc: &Doc<'_>,
+    root: Node,
+    elements: &[(Node, Range<usize>)],
+    deleted: &mut [bool],
+) {
+    let layers = elements
+        .iter()
+        .filter(|(node, _)| doc.name(*node) == "Layer")
+        .filter_map(|(node, _)| Some((doc.attr(*node, "name")?, doc.attr(*node, "layerFunction")?)))
+        .collect::<Vec<_>>();
+    let known_layers = layers.iter().map(|(name, _)| *name).collect::<HashSet<_>>();
     let retained_layers = layers
         .iter()
-        .filter(|(_, function, _)| is_manufacturing_layer(function))
-        .map(|(name, _, _)| *name)
+        .filter(|(_, function)| is_manufacturing_layer(function))
+        .map(|(name, _)| *name)
+        .collect::<HashSet<_>>();
+    let dropped = |name: Option<&str>| name.is_some_and(|name| !retained_layers.contains(name));
+    let known_dropped = |name: Option<&str>| {
+        name.is_some_and(|name| known_layers.contains(name) && !retained_layers.contains(name))
+    };
+    let root_sections = doc
+        .children(root)
+        .into_iter()
+        .filter(|child| matches!(doc.name(*child), "Bom" | "Avl"))
+        .map(|child| doc.span(child).start)
         .collect::<HashSet<_>>();
 
-    let mut deletions = Vec::new();
-    for child in doc.children(root) {
-        if matches!(doc.name(child), "Bom" | "Avl") {
-            deletions.push(child);
-        }
+    for ((node, span), deleted) in elements.iter().zip(deleted) {
+        let node = *node;
+        *deleted = match doc.name(node) {
+            "Bom" | "Avl" => root_sections.contains(&span.start),
+            "BomRef" | "AvlRef" | "PinRef" | "PortRef" => true,
+            name if EXCLUDED_STEP_CHILDREN.contains(&name) => true,
+            "Layer" => doc.attr(node, "layerFunction").is_some() && dropped(doc.attr(node, "name")),
+            "StackupLayer" => known_dropped(doc.attr(node, "layerOrGroupRef")),
+            "CADDataLayerRef" => known_dropped(doc.attr(node, "layerId")),
+            "LayerRef" => dropped(doc.attr(node, "name")),
+            "LayerFeature" => dropped(doc.attr(node, "layerRef")),
+            _ => false,
+        };
     }
-    for element in ["BomRef", "AvlRef"] {
-        deletions.extend(doc.find_all(element));
-    }
-    for element in EXCLUDED_STEP_CHILDREN {
-        deletions.extend(doc.find_all(element));
-    }
-    for (name, _, layer) in layers {
-        if !retained_layers.contains(name) {
-            deletions.push(layer);
-        }
-    }
-    for stackup_layer in doc.find_all("StackupLayer") {
-        if doc
-            .attr(stackup_layer, "layerOrGroupRef")
-            .is_some_and(|name| known_layers.contains(name) && !retained_layers.contains(name))
-        {
-            deletions.push(stackup_layer);
-        }
-    }
-    for layer_ref in doc.find_all("CADDataLayerRef") {
-        if doc
-            .attr(layer_ref, "layerId")
-            .is_some_and(|name| known_layers.contains(name) && !retained_layers.contains(name))
-        {
-            deletions.push(layer_ref);
-        }
-    }
-    for layer_ref in doc.find_all("LayerRef") {
-        if doc
-            .attr(layer_ref, "name")
-            .is_some_and(|name| !retained_layers.contains(name))
-        {
-            deletions.push(layer_ref);
-        }
-    }
-    for layer_feature in doc.find_all("LayerFeature") {
-        if doc
-            .attr(layer_feature, "layerRef")
-            .is_some_and(|name| !retained_layers.contains(name))
-        {
-            deletions.push(layer_feature);
-        }
-    }
-
-    apply_deletions(xml, &doc, deletions)
 }
 
-fn strip_component_associations(xml: &str) -> Result<String> {
-    let doc = Doc::parse(xml)?;
-    let root = doc.root()?;
-    let mut edits = Vec::new();
-
-    for node in descendants(&doc, root) {
-        if matches!(doc.name(node), "PinRef" | "PortRef") {
-            edits.push(doc.delete(node));
-            continue;
-        }
-
-        let attrs = doc
-            .attrs(node)
-            .filter(|(name, _)| {
-                !matches!(
-                    *name,
-                    "componentRef"
-                        | "compRef"
-                        | "packageRef"
-                        | "pinRef"
-                        | "bomRef"
-                        | "modelRef"
-                        | "matDes"
-                )
-            })
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect::<Vec<_>>();
-        if attrs.len() == doc.attrs(node).count() {
-            continue;
-        }
-
-        let mut writer = XmlWriter::new();
-        if doc.source(node).ends_with("/>") {
-            writer.empty_element_with(doc.name(node), attrs);
-        } else {
-            writer.start_element_with(doc.name(node), attrs);
-        }
-        edits.push(doc.replace_start_tag(node, writer.into_string()));
-    }
-
-    Ok(edit::apply(xml, edits)?)
-}
-
-fn prune_unreferenced_definitions(xml: &str) -> Result<String> {
-    let doc = Doc::parse(xml)?;
-    let root = doc.root()?;
-    let all_nodes = descendants(&doc, root);
-    let mut deletions = Vec::new();
-
-    let padstack_refs = all_nodes
-        .iter()
-        .filter_map(|node| doc.attr(*node, "padstackDefRef"))
+/// Pad stacks and specs that no surviving element references.
+fn mark_unreferenced_definitions(
+    doc: &Doc<'_>,
+    elements: &[(Node, Range<usize>)],
+    alive: &[bool],
+    deleted: &mut [bool],
+) {
+    let survivors = || {
+        elements
+            .iter()
+            .zip(alive)
+            .filter_map(|((node, _), alive)| alive.then_some(*node))
+    };
+    let padstack_refs = survivors()
+        .filter_map(|node| doc.attr(node, "padstackDefRef"))
         .collect::<HashSet<_>>();
-    for definition in doc.find_all("PadStackDef") {
-        if doc
-            .attr(definition, "name")
-            .is_none_or(|name| !padstack_refs.contains(name))
-        {
-            deletions.push(definition);
-        }
-    }
-
-    let spec_refs = all_nodes
-        .iter()
+    let spec_refs = survivors()
         .flat_map(|node| {
-            let element_ref = (doc.name(*node) == "SpecRef")
-                .then(|| doc.attr(*node, "id"))
+            let element_ref = (doc.name(node) == "SpecRef")
+                .then(|| doc.attr(node, "id"))
                 .flatten();
-            [element_ref, doc.attr(*node, "specRef")]
+            [element_ref, doc.attr(node, "specRef")]
                 .into_iter()
                 .flatten()
         })
         .collect::<HashSet<_>>();
-    for spec in doc.find_all("Spec") {
-        if doc
-            .attr(spec, "name")
-            .is_none_or(|name| !spec_refs.contains(name))
-        {
-            deletions.push(spec);
-        }
+
+    for (index, (node, _)) in elements
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| alive[*index])
+    {
+        let referenced = match doc.name(*node) {
+            "PadStackDef" => &padstack_refs,
+            "Spec" => &spec_refs,
+            _ => continue,
+        };
+        deleted[index] = doc
+            .attr(*node, "name")
+            .is_none_or(|name| !referenced.contains(name));
     }
-
-    let without_unreferenced_specs = apply_deletions(xml, &doc, deletions)?;
-    prune_unreferenced_dictionary_entries(&without_unreferenced_specs)
 }
 
-fn prune_unreferenced_dictionary_entries(xml: &str) -> Result<String> {
-    let doc = Doc::parse(xml)?;
-    let root = doc.root()?;
-    let all_nodes = descendants(&doc, root);
-    let deletions = unreferenced_dictionary_entries(&doc, &all_nodes)?;
-    apply_deletions(xml, &doc, deletions)
-}
-
-fn unreferenced_dictionary_entries<'a>(doc: &'a Doc<'a>, all_nodes: &[Node]) -> Result<Vec<Node>> {
-    let root = doc.root()?;
+/// Dictionary entries that nothing outside the dictionaries reaches, directly
+/// or through another reachable entry.
+fn mark_unreferenced_dictionary_entries<'a>(
+    doc: &'a Doc<'a>,
+    root: Node,
+    elements: &[(Node, Range<usize>)],
+    alive: &[bool],
+    deleted: &mut [bool],
+) -> Result<()> {
     let content = doc
         .child(root, "Content")
         .context("IPC-2581 document has no Content element")?;
@@ -298,178 +239,190 @@ fn unreferenced_dictionary_entries<'a>(doc: &'a Doc<'a>, all_nodes: &[Node]) -> 
         .map(|node| doc.span(node))
         .collect::<Vec<_>>();
 
-    let mut references = DICTIONARY_REFERENCES
+    // One walk splits every surviving reference by where it sits: inside a
+    // dictionary entry, where it counts only once that entry is reached, or
+    // outside the dictionaries, where it seeds the search.
+    let mut entries = Vec::<(usize, usize, &str)>::new();
+    let mut entry_references = Vec::<Vec<(usize, &str)>>::new();
+    let mut open_entries = Vec::<(usize, usize)>::new();
+    let mut pending = Vec::<(usize, &str)>::new();
+    for (index, (node, span)) in elements
         .iter()
-        .map(|kind| (kind.entry, HashSet::<&str>::new()))
-        .collect::<HashMap<_, _>>();
-
-    collect_dictionary_references(
-        doc,
-        all_nodes.iter().copied().filter(|node| {
-            let span = doc.span(*node);
-            !dictionary_spans
-                .iter()
-                .any(|dictionary| contains(dictionary, &span))
-        }),
-        &mut references,
-    );
-
-    loop {
-        let selected_entry_spans = DICTIONARY_REFERENCES
+        .enumerate()
+        .filter(|(index, _)| alive[*index])
+    {
+        while open_entries
+            .last()
+            .is_some_and(|(_, end)| span.start >= *end)
+        {
+            open_entries.pop();
+        }
+        if let Some(kind) = DICTIONARY_REFERENCES
             .iter()
-            .flat_map(|kind| {
-                let referenced = &references[kind.entry];
-                doc.find_all(kind.entry)
-                    .into_iter()
-                    .filter(move |entry| {
-                        doc.attr(*entry, "id")
-                            .is_some_and(|id| referenced.contains(id))
-                    })
-                    .map(|entry| doc.span(entry))
-            })
-            .collect::<Vec<_>>();
-        let before = references.values().map(HashSet::len).sum::<usize>();
-        collect_dictionary_references(
-            doc,
-            all_nodes.iter().copied().filter(|node| {
-                let span = doc.span(*node);
-                selected_entry_spans
-                    .iter()
-                    .any(|entry| contains(entry, &span))
-            }),
-            &mut references,
-        );
-        let after = references.values().map(HashSet::len).sum::<usize>();
-        if after == before {
-            break;
+            .position(|kind| kind.entry == doc.name(*node))
+        {
+            open_entries.push((entries.len(), span.end));
+            entries.push((index, kind, doc.attr(*node, "id").unwrap_or_default()));
+            entry_references.push(Vec::new());
+        }
+        let in_dictionary = dictionary_spans
+            .iter()
+            .any(|dictionary| contains(dictionary, span));
+        for reference in dictionary_references(doc, *node) {
+            for (entry, _) in &open_entries {
+                entry_references[*entry].push(reference);
+            }
+            if !in_dictionary {
+                pending.push(reference);
+            }
         }
     }
 
-    Ok(DICTIONARY_REFERENCES
-        .iter()
-        .flat_map(|kind| {
-            let referenced = &references[kind.entry];
-            doc.find_all(kind.entry).into_iter().filter(move |entry| {
-                doc.attr(*entry, "id")
-                    .is_none_or(|id| !referenced.contains(id))
-            })
-        })
-        .collect())
+    let mut entries_by_id = HashMap::<(usize, &str), Vec<usize>>::new();
+    for (entry, (index, kind, id)) in entries.iter().enumerate() {
+        if doc.attr(elements[*index].0, "id").is_some() {
+            entries_by_id.entry((*kind, *id)).or_default().push(entry);
+        }
+    }
+    let mut referenced = HashSet::new();
+    while let Some(reference) = pending.pop() {
+        if referenced.insert(reference) {
+            for &entry in entries_by_id.get(&reference).into_iter().flatten() {
+                pending.extend(entry_references[entry].iter().copied());
+            }
+        }
+    }
+
+    for (index, kind, id) in entries {
+        deleted[index] =
+            doc.attr(elements[index].0, "id").is_none() || !referenced.contains(&(kind, id));
+    }
+    Ok(())
 }
 
-fn collect_dictionary_references<'a>(
+/// The dictionary entries one element names, as (kind, id).
+fn dictionary_references<'a>(
     doc: &'a Doc<'a>,
-    nodes: impl Iterator<Item = Node>,
-    references: &mut HashMap<&'static str, HashSet<&'a str>>,
-) {
-    for node in nodes {
-        for kind in DICTIONARY_REFERENCES {
-            if doc.name(node) == kind.reference
-                && let Some(id) = doc.attr(node, "id")
-            {
-                references
-                    .get_mut(kind.entry)
-                    .expect("all dictionary entry kinds are initialized")
-                    .insert(id);
-            }
-            if let Some(attribute) = kind.attribute
-                && let Some(id) = doc.attr(node, attribute)
-            {
-                references
-                    .get_mut(kind.entry)
-                    .expect("all dictionary entry kinds are initialized")
-                    .insert(id);
-            }
-        }
-    }
+    node: Node,
+) -> impl Iterator<Item = (usize, &'a str)> {
+    DICTIONARY_REFERENCES
+        .iter()
+        .enumerate()
+        .flat_map(move |(kind_index, kind)| {
+            let element_ref = (doc.name(node) == kind.reference)
+                .then(|| doc.attr(node, "id"))
+                .flatten();
+            let attribute_ref = kind
+                .attribute
+                .and_then(|attribute| doc.attr(node, attribute));
+            [element_ref, attribute_ref]
+                .into_iter()
+                .flatten()
+                .map(move |id| (kind_index, id))
+        })
 }
 
-fn rewrite_function_mode(xml: &str) -> Result<String> {
-    let section_key = fabrication_section_key(xml)?;
-    let doc = Doc::parse(xml)?;
-    let mut edits = Vec::new();
-    for function_mode in doc.find_all("FunctionMode") {
-        let mut attrs = vec![
-            ("mode".to_string(), "FABRICATION".to_string()),
-            ("sectionKey".to_string(), section_key.clone()),
-        ];
-        attrs.extend(
-            doc.attrs(function_mode)
-                .filter(|(name, _)| !matches!(*name, "mode" | "sectionKey"))
-                .map(|(name, value)| (name.to_string(), value.to_string())),
-        );
-        let mut writer = XmlWriter::new();
+/// The start tag a surviving element keeps: without the attributes that tie
+/// it to components, with schema layer-function names, and for FunctionMode
+/// with the fabrication mode and its section key.
+fn rewritten_start_tag(doc: &Doc<'_>, node: Node, section_key: &str) -> Option<Edit> {
+    let name = doc.name(node);
+    let kept = || {
+        doc.attrs(node).filter(|(name, _)| {
+            !matches!(
+                *name,
+                "componentRef"
+                    | "compRef"
+                    | "packageRef"
+                    | "pinRef"
+                    | "bomRef"
+                    | "modelRef"
+                    | "matDes"
+            )
+        })
+    };
+    let mut writer = XmlWriter::new();
+    if name == "FunctionMode" {
+        let attrs = [("mode", "FABRICATION"), ("sectionKey", section_key)]
+            .into_iter()
+            .chain(kept().filter(|(name, _)| !matches!(*name, "mode" | "sectionKey")))
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect::<Vec<_>>();
         writer.empty_element_with("FunctionMode", attrs);
-        edits.push(doc.replace(function_mode, writer.into_string()));
+        return Some(doc.replace(node, writer.into_string()));
     }
-    Ok(edit::apply(xml, edits)?)
-}
 
-fn fabrication_section_key(xml: &str) -> Result<String> {
-    Ok(fabrication_section_key_union(std::slice::from_ref(
-        &Doc::parse(xml)?,
-    )))
+    // These aliases are accepted by the internal parser, but IPC-2581C names
+    // the schema values ROUT and V_CUT.
+    let normalized = |attribute: &str, value: &str| match (name, attribute, value) {
+        ("Layer", "layerFunction", "ROUTE") => "ROUT".to_string(),
+        ("Layer", "layerFunction", "SCORE") => "V_CUT".to_string(),
+        _ => value.to_string(),
+    };
+    let attrs = kept()
+        .map(|(attribute, value)| (attribute.to_string(), normalized(attribute, value)))
+        .collect::<Vec<_>>();
+    if attrs
+        .iter()
+        .map(|(attribute, value)| (attribute.as_str(), value.as_str()))
+        .eq(doc.attrs(node))
+    {
+        return None;
+    }
+    if doc.source(node).ends_with("/>") {
+        writer.empty_element_with(name, attrs);
+    } else {
+        writer.start_element_with(name, attrs);
+    }
+    Some(doc.replace_start_tag(node, writer.into_string()))
 }
 
 /// The IPC-2581 fabrication `sectionKey` implied by the union of the given
 /// documents' physical content. Element presence is monotone under document
 /// composition, so a composed document's key is the union of its sources'.
 pub(crate) fn fabrication_section_key_union(docs: &[Doc<'_>]) -> String {
-    let mut keys = HashSet::new();
-    for doc in docs {
-        collect_section_keys(doc, &mut keys);
-    }
+    ordered_section_key(docs.iter().flat_map(|doc| {
+        doc.root()
+            .map(|root| descendants(doc, root))
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(move |node| section_keys(doc, node))
+    }))
+}
+
+fn section_key(doc: &Doc<'_>, elements: impl Iterator<Item = Node>) -> String {
+    ordered_section_key(elements.flat_map(|node| section_keys(doc, node)))
+}
+
+fn ordered_section_key(keys: impl Iterator<Item = &'static char>) -> String {
+    let keys = keys.collect::<HashSet<_>>();
     "KSUMLRDOIEFY"
         .chars()
         .filter(|key| keys.contains(key))
         .collect()
 }
 
-fn collect_section_keys(doc: &Doc<'_>, keys: &mut HashSet<char>) {
-    if !doc.find_all("PadStackDef").is_empty() {
-        keys.insert('K');
-    }
-    if !doc.find_all("Stackup").is_empty() {
-        keys.insert('S');
-    }
-    if !doc.find_all("Profile").is_empty() {
-        keys.insert('U');
-    }
-    if !doc.find_all("PhyNetGroup").is_empty() {
-        keys.insert('Y');
-    }
-    for layer in doc.find_all("Layer") {
-        let Some(function) = doc.attr(layer, "layerFunction") else {
-            continue;
-        };
-        match function {
-            "SOLDERMASK" => {
-                keys.insert('M');
-            }
-            "SILKSCREEN" | "LEGEND" => {
-                keys.insert('L');
-            }
-            "DRILL" | "ROUT" | "ROUTE" | "V_CUT" | "SCORE" => {
-                keys.insert('R');
-            }
-            "BOARD_OUTLINE" => {
-                keys.insert('D');
-            }
-            "EDGE_CHAMFER" => {
-                keys.extend(['R', 'F']);
-            }
+/// The section keys one element's presence implies.
+fn section_keys(doc: &Doc<'_>, node: Node) -> &'static [char] {
+    match doc.name(node) {
+        "PadStackDef" => &['K'],
+        "Stackup" => &['S'],
+        "Profile" => &['U'],
+        "PhyNetGroup" => &['Y'],
+        "Layer" => match doc.attr(node, "layerFunction").unwrap_or_default() {
+            "SOLDERMASK" => &['M'],
+            "SILKSCREEN" | "LEGEND" => &['L'],
+            "DRILL" | "ROUT" | "ROUTE" | "V_CUT" | "SCORE" => &['R'],
+            "BOARD_OUTLINE" => &['D'],
+            "EDGE_CHAMFER" => &['R', 'F'],
             "CONDUCTOR" | "CONDFILM" | "CONDFOIL" | "PLANE" | "SIGNAL" | "MIXED" => {
-                match doc.attr(layer, "side") {
-                    Some("INTERNAL") => {
-                        keys.insert('I');
-                    }
-                    _ => {
-                        keys.insert('O');
-                    }
+                match doc.attr(node, "side") {
+                    Some("INTERNAL") => &['I'],
+                    _ => &['O'],
                 }
             }
             "DIELBASE" | "DIELCORE" | "DIELPREG" | "DIELADHV" | "DIELBONDPLY" | "DIELCOVERLAY" => {
-                keys.insert('E');
+                &['E']
             }
             "COATINGCOND"
             | "COATINGNONCOND"
@@ -481,11 +434,10 @@ fn collect_section_keys(doc: &Doc<'_>, keys: &mut HashSet<char>) {
             | "EDGE_PLATING"
             | "STIFFENER"
             | "CAPACITIVE"
-            | "RESISTIVE" => {
-                keys.insert('F');
-            }
-            _ => {}
-        }
+            | "RESISTIVE" => &['F'],
+            _ => &[],
+        },
+        _ => &[],
     }
 }
 
@@ -540,25 +492,6 @@ fn descendants(doc: &Doc<'_>, node: Node) -> Vec<Node> {
     let mut nodes = Vec::new();
     visit(doc, node, &mut nodes);
     nodes
-}
-
-fn apply_deletions(xml: &str, doc: &Doc<'_>, nodes: Vec<Node>) -> Result<String> {
-    let mut spans = nodes
-        .into_iter()
-        .map(|node| (doc.span(node), node))
-        .collect::<Vec<_>>();
-    spans.sort_by_key(|(span, _)| span.start);
-
-    let mut edits = Vec::<Edit>::new();
-    let mut deleted_end = 0;
-    for (span, node) in spans {
-        if span.start < deleted_end {
-            continue;
-        }
-        deleted_end = span.end;
-        edits.push(doc.delete(node));
-    }
-    Ok(edit::apply(xml, edits)?)
 }
 
 fn contains(outer: &Range<usize>, inner: &Range<usize>) -> bool {
