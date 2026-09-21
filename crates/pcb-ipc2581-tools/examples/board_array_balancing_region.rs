@@ -603,7 +603,7 @@ fn main() -> Result<()> {
 
 fn support_layer(
     source: ArraySupportLayerSource,
-    geometry: BoardArraySupportLayerGeometry<Symbol>,
+    geometry: BoardArraySupportLayerGeometry,
     copper_layer: Symbol,
 ) -> Result<SupportLayer> {
     Ok(SupportLayer {

@@ -201,9 +201,7 @@ fn vscore_route_reliefs_inner(
     })
 }
 
-pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Vec<VScoreLine> {
+pub fn vscore_lines_for(doc: &Document) -> Vec<VScoreLine> {
     vscore_feature_lines_for(doc)
         .into_iter()
         .map(|(_, line)| line)
@@ -212,9 +210,7 @@ pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
 
 /// Physical score centerlines with their source feature indices, preserving
 /// provenance for diagnostics while sharing the same operation interpretation.
-pub fn vscore_feature_lines_for<Symbol: PartialEq, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Vec<(usize, VScoreLine)> {
+pub fn vscore_feature_lines_for(doc: &Document) -> Vec<(usize, VScoreLine)> {
     let mut lines = Vec::new();
     for (feature_index, feature) in doc
         .features
@@ -252,17 +248,11 @@ pub fn vscore_feature_lines_for<Symbol: PartialEq, LayerFunction>(
 /// arrows and stroke-font labels. Those features inherit V-cut layer intent,
 /// but only operation geometry references a specification containing a
 /// `V_Cut` process item.
-pub fn is_vcut_operation_feature<Symbol: PartialEq, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    feature: &crate::dialects::ipc::Feature<Symbol>,
-) -> bool {
+pub fn is_vcut_operation_feature(doc: &Document, feature: &crate::dialects::ipc::Feature) -> bool {
     feature.is_vcut() && feature_has_vcut_spec(doc, feature)
 }
 
-fn feature_has_vcut_spec<Symbol: PartialEq, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    feature: &crate::dialects::ipc::Feature<Symbol>,
-) -> bool {
+fn feature_has_vcut_spec(doc: &Document, feature: &crate::dialects::ipc::Feature) -> bool {
     let Some(set_index) = feature.set else {
         return false;
     };
@@ -276,23 +266,17 @@ fn feature_has_vcut_spec<Symbol: PartialEq, LayerFunction>(
             .is_some_and(|layer| spec_refs_include_vcut(doc, layer.spec_refs))
 }
 
-fn spec_refs_include_vcut<Symbol: PartialEq, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    spec_refs: crate::geom::Span,
-) -> bool {
+fn spec_refs_include_vcut(doc: &Document, spec_refs: crate::geom::Span) -> bool {
     spec_refs
         .slice(&doc.spec_refs)
         .iter()
-        .any(|spec_ref| spec_is_vcut(doc, &spec_ref.spec))
+        .any(|spec_ref| spec_is_vcut(doc, spec_ref.spec))
 }
 
-fn spec_is_vcut<Symbol: PartialEq, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    spec_name: &Symbol,
-) -> bool {
+fn spec_is_vcut(doc: &Document, spec_name: ipc2581::Symbol) -> bool {
     doc.specs
         .iter()
-        .find(|spec| &spec.name == spec_name)
+        .find(|spec| spec.name == spec_name)
         .is_some_and(|spec| {
             spec.items
                 .slice(&doc.spec_items)
@@ -701,7 +685,7 @@ mod tests {
     use super::*;
     use crate::dialects::ipc::{
         Feature, FeatureDomain, FeatureKind, FeaturePlacementGroup, FeatureRole, FeatureSet, Spec,
-        SpecItem, SpecRef,
+        SpecItem, SpecRef, test_symbol as sym,
     };
     use crate::geom::{Affine2, LineCap, Paint, Polarity, Span, StrokeStyle};
     fn path(cmds: Vec<PathCmd>) -> Vec<ContourBuf> {
@@ -757,7 +741,7 @@ mod tests {
 
     #[test]
     fn vscore_lines_apply_shared_feature_placements() {
-        let mut doc = Document::<u32, ()>::new();
+        let mut doc = Document::new();
         let path = doc.push_path(
             Paint::Stroke(StrokeStyle::new(0.1, LineCap::Round)),
             [ContourBuf::new(vec![
@@ -766,17 +750,17 @@ mod tests {
             ])],
         );
         doc.spec_items.push(SpecItem {
-            element: 1,
+            element: sym(1),
             kind: SpecItemKind::VCut,
             item_type: None,
             comment: None,
             properties: Span::EMPTY,
         });
         doc.specs.push(Spec {
-            name: 10,
+            name: sym(10),
             items: Span::single(0),
         });
-        doc.spec_refs.push(SpecRef { spec: 10 });
+        doc.spec_refs.push(SpecRef { spec: sym(10) });
         doc.feature_sets.push(FeatureSet {
             layer: 0,
             source_set_index: 0,

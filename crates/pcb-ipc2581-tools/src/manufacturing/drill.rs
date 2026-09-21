@@ -55,7 +55,7 @@ enum XncSpanKey {
 
 fn xnc_files_from_nc(
     imported: &ImportedDesign,
-    nc: &nc::Document<ipc2581::Symbol>,
+    nc: &nc::Document,
     copper_layers: &[ipc2581::Symbol],
 ) -> Result<Vec<ManufacturingFile>> {
     let mut groups = std::collections::BTreeMap::<XncGroupKey, XncBuilder>::new();
@@ -116,7 +116,7 @@ fn xnc_file_function(key: &XncGroupKey, copper_layers: &[ipc2581::Symbol]) -> Xn
     )
 }
 
-fn xnc_tool_attributes(object: &nc::Object<ipc2581::Symbol>) -> Vec<XncAttribute> {
+fn xnc_tool_attributes(object: &nc::Object) -> Vec<XncAttribute> {
     let drill_function = match object.function {
         nc::Function::Via => "ViaDrill",
         nc::Function::Component => "ComponentDrill",
@@ -128,10 +128,7 @@ fn xnc_tool_attributes(object: &nc::Object<ipc2581::Symbol>) -> Vec<XncAttribute
     vec![XncAttribute::tool("AperFunction", fields)]
 }
 
-fn xnc_object_attributes(
-    imported: &ImportedDesign,
-    object: &nc::Object<ipc2581::Symbol>,
-) -> Vec<XncAttribute> {
+fn xnc_object_attributes(imported: &ImportedDesign, object: &nc::Object) -> Vec<XncAttribute> {
     let mut attributes = Vec::new();
     if let Some(net) = object.net {
         attributes.push(XncAttribute::object("N", [imported.resolve(net)]));
@@ -148,10 +145,7 @@ fn xnc_object_attributes(
     attributes
 }
 
-fn xnc_span_key(
-    copper_layers: &[ipc2581::Symbol],
-    span: &nc::DrillSpan<ipc2581::Symbol>,
-) -> XncSpanKey {
+fn xnc_span_key(copper_layers: &[ipc2581::Symbol], span: &nc::DrillSpan) -> XncSpanKey {
     match span {
         nc::DrillSpan::FromTo { from, to } => {
             let Some(from) = from.and_then(|layer| copper_layer_index(copper_layers, layer)) else {

@@ -42,7 +42,7 @@ pub(super) fn lower_feature_shape(
     doc: &mut GeometryDocument,
     shape: &FeatureShape,
     transform: Affine2,
-) -> Result<Option<(bool, Option<PrimitiveRef<Symbol>>)>> {
+) -> Result<Option<(bool, Option<PrimitiveRef>)>> {
     Ok(Some(match shape {
         FeatureShape::StandardPrimitive(primitive) => (
             lower_standard_primitive(context, doc, primitive, transform)?,

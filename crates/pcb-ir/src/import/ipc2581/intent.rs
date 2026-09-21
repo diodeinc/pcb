@@ -78,7 +78,7 @@ pub(super) fn complete_feature_intent(layer: &Layer, feature: &mut GeometryFeatu
     feature.reclassify();
 }
 
-pub(super) fn intent_for_layer(layer: &Layer) -> FeatureIntent<Symbol> {
+pub(super) fn intent_for_layer(layer: &Layer) -> FeatureIntent {
     let domain = layer_class(layer.layer_function).1;
     FeatureIntent {
         domain,
@@ -133,7 +133,7 @@ pub(super) fn material_for_domain(domain: FeatureDomain) -> FeatureMaterial {
     }
 }
 
-pub(super) fn span_for_layer(layer: &Layer, domain: FeatureDomain) -> FeatureSpan<Symbol> {
+pub(super) fn span_for_layer(layer: &Layer, domain: FeatureDomain) -> FeatureSpan {
     if let Some(span) = layer.span {
         return FeatureSpan::FromTo {
             from: span.from_layer,

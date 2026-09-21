@@ -20,9 +20,9 @@ pub use crate::dialects::assembly::{
     PackageDefinitionId, Population as PopulationState,
 };
 
-pub type GeometryDocument = crate::dialects::ipc::Document<Symbol, LayerFunction>;
-type GeometryLayer = crate::dialects::ipc::Layer<Symbol, LayerFunction>;
-type GeometryFeature = crate::dialects::ipc::Feature<Symbol>;
+pub type GeometryDocument = crate::dialects::ipc::Document;
+type GeometryLayer = crate::dialects::ipc::Layer;
+type GeometryFeature = crate::dialects::ipc::Feature;
 
 mod append;
 mod assembly;

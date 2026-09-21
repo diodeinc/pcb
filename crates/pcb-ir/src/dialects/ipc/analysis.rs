@@ -56,13 +56,13 @@ pub enum ProfileSet {
     RootOnly,
 }
 
-pub fn board_bbox<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) -> Option<BBox> {
+pub fn board_bbox(doc: &Document) -> Option<BBox> {
     layout_steps_by_kind(doc, LayoutStepKind::Board)
         .map(|(_, step)| step.bbox)
         .find(|bbox| !bbox.is_empty())
 }
 
-pub fn panel_bbox<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) -> Option<BBox> {
+pub fn panel_bbox(doc: &Document) -> Option<BBox> {
     root_panel_step(doc)
         .map(|(_, step)| step.bbox)
         .filter(|bbox| !bbox.is_empty())
@@ -73,9 +73,7 @@ pub fn panel_bbox<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) 
         })
 }
 
-pub fn root_step<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Option<(u32, &LayoutStep<Symbol>)> {
+pub fn root_step(doc: &Document) -> Option<(u32, &LayoutStep)> {
     let index = doc.layout.root_step?;
     doc.layout
         .steps
@@ -83,16 +81,14 @@ pub fn root_step<Symbol, LayerFunction>(
         .map(|step| (index, step))
 }
 
-pub fn root_panel_step<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Option<(u32, &LayoutStep<Symbol>)> {
+pub fn root_panel_step(doc: &Document) -> Option<(u32, &LayoutStep)> {
     root_step(doc).filter(|(_, step)| step.kind == LayoutStepKind::Panel)
 }
 
-pub fn layout_steps_by_kind<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+pub fn layout_steps_by_kind(
+    doc: &Document,
     kind: LayoutStepKind,
-) -> impl Iterator<Item = (u32, &LayoutStep<Symbol>)> {
+) -> impl Iterator<Item = (u32, &LayoutStep)> {
     doc.layout
         .steps
         .iter()
@@ -100,10 +96,10 @@ pub fn layout_steps_by_kind<Symbol, LayerFunction>(
         .filter_map(move |(index, step)| (step.kind == kind).then_some((index as u32, step)))
 }
 
-pub fn layout_instances_by_kind<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+pub fn layout_instances_by_kind(
+    doc: &Document,
     kind: LayoutStepKind,
-) -> impl Iterator<Item = (u32, &LayoutInstance<Symbol>)> {
+) -> impl Iterator<Item = (u32, &LayoutInstance)> {
     doc.layout
         .instances
         .iter()
@@ -114,11 +110,11 @@ pub fn layout_instances_by_kind<Symbol, LayerFunction>(
         })
 }
 
-pub fn layout_child_repeats<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+pub fn layout_child_repeats(
+    doc: &Document,
     parent_step: u32,
     parent_instance: Option<u32>,
-) -> impl Iterator<Item = (u32, &LayoutRepeat<Symbol>)> {
+) -> impl Iterator<Item = (u32, &LayoutRepeat)> {
     doc.layout
         .repeats
         .iter()
@@ -129,10 +125,10 @@ pub fn layout_child_repeats<Symbol, LayerFunction>(
         })
 }
 
-pub fn layout_repeat_instances<'a, Symbol, LayerFunction>(
-    doc: &'a Document<Symbol, LayerFunction>,
-    repeat: &LayoutRepeat<Symbol>,
-) -> impl Iterator<Item = (u32, &'a LayoutInstance<Symbol>)> {
+pub fn layout_repeat_instances<'a>(
+    doc: &'a Document,
+    repeat: &LayoutRepeat,
+) -> impl Iterator<Item = (u32, &'a LayoutInstance)> {
     repeat.instances.indices().filter_map(move |index| {
         doc.layout
             .instances
@@ -141,15 +137,15 @@ pub fn layout_repeat_instances<'a, Symbol, LayerFunction>(
     })
 }
 
-pub fn board_step_count<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) -> usize {
+pub fn board_step_count(doc: &Document) -> usize {
     layout_steps_by_kind(doc, LayoutStepKind::Board).count()
 }
 
-pub fn board_instance_count<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) -> usize {
+pub fn board_instance_count(doc: &Document) -> usize {
     layout_instances_by_kind(doc, LayoutStepKind::Board).count()
 }
 
-pub fn panel_step_count<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) -> usize {
+pub fn panel_step_count(doc: &Document) -> usize {
     layout_steps_by_kind(doc, LayoutStepKind::Panel).count()
 }
 
@@ -182,9 +178,7 @@ pub struct SimpleBoardArrayLayout {
 
 const SIMPLE_BOARD_ARRAY_EPSILON: f64 = 1e-6;
 
-pub fn simple_board_array_layout<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Option<SimpleBoardArrayLayout> {
+pub fn simple_board_array_layout(doc: &Document) -> Option<SimpleBoardArrayLayout> {
     let (array_step_index, array_step) = root_panel_step(doc)?;
     let array_bbox = array_step.bbox;
     if array_bbox.is_empty() || array_bbox.width() <= 0.0 || array_bbox.height() <= 0.0 {
@@ -214,11 +208,11 @@ pub fn simple_board_array_layout<Symbol, LayerFunction>(
     }
 }
 
-fn simple_direct_board_array<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+fn simple_direct_board_array(
+    doc: &Document,
     array_step_index: u32,
     array_repeat_index: u32,
-    repeat: &LayoutRepeat<Symbol>,
+    repeat: &LayoutRepeat,
 ) -> Option<SimpleBoardArrayLayout> {
     let array_step = doc.layout.steps.get(array_step_index as usize)?;
     let board_step = doc.layout.steps.get(repeat.child_step as usize)?;
@@ -271,11 +265,11 @@ fn simple_direct_board_array<Symbol, LayerFunction>(
     })
 }
 
-fn simple_board_cell_array<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+fn simple_board_cell_array(
+    doc: &Document,
     array_step_index: u32,
     array_repeat_index: u32,
-    repeat: &LayoutRepeat<Symbol>,
+    repeat: &LayoutRepeat,
 ) -> Option<SimpleBoardArrayLayout> {
     let array_step = doc.layout.steps.get(array_step_index as usize)?;
     let board_cell_step = doc.layout.steps.get(repeat.child_step as usize)?;
@@ -365,7 +359,7 @@ fn simple_margins_all(value: f64) -> LayoutMargins {
     }
 }
 
-fn simple_step_dimensions<Symbol>(step: &LayoutStep<Symbol>) -> Option<(f64, f64)> {
+fn simple_step_dimensions(step: &LayoutStep) -> Option<(f64, f64)> {
     (!step.bbox.is_empty() && step.bbox.width() > 0.0 && step.bbox.height() > 0.0)
         .then_some((step.bbox.width(), step.bbox.height()))
 }
@@ -516,8 +510,8 @@ pub struct ProfileOccurrence<'a> {
     pub depth: u32,
 }
 
-pub fn profile_occurrences_for<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+pub fn profile_occurrences_for(
+    doc: &Document,
     profile_set: ProfileSet,
 ) -> Vec<ProfileOccurrence<'_>> {
     if profile_set == ProfileSet::BoardOutlines {
@@ -593,9 +587,9 @@ struct ProfileOccurrenceSpec {
     depth: u32,
 }
 
-fn push_profile_occurrences<'a, Symbol, LayerFunction>(
+fn push_profile_occurrences<'a>(
     occurrences: &mut Vec<ProfileOccurrence<'a>>,
-    doc: &'a Document<Symbol, LayerFunction>,
+    doc: &'a Document,
     spec: ProfileOccurrenceSpec,
 ) {
     for profile_index in spec.profiles.indices() {
@@ -628,9 +622,7 @@ fn include_instance_profiles(
     }
 }
 
-fn board_profile_occurrences<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Vec<ProfileOccurrence<'_>> {
+fn board_profile_occurrences(doc: &Document) -> Vec<ProfileOccurrence<'_>> {
     let Some((step_index, step)) = layout_steps_by_kind(doc, LayoutStepKind::Board).next() else {
         return Vec::new();
     };
@@ -671,10 +663,7 @@ fn instance_profile_role(kind: LayoutStepKind) -> ProfileOccurrenceRole {
     }
 }
 
-pub(crate) fn instance_depth<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    instance_index: u32,
-) -> u32 {
+pub(crate) fn instance_depth(doc: &Document, instance_index: u32) -> u32 {
     let mut depth = 1;
     let mut remaining = doc.layout.instances.len();
     let mut parent = doc

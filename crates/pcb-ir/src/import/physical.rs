@@ -85,7 +85,7 @@ pub struct HoleProtectionEvidence {
     pub layer: LayerId,
     pub function: LayerFunction,
     pub side: Side,
-    pub span: FeatureSpan<Symbol>,
+    pub span: FeatureSpan,
     pub spec_refs: Vec<Symbol>,
 }
 
@@ -164,7 +164,7 @@ pub struct PhysicalHole {
     pub plating: PlatingKind,
     pub padstack: Option<Symbol>,
     pub net: Option<Symbol>,
-    pub span: FeatureSpan<Symbol>,
+    pub span: FeatureSpan,
     pub spec_refs: Vec<Symbol>,
     pub termination: Association<PhysicalTerminationId>,
     pub termination_basis: Option<AssociationBasis>,
@@ -825,11 +825,7 @@ impl ImportedDesign {
         Ok(())
     }
 
-    fn feature_spec_refs(
-        &self,
-        layer: &ipc2581::types::Layer,
-        feature: &Feature<Symbol>,
-    ) -> Vec<Symbol> {
+    fn feature_spec_refs(&self, layer: &ipc2581::types::Layer, feature: &Feature) -> Vec<Symbol> {
         let mut spec_refs = layer.spec_refs.clone();
         spec_refs.extend(
             feature
@@ -885,7 +881,7 @@ impl ImportedDesign {
         &self,
         layer: LayerId,
         scope: ArtworkScope,
-        include: impl Fn(&Feature<Symbol>) -> bool,
+        include: impl Fn(&Feature) -> bool,
         resolution: Resolution,
     ) -> Result<Vec<(crate::import::ipc2581::FeatureOccurrence, ContourSet)>> {
         let definition = self
@@ -973,10 +969,10 @@ impl ImportedDesign {
 
 struct OccurrenceAttribution;
 
-impl ArtworkLowering<Symbol, Option<FeatureOccurrenceId>> for OccurrenceAttribution {
+impl ArtworkLowering<Option<FeatureOccurrenceId>> for OccurrenceAttribution {
     fn object_meta(
         &mut self,
-        feature: &Feature<Symbol>,
+        feature: &Feature,
         _kind: ArtworkObjectKind,
     ) -> Option<FeatureOccurrenceId> {
         Some(
@@ -1262,7 +1258,7 @@ fn protection_side_compatible(assembly_side: Side, protection_side: Side) -> boo
         || (assembly_side != Side::None && assembly_side == protection_side)
 }
 
-fn feature_spans_layer(span: FeatureSpan<Symbol>, target: Symbol, layer_order: &[Symbol]) -> bool {
+fn feature_spans_layer(span: FeatureSpan, target: Symbol, layer_order: &[Symbol]) -> bool {
     // Source-land links retain candidates for unresolved spans, unlike exact
     // assembly evidence. Resolve known spans with the same physical predicate.
     if let FeatureSpan::FromTo { .. } | FeatureSpan::Unknown = span
@@ -1274,7 +1270,7 @@ fn feature_spans_layer(span: FeatureSpan<Symbol>, target: Symbol, layer_order: &
 }
 
 pub(super) fn feature_definitely_spans_layer(
-    span: FeatureSpan<Symbol>,
+    span: FeatureSpan,
     target: Symbol,
     stackup: Option<&[Symbol]>,
 ) -> bool {
@@ -1304,8 +1300,8 @@ pub(super) fn feature_definitely_spans_layer(
 }
 
 fn feature_spans_overlap(
-    left: FeatureSpan<Symbol>,
-    right: FeatureSpan<Symbol>,
+    left: FeatureSpan,
+    right: FeatureSpan,
     stackup: Option<&[Symbol]>,
 ) -> bool {
     if matches!(left, FeatureSpan::ThroughBoard) {
@@ -1340,7 +1336,7 @@ fn feature_spans_overlap(
     }
 }
 
-fn span_endpoints(span: FeatureSpan<Symbol>) -> Option<[Symbol; 2]> {
+fn span_endpoints(span: FeatureSpan) -> Option<[Symbol; 2]> {
     match span {
         FeatureSpan::Layer(layer) => Some([layer, layer]),
         FeatureSpan::FromTo {

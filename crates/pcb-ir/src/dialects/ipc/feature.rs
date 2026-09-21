@@ -1,13 +1,14 @@
 use crate::dialects::Side;
 use crate::dialects::ipc::layout::LayoutStepKind;
 use crate::geom::{Affine2, BBox, PaintKind, Point, Polarity, Span};
+use ipc2581::Symbol;
 
 /// One extracted layer feature.
 ///
 /// Geometry lives in `paths` (a span of `doc.arena.paths`), already placed by
 /// `transform` unless the feature belongs to a placement group.
 #[derive(Debug, Clone)]
-pub struct Feature<Symbol> {
+pub struct Feature {
     pub kind: FeatureKind,
     /// Export/render grouping, derived from `kind` and `intent` via
     /// [`FeatureBucket::classify`]. Extraction never writes this directly;
@@ -34,7 +35,7 @@ pub struct Feature<Symbol> {
     /// the feature paths are already in layer coordinates.
     pub placement_group: Option<u32>,
     pub source: SourceRef,
-    pub intent: FeatureIntent<Symbol>,
+    pub intent: FeatureIntent,
     pub fiducial_kind: FiducialKind,
     pub transform: Affine2,
     pub bbox: BBox,
@@ -45,7 +46,7 @@ pub struct Feature<Symbol> {
     /// The simple shape the geometry is exactly, when it is one.
     pub shape: Option<SimpleShape>,
     pub padstack_ref: Option<Symbol>,
-    pub primitive_ref: Option<PrimitiveRef<Symbol>>,
+    pub primitive_ref: Option<PrimitiveRef>,
     /// Spans `doc.pin_refs`.
     pub pin_refs: Span,
     pub flags: FeatureFlags,
@@ -55,12 +56,12 @@ pub struct Feature<Symbol> {
 /// The dictionary matters: standard entries are exact catalogue primitives
 /// (circles, rectangles, ovals), user entries are arbitrary contour shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PrimitiveRef<Symbol> {
+pub enum PrimitiveRef {
     Standard(Symbol),
     User(Symbol),
 }
 
-impl<Symbol: Copy> PrimitiveRef<Symbol> {
+impl PrimitiveRef {
     pub fn id(self) -> Symbol {
         match self {
             Self::Standard(id) | Self::User(id) => id,
@@ -68,7 +69,7 @@ impl<Symbol: Copy> PrimitiveRef<Symbol> {
     }
 }
 
-impl<Symbol> Feature<Symbol> {
+impl Feature {
     pub fn new(kind: FeatureKind, polarity: Polarity) -> Self {
         let intent = FeatureIntent::default();
         Self {
@@ -148,9 +149,7 @@ impl<Symbol> Feature<Symbol> {
     pub fn is_array_step_feature(&self) -> bool {
         self.source_step_kind == LayoutStepKind::Panel
     }
-}
 
-impl<Symbol: Clone> Feature<Symbol> {
     pub fn with_path_span(&self, bucket: FeatureBucket, paths: Span, bbox: BBox) -> Self {
         let mut feature = self.clone();
         feature.bucket = bucket;
@@ -249,7 +248,7 @@ impl FeatureBucket {
     /// decides, with pads split into through-hole/surface buckets by plating;
     /// features whose role carries no grouping of its own (conductors, array
     /// separation, outlines) fall back to trace-vs-fill by kind.
-    pub fn classify<Symbol>(kind: FeatureKind, intent: &FeatureIntent<Symbol>) -> Self {
+    pub fn classify(kind: FeatureKind, intent: &FeatureIntent) -> Self {
         match kind {
             FeatureKind::Hole | FeatureKind::Slot => Self::Cutout,
             _ => match intent.role {
@@ -280,17 +279,17 @@ impl FeatureBucket {
 
 /// Source-level fabrication meaning carried with geometry through processing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FeatureIntent<Symbol> {
+pub struct FeatureIntent {
     pub domain: FeatureDomain,
     pub role: FeatureRole,
     pub operation: FeatureOperation,
     pub material: FeatureMaterial,
     pub plating: PlatingKind,
-    pub span: FeatureSpan<Symbol>,
+    pub span: FeatureSpan,
     pub side: Side,
 }
 
-impl<Symbol> Default for FeatureIntent<Symbol> {
+impl Default for FeatureIntent {
     fn default() -> Self {
         Self {
             domain: FeatureDomain::Unknown,
@@ -372,7 +371,7 @@ pub enum PlatingKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FeatureSpan<Symbol> {
+pub enum FeatureSpan {
     Unknown,
     Layer(Symbol),
     ThroughBoard,
@@ -421,7 +420,7 @@ pub struct SourceRef {
 
 /// One IPC `Set` of features on a layer.
 #[derive(Debug, Clone)]
-pub struct FeatureSet<Symbol> {
+pub struct FeatureSet {
     pub layer: u32,
     pub source_set_index: u32,
     pub source_geometry_ref: Option<Symbol>,
@@ -460,7 +459,7 @@ pub struct FeaturePlacementGroup {
 }
 
 #[derive(Debug, Clone)]
-pub struct PinRef<Symbol> {
+pub struct PinRef {
     pub component_ref: Option<Symbol>,
     pub pin: Symbol,
     pub title: Option<Symbol>,

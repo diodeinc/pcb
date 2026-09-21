@@ -2,11 +2,8 @@ use std::collections::BTreeMap;
 
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::{ArtworkScope, FeatureKind, PlatingKind};
-use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
+use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign, LayerId};
 use serde::{Deserialize, Serialize};
-
-type GeometryDocument =
-    pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 /// Drill hole statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,9 +132,7 @@ fn collect_drill_info(doc: &GeometryDocument, collector: &mut DrillStatsCollecto
     }
 }
 
-fn drill_hole(
-    feature: &pcb_ir::dialects::ipc::Feature<ipc2581::Symbol>,
-) -> Option<(f64, DrillHoleType)> {
+fn drill_hole(feature: &pcb_ir::dialects::ipc::Feature) -> Option<(f64, DrillHoleType)> {
     if !feature.is_drill_like() || feature.kind != FeatureKind::Hole {
         return None;
     }

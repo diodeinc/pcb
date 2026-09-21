@@ -148,7 +148,7 @@ impl Source<'_> {
 
     /// The occurrence holding a feature, as the frame names it: `None` for
     /// the Step's own content, the scope's instance for what it places.
-    fn placed(&self, feature: &Feature<Symbol>) -> Option<u32> {
+    fn placed(&self, feature: &Feature) -> Option<u32> {
         let own = match self.root {
             LayoutOccurrenceId::Root => None,
             LayoutOccurrenceId::Instance(instance) => Some(instance),
@@ -1319,7 +1319,7 @@ fn slot_width(stated_mm: Option<f64>, measured: Distance) -> Result<Distance> {
 /// Resolve a drill span to an inclusive ordinal range over the copper
 /// stackup. Unknown, through-board, and unresolvable spans widen to `None`;
 /// so does a span that reaches no copper layer at all.
-fn copper_span(span: FeatureSpan<Symbol>, layers: &[ipc2581::types::Layer]) -> Option<(u16, u16)> {
+fn copper_span(span: FeatureSpan, layers: &[ipc2581::types::Layer]) -> Option<(u16, u16)> {
     let position = |name: Symbol| layers.iter().position(|layer| layer.name == name);
     let (low, high) = match span {
         FeatureSpan::Unknown | FeatureSpan::ThroughBoard => return None,
@@ -1354,7 +1354,7 @@ fn copper_span(span: FeatureSpan<Symbol>, layers: &[ipc2581::types::Layer]) -> O
 }
 
 fn drill_span(
-    span: FeatureSpan<Symbol>,
+    span: FeatureSpan,
     layers: &[ipc2581::types::Layer],
     whole_stack: (u16, u16),
     stackup: Option<&PhysicalStackup>,
@@ -1377,10 +1377,7 @@ fn drill_span(
     }
 }
 
-fn physical_copper_span(
-    span: FeatureSpan<Symbol>,
-    stackup: &PhysicalStackup,
-) -> Option<(u16, u16)> {
+fn physical_copper_span(span: FeatureSpan, stackup: &PhysicalStackup) -> Option<(u16, u16)> {
     let copper_index = |name: Symbol| {
         stackup
             .layers
@@ -1402,7 +1399,7 @@ fn physical_copper_span(
     }
 }
 
-fn source_net(document: &GeometryDocument, feature: &Feature<Symbol>) -> Option<Symbol> {
+fn source_net(document: &GeometryDocument, feature: &Feature) -> Option<Symbol> {
     feature.net.or_else(|| {
         feature
             .set
@@ -1411,7 +1408,7 @@ fn source_net(document: &GeometryDocument, feature: &Feature<Symbol>) -> Option<
     })
 }
 
-fn feature_provenance(source: Source<'_>, layer: &str, feature: &Feature<Symbol>) -> SourceLocator {
+fn feature_provenance(source: Source<'_>, layer: &str, feature: &Feature) -> SourceLocator {
     let imported = source.imported;
     let occurrence = feature_occurrence_id(feature)
         .expect("materialized DFM feature must retain its occurrence identity");
@@ -1441,12 +1438,8 @@ fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
 
 struct CopperAttributionLowering<'a>(Source<'a>);
 
-impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering<'_> {
-    fn object_meta(
-        &mut self,
-        feature: &Feature<Symbol>,
-        _kind: ArtworkObjectKind,
-    ) -> Option<ConductorId> {
+impl ArtworkLowering<Option<ConductorId>> for CopperAttributionLowering<'_> {
+    fn object_meta(&mut self, feature: &Feature, _kind: ArtworkObjectKind) -> Option<ConductorId> {
         let step = feature.source_step_ref;
         let instance = self.0.placed(feature);
         if let Some(net) = feature.net {
@@ -1514,7 +1507,7 @@ fn compose_attributed_copper(
 fn compose_attributed_owners<Owner: Clone + Eq + std::hash::Hash>(
     document: &mut GeometryDocument,
     role: LayerRole,
-    lowering: &mut impl ArtworkLowering<Symbol, Option<Owner>>,
+    lowering: &mut impl ArtworkLowering<Option<Owner>>,
     resolution: Resolution,
 ) -> Result<artwork::OwnerImages<Owner>> {
     pcb_ir::dialects::ipc::process::normalize_for_artwork(document, resolution)?;
@@ -1777,12 +1770,10 @@ fn stack_side(ordinal: usize, total: usize) -> &'static str {
 
 struct MaskAttributionLowering<'a>(Source<'a>);
 
-impl ArtworkLowering<Symbol, Option<(Option<Symbol>, Option<u32>)>>
-    for MaskAttributionLowering<'_>
-{
+impl ArtworkLowering<Option<(Option<Symbol>, Option<u32>)>> for MaskAttributionLowering<'_> {
     fn object_meta(
         &mut self,
-        feature: &Feature<Symbol>,
+        feature: &Feature,
         _kind: ArtworkObjectKind,
     ) -> Option<(Option<Symbol>, Option<u32>)> {
         Some((feature.source_step_ref, self.0.placed(feature)))

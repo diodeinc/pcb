@@ -24,7 +24,7 @@ use crate::copper_balance::{
 };
 use crate::generated::GeneratedLayerFeature;
 use crate::geometry;
-use crate::ipc2581::{Ipc2581, Symbol};
+use crate::ipc2581::Ipc2581;
 
 /// Plan best-effort copper balancing for every copper layer in a board array.
 ///
@@ -246,10 +246,8 @@ pub struct ArraySupportLayerSource {
     pub name: String,
     pub layer_function: LayerFunction,
     pub policy: BoardArraySupportLayerPolicy,
-    pub document: SupportDocument,
+    pub document: pcb_ir::import::ipc2581::GeometryDocument,
 }
-
-type SupportDocument = pcb_ir::dialects::ipc::Document<Symbol, LayerFunction>;
 
 /// Extract every ECAD layer as an `ArraySupport` document for safe-region
 /// discovery.

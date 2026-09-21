@@ -40,6 +40,7 @@ use crate::dialects::ipc::{
 };
 use crate::geom::accuracy::{ErrorAllocation, allocate_error};
 use crate::geom::{ContourSet, FillRule, Paint};
+use ipc2581::Symbol;
 
 /// Default Euclidean clearance from every protected feature.
 pub const DEFAULT_BALANCING_CLEARANCE_MM: f64 = 0.5;
@@ -68,12 +69,12 @@ pub struct BoardArrayBalancingInput {
 /// The list passed to the collector is the only copper-stack description used
 /// to resolve feature spans and surface-side geometry to copper layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BoardArrayCopperLayer<Symbol> {
+pub struct BoardArrayCopperLayer {
     pub name: Symbol,
     pub side: Side,
 }
 
-impl<Symbol> BoardArrayCopperLayer<Symbol> {
+impl BoardArrayCopperLayer {
     pub fn new(name: Symbol, side: Side) -> Self {
         Self { name, side }
     }
@@ -81,15 +82,15 @@ impl<Symbol> BoardArrayCopperLayer<Symbol> {
 
 /// Copper layers affected by one physical support-geometry region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BoardArrayCopperReach<Symbol> {
+pub enum BoardArrayCopperReach {
     /// Through-stack or conservatively unresolved physical geometry.
     All,
     /// Geometry confined to one copper layer or its adjacent surface.
     Layer(Symbol),
 }
 
-impl<Symbol: PartialEq> BoardArrayCopperReach<Symbol> {
-    fn includes(&self, layer: &Symbol) -> bool {
+impl BoardArrayCopperReach {
+    fn includes(self, layer: Symbol) -> bool {
         match self {
             Self::All => true,
             Self::Layer(affected) => affected == layer,
@@ -99,8 +100,8 @@ impl<Symbol: PartialEq> BoardArrayCopperReach<Symbol> {
 
 /// One disjoint copper-reach bucket from an extracted support layer.
 #[derive(Debug, Clone)]
-pub struct BoardArrayScopedObstacle<Symbol> {
-    pub reach: BoardArrayCopperReach<Symbol>,
+pub struct BoardArrayScopedObstacle {
+    pub reach: BoardArrayCopperReach,
     pub region: ContourSet,
 }
 
@@ -208,23 +209,20 @@ pub enum BoardArraySupportLayerPolicy {
 
 /// One already-extracted IPC `ArraySupport` layer.
 #[derive(Debug, Clone, Copy)]
-pub struct BoardArraySupportDocument<'a, Symbol, LayerFunction> {
-    pub document: &'a Document<Symbol, LayerFunction>,
+pub struct BoardArraySupportDocument<'a> {
+    pub document: &'a Document,
     pub policy: BoardArraySupportLayerPolicy,
 }
 
-impl<'a, Symbol, LayerFunction> BoardArraySupportDocument<'a, Symbol, LayerFunction> {
-    pub fn new(
-        document: &'a Document<Symbol, LayerFunction>,
-        policy: BoardArraySupportLayerPolicy,
-    ) -> Self {
+impl<'a> BoardArraySupportDocument<'a> {
+    pub fn new(document: &'a Document, policy: BoardArraySupportLayerPolicy) -> Self {
         Self { document, policy }
     }
 }
 
 /// Geometry and coverage accounting for one array-support layer.
 #[derive(Debug, Clone)]
-pub struct BoardArraySupportLayerGeometry<Symbol> {
+pub struct BoardArraySupportLayerGeometry {
     pub source_feature_count: usize,
     pub feature_count: usize,
     pub source_path_count: usize,
@@ -233,13 +231,13 @@ pub struct BoardArraySupportLayerGeometry<Symbol> {
     pub unpainted_path_count: usize,
     /// Canonical physical geometry, partitioned by copper reach. Each included
     /// support path contributes to exactly one bucket.
-    pub obstacles: Vec<BoardArrayScopedObstacle<Symbol>>,
+    pub obstacles: Vec<BoardArrayScopedObstacle>,
     /// The resolution every bucket was prepared at, kept for layers whose
     /// buckets are all empty.
     pub resolution: Resolution,
 }
 
-impl<Symbol: Copy + PartialEq> BoardArraySupportLayerGeometry<Symbol> {
+impl BoardArraySupportLayerGeometry {
     /// Derive this source layer's physical obstacle region for one copper
     /// layer. The scoped buckets remain the sole stored geometry.
     pub fn region_for_layer(&self, layer: Symbol) -> Result<ContourSet, AccuracyError> {
@@ -247,7 +245,7 @@ impl<Symbol: Copy + PartialEq> BoardArraySupportLayerGeometry<Symbol> {
             self.resolution,
             self.obstacles
                 .iter()
-                .filter(|obstacle| obstacle.reach.includes(&layer))
+                .filter(|obstacle| obstacle.reach.includes(layer))
                 .map(|obstacle| obstacle.region.clone()),
         )
     }
@@ -255,15 +253,15 @@ impl<Symbol: Copy + PartialEq> BoardArraySupportLayerGeometry<Symbol> {
 
 /// IPC-derived inputs and diagnostics, before safe-region computation.
 #[derive(Debug, Clone)]
-pub struct BoardArrayBalancingCollection<Symbol> {
+pub struct BoardArrayBalancingCollection {
     pub panel_outer: ContourSet,
     pub board_footprints: ContourSet,
     pub material_removal: ContourSet,
     pub board_instance_count: usize,
-    pub support_layers: Vec<BoardArraySupportLayerGeometry<Symbol>>,
+    pub support_layers: Vec<BoardArraySupportLayerGeometry>,
 }
 
-impl<Symbol: Copy + PartialEq> BoardArrayBalancingCollection<Symbol> {
+impl BoardArrayBalancingCollection {
     /// Derive the geometry-only input for one copper layer from the canonical
     /// scoped support geometry.
     pub fn input_for_layer(
@@ -297,7 +295,7 @@ impl<Symbol: Copy + PartialEq> BoardArrayBalancingCollection<Symbol> {
         self.support_layers
             .iter()
             .flat_map(|source| &source.obstacles)
-            .all(|obstacle| obstacle.reach.includes(&left) == obstacle.reach.includes(&right))
+            .all(|obstacle| obstacle.reach.includes(left) == obstacle.reach.includes(right))
     }
 }
 
@@ -450,17 +448,13 @@ pub fn board_array_balancing_region(
 ///
 /// Source-file traversal and view extraction stay outside `pcb-ir`; all
 /// geometry classification after extraction lives here.
-pub fn collect_board_array_balancing_input<'a, Symbol, LayerFunction>(
-    layout: &Document<Symbol, LayerFunction>,
+pub fn collect_board_array_balancing_input<'a>(
+    layout: &Document,
     fabrication_profile: &BoardArrayFabricationProfile,
-    copper_layers: &[BoardArrayCopperLayer<Symbol>],
-    support_documents: impl IntoIterator<Item = BoardArraySupportDocument<'a, Symbol, LayerFunction>>,
+    copper_layers: &[BoardArrayCopperLayer],
+    support_documents: impl IntoIterator<Item = BoardArraySupportDocument<'a>>,
     resolution: Resolution,
-) -> Result<BoardArrayBalancingCollection<Symbol>, BalancingRegionError>
-where
-    Symbol: Copy + PartialEq + 'a,
-    LayerFunction: 'a,
-{
+) -> Result<BoardArrayBalancingCollection, BalancingRegionError> {
     let collection = inspect_board_array_balancing_input(
         layout,
         fabrication_profile,
@@ -528,17 +522,13 @@ pub fn collect_fab_panel_balancing_input(
 /// Production consumers should use the fail-closed collector. This inspection
 /// entry point exists so a debug harness can serialize the offending geometry
 /// before reporting incomplete coverage.
-pub fn inspect_board_array_balancing_input<'a, Symbol, LayerFunction>(
-    layout: &Document<Symbol, LayerFunction>,
+pub fn inspect_board_array_balancing_input<'a>(
+    layout: &Document,
     fabrication_profile: &BoardArrayFabricationProfile,
-    copper_layers: &[BoardArrayCopperLayer<Symbol>],
-    support_documents: impl IntoIterator<Item = BoardArraySupportDocument<'a, Symbol, LayerFunction>>,
+    copper_layers: &[BoardArrayCopperLayer],
+    support_documents: impl IntoIterator<Item = BoardArraySupportDocument<'a>>,
     resolution: Resolution,
-) -> Result<BoardArrayBalancingCollection<Symbol>, BalancingRegionError>
-where
-    Symbol: Copy + PartialEq + 'a,
-    LayerFunction: 'a,
-{
+) -> Result<BoardArrayBalancingCollection, BalancingRegionError> {
     let panel_contours = fabrication_profile
         .array_outlines
         .iter()
@@ -585,11 +575,11 @@ where
     })
 }
 
-fn collect_support_layer_geometry<Symbol: Copy + PartialEq, LayerFunction>(
-    source: BoardArraySupportDocument<'_, Symbol, LayerFunction>,
-    copper_layers: &[BoardArrayCopperLayer<Symbol>],
+fn collect_support_layer_geometry(
+    source: BoardArraySupportDocument<'_>,
+    copper_layers: &[BoardArrayCopperLayer],
     resolution: Resolution,
-) -> Result<BoardArraySupportLayerGeometry<Symbol>, AccuracyError> {
+) -> Result<BoardArraySupportLayerGeometry, AccuracyError> {
     let source_path_count = source
         .document
         .features
@@ -613,8 +603,7 @@ fn collect_support_layer_geometry<Symbol: Copy + PartialEq, LayerFunction>(
         .iter()
         .filter(|path| matches!(path.paint, Paint::None))
         .count();
-    let mut scoped_features: Vec<(BoardArrayCopperReach<Symbol>, Vec<&Feature<Symbol>>)> =
-        Vec::new();
+    let mut scoped_features: Vec<(BoardArrayCopperReach, Vec<&Feature>)> = Vec::new();
     for feature in &features {
         let reach = copper_reach(feature, copper_layers);
         if let Some((_, grouped)) = scoped_features
@@ -667,10 +656,10 @@ fn collect_support_layer_geometry<Symbol: Copy + PartialEq, LayerFunction>(
 /// shapes or roles. Exact copper-layer spans stay local, surface geometry maps
 /// to the corresponding outer copper, and every unresolved/through span is
 /// conservatively stack-wide.
-fn copper_reach<Symbol: Copy + PartialEq>(
-    feature: &Feature<Symbol>,
-    copper_layers: &[BoardArrayCopperLayer<Symbol>],
-) -> BoardArrayCopperReach<Symbol> {
+fn copper_reach(
+    feature: &Feature,
+    copper_layers: &[BoardArrayCopperLayer],
+) -> BoardArrayCopperReach {
     if let FeatureSpan::Layer(layer) = feature.intent.span
         && copper_layers.iter().any(|copper| copper.name == layer)
     {
@@ -719,14 +708,12 @@ mod tests {
     use crate::dialects::ipc::{
         Feature, FeatureDomain, FeatureKind, FeaturePlacementGroup, FeatureRole, FeatureSet,
         LayoutInstance, LayoutPurpose, LayoutStep, LayoutStepKind, Spec, SpecItem, SpecItemKind,
-        SpecRef, StepProfile,
+        SpecRef, StepProfile, test_symbol as sym,
     };
     use crate::geom::{
         Affine2, BBox, ContourBuf, GeometryAccuracy, LineCap, Paint, PathCmd, Point, Polarity,
         Span, StrokeStyle,
     };
-
-    type TestDocument = Document<u32, ()>;
 
     #[test]
     fn computes_and_certifies_safe_region() {
@@ -1034,7 +1021,7 @@ mod tests {
     #[test]
     fn collector_derives_panel_boards_material_removal_and_support() {
         let (layout, profile) = layout_and_profile();
-        let mut support = TestDocument::new();
+        let mut support = Document::new();
         let path = support.push_path(
             Paint::Fill {
                 rule: FillRule::NonZero,
@@ -1043,13 +1030,13 @@ mod tests {
         );
         let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         feature.paths = Span::single(path);
-        feature.intent.span = FeatureSpan::Layer(100);
+        feature.intent.span = FeatureSpan::Layer(sym(100));
         support.features.push(feature);
 
         let copper_layers = [
-            BoardArrayCopperLayer::new(100, Side::Top),
-            BoardArrayCopperLayer::new(200, Side::Inner),
-            BoardArrayCopperLayer::new(300, Side::Inner),
+            BoardArrayCopperLayer::new(sym(100), Side::Top),
+            BoardArrayCopperLayer::new(sym(200), Side::Inner),
+            BoardArrayCopperLayer::new(sym(300), Side::Inner),
         ];
 
         let collection = collect_board_array_balancing_input(
@@ -1070,20 +1057,28 @@ mod tests {
         assert!((collection.panel_outer.area() - 200.0).abs() <= 1e-6);
         assert!((collection.board_footprints.area() - 12.0).abs() <= 1e-6);
         assert!((collection.material_removal.area() - 1.0).abs() <= 1e-6);
-        assert!((collection.support_features_for_layer(100).unwrap().area() - 1.0).abs() <= 1e-6);
+        assert!(
+            (collection
+                .support_features_for_layer(sym(100))
+                .unwrap()
+                .area()
+                - 1.0)
+                .abs()
+                <= 1e-6
+        );
         assert!(
             collection
-                .support_features_for_layer(200)
+                .support_features_for_layer(sym(200))
                 .unwrap()
                 .is_empty()
         );
-        assert!(!collection.has_same_support_scope(100, 200));
-        assert!(collection.has_same_support_scope(200, 300));
+        assert!(!collection.has_same_support_scope(sym(100), sym(200)));
+        assert!(collection.has_same_support_scope(sym(200), sym(300)));
     }
 
     #[test]
     fn support_geometry_applies_shared_feature_placements() {
-        let mut support = TestDocument::new();
+        let mut support = Document::new();
         let path = support.push_path(
             Paint::Fill {
                 rule: FillRule::NonZero,
@@ -1092,7 +1087,7 @@ mod tests {
         );
         let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         feature.paths = Span::single(path);
-        feature.intent.span = FeatureSpan::Layer(100);
+        feature.intent.span = FeatureSpan::Layer(sym(100));
         feature.placement_group = Some(0);
         support.features.push(feature);
         support.feature_placements.extend([
@@ -1111,11 +1106,11 @@ mod tests {
                 &support,
                 BoardArraySupportLayerPolicy::AllPaintedFeatures,
             ),
-            &[BoardArrayCopperLayer::new(100, Side::Top)],
+            &[BoardArrayCopperLayer::new(sym(100), Side::Top)],
             Resolution::default(),
         )
         .unwrap();
-        let region = geometry.region_for_layer(100).unwrap();
+        let region = geometry.region_for_layer(sym(100)).unwrap();
 
         assert_eq!(geometry.feature_count, 1);
         assert_eq!(geometry.path_count, 1);
@@ -1127,7 +1122,7 @@ mod tests {
 
     #[test]
     fn support_geometry_follows_ir_feature_span_and_surface_side() {
-        let mut support = TestDocument::new();
+        let mut support = Document::new();
         let top_surface_path = support.push_path(
             Paint::Fill {
                 rule: FillRule::NonZero,
@@ -1149,7 +1144,7 @@ mod tests {
 
         let mut top_surface = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         top_surface.paths = Span::single(top_surface_path);
-        top_surface.intent.span = FeatureSpan::Layer(900);
+        top_surface.intent.span = FeatureSpan::Layer(sym(900));
         top_surface.intent.side = Side::Top;
         support.features.push(top_surface);
 
@@ -1160,13 +1155,13 @@ mod tests {
 
         let mut bottom_copper = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         bottom_copper.paths = Span::single(bottom_copper_path);
-        bottom_copper.intent.span = FeatureSpan::Layer(200);
+        bottom_copper.intent.span = FeatureSpan::Layer(sym(200));
         bottom_copper.intent.side = Side::Bottom;
         support.features.push(bottom_copper);
 
         let copper_layers = [
-            BoardArrayCopperLayer::new(100, Side::Top),
-            BoardArrayCopperLayer::new(200, Side::Bottom),
+            BoardArrayCopperLayer::new(sym(100), Side::Top),
+            BoardArrayCopperLayer::new(sym(200), Side::Bottom),
         ];
         let geometry = collect_support_layer_geometry(
             BoardArraySupportDocument::new(
@@ -1177,8 +1172,8 @@ mod tests {
             Resolution::default(),
         )
         .unwrap();
-        let top = geometry.region_for_layer(100).unwrap();
-        let bottom = geometry.region_for_layer(200).unwrap();
+        let top = geometry.region_for_layer(sym(100)).unwrap();
+        let bottom = geometry.region_for_layer(sym(200)).unwrap();
 
         assert!((top.area() - 2.0).abs() <= 1e-6);
         assert!((bottom.area() - 2.0).abs() <= 1e-6);
@@ -1207,7 +1202,7 @@ mod tests {
 
     #[test]
     fn vcut_policy_excludes_documentation_but_keeps_operation_geometry() {
-        let mut support = TestDocument::new();
+        let mut support = Document::new();
         let operation_path = support.push_path(
             Paint::Stroke(StrokeStyle::new(0.1, LineCap::Round)),
             [line_contour(0.0, 0.0, 10.0, 0.0)],
@@ -1217,17 +1212,17 @@ mod tests {
             [line_contour(0.0, 2.0, 10.0, 2.0)],
         );
         support.spec_items.push(SpecItem {
-            element: 1,
+            element: sym(1),
             kind: SpecItemKind::VCut,
             item_type: None,
             comment: None,
             properties: Span::EMPTY,
         });
         support.specs.push(Spec {
-            name: 10,
+            name: sym(10),
             items: Span::single(0),
         });
-        support.spec_refs.push(SpecRef { spec: 10 });
+        support.spec_refs.push(SpecRef { spec: sym(10) });
         support.feature_sets.push(FeatureSet {
             layer: 0,
             source_set_index: 0,
@@ -1260,7 +1255,7 @@ mod tests {
                 &support,
                 BoardArraySupportLayerPolicy::VCutOperationsOnly,
             ),
-            &[BoardArrayCopperLayer::new(100, Side::Top)],
+            &[BoardArrayCopperLayer::new(sym(100), Side::Top)],
             Resolution::default(),
         )
         .unwrap();
@@ -1270,7 +1265,7 @@ mod tests {
         assert_eq!(geometry.source_path_count, 2);
         assert_eq!(geometry.path_count, 1);
         assert_eq!(geometry.excluded_documentation_path_count, 1);
-        assert!(geometry.region_for_layer(100).unwrap().bbox.max.y < 1.0);
+        assert!(geometry.region_for_layer(sym(100)).unwrap().bbox.max.y < 1.0);
     }
 
     #[test]
@@ -1341,7 +1336,7 @@ mod tests {
     #[test]
     fn collector_fails_closed_on_unpainted_support_geometry() {
         let (layout, profile) = layout_and_profile();
-        let mut support = TestDocument::new();
+        let mut support = Document::new();
         let path = support.push_path(Paint::None, [rectangle_contour(1.0, 1.0, 2.0, 2.0)]);
         support.features.push(Feature {
             paths: Span::single(path),
@@ -1351,7 +1346,7 @@ mod tests {
         let error = collect_board_array_balancing_input(
             &layout,
             &profile,
-            &[BoardArrayCopperLayer::new(100, Side::Top)],
+            &[BoardArrayCopperLayer::new(sym(100), Side::Top)],
             [BoardArraySupportDocument::new(
                 &support,
                 BoardArraySupportLayerPolicy::AllPaintedFeatures,
@@ -1381,8 +1376,8 @@ mod tests {
         }
     }
 
-    fn layout_and_profile() -> (TestDocument, BoardArrayFabricationProfile) {
-        let mut layout = TestDocument::new();
+    fn layout_and_profile() -> (Document, BoardArrayFabricationProfile) {
+        let mut layout = Document::new();
         let panel_path = layout.push_path(Paint::None, [rectangle_contour(0.0, 0.0, 20.0, 10.0)]);
         let board_path = layout.push_path(Paint::None, [rectangle_contour(0.0, 0.0, 4.0, 3.0)]);
         layout.profiles.push(StepProfile {
@@ -1397,7 +1392,7 @@ mod tests {
         });
         layout.layout.root_step = Some(0);
         layout.layout.steps.push(LayoutStep {
-            source_step_ref: 1,
+            source_step_ref: sym(1),
             kind: LayoutStepKind::Panel,
             purpose: LayoutPurpose::Product,
             datum: Point::default(),
@@ -1405,7 +1400,7 @@ mod tests {
             bbox: bbox(0.0, 0.0, 20.0, 10.0),
         });
         layout.layout.steps.push(LayoutStep {
-            source_step_ref: 2,
+            source_step_ref: sym(2),
             kind: LayoutStepKind::Board,
             purpose: LayoutPurpose::Product,
             datum: Point::default(),
@@ -1416,8 +1411,8 @@ mod tests {
             repeat: 0,
             parent_instance: None,
             child_step: 1,
-            source_step_ref: 2,
-            parent_step_ref: 1,
+            source_step_ref: sym(2),
+            parent_step_ref: sym(1),
             transform: Affine2::translation(Point::new(3.0, 2.0)),
             repeat_index_x: 0,
             repeat_index_y: 0,
@@ -1437,7 +1432,7 @@ mod tests {
         (layout, profile)
     }
 
-    fn vcut_feature(path: u32, set: u32) -> Feature<u32> {
+    fn vcut_feature(path: u32, set: u32) -> Feature {
         let mut feature = Feature::new(FeatureKind::Trace, Polarity::Dark);
         feature.intent.domain = FeatureDomain::VCut;
         feature.intent.role = FeatureRole::ArraySeparation;

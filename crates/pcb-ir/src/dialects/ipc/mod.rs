@@ -57,3 +57,14 @@ pub use surface_layers::{
     PhysicalLayer, SurfaceLayerError, TwoSidedSurfaceLayers, resolve_two_sided_surface_layers,
 };
 pub use validate::validate_artwork_ready;
+
+/// A symbol that equals another exactly when their indices are equal. The
+/// dialect compares names and never resolves them, so tests need no text.
+#[cfg(test)]
+pub(crate) fn test_symbol(index: u32) -> ipc2581::Symbol {
+    let mut interner = ipc2581::Interner::new();
+    (0..=index)
+        .map(|index| interner.intern(&index.to_string()))
+        .last()
+        .expect("the range is never empty")
+}

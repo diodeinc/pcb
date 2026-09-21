@@ -973,7 +973,7 @@ fn hole_plating(value: PlatingKind) -> report::HolePlating {
     }
 }
 
-fn hole_span(imported: &ImportedDesign, value: FeatureSpan<ipc2581::Symbol>) -> report::HoleSpan {
+fn hole_span(imported: &ImportedDesign, value: FeatureSpan) -> report::HoleSpan {
     match value {
         FeatureSpan::Unknown => report::HoleSpan {
             kind: report::HoleSpanKind::Unknown,

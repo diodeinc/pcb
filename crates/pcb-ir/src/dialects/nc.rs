@@ -2,17 +2,16 @@
 //! straight slots.
 
 use crate::geom::Point;
+use ipc2581::Symbol;
 
 #[derive(Debug, Clone, Default)]
-pub struct Document<Symbol = ()> {
-    pub objects: Vec<Object<Symbol>>,
+pub struct Document {
+    pub objects: Vec<Object>,
 }
 
-impl<Symbol> Document<Symbol> {
+impl Document {
     pub fn new() -> Self {
-        Self {
-            objects: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -21,10 +20,10 @@ impl<Symbol> Document<Symbol> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Object<Symbol = ()> {
+pub struct Object {
     pub geometry: Geometry,
     pub plating: Plating,
-    pub span: DrillSpan<Symbol>,
+    pub span: DrillSpan,
     pub function: Function,
     pub net: Option<Symbol>,
     pub component: Option<Symbol>,
@@ -59,8 +58,8 @@ pub enum Plating {
 }
 
 /// Which layers an operation spans through the stackup.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum DrillSpan<Symbol = ()> {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DrillSpan {
     ThroughBoard,
     FromTo {
         from: Option<Symbol>,

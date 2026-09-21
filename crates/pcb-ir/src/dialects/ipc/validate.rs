@@ -9,9 +9,7 @@ use crate::geom::{Diagnostics, PaintKind, Point, Span, tol};
 /// set-void semantics, homogeneous paint per feature, and circular arcs.
 /// Clear polarity is native — ordered artwork paints it with exactly IPC's
 /// sequential semantics. All problems are collected.
-pub fn validate_artwork_ready<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Result<(), Diagnostics> {
+pub fn validate_artwork_ready(doc: &Document) -> Result<(), Diagnostics> {
     let mut diagnostics = Diagnostics::default();
     validate_homogeneous_features_into(doc, &mut diagnostics);
     for (feature_index, feature) in doc.features.iter().enumerate() {
@@ -28,10 +26,7 @@ pub fn validate_artwork_ready<Symbol, LayerFunction>(
     diagnostics.into_result()
 }
 
-fn validate_homogeneous_features_into<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    diagnostics: &mut Diagnostics,
-) {
+fn validate_homogeneous_features_into(doc: &Document, diagnostics: &mut Diagnostics) {
     for (group_index, group) in doc.feature_placement_groups.iter().enumerate() {
         if let Err(error) = checked_span(group.features, "features", doc.features.len()) {
             diagnostics.error(format!("feature placement group {group_index}: {error}"));
@@ -79,10 +74,10 @@ fn validate_homogeneous_features_into<Symbol, LayerFunction>(
     }
 }
 
-fn validate_feature_arcs<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+fn validate_feature_arcs(
+    doc: &Document,
     feature_index: usize,
-    feature: &Feature<Symbol>,
+    feature: &Feature,
     diagnostics: &mut Diagnostics,
 ) {
     for path_index in feature.paths.indices() {
@@ -92,11 +87,7 @@ fn validate_feature_arcs<Symbol, LayerFunction>(
     }
 }
 
-fn validate_path_arcs<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    feature_index: usize,
-    path_index: u32,
-) -> Result<(), String> {
+fn validate_path_arcs(doc: &Document, feature_index: usize, path_index: u32) -> Result<(), String> {
     let path = &doc.arena.paths[path_index as usize];
     checked_span(path.contours, "path contours", doc.arena.contours.len())
         .map_err(|error| format!("feature {feature_index} path {path_index}: {error}"))?;

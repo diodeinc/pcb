@@ -3,34 +3,35 @@ use crate::dialects::ipc::layout::{LayoutGraph, StepProfile, StepProfileCutout};
 use crate::dialects::ipc::spec::{Spec, SpecItem, SpecProperty, SpecRef};
 use crate::geom::path::ContourBuf;
 use crate::geom::{Affine2, BBox, Diagnostic, Paint, PathArena, Resolution};
+use ipc2581::Symbol;
+use ipc2581::types::LayerFunction;
 
 const IDENTITY_PLACEMENT: [Affine2; 1] = [Affine2::IDENTITY];
 
 /// Source-faithful IPC-2581 geometry document.
 ///
-/// `Symbol` is the caller's interned-string handle; `LayerFunction` is the
-/// caller's layer-function type. pcb-ir never resolves either, so the dialect
-/// stays decoupled from any particular IPC-2581 parser.
-#[derive(Debug, Clone)]
-pub struct Document<Symbol, LayerFunction> {
-    pub layout: LayoutGraph<Symbol>,
-    pub layers: Vec<Layer<Symbol, LayerFunction>>,
+/// Names are [`Symbol`]s of the source file's interner, which the importer's
+/// caller keeps to resolve them.
+#[derive(Debug, Clone, Default)]
+pub struct Document {
+    pub layout: LayoutGraph,
+    pub layers: Vec<Layer>,
     pub profiles: Vec<StepProfile>,
     pub profile_cutouts: Vec<StepProfileCutout>,
-    pub specs: Vec<Spec<Symbol>>,
-    pub spec_items: Vec<SpecItem<Symbol>>,
-    pub spec_properties: Vec<SpecProperty<Symbol>>,
-    pub spec_refs: Vec<SpecRef<Symbol>>,
-    pub feature_sets: Vec<FeatureSet<Symbol>>,
-    pub features: Vec<Feature<Symbol>>,
+    pub specs: Vec<Spec>,
+    pub spec_items: Vec<SpecItem>,
+    pub spec_properties: Vec<SpecProperty>,
+    pub spec_refs: Vec<SpecRef>,
+    pub feature_sets: Vec<FeatureSet>,
+    pub features: Vec<Feature>,
     pub feature_placement_groups: Vec<FeaturePlacementGroup>,
     pub feature_placements: Vec<Affine2>,
-    pub pin_refs: Vec<PinRef<Symbol>>,
+    pub pin_refs: Vec<PinRef>,
     pub arena: PathArena,
     pub diagnostics: Vec<Diagnostic>,
 }
 
-impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
+impl Document {
     pub fn new() -> Self {
         Self::default()
     }
@@ -68,7 +69,7 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
     /// one identity placement. Grouped features retain one local definition
     /// and expose every placement recorded by the source IPC `Features`
     /// container.
-    pub fn placements_for_feature(&self, feature: &Feature<Symbol>) -> &[Affine2] {
+    pub fn placements_for_feature(&self, feature: &Feature) -> &[Affine2] {
         feature
             .placement_group
             .map_or(&IDENTITY_PLACEMENT, |group| {
@@ -79,7 +80,7 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
     }
 
     /// Layer-space bounds of a feature's local paths across its placements.
-    pub fn placed_paths_bbox(&self, feature: &Feature<Symbol>) -> BBox {
+    pub fn placed_paths_bbox(&self, feature: &Feature) -> BBox {
         let local = self.arena.paths_bbox(feature.paths);
         self.placements_for_feature(feature)
             .iter()
@@ -88,7 +89,7 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
     }
 
     /// Detach every contour occurrence of a feature in layer coordinates.
-    pub fn placed_feature_contours(&self, feature: &Feature<Symbol>) -> Vec<ContourBuf> {
+    pub fn placed_feature_contours(&self, feature: &Feature) -> Vec<ContourBuf> {
         self.placements_for_feature(feature)
             .iter()
             .flat_map(|&placement| {
@@ -103,9 +104,7 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
     pub fn warn(&mut self, message: impl Into<String>) {
         self.diagnostics.push(Diagnostic::warning(message));
     }
-}
 
-impl<Symbol: Copy + Eq + std::hash::Hash, LayerFunction: Clone> Document<Symbol, LayerFunction> {
     /// Consume a source layer into its final painted image through the
     /// artwork dialect, prepared at `resolution`.
     ///
@@ -132,31 +131,9 @@ impl<Symbol: Copy + Eq + std::hash::Hash, LayerFunction: Clone> Document<Symbol,
     }
 }
 
-impl<Symbol, LayerFunction> Default for Document<Symbol, LayerFunction> {
-    fn default() -> Self {
-        Self {
-            layout: LayoutGraph::default(),
-            layers: Vec::new(),
-            profiles: Vec::new(),
-            profile_cutouts: Vec::new(),
-            specs: Vec::new(),
-            spec_items: Vec::new(),
-            spec_properties: Vec::new(),
-            spec_refs: Vec::new(),
-            feature_sets: Vec::new(),
-            features: Vec::new(),
-            feature_placement_groups: Vec::new(),
-            feature_placements: Vec::new(),
-            pin_refs: Vec::new(),
-            arena: PathArena::default(),
-            diagnostics: Vec::new(),
-        }
-    }
-}
-
 /// One source layer with its extracted features.
 #[derive(Debug, Clone)]
-pub struct Layer<Symbol, LayerFunction> {
+pub struct Layer {
     pub name: String,
     pub source_layer_ref: Symbol,
     pub layer_function: LayerFunction,

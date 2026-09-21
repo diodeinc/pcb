@@ -30,11 +30,9 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::{BBox, LineCap, Paint, Polarity, Span, StrokeStyle};
-use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
+use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign, LayerId};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
-
-type IpcGeometryDocument = pcb_ir::dialects::ipc::Document<ipc2581::Symbol, LayerFunction>;
 
 /// The standard-primitive dictionary by entry id, built once per export:
 /// every pad-like feature of every layer looks its primitive up.
@@ -513,7 +511,7 @@ fn copper_layer_output(
 fn artwork_from_ipc_layer(
     imported: &ImportedDesign,
     standard_primitives: &StandardPrimitives,
-    doc: &IpcGeometryDocument,
+    doc: &GeometryDocument,
     layer_index: usize,
     spec: GerberArtworkSpec,
 ) -> GerberArtwork {
@@ -605,13 +603,13 @@ fn hierarchical_artwork_from_ipc_layer(
 struct GerberLowering<'a> {
     imported: &'a ImportedDesign,
     standard_primitives: &'a StandardPrimitives<'a>,
-    doc: &'a IpcGeometryDocument,
+    doc: &'a GeometryDocument,
     role: GerberLayerRole,
     side: IrSide,
 }
 
-impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
-    fn catalogue_aperture(&mut self, primitive: PrimitiveRef<ipc2581::Symbol>) -> Option<Aperture> {
+impl ArtworkLowering<ObjectAttributes> for GerberLowering<'_> {
+    fn catalogue_aperture(&mut self, primitive: PrimitiveRef) -> Option<Aperture> {
         let PrimitiveRef::Standard(id) = primitive else {
             return None;
         };
@@ -619,7 +617,7 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
     }
 
     /// Only pad-like copper and tiled balance cells may image as flashes.
-    fn flashes(&mut self, feature: &Feature<ipc2581::Symbol>) -> bool {
+    fn flashes(&mut self, feature: &Feature) -> bool {
         self.role != GerberLayerRole::Copper
             || feature.flags.copper_balance_void.is_some()
             || matches!(
@@ -633,7 +631,7 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
 
     /// Gerber orders removals rather than imaging them as clears, so every
     /// drilled or routed feature stages last regardless of its bucket.
-    fn paint_order(&mut self, feature: &Feature<ipc2581::Symbol>) -> PaintOrder {
+    fn paint_order(&mut self, feature: &Feature) -> PaintOrder {
         let stage = if feature.is_drill_like() {
             PaintStage::FinalCutout
         } else if feature.bucket == FeatureBucket::Fill {
@@ -644,11 +642,7 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
         PaintOrder { stage }
     }
 
-    fn object_meta(
-        &mut self,
-        feature: &Feature<ipc2581::Symbol>,
-        _kind: ArtworkObjectKind,
-    ) -> ObjectAttributes {
+    fn object_meta(&mut self, feature: &Feature, _kind: ArtworkObjectKind) -> ObjectAttributes {
         object_attributes(
             self.imported,
             self.doc,
@@ -996,7 +990,7 @@ fn payloads_bbox(payloads: &[ContourBuf]) -> BBox {
 fn append_profile_occurrences(
     artwork: &mut GerberArtwork,
     layer: u32,
-    doc: &IpcGeometryDocument,
+    doc: &GeometryDocument,
     profile_set: ProfileSet,
     style: ProfileGerberStyle,
 ) {
@@ -1091,8 +1085,8 @@ fn catalogue_aperture(primitive: &StandardPrimitive) -> Option<Aperture> {
 
 fn object_attributes(
     imported: &ImportedDesign,
-    doc: &IpcGeometryDocument,
-    feature: &Feature<ipc2581::Symbol>,
+    doc: &GeometryDocument,
+    feature: &Feature,
     role: GerberLayerRole,
     side: IrSide,
     aperture_function: Option<Vec<String>>,
@@ -1121,7 +1115,7 @@ fn object_attributes(
 }
 
 fn aperture_function(
-    feature: &Feature<ipc2581::Symbol>,
+    feature: &Feature,
     role: GerberLayerRole,
     side: IrSide,
 ) -> Option<Vec<String>> {
@@ -1210,7 +1204,7 @@ fn aperture_function(
     })
 }
 
-fn fiducial_aperture_function(feature: &Feature<ipc2581::Symbol>) -> Vec<String> {
+fn fiducial_aperture_function(feature: &Feature) -> Vec<String> {
     let kind = match feature.fiducial_kind {
         FiducialKind::Unknown => "Global",
         FiducialKind::Local => "Local",
@@ -2616,7 +2610,7 @@ mod tests {
 
             // Check source import and normalization before exporting.
             let mut doc = pcb_ir::import::ipc2581::extract_layer(&ipc, "TOP", resolution).unwrap();
-            let image = |doc: &pcb_ir::import::ipc2581::GeometryDocument| {
+            let image = |doc: &GeometryDocument| {
                 pcb_ir::geom::ContourSet::from_painted_paths(
                     &doc.arena,
                     doc.features

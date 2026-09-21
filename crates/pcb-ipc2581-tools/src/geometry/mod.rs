@@ -15,12 +15,10 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::geom::Resolution;
 use pcb_ir::geom::dfm::BBoxIndex;
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
+pub(crate) use pcb_ir::import::ipc2581::GeometryDocument;
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
 pub use pcb_ir::import::ipc2581::{extract_layer, extract_layer_for_view, extract_layout};
-
-pub(crate) type GeometryDocument =
-    pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 /// V-score centerlines per scoring layer (`VCut` and `Score` functions) for
 /// the given artwork scope.
@@ -236,7 +234,7 @@ struct ReliefRegion {
 }
 
 impl ReliefFeatureCandidate {
-    fn new(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Self {
+    fn new(doc: &GeometryDocument, feature: &Feature) -> Self {
         Self {
             contours: doc.placed_feature_contours(feature),
             bbox: feature.bbox,
@@ -288,7 +286,7 @@ fn relief_feature_layer(layer_function: LayerFunction) -> bool {
         || crate::layers::is_copper(layer_function)
 }
 
-fn is_through_cutout(feature: &Feature<Symbol>) -> bool {
+fn is_through_cutout(feature: &Feature) -> bool {
     matches!(feature.kind, FeatureKind::Hole | FeatureKind::Slot)
         && feature.bucket == FeatureBucket::Cutout
         && matches!(
@@ -300,7 +298,7 @@ fn is_through_cutout(feature: &Feature<Symbol>) -> bool {
         )
 }
 
-fn is_pad_envelope(feature: &Feature<Symbol>) -> bool {
+fn is_pad_envelope(feature: &Feature) -> bool {
     feature.kind == FeatureKind::Padstack
         && feature.polarity == Polarity::Dark
         && feature.intent.domain == FeatureDomain::Copper

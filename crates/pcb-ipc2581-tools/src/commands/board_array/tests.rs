@@ -1943,8 +1943,8 @@ fn assert_point_close(actual: Point, expected: Point) {
 fn assert_intent_eq(
     before_ipc: &Ipc2581,
     after_ipc: &Ipc2581,
-    before: &FeatureIntent<ipc2581::Symbol>,
-    after: &FeatureIntent<ipc2581::Symbol>,
+    before: &FeatureIntent,
+    after: &FeatureIntent,
 ) {
     assert_eq!(before.domain, after.domain);
     assert_eq!(before.role, after.role);
@@ -1958,7 +1958,7 @@ fn assert_intent_eq(
     );
 }
 
-fn resolved_feature_span(ipc: &Ipc2581, span: FeatureSpan<ipc2581::Symbol>) -> String {
+fn resolved_feature_span(ipc: &Ipc2581, span: FeatureSpan) -> String {
     match span {
         FeatureSpan::Unknown => "Unknown".to_string(),
         FeatureSpan::ThroughBoard => "ThroughBoard".to_string(),

@@ -9,14 +9,11 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::dialects::{LayerRole, Side};
 use pcb_ir::geom::{BBox, ContourBuf, FillRule, LineCap, Paint, Point, Polarity, Resolution};
 use pcb_ir::geom::{PathCmd, StrokeStyle};
-use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
+use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign, LayerId};
 use pcb_ir::render::{LayerStyle, RenderOptions};
 
 use crate::accessors::{BoardArrayGridInfo, IpcAccessor};
 use crate::layers::layer_role;
-
-type GeometryDocument =
-    pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 const OVERVIEW_STROKE_WIDTH_MM: f64 = 0.1;
 
@@ -245,8 +242,7 @@ impl Overview {
         };
         let (name, source_layer) = (layer.name.clone(), layer.source_layer_ref);
         let role = layer_role(layer.layer_function);
-        let native =
-            |feature: &Feature<ipc2581::Symbol>| feature.source_layer_ref == Some(source_layer);
+        let native = |feature: &Feature| feature.source_layer_ref == Some(source_layer);
 
         let scores = doc
             .features
@@ -278,10 +274,7 @@ impl Overview {
     }
 }
 
-fn vscore_guides(
-    doc: &GeometryDocument,
-    feature: &Feature<ipc2581::Symbol>,
-) -> Vec<(StrokeStyle, Vec<ContourBuf>)> {
+fn vscore_guides(doc: &GeometryDocument, feature: &Feature) -> Vec<(StrokeStyle, Vec<ContourBuf>)> {
     doc.placements_for_feature(feature)
         .iter()
         .flat_map(|&placement| {

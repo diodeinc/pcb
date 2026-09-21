@@ -4,14 +4,14 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use ipc2581::Symbol;
-use ipc2581::types::{LayerFunction, StepRepeat};
+use ipc2581::types::StepRepeat;
 use pcb_ir::dialects::artwork::{
     Document, Geometry, GridRepeat, Layer, Object, PaintStage, normalize_bounds,
 };
 use pcb_ir::geom::{Point, Polarity};
-use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, StepDefinition, step_repeat_transform};
-
-type GeometryDocument = pcb_ir::dialects::ipc::Document<Symbol, LayerFunction>;
+use pcb_ir::import::ipc2581::{
+    GeometryDocument, ImportedDesign, LayerId, StepDefinition, step_repeat_transform,
+};
 
 /// The Step a scope draws from: the design's primary Step, or the board
 /// definition it places.

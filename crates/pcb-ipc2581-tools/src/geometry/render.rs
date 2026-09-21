@@ -12,9 +12,8 @@ use pcb_ir::dialects::ipc::{
 };
 use pcb_ir::dialects::{LayerRole, Side};
 use pcb_ir::geom::{BBox, Paint, Polarity, Span, StrokeStyle};
-use pcb_ir::import::ipc2581::ImportedDesign;
+use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign};
 
-type GeometryDocument = pcb_ir::dialects::ipc::Document<Symbol, LayerFunction>;
 type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerFunction, Option<Symbol>>;
 
 const DISPLAY_PROFILE_STROKE_WIDTH_MM: f64 = 0.1;
@@ -106,14 +105,14 @@ fn layer_has_native_content(geometry: &GeometryDocument) -> bool {
         return false;
     };
     let features = layer.features.slice(&geometry.features);
-    let paints = |feature: &&Feature<Symbol>| {
+    let paints = |feature: &&Feature| {
         feature
             .paths
             .slice(&geometry.arena.paths)
             .iter()
             .any(|path| path.paint.is_painted() && !path.bbox.is_empty())
     };
-    let is_cutout = |feature: &Feature<Symbol>| feature.bucket == FeatureBucket::Cutout;
+    let is_cutout = |feature: &Feature| feature.bucket == FeatureBucket::Cutout;
     let cutouts_image = !crate::layers::is_copper(layer.layer_function)
         && features.iter().filter(paints).all(is_cutout);
     features

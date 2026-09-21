@@ -15,8 +15,8 @@ struct DxfVertex {
     bulge: f64,
 }
 
-pub fn render_profile_set_dxf<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+pub fn render_profile_set_dxf(
+    doc: &Document,
     profile_set: ProfileSet,
     accuracy: GeometryAccuracy,
 ) -> anyhow::Result<String> {
@@ -66,9 +66,9 @@ fn write_footer(dxf: &mut String) {
     dxf.push_str("0\nENDSEC\n0\nEOF\n");
 }
 
-fn write_path<Symbol, LayerFunction>(
+fn write_path(
     dxf: &mut String,
-    doc: &Document<Symbol, LayerFunction>,
+    doc: &Document,
     path_index: u32,
     transform: pcb_ir::geom::Affine2,
     accuracy: GeometryAccuracy,
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn preserves_profile_arcs_as_polyline_bulges() {
-        let mut doc = Document::<u32, ()>::new();
+        let mut doc = Document::new();
         let path = doc.push_path(
             Paint::None,
             [ContourBuf::new(vec![
@@ -247,7 +247,7 @@ mod tests {
         assert_eq!(dxf.matches("42\n1\n").count(), 2);
     }
 
-    fn rect_profile_doc() -> Document<u32, ()> {
+    fn rect_profile_doc() -> Document {
         let mut doc = Document::new();
         let outer_path = doc.push_path(
             Paint::None,
