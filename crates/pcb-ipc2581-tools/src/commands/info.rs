@@ -854,8 +854,8 @@ pub fn info_json(
                 .as_ref()
                 .and_then(|c| c.name.clone()),
             "soldermask_kind": canonical_soldermask_kind(stackup_details.soldermask_color.as_ref()),
-            "outer_copper_oz": stackup_details.outer_copper_oz(),
-            "inner_copper_oz": stackup_details.inner_copper_oz(),
+            "outer_copper_oz": stackup_details.outer_copper_oz,
+            "inner_copper_oz": stackup_details.inner_copper_oz,
         });
     }
 
