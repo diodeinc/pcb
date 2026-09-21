@@ -161,6 +161,9 @@ struct Writer<'a> {
     current_coordinates: Option<(i64, i64)>,
     /// The current point while it is known to continue a stroke.
     current_point: Option<(i64, i64)>,
+    /// Where the previous object's draw ended, while no other operation has
+    /// intervened.
+    stroke_end: Option<(i64, i64)>,
     current_aperture_attributes: Vec<AttributeValue>,
     current_object_attributes: Vec<AttributeValue>,
 }
@@ -176,6 +179,7 @@ impl<'a> Writer<'a> {
             current_repeat: None,
             current_coordinates: None,
             current_point: None,
+            stroke_end: None,
             current_aperture_attributes: Vec::new(),
             current_object_attributes: Vec::new(),
         }
@@ -345,11 +349,77 @@ impl<'a> Writer<'a> {
     }
 
     fn write_objects(&mut self, objects: &[WriterObject]) -> Result<()> {
-        for object in objects {
-            self.write_object(object)?;
+        for (index, object) in objects.iter().enumerate() {
+            if !self.is_covered_dot(object, objects.get(index + 1)) {
+                self.write_object(object)?;
+            }
         }
         self.close_step_repeat();
         Ok(())
+    }
+
+    /// Whether a segment's endpoints coincide at output precision. A full
+    /// circle is exempt; every other arc must not reach the file this way,
+    /// because G75 reads coincident arc endpoints as 360 degrees.
+    fn collapses(&self, start: Point, end: Point, arc: Option<(Point, bool)>) -> bool {
+        self.coordinates(start) == self.coordinates(end)
+            && arc.is_none_or(|(offset, clockwise)| {
+                geometry_arc(start, end, offset, clockwise).sweep_radians() <= std::f64::consts::PI
+            })
+    }
+
+    /// The point and aperture of a draw that images as a single dot.
+    fn dot(&self, kind: &ObjectKind) -> Option<((i64, i64), i32)> {
+        let (start, end, arc, aperture) = match *kind {
+            ObjectKind::Draw {
+                start,
+                end,
+                aperture,
+            } => (start, end, None, aperture),
+            ObjectKind::Arc {
+                start,
+                end,
+                center_offset,
+                clockwise,
+                aperture,
+            } => (start, end, Some((center_offset, clockwise)), aperture),
+            ObjectKind::Flash { .. } | ObjectKind::Region { .. } => return None,
+        };
+        self.collapses(start, end, arc)
+            .then(|| (self.coordinates(end), aperture))
+    }
+
+    /// A dot is redundant when the neighbouring draw of the same stroke
+    /// already images its disc; a dot on its own is the whole image.
+    fn is_covered_dot(&self, object: &WriterObject, next: Option<&WriterObject>) -> bool {
+        let Some((at, aperture)) = self.dot(&object.kind) else {
+            return false;
+        };
+        let before = self.stroke_end == Some(at)
+            && self.current_aperture == Some(aperture)
+            && self.current_polarity == object.polarity
+            && self.current_repeat == object.repeat
+            && self.current_object_attributes == object.attributes;
+        let after = next.is_some_and(|next| {
+            let continues = match next.kind {
+                ObjectKind::Draw {
+                    start,
+                    aperture: next_aperture,
+                    ..
+                }
+                | ObjectKind::Arc {
+                    start,
+                    aperture: next_aperture,
+                    ..
+                } => next_aperture == aperture && self.coordinates(start) == at,
+                ObjectKind::Flash { .. } | ObjectKind::Region { .. } => false,
+            };
+            continues
+                && next.polarity == object.polarity
+                && next.repeat == object.repeat
+                && next.attributes == object.attributes
+        });
+        before || after
     }
 
     fn write_object(&mut self, object: &WriterObject) -> Result<()> {
@@ -395,6 +465,10 @@ impl<'a> Writer<'a> {
                 self.write_region(contours)?;
             }
         }
+        self.stroke_end = match object.kind {
+            ObjectKind::Draw { .. } | ObjectKind::Arc { .. } => self.current_point,
+            ObjectKind::Flash { .. } | ObjectKind::Region { .. } => None,
+        };
 
         Ok(())
     }
@@ -490,23 +564,27 @@ impl<'a> Writer<'a> {
             self.current_point = None;
             self.write_move(segment_start(first));
             for segment in &contour.segments {
-                match *segment {
-                    ContourSegment::Line { start, end } => {
-                        if self.coordinates(start) == self.coordinates(end) {
-                            return Err(GerberError::InvalidStructure(format!(
-                                "region segment from ({}, {}) to ({}, {}) collapses at output precision; increase precision or repair the source geometry",
-                                start.x, start.y, end.x, end.y
-                            )));
-                        }
-                        self.set_plot_mode(PlotMode::Linear);
-                        self.write_plot(end, None);
-                    }
+                let (start, end, arc) = match *segment {
+                    ContourSegment::Line { start, end } => (start, end, None),
                     ContourSegment::Arc {
                         start,
                         end,
                         center_offset,
                         clockwise,
-                    } => {
+                    } => (start, end, Some((center_offset, clockwise))),
+                };
+                if self.collapses(start, end, arc) {
+                    return Err(GerberError::InvalidStructure(format!(
+                        "region segment from ({}, {}) to ({}, {}) collapses at output precision; increase precision or repair the source geometry",
+                        start.x, start.y, end.x, end.y
+                    )));
+                }
+                match arc {
+                    None => {
+                        self.set_plot_mode(PlotMode::Linear);
+                        self.write_plot(end, None);
+                    }
+                    Some((center_offset, clockwise)) => {
                         self.write_arc(start, end, center_offset, clockwise);
                     }
                 }
@@ -564,13 +642,12 @@ impl<'a> Writer<'a> {
     /// G75 interprets as a full circle.
     /// Equal subdivisions avoid leaving a tiny remainder for near-full circles.
     fn write_arc(&mut self, start: Point, end: Point, offset: Point, clockwise: bool) {
-        use pcb_ir::geom::{Arc, Point as GeometryPoint, Segment};
-        let arc = Arc::new(
-            GeometryPoint::new(start.x, start.y),
-            GeometryPoint::new(end.x, end.y),
-            GeometryPoint::new(start.x + offset.x, start.y + offset.y),
-            clockwise,
-        );
+        // A collapsed arc images as its dot.
+        if self.collapses(start, end, Some((offset, clockwise))) {
+            self.set_plot_mode(PlotMode::Linear);
+            return self.write_plot(end, None);
+        }
+        let arc = geometry_arc(start, end, offset, clockwise);
         let sweep = arc.sweep_radians();
         let count = (sweep / std::f64::consts::PI).ceil().max(1.0) as usize;
         self.set_plot_mode(if clockwise {
@@ -584,7 +661,7 @@ impl<'a> Writer<'a> {
             let next = if index == count {
                 end
             } else {
-                let point = Segment::Arc(arc).point_at(index as f64 / count as f64);
+                let point = pcb_ir::geom::Segment::Arc(arc).point_at(index as f64 / count as f64);
                 Point {
                     x: point.x,
                     y: point.y,
@@ -677,6 +754,16 @@ fn validate_no_command_delimiters(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn geometry_arc(start: Point, end: Point, offset: Point, clockwise: bool) -> pcb_ir::geom::Arc {
+    use pcb_ir::geom::Point as GeometryPoint;
+    pcb_ir::geom::Arc::new(
+        GeometryPoint::new(start.x, start.y),
+        GeometryPoint::new(end.x, end.y),
+        GeometryPoint::new(start.x + offset.x, start.y + offset.y),
+        clockwise,
+    )
+}
+
 fn segment_start(segment: &ContourSegment) -> Point {
     match *segment {
         ContourSegment::Line { start, .. } | ContourSegment::Arc { start, .. } => start,
@@ -764,6 +851,89 @@ mod tests {
         assert!(output.contains("G36*\nX3000000D02*"), "{output}");
         let parsed = crate::GerberX2::parse(&output).unwrap();
         assert_eq!(parsed.objects().len(), 5);
+    }
+
+    fn stroke_layer(objects: Vec<WriterObject>) -> GerberLayer {
+        GerberLayer {
+            apertures: [10, 11]
+                .map(|code| WriterAperture {
+                    code,
+                    template: WriterApertureTemplate::Circle {
+                        diameter: 0.1,
+                        hole_diameter: None,
+                    },
+                    attributes: Vec::new(),
+                })
+                .to_vec(),
+            objects,
+            ..GerberLayer::default()
+        }
+    }
+
+    #[test]
+    fn sub_grid_arc_serializes_as_a_dot_not_a_full_circle() {
+        let output = write_layer(&stroke_layer(vec![WriterObject::dark(ObjectKind::Arc {
+            start: Point { x: 10.0, y: 0.0 },
+            end: Point {
+                x: 10.000_000_3,
+                y: 0.000_000_2,
+            },
+            center_offset: Point { x: -5.0, y: 0.0 },
+            clockwise: false,
+            aperture: 10,
+        })]))
+        .unwrap();
+        assert!(
+            output.contains("X10000000Y0D02*\nG01*\nX10000000D01*\n"),
+            "{output}"
+        );
+        let parsed = crate::GerberX2::parse(&output).unwrap();
+        assert!(matches!(parsed.objects()[0].kind, ObjectKind::Draw { .. }));
+    }
+
+    #[test]
+    fn zero_length_draws_survive_only_as_a_whole_stroke() {
+        let point = |x: f64, y: f64| Point { x, y };
+        let draw = |start, end, aperture| {
+            WriterObject::dark(ObjectKind::Draw {
+                start,
+                end,
+                aperture,
+            })
+        };
+        let nudge = 0.000_000_3;
+        let plots = |objects| {
+            let output = write_layer(&stroke_layer(objects)).unwrap();
+            (
+                output.matches("D01*").count(),
+                output.matches("D02*").count(),
+            )
+        };
+        // Inside a polyline the neighbouring draws already image the point,
+        // whether the collapsed draw leads, sits inside, or trails.
+        assert_eq!(
+            plots(vec![
+                draw(point(0.0, 0.0), point(nudge, 0.0), 10),
+                draw(point(nudge, 0.0), point(1.0, 0.0), 10),
+                draw(point(1.0, 0.0), point(1.0, nudge), 10),
+                draw(point(1.0, nudge), point(1.0, 1.0), 10),
+                draw(point(1.0, 1.0), point(1.0, 1.0), 10),
+            ]),
+            (2, 1)
+        );
+        // A dot on its own is the whole image, as is one whose neighbour
+        // draws through a different aperture.
+        assert_eq!(
+            plots(vec![draw(point(2.0, 2.0), point(2.0, 2.0), 10)]),
+            (1, 1)
+        );
+        assert_eq!(
+            plots(vec![
+                draw(point(0.0, 0.0), point(1.0, 0.0), 10),
+                draw(point(1.0, 0.0), point(1.0, 0.0), 11),
+            ]),
+            (2, 1)
+        );
     }
 
     #[test]
