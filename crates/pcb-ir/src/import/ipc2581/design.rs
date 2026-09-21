@@ -413,7 +413,7 @@ impl ImportedDesign {
             board: (definition.kind == LayoutStepKind::Board).then_some(LayoutOccurrenceId::Root),
             root_from_board: Affine2::IDENTITY,
         };
-        self.materialize(layer, &[alone], Some(step))
+        self.materialize(layer, &[alone], Some(step), &|_| true)
     }
 
     pub fn feature_occurrences(
@@ -543,7 +543,7 @@ impl ImportedDesign {
         // A single-step view carries only that step's layout.
         let alone = matches!(scope, ArtworkScope::Board | ArtworkScope::ArrayLocal)
             .then(|| occurrences[0].step);
-        self.materialize(layer, &occurrences, alone)
+        self.materialize(layer, &occurrences, alone, &|_| true)
     }
 
     /// The Step occurrences `scope` materializes, each with the layout Step it
@@ -562,13 +562,52 @@ impl ImportedDesign {
     /// One layer of the part of `scope` that its Step occurrence `root`
     /// places, itself included, in that Step's own frame. Features keep the
     /// occurrence identity they have in `scope`, so they still join its
-    /// physical view; the layout is the root Step's alone.
+    /// physical view; the layout is the root Step's alone. An occurrence
+    /// that `held` declines leaves its features out and every other feature
+    /// as it would be among them.
     pub fn materialize_occurrence_layer(
         &self,
         layer: LayerId,
         scope: ArtworkScope,
         root: LayoutOccurrenceId,
+        held: &dyn Fn(LayoutOccurrenceId) -> bool,
     ) -> Result<GeometryDocument> {
+        let placed = self.placed_occurrences(scope, root)?;
+        self.materialize(layer, &placed, Some(placed[0].step), held)
+    }
+
+    /// Bounds of one layer in every Step occurrence that `root` places,
+    /// itself included, in the frame of `root`: they enclose what
+    /// [`Self::materialize_occurrence_layer`] holds of each.
+    pub fn occurrence_layer_bounds(
+        &self,
+        layer: LayerId,
+        scope: ArtworkScope,
+        root: LayoutOccurrenceId,
+    ) -> Result<Vec<(LayoutOccurrenceId, BBox)>> {
+        Ok(self
+            .placed_occurrences(scope, root)?
+            .into_iter()
+            .filter_map(|occurrence| {
+                let step_layer = self.step_layers.iter().find(|step_layer| {
+                    step_layer.layer == layer && step_layer.step == occurrence.step
+                })?;
+                let bounds = self.geometry.layers[step_layer.document_layer as usize].bbox;
+                Some((
+                    occurrence.layout,
+                    bounds.transformed(occurrence.root_from_step),
+                ))
+            })
+            .collect())
+    }
+
+    /// The occurrences of `scope` that `root` places, itself first, placed
+    /// in its own frame.
+    fn placed_occurrences(
+        &self,
+        scope: ArtworkScope,
+        root: LayoutOccurrenceId,
+    ) -> Result<Vec<StepOccurrence>> {
         let occurrences = self.step_occurrences(scope)?;
         let start = occurrences
             .iter()
@@ -591,7 +630,7 @@ impl ImportedDesign {
             .inverse()
             .context("layout occurrence has a singular placement")?;
         // Traversal order keeps an occurrence's placements right behind it.
-        let placed = occurrences[start..]
+        Ok(occurrences[start..]
             .iter()
             .take_while(placed_by_root)
             .map(|occurrence| StepOccurrence {
@@ -604,18 +643,18 @@ impl ImportedDesign {
                 root_from_board: frame_from_root.concat(occurrence.root_from_board),
                 ..*occurrence
             })
-            .collect::<Vec<_>>();
-        self.materialize(layer, &placed, Some(occurrences[start].step))
+            .collect())
     }
 
-    /// One layer's definitions copied into every given step occurrence, with
-    /// the layout of `alone` when the view is that single step and the whole
-    /// layout graph otherwise.
+    /// One layer's definitions copied into every given step occurrence that
+    /// `held` names, with the layout of `alone` when the view is that single
+    /// step and the whole layout graph otherwise.
     fn materialize(
         &self,
         layer: LayerId,
         occurrences: &[StepOccurrence],
         alone: Option<u32>,
+        held: &dyn Fn(LayoutOccurrenceId) -> bool,
     ) -> Result<GeometryDocument> {
         let definition = self
             .layer_definition(layer)
@@ -641,15 +680,18 @@ impl ImportedDesign {
                 continue;
             };
             let source_layer = step_layer.document_layer as usize;
-            bbox = bbox.union(append_transformed_layer(
-                &mut target,
-                &self.geometry,
-                source_layer,
-                occurrence.root_from_step,
-                source_set_offset,
-                occurrence.layout.source_instance(),
-                0,
-            )?);
+            if held(occurrence.layout) {
+                bbox = bbox.union(append_transformed_layer(
+                    &mut target,
+                    &self.geometry,
+                    source_layer,
+                    occurrence.root_from_step,
+                    source_set_offset,
+                    occurrence.layout.source_instance(),
+                    0,
+                )?);
+            }
+            // Sets are numbered across every occurrence, held or not.
             source_set_offset = source_set_offset
                 .checked_add(source_layer_set_span(&self.geometry, source_layer)?)
                 .context("layout contains too many source feature sets")?;

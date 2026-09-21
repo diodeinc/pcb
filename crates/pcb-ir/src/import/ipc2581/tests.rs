@@ -2102,7 +2102,7 @@ fn an_occurrence_layer_is_its_part_of_the_scope_in_its_own_frame() {
     );
     let placed = |root| {
         let document = design
-            .materialize_occurrence_layer(layer, scope, root)
+            .materialize_occurrence_layer(layer, scope, root, &|_| true)
             .unwrap();
         document
             .features
@@ -2131,10 +2131,40 @@ fn an_occurrence_layer_is_its_part_of_the_scope_in_its_own_frame() {
     assert_eq!(placed(Instance(5)), [(Point::new(2.0, 3.0), Some(5))]);
     assert!(
         design
-            .materialize_occurrence_layer(layer, ArtworkScope::Board, Instance(5))
+            .materialize_occurrence_layer(layer, ArtworkScope::Board, Instance(5), &|_| true)
             .is_err(),
         "the board scope holds the board alone, as its root"
     );
+
+    // Leaving an occurrence out leaves the others as they were among it.
+    let facts = |document: &GeometryDocument| {
+        let features = document.features.iter();
+        features
+            .map(|feature| {
+                let set = document.feature_set(feature).unwrap().source_set_index;
+                (feature.center, feature.source_instance, set, feature.bbox)
+            })
+            .collect::<Vec<_>>()
+    };
+    let whole = design
+        .materialize_occurrence_layer(layer, scope, Root, &|_| true)
+        .unwrap();
+    let without = design
+        .materialize_occurrence_layer(layer, scope, Root, &|held| held != Instance(3))
+        .unwrap();
+    let mut expected = facts(&whole);
+    expected.retain(|(_, instance, ..)| *instance != Some(3));
+    assert_eq!(facts(&without), expected);
+    assert_eq!(expected.len() + 1, whole.features.len());
+
+    // An occurrence's bounds are those of what it would hold.
+    let bounds = design.occurrence_layer_bounds(layer, scope, Root).unwrap();
+    for (occurrence, bounds) in bounds {
+        let alone = design
+            .materialize_occurrence_layer(layer, scope, Root, &|held| held == occurrence)
+            .unwrap();
+        assert_eq!(bounds, alone.layers[0].bbox, "{occurrence:?}");
+    }
 }
 
 /// The reported fabrication-panel bug: a render of a nested panel has to
