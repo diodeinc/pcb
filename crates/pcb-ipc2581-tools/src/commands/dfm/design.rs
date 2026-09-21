@@ -2071,24 +2071,17 @@ fn webbed_openings(source: Source<'_>, document: &GeometryDocument) -> BBoxIndex
     }
     let reach_mm = source.web_reach_mm();
     let webbed = placements.into_iter().flat_map(|(branch, openings)| {
-        let mut held = openings
-            .iter()
-            .map(|&bounds| outside.reaches(bounds, Some(branch), reach_mm))
-            .collect::<Vec<_>>();
+        let near = BBoxIndex::new(openings.clone());
+        let mut held = vec![false; openings.len()];
+        // From every opening that reaches outside the placement, along each
+        // chain of openings within reach of one another.
         let mut frontier = (0..openings.len())
-            .filter(|&opening| held[opening])
+            .filter(|&opening| outside.reaches(openings[opening], Some(branch), reach_mm))
             .collect::<Vec<_>>();
-        // Whatever reaches into another placement is held from there.
-        let near = BBoxIndex::new(if frontier.is_empty() {
-            Vec::new()
-        } else {
-            openings.clone()
-        });
         while let Some(opening) = frontier.pop() {
-            for other in near.query(openings[opening].expand(reach_mm)) {
-                if !std::mem::replace(&mut held[other], true) {
-                    frontier.push(other);
-                }
+            if !std::mem::replace(&mut held[opening], true) {
+                let chained = near.query(openings[opening].expand(reach_mm));
+                frontier.extend(chained.into_iter().filter(|&other| !held[other]));
             }
         }
         openings
