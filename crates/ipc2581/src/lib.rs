@@ -145,6 +145,12 @@ impl Ipc2581 {
         })
     }
 
+    /// Parse IPC-2581 that must first validate against the IPC-2581C schema.
+    pub fn parse_validated(xml: &str) -> Result<Self> {
+        validate(xml)?;
+        Self::parse(xml)
+    }
+
     /// Parse IPC-2581 from file
     #[cfg(not(target_family = "wasm"))]
     pub fn parse_file(path: impl AsRef<Path>) -> Result<Self> {
@@ -320,6 +326,23 @@ mod tests {
         let err = validate(xml).unwrap_err().to_string();
         assert!(err.contains("schema validation failed"));
         assert!(err.contains("LogisticHeader"));
+    }
+
+    #[test]
+    fn parse_validated_rejects_what_the_schema_rejects() {
+        // The parser alone accepts a document without its LogisticHeader.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY"/>
+  </Content>
+</IPC-2581>"#;
+
+        assert!(Ipc2581::parse(xml).is_ok());
+        assert!(matches!(
+            Ipc2581::parse_validated(xml),
+            Err(Ipc2581Error::SchemaValidation(_))
+        ));
     }
 
     #[test]
