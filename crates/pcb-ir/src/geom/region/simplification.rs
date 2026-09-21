@@ -219,7 +219,7 @@ fn decimate_ring_inward(ring: &[[f64; 2]], deviation_mm: f64) -> Ring {
 
 impl ContourSet {
     /// Decimate the region's boundary so it only shrinks; see
-    /// [`decimate_rings_inward`].
+    /// `decimate_rings_inward`.
     ///
     /// A chord takes one turn of winding off what it cuts from its ring and
     /// changes nothing elsewhere, so the decimated rings wind no point more

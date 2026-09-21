@@ -178,7 +178,7 @@ const EXHAUSTIVE_BUDGET: f64 = 3.0e6;
 /// Fewest tabs whose worst deflection is within the limit. A greedy pass
 /// with pruning and swapping gives a feasible set; the exhaustive search
 /// then finds the best set no larger than it, smallest count first, up to
-/// [`EXHAUSTIVE_TABS`] and while the enumeration stays within budget, which
+/// `EXHAUSTIVE_TABS` and while the enumeration stays within budget, which
 /// is what `proven` records. Always returns a set; check `violations`.
 pub fn select(sites: &[Site], loads: &[Point], model: &Model) -> Selection {
     let evaluator = Evaluator::new(sites, loads, model);

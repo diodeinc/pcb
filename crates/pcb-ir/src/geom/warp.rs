@@ -407,7 +407,7 @@ const SURFACE_DEGREE: usize = 12;
 /// which is the single largest source of uncertainty in the absolute result.
 ///
 /// The surface is the Ritz solution of the free plate: over every polynomial
-/// `w` up to [`SURFACE_DEGREE`], the one that leaves the plate's bending
+/// `w` up to `SURFACE_DEGREE`, the one that leaves the plate's bending
 /// energy, `D/2 (w_xx + w_yy)^2 - D (1 - nu) (w_xx w_yy - w_xy^2)`, less the
 /// moment's work on its curvature, `M (w_xx + w_yy)`, stationary over the
 /// panel, with `M` the thermal moment held constant over each cell. Free edges

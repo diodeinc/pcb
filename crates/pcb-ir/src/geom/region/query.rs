@@ -81,7 +81,7 @@ impl PreparedRegion {
     /// Uses floating-point arithmetic without snapping to the region tolerance.
     /// The distance is to the prepared boundary, every point of which lies
     /// within `uncertainty_mm` of a source boundary (see
-    /// [`crate::geom::accuracy`]); the source geometry's sign is uncertain when
+    /// the accuracy module); the source geometry's sign is uncertain when
     /// the band includes zero. A prepared boundary may carry seams the exact
     /// composition would not, so the distance is a lower bound on the distance
     /// to the exact composed set, never an upper bound.

@@ -3,7 +3,7 @@
 //! Writer-oriented: this dialect models what board *generators* produce —
 //! layers, nets, footprints with pads, tracks, vias, zones, and board
 //! graphics — not everything KiCad can read back. Coordinates are KiCad
-//! layout coordinates (millimeters, Y down). [`write`] serializes a
+//! layout coordinates (millimeters, Y down). [`write()`] serializes a
 //! document into KiCad 9/10 s-expression text.
 //!
 //! Identity is deterministic by design: every element carries a `uuid`

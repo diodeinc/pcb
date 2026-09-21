@@ -358,7 +358,7 @@ impl std::error::Error for BalancingRegionError {}
 ///
 /// Let `P` be [`BoardArrayBalancingInput::panel_outer`], `O` the union of the
 /// three obstacle inputs, `c`
-/// [`BalancingRegionOptions::construction_clearance_mm`], `q`
+/// [`BalancingRegionOptions::clearance_mm`], `q`
 /// [`BalancingRegionOptions::regularization_radius_mm`], and `v`
 /// [`BalancingRegionOptions::gap_radius_mm`]. The geometric stages are:
 ///
