@@ -9,9 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, ensure};
 use pcb_ir::dialects::ipc::{ArtworkScope, ProfileSet, profile_occurrences_for};
-use pcb_ir::dialects::{LayerRole, Side, mask};
+use pcb_ir::dialects::{LayerRole, Side, artwork, mask};
 use pcb_ir::geom::path::{ContourBuf, PathCmd};
-use pcb_ir::geom::{Affine2, BBox, FillRule, Point, shapes};
+use pcb_ir::geom::{Affine2, BBox, FillRule, Paint, Point, Polarity};
 use pcb_ir::render::RenderOptions;
 
 use super::design::Design;
@@ -34,7 +34,10 @@ enum GeometrySource {
     /// Native artwork uses the same scope and manufacturing composition as
     /// the checks, while retaining analytic curves for close inspection.
     Layer,
-    /// Analytic drills and un-clipped physical profile paths.
+    /// Analytic drills, drawn once for each Step that owns some and placed
+    /// wherever the layout places that Step.
+    Placed(artwork::Document<(), ()>),
+    /// Un-clipped physical profile paths and score lines.
     Shapes {
         shapes: Vec<Vec<ContourBuf>>,
         fill_rule: FillRule,
@@ -58,6 +61,24 @@ impl GeometryPass {
             color,
             source: GeometrySource::Layer,
             bounds,
+        }
+    }
+
+    fn placed(
+        feature: &'static str,
+        color: &'static str,
+        layer: String,
+        artwork: artwork::Document<(), ()>,
+    ) -> Self {
+        let drawn = &artwork.layers[0];
+        Self {
+            label: drawn.name.clone(),
+            feature,
+            layer: Some(layer),
+            role: drawn.role,
+            color,
+            bounds: drawn.bbox,
+            source: GeometrySource::Placed(artwork),
         }
     }
 
@@ -100,6 +121,7 @@ impl GeometryPass {
                     .with_context(|| format!("failed to prepare DFM scene layer {layer}"))?;
                 Ok(pcb_ir::render::artwork_svg(&artwork, &options)?)
             }
+            GeometrySource::Placed(artwork) => Ok(pcb_ir::render::artwork_svg(artwork, &options)?),
             GeometrySource::Shapes { shapes, fill_rule } => {
                 let mut doc = mask::Document::<()>::new();
                 let layer = doc.push_layer(mask::Layer::new(&self.label, self.role, Side::None));
@@ -222,6 +244,60 @@ pub(super) fn export(
     })
 }
 
+/// One drill layer of the whole layout: each Step's own holes and slots are a
+/// block, placed wherever the layout places the Step.
+fn placed_drills(designs: &[Design<'_>], layer: &str) -> artwork::Document<(), ()> {
+    let mut artwork = artwork::Document::new();
+    let drawn = artwork.push_layer(artwork::Layer::new(
+        format!("{layer} drills / routes"),
+        LayerRole::Drill,
+        Side::None,
+    ));
+    for design in designs {
+        let holes = design
+            .holes
+            .iter()
+            .filter(|hole| hole.branch.is_none() && hole.layer.name == layer)
+            .collect::<Vec<_>>();
+        let slots = design
+            .slots
+            .iter()
+            .filter(|slot| slot.branch.is_none() && slot.layer.name == layer)
+            .collect::<Vec<_>>();
+        if holes.is_empty() && slots.is_empty() {
+            continue;
+        }
+        let block = artwork.push_block();
+        for hole in holes {
+            let aperture = artwork.push_aperture(artwork::Aperture::circle(hole.diameter_mm));
+            let flash = artwork::Geometry::Flash {
+                aperture,
+                transform: Affine2::translation(hole.center),
+            };
+            artwork.push_block_object(block, artwork::Object::new(Polarity::Dark, flash));
+        }
+        // Match the check's independently filled contour union; source
+        // curves are retained instead of polygonized again.
+        for contour in slots.iter().flat_map(|slot| &slot.native_outline) {
+            let path = artwork.push_path(
+                Paint::Fill {
+                    rule: FillRule::EvenOdd,
+                },
+                [contour.clone()],
+            );
+            let region = artwork::Geometry::Region { path };
+            artwork.push_block_object(block, artwork::Object::new(Polarity::Dark, region));
+        }
+        for &placement in &design.placements {
+            let (transform, _) = design.placed(placement);
+            let instance = artwork::Geometry::Instance { block, transform };
+            artwork.push_object(drawn, artwork::Object::new(Polarity::Dark, instance));
+        }
+    }
+    artwork::normalize_bounds(&mut artwork);
+    artwork
+}
+
 fn pass_applies(source: &GeometryPass, layers: &[LayerRef]) -> bool {
     source
         .layer
@@ -269,37 +345,19 @@ fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> anyhow::Result<
         }
     }
     if wanted.contains("drills") {
-        let mut layers = BTreeMap::<String, Vec<Vec<ContourBuf>>>::new();
-        for hole in &design.holes {
-            if let Some(circle) = shapes::circle(hole.diameter_mm) {
-                layers
-                    .entry(hole.layer.name.clone())
-                    .or_default()
-                    .push(vec![circle.transformed(Affine2::translation(hole.center))]);
-            }
-        }
-        for slot in &design.slots {
-            layers
-                .entry(slot.layer.name.clone())
-                .or_default()
-                // Match the check's independently filled contour union;
-                // source curves are retained instead of polygonized again.
-                .extend(
-                    slot.native_outline
-                        .iter()
-                        .cloned()
-                        .map(|contour| vec![contour]),
-                );
-        }
-        for (layer, shapes) in layers {
-            passes.push(GeometryPass::shapes(
-                format!("{layer} drills / routes"),
+        let layers = designs
+            .iter()
+            .flat_map(|design| {
+                let holes = design.holes.iter().map(|hole| &hole.layer.name);
+                holes.chain(design.slots.iter().map(|slot| &slot.layer.name))
+            })
+            .collect::<BTreeSet<_>>();
+        for layer in layers {
+            passes.push(GeometryPass::placed(
                 "drills",
-                LayerRole::Drill,
                 "#5c7cfa",
-                Some(layer),
-                FillRule::EvenOdd,
-                shapes,
+                layer.clone(),
+                placed_drills(designs, layer),
             ));
         }
     }
@@ -476,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn outlines_and_drills_remain_full_native_paths_outside_any_site() {
+    fn outlines_remain_full_native_paths_outside_any_site() {
         let resolution = Resolution::default();
 
         let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
@@ -504,22 +562,51 @@ mod tests {
         assert!(svg.contains("-50"));
         assert!(svg.contains("50"));
         assert!(svg.contains("fill='none'"));
+    }
 
-        let circle = shapes::circle(1.0)
-            .unwrap()
-            .transformed(Affine2::translation(Point::new(40.0, -30.0)));
-        let drill = GeometryPass::shapes(
-            "Drills".into(),
-            "drills",
-            LayerRole::Drill,
-            "#5c7cfa",
-            Some("Drill".into()),
-            FillRule::EvenOdd,
-            vec![vec![circle]],
+    #[test]
+    fn drills_are_drawn_once_for_their_step_and_placed_with_it() {
+        let resolution = Resolution::default();
+        let ipc = Ipc2581::parse(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+          <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/><LayerRef name="DRILL"/></Content>
+          <Ecad><CadHeader units="MILLIMETER"/><CadData>
+            <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
+            <Step name="board" type="BOARD">
+              <LayerFeature layerRef="DRILL"><Set><Hole name="via" diameter="1" platingStatus="VIA" x="40" y="-30"/></Set></LayerFeature>
+            </Step>
+            <Step name="panel" type="PALLET">
+              <StepRepeat stepRef="board" x="100" y="0" nx="3" ny="1" dx="50" dy="0"/>
+              <LayerFeature layerRef="DRILL"><Set><Hole name="tooling" diameter="3" platingStatus="NONPLATED" x="5" y="5"/></Set></LayerFeature>
+            </Step>
+          </CadData></Ecad>
+        </IPC-2581>"#,
+        )
+        .unwrap();
+        let pdk = MASK_PDK.replace(
+            "[[rules.soldermask.web]]\n      id = \"mask-web\"",
+            "[[rules.drilling.hole_diameter]]\n      id = \"via\"\n      select = { hole = \"via\" }",
         );
-        let svg = drill.svg(&design, outline.bbox, 0).unwrap();
-        assert!(svg.contains('A'), "round drills retain analytic arcs");
-        assert!(svg.contains("40.5 -30"));
+        let rules = rules::lower(&pdk::Pdk::parse(&pdk).unwrap(), None).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
+        let designs =
+            Design::frames(&imported, ArtworkScope::ArrayFlattened, &rules, resolution).unwrap();
+        let drills = placed_drills(&designs, "DRILL");
+        let pass = GeometryPass::placed("drills", "#5c7cfa", "DRILL".into(), drills);
+        assert_eq!(
+            pass.bounds,
+            BBox::new(Point::new(3.5, -30.5), Point::new(240.5, 6.5)),
+            "every placement counts toward the scene"
+        );
+        let svg = pass.svg(&designs[0], pass.bounds, 0).unwrap();
+        assert_eq!(svg.matches(" A").count(), 2 * 4, "two analytic circles");
+        assert!(svg.contains("matrix(1 0 0 1 40 -30)"), "in its own Step");
+        for x in [100, 150, 200] {
+            assert!(
+                svg.contains(&format!("matrix(1 0 0 1 {x} 0)")),
+                "placed at {x}"
+            );
+        }
     }
 
     #[test]
