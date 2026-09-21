@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use anyhow::Result;
 use ipc2581::Symbol;
 use ipc2581::types;
@@ -659,39 +657,11 @@ fn geometry_reference(
 }
 
 fn package_shape_context(design: &ImportedDesign) -> super::ExtractContext<'_> {
-    super::ExtractContext {
-        strings: &design.strings,
-        resolution: crate::geom::Resolution::default(),
-        padstacks: HashMap::new(),
-        line_descs: design
-            .content
-            .dictionary_line_desc
-            .entries
-            .iter()
-            .map(|entry| (entry.id, entry.line_desc))
-            .collect(),
-        fill_descs: design
-            .content
-            .dictionary_fill_desc
-            .entries
-            .iter()
-            .map(|entry| (entry.id, entry.fill_desc))
-            .collect(),
-        standard_primitives: design
-            .content
-            .dictionary_standard
-            .entries
-            .iter()
-            .map(|entry| (entry.id, &entry.primitive))
-            .collect(),
-        user_primitives: design
-            .content
-            .dictionary_user
-            .entries
-            .iter()
-            .map(|entry| (entry.id, &entry.primitive))
-            .collect(),
-    }
+    super::ExtractContext::new(
+        &design.strings,
+        &design.content,
+        crate::geom::Resolution::default(),
+    )
 }
 
 fn map_bom(design: &ImportedDesign, bom: &types::Bom) -> ir::Bom {

@@ -283,6 +283,8 @@ struct LayoutInstanceSpec {
     repeat_pitch_y: f64,
 }
 
+/// Lookups shared by everything one import lowers: the file's dictionaries,
+/// plus the padstacks of the step being extracted.
 struct ExtractContext<'a> {
     strings: &'a Interner,
     resolution: Resolution,
@@ -291,6 +293,66 @@ struct ExtractContext<'a> {
     fill_descs: HashMap<Symbol, ipc2581::types::FillDesc>,
     standard_primitives: HashMap<Symbol, &'a StandardPrimitive>,
     user_primitives: HashMap<Symbol, &'a UserPrimitive>,
+    /// Physical layer order for slot spans; `None` when the stackup gives
+    /// none, so a spanned slot reaches only the layers its span names.
+    slot_layer_order: Option<Vec<Symbol>>,
+}
+
+impl<'a> ExtractContext<'a> {
+    fn new(
+        strings: &'a Interner,
+        content: &'a ipc2581::types::Content,
+        resolution: Resolution,
+    ) -> Self {
+        Self {
+            strings,
+            resolution,
+            padstacks: HashMap::new(),
+            line_descs: content
+                .dictionary_line_desc
+                .entries
+                .iter()
+                .map(|entry| (entry.id, entry.line_desc))
+                .collect(),
+            fill_descs: content
+                .dictionary_fill_desc
+                .entries
+                .iter()
+                .map(|entry| (entry.id, entry.fill_desc))
+                .collect(),
+            standard_primitives: content
+                .dictionary_standard
+                .entries
+                .iter()
+                .map(|entry| (entry.id, &entry.primitive))
+                .collect(),
+            user_primitives: content
+                .dictionary_user
+                .entries
+                .iter()
+                .map(|entry| (entry.id, &entry.primitive))
+                .collect(),
+            slot_layer_order: None,
+        }
+    }
+
+    /// The context for extracting layer features: slot spans need the
+    /// physical layer order, which is resolved (and reported) once.
+    fn for_layers(ipc: &'a Ipc2581, resolution: Resolution, doc: &mut GeometryDocument) -> Self {
+        let mut context = Self::new(ipc.interner(), ipc.content(), resolution);
+        if let Some(ecad) = ipc.ecad() {
+            context.slot_layer_order = resolve_slot_layer_order(doc, &ecad.cad_data);
+        }
+        context
+    }
+
+    fn enter_step(&mut self, step: &'a Step) {
+        self.padstacks = step
+            .padstack_defs
+            .iter()
+            .map(|padstack| (padstack.name, padstack))
+            .collect();
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -429,10 +491,10 @@ struct CopperBalanceVoidMetadata {
 }
 
 fn set_copper_balance_metadata(
-    ipc: &Ipc2581,
+    strings: &Interner,
     set: &ipc2581::types::FeatureSet,
 ) -> Result<Option<CopperBalanceMetadata>> {
-    let kind = nonstandard_attribute(ipc, set, COPPER_BALANCE_ATTRIBUTE_NAME, "STRING")?;
+    let kind = nonstandard_attribute(strings, set, COPPER_BALANCE_ATTRIBUTE_NAME, "STRING")?;
     let auxiliary_attributes = [
         (COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME, "STRING"),
         (COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME, "DOUBLE"),
@@ -445,7 +507,7 @@ fn set_copper_balance_metadata(
         if auxiliary_attributes.iter().any(|(name, _)| {
             set.nonstandard_attributes
                 .iter()
-                .any(|attribute| ipc.resolve(attribute.name) == *name)
+                .any(|attribute| strings.resolve(attribute.name) == *name)
         }) {
             bail!("copper-balance lattice metadata requires diode.copper_balance");
         }
@@ -454,7 +516,7 @@ fn set_copper_balance_metadata(
     let kind = CopperBalanceKind::from_attribute_value(kind)?;
     let void = if kind == CopperBalanceKind::FullVoid {
         let lattice = required_nonstandard_attribute(
-            ipc,
+            strings,
             set,
             COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME,
             "STRING",
@@ -465,28 +527,28 @@ fn set_copper_balance_metadata(
         let metadata = CopperBalanceVoidMetadata {
             lattice_origin: Point::new(
                 required_double_attribute(
-                    ipc,
+                    strings,
                     set,
                     COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME,
                 )?,
                 required_double_attribute(
-                    ipc,
+                    strings,
                     set,
                     COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME,
                 )?,
             ),
             lattice_pitch_mm: required_double_attribute(
-                ipc,
+                strings,
                 set,
                 COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME,
             )?,
             radius_mm: required_double_attribute(
-                ipc,
+                strings,
                 set,
                 COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME,
             )?,
             corner_radius_mm: required_double_attribute(
-                ipc,
+                strings,
                 set,
                 COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME,
             )?,
@@ -507,7 +569,7 @@ fn set_copper_balance_metadata(
         Some(metadata)
     } else {
         for (name, attribute_type) in auxiliary_attributes {
-            if nonstandard_attribute(ipc, set, name, attribute_type)?.is_some() {
+            if nonstandard_attribute(strings, set, name, attribute_type)?.is_some() {
                 bail!("copper-balance {kind:?} set must not carry lattice metadata");
             }
         }
@@ -517,28 +579,28 @@ fn set_copper_balance_metadata(
 }
 
 fn required_double_attribute(
-    ipc: &Ipc2581,
+    strings: &Interner,
     set: &ipc2581::types::FeatureSet,
     name: &str,
 ) -> Result<f64> {
-    let value = required_nonstandard_attribute(ipc, set, name, "DOUBLE")?;
+    let value = required_nonstandard_attribute(strings, set, name, "DOUBLE")?;
     value
         .parse::<f64>()
         .with_context(|| format!("{name} has invalid DOUBLE value '{value}'"))
 }
 
 fn required_nonstandard_attribute<'a>(
-    ipc: &'a Ipc2581,
+    strings: &'a Interner,
     set: &'a ipc2581::types::FeatureSet,
     name: &str,
     expected_type: &str,
 ) -> Result<&'a str> {
-    nonstandard_attribute(ipc, set, name, expected_type)?
+    nonstandard_attribute(strings, set, name, expected_type)?
         .with_context(|| format!("copper-balance set is missing {name}"))
 }
 
 fn nonstandard_attribute<'a>(
-    ipc: &'a Ipc2581,
+    strings: &'a Interner,
     set: &'a ipc2581::types::FeatureSet,
     name: &str,
     expected_type: &str,
@@ -546,7 +608,7 @@ fn nonstandard_attribute<'a>(
     let mut attributes = set
         .nonstandard_attributes
         .iter()
-        .filter(|attribute| ipc.resolve(attribute.name) == name);
+        .filter(|attribute| strings.resolve(attribute.name) == name);
     let Some(attribute) = attributes.next() else {
         return Ok(None);
     };
@@ -555,14 +617,14 @@ fn nonstandard_attribute<'a>(
     }
     let attr_type = attribute
         .attr_type
-        .map(|attr_type| ipc.resolve(attr_type))
+        .map(|attr_type| strings.resolve(attr_type))
         .with_context(|| format!("{name} attribute has no type"))?;
     if attr_type != expected_type {
         bail!("{name} attribute must have type {expected_type}, got '{attr_type}'");
     }
     attribute
         .value
-        .map(|value| ipc.resolve(value))
+        .map(|value| strings.resolve(value))
         .with_context(|| format!("{name} attribute has no value"))
         .map(Some)
 }
@@ -806,8 +868,10 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
         ensure_layout_step_for_step(&mut geometry, step);
     }
 
+    let mut context = ExtractContext::for_layers(ipc, resolution, &mut geometry);
     let mut step_layers = Vec::new();
     for step in &ecad.cad_data.steps {
+        context.enter_step(step);
         let step_id = geometry
             .layout
             .steps
@@ -818,13 +882,12 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
         for (layer_index, source_layer) in ecad.cad_data.layers.iter().enumerate() {
             let feature_start = geometry.features.len() as u32;
             let Some(document_layer) = append_step_layer(
-                ipc,
+                &context,
                 &mut geometry,
                 step,
                 &ecad.cad_data.layers,
                 source_layer,
                 ipc.resolve(source_layer.name),
-                resolution,
             )?
             else {
                 continue;
@@ -1556,7 +1619,9 @@ pub fn extract_step_layer_local(
     resolution: Resolution,
 ) -> Result<GeometryDocument> {
     let mut doc = GeometryDocument::new();
-    append_step_layer(ipc, &mut doc, step, layers, layer, layer_name, resolution)?;
+    let mut context = ExtractContext::for_layers(ipc, resolution, &mut doc);
+    context.enter_step(step);
+    append_step_layer(&context, &mut doc, step, layers, layer, layer_name)?;
     Ok(doc)
 }
 
@@ -1564,49 +1629,13 @@ pub fn extract_step_layer_local(
 /// index. A step with nothing on the layer appends nothing but the warnings
 /// for what it had to drop.
 fn append_step_layer(
-    ipc: &Ipc2581,
+    context: &ExtractContext<'_>,
     doc: &mut GeometryDocument,
     step: &Step,
     layers: &[Layer],
     layer: &Layer,
     layer_name: &str,
-    resolution: Resolution,
 ) -> Result<Option<u32>> {
-    let content = ipc.content();
-    let context = ExtractContext {
-        strings: ipc.interner(),
-        resolution,
-        padstacks: step
-            .padstack_defs
-            .iter()
-            .map(|padstack| (padstack.name, padstack))
-            .collect(),
-        line_descs: content
-            .dictionary_line_desc
-            .entries
-            .iter()
-            .map(|entry| (entry.id, entry.line_desc))
-            .collect(),
-        fill_descs: content
-            .dictionary_fill_desc
-            .entries
-            .iter()
-            .map(|entry| (entry.id, entry.fill_desc))
-            .collect(),
-        standard_primitives: content
-            .dictionary_standard
-            .entries
-            .iter()
-            .map(|entry| (entry.id, &entry.primitive))
-            .collect(),
-        user_primitives: content
-            .dictionary_user
-            .entries
-            .iter()
-            .map(|entry| (entry.id, &entry.primitive))
-            .collect(),
-    };
-
     let mark = DocumentMark::of(doc);
     let feature_start = doc.features.len() as u32;
     let set_start = doc.feature_sets.len() as u32;
@@ -1639,7 +1668,7 @@ fn append_step_layer(
             // layer's. They do not compose: Allegro marks anti-etch on NEGATIVE
             // planes as NEGATIVE sets, which clear like the antipads beside them.
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
-            let copper_balance = set_copper_balance_metadata(ipc, set)?;
+            let copper_balance = set_copper_balance_metadata(context.strings, set)?;
             if copper_balance.is_some_and(|metadata| metadata.void.is_some())
                 && set.features.len() != 1
             {
@@ -1655,7 +1684,7 @@ fn append_step_layer(
                 };
                 let mark = DocumentMark::of(doc);
                 let features = extract_set_feature(
-                    &context,
+                    context,
                     layer.name,
                     set.net,
                     polarity,
@@ -1669,7 +1698,7 @@ fn append_step_layer(
                     set_feature,
                     &features,
                     doc,
-                    resolution,
+                    context.resolution,
                 )?;
 
                 for mut feature in features {
@@ -1689,24 +1718,19 @@ fn append_step_layer(
         }
     }
 
-    // Resolve once, and only if a slot needs cross-layer span membership.
-    let mut slot_layer_order: Option<Option<Vec<Symbol>>> = None;
-    let stackups = ipc
-        .ecad()
-        .map_or(&[][..], |ecad| ecad.cad_data.stackups.as_slice());
+    // Holes stay on their drill layer; slots also image on the copper
+    // layers their fabrication layer spans.
     for layer_feature in &step.layer_features {
-        let Some(source_layer) = layers
-            .iter()
-            .find(|candidate| candidate.name == layer_feature.layer_ref)
-        else {
+        let Some(source_layer) = layers.iter().find(|candidate| {
+            candidate.name == layer_feature.layer_ref && candidate.layer_function.is_fabrication()
+        }) else {
             continue;
         };
         let is_drill_layer = source_layer.layer_function == LayerFunction::Drill;
-        let is_fabrication_layer = source_layer.layer_function.is_fabrication();
 
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
-            let copper_balance = set_copper_balance_metadata(ipc, set)?;
+            let copper_balance = set_copper_balance_metadata(context.strings, set)?;
             let mut emitted = Vec::new();
 
             if is_drill_layer && source_layer.name == layer.name {
@@ -1724,32 +1748,24 @@ fn append_step_layer(
                 }
             }
 
-            if is_fabrication_layer {
-                for (feature_index, set_feature) in set.features.iter().enumerate() {
-                    if let SetFeature::Slot(slot) = set_feature {
-                        if !slot_applies_to_layer(
-                            source_layer,
-                            layer,
-                            || {
-                                slot_layer_order
-                                    .get_or_insert_with(|| {
-                                        resolve_slot_layer_order(doc, stackups, layers)
-                                    })
-                                    .as_deref()
-                            },
-                            slot,
-                        ) {
-                            continue;
-                        }
-                        let source = SourceRef {
-                            set_index: set_index as u32,
-                            feature_index: feature_index as u32,
-                            definition: None,
-                        };
-                        let mark = DocumentMark::of(doc);
-                        let feature = extract_slot(&context, source, set.geometry, slot, doc)?;
-                        emitted.extend(keep_finite(doc, mark, vec![feature], source));
+            for (feature_index, set_feature) in set.features.iter().enumerate() {
+                if let SetFeature::Slot(slot) = set_feature {
+                    if !slot_applies_to_layer(
+                        source_layer,
+                        layer,
+                        context.slot_layer_order.as_deref(),
+                        slot,
+                    ) {
+                        continue;
                     }
+                    let source = SourceRef {
+                        set_index: set_index as u32,
+                        feature_index: feature_index as u32,
+                        definition: None,
+                    };
+                    let mark = DocumentMark::of(doc);
+                    let feature = extract_slot(context, source, set.geometry, slot, doc)?;
+                    emitted.extend(keep_finite(doc, mark, vec![feature], source));
                 }
             }
 
@@ -2556,16 +2572,34 @@ fn is_board_step(step: &Step) -> bool {
         || (step.step_type.is_none() && step.step_repeats.is_empty())
 }
 
-/// Physical layer order for slot spans. An absent stackup leaves declaration
-/// order; an invalid one leaves no order at all, so a spanned slot reaches
-/// only the layers its span names.
+/// Physical layer order for slot spans, resolved only when a through slot on
+/// a spanned fabrication layer will ask for it. An absent stackup leaves
+/// declaration order; an invalid one leaves no order at all, so a spanned slot
+/// reaches only the layers its span names.
 fn resolve_slot_layer_order(
     doc: &mut GeometryDocument,
-    stackups: &[ipc2581::types::Stackup],
-    layers: &[Layer],
+    cad: &ipc2581::types::ecad::CadData,
 ) -> Option<Vec<Symbol>> {
-    match physical_stackup_layers(stackups, layers) {
-        Ok(order) => Some(order.unwrap_or_else(|| layers.iter().map(|layer| layer.name).collect())),
+    let spanned = |layer_ref: Symbol| {
+        cad.layers.iter().any(|layer| {
+            layer.name == layer_ref && layer.layer_function.is_fabrication() && layer.span.is_some()
+        })
+    };
+    let needed = cad
+        .steps
+        .iter()
+        .flat_map(|step| &step.layer_features)
+        .filter(|layer_feature| spanned(layer_feature.layer_ref))
+        .flat_map(|layer_feature| &layer_feature.sets)
+        .flat_map(|set| &set.features)
+        .any(|feature| matches!(feature, SetFeature::Slot(slot) if !slot.z_axis_dim));
+    if !needed {
+        return None;
+    }
+    match physical_stackup_layers(&cad.stackups, &cad.layers) {
+        Ok(order) => {
+            Some(order.unwrap_or_else(|| cad.layers.iter().map(|layer| layer.name).collect()))
+        }
         Err(error) => {
             doc.warn(format!(
                 "Spanned slots reach only the layers they name because the stackup is invalid: {error}"
@@ -2575,10 +2609,10 @@ fn resolve_slot_layer_order(
     }
 }
 
-fn slot_applies_to_layer<'a>(
+fn slot_applies_to_layer(
     source_layer: &Layer,
     target_layer: &Layer,
-    layer_order: impl FnOnce() -> Option<&'a [Symbol]>,
+    layer_order: Option<&[Symbol]>,
     slot: &ipc2581::types::Slot,
 ) -> bool {
     if source_layer.name == target_layer.name {
@@ -2591,8 +2625,6 @@ fn slot_applies_to_layer<'a>(
     let Some(span) = source_layer.span else {
         return false;
     };
-
-    let layer_order = layer_order();
     feature_definitely_spans_layer(
         FeatureSpan::FromTo {
             from: span.from_layer.or_else(|| layer_order?.first().copied()),
@@ -4362,15 +4394,7 @@ mod tests {
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
         )
         .unwrap();
-        let context = ExtractContext {
-            strings: ipc.interner(),
-            resolution: Resolution::default(),
-            padstacks: HashMap::new(),
-            line_descs: HashMap::new(),
-            fill_descs: HashMap::new(),
-            standard_primitives: HashMap::new(),
-            user_primitives: HashMap::new(),
-        };
+        let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
         let circle = ipc2581::types::StandardPrimitive::Circle(ipc2581::types::Styled {
             shape: ipc2581::types::Circle { diameter: 1.0 },
             fill_property: Some(FillProperty::Hollow),
@@ -4409,15 +4433,7 @@ mod tests {
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
         )
         .unwrap();
-        let context = ExtractContext {
-            strings: ipc.interner(),
-            resolution: Resolution::default(),
-            padstacks: HashMap::new(),
-            line_descs: HashMap::new(),
-            fill_descs: HashMap::new(),
-            standard_primitives: HashMap::new(),
-            user_primitives: HashMap::new(),
-        };
+        let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
         for fill_property in [FillProperty::Hatch, FillProperty::Mesh] {
             let mut doc = GeometryDocument::new();
             let primitive = StandardPrimitive::Circle(ipc2581::types::Styled {
@@ -4442,15 +4458,7 @@ mod tests {
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
         )
         .unwrap();
-        let context = ExtractContext {
-            strings: ipc.interner(),
-            resolution: Resolution::default(),
-            padstacks: HashMap::new(),
-            line_descs: HashMap::new(),
-            fill_descs: HashMap::new(),
-            standard_primitives: HashMap::new(),
-            user_primitives: HashMap::new(),
-        };
+        let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
         let mut doc = GeometryDocument::new();
         let primitive = ipc2581::types::StandardPrimitive::RectCenter(ipc2581::types::Styled {
             shape: ipc2581::types::RectCenter {
@@ -4531,15 +4539,7 @@ mod tests {
         )
         .unwrap();
         let feature = extract_feature_polyline(
-            &ExtractContext {
-                strings: ipc.interner(),
-                resolution: Resolution::default(),
-                padstacks: HashMap::new(),
-                line_descs: HashMap::new(),
-                fill_descs: HashMap::new(),
-                standard_primitives: HashMap::new(),
-                user_primitives: HashMap::new(),
-            },
+            &ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default()),
             None,
             GeometryPolarity::Dark,
             SourceRef::default(),
@@ -4583,15 +4583,7 @@ mod tests {
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
         )
         .unwrap();
-        let context = ExtractContext {
-            strings: ipc.interner(),
-            resolution: Resolution::default(),
-            padstacks: HashMap::new(),
-            line_descs: HashMap::new(),
-            fill_descs: HashMap::new(),
-            standard_primitives: HashMap::new(),
-            user_primitives: HashMap::new(),
-        };
+        let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
         lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
 
         assert_eq!(doc.arena.paths.len(), 1);
@@ -4741,15 +4733,7 @@ mod tests {
         )
         .unwrap();
         let entry = ipc.content().dictionary_line_desc.entries[0].clone();
-        let context = ExtractContext {
-            strings: ipc.interner(),
-            resolution: Resolution::default(),
-            padstacks: HashMap::new(),
-            line_descs: HashMap::from([(entry.id, entry.line_desc)]),
-            fill_descs: HashMap::new(),
-            standard_primitives: HashMap::new(),
-            user_primitives: HashMap::new(),
-        };
+        let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
         let mut doc = GeometryDocument::new();
         let primitive = UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
             shapes: vec![
@@ -4799,15 +4783,7 @@ mod tests {
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
         )
         .unwrap();
-        let context = ExtractContext {
-            strings: ipc.interner(),
-            resolution: Resolution::default(),
-            padstacks: HashMap::new(),
-            line_descs: HashMap::new(),
-            fill_descs: HashMap::new(),
-            standard_primitives: HashMap::new(),
-            user_primitives: HashMap::new(),
-        };
+        let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
         let primitive = ipc2581::types::ecad::FeatureUserPrimitive {
             primitive: UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
                 shapes: vec![ipc2581::types::UserShape {
@@ -4868,15 +4844,7 @@ mod tests {
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
         )
         .unwrap();
-        let context = ExtractContext {
-            strings: ipc.interner(),
-            resolution: Resolution::default(),
-            padstacks: HashMap::new(),
-            line_descs: HashMap::new(),
-            fill_descs: HashMap::new(),
-            standard_primitives: HashMap::new(),
-            user_primitives: HashMap::new(),
-        };
+        let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
         let primitive = ipc2581::types::ecad::FeatureUserPrimitive {
             primitive: UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
                 shapes: vec![ipc2581::types::UserShape {
@@ -5000,15 +4968,7 @@ mod tests {
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
         )
         .unwrap();
-        let context = ExtractContext {
-            strings: ipc.interner(),
-            resolution: Resolution::default(),
-            padstacks: HashMap::new(),
-            line_descs: HashMap::new(),
-            fill_descs: HashMap::new(),
-            standard_primitives: HashMap::new(),
-            user_primitives: HashMap::new(),
-        };
+        let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
         let primitive = ipc2581::types::ecad::FeatureUserPrimitive {
             primitive: UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
                 shapes: vec![
@@ -6339,7 +6299,7 @@ mod tests {
             }),
         );
         let layers = [l1.name, l2.name, l3.name, route.name];
-        let layer_order = || Some(layers.as_slice());
+        let layer_order = Some(layers.as_slice());
         let slot = test_slot(false);
 
         assert!(slot_applies_to_layer(&route, &l1, layer_order, &slot));
@@ -6353,7 +6313,7 @@ mod tests {
         let mut interner = ipc2581::Interner::new();
         let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
         let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
-        let layer_order = || unreachable!("Z-axis slots need no layer order");
+        let layer_order = None;
         let slot = test_slot(true);
 
         assert!(!slot_applies_to_layer(&route, &l1, layer_order, &slot));
@@ -6365,7 +6325,7 @@ mod tests {
         let mut interner = ipc2581::Interner::new();
         let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
         let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
-        let layer_order = || unreachable!("unspanned slots need no layer order");
+        let layer_order = None;
         let slot = test_slot(false);
 
         assert!(!slot_applies_to_layer(&route, &l1, layer_order, &slot));

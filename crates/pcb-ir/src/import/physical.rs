@@ -1901,13 +1901,15 @@ mod tests {
                     if z_axis && copper { 0 } else { through_slots },
                     "{name} z_axis={z_axis}"
                 );
+                // Reported once per import, and only when a through slot
+                // on a spanned layer needs the order at all.
                 assert_eq!(
                     document
                         .diagnostics
                         .iter()
                         .filter(|diagnostic| diagnostic.message.contains("stackup is invalid"))
                         .count(),
-                    usize::from(copper && !z_axis),
+                    usize::from(!z_axis),
                     "{name} z_axis={z_axis}"
                 );
             }
