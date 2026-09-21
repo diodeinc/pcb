@@ -785,7 +785,7 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
             as u32;
         for (layer_index, source_layer) in ecad.cad_data.layers.iter().enumerate() {
             let layer_name = ipc.resolve(source_layer.name);
-            let local = extract_step_layer_local(
+            let mut local = extract_step_layer_local(
                 ipc,
                 step,
                 &ecad.cad_data.layers,
@@ -793,6 +793,9 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
                 layer_name,
                 resolution,
             )?;
+            // Extraction warns into its scratch document. A layer whose every
+            // feature was dropped is exactly the one that must still report.
+            geometry.diagnostics.append(&mut local.diagnostics);
             if local.features.is_empty() {
                 continue;
             }
@@ -5155,6 +5158,43 @@ mod tests {
                 .to_string()
                 .contains("primary step 'panel' does not reference a board step"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn import_reports_features_it_had_to_drop() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="TOP">
+          <Set><Features><Location x="0" y="0"/><StandardPrimitiveRef id="absent"/></Features></Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+
+        // The layer's only feature is gone, so nothing else can say why.
+        assert!(
+            imported
+                .geometry
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("'absent' is missing")),
+            "diagnostics: {:?}",
+            imported.geometry.diagnostics
         );
     }
 
