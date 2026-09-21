@@ -19,6 +19,7 @@ use pcb_ipc2581_tools::geometry::{
 use pcb_ipc2581_tools::ipc2581::{Ipc2581, Symbol, types::LayerFunction};
 use pcb_ipc2581_tools::layers::copper_layers;
 use pcb_ipc2581_tools::utils::file::load_ipc_file;
+use pcb_ipc2581_tools::utils::format::fmt_num as num;
 use pcb_ir::dialects::ipc::{
     BalancingRegionOptions, BoardArrayBalancingResult, BoardArraySupportDocument,
     BoardArraySupportLayerGeometry, DEFAULT_BALANCING_CLEARANCE_MM,
@@ -1343,21 +1344,6 @@ fn slug(value: &str) -> String {
     } else {
         out
     }
-}
-
-fn num(value: f64) -> String {
-    let mut value = if value.abs() < 5e-9 { 0.0 } else { value };
-    if value == -0.0 {
-        value = 0.0;
-    }
-    let mut text = format!("{value:.6}");
-    while text.contains('.') && text.ends_with('0') {
-        text.pop();
-    }
-    if text.ends_with('.') {
-        text.pop();
-    }
-    text
 }
 
 fn escape_html(value: &str) -> String {

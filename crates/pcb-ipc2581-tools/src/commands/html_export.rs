@@ -57,10 +57,13 @@ pub fn generate_html(
     resolution: Resolution,
 ) -> Result<String> {
     let mut env = Environment::new();
-    env.add_template("html", HTML_TEMPLATE)
+    // Names from the source file land in markup; escaping must not hinge on
+    // what the template happens to be called.
+    env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
+    env.add_template("report.html", HTML_TEMPLATE)
         .context("Failed to add HTML template")?;
 
-    let template = env.get_template("html")?;
+    let template = env.get_template("report.html")?;
 
     // Extract data
     let board_summary = extract_board_summary(accessor, imported, unit_format, resolution)?;
@@ -666,6 +669,17 @@ mod tests {
         assert!(!section("F.Cu").contains("layer-warning"));
         assert!(!section("B.Cu").contains("<svg "));
         assert!(section("B.Cu").contains("Render unavailable: "));
+    }
+
+    #[test]
+    fn names_from_the_source_are_escaped() {
+        let xml = layer_render_fixture().replace("Edge.Cuts", "Edge&amp;&lt;b&gt;Cuts");
+        let ipc = ipc2581::Ipc2581::parse(&xml).unwrap();
+
+        let html = report(&ipc, Resolution::default());
+
+        assert!(html.contains("<span>Edge&amp;&lt;b&gt;Cuts</span>"));
+        assert!(!html.contains("<b>Cuts"));
     }
 
     fn cut_pad_fixture() -> &'static str {

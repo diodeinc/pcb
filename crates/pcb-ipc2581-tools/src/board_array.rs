@@ -81,11 +81,8 @@ fn render_board_array_svg(
     .unwrap();
     writeln!(
         svg,
-        "  <title>{}</title>",
-        escape_xml(&format!(
-            "Board array overview: {} columns by {} rows",
-            grid.columns, grid.rows
-        ))
+        "  <title>Board array overview: {} columns by {} rows</title>",
+        grid.columns, grid.rows
     )
     .unwrap();
     writeln!(svg, "  <g transform='scale(1 -1)'>").unwrap();
@@ -468,15 +465,6 @@ fn write_rail_guides(svg: &mut String, grid: &BoardArrayGridInfo, panel: BBox, s
             .unwrap();
         }
     }
-}
-
-fn escape_xml(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]
