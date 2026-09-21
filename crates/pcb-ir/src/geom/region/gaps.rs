@@ -391,7 +391,7 @@ impl ContourSet {
         // facing walls is the closing of the whole region there.
         self.two_sided_residual(radius, minimum_mm, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance();
-            let reach = 4.0 * (radius + 2.0 * region.tolerance());
+            let reach = gap_reach_mm(radius, region.tolerance());
             let candidates = region.facing_components(0.0, facing, reach)?;
             closing_residual(&candidates, radius)
         })
@@ -412,6 +412,13 @@ impl ContourSet {
         let components = two_sided_residual_components(self, &residue, radius, minimum_mm);
         Ok(components)
     }
+}
+
+/// How far from the bounds of facing walls the closing by `radius` reads the
+/// material: two diameters, as [`ContourSet::disk_gap_violation_components`]
+/// derives. Material beyond it changes nothing the closing finds there.
+pub(crate) fn gap_reach_mm(radius: f64, tolerance_mm: f64) -> f64 {
+    4.0 * (radius + 2.0 * tolerance_mm)
 }
 
 /// A point strictly inside a ring that encloses area: the middle of the

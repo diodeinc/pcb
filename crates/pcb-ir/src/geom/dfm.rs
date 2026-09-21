@@ -5,13 +5,15 @@
 //! it was measured against. Deciding whether a distance violates a limit is
 //! the caller's policy, via [`Distance::certainly_below`].
 
-use crate::geom::{AccuracyError, Resolution};
+use crate::geom::{AccuracyError, GeometryAccuracy, Resolution};
 use std::collections::BTreeMap;
 
 use crate::geom::bbox::BBox;
 use crate::geom::grid::CellGrid;
 use crate::geom::point::Point;
-use crate::geom::region::{ContourSet, PreparedRegion, TwoSidedResidualComponent, ring_edges};
+use crate::geom::region::{
+    ContourSet, PreparedRegion, TwoSidedResidualComponent, gap_reach_mm, ring_edges,
+};
 use crate::geom::tol;
 
 pub use crate::geom::dist::Distance;
@@ -735,12 +737,31 @@ pub fn thin_features(
 pub fn thin_gaps(region: &ContourSet, min_gap_mm: f64) -> Result<Vec<ThinPiece>, AccuracyError> {
     Ok(pieces(
         region.disk_gap_violation_components(
-            (min_gap_mm + (2.0 * region.budget().max_error_mm() + region.uncertainty_mm)) / 2.0,
+            gap_guard_radius_mm(min_gap_mm, region.budget(), region.uncertainty_mm),
             min_gap_mm - 2.0 * region.uncertainty_mm,
             min_gap_mm,
         )?,
         min_gap_mm,
     ))
+}
+
+/// The closing radius that keeps every gap under `min_gap_mm` a candidate
+/// across the approximation a region may carry.
+fn gap_guard_radius_mm(min_gap_mm: f64, budget: GeometryAccuracy, uncertainty_mm: f64) -> f64 {
+    (min_gap_mm + (2.0 * budget.max_error_mm() + uncertainty_mm)) / 2.0
+}
+
+/// How far from the bounds of a gap's walls [`thin_gaps`] reads a region
+/// prepared at `resolution`. Material farther than this from every wall of a
+/// reported piece changes neither that it is reported nor anything about it,
+/// so an image may leave out whatever lies beyond this of all it keeps.
+pub fn thin_gaps_reach_mm(min_gap_mm: f64, resolution: Resolution) -> f64 {
+    // A prepared region never carries more uncertainty than its budget.
+    let budget = resolution.accuracy;
+    gap_reach_mm(
+        gap_guard_radius_mm(min_gap_mm, budget, budget.max_error_mm()),
+        resolution.tolerance_mm,
+    )
 }
 
 /// The narrowest local width of a filled region: the least separation of
@@ -1380,6 +1401,31 @@ mod tests {
             gaps[0].width.mm
         );
         assert!(thin_features(&region, 0.1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn material_beyond_the_gap_reach_leaves_a_reported_gap_alone() {
+        let resolution = res(tol::REGION_MM);
+        let reach = thin_gaps_reach_mm(0.1, resolution);
+        let plates = [rect_at(0.0, 0.0, 1.0, 1.0), rect_at(1.06, 0.0, 2.0, 1.0)];
+        // Just past the reach of the second plate, and of everything else
+        // by more: the nearest it can come without being read with the gap.
+        let beyond = rect_at(2.0 + reach + 1e-6, 0.0, 3.0, 1.0);
+        let gaps = |contours: &[ContourBuf]| {
+            let region = ContourSet::from_filled_contours(contours, resolution).unwrap();
+            thin_gaps(&region, 0.1).unwrap()
+        };
+        let alone = gaps(&plates);
+        let among = gaps(&[plates.to_vec(), vec![beyond]].concat());
+        assert_eq!((alone.len(), among.len()), (1, 1));
+        // The same piece, to the rounding of the wider image's coordinates.
+        let (alone, among) = (&alone[0], &among[0]);
+        assert!((alone.width.mm - among.width.mm).abs() < 1e-12);
+        assert!(alone.width.first.distance_to(among.width.first) < 1e-12);
+        assert!(alone.bbox.min.distance_to(among.bbox.min) < 1e-12);
+        assert!(alone.bbox.max.distance_to(among.bbox.max) < 1e-12);
+        assert!((alone.candidate.area() - among.candidate.area()).abs() < 1e-12);
+        assert_eq!(alone.sites.len(), among.sites.len());
     }
 
     #[test]
