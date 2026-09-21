@@ -312,6 +312,22 @@ fn scene_bounds(layout: Option<ReportBBox>, sources: &[GeometryPass]) -> BBox {
     )
 }
 
+/// The bounds of one layer over the whole layout. Every Step's design holds
+/// the image of its own content, wherever the layout places the Step.
+fn placed_bounds<'a>(
+    designs: &'a [Design<'a>],
+    image: impl Fn(&'a Design<'a>) -> Option<BBox>,
+) -> BBox {
+    designs
+        .iter()
+        .filter_map(|design| Some((design, image(design)?)))
+        .flat_map(|(design, bounds)| {
+            let placements = design.placements.iter();
+            placements.map(move |&placement| bounds.transformed(design.placed(placement).0))
+        })
+        .fold(BBox::empty(), BBox::union)
+}
+
 fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> anyhow::Result<Vec<GeometryPass>> {
     let design = &designs[0];
     let layout = &design.imported.geometry;
@@ -321,26 +337,30 @@ fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> anyhow::Result<
         .collect::<BTreeSet<_>>();
     let mut passes = Vec::new();
     if wanted.contains("copper") {
-        for layer in &design.copper_layers {
+        for (index, layer) in design.copper_layers.iter().enumerate() {
             passes.push(GeometryPass::layer(
                 layer.layer.name.clone(),
                 "copper",
                 LayerRole::Copper,
                 "#d87822",
                 Some(layer.layer.name.clone()),
-                layer.image.bbox,
+                placed_bounds(designs, |design| {
+                    Some(design.copper_layers.get(index)?.image.bbox)
+                }),
             ));
         }
     }
     if wanted.contains("mask_openings") {
-        for layer in &design.mask_layers {
+        for (index, layer) in design.mask_layers.iter().enumerate() {
             passes.push(GeometryPass::layer(
                 format!("{} openings", layer.layer.name),
                 "mask_openings",
                 LayerRole::Soldermask,
                 "#159447",
                 Some(layer.layer.name.clone()),
-                layer.image.bbox,
+                placed_bounds(designs, |design| {
+                    Some(design.mask_layers.get(index)?.image.bbox)
+                }),
             ));
         }
     }
