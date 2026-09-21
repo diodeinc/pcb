@@ -40,9 +40,13 @@ pub fn render_profile_set_dxf<Symbol, LayerFunction>(
     Ok(dxf)
 }
 
+/// The file is plain R12: polylines with bulges need nothing newer, and R12
+/// is the one version that requires no handles, owner references or object
+/// tables. `$INSUNITS` postdates R12 but is how readers learn the file is in
+/// millimetres; R12 readers skip header variables they do not know.
 fn write_header(dxf: &mut String) {
     dxf.push_str("0\nSECTION\n2\nHEADER\n");
-    dxf.push_str("9\n$ACADVER\n1\nAC1021\n");
+    dxf.push_str("9\n$ACADVER\n1\nAC1009\n");
     dxf.push_str("9\n$INSUNITS\n70\n4\n");
     dxf.push_str("0\nENDSEC\n");
 }
@@ -76,106 +80,71 @@ fn write_path<Symbol, LayerFunction>(
     Ok(())
 }
 
+/// A closed 2D polyline: flag 66 announces the vertices that follow, flag 70
+/// closes the last vertex back to the first.
 fn write_polyline(dxf: &mut String, vertices: &[DxfVertex]) {
     if vertices.len() < 2 {
         return;
     }
 
-    dxf.push_str("0\nLWPOLYLINE\n100\nAcDbEntity\n");
-    writeln!(dxf, "8\n{OUTLINE_LAYER}").unwrap();
-    dxf.push_str("62\n7\n100\nAcDbPolyline\n");
-    writeln!(dxf, "90\n{}", vertices.len()).unwrap();
-    dxf.push_str("70\n1\n");
+    writeln!(dxf, "0\nPOLYLINE\n8\n{OUTLINE_LAYER}\n62\n7\n66\n1\n70\n1").unwrap();
     for vertex in vertices {
-        writeln!(dxf, "10\n{}\n20\n{}", fmt_num(vertex.x), fmt_num(vertex.y)).unwrap();
+        writeln!(
+            dxf,
+            "0\nVERTEX\n8\n{OUTLINE_LAYER}\n10\n{}\n20\n{}",
+            fmt_num(vertex.x),
+            fmt_num(vertex.y)
+        )
+        .unwrap();
         if vertex.bulge.abs() > EPSILON {
             writeln!(dxf, "42\n{}", fmt_num(vertex.bulge)).unwrap();
         }
     }
+    writeln!(dxf, "0\nSEQEND\n8\n{OUTLINE_LAYER}").unwrap();
 }
 
 /// Polyline vertices of a contour whose curves were flattened to lines and
-/// circular arcs; arcs keep their bulge.
+/// circular arcs. Each segment contributes its start vertex, carrying the
+/// bulge of the arc that leaves it; the closed polyline supplies the return
+/// to the first vertex.
 fn contour_vertices(contour: &ContourBuf) -> Vec<DxfVertex> {
-    let Some(first) = contour.cmds.first().map(|cmd| cmd.p0) else {
-        return Vec::new();
+    let vertex = |point: Point, bulge: f64| DxfVertex {
+        x: point.x,
+        y: point.y,
+        bulge,
     };
-    let mut vertices = vec![DxfVertex {
-        x: first.x,
-        y: first.y,
-        bulge: 0.0,
-    }];
+    let mut vertices = Vec::new();
+    let mut end = None;
     for segment in contour.segments() {
         match segment {
-            Segment::Line { end, .. } => {
-                vertices.last_mut().unwrap().bulge = 0.0;
-                push_endpoint(&mut vertices, end, first);
+            // A closing sliver between coincident points is not an edge.
+            Segment::Line { start, end } if same_point(start, end) => continue,
+            Segment::Line { start, .. } => vertices.push(vertex(start, 0.0)),
+            Segment::Arc(arc) if arc.is_full_circle() => {
+                // One bulge cannot span a full turn; split at the antipode.
+                let bulge = if arc.clockwise { -1.0 } else { 1.0 };
+                vertices.push(vertex(arc.start, bulge));
+                vertices.push(vertex(arc.center * 2.0 - arc.start, bulge));
             }
             Segment::Arc(arc) => {
-                if same_point(arc.start, arc.end) && arc.start.distance_to(arc.center) > EPSILON {
-                    let opposite = opposite_arc_point(arc.start, arc.center, arc.clockwise);
-                    vertices.last_mut().unwrap().bulge = half_circle_bulge(arc.clockwise);
-                    vertices.push(DxfVertex {
-                        x: opposite.x,
-                        y: opposite.y,
-                        bulge: half_circle_bulge(arc.clockwise),
-                    });
-                    push_endpoint(&mut vertices, arc.end, first);
-                } else {
-                    vertices.last_mut().unwrap().bulge =
-                        arc_bulge(arc.start, arc.end, arc.center, arc.clockwise);
-                    push_endpoint(&mut vertices, arc.end, first);
-                }
+                let sweep = arc.sweep_radians();
+                let sweep = if arc.clockwise { -sweep } else { sweep };
+                vertices.push(vertex(arc.start, (sweep / 4.0).tan()));
             }
             Segment::Cubic { .. } | Segment::Ellipse(_) => {
                 unreachable!("curves are flattened before polyline conversion")
             }
         }
+        end = Some(segment.end());
+    }
+    // An open contour stops short of its start; the polyline closes from there.
+    if let (Some(first), Some(end)) = (vertices.first(), end)
+        && !same_point(end, Point::new(first.x, first.y))
+    {
+        vertices.push(vertex(end, 0.0));
     }
 
     vertices
-}
-
-fn push_endpoint(vertices: &mut Vec<DxfVertex>, point: Point, first: Point) {
-    if same_point(point, first) {
-        return;
-    }
-    vertices.push(DxfVertex {
-        x: point.x,
-        y: point.y,
-        bulge: 0.0,
-    });
-}
-
-fn arc_bulge(start: Point, end: Point, center: Point, clockwise: bool) -> f64 {
-    let start_angle = start.angle_from(center);
-    let end_angle = end.angle_from(center);
-    let ccw_sweep = (end_angle - start_angle).rem_euclid(std::f64::consts::TAU);
-    let signed_sweep = if clockwise {
-        -(std::f64::consts::TAU - ccw_sweep)
-    } else {
-        ccw_sweep
-    };
-    (signed_sweep / 4.0).tan()
-}
-
-fn opposite_arc_point(start: Point, center: Point, clockwise: bool) -> Point {
-    let radius = start.distance_to(center);
-    let start_angle = start.angle_from(center);
-    let angle = start_angle
-        + if clockwise {
-            -std::f64::consts::PI
-        } else {
-            std::f64::consts::PI
-        };
-    Point::new(
-        center.x + radius * angle.cos(),
-        center.y + radius * angle.sin(),
-    )
-}
-
-fn half_circle_bulge(clockwise: bool) -> f64 {
-    if clockwise { -1.0 } else { 1.0 }
 }
 
 fn same_point(a: Point, b: Point) -> bool {
@@ -201,15 +170,57 @@ mod tests {
         )
         .unwrap();
 
+        assert!(dxf.contains("9\n$ACADVER\n1\nAC1009\n"));
         assert!(dxf.contains("9\n$INSUNITS\n70\n4\n"));
         assert!(dxf.contains("2\nBOARD_OUTLINE\n"));
-        assert!(dxf.contains("0\nLWPOLYLINE\n"));
-        assert!(dxf.contains("90\n4\n"));
-        assert!(dxf.contains("70\n1\n"));
+        assert_eq!(
+            dxf.matches("0\nPOLYLINE\n8\nBOARD_OUTLINE\n62\n7\n66\n1\n70\n1\n")
+                .count(),
+            2
+        );
+        assert_eq!(dxf.matches("0\nVERTEX\n").count(), 8);
+        assert_eq!(dxf.matches("0\nSEQEND\n").count(), 2);
+        // R12 entities carry no subclass markers.
+        assert!(!dxf.contains("AcDb"));
     }
 
     #[test]
-    fn preserves_profile_arcs_as_lwpolyline_bulges() {
+    fn closing_sliver_keeps_the_last_arc() {
+        // The second arc ends a hair from the start, so the contour closes
+        // with a sub-nanometre line that must not flatten the arc before it.
+        let vertices = contour_vertices(&ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(1.0, 0.0)),
+            PathCmd::arc_to(Point::new(-1.0, 0.0), Point::new(0.0, 0.0), false),
+            PathCmd::arc_to(Point::new(1.0, 5e-10), Point::new(0.0, 0.0), false),
+            PathCmd::close(),
+        ]));
+
+        assert_eq!(vertices.len(), 2);
+        assert!((vertices[0].bulge - 1.0).abs() < 1e-9);
+        assert!((vertices[1].bulge - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn full_circle_splits_into_two_half_turns() {
+        let vertices = contour_vertices(&ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(1.0, 0.0)),
+            PathCmd::arc_to(Point::new(1.0, 0.0), Point::new(0.0, 0.0), true),
+            PathCmd::close(),
+        ]));
+
+        assert_eq!(vertices.len(), 2);
+        assert_eq!(
+            (vertices[0].x, vertices[0].y, vertices[0].bulge),
+            (1.0, 0.0, -1.0)
+        );
+        assert_eq!(
+            (vertices[1].x, vertices[1].y, vertices[1].bulge),
+            (-1.0, 0.0, -1.0)
+        );
+    }
+
+    #[test]
+    fn preserves_profile_arcs_as_polyline_bulges() {
         let mut doc = Document::<u32, ()>::new();
         let path = doc.push_path(
             Paint::None,
@@ -233,7 +244,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(dxf.contains("42\n1\n"));
+        assert_eq!(dxf.matches("42\n1\n").count(), 2);
     }
 
     fn rect_profile_doc() -> Document<u32, ()> {
