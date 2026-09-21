@@ -360,7 +360,8 @@ pub struct UserShape {
     pub fill_desc_ref: Option<Symbol>,
 }
 
-/// Types of shapes that can appear in UserSpecial
+/// Types of shapes that can appear in UserSpecial: the `Feature`
+/// substitution group, plus the bare `Polygon` KiCad writes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UserShapeType {
     Circle(Circle),
@@ -368,10 +369,15 @@ pub enum UserShapeType {
     Oval(Oval),
     RectRound(RectRound),
     Contour(Contour),
+    /// Any standard primitive without a variant of its own above.
+    StandardPrimitive(StandardPrimitive),
+    StandardPrimitiveRef(Symbol),
     Polygon(Polygon),
     Line(Line),
     Arc(Arc),
     Polyline(Polyline),
+    Outline(super::PackageOutline),
+    Text(Text),
     UserPrimitiveRef(Symbol),
     UserPrimitive(UserPrimitive),
 }

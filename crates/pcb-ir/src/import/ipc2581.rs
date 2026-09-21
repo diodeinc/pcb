@@ -3478,6 +3478,23 @@ fn lower_user_primitive(
                             line_desc,
                         );
                     }
+                    UserShapeType::StandardPrimitive(primitive) => {
+                        nested_paint = Some(lower_standard_primitive(
+                            context, doc, primitive, transform,
+                        )?);
+                    }
+                    UserShapeType::StandardPrimitiveRef(primitive_ref) => {
+                        if let Some(primitive) =
+                            context.standard_primitives.get(primitive_ref).copied()
+                        {
+                            nested_paint = Some(lower_standard_primitive(
+                                context, doc, primitive, transform,
+                            )?);
+                        }
+                    }
+                    // Text has no glyphs here, and KiCad's zero-width glyph
+                    // Outlines have no area to image.
+                    UserShapeType::Text(_) | UserShapeType::Outline(_) => {}
                     UserShapeType::UserPrimitive(primitive) => {
                         nested_paint =
                             Some(lower_user_primitive(context, doc, primitive, transform)?);

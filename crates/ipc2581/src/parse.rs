@@ -359,28 +359,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_feature_line_desc(
-        &self,
-        node: &Node,
-        units: Units,
-    ) -> Result<(f64, Option<LineEnd>, Option<LineProperty>)> {
-        let line_width = self
-            .attr(node, "lineWidth")
-            .map(|s| self.parse_f64_str_with_units(s, units))
-            .transpose()?
-            .unwrap_or(0.25);
-        let line_end = self
-            .attr(node, "lineEnd")
-            .map(|s| self.parse_line_end(s))
-            .transpose()?;
-        let line_property = self
-            .attr(node, "lineProperty")
-            .map(|s| self.parse_line_property(s))
-            .transpose()?;
-
-        Ok((line_width, line_end, line_property))
-    }
-
     fn parse_dictionary_fill_desc(&mut self, node: &Node) -> Result<DictionaryFillDesc> {
         let units = self
             .attr(node, "units")
@@ -1007,66 +985,94 @@ impl<'a> Parser<'a> {
 
     fn parse_entry_user(&mut self, node: &Node, units: Units) -> Result<EntryUser> {
         let id = self.required_attr(node, "id", "EntryUser")?;
-
-        // Find the primitive child element (currently only supporting UserSpecial)
-        let primitive_node = self
+        let (child, shape) = self
             .element_children(node)
-            .find(|n| self.name(n) == "UserSpecial")
+            .find_map(|child| {
+                self.parse_feature_shape(&child, units)
+                    .map(|shape| shape.map(|shape| (child, shape)))
+                    .transpose()
+            })
+            .transpose()?
             .ok_or(Ipc2581Error::MissingElement("UserPrimitive"))?;
-
-        let primitive = self.parse_user_special(&primitive_node, units)?;
+        let primitive = self.user_primitive(&child, shape, units)?;
 
         Ok(EntryUser { id, primitive })
     }
 
     fn parse_user_special(&mut self, node: &Node, units: Units) -> Result<UserPrimitive> {
         let mut shapes = Vec::new();
-
         for child in self.element_children(node) {
-            if let Some(shape) = self.parse_user_shape(&child, units)? {
-                shapes.push(shape);
-            }
+            let shape = self.parse_feature_shape(&child, units)?.ok_or_else(|| {
+                Ipc2581Error::InvalidStructure(format!(
+                    "Unexpected {} in UserSpecial",
+                    self.name(&child)
+                ))
+            })?;
+            shapes.push(self.user_shape(&child, shape, units)?);
         }
 
         Ok(UserPrimitive::UserSpecial(UserSpecial { shapes }))
     }
 
+    /// A `Feature` as a user primitive: a `UserSpecial` as itself, anything
+    /// else as the only shape of one.
+    fn user_primitive(
+        &mut self,
+        node: &Node,
+        shape: FeatureShape,
+        units: Units,
+    ) -> Result<UserPrimitive> {
+        Ok(match shape {
+            FeatureShape::UserPrimitive(primitive) => primitive,
+            shape => UserPrimitive::UserSpecial(UserSpecial {
+                shapes: vec![self.user_shape(node, shape, units)?],
+            }),
+        })
+    }
+
+    /// A `Feature` parsed from `node` as a member of a `UserSpecial`.
+    fn user_shape(&mut self, node: &Node, shape: FeatureShape, units: Units) -> Result<UserShape> {
+        let mut style_node = *node;
+        let shape = match shape {
+            FeatureShape::UserShape(shape) => return Ok(shape),
+            FeatureShape::StandardPrimitive(primitive) => match primitive {
+                StandardPrimitive::Circle(circle) => UserShapeType::Circle(circle.shape),
+                StandardPrimitive::RectCenter(rect) => UserShapeType::RectCenter(rect.shape),
+                StandardPrimitive::Oval(oval) => UserShapeType::Oval(oval.shape),
+                StandardPrimitive::RectRound(rect) => UserShapeType::RectRound(rect.shape),
+                StandardPrimitive::Contour(contour) => {
+                    // A Contour is styled through its Polygon.
+                    style_node = self
+                        .element_children(node)
+                        .find(|child| self.name(child) == "Polygon")
+                        .unwrap_or(*node);
+                    UserShapeType::Contour(contour)
+                }
+                primitive => UserShapeType::StandardPrimitive(primitive),
+            },
+            FeatureShape::StandardPrimitiveRef(id) => UserShapeType::StandardPrimitiveRef(id),
+            FeatureShape::UserPrimitive(primitive) => UserShapeType::UserPrimitive(primitive),
+            FeatureShape::UserPrimitiveRef(id) => UserShapeType::UserPrimitiveRef(id),
+            FeatureShape::Text(text) => UserShapeType::Text(text),
+            FeatureShape::Outline(outline) => UserShapeType::Outline(outline),
+        };
+        let (line_desc, line_desc_ref, fill_desc, fill_desc_ref) =
+            self.parse_fill_and_line_desc(&style_node, units)?;
+        Ok(UserShape {
+            shape,
+            line_desc,
+            line_desc_ref,
+            fill_desc,
+            fill_desc_ref,
+        })
+    }
+
+    /// The stroked `Simple` members of the `Feature` group, plus the bare
+    /// `Polygon` that KiCad writes where a `Feature` belongs.
     fn parse_user_shape(&mut self, node: &Node, units: Units) -> Result<Option<UserShape>> {
-        let tag_name = self.name(node);
-        let shape = match tag_name {
-            // Preserve the scope of ordered VOID operations in nested primitives.
-            "UserSpecial" => Some(UserShapeType::UserPrimitive(
-                self.parse_user_special(node, units)?,
-            )),
-            "Contour" => Some(UserShapeType::Contour(self.parse_contour(node, units)?)),
-            "Circle" => Some(UserShapeType::Circle(Circle {
-                diameter: self.parse_f64_attr_with_units(node, "diameter", "Circle", units)?,
-            })),
-            "RectCenter" => Some(UserShapeType::RectCenter(RectCenter {
-                size: Size {
-                    width: self.parse_f64_attr_with_units(node, "width", "RectCenter", units)?,
-                    height: self.parse_f64_attr_with_units(node, "height", "RectCenter", units)?,
-                },
-            })),
-            "Oval" => Some(UserShapeType::Oval(Oval {
-                size: Size {
-                    width: self.parse_f64_attr_with_units(node, "width", "Oval", units)?,
-                    height: self.parse_f64_attr_with_units(node, "height", "Oval", units)?,
-                },
-            })),
-            "RectRound" => Some(UserShapeType::RectRound(RectRound {
-                size: Size {
-                    width: self.parse_f64_attr_with_units(node, "width", "RectRound", units)?,
-                    height: self.parse_f64_attr_with_units(node, "height", "RectRound", units)?,
-                },
-                radius: self.parse_f64_attr_with_units(node, "radius", "RectRound", units)?,
-                upper_right: self.parse_bool_attr(node, "upperRight").unwrap_or(false),
-                upper_left: self.parse_bool_attr(node, "upperLeft").unwrap_or(false),
-                lower_right: self.parse_bool_attr(node, "lowerRight").unwrap_or(false),
-                lower_left: self.parse_bool_attr(node, "lowerLeft").unwrap_or(false),
-            })),
-            "Polygon" => Some(UserShapeType::Polygon(self.parse_polygon(node, units)?)),
-            "Line" => Some(UserShapeType::Line(crate::types::primitives::Line {
+        let shape = match self.name(node) {
+            "Polygon" => UserShapeType::Polygon(self.parse_polygon(node, units)?),
+            "Line" => UserShapeType::Line(crate::types::primitives::Line {
                 start: Point {
                     x: self.parse_f64_attr_with_units(node, "startX", "Line", units)?,
                     y: self.parse_f64_attr_with_units(node, "startY", "Line", units)?,
@@ -1075,28 +1081,13 @@ impl<'a> Parser<'a> {
                     x: self.parse_f64_attr_with_units(node, "endX", "Line", units)?,
                     y: self.parse_f64_attr_with_units(node, "endY", "Line", units)?,
                 },
-            })),
-            "Arc" => Some(UserShapeType::Arc(self.parse_user_arc(node, units)?)),
-            "Polyline" => Some(UserShapeType::Polyline(
-                self.parse_user_polyline(node, units)?,
-            )),
-            "UserPrimitiveRef" => self
-                .attr(node, "id")
-                .map(|id| UserShapeType::UserPrimitiveRef(self.interner.intern(id))),
-            _ => None,
-        };
-        let Some(shape) = shape else {
-            return Ok(None);
-        };
-        let style_node = if tag_name == "Contour" {
-            self.element_children(node)
-                .find(|child| self.name(child) == "Polygon")
-                .unwrap_or(*node)
-        } else {
-            *node
+            }),
+            "Arc" => UserShapeType::Arc(self.parse_user_arc(node, units)?),
+            "Polyline" => UserShapeType::Polyline(self.parse_user_polyline(node, units)?),
+            _ => return Ok(None),
         };
         let (line_desc, line_desc_ref, fill_desc, fill_desc_ref) =
-            self.parse_fill_and_line_desc(&style_node, units)?;
+            self.parse_fill_and_line_desc(node, units)?;
         Ok(Some(UserShape {
             shape,
             line_desc,
@@ -2396,42 +2387,44 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The `StandardShape` half of the `Feature` group.
     fn parse_standard_shape(&mut self, node: &Node, units: Units) -> Result<Option<StandardShape>> {
-        let shape = match self.name(node) {
-            "StandardPrimitiveRef" => self
-                .attr(node, "id")
-                .map(|id| StandardShape::PrimitiveRef(self.interner.intern(id))),
-            name if is_standard_primitive_name(name) => Some(StandardShape::Primitive(
-                self.parse_standard_primitive(node, units)?,
-            )),
+        Ok(match self.parse_feature_shape(node, units)? {
+            Some(FeatureShape::StandardPrimitive(primitive)) => {
+                Some(StandardShape::Primitive(primitive))
+            }
+            Some(FeatureShape::StandardPrimitiveRef(id)) => Some(StandardShape::PrimitiveRef(id)),
             _ => None,
-        };
-        Ok(shape)
+        })
     }
 
+    /// The IPC-2581C `Feature` substitution group; `None` for any other
+    /// element. Every element that holds a `Feature` parses it through here.
     fn parse_feature_shape(&mut self, node: &Node, units: Units) -> Result<Option<FeatureShape>> {
         let shape = match self.name(node) {
-            "StandardPrimitiveRef" => self
-                .attr(node, "id")
-                .map(|id| FeatureShape::StandardPrimitiveRef(self.interner.intern(id))),
-            "UserPrimitiveRef" => self
-                .attr(node, "id")
-                .map(|id| FeatureShape::UserPrimitiveRef(self.interner.intern(id))),
-            "UserSpecial" => Some(FeatureShape::UserPrimitive(
-                self.parse_user_special(node, units)?,
-            )),
-            "Text" => Some(FeatureShape::Text(self.parse_text(node, units)?)),
-            "Outline" => Some(FeatureShape::Outline(
-                self.parse_package_outline(node, units)?,
-            )),
-            name if is_standard_primitive_name(name) => Some(FeatureShape::StandardPrimitive(
-                self.parse_standard_primitive(node, units)?,
-            )),
-            _ => self
-                .parse_user_shape(node, units)?
-                .map(FeatureShape::UserShape),
+            "StandardPrimitiveRef" => FeatureShape::StandardPrimitiveRef(self.required_attr(
+                node,
+                "id",
+                "StandardPrimitiveRef",
+            )?),
+            "UserPrimitiveRef" => FeatureShape::UserPrimitiveRef(self.required_attr(
+                node,
+                "id",
+                "UserPrimitiveRef",
+            )?),
+            "UserSpecial" => FeatureShape::UserPrimitive(self.parse_user_special(node, units)?),
+            "Text" => FeatureShape::Text(self.parse_text(node, units)?),
+            "Outline" => FeatureShape::Outline(self.parse_package_outline(node, units)?),
+            name if is_standard_primitive_name(name) => {
+                FeatureShape::StandardPrimitive(self.parse_standard_primitive(node, units)?)
+            }
+            _ => {
+                return Ok(self
+                    .parse_user_shape(node, units)?
+                    .map(FeatureShape::UserShape));
+            }
         };
-        Ok(shape)
+        Ok(Some(shape))
     }
 
     fn parse_text(&mut self, node: &Node, units: Units) -> Result<Text> {
@@ -2806,19 +2799,15 @@ impl<'a> Parser<'a> {
                     });
                 }
                 "PinRef" => pin_ref = Some(self.parse_pin_ref(&child)?),
-                "StandardPrimitiveRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        shape = Some(ecad::FiducialShape::StandardPrimitiveRef(
-                            self.interner.intern(id),
-                        ));
+                _ => match self.parse_standard_shape(&child, units)? {
+                    Some(StandardShape::Primitive(primitive)) => {
+                        shape = Some(ecad::FiducialShape::Primitive(primitive));
                     }
-                }
-                name if is_standard_primitive_name(name) => {
-                    shape = Some(ecad::FiducialShape::Primitive(
-                        self.parse_standard_primitive(&child, units)?,
-                    ));
-                }
-                _ => {}
+                    Some(StandardShape::PrimitiveRef(id)) => {
+                        shape = Some(ecad::FiducialShape::StandardPrimitiveRef(id));
+                    }
+                    None => {}
+                },
             }
         }
 
@@ -2863,64 +2852,11 @@ impl<'a> Parser<'a> {
                         y: self.parse_f64_attr_with_units(&child, "y", "Location", units)?,
                     });
                 }
-                "Polygon" => {
-                    let polygon = self.parse_polygon(&child, units)?;
-                    features.push(ecad::SetFeature::Polygon(Self::translate_polygon(
-                        polygon, offset,
-                    )));
-                }
-                "Polyline" => {
-                    features.push(ecad::SetFeature::Polyline(
-                        self.parse_feature_polyline(&child, units, offset.x, offset.y)?,
-                    ));
-                }
-                "Line" => {
-                    features.push(ecad::SetFeature::Line(
-                        self.parse_line(&child, units, offset.x, offset.y)?,
-                    ));
-                }
-                "Arc" => {
-                    features.push(ecad::SetFeature::Arc(
-                        self.parse_feature_arc(&child, units, offset.x, offset.y)?,
-                    ));
-                }
-                "Contour" => {
-                    features.push(self.parse_contour_feature(&child, units, offset)?);
-                }
-                "UserSpecial" => {
-                    let primitive = self.parse_user_special(&child, units)?;
-                    features.push(ecad::SetFeature::UserPrimitive(
-                        ecad::FeatureUserPrimitive {
-                            primitive,
-                            x: offset.x,
-                            y: offset.y,
-                        },
-                    ));
-                }
-                "StandardPrimitiveRef" => {
-                    let id = self.required_attr(&child, "id", "StandardPrimitiveRef")?;
-                    features.push(ecad::SetFeature::StandardPrimitiveRef(
-                        ecad::FeaturePrimitiveRef {
-                            id,
-                            x: offset.x,
-                            y: offset.y,
-                        },
-                    ));
-                }
-                "UserPrimitiveRef" => {
-                    let id = self.required_attr(&child, "id", "UserPrimitiveRef")?;
-                    features.push(ecad::SetFeature::UserPrimitiveRef(
-                        ecad::FeaturePrimitiveRef {
-                            id,
-                            x: offset.x,
-                            y: offset.y,
-                        },
-                    ));
-                }
                 name => {
-                    return Err(Ipc2581Error::InvalidStructure(format!(
-                        "Unexpected {name} in Features"
-                    )));
+                    let shape = self.parse_feature_shape(&child, units)?.ok_or_else(|| {
+                        Ipc2581Error::InvalidStructure(format!("Unexpected {name} in Features"))
+                    })?;
+                    features.push(self.set_feature(&child, shape, units, offset)?);
                 }
             }
         }
@@ -2945,247 +2881,98 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_contour_feature(
+    /// A `Feature` parsed from `node` as a `Features` member placed at `at`.
+    fn set_feature(
         &mut self,
         node: &Node,
+        shape: FeatureShape,
         units: Units,
-        offset: Point,
+        at: Point,
     ) -> Result<ecad::SetFeature> {
-        let contour = self.parse_contour(node, units)?;
-        let style_node = self
-            .element_children(node)
-            .find(|child| self.name(child) == "Polygon")
-            .unwrap_or(*node);
-        let (line_desc, line_desc_ref, fill_desc, fill_desc_ref) =
-            self.parse_fill_and_line_desc(&style_node, units)?;
+        let (x, y) = (at.x, at.y);
+        let stroked = match shape {
+            FeatureShape::StandardPrimitiveRef(id) => {
+                return Ok(ecad::SetFeature::StandardPrimitiveRef(
+                    ecad::FeaturePrimitiveRef { id, x, y },
+                ));
+            }
+            FeatureShape::UserPrimitiveRef(id) => {
+                return Ok(ecad::SetFeature::UserPrimitiveRef(
+                    ecad::FeaturePrimitiveRef { id, x, y },
+                ));
+            }
+            FeatureShape::UserShape(shape) => shape,
+            shape => {
+                let primitive = self.user_primitive(node, shape, units)?;
+                return Ok(ecad::SetFeature::UserPrimitive(
+                    ecad::FeatureUserPrimitive { primitive, x, y },
+                ));
+            }
+        };
 
-        Ok(ecad::SetFeature::UserPrimitive(
-            ecad::FeatureUserPrimitive {
-                primitive: UserPrimitive::UserSpecial(UserSpecial {
-                    shapes: vec![UserShape {
-                        shape: UserShapeType::Contour(contour),
-                        line_desc,
-                        line_desc_ref,
-                        fill_desc,
-                        fill_desc_ref,
-                    }],
-                }),
-                x: offset.x,
-                y: offset.y,
-            },
-        ))
+        let line_desc_ref = stroked.line_desc_ref;
+        let line_width = stroked.line_desc.map_or(0.25, |desc| desc.line_width);
+        let line_end = stroked.line_desc.map(|desc| desc.line_end);
+        let line_property = stroked.line_desc.and_then(|desc| desc.line_property);
+        let moved = |point: Point| Point {
+            x: point.x + x,
+            y: point.y + y,
+        };
+        Ok(match stroked.shape {
+            UserShapeType::Polygon(polygon) => {
+                ecad::SetFeature::Polygon(Self::translate_polygon(polygon, at))
+            }
+            UserShapeType::Line(line) => ecad::SetFeature::Line(ecad::Line {
+                start_x: line.start.x + x,
+                start_y: line.start.y + y,
+                end_x: line.end.x + x,
+                end_y: line.end.y + y,
+                line_desc_ref,
+                line_width,
+                line_end,
+                line_property,
+            }),
+            UserShapeType::Arc(arc) => ecad::SetFeature::Arc(ecad::FeatureArc {
+                start: moved(arc.start),
+                end: moved(arc.end),
+                center: moved(arc.center),
+                clockwise: arc.clockwise,
+                line_desc_ref,
+                line_width,
+                line_end,
+                line_property,
+            }),
+            UserShapeType::Polyline(mut polyline) => {
+                Self::translate_steps(&mut polyline.steps, at);
+                ecad::SetFeature::Polyline(ecad::FeaturePolyline {
+                    begin: moved(polyline.begin),
+                    steps: polyline.steps,
+                    line_desc_ref,
+                    line_width,
+                    line_end,
+                    line_property,
+                })
+            }
+            _ => unreachable!("parse_user_shape yields only stroked shapes and polygons"),
+        })
     }
 
     fn translate_polygon(mut polygon: Polygon, offset: Point) -> Polygon {
-        Self::translate_point(&mut polygon.begin, offset);
-        for step in &mut polygon.steps {
-            match step {
-                PolyStep::Segment(segment) => {
-                    Self::translate_point(&mut segment.point, offset);
-                }
-                PolyStep::Curve(curve) => {
-                    Self::translate_point(&mut curve.point, offset);
-                    Self::translate_point(&mut curve.center, offset);
-                }
-            }
-        }
+        polygon.begin.x += offset.x;
+        polygon.begin.y += offset.y;
+        Self::translate_steps(&mut polygon.steps, offset);
         polygon
     }
 
-    fn translate_point(point: &mut Point, offset: Point) {
-        point.x += offset.x;
-        point.y += offset.y;
-    }
-
-    fn parse_line(
-        &mut self,
-        node: &Node,
-        units: Units,
-        offset_x: f64,
-        offset_y: f64,
-    ) -> Result<ecad::Line> {
-        let start_x = self.parse_f64_attr_with_units(node, "startX", "Line", units)? + offset_x;
-        let start_y = self.parse_f64_attr_with_units(node, "startY", "Line", units)? + offset_y;
-        let end_x = self.parse_f64_attr_with_units(node, "endX", "Line", units)? + offset_x;
-        let end_y = self.parse_f64_attr_with_units(node, "endY", "Line", units)? + offset_y;
-
-        let mut line_width = 0.25;
-        let mut line_end = None;
-        let mut line_property = None;
-        let mut line_desc_ref = None;
-
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "LineDesc" => {
-                    (line_width, line_end, line_property) =
-                        self.parse_feature_line_desc(&child, units)?;
-                }
-                "LineDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        line_desc_ref = Some(self.interner.intern(id));
-                    }
-                }
-                _ => {}
-            }
+    fn translate_steps(steps: &mut [PolyStep], offset: Point) {
+        let points = steps.iter_mut().flat_map(|step| match step {
+            PolyStep::Segment(segment) => [Some(&mut segment.point), None],
+            PolyStep::Curve(curve) => [Some(&mut curve.point), Some(&mut curve.center)],
+        });
+        for point in points.flatten() {
+            point.x += offset.x;
+            point.y += offset.y;
         }
-
-        Ok(ecad::Line {
-            start_x,
-            start_y,
-            end_x,
-            end_y,
-            line_desc_ref,
-            line_width,
-            line_end,
-            line_property,
-        })
-    }
-
-    fn parse_feature_arc(
-        &mut self,
-        node: &Node,
-        units: Units,
-        offset_x: f64,
-        offset_y: f64,
-    ) -> Result<ecad::FeatureArc> {
-        let arc = self.parse_user_arc(node, units)?;
-        let mut line_width = 0.25;
-        let mut line_end = None;
-        let mut line_property = None;
-        let mut line_desc_ref = None;
-
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "LineDesc" => {
-                    (line_width, line_end, line_property) =
-                        self.parse_feature_line_desc(&child, units)?;
-                }
-                "LineDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        line_desc_ref = Some(self.interner.intern(id));
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        Ok(ecad::FeatureArc {
-            start: Point {
-                x: arc.start.x + offset_x,
-                y: arc.start.y + offset_y,
-            },
-            end: Point {
-                x: arc.end.x + offset_x,
-                y: arc.end.y + offset_y,
-            },
-            center: Point {
-                x: arc.center.x + offset_x,
-                y: arc.center.y + offset_y,
-            },
-            clockwise: arc.clockwise,
-            line_desc_ref,
-            line_width,
-            line_end,
-            line_property,
-        })
-    }
-
-    fn parse_feature_polyline(
-        &mut self,
-        node: &Node,
-        units: Units,
-        offset_x: f64,
-        offset_y: f64,
-    ) -> Result<ecad::FeaturePolyline> {
-        let mut begin = None;
-        let mut steps = Vec::new();
-        let mut line_width = 0.25;
-        let mut line_end = None;
-        let mut line_property = None;
-        let mut line_desc_ref = None;
-
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "PolyBegin" => {
-                    begin = Some(Point {
-                        x: self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units)?
-                            + offset_x,
-                        y: self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units)?
-                            + offset_y,
-                    });
-                }
-                "PolyStepSegment" => {
-                    steps.push(PolyStep::Segment(PolyStepSegment {
-                        point: Point {
-                            x: self.parse_f64_attr_with_units(
-                                &child,
-                                "x",
-                                "PolyStepSegment",
-                                units,
-                            )? + offset_x,
-                            y: self.parse_f64_attr_with_units(
-                                &child,
-                                "y",
-                                "PolyStepSegment",
-                                units,
-                            )? + offset_y,
-                        },
-                    }));
-                }
-                "PolyStepCurve" => {
-                    steps.push(PolyStep::Curve(PolyStepCurve {
-                        point: Point {
-                            x: self.parse_f64_attr_with_units(
-                                &child,
-                                "x",
-                                "PolyStepCurve",
-                                units,
-                            )? + offset_x,
-                            y: self.parse_f64_attr_with_units(
-                                &child,
-                                "y",
-                                "PolyStepCurve",
-                                units,
-                            )? + offset_y,
-                        },
-                        center: Point {
-                            x: self.parse_f64_attr_with_units(
-                                &child,
-                                "centerX",
-                                "PolyStepCurve",
-                                units,
-                            )? + offset_x,
-                            y: self.parse_f64_attr_with_units(
-                                &child,
-                                "centerY",
-                                "PolyStepCurve",
-                                units,
-                            )? + offset_y,
-                        },
-                        clockwise: self.parse_bool_attr(&child, "clockwise")?,
-                    }));
-                }
-                "LineDesc" => {
-                    (line_width, line_end, line_property) =
-                        self.parse_feature_line_desc(&child, units)?;
-                }
-                "LineDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        line_desc_ref = Some(self.interner.intern(id));
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        Ok(ecad::FeaturePolyline {
-            begin: begin.ok_or(Ipc2581Error::MissingElement("PolyBegin in Polyline"))?,
-            steps,
-            line_desc_ref,
-            line_width,
-            line_end,
-            line_property,
-        })
     }
 
     fn parse_hole(&mut self, node: &Node) -> Result<Hole> {
@@ -3243,64 +3030,38 @@ impl<'a> Parser<'a> {
         let plating_status =
             self.parse_plating_status(self.interner.resolve(plating_status_str))?;
 
-        // Parse Location child element
-        let (x, y) = if let Some(location_node) = self
-            .element_children(node)
-            .find(|n| self.name(n) == "Location")
-        {
-            let x = self.parse_f64_attr_with_units(&location_node, "x", "Location", units)?;
-            let y = self.parse_f64_attr_with_units(&location_node, "y", "Location", units)?;
-            (x, y)
-        } else {
-            (0.0, 0.0)
-        };
-
-        // Parse shape - can be Outline OR StandardPrimitive
-        // Per IPC-2581 spec 8.2.3.10.6: "The shape is defined by the substitution
-        // group Feature, which can be either a user defined shape or a standard
-        // primitive shape."
-        let shape = if let Some(outline_node) = self
-            .element_children(node)
-            .find(|n| self.name(n) == "Outline")
-        {
-            // Outline path with polygon
-            if let Some(polygon_node) = self
-                .element_children(&outline_node)
-                .find(|n| self.name(n) == "Polygon")
-            {
-                SlotShape::Outline(self.parse_polygon(&polygon_node, units)?)
-            } else {
-                return Err(Ipc2581Error::MissingElement(
-                    "Polygon in SlotCavity Outline",
-                ));
+        // Allegro and KiCad revision B omit the Location; the shape is then
+        // in step coordinates.
+        let (mut x, mut y) = (0.0, 0.0);
+        let mut xform = None;
+        let mut shape = None;
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "Location" => {
+                    x = self.parse_f64_attr_with_units(&child, "x", "Location", units)?;
+                    y = self.parse_f64_attr_with_units(&child, "y", "Location", units)?;
+                }
+                "Xform" => xform = Some(self.parse_xform(&child, units)?),
+                name if shape.is_none() => {
+                    shape = match self.parse_feature_shape(&child, units)? {
+                        Some(FeatureShape::Outline(outline)) => {
+                            Some(SlotShape::Outline(outline.polygon))
+                        }
+                        Some(FeatureShape::StandardPrimitive(primitive)) => {
+                            Some(SlotShape::Primitive(primitive))
+                        }
+                        Some(_) => {
+                            return Err(Ipc2581Error::InvalidStructure(format!(
+                                "Unsupported {name} shape in SlotCavity"
+                            )));
+                        }
+                        None => None,
+                    };
+                }
+                _ => {}
             }
-        } else {
-            // Try to parse as StandardPrimitive (Circle, Oval, RectCenter, etc.)
-            // Find first child that is a StandardPrimitive
-            let primitive_node = self
-                .element_children(node)
-                .find(|n| {
-                    matches!(
-                        self.name(n),
-                        "Circle"
-                            | "Oval"
-                            | "RectCenter"
-                            | "RectRound"
-                            | "Ellipse"
-                            | "Diamond"
-                            | "Hexagon"
-                            | "Octagon"
-                            | "Triangle"
-                    )
-                })
-                .ok_or(Ipc2581Error::MissingElement(
-                    "Shape (Outline or StandardPrimitive) in SlotCavity",
-                ))?;
-
-            SlotShape::Primitive(self.parse_standard_primitive(&primitive_node, units)?)
-        };
-
-        let xform = self.parse_xform_child(node, units)?;
+        }
+        let shape = shape.ok_or(Ipc2581Error::MissingElement("Feature in SlotCavity"))?;
 
         let z_axis_dim = has_z_axis_dim(self.doc(), node);
 
@@ -3323,59 +3084,35 @@ impl<'a> Parser<'a> {
             .attr(node, "padstackDefRef")
             .map(|s| self.interner.intern(s));
 
-        // Check for x, y as attributes first (legacy format)
-        let mut x = self
-            .attr(node, "x")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
-        let mut y = self
-            .attr(node, "y")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
+        // x and y attributes are a legacy form of the Location child.
+        let coordinate = |value: Option<&str>| {
+            value
+                .and_then(|s| s.parse::<f64>().ok())
+                .map(|v| crate::units::to_mm(v, units))
+        };
+        let mut x = coordinate(self.attr(node, "x"));
+        let mut y = coordinate(self.attr(node, "y"));
 
-        // Look for Location child element (standard format)
-        for child in self.element_children(node) {
-            if self.name(&child) == "Location" {
-                x = self
-                    .attr(&child, "x")
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|v| crate::units::to_mm(v, units));
-                y = self
-                    .attr(&child, "y")
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|v| crate::units::to_mm(v, units));
-                break;
-            }
-        }
-
-        let xform = self.parse_xform_child(node, units)?;
-
-        let feature = self
-            .element_children(node)
-            .find_map(|child| self.parse_feature_shape(&child, units).transpose())
-            .transpose()?;
-
-        // Parse inline StandardPrimitiveRef if present
-        let standard_primitive_ref = self
-            .element_children(node)
-            .find(|n| self.name(n) == "StandardPrimitiveRef")
-            .and_then(|n| self.attr(&n, "id"))
-            .map(|id| self.interner.intern(id));
-
-        // Parse inline UserPrimitiveRef if present
-        let user_primitive_ref = self
-            .element_children(node)
-            .find(|n| self.name(n) == "UserPrimitiveRef")
-            .and_then(|n| self.attr(&n, "id"))
-            .map(|id| self.interner.intern(id));
-
+        let mut xform = None;
+        let mut feature = None;
         let mut pin_ref = None;
         for child in self.element_children(node) {
-            if self.name(&child) == "PinRef" {
-                pin_ref = Some(self.parse_pin_ref(&child)?);
-                break;
+            match self.name(&child) {
+                "Location" => {
+                    x = coordinate(self.attr(&child, "x"));
+                    y = coordinate(self.attr(&child, "y"));
+                }
+                "Xform" => xform = Some(self.parse_xform(&child, units)?),
+                "PinRef" => pin_ref = Some(self.parse_pin_ref(&child)?),
+                _ if feature.is_none() => feature = self.parse_feature_shape(&child, units)?,
+                _ => {}
             }
         }
+        let (standard_primitive_ref, user_primitive_ref) = match feature {
+            Some(FeatureShape::StandardPrimitiveRef(id)) => (Some(id), None),
+            Some(FeatureShape::UserPrimitiveRef(id)) => (None, Some(id)),
+            _ => (None, None),
+        };
 
         Ok(Pad {
             padstack_def_ref,

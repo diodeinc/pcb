@@ -499,7 +499,7 @@ mod tests {
             <Polygon><PolyBegin x="0" y="0"/>
             <PolyStepSegment x="4" y="0"/><PolyStepSegment x="4" y="2"/>
             <PolyStepSegment x="0" y="2"/><PolyStepSegment x="0" y="0"/>
-            <LineDesc lineWidth="0.05"/><FillDesc fillProperty="HOLLOW"/>
+            <LineDesc lineWidth="0.05" lineEnd="ROUND"/><FillDesc fillProperty="HOLLOW"/>
             </Polygon></Features></Set>"#;
         format!(
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -601,7 +601,7 @@ mod tests {
         let start = xml.find("<LayerFeature layerRef=\"F.Courtyard\">").unwrap();
         let end = start + xml[start..].find("</LayerFeature>").unwrap();
         let lines = [(0, 0, 4, 0), (4, 2, 4, 0), (0, 2, 4, 2), (0, 2, 0, 0)];
-        let sets = lines.iter().map(|(x1, y1, x2, y2)| format!(r#"<Set componentRef="U1"><Features><Xform rotation="90"/><Location x="8" y="1"/><Line startX="{x1}" startY="{y1}" endX="{x2}" endY="{y2}"><LineDesc lineWidth="0.05"/></Line></Features></Set>"#)).collect::<Vec<_>>();
+        let sets = lines.iter().map(|(x1, y1, x2, y2)| format!(r#"<Set componentRef="U1"><Features><Xform rotation="90"/><Location x="8" y="1"/><Line startX="{x1}" startY="{y1}" endX="{x2}" endY="{y2}"><LineDesc lineWidth="0.05" lineEnd="ROUND"/></Line></Features></Set>"#)).collect::<Vec<_>>();
         for count in [4, 3] {
             let mut xml = xml.clone();
             xml.replace_range(

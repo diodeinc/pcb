@@ -311,7 +311,7 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
         let shape = r#"<Outline><Polygon><PolyBegin x="-1" y="-1"/>
           <PolyStepSegment x="1" y="1"/><PolyStepSegment x="1" y="1.4"/>
           <PolyStepSegment x="-1" y="-0.6"/><PolyStepSegment x="-1" y="-1"/>
-        </Polygon></Outline>"#;
+        </Polygon><LineDesc lineEnd="ROUND" lineWidth="0"/></Outline>"#;
         let copper = r#"<Set><Features><Contour><Polygon><PolyBegin x="-2" y="-2.3"/>
           <PolyStepSegment x="2" y="1.7"/><PolyStepSegment x="2" y="2.7"/>
           <PolyStepSegment x="-2" y="-1.3"/><PolyStepSegment x="-2" y="-2.3"/>

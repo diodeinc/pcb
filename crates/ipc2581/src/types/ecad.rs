@@ -236,7 +236,7 @@ pub struct Package {
     pub other_side_view: Option<PackageOtherSideView>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PackageOutline {
     pub polygon: super::Polygon,
     pub polygon_xform: Option<super::Xform>,
