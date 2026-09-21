@@ -68,6 +68,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - IPC-2581 exports no longer fail on a KiCad arc that collapsed to a point.
 - Donut fiducials keep their hole, scaled fiducials keep their size, and fiducials cut by a slot image cut.
 - Drill export reports a square hole instead of drilling it round.
+- `pcb ipc dfm check` no longer fails with a report over the size limit on board arrays and fabrication panels.
+- DFM width and gap checks no longer panic on copper whose hole touches its outline.
+- Copper balancing no longer crashes on nearly coincident copper edges or over-trims notch corners.
+- Gerber apertures whose hole is wider than the shape no longer add copper.
+- Balance void sizes no longer all round the same way across uniform fill.
 
 ### Changed
 
@@ -94,6 +99,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - DFM reports list measurements that fall within measurement uncertainty.
 - The DFM report schema is now version 2.
 - Physical and DFM views of panels build several times faster, and import uses less memory.
+- DFM checks each board of an array or panel once and lists every placement in a new `frames` table; panels run many times faster.
+- DFM report schema v2 adds `frames` and a `frame` index on findings, and drops `group_key`.
+- DFM minimum width and gap checks are up to 2.4× faster on dense panels.
+- PNG and terminal renders are faster and no longer go through an SVG rasterizer.
+- The board-array overview in HTML reports is smaller and uses the same layer colours as layer renders.
+- `pcb ipc warp` evaluates the stack at its measured copper and solves the panel as a free plate; bow estimates rise about 1.2–3×.
+- The warp report drops the deflection-by-shape table.
+- Copper balancing converges to a certified density match and is faster on board arrays.
 
 ## [0.4.56] - 2026-09-20
 
