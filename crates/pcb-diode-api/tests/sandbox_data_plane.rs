@@ -273,27 +273,25 @@ fn wait_for_call(mock: &Mock<'_>) {
 
 #[test]
 fn waits_for_lifecycle_contention_before_submitting_work() {
-    for code in ["SANDBOX_BUSY", "SANDBOX_UPDATING"] {
-        let server = MockServer::start();
-        let mut busy = server.mock(|when, then| {
-            when.method(POST).path("/api/sandboxes/sbx_1/access-token");
-            then.status(503)
-                .json_body(serde_json::json!({"code": code}));
-        });
-        let read = server.mock(|when, then| {
-            when.method(GET).path("/sandboxes/sbx_1/fs/read");
-            then.status(200).body("ready");
-        });
-        let client = client_for(&server);
-        let worker = thread::spawn(move || client.read_file(SANDBOX, "/file"));
-        wait_for_call(&busy);
-        read.assert_calls(0);
-        busy.delete();
-        let mint = mock_mint(&server, "ready-token");
-        assert_eq!(worker.join().unwrap().unwrap(), b"ready");
-        mint.assert_calls(1);
-        read.assert_calls(1);
-    }
+    let server = MockServer::start();
+    let mut busy = server.mock(|when, then| {
+        when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+        then.status(503)
+            .json_body(serde_json::json!({"code": "SANDBOX_NOT_READY"}));
+    });
+    let read = server.mock(|when, then| {
+        when.method(GET).path("/sandboxes/sbx_1/fs/read");
+        then.status(200).body("ready");
+    });
+    let client = client_for(&server);
+    let worker = thread::spawn(move || client.read_file(SANDBOX, "/file"));
+    wait_for_call(&busy);
+    read.assert_calls(0);
+    busy.delete();
+    let mint = mock_mint(&server, "ready-token");
+    assert_eq!(worker.join().unwrap().unwrap(), b"ready");
+    mint.assert_calls(1);
+    read.assert_calls(1);
 }
 
 #[test]
@@ -354,7 +352,7 @@ fn renewal_does_not_block_other_sandboxes() {
         let mut busy = server.mock(|when, then| {
             when.method(POST).path("/api/sandboxes/sbx_1/access-token");
             then.status(503)
-                .json_body(serde_json::json!({"code": "SANDBOX_UPDATING"}));
+                .json_body(serde_json::json!({"code": "SANDBOX_NOT_READY"}));
         });
         let other_mint = server.mock(|when, then| {
             when.method(POST).path("/api/sandboxes/sbx_2/access-token");
@@ -382,7 +380,7 @@ fn renewal_does_not_block_other_sandboxes() {
         });
         let result = rx.recv_timeout(Duration::from_secs(1));
         // End maintenance before asserting so a regression cannot strand a
-        // worker in the twenty-minute renewal loop.
+        // worker in the two-minute renewal loop.
         busy.delete();
         server.mock(|when, then| {
             when.method(POST).path("/api/sandboxes/sbx_1/access-token");
@@ -764,7 +762,7 @@ fn lease_expiry_and_cancellation_stop_shared_renewal_waiters() {
         let mut busy = server.mock(|when, then| {
             when.method(POST).path("/api/sandboxes/sbx_1/access-token");
             then.status(503)
-                .json_body(serde_json::json!({"code": "SANDBOX_UPDATING"}));
+                .json_body(serde_json::json!({"code": "SANDBOX_NOT_READY"}));
         });
         let writes = server.mock(|when, then| {
             when.method(PUT).path("/sandboxes/sbx_1/fs/write");
@@ -777,7 +775,7 @@ fn lease_expiry_and_cancellation_stop_shared_renewal_waiters() {
         if cancel {
             // Reach a multi-second backoff so an uninterruptible sleep fails.
             let deadline = Instant::now() + Duration::from_secs(5);
-            while busy.calls() < 5 {
+            while busy.calls() < 4 {
                 assert!(Instant::now() < deadline, "renewal stopped retrying");
                 thread::sleep(Duration::from_millis(10));
             }
@@ -837,7 +835,7 @@ fn heartbeat_after_maintenance_uses_fresh_timestamps_and_extends_lease() {
     let mut busy = server.mock(|when, then| {
         when.method(POST).path("/api/sandboxes/sbx_1/access-token");
         then.status(503)
-            .json_body(serde_json::json!({"code": "SANDBOX_UPDATING"}));
+            .json_body(serde_json::json!({"code": "SANDBOX_NOT_READY"}));
     });
     let observed = Arc::new(Mutex::new(Vec::new()));
     let received = Arc::clone(&observed);

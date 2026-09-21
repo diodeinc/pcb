@@ -638,9 +638,10 @@ impl SandboxClient {
         sandbox_id: &str,
         state: &SandboxConnectionState,
     ) -> Result<Arc<SandboxConnection>> {
-        // Pre-lease waits may last twenty minutes; a sync lease or cleanup
-        // deadline always bounds this further through request_timeout.
-        let deadline = Instant::now() + Duration::from_secs(20 * 60);
+        // A sandbox that is still starting, restoring, or updating is retried
+        // for about two minutes. A sync lease or cleanup deadline bounds this
+        // further through request_timeout.
+        let deadline = Instant::now() + Duration::from_secs(2 * 60);
         // Serialize renewal for this sandbox only, never holding the map lock
         // during network requests. Clones and heartbeats share the result.
         let _renewal = loop {
@@ -663,9 +664,10 @@ impl SandboxClient {
             encode_segment(sandbox_id)
         ));
         let mut delay = Duration::ZERO;
+        let mut announced_phase = String::new();
         loop {
             self.wait(delay.min(deadline.saturating_duration_since(Instant::now())))?;
-            delay = (delay * 2).clamp(Duration::from_millis(200), Duration::from_secs(4));
+            delay = (delay * 2).clamp(Duration::from_millis(500), Duration::from_secs(4));
             let remaining =
                 self.request_timeout(deadline.saturating_duration_since(Instant::now()))?;
             // Blocking HTTP cannot be cancelled mid-request. Keep lease renewal
@@ -707,15 +709,29 @@ impl SandboxClient {
             let text = response
                 .text()
                 .context("Failed to read sandbox connection error")?;
-            let retry = status == StatusCode::SERVICE_UNAVAILABLE
-                && serde_json::from_str::<serde_json::Value>(&text).is_ok_and(|error| {
-                    matches!(
-                        error["code"].as_str(),
-                        Some("SANDBOX_BUSY" | "SANDBOX_UPDATING")
-                    )
-                });
-            if !retry {
-                bail!("Failed to mint sandbox connection ({status}): {text}");
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                continue;
+            }
+            let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+            if status == StatusCode::SERVICE_UNAVAILABLE
+                && parsed["code"].as_str() == Some("SANDBOX_NOT_READY")
+            {
+                let phase = parsed["phase"].as_str().unwrap_or("provisioning");
+                if announced_phase != phase {
+                    let message = match phase {
+                        "restoring" => "Restoring sandbox…",
+                        "updating" => "Updating sandbox…",
+                        _ => "Starting sandbox…",
+                    };
+                    eprintln!("{message}");
+                    announced_phase.clear();
+                    announced_phase.push_str(phase);
+                }
+                continue;
+            }
+            match parsed["error"].as_str() {
+                Some(message) => bail!("{message}"),
+                None => bail!("Failed to mint sandbox connection ({status}): {text}"),
             }
         }
     }
