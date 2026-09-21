@@ -261,7 +261,7 @@ impl ContourSet {
     /// filled-region disk:
     ///
     /// ```text
-    /// T(S) = open(S \ (Γ(G_gap_radius(S)) ⊕ disk(gap_radius + guard)), disk(filled_radius)) ∩ S
+    /// T(S) = open(S \ (Γ(G_gap_radius(S)) ⊕ disk(gap_radius + guard)), disk(filled_radius))
     /// ```
     ///
     /// `G_r(X)` is the two-sided part of `close(X, disk(r)) \ X`, and `Γ(N)`
@@ -325,11 +325,7 @@ impl ContourSet {
             return Ok(None);
         }
         let keep_out = narrow_void_keep_out(self, &narrow_voids, gap_radius + guard)?;
-        Ok(Some(
-            self.difference(&keep_out)?
-                .disk_open(filled_radius)?
-                .intersection(self)?,
-        ))
+        Ok(Some(self.difference(&keep_out)?.disk_open(filled_radius)?))
     }
 
     /// Unfilled material that violates the two-sided void-gap radius.
