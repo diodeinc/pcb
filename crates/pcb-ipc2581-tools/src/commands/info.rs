@@ -12,11 +12,14 @@ use colored::Colorize;
 use comfy_table::presets::UTF8_FULL_CONDENSED;
 #[cfg(feature = "cli")]
 use comfy_table::{Cell, Color, Table};
+use pcb_ir::dialects::ipc::ArtworkScope;
+#[cfg(feature = "cli")]
 use pcb_ir::geom::Resolution;
+use pcb_ir::import::ipc2581::ImportedDesign;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::accessors::{ColorInfo, DrillHoleType, DrillStats, IpcAccessor};
+use crate::accessors::{ColorInfo, DrillHoleType, DrillStats, IpcAccessor, drill_stats};
 #[cfg(feature = "cli")]
 use crate::utils::{file as file_utils, units};
 #[cfg(feature = "cli")]
@@ -38,11 +41,12 @@ pub fn execute(
 ) -> Result<()> {
     let content = file_utils::load_ipc_file(file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
+    let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
     let accessor = IpcAccessor::new(&ipc);
 
     match format {
-        OutputFormat::Text => output_text(&accessor, units, resolution),
-        OutputFormat::Json => output_json(&accessor, resolution),
+        OutputFormat::Text => output_text(&accessor, &imported, units),
+        OutputFormat::Json => output_json(&accessor, &imported),
     }
 }
 
@@ -161,9 +165,12 @@ fn canonical_soldermask_kind(color: Option<&ColorInfo>) -> SoldermaskKind {
 #[cfg(feature = "cli")]
 fn output_text(
     accessor: &IpcAccessor,
+    imported: &ImportedDesign,
     unit_format: UnitFormat,
-    resolution: Resolution,
 ) -> Result<()> {
+    let board_drills = drill_stats(imported, ArtworkScope::Board)?;
+    let array_drills = drill_stats(imported, ArtworkScope::ArrayLocal)?;
+
     // Board Summary header
     println!("{}", "Board Summary".bold());
 
@@ -216,7 +223,7 @@ fn output_text(
     }
 
     // Drill statistics (summary)
-    if let Some(drills) = accessor.board_drill_stats(resolution)?
+    if let Some(drills) = &board_drills
         && drills.total_holes > 0
     {
         summary_table.add_row(vec![
@@ -490,20 +497,20 @@ fn output_text(
     }
 
     // Drill distribution
-    if let Some(drills) = accessor.board_drill_stats(resolution)?
+    if let Some(drills) = &board_drills
         && !drills.distribution.is_empty()
     {
-        print_drill_distribution("Drill Distribution", &drills);
+        print_drill_distribution("Drill Distribution", drills);
     }
 
     if let Some(board_array) = layout.and_then(|layout| layout.board_array) {
-        print_board_array_summary(&board_array, accessor, unit_format, resolution)?;
+        print_board_array_summary(&board_array, array_drills.as_ref(), unit_format);
     }
 
-    if let Some(drills) = accessor.board_array_drill_stats(resolution)?
+    if let Some(drills) = &array_drills
         && !drills.distribution.is_empty()
     {
-        print_drill_distribution("Array Drill Distribution", &drills);
+        print_drill_distribution("Array Drill Distribution", drills);
     }
 
     // File metadata at the end (greyed out)
@@ -544,10 +551,9 @@ fn output_text(
 #[cfg(feature = "cli")]
 fn print_board_array_summary(
     board_array: &BoardArrayInfo,
-    accessor: &IpcAccessor,
+    drills: Option<&DrillStats>,
     unit_format: UnitFormat,
-    resolution: Resolution,
-) -> anyhow::Result<()> {
+) {
     println!("{}", "Board Array Summary".bold());
 
     let mut table = Table::new();
@@ -585,7 +591,7 @@ fn print_board_array_summary(
         ]);
     }
 
-    if let Some(drills) = accessor.board_array_drill_stats(resolution)?
+    if let Some(drills) = drills
         && drills.total_holes > 0
     {
         table.add_row(vec![
@@ -599,8 +605,6 @@ fn print_board_array_summary(
 
     println!("{table}");
     println!();
-
-    Ok(())
 }
 
 #[cfg(feature = "cli")]
@@ -673,10 +677,10 @@ fn drill_stats_json(drills: &DrillStats) -> serde_json::Value {
 }
 
 #[cfg(feature = "cli")]
-fn output_json(accessor: &IpcAccessor, resolution: Resolution) -> Result<()> {
+fn output_json(accessor: &IpcAccessor, imported: &ImportedDesign) -> Result<()> {
     println!(
         "{}",
-        serde_json::to_string_pretty(&info_json(accessor, resolution)?)?
+        serde_json::to_string_pretty(&info_json(accessor, imported)?)?
     );
     Ok(())
 }
@@ -684,7 +688,7 @@ fn output_json(accessor: &IpcAccessor, resolution: Resolution) -> Result<()> {
 /// Extract the same board, assembly, and fabrication summary emitted by `ipc info --format json`.
 pub fn info_json(
     accessor: &IpcAccessor,
-    resolution: Resolution,
+    imported: &ImportedDesign,
 ) -> anyhow::Result<serde_json::Value> {
     let ipc = accessor.ipc();
     let content = ipc.content();
@@ -777,7 +781,7 @@ pub fn info_json(
                 "height_inch": dimensions.height_inch(),
             });
         }
-        if let Some(drills) = accessor.board_array_drill_stats(resolution)?
+        if let Some(drills) = drill_stats(imported, ArtworkScope::ArrayLocal)?
             && drills.total_holes > 0
         {
             info["board_array"]["drills"] = drill_stats_json(&drills);
@@ -795,7 +799,7 @@ pub fn info_json(
     }
 
     // Drill statistics with distribution
-    if let Some(drills) = accessor.board_drill_stats(resolution)?
+    if let Some(drills) = drill_stats(imported, ArtworkScope::Board)?
         && drills.total_holes > 0
     {
         info["drills"] = drill_stats_json(&drills);
@@ -978,6 +982,7 @@ mod tests {
     use super::info_json;
     use crate::accessors::IpcAccessor;
     use pcb_ir::geom::Resolution;
+    use pcb_ir::import::ipc2581::import_design;
 
     #[test]
     fn component_placements_deduplicate_bom_refdes() {
@@ -1017,7 +1022,8 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let info = info_json(&IpcAccessor::new(&ipc), Resolution::default()).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let info = info_json(&IpcAccessor::new(&ipc), &imported).unwrap();
         let placements = info["component_placements"].as_array().unwrap();
         assert_eq!(
             placements

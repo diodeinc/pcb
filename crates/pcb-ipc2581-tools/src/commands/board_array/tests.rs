@@ -723,9 +723,10 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
     let ipc = Ipc2581::parse(&xml).unwrap();
     let accessor = IpcAccessor::new(&ipc);
 
-    let svg = crate::board_array::render_board_array_overview_svg(&accessor, resolution)
-        .unwrap()
-        .unwrap();
+    let svg =
+        crate::board_array::render_board_array_overview_svg(&accessor, &design(&ipc), resolution)
+            .unwrap()
+            .unwrap();
     assert!(svg.matches("vcut-guide").count() > 24);
     assert!(svg.contains("stroke='#dc2626'"));
     assert!(svg.contains("stroke-width='0.12'"));

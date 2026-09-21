@@ -1457,9 +1457,12 @@ fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .context("Failed to load IPC-2581 file for HTML export")?;
     let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse(&ipc_content)
         .context("Failed to parse IPC-2581 file for HTML export")?;
+    let imported = pcb_ir::import::ipc2581::import_design(&ipc, info.geometry_resolution)
+        .context("Failed to import IPC-2581 design for HTML export")?;
     let accessor = pcb_ipc2581_tools::accessors::IpcAccessor::new(&ipc);
     let html = pcb_ipc2581_tools::commands::html_export::generate_html(
         &accessor,
+        &imported,
         pcb_ipc2581_tools::UnitFormat::Mm,
         info.geometry_resolution,
     )

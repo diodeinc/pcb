@@ -71,7 +71,9 @@ impl IpcDocument {
     #[wasm_bindgen(unchecked_return_type = "IpcInfo")]
     pub fn info(&self) -> Result<JsValue, JsError> {
         to_js(
-            &commands::info::info_json(&self.accessor(), Resolution::default())
+            &self
+                .design(Resolution::default())
+                .and_then(|design| commands::info::info_json(&self.accessor(), design))
                 .map_err(js_error)?,
         )
     }
@@ -290,7 +292,12 @@ impl IpcDocument {
             ExportOptions::Html {} => ExportFile::new(
                 "board.html",
                 "text/html",
-                commands::html_export::generate_html(&self.accessor(), UnitFormat::Mm, resolution)?,
+                commands::html_export::generate_html(
+                    &self.accessor(),
+                    self.design(resolution)?,
+                    UnitFormat::Mm,
+                    resolution,
+                )?,
             ),
         };
         Ok(vec![file])

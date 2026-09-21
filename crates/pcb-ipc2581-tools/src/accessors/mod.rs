@@ -18,7 +18,7 @@ pub use board::{
 };
 pub use bom::{Alternative, AvlLookup, BomStats, CharacteristicsData};
 pub use components::ComponentStats;
-pub use drills::{DrillHoleType, DrillSize, DrillStats, DrillTypeDistribution};
+pub use drills::{DrillHoleType, DrillSize, DrillStats, DrillTypeDistribution, drill_stats};
 pub use layers::{LayerStats, NetStats};
 pub use metadata::{FileMetadata, SoftwareInfo};
 pub use stackup::{

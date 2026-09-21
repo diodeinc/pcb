@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::{ArtworkScope, LayoutStep, LayoutStepKind};
 use pcb_ir::geom::{Affine2, BBox, ContourBuf, Point};
-use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, import_design};
+use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 use pcb_ir::render::svg_path_data;
 
 use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
@@ -19,6 +19,7 @@ const OVERVIEW_VIEWBOX_PADDING_MM: f64 = 1.0;
 
 pub fn render_board_array_overview_svg(
     accessor: &IpcAccessor<'_>,
+    imported: &ImportedDesign,
     resolution: Resolution,
 ) -> Result<Option<String>> {
     let Some(layout) = accessor.board_layout_info() else {
@@ -33,9 +34,8 @@ pub fn render_board_array_overview_svg(
         return Ok(None);
     };
     let array_height = dimensions.height_mm();
-    let imported = import_design(accessor.ipc(), resolution)?;
-    let layer_overlays = board_array_layer_overlays(&imported, array_height, resolution)?;
-    render_board_array_svg(&imported, board_array, &doc, &layer_overlays, resolution)
+    let layer_overlays = board_array_layer_overlays(imported, array_height, resolution)?;
+    render_board_array_svg(imported, board_array, &doc, &layer_overlays, resolution)
 }
 
 fn render_board_array_svg(
@@ -644,6 +644,13 @@ mod tests {
 
     use super::*;
 
+    fn overview(ipc: &ipc2581::Ipc2581, resolution: Resolution) -> String {
+        let imported = pcb_ir::import::ipc2581::import_design(ipc, resolution).unwrap();
+        render_board_array_overview_svg(&IpcAccessor::new(ipc), &imported, resolution)
+            .unwrap()
+            .unwrap()
+    }
+
     #[test]
     fn renders_simple_board_array_overview_svg() {
         let resolution = Resolution::default();
@@ -690,11 +697,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
-
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
+        let svg = overview(&ipc, resolution);
 
         assert!(svg.contains("data-board-array-overview='true'"));
         assert!(svg.contains("viewBox='-1 -1 46 26'"));
@@ -757,11 +760,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
-
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
+        let svg = overview(&ipc, resolution);
 
         assert!(svg.contains("class='board-array-outline'"));
         assert!(svg.contains(" A3 3"));
@@ -825,11 +824,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
-
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
+        let svg = overview(&ipc, resolution);
 
         assert_eq!(svg.matches("vcut-guide").count(), 2);
         assert!(svg.contains("d='M5 24 L5 0'"));
@@ -926,11 +921,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
-
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
+        let svg = overview(&ipc, resolution);
 
         assert!(svg.contains("class='board-array-profile-cutout'"));
         assert!(svg.contains("fill='#ffffff'"));
@@ -1013,11 +1004,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
-
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
+        let svg = overview(&ipc, resolution);
 
         assert_eq!(svg.matches("array-layer-copper").count(), 1);
         assert!(!svg.contains("M7 5.5 L15 5.5"));
@@ -1097,11 +1084,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
-
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
+        let svg = overview(&ipc, resolution);
 
         assert_eq!(
             svg.matches("array-layer-copper").count(),

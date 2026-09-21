@@ -4,13 +4,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use ipc2581::types::ecad::Layer;
 use minijinja::{Environment, context};
 use pcb_ir::dialects::ipc::{ArtworkScope, ProfileSet};
+use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 use serde::Serialize;
 
 use crate::UnitFormat;
-use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishInfo};
+use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishInfo, drill_stats};
 use crate::geometry;
 #[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
@@ -28,10 +28,11 @@ pub fn execute(
     // Load and parse IPC-2581 file
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
+    let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
     let accessor = IpcAccessor::new(&ipc);
 
     // Generate HTML
-    let html = generate_html(&accessor, unit_format, resolution)?;
+    let html = generate_html(&accessor, &imported, unit_format, resolution)?;
 
     // Determine output path
     let output_path = match output_file {
@@ -54,6 +55,7 @@ pub fn execute(
 
 pub fn generate_html(
     accessor: &IpcAccessor,
+    imported: &ImportedDesign,
     unit_format: UnitFormat,
     resolution: Resolution,
 ) -> Result<String> {
@@ -64,9 +66,9 @@ pub fn generate_html(
     let template = env.get_template("html")?;
 
     // Extract data
-    let board_summary = extract_board_summary(accessor, unit_format, resolution)?;
+    let board_summary = extract_board_summary(accessor, imported, unit_format, resolution)?;
     let stackup = extract_stackup_data(accessor, unit_format);
-    let rendered_layers = extract_rendered_layers(accessor, resolution)?;
+    let rendered_layers = extract_rendered_layers(imported, resolution)?;
     let version = env!("CARGO_PKG_VERSION");
 
     // Extract file metadata
@@ -197,13 +199,14 @@ struct Color {
 
 fn extract_board_summary(
     accessor: &IpcAccessor,
+    imported: &ImportedDesign,
     unit_format: UnitFormat,
     resolution: Resolution,
 ) -> Result<BoardSummary> {
     let layout = accessor.board_layout_info();
     let design_name = layout.as_ref().and_then(|layout| layout.board_name.clone());
     let array_overview_svg =
-        crate::board_array::render_board_array_overview_svg(accessor, resolution)?;
+        crate::board_array::render_board_array_overview_svg(accessor, imported, resolution)?;
 
     let (width, height) = if let Some(dims) = layout
         .as_ref()
@@ -237,8 +240,7 @@ fn extract_board_summary(
                             .format_shorthand(|value| format_length(value, unit_format)),
                     ),
                 }),
-                drill_holes: accessor
-                    .board_array_drill_stats(resolution)?
+                drill_holes: drill_stats(imported, ArtworkScope::ArrayLocal)?
                     .and_then(format_drill_count),
                 overview_svg: array_overview_svg,
             })
@@ -264,9 +266,7 @@ fn extract_board_summary(
 
     let components = accessor.component_stats().map(|stats| stats.total);
     let nets = accessor.net_stats().map(|stats| stats.count);
-    let drill_holes = accessor
-        .board_drill_stats(resolution)?
-        .and_then(format_drill_count);
+    let drill_holes = drill_stats(imported, ArtworkScope::Board)?.and_then(format_drill_count);
 
     Ok(BoardSummary {
         design_name,
@@ -320,46 +320,43 @@ fn formatted_dimensions(
 }
 
 fn extract_rendered_layers(
-    accessor: &IpcAccessor,
+    imported: &ImportedDesign,
     resolution: Resolution,
 ) -> Result<RenderedLayers> {
-    let ipc = accessor.ipc();
-    let Some(ecad) = ipc.ecad() else {
-        return Ok(RenderedLayers::default());
-    };
-    let layers_by_ref = ecad
-        .cad_data
-        .layers
+    let layer_ids = imported
+        .layer_definitions
         .iter()
-        .map(|layer| (layer.name, layer))
+        .enumerate()
+        .map(|(index, layer)| (layer.name, LayerId(index as u32)))
         .collect::<HashMap<_, _>>();
 
     let mut stackup_layer_refs = HashSet::new();
     let mut stackup_layers = Vec::new();
 
-    if let Some(stackup) = ecad.cad_data.stackups.first() {
+    if let Some(stackup) = imported.stackups.first() {
         for stackup_layer in &stackup.layers {
             stackup_layer_refs.insert(stackup_layer.layer_ref);
-            let Some(layer) = layers_by_ref.get(&stackup_layer.layer_ref).copied() else {
+            let Some(&id) = layer_ids.get(&stackup_layer.layer_ref) else {
                 continue;
             };
-            if layer.layer_function.is_dielectric() {
+            let function = imported.layer_definitions[id.0 as usize].layer_function;
+            if function.is_dielectric() {
                 continue;
             }
 
             let rendered = rendered_source_layer(
-                ipc,
-                layer,
+                imported,
+                id,
                 stackup_layer.layer_number.map(|number| number.to_string()),
                 resolution,
             )?;
-            if layer.layer_function.is_coating() && !rendered.has_native_content {
+            if function.is_coating() && !rendered.has_native_content {
                 continue;
             }
             stackup_layers.push(rendered);
         }
     } else {
-        for layer in &ecad.cad_data.layers {
+        for (index, layer) in imported.layer_definitions.iter().enumerate() {
             if layer.layer_function.is_fabrication()
                 || layer.layer_function.is_dielectric()
                 || layer.layer_function.is_coating()
@@ -367,18 +364,23 @@ fn extract_rendered_layers(
                 continue;
             }
             stackup_layer_refs.insert(layer.name);
-            stackup_layers.push(rendered_source_layer(ipc, layer, None, resolution)?);
+            stackup_layers.push(rendered_source_layer(
+                imported,
+                LayerId(index as u32),
+                None,
+                resolution,
+            )?);
         }
     }
 
     let mut non_stackup_layers = Vec::new();
 
-    for layer in &ecad.cad_data.layers {
+    for (index, layer) in imported.layer_definitions.iter().enumerate() {
         if stackup_layer_refs.contains(&layer.name) {
             continue;
         }
 
-        let rendered = rendered_source_layer(ipc, layer, None, resolution)?;
+        let rendered = rendered_source_layer(imported, LayerId(index as u32), None, resolution)?;
         if rendered.has_native_content {
             non_stackup_layers.push(rendered);
         }
@@ -391,14 +393,14 @@ fn extract_rendered_layers(
 }
 
 fn rendered_source_layer(
-    ipc: &ipc2581::Ipc2581,
-    layer: &Layer,
+    imported: &ImportedDesign,
+    id: LayerId,
     sequence: Option<String>,
     resolution: Resolution,
 ) -> anyhow::Result<RenderedLayer> {
-    let name = ipc.resolve(layer.name).to_string();
+    let layer = &imported.layer_definitions[id.0 as usize];
     let mut rendered = RenderedLayer {
-        name: name.clone(),
+        name: imported.resolve(layer.name).to_string(),
         function: layer.layer_function.as_str().to_string(),
         side: layer
             .side
@@ -411,24 +413,15 @@ fn rendered_source_layer(
         has_native_content: false,
     };
 
-    // Every layer's SVG is inlined into one page, where element ids are
-    // global, so each takes its ids from the layer's place in the source.
-    let ids = ipc
-        .ecad()
-        .and_then(|ecad| {
-            ecad.cad_data
-                .layers
-                .iter()
-                .position(|candidate| candidate.name == layer.name)
-        })
-        .map_or_else(String::new, |index| format!("l{index}-"));
-    match geometry::extract_layer_for_view(ipc, &name, ArtworkScope::Board, resolution) {
+    match imported.materialize_layer(id, ArtworkScope::Board) {
         Ok(geometry) => render_extracted_layer(
             &mut rendered,
             geometry,
             ArtworkScope::Board.profile_set(),
             resolution,
-            &ids,
+            // Every layer's SVG is inlined into one page, where element ids
+            // are global, so each takes its ids from its place in the source.
+            &format!("l{}-", id.0),
         )?,
         Err(error) => {
             rendered.warning = Some(format!("Render unavailable: {error}"));
@@ -590,9 +583,7 @@ mod tests {
         let resolution = Resolution::default();
 
         let ipc = ipc2581::Ipc2581::parse(board_array_design_name_fixture()).unwrap();
-        let accessor = IpcAccessor::new(&ipc);
-
-        let html = generate_html(&accessor, UnitFormat::Mm, resolution).unwrap();
+        let html = report(&ipc, resolution);
         let design_start = html.find("Design Name:").unwrap();
         let dimensions_start = html.find("Board Dimensions:").unwrap();
         let design_row = &html[design_start..dimensions_start];
@@ -617,9 +608,7 @@ mod tests {
         let resolution = Resolution::default();
 
         let ipc = ipc2581::Ipc2581::parse(layer_render_fixture()).unwrap();
-        let accessor = IpcAccessor::new(&ipc);
-
-        let html = generate_html(&accessor, UnitFormat::Mm, resolution).unwrap();
+        let html = report(&ipc, resolution);
 
         assert!(html.contains("<h2>Layers</h2>"));
         assert!(html.contains("<h3>Stackup Layers</h3>"));
@@ -649,9 +638,7 @@ mod tests {
         let resolution = Resolution::default();
 
         let ipc = ipc2581::Ipc2581::parse(array_layer_render_fixture()).unwrap();
-        let accessor = IpcAccessor::new(&ipc);
-
-        let html = generate_html(&accessor, UnitFormat::Mm, resolution).unwrap();
+        let html = report(&ipc, resolution);
 
         let array_summary = html.find("<h2>Board Array Summary</h2>").unwrap();
         let file_info = html.find(r#"<div class="file-info">"#).unwrap();
@@ -665,6 +652,17 @@ mod tests {
         assert!(summary_section.contains("vcut-guide"));
         assert!(summary_section.contains("array-layer-drill"));
         assert!(summary_section.contains("Array Drill Holes:"));
+    }
+
+    fn report(ipc: &ipc2581::Ipc2581, resolution: Resolution) -> String {
+        let imported = pcb_ir::import::ipc2581::import_design(ipc, resolution).unwrap();
+        generate_html(
+            &IpcAccessor::new(ipc),
+            &imported,
+            UnitFormat::Mm,
+            resolution,
+        )
+        .unwrap()
     }
 
     fn board_array_design_name_fixture() -> &'static str {
