@@ -151,7 +151,7 @@ impl PathCmd {
     }
 
     /// Exact image under an affine transform, given the current point.
-    fn transformed(self, transform: Affine2, start: Point) -> Self {
+    pub(crate) fn transformed(self, transform: Affine2, start: Point) -> Self {
         match self.op {
             PathOp::MoveTo | PathOp::LineTo => Self {
                 p0: transform.transform_point(self.p0),
