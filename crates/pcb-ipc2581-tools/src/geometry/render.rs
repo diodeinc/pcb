@@ -74,11 +74,12 @@ pub fn render_layer_terminal(
 /// Whether a normalized single-layer document paints anything of its own.
 ///
 /// Borrowed features, such as the rout slots every layer in their span
-/// carries, do not count. Normalization leaves a feature that set voids or
-/// cutouts erased without paths, so a surviving dark feature with painted
-/// paths is content. Cutouts image as themselves only where composition
-/// lets them: on a non-copper layer holding nothing else, such as a drill
-/// layer.
+/// carries, do not count. Normalization leaves a feature that a set void
+/// erased without paths, so a surviving dark feature with painted paths is
+/// content; what clears and cutouts later remove from it is for composition
+/// to say, not for this check. Cutouts image as themselves only where
+/// composition lets them: on a non-copper layer holding nothing else, such
+/// as a drill layer.
 pub fn layer_has_native_content(geometry: &GeometryDocument) -> bool {
     let Some(layer) = geometry.layers.first() else {
         return false;
@@ -282,7 +283,10 @@ mod tests {
         };
 
         assert!(native_content("F.Cu"), "a surviving pad is content");
-        assert!(!native_content("In1.Cu"), "the slot erases the only pad");
+        assert!(
+            native_content("In1.Cu"),
+            "a pad under a slot is still drawn"
+        );
         assert!(!native_content("B.Cu"), "a borrowed slot is not content");
         assert!(native_content("Drill"), "holes image on their own layer");
         assert!(native_content("Rout"), "slots image on their own layer");

@@ -651,7 +651,7 @@ mod tests {
     fn a_layer_that_cannot_render_is_marked_and_the_rest_still_render() {
         // SVG coordinates round on a nanometre grid. A budget that barely
         // covers that rounding leaves nothing for flattening, so only the
-        // layer whose pad the slot cuts fails; exact lines still draw.
+        // layer whose pad a set void cuts fails; exact lines still draw.
         let resolution = Resolution::default()
             .with_accuracy(pcb_ir::geom::GeometryAccuracy::new(7.2e-7).unwrap());
         let ipc = ipc2581::Ipc2581::parse(cut_pad_fixture()).unwrap();
@@ -783,6 +783,11 @@ mod tests {
       <EntryStandard id="pad">
         <Circle diameter="1"/>
       </EntryStandard>
+      <EntryStandard id="void">
+        <Circle diameter="0.4">
+          <FillDesc fillProperty="VOID"/>
+        </Circle>
+      </EntryStandard>
     </DictionaryStandard>
   </Content>
   <Ecad>
@@ -790,9 +795,6 @@ mod tests {
     <CadData>
       <Layer name="F.Cu" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
       <Layer name="B.Cu" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
-      <Layer name="Rout" layerFunction="ROUT" side="ALL" polarity="POSITIVE">
-        <Span fromLayer="B.Cu" toLayer="B.Cu"/>
-      </Layer>
       <Step name="board" type="BOARD">
         <Profile>
           <Polygon>
@@ -805,6 +807,11 @@ mod tests {
         <PadStackDef name="padstack">
           <PadstackPadDef layerRef="B.Cu" padUse="REGULAR">
             <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="voidstack">
+          <PadstackPadDef layerRef="B.Cu" padUse="REGULAR">
+            <StandardPrimitiveRef id="void"/>
           </PadstackPadDef>
         </PadStackDef>
         <LayerFeature layerRef="F.Cu">
@@ -821,14 +828,9 @@ mod tests {
             <Pad padstackDefRef="padstack">
               <Location x="5" y="2.5"/>
             </Pad>
-          </Set>
-        </LayerFeature>
-        <LayerFeature layerRef="Rout">
-          <Set>
-            <SlotCavity name="S1" platingStatus="NONPLATED" plusTol="0" minusTol="0">
+            <Pad padstackDefRef="voidstack">
               <Location x="5.5" y="2.5"/>
-              <Oval width="2" height="0.4"/>
-            </SlotCavity>
+            </Pad>
           </Set>
         </LayerFeature>
       </Step>
