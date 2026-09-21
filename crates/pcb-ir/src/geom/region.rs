@@ -262,12 +262,11 @@ impl ContourSet {
             {
                 last += 1;
             }
-            let (min_x, max_x) = by_height[first..last]
-                .iter()
-                .map(|&point| points[point].x)
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), x| {
-                    (low.min(x), high.max(x))
-                });
+            // Heights within tolerance share this line, so height order is
+            // not yet x order along it, which the crossing walk relies on.
+            by_height[first..last]
+                .sort_by(|left, right| points[*left].x.total_cmp(&points[*right].x));
+            let (min_x, max_x) = (points[by_height[first]].x, points[by_height[last - 1]].x);
             let mut crossings = crossings_at(y, min_x, max_x).collect::<Vec<_>>();
             crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
             let mut crossing = 0;

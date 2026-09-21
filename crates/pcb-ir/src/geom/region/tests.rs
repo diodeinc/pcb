@@ -178,6 +178,19 @@ fn containment_observes_boundaries_and_holes() {
 
 type ExpectedSpan = ((f64, f64), (f64, f64));
 
+#[test]
+fn batched_containment_survives_heights_that_differ_by_an_ulp() {
+    let square = ContourSet::rectangle(
+        BBox::new(Point::new(0.0, 0.0), Point::new(4.0, 4.0)),
+        res(tol::REGION_MM),
+    );
+    // Two heights one ulp apart share a sweep line. The lower one lies
+    // farther right, so height order is not x order along that line.
+    let above = f64::from_bits(2.0_f64.to_bits() + 1);
+    let points = [Point::new(6.0, 2.0), Point::new(2.0, above)];
+    assert_eq!(square.contains_points_batch(&points), [false, true]);
+}
+
 fn assert_spans(actual: Vec<(Point, Point)>, expected: &[ExpectedSpan]) {
     assert_eq!(actual.len(), expected.len(), "{actual:?}");
     for ((start, end), &(from, to)) in actual.iter().zip(expected) {
