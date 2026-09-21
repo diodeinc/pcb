@@ -447,6 +447,7 @@ impl EdgeVoidEmission {
             .unzip();
         let clipped = lattice::emission_partial_voids(
             voidable,
+            &lattice.disk_center_region,
             &lattice.lattice.void_candidates(&crossing),
             &crossing_depths_mm,
             profile,

@@ -29,6 +29,9 @@ pub(super) struct LatticeCandidates {
     /// negative outside it: the radius of the largest disk about the center
     /// the region contains. Indexed like `edge_candidates`.
     pub(super) edge_center_depths_mm: Vec<f64>,
+    /// Where the center of a minimum partial-void disk may sit: the voidable
+    /// region eroded by that disk.
+    pub(super) disk_center_region: ContourSet,
 }
 
 impl LatticeCandidates {
@@ -47,6 +50,7 @@ impl LatticeCandidates {
                 full_sites: Vec::new(),
                 edge_candidates: Vec::new(),
                 edge_center_depths_mm: Vec::new(),
+                disk_center_region: ContourSet::empty(voidable.resolution),
             });
         }
 
@@ -69,8 +73,13 @@ impl LatticeCandidates {
         // A site's depth does not depend on the radius tried at it, so it is
         // measured once here for every clip and emission that asks.
         let edge_depths_mm = center_depths_mm(voidable, &edge_centers);
-        let activation_radii =
-            minimum_partial_candidates(voidable, &edge_centers, &edge_depths_mm, profile)?;
+        let disk_center_region = voidable.disk_erode(profile.minimum_partial_void_inradius_mm())?;
+        let activation_radii = minimum_partial_candidates(
+            &disk_center_region,
+            &edge_centers,
+            &edge_depths_mm,
+            profile,
+        )?;
         let (edge_candidates, edge_center_depths_mm) = edge_centers
             .into_iter()
             .zip(activation_radii)
@@ -85,6 +94,7 @@ impl LatticeCandidates {
             full_sites,
             edge_candidates,
             edge_center_depths_mm,
+            disk_center_region,
         })
     }
 
@@ -119,7 +129,13 @@ impl LatticeCandidates {
         let candidates = self
             .lattice
             .void_candidates(&self.edge_voids(radius, profile));
-        clipped_partial_voids(voidable, &candidates, &self.edge_center_depths_mm, profile)
+        clipped_partial_voids(
+            voidable,
+            &self.disk_center_region,
+            &candidates,
+            &self.edge_center_depths_mm,
+            profile,
+        )
     }
 
     pub(super) fn void_area(
@@ -169,12 +185,12 @@ pub(super) fn hex_aligned_lattice_centers(
 /// The smallest radius at which each center's clipped void holds the minimum
 /// disk, or `None` where no radius does.
 fn minimum_partial_candidates(
-    voidable: &ContourSet,
+    disk_center_region: &ContourSet,
     centers: &[Point],
     depths_mm: &[f64],
     profile: DenseCopperBalanceProfile,
 ) -> Result<Vec<Option<f64>>, AccuracyError> {
-    let accuracy = voidable.budget();
+    let accuracy = disk_center_region.budget();
     if centers.is_empty() {
         return Ok(Vec::new());
     }
@@ -183,8 +199,10 @@ fn minimum_partial_candidates(
     let max_radius = profile.max_void_radius_mm;
     let min_trials = uniform_candidates(centers, min_radius);
     let max_trials = uniform_candidates(centers, max_radius);
-    let accepted_at_min = accepted_candidate_mask(voidable, &min_trials, depths_mm, profile)?;
-    let accepted_at_max = accepted_candidate_mask(voidable, &max_trials, depths_mm, profile)?;
+    let accepted_at_min =
+        accepted_candidate_mask(disk_center_region, &min_trials, depths_mm, profile)?;
+    let accepted_at_max =
+        accepted_candidate_mask(disk_center_region, &max_trials, depths_mm, profile)?;
     let mut bounds = accepted_at_min
         .into_iter()
         .zip(accepted_at_max)
@@ -221,8 +239,12 @@ fn minimum_partial_candidates(
             .iter()
             .map(|(index, ..)| depths_mm[*index])
             .collect::<Vec<_>>();
-        let accepted =
-            accepted_candidate_mask(voidable, &trial_geometry, &trial_depths_mm, profile)?;
+        let accepted = accepted_candidate_mask(
+            disk_center_region,
+            &trial_geometry,
+            &trial_depths_mm,
+            profile,
+        )?;
         for ((index, _, radius), accepted) in trials.into_iter().zip(accepted) {
             let (low, high) = bounds[index].as_mut().expect("trial has radius bounds");
             if accepted {
@@ -275,14 +297,15 @@ fn uniform_candidates(centers: &[Point], radius: f64) -> Vec<(Point, f64)> {
     centers.iter().map(|center| (*center, radius)).collect()
 }
 
+/// Which candidates' clipped voids hold the minimum partial-void disk.
 fn accepted_candidate_mask(
-    voidable: &ContourSet,
+    disk_center_region: &ContourSet,
     candidates: &[(Point, f64)],
     depths_mm: &[f64],
     profile: DenseCopperBalanceProfile,
 ) -> Result<Vec<bool>, AccuracyError> {
-    let raw = hexagon_set_with_radii(candidates, voidable.resolution)?.intersection(voidable)?;
-    let (core_points, slack_mm) = minimum_disk_core_points(&raw, candidates, depths_mm, profile)?;
+    let (core_points, slack_mm) =
+        minimum_disk_core_points(disk_center_region, candidates, depths_mm, profile)?;
     Ok(candidate_point_mask(
         candidates,
         &core_points,
@@ -296,12 +319,14 @@ fn accepted_candidate_mask(
 /// is each candidate center's depth inside `voidable`.
 pub(super) fn clipped_partial_voids(
     voidable: &ContourSet,
+    disk_center_region: &ContourSet,
     candidates: &[(Point, f64)],
     depths_mm: &[f64],
     profile: DenseCopperBalanceProfile,
 ) -> Result<ContourSet, AccuracyError> {
     let raw = hexagon_set_with_radii(candidates, voidable.resolution)?.intersection(voidable)?;
-    let (mut core_points, _) = minimum_disk_core_points(&raw, candidates, depths_mm, profile)?;
+    let (mut core_points, _) =
+        minimum_disk_core_points(disk_center_region, candidates, depths_mm, profile)?;
     core_points.sort_by(|left, right| left.x.total_cmp(&right.x));
     let rings = raw
         .connected_components()
@@ -321,40 +346,68 @@ pub(super) fn clipped_partial_voids(
 /// inward to the arc-flattening tolerance.
 pub(super) fn emission_partial_voids(
     voidable: &ContourSet,
+    disk_center_region: &ContourSet,
     candidates: &[(Point, f64)],
     depths_mm: &[f64],
     profile: DenseCopperBalanceProfile,
 ) -> Result<ContourSet, AccuracyError> {
-    let clipped = clipped_partial_voids(voidable, candidates, depths_mm, profile)?
-        .disk_open(profile.void_regularization_radius_mm())?;
+    let clipped =
+        clipped_partial_voids(voidable, disk_center_region, candidates, depths_mm, profile)?
+            .disk_open(profile.void_regularization_radius_mm())?;
     clipped.decimate_inward()
 }
 
-/// Points proving where the minimum partial-void disk fits, with the
-/// positional uncertainty of the eroded region they were read from.
+/// Points proving where the minimum partial-void disk fits inside a clipped
+/// void, with the positional uncertainty of the region they were read from.
+///
+/// Those are the centers the disk may take: the clipped void eroded by the
+/// disk. Erosion distributes over intersection, so that is the eroded hexagon
+/// met with the eroded region — a closed-form template against one erosion
+/// per region, where eroding the clipped voids themselves would offset every
+/// fragment again for every radius tried.
 fn minimum_disk_core_points(
-    raw: &ContourSet,
+    disk_center_region: &ContourSet,
     candidates: &[(Point, f64)],
     depths_mm: &[f64],
     profile: DenseCopperBalanceProfile,
 ) -> Result<(Vec<Point>, f64), AccuracyError> {
-    let minimum_radius = profile.minimum_partial_void_inradius_mm();
-    let core = raw.disk_erode(minimum_radius)?;
+    let core = placed_templates(candidates, disk_center_region.resolution, |radius| {
+        minimum_disk_centers(radius, profile)
+    })?
+    .intersection(disk_center_region)?;
     let mut points = representative_points(&core);
     // Preserve the exact equality case: a clipped void exactly one minimum
-    // disk in diameter erodes to a degenerate point or segment that falls
-    // below the ring-area floor, even though the disk itself fits. Every
-    // hexagon holds that disk about its own center, so the center is a core
-    // point wherever the region holds it too.
+    // disk in diameter leaves a degenerate point or segment of centers that
+    // falls below the ring-area floor, even though the disk itself fits.
+    // Every hexagon holds that disk about its own center, so the center is a
+    // core point wherever the region holds it too.
+    let minimum_radius = profile.minimum_partial_void_inradius_mm();
     points.extend(
         candidates
             .iter()
             .zip(depths_mm)
             .filter_map(|((center, _), depth_mm)| {
-                disk_fits(*depth_mm, minimum_radius, raw).then_some(*center)
+                disk_fits(*depth_mm, minimum_radius, disk_center_region).then_some(*center)
             }),
     );
     Ok((points, core.uncertainty_mm))
+}
+
+/// Where the minimum partial-void disk's center may sit inside one rounded
+/// hexagonal void at the origin: the void eroded by the disk.
+///
+/// The void is a sharp hexagon opened by its corner fillet, so eroding it by
+/// no more than the fillet shrinks the fillet, and by more than the fillet
+/// leaves the sharp hexagon whose flats have moved in by the disk radius.
+fn minimum_disk_centers(radius: f64, profile: DenseCopperBalanceProfile) -> Option<ContourBuf> {
+    let disk_radius = profile.minimum_partial_void_inradius_mm();
+    let inset_radius = radius - 2.0 * disk_radius / SQRT_3;
+    let fillet = radius * ROUNDED_HEXAGON_CORNER_RADIUS_RATIO - disk_radius;
+    if fillet > 0.0 {
+        shapes::rounded_hexagon(inset_radius, fillet, 0.0)
+    } else {
+        shapes::regular_polygon(2.0 * inset_radius, 6, 0.0)
+    }
 }
 
 /// Whether a closed disk fits about a center `depth_mm` inside a region, to
@@ -432,15 +485,25 @@ fn component_contains_any_point(component: &ContourSet, points: &[Point]) -> boo
         })
 }
 
-/// The union of rounded hexagons on lattice sites.
-///
-/// The profile guarantees a positive web between neighbors, so the hexagons
-/// are pairwise disjoint convex rings: already the regularized form a union
-/// would return. Each distinct radius is flattened once and its ring moved to
-/// every site that uses it.
+/// The union of rounded hexagonal voids on lattice sites.
 pub(super) fn hexagon_set_with_radii(
     candidates: &[(Point, f64)],
     resolution: Resolution,
+) -> Result<ContourSet, AccuracyError> {
+    placed_templates(candidates, resolution, rounded_hexagonal_void)
+}
+
+/// The union of one origin-centered convex template per lattice site, each
+/// sized by its site's void radius and no larger than that void.
+///
+/// The profile guarantees a positive web between neighboring voids, so the
+/// placed templates are pairwise disjoint convex rings: already the
+/// regularized form a union would return. Each distinct radius is flattened
+/// once and its ring moved to every site that uses it.
+fn placed_templates(
+    candidates: &[(Point, f64)],
+    resolution: Resolution,
+    template: impl Fn(f64) -> Option<ContourBuf>,
 ) -> Result<ContourSet, AccuracyError> {
     let mut templates: Vec<(f64, ContourSet)> = Vec::new();
     let mut rings = Vec::with_capacity(candidates.len());
@@ -448,11 +511,10 @@ pub(super) fn hexagon_set_with_radii(
         let index = match templates.iter().position(|(known, _)| known == radius) {
             Some(index) => index,
             None => {
-                let hexagon =
-                    rounded_hexagonal_void(*radius).expect("candidate radius is validated");
-                let template =
-                    ContourSet::from_contours(&[hexagon], FillRule::EvenOdd, resolution.strict())?;
-                templates.push((*radius, template));
+                let contour = template(*radius).expect("candidate radius is validated");
+                let prepared =
+                    ContourSet::from_contours(&[contour], FillRule::EvenOdd, resolution.strict())?;
+                templates.push((*radius, prepared));
                 templates.len() - 1
             }
         };
@@ -588,11 +650,15 @@ mod tests {
             profile,
         );
         let depths_mm = center_depths_mm(&voidable, &centers);
+        let disk_center_region = voidable
+            .disk_erode(profile.minimum_partial_void_inradius_mm())
+            .unwrap();
         let mut previously_accepted = vec![false; centers.len()];
         for radius in [0.20, 0.30, 0.40, 0.50, 0.60, 0.65] {
             let candidates = uniform_candidates(&centers, radius);
             let accepted =
-                accepted_candidate_mask(&voidable, &candidates, &depths_mm, profile).unwrap();
+                accepted_candidate_mask(&disk_center_region, &candidates, &depths_mm, profile)
+                    .unwrap();
             assert!(
                 previously_accepted
                     .iter()
@@ -601,6 +667,108 @@ mod tests {
             );
             previously_accepted = accepted;
         }
+    }
+
+    /// The closed-form centers template has to be the void eroded by the
+    /// minimum disk, whether the disk is smaller or larger than the fillet.
+    #[test]
+    fn minimum_disk_centers_are_the_eroded_void() {
+        let resolution = res(tol::REGION_MM);
+        for (radius, min_void_radius_mm) in [(0.65, 0.2), (0.2, 0.2), (2.0, 0.2), (2.0, 0.9)] {
+            let profile = DenseCopperBalanceProfile {
+                min_void_radius_mm,
+                ..DenseCopperBalanceProfile::V1
+            };
+            let void = ContourSet::from_filled_contours(
+                &[rounded_hexagonal_void(radius).unwrap()],
+                resolution,
+            )
+            .unwrap();
+            let eroded = void
+                .disk_erode(profile.minimum_partial_void_inradius_mm())
+                .unwrap();
+            let centers = ContourSet::from_filled_contours(
+                &[minimum_disk_centers(radius, profile).unwrap()],
+                resolution,
+            )
+            .unwrap();
+            let mismatch = eroded.difference(&centers).unwrap().area()
+                + centers.difference(&eroded).unwrap().area();
+            assert!(
+                mismatch <= 1e-3 * eroded.area(),
+                "radius {radius}, disk {}: {mismatch} of {}",
+                profile.minimum_partial_void_inradius_mm(),
+                eroded.area()
+            );
+        }
+    }
+
+    /// Eroding the hexagon and the region apart has to accept exactly the
+    /// candidates that eroding each clipped void would, around convex and
+    /// reflex boundary alike.
+    #[test]
+    fn distributed_erosion_accepts_what_eroding_each_clipped_void_accepts() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let resolution = res(tol::REGION_MM);
+        let plate = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(14.0, 9.0)),
+            resolution,
+        );
+        let cutouts = ContourSet::from_filled_contours(
+            &[
+                shapes::circle(3.1)
+                    .unwrap()
+                    .transformed(crate::geom::Affine2::translation(Point::new(4.2, 4.4))),
+                shapes::rect(2.3, 0.9)
+                    .unwrap()
+                    .transformed(crate::geom::Affine2::translation(Point::new(10.1, 5.2))),
+            ],
+            resolution,
+        )
+        .unwrap();
+        let voidable = plate.difference(&cutouts).unwrap();
+        let minimum_radius = profile.minimum_partial_void_inradius_mm();
+        let disk_center_region = voidable.disk_erode(minimum_radius).unwrap();
+        let centers = hex_aligned_lattice_centers(
+            voidable
+                .disk_dilate(profile.max_void_radius_mm)
+                .unwrap()
+                .bbox,
+            Point::new(0.17, 0.31),
+            profile,
+        );
+        let depths_mm = center_depths_mm(&voidable, &centers);
+
+        let mut accepted_anywhere = 0;
+        for radius in [0.20, 0.35, 0.50, 0.65] {
+            let candidates = uniform_candidates(&centers, radius);
+            let eroded = hexagon_set_with_radii(&candidates, resolution)
+                .unwrap()
+                .intersection(&voidable)
+                .unwrap()
+                .disk_erode(minimum_radius)
+                .unwrap();
+            let expected = candidate_point_mask(
+                &candidates,
+                &representative_points(&eroded),
+                profile,
+                eroded.uncertainty_mm,
+            );
+            let accepted =
+                accepted_candidate_mask(&disk_center_region, &candidates, &depths_mm, profile)
+                    .unwrap();
+            // The equality case is granted on top of the erosion either way.
+            let expected = expected
+                .iter()
+                .zip(&depths_mm)
+                .map(|(eroded, depth_mm)| {
+                    *eroded || disk_fits(*depth_mm, minimum_radius, &voidable)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(accepted, expected, "radius {radius}");
+            accepted_anywhere += accepted.iter().filter(|accepted| **accepted).count();
+        }
+        assert!(accepted_anywhere > 0);
     }
 
     /// Placing flattened templates has to give the region a union of the
