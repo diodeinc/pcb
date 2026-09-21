@@ -30,9 +30,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Check each board of an array once in DFM: panels run in seconds, reports use schema v2 with a `frames` table, finding ids survive coordinate noise, and required rules that cannot be evaluated fail the verdict.
-- Speed up Gerber export and compare, renders, HTML reports, copper balancing and array generation; parse IPC-2581 with a third of the memory.
+- Speed up Gerber export and compare, DFM, renders, HTML reports, copper balancing and array generation; parse IPC-2581 with a third of the memory.
 - Draw each board of an array once in `pcb ipc render` and the web viewer, shrinking panel SVGs over 100×.
-- Model warp at measured copper as a free plate and stop reporting twist; copper-balance fill differs slightly from earlier releases.
+- Model warp at measured copper as a free plate and stop reporting twist.
 - Report malformed IPC-2581 attribute values as errors instead of defaulting them.
 
 ## [0.4.56] - 2026-09-20
