@@ -614,12 +614,34 @@ fn ipc_dfm_json_replaces_stale_report_and_reports_all_incomplete_runs() {
     assert_eq!(complete_report["verdict"], "fail");
     assert_eq!(complete_report["scene"]["schema_version"], 1);
 
+    // Copper no net owns leaves copper clearance uncertified, not the run:
+    // that rule is incomplete and fails the verdict, the rest is reported.
+    let unattributed = run_pcbc(
+        &mut sandbox,
+        ["ipc", "dfm", "check", "board.xml", "--pdk", "standard"],
+    );
+    assert!(!unattributed.status.success());
+    let unattributed: Value = serde_json::from_slice(&unattributed.stdout).unwrap();
+    assert_eq!(unattributed["verdict"], "fail");
+    let rules = unattributed["rules"].as_array().unwrap();
+    let incomplete = rules
+        .iter()
+        .filter(|rule| rule["status"] == "incomplete")
+        .collect::<Vec<_>>();
+    assert_eq!(incomplete.len(), 1);
+    assert!(
+        incomplete[0]["skip_reason"]
+            .as_str()
+            .unwrap()
+            .contains("without net attribution")
+    );
+    assert!(rules.iter().any(|rule| rule["status"] == "pass"));
+
     for (input, pdk, waivers, expected_error) in [
         ("missing.xml", "pdk.toml", None, "failed to read IPC-2581"),
         ("broken.xml", "pdk.toml", None, "failed to parse IPC-2581"),
         ("board.xml", "missing-pdk.toml", None, "failed to read PDK"),
         ("board.xml", "bad-pdk.toml", None, "failed to parse PDK"),
-        ("board.xml", "standard", None, "without net attribution"),
         (
             "board.xml",
             "pdk.toml",
@@ -856,7 +878,7 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
             if kind == "fab_panel" {
                 "fail"
             } else {
-                "skipped"
+                "not_applicable"
             }
         );
     }
