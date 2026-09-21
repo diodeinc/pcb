@@ -7,8 +7,10 @@ use std::f64::consts::PI;
 use super::{
     DenseCopperBalanceProfile, DenseCopperLattice, DenseCopperLatticeSite, DenseCopperVoid, SQRT_3,
 };
+use crate::geom::accuracy::numerical_error;
+use crate::geom::region::rings_bbox;
 use crate::geom::shapes;
-use crate::geom::{Affine2, BBox, ContourBuf, ContourSet, Point};
+use crate::geom::{BBox, ContourBuf, ContourSet, FillRule, Point};
 
 pub const ROUNDED_HEXAGON_CORNER_RADIUS_RATIO: f64 = 0.15;
 // A sharp regular hexagon has area 3√3 R² / 2. Rounding each 120° corner
@@ -383,18 +385,47 @@ fn component_contains_any_point(component: &ContourSet, points: &[Point]) -> boo
         })
 }
 
+/// The union of rounded hexagons on lattice sites.
+///
+/// The profile guarantees a positive web between neighbors, so the hexagons
+/// are pairwise disjoint convex rings: already the regularized form a union
+/// would return. Each distinct radius is flattened once and its ring moved to
+/// every site that uses it.
 pub(super) fn hexagon_set_with_radii(
     candidates: &[(Point, f64)],
     resolution: Resolution,
 ) -> Result<ContourSet, AccuracyError> {
-    let contours = candidates
+    let mut templates: Vec<(f64, ContourSet)> = Vec::new();
+    let mut rings = Vec::with_capacity(candidates.len());
+    for (center, radius) in candidates {
+        let index = match templates.iter().position(|(known, _)| known == radius) {
+            Some(index) => index,
+            None => {
+                let hexagon =
+                    rounded_hexagonal_void(*radius).expect("candidate radius is validated");
+                let template =
+                    ContourSet::from_contours(&[hexagon], FillRule::EvenOdd, resolution.strict())?;
+                templates.push((*radius, template));
+                templates.len() - 1
+            }
+        };
+        rings.extend(templates[index].1.rings.iter().map(|ring| {
+            ring.iter()
+                .map(|[x, y]| [x + center.x, y + center.y])
+                .collect::<Vec<_>>()
+        }));
+    }
+    let uncertainty_mm = templates
         .iter()
-        .map(|(center, radius)| {
-            let hexagon = rounded_hexagonal_void(*radius).expect("candidate radius is validated");
-            hexagon.transformed(Affine2::translation(*center))
-        })
-        .collect::<Vec<_>>();
-    ContourSet::from_filled_contours(&contours, resolution)
+        .map(|(_, template)| template.uncertainty_mm)
+        .fold(0.0, f64::max)
+        + numerical_error(rings_bbox(&rings));
+    resolution.accuracy.check(uncertainty_mm)?;
+    Ok(ContourSet::from_regularized(
+        rings,
+        resolution,
+        uncertainty_mm,
+    ))
 }
 
 /// One slightly rounded, flat-top regular hexagonal void centered at zero.
@@ -491,6 +522,37 @@ mod tests {
             );
             previously_accepted = accepted;
         }
+    }
+
+    /// Placing flattened templates has to give the region a union of the
+    /// individually prepared hexagons gives.
+    #[test]
+    fn placed_templates_match_the_union_of_prepared_hexagons() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let resolution = res(tol::REGION_MM);
+        let bounds = BBox::new(Point::new(-3.0, -2.0), Point::new(9.0, 7.0));
+        let radii = [0.2, 0.41, 0.65];
+        let candidates = hex_aligned_lattice_centers(bounds, Point::new(0.3, -0.1), profile)
+            .into_iter()
+            .enumerate()
+            .map(|(index, center)| (center, radii[index % radii.len()]))
+            .collect::<Vec<_>>();
+        let contours = candidates
+            .iter()
+            .map(|(center, radius)| {
+                rounded_hexagonal_void(*radius)
+                    .unwrap()
+                    .transformed(crate::geom::Affine2::translation(*center))
+            })
+            .collect::<Vec<_>>();
+        let unioned = ContourSet::from_filled_contours(&contours, resolution).unwrap();
+
+        let placed = hexagon_set_with_radii(&candidates, resolution).unwrap();
+        assert_eq!(placed.rings.len(), candidates.len());
+        assert_eq!(placed.rings.len(), unioned.rings.len());
+        assert!((placed.area() - unioned.area()).abs() <= 1e-9 * unioned.area());
+        assert!(placed.difference(&unioned).unwrap().area() <= 1e-9);
+        assert!(unioned.difference(&placed).unwrap().area() <= 1e-9);
     }
 
     #[test]
