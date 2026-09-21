@@ -184,11 +184,12 @@ fn holes_islands_and_fifty_micron_gaps_survive_fine_preparation() {
     assert!(!region.contains_point(Point::ZERO));
     assert!(region.contains_point(Point::new(0.2, 0.0)));
     assert!(!region.contains_point(Point::new(0.325, 0.0)));
+    // Three covered spans along the axis: the ring on either side of its
+    // hole, and the island past the fifty micron gap.
+    let along_axis = [-0.2, 0.0, 0.2, 0.325, 0.45].map(|x| Point::new(x, 0.0));
     assert_eq!(
-        region
-            .segment_spans(Point::new(-1.0, 0.0), Point::new(1.0, 0.0))
-            .len(),
-        3
+        region.contains_points_batch(&along_axis),
+        [true, false, true, false, true]
     );
     let inset = region
         .clone()
