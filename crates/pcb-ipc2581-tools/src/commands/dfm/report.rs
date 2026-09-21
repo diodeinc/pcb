@@ -627,6 +627,10 @@ pub struct Subject {
     /// retains the historical flattened locator for compatibility.
     pub provenance: Option<SourceLocator>,
     pub drill_span: Option<DrillSpan>,
+    /// Where the source places a drilled subject. Identity only: the report
+    /// already states it as evidence.
+    #[serde(skip)]
+    pub anchor: Option<ReportPoint>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -72,6 +72,34 @@ impl PreparedRegion {
         )
     }
 
+    /// The boundary point nearest `point` within `max_distance_mm`, chosen
+    /// canonically among equidistant candidates. A disk centered in a round
+    /// pad is equally near every facet of the flattened pad, and which facet
+    /// wins a bare minimum follows floating-point noise, moving the witness
+    /// around the pad between equivalent inputs. Among the candidates within
+    /// [`tol::EPSILON_MM`] of the minimum this takes the least point in
+    /// micrometre-quantized lexicographic order. The distance stays the minimum.
+    pub fn canonical_nearest_within(&self, point: Point, max_distance_mm: f64) -> Option<Distance> {
+        let nearest = self.nearest_within(point, max_distance_mm)?;
+        let reach = nearest.mm + tol::EPSILON_MM;
+        let micrometres = |point: Point| {
+            [point.x, point.y].map(|coordinate| (coordinate * 1000.0).round() as i64)
+        };
+        let second = self
+            .segments_meeting(BBox::from_point(point).expand(reach))
+            .map(|(start, end)| crate::geom::dist::point_segment(point, start, end))
+            .filter(|&(distance, _)| distance <= reach)
+            .map(|(_, boundary)| boundary)
+            .min_by(|left, right| {
+                micrometres(*left)
+                    .cmp(&micrometres(*right))
+                    .then_with(|| left.x.total_cmp(&right.x))
+                    .then_with(|| left.y.total_cmp(&right.y))
+            })
+            .unwrap_or(nearest.second);
+        Some(Distance { second, ..nearest })
+    }
+
     /// The radial material enclosure of a circular cutout whose center lies
     /// in the material, searched out to `max_enclosure_mm`.
     ///
@@ -88,7 +116,7 @@ impl PreparedRegion {
         max_enclosure_mm: f64,
     ) -> Option<Distance> {
         let search = (cutout_radius_mm + max_enclosure_mm).max(0.0);
-        let nearest = self.nearest_within(center, search)?;
+        let nearest = self.canonical_nearest_within(center, search)?;
         let direction = nearest.second - center;
         let direction = if direction.length() <= f64::EPSILON {
             Point::new(1.0, 0.0)
@@ -1120,6 +1148,42 @@ mod tests {
         assert_eq!(measurement.uncertainty_mm, copper.uncertainty_mm);
         assert!((measurement.first.x - 2.65).abs() < copper.budget().max_error_mm() / 2.0);
         assert!((measurement.second.x - 2.5).abs() < copper.budget().max_error_mm() / 2.0);
+    }
+
+    #[test]
+    fn a_centered_disk_reports_one_witness_whatever_the_facet_order_or_noise() {
+        // A round pad flattened to 32 facets, all equally near its center.
+        let facets = (0..32)
+            .map(|i| {
+                let angle = f64::from(i) * std::f64::consts::TAU / 32.0;
+                [angle.cos(), angle.sin()]
+            })
+            .collect::<Vec<_>>();
+        let witness = |ring: Vec<[f64; 2]>| {
+            ContourSet::from_regularized(vec![ring], res(0.001), 0.0)
+                .prepare_query()
+                .circular_enclosure(Point::ZERO, 0.3, 1.0)
+                .unwrap()
+                .second
+        };
+        let reference = witness(facets.clone());
+        for start in [1, 7, 20] {
+            let mut rotated = facets.clone();
+            rotated.rotate_left(start);
+            assert_eq!(witness(rotated), reference, "start vertex {start}");
+        }
+        // Noise far below any tolerance makes a different facet strictly nearest.
+        for facet in [3, 11, 26] {
+            let mut noisy = facets.clone();
+            for vertex in [facet, facet + 1] {
+                noisy[vertex] = noisy[vertex].map(|coordinate| coordinate * (1.0 - 1e-12));
+            }
+            let moved = witness(noisy) - reference;
+            assert!(
+                moved.length() < 1e-9,
+                "facet {facet} moved the witness {moved:?}"
+            );
+        }
     }
 
     #[test]

@@ -157,7 +157,10 @@ fn hole_clearance(
 }
 
 fn zero_hole_clearance(hole: &Hole, outline: &BoardOutline, search_mm: f64) -> Distance {
-    let Some(nearest) = outline.boundary.nearest_within(hole.center, search_mm) else {
+    let Some(nearest) = outline
+        .boundary
+        .canonical_nearest_within(hole.center, search_mm)
+    else {
         return Distance::exact(0.0, hole.center, hole.center);
     };
     let radial = nearest.second - hole.center;

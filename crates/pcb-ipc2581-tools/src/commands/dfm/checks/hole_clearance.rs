@@ -144,7 +144,7 @@ fn disk_to_copper_clearance(
             copper.uncertainty_mm,
         ));
     }
-    let nearest = boundary.nearest_within(center, radius_mm + limit_mm)?;
+    let nearest = boundary.canonical_nearest_within(center, radius_mm + limit_mm)?;
     let direction = nearest.second - center;
     let direction = if direction.length() <= f64::EPSILON {
         Point::new(1.0, 0.0)

@@ -36,8 +36,8 @@ use sha2::{Digest, Sha256};
 use super::design::{Design, Hole, HoleClass, Slot};
 use super::pdk::SlotPlating;
 use super::report::{
-    DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox,
-    ReportPoint, RuleResult, RuleStatus, Severity, Site, SourceLocator, Subject, Witness,
+    DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportPoint,
+    RuleResult, RuleStatus, Severity, Site, SourceLocator, Subject, Witness,
 };
 use super::rules::{Comparison, Linework, Pools, Rule, RuleKind};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
@@ -841,6 +841,7 @@ fn hole_subject(design: &Design, hole: &Hole, role: &'static str) -> Subject {
         hole.source_feature_index,
     );
     subject.provenance = Some(hole.provenance.clone());
+    subject.anchor = Some(hole.center.into());
     subject.drill_span = Some(hole.drill_span.clone());
     subject
 }
@@ -858,6 +859,7 @@ fn slot_subject(design: &Design, slot: &Slot, role: &'static str) -> Subject {
         slot.source_feature_index,
     );
     subject.provenance = Some(slot.provenance.clone());
+    subject.anchor = Some(slot.bbox.center().into());
     // Width and board-edge checks need not resolve the physical stackup.
     // Do not present their declaration-order fallback as a physical span.
     subject.drill_span = design.stackup.as_ref().map(|_| slot.drill_span.clone());
@@ -893,27 +895,32 @@ impl<'a> From<&'a Subject> for LegacySubject<'a> {
     }
 }
 
-/// Stable annular identity excludes generated IPC primitive names and feature
-/// indices, which can change between equivalent clean exports.
+/// What identifies a subject across equivalent exports: who it is, not how
+/// the file happened to name or number it. Generated IPC primitive names,
+/// padstack ids, and set/feature indices change between clean exports of the
+/// same board and are excluded. A drilled subject is further identified by
+/// where the source drills it, in whole micrometres.
 #[derive(serde::Serialize)]
-struct AnnularSubject<'a> {
+struct StableSubject<'a> {
     role: &'static str,
     kind: &'static str,
     reference_designator: &'a Option<String>,
     pin: &'a Option<String>,
     net: &'a Option<String>,
-    source: Option<AnnularSource<'a>>,
+    source: Option<StableSource<'a>>,
     drill_span: &'a Option<DrillSpan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anchor: Option<[i64; 2]>,
 }
 
 #[derive(serde::Serialize)]
-struct AnnularSource<'a> {
+struct StableSource<'a> {
     step: &'a Option<String>,
     layer: &'a Option<String>,
     instance_index: Option<u32>,
 }
 
-impl<'a> From<&'a Subject> for AnnularSubject<'a> {
+impl<'a> From<&'a Subject> for StableSubject<'a> {
     fn from(subject: &'a Subject) -> Self {
         Self {
             role: subject.role,
@@ -921,43 +928,24 @@ impl<'a> From<&'a Subject> for AnnularSubject<'a> {
             reference_designator: &subject.reference_designator,
             pin: &subject.pin,
             net: &subject.net,
-            source: subject.source.as_ref().map(|source| AnnularSource {
+            source: subject.source.as_ref().map(|source| StableSource {
                 step: &source.step,
                 layer: &source.layer,
                 instance_index: source.instance_index,
             }),
             drill_span: &subject.drill_span,
+            anchor: subject.anchor.map(micrometres),
         }
     }
 }
 
-/// The original evidence record, excluding display-only constructions.
-/// Borrow the potentially large rings rather than cloning them to hash IDs.
-#[derive(serde::Serialize)]
-struct LegacyEvidence<'a> {
-    role: &'static str,
-    kind: &'static str,
-    center: &'a Option<ReportPoint>,
-    diameter: &'a Option<f64>,
-    start: &'a Option<ReportPoint>,
-    end: &'a Option<ReportPoint>,
-    bounding_box: &'a Option<ReportBBox>,
-    paths: &'a [Vec<ReportPoint>],
-}
-
-impl<'a> From<&'a Evidence> for LegacyEvidence<'a> {
-    fn from(evidence: &'a Evidence) -> Self {
-        Self {
-            role: evidence.role,
-            kind: evidence.kind,
-            center: &evidence.center,
-            diameter: &evidence.diameter,
-            start: &evidence.start,
-            end: &evidence.end,
-            bounding_box: &evidence.bounding_box,
-            paths: &evidence.paths,
-        }
-    }
+/// Identity coordinates are whole micrometres: far above the noise that
+/// equivalent geometry differs by, far below anything that tells two
+/// violations apart. Any grid has cell edges where noise still flips a
+/// coordinate; offsetting them a quarter micrometre keeps them off the
+/// half-micrometre lattice, where midpoints of gridded CAD coordinates fall.
+fn micrometres(point: ReportPoint) -> [i64; 2] {
+    [point.x, point.y].map(|millimetres| (millimetres * 1000.0 + 0.25).floor() as i64)
 }
 
 /// The layers a finding spans, each named once.
@@ -968,121 +956,146 @@ fn layers<'a>(layers: impl IntoIterator<Item = &'a LayerRef>) -> Vec<LayerRef> {
 }
 
 /// Sort findings into rule/location order and give each an id hashed from
-/// what it is about — rule, subjects, layers, and measured location. The id
-/// is deterministic per input and survives revisions only while those facts
-/// are unchanged: a violation whose representative point moves is a new
-/// finding, so its stale waiver surfaces as unmatched. The measured value
-/// is deliberately excluded — a waived violation that changes magnitude
+/// what it is about: its rule, its stable subjects, its layers, and where it
+/// is, in whole micrometres. A drilled subject carries its own source
+/// location; only a finding without one is placed by its measured point,
+/// which depends on which of several equally near boundaries was the witness.
+/// No raw float and no evidence geometry enters an id, so noise-level
+/// coordinate changes do not re-key findings and strand their waivers. The
+/// measured value is excluded too: a waived violation that changes magnitude
 /// in place keeps its waiver.
+///
+/// Ids released earlier hashed raw coordinates and export-specific indices.
+/// Each is still computed, exactly as it was, and returned as an alias of the
+/// finding's id so a waiver written against it keeps matching.
 fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) -> HashMap<String, String> {
     findings.sort_by(|left, right| {
         left.rule_id
             .cmp(&right.rule_id)
             .then_with(|| compare_locations(&left.location, &right.location))
     });
+    let short = |fingerprint: &[u8]| hex::encode(&Sha256::digest(fingerprint)[..6]);
     let mut seen: HashMap<String, u32> = HashMap::new();
-    let mut legacy_seen: HashMap<String, u32> = HashMap::new();
+    let mut released_seen: HashMap<String, u32> = HashMap::new();
     let mut waiver_aliases = HashMap::new();
     for finding in findings.iter_mut() {
-        let legacy_fingerprint = serde_json::to_string(&(
-            &finding.rule_id,
-            finding
-                .subjects
-                .iter()
-                .map(LegacySubject::from)
-                .collect::<Vec<_>>(),
-            &finding.layers,
-            &finding.location.point,
-        ))
-        .expect("legacy finding identity serializes");
-        let annular = annular_rules.contains(finding.rule_id.as_str());
-        let fingerprint = if annular {
-            let hole = finding
-                .evidence
-                .iter()
-                .find(|evidence| evidence.role == "drilled_hole")
-                .expect("annular findings report their drilled hole");
-            serde_json::to_string(&(
+        let subjects = finding
+            .subjects
+            .iter()
+            .map(StableSubject::from)
+            .collect::<Vec<_>>();
+        let placed_by_subject = subjects.iter().any(|subject| subject.anchor.is_some());
+        let digest = short(
+            &serde_json::to_vec(&(
                 &finding.rule_id,
-                finding
-                    .subjects
-                    .iter()
-                    .map(AnnularSubject::from)
-                    .collect::<Vec<_>>(),
+                &subjects,
                 &finding.layers,
-                &hole.center,
-                &hole.diameter,
+                finding
+                    .location
+                    .point
+                    .filter(|_| !placed_by_subject)
+                    .map(micrometres),
             ))
-        } else {
-            Ok(legacy_fingerprint.clone())
-        }
-        .expect("finding identity serializes");
-        let digest = Sha256::digest(fingerprint.as_bytes());
-        let short = hex::encode(&digest[..6]);
+            .expect("finding identity serializes"),
+        );
         let repeat = seen
-            .entry(short.clone())
+            .entry(digest.clone())
             .and_modify(|n| *n += 1)
             .or_insert(1);
         finding.id = if *repeat == 1 {
-            format!("dfm-{short}")
+            format!("dfm-{digest}")
         } else {
-            format!("dfm-{short}-{repeat}")
+            format!("dfm-{digest}-{repeat}")
         };
-        if annular {
-            let digest = Sha256::digest(legacy_fingerprint.as_bytes());
-            let legacy_short = hex::encode(&digest[..6]);
-            let repeat = legacy_seen
-                .entry(legacy_short.clone())
+
+        for released in released_fingerprints(finding, annular_rules) {
+            let released_id = format!("dfm-{}", short(released.as_bytes()));
+            let repeat = released_seen
+                .entry(released_id.clone())
                 .and_modify(|n| *n += 1)
                 .or_insert(1);
-            let legacy_id = format!("dfm-{legacy_short}");
             if *repeat == 1 {
-                if legacy_id != finding.id {
-                    waiver_aliases.insert(legacy_id, finding.id.clone());
+                if released_id != finding.id {
+                    waiver_aliases.insert(released_id, finding.id.clone());
                 }
             } else {
-                // An ordinal legacy ID can move when equivalent findings are
+                // An ordinal id can move when equivalent findings are
                 // reordered. Do not transfer either waiver ambiguously.
-                waiver_aliases.remove(&legacy_id);
+                waiver_aliases.remove(&released_id);
             }
         }
+
         let mut sites_seen: HashMap<String, usize> = HashMap::new();
         for site in &mut finding.sites {
-            let bytes = if annular_rules.contains(finding.rule_id.as_str()) {
-                serde_json::to_vec(&(
+            let bounds = site.bounding_box;
+            let digest = short(
+                &serde_json::to_vec(&(
                     &site.layers,
                     &site.measurement_kind,
-                    &site.bounding_box,
                     site.subjects
                         .iter()
-                        .map(AnnularSubject::from)
+                        .map(StableSubject::from)
                         .collect::<Vec<_>>(),
+                    [micrometres(bounds.min), micrometres(bounds.max)],
                 ))
-            } else {
-                serde_json::to_vec(&(
-                    &site.layers,
-                    &site.measurement_kind,
-                    &site.bounding_box,
-                    site.evidence
-                        .iter()
-                        .map(LegacyEvidence::from)
-                        .collect::<Vec<_>>(),
-                ))
-            }
-            .expect("site identity serializes");
-            let digest = Sha256::digest(bytes);
-            let short = hex::encode(&digest[..6]);
+                .expect("site identity serializes"),
+            );
             let ordinal = sites_seen
-                .entry(short.clone())
+                .entry(digest.clone())
                 .and_modify(|n| *n += 1)
                 .or_insert(1);
-            site.id = format!("{}-site-{short}", finding.id);
+            site.id = format!("{}-site-{digest}", finding.id);
             if *ordinal > 1 {
                 site.id.push_str(&format!("-{ordinal}"));
             }
         }
     }
     waiver_aliases
+}
+
+/// The identity records of every released id format, byte for byte. The first
+/// served every rule; annular findings then moved to their drilled hole, with
+/// the subject projection that is now stable identity minus its anchor.
+fn released_fingerprints(finding: &Finding, annular_rules: &HashSet<&str>) -> Vec<String> {
+    let original = serde_json::to_string(&(
+        &finding.rule_id,
+        finding
+            .subjects
+            .iter()
+            .map(LegacySubject::from)
+            .collect::<Vec<_>>(),
+        &finding.layers,
+        &finding.location.point,
+    ));
+    let annular = annular_rules
+        .contains(finding.rule_id.as_str())
+        .then(|| {
+            finding
+                .evidence
+                .iter()
+                .find(|evidence| evidence.role == "drilled_hole")
+        })
+        .flatten()
+        .map(|hole| {
+            serde_json::to_string(&(
+                &finding.rule_id,
+                finding
+                    .subjects
+                    .iter()
+                    .map(|subject| StableSubject {
+                        anchor: None,
+                        ..StableSubject::from(subject)
+                    })
+                    .collect::<Vec<_>>(),
+                &finding.layers,
+                &hole.center,
+                &hole.diameter,
+            ))
+        });
+    std::iter::once(original)
+        .chain(annular)
+        .map(|fingerprint| fingerprint.expect("released finding identity serializes"))
+        .collect()
 }
 
 /// Collapse only proven repeats of the same definition-local subjects, with
@@ -1181,8 +1194,8 @@ mod tests {
     use super::*;
     use crate::commands::dfm::report::ReportPoint;
 
-    fn assign_ids(findings: &mut [Finding]) {
-        super::assign_ids(findings, &HashSet::new());
+    fn assign_ids(findings: &mut [Finding]) -> HashMap<String, String> {
+        super::assign_ids(findings, &HashSet::new())
     }
 
     fn finding_at(x: f64) -> Finding {
@@ -1232,16 +1245,17 @@ mod tests {
     }
 
     #[test]
-    fn visual_metadata_does_not_change_the_original_waiver_id() {
+    fn visual_metadata_does_not_change_the_id_and_the_released_id_still_resolves() {
         let mut finding = finding_at(1.0);
         finding.subjects.push(Subject {
             role: "hole",
             kind: "via_hole",
             ..Subject::default()
         });
-        assign_ids(std::slice::from_mut(&mut finding));
+        let aliases = assign_ids(std::slice::from_mut(&mut finding));
+        let id = finding.id.clone();
         // Independently computed from the pre-sites v1 JSON identity record.
-        assert_eq!(finding.id, "dfm-bee136ee7a39");
+        assert_eq!(aliases.get("dfm-bee136ee7a39"), Some(&id));
         finding.subjects[0].provenance = Some(SourceLocator {
             step: Some("board".into()),
             layer: Some("DRILL".into()),
@@ -1264,9 +1278,88 @@ mod tests {
             evidence: finding.evidence.clone(),
             note: None,
         });
-        assign_ids(std::slice::from_mut(&mut finding));
-        assert_eq!(finding.id, "dfm-bee136ee7a39");
-        assert!(finding.sites[0].id.starts_with("dfm-bee136ee7a39-site-"));
+        let aliases = assign_ids(std::slice::from_mut(&mut finding));
+        assert_eq!(finding.id, id);
+        assert_eq!(aliases.get("dfm-bee136ee7a39"), Some(&id));
+        assert!(finding.sites[0].id.starts_with(&format!("{id}-site-")));
+    }
+
+    #[test]
+    fn a_waiver_written_against_a_released_id_still_applies() {
+        use crate::commands::dfm::waivers::{Waiver, WaiverFile, apply};
+        let mut finding = finding_at(1.0);
+        finding.subjects.push(Subject {
+            role: "hole",
+            kind: "via_hole",
+            ..Subject::default()
+        });
+        let aliases = assign_ids(std::slice::from_mut(&mut finding));
+        assert_ne!(finding.id, "dfm-bee136ee7a39");
+        let file = WaiverFile {
+            waiver: vec![Waiver {
+                finding: "dfm-bee136ee7a39".to_owned(),
+                reason: "approved by fab".to_owned(),
+                expires: None,
+            }],
+        };
+        let outcome = apply(
+            std::slice::from_mut(&mut finding),
+            &file,
+            &aliases,
+            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+        );
+        assert!(finding.waived);
+        assert_eq!(outcome.applied, 1);
+        assert!(outcome.unmatched.is_empty());
+    }
+
+    #[test]
+    fn noise_level_coordinate_changes_do_not_rekey_findings_or_sites() {
+        let site = |center: Point, subjects: Vec<Subject>| Site {
+            id: String::new(),
+            measurement: Measurement::minimum_distance(0.1, 0.2),
+            measurement_kind: MeasurementKind::Clearance,
+            uncertainty_mm: 0.0,
+            witnesses: Vec::new(),
+            bounding_box: BBox::from_point(center).expand(0.05).into(),
+            layers: Vec::new(),
+            subjects,
+            evidence: vec![Evidence::circle("hole", center, 0.1)],
+            note: None,
+        };
+        // Placed by its drilled subject; and by its measured point, here the
+        // midpoint of gridded coordinates, on the half-micrometre lattice.
+        for anchored in [true, false] {
+            let ids = |noise: f64| {
+                let center = Point::new(12.3455 + noise, -4.0005 - noise);
+                let subject = Subject {
+                    role: "hole",
+                    kind: "via_hole",
+                    anchor: anchored.then(|| center.into()),
+                    ..Subject::default()
+                };
+                let mut finding = finding_at(0.0);
+                // The witness of an anchored finding may be any equally near point.
+                finding.location.point = Some(if anchored {
+                    Point::new(12.0 + 1e3 * noise, -4.0).into()
+                } else {
+                    center.into()
+                });
+                finding.subjects.push(subject.clone());
+                finding.sites.push(site(center, vec![subject]));
+                assign_ids(std::slice::from_mut(&mut finding));
+                (finding.id.clone(), finding.sites[0].id.clone())
+            };
+            let reference = ids(0.0);
+            for noise in [1e-12, -1e-12, 3e-10] {
+                assert_eq!(ids(noise), reference, "anchored {anchored}, noise {noise}");
+            }
+            assert_ne!(
+                ids(0.002).0,
+                reference.0,
+                "two micrometres away is elsewhere"
+            );
+        }
     }
 
     #[test]
@@ -1293,6 +1386,7 @@ mod tests {
                 last_copper_index: 1,
                 interpretation: "declared",
             }),
+            anchor: Some(Point::new(2.0, 3.0).into()),
             ..Subject::default()
         });
         finding
@@ -1322,11 +1416,13 @@ mod tests {
         let aliases = super::assign_ids(std::slice::from_mut(&mut finding), &annular);
         let finding_id = finding.id.clone();
         let site_id = finding.sites[0].id.clone();
-        assert_eq!(
-            aliases.get("dfm-ed8c542f1d5c"),
-            Some(&finding_id),
-            "the released annular ID remains a waiver alias"
-        );
+        for released in ["dfm-ed8c542f1d5c", "dfm-96a22f500f68"] {
+            assert_eq!(
+                aliases.get(released),
+                Some(&finding_id),
+                "both released annular id formats remain waiver aliases"
+            );
+        }
 
         for subject in [&mut finding.subjects[0], &mut finding.sites[0].subjects[0]] {
             subject.name = Some("OVAL_10".into());
@@ -1348,10 +1444,11 @@ mod tests {
         let mut different_hole = finding_at(9.0);
         different_hole.rule_id = "annular".to_owned();
         different_hole.subjects = finding.subjects.clone();
+        different_hole.subjects[0].anchor = Some(Point::new(5.0, 3.0).into());
         different_hole.layers = finding.layers.clone();
         different_hole
             .evidence
-            .push(Evidence::circle("drilled_hole", Point::new(2.0, 3.0), 0.3));
+            .push(Evidence::circle("drilled_hole", Point::new(5.0, 3.0), 0.2));
         super::assign_ids(std::slice::from_mut(&mut different_hole), &annular);
         assert_ne!(different_hole.id, finding.id);
     }
@@ -1391,12 +1488,6 @@ mod tests {
     fn native_display_metadata_preserves_site_ids_waivers_and_repeat_groups() {
         use super::super::report::{DisplayCircle, EvidenceDisplay};
         let mut finding = repeated_hole(0.0, 4);
-        let evidence = &finding.sites[0].evidence[0];
-        assert_eq!(
-            serde_json::to_string(evidence).unwrap(),
-            serde_json::to_string(&LegacyEvidence::from(evidence)).unwrap(),
-            "the identity projection preserves the original field order and nulls"
-        );
         assign_ids(std::slice::from_mut(&mut finding));
         let original_finding = finding.id.clone();
         let original_site = finding.sites[0].id.clone();

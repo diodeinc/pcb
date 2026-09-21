@@ -583,11 +583,18 @@ consumer's machine to render or validate the report.
 
 ### Findings
 
-- `id` hashes the rule, subjects, layers, and measured location. It remains
-  stable while those facts are unchanged. Moving the representative point
-  creates a new finding; its old waiver becomes `unmatched`. The measured
-  value, added sites, presentation grouping, and extended provenance do not
-  affect identity: a violation that shrinks or grows in place keeps its waiver.
+- `id` hashes the rule, the subjects' stable identity, the layers, and where
+  the finding is, in whole micrometres. A drilled subject is placed by where
+  the source drills it; only a finding without one is placed by its measured
+  point. Generated primitive names, padstack ids, set and feature indices, raw
+  floating-point coordinates, and evidence geometry never enter an id, so an
+  equivalent re-export or a noise-level coordinate change does not re-key a
+  finding. Moving a violation by micrometres creates a new finding; its old
+  waiver becomes `unmatched`. The measured value, added sites, presentation
+  grouping, and extended provenance do not affect identity: a violation that
+  shrinks or grows in place keeps its waiver. Ids in every format released
+  earlier are still computed and accepted as aliases, so existing waiver files
+  keep matching while the geometry they were written against is unchanged.
 - `rule_id`, `severity`, `title`, and `message` identify and explain the
   violation; `waived` and `waiver_reason` record acceptance.
 - `measurement` carries `actual_mm`, `required_mm`, and signed `margin_mm` for
