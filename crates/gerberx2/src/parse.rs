@@ -8,7 +8,6 @@ pub struct Parser<'a> {
     source: &'a str,
     pos: usize,
     interner: Interner,
-    commands: Vec<Command>,
     file_attributes: Vec<Attribute>,
     aperture_attributes: AttributeDictionary,
     object_attributes: AttributeDictionary,
@@ -17,7 +16,6 @@ pub struct Parser<'a> {
     aperture_definitions: Vec<ApertureDefinition>,
     aperture_lookup: HashMap<i32, usize>,
     macro_lookup: HashMap<Symbol, ApertureMacro>,
-    aperture_macros: Vec<ApertureMacro>,
     objects: Vec<GraphicalObject>,
     step_repeats: Vec<StepRepeatBlock>,
     region: Option<RegionBuilder>,
@@ -66,6 +64,79 @@ impl AttributeDictionary {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct ApertureMacro {
+    name: Symbol,
+    primitives: Vec<MacroPrimitive>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum MacroPrimitive {
+    VariableDefinition {
+        variable: usize,
+        expression: MacroExpression,
+    },
+    Shape {
+        code: i32,
+        parameters: Vec<MacroExpression>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum MacroExpression {
+    Number(f64),
+    Variable(usize),
+    UnaryMinus(Box<MacroExpression>),
+    Add(Box<MacroExpression>, Box<MacroExpression>),
+    Subtract(Box<MacroExpression>, Box<MacroExpression>),
+    Multiply(Box<MacroExpression>, Box<MacroExpression>),
+    Divide(Box<MacroExpression>, Box<MacroExpression>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperationCode {
+    Plot,
+    Move,
+    Flash,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CoordinateFields {
+    x: Option<i64>,
+    y: Option<i64>,
+    i: Option<i64>,
+    j: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct GraphicsState {
+    unit: Option<Unit>,
+    coordinate_format: Option<CoordinateFormat>,
+    current_point: Option<Point>,
+    current_aperture: Option<i32>,
+    plot_mode: Option<PlotMode>,
+    polarity: Polarity,
+    mirroring: Mirroring,
+    rotation_degrees: f64,
+    scaling: f64,
+}
+
+impl Default for GraphicsState {
+    fn default() -> Self {
+        Self {
+            unit: None,
+            coordinate_format: None,
+            current_point: None,
+            current_aperture: None,
+            plot_mode: None,
+            polarity: Polarity::Dark,
+            mirroring: Mirroring::None,
+            rotation_degrees: 0.0,
+            scaling: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct RegionBuilder {
     contours: Vec<Contour>,
@@ -90,7 +161,6 @@ impl<'a> Parser<'a> {
             source,
             pos: 0,
             interner: Interner::new(),
-            commands: Vec::new(),
             file_attributes: Vec::new(),
             aperture_attributes: AttributeDictionary::default(),
             object_attributes: AttributeDictionary::default(),
@@ -98,7 +168,6 @@ impl<'a> Parser<'a> {
             aperture_definitions: Vec::new(),
             aperture_lookup: HashMap::new(),
             macro_lookup: HashMap::new(),
-            aperture_macros: Vec::new(),
             objects: Vec::new(),
             step_repeats: Vec::new(),
             region: None,
@@ -147,14 +216,11 @@ impl<'a> Parser<'a> {
 
         Ok(GerberX2 {
             interner: std::mem::take(&mut self.interner),
-            commands: std::mem::take(&mut self.commands),
             file_attributes: std::mem::take(&mut self.file_attributes),
             attributes: std::mem::take(&mut self.attributes),
             aperture_definitions: std::mem::take(&mut self.aperture_definitions),
-            aperture_macros: std::mem::take(&mut self.aperture_macros),
             objects: std::mem::take(&mut self.objects),
             step_repeats: std::mem::take(&mut self.step_repeats),
-            final_state: self.state.clone(),
         })
     }
 
@@ -218,21 +284,17 @@ impl<'a> Parser<'a> {
                 _ => return Err(self.syntax(format!("invalid MO unit '{rest}'"))),
             };
             self.state.unit = Some(unit);
-            self.commands.push(Command::Unit(unit));
             return Ok(());
         }
 
         if let Some(rest) = word.strip_prefix("FS") {
             let format = parse_format(rest).ok_or_else(|| self.syntax("invalid FS command"))?;
             self.state.coordinate_format = Some(format);
-            self.commands.push(Command::Format(format));
             return Ok(());
         }
 
         if let Some(rest) = word.strip_prefix("AD") {
             let aperture = self.parse_aperture_definition(rest)?;
-            self.commands
-                .push(Command::ApertureDefinition(aperture.clone()));
             self.aperture_lookup
                 .insert(aperture.code, self.aperture_definitions.len());
             self.aperture_definitions.push(aperture);
@@ -241,10 +303,7 @@ impl<'a> Parser<'a> {
 
         if let Some(rest) = word.strip_prefix("AM") {
             let macro_def = self.parse_aperture_macro(rest)?;
-            self.commands
-                .push(Command::ApertureMacro(macro_def.clone()));
-            self.macro_lookup.insert(macro_def.name, macro_def.clone());
-            self.aperture_macros.push(macro_def);
+            self.macro_lookup.insert(macro_def.name, macro_def);
             return Ok(());
         }
 
@@ -255,7 +314,6 @@ impl<'a> Parser<'a> {
                 _ => return Err(self.syntax(format!("invalid LP polarity '{rest}'"))),
             };
             self.state.polarity = polarity;
-            self.commands.push(Command::LoadPolarity(polarity));
             return Ok(());
         }
 
@@ -268,21 +326,18 @@ impl<'a> Parser<'a> {
                 _ => return Err(self.syntax(format!("invalid LM mirroring '{rest}'"))),
             };
             self.state.mirroring = mirroring;
-            self.commands.push(Command::LoadMirroring(mirroring));
             return Ok(());
         }
 
         if let Some(rest) = word.strip_prefix("LR") {
             let rotation = parse_f64(rest)?;
             self.state.rotation_degrees = rotation;
-            self.commands.push(Command::LoadRotation(rotation));
             return Ok(());
         }
 
         if let Some(rest) = word.strip_prefix("LS") {
             let scaling = parse_f64(rest)?;
             self.state.scaling = scaling;
-            self.commands.push(Command::LoadScaling(scaling));
             return Ok(());
         }
 
@@ -302,7 +357,6 @@ impl<'a> Parser<'a> {
                 self.aperture_lookup
                     .insert(aperture.code, self.aperture_definitions.len());
                 self.aperture_definitions.push(aperture);
-                self.commands.push(Command::EndBlockAperture);
             } else {
                 let code = parse_aperture_code(rest)?;
                 if self.block.is_some() {
@@ -312,7 +366,6 @@ impl<'a> Parser<'a> {
                     aperture_code: code,
                     object_start: self.objects.len(),
                 });
-                self.commands.push(Command::BeginBlockAperture(code));
             }
             return Ok(());
         }
@@ -337,7 +390,6 @@ impl<'a> Parser<'a> {
                         objects,
                     });
                 }
-                self.commands.push(Command::EndStepRepeat);
             } else {
                 let sr = parse_step_repeat(rest)?;
                 if self.step_repeat.is_some() {
@@ -347,7 +399,6 @@ impl<'a> Parser<'a> {
                     repeat: sr,
                     object_start: self.objects.len(),
                 });
-                self.commands.push(Command::BeginStepRepeat(sr));
             }
             return Ok(());
         }
@@ -355,21 +406,18 @@ impl<'a> Parser<'a> {
         if let Some(rest) = word.strip_prefix("TF") {
             let attr = self.parse_attribute(rest)?;
             self.file_attributes.push(attr.clone());
-            self.commands.push(Command::FileAttribute(attr));
             return Ok(());
         }
 
         if let Some(rest) = word.strip_prefix("TA") {
             let attr = self.parse_attribute(rest)?;
             self.aperture_attributes.insert(attr.clone());
-            self.commands.push(Command::ApertureAttribute(attr));
             return Ok(());
         }
 
         if let Some(rest) = word.strip_prefix("TO") {
             let attr = self.parse_attribute(rest)?;
             self.object_attributes.insert(attr.clone());
-            self.commands.push(Command::ObjectAttribute(attr));
             return Ok(());
         }
 
@@ -377,7 +425,6 @@ impl<'a> Parser<'a> {
             let name = (!rest.is_empty()).then(|| self.interner.intern(rest));
             self.aperture_attributes.remove(name);
             self.object_attributes.remove(name);
-            self.commands.push(Command::DeleteAttribute(name));
             return Ok(());
         }
 
@@ -386,32 +433,24 @@ impl<'a> Parser<'a> {
 
     fn parse_word_command(&mut self, command: &'a str) -> Result<()> {
         let word = command.strip_suffix('*').unwrap_or(command);
-        if let Some(comment) = word.strip_prefix("G04") {
-            let comment = self.interner.intern(comment);
-            self.commands.push(Command::Comment(comment));
+        if word.starts_with("G04") {
             return Ok(());
         }
 
         match word {
             "G01" => {
                 self.state.plot_mode = Some(PlotMode::Linear);
-                self.commands.push(Command::PlotMode(PlotMode::Linear));
                 return Ok(());
             }
             "G02" => {
                 self.state.plot_mode = Some(PlotMode::ClockwiseArc);
-                self.commands
-                    .push(Command::PlotMode(PlotMode::ClockwiseArc));
                 return Ok(());
             }
             "G03" => {
                 self.state.plot_mode = Some(PlotMode::CounterclockwiseArc);
-                self.commands
-                    .push(Command::PlotMode(PlotMode::CounterclockwiseArc));
                 return Ok(());
             }
             "G75" => {
-                self.commands.push(Command::QuadrantModeMulti);
                 return Ok(());
             }
             "G36" => {
@@ -419,7 +458,6 @@ impl<'a> Parser<'a> {
                     return Err(self.syntax("nested region statements are not allowed"));
                 }
                 self.region = Some(RegionBuilder::default());
-                self.commands.push(Command::BeginRegion);
                 return Ok(());
             }
             "G37" => {
@@ -437,12 +475,10 @@ impl<'a> Parser<'a> {
                 self.push_object(ObjectKind::Region {
                     contours: region.contours,
                 });
-                self.commands.push(Command::EndRegion);
                 return Ok(());
             }
             "M02" => {
                 self.saw_m02 = true;
-                self.commands.push(Command::EndOfFile);
                 return Ok(());
             }
             _ => {}
@@ -450,13 +486,11 @@ impl<'a> Parser<'a> {
 
         if let Some(code) = parse_set_aperture(word) {
             self.state.current_aperture = Some(code);
-            self.commands.push(Command::SetCurrentAperture(code));
             return Ok(());
         }
 
         let (fields, code) = parse_operation(word)?;
         self.interpret_operation(fields, code)?;
-        self.commands.push(Command::Operation { fields, code });
         Ok(())
     }
 
@@ -742,16 +776,13 @@ impl<'a> Parser<'a> {
             return Err(self.syntax("AM missing body"));
         };
         let mut primitives = Vec::new();
+        // Primitive code 0 is a comment.
         for word in body
             .split_terminator('*')
             .map(str::trim)
-            .filter(|word| !word.is_empty())
+            .filter(|word| !word.is_empty() && !word.starts_with('0'))
         {
-            if let Some(text) = word.strip_prefix('0') {
-                primitives.push(MacroPrimitive::Comment(
-                    self.interner.intern(text.trim_start()),
-                ));
-            } else if let Some((variable, expression)) = word.split_once('=') {
+            if let Some((variable, expression)) = word.split_once('=') {
                 let variable = variable
                     .strip_prefix('$')
                     .ok_or_else(|| self.syntax("macro variable definition missing $ prefix"))?
@@ -867,7 +898,6 @@ fn lower_macro_aperture(
     let mut paths = Vec::new();
     for primitive in &macro_def.primitives {
         match primitive {
-            MacroPrimitive::Comment(_) => {}
             MacroPrimitive::VariableDefinition {
                 variable,
                 expression,

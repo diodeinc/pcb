@@ -1,7 +1,6 @@
 use gerberx2::{
-    ApertureTemplate, AttributeValue, Command, Contour, ContourSegment, GerberLayer, GerberX2,
-    ObjectKind, PathCommand, Point, StepRepeat, Unit, WriterAperture, WriterApertureTemplate,
-    WriterObject,
+    ApertureTemplate, AttributeValue, Contour, ContourSegment, GerberLayer, GerberX2, ObjectKind,
+    PathCommand, Point, StepRepeat, WriterAperture, WriterApertureTemplate, WriterObject,
 };
 use pcb_ir::geom::Polarity;
 use pcb_ir::geom::{GeometryAccuracy, Resolution};
@@ -13,7 +12,6 @@ fn parses_basic_x2_layer() {
     )
     .unwrap();
 
-    assert_eq!(gerber.final_state().unit, Some(Unit::Millimeter));
     assert_eq!(gerber.file_attributes().len(), 1);
     assert_eq!(gerber.aperture_definitions().len(), 1);
     assert!(matches!(
@@ -24,12 +22,6 @@ fn parses_basic_x2_layer() {
             hole_diameter: None
         }
     ));
-    assert!(
-        gerber
-            .commands()
-            .iter()
-            .any(|command| matches!(command, Command::Operation { .. }))
-    );
     assert_eq!(gerber.objects().len(), 1);
     assert!(matches!(
         gerber.objects()[0].kind,
@@ -459,7 +451,6 @@ fn lowers_aperture_macro_primitives_to_geometry_paths() {
     )
     .unwrap();
 
-    assert_eq!(gerber.aperture_macros().len(), 1);
     let geometry = gerber.aperture_definitions()[0].geometry.as_ref().unwrap();
     assert_eq!(geometry.paths.len(), 9);
     assert_eq!(geometry.paths[0].polarity, Polarity::Dark);

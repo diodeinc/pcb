@@ -83,36 +83,6 @@ pub enum ApertureTemplate {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ApertureMacro {
-    pub name: Symbol,
-    pub primitives: Vec<MacroPrimitive>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum MacroPrimitive {
-    Comment(Symbol),
-    VariableDefinition {
-        variable: usize,
-        expression: MacroExpression,
-    },
-    Shape {
-        code: i32,
-        parameters: Vec<MacroExpression>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum MacroExpression {
-    Number(f64),
-    Variable(usize),
-    UnaryMinus(Box<MacroExpression>),
-    Add(Box<MacroExpression>, Box<MacroExpression>),
-    Subtract(Box<MacroExpression>, Box<MacroExpression>),
-    Multiply(Box<MacroExpression>, Box<MacroExpression>),
-    Divide(Box<MacroExpression>, Box<MacroExpression>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct ApertureGeometry {
     pub paths: Vec<GeometryPath>,
 }
@@ -147,52 +117,6 @@ pub enum PlotMode {
     CounterclockwiseArc,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OperationCode {
-    Plot,
-    Move,
-    Flash,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CoordinateFields {
-    pub x: Option<i64>,
-    pub y: Option<i64>,
-    pub i: Option<i64>,
-    pub j: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Command {
-    Comment(Symbol),
-    Unit(Unit),
-    Format(CoordinateFormat),
-    ApertureDefinition(ApertureDefinition),
-    ApertureMacro(ApertureMacro),
-    SetCurrentAperture(i32),
-    PlotMode(PlotMode),
-    QuadrantModeMulti,
-    Operation {
-        fields: CoordinateFields,
-        code: OperationCode,
-    },
-    LoadPolarity(Polarity),
-    LoadMirroring(Mirroring),
-    LoadRotation(f64),
-    LoadScaling(f64),
-    BeginRegion,
-    EndRegion,
-    BeginBlockAperture(i32),
-    EndBlockAperture,
-    BeginStepRepeat(StepRepeat),
-    EndStepRepeat,
-    FileAttribute(Attribute),
-    ApertureAttribute(Attribute),
-    ObjectAttribute(Attribute),
-    DeleteAttribute(Option<Symbol>),
-    EndOfFile,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StepRepeat {
     pub x_repeats: i32,
@@ -208,35 +132,6 @@ pub struct StepRepeatBlock {
     pub repeat: StepRepeat,
     /// The repeated run within [`crate::GerberX2::objects`].
     pub objects: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct GraphicsState {
-    pub unit: Option<Unit>,
-    pub coordinate_format: Option<CoordinateFormat>,
-    pub current_point: Option<Point>,
-    pub current_aperture: Option<i32>,
-    pub plot_mode: Option<PlotMode>,
-    pub polarity: Polarity,
-    pub mirroring: Mirroring,
-    pub rotation_degrees: f64,
-    pub scaling: f64,
-}
-
-impl Default for GraphicsState {
-    fn default() -> Self {
-        Self {
-            unit: None,
-            coordinate_format: None,
-            current_point: None,
-            current_aperture: None,
-            plot_mode: None,
-            polarity: Polarity::Dark,
-            mirroring: Mirroring::None,
-            rotation_degrees: 0.0,
-            scaling: 1.0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -279,11 +174,6 @@ pub struct GraphicalObject {
     /// under one dictionary state share one set.
     pub aperture_attributes: Span,
     pub object_attributes: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ObjectStream {
-    pub objects: Vec<GraphicalObject>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -42,15 +42,12 @@ pub type Result<T> = std::result::Result<T, GerberError>;
 #[derive(Debug)]
 pub struct GerberX2 {
     interner: Interner,
-    commands: Vec<Command>,
     file_attributes: Vec<Attribute>,
     /// Every attribute set an aperture or object refers to.
     attributes: Vec<Attribute>,
     aperture_definitions: Vec<ApertureDefinition>,
-    aperture_macros: Vec<ApertureMacro>,
     objects: Vec<GraphicalObject>,
     step_repeats: Vec<StepRepeatBlock>,
-    final_state: GraphicsState,
 }
 
 impl GerberX2 {
@@ -63,10 +60,6 @@ impl GerberX2 {
     pub fn parse_file(path: impl AsRef<Path>) -> Result<Self> {
         let source = std::fs::read_to_string(path)?;
         Self::parse(&source)
-    }
-
-    pub fn commands(&self) -> &[Command] {
-        &self.commands
     }
 
     pub fn file_attributes(&self) -> &[Attribute] {
@@ -82,10 +75,6 @@ impl GerberX2 {
         &self.aperture_definitions
     }
 
-    pub fn aperture_macros(&self) -> &[ApertureMacro] {
-        &self.aperture_macros
-    }
-
     /// The object stream in file order. A step-repeated run appears once;
     /// [`Self::step_repeats`] says where it repeats.
     pub fn objects(&self) -> &[GraphicalObject] {
@@ -97,16 +86,8 @@ impl GerberX2 {
         &self.step_repeats
     }
 
-    pub fn final_state(&self) -> &GraphicsState {
-        &self.final_state
-    }
-
     pub fn resolve(&self, sym: Symbol) -> &str {
         self.interner.resolve(sym)
-    }
-
-    pub fn interner(&self) -> &Interner {
-        &self.interner
     }
 }
 
@@ -124,6 +105,5 @@ mod tests {
         assert_eq!(gerber.aperture_definitions().len(), 1);
         assert_eq!(gerber.file_attributes().len(), 1);
         assert_eq!(gerber.objects().len(), 1);
-        assert!(matches!(gerber.commands().last(), Some(Command::EndOfFile)));
     }
 }
