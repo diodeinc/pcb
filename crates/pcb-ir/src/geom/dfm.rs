@@ -16,6 +16,10 @@ use crate::geom::tol;
 
 pub use crate::geom::dist::Distance;
 
+/// Absorbs floating-point unit conversion when a measurement sits exactly on
+/// its limit.
+pub const COMPARISON_EPSILON_MM: f64 = 1e-6;
+
 /// Candidate index over ring or shape bounds, on a grid of about sixty-four
 /// cells across. Every bounds is registered in each cell it covers, so a
 /// large enclosing ring stays queryable in a small region of interest.
@@ -267,7 +271,7 @@ pub fn linework_clearance_sites(
     linework_uncertainty_mm: f64,
 ) -> Vec<ClearanceSite> {
     let uncertainty_mm = linework_uncertainty_mm + material.uncertainty_mm;
-    let reach = minimum_mm - uncertainty_mm - 1e-6;
+    let reach = minimum_mm - uncertainty_mm - COMPARISON_EPSILON_MM;
     if reach <= 0.0 || material.is_empty() {
         return Vec::new();
     }

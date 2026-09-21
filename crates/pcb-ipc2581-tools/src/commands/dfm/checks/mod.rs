@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use chrono::NaiveDate;
 use ipc2581::Symbol;
 use pcb_ir::dialects::ipc::ArtworkScope;
-use pcb_ir::geom::dfm::Distance;
+use pcb_ir::geom::dfm::{COMPARISON_EPSILON_MM, Distance};
 use pcb_ir::geom::{Affine2, BBox, Point};
 use sha2::{Digest, Sha256};
 
@@ -37,14 +37,10 @@ use super::design::{Design, Hole, HoleClass, Slot};
 use super::pdk::SlotPlating;
 use super::report::{
     DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportPoint,
-    RuleResult, RuleStatus, Severity, Site, SourceLocator, Subject, Witness,
+    RuleResult, RuleStatus, Severity, Site, SourceLocator, Subject, Unresolved, Witness,
 };
 use super::rules::{Comparison, Linework, Pools, Rule, RuleKind};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
-
-/// Absorbs floating-point unit conversion when a measurement sits exactly
-/// on its limit.
-const COMPARISON_EPSILON_MM: f64 = 1e-6;
 
 #[derive(Default)]
 pub(super) struct Results {
@@ -175,13 +171,22 @@ pub(super) fn run(
                     debug_assert_eq!(rule.comparison, Comparison::Minimum);
                     let limit = rule.limit.length().millimeters();
                     result.checked = evaluation.checked;
-                    results.findings.extend(
-                        evaluation
-                            .measured
-                            .into_iter()
-                            .filter(|measured| violates(&measured.distance, limit))
-                            .map(|measured| finding(rule, measured)),
-                    );
+                    for measured in evaluation.measured {
+                        match judge(&measured.distance, limit) {
+                            Judgement::Violates => results.findings.push(finding(rule, measured)),
+                            Judgement::Unresolved => result.unresolved.push(Unresolved {
+                                actual_mm: measured.distance.mm,
+                                uncertainty_mm: measured.distance.uncertainty_mm,
+                                point: measured.distance.midpoint().into(),
+                                layers: measured
+                                    .layers
+                                    .into_iter()
+                                    .map(|layer| layer.name)
+                                    .collect(),
+                            }),
+                            Judgement::Meets => {}
+                        }
+                    }
                     (evaluation.checked == 0)
                         .then(|| (RuleStatus::NotApplicable, nothing_measurable()))
                 }
@@ -210,7 +215,7 @@ pub(super) fn run(
                                 evaluation
                                     .measured
                                     .into_iter()
-                                    .filter(|measured| measured.actual_ratio > maximum)
+                                    .filter(|measured| exceeds(measured, maximum))
                                     .map(|measured| ratio_finding(rule, measured, maximum)),
                             );
                             None
@@ -303,11 +308,40 @@ fn share_evidence(findings: &mut [Finding], design: &Design) -> Vec<Evidence> {
         .collect()
 }
 
+/// How a measured distance stands against a minimum.
+#[derive(PartialEq)]
+enum Judgement {
+    Meets,
+    /// Below the limit, but by less than the measurement's own uncertainty.
+    Unresolved,
+    Violates,
+}
+
 /// The one verdict: a distance violates a minimum when it is certainly
 /// below it, beyond both its own geometric uncertainty and the comparison
-/// epsilon.
+/// epsilon. One that is below it only within that uncertainty is neither a
+/// violation nor a pass, and is reported as unresolved.
+fn judge(distance: &Distance, limit_mm: f64) -> Judgement {
+    let limit_mm = limit_mm - COMPARISON_EPSILON_MM;
+    if distance.certainly_below(limit_mm) {
+        Judgement::Violates
+    } else if distance.mm < limit_mm {
+        Judgement::Unresolved
+    } else {
+        Judgement::Meets
+    }
+}
+
 fn violates(distance: &Distance, limit_mm: f64) -> bool {
-    distance.certainly_below(limit_mm - COMPARISON_EPSILON_MM)
+    judge(distance, limit_mm) == Judgement::Violates
+}
+
+/// A ratio exceeds its maximum when the drilled depth exceeds the depth the
+/// maximum allows for that diameter, by the same comparison epsilon: a span
+/// summed from decimal layer thicknesses must not fail a limit it sits on.
+fn exceeds(measured: &RatioMeasured, maximum: f64) -> bool {
+    measured.drilled_span_thickness_mm
+        > maximum * measured.finished_hole_diameter_mm + COMPARISON_EPSILON_MM
 }
 
 fn violates_count(actual: u32, comparison: Comparison, limit: u32) -> bool {
@@ -1219,6 +1253,40 @@ mod tests {
             sites: Vec::new(),
             group_key: None,
         }
+    }
+
+    #[test]
+    fn a_shortfall_inside_the_measurement_uncertainty_is_unresolved_not_passed() {
+        let measured = |mm: f64| Distance::with_uncertainty(mm, Point::ZERO, Point::ZERO, 0.003);
+        assert!(judge(&measured(0.0960), 0.1) == Judgement::Violates);
+        assert!(judge(&measured(0.0985), 0.1) == Judgement::Unresolved);
+        assert!(judge(&measured(0.1000), 0.1) == Judgement::Meets);
+        // Unit conversion noise on the limit itself is not a shortfall.
+        assert!(judge(&measured(0.1 - 1e-9), 0.1) == Judgement::Meets);
+        // An exact measurement is never unresolved.
+        let exact = Distance::exact(0.0999, Point::ZERO, Point::ZERO);
+        assert!(judge(&exact, 0.1) == Judgement::Violates);
+    }
+
+    #[test]
+    fn a_ratio_sitting_on_its_maximum_does_not_exceed_it() {
+        let ratio = |thickness_mm: f64| RatioMeasured {
+            actual_ratio: thickness_mm / 0.1,
+            drilled_span_thickness_mm: thickness_mm,
+            finished_hole_diameter_mm: 0.1,
+            thickness_source: "test",
+            center: Point::ZERO,
+            bbox: BBox::from_point(Point::ZERO),
+            layers: Vec::new(),
+            subjects: Vec::new(),
+            evidence: Vec::new(),
+            note: String::new(),
+        };
+        // Summed decimal layer thicknesses: 0.1 + 0.2 is 0.30000000000000004.
+        let summed = ratio(0.1 + 0.2);
+        assert!(summed.actual_ratio > 3.0);
+        assert!(!exceeds(&summed, 3.0));
+        assert!(exceeds(&ratio(0.31), 3.0));
     }
 
     #[test]

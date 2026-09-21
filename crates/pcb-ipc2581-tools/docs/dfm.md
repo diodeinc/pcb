@@ -216,7 +216,16 @@ curve; zero for stated primitives and analytic shapes). A pair of witness
 points does not always encode a length: widths, diameters, and annular
 enclosures retain their own measurement constructions. The engine fails a
 minimum only when the measured value falls short beyond its own uncertainty,
-so curve tessellation by itself cannot manufacture a violation. Profile
+so curve tessellation by itself cannot manufacture a violation. A value that
+falls short by less than its uncertainty is neither a violation nor proof the
+limit is met: the rule lists it under `unresolved` with its value, uncertainty,
+location, and layers, `summary.unresolved` counts them, and the CLI reports how
+many measurements were within measurement uncertainty. They do not affect the
+verdict. Copper-width and soldermask-web candidates are extracted only where
+they are certainly below the limit, so those two rules list none. An aspect
+ratio exceeds its maximum only when the drilled depth exceeds what the maximum
+allows for that diameter by more than the same comparison epsilon, so a span
+summed from decimal layer thicknesses does not fail a limit it sits on. Profile
 copper-layer qualification instead compares one exact integer with the
 configured support bounds.
 
@@ -737,7 +746,8 @@ Report and scene versions are independent; the report uses integer `2` and the
 scene integer `1`. Report version 2 moved each edge-clearance site's
 `board_profile` region into the `shared_evidence` table, and split the rule
 status `skipped` (and `summary.rules_skipped`) into `not_applicable` and
-`incomplete`, the latter failing the verdict for a required rule. `rules` may
+`incomplete`, the latter failing the verdict for a required rule. Rules list
+`unresolved` measurements and the summary counts them. `rules` may
 hold one extra `incomplete` result per authored rule whose cases do not cover
 the design.
 New fields and new `kind`, `role`, `status`, rule, and method values may be

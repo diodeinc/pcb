@@ -382,6 +382,12 @@ fn annotations(summary: &report::Summary) -> String {
     if summary.waived > 0 {
         notes.push_str(&format!(", {} waived", summary.waived));
     }
+    if summary.unresolved > 0 {
+        notes.push_str(&format!(
+            ", {} within measurement uncertainty",
+            summary.unresolved
+        ));
+    }
     notes
 }
 
@@ -429,6 +435,7 @@ fn summarize(checked: &checks::Results) -> report::Summary {
             .iter()
             .filter(|finding| finding.waived)
             .count(),
+        unresolved: checked.rules.iter().map(|rule| rule.unresolved.len()).sum(),
     }
 }
 
@@ -819,6 +826,46 @@ limit = { minimum = "300 mil" }
         assert_eq!(mask_rule.severity, report::Severity::Warning);
         assert!(matches!(mask_rule.status, report::RuleStatus::Warning));
         assert_eq!(mask_rule.finding_count, 1);
+    }
+
+    #[test]
+    fn a_limit_inside_a_measurements_uncertainty_is_reported_unresolved() {
+        let edge = "copper.minimum_board_edge_clearance";
+        let with_limit = |limit_mm: f64| {
+            check_with_pdk(
+                BOARD,
+                LayoutTarget::Board,
+                &PDK.replace(
+                    "id = \"copper.minimum_board_edge_clearance\"\nlimit = { minimum = \"0.5 mm\" }",
+                    &format!(
+                        "id = \"copper.minimum_board_edge_clearance\"\nlimit = {{ minimum = \"{limit_mm} mm\" }}"
+                    ),
+                ),
+            )
+        };
+        // The round-capped trace is flattened, so its 0.9 mm clearance to the
+        // board edge carries an uncertainty; read both from a certain failure.
+        let failing = with_limit(2.0);
+        let site = &failing.findings[0].sites[0];
+        let (actual, uncertainty) = (site.measurement.actual_mm().unwrap(), site.uncertainty_mm);
+        assert!(uncertainty > 0.0);
+
+        let inside = with_limit(actual + uncertainty / 2.0);
+        assert!(
+            inside.findings.is_empty(),
+            "tessellation alone could explain it"
+        );
+        let unresolved = &rule(&inside, edge).unresolved;
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(unresolved[0].actual_mm, actual);
+        assert_eq!(unresolved[0].uncertainty_mm, uncertainty);
+        assert_eq!(unresolved[0].layers, ["TOP"]);
+        assert_eq!(inside.summary.unresolved, 1);
+        assert!(matches!(inside.verdict, report::Verdict::Pass));
+
+        let beyond = with_limit(actual + uncertainty + 1e-4);
+        assert_eq!(beyond.findings.len(), 1);
+        assert!(rule(&beyond, edge).unresolved.is_empty());
     }
 
     #[test]

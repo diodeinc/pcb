@@ -30,6 +30,9 @@ pub(super) fn evaluate(
         .filter(|(_, slot)| slot_matches(slot.plating, SlotPlating::Plated))
     {
         let mut sites = Vec::new();
+        // The least enclosure on any layer, violating or not: the engine
+        // judges it, so one inside its own uncertainty is not lost here.
+        let mut least: Option<(pcb_ir::geom::dfm::Distance, Vec<_>)> = None;
         for (index, copper) in design
             .copper_layers
             .iter()
@@ -82,9 +85,18 @@ pub(super) fn evaluate(
                     }
                     distance
                 });
-            let Some(distance) = distance.filter(|distance| violates(distance, limit_mm)) else {
+            let Some(distance) = distance else {
                 continue;
             };
+            if least
+                .as_ref()
+                .is_none_or(|(least, _)| distance.mm < least.mm)
+            {
+                least = Some((distance, layers([&slot.layer, &copper.layer])));
+            }
+            if !violates(&distance, limit_mm) {
+                continue;
+            }
             let envelope = slot.outline.disk_dilate(limit_mm)?;
             let mut site = MeasuredSite::new(
                 distance,
@@ -121,6 +133,15 @@ pub(super) fn evaluate(
                 subjects: worst.subjects.clone(),
                 evidence: worst.evidence.clone(),
                 sites,
+            });
+        } else if let Some((distance, layers)) = least {
+            measured.push(Measured {
+                distance,
+                bbox: slot.bbox,
+                layers,
+                subjects: vec![slot_subject(design, slot, "slot")],
+                evidence: Vec::new(),
+                sites: Vec::new(),
             });
         }
     }

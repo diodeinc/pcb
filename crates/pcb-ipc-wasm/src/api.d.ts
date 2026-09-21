@@ -74,7 +74,7 @@ export interface DfmSummary {
   rules_configured: number; rules_passed: number; rules_warned: number;
   rules_failed: number; rules_not_applicable: number; rules_incomplete: number;
   findings: number;
-  errors: number; warnings: number; waived: number;
+  errors: number; warnings: number; waived: number; unresolved: number;
 }
 export interface DfmFinding {
   id: string; rule_id: string; severity: "error" | "warning";

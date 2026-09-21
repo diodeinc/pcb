@@ -280,6 +280,8 @@ pub struct Summary {
     /// Unwaived warning-severity findings.
     pub warnings: usize,
     pub waived: usize,
+    /// Measurements no rule could decide; see [`RuleResult::unresolved`].
+    pub unresolved: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -301,6 +303,10 @@ pub struct RuleResult {
     pub checked: usize,
     pub finding_count: usize,
     pub waived_count: usize,
+    /// Measurements below the limit by less than their own uncertainty. They
+    /// are not findings, since tessellation alone could account for the
+    /// shortfall, and they are not proof the limit is met either.
+    pub unresolved: Vec<Unresolved>,
     /// Why a `not_applicable` or `incomplete` rule was not evaluated.
     pub skip_reason: Option<String>,
     /// Input assumptions actually used while evaluating this rule.
@@ -325,6 +331,7 @@ impl RuleResult {
             checked: 0,
             finding_count: 0,
             waived_count: 0,
+            unresolved: Vec::new(),
             skip_reason: None,
             assumptions: Vec::new(),
             view: rule.kind.view_recipe(),
@@ -379,6 +386,15 @@ pub enum RuleStatus {
     NotApplicable,
     /// The rule applies, but its subjects could not be measured.
     Incomplete,
+}
+
+/// One measurement the limit falls inside the uncertainty band of.
+#[derive(Debug, Serialize)]
+pub struct Unresolved {
+    pub actual_mm: f64,
+    pub uncertainty_mm: f64,
+    pub point: ReportPoint,
+    pub layers: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
