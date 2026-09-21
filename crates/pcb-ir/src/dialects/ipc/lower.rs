@@ -193,17 +193,24 @@ where
                 &mut block_objects,
             );
         }
-        // Partition lowered members by polarity and paint stage: each class
-        // becomes one reusable block whose instances carry the class polarity
-        // and stage, so polarity runs and stage sorting order compact groups
-        // exactly like the flat features they stand for. Block content is
-        // normalized to dark; the instance polarity composes it back.
-        let mut classes = Vec::<(Polarity, artwork::PaintOrder, u32)>::new();
+        // Each maximal run of same-polarity members becomes reusable blocks,
+        // one per paint stage, whose instances carry the run's polarity and
+        // stage; block content is normalized to dark and the instance
+        // polarity composes it back. Paint within a run commutes, so a group
+        // of one run stamps each block across every placement. Runs do not
+        // commute with each other, so a group of several paints placement by
+        // placement, run by run, exactly as its flat features would.
+        let mut runs = Vec::<Vec<(Polarity, artwork::PaintOrder, u32)>>::new();
+        let mut run_polarity = None;
         for mut object in block_objects {
-            let class = (object.polarity, object.order.stage);
+            if run_polarity != Some(object.polarity) {
+                run_polarity = Some(object.polarity);
+                runs.push(Vec::new());
+            }
+            let classes = runs.last_mut().expect("a run was just opened");
             let block = match classes
                 .iter()
-                .find(|(polarity, order, _)| (*polarity, order.stage) == class)
+                .find(|(_, order, _)| order.stage == object.order.stage)
             {
                 Some(&(_, _, block)) => block,
                 None => {
@@ -215,16 +222,27 @@ where
             object.polarity = Polarity::Dark;
             out.push_block_object(block, object);
         }
-        for (polarity, order, block) in classes {
-            objects.extend(group.placements.slice(&doc.feature_placements).iter().map(
-                |&transform| artwork::Object {
-                    polarity,
-                    order,
-                    geometry: artwork::Geometry::Instance { block, transform },
-                    bbox: out.blocks[block as usize].bbox.transformed(transform),
-                    meta: ObjectMeta::default(),
-                },
-            ));
+        let placements = group.placements.slice(&doc.feature_placements);
+        let instance = |&(polarity, order, block): &(Polarity, artwork::PaintOrder, u32),
+                        transform: Affine2| artwork::Object {
+            polarity,
+            order,
+            geometry: artwork::Geometry::Instance { block, transform },
+            bbox: out.blocks[block as usize].bbox.transformed(transform),
+            meta: ObjectMeta::default(),
+        };
+        if let [classes] = &runs[..] {
+            objects.extend(classes.iter().flat_map(|class| {
+                placements
+                    .iter()
+                    .map(move |&transform| instance(class, transform))
+            }));
+        } else {
+            objects.extend(placements.iter().flat_map(|&transform| {
+                runs.iter()
+                    .flatten()
+                    .map(move |class| instance(class, transform))
+            }));
         }
     }
     out.diagnostics.extend(doc.diagnostics.clone());
@@ -865,6 +883,62 @@ mod tests {
                 .iter()
                 .all(|object| object.polarity == Polarity::Clear)
         );
+    }
+
+    #[test]
+    fn mixed_polarity_groups_paint_like_their_flat_features() {
+        // A dark member that follows a clear one must survive it, in every
+        // placement, even where a later placement's clear reaches back.
+        let mut doc = Document::<u32, ()>::new();
+        let members = [
+            (Polarity::Dark, rectangle_contour(0.0, 0.0, 4.0, 1.0)),
+            (Polarity::Clear, rectangle_contour(1.0, 0.0, 3.0, 1.0)),
+            (Polarity::Dark, rectangle_contour(1.5, 0.0, 2.5, 1.0)),
+        ];
+        for (polarity, contour) in members {
+            let path = doc.push_path(
+                Paint::Fill {
+                    rule: FillRule::NonZero,
+                },
+                [contour],
+            );
+            let mut feature = Feature::new(FeatureKind::Polygon, polarity);
+            feature.paths = Span::single(path);
+            feature.placement_group = Some(0);
+            doc.features.push(feature);
+        }
+        doc.feature_placements.extend([
+            Affine2::translation(Point::new(0.0, 0.0)),
+            Affine2::translation(Point::new(1.0, 0.0)),
+        ]);
+        doc.feature_placement_groups.push(FeaturePlacementGroup {
+            placements: Span::new(0, 2),
+            features: Span::new(0, 3),
+        });
+        doc.layers.push(crate::dialects::ipc::Layer {
+            name: "TOP".to_string(),
+            source_layer_ref: 0,
+            layer_function: (),
+            spec_refs: Span::EMPTY,
+            sets: Span::EMPTY,
+            features: Span::new(0, 3),
+            bbox: BBox::empty(),
+        });
+
+        let image = |doc: &Document<u32, ()>| {
+            let artwork = lower_layer_to_artwork(doc, 0, LayerRole::Copper, Side::Top);
+            let (mut layers, _) =
+                artwork::compose_owner_regions(&artwork, |_| Some(()), Resolution::default())
+                    .unwrap();
+            layers.remove(0).remove(0).1
+        };
+        let grouped = image(&doc);
+        crate::dialects::ipc::process::expand_feature_placement_groups(&mut doc);
+        let flat = image(&doc);
+
+        assert!(grouped.contains_point(Point::new(2.0, 0.5)));
+        assert!((grouped.area() - flat.area()).abs() < 1e-9);
+        assert!(grouped.difference(&flat).unwrap().is_empty());
     }
 
     #[test]

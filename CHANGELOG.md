@@ -24,6 +24,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Image zero-length round and square strokes as dots in composed layer images, matching Gerber output.
 - Report IPC-2581 import warnings for features that had to be dropped.
 - Stop painting slots and routed cutouts back as copper in exported Gerber copper layers.
+- Keep IPC-2581 paint order when a repeated feature group mixes dark and clear shapes.
 
 ### Changed
 
