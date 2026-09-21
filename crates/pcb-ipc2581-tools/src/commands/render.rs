@@ -9,7 +9,7 @@ use crate::{LayoutTarget, RenderFormat, ipc2581};
 
 /// Options for rendering processed geometry from a single IPC-2581 layer.
 #[derive(Debug, Clone)]
-pub struct RenderOptions {
+pub struct LayerRenderOptions {
     pub layer: String,
     pub output: Option<PathBuf>,
     pub format: RenderFormat,
@@ -20,7 +20,11 @@ pub struct RenderOptions {
 ///
 /// The layer runs through the same normalization Gerber export uses, so a
 /// render and a fabrication file describe the same image.
-pub fn execute(input_file: &Path, options: &RenderOptions, resolution: Resolution) -> Result<()> {
+pub fn execute(
+    input_file: &Path,
+    options: &LayerRenderOptions,
+    resolution: Resolution,
+) -> Result<()> {
     let target = resolve_target(options)?;
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
@@ -59,7 +63,7 @@ enum RenderTarget {
     Terminal,
 }
 
-fn resolve_target(options: &RenderOptions) -> Result<RenderTarget> {
+fn resolve_target(options: &LayerRenderOptions) -> Result<RenderTarget> {
     match options.format {
         RenderFormat::Auto => {
             if let Some(output) = &options.output {
@@ -93,7 +97,7 @@ fn infer_format_from_output(output: &Path) -> Result<RenderTarget> {
     }
 }
 
-fn write_output(options: &RenderOptions, format: &str, contents: &[u8]) -> Result<()> {
+fn write_output(options: &LayerRenderOptions, format: &str, contents: &[u8]) -> Result<()> {
     if let Some(output) = &options.output {
         std::fs::write(output, contents)
             .with_context(|| format!("Failed to write {format} to {}", output.display()))?;

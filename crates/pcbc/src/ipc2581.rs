@@ -601,7 +601,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             layout_target,
         } => commands::render::execute(
             &file,
-            &commands::render::RenderOptions {
+            &commands::render::LayerRenderOptions {
                 layer,
                 output,
                 format,
