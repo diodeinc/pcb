@@ -214,6 +214,7 @@ pub enum PadUse {
     Regular,
     Antipad,
     Thermal,
+    Other,
 }
 
 /// Package describes a component package (land pattern + outline)
@@ -786,6 +787,7 @@ pub enum LayerFunction {
     DielCoverlay, // Dielectric coverlay (flex circuits)
 
     // Component layers
+    Component,
     ComponentTop,
     ComponentBottom,
     ComponentEmbedded,
@@ -811,6 +813,7 @@ pub enum LayerFunction {
     Probe,
     Courtyard,
     LandPattern,
+    Pin,
     ThievingKeepInout, // Copper thieving constraints
 
     // Composite
@@ -847,6 +850,7 @@ impl LayerFunction {
             Self::DielAdhv => "DIELADHV",
             Self::DielBondPly => "DIELBONDPLY",
             Self::DielCoverlay => "DIELCOVERLAY",
+            Self::Component => "COMPONENT",
             Self::ComponentTop => "COMPONENT_TOP",
             Self::ComponentBottom => "COMPONENT_BOTTOM",
             Self::ComponentEmbedded => "COMPONENT_EMBEDDED",
@@ -862,12 +866,13 @@ impl LayerFunction {
             Self::Document => "DOCUMENT",
             Self::Graphic => "GRAPHIC",
             Self::BoardOutline => "BOARD_OUTLINE",
-            Self::BoardFab => "BOARD_FAB",
+            Self::BoardFab => "BOARDFAB",
             Self::Rework => "REWORK",
             Self::Fixture => "FIXTURE",
             Self::Probe => "PROBE",
             Self::Courtyard => "COURTYARD",
             Self::LandPattern => "LANDPATTERN",
+            Self::Pin => "PIN",
             Self::ThievingKeepInout => "THIEVING_KEEP_INOUT",
             Self::StackupComposite => "STACKUP_COMPOSITE",
             Self::Other => "OTHER",

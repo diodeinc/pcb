@@ -3225,6 +3225,7 @@ impl<'a> Parser<'a> {
             "DIELCOVERLAY" => Ok(LayerFunction::DielCoverlay),
 
             // Component layers
+            "COMPONENT" => Ok(LayerFunction::Component),
             "COMPONENT_TOP" => Ok(LayerFunction::ComponentTop),
             "COMPONENT_BOTTOM" => Ok(LayerFunction::ComponentBottom),
             "COMPONENT_EMBEDDED" => Ok(LayerFunction::ComponentEmbedded),
@@ -3244,12 +3245,13 @@ impl<'a> Parser<'a> {
             "DOCUMENT" => Ok(LayerFunction::Document),
             "GRAPHIC" => Ok(LayerFunction::Graphic),
             "BOARD_OUTLINE" => Ok(LayerFunction::BoardOutline),
-            "BOARD_FAB" => Ok(LayerFunction::BoardFab),
+            "BOARDFAB" | "BOARD_FAB" => Ok(LayerFunction::BoardFab),
             "REWORK" => Ok(LayerFunction::Rework),
             "FIXTURE" => Ok(LayerFunction::Fixture),
             "PROBE" => Ok(LayerFunction::Probe),
             "COURTYARD" => Ok(LayerFunction::Courtyard),
             "LANDPATTERN" => Ok(LayerFunction::LandPattern),
+            "PIN" => Ok(LayerFunction::Pin),
             "THIEVING_KEEP_INOUT" => Ok(LayerFunction::ThievingKeepInout),
 
             // Composite
@@ -3408,6 +3410,7 @@ impl<'a> Parser<'a> {
             "REGULAR" => Ok(PadUse::Regular),
             "ANTIPAD" => Ok(PadUse::Antipad),
             "THERMAL" => Ok(PadUse::Thermal),
+            "OTHER" => Ok(PadUse::Other),
             _ => Err(Ipc2581Error::InvalidAttribute(format!(
                 "Invalid pad use: {}",
                 s
