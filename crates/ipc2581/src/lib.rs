@@ -117,11 +117,7 @@ impl Ipc2581 {
 
     /// Parse IPC-2581 from XML string
     pub fn parse(xml: &str) -> Result<Self> {
-        let (xml, digest) = checksum::split_trailer(xml);
-        let doc = dom::Dom::parse(xml)?;
-        if let Some(digest) = digest {
-            checksum::verify(&xml[doc.root_range()], digest)?;
-        }
+        let doc = checksum::parse_document(xml, dom::Keep::Tree)?;
         if doc.root_namespace() != Some("http://webstds.ipc.org/2581") {
             return Err(Ipc2581Error::InvalidStructure(format!(
                 "Expected IPC-2581 namespace, got {:?}",

@@ -3143,6 +3143,7 @@ mod tests {
     fn detects_slot_cavity_z_axis_substitution_children() {
         let doc = Dom::parse(
             r#"<SlotCavity><Location x="0" y="0"/><MaterialCut depth="0.1"/></SlotCavity>"#,
+            crate::dom::Keep::Tree,
         )
         .unwrap();
 
@@ -3153,6 +3154,7 @@ mod tests {
     fn detects_wrapped_slot_cavity_z_axis_dimensions() {
         let doc = Dom::parse(
             r#"<SlotCavity><Location x="0" y="0"/><ZAxisDim><MaterialLeft thickness="0.1"/></ZAxisDim></SlotCavity>"#,
+            crate::dom::Keep::Tree,
         )
         .unwrap();
 

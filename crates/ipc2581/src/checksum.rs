@@ -1,3 +1,4 @@
+use crate::dom::{Dom, Keep};
 use crate::{Ipc2581Error, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use md5::{Digest, Md5};
@@ -34,14 +35,13 @@ pub fn verify(root_source: &str, digest: [u8; 16]) -> Result<()> {
 }
 
 /// Parses the XML document in `xml`, verifying its checksum trailer if any.
-pub fn parse_document(xml: &str) -> Result<uppsala::Document<'_>> {
+pub(crate) fn parse_document(xml: &str, keep: Keep) -> Result<Dom<'_>> {
     let (xml, digest) = split_trailer(xml);
-    let doc = uppsala::parse(xml).map_err(|err| Ipc2581Error::XmlParse(err.to_string()))?;
-    if let (Some(digest), Some(root)) = (digest, doc.document_element()) {
-        let range = doc.node_range(root).expect("root comes from parsed source");
-        verify(&xml[range], digest)?;
+    let dom = Dom::parse(xml, keep)?;
+    if let Some(digest) = digest {
+        verify(&xml[dom.root_range()], digest)?;
     }
-    Ok(doc)
+    Ok(dom)
 }
 
 #[cfg(test)]
@@ -49,6 +49,10 @@ mod tests {
     use super::*;
 
     const ROOT: &str = "<IPC-2581 revision=\"C\">\n  <Content roleRef=\"Owner\"/>\n</IPC-2581>";
+
+    fn parse_document(xml: &str) -> Result<Dom<'_>> {
+        super::parse_document(xml, Keep::Tree)
+    }
 
     fn with_trailer(root: &str, digested: &str) -> String {
         let digest = STANDARD.encode(Md5::digest(digested.as_bytes()));
@@ -73,8 +77,11 @@ mod tests {
 
     #[test]
     fn mismatched_trailer_is_rejected() {
-        let error = parse_document(&with_trailer(ROOT, "something else")).unwrap_err();
-        assert!(matches!(error, Ipc2581Error::ChecksumMismatch { .. }));
+        let mismatched = with_trailer(ROOT, "something else");
+        assert!(matches!(
+            parse_document(&mismatched),
+            Err(Ipc2581Error::ChecksumMismatch { .. })
+        ));
     }
 
     #[test]

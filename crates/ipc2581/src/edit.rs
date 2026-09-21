@@ -3,26 +3,27 @@
 //! Instead of parsing and re-serializing the whole document (which reformats
 //! every byte and loses the original text), edits are expressed as byte-range
 //! splices against the original source. A [`Doc`] indexes the source with the
-//! same arena-backed DOM used by [`crate::Ipc2581::parse`], each node carrying
-//! its exact byte range; navigation locates the elements to change and the
-//! `Edit` constructors turn them into splices. [`apply`] then rebuilds the
-//! document in a single pass, leaving everything outside the edited ranges
-//! byte-for-byte intact.
+//! same flat element tree [`crate::Ipc2581::parse`] reads, each element
+//! carrying its exact byte range; navigation locates the elements to change
+//! and the `Edit` constructors turn them into splices. [`apply`] then rebuilds
+//! the document in a single pass, leaving everything outside the edited
+//! ranges byte-for-byte intact.
 
 use std::ops::Range;
 
+use crate::dom::{self, Dom};
 use crate::{Ipc2581Error, Result};
 
 /// A parsed view over IPC-2581 source text that maps elements back to their
 /// byte ranges in the source.
 pub struct Doc<'a> {
     source: &'a str,
-    dom: uppsala::Document<'a>,
+    dom: Dom<'a>,
 }
 
 /// Handle to an element in a [`Doc`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Node(uppsala::NodeId);
+pub struct Node(dom::Node);
 
 /// A single splice: delete `delete` bytes at `at`, then insert `insert` there.
 #[derive(Debug, Clone)]
@@ -48,56 +49,41 @@ impl Edit {
 
 impl<'a> Doc<'a> {
     pub fn parse(source: &'a str) -> Result<Self> {
-        let dom = crate::checksum::parse_document(source)?;
+        let dom = crate::checksum::parse_document(source, dom::Keep::SourceSpans)?;
         Ok(Self { source, dom })
     }
 
     /// The document (root) element.
     pub fn root(&self) -> Result<Node> {
-        self.dom
-            .document_element()
-            .map(Node)
-            .ok_or(Ipc2581Error::MissingElement("document root"))
+        Ok(Node(self.dom.root()))
     }
 
     /// Local name of an element.
     pub fn name(&self, node: Node) -> &str {
-        self.dom
-            .element(node.0)
-            .map(|element| element.name.local_name.as_ref())
-            .unwrap_or_default()
+        self.dom.name(node.0)
     }
 
     /// Attribute value by local name.
     pub fn attr(&self, node: Node, name: &str) -> Option<&str> {
-        self.dom.element(node.0)?.get_attribute(name)
+        self.dom.attr(node.0, name)
     }
 
     /// All attributes of an element as (name, value) pairs, in source order.
     pub fn attrs(&self, node: Node) -> impl Iterator<Item = (&str, &str)> {
-        self.dom
-            .element(node.0)
-            .into_iter()
-            .flat_map(|element| element.attributes.iter())
-            .map(|attr| (attr.name.local_name.as_ref(), attr.value.as_ref()))
-    }
-
-    fn child_elements(&self, node: Node) -> impl Iterator<Item = Node> + '_ {
-        self.dom
-            .children_iter(node.0)
-            .filter(|&id| self.dom.element(id).is_some())
-            .map(Node)
+        self.dom.attrs(node.0)
     }
 
     /// Child elements, in source order.
     pub fn children(&self, node: Node) -> Vec<Node> {
-        self.child_elements(node).collect()
+        self.dom.children(node.0).map(Node).collect()
     }
 
     /// First child element with the given local name.
     pub fn child(&self, node: Node, name: &str) -> Option<Node> {
-        self.child_elements(node)
-            .find(|&child| self.name(child) == name)
+        self.dom
+            .children(node.0)
+            .find(|&child| self.dom.name(child) == name)
+            .map(Node)
     }
 
     /// Raw source text of an element, including its tags.
@@ -122,7 +108,7 @@ impl<'a> Doc<'a> {
         let span = self.span(node);
         let slice = self.source(node);
         let Some(start_tag) = slice.strip_suffix("/>") else {
-            return Edit::splice(span.start + self.end_tag_offset(node), 0, xml.into());
+            return Edit::splice(self.dom.end_tag(node.0), 0, xml.into());
         };
         // The name as written, so a prefixed element closes with its prefix.
         let name = &slice[1..];
@@ -160,43 +146,16 @@ impl<'a> Doc<'a> {
     /// All elements with the given local name, anywhere in the document,
     /// in document order.
     pub fn find_all(&self, name: &str) -> Vec<Node> {
-        // Pre-order walk over the sibling links; nothing is allocated per node.
-        let mut next = self.dom.document_element();
-        std::iter::from_fn(|| {
-            let current = next?;
-            next = self.dom.first_child(current).or_else(|| {
-                std::iter::successors(Some(current), |&node| self.dom.parent(node))
-                    .find_map(|node| self.dom.next_sibling(node))
-            });
-            Some(Node(current))
-        })
-        .filter(|&node| self.dom.element(node.0).is_some() && self.name(node) == name)
-        .collect()
+        self.dom
+            .elements()
+            .filter(|&node| self.dom.name(node) == name)
+            .map(Node)
+            .collect()
     }
 
     /// Byte range of an element in the source, including its tags.
     pub fn span(&self, node: Node) -> Range<usize> {
-        self.dom
-            .node_range(node.0)
-            .expect("nodes come from parsed source")
-    }
-
-    /// Byte offset of the closing tag within a non-self-closing element.
-    fn end_tag_offset(&self, node: Node) -> usize {
-        let span = self.span(node);
-        match self.dom.children(node.0).last() {
-            Some(&last) => {
-                let child_end = self
-                    .dom
-                    .node_range(last)
-                    .expect("nodes come from parsed source")
-                    .end;
-                child_end - span.start
-            }
-            // No child nodes at all: content is empty, so the closing tag
-            // starts right after the opening tag.
-            None => start_tag_len(self.source(node)),
-        }
+        self.dom.range(node.0)
     }
 }
 
@@ -391,6 +350,18 @@ mod tests {
         let out = apply(XML, vec![edit]).unwrap();
 
         assert!(out.contains("</Step>\n    <Step name=\"panel\"/></CadData>"));
+
+        // Text, comments and an empty element end at their end tag too.
+        let xml = "<R><A><B/>text<!-- c --></A><E></E></R>";
+        let doc = Doc::parse(xml).unwrap();
+        let root = doc.root().unwrap();
+        let edits = ["A", "E"]
+            .map(|name| doc.append_inside(doc.child(root, name).unwrap(), "<N/>"))
+            .to_vec();
+        assert_eq!(
+            apply(xml, edits).unwrap(),
+            "<R><A><B/>text<!-- c --><N/></A><E><N/></E></R>"
+        );
     }
 
     #[test]
