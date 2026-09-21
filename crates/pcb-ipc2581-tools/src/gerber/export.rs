@@ -39,6 +39,10 @@ use rayon::prelude::*;
 
 type IpcGeometryDocument = pcb_ir::dialects::ipc::Document<ipc2581::Symbol, LayerFunction>;
 
+/// The standard-primitive dictionary by entry id, built once per export:
+/// every pad-like feature of every layer looks its primitive up.
+type StandardPrimitives<'a> = HashMap<ipc2581::Symbol, &'a StandardPrimitive>;
+
 #[derive(Debug, Clone)]
 pub struct GerberX2File {
     pub filename: String,
@@ -90,6 +94,15 @@ pub fn build_gerber_x2_files(
         .iter()
         .any(|plan| plan.role == GerberLayerRole::Profile);
     let part = gerber_part_for_ipc_view(imported, view)?;
+    // The first entry of an id wins, as a scan of the dictionary finds it.
+    let standard_primitives: StandardPrimitives = imported
+        .content
+        .dictionary_standard
+        .entries
+        .iter()
+        .rev()
+        .map(|entry| (entry.id, &entry.primitive))
+        .collect();
 
     // Layers are independent of one another.
     let export = |plan: &ExportLayerPlan<'_>| -> Result<Option<GerberX2File>> {
@@ -104,6 +117,7 @@ pub fn build_gerber_x2_files(
         let artwork = if view == ArtworkScope::ArrayFlattened {
             hierarchical_artwork_from_ipc_layer(
                 imported,
+                &standard_primitives,
                 plan.layer_id,
                 layer_name,
                 spec,
@@ -117,7 +131,7 @@ pub fn build_gerber_x2_files(
             if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
                 bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
             }
-            artwork_from_ipc_layer(imported, &doc, 0, spec)?
+            artwork_from_ipc_layer(imported, &standard_primitives, &doc, 0, spec)?
         };
         if matches!(plan.role, GerberLayerRole::Vcut | GerberLayerRole::Score)
             && artwork.layers[0].objects.is_empty()
@@ -516,6 +530,7 @@ fn copper_layer_output(
 
 fn artwork_from_ipc_layer(
     imported: &ImportedDesign,
+    standard_primitives: &StandardPrimitives,
     doc: &IpcGeometryDocument,
     layer_index: usize,
     spec: GerberArtworkSpec,
@@ -531,6 +546,7 @@ fn artwork_from_ipc_layer(
     };
     let mut lowering = GerberLowering {
         imported,
+        standard_primitives,
         doc,
         role: spec.role,
         side: spec.side,
@@ -562,6 +578,7 @@ fn artwork_from_ipc_layer(
 /// plain flat artwork.
 fn hierarchical_artwork_from_ipc_layer(
     imported: &ImportedDesign,
+    standard_primitives: &StandardPrimitives,
     layer: LayerId,
     layer_name: &str,
     spec: GerberArtworkSpec,
@@ -579,6 +596,7 @@ fn hierarchical_artwork_from_ipc_layer(
     });
     let context = HierarchicalArtworkContext {
         imported,
+        standard_primitives,
         layer,
         layer_name,
         role: spec.role,
@@ -599,6 +617,7 @@ fn hierarchical_artwork_from_ipc_layer(
 
 struct HierarchicalArtworkContext<'a> {
     imported: &'a ImportedDesign,
+    standard_primitives: &'a StandardPrimitives<'a>,
     layer: LayerId,
     layer_name: &'a str,
     role: GerberLayerRole,
@@ -682,6 +701,7 @@ fn build_step_artwork_objects(
 
     let mut lowering = GerberLowering {
         imported: context.imported,
+        standard_primitives: context.standard_primitives,
         doc: &local,
         role: context.role,
         side: context.side,
@@ -723,6 +743,7 @@ fn build_step_artwork_objects(
 /// every object carries X2 attributes.
 struct GerberLowering<'a> {
     imported: &'a ImportedDesign,
+    standard_primitives: &'a StandardPrimitives<'a>,
     doc: &'a IpcGeometryDocument,
     role: GerberLayerRole,
     side: IrSide,
@@ -733,7 +754,7 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
         &mut self,
         feature: &Feature<ipc2581::Symbol>,
     ) -> Option<(Aperture, Affine2, BBox)> {
-        standard_flash_aperture(self.imported, self.doc, feature)
+        standard_flash_aperture(self.standard_primitives, self.doc, feature)
     }
 
     /// Only pad-like copper and tiled balance cells may image as flashes.
@@ -1232,7 +1253,7 @@ fn ir_side(side: Option<IpcSide>) -> IrSide {
 }
 
 fn standard_flash_aperture(
-    imported: &ImportedDesign,
+    standard_primitives: &StandardPrimitives,
     doc: &IpcGeometryDocument,
     feature: &Feature<ipc2581::Symbol>,
 ) -> Option<(Aperture, Affine2, BBox)> {
@@ -1240,7 +1261,10 @@ fn standard_flash_aperture(
         return None;
     }
 
-    let primitive = standard_primitive_for_feature(imported, feature)?;
+    let Some(PrimitiveRef::Standard(primitive_ref)) = feature.primitive_ref else {
+        return None;
+    };
+    let primitive = *standard_primitives.get(&primitive_ref)?;
     if !standard_primitive_is_solid_fill(primitive) {
         return None;
     }
@@ -1302,22 +1326,6 @@ fn standard_flash_feature_is_eligible(feature: &Feature<ipc2581::Symbol>) -> boo
             feature.intent.role,
             FeatureRole::Pad | FeatureRole::Via | FeatureRole::Hole
         ) || feature.is_fiducial())
-}
-
-fn standard_primitive_for_feature<'a>(
-    imported: &'a ImportedDesign,
-    feature: &Feature<ipc2581::Symbol>,
-) -> Option<&'a StandardPrimitive> {
-    let Some(PrimitiveRef::Standard(primitive_ref)) = feature.primitive_ref else {
-        return None;
-    };
-    imported
-        .content
-        .dictionary_standard
-        .entries
-        .iter()
-        .find(|entry| entry.id == primitive_ref)
-        .map(|entry| &entry.primitive)
 }
 
 fn standard_primitive_is_solid_fill(primitive: &StandardPrimitive) -> bool {
