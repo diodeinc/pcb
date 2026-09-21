@@ -50,7 +50,7 @@ pub struct IctContact {
 
 #[cfg(feature = "cli")]
 pub fn execute(file: &Path, options: &IctOptions, resolution: Resolution) -> Result<()> {
-    let ipc = Ipc2581::parse_file(file)?;
+    let ipc = Ipc2581::parse(&crate::utils::file::load_ipc_file(file)?)?;
     let contacts = extract_contacts(&ipc, &import_design(&ipc, resolution)?, resolution)?;
     let csv = emit_ict_csv(&contacts, options.side);
 
@@ -331,6 +331,26 @@ fn write_csv_field(output: &mut String, field: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn reads_compressed_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("ict.csv");
+        execute(
+            Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../ipc2581/tests/data/DM0002-IPC-2518.xml.zst"
+            )),
+            &IctOptions {
+                output: Some(output.clone()),
+                side: CplSideFilter::Both,
+            },
+            pcb_ir::geom::Resolution::default(),
+        )
+        .unwrap();
+        assert!(fs::read_to_string(output).unwrap().contains(','));
+    }
 
     #[test]
     fn ict_package_names_match_with_dedupe_suffix() {

@@ -19,8 +19,7 @@ const SURFACE_MOUNT_LIMIT_PERCENT: f64 = 0.75;
 
 #[cfg(feature = "cli")]
 pub fn execute(file: &Path, report: Option<&Path>, resolution: Resolution) -> Result<()> {
-    let xml = std::fs::read_to_string(file)
-        .with_context(|| format!("failed to read {}", file.display()))?;
+    let xml = crate::utils::file::load_ipc_file(file)?;
     let ipc = Ipc2581::parse(&xml).context("failed to parse IPC-2581 file")?;
     let analysis = warp::analyze(&ipc, resolution)?;
 
