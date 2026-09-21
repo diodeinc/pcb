@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use crate::{
     AttributeValue, Contour, ContourSegment, GerberError, GerberLayer, ObjectKind,
     Point as GerberPoint, Result, WriterAperture, WriterApertureTemplate, WriterObject,
-    sanitize_attribute_field,
+    escape_attribute_field,
 };
 use pcb_ir::dialects::artwork::legalize::bake_aperture_basis;
 use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
@@ -118,16 +118,17 @@ fn object_attributes(
     gerber: &crate::GerberX2,
     meta: &crate::geometry::GerberObjectMeta,
 ) -> ObjectAttributes {
-    let component = attribute_fields(gerber, &meta.object_attributes, ".C")
-        .or_else(|| attribute_fields(gerber, &meta.object_attributes, ".P"))
-        .and_then(|fields| fields.into_iter().next());
+    // Names are free-form text here and are escaped again on the way out.
+    let name = |attribute: &str, index: usize| {
+        attribute_fields(gerber, &meta.object_attributes, attribute)
+            .and_then(|fields| fields.into_iter().nth(index))
+            .map(|field| crate::unescape_attribute_field(&field))
+    };
     ObjectAttributes {
         aperture_function: attribute_fields(gerber, &meta.aperture_attributes, ".AperFunction"),
-        net: attribute_fields(gerber, &meta.object_attributes, ".N")
-            .and_then(|fields| fields.into_iter().next()),
-        component,
-        pin: attribute_fields(gerber, &meta.object_attributes, ".P")
-            .and_then(|fields| fields.into_iter().nth(1)),
+        net: name(".N", 0),
+        component: name(".C", 0).or_else(|| name(".P", 0)),
+        pin: name(".P", 1),
     }
 }
 
@@ -827,20 +828,20 @@ fn lower_object_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue>
     if let Some(component) = &attributes.component {
         values.push(AttributeValue::new(
             ".C",
-            [sanitize_attribute_field(component)],
+            [escape_attribute_field(component)],
         ));
     }
     if let (Some(component), Some(pin)) = (&attributes.component, &attributes.pin) {
         values.push(AttributeValue::new(
             ".P",
             [
-                sanitize_attribute_field(component),
-                sanitize_attribute_field(pin),
+                escape_attribute_field(component),
+                escape_attribute_field(pin),
             ],
         ));
     }
     if let Some(net) = &attributes.net {
-        values.push(AttributeValue::new(".N", [sanitize_attribute_field(net)]));
+        values.push(AttributeValue::new(".N", [escape_attribute_field(net)]));
     }
     values
 }
@@ -1064,7 +1065,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitizes_net_names_for_gerber_attribute_fields() {
+    fn escapes_net_names_for_gerber_attribute_fields() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
             net: Some("PWR_RST*,A%B".to_string()),
@@ -1073,7 +1074,21 @@ mod tests {
         });
 
         assert_eq!(attributes[0].name, ".N");
-        assert_eq!(attributes[0].fields, ["PWR_RST__A_B"]);
+        assert_eq!(attributes[0].fields, ["PWR_RST\\u002A\\u002CA\\u0025B"]);
+    }
+
+    #[test]
+    fn normalizing_keeps_escaped_names_escaped_once() {
+        let source = "%FSLAX26Y26*%%MOMM*%%ADD10C,1*%D10*%TO.N,\\u00B5C\\u005CRST*%X0Y0D03*M02*";
+        let normalized = normalize_layer(
+            &crate::GerberX2::parse(source).unwrap(),
+            GeometryAccuracy::default(),
+        )
+        .unwrap();
+        assert!(
+            normalized.contains("%TO.N,\\u00B5C\\u005CRST*%"),
+            "{normalized}"
+        );
     }
 
     #[test]

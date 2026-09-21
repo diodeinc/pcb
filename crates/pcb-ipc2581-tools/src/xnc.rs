@@ -42,7 +42,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Result, bail};
-use gerberx2::sanitize_attribute_field;
+use gerberx2::escape_attribute_field;
 use pcb_ir::geom::Point;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +51,8 @@ pub enum XncUnit {
     Inch,
 }
 
+/// One X2 attribute comment. Construction escapes every field, so whatever
+/// the source names contain, the file stays printable ASCII.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct XncAttribute {
     command: String,
@@ -76,7 +78,7 @@ impl XncAttribute {
             fields: fields
                 .into_iter()
                 .map(Into::into)
-                .map(|field| sanitize_attribute_field(&field))
+                .map(|field| escape_attribute_field(&field))
                 .collect(),
         }
     }
@@ -374,8 +376,6 @@ pub fn write_xnc(doc: &XncDocument) -> Result<String> {
         }
     }
     out.push_str("M30\n");
-
-    validate_ascii(&out)?;
     Ok(out)
 }
 
@@ -412,15 +412,12 @@ fn validate_document(doc: &XncDocument) -> Result<()> {
             bail!("XNC tool T{:02} is declared more than once", tool.number);
         }
         validate_positive("tool diameter", tool.diameter)?;
-        validate_attributes(&tool.attributes)?;
     }
-    validate_attributes(&doc.file_attributes)?;
 
     for object in &doc.objects {
         if !tools.contains(&object.tool()) {
             bail!("XNC object references undefined tool T{:02}", object.tool());
         }
-        validate_attributes(object.attributes())?;
         match object {
             XncObject::Drill { at, .. } => validate_point(*at)?,
             XncObject::Slot { start, end, .. } => {
@@ -459,26 +456,6 @@ fn validate_document(doc: &XncDocument) -> Result<()> {
     Ok(())
 }
 
-fn validate_attributes(attributes: &[XncAttribute]) -> Result<()> {
-    for attribute in attributes {
-        validate_token("XNC attribute command", &attribute.command)?;
-        for field in &attribute.fields {
-            validate_token("XNC attribute field", field)?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_token(label: &str, value: &str) -> Result<()> {
-    if value.is_empty() {
-        bail!("{label} is empty");
-    }
-    if value.contains([',', ';', '\n', '\r']) {
-        bail!("{label} contains an invalid separator");
-    }
-    validate_ascii(value)
-}
-
 fn validate_point(point: Point) -> Result<()> {
     if !point.is_finite() {
         bail!("XNC coordinate is not finite");
@@ -500,17 +477,6 @@ fn validate_positive(label: &str, value: f64) -> Result<()> {
         bail!("XNC {label} must be positive and finite");
     }
     Ok(())
-}
-
-fn validate_ascii(text: &str) -> Result<()> {
-    if text
-        .bytes()
-        .all(|byte| byte == b'\n' || byte == b'\r' || (32..=126).contains(&byte))
-    {
-        Ok(())
-    } else {
-        bail!("XNC output contains non-ASCII characters")
-    }
 }
 
 fn sanitize_attribute_name(name: &str) -> String {
@@ -577,6 +543,27 @@ mod tests {
         let output = write_xnc(&document).unwrap();
         assert!(output.contains("T01C0.3\n"));
         assert!(output.contains("T02C1.0\n"));
+    }
+
+    #[test]
+    fn free_form_names_stay_printable_ascii() {
+        let mut builder = XncBuilder::new(XncUnit::Metric, vec![]);
+        builder
+            .add_drill(
+                0.3,
+                Point::new(1.0, 1.0),
+                vec![],
+                vec![
+                    XncAttribute::object("N", ["\u{b5}C_RST;1"]),
+                    XncAttribute::object("P", ["R\\1", "\u{3a9}"]),
+                ],
+            )
+            .unwrap();
+
+        let output = write_xnc(&builder.finish()).unwrap();
+        assert!(output.is_ascii());
+        assert!(output.contains("; #@! TO.N,\\u00B5C_RST\\u003B1\n"));
+        assert!(output.contains("; #@! TO.P,R\\u005C1,\\u03A9\n"));
     }
 
     #[test]

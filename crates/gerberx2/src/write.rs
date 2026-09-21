@@ -26,26 +26,50 @@ impl AttributeValue {
     }
 }
 
-/// Convert arbitrary metadata into a Gerber X2 attribute field.
+/// Encode free-form metadata as one X2 attribute field, for Gerber and XNC
+/// alike.
 ///
-/// Gerber attributes are comma-separated and commands are terminated by `*`
-/// inside `%...%` extended commands, so those characters cannot appear
-/// literally in a field. The writer keeps validation strict; source dialects
-/// should normalize free-form metadata through this helper when lowering into
-/// Gerber writer IR.
-pub fn sanitize_attribute_field(field: &str) -> String {
-    let sanitized = field
-        .chars()
-        .map(|ch| match ch {
-            '*' | '%' | ',' => '_',
-            _ => ch,
-        })
-        .collect::<String>();
-    if sanitized.is_empty() {
-        "_".to_string()
-    } else {
-        sanitized
+/// A field is printable ASCII. The command delimiters `*` and `%`, the field
+/// separator `,`, the XNC comment mark `;`, the escape character `\` itself,
+/// control characters and everything beyond ASCII are written as `\uXXXX`
+/// UTF-16 escapes, which is what the format specifies and what KiCad writes.
+/// The writers keep validation strict; source dialects pass free-form
+/// metadata through this encoding when lowering into writer IR.
+pub fn escape_attribute_field(field: &str) -> String {
+    if field.is_empty() {
+        return "_".to_string();
     }
+    let mut escaped = String::with_capacity(field.len());
+    for ch in field.chars() {
+        if matches!(ch, ' '..='~') && !matches!(ch, '\\' | '*' | '%' | ',' | ';') {
+            escaped.push(ch);
+        } else {
+            for unit in ch.encode_utf16(&mut [0; 2]) {
+                write!(escaped, "\\u{unit:04X}").unwrap();
+            }
+        }
+    }
+    escaped
+}
+
+/// Decode the `\uXXXX` escapes of an attribute field read from a file.
+pub fn unescape_attribute_field(field: &str) -> String {
+    let mut units = Vec::with_capacity(field.len());
+    let mut rest = field;
+    while let Some(ch) = rest.chars().next() {
+        let escape = rest
+            .strip_prefix("\\u")
+            .and_then(|hex| hex.get(..4))
+            .filter(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        if let Some(hex) = escape {
+            units.push(u16::from_str_radix(hex, 16).expect("four hex digits"));
+            rest = &rest[6..];
+        } else {
+            units.extend_from_slice(ch.encode_utf16(&mut [0; 2]));
+            rest = &rest[ch.len_utf8()..];
+        }
+    }
+    String::from_utf16_lossy(&units)
 }
 
 /// One aperture definition plus X2 aperture attributes active while defining it.
@@ -786,9 +810,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sanitizes_freeform_attribute_fields() {
-        assert_eq!(sanitize_attribute_field("PWR_RST*,A%B"), "PWR_RST__A_B");
-        assert_eq!(sanitize_attribute_field(""), "_");
+    fn escapes_freeform_attribute_fields() {
+        for (field, escaped) in [
+            ("PWR RST-1", "PWR RST-1"),
+            ("PWR_RST*,A%B;", "PWR_RST\\u002A\\u002CA\\u0025B\\u003B"),
+            ("R\\E\\S", "R\\u005CE\\u005CS"),
+            ("\u{b5}C_RST\t", "\\u00B5C_RST\\u0009"),
+            ("\u{1f600}", "\\uD83D\\uDE00"),
+        ] {
+            assert_eq!(escape_attribute_field(field), escaped);
+            assert_eq!(unescape_attribute_field(escaped), field);
+        }
+        assert_eq!(escape_attribute_field(""), "_");
+        // Anything short of a full escape is literal text.
+        assert_eq!(unescape_attribute_field("\\u00B"), "\\u00B");
     }
 
     #[test]
