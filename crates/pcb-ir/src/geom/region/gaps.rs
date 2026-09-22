@@ -123,13 +123,7 @@ impl ContourSet {
     ) -> Result<Self, AccuracyError> {
         let (components, outers) = self.ring_components();
         let segments = source_boundary_segments(self);
-        let boundary = PreparedRegion::from_segments(
-            segments
-                .iter()
-                .map(|segment| (segment.start, segment.end))
-                .collect(),
-            self.uncertainty_mm,
-        );
+        let boundary = boundary_index(&segments, self.uncertainty_mm);
         let sees_left = |wall: &OrientedBoundarySegment, across: Point| {
             let along = wall.end - wall.start;
             let turn = along.x * across.y - along.y * across.x;
@@ -507,6 +501,17 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
         .collect()
 }
 
+/// A spatial index over boundary segments, keeping their ids.
+fn boundary_index(segments: &[OrientedBoundarySegment], uncertainty_mm: f64) -> PreparedRegion {
+    PreparedRegion::from_segments(
+        segments
+            .iter()
+            .map(|segment| (segment.start, segment.end))
+            .collect(),
+        uncertainty_mm,
+    )
+}
+
 /// Canonical arc-length parameterization of a closed polygonal ring.
 /// Consecutive entries are the stations at the ends of each source edge.
 struct RingArcLength<'a> {
@@ -574,13 +579,7 @@ fn two_sided_residual_components(
         return Vec::new();
     }
     let segments = source_boundary_segments(source);
-    let boundary = PreparedRegion::from_segments(
-        segments
-            .iter()
-            .map(|segment| (segment.start, segment.end))
-            .collect(),
-        source.uncertainty_mm,
-    );
+    let boundary = boundary_index(&segments, source.uncertainty_mm);
     let complete_boundary = source.prepare_query();
     let boundary_uncertainty = source.uncertainty_mm + numerical_error(source.bbox);
     // The downstream measurement only keeps axis portions whose radius is at
@@ -590,102 +589,38 @@ fn two_sided_residual_components(
     // Contact constraints are resolved through this index so they match the
     // un-narrowed spatial query exactly (see `in_region_with_contact_index`).
     let contact_index = ContactIndex::for_segments(&complete_boundary.segments);
+    // Candidate axes use the source edges near the component, while
+    // validation sees every (including short) source edge through
+    // `complete_boundary`. A component without an axis has no width.
+    let measure = |component: ContourSet| {
+        let axis = component_axis(
+            &boundary.segment_ids_meeting(component.bbox.expand(reach)),
+            &segments,
+            &boundary,
+            &component.prepare_query(),
+            &complete_boundary,
+            reach,
+            radius_cap,
+            &contact_index,
+        );
+        (!axis.is_empty()).then_some(TwoSidedResidualComponent {
+            region: component,
+            boundary_uncertainty_mm: boundary_uncertainty,
+            axis,
+        })
+    };
     // Components are independent: each measures its own medial axis against
     // shared read-only indexes. Parallel iteration preserves component order,
-    // so reports are identical to the sequential run.
+    // so reports are identical to the sequential run on wasm, which has no
+    // threads.
     #[cfg(not(target_family = "wasm"))]
-    {
-        use rayon::prelude::*;
-        residual
-            .connected_components()
-            .into_par_iter()
-            .filter_map(|component| {
-                measure_component(
-                    component,
-                    &segments,
-                    &boundary,
-                    &complete_boundary,
-                    &contact_index,
-                    boundary_uncertainty,
-                    reach,
-                    radius_cap,
-                )
-            })
-            .collect()
-    }
+    use rayon::prelude::*;
+    let components = residual.connected_components();
+    #[cfg(not(target_family = "wasm"))]
+    let components = components.into_par_iter();
     #[cfg(target_family = "wasm")]
-    {
-        residual
-            .connected_components()
-            .into_iter()
-            .filter_map(|component| {
-                measure_component(
-                    component,
-                    &segments,
-                    &boundary,
-                    &complete_boundary,
-                    &contact_index,
-                    boundary_uncertainty,
-                    reach,
-                    radius_cap,
-                )
-            })
-            .collect()
-    }
-}
-
-/// Measure one residue component's medial axis, or `None` when it has none.
-#[allow(clippy::too_many_arguments)]
-fn measure_component(
-    component: ContourSet,
-    segments: &[OrientedBoundarySegment],
-    boundary: &PreparedRegion,
-    complete_boundary: &PreparedRegion,
-    contact_index: &ContactIndex,
-    boundary_uncertainty: f64,
-    reach: f64,
-    radius_cap: f64,
-) -> Option<TwoSidedResidualComponent> {
-    // Preserve the source-boundary index: candidate axes use the
-    // nearby subset, while validation sees every (including short)
-    // source edge through `complete_boundary`.
-    let axis = component_axis(
-        &boundary.segment_ids_meeting(component.bbox.expand(reach)),
-        segments,
-        boundary,
-        &component.prepare_query(),
-        complete_boundary,
-        reach,
-        radius_cap,
-        contact_index,
-    );
-    (!axis.is_empty()).then_some(TwoSidedResidualComponent {
-        region: component,
-        boundary_uncertainty_mm: boundary_uncertainty,
-        axis,
-    })
-}
-
-/// Validate one wall pair's bisectors. Pure over shared read-only inputs, so
-/// pairs validate in parallel.
-fn validate_pair(
-    first_wall: (Point, Point),
-    second_wall: (Point, Point),
-    component: &PreparedRegion,
-    complete_boundary: &PreparedRegion,
-    radius_cap: f64,
-    contact_index: &ContactIndex,
-) -> Vec<WidthAxis> {
-    let mut validated = Vec::new();
-    for axis in WidthAxis::between(first_wall, second_wall, component.bounds()) {
-        validated.extend(axis.in_region_with_contact_index(
-            component,
-            complete_boundary,
-            radius_cap,
-            contact_index,
-        ));
-    }
-    validated
+    let components = components.into_iter();
+    components.filter_map(measure).collect()
 }
 
 /// Enumerate exact bisectors of every reachable pair of nonincident walls,
@@ -766,14 +701,17 @@ fn component_axis(
     // identical to the sequential loop. Rayon has no threads on wasm, so the
     // wasm target below runs the same closure sequentially.
     let validate = |(first_wall, second_wall): ((Point, Point), (Point, Point))| {
-        validate_pair(
-            first_wall,
-            second_wall,
-            component,
-            complete_boundary,
-            radius_cap,
-            contact_index,
-        )
+        WidthAxis::between(first_wall, second_wall, component.bounds())
+            .into_iter()
+            .flat_map(|axis| {
+                axis.in_region_with_contact_index(
+                    component,
+                    complete_boundary,
+                    radius_cap,
+                    contact_index,
+                )
+            })
+            .collect::<Vec<_>>()
     };
     #[cfg(not(target_family = "wasm"))]
     let validated = {
@@ -792,13 +730,7 @@ fn component_axis(
 /// the rounded bite of one smooth concavity is not mistaken for a gap.
 fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> ContourSet {
     let source_segments = source_boundary_segments(source);
-    let boundary = PreparedRegion::from_segments(
-        source_segments
-            .iter()
-            .map(|segment| (segment.start, segment.end))
-            .collect(),
-        source.uncertainty_mm,
-    );
+    let boundary = boundary_index(&source_segments, source.uncertainty_mm);
     let contact_tolerance = source
         .tolerance()
         .max(residual.tolerance())
@@ -909,13 +841,7 @@ fn narrow_void_medial_axis_keep_out(
     // Walls are numbered as every other judgement of incidence numbers
     // them, so two that meet across a sub-tolerance edge stay adjacent.
     let walls_segments = source_boundary_segments(&walls);
-    let boundary = PreparedRegion::from_segments(
-        walls_segments
-            .iter()
-            .map(|wall| (wall.start, wall.end))
-            .collect(),
-        source.uncertainty_mm,
-    );
+    let boundary = boundary_index(&walls_segments, source.uncertainty_mm);
     // A closing residual is within the disk radius of its nearest source boundary.
     let void_boundary = narrow_voids.prepare_query();
     let mut relevant = narrow_voids
@@ -968,21 +894,17 @@ fn narrow_void_medial_axis_keep_out(
                     .map_err(gap_regularization_error)?,
             )
             .map_err(gap_regularization_error)?;
-        let left_boundary = boundary_segments
-            .get(left.source_index().usize())
-            .ok_or_else(|| {
+        let wall = |source: usize| {
+            boundary_segments.get(source).copied().ok_or_else(|| {
                 GapRegularizationError(
                     "Voronoi cell references an unknown boundary segment".to_string(),
                 )
-            })?;
-        let right_boundary = boundary_segments
-            .get(right.source_index().usize())
-            .ok_or_else(|| {
-                GapRegularizationError(
-                    "Voronoi cell references an unknown boundary segment".to_string(),
-                )
-            })?;
-        if boundary_segments_are_incident(*left_boundary, *right_boundary) {
+            })
+        };
+        if boundary_segments_are_incident(
+            wall(left.source_index().usize())?,
+            wall(right.source_index().usize())?,
+        ) {
             continue;
         }
         let samples = voronoi_edge_samples(
@@ -1190,34 +1112,25 @@ fn clip_infinite_voronoi_edge(
     }
     let coefficient = reach / direction_scale;
     let affine = SimpleAffine::default();
-    let start = edge
-        .vertex0()
-        .map(|vertex| {
-            diagram
-                .vertex(vertex)
-                .map(|vertex| affine.transform(vertex.x(), vertex.y()))
-        })
-        .transpose()
-        .map_err(gap_regularization_error)?
-        .unwrap_or([
-            origin[0] - direction[0] * coefficient,
-            origin[1] - direction[1] * coefficient,
-        ]);
-    let end = diagram
+    // The edge's own vertex where it has one, else the point `reach` along it.
+    let end = |vertex: Option<_>, toward: f64| -> Result<_, GapRegularizationError> {
+        let vertex = vertex
+            .map(|vertex| diagram.vertex(vertex))
+            .transpose()
+            .map_err(gap_regularization_error)?;
+        Ok(vertex.map_or(
+            [
+                origin[0] + toward * direction[0] * coefficient,
+                origin[1] + toward * direction[1] * coefficient,
+            ],
+            |vertex| affine.transform(vertex.x(), vertex.y()),
+        ))
+    };
+    let start = end(edge.vertex0(), -1.0)?;
+    let vertex1 = diagram
         .edge_get_vertex1(edge_id)
-        .map_err(gap_regularization_error)?
-        .map(|vertex| {
-            diagram
-                .vertex(vertex)
-                .map(|vertex| affine.transform(vertex.x(), vertex.y()))
-        })
-        .transpose()
-        .map_err(gap_regularization_error)?
-        .unwrap_or([
-            origin[0] + direction[0] * coefficient,
-            origin[1] + direction[1] * coefficient,
-        ]);
-    Ok(vec![start, end])
+        .map_err(gap_regularization_error)?;
+    Ok(vec![start, end(vertex1, 1.0)?])
 }
 
 fn voronoi_cell_point(
@@ -1261,33 +1174,13 @@ fn regions_within_distance(left: &ContourSet, right: &ContourSet, distance: f64)
         return false;
     }
     let threshold = distance + left.tolerance().max(right.tolerance());
-    for left_ring in &left.rings {
-        for left_index in 0..left_ring.len() {
-            let [left_start_x, left_start_y] = left_ring[left_index];
-            let [left_end_x, left_end_y] = left_ring[(left_index + 1) % left_ring.len()];
-            let left_start = Point::new(left_start_x, left_start_y);
-            let left_end = Point::new(left_end_x, left_end_y);
-            let left_bbox = BBox::spanning(left_start, left_end).expand(threshold);
-            for right_ring in &right.rings {
-                for right_index in 0..right_ring.len() {
-                    let [right_start_x, right_start_y] = right_ring[right_index];
-                    let [right_end_x, right_end_y] =
-                        right_ring[(right_index + 1) % right_ring.len()];
-                    let right_start = Point::new(right_start_x, right_start_y);
-                    let right_end = Point::new(right_end_x, right_end_y);
-                    if !left_bbox.intersects(BBox::spanning(right_start, right_end)) {
-                        continue;
-                    }
-                    let (separation, _, _) =
-                        dist::segments(left_start, left_end, right_start, right_end);
-                    if separation <= threshold {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
+    left.edges().any(|(left_start, left_end)| {
+        let left_bbox = BBox::spanning(left_start, left_end).expand(threshold);
+        right.edges().any(|(right_start, right_end)| {
+            left_bbox.intersects(BBox::spanning(right_start, right_end))
+                && dist::segments(left_start, left_end, right_start, right_end).0 <= threshold
+        })
+    })
 }
 
 #[cfg(test)]
