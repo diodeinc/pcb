@@ -10,9 +10,9 @@
 //! local window of both; the holes and break rows are the builder's, and the
 //! removal is the builder's own routed void of the slot around every neck, so
 //! the panel emits the construction each tab was certified with. The emitted
-//! panel is then checked as a whole: no routed void reaches into any board,
-//! every board is connected to the frame before the break rows are cut, and
-//! every board is free of the frame and of each other after.
+//! panel is then checked as a whole: every board is connected to the frame
+//! before the break rows are cut, and every board is free of the frame and of
+//! each other after.
 
 use anyhow::{Context, Result, bail, ensure};
 use ipc2581::types::Polygon;
@@ -111,10 +111,6 @@ pub(super) fn generate(
         .iter()
         .flat_map(|&offset| voids.iter().map(move |void| placed(void, offset)))
         .collect::<Result<Vec<_>>>()?;
-    let boards = offsets
-        .iter()
-        .map(|&offset| placed(&cell.board, offset))
-        .collect::<Result<Vec<_>>>()?;
     let perforations = ContourSet::union_all(
         strict,
         offsets
@@ -140,15 +136,7 @@ pub(super) fn generate(
                 .map(|&offset| inside.point + offset - inside.outward_normal * WITNESS_DEPTH_MM),
         )
         .collect::<Vec<_>>();
-    check_release(
-        stock,
-        &boards,
-        &cutouts,
-        &perforations,
-        &break_rows,
-        &witnesses,
-        resolution,
-    )?;
+    check_release(stock, &cutouts, &perforations, &break_rows, &witnesses)?;
     Ok(Tabs {
         cutouts,
         holes: offsets
@@ -299,31 +287,17 @@ fn routable_components(region: &ContourSet, resolution: Resolution) -> usize {
         .count()
 }
 
-/// The router may not remove any board's material, every board must connect
-/// to the frame through its tabs, and cutting every break row must free every
-/// board from the frame and from each other.
+/// Every board must connect to the frame through its tabs, and cutting every
+/// break row must free every board from the frame and from each other.
 fn check_release(
     stock: &ContourSet,
-    boards: &[ContourSet],
     cutouts: &[ContourSet],
     perforations: &ContourSet,
     break_rows: &[ContourBuf],
     witnesses: &[Point],
-    significance: Resolution,
 ) -> Result<()> {
-    let resolution = significance.strict();
+    let resolution = stock.resolution.strict();
     let routed = ContourSet::union_all(resolution, cutouts.iter().cloned())?;
-    // Voids share their inner wall with the board they free, so the overlap
-    // is judged at the caller's significance: coincident-edge residue is not
-    // a bite, anything the board's own image would keep is.
-    let bitten =
-        ContourSet::union_all(resolution, boards.iter().cloned())?.intersection(&routed)?;
-    let bitten = ContourSet::from_regularized(bitten.rings, significance, bitten.uncertainty_mm);
-    ensure!(
-        bitten.is_empty(),
-        "routed slots remove {:.3} mm² of board material",
-        bitten.area()
-    );
     let retained = stock.difference(&routed)?.difference(perforations)?;
     let boards = 1..witnesses.len();
     let held = material_after_break(
@@ -385,40 +359,4 @@ pub fn cutout_polygon(cutout: &ContourSet) -> Result<Polygon> {
             .chain(std::iter::once(&ring[0]))
             .map(|p| poly_segment(p[0], p[1])),
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rect(x: f64, y: f64, w: f64, h: f64) -> ContourSet {
-        ContourSet::rectangle(
-            BBox::new(Point::new(x, y), Point::new(x + w, y + h)),
-            Resolution::default().strict(),
-        )
-    }
-
-    #[test]
-    fn release_check_rejects_a_void_that_reaches_into_a_board() {
-        let stock = rect(0.0, 0.0, 100.0, 40.0);
-        let boards = [rect(10.0, 10.0, 30.0, 20.0), rect(40.0, 10.0, 30.0, 20.0)];
-        // The first board's slot, cut 1.4 mm into its abutting neighbour.
-        let slot = rect(40.0, 10.0, 1.4, 20.0);
-        let error = check_release(
-            &stock,
-            &boards,
-            &[slot],
-            &ContourSet::empty(Resolution::default()),
-            &[],
-            &[Point::new(50.0, 1.0)],
-            Resolution::default(),
-        )
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("routed slots remove 28.000 mm² of board material"),
-            "{error}"
-        );
-    }
 }

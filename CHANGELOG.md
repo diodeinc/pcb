@@ -14,7 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Fix IPC-2581 import of negative planes, inline pads, donuts, thermals, imprecise arcs and MD5 trailers.
 - Fix donut, scaled and slot-cut fiducials, and square holes drilled round.
 - Fix DFM false positives on stacked vias and array tooling holes.
-- Fix mouse-bite tabs cutting into neighbouring boards or rail tooling, and rail fiducials on V-score lines.
+- Reject mouse-bite board margins too small for the routed slot, and keep rail fiducials off V-score lines.
 - Fix `pcb ipc warp` overstating bow about 20×.
 - Fix Gerber macro rotation, non-round line ends and attribute escaping.
 
