@@ -230,16 +230,6 @@ fn exact_coordinate(value: f64) -> u64 {
 }
 
 impl ImportedDesign {
-    /// Derive source lands before routing and clears; IDs match hole links.
-    pub fn source_lands(
-        &self,
-        scope: ArtworkScope,
-        resolution: Resolution,
-    ) -> Result<Vec<PhysicalLand>> {
-        let components = self.component_index(scope)?;
-        self.derive_physical_lands(scope, &components, true, &|_| true, resolution)
-    }
-
     /// Derive surviving final copper lands without materializing unrelated physical
     /// layers.
     pub fn physical_lands(
@@ -251,29 +241,10 @@ impl ImportedDesign {
         self.derive_physical_lands(scope, &components, false, &|_| true, resolution)
     }
 
-    /// Derive electrical contacts from surviving lands using exact IPC identities.
-    pub fn physical_terminations(
-        &self,
-        scope: ArtworkScope,
-        resolution: Resolution,
-    ) -> Result<Vec<PhysicalTermination>> {
-        let lands = self.physical_lands(scope, resolution)?;
-        Ok(self.derive_physical_terminations(&lands))
-    }
-
-    /// Derive drilled openings and their source-land relationships without
-    /// composing final copper or materializing assembly, paste, or mask layers.
-    pub fn physical_holes(
-        &self,
-        scope: ArtworkScope,
-        resolution: Resolution,
-    ) -> Result<Vec<PhysicalHole>> {
-        let lands = self.source_lands(scope, resolution)?;
-        self.derive_physical_holes(scope, &lands, &|_| true, resolution)
-    }
-
-    /// The drilled openings that one Step occurrence of `scope` holds itself,
-    /// each exactly as [`Self::physical_holes`] derives it. Only a land of an
+    /// The drilled openings that one Step occurrence of `scope` holds itself
+    /// and their source-land relationships, without the assembly evidence of
+    /// [`Self::physical_view`]: no final copper is composed and no assembly,
+    /// paste, or mask layer is materialized. Only a land of an
     /// opening's own board can claim it, so only the occurrences sharing the
     /// board of `occurrence` are imaged: a panel of one board derives that
     /// board's openings from one placement of it, not from all of them.
@@ -374,7 +345,7 @@ impl ImportedDesign {
                     .map(|occurrence| (occurrence, None))
                     .collect::<Vec<_>>()
             } else {
-                self.attributed_land_images(layer_id, scope, resolution)?
+                self.attributed_feature_images(layer_id, scope, is_land, resolution)?
                     .into_iter()
                     .map(|(occurrence, image)| (occurrence, Some(image)))
                     .collect()
@@ -384,11 +355,7 @@ impl ImportedDesign {
                 let feature = self
                     .feature_definition(source.feature)
                     .context("physical land references a missing feature definition")?;
-                if feature.kind != FeatureKind::Padstack
-                    || feature.polarity != Polarity::Dark
-                    || feature.intent.domain != FeatureDomain::Copper
-                    || !include(&occurrence)
-                {
+                if !is_land(feature) || !include(&occurrence) {
                     continue;
                 }
                 let evidence = self.feature_evidence(source);
@@ -441,13 +408,12 @@ impl ImportedDesign {
             let definition = self
                 .component_definition(component.component)
                 .expect("physical land component references its imported definition");
-            let side = self
-                .layer_definitions
-                .iter()
-                .find(|layer| layer.name == definition.source.layer_ref)
-                .and_then(|layer| layer.side)
-                .map(|side| side_for_layer(Some(side)))
-                .unwrap_or(Side::None);
+            let side = side_for_layer(
+                self.layer_definitions
+                    .iter()
+                    .find(|layer| layer.name == definition.source.layer_ref)
+                    .and_then(|layer| layer.side),
+            );
             terminations.push(PhysicalTermination {
                 id: PhysicalTerminationId(0),
                 component,
@@ -536,7 +502,7 @@ impl ImportedDesign {
             let layer_id = LayerId(layer_index as u32);
             let side = side_for_layer(layer.side);
             for (occurrence, image) in
-                self.attributed_feature_images(layer_id, scope, resolution)?
+                self.attributed_feature_images(layer_id, scope, |_| true, resolution)?
             {
                 let source = occurrence.id;
                 let feature = self
@@ -618,7 +584,7 @@ impl ImportedDesign {
             let layer_id = LayerId(layer_index as u32);
             let side = side_for_layer(layer.side);
             for (occurrence, image) in
-                self.attributed_feature_images(layer_id, scope, resolution)?
+                self.attributed_feature_images(layer_id, scope, |_| true, resolution)?
             {
                 let source = occurrence.id;
                 let evidence = self.feature_evidence(source);
@@ -774,10 +740,14 @@ impl ImportedDesign {
         stackup: Option<&[Symbol]>,
     ) -> Result<(Association<PhysicalTerminationId>, Option<AssociationBasis>)> {
         if !evidence.component_refs.is_empty() || evidence.pin.is_some() {
-            return Ok((
-                association_from_candidates(terminations.claimed(hole.id.0.layout, evidence), true),
-                Some(AssociationBasis::SourceIdentity),
-            ));
+            let claimed = terminations.claimed(hole.id.0.layout, evidence);
+            let association = match claimed.as_slice() {
+                [termination] => Association::Resolved(*termination),
+                // Naming no termination that exists contradicts the source.
+                [] => Association::Conflicting(Vec::new()),
+                _ => Association::Ambiguous(claimed),
+            };
+            return Ok((association, Some(AssociationBasis::SourceIdentity)));
         }
 
         let mut candidates = Vec::new();
@@ -834,7 +804,7 @@ impl ImportedDesign {
             }
             let layer_id = LayerId(layer_index as u32);
             for (occurrence, image) in
-                self.attributed_feature_images(layer_id, scope, resolution)?
+                self.attributed_feature_images(layer_id, scope, |_| true, resolution)?
             {
                 let feature = self
                     .feature_definition(occurrence.id.feature)
@@ -891,34 +861,9 @@ impl ImportedDesign {
         spec_refs
     }
 
+    /// The final image of every feature occurrence on `layer` that `include`
+    /// names, after the whole layer's clears.
     fn attributed_feature_images(
-        &self,
-        layer: LayerId,
-        scope: ArtworkScope,
-        resolution: Resolution,
-    ) -> Result<Vec<(FeatureOccurrence, ContourSet)>> {
-        self.attributed_feature_images_where(layer, scope, |_| true, resolution)
-    }
-
-    fn attributed_land_images(
-        &self,
-        layer: LayerId,
-        scope: ArtworkScope,
-        resolution: Resolution,
-    ) -> Result<Vec<(FeatureOccurrence, ContourSet)>> {
-        self.attributed_feature_images_where(
-            layer,
-            scope,
-            |feature| {
-                feature.kind == FeatureKind::Padstack
-                    && feature.polarity == Polarity::Dark
-                    && feature.intent.domain == FeatureDomain::Copper
-            },
-            resolution,
-        )
-    }
-
-    fn attributed_feature_images_where(
         &self,
         layer: LayerId,
         scope: ArtworkScope,
@@ -1019,17 +964,11 @@ impl ImportedDesign {
     }
 }
 
-fn association_from_candidates<T: Copy + Ord>(
-    candidates: BTreeSet<T>,
-    source_claimed: bool,
-) -> Association<T> {
-    let candidates = candidates.into_iter().collect::<Vec<_>>();
-    match candidates.as_slice() {
-        [candidate] => Association::Resolved(*candidate),
-        [_, _, ..] => Association::Ambiguous(candidates),
-        [] if source_claimed => Association::Conflicting(Vec::new()),
-        [] => Association::Unresolved,
-    }
+/// A dark copper padstack: what a land is before anything clears it.
+fn is_land(feature: &Feature) -> bool {
+    feature.kind == FeatureKind::Padstack
+        && feature.polarity == Polarity::Dark
+        && feature.intent.domain == FeatureDomain::Copper
 }
 
 /// Component occurrences by `(layout occurrence, designator)`.
@@ -1242,12 +1181,13 @@ impl<'a> TerminationIndex<'a> {
         }
     }
 
-    /// Terminations of `layout` agreeing with every identity in `evidence`.
+    /// Terminations of `layout` agreeing with every identity in `evidence`,
+    /// in id order.
     fn claimed(
         &self,
         layout: LayoutOccurrenceId,
         evidence: &FeatureEvidence,
-    ) -> BTreeSet<PhysicalTerminationId> {
+    ) -> Vec<PhysicalTerminationId> {
         let named = evidence
             .component_refs
             .iter()
@@ -1263,6 +1203,8 @@ impl<'a> TerminationIndex<'a> {
             .map(|&index| &self.terminations[index as usize])
             .filter(|termination| evidence.pin.is_none() || evidence.pin == Some(termination.pin))
             .map(|termination| termination.id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect()
     }
 
@@ -1497,7 +1439,9 @@ mod tests {
             .unwrap_err();
         let mask_error = imported.mask_openings(scope, &lands, fine).unwrap_err();
         let terminations = imported.derive_physical_terminations(&lands);
-        let mut holes = imported.physical_holes(scope, fine).unwrap();
+        let mut holes = imported
+            .physical_holes_of(scope, LayoutOccurrenceId::Root, fine)
+            .unwrap();
         holes[0].span = FeatureSpan::ThroughBoard;
         let assembly_error = imported
             .attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes, fine)
@@ -1528,7 +1472,11 @@ mod tests {
         );
         assert_eq!(
             imported
-                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .physical_holes_of(
+                    ArtworkScope::Board,
+                    LayoutOccurrenceId::Root,
+                    Resolution::default()
+                )
                 .unwrap()
                 .len(),
             1
@@ -1553,7 +1501,11 @@ mod tests {
         make_paste_artwork_invalid(&mut imported);
 
         let holes = imported
-            .physical_holes(ArtworkScope::Board, Resolution::default())
+            .physical_holes_of(
+                ArtworkScope::Board,
+                LayoutOccurrenceId::Root,
+                Resolution::default(),
+            )
             .unwrap();
         assert_eq!(holes.len(), 1);
         assert_eq!(holes[0].termination, Association::Unresolved);
@@ -1577,7 +1529,11 @@ mod tests {
         let ipc = Ipc2581::parse(&xml).unwrap();
         let imported = import_design(&ipc, Resolution::default()).unwrap();
         let holes = imported
-            .physical_holes(ArtworkScope::Board, Resolution::default())
+            .physical_holes_of(
+                ArtworkScope::Board,
+                LayoutOccurrenceId::Root,
+                Resolution::default(),
+            )
             .unwrap();
 
         assert_eq!(holes.len(), 1);
@@ -1613,7 +1569,11 @@ mod tests {
             let imported =
                 import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             let holes = imported
-                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .physical_holes_of(
+                    ArtworkScope::Board,
+                    LayoutOccurrenceId::Root,
+                    Resolution::default(),
+                )
                 .unwrap();
             assert_eq!(holes.len(), 1);
             let hole = &holes[0];
@@ -1792,7 +1752,11 @@ mod tests {
             let imported =
                 import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             let holes = imported
-                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .physical_holes_of(
+                    ArtworkScope::Board,
+                    LayoutOccurrenceId::Root,
+                    Resolution::default(),
+                )
                 .unwrap();
             assert_eq!(holes.len(), 1);
             let inner = imported.layer_id("L1").unwrap();
@@ -1826,7 +1790,11 @@ mod tests {
             let imported =
                 import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             let holes = imported
-                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .physical_holes_of(
+                    ArtworkScope::Board,
+                    LayoutOccurrenceId::Root,
+                    Resolution::default(),
+                )
                 .unwrap();
             for name in ["L0", "L1", "L2"] {
                 let layer = imported.layer_id(name).unwrap();
@@ -1893,7 +1861,11 @@ mod tests {
                 imported.geometry.diagnostics
             );
             let error = imported
-                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .physical_holes_of(
+                    ArtworkScope::Board,
+                    LayoutOccurrenceId::Root,
+                    Resolution::default(),
+                )
                 .unwrap_err();
             assert!(error.to_string().contains(message), "{error}");
         }
@@ -1975,7 +1947,11 @@ mod tests {
             let imported =
                 import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             let holes = imported
-                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .physical_holes_of(
+                    ArtworkScope::Board,
+                    LayoutOccurrenceId::Root,
+                    Resolution::default(),
+                )
                 .unwrap();
             assert_eq!(holes[0].lands.len(), 3);
             let inner = imported.layer_id("L1").unwrap();
