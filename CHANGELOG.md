@@ -10,22 +10,23 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- Stop painting slots and routed cutouts back as copper in exported Gerber copper layers.
-- Fix IPC-2581 import of negative planes, inline pad shapes, donuts and thermals, imprecise arcs, and files with an MD5 trailer.
-- Fix donut, scaled and slot-cut fiducials, and stop drilling square holes round.
-- Fix DFM false positives on stacked vias and array tooling holes, and failures on one bad feature or a large panel report.
-- Fix mouse-bite arrays cutting into neighbouring boards or rail tooling, and rail fiducials landing on V-score lines.
-- Correct `pcb ipc warp` bow, overstated about 20×, and support single boards.
+- Stop exporting slots and routed cutouts as copper in Gerber copper layers.
+- Fix IPC-2581 import of negative planes, inline pads, donuts, thermals, imprecise arcs and MD5 trailers.
+- Fix donut, scaled and slot-cut fiducials, and square holes drilled round.
+- Fix DFM false positives on stacked vias and array tooling holes.
+- Fix mouse-bite tabs cutting into neighbouring boards or rail tooling, and rail fiducials on V-score lines.
+- Fix `pcb ipc warp` overstating bow about 20×.
 - Fix Gerber macro rotation, non-round line ends and attribute escaping.
 
 ### Changed
 
-- Check each board of an array once in DFM: panels run in seconds, reports use schema v2 with a `frames` table, finding ids survive coordinate noise, and required rules that cannot be evaluated fail the verdict.
-- Speed up Gerber export and compare, DFM, renders, HTML reports, copper balancing and array generation; parse IPC-2581 with a third of the memory.
-- Draw each board of an array once in `pcb ipc render` and the web viewer, shrinking panel SVGs over 100×.
-- Model warp at measured copper as a free plate and stop reporting twist.
-- Grade copper-balance fill more evenly and keep each layer's copper area through void sizing.
-- Report malformed IPC-2581 attribute values as errors instead of defaulting them.
+- DFM checks each board of an array once; reports use schema v2 with a `frames` table.
+- Fail the DFM verdict when a required rule cannot be evaluated.
+- Speed up Gerber export, DFM, rendering, copper balancing and array generation.
+- Shrink board-array SVGs over 100×.
+- Grade copper-balance fill more evenly.
+- `pcb ipc warp` supports single boards and no longer reports twist.
+- Report malformed IPC-2581 attribute values as errors.
 
 ## [0.4.57] - 2026-09-21
 
