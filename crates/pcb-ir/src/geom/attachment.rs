@@ -497,15 +497,12 @@ impl PolygonTopology {
     /// Whether two supplied material witnesses remain connected. Missing or
     /// boundary-band witnesses are unresolved, not successful separation.
     pub fn connected(&self, first: usize, second: usize) -> Result<Option<bool>, QueryError> {
-        let a = self
-            .witnesses
-            .get(first)
-            .ok_or(QueryError::InvalidInput("unknown material witness"))?;
-        let b = self
-            .witnesses
-            .get(second)
-            .ok_or(QueryError::InvalidInput("unknown material witness"))?;
-        Ok(match (a, b) {
+        let witness = |index: usize| {
+            self.witnesses
+                .get(index)
+                .ok_or(QueryError::InvalidInput("unknown material witness"))
+        };
+        Ok(match (witness(first)?, witness(second)?) {
             (RegionMembership::Component(a), RegionMembership::Component(b)) => Some(a == b),
             _ => None,
         })
