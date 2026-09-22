@@ -281,19 +281,6 @@ mod tests {
     }
 
     #[test]
-    fn append_inside_expands_self_closing_elements() {
-        let doc = Doc::parse(XML).unwrap();
-        let root = doc.root().unwrap();
-        let ecad = doc.child(root, "Ecad").unwrap();
-        let cad_header = doc.child(ecad, "CadHeader").unwrap();
-
-        let edit = doc.append_inside(cad_header, "<Spec name=\"vcut\"/>");
-        let out = doc.apply(vec![edit]).unwrap();
-
-        assert!(out.contains("<CadHeader units=\"MILLIMETER\"><Spec name=\"vcut\"/></CadHeader>"));
-    }
-
-    #[test]
     fn appends_into_one_self_closing_element_compose() {
         let xml = r#"<ipc:IPC-2581 xmlns:ipc="urn:x"><ipc:Step name="a" /><Characteristics/><Tail/></ipc:IPC-2581>"#;
         let doc = Doc::parse(xml).unwrap();

@@ -1,5 +1,3 @@
-mod test_helpers;
-
 mod feature_set;
 mod padstack;
 mod schema_enums;

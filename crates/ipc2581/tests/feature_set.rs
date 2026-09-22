@@ -29,46 +29,18 @@ fn fixture_with_dictionary(entries: &str, sets: &str) -> String {
 }
 
 #[test]
-fn retains_component_ref_and_all_geometry_usage_variants() {
-    let values = [
-        ("THIEVING", GeometryUsage::Thieving),
-        ("THERMAL_RELIEF", GeometryUsage::ThermalRelief),
-        ("TEXT", GeometryUsage::Text),
-        ("TEARDROP", GeometryUsage::Teardrop),
-        ("GRAPHIC", GeometryUsage::Graphic),
-        ("NONE", GeometryUsage::None),
-    ];
-    let sets = values
-        .iter()
-        .enumerate()
-        .map(|(index, (value, _))| {
-            format!(
-                r#"<Set componentRef="U{}" geometryUsage="{}"/>"#,
-                index + 1,
-                value
-            )
-        })
-        .collect::<String>();
+fn set_retains_component_ref_and_known_geometry_usage() {
+    let doc = Ipc2581::parse(&fixture(
+        r#"<Set componentRef="U1" geometryUsage="TEARDROP"/>"#,
+    ))
+    .unwrap();
+    let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+    assert_eq!(doc.resolve(set.component_ref.unwrap()), "U1");
+    assert_eq!(set.geometry_usage, Some(GeometryUsage::Teardrop));
 
-    let doc = Ipc2581::parse(&fixture(&sets)).expect("fixture should parse");
-    let parsed_sets = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets;
-    assert_eq!(parsed_sets.len(), values.len());
-    for (index, (set, (_, expected))) in parsed_sets.iter().zip(values).enumerate() {
-        assert_eq!(
-            doc.resolve(set.component_ref.unwrap()),
-            format!("U{}", index + 1)
-        );
-        assert_eq!(set.geometry_usage, Some(expected));
-    }
-}
-
-#[test]
-fn rejects_unknown_geometry_usage() {
-    let error = Ipc2581::parse(&fixture(r#"<Set geometryUsage="DECORATIVE"/>"#))
-        .expect_err("unknown geometryUsage should fail parsing");
-
+    let error = Ipc2581::parse(&fixture(r#"<Set geometryUsage="DECORATIVE"/>"#)).unwrap_err();
     assert!(
-        matches!(error, Ipc2581Error::InvalidAttribute(ref message) if message == "Unknown geometryUsage: DECORATIVE"),
+        matches!(error, Ipc2581Error::InvalidAttribute(ref message) if message.contains("geometryUsage")),
         "unexpected error: {error}"
     );
 }

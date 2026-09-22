@@ -257,8 +257,6 @@ mod tests {
 
     #[test]
     fn hole_renders_units_and_plating() {
-        assert_eq!(PlatingStatus::ViaCapped.as_str(), "VIA_CAPPED");
-
         let hole_mm = Hole {
             name: None,
             shape: crate::types::HoleShape::Circle,

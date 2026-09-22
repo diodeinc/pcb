@@ -3140,25 +3140,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_slot_cavity_z_axis_substitution_children() {
-        let doc = Dom::parse(
+    fn detects_bare_and_wrapped_slot_cavity_z_axis_dimensions() {
+        for xml in [
             r#"<SlotCavity><Location x="0" y="0"/><MaterialCut depth="0.1"/></SlotCavity>"#,
-            crate::dom::Keep::Tree,
-        )
-        .unwrap();
-
-        assert!(has_z_axis_dim(&doc, &doc.root()));
-    }
-
-    #[test]
-    fn detects_wrapped_slot_cavity_z_axis_dimensions() {
-        let doc = Dom::parse(
             r#"<SlotCavity><Location x="0" y="0"/><ZAxisDim><MaterialLeft thickness="0.1"/></ZAxisDim></SlotCavity>"#,
-            crate::dom::Keep::Tree,
-        )
-        .unwrap();
-
-        assert!(has_z_axis_dim(&doc, &doc.root()));
+        ] {
+            let doc = Dom::parse(xml, crate::dom::Keep::Tree).unwrap();
+            assert!(has_z_axis_dim(&doc, &doc.root()), "{xml}");
+        }
     }
 
     #[test]

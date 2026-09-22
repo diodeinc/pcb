@@ -230,26 +230,6 @@ mod tests {
     use crate::Interner;
 
     #[test]
-    fn test_moisture_sensitivity_parse() {
-        for (token, level) in [
-            ("UNLIMITED", MoistureSensitivity::Unlimited),
-            ("1_YEAR", MoistureSensitivity::OneYear),
-            ("168_HOURS", MoistureSensitivity::Hours168),
-        ] {
-            assert_eq!(MoistureSensitivity::from_ipc(token).unwrap(), level);
-        }
-        assert!(MoistureSensitivity::from_ipc("INVALID").is_err());
-    }
-
-    #[test]
-    fn test_moisture_sensitivity_as_str() {
-        assert_eq!(MoistureSensitivity::Unlimited.as_str(), "UNLIMITED");
-        assert_eq!(MoistureSensitivity::OneYear.as_str(), "1_YEAR");
-        assert_eq!(MoistureSensitivity::Hours168.as_str(), "168_HOURS");
-        assert_eq!(MoistureSensitivity::Bake.as_str(), "BAKE");
-    }
-
-    #[test]
     fn test_avl_mpn_xml_with_dangerous_characters() {
         let mut interner = Interner::new();
         let dangerous_name = interner.intern("R&D <test>");

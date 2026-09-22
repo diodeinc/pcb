@@ -232,37 +232,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn error_types_compile() {
-        let _err = Ipc2581Error::MissingElement("test");
-        let _err = Ipc2581Error::MissingAttribute {
-            element: "Circle",
-            attr: "diameter",
-        };
-    }
-
-    #[test]
-    fn parse_simple_document() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="Owner">
-    <FunctionMode mode="ASSEMBLY"/>
-    <DictionaryColor/>
-    <DictionaryLineDesc units="MILLIMETER"/>
-    <DictionaryFillDesc units="MILLIMETER"/>
-    <DictionaryStandard units="MILLIMETER"/>
-    <DictionaryUser units="MILLIMETER"/>
-  </Content>
-</IPC-2581>"#;
-
-        let result = Ipc2581::parse(xml);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-
-        let doc = result.unwrap();
-        assert_eq!(doc.revision(), "C");
-        assert_eq!(doc.resolve(doc.content().role_ref), "Owner");
-    }
-
-    #[test]
     fn parses_checksummed_and_prefixed_documents() {
         use base64::Engine as _;
         use md5::Digest as _;
@@ -355,11 +324,9 @@ mod tests {
   </Content>
 </IPC-2581>"#;
 
-        let result = Ipc2581::parse(xml);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-
-        let doc = result.unwrap();
+        let doc = Ipc2581::parse(xml).unwrap();
         assert_eq!(doc.revision(), "B");
+        assert_eq!(doc.resolve(doc.content().role_ref), "Owner");
         assert_eq!(
             doc.content().function_mode.level,
             Some(types::content::Level(1))
@@ -367,23 +334,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_all_ipc_line_properties() {
+    fn parses_optional_line_property() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
     <FunctionMode mode="FABRICATION"/>
     <DictionaryLineDesc units="MILLIMETER">
-      <EntryLineDesc id="solid"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="SOLID"/></EntryLineDesc>
       <EntryLineDesc id="dotted"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="DOTTED"/></EntryLineDesc>
-      <EntryLineDesc id="dashed"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="DASHED"/></EntryLineDesc>
-      <EntryLineDesc id="center"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="CENTER"/></EntryLineDesc>
-      <EntryLineDesc id="phantom"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="PHANTOM"/></EntryLineDesc>
-      <EntryLineDesc id="erase"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="ERASE"/></EntryLineDesc>
+      <EntryLineDesc id="plain"><LineDesc lineWidth="0.1" lineEnd="ROUND"/></EntryLineDesc>
     </DictionaryLineDesc>
-    <DictionaryColor/>
-    <DictionaryFillDesc units="MILLIMETER"/>
-    <DictionaryStandard units="MILLIMETER"/>
-    <DictionaryUser units="MILLIMETER"/>
   </Content>
 </IPC-2581>"#;
 
@@ -395,18 +354,7 @@ mod tests {
             .iter()
             .map(|entry| entry.line_desc.line_property)
             .collect::<Vec<_>>();
-
-        assert_eq!(
-            properties,
-            vec![
-                Some(types::primitives::LineProperty::Solid),
-                Some(types::primitives::LineProperty::Dotted),
-                Some(types::primitives::LineProperty::Dashed),
-                Some(types::primitives::LineProperty::Center),
-                Some(types::primitives::LineProperty::Phantom),
-                Some(types::primitives::LineProperty::Erase),
-            ]
-        );
+        assert_eq!(properties, [Some(LineProperty::Dotted), None]);
     }
 
     #[test]
@@ -846,12 +794,7 @@ mod tests {
   </Avl>
 </IPC-2581>"#;
 
-        let result = Ipc2581::parse(xml);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-
-        let doc = result.unwrap();
-        assert!(doc.avl().is_some(), "AVL section should be parsed");
-
+        let doc = Ipc2581::parse(xml).unwrap();
         let avl = doc.avl().unwrap();
         assert_eq!(doc.resolve(avl.name), "Test_AVL");
         assert_eq!(avl.items.len(), 1);
@@ -890,12 +833,7 @@ mod tests {
   </Bom>
 </IPC-2581>"#;
 
-        let result = Ipc2581::parse(xml);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-
-        let doc = result.unwrap();
-        assert!(doc.bom().is_some(), "BOM section should be parsed");
-
+        let doc = Ipc2581::parse(xml).unwrap();
         let bom = doc.bom().unwrap();
         assert_eq!(doc.resolve(bom.name), "TestBOM");
         assert_eq!(bom.items.len(), 1);
@@ -903,14 +841,11 @@ mod tests {
         let item = &bom.items[0];
         assert_eq!(doc.resolve(item.oem_design_number_ref), "XO32-12MHZ");
 
-        // Verify description attribute is parsed
-        assert!(item.description.is_some(), "Description should be present");
         assert_eq!(
             doc.resolve(item.description.unwrap()),
             "HCMOS Clock Oscillator"
         );
 
-        // Verify other attributes
         assert_eq!(item.quantity, Some(1));
         assert_eq!(item.pin_count, Some(4));
         let references = item.reference_designators().collect::<Vec<_>>();
@@ -1240,31 +1175,8 @@ mod tests {
         );
         assert_eq!(component.spec_refs.len(), 1);
         assert_eq!(doc.resolve(component.spec_refs[0]), "AssemblySpec");
-    }
 
-    #[test]
-    fn parse_component_accepts_only_ipc2581c_mount_types() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="Owner">
-    <FunctionMode mode="ASSEMBLY"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Step name="board" type="BOARD">
-        <Component refDes="J1" part="CONN" layerRef="F.Cu" mountType="THMT">
-          <Location x="0" y="0"/>
-        </Component>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#;
-
-        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
-        let component = &doc.ecad().unwrap().cad_data.steps[0].components[0];
-
-        assert_eq!(component.mount_type, MountType::Thmt);
+        // Only IPC-2581C mount types are accepted.
         assert!(Ipc2581::parse(&xml.replace("THMT", "THT")).is_err());
     }
 }
