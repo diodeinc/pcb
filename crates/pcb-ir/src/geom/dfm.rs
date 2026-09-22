@@ -681,8 +681,6 @@ pub struct ThinPiece {
     /// Minimum separation of the two opposing source-boundary branches,
     /// carrying the uncertainty of both prepared boundaries.
     pub width: Distance,
-    /// Approximate longitudinal extent (half the residue perimeter).
-    pub length_mm: f64,
     /// Guarded morphology residue; context, not an exact failure footprint.
     pub candidate: ContourSet,
     /// The actual maximal disk that produced `width`, not a disk inferred
@@ -768,10 +766,6 @@ pub fn thin_gaps_reach_mm(min_gap_mm: f64, resolution: Resolution) -> f64 {
 /// any two facing boundary branches. An opening wide enough to erase the
 /// whole region makes every piece of it a candidate. `None` when no two
 /// branches face each other (an empty region, or a single point).
-pub fn min_width(region: &ContourSet) -> Result<Option<Distance>, AccuracyError> {
-    Ok(min_width_disk(region)?.map(|disk| disk.width))
-}
-
 pub fn min_width_disk(region: &ContourSet) -> Result<Option<WidthDisk>, AccuracyError> {
     let erase_all = 2.0 * region.bbox.width().max(region.bbox.height());
     Ok(thin_features(region, erase_all)?
@@ -872,7 +866,6 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                 bbox: component.region.bbox,
                 area_mm2: component.region.area(),
                 width: disk.width,
-                length_mm: region_perimeter(&component.region) / 2.0,
                 disk,
                 sites,
                 candidate: component.region,
@@ -881,15 +874,6 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
         .collect::<Vec<_>>();
     pieces.sort_by(|a, b| b.area_mm2.total_cmp(&a.area_mm2));
     pieces
-}
-
-fn region_perimeter(region: &ContourSet) -> f64 {
-    region
-        .rings
-        .iter()
-        .flat_map(ring_edges)
-        .map(|(start, end)| start.distance_to(end))
-        .sum()
 }
 
 #[cfg(test)]
@@ -1038,10 +1022,8 @@ mod tests {
         assert_eq!(sites[0].distance.mm, 0.0);
         assert!((sites[0].overlap.area() - 1.0).abs() < 1e-9);
         assert!((sites[0].bbox.width() - 1.0).abs() < 1e-9);
-    }
 
-    #[test]
-    fn region_sites_merge_boundary_spans_with_their_shared_overlap() {
+        // Boundary spans near a partial overlap merge into its one site.
         let first = rect_region(0.0, 0.0, 2.0, 2.0);
         let second = rect_region(1.0, 0.5, 3.0, 1.5);
         let sites = region_clearance_sites(&first, &second, 0.2).unwrap();
@@ -1051,33 +1033,13 @@ mod tests {
     }
 
     #[test]
-    fn clearance_reports_distance_and_witness_points() {
-        let left = rect_region(0.0, 0.0, 2.0, 2.0);
-        let right = rect_region(3.5, 0.5, 5.0, 1.5);
-
-        let between_regions = region_clearance(&left, &right).unwrap();
-        assert!((between_regions.mm - 1.5).abs() < 1e-9);
-        assert!((between_regions.first.x - 2.0).abs() < 1e-9);
-        assert!((between_regions.second.x - 3.5).abs() < 1e-9);
-
-        let index = left.prepare_query();
-        let from_segment = index
-            .segment_nearest_within(Point::new(-1.0, 3.0), Point::new(3.0, 3.0), 1.5)
-            .unwrap();
-        assert!((from_segment.mm - 1.0).abs() < 1e-9);
-
-        let crossing = index
-            .segment_nearest_within(Point::new(-1.0, 1.0), Point::new(3.0, 1.0), 0.5)
-            .unwrap();
-        assert_eq!(crossing.mm, 0.0);
-    }
-
-    #[test]
     fn region_clearance_handles_diagonal_separation_crossing_and_containment() {
         let origin = rect_region(0.0, 0.0, 1.0, 1.0);
         let diagonal = rect_region(2.0, 3.0, 3.0, 4.0);
         let clearance = region_clearance(&origin, &diagonal).unwrap();
         assert!((clearance.mm - 5.0_f64.sqrt()).abs() < 1e-9);
+        assert!(clearance.first.distance_to(Point::new(1.0, 1.0)) < 1e-9);
+        assert!(clearance.second.distance_to(Point::new(2.0, 3.0)) < 1e-9);
         assert!((origin.bbox.distance_to(diagonal.bbox) - 5.0_f64.sqrt()).abs() < 1e-9);
 
         let horizontal = rect_region(-2.0, -0.25, 2.0, 0.25);
@@ -1336,7 +1298,6 @@ mod tests {
             "width {}",
             piece.width.mm
         );
-        assert!(piece.length_mm > 1.5, "length {}", piece.length_mm);
         assert!((piece.disk.radius_mm * 2.0 - piece.width.mm).abs() < 1e-12);
         let points = piece
             .sites
@@ -1528,9 +1489,11 @@ mod tests {
             res(tol::REGION_MM),
         )
         .unwrap();
-        let width = min_width(&stadium)
-            .unwrap()
-            .expect("a stadium has facing walls");
+        let min_width = |region: &ContourSet| {
+            let disk = min_width_disk(region).unwrap();
+            disk.map(|disk| disk.width)
+        };
+        let width = min_width(&stadium).expect("a stadium has facing walls");
         assert!(
             (0.0..=width.uncertainty_mm).contains(&(0.6 - width.mm)),
             "width {}",
@@ -1538,12 +1501,8 @@ mod tests {
         );
 
         let plate = rect_region(0.0, 0.0, 10.0, 3.0);
-        assert!((min_width(&plate).unwrap().unwrap().mm - 3.0).abs() < 1e-9);
-        assert!(
-            min_width(&ContourSet::empty(res(tol::REGION_MM)))
-                .unwrap()
-                .is_none()
-        );
+        assert!((min_width(&plate).unwrap().mm - 3.0).abs() < 1e-9);
+        assert!(min_width(&ContourSet::empty(res(tol::REGION_MM))).is_none());
     }
 
     #[test]
