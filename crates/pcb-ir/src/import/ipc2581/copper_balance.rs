@@ -60,8 +60,7 @@ pub(super) struct CopperBalanceMetadata {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct CopperBalanceVoidMetadata {
-    pub(super) lattice_origin: Point,
-    pub(super) lattice_pitch_mm: f64,
+    pub(super) lattice: crate::geom::copper_balance::DenseCopperLattice,
     pub(super) radius_mm: f64,
     pub(super) corner_radius_mm: f64,
 }
@@ -100,43 +99,27 @@ pub(super) fn set_copper_balance_metadata(
         if lattice != COPPER_BALANCE_LATTICE_VALUE {
             bail!("unsupported copper-balance lattice '{lattice}'");
         }
+        let double = |name| required_double_attribute(strings, attributes, name);
         let metadata = CopperBalanceVoidMetadata {
-            lattice_origin: Point::new(
-                required_double_attribute(
-                    strings,
-                    attributes,
-                    COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME,
-                )?,
-                required_double_attribute(
-                    strings,
-                    attributes,
-                    COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME,
-                )?,
-            ),
-            lattice_pitch_mm: required_double_attribute(
-                strings,
-                attributes,
-                COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME,
-            )?,
-            radius_mm: required_double_attribute(
-                strings,
-                attributes,
-                COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME,
-            )?,
-            corner_radius_mm: required_double_attribute(
-                strings,
-                attributes,
-                COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME,
-            )?,
+            lattice: crate::geom::copper_balance::DenseCopperLattice {
+                origin: Point::new(
+                    double(COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME)?,
+                    double(COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME)?,
+                ),
+                pitch_mm: double(COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME)?,
+            },
+            radius_mm: double(COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME)?,
+            corner_radius_mm: double(COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME)?,
         };
-        if !metadata.lattice_origin.x.is_finite()
-            || !metadata.lattice_origin.y.is_finite()
-            || !metadata.lattice_pitch_mm.is_finite()
-            || metadata.lattice_pitch_mm <= 0.0
-            || !metadata.radius_mm.is_finite()
-            || metadata.radius_mm <= 0.0
-            || !metadata.corner_radius_mm.is_finite()
-            || metadata.corner_radius_mm <= 0.0
+        let lengths = [
+            metadata.lattice.pitch_mm,
+            metadata.radius_mm,
+            metadata.corner_radius_mm,
+        ];
+        if !metadata.lattice.origin.is_finite()
+            || lengths
+                .iter()
+                .any(|length| !length.is_finite() || *length <= 0.0)
         {
             bail!("copper-balance lattice and rounded-hex dimensions must be finite and positive");
         }
@@ -235,14 +218,10 @@ pub(super) fn validate_copper_balance_structure(
     }
     validate_copper_balance_void_shape(doc, feature, void, resolution)?;
 
-    let lattice = crate::geom::copper_balance::DenseCopperLattice {
-        origin: void.lattice_origin,
-        pitch_mm: void.lattice_pitch_mm,
-    };
     let mut sites = BTreeSet::new();
     for location in &source_group.locations {
         let point = Point::new(location.x, location.y);
-        let (site, center) = lattice.nearest_site(point);
+        let (site, center) = void.lattice.nearest_site(point);
         if point.distance_to(center) > LATTICE_COORDINATE_TOLERANCE_MM {
             bail!(
                 "copper-balance void location ({}, {}) is not on its declared lattice",

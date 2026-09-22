@@ -76,8 +76,10 @@ fn ipc_offsets_and_geometry_rotate_before_mirroring() {
 #[test]
 fn void_verification_inherits_accuracy_but_keeps_its_significance() {
     let metadata = CopperBalanceVoidMetadata {
-        lattice_origin: Point::new(0.0, 0.0),
-        lattice_pitch_mm: 3.0,
+        lattice: crate::geom::copper_balance::DenseCopperLattice {
+            origin: Point::new(0.0, 0.0),
+            pitch_mm: 3.0,
+        },
         radius_mm: 1.0,
         corner_radius_mm: 0.0001,
     };
