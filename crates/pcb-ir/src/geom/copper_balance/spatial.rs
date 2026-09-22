@@ -507,7 +507,6 @@ pub(super) fn spatial_result_from_squared_radii(
     squared_radii: &[f64],
     baseline: DenseCopperBalanceResult,
     layer: SpatialCopperBalanceLayerRequest<'_>,
-    density_domain_area_mm2: f64,
     profile: DenseCopperBalanceProfile,
 ) -> DenseCopperBalanceResult {
     let full_voids = sites
@@ -526,7 +525,7 @@ pub(super) fn spatial_result_from_squared_radii(
         + baseline.edge_void_emission.region.area();
     let generated_area_mm2 = (baseline.usable.area() - void_area_mm2).max(0.0);
     let achieved_density =
-        (layer.existing_copper.area() + generated_area_mm2) / density_domain_area_mm2;
+        (layer.existing_copper.area() + generated_area_mm2) / layer.density_domain.area();
     DenseCopperBalanceResult {
         solution: DenseCopperBalanceSolution {
             mode: DenseCopperBalanceMode::Perforated {

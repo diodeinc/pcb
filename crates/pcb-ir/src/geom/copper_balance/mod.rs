@@ -475,11 +475,11 @@ impl std::error::Error for DenseCopperBalanceError {}
 fn uniform_copper_balance(
     profile: DenseCopperBalanceProfile,
     layer: SpatialCopperBalanceLayerRequest<'_>,
-    density_domain_area_mm2: f64,
     voidable: &ContourSet,
     lattice: &LatticeCandidates,
 ) -> Result<DenseCopperBalanceResult, AccuracyError> {
     let usable = layer.safe_region.clone();
+    let density_domain_area_mm2 = layer.density_domain.area();
     let existing_copper_area_mm2 = layer.existing_copper.area();
     let usable_area_mm2 = usable.area();
     let desired_added_area_mm2 =
@@ -573,11 +573,6 @@ pub fn generate_spatial_dense_copper_balance(
 ) -> Result<SpatialCopperBalance, DenseCopperBalanceError> {
     profile.validate()?;
     validate_spatial_request(request)?;
-    let density_domain_areas = request
-        .layers
-        .iter()
-        .map(|layer| layer.density_domain.area())
-        .collect::<Vec<_>>();
 
     // Layers frequently share one safe region — a fab panel's every copper
     // layer, a board array's layers with equal support scope — so erode and
@@ -608,16 +603,11 @@ pub fn generate_spatial_dense_copper_balance(
         .into_iter()
         .unzip();
     let uniform = map_layers(
-        request
-            .layers
-            .iter()
-            .zip(&layer_regions)
-            .zip(&density_domain_areas),
-        |((layer, region_index), density_domain_area_mm2)| {
+        request.layers.iter().zip(&layer_regions),
+        |(layer, region_index)| {
             uniform_copper_balance(
                 profile,
                 *layer,
-                *density_domain_area_mm2,
                 &region_voidable[*region_index],
                 &region_lattices[*region_index],
             )
@@ -712,10 +702,6 @@ pub fn generate_spatial_dense_copper_balance(
             DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => Vec::new(),
         })
         .collect::<Vec<Vec<f64>>>();
-    let squared_radius_sums = squared_radii
-        .iter()
-        .map(|radii| radii.iter().sum::<f64>())
-        .collect::<Vec<_>>();
     let cell_area_mm2 = SQRT_3 * profile.pitch_mm.powi(2) / 2.0;
     let normalized_stack_weights = normalized_stack_weights(request.layers);
     // A stackup that located no conductors leaves every weight zero. There is
@@ -760,12 +746,12 @@ pub fn generate_spatial_dense_copper_balance(
         .sum::<f64>();
     let spend = (-moment_mm4).clamp(-reach_mm4, reach_mm4) / reach_mm4.max(f64::MIN_POSITIVE);
     // Void area moves opposite to copper area.
-    let pinned_sums = squared_radius_sums
+    let pinned_sums = squared_radii
         .iter()
         .zip(&normalized_stack_weights)
         .zip(&slack_areas_mm2)
-        .map(|((sum, weight), slack)| {
-            sum - spend * share(*weight) * slack / ROUNDED_HEXAGON_AREA_FACTOR
+        .map(|((radii, weight), slack)| {
+            radii.iter().sum::<f64>() - spend * share(*weight) * slack / ROUNDED_HEXAGON_AREA_FACTOR
         })
         .collect::<Vec<_>>();
     let void_fraction_per_radius_squared = ROUNDED_HEXAGON_AREA_FACTOR / cell_area_mm2;
@@ -815,7 +801,6 @@ pub fn generate_spatial_dense_copper_balance(
                     &squared_radii,
                     baseline,
                     request.layers[layer_index],
-                    density_domain_areas[layer_index],
                     profile,
                 )
             };
