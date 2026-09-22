@@ -295,18 +295,12 @@ impl EllipticalArc {
 
     /// Exact image under an affine transform.
     pub fn transformed(&self, transform: Affine2) -> Self {
-        let linear = |p: Point| {
-            Point::new(
-                transform.m00 * p.x + transform.m01 * p.y,
-                transform.m10 * p.x + transform.m11 * p.y,
-            )
-        };
         Self {
             start: transform.transform_point(self.start),
             end: transform.transform_point(self.end),
             center: transform.transform_point(self.center),
-            x_axis: linear(self.x_axis),
-            y_axis: linear(self.y_axis),
+            x_axis: transform.transform_vector(self.x_axis),
+            y_axis: transform.transform_vector(self.y_axis),
             clockwise: self.clockwise != (transform.determinant() < 0.0),
         }
     }
