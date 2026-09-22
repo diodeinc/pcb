@@ -404,12 +404,7 @@ impl ContourSet {
 
     /// Whether the regularized region contains the point, including its boundary.
     pub fn contains_point(&self, point: Point) -> bool {
-        if self.is_empty()
-            || point.x < self.bbox.min.x
-            || point.x > self.bbox.max.x
-            || point.y < self.bbox.min.y
-            || point.y > self.bbox.max.y
-        {
+        if self.is_empty() || !self.bbox.contains_point(point) {
             return false;
         }
 

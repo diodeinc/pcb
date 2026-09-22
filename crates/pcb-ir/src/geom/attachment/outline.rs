@@ -472,30 +472,22 @@ fn expand_span(
     obstacle: Option<usize>,
     certain: bool,
 ) {
-    if hi - lo + 2.0 * half >= perimeter {
+    let mut push = |lo, hi| {
         spans.push(Span {
-            lo: 0.0,
-            hi: perimeter,
+            lo,
+            hi,
             obstacle,
             certain,
-        });
-        return;
+        })
+    };
+    if hi - lo + 2.0 * half >= perimeter {
+        return push(0.0, perimeter);
     }
     let start = (lo - half).rem_euclid(perimeter);
     let end = start + hi - lo + 2.0 * half;
-    spans.push(Span {
-        lo: start,
-        hi: end.min(perimeter),
-        obstacle,
-        certain,
-    });
+    push(start, end.min(perimeter));
     if end > perimeter {
-        spans.push(Span {
-            lo: 0.0,
-            hi: end - perimeter,
-            obstacle,
-            certain,
-        });
+        push(0.0, end - perimeter);
     }
 }
 

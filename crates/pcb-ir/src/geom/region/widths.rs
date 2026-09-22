@@ -71,16 +71,14 @@ fn point_key(point: Point) -> (u64, u64) {
 
 impl ContactIndex {
     pub(crate) fn for_segments(segments: &[(Point, Point)]) -> Self {
-        let mut map = std::collections::HashMap::new();
+        let mut index = Self::default();
         for (id, &(start, end)) in segments.iter().enumerate() {
-            map.entry(point_key(start))
-                .or_insert_with(Vec::new)
-                .push(id);
+            index.map.entry(point_key(start)).or_default().push(id);
             if point_key(end) != point_key(start) {
-                map.entry(point_key(end)).or_insert_with(Vec::new).push(id);
+                index.map.entry(point_key(end)).or_default().push(id);
             }
         }
-        Self { map }
+        index
     }
 
     /// Ids of segments sharing `point`, in source order.
@@ -351,14 +349,12 @@ impl WidthAxis {
         // hence safe.
         let mut narrowed = self;
         if radius_cap.is_finite() {
-            match narrowed.range_with_radius_below(radius_cap + error) {
-                Some(range) => {
-                    narrowed.range = (narrowed.range.0.max(range.0), narrowed.range.1.min(range.1));
-                    if narrowed.range.0 > narrowed.range.1 {
-                        return Vec::new();
-                    }
-                }
-                None => return Vec::new(),
+            let Some(range) = narrowed.range_with_radius_below(radius_cap + error) else {
+                return Vec::new();
+            };
+            narrowed.range = (narrowed.range.0.max(range.0), narrowed.range.1.min(range.1));
+            if narrowed.range.0 > narrowed.range.1 {
+                return Vec::new();
             }
         }
         let bounds = narrowed.bounds();
