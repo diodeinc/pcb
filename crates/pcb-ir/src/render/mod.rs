@@ -118,6 +118,11 @@ pub enum SizeConstraint {
     },
     /// Scale so the longer edge is at most this many pixels.
     MaxDimension(u32),
+    /// Scale to fit inside this box, keeping the image's proportions.
+    Within {
+        width_px: u32,
+        height_px: u32,
+    },
 }
 
 impl SizeConstraint {
@@ -129,7 +134,11 @@ impl SizeConstraint {
                 width_px,
                 height_px,
             } => Some((width_px, height_px)),
-            Self::MaxDimension(max) => Some(pixel_size(bbox, max)),
+            Self::MaxDimension(max) => Some(pixel_size(bbox, max, max)),
+            Self::Within {
+                width_px,
+                height_px,
+            } => Some(pixel_size(bbox, width_px, height_px)),
         }
     }
 }
@@ -141,16 +150,15 @@ pub(crate) fn layer_indices(layer_count: usize, layers: Option<&[usize]>) -> Vec
     }
 }
 
-/// Pixel dimensions for a raster render of this bbox under the given constraint.
-pub(crate) fn pixel_size(bbox: BBox, max_dimension_px: u32) -> (u32, u32) {
+/// Pixel dimensions of the largest raster of this bbox that fits the box.
+pub(crate) fn pixel_size(bbox: BBox, width_px: u32, height_px: u32) -> (u32, u32) {
     if bbox.is_empty() || bbox.width() <= 0.0 || bbox.height() <= 0.0 {
-        return (max_dimension_px, max_dimension_px);
+        return (width_px, height_px);
     }
-    let scale = max_dimension_px as f64 / bbox.width().max(bbox.height());
-    (
-        (bbox.width() * scale).ceil().max(1.0) as u32,
-        (bbox.height() * scale).ceil().max(1.0) as u32,
-    )
+    let scale = (f64::from(width_px) / bbox.width()).min(f64::from(height_px) / bbox.height());
+    // The edge that binds can land a rounding error past its limit.
+    let fit = |extent: f64, limit: u32| ((extent * scale).ceil() as u32).clamp(1, limit.max(1));
+    (fit(bbox.width(), width_px), fit(bbox.height(), height_px))
 }
 
 /// The budget shared geometry has in its own frame: what the largest scale

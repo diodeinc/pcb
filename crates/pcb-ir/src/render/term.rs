@@ -1,13 +1,14 @@
 use std::io::{self, IsTerminal, Write};
 
+use crate::render::{RenderOptions, SizeConstraint};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use terminal_size::{Width, terminal_size};
-
-use crate::render::{RenderOptions, SizeConstraint};
 
 const KITTY_CHUNK_SIZE: usize = 4096;
-const MAX_TERMINAL_DIMENSION_PX: u32 = 1200;
+/// The cells of a window that does not say its size, and the pixels of a
+/// cell of one that does not say those.
+const DEFAULT_WINDOW_CELLS: (u16, u16) = (120, 40);
+const DEFAULT_CELL_PX: (u32, u32) = (10, 20);
 
 /// Whether stdout is a terminal that displays kitty graphics. Any other
 /// terminal prints the image payload as text, so only ones known to speak
@@ -30,7 +31,7 @@ fn speaks_kitty_graphics(env: impl Fn(&str) -> Option<String>) -> bool {
 
 /// Render artwork layers as an inline image using the kitty graphics
 /// protocol. Any size constraint in `options` is replaced by the terminal
-/// width.
+/// window's.
 pub fn artwork_to_terminal<LayerMeta, ObjectMeta>(
     doc: &crate::dialects::artwork::Document<LayerMeta, ObjectMeta>,
     options: &RenderOptions,
@@ -39,8 +40,12 @@ pub fn artwork_to_terminal<LayerMeta, ObjectMeta>(
 }
 
 fn terminal_options(options: &RenderOptions) -> RenderOptions {
+    let (width_px, height_px) = terminal_image_box_px();
     RenderOptions {
-        size: SizeConstraint::MaxDimension(terminal_max_dimension_px()),
+        size: SizeConstraint::Within {
+            width_px,
+            height_px,
+        },
         ..options.clone()
     }
 }
@@ -76,13 +81,23 @@ pub fn write_kitty_png<W: Write>(writer: &mut W, png: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-fn terminal_max_dimension_px() -> u32 {
-    let Some((Width(columns), _)) = terminal_size() else {
-        return MAX_TERMINAL_DIMENSION_PX;
-    };
-    u32::from(columns)
-        .saturating_mul(12)
-        .clamp(1, MAX_TERMINAL_DIMENSION_PX)
+/// The box an inline image fits: the window's width and two thirds of its
+/// height, so the picture fills the terminal it is asked for in and stays on
+/// screen with the command that drew it.
+///
+/// An image displays pixel for pixel, so the box is in the window's own
+/// pixels, which a terminal that speaks kitty graphics reports.
+fn terminal_image_box_px() -> (u32, u32) {
+    let cells = crossterm::terminal::size().unwrap_or(DEFAULT_WINDOW_CELLS);
+    let reported = crossterm::terminal::window_size()
+        .ok()
+        .map(|window| (u32::from(window.width), u32::from(window.height)))
+        .filter(|&(width, height)| width > 0 && height > 0);
+    let (width, height) = reported.unwrap_or((
+        u32::from(cells.0) * DEFAULT_CELL_PX.0,
+        u32::from(cells.1) * DEFAULT_CELL_PX.1,
+    ));
+    (width, height * 2 / 3)
 }
 
 #[cfg(test)]

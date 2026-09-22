@@ -971,8 +971,7 @@ fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
                     }
                     let children = out.blocks[child as usize].objects.clone();
                     for child_object in children {
-                        let geometry =
-                            transform_primitive_geometry(out, child_object.geometry, transform);
+                        let geometry = transformed_geometry(out, child_object.geometry, transform);
                         out.push_block_object(
                             id,
                             Object {
@@ -993,9 +992,10 @@ fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
     }
 }
 
-/// Apply `transform` to primitive geometry within one document, copying
-/// transformed paths into its arena.
-fn transform_primitive_geometry<LayerMeta, ObjectMeta>(
+/// `geometry` as it images under `transform`, within one document: a
+/// placement composes with it, a grid's step vectors turn with it, and a
+/// path is copied into the arena transformed.
+pub fn transformed_geometry<LayerMeta, ObjectMeta>(
     doc: &mut Document<LayerMeta, ObjectMeta>,
     geometry: Geometry,
     transform: Affine2,
@@ -1007,6 +1007,26 @@ fn transform_primitive_geometry<LayerMeta, ObjectMeta>(
         } => Geometry::Flash {
             aperture,
             transform: transform.concat(flash),
+        },
+        Geometry::Instance {
+            block,
+            transform: placement,
+        } => Geometry::Instance {
+            block,
+            transform: transform.concat(placement),
+        },
+        Geometry::GridInstance {
+            block,
+            transform: placement,
+            repeat,
+        } => Geometry::GridInstance {
+            block,
+            transform: transform.concat(placement),
+            repeat: GridRepeat {
+                x_step: transform.transform_vector(repeat.x_step),
+                y_step: transform.transform_vector(repeat.y_step),
+                ..repeat
+            },
         },
         Geometry::Stroke { path } | Geometry::Region { path } => {
             let path = if transform.is_identity() {
@@ -1021,12 +1041,8 @@ fn transform_primitive_geometry<LayerMeta, ObjectMeta>(
             };
             match geometry {
                 Geometry::Stroke { .. } => Geometry::Stroke { path },
-                Geometry::Region { .. } => Geometry::Region { path },
-                _ => unreachable!(),
+                _ => Geometry::Region { path },
             }
-        }
-        Geometry::Instance { .. } | Geometry::GridInstance { .. } => {
-            unreachable!("flattened blocks contain only primitive geometry")
         }
     }
 }
@@ -1059,7 +1075,7 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
         geometry => {
             // The target arena starts as a clone of the source arena, so
             // source path indices resolve identically in the target.
-            let geometry = transform_primitive_geometry(target, geometry, transform);
+            let geometry = transformed_geometry(target, geometry, transform);
             target.push_object(
                 layer,
                 Object {
@@ -1090,23 +1106,14 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
     }
     let placements = match repeat {
         None => vec![placement],
-        Some(repeat)
-            if expansion.preserve_grids && !expansion.block_contains_grid[block as usize] =>
-        {
+        Some(_) if expansion.preserve_grids && !expansion.block_contains_grid[block as usize] => {
+            let geometry = transformed_geometry(target, object.geometry, transform);
             target.push_object(
                 layer,
                 Object {
                     polarity,
                     order: object.order,
-                    geometry: Geometry::GridInstance {
-                        block,
-                        transform: transform.concat(placement),
-                        repeat: GridRepeat {
-                            x_step: transform.transform_vector(repeat.x_step),
-                            y_step: transform.transform_vector(repeat.y_step),
-                            ..repeat
-                        },
-                    },
+                    geometry,
                     bbox: BBox::empty(),
                     meta: object.meta.clone(),
                 },

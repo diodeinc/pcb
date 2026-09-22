@@ -26,7 +26,7 @@ tiny-skia = { workspace = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 base64 = { workspace = true }
-terminal_size = { workspace = true }
+crossterm = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true }

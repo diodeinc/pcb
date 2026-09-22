@@ -3,7 +3,8 @@ use pcb_ir::geom::Resolution;
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
-    LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, manufacturing, utils,
+    BoardSide, LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands,
+    manufacturing, utils,
 };
 
 #[derive(Args)]
@@ -145,14 +146,18 @@ enum Commands {
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
     },
-    /// Render processed geometry for a single IPC-2581 layer
+    /// Render the finished board, top and bottom side by side, or one side, or one IPC-2581 layer
     Render {
         /// IPC-2581 XML file to render from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layer name to render, for example TOP or BOTTOM
-        #[arg(short, long)]
-        layer: String,
+        /// Render this layer's processed geometry instead, for example F.Cu
+        #[arg(short, long, conflicts_with = "side")]
+        layer: Option<String>,
+        /// Render only this side of the finished board: copper under the mask, the finish in its
+        /// openings and the legend, with everything beneath the outer copper left out.
+        #[arg(long)]
+        side: Option<BoardSide>,
         /// Output file path. If omitted, auto renders to the terminal when possible.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
@@ -596,13 +601,20 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
         Commands::Render {
             file,
             layer,
+            side,
             output,
             format,
             layout_target,
         } => commands::render::execute(
             &file,
-            &commands::render::LayerRenderOptions {
-                layer,
+            &commands::render::RenderCommandOptions {
+                subject: layer.map_or_else(
+                    || {
+                        let both = vec![BoardSide::Top, BoardSide::Bottom];
+                        commands::render::RenderSubject::Sides(side.map_or(both, |side| vec![side]))
+                    },
+                    commands::render::RenderSubject::Layer,
+                ),
                 output,
                 format,
                 layout_target,

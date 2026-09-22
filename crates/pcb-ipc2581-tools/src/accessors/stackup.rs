@@ -235,53 +235,15 @@ impl<'a> IpcAccessor<'a> {
             .map(|(name, spec)| (self.ipc.resolve(*name).to_string(), spec))
             .collect();
 
-        // Extract soldermask and silkscreen colors
-        let mut soldermask_color = None;
-        let mut silkscreen_color = None;
-
-        for stackup_layer in &stackup.layers {
-            let layer_function = layer_map
-                .get(&stackup_layer.layer_ref)
-                .map(|layer| layer.layer_function);
-
-            // Check if this is a soldermask or silkscreen layer
-            if let Some(spec_ref) = &stackup_layer.spec_ref {
-                let spec_name = self.ipc.resolve(*spec_ref).to_string();
-                if let Some(spec) = spec_map.get(&spec_name) {
-                    // Extract color from Spec (try multiple sources)
-                    let mut color_name = spec.color_term.map(|c| self.ipc.resolve(c).to_string());
-                    let color_rgb = spec.color_rgb;
-
-                    // Also check properties for "Color : XXX" format
-                    if color_name.is_none() {
-                        for prop in &spec.properties {
-                            let prop_text = self.ipc.resolve(*prop);
-                            if let Some(stripped) = prop_text.strip_prefix("Color : ") {
-                                color_name = Some(stripped.trim().to_string());
-                                break;
-                            }
-                        }
-                    }
-
-                    let color_info = ColorInfo {
-                        name: color_name,
-                        rgb: color_rgb,
-                    };
-
-                    match layer_function {
-                        Some(LayerFunction::Soldermask) if soldermask_color.is_none() => {
-                            soldermask_color = Some(color_info);
-                        }
-                        Some(LayerFunction::Silkscreen) | Some(LayerFunction::Legend)
-                            if silkscreen_color.is_none() =>
-                        {
-                            silkscreen_color = Some(color_info);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+        // The board's inks are its first mask's and its first legend's.
+        let inks = self.stackup_inks();
+        let ink = |is: fn(LayerFunction) -> bool| {
+            let first = inks.iter().find(|(layer, _)| is(layer.layer_function));
+            first.map(|(_, ink)| ink.clone())
+        };
+        let soldermask_color = ink(|function| function == LayerFunction::Soldermask);
+        let silkscreen_color =
+            ink(|function| matches!(function, LayerFunction::Silkscreen | LayerFunction::Legend));
 
         let mut layers = Vec::new();
         let mut conductors = Vec::new();
@@ -356,6 +318,43 @@ impl<'a> IpcAccessor<'a> {
             outer_copper_oz: uniform_copper_oz(&conductors, &[Side::Top, Side::Bottom]),
             inner_copper_oz: uniform_copper_oz(&conductors, &[Side::Internal]),
         })
+    }
+
+    /// The ink of every stackup layer that has a spec, in stackup order: the
+    /// layer and the colour its spec gives it, by term, by RGB, or in a
+    /// `Color : <name>` property. Each side's mask and legend is its own
+    /// layer, so each keeps its own ink.
+    pub fn stackup_inks(&self) -> Vec<(&'a Layer, ColorInfo)> {
+        let Some(ecad) = self.ecad() else {
+            return Vec::new();
+        };
+        let layer = |name| ecad.cad_data.layers.iter().find(|layer| layer.name == name);
+        let spec = |name: ipc2581::Symbol| {
+            let specs = &ecad.cad_header.specs;
+            Some(specs.iter().find(|(spec, _)| **spec == name)?.1)
+        };
+        ecad.cad_data
+            .stackups
+            .first()
+            .into_iter()
+            .flat_map(|stackup| &stackup.layers)
+            .filter_map(|stackup_layer| {
+                let spec = spec(stackup_layer.spec_ref?)?;
+                let named = spec.color_term.map(|term| self.ipc.resolve(term));
+                let property = || {
+                    let texts = spec.properties.iter().map(|text| self.ipc.resolve(*text));
+                    texts
+                        .filter_map(|text| text.strip_prefix("Color : "))
+                        .map(str::trim)
+                        .next()
+                };
+                let ink = ColorInfo {
+                    name: named.or_else(property).map(str::to_string),
+                    rgb: spec.color_rgb,
+                };
+                Some((layer(stackup_layer.layer_ref)?, ink))
+            })
+            .collect()
     }
 
     /// Extract surface finish from coating layer specs (COATINGCOND/COATINGNONCOND)

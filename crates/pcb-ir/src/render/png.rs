@@ -108,7 +108,8 @@ struct Canvas {
 impl Canvas {
     fn new(bbox: BBox, size: SizeConstraint) -> Result<Self, String> {
         let (width, height) = size.pixels(bbox).unwrap_or_else(|| {
-            crate::render::pixel_size(bbox, crate::render::DEFAULT_MAX_DIMENSION_PX)
+            let max = crate::render::DEFAULT_MAX_DIMENSION_PX;
+            crate::render::pixel_size(bbox, max, max)
         });
         let pixmap = || {
             Pixmap::new(width, height)
@@ -650,6 +651,31 @@ mod tests {
             [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()],
             [0x20, 0x40, 0x60, 0xff]
         );
+    }
+
+    #[test]
+    fn a_render_within_a_box_fills_the_edge_that_binds() {
+        let mut doc = copper_artwork();
+        let pour = fill(&mut doc, square(10.0));
+        doc.push_object(0, artwork::Object::new(Polarity::Dark, pour));
+        artwork::normalize_bounds(&mut doc);
+        let size = |viewport: BBox, width_px, height_px| {
+            let options = RenderOptions::default().with_viewport(viewport).with_size(
+                SizeConstraint::Within {
+                    width_px,
+                    height_px,
+                },
+            );
+            let image = Pixmap::decode_png(&artwork_png(&doc, &options).unwrap()).unwrap();
+            (image.width(), image.height())
+        };
+        let wide = BBox::new(Point::ZERO, Point::new(20.0, 10.0));
+
+        assert_eq!(size(wide, 400, 100), (200, 100), "the height binds");
+        assert_eq!(size(wide, 100, 400), (100, 50), "the width binds");
+        // 120 * (1000 / 120) is a rounding error over 1000.
+        let square = BBox::new(Point::ZERO, Point::new(120.0, 120.0));
+        assert_eq!(size(square, 1000, 1000), (1000, 1000));
     }
 
     #[test]
