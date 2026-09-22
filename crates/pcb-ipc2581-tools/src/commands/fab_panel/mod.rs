@@ -12,8 +12,7 @@ use ipc2581::types::{Spec, Units};
 use pcb_ir::dialects::ipc::{LayoutStepKind, root_step};
 use pcb_ir::geom::{BBox, Point};
 
-use super::EdgeInsetsMm;
-use crate::copper_balance::CopperBalanceReport;
+use super::{EdgeInsetsMm, PanelCreation};
 use crate::geometry;
 #[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
@@ -114,18 +113,13 @@ impl FabPanelSpec {
 
     /// The profile represented by the generated IPC document.
     fn output_bbox(self) -> Result<BBox> {
-        if self.emit_usable_area {
+        let (width, height) = if self.emit_usable_area {
             let usable = self.usable_bbox()?;
-            Ok(BBox::new(
-                Point::new(0.0, 0.0),
-                Point::new(usable.width(), usable.height()),
-            ))
+            (usable.width(), usable.height())
         } else {
-            Ok(BBox::new(
-                Point::new(0.0, 0.0),
-                Point::new(self.width_mm, self.height_mm),
-            ))
-        }
+            (self.width_mm, self.height_mm)
+        };
+        Ok(BBox::new(Point::new(0.0, 0.0), Point::new(width, height)))
     }
 
     /// The usable packing domain expressed in generated-output coordinates.
@@ -216,14 +210,6 @@ struct SurfaceFinishSignature {
     products: Vec<(String, Option<String>)>,
 }
 
-/// Generated fabrication-panel IPC plus optional per-layer copper-balance
-/// accounting.
-#[derive(Debug, Clone)]
-pub struct FabPanelCreation {
-    pub xml: String,
-    pub copper_balance: Option<CopperBalanceReport>,
-}
-
 #[cfg(feature = "cli")]
 pub fn execute(
     inputs: &[PathBuf],
@@ -259,27 +245,8 @@ pub fn execute(
         occurrences.push(source_index);
     }
 
-    let creation = create_fab_panel(&source_xml, &occurrences, spec, balance_copper, resolution)?;
-    crate::commands::board_array::write_panel_output(
-        output,
-        &creation.xml,
-        "fabrication panel",
-        creation.copper_balance.as_ref(),
-    )
-}
-
-#[cfg(test)]
-fn create_fab_panel_xml(source_xml: &[String], occurrences: &[usize]) -> Result<String> {
-    let resolution = Resolution::default();
-
-    create_fab_panel(
-        source_xml,
-        occurrences,
-        FabPanelSpec::default(),
-        false,
-        resolution,
-    )
-    .map(|creation| creation.xml)
+    create_fab_panel(&source_xml, &occurrences, spec, balance_copper, resolution)?
+        .write(output, "fabrication panel")
 }
 
 pub fn create_fab_panel(
@@ -288,7 +255,7 @@ pub fn create_fab_panel(
     spec: FabPanelSpec,
     balance_copper: bool,
     resolution: Resolution,
-) -> Result<FabPanelCreation> {
+) -> Result<PanelCreation> {
     if occurrences.is_empty() {
         bail!("at least one assembly panel is required");
     }
@@ -334,9 +301,7 @@ pub fn create_fab_panel(
     })?;
     // Nothing below reads the sources again, and their parses are large.
     drop(parsed);
-    let first = sources
-        .first()
-        .context("at least one assembly panel source is required")?;
+    let first = &sources[0];
     for source in &sources[1..] {
         if source.units != first.units {
             bail!("all assembly panel IPC-2581 files must use the same units");
@@ -352,13 +317,15 @@ pub fn create_fab_panel(
             let source = sources
                 .get(*source_index)
                 .with_context(|| format!("invalid assembly panel source index {source_index}"))?;
+            let size_um = |value_mm| ceil_um(value_mm, 1.0, "assembly panel dimension");
             Ok(Size {
-                width: dimension_um(source.bbox.width())?,
-                height: dimension_um(source.bbox.height())?,
+                width: size_um(source.bbox.width())?,
+                height: size_um(source.bbox.height())?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let placements = pack(&items, spec.usable_size()?, spacing_um(spec.panel_gap_mm)?)?;
+    let (bin, gap) = (spec.usable_size()?, spec.panel_gap_mm);
+    let placements = pack(&items, bin, ceil_um(gap, 0.0, "fabrication panel spacing")?)?;
 
     // The provisional panel only feeds copper-balance planning: gutters and
     // placed-panel copper must exist before balance copper can be derived.
@@ -387,12 +354,8 @@ pub fn create_fab_panel(
         (Vec::new(), Vec::new(), None)
     };
 
-    let units = sources
-        .first()
-        .context("at least one assembly panel source is required")?
-        .units;
-    let xml = xml::write_fab_panel_xml(&provisional, units, &balance_features, &templates)?;
-    Ok(FabPanelCreation {
+    let xml = xml::write_fab_panel_xml(&provisional, first.units, &balance_features, &templates)?;
+    Ok(PanelCreation {
         xml,
         copper_balance,
     })
@@ -683,18 +646,11 @@ fn float_bits(value: Option<f64>) -> Option<u64> {
     value.map(f64::to_bits)
 }
 
-fn dimension_um(value_mm: f64) -> Result<u32> {
+/// `value_mm` rounded up to whole micrometres, no fewer than `min_um`.
+fn ceil_um(value_mm: f64, min_um: f64, what: &str) -> Result<u32> {
     let value = (value_mm * MICROMETERS_PER_MM).ceil();
-    if !value.is_finite() || value <= 0.0 || value > f64::from(u32::MAX) {
-        bail!("assembly panel dimension {value_mm} mm is outside the supported range");
-    }
-    Ok(value as u32)
-}
-
-fn spacing_um(value_mm: f64) -> Result<u32> {
-    let value = (value_mm * MICROMETERS_PER_MM).ceil();
-    if !value.is_finite() || value < 0.0 || value > f64::from(u32::MAX) {
-        bail!("fabrication panel spacing {value_mm} mm is outside the supported range");
+    if !(min_um..=f64::from(u32::MAX)).contains(&value) {
+        bail!("{what} {value_mm} mm is outside the supported range");
     }
     Ok(value as u32)
 }

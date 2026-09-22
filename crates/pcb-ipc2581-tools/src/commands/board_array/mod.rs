@@ -7,10 +7,10 @@ pub mod eligibility;
 pub mod mouse_bite;
 pub mod placement;
 
+use super::PanelCreation;
 use super::board_array_auto::{
     AutoSheetSize, TargetSizeMm, auto_board_array_plan, auto_board_array_plan_for_sheet,
 };
-use crate::copper_balance::CopperBalanceReport;
 use crate::generated::GeneratedLayerFeature;
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
@@ -113,13 +113,6 @@ impl Separation {
             Self::MouseBite => "mouse-bite",
         }
     }
-}
-
-/// Generated board-array IPC plus optional per-layer copper-balance accounting.
-#[derive(Debug, Clone)]
-pub struct BoardArrayCreation {
-    pub xml: String,
-    pub copper_balance: Option<CopperBalanceReport>,
 }
 
 pub type BoardMarginMm = super::EdgeInsetsMm;
@@ -253,13 +246,8 @@ pub fn execute(
     resolution: Resolution,
 ) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_board_array(&content, options, balance_copper, separation, resolution)?;
-    write_panel_output(
-        output,
-        &creation.xml,
-        "board array",
-        creation.copper_balance.as_ref(),
-    )
+    create_board_array(&content, options, balance_copper, separation, resolution)?
+        .write(output, "board array")
 }
 
 #[cfg(feature = "cli")]
@@ -272,38 +260,8 @@ pub fn execute_auto(
     resolution: Resolution,
 ) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation =
-        create_auto_board_array(&content, sheet, balance_copper, separation, resolution)?;
-    write_panel_output(
-        output,
-        &creation.xml,
-        "board array",
-        creation.copper_balance.as_ref(),
-    )
-}
-
-/// Report the balance, then write a created panel to `output` or stdout.
-#[cfg(feature = "cli")]
-pub(crate) fn write_panel_output(
-    output: &Path,
-    xml: &str,
-    what: &str,
-    copper_balance: Option<&CopperBalanceReport>,
-) -> Result<()> {
-    for line in copper_balance
-        .into_iter()
-        .flat_map(|report| report.summary_lines())
-    {
-        eprintln!("  {line}");
-    }
-    if output.as_os_str() == "-" {
-        pcb_ui::write_stdout(|stdout| stdout.write_all(xml.as_bytes()))?;
-        eprintln!("✓ Created IPC-2581 {what} on stdout");
-    } else {
-        file_utils::save_ipc_file(output, xml)?;
-        eprintln!("✓ Created IPC-2581 {what} at {}", output.display());
-    }
-    Ok(())
+    create_auto_board_array(&content, sheet, balance_copper, separation, resolution)?
+        .write(output, "board array")
 }
 
 /// Create a manually configured board array and return its balance accounting.
@@ -313,7 +271,7 @@ pub fn create_board_array(
     balance_copper: bool,
     separation: Separation,
     resolution: Resolution,
-) -> Result<BoardArrayCreation> {
+) -> Result<PanelCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let spec = build_board_array_spec(
         &ipc,
@@ -333,7 +291,7 @@ pub fn create_auto_board_array(
     balance_copper: bool,
     separation: Separation,
     resolution: Resolution,
-) -> Result<BoardArrayCreation> {
+) -> Result<PanelCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let board = primary_board_layout(&ipc)?;
     let (options, panelization) = auto_board_array_options(&ipc, board, sheet, resolution)?;
@@ -496,7 +454,7 @@ fn write_board_array_creation(
     mut spec: BoardArraySpec,
     balance_copper: bool,
     resolution: Resolution,
-) -> Result<BoardArrayCreation> {
+) -> Result<PanelCreation> {
     let doc = ipc2581::edit::Doc::parse(xml)?;
     let mut copper_balance = None;
     if balance_copper {
@@ -518,7 +476,7 @@ fn write_board_array_creation(
                 .map(|feature| (GeneratedFeatureScope::Array, feature)),
         );
     }
-    Ok(BoardArrayCreation {
+    Ok(PanelCreation {
         xml: finished_board_array_xml(&doc, &spec)?,
         copper_balance,
     })

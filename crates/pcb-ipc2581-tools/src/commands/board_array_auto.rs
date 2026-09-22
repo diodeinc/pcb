@@ -113,19 +113,15 @@ pub fn auto_board_array_plan(
     //
     // A valid plan has Nx, Ny >= 1. The final array dimensions are exactly
     // T because the leftover span is assigned back to the two edge rails.
-    for sheet in AUTO_SHEETS {
-        if let Some(plan) = plan_for_sheet(sheet, board_width_mm, board_height_mm, board_margin_mm)
-        {
-            return Ok(plan);
-        }
-    }
-
-    Err(AutoBoardArrayError {
-        board_width_mm,
-        board_height_mm,
-        board_margin_mm,
-        sheet: AutoSheetSize::A4,
-    })
+    AUTO_SHEETS
+        .into_iter()
+        .find_map(|sheet| plan_for_sheet(sheet, board_width_mm, board_height_mm, board_margin_mm))
+        .ok_or(AutoBoardArrayError {
+            board_width_mm,
+            board_height_mm,
+            board_margin_mm,
+            sheet: AutoSheetSize::A4,
+        })
 }
 
 pub fn auto_board_array_plan_for_sheet(
@@ -176,7 +172,10 @@ fn plan_for_target(
         || !board_height_mm.is_finite()
         || board_width_mm <= 0.0
         || board_height_mm <= 0.0
-        || !valid_margin(board_margin_mm)
+        || !board_margin_mm
+            .sides()
+            .iter()
+            .all(|(_, value)| value.is_finite() && *value >= 0.0)
     {
         return None;
     }
@@ -205,12 +204,6 @@ fn plan_for_target(
     })
 }
 
-fn valid_margin(margin: BoardMarginMm) -> bool {
-    [margin.top, margin.right, margin.bottom, margin.left]
-        .into_iter()
-        .all(|value| value.is_finite() && value >= 0.0)
-}
-
 fn axis_count(usable_span: f64, cell_span: f64) -> Option<u32> {
     if usable_span < 0.0 || cell_span <= 0.0 {
         return None;
@@ -235,147 +228,47 @@ fn compare_auto_plan(a: &AutoBoardArrayPlan, b: &AutoBoardArrayPlan) -> Ordering
 }
 
 fn fmt_margin(margin: BoardMarginMm) -> String {
-    format!(
-        "{} top / {} right / {} bottom / {} left",
-        fmt_num(margin.top),
-        fmt_num(margin.right),
-        fmt_num(margin.bottom),
-        fmt_num(margin.left)
-    )
+    margin
+        .sides()
+        .map(|(side, value)| format!("{} {side}", fmt_num(value)))
+        .join(" / ")
 }
 
 #[cfg(test)]
 mod tests {
+    use super::AutoSheetSize::{A4, A5, A6, A7};
     use super::*;
 
-    const AUTO_BOARD_MARGIN_MM: f64 = 5.0;
+    const MARGIN: BoardMarginMm = BoardMarginMm::all(5.0);
 
-    fn auto_plan(board_width_mm: f64, board_height_mm: f64) -> AutoBoardArrayPlan {
-        auto_board_array_plan(
-            board_width_mm,
-            board_height_mm,
-            BoardMarginMm::all(AUTO_BOARD_MARGIN_MM),
-        )
-        .unwrap()
+    /// The leftover span goes to the rails, so the array is exactly its sheet.
+    fn assert_fills_target(board: (f64, f64), plan: &AutoBoardArrayPlan) {
+        let (margin, rail) = (plan.board_margin_mm, plan.edge_rail_mm);
+        let width = plan.columns as f64 * (board.0 + margin.left + margin.right);
+        let height = plan.rows as f64 * (board.1 + margin.bottom + margin.top);
+        assert!((width + rail.left + rail.right - plan.target.width).abs() < 1e-9);
+        assert!((height + rail.bottom + rail.top - plan.target.height).abs() < 1e-9);
     }
 
     #[test]
-    fn projects_board_bbox_to_maximal_a7_grid() {
-        let plan = auto_plan(20.0, 10.0);
+    fn picks_the_smallest_sheet_and_the_orientation_that_fits_most_boards() {
+        for (board, sheet, target, grid) in [
+            ((20.0, 10.0), A7, (105.0, 74.0), (3, 3)),
+            // Rotated, one column of three beats one row of two.
+            ((40.0, 20.0), A7, (74.0, 105.0), (1, 3)),
+            ((70.0, 58.0), A6, (105.0, 148.0), (1, 2)),
+            ((120.0, 90.0), A5, (148.0, 210.0), (1, 2)),
+            ((190.0, 250.0), A4, (210.0, 297.0), (1, 1)),
+        ] {
+            let plan = auto_board_array_plan(board.0, board.1, MARGIN).unwrap();
+            assert_eq!(plan.sheet, sheet);
+            assert_eq!((plan.target.width, plan.target.height), target);
+            assert_eq!((plan.columns, plan.rows), grid);
+            assert_eq!(plan.board_margin_mm, MARGIN);
+            assert_fills_target(board, &plan);
+        }
 
-        assert_eq!(plan.sheet, AutoSheetSize::A7);
-        assert_eq!(
-            plan.target,
-            TargetSizeMm {
-                width: 105.0,
-                height: 74.0
-            }
-        );
-        assert_eq!((plan.columns, plan.rows), (3, 3));
-        assert_eq!(plan.board_margin_mm, BoardMarginMm::all(5.0));
-        assert_close(plan.edge_rail_mm.left, 7.5);
-        assert_close(plan.edge_rail_mm.right, 7.5);
-        assert_close(plan.edge_rail_mm.bottom, 7.0);
-        assert_close(plan.edge_rail_mm.top, 7.0);
-        assert_close(finished_width(20.0, &plan), plan.target.width);
-        assert_close(finished_height(10.0, &plan), plan.target.height);
-    }
-
-    #[test]
-    fn projects_board_bbox_to_requested_sheet() {
-        let plan = auto_board_array_plan_for_sheet(
-            20.0,
-            10.0,
-            BoardMarginMm::all(AUTO_BOARD_MARGIN_MM),
-            AutoSheetSize::A5,
-        )
-        .unwrap();
-
-        assert_eq!(plan.sheet, AutoSheetSize::A5);
-        assert_eq!(
-            plan.target,
-            TargetSizeMm {
-                width: 148.0,
-                height: 210.0
-            }
-        );
-        assert_eq!((plan.columns, plan.rows), (4, 10));
-        assert_close(finished_width(20.0, &plan), plan.target.width);
-        assert_close(finished_height(10.0, &plan), plan.target.height);
-    }
-
-    #[test]
-    fn chooses_rotated_a7_when_it_fits_more_boards() {
-        let plan = auto_plan(40.0, 20.0);
-
-        assert_eq!(plan.sheet, AutoSheetSize::A7);
-        assert_eq!(
-            plan.target,
-            TargetSizeMm {
-                width: 74.0,
-                height: 105.0
-            }
-        );
-        assert_eq!((plan.columns, plan.rows), (1, 3));
-        assert_close(finished_width(40.0, &plan), 74.0);
-        assert_close(finished_height(20.0, &plan), 105.0);
-    }
-
-    #[test]
-    fn promotes_to_a6_when_board_cannot_fit_a7() {
-        let plan = auto_plan(70.0, 58.0);
-
-        assert_eq!(plan.sheet, AutoSheetSize::A6);
-        assert_eq!(
-            plan.target,
-            TargetSizeMm {
-                width: 105.0,
-                height: 148.0
-            }
-        );
-        assert_eq!((plan.columns, plan.rows), (1, 2));
-        assert_close(finished_width(70.0, &plan), 105.0);
-        assert_close(finished_height(58.0, &plan), 148.0);
-    }
-
-    #[test]
-    fn promotes_to_a5_when_board_cannot_fit_a6() {
-        let plan = auto_plan(120.0, 90.0);
-
-        assert_eq!(plan.sheet, AutoSheetSize::A5);
-        assert_eq!(
-            plan.target,
-            TargetSizeMm {
-                width: 148.0,
-                height: 210.0
-            }
-        );
-        assert_eq!((plan.columns, plan.rows), (1, 2));
-        assert_close(finished_width(120.0, &plan), 148.0);
-        assert_close(finished_height(90.0, &plan), 210.0);
-    }
-
-    #[test]
-    fn promotes_to_a4_when_board_cannot_fit_a5() {
-        let plan = auto_plan(190.0, 250.0);
-
-        assert_eq!(plan.sheet, AutoSheetSize::A4);
-        assert_eq!(
-            plan.target,
-            TargetSizeMm {
-                width: 210.0,
-                height: 297.0
-            }
-        );
-        assert_eq!((plan.columns, plan.rows), (1, 1));
-        assert_close(finished_width(190.0, &plan), 210.0);
-        assert_close(finished_height(250.0, &plan), 297.0);
-    }
-
-    #[test]
-    fn rejects_board_that_cannot_fit_a4() {
-        let error = auto_board_array_plan(278.0, 278.0, BoardMarginMm::all(AUTO_BOARD_MARGIN_MM))
-            .unwrap_err();
+        let error = auto_board_array_plan(278.0, 278.0, MARGIN).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -384,43 +277,26 @@ mod tests {
     }
 
     #[test]
-    fn keeps_grid_axes_within_limit() {
-        let plan = auto_plan(1.0, 1.0);
-        assert!(plan.columns <= AUTO_MAX_GRID_COUNT);
-        assert!(plan.rows <= AUTO_MAX_GRID_COUNT);
-        assert_close(finished_width(1.0, &plan), plan.target.width);
-        assert_close(finished_height(1.0, &plan), plan.target.height);
+    fn a_requested_sheet_is_filled_up_to_the_grid_limit() {
+        let plan = auto_board_array_plan_for_sheet(20.0, 10.0, MARGIN, A5).unwrap();
+        assert_eq!((plan.sheet, plan.columns, plan.rows), (A5, 4, 10));
+        assert_eq!((plan.target.width, plan.target.height), (148.0, 210.0));
+        assert_fills_target((20.0, 10.0), &plan);
+
+        let plan = auto_board_array_plan_for_sheet(1.0, 1.0, MARGIN, A4).unwrap();
+        assert_eq!(
+            (plan.columns, plan.rows),
+            (AUTO_MAX_GRID_COUNT, AUTO_MAX_GRID_COUNT)
+        );
+        assert_fills_target((1.0, 1.0), &plan);
     }
 
     #[test]
     fn uses_asymmetric_board_margins_as_cell_size() {
-        let margin = BoardMarginMm {
-            top: 6.0,
-            right: 7.0,
-            bottom: 8.0,
-            left: 9.0,
-        };
+        let margin = BoardMarginMm::new(6.0, 7.0, 8.0, 9.0);
         let plan = auto_board_array_plan(20.0, 10.0, margin).unwrap();
 
         assert_eq!(plan.board_margin_mm, margin);
-        assert_close(finished_width(20.0, &plan), plan.target.width);
-        assert_close(finished_height(10.0, &plan), plan.target.height);
-    }
-
-    fn finished_width(board_width: f64, plan: &AutoBoardArrayPlan) -> f64 {
-        let cell_width = board_width + plan.board_margin_mm.left + plan.board_margin_mm.right;
-        plan.columns as f64 * cell_width + plan.edge_rail_mm.left + plan.edge_rail_mm.right
-    }
-
-    fn finished_height(board_height: f64, plan: &AutoBoardArrayPlan) -> f64 {
-        let cell_height = board_height + plan.board_margin_mm.bottom + plan.board_margin_mm.top;
-        plan.rows as f64 * cell_height + plan.edge_rail_mm.bottom + plan.edge_rail_mm.top
-    }
-
-    fn assert_close(actual: f64, expected: f64) {
-        assert!(
-            (actual - expected).abs() < 1e-9,
-            "expected {expected}, got {actual}"
-        );
+        assert_fills_target((20.0, 10.0), &plan);
     }
 }

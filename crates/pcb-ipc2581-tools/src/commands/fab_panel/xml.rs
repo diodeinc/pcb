@@ -187,7 +187,8 @@ fn should_namespace_attr(
     }
 }
 
-/// Render the fabrication-panel document from already-stripped sources. The
+/// Render the fabrication-panel document from already-stripped sources, of
+/// which there is at least one. The
 /// provisional balancing pass consumes this directly; only the final document
 /// pays for reformatting via [`write_fab_panel_xml`].
 pub(super) fn render_fab_panel_xml(
@@ -201,15 +202,12 @@ pub(super) fn render_fab_panel_xml(
         .iter()
         .map(|source| Doc::parse(&source.namespaced_xml))
         .collect::<ipc2581::Result<Vec<_>>>()?;
-    let first = sources
-        .first()
-        .context("at least one assembly panel source is required")?;
     let mut writer = XmlWriter::new();
     writer.write_declaration();
     writer.start_element(
         "IPC-2581",
         &[
-            ("revision", first.revision.as_str()),
+            ("revision", sources[0].revision.as_str()),
             ("xmlns", "http://webstds.ipc.org/2581"),
         ],
     );
@@ -292,7 +290,7 @@ fn write_content(
     writer.empty_element("StepRef", &[("name", FAB_PANEL_STEP_NAME)]);
 
     for (doc_index, doc) in docs.iter().enumerate() {
-        let cad_data = cad_data(doc)?;
+        let cad_data = ecad_child(doc, "CadData")?;
         for layer in children_named(doc, cad_data, "Layer") {
             let name = doc
                 .attr(layer, "name")
@@ -395,14 +393,11 @@ fn write_ecad(
     shared_stackup_layers: &HashSet<String>,
     spec: FabPanelSpec,
 ) -> Result<()> {
-    let units = sources
-        .first()
-        .context("at least one assembly panel source is required")?
-        .units;
+    let units = sources[0].units;
     writer.start_element("Ecad", &[("name", FAB_PANEL_STEP_NAME)]);
     writer.start_element("CadHeader", &[("units", units_attr(units))]);
     for doc in docs {
-        let cad_header = cad_header(doc)?;
+        let cad_header = ecad_child(doc, "CadHeader")?;
         for spec in children_named(doc, cad_header, "Spec") {
             writer.raw(doc.source(spec));
         }
@@ -411,7 +406,7 @@ fn write_ecad(
 
     writer.start_element("CadData", &[]);
     for (doc_index, doc) in docs.iter().enumerate() {
-        let cad_data = cad_data(doc)?;
+        let cad_data = ecad_child(doc, "CadData")?;
         for layer in children_named(doc, cad_data, "Layer") {
             let name = doc
                 .attr(layer, "name")
@@ -422,15 +417,11 @@ fn write_ecad(
             writer.raw(doc.source(layer));
         }
     }
-    let first_doc = docs
-        .first()
-        .context("at least one assembly panel source is required")?;
-    let first_cad_data = cad_data(first_doc)?;
-    for stackup in children_named(first_doc, first_cad_data, "Stackup") {
-        writer.raw(first_doc.source(stackup));
+    for stackup in children_named(&docs[0], ecad_child(&docs[0], "CadData")?, "Stackup") {
+        writer.raw(docs[0].source(stackup));
     }
     for doc in docs {
-        let cad_data = cad_data(doc)?;
+        let cad_data = ecad_child(doc, "CadData")?;
         for step in children_named(doc, cad_data, "Step") {
             writer.raw(doc.source(step));
         }
@@ -526,22 +517,12 @@ fn write_fab_step(
     Ok(())
 }
 
-fn cad_header<'a>(doc: &'a Doc<'a>) -> Result<Node> {
-    let root = doc.root()?;
+fn ecad_child<'a>(doc: &'a Doc<'a>, name: &str) -> Result<Node> {
     let ecad = doc
-        .child(root, "Ecad")
+        .child(doc.root()?, "Ecad")
         .context("assembly panel IPC-2581 has no Ecad element")?;
-    doc.child(ecad, "CadHeader")
-        .context("assembly panel IPC-2581 has no CadHeader element")
-}
-
-fn cad_data<'a>(doc: &'a Doc<'a>) -> Result<Node> {
-    let root = doc.root()?;
-    let ecad = doc
-        .child(root, "Ecad")
-        .context("assembly panel IPC-2581 has no Ecad element")?;
-    doc.child(ecad, "CadData")
-        .context("assembly panel IPC-2581 has no CadData element")
+    doc.child(ecad, name)
+        .with_context(|| format!("assembly panel IPC-2581 has no {name} element"))
 }
 
 fn children_named<'a>(doc: &'a Doc<'a>, parent: Node, name: &'a str) -> Vec<Node> {

@@ -18,6 +18,7 @@ use ipc2581::write::fmt_units;
 /// Content step/layer refs, generated CadHeader specs, generated layers,
 /// board-outline removal, and the generated board-cell/array steps.
 pub(super) fn board_array_edits(doc: &Doc, spec: &BoardArraySpec) -> Result<Vec<Edit>> {
+    let generated_steps_xml = write_generated_steps_xml(spec)?;
     let root = doc.root()?;
     let mut edits = Vec::new();
 
@@ -81,7 +82,7 @@ pub(super) fn board_array_edits(doc: &Doc, spec: &BoardArraySpec) -> Result<Vec<
         }
     }
 
-    edits.push(doc.append_inside(cad_data, write_generated_steps_xml(spec)?));
+    edits.push(doc.append_inside(cad_data, generated_steps_xml));
     edits.extend(crate::generated::user_dictionary_edit(
         doc,
         spec.units,
