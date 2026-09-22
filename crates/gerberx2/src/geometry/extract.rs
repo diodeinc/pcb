@@ -32,7 +32,8 @@ pub fn extract_document(
     gerber: &GerberX2,
     accuracy: GeometryAccuracy,
 ) -> std::result::Result<GerberArtworkDocument, AccuracyError> {
-    let file_function = file_function(gerber);
+    let file_function =
+        crate::from_artwork::file_attribute_fields(gerber, ".FileFunction").unwrap_or_default();
     let mut doc = Document::new();
     let layer = doc.push_layer(Layer {
         name: file_function.join(", "),
@@ -186,7 +187,7 @@ fn macro_aperture(
     let paths = aperture_paths(geometry, Affine2::IDENTITY);
     let contours = match paths.as_slice() {
         [path] if path.polarity == Polarity::Dark => path.contours.clone(),
-        _ => compose_paths(paths, accuracy)?,
+        _ => compose_paths(paths, accuracy)?.to_contours(),
     };
     let uncertainty_mm = contours
         .iter()
@@ -236,11 +237,11 @@ fn extract_object(
     object: &gerber::GraphicalObject,
     tables: &Tables<'_>,
 ) -> std::result::Result<(), AccuracyError> {
-    let apertures = &tables.definitions;
     let accuracy = tables.accuracy;
-    match &object.kind {
+    // A draw is its aperture, its ends and, along an arc, its circle.
+    let (aperture, start, end, arc) = match &object.kind {
         gerber::ObjectKind::Flash { at, aperture } => {
-            if !apertures.contains_key(aperture) {
+            if !tables.definitions.contains_key(aperture) {
                 doc.warn(format!("flash references undefined aperture D{aperture}"));
                 return Ok(());
             }
@@ -266,42 +267,16 @@ fn extract_object(
                     meta: meta_from_object(object),
                 },
             );
+            return Ok(());
+        }
+        gerber::ObjectKind::Region { contours } => {
+            return push_flattened_paths(doc, target, object, region_paths(contours), accuracy);
         }
         gerber::ObjectKind::Draw {
             start,
             end,
             aperture,
-        } => {
-            if let Some(width) = circular_aperture_diameter(apertures, *aperture) {
-                push_flattened_paths(
-                    doc,
-                    target,
-                    object,
-                    vec![line_path(
-                        point(*start),
-                        point(*end),
-                        width * object.scaling.abs(),
-                    )],
-                    accuracy,
-                )?;
-            } else if let Some(geometry) = aperture_geometry(apertures, *aperture) {
-                push_flattened_paths(
-                    doc,
-                    target,
-                    object,
-                    swept_aperture(
-                        &[point(*start), point(*end)],
-                        0.0,
-                        object,
-                        geometry,
-                        accuracy,
-                    )?,
-                    accuracy,
-                )?;
-            } else {
-                doc.warn(format!("D{aperture} draw aperture has no lowered geometry"));
-            }
-        }
+        } => (*aperture, point(*start), point(*end), None),
         gerber::ObjectKind::Arc {
             start,
             end,
@@ -309,47 +284,38 @@ fn extract_object(
             clockwise,
             aperture,
         } => {
-            let start = point(*start);
+            let (start, end) = (point(*start), point(*end));
             let center = Point::new(start.x + center_offset.x, start.y + center_offset.y);
-            if let Some(width) = circular_aperture_diameter(apertures, *aperture) {
-                push_flattened_paths(
-                    doc,
-                    target,
-                    object,
-                    vec![arc_path(
-                        start,
-                        point(*end),
-                        center,
-                        *clockwise,
-                        width * object.scaling.abs(),
-                    )],
-                    accuracy,
-                )?;
-            } else if let Some(geometry) = aperture_geometry(apertures, *aperture) {
-                push_flattened_paths(
-                    doc,
-                    target,
-                    object,
-                    arc_sweep(
-                        start,
-                        point(*end),
-                        center,
-                        *clockwise,
-                        object,
-                        geometry,
-                        accuracy,
-                    )?,
-                    accuracy,
-                )?;
-            } else {
-                doc.warn(format!("D{aperture} arc aperture has no lowered geometry"));
-            }
-        }
-        gerber::ObjectKind::Region { contours } => {
-            push_flattened_paths(doc, target, object, region_paths(contours), accuracy)?;
+            let arc = Arc::new(start, end, center, *clockwise);
+            (*aperture, start, end, Some(arc))
         }
     };
-    Ok(())
+    let definition = tables.definitions.get(&aperture);
+    let paths = if let Some(gerber::ApertureTemplate::Circle { diameter, .. }) =
+        definition.map(|definition| &definition.template)
+    {
+        let to = arc.map_or(PathCmd::line_to(end), |arc| {
+            PathCmd::arc_to(end, arc.center, arc.clockwise)
+        });
+        vec![ExtractedPath {
+            polarity: Polarity::Dark,
+            paint: Paint::Stroke(StrokeStyle::round(diameter * object.scaling.abs())),
+            contours: vec![ContourBuf::new(vec![PathCmd::move_to(start), to])],
+        }]
+    } else if let Some(geometry) = definition.and_then(|definition| definition.geometry.as_ref()) {
+        let (points, path_error) = match arc {
+            Some(arc) => arc_points(arc, accuracy)?,
+            None => (vec![start, end], 0.0),
+        };
+        swept_aperture(&points, path_error, object, geometry, accuracy)?
+    } else {
+        let kind = if arc.is_some() { "arc" } else { "draw" };
+        doc.warn(format!(
+            "D{aperture} {kind} aperture has no lowered geometry"
+        ));
+        return Ok(());
+    };
+    push_flattened_paths(doc, target, object, paths, accuracy)
 }
 
 /// Convert a standard aperture template into an artwork aperture. Macro and
@@ -397,44 +363,10 @@ fn standard_aperture(template: &gerber::ApertureTemplate) -> Option<Aperture> {
     aperture.hole_fits().then_some(aperture)
 }
 
-fn aperture_geometry<'a>(
-    apertures: &'a HashMap<i32, &gerber::ApertureDefinition>,
-    code: i32,
-) -> Option<&'a gerber::ApertureGeometry> {
-    apertures.get(&code)?.geometry.as_ref()
-}
-
-fn file_function(gerber: &GerberX2) -> Vec<String> {
-    gerber
-        .file_attributes()
-        .iter()
-        .find(|attr| gerber.resolve(attr.name) == ".FileFunction")
-        .map(|attr| {
-            attr.fields
-                .iter()
-                .map(|field| gerber.resolve(*field).to_string())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn meta_from_object(object: &gerber::GraphicalObject) -> GerberObjectMeta {
     GerberObjectMeta {
         aperture_attributes: object.aperture_attributes,
         object_attributes: object.object_attributes,
-    }
-}
-
-fn circular_aperture_diameter(
-    apertures: &HashMap<i32, &gerber::ApertureDefinition>,
-    code: i32,
-) -> Option<f64> {
-    match apertures.get(&code)?.template {
-        gerber::ApertureTemplate::Circle {
-            diameter,
-            hole_diameter: _,
-        } => Some(diameter),
-        _ => None,
     }
 }
 
@@ -451,56 +383,41 @@ fn push_flattened_paths(
     doc: &mut GerberArtworkDocument,
     target: ArtworkTarget,
     object: &gerber::GraphicalObject,
-    paths: Vec<ExtractedPath>,
+    mut paths: Vec<ExtractedPath>,
     accuracy: GeometryAccuracy,
 ) -> std::result::Result<(), AccuracyError> {
-    if paths.is_empty() {
-        return Ok(());
-    }
-
-    if paths.len() == 1 && paths[0].polarity == Polarity::Dark {
-        let extracted = paths.into_iter().next().unwrap();
-        let is_stroked = matches!(extracted.paint, Paint::Stroke(_));
-        let path = doc.push_path(extracted.paint, extracted.contours);
-        target.push(
-            doc,
-            Object {
-                polarity: object.polarity,
-                order: Default::default(),
-                geometry: if is_stroked {
-                    Geometry::Stroke { path }
-                } else {
-                    Geometry::Region { path }
-                },
-                bbox: doc.path_bbox(path),
-                meta: meta_from_object(object),
-            },
-        );
-        return Ok(());
-    }
-
-    let contours = compose_paths(paths, accuracy)?;
-    if contours.is_empty() {
-        return Ok(());
-    }
-
-    let path = doc.push_path(
-        Paint::Fill {
-            rule: FillRule::NonZero,
-        },
-        contours,
-    );
+    // A lone dark piece keeps its own paint; anything else is composed.
+    let (paint, contours) = match paths.as_slice() {
+        [] => return Ok(()),
+        [path] if path.polarity == Polarity::Dark => {
+            let path = paths.pop().unwrap();
+            (path.paint, path.contours)
+        }
+        _ => {
+            let contours = compose_paths(paths, accuracy)?.to_contours();
+            if contours.is_empty() {
+                return Ok(());
+            }
+            let rule = FillRule::NonZero;
+            (Paint::Fill { rule }, contours)
+        }
+    };
+    let is_stroked = matches!(paint, Paint::Stroke(_));
+    let path = doc.push_path(paint, contours);
     target.push(
         doc,
         Object {
             polarity: object.polarity,
             order: Default::default(),
-            geometry: Geometry::Region { path },
+            geometry: if is_stroked {
+                Geometry::Stroke { path }
+            } else {
+                Geometry::Region { path }
+            },
             bbox: doc.path_bbox(path),
             meta: meta_from_object(object),
         },
     );
-
     Ok(())
 }
 
@@ -508,7 +425,7 @@ fn push_flattened_paths(
 fn compose_paths(
     paths: Vec<ExtractedPath>,
     accuracy: GeometryAccuracy,
-) -> std::result::Result<Vec<ContourBuf>, AccuracyError> {
+) -> std::result::Result<region::ContourSet, AccuracyError> {
     let resolution = Resolution::new(0.0, accuracy);
     let mut composer = PaintComposer::new(resolution);
     for extracted in paths {
@@ -521,7 +438,7 @@ fn compose_paths(
             )?,
         );
     }
-    Ok(composer.finish()?.to_contours())
+    composer.finish()
 }
 
 fn aperture_paths(geometry: &gerber::ApertureGeometry, transform: Affine2) -> Vec<ExtractedPath> {
@@ -559,28 +476,6 @@ fn transform_contour(commands: &[gerber::PathCommand], transform: Affine2) -> Co
     ContourBuf::new(cmds).transformed(transform)
 }
 
-fn line_path(start: Point, end: Point, width: f64) -> ExtractedPath {
-    ExtractedPath {
-        polarity: Polarity::Dark,
-        paint: Paint::Stroke(StrokeStyle::round(width)),
-        contours: vec![ContourBuf::new(vec![
-            PathCmd::move_to(start),
-            PathCmd::line_to(end),
-        ])],
-    }
-}
-
-fn arc_path(start: Point, end: Point, center: Point, clockwise: bool, width: f64) -> ExtractedPath {
-    ExtractedPath {
-        polarity: Polarity::Dark,
-        paint: Paint::Stroke(StrokeStyle::round(width)),
-        contours: vec![ContourBuf::new(vec![
-            PathCmd::move_to(start),
-            PathCmd::arc_to(end, center, clockwise),
-        ])],
-    }
-}
-
 fn swept_aperture(
     points: &[Point],
     path_error: f64,
@@ -589,14 +484,10 @@ fn swept_aperture(
     accuracy: GeometryAccuracy,
 ) -> std::result::Result<Vec<ExtractedPath>, AccuracyError> {
     let resolution = Resolution::new(0.0, accuracy);
-    let mut composer = PaintComposer::new(resolution);
-    for path in aperture_paths(geometry, object_transform(object, Point::ZERO)) {
-        composer.push(
-            path.polarity,
-            region::ContourSet::from_contours(&path.contours, FillRule::NonZero, resolution)?,
-        );
-    }
-    let aperture = composer.finish()?;
+    let aperture = compose_paths(
+        aperture_paths(geometry, object_transform(object, Point::ZERO)),
+        accuracy,
+    )?;
     let edge_count: usize = aperture.rings.iter().map(Vec::len).sum();
     if points.len().saturating_mul(edge_count) > 1_000_000 {
         return Err(AccuracyError::SubdivisionLimit);
@@ -643,16 +534,12 @@ fn swept_aperture(
     }])
 }
 
-fn arc_sweep(
-    start: Point,
-    end: Point,
-    center: Point,
-    clockwise: bool,
-    object: &gerber::GraphicalObject,
-    geometry: &gerber::ApertureGeometry,
+/// Points along `arc` whose chords stay within a quarter of the budget,
+/// and that chord error.
+fn arc_points(
+    arc: Arc,
     accuracy: GeometryAccuracy,
-) -> std::result::Result<Vec<ExtractedPath>, AccuracyError> {
-    let arc = Arc::new(start, end, center, clockwise);
+) -> std::result::Result<(Vec<Point>, f64), AccuracyError> {
     let radius = arc.radius();
     let sweep = arc.sweep_radians();
     let path_error = accuracy.max_error_mm() / 4.0;
@@ -662,12 +549,12 @@ fn arc_sweep(
         return Err(AccuracyError::SubdivisionLimit);
     }
     let steps = steps as usize;
-    let signed_sweep = if clockwise { -sweep } else { sweep };
-    let start_angle = start.angle_from(center);
+    let signed_sweep = if arc.clockwise { -sweep } else { sweep };
+    let start_angle = arc.start.angle_from(arc.center);
     let points = (0..=steps)
         .map(|index| arc.point_at(start_angle + signed_sweep * index as f64 / steps as f64))
-        .collect::<Vec<_>>();
-    swept_aperture(&points, path_error, object, geometry, accuracy)
+        .collect();
+    Ok((points, path_error))
 }
 
 fn object_transform(object: &gerber::GraphicalObject, at: Point) -> Affine2 {

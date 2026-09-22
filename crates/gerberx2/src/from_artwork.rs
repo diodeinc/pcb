@@ -5,7 +5,7 @@
 //! can be emitted as a Gerber file, regardless of which source dialect
 //! produced it.
 
-use pcb_ir::geom::{AccuracyError, GeometryAccuracy};
+use pcb_ir::geom::GeometryAccuracy;
 use std::collections::HashMap;
 
 use crate::{
@@ -107,7 +107,7 @@ pub fn annotate_for_export(
     }
 }
 
-fn file_attribute_fields(gerber: &crate::GerberX2, name: &str) -> Option<Vec<String>> {
+pub(crate) fn file_attribute_fields(gerber: &crate::GerberX2, name: &str) -> Option<Vec<String>> {
     gerber
         .file_attributes()
         .iter()
@@ -155,7 +155,7 @@ pub fn lower_artwork_layer(
     let layer = pcb_ir::dialects::artwork::expand_instances_preserving_grids(layer);
     let mut apertures = ApertureTable::default();
     let mut attribute_sets = AttributeSets::default();
-    let mut plan = GerberPlan::default();
+    let mut groups = Vec::new();
     let layer_attributes = layer
         .layers
         .first()
@@ -196,11 +196,17 @@ pub fn lower_artwork_layer(
                 for object in &mut objects {
                     object.repeat = repeat;
                 }
-                plan.push_group(child.order.stage, polarity, objects);
+                if !objects.is_empty() {
+                    groups.push(GerberObjectGroup {
+                        stage: child.order.stage,
+                        polarity,
+                        objects,
+                    });
+                }
             }
         }
     }
-    let objects = plan.into_ordered_objects(&attribute_sets);
+    let objects = ordered_objects(groups, &attribute_sets);
 
     Ok(GerberLayer {
         file_attributes: lower_layer_attributes(&layer_attributes),
@@ -301,10 +307,16 @@ fn lower_artwork_object(
     let mut objects = Vec::new();
     match object.geometry {
         ArtworkGeometry::Region { path } => {
-            objects.extend(lower_region_objects(
-                layer,
-                path,
-                transform,
+            let artwork_path = &layer.arena.paths[path as usize];
+            let contours = layer
+                .arena
+                .path_contours(artwork_path)
+                .into_iter()
+                .map(|contour| contour.transformed(transform))
+                .collect::<Vec<_>>();
+            objects.extend(region_objects(
+                &contours,
+                artwork_path.fill_rule().unwrap_or(FillRule::NonZero),
                 polarity,
                 aperture_function,
                 attributes,
@@ -350,7 +362,10 @@ fn lower_artwork_object(
                 else {
                     continue;
                 };
-                let segments = contour_segments(&contour, accuracy)?;
+                let segments = contour
+                    .flattened_curves(accuracy)?
+                    .segments()
+                    .collect::<Vec<_>>();
                 for mark in
                     pcb_ir::geom::stroke_pattern_marks(&segments, stroke.pattern, stroke_width)
                 {
@@ -428,14 +443,9 @@ fn lower_stroke_segment(segment: Segment, aperture: i32) -> ObjectKind {
             aperture,
         },
         Segment::Ellipse(_) => {
-            unreachable!("contour_segments flattens curves")
+            unreachable!("flattened curves are lines and circular arcs")
         }
     }
-}
-
-#[derive(Debug, Default)]
-struct GerberPlan {
-    groups: Vec<GerberObjectGroup>,
 }
 
 #[derive(Debug)]
@@ -464,67 +474,43 @@ fn group_order(group: &GerberObjectGroup, rank: &[u32]) -> (PaintStage, u32, i32
     )
 }
 
-impl GerberPlan {
-    fn push_group(&mut self, stage: PaintStage, polarity: Polarity, objects: Vec<WriterObject>) {
-        if objects.is_empty() {
-            return;
-        }
-        self.groups.push(GerberObjectGroup {
-            stage,
-            polarity,
-            objects,
-        });
+fn ordered_objects(
+    groups: Vec<GerberObjectGroup>,
+    attribute_sets: &AttributeSets,
+) -> Vec<WriterObject> {
+    let sets = attribute_sets.sets();
+    let mut by_value = (0..sets.len() as u32).collect::<Vec<_>>();
+    by_value.sort_by_key(|&id| &sets[id as usize]);
+    let mut rank = vec![0; sets.len()];
+    for (position, &id) in by_value.iter().enumerate() {
+        rank[id as usize] = position as u32;
     }
 
-    fn into_ordered_objects(self, attribute_sets: &AttributeSets) -> Vec<WriterObject> {
-        let sets = attribute_sets.sets();
-        let mut by_value = (0..sets.len() as u32).collect::<Vec<_>>();
-        by_value.sort_by_key(|&id| &sets[id as usize]);
-        let mut rank = vec![0; sets.len()];
-        for (position, &id) in by_value.iter().enumerate() {
-            rank[id as usize] = position as u32;
-        }
-
-        // Dark paint commutes with dark paint and clear with clear, but not
-        // across a polarity change: stage ordering (fills before pads) may
-        // only permute groups within each maximal same-polarity run. Within
-        // a stage the same commutativity lets groups cluster by object
-        // attributes and aperture, so the writer's attribute and tool state
-        // changes as rarely as possible. Final cutouts are terminal by
-        // definition and emit after everything.
-        let (cutouts, mut painted): (Vec<_>, Vec<_>) = self
-            .groups
-            .into_iter()
-            .partition(|group| group.stage == PaintStage::FinalCutout);
-        let mut start = 0;
-        while start < painted.len() {
-            let polarity = painted[start].polarity;
-            let mut end = start + 1;
-            while end < painted.len() && painted[end].polarity == polarity {
-                end += 1;
-            }
-            painted[start..end].sort_by_key(|group| group_order(group, &rank));
-            start = end;
-        }
-        painted
-            .into_iter()
-            .chain(cutouts)
-            .flat_map(|group| group.objects)
-            .collect()
+    // Dark paint commutes with dark paint and clear with clear, but not
+    // across a polarity change: stage ordering (fills before pads) may only
+    // permute groups within each maximal same-polarity run. Within a stage
+    // the same commutativity lets groups cluster by object attributes and
+    // aperture, so the writer's attribute and tool state changes as rarely
+    // as possible. Final cutouts are terminal by definition and emit after
+    // everything.
+    let (cutouts, mut painted): (Vec<_>, Vec<_>) = groups
+        .into_iter()
+        .partition(|group| group.stage == PaintStage::FinalCutout);
+    for run in painted.chunk_by_mut(|a, b| a.polarity == b.polarity) {
+        run.sort_by_key(|group| group_order(group, &rank));
     }
+    painted
+        .into_iter()
+        .chain(cutouts)
+        .flat_map(|group| group.objects)
+        .collect()
 }
 
 #[derive(Default)]
 struct ApertureTable {
-    by_key: HashMap<ApertureKey, i32>,
+    /// Codes by template and the attribute set carrying the aperture function.
+    by_key: HashMap<(ApertureTemplateKey, u32), i32>,
     apertures: Vec<WriterAperture>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ApertureKey {
-    template: ApertureTemplateKey,
-    /// The attribute set carrying the aperture function.
-    function: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -535,26 +521,8 @@ enum ApertureTemplateKey {
         aperture: u32,
         basis: [i64; 4],
     },
-    Circle {
-        diameter_nm: i64,
-        hole_nm: i64,
-    },
-    Rectangle {
-        width_nm: i64,
-        height_nm: i64,
-        hole_nm: i64,
-    },
-    Obround {
-        width_nm: i64,
-        height_nm: i64,
-        hole_nm: i64,
-    },
-    Polygon {
-        diameter_nm: i64,
-        vertices: u32,
-        rotation_microdeg: i64,
-        hole_nm: i64,
-    },
+    /// A standard template's letter, its parameters and its hole.
+    Standard(char, [i64; 3], i64),
     Outline(Vec<Vec<(i64, i64)>>),
 }
 
@@ -578,8 +546,8 @@ impl ApertureTable {
             m12: 0.0,
             ..transform
         };
-        let key = ApertureKey {
-            template: ApertureTemplateKey::Source {
+        let key = (
+            ApertureTemplateKey::Source {
                 aperture: source,
                 // Composed placements of one orientation differ in their
                 // last bits; a nano-scale basis grid reunites them.
@@ -587,7 +555,7 @@ impl ApertureTable {
                     .map(|value| (value * 1e9).round() as i64),
             },
             function,
-        };
+        );
         if let Some(code) = self.by_key.get(&key) {
             return Ok(Some(*code));
         }
@@ -628,24 +596,23 @@ impl ApertureTable {
             return Ok(None);
         }
         let hole_diameter = (aperture.hole_diameter > 0.0).then_some(aperture.hole_diameter);
-        let hole_nm = hole_diameter.map_or(0, quantize_mm);
+        let standard = |letter, parameters: [f64; 3]| {
+            ApertureTemplateKey::Standard(
+                letter,
+                parameters.map(quantize_mm),
+                hole_diameter.map_or(0, quantize_mm),
+            )
+        };
         let (template_key, template) = match aperture.shape {
             ApertureShape::Circle { diameter } => (
-                ApertureTemplateKey::Circle {
-                    diameter_nm: quantize_mm(diameter),
-                    hole_nm,
-                },
+                standard('C', [diameter, 0.0, 0.0]),
                 WriterApertureTemplate::Circle {
                     diameter,
                     hole_diameter,
                 },
             ),
             ApertureShape::Rectangle { width, height } => (
-                ApertureTemplateKey::Rectangle {
-                    width_nm: quantize_mm(width),
-                    height_nm: quantize_mm(height),
-                    hole_nm,
-                },
+                standard('R', [width, height, 0.0]),
                 WriterApertureTemplate::Rectangle {
                     width,
                     height,
@@ -653,11 +620,7 @@ impl ApertureTable {
                 },
             ),
             ApertureShape::Obround { width, height } => (
-                ApertureTemplateKey::Obround {
-                    width_nm: quantize_mm(width),
-                    height_nm: quantize_mm(height),
-                    hole_nm,
-                },
+                standard('O', [width, height, 0.0]),
                 WriterApertureTemplate::Obround {
                     width,
                     height,
@@ -669,12 +632,7 @@ impl ApertureTable {
                 vertices,
                 rotation_degrees,
             } => (
-                ApertureTemplateKey::Polygon {
-                    diameter_nm: quantize_mm(diameter),
-                    vertices,
-                    rotation_microdeg: quantize_mm(rotation_degrees),
-                    hole_nm,
-                },
+                standard('P', [diameter, f64::from(vertices), rotation_degrees]),
                 WriterApertureTemplate::Polygon {
                     outer_diameter: diameter,
                     vertices: vertices as i32,
@@ -703,10 +661,7 @@ impl ApertureTable {
                 )
             }
         };
-        let key = ApertureKey {
-            template: template_key,
-            function,
-        };
+        let key = (template_key, function);
         if let Some(code) = self.by_key.get(&key) {
             return Ok(Some(*code));
         }
@@ -742,32 +697,6 @@ fn lower_layer_attributes(attributes: &LayerAttributes) -> Vec<AttributeValue> {
         ));
     }
     values
-}
-
-fn lower_region_objects(
-    layer: &ArtworkDocument,
-    path_index: u32,
-    transform: Affine2,
-    polarity: Polarity,
-    aperture_attributes: u32,
-    attributes: u32,
-    accuracy: GeometryAccuracy,
-) -> Result<Vec<WriterObject>> {
-    let artwork_path = &layer.arena.paths[path_index as usize];
-    let contours = layer
-        .arena
-        .path_contours(artwork_path)
-        .into_iter()
-        .map(|contour| contour.transformed(transform))
-        .collect::<Vec<_>>();
-    region_objects(
-        &contours,
-        artwork_path.fill_rule().unwrap_or(FillRule::NonZero),
-        polarity,
-        aperture_attributes,
-        attributes,
-        accuracy,
-    )
 }
 
 fn region_objects(
@@ -824,15 +753,6 @@ fn lower_ring(ring: &Ring) -> Contour {
             })
             .collect(),
     }
-}
-
-/// Decode a contour into the line and circular-arc segments Gerber can draw,
-/// flattening cubic and elliptical curves within the accuracy budget.
-fn contour_segments(
-    contour: &ContourBuf,
-    accuracy: GeometryAccuracy,
-) -> std::result::Result<Vec<Segment>, AccuracyError> {
-    Ok(contour.flattened_curves(accuracy)?.segments().collect())
 }
 
 fn lower_object_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue> {
@@ -1059,13 +979,13 @@ mod tests {
             transform: Affine2::IDENTITY,
         };
         assert!(lower(&flash, Affine2::IDENTITY, &mut table).is_err());
-        assert!(!table.by_key.contains_key(&ApertureKey {
-            template: ApertureTemplateKey::Source {
+        assert!(!table.by_key.contains_key(&(
+            ApertureTemplateKey::Source {
                 aperture: invalid,
                 basis: [1_000_000_000, 0, 0, 1_000_000_000],
             },
-            function: AttributeSets::EMPTY,
-        }));
+            AttributeSets::EMPTY,
+        )));
         // A new export/table must check its own, finer accuracy budget.
         flash.geometry = ArtworkGeometry::Flash {
             aperture: source,
