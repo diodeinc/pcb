@@ -52,43 +52,42 @@ pub(super) fn layer_class(function: LayerFunction) -> (crate::dialects::LayerRol
     }
 }
 
+/// Fill in whatever intent extraction left open from the feature's kind and
+/// the layer it sits on.
 pub(super) fn complete_feature_intent(layer: &Layer, feature: &mut GeometryFeature) {
-    let layer_intent = intent_for_layer(layer);
+    let layer_domain = layer_class(layer.layer_function).1;
     if feature.intent.domain == FeatureDomain::Unknown {
-        feature.intent.domain = layer_intent.domain;
+        feature.intent.domain = layer_domain;
     }
     if feature.intent.operation == FeatureOperation::Unknown {
-        feature.intent.operation = operation_for_feature(feature, layer_intent.operation);
+        feature.intent.operation = match feature.kind {
+            FeatureKind::Hole => FeatureOperation::Drill,
+            FeatureKind::Slot => FeatureOperation::Route,
+            _ => operation_for_domain(layer_domain),
+        };
     }
     if feature.intent.material == FeatureMaterial::Unknown {
         feature.intent.material = material_for_domain(feature.intent.domain);
     }
     if feature.intent.span == FeatureSpan::Unknown {
-        feature.intent.span = layer_intent.span;
+        feature.intent.span = span_for_layer(layer, layer_domain);
     }
     if feature.intent.side == crate::dialects::Side::None {
-        feature.intent.side = layer_intent.side;
+        feature.intent.side = side_for_layer(layer.side);
     }
     if feature.intent.role == FeatureRole::Unknown {
         feature.intent.role = role_for_feature(feature);
     }
-    if feature.intent.plating == PlatingKind::Unknown {
-        feature.intent.plating = plating_for_feature(feature);
+    // Only drilled and padstack features can be plated at all.
+    if feature.intent.plating == PlatingKind::Unknown
+        && !matches!(
+            feature.kind,
+            FeatureKind::Hole | FeatureKind::Slot | FeatureKind::Padstack
+        )
+    {
+        feature.intent.plating = PlatingKind::None;
     }
     feature.reclassify();
-}
-
-pub(super) fn intent_for_layer(layer: &Layer) -> FeatureIntent {
-    let domain = layer_class(layer.layer_function).1;
-    FeatureIntent {
-        domain,
-        role: FeatureRole::Unknown,
-        operation: operation_for_domain(domain),
-        material: material_for_domain(domain),
-        plating: PlatingKind::Unknown,
-        span: span_for_layer(layer, domain),
-        side: side_for_layer(layer.side),
-    }
 }
 
 pub(super) fn operation_for_domain(domain: FeatureDomain) -> FeatureOperation {
@@ -103,17 +102,6 @@ pub(super) fn operation_for_domain(domain: FeatureDomain) -> FeatureOperation {
         FeatureDomain::Profile => FeatureOperation::Profile,
         FeatureDomain::Mechanical => FeatureOperation::Mark,
         FeatureDomain::Unknown | FeatureDomain::Other => FeatureOperation::Unknown,
-    }
-}
-
-pub(super) fn operation_for_feature(
-    feature: &GeometryFeature,
-    layer_operation: FeatureOperation,
-) -> FeatureOperation {
-    match feature.kind {
-        FeatureKind::Hole => FeatureOperation::Drill,
-        FeatureKind::Slot => FeatureOperation::Route,
-        _ => layer_operation,
     }
 }
 
@@ -174,13 +162,6 @@ pub(super) fn role_for_feature(feature: &GeometryFeature) -> FeatureRole {
             FeatureDomain::Copper | FeatureDomain::Unknown => FeatureRole::Conductor,
             _ => FeatureRole::Other,
         },
-    }
-}
-
-pub(super) fn plating_for_feature(feature: &GeometryFeature) -> PlatingKind {
-    match feature.kind {
-        FeatureKind::Hole | FeatureKind::Slot | FeatureKind::Padstack => feature.intent.plating,
-        _ => PlatingKind::None,
     }
 }
 
