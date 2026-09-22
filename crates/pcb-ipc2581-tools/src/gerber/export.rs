@@ -1022,144 +1022,87 @@ mod tests {
     use crate::manufacturing::{
         ManufacturingExportOptions, ManufacturingPackage, build_manufacturing_package,
     };
+    use gerberx2::ObjectKind;
+    use gerberx2::geometry::GerberArtworkDocument;
     use ipc2581::Ipc2581;
     use pcb_ir::import::ipc2581::import_design;
+    use std::collections::BTreeMap;
     #[cfg(feature = "cli")]
     use std::io::{Cursor, Read};
 
-    fn gerber_files(ipc: &Ipc2581, view: ArtworkScope) -> Result<Vec<GerberX2File>> {
+    /// Exported file contents by filename.
+    type Files = BTreeMap<String, String>;
+
+    fn gerber_files(ipc: &Ipc2581, view: ArtworkScope) -> Files {
         build_gerber_x2_files(
-            &import_design(ipc, Resolution::default())?,
+            &import_design(ipc, Resolution::default()).unwrap(),
             view,
             &GerberExportOptions::default(),
             Resolution::default(),
         )
+        .unwrap()
+        .into_iter()
+        .map(|file| (file.filename, file.contents))
+        .collect()
     }
 
-    fn manufacturing_package(ipc: &Ipc2581, view: ArtworkScope) -> Result<ManufacturingPackage> {
+    fn manufacturing_package(ipc: &Ipc2581, view: ArtworkScope) -> ManufacturingPackage {
         build_manufacturing_package(
-            &import_design(ipc, Resolution::default())?,
+            &import_design(ipc, Resolution::default()).unwrap(),
             &ManufacturingExportOptions {
                 view,
                 relief_debug_dir: None,
             },
             Resolution::default(),
         )
-    }
-
-    #[test]
-    fn negative_set_before_a_later_fill_is_repainted_by_it() {
-        let resolution = Resolution::default();
-
-        // Sequential set semantics: a fill written after the clear repaints
-        // the cleared area, so the fill survives intact.
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Datum x="0" y="0"/>
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="10"/>
-            <PolyStepSegment x="0" y="10"/>
-            <PolyStepSegment x="0" y="0"/>
-          </Polygon>
-        </Profile>
-        <LayerFeature layerRef="TOP">
-          <Set polarity="NEGATIVE">
-            <Features>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="4" y="4"/>
-                    <PolyStepSegment x="6" y="4"/>
-                    <PolyStepSegment x="6" y="6"/>
-                    <PolyStepSegment x="4" y="6"/>
-                    <PolyStepSegment x="4" y="4"/>
-                  </Polygon>
-                </Contour>
-              </UserSpecial>
-            </Features>
-          </Set>
-          <Set>
-            <Features>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="2" y="2"/>
-                    <PolyStepSegment x="8" y="2"/>
-                    <PolyStepSegment x="8" y="8"/>
-                    <PolyStepSegment x="2" y="8"/>
-                    <PolyStepSegment x="2" y="2"/>
-                  </Polygon>
-                </Contour>
-              </UserSpecial>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-        let copper = files
-            .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
-        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-
-        let mask = pcb_ir::dialects::artwork::compose_to_mask(
-            &gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap(),
-            resolution,
-        )
-        .unwrap();
-        let mut rings = Vec::new();
-        for layer in &mask.layers {
-            for shape in mask.shapes(layer) {
-                rings.extend(
-                    pcb_ir::geom::ContourSet::from_contours(
-                        &mask.arena.path_contours(shape),
-                        pcb_ir::geom::FillRule::NonZero,
-                        resolution.strict(),
-                    )
-                    .unwrap()
-                    .rings,
-                );
-            }
-        }
-        let copper_area = pcb_ir::geom::ContourSet::from_rings(
-            rings,
-            pcb_ir::geom::FillRule::NonZero,
-            resolution,
-        )
         .unwrap()
-        .area();
-        // The 6x6 fill paints after the clear and survives whole.
-        let expected = 36.0;
-        assert!(
-            (copper_area - expected).abs() <= expected * 0.01,
-            "expected intact fill area {expected:.2}, got {copper_area:.2}"
-        );
     }
 
-    #[test]
-    fn catalogue_pads_flash_through_shared_apertures() {
-        let resolution = Resolution::default();
+    fn manufacturing_files(ipc: &Ipc2581, view: ArtworkScope) -> Files {
+        manufacturing_package(ipc, view)
+            .files
+            .into_iter()
+            .map(|file| (file.filename, file.contents))
+            .collect()
+    }
 
-        let ipc = ipc::Ipc2581::parse(
+    fn extracted(contents: &str) -> GerberArtworkDocument {
+        let parsed = gerberx2::GerberX2::parse(contents).unwrap();
+        gerberx2::geometry::extract_document(&parsed, GeometryAccuracy::default()).unwrap()
+    }
+
+    /// The area a Gerber file images.
+    fn area(contents: &str) -> f64 {
+        pcb_ir::dialects::artwork::compare::summarize(&extracted(contents), Resolution::default())
+            .unwrap()
+            .area_mm2
+    }
+
+    fn count(contents: &str, kind: impl Fn(&ObjectKind) -> bool) -> usize {
+        let parsed = gerberx2::GerberX2::parse(contents).unwrap();
+        parsed
+            .objects()
+            .iter()
+            .filter(|object| kind(&object.kind))
+            .count()
+    }
+
+    /// A filled axis-aligned rectangle as a `UserSpecial` contour.
+    fn rect_contour(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
+        format!(
+            r#"<Contour><Polygon>
+              <PolyBegin x="{x0}" y="{y0}"/><PolyStepSegment x="{x1}" y="{y0}"/>
+              <PolyStepSegment x="{x1}" y="{y1}"/><PolyStepSegment x="{x0}" y="{y1}"/>
+              <PolyStepSegment x="{x0}" y="{y0}"/>
+            </Polygon></Contour>"#
+        )
+    }
+
+    /// A one-Step board with a 20 x 20 profile and one `TOP` signal layer
+    /// carrying `features`. `pad` is the standard primitive of dictionary
+    /// entry `pad`, which padstack `padstack` places on `TOP`.
+    fn top_copper_board(pad: &str, features: &str) -> Ipc2581 {
+        ipc::Ipc2581::parse(&format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
@@ -1167,7 +1110,7 @@ mod tests {
     <StepRef name="board"/>
     <LayerRef name="TOP"/>
     <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="pad"><RectRound width="2" height="1" radius="0.25" upperRight="true" upperLeft="true" lowerRight="true" lowerLeft="true"/></EntryStandard>
+      <EntryStandard id="pad">{pad}</EntryStandard>
     </DictionaryStandard>
   </Content>
   <Ecad>
@@ -1190,283 +1133,117 @@ mod tests {
             <StandardPrimitiveRef id="pad"/>
           </PadstackPadDef>
         </PadStackDef>
-        <LayerFeature layerRef="TOP">
-          <Set net="N1">
-            <Pad padstackDefRef="padstack">
-              <Location x="5" y="5"/>
-              <StandardPrimitiveRef id="pad"/>
-            </Pad>
-            <Pad padstackDefRef="padstack">
-              <Location x="5" y="15"/>
-              <StandardPrimitiveRef id="pad"/>
-            </Pad>
-            <Pad padstackDefRef="padstack">
-              <Xform rotation="45"/>
-              <Location x="15" y="10"/>
-              <StandardPrimitiveRef id="pad"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
+        <LayerFeature layerRef="TOP">{features}</LayerFeature>
       </Step>
     </CadData>
   </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-        let copper = files
+</IPC-2581>"#
+        ))
+        .unwrap()
+    }
+
+    /// `pad` placed through `padstack` at each location, with optional
+    /// extra child elements.
+    fn pads<const N: usize>(locations: [(f64, f64, &str); N]) -> String {
+        locations
             .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
-        assert_eq!(copper.contents.matches("D03*").count(), 3);
+            .map(|(x, y, extra)| {
+                format!(
+                    r#"<Pad padstackDefRef="padstack">{extra}<Location x="{x}" y="{y}"/>
+                      <StandardPrimitiveRef id="pad"/></Pad>"#
+                )
+            })
+            .collect()
+    }
+
+    const CIRCLE_1: &str = r#"<Circle diameter="1"/>"#;
+
+    #[test]
+    fn negative_sets_clear_only_what_was_painted_before_them() {
+        let user_special =
+            |contours: &str| format!("<Features><UserSpecial>{contours}</UserSpecial></Features>");
+        // Sequential set semantics: a fill written after the clear repaints
+        // the cleared area, so the 6 x 6 fill survives whole.
+        let repainted = format!(
+            r#"<Set polarity="NEGATIVE">{}</Set><Set>{}</Set>"#,
+            user_special(&rect_contour(4.0, 4.0, 6.0, 6.0)),
+            user_special(&rect_contour(2.0, 2.0, 8.0, 8.0)),
+        );
+        // A clear painted after a pad erases their overlap, a quarter of it.
+        let erased = format!(
+            r#"<Set net="N1">{}</Set><Set polarity="NEGATIVE">{}</Set>"#,
+            pads([(5.0, 5.0, "")]),
+            user_special(&rect_contour(4.0, 4.0, 5.0, 5.0)),
+        );
+        for (features, expected) in [
+            (repainted, 36.0),
+            (erased, std::f64::consts::PI * (1.0 - 0.25)),
+        ] {
+            let ipc = top_copper_board(r#"<Circle diameter="2"/>"#, &features);
+            let copper = &gerber_files(&ipc, ArtworkScope::Board)["F_Cu.gtl"];
+            assert!(
+                !copper.contains("%LPC*%"),
+                "Gerber carries a clear set as the dark copper it leaves"
+            );
+            let actual = area(copper);
+            assert!(
+                (actual - expected).abs() <= expected * 0.02,
+                "expected area {expected:.4}, got {actual:.4}"
+            );
+        }
+    }
+
+    #[test]
+    fn catalogue_pads_flash_through_shared_apertures() {
+        let ipc = top_copper_board(
+            r#"<RectRound width="2" height="1" radius="0.25" upperRight="true" upperLeft="true" lowerRight="true" lowerLeft="true"/>"#,
+            &format!(
+                r#"<Set net="N1">{}</Set>"#,
+                pads([
+                    (5.0, 5.0, ""),
+                    (5.0, 15.0, ""),
+                    (15.0, 10.0, r#"<Xform rotation="45"/>"#)
+                ])
+            ),
+        );
+        let copper = &gerber_files(&ipc, ArtworkScope::Board)["F_Cu.gtl"];
+        assert_eq!(copper.matches("D03*").count(), 3);
         assert!(
-            !copper.contents.contains("G36*"),
+            !copper.contains("G36*"),
             "catalogue pads must flash, not flatten to regions"
         );
         assert!(
-            copper.contents.matches("%ADD").count() <= 2,
+            copper.matches("%ADD").count() <= 2,
             "repeated orientations share aperture definitions"
         );
-        assert!(!copper.contents.contains("%AMRoundedRect*"));
-        assert!(!copper.contents.lines().any(|line| line.starts_with("21,")));
-        assert!(!copper.contents.contains("%LR"));
-        assert!(copper.contents.lines().any(|line| line.starts_with("4,")));
+        assert!(!copper.contains("%AMRoundedRect*"));
+        assert!(!copper.lines().any(|line| line.starts_with("21,")));
+        assert!(!copper.contains("%LR"));
+        assert!(copper.lines().any(|line| line.starts_with("4,")));
 
-        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-        let mask = pcb_ir::dialects::artwork::compose_to_mask(
-            &gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap(),
-            resolution,
-        )
-        .unwrap();
-        let mut rings = Vec::new();
-        for layer in &mask.layers {
-            for shape in mask.shapes(layer) {
-                rings.extend(
-                    pcb_ir::geom::ContourSet::from_contours(
-                        &mask.arena.path_contours(shape),
-                        pcb_ir::geom::FillRule::NonZero,
-                        resolution.strict(),
-                    )
-                    .unwrap()
-                    .rings,
-                );
-            }
-        }
-        let copper_area = pcb_ir::geom::ContourSet::from_rings(
-            rings,
-            pcb_ir::geom::FillRule::NonZero,
-            resolution,
-        )
-        .unwrap()
-        .area();
         let corner_deficit = 0.25 * 0.25 * (4.0 - std::f64::consts::PI);
         let expected = 3.0 * (2.0 - corner_deficit);
+        let actual = area(copper);
         assert!(
-            (copper_area - expected).abs() <= expected * 0.02,
-            "expected three roundrect pads with area {expected:.4}, got {copper_area:.4}"
+            (actual - expected).abs() <= expected * 0.02,
+            "expected three roundrect pads with area {expected:.4}, got {actual:.4}"
         );
     }
 
     #[test]
     fn oversized_corner_radius_clamps_to_the_obround_image() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="pad"><RectRound width="2" height="1" radius="0.75" upperRight="true" upperLeft="true" lowerRight="true" lowerLeft="true"/></EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Datum x="0" y="0"/>
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="10"/>
-            <PolyStepSegment x="0" y="10"/>
-            <PolyStepSegment x="0" y="0"/>
-          </Polygon>
-        </Profile>
-        <PadStackDef name="padstack">
-          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
-            <StandardPrimitiveRef id="pad"/>
-          </PadstackPadDef>
-        </PadStackDef>
-        <LayerFeature layerRef="TOP">
-          <Set net="N1">
-            <Pad padstackDefRef="padstack">
-              <Location x="5" y="5"/>
-              <StandardPrimitiveRef id="pad"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-        let copper = files
-            .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
-        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-        let mask = pcb_ir::dialects::artwork::compose_to_mask(
-            &gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap(),
-            resolution,
-        )
-        .unwrap();
-        let mut rings = Vec::new();
-        for layer in &mask.layers {
-            for shape in mask.shapes(layer) {
-                rings.extend(
-                    pcb_ir::geom::ContourSet::from_contours(
-                        &mask.arena.path_contours(shape),
-                        pcb_ir::geom::FillRule::NonZero,
-                        resolution.strict(),
-                    )
-                    .unwrap()
-                    .rings,
-                );
-            }
-        }
-        let copper_area = pcb_ir::geom::ContourSet::from_rings(
-            rings,
-            pcb_ir::geom::FillRule::NonZero,
-            resolution,
-        )
-        .unwrap()
-        .area();
+        let ipc = top_copper_board(
+            r#"<RectRound width="2" height="1" radius="0.75" upperRight="true" upperLeft="true" lowerRight="true" lowerLeft="true"/>"#,
+            &format!(r#"<Set net="N1">{}</Set>"#, pads([(5.0, 5.0, "")])),
+        );
+        let copper = &gerber_files(&ipc, ArtworkScope::Board)["F_Cu.gtl"];
         // The radius clamps to height / 2, so the pad images as a 2x1 obround.
         let clamped = 0.5;
         let expected = 2.0 * 1.0 - clamped * clamped * (4.0 - std::f64::consts::PI);
+        let actual = area(copper);
         assert!(
-            (copper_area - expected).abs() <= expected * 0.02,
-            "expected clamped obround area {expected:.4}, got {copper_area:.4}"
-        );
-    }
-
-    #[test]
-    fn negative_set_after_an_overlay_pad_erases_it_as_dark_geometry() {
-        let resolution = Resolution::default();
-
-        // Sequential set semantics: the clear paints after the pad, erasing
-        // the overlap. Gerber carries the result as dark-only geometry.
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="pad"><Circle diameter="2"/></EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Datum x="0" y="0"/>
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="10"/>
-            <PolyStepSegment x="0" y="10"/>
-            <PolyStepSegment x="0" y="0"/>
-          </Polygon>
-        </Profile>
-        <PadStackDef name="padstack">
-          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
-            <StandardPrimitiveRef id="pad"/>
-          </PadstackPadDef>
-        </PadStackDef>
-        <LayerFeature layerRef="TOP">
-          <Set net="N1">
-            <Pad padstackDefRef="padstack">
-              <Location x="5" y="5"/>
-              <StandardPrimitiveRef id="pad"/>
-            </Pad>
-          </Set>
-          <Set polarity="NEGATIVE">
-            <Features>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="4" y="4"/>
-                    <PolyStepSegment x="5" y="4"/>
-                    <PolyStepSegment x="5" y="5"/>
-                    <PolyStepSegment x="4" y="5"/>
-                    <PolyStepSegment x="4" y="4"/>
-                  </Polygon>
-                </Contour>
-              </UserSpecial>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-        let copper = files
-            .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
-        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-        assert!(
-            parsed
-                .objects()
-                .iter()
-                .all(|object| object.polarity == Polarity::Dark),
-            "the clear set should resolve into the dark copper it erases"
-        );
-
-        let mask = pcb_ir::dialects::artwork::compose_to_mask(
-            &gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap(),
-            resolution,
-        )
-        .unwrap();
-        let mut rings = Vec::new();
-        for layer in &mask.layers {
-            for shape in mask.shapes(layer) {
-                rings.extend(
-                    pcb_ir::geom::ContourSet::from_contours(
-                        &mask.arena.path_contours(shape),
-                        pcb_ir::geom::FillRule::NonZero,
-                        resolution.strict(),
-                    )
-                    .unwrap()
-                    .rings,
-                );
-            }
-        }
-        let copper_area = pcb_ir::geom::ContourSet::from_rings(
-            rings,
-            pcb_ir::geom::FillRule::NonZero,
-            resolution,
-        )
-        .unwrap()
-        .area();
-        let expected = std::f64::consts::PI * (1.0 - 0.25);
-        assert!(
-            (copper_area - expected).abs() <= expected * 0.02,
-            "expected quarter-cleared pad area {expected:.4}, got {copper_area:.4}"
+            (actual - expected).abs() <= expected * 0.02,
+            "expected clamped obround area {expected:.4}, got {actual:.4}"
         );
     }
 
@@ -1475,147 +1252,88 @@ mod tests {
         // Repeated references to a standard catalogue entry are exact
         // primitives, not user-dictionary instances: they must flash as
         // circle apertures rather than flatten into outline macros.
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="fid"><Circle diameter="1"/></EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Datum x="0" y="0"/>
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="10"/>
-            <PolyStepSegment x="0" y="10"/>
-            <PolyStepSegment x="0" y="0"/>
-          </Polygon>
-        </Profile>
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <LocalFiducial>
-              <Location x="3" y="3"/>
-              <StandardPrimitiveRef id="fid"/>
-            </LocalFiducial>
-            <LocalFiducial>
-              <Location x="7" y="7"/>
-              <StandardPrimitiveRef id="fid"/>
-            </LocalFiducial>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-        let copper = files
-            .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
+        let ipc = top_copper_board(
+            CIRCLE_1,
+            r#"<Set>
+              <LocalFiducial><Location x="3" y="3"/><StandardPrimitiveRef id="pad"/></LocalFiducial>
+              <LocalFiducial><Location x="7" y="7"/><StandardPrimitiveRef id="pad"/></LocalFiducial>
+            </Set>"#,
+        );
+        let copper = &gerber_files(&ipc, ArtworkScope::Board)["F_Cu.gtl"];
         assert!(
-            !copper.contents.contains("%AM"),
+            !copper.contains("%AM"),
             "catalogue circles must not lower to outline macros"
         );
         assert!(
-            copper.contents.contains("C,1"),
+            copper.contains("C,1"),
             "fiducials should flash through a shared circle aperture"
         );
     }
 
     #[test]
-    fn drill_and_route_layers_are_not_exported_as_gerber_layers() {
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
+    fn layer_plans_name_every_exported_layer_once() {
+        for (layers, expected) in [
+            // Drill and rout layers are NC files, not Gerber layers.
+            (
+                r#"<Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL"/>
+                   <Layer name="Drill" layerFunction="DRILL" side="ALL"/>
+                   <Layer name="F.Cu_B.Cu_1" layerFunction="ROUT" side="ALL"/>"#,
+                vec!["Edge_Cuts.gm1: Profile,NP"],
+            ),
+            // Drawings keep their source names under valid X2 functions.
+            (
+                r#"<Layer name="F.Fab" layerFunction="ASSEMBLY" side="TOP"/>
+                   <Layer name="B.Fab" layerFunction="ASSEMBLY" side="BOTTOM"/>
+                   <Layer name="Assembly Notes" layerFunction="ASSEMBLY" side="NONE"/>
+                   <Layer name="Board Fab" layerFunction="BOARD_FAB" side="ALL"/>"#,
+                vec![
+                    "F_Fab.gbr: AssemblyDrawing,Top",
+                    "B_Fab.gbr: AssemblyDrawing,Bot",
+                    "Assembly_Notes.gbr: OtherDrawing,Assembly",
+                    "Board_Fab.gbr: FabricationDrawing",
+                ],
+            ),
+            // A repeated role falls back to its source layer name.
+            (
+                r#"<Layer name="ROUT-A" layerFunction="ROUT" side="ALL"/>
+                   <Layer name="ROUT-B" layerFunction="ROUT" side="ALL"/>
+                   <Layer name="VCUT-A" layerFunction="V_CUT" side="NONE"/>
+                   <Layer name="VCUT-B" layerFunction="V_CUT" side="NONE"/>
+                   <Layer name="SCORE-A" layerFunction="SCORE" side="NONE"/>
+                   <Layer name="SCORE-B" layerFunction="SCORE" side="NONE"/>"#,
+                vec![
+                    "V_Cut.gbr: Vcut",
+                    "VCUT_B.gbr: Vcut",
+                    "Score.gbr: Vcut",
+                    "SCORE_B.gbr: Vcut",
+                ],
+            ),
+        ] {
+            let ipc = ipc::Ipc2581::parse(&format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner"><FunctionMode mode="FABRICATION"/></Content>
   <Ecad>
     <CadHeader units="MILLIMETER"/>
     <CadData>
-      <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL"/>
-      <Layer name="Drill" layerFunction="DRILL" side="ALL"/>
-      <Layer name="F.Cu_B.Cu_1" layerFunction="ROUT" side="ALL"/>
+      {layers}
       <Step name="board" type="BOARD"/>
     </CadData>
   </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let imported = import_design(&ipc, Resolution::default()).unwrap();
-
-        let filenames = export_layer_plans(&imported, &imported.layer_definitions)
-            .into_iter()
-            .map(|plan| plan.filename)
-            .collect::<Vec<_>>();
-
-        assert_eq!(filenames, ["Edge_Cuts.gm1"]);
-    }
-
-    #[test]
-    fn assembly_layers_use_source_names_and_valid_gerber_x2_functions() {
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/></Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="F.Fab" layerFunction="ASSEMBLY" side="TOP"/>
-      <Layer name="B.Fab" layerFunction="ASSEMBLY" side="BOTTOM"/>
-      <Layer name="Assembly Notes" layerFunction="ASSEMBLY" side="NONE"/>
-      <Layer name="Board Fab" layerFunction="BOARD_FAB" side="ALL"/>
-      <Step name="board" type="BOARD"/>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-
-        let imported = import_design(&ipc, Resolution::default()).unwrap();
-        let plans = export_layer_plans(&imported, &imported.layer_definitions);
-        let outputs = plans
-            .iter()
-            .map(|plan| (plan.filename.as_str(), plan.file_function.as_slice()))
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            outputs,
-            [
-                (
-                    "F_Fab.gbr",
-                    ["AssemblyDrawing".to_string(), "Top".to_string()].as_slice()
-                ),
-                (
-                    "B_Fab.gbr",
-                    ["AssemblyDrawing".to_string(), "Bot".to_string()].as_slice()
-                ),
-                (
-                    "Assembly_Notes.gbr",
-                    ["OtherDrawing".to_string(), "Assembly".to_string()].as_slice()
-                ),
-                (
-                    "Board_Fab.gbr",
-                    ["FabricationDrawing".to_string()].as_slice()
-                ),
-            ]
-        );
+</IPC-2581>"#
+            ))
+            .unwrap();
+            let imported = import_design(&ipc, Resolution::default()).unwrap();
+            let outputs = export_layer_plans(&imported, &imported.layer_definitions)
+                .iter()
+                .map(|plan| format!("{}: {}", plan.filename, plan.file_function.join(",")))
+                .collect::<Vec<_>>();
+            assert_eq!(outputs, expected);
+        }
     }
 
     #[test]
     fn assembly_gerbers_preserve_phantom_patterns_for_boards_and_arrays() {
-        let resolution = Resolution::default();
-
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1648,46 +1366,24 @@ mod tests {
         )
         .unwrap();
 
-        let board_files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-        let board_fab = board_files
-            .iter()
-            .find(|file| file.filename == "F_Fab.gbr")
-            .unwrap();
-        assert!(
-            board_fab
-                .contents
-                .contains("%TF.FileFunction,AssemblyDrawing,Top*%")
-        );
-        assert!(board_fab.contents.contains("%TF.Part,Single*%"));
-        let parsed = gerberx2::GerberX2::parse(&board_fab.contents).unwrap();
+        let board_fab = &gerber_files(&ipc, ArtworkScope::Board)["F_Fab.gbr"];
+        assert!(board_fab.contains("%TF.FileFunction,AssemblyDrawing,Top*%"));
+        assert!(board_fab.contains("%TF.Part,Single*%"));
         assert_eq!(
-            parsed
-                .objects()
-                .iter()
-                .filter(|object| matches!(object.kind, gerberx2::ObjectKind::Draw { .. }))
-                .count(),
+            count(board_fab, |kind| matches!(kind, ObjectKind::Draw { .. })),
             2
         );
         assert_eq!(
-            parsed
-                .objects()
-                .iter()
-                .filter(|object| matches!(object.kind, gerberx2::ObjectKind::Flash { .. }))
-                .count(),
+            count(board_fab, |kind| matches!(kind, ObjectKind::Flash { .. })),
             2
         );
 
-        let array_files = gerber_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
-        let array_fab = array_files
-            .iter()
-            .find(|file| file.filename == "F_Fab.gbr")
-            .unwrap();
-        assert!(array_fab.contents.contains("%TF.Part,Array*%"));
-        assert!(!array_fab.contents.contains("%ABD"));
-        assert!(array_fab.contents.contains("%SRX2Y1I30J0*%"));
-        let parsed = gerberx2::GerberX2::parse(&array_fab.contents).unwrap();
-        assert_eq!(parsed.objects().len(), 4);
-        let artwork = gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
+        let array_fab = &gerber_files(&ipc, ArtworkScope::ArrayFlattened)["F_Fab.gbr"];
+        assert!(array_fab.contains("%TF.Part,Array*%"));
+        assert!(!array_fab.contains("%ABD"));
+        assert!(array_fab.contains("%SRX2Y1I30J0*%"));
+        assert_eq!(count(array_fab, |_| true), 4);
+        let artwork = extracted(array_fab);
         assert_eq!(artwork.blocks.len(), 1);
         assert_eq!(
             pcb_ir::dialects::artwork::expand_instances(&artwork)
@@ -1698,88 +1394,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_fabrication_layer_roles_export_to_unique_filenames() {
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/></Content>
-      <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="ROUT-A" layerFunction="ROUT" side="ALL"/>
-      <Layer name="ROUT-B" layerFunction="ROUT" side="ALL"/>
-      <Layer name="VCUT-A" layerFunction="V_CUT" side="NONE"/>
-      <Layer name="VCUT-B" layerFunction="V_CUT" side="NONE"/>
-      <Layer name="SCORE-A" layerFunction="SCORE" side="NONE"/>
-      <Layer name="SCORE-B" layerFunction="SCORE" side="NONE"/>
-      <Step name="board" type="BOARD"/>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let imported = import_design(&ipc, Resolution::default()).unwrap();
-
-        let filenames = export_layer_plans(&imported, &imported.layer_definitions)
-            .into_iter()
-            .map(|plan| plan.filename)
-            .collect::<Vec<_>>();
-        let unique = filenames.iter().collect::<HashSet<_>>();
-
-        assert_eq!(unique.len(), filenames.len());
-        assert_eq!(
-            filenames,
-            ["V_Cut.gbr", "VCUT_B.gbr", "Score.gbr", "SCORE_B.gbr"]
-        );
-    }
-
-    #[test]
-    fn gerber_export_renders_step_profile_only_as_canonical_edge_cuts() {
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="Edge.Cuts"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-            <PolyStepSegment x="0" y="0"/>
-          </Polygon>
-        </Profile>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-        let edge_cuts = files
-            .iter()
-            .find(|file| file.filename == "Edge_Cuts.gm1")
-            .unwrap();
-
-        assert!(edge_cuts.contents.contains("%TF.FileFunction,Profile,NP*%"));
-        assert!(edge_cuts.contents.contains("%TA.AperFunction,Profile*%"));
-        assert!(edge_cuts.contents.contains("%ADD10C,0.05*%"));
-        gerberx2::GerberX2::parse(&edge_cuts.contents).unwrap();
-    }
-
-    #[test]
     fn standalone_profile_export_matches_both_layout_targets() {
-        let resolution = Resolution::default();
-
         for outline_layer in [
             "",
             r#"<Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL" polarity="POSITIVE"/>"#,
@@ -1815,31 +1430,14 @@ mod tests {
 </IPC-2581>"#,
             ))
             .unwrap();
-            let board = manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
-            let array = manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
-            assert_eq!(
-                board
-                    .files
-                    .iter()
-                    .map(|f| (&f.filename, &f.contents))
-                    .collect::<Vec<_>>(),
-                array
-                    .files
-                    .iter()
-                    .map(|f| (&f.filename, &f.contents))
-                    .collect::<Vec<_>>(),
-            );
-            let profile = &array
-                .files
-                .iter()
-                .find(|f| f.filename == "Edge_Cuts.gm1")
-                .unwrap()
-                .contents;
+            let array = manufacturing_files(&ipc, ArtworkScope::ArrayFlattened);
+            assert_eq!(manufacturing_files(&ipc, ArtworkScope::Board), array);
+            let profile = &array["Edge_Cuts.gm1"];
             assert!(profile.contains("%TF.FileFunction,Profile,NP*%"));
             assert!(profile.contains("%TF.Part,Single*%"));
-            let parsed = gerberx2::GerberX2::parse(profile).unwrap();
-            let geometry =
-                gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
+            assert!(profile.contains("%TA.AperFunction,Profile*%"));
+            assert!(profile.contains("%ADD10C,0.05*%"));
+            let geometry = extracted(profile);
             geometry.validate().unwrap();
             assert_eq!(geometry.layers[0].objects.count, 8);
         }
@@ -1847,90 +1445,50 @@ mod tests {
 
     #[test]
     fn exports_ipc_layer_to_parseable_gerber_x2() {
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="pad"><Circle diameter="1"/></EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="10"/>
-            <PolyStepSegment x="0" y="0"/>
-          </Polygon>
-        </Profile>
-        <PadStackDef name="padstack">
-          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
-            <StandardPrimitiveRef id="pad"/>
-          </PadstackPadDef>
-        </PadStackDef>
-        <LayerFeature layerRef="TOP">
-          <Set net="N1">
+        let ipc = top_copper_board(
+            CIRCLE_1,
+            &format!(
+                r#"<Set net="N1">{}</Set>"#,
+                pads([(2.0, 3.0, r#"<PinRef componentRef="U1" pin="1"/>"#)])
+            ),
+        );
+        let files = gerber_files(&ipc, ArtworkScope::Board);
+        for contents in files.values() {
+            gerberx2::GerberX2::parse(contents).unwrap();
+        }
+        let copper = &files["F_Cu.gtl"];
+        for attribute in [
+            "%TF.FileFunction,Copper,L1,Top*%",
+            "%TF.Part,Single*%",
+            "%TF.FilePolarity,Positive*%",
+            "%TF.SameCoordinates*%",
+            "%TA.AperFunction,SMDPad,CuDef*%",
+            "%TO.C,U1*%",
+            "%TO.P,U1,1*%",
+            "%TO.N,N1*%",
+        ] {
+            assert!(copper.contains(attribute), "{attribute} is missing");
+        }
+        assert_eq!(
+            count(copper, |kind| matches!(kind, ObjectKind::Flash { .. })),
+            1
+        );
+
+        // An array of this one board is the board itself.
+        let array_copper = &gerber_files(&ipc, ArtworkScope::ArrayFlattened)["F_Cu.gtl"];
+        assert!(array_copper.contains("%TF.Part,Single*%"));
+    }
+
+    #[test]
+    fn mask_and_paste_use_specification_correct_attributes() {
+        let pad = r#"<Set net="N1">
             <Pad padstackDefRef="padstack">
               <Location x="2" y="3"/>
               <StandardPrimitiveRef id="pad"/>
               <PinRef componentRef="U1" pin="1"/>
             </Pad>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-
-        assert!(files.iter().any(|file| file.filename == "F_Cu.gtl"));
-        for file in &files {
-            gerberx2::GerberX2::parse(&file.contents).unwrap();
-        }
-        let copper = files
-            .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
-        assert!(copper.contents.contains("%TF.FileFunction,Copper,L1,Top*%"));
-        assert!(copper.contents.contains("%TF.Part,Single*%"));
-        assert!(copper.contents.contains("%TF.FilePolarity,Positive*%"));
-        assert!(copper.contents.contains("%TF.SameCoordinates*%"));
-        assert!(copper.contents.contains("%TA.AperFunction,SMDPad,CuDef*%"));
-        assert!(copper.contents.contains("%TO.C,U1*%"));
-        assert!(copper.contents.contains("%TO.P,U1,1*%"));
-        assert!(copper.contents.contains("%TO.N,N1*%"));
-
-        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-        assert!(
-            parsed
-                .objects()
-                .iter()
-                .any(|object| matches!(object.kind, gerberx2::ObjectKind::Flash { .. }))
-        );
-
-        let panel_target_files = gerber_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
-
-        let panel_target_copper = panel_target_files
-            .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
-        assert!(panel_target_copper.contents.contains("%TF.Part,Single*%"));
-        assert!(!panel_target_copper.contents.contains("%TF.Part,Array*%"));
-    }
-
-    #[test]
-    fn mask_and_paste_use_specification_correct_attributes() {
-        let ipc = ipc::Ipc2581::parse(
+          </Set>"#;
+        let ipc = ipc::Ipc2581::parse(&format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
@@ -1956,247 +1514,73 @@ mod tests {
             <StandardPrimitiveRef id="pad"/>
           </PadstackPadDef>
         </PadStackDef>
-        <LayerFeature layerRef="F.Mask">
-          <Set net="N1">
-            <Pad padstackDefRef="padstack">
-              <Location x="2" y="3"/>
-              <StandardPrimitiveRef id="pad"/>
-              <PinRef componentRef="U1" pin="1"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
-        <LayerFeature layerRef="F.Paste">
-          <Set net="N1">
-            <Pad padstackDefRef="padstack">
-              <Location x="2" y="3"/>
-              <StandardPrimitiveRef id="pad"/>
-              <PinRef componentRef="U1" pin="1"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
+        <LayerFeature layerRef="F.Mask">{pad}</LayerFeature>
+        <LayerFeature layerRef="F.Paste">{pad}</LayerFeature>
       </Step>
     </CadData>
   </Ecad>
-</IPC-2581>"#,
-        )
+</IPC-2581>"#
+        ))
         .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-
-        let mask = files
-            .iter()
-            .find(|file| file.filename == "F_Mask.gts")
-            .unwrap();
-        assert!(mask.contents.contains("%TF.FilePolarity,Negative*%"));
-        assert!(mask.contents.contains("%TF.SameCoordinates*%"));
-        assert!(mask.contents.contains("%TA.AperFunction,Material*%"));
-        assert!(mask.contents.contains("%TO.C,U1*%"));
-        assert!(!mask.contents.contains("SMDPad"));
-        assert!(!mask.contents.contains("%TO.P,"));
-        assert!(!mask.contents.contains("%TO.N,"));
-        gerberx2::GerberX2::parse(&mask.contents).unwrap();
-
-        let paste = files
-            .iter()
-            .find(|file| file.filename == "F_Paste.gtp")
-            .unwrap();
-        assert!(paste.contents.contains("%TF.FilePolarity,Positive*%"));
-        assert!(paste.contents.contains("%TF.SameCoordinates*%"));
-        assert!(paste.contents.contains("%TA.AperFunction,Material*%"));
-        assert!(paste.contents.contains("%TO.C,U1*%"));
-        assert!(!paste.contents.contains("SMDPad"));
-        assert!(!paste.contents.contains("%TO.P,"));
-        assert!(!paste.contents.contains("%TO.N,"));
-        gerberx2::GerberX2::parse(&paste.contents).unwrap();
+        let files = gerber_files(&ipc, ArtworkScope::Board);
+        for (filename, polarity) in [("F_Mask.gts", "Negative"), ("F_Paste.gtp", "Positive")] {
+            let layer = &files[filename];
+            assert!(layer.contains(&format!("%TF.FilePolarity,{polarity}*%")));
+            assert!(layer.contains("%TF.SameCoordinates*%"));
+            assert!(layer.contains("%TA.AperFunction,Material*%"));
+            assert!(layer.contains("%TO.C,U1*%"));
+            assert!(!layer.contains("SMDPad"));
+            assert!(!layer.contains("%TO.P,"));
+            assert!(!layer.contains("%TO.N,"));
+            gerberx2::GerberX2::parse(layer).unwrap();
+        }
     }
 
     #[test]
-    fn gerber_export_places_pad_flashes_after_local_fill_cut_ins() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="pad"><Circle diameter="1"/></EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <PadStackDef name="padstack">
-          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
-            <StandardPrimitiveRef id="pad"/>
-          </PadstackPadDef>
-        </PadStackDef>
-        <LayerFeature layerRef="TOP">
-          <Set net="N1">
-            <Pad padstackDefRef="padstack">
-              <Location x="5" y="5"/>
-              <StandardPrimitiveRef id="pad"/>
-            </Pad>
-            <Features>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="0" y="0"/>
-                    <PolyStepSegment x="10" y="0"/>
-                    <PolyStepSegment x="10" y="10"/>
-                    <PolyStepSegment x="0" y="10"/>
-                    <PolyStepSegment x="0" y="0"/>
-                  </Polygon>
-                </Contour>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="4" y="4"/>
-                    <PolyStepSegment x="6" y="4"/>
-                    <PolyStepSegment x="6" y="6"/>
-                    <PolyStepSegment x="4" y="6"/>
-                    <PolyStepSegment x="4" y="4"/>
-                  </Polygon>
-                </Contour>
-              </UserSpecial>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-
-        let copper = files
-            .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
-        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-        assert!(
-            parsed
-                .objects()
-                .iter()
-                .all(|object| object.polarity == Polarity::Dark),
-            "positive compound region holes should not export as layer-global clear regions"
+    fn overlay_copper_follows_the_local_cut_ins_of_a_fill() {
+        let donut = format!(
+            "<Features><UserSpecial>{}{}</UserSpecial></Features>",
+            rect_contour(0.0, 0.0, 10.0, 10.0),
+            rect_contour(4.0, 4.0, 6.0, 6.0)
         );
-        let region_index = parsed
-            .objects()
-            .iter()
-            .position(|object| {
-                object.polarity == Polarity::Dark
-                    && matches!(object.kind, gerberx2::ObjectKind::Region { .. })
-            })
-            .expect("compound fill should export as a dark local cut-in region");
-        let pad_flash_index = parsed
-            .objects()
-            .iter()
-            .position(|object| matches!(object.kind, gerberx2::ObjectKind::Flash { .. }))
-            .expect("standard circular pad should export as a flash");
-        assert!(region_index < pad_flash_index);
-
-        let geometry = gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, resolution).unwrap();
-        assert!(
-            summary.area_mm2 > 96.7,
-            "pad flash was not restored after local clear; area was {}",
-            summary.area_mm2
-        );
-    }
-
-    #[test]
-    fn gerber_export_places_multi_contour_traces_after_local_fill_cut_ins() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <LayerFeature layerRef="TOP">
-          <Set net="TRACE">
-            <Features>
-              <Line startX="4.2" startY="4.6" endX="5.8" endY="4.6">
-                <LineDesc lineWidth="0.5" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-            <Features>
-              <Line startX="4.2" startY="5.4" endX="5.8" endY="5.4">
-                <LineDesc lineWidth="0.5" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set>
-            <Features>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="0" y="0"/>
-                    <PolyStepSegment x="10" y="0"/>
-                    <PolyStepSegment x="10" y="10"/>
-                    <PolyStepSegment x="0" y="10"/>
-                    <PolyStepSegment x="0" y="0"/>
-                  </Polygon>
-                </Contour>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="4" y="4"/>
-                    <PolyStepSegment x="6" y="4"/>
-                    <PolyStepSegment x="6" y="6"/>
-                    <PolyStepSegment x="4" y="6"/>
-                    <PolyStepSegment x="4" y="4"/>
-                  </Polygon>
-                </Contour>
-              </UserSpecial>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-
-        let copper = files
-            .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
-        assert!(
-            !copper.contents.contains("%LPC*%"),
-            "positive compound region holes should not export as layer-global clear regions"
-        );
-        let fill_end_index = copper
-            .contents
-            .find("G37*")
-            .expect("compound fill should export as a region");
-        let trace_index = copper
-            .contents
-            .find("%TO.N,TRACE*%")
-            .expect("multi-contour trace should keep its net attribute");
-        assert!(fill_end_index < trace_index);
-
-        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-        let geometry = gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, resolution).unwrap();
-        assert!(
-            summary.area_mm2 > 97.0,
-            "multi-contour trace was not restored after local clear; area was {}",
-            summary.area_mm2
-        );
+        let line = |y: f64| {
+            format!(
+                r#"<Features><Line startX="4.2" startY="{y}" endX="5.8" endY="{y}">
+                  <LineDesc lineWidth="0.5" lineEnd="ROUND"/>
+                </Line></Features>"#
+            )
+        };
+        for (features, overlay, restored_area) in [
+            (
+                format!(r#"<Set net="N1">{}{donut}</Set>"#, pads([(5.0, 5.0, "")])),
+                "D03*",
+                96.7,
+            ),
+            (
+                format!(
+                    r#"<Set net="TRACE">{}{}</Set><Set>{donut}</Set>"#,
+                    line(4.6),
+                    line(5.4)
+                ),
+                "%TO.N,TRACE*%",
+                97.0,
+            ),
+        ] {
+            let ipc = top_copper_board(CIRCLE_1, &features);
+            let copper = &gerber_files(&ipc, ArtworkScope::Board)["F_Cu.gtl"];
+            assert!(
+                !copper.contains("%LPC*%"),
+                "positive compound region holes should not export as layer-global clear regions"
+            );
+            let fill_end = copper.rfind("G37*").expect("the fill exports as regions");
+            let overlay_start = copper.find(overlay).expect("the overlay is exported");
+            assert!(fill_end < overlay_start);
+            let actual = area(copper);
+            assert!(
+                actual > restored_area,
+                "{overlay} was not restored after the local cut-in; area was {actual}"
+            );
+        }
     }
 
     #[test]
@@ -2247,113 +1631,38 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let package = manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
+        let files = manufacturing_files(&ipc, ArtworkScope::Board);
+        for absent in ["Drill.gbr", "Route.gbr", "Edge_Cuts.gm1", "PTH_Slots.drl"] {
+            assert!(!files.contains_key(absent), "{absent} was exported");
+        }
 
-        assert!(
-            !package
-                .files
-                .iter()
-                .any(|file| file.filename == "Drill.gbr")
-        );
-        assert!(
-            !package
-                .files
-                .iter()
-                .any(|file| file.filename == "Route.gbr")
-        );
-        assert!(
-            !package
-                .files
-                .iter()
-                .any(|file| file.filename == "Edge_Cuts.gm1")
-        );
-        let pth = package
-            .files
-            .iter()
-            .find(|file| file.filename == "PTH.drl")
-            .unwrap();
-        let npth = package
-            .files
-            .iter()
-            .find(|file| file.filename == "NPTH.drl")
-            .unwrap();
-        assert!(
-            !package
-                .files
-                .iter()
-                .any(|file| file.filename == "PTH_Slots.drl")
-        );
-
-        assert!(
-            pth.contents
-                .contains("; #@! TF.FileFunction,Plated,1,2,PTH")
-        );
-        assert!(
-            pth.contents
-                .contains("; #@! TA.AperFunction,Plated,PTH,ViaDrill\nT01C0.3")
-        );
-        assert!(
-            pth.contents
-                .contains("; #@! TA.AperFunction,Plated,PTH,ComponentDrill\nT02C0.6")
-        );
-        assert!(pth.contents.contains("X10.0Y19.45G85X10.0Y20.55\nG05"));
-        assert!(
-            npth.contents
-                .contains("; #@! TF.FileFunction,NonPlated,1,2,NPTH")
-        );
-        assert!(npth.contents.contains("T01C0.65"));
-        assert!(npth.contents.contains("X3.0Y4.0"));
+        let pth = &files["PTH.drl"];
+        assert!(pth.contains("; #@! TF.FileFunction,Plated,1,2,PTH"));
+        assert!(pth.contains("; #@! TA.AperFunction,Plated,PTH,ViaDrill\nT01C0.3"));
+        assert!(pth.contains("; #@! TA.AperFunction,Plated,PTH,ComponentDrill\nT02C0.6"));
+        assert!(pth.contains("X10.0Y19.45G85X10.0Y20.55\nG05"));
+        let npth = &files["NPTH.drl"];
+        assert!(npth.contains("; #@! TF.FileFunction,NonPlated,1,2,NPTH"));
+        assert!(npth.contains("T01C0.65"));
+        assert!(npth.contains("X3.0Y4.0"));
     }
 
     #[cfg(feature = "cli")]
     #[test]
     fn gerber_export_writes_zip_when_output_has_zip_extension() {
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="10"/>
-            <PolyStepSegment x="0" y="0"/>
-          </Polygon>
-        </Profile>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
+        let ipc = top_copper_board(CIRCLE_1, "");
         let output_zip = std::env::temp_dir().join(format!(
             "pcb-ipc-gerber-zip-test-{}.zip",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&output_zip);
 
-        let package = manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
+        let package = manufacturing_package(&ipc, ArtworkScope::Board);
         crate::manufacturing::write_manufacturing_package(&package, &output_zip).unwrap();
 
-        assert!(output_zip.is_file());
         let zip_file = std::fs::File::open(&output_zip).unwrap();
         let mut archive = zip::ZipArchive::new(zip_file).unwrap();
-        let names = (0..archive.len())
-            .map(|index| archive.by_index(index).unwrap().name().to_string())
-            .collect::<Vec<_>>();
         assert_eq!(archive.len(), package.files.len());
-        assert!(names.iter().any(|name| name == "F_Cu.gtl"));
-        assert!(!names.iter().any(|name| name == "profile.gbr"));
-
         let mut top_copper = String::new();
         archive
             .by_name("F_Cu.gtl")
@@ -2426,31 +1735,19 @@ mod tests {
             assert!(region.contains_point(pcb_ir::geom::Point::new(2.5, 2.5)));
             assert!(region.contains_point(pcb_ir::geom::Point::new(4.5, 1.0)));
 
-            let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-            let layer = files.iter().find(|file| file.filename == filename).unwrap();
-            assert!(
-                !layer.contents.contains("%LPC*%"),
-                "cutouts must stay local"
-            );
-            let parsed = gerberx2::GerberX2::parse(&layer.contents).unwrap();
-            let geometry =
-                gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
-            let summary =
-                pcb_ir::dialects::artwork::compare::summarize(&geometry, resolution).unwrap();
+            let layer = &gerber_files(&ipc, ArtworkScope::Board)[filename];
+            assert!(!layer.contains("%LPC*%"), "cutouts must stay local");
             // 24 - 4 + 18 - (8 - 1) = 31; the nested sibling adds no new area.
-            assert!(
-                (summary.area_mm2 - 31.0).abs() < 1e-6,
-                "area: {}",
-                summary.area_mm2
-            );
+            let actual = area(layer);
+            assert!((actual - 31.0).abs() < 1e-6, "area: {actual}");
         }
     }
 
     #[test]
     fn gerber_export_preserves_user_special_counter_holes() {
-        let resolution = Resolution::default();
-
-        let source = r#"<?xml version="1.0" encoding="UTF-8"?>
+        let silk_board = |contours: &str| {
+            ipc::Ipc2581::parse(&format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
     <FunctionMode mode="FABRICATION"/>
@@ -2463,84 +1760,56 @@ mod tests {
       <Layer name="F.SilkS" layerFunction="LEGEND" side="TOP" polarity="POSITIVE"/>
       <Step name="board" type="BOARD">
         <LayerFeature layerRef="F.SilkS">
-          <Set>
-            <Features>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="0" y="0"/>
-                    <PolyStepSegment x="4" y="0"/>
-                    <PolyStepSegment x="4" y="4"/>
-                    <PolyStepSegment x="0" y="4"/>
-                    <PolyStepSegment x="0" y="0"/>
-                  </Polygon>
-                  <Cutout>
-                    <PolyBegin x="1" y="1"/>
-                    <PolyStepSegment x="3" y="1"/>
-                    <PolyStepSegment x="3" y="3"/>
-                    <PolyStepSegment x="1" y="3"/>
-                    <PolyStepSegment x="1" y="1"/>
-                  </Cutout>
-                </Contour>
-              </UserSpecial>
-            </Features>
-          </Set>
+          <Set><Features><UserSpecial>{contours}</UserSpecial></Features></Set>
         </LayerFeature>
       </Step>
     </CadData>
   </Ecad>
-</IPC-2581>"#;
+</IPC-2581>"#
+            ))
+            .unwrap()
+        };
+        let cutout = r#"<Contour>
+          <Polygon>
+            <PolyBegin x="0" y="0"/><PolyStepSegment x="4" y="0"/>
+            <PolyStepSegment x="4" y="4"/><PolyStepSegment x="0" y="4"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+          <Cutout>
+            <PolyBegin x="1" y="1"/><PolyStepSegment x="3" y="1"/>
+            <PolyStepSegment x="3" y="3"/><PolyStepSegment x="1" y="3"/>
+            <PolyStepSegment x="1" y="1"/>
+          </Cutout>
+        </Contour>"#;
         // KiCad's Fracture() joins a hole to its outer ring with a retraced
         // bridge. Knockout text can also leave a separate positive counter island.
-        let mut fractured = source.to_owned();
-        let start = fractured.find("<Contour>").unwrap();
-        let end = fractured.find("</Contour>").unwrap() + "</Contour>".len();
-        fractured.replace_range(
-            start..end,
-            r#"
-          <Contour><Polygon>
+        let fractured = format!(
+            r#"<Contour><Polygon>
             <PolyBegin x="0" y="0"/><PolyStepSegment x="4" y="0"/>
             <PolyStepSegment x="4" y="4"/><PolyStepSegment x="0" y="4"/>
             <PolyStepSegment x="0" y="0"/><PolyStepSegment x="1" y="1"/>
             <PolyStepSegment x="1" y="3"/><PolyStepSegment x="3" y="3"/>
             <PolyStepSegment x="3" y="1"/><PolyStepSegment x="1" y="1"/>
             <PolyStepSegment x="0" y="0"/>
-          </Polygon></Contour>
-          <Contour><Polygon>
-            <PolyBegin x="1.5" y="1.5"/><PolyStepSegment x="2" y="1.5"/>
-            <PolyStepSegment x="2" y="2"/><PolyStepSegment x="1.5" y="2"/>
-            <PolyStepSegment x="1.5" y="1.5"/>
-          </Polygon></Contour>"#,
+          </Polygon></Contour>{}"#,
+            rect_contour(1.5, 1.5, 2.0, 2.0)
         );
-        for (source, expected_area) in [(source, 12.0), (fractured.as_str(), 12.25)] {
-            let ipc = ipc::Ipc2581::parse(source).unwrap();
-            let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
-
-            let silk = files
-                .iter()
-                .find(|file| file.filename == "F_SilkS.gto")
-                .unwrap();
+        for (contours, expected_area) in [(cutout, 12.0), (fractured.as_str(), 12.25)] {
+            let silk = &gerber_files(&silk_board(contours), ArtworkScope::Board)["F_SilkS.gto"];
             assert!(
-                !silk.contents.contains("%LPC*%"),
+                !silk.contains("%LPC*%"),
                 "positive compound region holes should not export as layer-global clear regions"
             );
-            let parsed = gerberx2::GerberX2::parse(&silk.contents).unwrap();
-            let geometry =
-                gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
-            let summary =
-                pcb_ir::dialects::artwork::compare::summarize(&geometry, resolution).unwrap();
+            let actual = area(silk);
             assert!(
-                (summary.area_mm2 - expected_area).abs() < 1e-6,
-                "compound region should preserve its counter hole; area was {}",
-                summary.area_mm2
+                (actual - expected_area).abs() < 1e-6,
+                "compound region should preserve its counter hole; area was {actual}"
             );
         }
     }
 
     #[test]
     fn gerber_preserves_leaf_board_repeats_without_nesting() {
-        let resolution = Resolution::default();
-
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2595,27 +1864,21 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
-
-        let top = files
-            .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
-        assert!(top.contents.contains("%TF.Part,Array*%"));
-        assert!(!top.contents.contains("%ABD"));
-        assert_eq!(top.contents.matches("%SRX2Y1I14J0*%").count(), 1);
-        assert_eq!(top.contents.matches("%SR*%").count(), 1);
-        assert!(!top.contents.contains("%SRX3Y1I30J0*%"));
-        assert!(!top.contents.contains("%LM"));
-        assert!(!top.contents.contains("%LR"));
-        assert!(!top.contents.contains("%LS"));
-        let parsed = gerberx2::GerberX2::parse(&top.contents).unwrap();
+        let top = &gerber_files(&ipc, ArtworkScope::ArrayFlattened)["F_Cu.gtl"];
+        assert!(top.contains("%TF.Part,Array*%"));
+        assert!(!top.contains("%ABD"));
+        assert_eq!(top.matches("%SRX2Y1I14J0*%").count(), 1);
+        assert_eq!(top.matches("%SR*%").count(), 1);
+        assert!(!top.contains("%SRX3Y1I30J0*%"));
+        assert!(!top.contains("%LM"));
+        assert!(!top.contains("%LR"));
+        assert!(!top.contains("%LS"));
         assert_eq!(
-            parsed.objects().len(),
+            count(top, |_| true),
             3,
             "the three panel placements each retain one board grid"
         );
-        let artwork = gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
+        let artwork = extracted(top);
         assert_eq!(artwork.blocks.len(), 1);
         assert_eq!(
             pcb_ir::dialects::artwork::expand_instances(&artwork)
@@ -2666,17 +1929,13 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
-
-        assert!(files.iter().all(|file| file.filename != "V_Cut.gbr"));
-        let profile = files
-            .iter()
-            .find(|file| file.filename == "Board_Array_Profile.gm1")
-            .unwrap();
-        assert!(profile.contents.contains("%TF.Part,Array*%"));
-        assert!(!profile.contents.contains("G02*"));
-        assert!(!profile.contents.contains("G03*"));
-        gerberx2::GerberX2::parse(&profile.contents).unwrap();
+        let files = gerber_files(&ipc, ArtworkScope::ArrayFlattened);
+        assert!(!files.contains_key("V_Cut.gbr"));
+        let profile = &files["Board_Array_Profile.gm1"];
+        assert!(profile.contains("%TF.Part,Array*%"));
+        assert!(!profile.contains("G02*"));
+        assert!(!profile.contains("G03*"));
+        gerberx2::GerberX2::parse(profile).unwrap();
     }
 
     #[test]
@@ -2747,35 +2006,32 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
-
-        let top = files
-            .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
-        assert!(top.contents.contains("%TF.Part,Array*%"));
-        assert!(
-            top.contents
-                .contains("%TA.AperFunction,FiducialPad,Global*%")
-        );
-        assert!(top.contents.contains("%TO.C,U1*%"));
-        assert!(top.contents.contains("%TO.P,U1,1*%"));
-
-        let vcut = files
-            .iter()
-            .find(|file| file.filename == "V_Cut.gbr")
-            .unwrap();
-        assert!(vcut.contents.contains("%TF.FileFunction,Vcut*%"));
-        assert!(vcut.contents.contains("%TF.Part,Array*%"));
-        assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
-
-        let score = files
-            .iter()
-            .find(|file| file.filename == "Score.gbr")
-            .unwrap();
-        assert!(score.contents.contains("%TF.FileFunction,Vcut*%"));
-        assert!(score.contents.contains("%TF.Part,Array*%"));
-        assert!(score.contents.contains("%TA.AperFunction,Other,Score*%"));
+        let files = gerber_files(&ipc, ArtworkScope::ArrayFlattened);
+        for (filename, attributes) in [
+            (
+                "F_Cu.gtl",
+                [
+                    "%TA.AperFunction,FiducialPad,Global*%",
+                    "%TO.C,U1*%",
+                    "%TO.P,U1,1*%",
+                ]
+                .as_slice(),
+            ),
+            (
+                "V_Cut.gbr",
+                &["%TF.FileFunction,Vcut*%", "%TA.AperFunction,Other,Vcut*%"],
+            ),
+            (
+                "Score.gbr",
+                &["%TF.FileFunction,Vcut*%", "%TA.AperFunction,Other,Score*%"],
+            ),
+        ] {
+            let contents = &files[filename];
+            assert!(contents.contains("%TF.Part,Array*%"));
+            for attribute in attributes {
+                assert!(contents.contains(attribute), "{filename}: {attribute}");
+            }
+        }
     }
 
     #[cfg(feature = "cli")]
@@ -2786,22 +2042,20 @@ mod tests {
         let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
         let content = zstd::decode_all(Cursor::new(compressed)).unwrap();
         let ipc = ipc::Ipc2581::parse(std::str::from_utf8(&content).unwrap()).unwrap();
-        let files = gerber_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = gerber_files(&ipc, ArtworkScope::Board);
 
         assert!(files.len() >= 10);
-        assert!(files.iter().any(|file| file.filename == "F_Cu.gtl"));
-        assert!(files.iter().any(|file| file.filename == "Edge_Cuts.gm1"));
+        assert!(files.contains_key("F_Cu.gtl"));
+        assert!(files.contains_key("Edge_Cuts.gm1"));
 
-        for file in &files {
-            let parsed = gerberx2::GerberX2::parse(&file.contents).unwrap();
-            let geometry =
-                gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
+        for (filename, contents) in &files {
+            let geometry = extracted(contents);
             geometry.validate().unwrap();
 
             let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, resolution).unwrap();
             mask.validate().unwrap();
             let svg = pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::layer(0));
-            assert!(svg.contains("<svg"), "{} did not render SVG", file.filename);
+            assert!(svg.contains("<svg"), "{filename} did not render SVG");
         }
 
         let mut layer = geometry::extract_layer(&ipc, "F.Cu", resolution).unwrap();
