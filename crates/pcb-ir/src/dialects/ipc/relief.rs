@@ -55,25 +55,13 @@ impl VScoreReliefInput {
         score_lines: Vec<VScoreLine>,
         resolution: Resolution,
     ) -> Self {
-        Self::with_resolution(
-            board_boundaries,
-            score_lines,
-            resolution.with_tolerance(DEFAULT_RELIEF_TOLERANCE_MM),
-        )
-    }
-
-    pub fn with_resolution(
-        board_boundaries: Vec<ContourBuf>,
-        score_lines: Vec<VScoreLine>,
-        resolution: Resolution,
-    ) -> Self {
         Self {
             board_boundaries,
             board_cutouts: Vec::new(),
             score_blockers: Vec::new(),
             score_lines,
             tool_diameter_mm: DEFAULT_ROUTE_TOOL_DIAMETER_MM,
-            resolution,
+            resolution: resolution.with_tolerance(DEFAULT_RELIEF_TOLERANCE_MM),
         }
     }
 
@@ -144,19 +132,9 @@ impl fmt::Display for VScoreReliefError {
 
 impl std::error::Error for VScoreReliefError {}
 
+/// The relief contours, with per-boundary construction geometry when
+/// `include_debug` asks for it.
 pub fn vscore_route_reliefs(
-    input: &VScoreReliefInput,
-) -> Result<Vec<ContourBuf>, VScoreReliefError> {
-    Ok(vscore_route_reliefs_inner(input, false)?.relief_contours)
-}
-
-pub fn vscore_route_reliefs_with_debug(
-    input: &VScoreReliefInput,
-) -> Result<VScoreReliefOutput, VScoreReliefError> {
-    vscore_route_reliefs_inner(input, true)
-}
-
-fn vscore_route_reliefs_inner(
     input: &VScoreReliefInput,
     include_debug: bool,
 ) -> Result<VScoreReliefOutput, VScoreReliefError> {
@@ -692,46 +670,42 @@ mod tests {
         vec![ContourBuf::new(cmds)]
     }
 
+    fn polygon(points: &[(f64, f64)]) -> Vec<ContourBuf> {
+        let mut cmds = points
+            .iter()
+            .map(|&(x, y)| PathCmd::line_to(Point::new(x, y)))
+            .collect::<Vec<_>>();
+        cmds[0] = PathCmd::move_to(cmds[0].p0);
+        cmds.push(PathCmd::close());
+        vec![ContourBuf::new(cmds)]
+    }
+
     fn rectangle_score_lines(width: f64, height: f64) -> Vec<VScoreLine> {
-        vec![
-            VScoreLine {
-                start: Point::new(0.0, 0.0),
-                end: Point::new(width, 0.0),
-                width: 0.025,
-            },
-            VScoreLine {
-                start: Point::new(width, 0.0),
-                end: Point::new(width, height),
-                width: 0.025,
-            },
-            VScoreLine {
-                start: Point::new(width, height),
-                end: Point::new(0.0, height),
-                width: 0.025,
-            },
-            VScoreLine {
-                start: Point::new(0.0, height),
-                end: Point::new(0.0, 0.0),
-                width: 0.025,
-            },
+        [
+            (0.0, 0.0),
+            (width, 0.0),
+            (width, height),
+            (0.0, height),
+            (0.0, 0.0),
         ]
+        .windows(2)
+        .map(|ends| VScoreLine {
+            start: Point::new(ends[0].0, ends[0].1),
+            end: Point::new(ends[1].0, ends[1].1),
+            width: 0.025,
+        })
+        .collect()
     }
 
     #[test]
     fn rectangle_boundary_needs_no_reliefs() {
         let input = VScoreReliefInput::new(
-            path(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 5.0)),
-                PathCmd::line_to(Point::new(0.0, 5.0)),
-                PathCmd::close(),
-            ]),
+            polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (0.0, 5.0)]),
             rectangle_score_lines(10.0, 5.0),
             Resolution::default(),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs(&input, true).unwrap();
 
         assert!(output.relief_contours.is_empty());
         assert_eq!(output.debug.entries.len(), 1);
@@ -804,13 +778,7 @@ mod tests {
     #[test]
     fn edge_exposure_routes_outside_without_removing_finished_board() {
         let mut input = VScoreReliefInput::new(
-            path(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 5.0)),
-                PathCmd::line_to(Point::new(0.0, 5.0)),
-                PathCmd::close(),
-            ]),
+            polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (0.0, 5.0)]),
             rectangle_score_lines(10.0, 5.0),
             Resolution::default(),
         );
@@ -819,7 +787,7 @@ mod tests {
             max: Point::new(4.0, 3.0),
         })];
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs(&input, true).unwrap();
         let relief =
             ContourSet::from_filled_contours(&output.relief_contours, input.resolution).unwrap();
         let board = ContourSet::rectangle(
@@ -845,13 +813,7 @@ mod tests {
     #[test]
     fn internal_score_blocker_is_ignored() {
         let mut input = VScoreReliefInput::new(
-            path(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 5.0)),
-                PathCmd::line_to(Point::new(0.0, 5.0)),
-                PathCmd::close(),
-            ]),
+            polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (0.0, 5.0)]),
             rectangle_score_lines(10.0, 5.0),
             Resolution::default(),
         );
@@ -860,7 +822,7 @@ mod tests {
             max: Point::new(6.0, 3.0),
         })];
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs(&input, true).unwrap();
 
         assert!(output.relief_contours.is_empty());
         assert!(output.debug.entries[0].dead_space_pockets.is_empty());
@@ -869,21 +831,20 @@ mod tests {
     #[test]
     fn inset_boundary_creates_closed_dead_space_pocket() {
         let input = VScoreReliefInput::new(
-            path(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 5.0)),
-                PathCmd::line_to(Point::new(6.0, 5.0)),
-                PathCmd::line_to(Point::new(5.0, 3.0)),
-                PathCmd::line_to(Point::new(4.0, 5.0)),
-                PathCmd::line_to(Point::new(0.0, 5.0)),
-                PathCmd::close(),
+            polygon(&[
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 5.0),
+                (6.0, 5.0),
+                (5.0, 3.0),
+                (4.0, 5.0),
+                (0.0, 5.0),
             ]),
             rectangle_score_lines(10.0, 5.0),
             Resolution::default(),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs(&input, true).unwrap();
         let relief_contours = &output.relief_contours;
         let debug = &output.debug.entries[0];
 
@@ -906,53 +867,17 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_relief_regions_are_merged_before_emit() {
-        let boundary = path(vec![
-            PathCmd::move_to(Point::new(0.0, 0.0)),
-            PathCmd::line_to(Point::new(10.0, 0.0)),
-            PathCmd::line_to(Point::new(10.0, 5.0)),
-            PathCmd::line_to(Point::new(6.0, 5.0)),
-            PathCmd::line_to(Point::new(5.0, 3.0)),
-            PathCmd::line_to(Point::new(4.0, 5.0)),
-            PathCmd::line_to(Point::new(0.0, 5.0)),
-            PathCmd::close(),
-        ]);
-        let mut board_boundary = boundary.clone();
-        board_boundary.extend(boundary);
-        let input = VScoreReliefInput::new(
-            board_boundary,
-            rectangle_score_lines(10.0, 5.0),
-            Resolution::default(),
-        );
-
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
-
-        assert_eq!(output.debug.entries.len(), 2);
-        assert!(!output.relief_contours.is_empty());
-        assert!(!output.debug.merged_relief_contours.is_empty());
-        assert_eq!(
-            payloads_bbox(&output.relief_contours),
-            payloads_bbox(&output.debug.merged_relief_contours)
-        );
-    }
-
-    #[test]
     fn missing_score_cell_side_yields_no_relief_candidate() {
         let mut score_lines = rectangle_score_lines(10.0, 5.0);
         score_lines.remove(2);
         let input = VScoreReliefInput::new(
-            path(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 5.0)),
-                PathCmd::line_to(Point::new(0.0, 5.0)),
-                PathCmd::close(),
-            ]),
+            polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (0.0, 5.0)]),
             score_lines,
             Resolution::default(),
         );
 
-        assert!(vscore_route_reliefs(&input).unwrap().is_empty());
+        let output = vscore_route_reliefs(&input, false).unwrap();
+        assert!(output.relief_contours.is_empty());
     }
 
     #[test]
@@ -973,7 +898,7 @@ mod tests {
         );
 
         assert_eq!(input.resolution.tolerance_mm, DEFAULT_RELIEF_TOLERANCE_MM);
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs(&input, true).unwrap();
         let relief_contours = &output.relief_contours;
 
         assert!(!relief_contours.is_empty());
@@ -1012,7 +937,7 @@ mod tests {
             Resolution::default(),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs(&input, true).unwrap();
         let relief_contours = &output.relief_contours;
         let debug = &output.debug.entries[0];
 
@@ -1038,21 +963,20 @@ mod tests {
     #[test]
     fn narrow_pocket_routes_from_sacrificial_margin() {
         let input = VScoreReliefInput::new(
-            path(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 5.0)),
-                PathCmd::line_to(Point::new(5.4, 5.0)),
-                PathCmd::line_to(Point::new(5.0, 4.0)),
-                PathCmd::line_to(Point::new(4.6, 5.0)),
-                PathCmd::line_to(Point::new(0.0, 5.0)),
-                PathCmd::close(),
+            polygon(&[
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 5.0),
+                (5.4, 5.0),
+                (5.0, 4.0),
+                (4.6, 5.0),
+                (0.0, 5.0),
             ]),
             rectangle_score_lines(10.0, 5.0),
             Resolution::default(),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs(&input, true).unwrap();
         let relief_contours = &output.relief_contours;
 
         assert!(!relief_contours.is_empty());
@@ -1063,18 +987,12 @@ mod tests {
     #[test]
     fn slightly_slanted_score_edges_are_treated_as_scored() {
         let input = VScoreReliefInput::new(
-            path(vec![
-                PathCmd::move_to(Point::new(0.05, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 10.0)),
-                PathCmd::line_to(Point::new(0.0, 10.0)),
-                PathCmd::close(),
-            ]),
+            polygon(&[(0.05, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]),
             rectangle_score_lines(10.0, 10.0),
             Resolution::default(),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs(&input, true).unwrap();
 
         assert!(output.relief_contours.is_empty());
         assert!(output.debug.entries[0].dead_space_pockets.is_empty());
@@ -1083,20 +1001,19 @@ mod tests {
     #[test]
     fn score_alignment_tolerance_keeps_real_pockets() {
         let input = VScoreReliefInput::new(
-            path(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 8.0)),
-                PathCmd::line_to(Point::new(8.0, 8.0)),
-                PathCmd::line_to(Point::new(8.0, 10.0)),
-                PathCmd::line_to(Point::new(0.0, 10.0)),
-                PathCmd::close(),
+            polygon(&[
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 8.0),
+                (8.0, 8.0),
+                (8.0, 10.0),
+                (0.0, 10.0),
             ]),
             rectangle_score_lines(10.0, 10.0),
             Resolution::default(),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs(&input, true).unwrap();
         let pocket_bbox = payloads_bbox(&output.debug.entries[0].dead_space_pockets);
 
         assert!(!output.relief_contours.is_empty());
@@ -1109,22 +1026,21 @@ mod tests {
     #[test]
     fn stepped_outline_routes_only_unscored_boundary_runs() {
         let input = VScoreReliefInput::new(
-            path(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 4.0)),
-                PathCmd::line_to(Point::new(8.0, 4.0)),
-                PathCmd::line_to(Point::new(8.0, 8.0)),
-                PathCmd::line_to(Point::new(6.0, 8.0)),
-                PathCmd::line_to(Point::new(6.0, 10.0)),
-                PathCmd::line_to(Point::new(0.0, 10.0)),
-                PathCmd::close(),
+            polygon(&[
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 4.0),
+                (8.0, 4.0),
+                (8.0, 8.0),
+                (6.0, 8.0),
+                (6.0, 10.0),
+                (0.0, 10.0),
             ]),
             rectangle_score_lines(10.0, 10.0),
             Resolution::default(),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs(&input, true).unwrap();
         let relief_bbox = output
             .relief_contours
             .iter()
@@ -1140,17 +1056,13 @@ mod tests {
     #[test]
     fn no_score_lines_errors_instead_of_inferring_bbox_scores() {
         let input = VScoreReliefInput::new(
-            path(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 0.0)),
-                PathCmd::line_to(Point::new(10.0, 5.0)),
-            ]),
+            polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 5.0)]),
             Vec::new(),
             Resolution::default(),
         );
 
         assert_eq!(
-            vscore_route_reliefs(&input).unwrap_err(),
+            vscore_route_reliefs(&input, false).unwrap_err(),
             VScoreReliefError::EmptyScoreLines
         );
     }

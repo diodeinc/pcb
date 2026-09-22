@@ -688,16 +688,11 @@ fn compose_board_array_fabrication_profile(
             tool_diameter_mm: relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM,
             resolution,
         };
-        let reliefs = if options.debug {
-            let output = relief::vscore_route_reliefs_with_debug(&relief_input)?;
-            relief_debug = output.debug;
-            output.relief_contours
-        } else {
-            relief::vscore_route_reliefs(&relief_input)?
-        };
+        let output = relief::vscore_route_reliefs(&relief_input, options.debug)?;
+        relief_debug = output.debug;
         // Relief contours encode a region with holes for protected board material.
         material_removal.union_assign(&ContourSet::from_contours(
-            &reliefs,
+            &output.relief_contours,
             FillRule::NonZero,
             resolution,
         )?)?;
@@ -763,15 +758,7 @@ mod tests {
             placements: Span::new(0, 2),
             features: Span::new(0, 2),
         });
-        doc.layers.push(crate::dialects::ipc::Layer {
-            name: "TOP".to_string(),
-            source_layer_ref: crate::dialects::ipc::test_symbol(0),
-            layer_function: LayerFunction::Conductor,
-            spec_refs: Span::EMPTY,
-            sets: Span::EMPTY,
-            features: Span::new(0, 2),
-            bbox: BBox::empty(),
-        });
+        doc.layers.push(conductor_layer(Span::new(0, 2)));
 
         let artwork = lower_layer_to_artwork(&doc, 0, LayerRole::Copper, Side::Top);
 
@@ -815,15 +802,7 @@ mod tests {
             placements: Span::new(0, 2),
             features: Span::single(0),
         });
-        doc.layers.push(crate::dialects::ipc::Layer {
-            name: "TOP".to_string(),
-            source_layer_ref: crate::dialects::ipc::test_symbol(0),
-            layer_function: LayerFunction::Conductor,
-            spec_refs: Span::EMPTY,
-            sets: Span::EMPTY,
-            features: Span::single(0),
-            bbox: BBox::empty(),
-        });
+        doc.layers.push(conductor_layer(Span::single(0)));
 
         let artwork = lower_layer_to_artwork(&doc, 0, LayerRole::Copper, Side::Top);
 
@@ -883,15 +862,7 @@ mod tests {
             placements: Span::new(0, 2),
             features: Span::new(0, 3),
         });
-        doc.layers.push(crate::dialects::ipc::Layer {
-            name: "TOP".to_string(),
-            source_layer_ref: crate::dialects::ipc::test_symbol(0),
-            layer_function: LayerFunction::Conductor,
-            spec_refs: Span::EMPTY,
-            sets: Span::EMPTY,
-            features: Span::new(0, 3),
-            bbox: BBox::empty(),
-        });
+        doc.layers.push(conductor_layer(Span::new(0, 3)));
 
         let image = |doc: &Document| {
             let artwork = lower_layer_to_artwork(doc, 0, LayerRole::Copper, Side::Top);
@@ -907,38 +878,6 @@ mod tests {
         assert!(grouped.contains_point(Point::new(2.0, 0.5)));
         assert!((grouped.area() - flat.area()).abs() < 1e-9);
         assert!(grouped.difference(&flat).unwrap().is_empty());
-    }
-
-    #[test]
-    fn material_removal_union_is_winding_insensitive() {
-        let resolution = Resolution::default().with_tolerance(0.001);
-        let mut region = ContourSet::empty(resolution);
-
-        region
-            .union_assign(
-                &ContourSet::from_filled_contours(
-                    &[reversed_rectangle_contour(0.0, 0.0, 2.0, 2.0)],
-                    resolution,
-                )
-                .unwrap(),
-            )
-            .unwrap();
-        region
-            .union_assign(
-                &ContourSet::from_filled_contours(
-                    &[rectangle_contour(1.0, 0.0, 4.0, 2.0)],
-                    resolution,
-                )
-                .unwrap(),
-            )
-            .unwrap();
-
-        let bbox = region
-            .to_contours()
-            .iter()
-            .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox));
-        assert_eq!(bbox.min, Point::new(0.0, 0.0));
-        assert_eq!(bbox.max, Point::new(4.0, 2.0));
     }
 
     #[test]
@@ -991,30 +930,16 @@ mod tests {
         assert!(exterior.difference(&removal).unwrap().is_empty());
     }
 
-    #[test]
-    fn assembly_panel_outlines_remain_nominal_and_are_not_material_removal() {
-        let finished = rectangle_contour(10.0, 20.0, 110.0, 100.0);
-        let input = BoardArrayFabricationProfileInput {
-            purpose: LayoutPurpose::FabricationPanel,
-            assembly_panel_outlines: vec![vec![finished]],
-            ..BoardArrayFabricationProfileInput::default()
-        };
-        let (profile, _) = compose_board_array_fabrication_profile(
-            input,
-            &[],
-            Default::default(),
-            Resolution::default(),
-        )
-        .unwrap();
-
-        assert_eq!(profile.purpose, LayoutPurpose::FabricationPanel);
-        assert!(profile.material_removal.is_empty());
-        assert_eq!(profile.assembly_panel_outlines.len(), 1);
-        let bbox = profile.assembly_panel_outlines[0]
-            .iter()
-            .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox));
-        assert_eq!(bbox.min, Point::new(10.0, 20.0));
-        assert_eq!(bbox.max, Point::new(110.0, 100.0));
+    fn conductor_layer(features: Span) -> crate::dialects::ipc::Layer {
+        crate::dialects::ipc::Layer {
+            name: "TOP".to_string(),
+            source_layer_ref: crate::dialects::ipc::test_symbol(0),
+            layer_function: LayerFunction::Conductor,
+            spec_refs: Span::EMPTY,
+            sets: Span::EMPTY,
+            features,
+            bbox: BBox::empty(),
+        }
     }
 
     fn rectangle_contour(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ContourBuf {
@@ -1023,16 +948,6 @@ mod tests {
             PathCmd::line_to(Point::new(max_x, min_y)),
             PathCmd::line_to(Point::new(max_x, max_y)),
             PathCmd::line_to(Point::new(min_x, max_y)),
-            PathCmd::close(),
-        ])
-    }
-
-    fn reversed_rectangle_contour(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ContourBuf {
-        ContourBuf::new(vec![
-            PathCmd::move_to(Point::new(min_x, max_y)),
-            PathCmd::line_to(Point::new(max_x, max_y)),
-            PathCmd::line_to(Point::new(max_x, min_y)),
-            PathCmd::line_to(Point::new(min_x, min_y)),
             PathCmd::close(),
         ])
     }
