@@ -1,4 +1,4 @@
-use super::{Tokens, Xform, from_token, token};
+use super::Xform;
 use crate::Symbol;
 use std::fmt;
 
@@ -102,21 +102,10 @@ pub struct Butterfly {
     pub size: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ButterflyShape {
-    Round,
-    Square,
-}
-
-impl ButterflyShape {
-    const TOKENS: Tokens<Self> = &[("ROUND", Self::Round), ("SQUARE", Self::Square)];
-
-    pub fn as_str(self) -> &'static str {
-        token(Self::TOKENS, self)
-    }
-
-    pub fn from_ipc(token: &str) -> crate::Result<Self> {
-        from_token(Self::TOKENS, "butterflyShape", token)
+ipc_enum! {
+    pub enum ButterflyShape("butterflyShape") {
+        Round = "ROUND",
+        Square = "SQUARE",
     }
 }
 
@@ -134,29 +123,13 @@ pub struct Donut {
     pub inner_diameter: f64,
 }
 
-/// Shape used for Donut and Thermal primitives
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConcentricShape {
-    Round,
-    Square,
-    Hexagon,
-    Octagon,
-}
-
-impl ConcentricShape {
-    const TOKENS: Tokens<Self> = &[
-        ("ROUND", Self::Round),
-        ("SQUARE", Self::Square),
-        ("HEXAGON", Self::Hexagon),
-        ("OCTAGON", Self::Octagon),
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        token(Self::TOKENS, self)
-    }
-
-    pub fn from_ipc(token: &str) -> crate::Result<Self> {
-        from_token(Self::TOKENS, "concentricShape", token)
+ipc_enum! {
+    /// Shape used for Donut and Thermal primitives
+    pub enum ConcentricShape("concentricShape") {
+        Round = "ROUND",
+        Square = "SQUARE",
+        Hexagon = "HEXAGON",
+        Octagon = "OCTAGON",
     }
 }
 
@@ -369,55 +342,22 @@ pub enum LineDescGroup {
     Ref(Symbol),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LineEnd {
-    None,
-    Round,
-    Square,
-}
-
-impl LineEnd {
-    const TOKENS: Tokens<Self> = &[
-        ("NONE", Self::None),
-        ("ROUND", Self::Round),
-        ("SQUARE", Self::Square),
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        token(Self::TOKENS, self)
-    }
-
-    pub fn from_ipc(token: &str) -> crate::Result<Self> {
-        from_token(Self::TOKENS, "lineEnd", token)
+ipc_enum! {
+    pub enum LineEnd("lineEnd") {
+        None = "NONE",
+        Round = "ROUND",
+        Square = "SQUARE",
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LineProperty {
-    Solid,
-    Dashed,
-    Dotted,
-    Center,
-    Phantom,
-    Erase,
-}
-
-impl LineProperty {
-    const TOKENS: Tokens<Self> = &[
-        ("SOLID", Self::Solid),
-        ("DOTTED", Self::Dotted),
-        ("DASHED", Self::Dashed),
-        ("CENTER", Self::Center),
-        ("PHANTOM", Self::Phantom),
-        ("ERASE", Self::Erase),
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        token(Self::TOKENS, self)
-    }
-
-    pub fn from_ipc(token: &str) -> crate::Result<Self> {
-        from_token(Self::TOKENS, "lineProperty", token)
+ipc_enum! {
+    pub enum LineProperty("lineProperty") {
+        Solid = "SOLID",
+        Dashed = "DASHED",
+        Dotted = "DOTTED",
+        Center = "CENTER",
+        Phantom = "PHANTOM",
+        Erase = "ERASE",
     }
 }
 
@@ -433,30 +373,13 @@ pub struct FillDesc {
     pub color: Option<ColorGroup>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FillProperty {
-    Fill,
-    Hollow,
-    Void,
-    Hatch,
-    Mesh,
-}
-
-impl FillProperty {
-    const TOKENS: Tokens<Self> = &[
-        ("FILL", Self::Fill),
-        ("HOLLOW", Self::Hollow),
-        ("VOID", Self::Void),
-        ("HATCH", Self::Hatch),
-        ("MESH", Self::Mesh),
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        token(Self::TOKENS, self)
-    }
-
-    pub fn from_ipc(token: &str) -> crate::Result<Self> {
-        from_token(Self::TOKENS, "fillProperty", token)
+ipc_enum! {
+    pub enum FillProperty("fillProperty") {
+        Fill = "FILL",
+        Hollow = "HOLLOW",
+        Void = "VOID",
+        Hatch = "HATCH",
+        Mesh = "MESH",
     }
 }
 

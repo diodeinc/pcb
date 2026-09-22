@@ -1,4 +1,3 @@
-use super::{Tokens, from_token, token};
 use crate::{Interner, Symbol};
 use uppsala::XmlWriter;
 
@@ -195,37 +194,17 @@ impl AvlMpn {
     }
 }
 
-/// J-STD-020 Moisture Sensitivity Levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MoistureSensitivity {
-    Unlimited,
-    OneYear,
-    FourWeeks,
-    Hours168,
-    Hours72,
-    Hours48,
-    Hours24,
-    Bake,
-}
-
-impl MoistureSensitivity {
-    const TOKENS: Tokens<Self> = &[
-        ("UNLIMITED", Self::Unlimited),
-        ("1_YEAR", Self::OneYear),
-        ("4_WEEKS", Self::FourWeeks),
-        ("168_HOURS", Self::Hours168),
-        ("72_HOURS", Self::Hours72),
-        ("48_HOURS", Self::Hours48),
-        ("24_HOURS", Self::Hours24),
-        ("BAKE", Self::Bake),
-    ];
-
-    pub fn as_str(&self) -> &'static str {
-        token(Self::TOKENS, *self)
-    }
-
-    pub fn from_ipc(token: &str) -> crate::Result<Self> {
-        from_token(Self::TOKENS, "moistureSensitivity", token)
+ipc_enum! {
+    /// J-STD-020 Moisture Sensitivity Levels
+    pub enum MoistureSensitivity("moistureSensitivity") {
+        Unlimited = "UNLIMITED",
+        OneYear = "1_YEAR",
+        FourWeeks = "4_WEEKS",
+        Hours168 = "168_HOURS",
+        Hours72 = "72_HOURS",
+        Hours48 = "48_HOURS",
+        Hours24 = "24_HOURS",
+        Bake = "BAKE",
     }
 }
 

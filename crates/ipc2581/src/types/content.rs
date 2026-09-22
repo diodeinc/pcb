@@ -1,5 +1,4 @@
 use super::dictionary::*;
-use super::{Tokens, from_token, token};
 use crate::Symbol;
 
 /// Content section of IPC-2581 file
@@ -27,36 +26,16 @@ pub struct FunctionMode {
     pub level: Option<Level>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    UserDef,
-    Bom,
-    Stackup,
-    Fabrication,
-    Assembly,
-    Test,
-    Stencil,
-    Dfx,
-}
-
-impl Mode {
-    const TOKENS: Tokens<Self> = &[
-        ("USERDEF", Self::UserDef),
-        ("BOM", Self::Bom),
-        ("STACKUP", Self::Stackup),
-        ("FABRICATION", Self::Fabrication),
-        ("ASSEMBLY", Self::Assembly),
-        ("TEST", Self::Test),
-        ("STENCIL", Self::Stencil),
-        ("DFX", Self::Dfx),
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        token(Self::TOKENS, self)
-    }
-
-    pub fn from_ipc(token: &str) -> crate::Result<Self> {
-        from_token(Self::TOKENS, "mode", token)
+ipc_enum! {
+    pub enum Mode("mode") {
+        UserDef = "USERDEF",
+        Bom = "BOM",
+        Stackup = "STACKUP",
+        Fabrication = "FABRICATION",
+        Assembly = "ASSEMBLY",
+        Test = "TEST",
+        Stencil = "STENCIL",
+        Dfx = "DFX",
     }
 }
 
