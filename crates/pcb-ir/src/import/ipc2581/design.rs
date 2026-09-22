@@ -45,7 +45,8 @@ pub struct StepDefinition {
 
 impl StepDefinition {
     pub fn is_panel(&self) -> bool {
-        is_panel(self.step_type, &self.step_repeats)
+        matches!(self.step_type, Some(StepType::Pallet))
+            || (self.step_type.is_none() && !self.step_repeats.is_empty())
     }
 }
 
