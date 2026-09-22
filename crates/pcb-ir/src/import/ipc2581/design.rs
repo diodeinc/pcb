@@ -124,6 +124,27 @@ pub(in crate::import) struct StepOccurrence {
     pub(super) root_from_board: Affine2,
 }
 
+impl StepOccurrence {
+    /// A step alone at the root of its own frame.
+    fn root(step: u32, kind: LayoutStepKind) -> Self {
+        Self {
+            step,
+            layout: LayoutOccurrenceId::Root,
+            root_from_step: Affine2::IDENTITY,
+            board: (kind == LayoutStepKind::Board).then_some(LayoutOccurrenceId::Root),
+            root_from_board: Affine2::IDENTITY,
+        }
+    }
+
+    /// The board frame's view of something placed in the root frame, when
+    /// this occurrence is on a board.
+    fn board_from(&self, root_from_local: Affine2) -> Option<Affine2> {
+        self.board
+            .and_then(|_| self.root_from_board.inverse())
+            .map(|board_from_root| board_from_root.concat(root_from_local))
+    }
+}
+
 /// Import the complete source design once, retaining step-local geometry.
 pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDesign> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
@@ -388,6 +409,12 @@ impl ImportedDesign {
             .map(|index| LayerId(index as u32))
     }
 
+    fn step_layer(&self, step: u32, layer: LayerId) -> Option<&StepLayer> {
+        self.step_layers
+            .iter()
+            .find(|step_layer| step_layer.layer == layer && step_layer.step == step)
+    }
+
     pub fn step_id(&self, source_step_ref: Symbol) -> Option<u32> {
         self.geometry
             .layout
@@ -407,13 +434,7 @@ impl ImportedDesign {
             .steps
             .get(step as usize)
             .context("step id is outside the imported design")?;
-        let alone = StepOccurrence {
-            step,
-            layout: LayoutOccurrenceId::Root,
-            root_from_step: Affine2::IDENTITY,
-            board: (definition.kind == LayoutStepKind::Board).then_some(LayoutOccurrenceId::Root),
-            root_from_board: Affine2::IDENTITY,
-        };
+        let alone = StepOccurrence::root(step, definition.kind);
         self.materialize(layer, &[alone], Some(step), &|_| true)
     }
 
@@ -425,9 +446,7 @@ impl ImportedDesign {
         let step_occurrences = self.step_occurrences(scope)?;
         let mut occurrences = Vec::new();
         for step_occurrence in &step_occurrences {
-            let Some(step_layer) = self.step_layers.iter().find(|step_layer| {
-                step_layer.layer == layer && step_layer.step == step_occurrence.step
-            }) else {
+            let Some(step_layer) = self.step_layer(step_occurrence.step, layer) else {
                 continue;
             };
             let source_layer = &self.geometry.layers[step_layer.document_layer as usize];
@@ -476,10 +495,7 @@ impl ImportedDesign {
             root_from_local,
             board: step.board,
             root_from_board: step.root_from_board,
-            board_from_local: step
-                .board
-                .and_then(|_| step.root_from_board.inverse())
-                .map(|board_from_root| board_from_root.concat(root_from_local)),
+            board_from_local: step.board_from(root_from_local),
         }
     }
 
@@ -524,10 +540,7 @@ impl ImportedDesign {
                     root_from_component,
                     board: step.board,
                     root_from_board: step.root_from_board,
-                    board_from_component: step
-                        .board
-                        .and_then(|_| step.root_from_board.inverse())
-                        .map(|board_from_root| board_from_root.concat(root_from_component)),
+                    board_from_component: step.board_from(root_from_component),
                     population: component.population,
                 });
             }
@@ -590,9 +603,7 @@ impl ImportedDesign {
             .placed_occurrences(scope, root)?
             .into_iter()
             .filter_map(|occurrence| {
-                let step_layer = self.step_layers.iter().find(|step_layer| {
-                    step_layer.layer == layer && step_layer.step == occurrence.step
-                })?;
+                let step_layer = self.step_layer(occurrence.step, layer)?;
                 let bounds = self.geometry.layers[step_layer.document_layer as usize].bbox;
                 Some((
                     occurrence.layout,
@@ -672,11 +683,7 @@ impl ImportedDesign {
         let mut bbox = BBox::empty();
         let mut source_set_offset = 0;
         for occurrence in occurrences {
-            let Some(step_layer) = self
-                .step_layers
-                .iter()
-                .find(|step_layer| step_layer.layer == layer && step_layer.step == occurrence.step)
-            else {
+            let Some(step_layer) = self.step_layer(occurrence.step, layer) else {
                 continue;
             };
             let source_layer = step_layer.document_layer as usize;
@@ -774,8 +781,7 @@ impl ImportedDesign {
         resolution: Resolution,
     ) -> Result<ContourSet> {
         let definition = self
-            .layer_definitions
-            .get(layer.0 as usize)
+            .layer_definition(layer)
             .context("layer id is outside the imported design")?;
         self.materialize_layer(layer, scope)?.into_layer_image(
             0,
@@ -800,14 +806,7 @@ impl ImportedDesign {
             .steps
             .get(root_step as usize)
             .context("canonical layout root references a missing step")?;
-        let root = StepOccurrence {
-            step: root_step,
-            layout: LayoutOccurrenceId::Root,
-            root_from_step: Affine2::IDENTITY,
-            board: (root_definition.kind == LayoutStepKind::Board)
-                .then_some(LayoutOccurrenceId::Root),
-            root_from_board: Affine2::IDENTITY,
-        };
+        let root = StepOccurrence::root(root_step, root_definition.kind);
         if scope == ArtworkScope::ArrayLocal {
             return Ok(vec![root]);
         }
@@ -829,13 +828,10 @@ impl ImportedDesign {
                     self.resolve(root_definition.source_step_ref)
                 )
             })?;
-        Ok(vec![StepOccurrence {
-            step: board.step,
-            layout: LayoutOccurrenceId::Root,
-            root_from_step: Affine2::IDENTITY,
-            board: Some(LayoutOccurrenceId::Root),
-            root_from_board: Affine2::IDENTITY,
-        }])
+        Ok(vec![StepOccurrence::root(
+            board.step,
+            LayoutStepKind::Board,
+        )])
     }
 
     fn append_step_occurrences(
