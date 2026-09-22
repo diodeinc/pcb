@@ -28,7 +28,7 @@ use pcb_ir::dialects::ipc::{
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::ContourBuf;
-use pcb_ir::geom::{BBox, LineCap, Paint, Polarity, Span, StrokeStyle};
+use pcb_ir::geom::{BBox, Paint, Polarity, Span, StrokeStyle};
 use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign, LayerId};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
@@ -48,20 +48,8 @@ pub struct GerberExportOptions {
     pub relief_debug_dir: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ProfileGerberStyle {
-    stroke_width_mm: f64,
-    line_cap: LineCap,
-}
-
-impl Default for ProfileGerberStyle {
-    fn default() -> Self {
-        Self {
-            stroke_width_mm: 0.05,
-            line_cap: LineCap::Round,
-        }
-    }
-}
+/// Profiles image as round strokes of this width.
+const PROFILE_STROKE_WIDTH_MM: f64 = 0.05;
 
 pub fn build_gerber_x2_files(
     imported: &ImportedDesign,
@@ -189,7 +177,10 @@ fn export_layer_plans<'a>(
     imported: &ImportedDesign,
     layers: &'a [Layer],
 ) -> Vec<ExportLayerPlan<'a>> {
-    let copper_count = copper_layer_count(layers);
+    let copper_count = layers
+        .iter()
+        .filter(|layer| gerber_layer_role(layer.layer_function) == Some(GerberLayerRole::Copper))
+        .count();
     let mut copper_index = 0;
     let mut plans = Vec::new();
     let mut used_filenames = HashSet::new();
@@ -222,13 +213,6 @@ fn export_layer_plans<'a>(
     plans
 }
 
-fn copper_layer_count(layers: &[Layer]) -> usize {
-    layers
-        .iter()
-        .filter(|layer| gerber_layer_role(layer.layer_function) == Some(GerberLayerRole::Copper))
-        .count()
-}
-
 fn allocate_filename(
     used: &mut HashSet<String>,
     preferred: &str,
@@ -238,10 +222,11 @@ fn allocate_filename(
         return preferred.to_string();
     }
 
-    let (stem, extension) = split_filename(preferred);
-    let extension = extension
-        .map(|extension| format!(".{extension}"))
-        .unwrap_or_default();
+    let (stem, extension) = preferred
+        .rsplit_once('.')
+        .map_or((preferred, String::new()), |(stem, extension)| {
+            (stem, format!(".{extension}"))
+        });
     let source_stem = sanitize_filename_stem(source_layer_name);
     let source_stem = if source_stem.is_empty() {
         stem.to_string()
@@ -260,14 +245,6 @@ fn allocate_filename(
         }
     }
     unreachable!("unbounded filename allocation should find an unused name")
-}
-
-fn split_filename(filename: &str) -> (&str, Option<&str>) {
-    filename
-        .rsplit_once('.')
-        .map_or((filename, None), |(stem, extension)| {
-            (stem, Some(extension))
-        })
 }
 
 fn sanitize_filename_stem(name: &str) -> String {
@@ -327,70 +304,55 @@ fn layer_output(
     copper_count: usize,
     source_layer_name: &str,
 ) -> (String, Vec<String>) {
+    let fields = |fields: &[&str]| fields.iter().map(|field| field.to_string()).collect();
+    // A layer that exists on the two outer sides only.
+    let outer = |top: &str, bottom: &str, function: &str| match side {
+        Some(IpcSide::Bottom) => (bottom.to_string(), fields(&[function, "Bot"])),
+        _ => (top.to_string(), fields(&[function, "Top"])),
+    };
+    let vcut = |filename: &str| match side {
+        Some(IpcSide::Top) => (filename.to_string(), fields(&["Vcut", "Top"])),
+        Some(IpcSide::Bottom) => (filename.to_string(), fields(&["Vcut", "Bot"])),
+        _ => (filename.to_string(), fields(&["Vcut"])),
+    };
     match role {
-        GerberLayerRole::Copper => copper_layer_output(side, copper_index, copper_count),
-        GerberLayerRole::Paste => match side {
-            Some(IpcSide::Bottom) => (
-                "B_Paste.gbp".to_string(),
-                vec!["Paste".into(), "Bot".into()],
-            ),
-            _ => (
-                "F_Paste.gtp".to_string(),
-                vec!["Paste".into(), "Top".into()],
-            ),
-        },
-        GerberLayerRole::Soldermask => match side {
-            Some(IpcSide::Bottom) => (
-                "B_Mask.gbs".to_string(),
-                vec!["Soldermask".into(), "Bot".into()],
-            ),
-            _ => (
-                "F_Mask.gts".to_string(),
-                vec!["Soldermask".into(), "Top".into()],
-            ),
-        },
-        GerberLayerRole::Legend => match side {
-            Some(IpcSide::Bottom) => (
-                "B_SilkS.gbo".to_string(),
-                vec!["Legend".into(), "Bot".into()],
-            ),
-            _ => (
-                "F_SilkS.gto".to_string(),
-                vec!["Legend".into(), "Top".into()],
-            ),
-        },
-        GerberLayerRole::AssemblyDrawing => assembly_drawing_layer_output(source_layer_name, side),
+        GerberLayerRole::Copper => {
+            let (filename, index, side) = match side {
+                Some(IpcSide::Top) => ("F_Cu.gtl".to_string(), 1, "Top"),
+                Some(IpcSide::Bottom) => ("B_Cu.gbl".to_string(), copper_count, "Bot"),
+                // KiCad numbers inner layers from 1, excluding the top layer.
+                _ => (
+                    format!("In{}_Cu.gbr", copper_index - 1),
+                    copper_index,
+                    "Inr",
+                ),
+            };
+            (filename, fields(&["Copper", &format!("L{index}"), side]))
+        }
+        GerberLayerRole::Paste => outer("F_Paste.gtp", "B_Paste.gbp", "Paste"),
+        GerberLayerRole::Soldermask => outer("F_Mask.gts", "B_Mask.gbs", "Soldermask"),
+        GerberLayerRole::Legend => outer("F_SilkS.gto", "B_SilkS.gbo", "Legend"),
+        GerberLayerRole::AssemblyDrawing => {
+            let (fallback_stem, file_function) = match side {
+                Some(IpcSide::Top) => ("F_Fab", ["AssemblyDrawing", "Top"]),
+                Some(IpcSide::Bottom) => ("B_Fab", ["AssemblyDrawing", "Bot"]),
+                _ => ("Assembly", ["OtherDrawing", "Assembly"]),
+            };
+            (
+                drawing_filename(source_layer_name, fallback_stem),
+                fields(&file_function),
+            )
+        }
         GerberLayerRole::FabricationDrawing => (
             drawing_filename(source_layer_name, "Fabrication_Drawing"),
-            vec!["FabricationDrawing".into()],
+            fields(&["FabricationDrawing"]),
         ),
-        GerberLayerRole::Profile => (
-            "Edge_Cuts.gm1".to_string(),
-            vec!["Profile".into(), "NP".into()],
-        ),
-        GerberLayerRole::Vcut => vcut_layer_output("V_Cut.gbr", side),
+        GerberLayerRole::Profile => ("Edge_Cuts.gm1".to_string(), fields(&["Profile", "NP"])),
+        GerberLayerRole::Vcut => vcut("V_Cut.gbr"),
         // Gerber calls the scored-line data function `Vcut`; the specification
         // explicitly treats scoring as the same fabrication operation.
-        GerberLayerRole::Score => vcut_layer_output("Score.gbr", side),
+        GerberLayerRole::Score => vcut("Score.gbr"),
     }
-}
-
-fn assembly_drawing_layer_output(
-    source_layer_name: &str,
-    side: Option<IpcSide>,
-) -> (String, Vec<String>) {
-    let fallback_stem = match side {
-        Some(IpcSide::Top) => "F_Fab",
-        Some(IpcSide::Bottom) => "B_Fab",
-        _ => "Assembly",
-    };
-    let filename = drawing_filename(source_layer_name, fallback_stem);
-    let file_function = match side {
-        Some(IpcSide::Top) => vec!["AssemblyDrawing".into(), "Top".into()],
-        Some(IpcSide::Bottom) => vec!["AssemblyDrawing".into(), "Bot".into()],
-        _ => vec!["OtherDrawing".into(), "Assembly".into()],
-    };
-    (filename, file_function)
 }
 
 fn drawing_filename(source_layer_name: &str, fallback_stem: &str) -> String {
@@ -402,25 +364,6 @@ fn drawing_filename(source_layer_name: &str, fallback_stem: &str) -> String {
         } else {
             &source_stem
         }
-    )
-}
-
-fn vcut_layer_output(filename: &str, side: Option<IpcSide>) -> (String, Vec<String>) {
-    let side = match side {
-        Some(IpcSide::Top) => Some("Top"),
-        Some(IpcSide::Bottom) => Some("Bot"),
-        Some(IpcSide::Both)
-        | Some(IpcSide::All)
-        | Some(IpcSide::None)
-        | Some(IpcSide::Internal)
-        | None => None,
-    };
-    (
-        filename.to_string(),
-        std::iter::once("Vcut")
-            .chain(side)
-            .map(str::to_string)
-            .collect(),
     )
 }
 
@@ -476,37 +419,6 @@ fn layer_attributes(
     }
 }
 
-fn copper_layer_output(
-    side: Option<IpcSide>,
-    copper_index: usize,
-    copper_count: usize,
-) -> (String, Vec<String>) {
-    let side_field = match side {
-        Some(IpcSide::Top) => "Top",
-        Some(IpcSide::Bottom) => "Bot",
-        _ => "Inr",
-    };
-    let filename = match side {
-        Some(IpcSide::Top) => "F_Cu.gtl".to_string(),
-        Some(IpcSide::Bottom) => "B_Cu.gbl".to_string(),
-        // KiCad numbers inner layers from 1, excluding the top layer.
-        _ => format!("In{}_Cu.gbr", copper_index - 1),
-    };
-    let index = match side {
-        Some(IpcSide::Top) => 1,
-        Some(IpcSide::Bottom) => copper_count,
-        _ => copper_index,
-    };
-    (
-        filename,
-        vec![
-            "Copper".to_string(),
-            format!("L{index}"),
-            side_field.to_string(),
-        ],
-    )
-}
-
 fn artwork_from_ipc_layer(
     imported: &ImportedDesign,
     standard_primitives: &StandardPrimitives,
@@ -537,13 +449,7 @@ fn artwork_from_ipc_layer(
         && spec.view != ArtworkScope::ArrayFlattened
         && artwork.layers[0].objects.is_empty()
     {
-        append_profile_occurrences(
-            &mut artwork,
-            0,
-            doc,
-            spec.view.profile_set(),
-            ProfileGerberStyle::default(),
-        );
+        append_profile_occurrences(&mut artwork, 0, doc, spec.view.profile_set());
     }
     artwork
 }
@@ -646,35 +552,9 @@ fn synthetic_profile_gerber_file(
     view: ArtworkScope,
     accuracy: GeometryAccuracy,
 ) -> Result<Option<GerberX2File>> {
-    let doc = &imported.geometry;
-    let mut artwork = GerberArtwork::new();
-    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
-        name: "Edge.Cuts".to_string(),
-        role: LayerRole::Profile,
-        side: IrSide::None,
-        objects: Span::EMPTY,
-        bbox: BBox::empty(),
-        meta: layer_attributes(
-            vec!["Profile".to_string(), "NP".to_string()],
-            gerber_part_for_ipc_view(imported, view)?,
-            GerberLayerRole::Profile,
-        ),
-    });
-    append_profile_occurrences(
-        &mut artwork,
-        artwork_layer,
-        doc,
-        view.profile_set(),
-        ProfileGerberStyle::default(),
-    );
-    if artwork.layers[artwork_layer as usize].objects.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(GerberX2File {
-        filename: "Edge_Cuts.gm1".to_string(),
-        contents: write_layer(&lower_artwork_layer(&artwork, accuracy)?)?,
-    }))
+    let mut artwork = profile_artwork("Edge.Cuts", gerber_part_for_ipc_view(imported, view)?);
+    append_profile_occurrences(&mut artwork, 0, &imported.geometry, view.profile_set());
+    profile_file(&artwork, "Edge_Cuts.gm1", accuracy)
 }
 
 fn board_array_profile_gerber_files(
@@ -718,32 +598,35 @@ fn board_array_profile_gerber_files(
         .collect());
     }
 
-    Ok([
-        profile_gerber_file(
+    [
+        (
             "Fab Panel Outline",
             "Fab_Panel_Outline.gm1",
             profile.array_outlines,
-            GerberPart::FabricationPanel,
-            resolution.accuracy,
-        )?,
-        profile_gerber_file(
+        ),
+        (
             "Assembly Panel Outlines",
             "Assembly_Panel_Outlines.gm1",
             profile.assembly_panel_outlines,
-            GerberPart::FabricationPanel,
-            resolution.accuracy,
-        )?,
-        profile_gerber_file(
+        ),
+        (
             "Board Cutouts",
             "Board_Cutouts.gm1",
             vec![profile.material_removal],
-            GerberPart::FabricationPanel,
-            resolution.accuracy,
-        )?,
+        ),
     ]
     .into_iter()
-    .flatten()
-    .collect())
+    .filter_map(|(layer_name, filename, contour_groups)| {
+        profile_gerber_file(
+            layer_name,
+            filename,
+            contour_groups,
+            GerberPart::FabricationPanel,
+            resolution.accuracy,
+        )
+        .transpose()
+    })
+    .collect()
 }
 
 fn profile_gerber_file(
@@ -753,8 +636,20 @@ fn profile_gerber_file(
     part: GerberPart,
     accuracy: GeometryAccuracy,
 ) -> Result<Option<GerberX2File>> {
+    let mut artwork = profile_artwork(layer_name, part);
+    for contours in contour_groups
+        .into_iter()
+        .filter(|contours| !contours.is_empty())
+    {
+        append_profile_payloads(&mut artwork, 0, contours);
+    }
+    profile_file(&artwork, filename, accuracy)
+}
+
+/// An empty document with one profile layer.
+fn profile_artwork(layer_name: &str, part: GerberPart) -> GerberArtwork {
     let mut artwork = GerberArtwork::new();
-    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
+    artwork.push_layer(pcb_ir::dialects::artwork::Layer {
         name: layer_name.to_string(),
         role: LayerRole::Profile,
         side: IrSide::None,
@@ -766,20 +661,21 @@ fn profile_gerber_file(
             GerberLayerRole::Profile,
         ),
     });
-    let style = ProfileGerberStyle::default();
-    for contours in contour_groups
-        .into_iter()
-        .filter(|contours| !contours.is_empty())
-    {
-        append_profile_payloads(&mut artwork, artwork_layer, contours, style);
-    }
-    if artwork.layers[artwork_layer as usize].objects.is_empty() {
+    artwork
+}
+
+/// The file of a profile layer, unless it draws nothing.
+fn profile_file(
+    artwork: &GerberArtwork,
+    filename: &str,
+    accuracy: GeometryAccuracy,
+) -> Result<Option<GerberX2File>> {
+    if artwork.layers[0].objects.is_empty() {
         return Ok(None);
     }
-
     Ok(Some(GerberX2File {
         filename: filename.to_string(),
-        contents: write_layer(&lower_artwork_layer(&artwork, accuracy)?)?,
+        contents: write_layer(&lower_artwork_layer(artwork, accuracy)?)?,
     }))
 }
 
@@ -825,139 +721,89 @@ fn render_vscore_relief_debug_svg(debug: &relief::VScoreReliefDebug) -> Option<S
     }
 
     let padding = 2.0;
+    let [x, y, width, height] = [
+        bbox.min.x - padding,
+        -(bbox.max.y + padding),
+        bbox.width() + 2.0 * padding,
+        bbox.height() + 2.0 * padding,
+    ]
+    .map(|value| trim_decimal(value, 6));
     let mut svg = String::new();
     writeln!(
         svg,
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{} {} {} {}' data-vscore-relief-debug='true'>",
-        trim_decimal(bbox.min.x - padding, 6),
-        trim_decimal(-(bbox.max.y + padding), 6),
-        trim_decimal(bbox.width() + 2.0 * padding, 6),
-        trim_decimal(bbox.height() + 2.0 * padding, 6)
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{x} {y} {width} {height}' data-vscore-relief-debug='true'>"
     )
     .unwrap();
     writeln!(
         svg,
-        "  <rect x='{}' y='{}' width='{}' height='{}' fill='#ffffff'/>",
-        trim_decimal(bbox.min.x - padding, 6),
-        trim_decimal(-(bbox.max.y + padding), 6),
-        trim_decimal(bbox.width() + 2.0 * padding, 6),
-        trim_decimal(bbox.height() + 2.0 * padding, 6)
+        "  <rect x='{x}' y='{y}' width='{width}' height='{height}' fill='#ffffff'/>"
     )
     .unwrap();
     writeln!(svg, "  <g transform='scale(1 -1)'>").unwrap();
 
+    // Style: class, fill, stroke, stroke width, extra attributes.
+    let mut path = |entry: usize, payloads: &[ContourBuf], style: [&str; 5]| {
+        let data = pcb_ir::render::svg_path_data(payloads);
+        let [class, fill, stroke, width, extra] = style;
+        if !data.is_empty() {
+            writeln!(
+                svg,
+                "    <path class='{class}' data-entry='{entry}' d='{data}' fill='{fill}' stroke='{stroke}' stroke-width='{width}' {extra} fill-rule='evenodd'/>"
+            )
+            .unwrap();
+        }
+    };
     for (index, entry) in debug.entries.iter().enumerate() {
-        write_debug_path(
-            &mut svg,
+        let dashed = "stroke-dasharray='0.6 0.6'";
+        path(
             index,
             std::slice::from_ref(&entry.score_cell),
-            DebugSvgPathStyle {
-                class_name: "score-cell",
-                fill: "none",
-                stroke: "#64748b",
-                stroke_width: "0.08",
-                extra_attrs: "stroke-dasharray='0.6 0.6'",
-            },
+            ["score-cell", "none", "#64748b", "0.08", dashed],
         );
-        write_debug_path(
-            &mut svg,
+        path(
             index,
             &entry.board_boundary,
-            DebugSvgPathStyle {
-                class_name: "board-boundary",
-                fill: "none",
-                stroke: "#064e3b",
-                stroke_width: "0.08",
-                extra_attrs: "",
-            },
+            ["board-boundary", "none", "#064e3b", "0.08", ""],
         );
-        write_debug_path(
-            &mut svg,
+        let translucent = "fill-opacity='0.18'";
+        path(
             index,
             &entry.dead_space_pockets,
-            DebugSvgPathStyle {
-                class_name: "dead-space-pocket",
-                fill: "#f59e0b",
-                stroke: "#f59e0b",
-                stroke_width: "0.05",
-                extra_attrs: "fill-opacity='0.18'",
-            },
+            [
+                "dead-space-pocket",
+                "#f59e0b",
+                "#f59e0b",
+                "0.05",
+                translucent,
+            ],
         );
-        write_debug_path(
-            &mut svg,
+        let translucent = "fill-opacity='0.16'";
+        path(
             index,
             &entry.legal_tool_centers,
-            DebugSvgPathStyle {
-                class_name: "legal-tool-center",
-                fill: "#2563eb",
-                stroke: "#1d4ed8",
-                stroke_width: "0.05",
-                extra_attrs: "fill-opacity='0.16'",
-            },
+            [
+                "legal-tool-center",
+                "#2563eb",
+                "#1d4ed8",
+                "0.05",
+                translucent,
+            ],
         );
-        write_debug_path(
-            &mut svg,
+        path(
             index,
             &entry.relief_contours,
-            DebugSvgPathStyle {
-                class_name: "relief-contour",
-                fill: "none",
-                stroke: "#dc2626",
-                stroke_width: "0.1",
-                extra_attrs: "",
-            },
+            ["relief-contour", "none", "#dc2626", "0.1", ""],
         );
     }
-    write_debug_path(
-        &mut svg,
+    path(
         debug.entries.len(),
         &debug.merged_relief_contours,
-        DebugSvgPathStyle {
-            class_name: "merged-relief-contour",
-            fill: "none",
-            stroke: "#7c3aed",
-            stroke_width: "0.14",
-            extra_attrs: "",
-        },
+        ["merged-relief-contour", "none", "#7c3aed", "0.14", ""],
     );
 
     writeln!(svg, "  </g>").unwrap();
     writeln!(svg, "</svg>").unwrap();
     Some(svg)
-}
-
-#[derive(Debug, Clone, Copy)]
-#[cfg(feature = "cli")]
-struct DebugSvgPathStyle {
-    class_name: &'static str,
-    fill: &'static str,
-    stroke: &'static str,
-    stroke_width: &'static str,
-    extra_attrs: &'static str,
-}
-
-#[cfg(feature = "cli")]
-fn write_debug_path(
-    svg: &mut String,
-    entry_index: usize,
-    payloads: &[ContourBuf],
-    style: DebugSvgPathStyle,
-) {
-    let Some(path_data) = debug_path_data(payloads) else {
-        return;
-    };
-    writeln!(
-        svg,
-        "    <path class='{}' data-entry='{entry_index}' d='{path_data}' fill='{}' stroke='{}' stroke-width='{}' {} fill-rule='evenodd'/>",
-        style.class_name, style.fill, style.stroke, style.stroke_width, style.extra_attrs
-    )
-    .unwrap();
-}
-
-#[cfg(feature = "cli")]
-fn debug_path_data(payloads: &[ContourBuf]) -> Option<String> {
-    let data = pcb_ir::render::svg_path_data(payloads);
-    (!data.is_empty()).then_some(data)
 }
 
 #[cfg(feature = "cli")]
@@ -972,7 +818,6 @@ fn append_profile_occurrences(
     layer: u32,
     doc: &GeometryDocument,
     profile_set: ProfileSet,
-    style: ProfileGerberStyle,
 ) {
     for occurrence in profile_occurrences_for(doc, profile_set) {
         let profile = occurrence.profile;
@@ -982,20 +827,14 @@ fn append_profile_occurrences(
                 artwork,
                 layer,
                 doc.transformed_path_contours(path, occurrence.transform),
-                style,
             );
         }
     }
 }
 
-fn append_profile_payloads(
-    artwork: &mut GerberArtwork,
-    layer: u32,
-    payloads: Vec<ContourBuf>,
-    style: ProfileGerberStyle,
-) {
+fn append_profile_payloads(artwork: &mut GerberArtwork, layer: u32, payloads: Vec<ContourBuf>) {
     let path = artwork.push_path(
-        Paint::Stroke(StrokeStyle::new(style.stroke_width_mm, style.line_cap)),
+        Paint::Stroke(StrokeStyle::round(PROFILE_STROKE_WIDTH_MM)),
         payloads,
     );
     let bbox = artwork.path_bbox(path);
@@ -1098,105 +937,82 @@ fn aperture_function(
     role: GerberLayerRole,
     side: IrSide,
 ) -> Option<Vec<String>> {
-    match role {
+    let function: &[&str] = match role {
         GerberLayerRole::Soldermask | GerberLayerRole::Paste | GerberLayerRole::Legend => {
-            return Some(vec!["Material".to_string()]);
+            &["Material"]
         }
         GerberLayerRole::AssemblyDrawing | GerberLayerRole::FabricationDrawing => return None,
-        GerberLayerRole::Profile => return Some(vec!["Profile".to_string()]),
-        GerberLayerRole::Vcut => {
-            return Some(vec!["Other".to_string(), "Vcut".to_string()]);
-        }
-        GerberLayerRole::Score => {
-            return Some(vec!["Other".to_string(), "Score".to_string()]);
-        }
-        GerberLayerRole::Copper => {}
-    }
+        GerberLayerRole::Profile => &["Profile"],
+        GerberLayerRole::Vcut => &["Other", "Vcut"],
+        GerberLayerRole::Score => &["Other", "Score"],
+        GerberLayerRole::Copper => copper_aperture_function(doc, feature, side),
+    };
+    Some(function.iter().map(|field| field.to_string()).collect())
+}
 
+/// What a copper feature is, from the most to the least specific thing the
+/// source says about it.
+fn copper_aperture_function(
+    doc: &GeometryDocument,
+    feature: &Feature,
+    side: IrSide,
+) -> &'static [&'static str] {
     if doc
         .feature_set(feature)
         .is_some_and(|set| set.copper_balance)
     {
-        return Some(vec!["CopperBalancing".to_string()]);
+        return &["CopperBalancing"];
     }
 
     match feature.intent.operation {
-        FeatureOperation::Drill => {
-            return Some(vec!["Other".to_string(), "Drill".to_string()]);
-        }
-        FeatureOperation::Score if feature.is_vcut() => {
-            return Some(vec!["Other".to_string(), "Vcut".to_string()]);
-        }
-        FeatureOperation::Score if feature.is_score() => {
-            return Some(vec!["Other".to_string(), "Score".to_string()]);
-        }
-        FeatureOperation::Route | FeatureOperation::Profile => {
-            return Some(vec!["Profile".to_string()]);
-        }
+        FeatureOperation::Drill => return &["Other", "Drill"],
+        FeatureOperation::Score if feature.is_vcut() => return &["Other", "Vcut"],
+        FeatureOperation::Score if feature.is_score() => return &["Other", "Score"],
+        FeatureOperation::Route | FeatureOperation::Profile => return &["Profile"],
         _ => {}
     }
 
     match feature.intent.role {
-        _ if feature.is_fiducial() => return Some(fiducial_aperture_function(feature)),
-        FeatureRole::Pad => {
-            return match feature.intent.plating {
-                PlatingKind::Plated => Some(vec!["ComponentPad".to_string()]),
-                PlatingKind::Via | PlatingKind::ViaCapped => Some(vec!["ViaPad".to_string()]),
-                _ if matches!(side, IrSide::Top | IrSide::Bottom) => {
-                    Some(vec!["SMDPad".to_string(), "CuDef".to_string()])
-                }
-                _ if !feature.pin_refs.is_empty() => Some(vec!["ComponentPad".to_string()]),
-                _ => Some(vec!["OtherPad".to_string(), "InnerLayerPad".to_string()]),
+        _ if feature.is_fiducial() => {
+            return match feature.fiducial_kind {
+                FiducialKind::Unknown | FiducialKind::Global => &["FiducialPad", "Global"],
+                FiducialKind::Local => &["FiducialPad", "Local"],
+                FiducialKind::Panel | FiducialKind::GoodPanel => &["FiducialPad", "Panel"],
+                FiducialKind::BadBoard => &["OtherPad", "BadBoardMark"],
             };
         }
-        FeatureRole::Via => return Some(vec!["ViaPad".to_string()]),
-        FeatureRole::Conductor => return Some(vec!["Conductor".to_string()]),
-        FeatureRole::Hole => {
-            return Some(vec!["Other".to_string(), "Hole".to_string()]);
+        FeatureRole::Pad => {
+            return match feature.intent.plating {
+                PlatingKind::Plated => &["ComponentPad"],
+                PlatingKind::Via | PlatingKind::ViaCapped => &["ViaPad"],
+                _ if matches!(side, IrSide::Top | IrSide::Bottom) => &["SMDPad", "CuDef"],
+                _ if !feature.pin_refs.is_empty() => &["ComponentPad"],
+                _ => &["OtherPad", "InnerLayerPad"],
+            };
         }
-        FeatureRole::Slot => {
-            return Some(vec!["Other".to_string(), "Slot".to_string()]);
-        }
-        FeatureRole::ArraySeparation if feature.is_vcut() => {
-            return Some(vec!["Other".to_string(), "Vcut".to_string()]);
-        }
-        FeatureRole::ArraySeparation if feature.is_score() => {
-            return Some(vec!["Other".to_string(), "Score".to_string()]);
-        }
-        FeatureRole::Route | FeatureRole::BoardOutline => {
-            return Some(vec!["Profile".to_string()]);
-        }
+        FeatureRole::Via => return &["ViaPad"],
+        FeatureRole::Conductor => return &["Conductor"],
+        FeatureRole::Hole => return &["Other", "Hole"],
+        FeatureRole::Slot => return &["Other", "Slot"],
+        FeatureRole::ArraySeparation if feature.is_vcut() => return &["Other", "Vcut"],
+        FeatureRole::ArraySeparation if feature.is_score() => return &["Other", "Score"],
+        FeatureRole::Route | FeatureRole::BoardOutline => return &["Profile"],
         _ => {}
     }
 
-    Some(match feature.intent.domain {
-        FeatureDomain::Copper => vec!["Conductor".to_string()],
-        FeatureDomain::Drill => vec!["Other".to_string(), "Drill".to_string()],
-        FeatureDomain::Rout | FeatureDomain::Profile => vec!["Profile".to_string()],
-        FeatureDomain::VCut => vec!["Other".to_string(), "Vcut".to_string()],
-        FeatureDomain::Score => vec!["Other".to_string(), "Score".to_string()],
+    match feature.intent.domain {
+        FeatureDomain::Copper => &["Conductor"],
+        FeatureDomain::Drill => &["Other", "Drill"],
+        FeatureDomain::Rout | FeatureDomain::Profile => &["Profile"],
+        FeatureDomain::VCut => &["Other", "Vcut"],
+        FeatureDomain::Score => &["Other", "Score"],
         FeatureDomain::Soldermask
         | FeatureDomain::Paste
         | FeatureDomain::Legend
         | FeatureDomain::Mechanical
         | FeatureDomain::Other
-        | FeatureDomain::Unknown => {
-            vec!["OtherCopper".to_string(), "Unclassified".to_string()]
-        }
-    })
-}
-
-fn fiducial_aperture_function(feature: &Feature) -> Vec<String> {
-    let kind = match feature.fiducial_kind {
-        FiducialKind::Unknown => "Global",
-        FiducialKind::Local => "Local",
-        FiducialKind::Global => "Global",
-        FiducialKind::Panel | FiducialKind::GoodPanel => "Panel",
-        FiducialKind::BadBoard => {
-            return vec!["OtherPad".to_string(), "BadBoardMark".to_string()];
-        }
-    };
-    vec!["FiducialPad".to_string(), kind.to_string()]
+        | FeatureDomain::Unknown => &["OtherCopper", "Unclassified"],
+    }
 }
 
 #[cfg(test)]
