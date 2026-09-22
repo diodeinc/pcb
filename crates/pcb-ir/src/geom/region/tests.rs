@@ -196,13 +196,8 @@ fn grid_coverage_agrees_with_clipping_every_cell() {
 #[test]
 fn filled_contour_region_is_winding_insensitive() {
     let clockwise = rectangle_contour(0.0, 0.0, 10.0, 5.0);
-    let counter_clockwise = ContourBuf::new(vec![
-        PathCmd::move_to(Point::new(0.0, 5.0)),
-        PathCmd::line_to(Point::new(10.0, 5.0)),
-        PathCmd::line_to(Point::new(10.0, 0.0)),
-        PathCmd::line_to(Point::new(0.0, 0.0)),
-        PathCmd::close(),
-    ]);
+    let counter_clockwise =
+        contour_from_vertices(&[[0.0, 5.0], [10.0, 5.0], [10.0, 0.0], [0.0, 0.0]]);
 
     let a = ContourSet::from_filled_contours(std::slice::from_ref(&clockwise), res(tol::REGION_MM))
         .unwrap();
@@ -798,27 +793,16 @@ pub(super) fn rect(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> BBox {
 }
 
 fn rectangle_contour(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ContourBuf {
-    ContourBuf::new(vec![
-        PathCmd::move_to(Point::new(min_x, min_y)),
-        PathCmd::line_to(Point::new(max_x, min_y)),
-        PathCmd::line_to(Point::new(max_x, max_y)),
-        PathCmd::line_to(Point::new(min_x, max_y)),
-        PathCmd::close(),
+    contour_from_vertices(&[
+        [min_x, min_y],
+        [max_x, min_y],
+        [max_x, max_y],
+        [min_x, max_y],
     ])
 }
 
 fn contour_from_vertices(vertices: &[[f64; 2]]) -> ContourBuf {
-    let mut cmds = Vec::with_capacity(vertices.len() + 1);
-    for (index, &[x, y]) in vertices.iter().enumerate() {
-        let point = Point::new(x, y);
-        cmds.push(if index == 0 {
-            PathCmd::move_to(point)
-        } else {
-            PathCmd::line_to(point)
-        });
-    }
-    cmds.push(PathCmd::close());
-    ContourBuf::new(cmds)
+    shapes::closed_polygon(vertices.iter().map(|&[x, y]| Point::new(x, y)).collect()).unwrap()
 }
 
 /// Regression: V-score relief tool-center region from a real board whose
