@@ -43,31 +43,28 @@ pub fn execute(
     let target = RenderTarget::resolve(options.output.as_deref(), options.format, &subject)?;
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
-    let view = options.layout_target.artwork_scope();
     let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
     let render = pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy);
     let output = options.output.as_deref();
     match &options.subject {
         RenderSubject::Layer(layer) => {
+            let view = options.layout_target.artwork_scope();
             let artwork =
                 geometry::render::layer_artwork(&imported, layer, view, true, resolution)?.artwork;
             render_artwork(&artwork, target, output, &subject, &render)
         }
         RenderSubject::Side(side) => {
-            let style = CompositeStyle::of_stackup(
-                crate::accessors::IpcAccessor::new(&ipc)
-                    .stackup_details()
-                    .as_ref(),
-            );
+            let accessor = crate::accessors::IpcAccessor::new(&ipc);
             let composite = geometry::composite::composite_artwork(
                 &imported,
-                side.ir_side(),
-                view,
-                &style,
+                *side,
+                options.layout_target,
+                &CompositeStyle::of_design(&accessor, *side),
                 resolution,
             )?;
             let render = render
                 .with_styles(composite.styles)
+                .with_viewport(composite.viewport)
                 .with_mirrored(composite.mirrored);
             render_artwork(&composite.artwork, target, output, &subject, &render)
         }

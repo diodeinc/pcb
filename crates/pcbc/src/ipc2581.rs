@@ -609,12 +609,10 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
         } => commands::render::execute(
             &file,
             &commands::render::RenderCommandOptions {
-                subject: match (side, layer) {
-                    (Some(side), _) => commands::render::RenderSubject::Side(side),
-                    (None, layer) => commands::render::RenderSubject::Layer(
-                        layer.ok_or_else(|| anyhow::anyhow!("pass --layer or --side"))?,
-                    ),
-                },
+                subject: side
+                    .map(commands::render::RenderSubject::Side)
+                    .or(layer.map(commands::render::RenderSubject::Layer))
+                    .expect("clap requires --layer or --side"),
                 output,
                 format,
                 layout_target,
