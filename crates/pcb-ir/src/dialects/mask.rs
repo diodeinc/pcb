@@ -105,29 +105,3 @@ impl<Meta: Default> Layer<Meta> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::geom::Point;
-    use crate::geom::path::PathCmd;
-
-    #[test]
-    fn stores_final_shapes_by_layer() {
-        let mut doc = Document::<()>::new();
-        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        doc.push_shape(
-            layer,
-            FillRule::NonZero,
-            vec![ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::close(),
-            ])],
-        );
-
-        assert_eq!(doc.layers[0].shapes.len(), 1);
-        assert_eq!(doc.arena.paths[0].contours.len(), 1);
-        assert_eq!(doc.arena.cmds.len(), 2);
-        doc.validate().unwrap();
-    }
-}

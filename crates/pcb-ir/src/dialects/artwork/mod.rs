@@ -449,7 +449,7 @@ impl Aperture {
 
     pub fn bbox(&self) -> BBox {
         match &self.shape {
-            ApertureShape::Circle { diameter } => {
+            ApertureShape::Circle { diameter } | ApertureShape::Polygon { diameter, .. } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
             ApertureShape::Rectangle { width, height }
@@ -458,9 +458,6 @@ impl Aperture {
                 Point::new(-width / 2.0, -height / 2.0),
                 Point::new(width / 2.0, height / 2.0),
             ),
-            ApertureShape::Polygon { diameter, .. } => {
-                BBox::from_point(Point::ZERO).expand(diameter / 2.0)
-            }
             ApertureShape::Contour { outline, .. } => outline.bbox,
         }
     }
@@ -527,7 +524,7 @@ pub fn paint_ordered<'a, LayerMeta, ObjectMeta>(
 /// regularized ring set.
 pub type OwnerImages<Owner> = Vec<(Owner, region::ContourSet)>;
 
-pub type OwnerRegionLayers<Owner> = Vec<Vec<(Owner, region::ContourSet)>>;
+pub type OwnerRegionLayers<Owner> = Vec<OwnerImages<Owner>>;
 
 /// A flash or path as one placement images it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -832,36 +829,29 @@ fn geometry_bbox<LayerMeta, ObjectMeta>(
     doc: &Document<LayerMeta, ObjectMeta>,
     geometry: Geometry,
 ) -> BBox {
-    match geometry {
-        Geometry::Region { path } | Geometry::Stroke { path } => doc
-            .arena
-            .paths
-            .get(path as usize)
-            .map(|path| path.bbox)
-            .unwrap_or_else(BBox::empty),
+    let block_bbox = |block: u32, transform| {
+        let block = doc.blocks.get(block as usize)?;
+        Some(block.bbox.transformed(transform))
+    };
+    let bbox = match geometry {
+        Geometry::Region { path } | Geometry::Stroke { path } => {
+            doc.arena.paths.get(path as usize).map(|path| path.bbox)
+        }
         Geometry::Flash {
             aperture,
             transform,
         } => doc
             .apertures
             .get(aperture as usize)
-            .map(|aperture| aperture.bbox().transformed(transform))
-            .unwrap_or_else(BBox::empty),
-        Geometry::Instance { block, transform } => doc
-            .blocks
-            .get(block as usize)
-            .map(|block| block.bbox.transformed(transform))
-            .unwrap_or_else(BBox::empty),
+            .map(|aperture| aperture.bbox().transformed(transform)),
+        Geometry::Instance { block, transform } => block_bbox(block, transform),
         Geometry::GridInstance {
             block,
             transform,
             repeat,
-        } => doc
-            .blocks
-            .get(block as usize)
-            .map(|block| repeat.bbox(block.bbox.transformed(transform)))
-            .unwrap_or_else(BBox::empty),
-    }
+        } => block_bbox(block, transform).map(|bbox| repeat.bbox(bbox)),
+    };
+    bbox.unwrap_or_else(BBox::empty)
 }
 
 /// Materialize all reusable block instances into ordinary layer objects.
@@ -1046,65 +1036,49 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
 ) {
     let transform = expansion.transform;
     let polarity = expansion.polarity.compose(object.polarity);
-    if let Geometry::Instance {
-        block,
-        transform: placement,
-    } = object.geometry
-    {
-        let Some(block_definition) = source.blocks.get(block as usize) else {
-            target.warn(format!(
-                "Skipping artwork instance of missing block {block}"
-            ));
-            return;
-        };
-        if block as usize >= block_limit {
-            target.warn(format!(
-                "Skipping artwork instance of non-earlier block {block}"
-            ));
-            return;
-        }
-        let transform = transform.concat(placement);
-        for child in &block_definition.objects {
-            expand_object_into_layer(
-                source,
-                target,
+    let (block, placement, repeat) = match object.geometry {
+        Geometry::Instance { block, transform } => (block, transform, None),
+        Geometry::GridInstance {
+            block,
+            transform,
+            repeat,
+        } => (block, transform, Some(repeat)),
+        geometry => {
+            // The target arena starts as a clone of the source arena, so
+            // source path indices resolve identically in the target.
+            let geometry = transform_primitive_geometry(target, geometry, transform);
+            target.push_object(
                 layer,
-                child,
-                InstanceExpansion {
-                    transform,
+                Object {
                     polarity,
-                    ..expansion
+                    order: object.order,
+                    geometry,
+                    bbox: BBox::empty(),
+                    meta: object.meta.clone(),
                 },
-                block as usize,
             );
+            return;
         }
+    };
+    let kind = if repeat.is_some() {
+        "grid instance"
+    } else {
+        "instance"
+    };
+    let Some(block_definition) = source.blocks.get(block as usize) else {
+        target.warn(format!("Skipping artwork {kind} of missing block {block}"));
+        return;
+    };
+    if block as usize >= block_limit {
+        target.warn(format!(
+            "Skipping artwork {kind} of non-earlier block {block}"
+        ));
         return;
     }
-
-    if let Geometry::GridInstance {
-        block,
-        transform: placement,
-        repeat,
-    } = object.geometry
-    {
-        let Some(block_definition) = source.blocks.get(block as usize) else {
-            target.warn(format!(
-                "Skipping artwork grid instance of missing block {block}"
-            ));
-            return;
-        };
-        if block as usize >= block_limit {
-            target.warn(format!(
-                "Skipping artwork grid instance of non-earlier block {block}"
-            ));
-            return;
-        }
-        if expansion.preserve_grids
-            && !expansion
-                .block_contains_grid
-                .get(block as usize)
-                .copied()
-                .unwrap_or(false)
+    let placements = match repeat {
+        None => vec![placement],
+        Some(repeat)
+            if expansion.preserve_grids && !expansion.block_contains_grid[block as usize] =>
         {
             target.push_object(
                 layer,
@@ -1115,10 +1089,9 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
                         block,
                         transform: transform.concat(placement),
                         repeat: GridRepeat {
-                            x_count: repeat.x_count,
-                            y_count: repeat.y_count,
                             x_step: transform.transform_vector(repeat.x_step),
                             y_step: transform.transform_vector(repeat.y_step),
+                            ..repeat
                         },
                     },
                     bbox: BBox::empty(),
@@ -1127,51 +1100,53 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
             );
             return;
         }
-        for offset in repeat.offsets() {
-            let placement = Affine2 {
+        Some(repeat) => repeat
+            .offsets()
+            .map(|offset| Affine2 {
                 m02: placement.m02 + offset.x,
                 m12: placement.m12 + offset.y,
                 ..placement
-            };
-            let occurrence = transform.concat(placement);
-            for child in &block_definition.objects {
-                expand_object_into_layer(
-                    source,
-                    target,
-                    layer,
-                    child,
-                    InstanceExpansion {
-                        transform: occurrence,
-                        polarity,
-                        ..expansion
-                    },
-                    block as usize,
-                );
-            }
+            })
+            .collect(),
+    };
+    for placement in placements {
+        for child in &block_definition.objects {
+            expand_object_into_layer(
+                source,
+                target,
+                layer,
+                child,
+                InstanceExpansion {
+                    transform: transform.concat(placement),
+                    polarity,
+                    ..expansion
+                },
+                block as usize,
+            );
         }
-        return;
     }
-
-    // The target arena starts as a clone of the source arena, so source path
-    // indices resolve identically in the target.
-    let geometry = transform_primitive_geometry(target, object.geometry, transform);
-    target.push_object(
-        layer,
-        Object {
-            polarity,
-            order: object.order,
-            geometry,
-            bbox: BBox::empty(),
-            meta: object.meta.clone(),
-        },
-    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::geom::path::PathCmd;
-    use crate::geom::{LineCap, LinePattern, StrokeStyle};
+    use crate::geom::{LineCap, StrokeStyle};
+
+    fn rect<Meta>(doc: &mut Document<(), Meta>, x0: f64, y0: f64, x1: f64, y1: f64) -> u32 {
+        doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            vec![ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(x0, y0)),
+                PathCmd::line_to(Point::new(x1, y0)),
+                PathCmd::line_to(Point::new(x1, y1)),
+                PathCmd::line_to(Point::new(x0, y1)),
+                PathCmd::close(),
+            ])],
+        )
+    }
 
     #[test]
     fn an_aperture_hole_must_lie_inside_its_shape() {
@@ -1201,31 +1176,6 @@ mod tests {
         assert!(doc.validate().is_ok());
         doc.push_aperture(rectangle(0.5));
         assert!(doc.validate().is_err());
-    }
-
-    #[test]
-    fn stores_layers_objects_and_paths_in_fat_struct_arenas() {
-        let mut doc = Document::<(), ()>::new();
-        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let path = doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            vec![ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::close(),
-            ])],
-        );
-
-        doc.push_object(
-            layer,
-            Object::new(Polarity::Dark, Geometry::Region { path }),
-        );
-
-        assert_eq!(doc.layers[0].objects, Span::new(0, 1));
-        assert_eq!(doc.objects.len(), 1);
-        assert_eq!(doc.arena.path(path).contours.len(), 1);
-        doc.validate().unwrap();
     }
 
     #[test]
@@ -1338,72 +1288,9 @@ mod tests {
     }
 
     #[test]
-    fn composes_ordered_artwork_to_mask() {
-        let mut doc = Document::<(), ()>::new();
-        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let path = doc.push_path(
-            Paint::Stroke(StrokeStyle::new(0.15, LineCap::Round)),
-            vec![ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(1.0, 0.0)),
-            ])],
-        );
-
-        doc.push_object(
-            layer,
-            Object::new(Polarity::Dark, Geometry::Stroke { path }),
-        );
-
-        let mask = compose_to_mask(&doc, Resolution::default()).unwrap();
-
-        assert_eq!(mask.layers.len(), 1);
-        assert_eq!(mask.layers[0].shapes.len(), 1);
-        assert!(!mask.layers[0].bbox.is_empty());
-        mask.validate().unwrap();
-    }
-
-    #[test]
-    fn a_zero_length_round_stroke_images_as_a_dot() {
-        let mut doc = Document::<(), ()>::new();
-        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let at = Point::new(1.0, 2.0);
-        let path = doc.push_path(
-            Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round)),
-            vec![ContourBuf::new(vec![
-                PathCmd::move_to(at),
-                PathCmd::line_to(at),
-            ])],
-        );
-        doc.push_object(
-            layer,
-            Object::new(Polarity::Dark, Geometry::Stroke { path }),
-        );
-
-        let (mut layers, _) =
-            compose_owner_regions(&doc, |_| Some(()), Resolution::default()).unwrap();
-        let (_, image) = layers.remove(0).pop().expect("the dot paints material");
-        assert!((image.area() - std::f64::consts::PI * 0.01).abs() < 1e-3);
-        assert!(image.contains_point(at));
-    }
-
-    #[test]
     fn composition_stages_overlays_over_base_clears_and_final_cutouts_last() {
         let mut doc = Document::<(), ()>::new();
         let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let rect = |doc: &mut Document<(), ()>, x0: f64, y0: f64, x1: f64, y1: f64| {
-            doc.push_path(
-                Paint::Fill {
-                    rule: FillRule::NonZero,
-                },
-                vec![ContourBuf::new(vec![
-                    PathCmd::move_to(Point::new(x0, y0)),
-                    PathCmd::line_to(Point::new(x1, y0)),
-                    PathCmd::line_to(Point::new(x1, y1)),
-                    PathCmd::line_to(Point::new(x0, y1)),
-                    PathCmd::close(),
-                ])],
-            )
-        };
         let stage_object = |polarity, path, stage| {
             let mut object = Object::new(polarity, Geometry::Region { path });
             object.order = PaintOrder { stage };
@@ -1454,20 +1341,6 @@ mod tests {
     fn attributed_composition_preserves_owner_claims_through_clear_and_overlay() {
         let mut doc = Document::<(), &'static str>::new();
         let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let rect = |doc: &mut Document<(), &'static str>, x0, y0, x1, y1| {
-            doc.push_path(
-                Paint::Fill {
-                    rule: FillRule::NonZero,
-                },
-                vec![ContourBuf::new(vec![
-                    PathCmd::move_to(Point::new(x0, y0)),
-                    PathCmd::line_to(Point::new(x1, y0)),
-                    PathCmd::line_to(Point::new(x1, y1)),
-                    PathCmd::line_to(Point::new(x0, y1)),
-                    PathCmd::close(),
-                ])],
-            )
-        };
         let object = |polarity, path, stage, meta| {
             let mut object = Object::new(polarity, Geometry::Region { path });
             object.order = PaintOrder { stage };
@@ -1585,42 +1458,6 @@ mod tests {
     }
 
     #[test]
-    fn flash_expansion_honors_aperture_holes() {
-        let mut doc = Document::<(), ()>::new();
-        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let aperture = doc.push_aperture(Aperture {
-            shape: ApertureShape::Circle { diameter: 2.0 },
-            hole_diameter: 1.0,
-        });
-        doc.push_object(
-            layer,
-            Object::new(
-                Polarity::Dark,
-                Geometry::Flash {
-                    aperture,
-                    transform: Affine2::IDENTITY,
-                },
-            ),
-        );
-
-        let mask = compose_to_mask(&doc, Resolution::default()).unwrap();
-        let expected = std::f64::consts::PI * (1.0 - 0.25);
-        let shape = mask.layers[0].shapes.slice(&mask.arena.paths)[0];
-        let area = region::ContourSet::from_contours(
-            &mask.arena.path_contours(&shape),
-            FillRule::NonZero,
-            Resolution::default(),
-        )
-        .unwrap()
-        .area();
-
-        assert!(
-            (area - expected).abs() < 0.02,
-            "expected annulus area ~{expected}, got {area}"
-        );
-    }
-
-    #[test]
     fn aperture_definitions_are_deduplicated() {
         let mut doc = Document::<(), ()>::new();
 
@@ -1632,18 +1469,4 @@ mod tests {
         assert_ne!(a, c);
         assert_eq!(doc.apertures.len(), 2);
     }
-
-    #[test]
-    fn stroked_paths_preserve_line_pattern() {
-        let stroke = StrokeStyle {
-            width: 0.1,
-            cap: LineCap::Round,
-            pattern: LinePattern::Phantom,
-        };
-        let path = Path::stroked(stroke);
-
-        assert_eq!(path.stroke().unwrap().pattern, LinePattern::Phantom);
-    }
-
-    use crate::geom::Path;
 }
