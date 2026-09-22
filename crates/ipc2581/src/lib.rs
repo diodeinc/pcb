@@ -51,9 +51,6 @@ pub enum Ipc2581Error {
     #[error("Invalid IPC-2581 structure: {0}")]
     InvalidStructure(String),
 
-    #[error("Unsupported revision: {0}")]
-    UnsupportedRevision(String),
-
     #[error("IPC-2581 schema validation failed: {0}")]
     SchemaValidation(String),
 }
@@ -763,11 +760,6 @@ mod tests {
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
     <FunctionMode mode="ASSEMBLY"/>
-    <DictionaryColor/>
-    <DictionaryLineDesc units="MILLIMETER"/>
-    <DictionaryFillDesc units="MILLIMETER"/>
-    <DictionaryStandard units="MILLIMETER"/>
-    <DictionaryUser units="MILLIMETER"/>
   </Content>
   <Avl name="Test_AVL">
     <AvlHeader title="Test" source="Test" author="Test" datetime="2025-01-04" version="1"/>
@@ -802,11 +794,6 @@ mod tests {
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
     <FunctionMode mode="ASSEMBLY"/>
-    <DictionaryColor/>
-    <DictionaryLineDesc units="MILLIMETER"/>
-    <DictionaryFillDesc units="MILLIMETER"/>
-    <DictionaryStandard units="MILLIMETER"/>
-    <DictionaryUser units="MILLIMETER"/>
   </Content>
   <Bom name="TestBOM">
     <BomHeader assembly="Test Design" revision="1.0"/>

@@ -284,9 +284,6 @@ impl fmt::Debug for Polygon {
     }
 }
 
-/// Polygon starting point
-pub type PolyBegin = Point;
-
 /// Polygon continuation step
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PolyStep {

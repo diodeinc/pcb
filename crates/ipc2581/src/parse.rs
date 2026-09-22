@@ -51,11 +51,11 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn name<'n>(&self, node: &'n Node) -> &'a str {
+    fn name(&self, node: &Node) -> &'a str {
         self.doc.name(*node)
     }
 
-    fn attr<'n>(&self, node: &'n Node, attr: &str) -> Option<&'a str> {
+    fn attr(&self, node: &Node, attr: &str) -> Option<&'a str> {
         self.doc.attr(*node, attr)
     }
 
@@ -2608,19 +2608,8 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let slot = ipc
-            .ecad()
-            .unwrap()
-            .cad_data
-            .steps
-            .first()
-            .unwrap()
-            .layer_features
-            .first()
-            .unwrap()
-            .slots()
-            .next()
-            .unwrap();
+        let layer_feature = &ipc.ecad().unwrap().cad_data.steps[0].layer_features[0];
+        let slot = layer_feature.slots().next().unwrap();
 
         let xform = slot.xform.unwrap();
         assert_eq!(xform.rotation, 90.0);
