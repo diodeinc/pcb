@@ -423,14 +423,13 @@ pub fn lower_to_nc(doc: &Document, nc: &mut nc::Document) -> Result<(), String> 
     for layer in &doc.layers {
         for feature in layer.features.slice(&doc.features) {
             let geometry = match feature.kind {
-                FeatureKind::Hole => feature
-                    .shape
-                    .and_then(SimpleShape::drill_diameter)
-                    .map(|diameter| nc::Geometry::Drill {
+                FeatureKind::Hole => match feature.shape {
+                    Some(SimpleShape::Circle { diameter }) => Ok(nc::Geometry::Drill {
                         at: feature.center,
                         diameter,
-                    })
-                    .ok_or("it is not a round hole"),
+                    }),
+                    _ => Err("it is not a round hole"),
+                },
                 FeatureKind::Slot => nc_linear_slot(feature)
                     .map(|(diameter, start, end)| {
                         // An oval as wide as it is long is one plunge.
@@ -522,7 +521,7 @@ fn nc_linear_slot(feature: &Feature) -> Option<(f64, Point, Point)> {
     };
     let reach = (width - height).abs() / 2.0;
     let length = along.x.hypot(along.y);
-    if diameter <= tol_epsilon() || length <= 0.0 {
+    if diameter <= crate::geom::tol::EPSILON_MM || length <= 0.0 {
         return None;
     }
     let reach = Point::new(along.x * reach / length, along.y * reach / length);
@@ -531,10 +530,6 @@ fn nc_linear_slot(feature: &Feature) -> Option<(f64, Point, Point)> {
         Point::new(feature.center.x - reach.x, feature.center.y - reach.y),
         Point::new(feature.center.x + reach.x, feature.center.y + reach.y),
     ))
-}
-
-fn tol_epsilon() -> f64 {
-    crate::geom::tol::EPSILON_MM
 }
 
 /// Options for [`board_array_fabrication_profile`].

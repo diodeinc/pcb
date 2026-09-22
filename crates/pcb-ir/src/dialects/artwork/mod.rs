@@ -336,15 +336,6 @@ pub enum Geometry {
     },
 }
 
-impl Geometry {
-    pub fn path(self) -> Option<u32> {
-        match self {
-            Self::Flash { .. } | Self::Instance { .. } | Self::GridInstance { .. } => None,
-            Self::Stroke { path } | Self::Region { path } => Some(path),
-        }
-    }
-}
-
 /// A standard aperture: a primitive shape with an optional round hole.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Aperture {

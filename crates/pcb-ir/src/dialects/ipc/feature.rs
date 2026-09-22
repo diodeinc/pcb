@@ -138,20 +138,6 @@ impl Feature {
         ) || matches!(self.intent.role, FeatureRole::Hole | FeatureRole::Slot)
     }
 
-    pub fn is_nonplated_tooling_hole(&self) -> bool {
-        self.intent.role == FeatureRole::Hole
-            && self.intent.operation == FeatureOperation::Drill
-            && self.intent.plating == PlatingKind::NonPlated
-    }
-
-    pub fn is_board_step_feature(&self) -> bool {
-        self.source_step_kind == LayoutStepKind::Board
-    }
-
-    pub fn is_array_step_feature(&self) -> bool {
-        self.source_step_kind == LayoutStepKind::Panel
-    }
-
     pub fn with_path_span(&self, bucket: FeatureBucket, paths: Span, bbox: BBox) -> Self {
         let mut feature = self.clone();
         feature.bucket = bucket;
@@ -203,14 +189,6 @@ impl SimpleShape {
                 width: width * scale,
                 height: height * scale,
             },
-        }
-    }
-
-    /// The diameter of the round tool that drills this shape, if one does.
-    pub fn drill_diameter(self) -> Option<f64> {
-        match self {
-            Self::Circle { diameter } => Some(diameter),
-            Self::Square { .. } | Self::Oval { .. } => None,
         }
     }
 

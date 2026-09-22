@@ -21,19 +21,6 @@ pub struct LayoutGraph {
     pub instances: Vec<LayoutInstance>,
 }
 
-impl LayoutGraph {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.root_step.is_none()
-            && self.steps.is_empty()
-            && self.repeats.is_empty()
-            && self.instances.is_empty()
-    }
-}
-
 /// Reusable IPC step definition.
 ///
 /// A step owns its local profile/layer features. A board array is represented
