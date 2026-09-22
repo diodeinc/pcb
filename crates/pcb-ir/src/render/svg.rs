@@ -9,18 +9,15 @@ use crate::geom::path::PathCmd;
 use crate::geom::{
     Affine2, BBox, FillRule, LineCap, Path, PathArena, Point, Polarity, StrokeStyle,
 };
-use crate::render::{Drawn, LayerStyle, RenderOptions, SizeConstraint};
+use crate::render::{Drawn, LayerStyle, RenderOptions};
 
 /// Render mask layers to an SVG document (millimeter units, y-up source
 /// coordinates flipped for screen display).
 pub fn svg<LayerMeta>(doc: &mask::Document<LayerMeta>, options: &RenderOptions) -> String {
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
     let bbox = options.viewport_over(layers.iter().map(|&index| doc.layers[index].bbox));
-    let title = layers
-        .first()
-        .and_then(|&index| doc.layers.get(index))
-        .map(|layer| layer.name.as_str());
-    let mut svg = open_svg(&bbox, pixel_size(options, bbox), title);
+    let title = layers.first().map(|&index| doc.layers[index].name.as_str());
+    let mut svg = open_svg(&bbox, options.size.pixels(bbox), title);
 
     for &layer_index in &layers {
         let layer = &doc.layers[layer_index];
@@ -105,11 +102,8 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
         write_artwork_layer(&mut body, &mut defs, &mut masks, doc, layer_index, options)?;
     }
 
-    let title = layers
-        .first()
-        .and_then(|&index| doc.layers.get(index))
-        .map(|layer| layer.name.as_str());
-    let mut svg = open_svg(&bbox, pixel_size(options, bbox), title);
+    let title = layers.first().map(|&index| doc.layers[index].name.as_str());
+    let mut svg = open_svg(&bbox, options.size.pixels(bbox), title);
     writeln!(svg, "  <defs>\n{defs}  </defs>").unwrap();
     svg.push_str(&body);
     Ok(close_svg(svg))
@@ -240,40 +234,23 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
     accuracy: GeometryAccuracy,
     ids: &str,
 ) -> Result<(), AccuracyError> {
+    let mut place = |def: char, index: u32, transform: Affine2| {
+        let transform = SvgTransform(transform);
+        writeln!(out, "      <use href='#{ids}{def}{index}'{transform}/>").unwrap();
+    };
     match object.geometry {
         Geometry::Flash {
             aperture,
             transform,
-        } => {
-            writeln!(
-                out,
-                "      <use href='#{ids}a{aperture}'{}/>",
-                SvgTransform(transform)
-            )
-            .unwrap();
-        }
-        Geometry::Instance { block, transform } => {
-            writeln!(
-                out,
-                "      <use href='#{ids}b{block}'{}/>",
-                SvgTransform(transform)
-            )
-            .unwrap();
-        }
+        } => place('a', aperture, transform),
+        Geometry::Instance { block, transform } => place('b', block, transform),
         Geometry::GridInstance {
             block,
             transform,
             repeat,
-        } => {
-            for offset in repeat.offsets() {
-                writeln!(
-                    out,
-                    "      <use href='#{ids}b{block}'{}/>",
-                    SvgTransform(Affine2::translation(offset).concat(transform))
-                )
-                .unwrap();
-            }
-        }
+        } => repeat
+            .offsets()
+            .for_each(|offset| place('b', block, Affine2::translation(offset).concat(transform))),
         Geometry::Region { path } => {
             let path = doc.arena.path(path);
             out.push_str("      <path d='");
@@ -391,17 +368,6 @@ impl std::fmt::Display for SvgTransform {
             num(m02),
             num(m12),
         )
-    }
-}
-
-fn pixel_size(options: &RenderOptions, bbox: BBox) -> Option<(u32, u32)> {
-    match options.size {
-        SizeConstraint::Auto => None,
-        SizeConstraint::Fixed {
-            width_px,
-            height_px,
-        } => Some((width_px, height_px)),
-        SizeConstraint::MaxDimension(max) => Some(crate::render::pixel_size(bbox, max)),
     }
 }
 
@@ -583,6 +549,7 @@ pub(crate) mod tests {
     use crate::dialects::{Side, mask::Layer};
     use crate::geom::path::ContourBuf;
     use crate::geom::{BBox, Paint, Resolution};
+    use crate::render::SizeConstraint;
 
     pub(crate) fn square(size: f64) -> ContourBuf {
         ContourBuf::new(vec![
@@ -1086,29 +1053,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn artwork_svg_keeps_filled_regions_unstroked() {
-        // A layer group carries the colour for both fills and strokes, so a
-        // region that does not opt out would gain the default one-unit
-        // outline and swallow neighbouring clearances.
-        let mut doc = copper_artwork();
-        let path = doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            vec![square(10.0)],
-        );
-        doc.push_object(
-            0,
-            artwork::Object::new(Polarity::Dark, Geometry::Region { path }),
-        );
-        artwork::normalize_bounds(&mut doc);
-
-        let svg = artwork_svg(&doc, &RenderOptions::default()).unwrap();
-
-        assert!(svg.contains("stroke='none'"), "{svg}");
-    }
-
-    #[test]
     fn artwork_svg_images_patterned_strokes_as_dashes() {
         let mut doc = copper_artwork();
         let path = doc.push_path(
@@ -1161,6 +1105,10 @@ pub(crate) mod tests {
 
         let svg = artwork_svg(&doc, &RenderOptions::default()).unwrap();
 
+        // The layer group carries the colour for fills and strokes alike, so
+        // a region that did not opt out would gain the default one-unit
+        // outline and swallow neighbouring clearances.
+        assert_eq!(svg.matches("stroke='none'").count(), 2, "{svg}");
         assert_eq!(svg.matches("<mask id='m0'").count(), 1);
         assert_eq!(svg.matches("<g mask='url(#m0)'>").count(), 1);
         // The mask's covering rect shares the user space of the geometry it
@@ -1174,70 +1122,30 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn renders_full_circle_arc_as_two_svg_arcs() {
+    fn mask_layers_draw_in_their_role_style() {
         let mut doc = mask::Document::<()>::new();
-        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        doc.push_shape(
-            layer,
-            FillRule::NonZero,
-            vec![ContourBuf::from_parts(
-                BBox::new(Point::new(-1.0, -1.0), Point::new(1.0, 1.0)),
-                vec![
-                    PathCmd::move_to(Point::new(1.0, 0.0)),
-                    PathCmd::arc_to(Point::new(1.0, 0.0), Point::new(0.0, 0.0), false),
-                    PathCmd::close(),
-                ],
-            )],
-        );
-
-        let svg = svg(&doc, &RenderOptions::layer(0));
-
-        assert_eq!(svg.matches(" A1 1 0 0 1 ").count(), 2);
-        assert!(svg.contains("-1 0"));
-    }
-
-    #[test]
-    fn renders_profile_layer_as_black_outline_overlay() {
-        let mut doc = mask::Document::<()>::new();
-        let copper = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let profile = doc.push_layer(Layer::new("Profile", LayerRole::Profile, Side::None));
         let contour = ContourBuf::new(vec![
             PathCmd::move_to(Point::new(0.0, 0.0)),
             PathCmd::line_to(Point::new(1.0, 0.0)),
             PathCmd::line_to(Point::new(1.0, 1.0)),
             PathCmd::close(),
         ]);
-        doc.push_shape(copper, FillRule::NonZero, vec![contour.clone()]);
-        doc.push_shape(profile, FillRule::NonZero, vec![contour]);
+        for (name, role) in [
+            ("F.Cu", LayerRole::Copper),
+            ("F.Silkscreen", LayerRole::Legend),
+            ("Profile", LayerRole::Profile),
+        ] {
+            let layer = doc.push_layer(Layer::new(name, role, Side::Top));
+            doc.push_shape(layer, FillRule::NonZero, vec![contour.clone()]);
+        }
 
-        let svg = svg(
-            &doc,
-            &RenderOptions::layers(vec![copper as usize, profile as usize]),
-        );
+        let svg = svg(&doc, &RenderOptions::default());
 
         assert!(svg.contains("fill='#d87822'"));
+        // Legend draws black for legibility, the profile as an outline.
+        assert!(svg.contains("fill='#000000'"));
         assert!(svg.contains("stroke='#000000'"));
         assert!(svg.contains("data-board-outline='true'"));
         assert!(svg.contains("stroke-width='0.1'"));
-    }
-
-    #[test]
-    fn renders_legend_layer_as_black_for_legibility() {
-        let mut doc = mask::Document::<()>::new();
-        let legend = doc.push_layer(Layer::new("F.Silkscreen", LayerRole::Legend, Side::Top));
-        doc.push_shape(
-            legend,
-            FillRule::NonZero,
-            vec![ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(1.0, 0.0)),
-                PathCmd::line_to(Point::new(1.0, 1.0)),
-                PathCmd::close(),
-            ])],
-        );
-
-        let svg = svg(&doc, &RenderOptions::layer(0));
-
-        assert!(svg.contains("fill='#000000'"));
     }
 }

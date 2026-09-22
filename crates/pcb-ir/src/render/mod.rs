@@ -52,13 +52,6 @@ impl RenderOptions {
         }
     }
 
-    pub fn layers(indices: impl Into<Vec<usize>>) -> Self {
-        Self {
-            layers: Some(indices.into()),
-            ..Self::default()
-        }
-    }
-
     pub fn with_size(mut self, size: SizeConstraint) -> Self {
         self.size = size;
         self
@@ -125,6 +118,20 @@ pub enum SizeConstraint {
     },
     /// Scale so the longer edge is at most this many pixels.
     MaxDimension(u32),
+}
+
+impl SizeConstraint {
+    /// The pixel size this asks of a render of `bbox`; `Auto` asks none.
+    pub(crate) fn pixels(self, bbox: BBox) -> Option<(u32, u32)> {
+        match self {
+            Self::Auto => None,
+            Self::Fixed {
+                width_px,
+                height_px,
+            } => Some((width_px, height_px)),
+            Self::MaxDimension(max) => Some(pixel_size(bbox, max)),
+        }
+    }
 }
 
 pub(crate) fn layer_indices(layer_count: usize, layers: Option<&[usize]>) -> Vec<usize> {

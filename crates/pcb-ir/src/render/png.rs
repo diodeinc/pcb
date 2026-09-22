@@ -107,16 +107,9 @@ struct Canvas {
 
 impl Canvas {
     fn new(bbox: BBox, size: SizeConstraint) -> Result<Self, String> {
-        let (width, height) = match size {
-            SizeConstraint::Auto => {
-                crate::render::pixel_size(bbox, crate::render::DEFAULT_MAX_DIMENSION_PX)
-            }
-            SizeConstraint::MaxDimension(max) => crate::render::pixel_size(bbox, max),
-            SizeConstraint::Fixed {
-                width_px,
-                height_px,
-            } => (width_px, height_px),
-        };
+        let (width, height) = size.pixels(bbox).unwrap_or_else(|| {
+            crate::render::pixel_size(bbox, crate::render::DEFAULT_MAX_DIMENSION_PX)
+        });
         let pixmap = || {
             Pixmap::new(width, height)
                 .ok_or_else(|| format!("failed to allocate {width}x{height} PNG raster"))
