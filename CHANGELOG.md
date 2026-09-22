@@ -8,15 +8,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-## [0.4.57] - 2026-09-21
-
-### Added
-
-- Added `pcb ipc interposer --layers 4` for inner GND planes.
-
-### Changed
-
-- Wait while a sandbox is starting, restoring, or updating, and stop when the API says it is archived or failed.
 ### Fixed
 
 - Stop painting slots and routed cutouts back as copper in exported Gerber copper layers.
@@ -35,6 +26,16 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Model warp at measured copper as a free plate and stop reporting twist.
 - Grade copper-balance fill more evenly and keep each layer's copper area through void sizing.
 - Report malformed IPC-2581 attribute values as errors instead of defaulting them.
+
+## [0.4.57] - 2026-09-21
+
+### Added
+
+- Added `pcb ipc interposer --layers 4` for inner GND planes.
+
+### Changed
+
+- Wait while a sandbox is starting, restoring, or updating, and stop when the API says it is archived or failed.
 
 ## [0.4.56] - 2026-09-20
 
