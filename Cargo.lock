@@ -4325,6 +4325,7 @@ dependencies = [
  "anyhow",
  "base64 0.23.1",
  "boostvoronoi",
+ "crossterm",
  "getrandom 0.3.4",
  "i_overlay",
  "i_triangle",
@@ -4333,7 +4334,6 @@ dependencies = [
  "pcb-sexpr",
  "rayon",
  "rustc-hash",
- "terminal_size",
  "tiny-skia",
 ]
 
