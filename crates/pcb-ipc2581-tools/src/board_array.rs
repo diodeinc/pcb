@@ -325,11 +325,102 @@ mod tests {
 
     use super::*;
 
-    fn overview(ipc: &ipc2581::Ipc2581, resolution: Resolution) -> String {
-        let imported = pcb_ir::import::ipc2581::import_design(ipc, resolution).unwrap();
-        render_board_array_overview_svg(&IpcAccessor::new(ipc), &imported, resolution)
+    const VCUT_SPEC: &str = r#"<Spec name="VCut_1">
+        <V_Cut type="OFFSET">
+          <Property value="0" unit="MM"/>
+        </V_Cut>
+      </Spec>"#;
+    const VCUT_LAYER: Option<[&str; 3]> = Some(["VCUT", "V_CUT", "NONE"]);
+    const TOP_LAYER: Option<[&str; 3]> = Some(["TOP", "SIGNAL", "TOP"]);
+    const BOARD_10X5: &str = r#"<Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>"#;
+    const PANEL_44X24: &str = r#"<Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="0" y="24"/>
+            <PolyStepSegment x="44" y="24"/>
+            <PolyStepSegment x="44" y="0"/>
+          </Polygon>
+        </Profile>"#;
+    const SIX_BOARDS: &str =
+        r#"<StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>"#;
+
+    /// The overview of a document with `specs` in its header, one optional
+    /// layer as name, function and side, the `board` Step's content, the
+    /// `steps` before the root "panel" Step, and that Step's content.
+    fn overview(
+        specs: &str,
+        layer: Option<[&str; 3]>,
+        board: &str,
+        steps: &str,
+        panel: &str,
+    ) -> String {
+        let (layer_ref, layer) = layer.map_or_else(Default::default, |[name, function, side]| {
+            (
+                format!(r#"<LayerRef name="{name}"/>"#),
+                format!(
+                    r#"<Layer name="{name}" layerFunction="{function}" side="{side}" polarity="POSITIVE"/>"#
+                ),
+            )
+        });
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+    {layer_ref}
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER">
+      {specs}
+    </CadHeader>
+    <CadData>
+      {layer}
+      <Step name="board" type="BOARD">
+        {board}
+      </Step>
+      {steps}
+      <Step name="panel" type="PALLET">
+        {panel}
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+        );
+        let ipc = ipc2581::Ipc2581::parse(&xml).unwrap();
+        let resolution = Resolution::default();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
+        render_board_array_overview_svg(&IpcAccessor::new(&ipc), &imported, resolution)
             .unwrap()
             .unwrap()
+    }
+
+    fn vcut_lines(lines: &[[f64; 4]]) -> String {
+        let features = lines.iter().map(|[x0, y0, x1, y1]| {
+            format!(
+                r#"<Features>
+              <Line startX="{x0}" startY="{y0}" endX="{x1}" endY="{y1}">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>"#
+            )
+        });
+        format!(
+            r#"<LayerFeature layerRef="VCUT">
+          <Set>
+            <SpecRef id="VCut_1"/>
+            {}
+          </Set>
+        </LayerFeature>"#,
+            features.collect::<String>()
+        )
     }
 
     /// The first overview layer drawn in `color`, from its group tag to the
@@ -345,51 +436,8 @@ mod tests {
 
     #[test]
     fn renders_simple_board_array_overview_svg() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER">
-      <Spec name="VCut_1">
-        <V_Cut type="OFFSET">
-          <Property value="0" unit="MM"/>
-        </V_Cut>
-      </Spec>
-    </CadHeader>
-    <CadData>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="0" y="24"/>
-            <PolyStepSegment x="44" y="24"/>
-            <PolyStepSegment x="44" y="0"/>
-          </Polygon>
-        </Profile>
-        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let svg = overview(&ipc, resolution);
+        let panel = format!("{PANEL_44X24}{SIX_BOARDS}");
+        let svg = overview(VCUT_SPEC, None, BOARD_10X5, "", &panel);
 
         assert!(svg.contains("viewBox='-1.05 -25.05 46.1 26.1'"));
         // The board draws once, as a fill block and an outline block.
@@ -407,28 +455,7 @@ mod tests {
 
     #[test]
     fn draws_a_panel_away_from_the_origin_inside_the_viewbox() {
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
+        let panel = r#"<Profile>
           <Polygon>
             <PolyBegin x="10" y="20"/>
             <PolyStepSegment x="10" y="44"/>
@@ -436,15 +463,8 @@ mod tests {
             <PolyStepSegment x="54" y="20"/>
           </Polygon>
         </Profile>
-        <StepRepeat stepRef="board" x="15" y="25.5" nx="3" ny="2" dx="12" dy="8"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-
-        let svg = overview(&ipc, Resolution::default());
+        <StepRepeat stepRef="board" x="15" y="25.5" nx="3" ny="2" dx="12" dy="8"/>"#;
+        let svg = overview("", None, BOARD_10X5, "", panel);
 
         // The flip group maps world y to screen -y, so the padded outline
         // stroke [8.95, 55.05] x [18.95, 45.05] is this viewBox, and every
@@ -468,30 +488,8 @@ mod tests {
 
     #[test]
     fn renders_board_array_overview_from_array_profile() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
+        let panel = format!(
+            r#"<Profile>
           <Polygon>
             <PolyBegin x="0" y="3"/>
             <PolyStepSegment x="0" y="21"/>
@@ -504,76 +502,18 @@ mod tests {
             <PolyStepCurve x="0" y="3" centerX="3" centerY="3" clockwise="true"/>
           </Polygon>
         </Profile>
-        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let svg = overview(&ipc, resolution);
+        {SIX_BOARDS}"#
+        );
+        let svg = overview("", None, BOARD_10X5, "", &panel);
 
         assert!(layer(&svg, "#111827").contains(" A3 3"));
     }
 
     #[test]
     fn renders_board_array_overview_vcuts_from_vcut_layer_only() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-    <LayerRef name="VCUT"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="VCUT" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="0" y="24"/>
-            <PolyStepSegment x="44" y="24"/>
-            <PolyStepSegment x="44" y="0"/>
-          </Polygon>
-        </Profile>
-        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
-        <LayerFeature layerRef="VCUT">
-          <Set>
-            <SpecRef id="VCut_1"/>
-            <Features>
-              <Line startX="5" startY="0" endX="5" endY="24">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-            <Features>
-              <Line startX="0" startY="5.5" endX="44" endY="5.5">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let svg = overview(&ipc, resolution);
+        let scores = vcut_lines(&[[5.0, 0.0, 5.0, 24.0], [0.0, 5.5, 44.0, 5.5]]);
+        let panel = format!("{PANEL_44X24}{SIX_BOARDS}{scores}");
+        let svg = overview("", VCUT_LAYER, BOARD_10X5, "", &panel);
 
         let guides = layer(&svg, "#dc2626");
         assert_eq!(guides.matches("<path").count(), 2);
@@ -588,28 +528,7 @@ mod tests {
 
     #[test]
     fn renders_board_array_overview_vcut_relief_contours() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-    <LayerRef name="VCUT"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER">
-      <Spec name="VCut_1">
-        <V_Cut type="OFFSET">
-          <Property value="0" unit="MM"/>
-        </V_Cut>
-      </Spec>
-    </CadHeader>
-    <CadData>
-      <Layer name="VCUT" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
+        let board = r#"<Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
             <PolyStepSegment x="10" y="0"/>
@@ -625,10 +544,9 @@ mod tests {
             <PolyStepSegment x="2" y="4"/>
             <PolyStepSegment x="0" y="4"/>
           </Cutout>
-        </Profile>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
+        </Profile>"#;
+        let panel = format!(
+            r#"<Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
             <PolyStepSegment x="0" y="20"/>
@@ -637,38 +555,15 @@ mod tests {
           </Polygon>
         </Profile>
         <StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0"/>
-        <LayerFeature layerRef="VCUT">
-          <Set>
-            <SpecRef id="VCut_1"/>
-            <Features>
-              <Line startX="5" startY="0" endX="5" endY="20">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-            <Features>
-              <Line startX="15" startY="0" endX="15" endY="20">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-            <Features>
-              <Line startX="0" startY="5" endX="20" endY="5">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-            <Features>
-              <Line startX="0" startY="15" endX="20" endY="15">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let svg = overview(&ipc, resolution);
+        {}"#,
+            vcut_lines(&[
+                [5.0, 0.0, 5.0, 20.0],
+                [15.0, 0.0, 15.0, 20.0],
+                [0.0, 5.0, 20.0, 5.0],
+                [0.0, 15.0, 20.0, 15.0],
+            ])
+        );
+        let svg = overview(VCUT_SPEC, VCUT_LAYER, board, "", &panel);
 
         let removal = &svg[svg.find("stroke='#111827' opacity='0.95'>").unwrap()..];
         assert!(removal[..removal.find("</g>").unwrap()].contains(" Z"));
@@ -683,29 +578,8 @@ mod tests {
 
     #[test]
     fn renders_nested_board_cell_support_geometry_without_board_features() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="array"/>
-    <LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
+        let board = format!(
+            r#"{BOARD_10X5}
         <LayerFeature layerRef="TOP">
           <Set>
             <Features>
@@ -714,9 +588,9 @@ mod tests {
               </Line>
             </Features>
           </Set>
-        </LayerFeature>
-      </Step>
-      <Step name="board_cell" type="PALLET">
+        </LayerFeature>"#
+        );
+        let board_cell = r#"<Step name="board_cell" type="PALLET">
         <Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
@@ -734,9 +608,8 @@ mod tests {
           </Set>
         </LayerFeature>
         <StepRepeat stepRef="board" x="2" y="2" nx="1" ny="1" dx="0" dy="0"/>
-      </Step>
-      <Step name="array" type="PALLET">
-        <Profile>
+      </Step>"#;
+        let array = r#"<Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
             <PolyStepSegment x="20" y="0"/>
@@ -744,14 +617,8 @@ mod tests {
             <PolyStepSegment x="0" y="15"/>
           </Polygon>
         </Profile>
-        <StepRepeat stepRef="board_cell" x="4" y="5" nx="1" ny="1" dx="12" dy="8"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let svg = overview(&ipc, resolution);
+        <StepRepeat stepRef="board_cell" x="4" y="5" nx="1" ny="1" dx="12" dy="8"/>"#;
+        let svg = overview("", TOP_LAYER, &board, board_cell, array);
 
         assert_eq!(svg.matches("<g fill='#d87822'").count(), 1);
         assert_eq!(layer(&svg, "#d87822").matches("<use").count(), 1);
@@ -760,79 +627,40 @@ mod tests {
 
     #[test]
     fn renders_clear_features_as_holes_in_the_layer_overlay() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-    <LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="0" y="24"/>
-            <PolyStepSegment x="44" y="24"/>
-            <PolyStepSegment x="44" y="0"/>
-          </Polygon>
-        </Profile>
+        let square = |polarity: &str, [min, max]: [(f64, f64); 2]| {
+            format!(
+                r#"<Set polarity="{polarity}">
+            <Features>
+              <UserSpecial>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="{x0}" y="{y0}"/>
+                    <PolyStepSegment x="{x1}" y="{y0}"/>
+                    <PolyStepSegment x="{x1}" y="{y1}"/>
+                    <PolyStepSegment x="{x0}" y="{y1}"/>
+                    <PolyStepSegment x="{x0}" y="{y0}"/>
+                  </Polygon>
+                </Contour>
+              </UserSpecial>
+            </Features>
+          </Set>"#,
+                x0 = min.0,
+                y0 = min.1,
+                x1 = max.0,
+                y1 = max.1,
+            )
+        };
+        let panel = format!(
+            r#"{PANEL_44X24}
         <LayerFeature layerRef="TOP">
-          <Set>
-            <Features>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="1" y="19"/>
-                    <PolyStepSegment x="9" y="19"/>
-                    <PolyStepSegment x="9" y="23"/>
-                    <PolyStepSegment x="1" y="23"/>
-                    <PolyStepSegment x="1" y="19"/>
-                  </Polygon>
-                </Contour>
-              </UserSpecial>
-            </Features>
-          </Set>
-          <Set polarity="NEGATIVE">
-            <Features>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="4" y="20"/>
-                    <PolyStepSegment x="6" y="20"/>
-                    <PolyStepSegment x="6" y="22"/>
-                    <PolyStepSegment x="4" y="22"/>
-                    <PolyStepSegment x="4" y="20"/>
-                  </Polygon>
-                </Contour>
-              </UserSpecial>
-            </Features>
-          </Set>
+          {}
+          {}
         </LayerFeature>
-        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let svg = overview(&ipc, resolution);
+        {SIX_BOARDS}"#,
+            square("POSITIVE", [(1.0, 19.0), (9.0, 23.0)]),
+            square("NEGATIVE", [(4.0, 20.0), (6.0, 22.0)]),
+        );
+        let svg = overview("", TOP_LAYER, BOARD_10X5, "", &panel);
 
         let copper = layer(&svg, "#d87822");
         assert!(copper.contains("<g mask='url(#overview-m0)'>"));
