@@ -250,7 +250,8 @@ pub(super) fn append_step_layer(
         }) else {
             continue;
         };
-        let is_drill_layer = source_layer.layer_function == LayerFunction::Drill;
+        let holes_image_here =
+            source_layer.layer_function == LayerFunction::Drill && source_layer.name == layer.name;
 
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
@@ -261,41 +262,33 @@ pub(super) fn append_step_layer(
             )?;
             let mut emitted = Vec::new();
             let set_features = set.features.slice(&layer_feature.features);
-
-            if is_drill_layer && source_layer.name == layer.name {
-                for (feature_index, set_feature) in set_features.iter().enumerate() {
-                    if let SetFeature::Hole(hole) = set_feature {
-                        let source = SourceRef {
-                            set_index: set_index as u32,
-                            feature_index: feature_index as u32,
-                            definition: None,
-                        };
-                        let mark = DocumentMark::of(doc);
-                        let feature = extract_hole(source, set.geometry, hole, doc);
-                        emitted.extend(keep_finite(doc, mark, vec![feature], source));
+            let holes = set_features
+                .iter()
+                .enumerate()
+                .filter(|(_, feature)| holes_image_here && matches!(feature, SetFeature::Hole(_)));
+            let slots = set_features.iter().enumerate().filter(|(_, feature)| {
+                matches!(feature, SetFeature::Slot(slot) if slot_applies_to_layer(
+                    source_layer,
+                    layer,
+                    context.slot_layer_order.as_deref(),
+                    slot,
+                ))
+            });
+            for (feature_index, set_feature) in holes.chain(slots) {
+                let source = SourceRef {
+                    set_index: set_index as u32,
+                    feature_index: feature_index as u32,
+                    definition: None,
+                };
+                let mark = DocumentMark::of(doc);
+                let feature = match set_feature {
+                    SetFeature::Hole(hole) => extract_hole(source, set.geometry, hole, doc),
+                    SetFeature::Slot(slot) => {
+                        extract_slot(context, source, set.geometry, slot, doc)?
                     }
-                }
-            }
-
-            for (feature_index, set_feature) in set_features.iter().enumerate() {
-                if let SetFeature::Slot(slot) = set_feature {
-                    if !slot_applies_to_layer(
-                        source_layer,
-                        layer,
-                        context.slot_layer_order.as_deref(),
-                        slot,
-                    ) {
-                        continue;
-                    }
-                    let source = SourceRef {
-                        set_index: set_index as u32,
-                        feature_index: feature_index as u32,
-                        definition: None,
-                    };
-                    let mark = DocumentMark::of(doc);
-                    let feature = extract_slot(context, source, set.geometry, slot, doc)?;
-                    emitted.extend(keep_finite(doc, mark, vec![feature], source));
-                }
+                    _ => continue,
+                };
+                emitted.extend(keep_finite(doc, mark, vec![feature], source));
             }
 
             if !emitted.is_empty() {
