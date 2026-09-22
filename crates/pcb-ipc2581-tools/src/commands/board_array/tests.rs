@@ -962,11 +962,7 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
         &ipc,
         primary_board_layout(&ipc).unwrap(),
         &options,
-        BoardArrayPanelizationMetadata {
-            mode: BoardArrayPanelizationMode::Manual,
-            sheet: None,
-            sheet_target_mm: None,
-        },
+        BoardArrayPanelizationMetadata::MANUAL,
         Separation::VScore,
         Resolution::default(),
     )
@@ -975,25 +971,22 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
     spec.generated_geometry.add_layer_feature(
         GeneratedFeatureScope::Array,
         "TOP",
-        Polarity::Positive,
         round_fiducial_features(IpcFiducialKind::Global, [(12.5, 12.5)], 1.0),
     );
     spec.generated_geometry.add_layer_feature(
         GeneratedFeatureScope::Array,
         "F.Mask",
-        Polarity::Positive,
         round_fiducial_features(IpcFiducialKind::Global, [(12.5, 12.5)], 2.0),
     );
-    spec.generated_geometry.add_layer(GeneratedLayer::new(
-        "Array_Drill",
-        LayerFunction::Drill,
-        Some(Side::All),
-        Some(Polarity::Positive),
-    ));
+    spec.generated_geometry.layers.push(GeneratedLayer {
+        name: "Array_Drill".to_string(),
+        layer_function: LayerFunction::Drill,
+        side: Side::All,
+        span: None,
+    });
     spec.generated_geometry.add_layer_feature(
         GeneratedFeatureScope::Array,
         "Array_Drill",
-        Polarity::Positive,
         round_nonplated_hole_features([(20.0, 20.0)], 2.0),
     );
     spec.content_layer_refs = content_layer_refs(
@@ -1093,11 +1086,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         &ipc,
         primary_board_layout(&ipc).unwrap(),
         &options,
-        BoardArrayPanelizationMetadata {
-            mode: BoardArrayPanelizationMode::Manual,
-            sheet: None,
-            sheet_target_mm: None,
-        },
+        BoardArrayPanelizationMetadata::MANUAL,
         Separation::VScore,
         Resolution::default(),
     )
@@ -1437,7 +1426,7 @@ fn board_array_creation_adds_default_tooling_at_multi_column_min_width() {
 fn rail_tooling_needs_room_between_the_score_lines_of_an_outer_board() {
     // 12 mm is the deepest fiducial inset: there it would sit on the score
     // line along the far edge of the outer board.
-    let spec = |board_width_mm| BoardArrayToolingSpec {
+    let grid = |board_width_mm| ArrayGrid {
         columns: 2,
         rows: 1,
         board_width_mm,
@@ -1449,11 +1438,11 @@ fn rail_tooling_needs_room_between_the_score_lines_of_an_outer_board() {
         array_width_mm: 2.0 * board_width_mm + 46.0,
         array_height_mm: 40.0,
     };
-    assert_eq!(board_array_tooling_orientation(&spec(12.0)), None);
-    assert_eq!(board_array_tooling_orientation(&spec(12.99)), None);
+    assert_eq!(board_array_tooling_rails(&grid(12.0)), None);
+    assert_eq!(board_array_tooling_rails(&grid(12.99)), None);
     assert_eq!(
-        board_array_tooling_orientation(&spec(13.0)),
-        Some(BoardArrayToolingOrientation::TopBottom)
+        board_array_tooling_rails(&grid(13.0)),
+        Some(RailPair::TopBottom)
     );
 }
 
@@ -2724,11 +2713,7 @@ fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
         &ipc,
         primary_board_layout(&ipc).unwrap(),
         &options,
-        BoardArrayPanelizationMetadata {
-            mode: BoardArrayPanelizationMode::Manual,
-            sheet: None,
-            sheet_target_mm: None,
-        },
+        BoardArrayPanelizationMetadata::MANUAL,
         Separation::MouseBite,
         resolution,
     )
@@ -2747,8 +2732,8 @@ fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
     for (index, cutout) in spec.profile_cutouts.iter().enumerate() {
         let (board, void) = (index / per_board, index % per_board);
         let shift = (
-            (board % 3) as f64 * spec.pitch_x_mm,
-            (board / 3) as f64 * spec.pitch_y_mm,
+            (board % 3) as f64 * spec.grid.pitch_x_mm,
+            (board / 3) as f64 * spec.grid.pitch_y_mm,
         );
         let expected = points(&spec.profile_cutouts[void])
             .into_iter()

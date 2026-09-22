@@ -66,12 +66,7 @@ impl FabPanelSpec {
     /// The rectangular packing domain after reserving fabrication process
     /// margins. The physical panel profile remains the full stock size.
     fn usable_bbox(self) -> Result<BBox> {
-        for (side, value) in [
-            ("top", self.edge_margin_mm.top),
-            ("right", self.edge_margin_mm.right),
-            ("bottom", self.edge_margin_mm.bottom),
-            ("left", self.edge_margin_mm.left),
-        ] {
+        for (side, value) in self.edge_margin_mm.sides() {
             if !value.is_finite() || value < 0.0 {
                 bail!("fabrication panel {side} edge margin must be non-negative; got {value} mm");
             }

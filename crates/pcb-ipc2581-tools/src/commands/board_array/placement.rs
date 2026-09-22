@@ -155,8 +155,12 @@ pub(super) fn place(
 /// would leave.
 pub fn analyze(xml: &str, preset: &Preset, resolution: Resolution) -> Result<Value> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let rail_width_mm =
-        super::narrowest_rail_mm(&super::minimum_auto_options(2, 2), preset.routing_gap_mm);
+    let tightest = super::minimum_auto_options(
+        2,
+        2,
+        super::BoardMarginMm::all(super::MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM),
+    );
+    let rail_width_mm = super::narrowest_rail_mm(&tightest, preset.routing_gap_mm);
     let placement = place(&ipc, preset, rail_width_mm, resolution)?;
     let Placement {
         prepared,

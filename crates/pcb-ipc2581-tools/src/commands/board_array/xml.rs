@@ -6,23 +6,18 @@
 
 use super::*;
 use crate::generated::{
-    GeneratedNameState, write_generated_layer_feature, write_nonstandard_attribute,
+    GeneratedNameState, write_double_attribute, write_generated_layer_feature,
+    write_nonstandard_attribute,
 };
 use ipc2581::XmlWriter;
 use ipc2581::edit::{Doc, Edit};
 use ipc2581::write;
-use ipc2581::write::{fmt_num, fmt_units};
+use ipc2581::write::fmt_units;
 
 /// The board-array changes as byte-range edits against the source document:
 /// Content step/layer refs, generated CadHeader specs, generated layers,
 /// board-outline removal, and the generated board-cell/array steps.
-pub(super) fn board_array_edits(
-    doc: &Doc,
-    spec: &BoardArraySpec,
-    generated_spec_xml: &str,
-    generated_layer_xml: Option<&str>,
-    array_step_xml: &str,
-) -> Result<Vec<Edit>> {
+pub(super) fn board_array_edits(doc: &Doc, spec: &BoardArraySpec) -> Result<Vec<Edit>> {
     let root = doc.root()?;
     let mut edits = Vec::new();
 
@@ -51,7 +46,7 @@ pub(super) fn board_array_edits(
     let cad_header = doc
         .child(ecad, "CadHeader")
         .ok_or_else(|| anyhow::anyhow!("IPC-2581 file has no CadHeader section"))?;
-    edits.push(doc.append_inside(cad_header, generated_spec_xml));
+    edits.push(doc.append_inside(cad_header, write_generated_specs_xml(spec)));
 
     let cad_data = doc
         .child(ecad, "CadData")
@@ -59,7 +54,8 @@ pub(super) fn board_array_edits(
     let children = doc.children(cad_data);
 
     // Generated layers join the end of the leading Layer block.
-    if let Some(layer_xml) = generated_layer_xml {
+    if !spec.generated_geometry.layers.is_empty() {
+        let layer_xml = write_generated_layers_xml(&spec.generated_geometry);
         match children.iter().find(|&&child| doc.name(child) != "Layer") {
             Some(&first_non_layer) => edits.push(doc.insert_before(first_non_layer, layer_xml)),
             None => edits.push(doc.append_inside(cad_data, layer_xml)),
@@ -85,7 +81,7 @@ pub(super) fn board_array_edits(
         }
     }
 
-    edits.push(doc.append_inside(cad_data, array_step_xml));
+    edits.push(doc.append_inside(cad_data, write_generated_steps_xml(spec)?));
     edits.extend(crate::generated::user_dictionary_edit(
         doc,
         spec.units,
@@ -106,7 +102,7 @@ fn write_content_refs_xml(spec: &BoardArraySpec) -> String {
     writer.into_string()
 }
 
-pub(super) fn write_generated_specs_xml(spec: &BoardArraySpec) -> String {
+fn write_generated_specs_xml(spec: &BoardArraySpec) -> String {
     let mut writer = XmlWriter::new();
     if let Some(vcut_spec_name) = &spec.vcut_spec_name {
         writer.start_element("Spec", &[("name", vcut_spec_name.as_str())]);
@@ -118,148 +114,127 @@ pub(super) fn write_generated_specs_xml(spec: &BoardArraySpec) -> String {
     writer.into_string()
 }
 
-pub(super) fn write_generated_layers_xml(geometry: &BoardArrayGeneratedGeometry) -> Option<String> {
-    if geometry.layers.is_empty() {
-        return None;
-    }
-
+fn write_generated_layers_xml(geometry: &BoardArrayGeneratedGeometry) -> String {
     let mut writer = XmlWriter::new();
-    for generated_layer in &geometry.layers {
-        write_generated_layer_xml(&mut writer, generated_layer);
-    }
-    Some(writer.into_string())
-}
-
-pub(super) fn write_generated_layer_xml(writer: &mut XmlWriter, generated_layer: &GeneratedLayer) {
-    let mut attrs = vec![
-        ("name", generated_layer.name.as_str()),
-        ("layerFunction", generated_layer.layer_function.as_str()),
-    ];
-    if let Some(side) = generated_layer.side {
-        attrs.push(("side", side.as_str()));
-    }
-    if let Some(polarity) = generated_layer.polarity {
-        attrs.push(("polarity", polarity.as_str()));
-    }
-    match &generated_layer.span {
-        Some((from, to)) => {
-            writer.start_element("Layer", &attrs);
-            writer.empty_element("Span", &[("fromLayer", from), ("toLayer", to)]);
-            writer.end_element("Layer");
+    for layer in &geometry.layers {
+        let attrs = [
+            ("name", layer.name.as_str()),
+            ("layerFunction", layer.layer_function.as_str()),
+            ("side", layer.side.as_str()),
+            ("polarity", Polarity::Positive.as_str()),
+        ];
+        match &layer.span {
+            Some((from, to)) => {
+                writer.start_element("Layer", &attrs);
+                writer.empty_element("Span", &[("fromLayer", from), ("toLayer", to)]);
+                writer.end_element("Layer");
+            }
+            None => writer.empty_element("Layer", &attrs),
         }
-        None => writer.empty_element("Layer", &attrs),
     }
+    writer.into_string()
 }
 
-pub(super) fn write_generated_steps_xml(spec: &BoardArraySpec) -> Result<String> {
-    let mut xml = write_board_cell_step_xml(spec)?;
-    xml.push_str(&write_array_step_xml(spec)?);
-    Ok(xml)
-}
-
-pub(super) fn write_board_cell_step_xml(spec: &BoardArraySpec) -> Result<String> {
+/// The board-cell Step, one board in its margin, then the array Step that
+/// repeats it.
+fn write_generated_steps_xml(spec: &BoardArraySpec) -> Result<String> {
     let mut writer = XmlWriter::new();
+    let (units, grid) = (spec.units, &spec.grid);
 
     writer.start_element(
         "Step",
         &[("name", spec.board_cell_name.as_str()), ("type", "PALLET")],
     );
-
-    write::location(&mut writer, "Datum", 0.0, 0.0, spec.units);
+    write::location(&mut writer, "Datum", 0.0, 0.0, units);
     write::profile(
         &mut writer,
-        spec.units,
-        &rectangle_polygon(spec.pitch_x_mm, spec.pitch_y_mm),
+        units,
+        &rectangle_polygon(grid.pitch_x_mm, grid.pitch_y_mm),
     );
-    write_board_cell_step_repeat(&mut writer, spec);
+    write_step_repeat(
+        &mut writer,
+        units,
+        &spec.board_name,
+        (spec.board_repeat_x_mm, spec.board_repeat_y_mm),
+        (1, 1),
+        (0.0, 0.0),
+        "0.00",
+    );
     write_generated_layer_features(&mut writer, spec, GeneratedFeatureScope::BoardCell)?;
-
     writer.end_element("Step");
-
-    Ok(writer.into_string())
-}
-
-pub(super) fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
-    let mut writer = XmlWriter::new();
 
     writer.start_element(
         "Step",
         &[("name", spec.array_name.as_str()), ("type", "PALLET")],
     );
-
     write_panelization_metadata(&mut writer, spec);
-    write::location(&mut writer, "Datum", 0.0, 0.0, spec.units);
-
+    write::location(&mut writer, "Datum", 0.0, 0.0, units);
     write::profile_with_cutouts(
         &mut writer,
-        spec.units,
+        units,
         &rounded_rectangle_polygon(
-            spec.array_width_mm,
-            spec.array_height_mm,
+            grid.array_width_mm,
+            grid.array_height_mm,
             ARRAY_CORNER_RADIUS_MM,
         ),
         &spec.profile_cutouts,
     );
-
-    write_array_step_repeat(&mut writer, spec);
+    write_step_repeat(
+        &mut writer,
+        units,
+        &spec.board_cell_name,
+        (spec.edge_rail_mm.left, spec.edge_rail_mm.bottom),
+        (grid.columns, grid.rows),
+        (grid.pitch_x_mm, grid.pitch_y_mm),
+        "0.00",
+    );
     write_generated_layer_features(&mut writer, spec, GeneratedFeatureScope::Array)?;
-
     writer.end_element("Step");
 
     Ok(writer.into_string())
 }
 
-pub(super) fn write_panelization_metadata(writer: &mut XmlWriter, spec: &BoardArraySpec) {
-    let metadata = spec.panelization;
+fn write_panelization_metadata(writer: &mut XmlWriter, spec: &BoardArraySpec) {
+    let string = |writer: &mut XmlWriter, name: &str, value: &str| {
+        write_nonstandard_attribute(writer, name, "STRING", value)
+    };
+    let integer = |writer: &mut XmlWriter, name: &str, value: u32| {
+        write_nonstandard_attribute(writer, name, "INTEGER", &value.to_string())
+    };
 
-    write_metadata_integer(writer, "diode.panelize.schema_version", 1);
-    write_metadata_string(writer, "diode.panelize.mode", metadata.mode.as_str());
-    if let Some(sheet) = metadata.sheet {
-        write_metadata_string(writer, "diode.panelize.sheet", sheet.name());
+    integer(writer, "diode.panelize.schema_version", 1);
+    string(
+        writer,
+        "diode.panelize.mode",
+        spec.panelization.mode.as_str(),
+    );
+    if let Some((sheet, target)) = spec.panelization.sheet {
+        string(writer, "diode.panelize.sheet", sheet.name());
+        write_double_attribute(writer, "diode.panelize.sheet_width_mm", target.width);
+        write_double_attribute(writer, "diode.panelize.sheet_height_mm", target.height);
     }
-    if let Some(target) = metadata.sheet_target_mm {
-        write_metadata_double(writer, "diode.panelize.sheet_width_mm", target.width);
-        write_metadata_double(writer, "diode.panelize.sheet_height_mm", target.height);
-    }
-
-    write_metadata_string(
+    string(
         writer,
         "diode.panelize.separation",
         spec.separation.as_str(),
     );
     if spec.separation == Separation::MouseBite {
-        write_metadata_integer(
-            writer,
-            "diode.panelize.tabs_per_board",
-            spec.tabs_per_board as u32,
-        );
+        let tabs = spec.tabs_per_board as u32;
+        integer(writer, "diode.panelize.tabs_per_board", tabs);
     }
-    write_metadata_integer(writer, "diode.panelize.columns", spec.columns);
-    write_metadata_integer(writer, "diode.panelize.rows", spec.rows);
-    write_margin_metadata(writer, "diode.panelize.board_margin", spec.board_margin_mm);
-    write_margin_metadata(writer, "diode.panelize.edge_rail", spec.edge_rail_mm);
+    integer(writer, "diode.panelize.columns", spec.grid.columns);
+    integer(writer, "diode.panelize.rows", spec.grid.rows);
+    for (prefix, margin) in [
+        ("board_margin", spec.board_margin_mm),
+        ("edge_rail", spec.edge_rail_mm),
+    ] {
+        for (side, value) in margin.sides() {
+            write_double_attribute(writer, &format!("diode.panelize.{prefix}_{side}_mm"), value);
+        }
+    }
 }
 
-pub(super) fn write_margin_metadata(writer: &mut XmlWriter, prefix: &str, margin: BoardMarginMm) {
-    write_metadata_double(writer, &format!("{prefix}_top_mm"), margin.top);
-    write_metadata_double(writer, &format!("{prefix}_right_mm"), margin.right);
-    write_metadata_double(writer, &format!("{prefix}_bottom_mm"), margin.bottom);
-    write_metadata_double(writer, &format!("{prefix}_left_mm"), margin.left);
-}
-
-pub(super) fn write_metadata_integer(writer: &mut XmlWriter, name: &str, value: u32) {
-    write_nonstandard_attribute(writer, name, "INTEGER", &value.to_string());
-}
-
-pub(super) fn write_metadata_double(writer: &mut XmlWriter, name: &str, value: f64) {
-    write_nonstandard_attribute(writer, name, "DOUBLE", &fmt_num(value));
-}
-
-pub(super) fn write_metadata_string(writer: &mut XmlWriter, name: &str, value: &str) {
-    write_nonstandard_attribute(writer, name, "STRING", value);
-}
-
-pub(super) fn write_generated_layer_features(
+fn write_generated_layer_features(
     writer: &mut XmlWriter,
     spec: &BoardArraySpec,
     scope: GeneratedFeatureScope,
@@ -327,15 +302,14 @@ pub(super) fn poly_curve(x: f64, y: f64, center_x: f64, center_y: f64) -> PolySt
     })
 }
 
-pub(super) fn round_fiducial(
+pub(super) fn round_fiducial_features(
     kind: IpcFiducialKind,
-    x_mm: f64,
-    y_mm: f64,
+    points: impl IntoIterator<Item = (f64, f64)>,
     diameter_mm: f64,
-) -> Fiducial {
-    Fiducial {
+) -> Vec<SetFeature> {
+    let fiducial = |(x, y)| Fiducial {
         kind,
-        location: Location { x: x_mm, y: y_mm },
+        location: Location { x, y },
         xform: None,
         shape: FiducialShape::Primitive(StandardPrimitive::Circle(Styled {
             shape: Circle {
@@ -348,40 +322,30 @@ pub(super) fn round_fiducial(
             fill_desc_ref: None,
         })),
         pin_ref: None,
-    }
-}
-
-pub(super) fn round_fiducial_features(
-    kind: IpcFiducialKind,
-    points: impl IntoIterator<Item = (f64, f64)>,
-    diameter_mm: f64,
-) -> Vec<SetFeature> {
+    };
     points
         .into_iter()
-        .map(|(x, y)| SetFeature::Fiducial(Box::new(round_fiducial(kind, x, y, diameter_mm))))
+        .map(|point| SetFeature::Fiducial(Box::new(fiducial(point))))
         .collect()
-}
-
-pub(super) fn round_nonplated_hole(x_mm: f64, y_mm: f64, diameter_mm: f64) -> Hole {
-    Hole {
-        name: None,
-        shape: ipc2581::types::HoleShape::Circle,
-        diameter: diameter_mm,
-        plating_status: PlatingStatus::NonPlated,
-        xform: None,
-        spec_refs: Vec::new(),
-        x: x_mm,
-        y: y_mm,
-    }
 }
 
 pub(super) fn round_nonplated_hole_features(
     points: impl IntoIterator<Item = (f64, f64)>,
     diameter_mm: f64,
 ) -> Vec<SetFeature> {
+    let hole = |(x, y)| Hole {
+        name: None,
+        shape: ipc2581::types::HoleShape::Circle,
+        diameter: diameter_mm,
+        plating_status: PlatingStatus::NonPlated,
+        xform: None,
+        spec_refs: Vec::new(),
+        x,
+        y,
+    };
     points
         .into_iter()
-        .map(|(x, y)| SetFeature::Hole(round_nonplated_hole(x, y, diameter_mm)))
+        .map(|point| SetFeature::Hole(hole(point)))
         .collect()
 }
 
@@ -409,29 +373,5 @@ pub(crate) fn write_step_repeat(
             ("angle", angle),
             ("mirror", "false"),
         ],
-    );
-}
-
-pub(super) fn write_array_step_repeat(writer: &mut XmlWriter, spec: &BoardArraySpec) {
-    write_step_repeat(
-        writer,
-        spec.units,
-        &spec.board_cell_name,
-        (spec.array_repeat_x_mm, spec.array_repeat_y_mm),
-        (spec.columns, spec.rows),
-        (spec.pitch_x_mm, spec.pitch_y_mm),
-        "0.00",
-    );
-}
-
-pub(super) fn write_board_cell_step_repeat(writer: &mut XmlWriter, spec: &BoardArraySpec) {
-    write_step_repeat(
-        writer,
-        spec.units,
-        &spec.board_name,
-        (spec.board_repeat_x_mm, spec.board_repeat_y_mm),
-        (1, 1),
-        (0.0, 0.0),
-        "0.00",
     );
 }

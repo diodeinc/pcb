@@ -9,8 +9,8 @@ use super::{FabPanelSpec, SourcePanel};
 use crate::commands::board_array::xml::{rectangle_polygon, write_step_repeat};
 use crate::commands::fab_panel::packing::Placement;
 use crate::generated::{
-    GeneratedLayerFeature, GeneratedNameState, units_attr, write_generated_layer_feature,
-    write_nonstandard_attribute as write_metadata,
+    GeneratedLayerFeature, GeneratedNameState, units_attr, write_double_attribute as write_double,
+    write_generated_layer_feature, write_nonstandard_attribute as write_metadata,
 };
 use crate::steps::FAB_PANEL_STEP_NAME;
 
@@ -454,30 +454,10 @@ fn write_fab_step(
     let output_usable = spec.output_usable_bbox()?;
     writer.start_element("Step", &[("name", FAB_PANEL_STEP_NAME), ("type", "PALLET")]);
     write_metadata(writer, "diode.fab_panel.schema_version", "INTEGER", "3");
-    write_metadata(
-        writer,
-        "diode.fab_panel.width_mm",
-        "DOUBLE",
-        &ipc2581::write::fmt_num(spec.width_mm()),
-    );
-    write_metadata(
-        writer,
-        "diode.fab_panel.height_mm",
-        "DOUBLE",
-        &ipc2581::write::fmt_num(spec.height_mm()),
-    );
-    write_metadata(
-        writer,
-        "diode.fab_panel.usable_width_mm",
-        "DOUBLE",
-        &ipc2581::write::fmt_num(usable.width()),
-    );
-    write_metadata(
-        writer,
-        "diode.fab_panel.usable_height_mm",
-        "DOUBLE",
-        &ipc2581::write::fmt_num(usable.height()),
-    );
+    write_double(writer, "diode.fab_panel.width_mm", spec.width_mm());
+    write_double(writer, "diode.fab_panel.height_mm", spec.height_mm());
+    write_double(writer, "diode.fab_panel.usable_width_mm", usable.width());
+    write_double(writer, "diode.fab_panel.usable_height_mm", usable.height());
     write_metadata(
         writer,
         "diode.fab_panel.output_region",
@@ -488,32 +468,14 @@ fn write_fab_step(
             "stock"
         },
     );
-    for (name, value) in [
-        (
-            "diode.fab_panel.edge_margin_top_mm",
-            spec.edge_margin_mm.top,
-        ),
-        (
-            "diode.fab_panel.edge_margin_right_mm",
-            spec.edge_margin_mm.right,
-        ),
-        (
-            "diode.fab_panel.edge_margin_bottom_mm",
-            spec.edge_margin_mm.bottom,
-        ),
-        (
-            "diode.fab_panel.edge_margin_left_mm",
-            spec.edge_margin_mm.left,
-        ),
-    ] {
-        write_metadata(writer, name, "DOUBLE", &ipc2581::write::fmt_num(value));
+    for (side, value) in spec.edge_margin_mm.sides() {
+        write_double(
+            writer,
+            &format!("diode.fab_panel.edge_margin_{side}_mm"),
+            value,
+        );
     }
-    write_metadata(
-        writer,
-        "diode.fab_panel.gap_mm",
-        "DOUBLE",
-        &ipc2581::write::fmt_num(spec.panel_gap_mm),
-    );
+    write_double(writer, "diode.fab_panel.gap_mm", spec.panel_gap_mm);
     write_metadata(
         writer,
         "diode.fab_panel.panel_count",

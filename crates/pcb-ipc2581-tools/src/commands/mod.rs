@@ -55,6 +55,16 @@ impl EdgeInsetsMm {
         }
     }
 
+    /// Every side with its name, in CSS order.
+    pub(crate) fn sides(self) -> [(&'static str, f64); 4] {
+        [
+            ("top", self.top),
+            ("right", self.right),
+            ("bottom", self.bottom),
+            ("left", self.left),
+        ]
+    }
+
     pub(crate) fn horizontal_sum(self) -> f64 {
         self.left + self.right
     }

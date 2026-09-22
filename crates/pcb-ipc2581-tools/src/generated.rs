@@ -66,14 +66,11 @@ pub(crate) fn write_generated_layer_feature(
     );
     writer.start_element("Set", &[("polarity", layer_feature.polarity.as_str())]);
     if let Some(kind) = layer_feature.copper_balance {
-        let value = kind.attribute_value();
-        writer.empty_element(
-            "NonstandardAttribute",
-            &[
-                ("name", COPPER_BALANCE_ATTRIBUTE_NAME),
-                ("type", "STRING"),
-                ("value", value),
-            ],
+        write_nonstandard_attribute(
+            writer,
+            COPPER_BALANCE_ATTRIBUTE_NAME,
+            "STRING",
+            kind.attribute_value(),
         );
     }
     if let Some(void_set) = &layer_feature.void_set {
@@ -105,8 +102,7 @@ pub(crate) fn write_generated_layer_feature(
                 void_set.corner_radius_mm,
             ),
         ] {
-            let value = write::fmt_units(value, Units::Millimeter);
-            write_nonstandard_attribute(writer, name, "DOUBLE", &value);
+            write_double_attribute(writer, name, value);
         }
     }
     for spec_ref in &layer_feature.spec_refs {
@@ -143,6 +139,11 @@ pub(crate) fn write_nonstandard_attribute(
     );
 }
 
+/// A millimeter value as a `DOUBLE` attribute.
+pub(crate) fn write_double_attribute(writer: &mut XmlWriter, name: &str, value_mm: f64) {
+    write_nonstandard_attribute(writer, name, "DOUBLE", &write::fmt_num(value_mm));
+}
+
 fn write_set_features(
     writer: &mut XmlWriter,
     units: Units,
@@ -154,13 +155,6 @@ fn write_set_features(
             SetFeature::Stroke(stroke) => {
                 writer.start_element("Features", &[]);
                 write::stroke(writer, units, stroke)?;
-                writer.end_element("Features");
-            }
-            SetFeature::Polygon(polygon) => {
-                writer.start_element("Features", &[]);
-                writer.start_element("Contour", &[]);
-                write::polygon(writer, units, polygon);
-                writer.end_element("Contour");
                 writer.end_element("Features");
             }
             SetFeature::UserPrimitive(feature) => {

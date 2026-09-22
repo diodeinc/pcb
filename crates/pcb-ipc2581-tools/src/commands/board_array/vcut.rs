@@ -2,45 +2,64 @@
 
 use super::*;
 
+/// Score the array along every board edge, through the rails, and call each
+/// line out below or to the right of the array.
 pub(super) fn add_vcut_lines(
     generated_geometry: &mut BoardArrayGeneratedGeometry,
     used_layer_names: &mut HashSet<String>,
-    vcut_spec_name: String,
-    array_width_mm: f64,
-    lines: Vec<VcutLine>,
+    vcut_spec_name: &str,
+    grid: &ArrayGrid,
 ) {
-    if lines.is_empty() {
+    let xs = board_edge_positions(
+        grid.columns,
+        grid.margin_x_mm,
+        grid.pitch_x_mm,
+        grid.board_width_mm,
+        grid.array_width_mm,
+    );
+    let ys = board_edge_positions(
+        grid.rows,
+        grid.margin_y_mm,
+        grid.pitch_y_mm,
+        grid.board_height_mm,
+        grid.array_height_mm,
+    );
+    if xs.is_empty() && ys.is_empty() {
         return;
     }
 
     let layer_name = reserve_unique_name(used_layer_names, VCUT_LAYER_BASE_NAME);
-    generated_geometry.add_layer(GeneratedLayer::new(
-        layer_name.clone(),
-        LayerFunction::VCut,
-        Some(Side::None),
-        Some(Polarity::Positive),
-    ));
-    generated_geometry.add_layer_feature_with_spec_refs(
-        GeneratedFeatureScope::Array,
-        layer_name.clone(),
-        Polarity::Positive,
-        vec![vcut_spec_name],
-        lines.iter().copied().map(vcut_line_feature).collect(),
-    );
-    generated_geometry.add_layer_feature(
-        GeneratedFeatureScope::Array,
-        layer_name,
-        Polarity::Positive,
-        vcut_callout_features(&lines, array_width_mm),
-    );
-}
+    generated_geometry.layers.push(GeneratedLayer {
+        name: layer_name.clone(),
+        layer_function: LayerFunction::VCut,
+        side: Side::None,
+        span: None,
+    });
+    let (width, height) = (grid.array_width_mm, grid.array_height_mm);
+    let score = |start, end| solid_line_feature(start, end, VCUT_MARKER_STROKE_MM);
+    let vertical = xs
+        .iter()
+        .map(|&x| score(Point::new(x, 0.0), Point::new(x, height)));
+    let horizontal = ys
+        .iter()
+        .map(|&y| score(Point::new(0.0, y), Point::new(width, y)));
+    generated_geometry
+        .add_layer_feature(
+            GeneratedFeatureScope::Array,
+            &layer_name,
+            vertical.chain(horizontal).collect(),
+        )
+        .spec_refs = vec![vcut_spec_name.to_string()];
 
-pub(super) fn vcut_line_feature(line: VcutLine) -> SetFeature {
-    solid_line_feature(
-        Point::new(line.start_x_mm, line.start_y_mm),
-        Point::new(line.end_x_mm, line.end_y_mm),
-        VCUT_MARKER_STROKE_MM,
-    )
+    let label = vcut_label_geometry();
+    let mut callouts = Vec::new();
+    for &x in &xs {
+        add_bottom_vcut_callout(&mut callouts, x, &label);
+    }
+    for &y in &ys {
+        add_right_vcut_callout(&mut callouts, width, y, &label);
+    }
+    generated_geometry.add_layer_feature(GeneratedFeatureScope::Array, &layer_name, callouts);
 }
 
 fn solid_line_feature(start: Point, end: Point, line_width: f64) -> SetFeature {
@@ -61,52 +80,21 @@ fn solid_line_feature(start: Point, end: Point, line_width: f64) -> SetFeature {
     })
 }
 
-pub(super) fn vcut_callout_features(lines: &[VcutLine], array_width_mm: f64) -> Vec<SetFeature> {
-    let mut features = Vec::new();
-    let label = vcut_label_geometry();
-    for line in lines {
-        if (line.start_x_mm - line.end_x_mm).abs() <= EPSILON {
-            add_bottom_vcut_callout(&mut features, line.start_x_mm, &label);
-        } else if (line.start_y_mm - line.end_y_mm).abs() <= EPSILON {
-            add_right_vcut_callout(&mut features, array_width_mm, line.start_y_mm, &label);
-        }
-    }
-    features
-}
-
-pub(super) fn add_bottom_vcut_callout(
-    features: &mut Vec<SetFeature>,
-    x: f64,
-    label: &VcutLabelGeometry,
-) {
+fn add_bottom_vcut_callout(features: &mut Vec<SetFeature>, x: f64, label: &VcutLabelGeometry) {
     let arrow_tip = Point::new(x, -VCUT_CALLOUT_ARROW_CLEARANCE_MM);
     let arrow_start = Point::new(
         x,
         -(VCUT_CALLOUT_ARROW_CLEARANCE_MM + VCUT_CALLOUT_ARROW_LENGTH_MM),
     );
-    add_vcut_annotation_line(features, arrow_start, arrow_tip, VCUT_MARKER_STROKE_MM);
-    add_vcut_annotation_line(
-        features,
-        arrow_tip,
-        Point::new(
-            x - VCUT_CALLOUT_ARROW_HEAD_MM,
-            arrow_tip.y - VCUT_CALLOUT_ARROW_HEAD_MM,
-        ),
-        VCUT_MARKER_STROKE_MM,
-    );
-    add_vcut_annotation_line(
-        features,
-        arrow_tip,
-        Point::new(
-            x + VCUT_CALLOUT_ARROW_HEAD_MM,
-            arrow_tip.y - VCUT_CALLOUT_ARROW_HEAD_MM,
-        ),
-        VCUT_MARKER_STROKE_MM,
-    );
-
-    add_vcut_label(
+    let head_y = arrow_tip.y - VCUT_CALLOUT_ARROW_HEAD_MM;
+    add_vcut_callout(
         features,
         label,
+        [arrow_start, arrow_tip],
+        [
+            Point::new(x - VCUT_CALLOUT_ARROW_HEAD_MM, head_y),
+            Point::new(x + VCUT_CALLOUT_ARROW_HEAD_MM, head_y),
+        ],
         Point::new(
             x - 0.5 * label.width_mm,
             arrow_start.y - VCUT_CALLOUT_TEXT_GAP_MM - label.height_mm,
@@ -114,7 +102,7 @@ pub(super) fn add_bottom_vcut_callout(
     );
 }
 
-pub(super) fn add_right_vcut_callout(
+fn add_right_vcut_callout(
     features: &mut Vec<SetFeature>,
     array_width_mm: f64,
     y: f64,
@@ -125,29 +113,15 @@ pub(super) fn add_right_vcut_callout(
         array_width_mm + VCUT_CALLOUT_ARROW_CLEARANCE_MM + VCUT_CALLOUT_ARROW_LENGTH_MM,
         y,
     );
-    add_vcut_annotation_line(features, arrow_start, arrow_tip, VCUT_MARKER_STROKE_MM);
-    add_vcut_annotation_line(
-        features,
-        arrow_tip,
-        Point::new(
-            arrow_tip.x + VCUT_CALLOUT_ARROW_HEAD_MM,
-            y - VCUT_CALLOUT_ARROW_HEAD_MM,
-        ),
-        VCUT_MARKER_STROKE_MM,
-    );
-    add_vcut_annotation_line(
-        features,
-        arrow_tip,
-        Point::new(
-            arrow_tip.x + VCUT_CALLOUT_ARROW_HEAD_MM,
-            y + VCUT_CALLOUT_ARROW_HEAD_MM,
-        ),
-        VCUT_MARKER_STROKE_MM,
-    );
-
-    add_vcut_label(
+    let head_x = arrow_tip.x + VCUT_CALLOUT_ARROW_HEAD_MM;
+    add_vcut_callout(
         features,
         label,
+        [arrow_start, arrow_tip],
+        [
+            Point::new(head_x, y - VCUT_CALLOUT_ARROW_HEAD_MM),
+            Point::new(head_x, y + VCUT_CALLOUT_ARROW_HEAD_MM),
+        ],
         Point::new(
             arrow_start.x + VCUT_CALLOUT_TEXT_GAP_MM,
             y - 0.5 * label.height_mm,
@@ -155,35 +129,35 @@ pub(super) fn add_right_vcut_callout(
     );
 }
 
-pub(super) fn add_vcut_label(
+/// An arrow from `shaft[0]` to its tip at `shaft[1]`, the two barbs of its
+/// head, and the label with its lower-left corner at `label_at`.
+fn add_vcut_callout(
     features: &mut Vec<SetFeature>,
     label: &VcutLabelGeometry,
-    lower_left: Point,
+    shaft: [Point; 2],
+    barbs: [Point; 2],
+    label_at: Point,
 ) {
-    for line in &label.lines {
-        add_vcut_annotation_line(
-            features,
-            Point::new(lower_left.x + line.start.x, lower_left.y + line.start.y),
-            Point::new(lower_left.x + line.end.x, lower_left.y + line.end.y),
+    let marker = |start, end| solid_line_feature(start, end, VCUT_MARKER_STROKE_MM);
+    features.push(marker(shaft[0], shaft[1]));
+    features.extend(barbs.map(|barb| marker(shaft[1], barb)));
+    features.extend(label.lines.iter().map(|[start, end]| {
+        solid_line_feature(
+            Point::new(label_at.x + start.x, label_at.y + start.y),
+            Point::new(label_at.x + end.x, label_at.y + end.y),
             VCUT_CALLOUT_TEXT_STROKE_MM,
-        );
-    }
+        )
+    }));
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct VcutLabelGeometry {
-    lines: Vec<VcutLabelLine>,
+/// The "V-CUT" label as stroke-font segments from its lower-left corner.
+struct VcutLabelGeometry {
+    lines: Vec<[Point; 2]>,
     width_mm: f64,
     height_mm: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct VcutLabelLine {
-    start: Point,
-    end: Point,
-}
-
-pub(super) fn vcut_label_geometry() -> VcutLabelGeometry {
+fn vcut_label_geometry() -> VcutLabelGeometry {
     let mut strokes = Vec::new();
     let mut cursor = 0.0;
 
@@ -212,13 +186,12 @@ pub(super) fn vcut_label_geometry() -> VcutLabelGeometry {
         })
         .expect("KiCad V-cut label glyphs should produce strokes");
     let scale = VCUT_CALLOUT_TEXT_HEIGHT_MM / (max_y - min_y);
-    let mut lines = Vec::new();
-    for stroke in strokes {
-        lines.extend(stroke.windows(2).map(|points| VcutLabelLine {
-            start: Point::new((points[0].x - min_x) * scale, (max_y - points[0].y) * scale),
-            end: Point::new((points[1].x - min_x) * scale, (max_y - points[1].y) * scale),
-        }));
-    }
+    let place = |point: Point| Point::new((point.x - min_x) * scale, (max_y - point.y) * scale);
+    let lines = strokes
+        .iter()
+        .flat_map(|stroke| stroke.windows(2))
+        .map(|points| [place(points[0]), place(points[1])])
+        .collect();
 
     VcutLabelGeometry {
         lines,
@@ -228,12 +201,12 @@ pub(super) fn vcut_label_geometry() -> VcutLabelGeometry {
 }
 
 #[derive(Debug)]
-pub(super) struct KiCadStrokeGlyph {
+struct KiCadStrokeGlyph {
     strokes: Vec<Vec<Point>>,
     width: f64,
 }
 
-pub(super) fn parse_kicad_stroke_glyph(raw: &str) -> KiCadStrokeGlyph {
+fn parse_kicad_stroke_glyph(raw: &str) -> KiCadStrokeGlyph {
     let bytes = raw.as_bytes();
     let glyph_start_x = f64::from(kicad_font_coord(bytes[0])) * KICAD_STROKE_FONT_SCALE;
     let glyph_end_x = f64::from(kicad_font_coord(bytes[1])) * KICAD_STROKE_FONT_SCALE;
@@ -267,65 +240,11 @@ pub(super) fn parse_kicad_stroke_glyph(raw: &str) -> KiCadStrokeGlyph {
     }
 }
 
-pub(super) fn kicad_font_coord(value: u8) -> i32 {
+fn kicad_font_coord(value: u8) -> i32 {
     i32::from(value) - i32::from(b'R')
 }
 
-pub(super) fn add_vcut_annotation_line(
-    features: &mut Vec<SetFeature>,
-    start: Point,
-    end: Point,
-    line_width: f64,
-) {
-    features.push(solid_line_feature(start, end, line_width));
-}
-
-pub(super) struct VcutLineSpec {
-    pub(super) columns: u32,
-    pub(super) rows: u32,
-    pub(super) board_width_mm: f64,
-    pub(super) board_height_mm: f64,
-    pub(super) margin_x_mm: f64,
-    pub(super) margin_y_mm: f64,
-    pub(super) pitch_x_mm: f64,
-    pub(super) pitch_y_mm: f64,
-    pub(super) array_width_mm: f64,
-    pub(super) array_height_mm: f64,
-}
-
-pub(super) fn vcut_lines(spec: VcutLineSpec) -> Vec<VcutLine> {
-    let x_positions = board_edge_positions(
-        spec.columns,
-        spec.margin_x_mm,
-        spec.pitch_x_mm,
-        spec.board_width_mm,
-        spec.array_width_mm,
-    );
-    let y_positions = board_edge_positions(
-        spec.rows,
-        spec.margin_y_mm,
-        spec.pitch_y_mm,
-        spec.board_height_mm,
-        spec.array_height_mm,
-    );
-    x_positions
-        .into_iter()
-        .map(|x| VcutLine {
-            start_x_mm: x,
-            start_y_mm: 0.0,
-            end_x_mm: x,
-            end_y_mm: spec.array_height_mm,
-        })
-        .chain(y_positions.into_iter().map(|y| VcutLine {
-            start_x_mm: 0.0,
-            start_y_mm: y,
-            end_x_mm: spec.array_width_mm,
-            end_y_mm: y,
-        }))
-        .collect()
-}
-
-pub(super) fn board_edge_positions(
+fn board_edge_positions(
     count: u32,
     margin: f64,
     pitch: f64,
