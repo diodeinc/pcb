@@ -256,29 +256,9 @@ pub(super) fn conductor_subject(
 
 #[cfg(test)]
 mod tests {
-    use pcb_ir::geom::Resolution;
     use std::collections::BTreeSet;
 
-    use chrono::NaiveDate;
-
-    use crate::commands::dfm::{checks, design::Design, pdk::Pdk, rules};
-    use crate::ipc2581::Ipc2581;
-
-    const PDK: &str = r#"schema_version = 2
-default_profile = "test"
-
-[pdk]
-id = "clearance-test"
-name = "Clearance test"
-revision = "1"
-
-[profiles.test]
-name = "Test"
-
-[[rules.copper.clearance]]
-id = "copper-clearance"
-limit = { minimum = "0.15 mm" }
-"#;
+    use crate::commands::dfm::{checks, fixtures};
 
     const BOARD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -337,18 +317,8 @@ limit = { minimum = "0.15 mm" }
 </IPC-2581>"#;
 
     fn run(xml: &str) -> checks::Results {
-        let ipc = Ipc2581::parse(xml).unwrap();
-        let pdk = Pdk::parse(PDK).unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-        let design = Design::board(&imported, &rules, Resolution::default());
-        checks::run(
-            &rules,
-            std::slice::from_ref(&design),
-            None,
-            NaiveDate::from_ymd_opt(2026, 8, 25).unwrap(),
-        )
-        .unwrap()
+        let rule = "[[rules.copper.clearance]]\nid = \"copper-clearance\"\nlimit = { minimum = \"0.15 mm\" }";
+        fixtures::run_board(xml, &fixtures::pdk(rule))
     }
 
     #[test]
@@ -393,22 +363,7 @@ limit = { minimum = "0.15 mm" }
 
     #[test]
     fn surviving_functional_copper_without_net_ownership_leaves_the_rule_incomplete() {
-        let resolution = Resolution::default();
-
-        let xml = BOARD.replace("<Set net=\"N2\">", "<Set>");
-        let ipc = Ipc2581::parse(&xml).unwrap();
-        let pdk = Pdk::parse(PDK).unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-
-        let design = Design::board(&imported, &rules, resolution);
-        let results = crate::commands::dfm::checks::run(
-            &rules,
-            std::slice::from_ref(&design),
-            None,
-            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-        )
-        .unwrap();
+        let results = run(&BOARD.replace("<Set net=\"N2\">", "<Set>"));
         let rule = &results.rules[0];
         assert!(matches!(
             rule.status,

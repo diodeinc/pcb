@@ -42,8 +42,6 @@ use rayon::prelude::*;
 
 use crate::geometry::GeometryDocument;
 use crate::layers;
-#[cfg(test)]
-use pcb_ir::import::ipc2581::import_design;
 use pcb_ir::import::ipc2581::{
     FeatureOccurrenceId, ImportedDesign, LayerId, LayoutOccurrenceId, feature_occurrence_id,
 };
@@ -2355,8 +2353,8 @@ fn layer_ref(name: &str, function: LayerFunction, side: Option<&'static str>) ->
 
 #[cfg(test)]
 mod tests {
+    use super::super::fixtures::{self, import};
     use super::*;
-    use crate::ipc2581::Ipc2581;
 
     fn root(imported: &ImportedDesign, scope: ArtworkScope) -> Source<'_> {
         Source {
@@ -2404,8 +2402,7 @@ mod tests {
             rectangle("NEGATIVE", 1.0, 3.0),
             rectangle("POSITIVE", 1.8, 2.2),
         );
-        let ipc = Ipc2581::parse(&source).unwrap();
-        let imported = import_design(&ipc, resolution).unwrap();
+        let imported = import(&source);
         let document = imported
             .materialize_layer(
                 imported.layer_id("F.Mask").unwrap(),
@@ -2478,7 +2475,7 @@ mod tests {
   </CadData></Ecad>
 </IPC-2581>"#
         );
-        let imported = import_design(&Ipc2581::parse(&xml).unwrap(), resolution).unwrap();
+        let imported = import(&xml);
         let source = Source {
             web_context_mm: thin_gaps_reach_mm(0.1, resolution),
             ..root(&imported, ArtworkScope::ArrayFlattened)
@@ -2537,9 +2534,7 @@ mod tests {
 
     #[test]
     fn a_layer_leaves_out_the_occurrences_beyond_reach_of_all_outside_them() {
-        let resolution = Resolution::default();
-        let imported =
-            import_design(&Ipc2581::parse(&edge_panel(12.0)).unwrap(), resolution).unwrap();
+        let imported = import(&edge_panel(12.0));
         let source = root(&imported, ArtworkScope::ArrayFlattened);
         let top = imported.layer_id("TOP").unwrap().0 as usize;
         let held = |reach_mm: f64, others: &[(BBox, Option<u32>)]| {
@@ -2564,13 +2559,11 @@ mod tests {
     #[test]
     fn a_design_holds_the_placed_conductors_within_reach_and_counts_them_all() {
         let resolution = Resolution::default();
-        let imported =
-            import_design(&Ipc2581::parse(&edge_panel(10.0)).unwrap(), resolution).unwrap();
+        let imported = import(&edge_panel(10.0));
         let frames = |limit: &str| {
-            let pdk = format!(
-                "schema_version = 2\ndefault_profile = \"test\"\n[pdk]\nid = \"held\"\nname = \"Held\"\nrevision = \"1\"\n[profiles.test]\nname = \"Test\"\n[[rules.copper.clearance]]\nid = \"copper\"\nlimit = {{ minimum = \"{limit}\" }}\n"
-            );
-            let rules = rules::lower(&super::super::pdk::Pdk::parse(&pdk).unwrap(), None).unwrap();
+            let rules = fixtures::rules(&fixtures::pdk(&format!(
+                "[[rules.copper.clearance]]\nid = \"copper\"\nlimit = {{ minimum = \"{limit}\" }}"
+            )));
             Design::frames(&imported, ArtworkScope::ArrayFlattened, &rules, resolution).unwrap()
         };
         let (near, all) = (frames("0.1 mm"), frames("1000 mm"));
@@ -2620,8 +2613,8 @@ mod tests {
         }
     }
 
-    fn slot_fixture(shape: &str) -> Ipc2581 {
-        Ipc2581::parse(&format!(
+    fn slot_fixture(shape: &str) -> ImportedDesign {
+        import(&format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
@@ -2646,7 +2639,6 @@ mod tests {
   </Ecad>
 </IPC-2581>"#
         ))
-        .unwrap()
     }
 
     #[test]
@@ -2657,12 +2649,15 @@ mod tests {
             r#"<Location x="10" y="20"/>
               <Oval width="1.8" height="0.6"/>"#,
         );
-        let oval = import_design(&oval, resolution).unwrap();
         let (_, slots, _) = collect_drilled(root(&oval, ArtworkScope::Board), None).unwrap();
         assert_eq!(slots.len(), 1);
         let stated = slots[0].width.as_ref().unwrap().width;
         assert!((stated.mm - 0.6).abs() < 1e-9);
         assert_eq!(stated.uncertainty_mm, 0.0, "a stated width is exact");
+        assert!(
+            slot_width(Some(0.9), stated).is_err(),
+            "a stated width must match the outline"
+        );
         let native = &slots[0].native_outline;
         assert!(
             native
@@ -2705,7 +2700,6 @@ mod tests {
                 <LineDesc lineWidth="0" lineEnd="ROUND"/>
               </Outline>"#,
         );
-        let outline = import_design(&outline, resolution).unwrap();
         let (_, slots, _) = collect_drilled(root(&outline, ArtworkScope::Board), None).unwrap();
         assert_eq!(slots.len(), 1);
         let width = slots[0].width.as_ref().unwrap().width;
@@ -2726,21 +2720,5 @@ mod tests {
                 .all(|command| command.op != pcb_ir::geom::path::PathOp::ArcTo),
             "actual source polygons must not be smoothed into curves"
         );
-    }
-
-    #[test]
-    fn stated_width_must_match_the_outline() {
-        let resolution = Resolution::default();
-
-        let ipc = slot_fixture(
-            r#"<Location x="10" y="20"/>
-              <Oval width="1.8" height="0.6"/>"#,
-        );
-        let imported = import_design(&ipc, resolution).unwrap();
-        let oval = collect_drilled(root(&imported, ArtworkScope::Board), None)
-            .unwrap()
-            .1
-            .remove(0);
-        assert!(slot_width(Some(0.9), oval.width.unwrap().width).is_err());
     }
 }

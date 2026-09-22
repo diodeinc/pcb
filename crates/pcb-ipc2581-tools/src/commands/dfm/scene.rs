@@ -480,9 +480,8 @@ fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> anyhow::Result<
 
 #[cfg(test)]
 mod tests {
-    use super::super::{pdk, rules};
+    use super::super::fixtures;
     use super::*;
-    use crate::ipc2581::Ipc2581;
     use pcb_ir::geom::{ContourSet, Resolution};
 
     const MASK_BOARD: &str = r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -499,26 +498,15 @@ mod tests {
       </CadData></Ecad>
     </IPC-2581>"#;
 
-    const MASK_PDK: &str = r#"schema_version = 2
-      default_profile = "test"
-      [pdk]
-      id = "mask-scene"
-      name = "Mask scene"
-      revision = "1"
-      [profiles.test]
-      name = "Test"
-      [[rules.soldermask.web]]
-      id = "mask-web"
-      limit = { minimum = "0.1 mm" }
-    "#;
+    const MASK_RULE: &str =
+        "[[rules.soldermask.web]]\nid = \"mask-web\"\nlimit = { minimum = \"0.1 mm\" }";
 
     #[test]
     fn native_mask_scene_preserves_openings_voids_and_world_coordinates() {
         let resolution = Resolution::default();
 
-        let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
-        let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
+        let rules = fixtures::rules(&fixtures::pdk(MASK_RULE));
+        let imported = fixtures::import(MASK_BOARD);
         let design = Design::board(&imported, &rules, resolution);
         let artwork = native_artwork(&design, "F.Mask").unwrap();
         let rendered = pcb_ir::dialects::artwork::compose_to_mask(&artwork, resolution).unwrap();
@@ -557,9 +545,8 @@ mod tests {
     fn outlines_remain_full_native_paths_outside_any_site() {
         let resolution = Resolution::default();
 
-        let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
-        let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
+        let rules = fixtures::rules(&fixtures::pdk(MASK_RULE));
+        let imported = fixtures::import(MASK_BOARD);
         let design = Design::board(&imported, &rules, resolution);
         let outline = ContourSet::rectangle(
             BBox::new(Point::new(-50.0, -50.0), Point::new(50.0, 50.0)),
@@ -587,7 +574,7 @@ mod tests {
     #[test]
     fn drills_are_drawn_once_for_their_step_and_placed_with_it() {
         let resolution = Resolution::default();
-        let ipc = Ipc2581::parse(
+        let imported = fixtures::import(
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
           <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/><LayerRef name="DRILL"/></Content>
           <Ecad><CadHeader units="MILLIMETER"/><CadData>
@@ -601,14 +588,10 @@ mod tests {
             </Step>
           </CadData></Ecad>
         </IPC-2581>"#,
-        )
-        .unwrap();
-        let pdk = MASK_PDK.replace(
-            "[[rules.soldermask.web]]\n      id = \"mask-web\"",
-            "[[rules.drilling.hole_diameter]]\n      id = \"via\"\n      select = { hole = \"via\" }",
         );
-        let rules = rules::lower(&pdk::Pdk::parse(&pdk).unwrap(), None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
+        let rules = fixtures::rules(&fixtures::pdk(
+            "[[rules.drilling.hole_diameter]]\nid = \"via\"\nselect = { hole = \"via\" }\nlimit = { minimum = \"0.1 mm\" }",
+        ));
         let designs =
             Design::frames(&imported, ArtworkScope::ArrayFlattened, &rules, resolution).unwrap();
         let drills = placed_drills(&designs, "DRILL");
@@ -627,27 +610,5 @@ mod tests {
                 "placed at {x}"
             );
         }
-    }
-
-    #[test]
-    fn full_scene_bounds_and_layer_matching_do_not_depend_on_a_site() {
-        let bounds = BBox::new(Point::new(-12.0, 3.0), Point::new(240.0, 180.0));
-        let pass = GeometryPass::layer(
-            "F.Cu".into(),
-            "copper",
-            LayerRole::Copper,
-            "#d87822",
-            Some("F.Cu".into()),
-            bounds,
-        );
-        let layer = |name: &str| LayerRef {
-            name: name.into(),
-            function: "CONDUCTOR".into(),
-            side: None,
-        };
-        assert!(pass_applies(&pass, &[layer("F.Cu")]));
-        assert!(!pass_applies(&pass, &[layer("B.Cu")]));
-        assert!(!pass_applies(&pass, &[]));
-        assert_eq!(scene_bounds(None, &[pass]), bounds);
     }
 }

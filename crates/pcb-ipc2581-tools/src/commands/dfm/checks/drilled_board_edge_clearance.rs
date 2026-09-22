@@ -366,29 +366,9 @@ fn outside_note(has_profile: bool) -> String {
 mod tests {
     use super::*;
     use crate::LayoutTarget;
-    use crate::commands::dfm::report::{Measurement, RuleStatus, Verdict};
-    use crate::commands::dfm::{CheckRequest, PdkSource, TextSource};
-    use crate::ipc2581::Ipc2581;
-    use pcb_ir::geom::Resolution;
-    use pcb_ir::import::ipc2581::import_design;
-
-    fn pdk(rules: &str) -> String {
-        format!(
-            r#"schema_version = 2
-default_profile = "test"
-
-[pdk]
-id = "edge-test"
-name = "Edge test"
-revision = "1"
-
-[profiles.test]
-name = "Test"
-
-{rules}
-"#
-        )
-    }
+    use crate::commands::dfm::DfmReport;
+    use crate::commands::dfm::fixtures::{pdk, report as check};
+    use crate::commands::dfm::report::{Measurement, RuleStatus, Site, Verdict};
 
     fn board(features: &str, cutout: &str) -> String {
         format!(
@@ -410,39 +390,12 @@ name = "Test"
         )
     }
 
-    fn check(xml: &str, pdk_source: &str, target: LayoutTarget) -> super::super::super::DfmReport {
-        let resolution = Resolution::default();
-
-        let imported = import_design(&Ipc2581::parse(xml).unwrap(), resolution).unwrap();
-        super::super::super::check(
-            &imported,
-            CheckRequest {
-                input: crate::commands::dfm::report::FileIdentity::new(
-                    "edge-test.xml",
-                    xml.as_bytes(),
-                ),
-                pdk: PdkSource::Toml(TextSource {
-                    path: "edge-test.toml",
-                    source: pdk_source,
-                }),
-                waivers: None,
-                layout_target: target,
-                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            },
-            resolution,
-        )
-        .unwrap()
-    }
-
     fn actual_mm(measurement: &Measurement) -> f64 {
         measurement.actual_mm().unwrap()
     }
 
     /// The shared board profile a site measures to.
-    fn board_profile<'a>(
-        report: &'a super::super::super::DfmReport,
-        site: &crate::commands::dfm::report::Site,
-    ) -> &'a Evidence {
+    fn board_profile<'a>(report: &'a DfmReport, site: &Site) -> &'a Evidence {
         let reference = site
             .evidence
             .iter()

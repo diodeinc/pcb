@@ -154,9 +154,21 @@ pub(super) fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::dfm::{pdk::Pdk, rules};
-    use crate::ipc2581::Ipc2581;
+    use crate::commands::dfm::fixtures;
     use pcb_ir::geom::Resolution;
+
+    /// The PTH-to-PTH pairs of `xml` measured against a 0.2 mm limit.
+    fn evaluate_pth_pairs(xml: &str) -> Evaluation {
+        let rules = fixtures::rules(&fixtures::pdk(
+            r#"[[rules.drilling.hole_to_hole_clearance]]
+id = "hole-clearance"
+select = { first_hole = "pth", second_hole = "pth" }
+limit = { minimum = "0.2 mm" }"#,
+        ));
+        let imported = fixtures::import(xml);
+        let design = Design::board(&imported, &rules, Resolution::default());
+        evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design).unwrap()
+    }
 
     #[test]
     fn physical_overlap_is_independent_of_copper_declaration_order() {
@@ -170,7 +182,8 @@ mod tests {
             ] {
                 let layers = order.map(|i| format!(r#"<Layer name="L{i}" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE"/>"#)).join("");
                 let stackup = [0, 1, 2, 3].map(|i| format!(r#"<StackupLayer layerOrGroupRef="L{i}" thickness="0.035" tolPlus="0" tolMinus="0" sequence="{i}"/>"#)).join("");
-                let ipc = Ipc2581::parse(&format!(r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+                let evaluation = evaluate_pth_pairs(&format!(
+                    r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
                   <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/>
                     <LayerRef name="L0"/><LayerRef name="L1"/><LayerRef name="L2"/><LayerRef name="L3"/><LayerRef name="D1"/><LayerRef name="D2"/>
                   </Content><Ecad><CadHeader units="MILLIMETER"/><CadData>{layers}
@@ -183,28 +196,9 @@ mod tests {
                       <LayerFeature layerRef="D1"><Set><Hole name="H1" diameter="1" platingStatus="PLATED" x="0" y="0"/></Set></LayerFeature>
                       <LayerFeature layerRef="D2"><Set><Hole name="H2" diameter="1" platingStatus="PLATED" x="0.1" y="0"/></Set></LayerFeature>
                     </Step>
-                  </CadData></Ecad></IPC-2581>"#, first.0, first.1, second.0, second.1)).unwrap();
-                let pdk = Pdk::parse(
-                    r#"schema_version = 2
-                    default_profile = "test"
-                    [pdk]
-                    id = "test"
-                    name = "Test"
-                    revision = "1"
-                    [profiles.test]
-                    name = "Test"
-                    [[rules.drilling.hole_to_hole_clearance]]
-                    id = "hole-clearance"
-                    select = { first_hole = "pth", second_hole = "pth" }
-                    limit = { minimum = "0.2 mm" }
-                "#,
-                )
-                .unwrap();
-                let rules = rules::lower(&pdk, None).unwrap();
-                let imported =
-                    pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-                let design = Design::board(&imported, &rules, Resolution::default());
-                let evaluation = evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design).unwrap();
+                  </CadData></Ecad></IPC-2581>"#,
+                    first.0, first.1, second.0, second.1
+                ));
                 assert_eq!(evaluation.checked, 2);
                 assert_eq!(
                     evaluation.measured.len(),
@@ -217,9 +211,8 @@ mod tests {
 
     #[test]
     fn overlapping_drills_retain_exact_circle_intersection_parameters() {
-        let resolution = Resolution::default();
-
-        let ipc = Ipc2581::parse(r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+        let evaluation = evaluate_pth_pairs(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
           <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/><LayerRef name="DRILL"/></Content>
           <Ecad><CadHeader units="MILLIMETER"/><CadData>
             <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
@@ -228,27 +221,8 @@ mod tests {
               <Hole name="H2" diameter="0.8" platingStatus="PLATED" x="10.5" y="-20"/>
             </Set></LayerFeature></Step>
           </CadData></Ecad>
-        </IPC-2581>"#).unwrap();
-        let pdk = Pdk::parse(
-            r#"schema_version = 2
-          default_profile = "test"
-          [pdk]
-          id = "test"
-          name = "Test"
-          revision = "1"
-          [profiles.test]
-          name = "Test"
-          [[rules.drilling.hole_to_hole_clearance]]
-          id = "hole-clearance"
-          select = { first_hole = "pth", second_hole = "pth" }
-          limit = { minimum = "0.2 mm" }
-        "#,
-        )
-        .unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::board(&imported, &rules, resolution);
-        let evaluation = evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design).unwrap();
+        </IPC-2581>"#,
+        );
         assert_eq!(evaluation.measured.len(), 1);
         let site = &evaluation.measured[0].sites[0];
         let overlap = site

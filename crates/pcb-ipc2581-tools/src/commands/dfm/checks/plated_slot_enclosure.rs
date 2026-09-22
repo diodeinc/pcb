@@ -143,24 +143,13 @@ pub(super) fn evaluate(
 mod tests {
     use super::*;
     use crate::LayoutTarget;
-    use crate::commands::dfm::report::{FileIdentity, RuleStatus, Verdict};
-    use crate::commands::dfm::{self, CheckRequest, PdkSource, TextSource};
-    use crate::ipc2581::Ipc2581;
+    use crate::commands::dfm::report::{RuleStatus, Verdict};
+    use crate::commands::dfm::{self, fixtures};
     use pcb_ir::geom::Resolution;
-    use pcb_ir::import::ipc2581::import_design;
 
-    const PDK: &str = r#"schema_version = 2
-default_profile = "test"
-[pdk]
-id = "test"
-name = "Test"
-revision = "1"
-[profiles.test]
-name = "Test"
-[[rules.copper.plated_slot_enclosure]]
+    const RULE: &str = r#"[[rules.copper.plated_slot_enclosure]]
 id = "slot-enclosure"
-limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
-"#;
+limit = { minimum = "0.2 mm", preferred = "0.3 mm" }"#;
 
     fn copper(right: f64) -> String {
         format!(
@@ -205,22 +194,7 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
     }
 
     fn check(xml: &str) -> dfm::DfmReport {
-        let imported = import_design(&Ipc2581::parse(xml).unwrap(), Resolution::default()).unwrap();
-        dfm::check(
-            &imported,
-            CheckRequest {
-                input: FileIdentity::new("slot.xml", xml.as_bytes()),
-                pdk: PdkSource::Toml(TextSource {
-                    path: "slot.toml",
-                    source: PDK,
-                }),
-                waivers: None,
-                layout_target: LayoutTarget::Board,
-                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            },
-            Resolution::default(),
-        )
-        .unwrap()
+        fixtures::report(xml, &fixtures::pdk(RULE), LayoutTarget::Board)
     }
 
     const OVAL: &str = r#"<Location x="0" y="0"/><Oval width="2" height="0.6"/>"#;
@@ -348,14 +322,10 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
 
     #[test]
     fn missing_stackup_or_span_cannot_be_certified_even_with_adequate_copper() {
-        use crate::commands::dfm::{pdk::Pdk, rules};
-
         let copper = copper(1.4);
-        let rules = rules::lower(&Pdk::parse(PDK).unwrap(), None).unwrap();
+        let rules = fixtures::rules(&fixtures::pdk(RULE));
         for span in [r#"<Span fromLayer="L0"/>"#, THROUGH] {
-            let xml = board(OVAL, [&copper, "", &copper], span);
-            let mut imported =
-                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
+            let mut imported = fixtures::import(&board(OVAL, [&copper, "", &copper], span));
             if span == THROUGH {
                 imported.stackups.clear();
             }
@@ -364,7 +334,7 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
                 &rules,
                 std::slice::from_ref(&design),
                 None,
-                chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+                chrono::NaiveDate::default(),
             )
             .unwrap();
             assert!(results.findings.is_empty());

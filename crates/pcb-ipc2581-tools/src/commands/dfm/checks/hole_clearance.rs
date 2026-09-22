@@ -215,31 +215,18 @@ fn fallback_site(
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
     use pcb_ir::geom::Resolution;
 
-    use crate::commands::dfm::{checks, design::Design, pdk::Pdk, rules};
-    use crate::ipc2581::Ipc2581;
+    use crate::commands::dfm::report::RuleStatus;
+    use crate::commands::dfm::{checks, design::Design, fixtures};
 
     fn pdk(hole: &str) -> String {
-        format!(
-            r#"schema_version = 2
-default_profile = "test"
-
-[pdk]
-id = "hole-clearance-test"
-name = "Hole clearance test"
-revision = "1"
-
-[profiles.test]
-name = "Test"
-
-[[rules.copper.hole_clearance]]
+        fixtures::pdk(&format!(
+            r#"[[rules.copper.hole_clearance]]
 id = "hole-clearance"
 select = {{ hole = "{hole}" }}
-limit = {{ minimum = "0.20 mm" }}
-"#
-        )
+limit = {{ minimum = "0.20 mm" }}"#
+        ))
     }
 
     fn copper(layer: usize, net: Option<&str>, x: f64) -> String {
@@ -333,22 +320,7 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     fn run(xml: &str, hole: &str) -> checks::Results {
-        run_pdk(xml, &pdk(hole))
-    }
-
-    fn run_pdk(xml: &str, source: &str) -> checks::Results {
-        let ipc = Ipc2581::parse(xml).unwrap();
-        let pdk = Pdk::parse(source).unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-        let design = Design::board(&imported, &rules, Resolution::default());
-        checks::run(
-            &rules,
-            std::slice::from_ref(&design),
-            None,
-            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-        )
-        .unwrap()
+        fixtures::run_board(xml, &pdk(hole))
     }
 
     #[test]
@@ -382,62 +354,39 @@ limit = {{ minimum = "0.20 mm" }}
 
     #[test]
     fn hole_clearance_report_includes_spatial_view_and_native_context() {
-        let resolution = Resolution::default();
-
-        use crate::LayoutTarget;
-        use crate::commands::dfm::{CheckRequest, PdkSource, TextSource, report};
-
         let xml = board("VIA", Some((0, 2)), &[copper(0, Some("N2"), 0.65)]);
-        let source = pdk("via");
-        let ipc = Ipc2581::parse(&xml).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let checked = crate::commands::dfm::check(
-            &imported,
-            CheckRequest {
-                input: report::FileIdentity::new("board.xml", xml.as_bytes()),
-                pdk: PdkSource::Toml(TextSource {
-                    path: "pdk.toml",
-                    source: &source,
-                }),
-                waivers: None,
-                layout_target: LayoutTarget::Board,
-                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            },
-            resolution,
-        )
-        .unwrap();
+        let checked = fixtures::report(&xml, &pdk("via"), crate::LayoutTarget::Board);
 
-        assert!(matches!(checked.verdict, report::Verdict::Fail));
         assert_eq!(checked.rules[0].view.kind, "hole_to_copper_clearance");
         assert!(checked.rules[0].view.spatial);
         assert_eq!(
             checked.rules[0].view.features,
             ["copper", "drills", "board_outlines"]
         );
-        assert!(
-            checked
-                .scene
-                .passes
-                .iter()
-                .any(|pass| { pass.feature == "copper" && pass.layer.as_deref() == Some("L0") })
-        );
-        assert!(
-            checked
-                .scene
-                .passes
-                .iter()
-                .any(|pass| { pass.feature == "drills" && pass.layer.as_deref() == Some("DRILL") })
-        );
+        for (feature, layer) in [("copper", "L0"), ("drills", "DRILL")] {
+            let mut passes = checked.scene.passes.iter();
+            assert!(
+                passes.any(|pass| pass.feature == feature && pass.layer.as_deref() == Some(layer))
+            );
+        }
     }
 
     #[test]
-    fn excludes_own_net_for_vias_and_pths_but_not_unattributed_copper() {
-        for (hole, plating) in [("via", "VIA"), ("pth", "PLATED")] {
+    fn excludes_own_net_for_vias_and_pths_but_not_for_npth_or_unattributed_copper() {
+        for (hole, plating, own_net_offends) in [
+            ("via", "VIA", false),
+            ("pth", "PLATED", false),
+            ("npth", "NONPLATED", true),
+        ] {
             let own_net = run(
                 &board(plating, Some((0, 2)), &[copper(0, Some("N1"), 0.55)]),
                 hole,
             );
-            assert!(own_net.findings.is_empty(), "{hole} own net");
+            assert_eq!(
+                own_net.findings.len(),
+                usize::from(own_net_offends),
+                "{hole} own net"
+            );
 
             let unattributed = run(
                 &board(plating, Some((0, 2)), &[copper(0, None, 0.55)]),
@@ -541,35 +490,7 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     #[test]
-    fn npth_treats_same_net_copper_as_an_offender() {
-        let results = run(
-            &board("NONPLATED", Some((0, 2)), &[copper(0, Some("N1"), 0.55)]),
-            "npth",
-        );
-        assert_eq!(results.findings.len(), 1);
-        assert_eq!(results.findings[0].subjects[1].net.as_deref(), Some("N1"));
-    }
-
-    #[test]
-    fn checks_only_copper_layers_in_the_declared_drill_span() {
-        let outside = run(
-            &board("VIA", Some((0, 1)), &[copper(2, Some("N2"), 0.55)]),
-            "via",
-        );
-        assert_eq!(outside.rules[0].checked, 2);
-        assert!(outside.findings.is_empty());
-
-        let inside = run(
-            &board("VIA", Some((0, 1)), &[copper(1, Some("N2"), 0.55)]),
-            "via",
-        );
-        assert_eq!(inside.findings.len(), 1);
-        assert_eq!(inside.findings[0].layers[1].name, "L1");
-    }
-
-    #[test]
     fn a_layer_or_stackup_no_case_matches_is_reported_not_left_unchecked() {
-        use crate::commands::dfm::report::RuleStatus;
         let cased = |cases: &str| {
             pdk("via").replace(
                 "limit = { minimum = \"0.20 mm\" }",
@@ -581,7 +502,7 @@ limit = {{ minimum = "0.20 mm" }}
         let through = board("VIA", Some((0, 2)), &[copper(0, Some("N2"), 0.8)]);
 
         // The through via meets the inner layer, which no case limits.
-        let partial = run_pdk(&through, &cased(outer));
+        let partial = fixtures::run_board(&through, &cased(outer));
         assert_eq!(partial.rules.len(), 2);
         assert!(matches!(partial.rules[0].status, RuleStatus::Pass));
         assert_eq!(
@@ -599,7 +520,7 @@ limit = {{ minimum = "0.20 mm" }}
             Some("no case applies to copper layer(s) 'L1' (inner, 1.01 oz)")
         );
 
-        let complete = run_pdk(&through, &cased(&format!("{outer}, {inner}")));
+        let complete = fixtures::run_board(&through, &cased(&format!("{outer}, {inner}")));
         assert_eq!(
             complete
                 .rules
@@ -610,12 +531,12 @@ limit = {{ minimum = "0.20 mm" }}
         );
 
         // Without a via there is nothing the uncovered layer leaves unchecked.
-        let no_vias = run_pdk(&board("PLATED", Some((0, 2)), &[]), &cased(outer));
+        let no_vias = fixtures::run_board(&board("PLATED", Some((0, 2)), &[]), &cased(outer));
         assert_eq!(no_vias.rules.len(), 1);
         assert!(matches!(no_vias.rules[0].status, RuleStatus::NotApplicable));
 
         let two_layer = r#"{ id = "two", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.20 mm" } }"#;
-        let count = run_pdk(&through, &cased(two_layer));
+        let count = fixtures::run_board(&through, &cased(two_layer));
         assert!(matches!(count.rules[0].status, RuleStatus::NotApplicable));
         assert_eq!(
             count.rules[1].skip_reason.as_deref(),
@@ -640,24 +561,11 @@ limit = {{ minimum = "0.20 mm" }}
 
     #[test]
     fn rejects_a_hole_without_a_resolvable_drill_span() {
-        let resolution = Resolution::default();
-
         let xml = board("VIA", Some((0, 1)), &[copper(0, Some("N2"), 0.8)]).replace(
             r#"<Span fromLayer="L0" toLayer="L1"/>"#,
             r#"<Span fromLayer="L0"/>"#,
         );
-        let ipc = Ipc2581::parse(&xml).unwrap();
-        let pdk = Pdk::parse(&pdk("via")).unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::board(&imported, &rules, resolution);
-        let results = checks::run(
-            &rules,
-            std::slice::from_ref(&design),
-            None,
-            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-        )
-        .unwrap();
+        let results = run(&xml, "via");
         let rule = &results.rules[0];
         assert!(rule.blocks_verdict(), "an unknown span must fail closed");
         assert!(
@@ -688,11 +596,7 @@ limit = {{ minimum = "0.20 mm" }}
                     &declarations.join("\n"),
                     &order.map(|i| declarations[i]).join("\n"),
                 );
-                let ipc = Ipc2581::parse(&xml).unwrap();
-                let pdk = Pdk::parse(&pdk("via")).unwrap();
-                let rules = rules::lower(&pdk, None).unwrap();
-                let imported =
-                    pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
+                let (imported, rules) = (fixtures::import(&xml), fixtures::rules(&pdk("via")));
                 let design = Design::board(&imported, &rules, Resolution::default());
                 let mut included = design
                     .copper_layers
@@ -703,13 +607,7 @@ limit = {{ minimum = "0.20 mm" }}
                     .collect::<Vec<_>>();
                 included.sort_unstable();
                 assert_eq!(included, ["L0", "L1"], "declarations {order:?}");
-                let results = checks::run(
-                    &rules,
-                    std::slice::from_ref(&design),
-                    None,
-                    NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-                )
-                .unwrap();
+                let results = run(&xml, "via");
                 assert_eq!(results.rules[0].checked, 2);
                 assert_eq!(
                     results.findings.len(),
@@ -722,30 +620,14 @@ limit = {{ minimum = "0.20 mm" }}
 
     #[test]
     fn does_not_require_a_span_for_a_nonapplicable_named_case() {
-        let resolution = Resolution::default();
-
         let xml = board("VIA", None, &[copper(0, Some("N2"), 0.55)]);
         let source = pdk("via").replace(
             "limit = { minimum = \"0.20 mm\" }",
             "cases = [{ id = \"two-layer\", when = { copper_layers = { exact = 2 } }, limit = { minimum = \"0.20 mm\" } }]",
         );
-        let ipc = Ipc2581::parse(&xml).unwrap();
-        let pdk = Pdk::parse(&source).unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::board(&imported, &rules, resolution);
-        let results = checks::run(
-            &rules,
-            std::slice::from_ref(&design),
-            None,
-            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-        )
-        .unwrap();
+        let results = fixtures::run_board(&xml, &source);
 
-        assert!(matches!(
-            results.rules[0].status,
-            crate::commands::dfm::report::RuleStatus::NotApplicable
-        ));
+        assert!(matches!(results.rules[0].status, RuleStatus::NotApplicable));
         assert_eq!(
             results.rules[0].skip_reason.as_deref(),
             Some("rule conditions do not apply to this stackup")

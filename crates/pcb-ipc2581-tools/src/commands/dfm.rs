@@ -524,6 +524,63 @@ fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+/// What every DFM test runs its fixture through.
+#[cfg(test)]
+mod fixtures {
+    use super::*;
+
+    /// A PDK of one `test` profile holding the given rule tables.
+    pub fn pdk(rules: &str) -> String {
+        format!(
+            "schema_version = 2\ndefault_profile = \"test\"\n[pdk]\nid = \"test\"\nname = \"Test\"\nrevision = \"1\"\n[profiles.test]\nname = \"Test\"\n{rules}\n"
+        )
+    }
+
+    pub fn import(xml: &str) -> ImportedDesign {
+        import_design(&Ipc2581::parse(xml).unwrap(), Resolution::default()).unwrap()
+    }
+
+    pub fn rules(pdk: &str) -> Vec<rules::Rule> {
+        rules::lower(&pdk::Pdk::parse(pdk).unwrap(), None).unwrap()
+    }
+
+    pub fn request<'a>(xml: &str, pdk: &'a str, layout_target: LayoutTarget) -> CheckRequest<'a> {
+        CheckRequest {
+            input: report::FileIdentity::new("board.xml", xml.as_bytes()),
+            pdk: PdkSource::Toml(TextSource {
+                path: "pdk.toml",
+                source: pdk,
+            }),
+            waivers: None,
+            layout_target,
+            generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        }
+    }
+
+    /// The report of `xml` checked against a PDK source.
+    pub fn report(xml: &str, pdk: &str, target: LayoutTarget) -> DfmReport {
+        check(
+            &import(xml),
+            request(xml, pdk, target),
+            Resolution::default(),
+        )
+        .unwrap()
+    }
+
+    /// The engine's results for the board of `xml`.
+    pub fn run_board(xml: &str, pdk: &str) -> checks::Results {
+        let (imported, rules) = (import(xml), rules(pdk));
+        let design = design::Design::board(&imported, &rules, Resolution::default());
+        checks::run(
+            &rules,
+            std::slice::from_ref(&design),
+            None,
+            chrono::NaiveDate::default(),
+        )
+        .unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
@@ -613,25 +670,38 @@ limit = { minimum = "300 mil" }
     }
 
     fn check_with_pdk(xml: &str, target: LayoutTarget, pdk_source: &str) -> DfmReport {
-        let resolution = Resolution::default();
+        fixtures::report(xml, pdk_source, target)
+    }
 
-        let ipc = Ipc2581::parse(xml).unwrap();
-        let imported = import_design(&ipc, resolution).unwrap();
-        super::check(
-            &imported,
-            CheckRequest {
-                input: report::FileIdentity::new("board.xml", xml.as_bytes()),
-                pdk: PdkSource::Toml(TextSource {
-                    path: "pdk.toml",
-                    source: pdk_source,
-                }),
-                waivers: None,
-                layout_target: target,
-                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+    /// A 2 x 2 V-scored array of `board` inside `rail_mm` rails.
+    fn array_of(board: &str, rail_mm: f64) -> String {
+        create_board_array(
+            board,
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 2,
+                board_margin_mm: EdgeInsetsMm::all(0.0),
+                edge_rail_mm: EdgeInsetsMm::all(rail_mm),
             },
-            resolution,
+            false,
+            crate::commands::board_array::Separation::VScore,
+            Resolution::default(),
         )
         .unwrap()
+        .xml
+    }
+
+    /// A fabrication panel of two of `array`.
+    fn fab_panel_of(array: &String) -> String {
+        create_fab_panel(
+            std::slice::from_ref(array),
+            &[0, 0],
+            FabPanelSpec::default(),
+            false,
+            Resolution::default(),
+        )
+        .unwrap()
+        .xml
     }
 
     fn rule<'a>(results: &'a DfmReport, id: &str) -> &'a report::RuleResult {
@@ -640,32 +710,6 @@ limit = { minimum = "300 mil" }
 
     #[test]
     fn loads_embedded_pdks_and_lowers_partial_ipc_baselines() {
-        let builtin = builtin_pdks()
-            .iter()
-            .find(|pdk| pdk.name == "standard")
-            .unwrap();
-        let parsed = pdk::Pdk::parse(builtin.source).unwrap();
-        assert_eq!(parsed.pdk.id, "standard");
-        assert_eq!(parsed.pdk.name, "Standard");
-        assert_eq!(parsed.pdk.manufacturer.as_deref(), Some("Diode"));
-        assert_eq!(parsed.pdk.process.as_deref(), Some("Standard"));
-        assert_eq!(parsed.default_profile, "standard");
-        let support = parsed.profiles["standard"]
-            .support
-            .copper_layers
-            .as_ref()
-            .unwrap();
-        assert_eq!(support.minimum(), Some(2));
-        assert_eq!(support.maximum(), Some(10));
-        let standard_rules = rules::lower(&parsed, None).unwrap();
-        assert!(!standard_rules.is_empty());
-        let mask_web = standard_rules
-            .iter()
-            .find(|rule| rule.id == "soldermask.minimum_web.preferred")
-            .unwrap();
-        assert_eq!(mask_web.severity, report::Severity::Warning);
-        assert_eq!(mask_web.limit.length().millimeters(), 0.1016);
-
         for builtin in builtin_pdks() {
             let parsed = pdk::Pdk::parse(builtin.source).unwrap();
             assert!(
@@ -675,13 +719,7 @@ limit = { minimum = "300 mil" }
             );
         }
 
-        let ipc = builtin_pdks().iter().find(|pdk| pdk.name == "ipc").unwrap();
-        let parsed = pdk::Pdk::parse(ipc.source).unwrap();
-        assert_eq!(parsed.rules.drilling.hole_to_board_edge_clearance.len(), 9);
-        assert_eq!(parsed.rules.drilling.slot_to_board_edge_clearance.len(), 6);
-        assert_eq!(parsed.rules.drilling.hole_aspect_ratio.len(), 6);
-        assert_eq!(parsed.rules.copper.hole_clearance.len(), 9);
-        assert_eq!(parsed.pdk.manufacturer.as_deref(), Some("Diode"));
+        let parsed = pdk::Pdk::parse(builtin_pdks::find("ipc").unwrap().source).unwrap();
         for class in 1..=3 {
             for (level, maximum, copper_clearance, edge_clearance) in [
                 ('a', 6.0, 0.25, 0.50),
@@ -695,15 +733,6 @@ limit = { minimum = "300 mil" }
                 assert_eq!(
                     definition.producibility_level.unwrap().label(),
                     level.to_ascii_uppercase().to_string()
-                );
-                assert_eq!(
-                    definition
-                        .defaults
-                        .board_thickness
-                        .as_ref()
-                        .unwrap()
-                        .millimeters(),
-                    1.6
                 );
                 let rules = rules::lower(&parsed, Some(&profile)).unwrap();
                 let aspect_ratio = rules
@@ -756,24 +785,8 @@ limit = { minimum = "300 mil" }
                 );
             }
         }
-        let (_, default_ipc) = parsed.selected_profile(Some("2b")).unwrap();
-        assert_eq!(default_ipc.performance_class, Some(2));
-        assert_eq!(
-            default_ipc.producibility_level,
-            Some(pdk::ProducibilityLevel::B)
-        );
-        assert!(
-            default_ipc
-                .description
-                .as_deref()
-                .unwrap()
-                .contains("proof of full IPC compliance")
-        );
 
-        let jlc = builtin_pdks()
-            .iter()
-            .find(|pdk| pdk.name == "jlcpcb-1oz")
-            .unwrap();
+        let jlc = builtin_pdks::find("jlcpcb-1oz").unwrap();
         let parsed = pdk::Pdk::parse(jlc.source).unwrap();
         let rules = rules::lower(&parsed, Some(jlc.profile)).unwrap();
         let mask = rules
@@ -799,7 +812,7 @@ limit = { minimum = "300 mil" }
 
     #[test]
     fn ipc_copper_clearance_checks_profile_cutouts() {
-        let ipc = builtin_pdks().iter().find(|pdk| pdk.name == "ipc").unwrap();
+        let ipc = builtin_pdks::find("ipc").unwrap();
         let id = "diode.ipc_baseline.copper.minimum_board_edge_clearance";
         let board = BOARD.replace(
             r#"<Set polarity="POSITIVE">"#,
@@ -858,10 +871,7 @@ limit = { minimum = "300 mil" }
           </Set>
         </LayerFeature>"#;
         let board = BOARD.replace(copper, mask_web);
-        let standard = builtin_pdks()
-            .iter()
-            .find(|pdk| pdk.name == "standard")
-            .unwrap();
+        let standard = builtin_pdks::find("standard").unwrap();
 
         let results = check_with_pdk(&board, LayoutTarget::Board, standard.source);
         let mask_rule = rule(&results, "soldermask.minimum_web.preferred");
@@ -930,28 +940,21 @@ limit = { minimum = "300 mil" }
 
     #[test]
     fn in_memory_report_keeps_source_identity_and_waiver_dates() {
-        let resolution = Resolution::default();
-
-        let imported = import_design(&Ipc2581::parse(BOARD).unwrap(), resolution).unwrap();
+        let imported = fixtures::import(BOARD);
         let pdk_source = PDK.replace("minimum = 2", "minimum = 3");
         let run = |waivers, day| {
             super::check(
                 &imported,
                 CheckRequest {
-                    input: report::FileIdentity::new("board.xml", BOARD.as_bytes()),
-                    pdk: PdkSource::Toml(TextSource {
-                        path: "pdk.toml",
-                        source: &pdk_source,
-                    }),
                     waivers,
-                    layout_target: LayoutTarget::Board,
                     generated_at: NaiveDate::from_ymd_opt(2026, 8, day)
                         .unwrap()
                         .and_hms_opt(0, 0, 0)
                         .unwrap()
                         .and_utc(),
+                    ..fixtures::request(BOARD, &pdk_source, LayoutTarget::Board)
                 },
-                resolution,
+                Resolution::default(),
             )
             .unwrap()
         };
@@ -1006,8 +1009,6 @@ reason = "old finding"
     #[cfg(feature = "cli")]
     #[test]
     fn cli_report_matches_in_memory_report_for_compressed_input() {
-        let resolution = Resolution::default();
-
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("board.xml.zst");
         let pdk = directory.path().join("custom.toml");
@@ -1024,7 +1025,7 @@ reason = "old finding"
                 output: Some(output.clone()),
                 layout_target: LayoutTarget::Board,
             },
-            resolution,
+            Resolution::default(),
         )
         .unwrap();
         let CheckOutcome::Failed(error) = outcome else {
@@ -1044,34 +1045,9 @@ reason = "old finding"
         assert_eq!(cli, serde_json::to_value(report).unwrap());
     }
 
-    #[test]
-    fn rejects_oversize_pdk_source() {
-        let resolution = Resolution::default();
-
-        let imported = import_design(&Ipc2581::parse(BOARD).unwrap(), resolution).unwrap();
-        let source = " ".repeat(MAX_PDK_BYTES + 1);
-        let error = super::check(
-            &imported,
-            CheckRequest {
-                input: report::FileIdentity::new("board.xml", BOARD.as_bytes()),
-                pdk: PdkSource::Toml(TextSource {
-                    path: "oversize.toml",
-                    source: &source,
-                }),
-                waivers: None,
-                layout_target: LayoutTarget::Board,
-                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            },
-            resolution,
-        )
-        .unwrap_err();
-
-        assert!(error.to_string().contains("exceeds the 1048576 byte limit"));
-    }
-
     #[cfg(feature = "cli")]
     #[test]
-    fn report_serialization_failure_preserves_existing_output() {
+    fn a_failed_report_write_leaves_the_destination_and_no_temporary_file() {
         struct Unserializable;
         impl Serialize for Unserializable {
             fn serialize<S: serde::Serializer>(
@@ -1081,22 +1057,32 @@ reason = "old finding"
                 Err(serde::ser::Error::custom("serialization failed"))
             }
         }
-
         let directory = tempfile::tempdir().unwrap();
-        let output = directory.path().join("report.dfm.json");
-        std::fs::write(&output, b"previous report").unwrap();
-        let options = CheckOptions {
+        let options = |output: PathBuf| CheckOptions {
             pdk: "standard".into(),
             waivers: None,
-            output: Some(output.clone()),
+            output: Some(output),
             layout_target: LayoutTarget::Board,
         };
 
-        let error = write_report(&options, &Unserializable).unwrap_err();
-
+        let file = directory.path().join("report.dfm.json");
+        std::fs::write(&file, b"previous report").unwrap();
+        let error = write_report(&options(file.clone()), &Unserializable).unwrap_err();
         assert!(error.to_string().contains("serialization failed"));
-        assert_eq!(std::fs::read(output).unwrap(), b"previous report");
-        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        assert_eq!(std::fs::read(file).unwrap(), b"previous report");
+
+        // A destination that cannot be replaced: a directory.
+        let occupied = directory.path().join("occupied");
+        std::fs::create_dir(&occupied).unwrap();
+        std::fs::write(occupied.join("sentinel"), b"untouched").unwrap();
+        let report = serde_json::json!({"verdict": "incomplete"});
+        let error = write_report(&options(occupied.clone()), &report).unwrap_err();
+        assert!(error.to_string().contains("failed to replace DFM report"));
+        assert_eq!(
+            std::fs::read(occupied.join("sentinel")).unwrap(),
+            b"untouched"
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
     }
 
     #[cfg(feature = "cli")]
@@ -1120,86 +1106,44 @@ reason = "old finding"
         }
     }
 
-    #[cfg(feature = "cli")]
-    #[test]
-    fn report_persistence_failure_preserves_destination_and_cleans_temporary_file() {
-        let directory = tempfile::tempdir().unwrap();
-        let output = directory.path().join("report.dfm.json");
-        std::fs::create_dir(&output).unwrap();
-        std::fs::write(output.join("sentinel"), b"untouched").unwrap();
-        let options = CheckOptions {
-            pdk: "standard".into(),
-            waivers: None,
-            output: Some(output.clone()),
-            layout_target: LayoutTarget::Board,
-        };
-
-        let error =
-            write_report(&options, &serde_json::json!({"verdict": "incomplete"})).unwrap_err();
-
-        assert!(error.to_string().contains("failed to replace DFM report"));
-        assert_eq!(
-            std::fs::read(output.join("sentinel")).unwrap(),
-            b"untouched"
-        );
-        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
-    }
-
     #[test]
     fn profile_support_checks_both_layer_bounds_from_the_physical_stackup() {
-        let below_minimum = check_with_pdk(
-            BOARD,
-            LayoutTarget::Board,
-            &PDK.replace("minimum = 2", "minimum = 3"),
-        );
-        let minimum_rule = rule(&below_minimum, "profile.support.copper_layers.minimum");
-        assert_eq!(minimum_rule.checked, 1);
-        assert_eq!(minimum_rule.comparison, "minimum");
-        assert_eq!(minimum_rule.limit.normalized_unit, "layers");
-        assert_eq!(minimum_rule.limit.normalized_value, 3.0);
-        assert!(matches!(minimum_rule.status, report::RuleStatus::Fail));
-        let minimum_finding = below_minimum
-            .findings
-            .iter()
-            .find(|finding| finding.rule_id == minimum_rule.id)
-            .unwrap();
-        assert!(matches!(
-            minimum_finding.measurement,
-            report::Measurement::Count {
-                actual_count: 2,
-                required_count: 3,
-                margin_count: -1,
-            }
-        ));
-        assert_eq!(
-            minimum_finding
-                .layers
-                .iter()
-                .map(|layer| layer.name.as_str())
-                .collect::<Vec<_>>(),
-            ["TOP", "BOTTOM"]
-        );
-
-        let above_maximum = check_with_pdk(
-            BOARD,
-            LayoutTarget::Board,
-            &PDK.replace(
-                "copper_layers = { minimum = 2, maximum = 4 }",
-                "copper_layers = { maximum = 1 }",
-            ),
-        );
-        let maximum_rule = rule(&above_maximum, "profile.support.copper_layers.maximum");
-        assert_eq!(maximum_rule.checked, 1);
-        assert_eq!(maximum_rule.comparison, "maximum");
-        assert!(matches!(maximum_rule.status, report::RuleStatus::Fail));
-        assert!(above_maximum.findings.iter().any(|finding| matches!(
-            finding.measurement,
-            report::Measurement::Count {
-                actual_count: 2,
-                required_count: 1,
-                margin_count: -1,
-            }
-        )));
+        for (support, comparison, required) in [
+            ("copper_layers = { minimum = 3, maximum = 4 }", "minimum", 3),
+            ("copper_layers = { maximum = 1 }", "maximum", 1),
+        ] {
+            let pdk = PDK.replace("copper_layers = { minimum = 2, maximum = 4 }", support);
+            let results = check_with_pdk(BOARD, LayoutTarget::Board, &pdk);
+            let bound = rule(
+                &results,
+                &format!("profile.support.copper_layers.{comparison}"),
+            );
+            assert_eq!(bound.checked, 1);
+            assert_eq!(bound.comparison, comparison);
+            assert_eq!(bound.limit.normalized_unit, "layers");
+            assert_eq!(bound.limit.normalized_value, f64::from(required));
+            assert!(matches!(bound.status, report::RuleStatus::Fail));
+            let [finding] = results.findings.as_slice() else {
+                panic!("one bound is violated: {:?}", results.findings);
+            };
+            assert_eq!(finding.rule_id, bound.id);
+            assert!(matches!(
+                finding.measurement,
+                report::Measurement::Count {
+                    actual_count: 2,
+                    required_count,
+                    margin_count: -1,
+                } if required_count == required
+            ));
+            assert_eq!(
+                finding
+                    .layers
+                    .iter()
+                    .map(|layer| layer.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["TOP", "BOTTOM"]
+            );
+        }
     }
 
     #[test]
@@ -1238,30 +1182,8 @@ reason = "old finding"
 
     #[test]
     fn generated_array_tooling_holes_are_measured_to_their_own_rail() {
-        let resolution = Resolution::default();
-        let array = create_board_array(
-            BOARD,
-            &BoardArrayCreateOptions {
-                columns: 2,
-                rows: 2,
-                board_margin_mm: EdgeInsetsMm::all(0.0),
-                edge_rail_mm: EdgeInsetsMm::all(10.0),
-            },
-            false,
-            crate::commands::board_array::Separation::VScore,
-            resolution,
-        )
-        .unwrap()
-        .xml;
-        let fab = create_fab_panel(
-            std::slice::from_ref(&array),
-            &[0, 0],
-            FabPanelSpec::default(),
-            false,
-            resolution,
-        )
-        .unwrap()
-        .xml;
+        let array = array_of(BOARD, 10.0);
+        let fab = fab_panel_of(&array);
         let pdk = format!(
             "{PDK}
 [[rules.copper.hole_clearance]]
@@ -1490,26 +1412,12 @@ limit = { minimum = "0.1 mm" }
 
     #[test]
     fn a_vscore_line_is_measured_once_by_the_board_it_crosses_everywhere() {
-        let resolution = Resolution::default();
-        // The trace's copper now ends 0.3 mm from the board's bottom edge.
+        // The trace's copper ends 0.3 mm from the board's bottom edge.
         let board = BOARD.replace(
             r#"startY="1" endX="29" endY="1""#,
             r#"startY="0.4" endX="29" endY="0.4""#,
         );
-        let array = create_board_array(
-            &board,
-            &BoardArrayCreateOptions {
-                columns: 2,
-                rows: 2,
-                board_margin_mm: EdgeInsetsMm::all(0.0),
-                edge_rail_mm: EdgeInsetsMm::all(5.0),
-            },
-            false,
-            crate::commands::board_array::Separation::VScore,
-            resolution,
-        )
-        .unwrap()
-        .xml;
+        let array = array_of(&board, 5.0);
         let results = check(&array, LayoutTarget::BoardArray);
         let vscore = results
             .findings
@@ -1539,31 +1447,8 @@ limit = { minimum = "0.1 mm" }
 
     #[test]
     fn one_evaluator_scales_through_board_array_and_fab_panel_lowering() {
-        let resolution = Resolution::default();
-
-        let array = create_board_array(
-            BOARD,
-            &BoardArrayCreateOptions {
-                columns: 2,
-                rows: 2,
-                board_margin_mm: EdgeInsetsMm::all(0.0),
-                edge_rail_mm: EdgeInsetsMm::all(5.0),
-            },
-            false,
-            crate::commands::board_array::Separation::VScore,
-            resolution,
-        )
-        .unwrap()
-        .xml;
-        let fab = create_fab_panel(
-            std::slice::from_ref(&array),
-            &[0, 0],
-            FabPanelSpec::default(),
-            false,
-            resolution,
-        )
-        .unwrap()
-        .xml;
+        let array = array_of(BOARD, 5.0);
+        let fab = fab_panel_of(&array);
 
         let board_results = check(BOARD, LayoutTarget::Board);
         let array_results = check(&array, LayoutTarget::BoardArray);

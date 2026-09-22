@@ -122,15 +122,9 @@ fn incomplete(
 
 #[cfg(test)]
 mod tests {
-    use pcb_ir::geom::Resolution;
-
     use crate::LayoutTarget;
-    use crate::commands::dfm::{
-        CheckRequest, PdkSource, TextSource, check,
-        report::{DfmReport, Measurement, RuleResult, RuleStatus, Verdict},
-    };
-    use crate::ipc2581::Ipc2581;
-    use pcb_ir::import::ipc2581::import_design;
+    use crate::commands::dfm::fixtures;
+    use crate::commands::dfm::report::{DfmReport, Measurement, RuleResult, RuleStatus, Verdict};
 
     const BOARD: &str = r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/>
@@ -164,74 +158,25 @@ mod tests {
   </CadData></Ecad>
 </IPC-2581>"#;
 
-    const PTH_PDK: &str = r#"schema_version = 2
-default_profile = "test"
-[pdk]
-id = "test"
-name = "Test"
-revision = "1"
-[profiles.test]
-name = "Test"
-[[rules.drilling.hole_aspect_ratio]]
+    const PTH: &str = r#"[[rules.drilling.hole_aspect_ratio]]
 id = "pth-aspect-ratio"
 select = { hole = "pth" }
-limit = { maximum = 8.0 }
-"#;
+limit = { maximum = 8.0 }"#;
 
-    const PTH_PDK_WITH_DEFAULT: &str = r#"schema_version = 2
-default_profile = "test"
-[pdk]
-id = "test"
-name = "Test"
-revision = "1"
-[profiles.test]
-name = "Test"
-[profiles.test.defaults]
-board_thickness = "1.6 mm"
-[[rules.drilling.hole_aspect_ratio]]
-id = "pth-aspect-ratio"
-select = { hole = "pth" }
-limit = { maximum = 8.0 }
-"#;
-
-    const VIA_PDK_WITH_DEFAULT: &str = r#"schema_version = 2
-default_profile = "test"
-[pdk]
-id = "test"
-name = "Test"
-revision = "1"
-[profiles.test]
-name = "Test"
-[profiles.test.defaults]
-board_thickness = "1.6 mm"
-[[rules.drilling.hole_aspect_ratio]]
+    const VIA: &str = r#"[[rules.drilling.hole_aspect_ratio]]
 id = "via-aspect-ratio"
 select = { hole = "via" }
 cases = [
   { id = "4-layer", when = { copper_layers = { exact = 4 } }, limit = { maximum = 8.0 } },
-]
-"#;
+]"#;
 
-    fn run(xml: &str, pdk: &str) -> DfmReport {
-        let resolution = Resolution::default();
-
-        let ipc = Ipc2581::parse(xml).unwrap();
-        let imported = import_design(&ipc, resolution).unwrap();
-        check(
-            &imported,
-            CheckRequest {
-                input: crate::commands::dfm::report::FileIdentity::new("board.xml", xml.as_bytes()),
-                pdk: PdkSource::Toml(TextSource {
-                    path: "test.toml",
-                    source: pdk,
-                }),
-                waivers: None,
-                layout_target: LayoutTarget::Board,
-                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            },
-            resolution,
-        )
-        .unwrap()
+    /// Check `rule`, with or without a profile default board thickness.
+    fn run(xml: &str, default_thickness: Option<&str>, rule: &str) -> DfmReport {
+        let defaults = default_thickness.map_or(String::new(), |thickness| {
+            format!("[profiles.test.defaults]\nboard_thickness = \"{thickness}\"\n")
+        });
+        let pdk = fixtures::pdk(&format!("{defaults}{rule}"));
+        fixtures::report(xml, &pdk, LayoutTarget::Board)
     }
 
     fn only_rule(report: &DfmReport) -> &RuleResult {
@@ -241,8 +186,7 @@ cases = [
 
     #[test]
     fn through_hole_passes_at_boundary_and_prefers_explicit_overall_thickness() {
-        let pdk = PTH_PDK_WITH_DEFAULT.replace("1.6 mm", "3.2 mm");
-        let report = run(BOARD, &pdk);
+        let report = run(BOARD, Some("3.2 mm"), PTH);
         let rule = only_rule(&report);
         assert!(matches!(report.verdict, Verdict::Pass));
         assert!(matches!(rule.status, RuleStatus::Pass));
@@ -258,7 +202,8 @@ cases = [
     fn through_hole_failure_and_report_json_expose_scalar_evidence() {
         let report = run(
             &BOARD.replace("diameter=\"0.2\"", "diameter=\"0.16\""),
-            PTH_PDK,
+            None,
+            PTH,
         );
         assert!(matches!(report.verdict, Verdict::Fail));
         let rule = only_rule(&report);
@@ -312,7 +257,7 @@ cases = [
                 "layerOrGroupRef=\"D1\"",
             )
             .replace("diameter=\"0.2\"", "diameter=\"0.16\"");
-        let report = run(&xml, PTH_PDK_WITH_DEFAULT);
+        let report = run(&xml, Some("1.6 mm"), PTH);
         let rule = only_rule(&report);
         assert_eq!(rule.assumptions.len(), 1);
         assert!(rule.assumptions[0].contains("defaults.board_thickness = '1.6 mm'"));
@@ -332,7 +277,7 @@ cases = [
             "layerOrGroupRef=\"D1\" thickness=\"0.20\"",
             "layerOrGroupRef=\"D1\"",
         );
-        let report = run(&xml, PTH_PDK);
+        let report = run(&xml, None, PTH);
         let rule = only_rule(&report);
         assert!(matches!(report.verdict, Verdict::Fail));
         assert!(matches!(rule.status, RuleStatus::Incomplete));
@@ -348,7 +293,7 @@ cases = [
 
     #[test]
     fn blind_and_buried_holes_use_only_their_physical_spans() {
-        let report = run(BOARD, VIA_PDK_WITH_DEFAULT);
+        let report = run(BOARD, Some("1.6 mm"), VIA);
         let rule = only_rule(&report);
         assert_eq!(rule.id, "via-aspect-ratio.4-layer");
         assert_eq!(rule.checked, 2);
@@ -391,7 +336,8 @@ cases = [
                 r#"<Span fromLayer="TOP" toLayer="INNER1"/>"#,
                 r#"<Span fromLayer="INNER2" toLayer="BOTTOM"/>"#,
             ),
-            VIA_PDK_WITH_DEFAULT,
+            Some("1.6 mm"),
+            VIA,
         );
         assert!(from_bottom.findings.iter().any(|finding| matches!(
             finding.measurement,
@@ -406,7 +352,7 @@ cases = [
             "layerOrGroupRef=\"D2\" thickness=\"0.40\"",
             "layerOrGroupRef=\"D2\"",
         );
-        let report = run(&xml, VIA_PDK_WITH_DEFAULT);
+        let report = run(&xml, Some("1.6 mm"), VIA);
         let rule = only_rule(&report);
         // A required limit that could not be measured never reads as a pass.
         assert!(matches!(report.verdict, Verdict::Fail));

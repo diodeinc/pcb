@@ -83,15 +83,13 @@ pub(super) fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::dfm::{pdk::Pdk, rules};
-    use crate::ipc2581::Ipc2581;
+    use crate::commands::dfm::fixtures;
     use pcb_ir::geom::Resolution;
 
     #[test]
     fn nominal_slot_display_retains_native_curves_and_the_checked_outline() {
-        let resolution = Resolution::default();
-
-        let ipc = Ipc2581::parse(r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+        let imported = fixtures::import(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
           <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/><LayerRef name="ROUT"/></Content>
           <Ecad><CadHeader units="MILLIMETER"/><CadData>
             <Layer name="ROUT" layerFunction="ROUT" side="ALL" polarity="POSITIVE"/>
@@ -101,26 +99,15 @@ mod tests {
               </SlotCavity>
             </Set></LayerFeature></Step>
           </CadData></Ecad>
-        </IPC-2581>"#).unwrap();
-        let pdk = Pdk::parse(
-            r#"schema_version = 2
-          default_profile = "test"
-          [pdk]
-          id = "test"
-          name = "Test"
-          revision = "1"
-          [profiles.test]
-          name = "Test"
-          [[rules.drilling.slot_width]]
-          id = "slot-width"
-          select = { plating = "plated" }
-          limit = { minimum = "0.8 mm" }
-        "#,
-        )
-        .unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::board(&imported, &rules, resolution);
+        </IPC-2581>"#,
+        );
+        let rules = fixtures::rules(&fixtures::pdk(
+            r#"[[rules.drilling.slot_width]]
+id = "slot-width"
+select = { plating = "plated" }
+limit = { minimum = "0.8 mm" }"#,
+        ));
+        let design = Design::board(&imported, &rules, Resolution::default());
         let evaluation = evaluate(0.8, SlotPlating::Plated, &design).unwrap();
         assert_eq!(evaluation.measured.len(), 1);
         assert_eq!(

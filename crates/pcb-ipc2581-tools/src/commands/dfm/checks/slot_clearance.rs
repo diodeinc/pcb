@@ -124,26 +124,16 @@ pub(super) fn evaluate(
 #[cfg(test)]
 mod tests {
     use crate::LayoutTarget;
-    use crate::commands::dfm::{self, CheckRequest, PdkSource, TextSource, report};
-    use crate::ipc2581::Ipc2581;
-    use pcb_ir::geom::Resolution;
+    use crate::commands::dfm::fixtures;
+    use crate::commands::dfm::{self, report};
 
     fn pdk(plating: &str) -> String {
-        format!(
-            r#"schema_version = 2
-default_profile = "test"
-[pdk]
-id = "slot-test"
-name = "Slot test"
-revision = "1"
-[profiles.test]
-name = "Test"
-[[rules.copper.slot_clearance]]
+        fixtures::pdk(&format!(
+            r#"[[rules.copper.slot_clearance]]
 id = "slot-clearance"
 select = {{ plating = "{plating}" }}
-limit = {{ minimum = "0.20 mm" }}
-"#
-        )
+limit = {{ minimum = "0.20 mm" }}"#
+        ))
     }
 
     // Declaration order deliberately differs from physical copper order.
@@ -173,6 +163,10 @@ limit = {{ minimum = "0.20 mm" }}
         )
     }
 
+    fn check(xml: &str, pdk: &str) -> report::DfmReport {
+        fixtures::report(xml, pdk, LayoutTarget::Board)
+    }
+
     fn copper(net: &str) -> String {
         format!(
             r#"<LayerFeature layerRef="L0"><Set {net}><Features><Contour><Polygon>
@@ -182,31 +176,12 @@ limit = {{ minimum = "0.20 mm" }}
         )
     }
 
-    fn check(xml: &str, source: &str, target: LayoutTarget) -> anyhow::Result<report::DfmReport> {
-        let imported =
-            pcb_ir::import::ipc2581::import_design(&Ipc2581::parse(xml)?, Resolution::default())?;
-        dfm::check(
-            &imported,
-            CheckRequest {
-                input: report::FileIdentity::new("slot.xml", xml.as_bytes()),
-                pdk: PdkSource::Toml(TextSource {
-                    path: "slot.toml",
-                    source,
-                }),
-                waivers: None,
-                layout_target: target,
-                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            },
-            Resolution::default(),
-        )
-    }
-
     #[test]
     fn width_only_report_omits_unproven_span_with_shuffled_layers() {
         let source = pdk("plated")
             .replace("rules.copper.slot_clearance", "rules.drilling.slot_width")
             .replace("0.20 mm", "0.80 mm");
-        let result = check(&board("PLATED", "", ""), &source, LayoutTarget::Board).unwrap();
+        let result = check(&board("PLATED", "", ""), &source);
         let finding = &result.findings[0];
         assert!((finding.measurement.actual_mm().unwrap() - 0.6).abs() < 1e-8);
         assert!(finding.subjects[0].drill_span.is_none());
@@ -228,7 +203,7 @@ limit = {{ minimum = "0.20 mm" }}
 <PolyStepSegment x="10" y="10"/><PolyStepSegment x="-10" y="10"/>
 <PolyStepSegment x="-10" y="-10"/></Polygon></Profile>"#,
                 );
-            let result = check(&xml, standard.source, LayoutTarget::Board).unwrap();
+            let result = check(&xml, standard.source);
             assert!(matches!(result.verdict, report::Verdict::Pass));
             assert_eq!(result.summary.errors, 0);
             let finding = result
@@ -256,7 +231,7 @@ limit = {{ minimum = "0.20 mm" }}
                 "<Span fromLayer=\"L0\" toLayer=\"L1\"/>",
                 "<Span fromLayer=\"L0\"/>",
             );
-            let unresolved = check(&missing, standard.source, LayoutTarget::Board).unwrap();
+            let unresolved = check(&missing, standard.source);
             let slot_rule = unresolved
                 .rules
                 .iter()
@@ -284,12 +259,7 @@ limit = {{ minimum = "0.20 mm" }}
             ("PLATED", "plated", "", true),
             ("NONPLATED", "nonplated", "net=\"N1\"", true),
         ] {
-            let result = check(
-                &board(plating, "net=\"N1\"", &copper(net)),
-                &pdk(selector),
-                LayoutTarget::Board,
-            )
-            .unwrap();
+            let result = check(&board(plating, "net=\"N1\"", &copper(net)), &pdk(selector));
             assert_eq!(result.rules[0].checked, 2);
             assert_eq!(result.findings.len(), usize::from(fails), "{result:#?}");
             if fails {
@@ -322,9 +292,7 @@ limit = {{ minimum = "0.20 mm" }}
         let own = check(
             &board("PLATED", "geometry=\"land-stack\"", land),
             &pdk("plated"),
-            LayoutTarget::Board,
-        )
-        .unwrap();
+        );
         assert!(own.findings.is_empty());
         for (identity, copper_land) in [
             ("", land.to_owned()),
@@ -333,12 +301,7 @@ limit = {{ minimum = "0.20 mm" }}
                 land.replace("<Set>", "<Set net=\"N2\">"),
             ),
         ] {
-            let unproven = check(
-                &board("PLATED", identity, &copper_land),
-                &pdk("plated"),
-                LayoutTarget::Board,
-            )
-            .unwrap();
+            let unproven = check(&board("PLATED", identity, &copper_land), &pdk("plated"));
             assert_eq!(
                 unproven.findings.len(),
                 1,
@@ -352,17 +315,13 @@ limit = {{ minimum = "0.20 mm" }}
                 &format!("{land}{}", copper("")),
             ),
             &pdk("plated"),
-            LayoutTarget::Board,
-        )
-        .unwrap();
+        );
         assert_eq!(foreign.findings.len(), 1);
         assert_eq!(foreign.findings[0].subjects[1].kind, "unattributed_copper");
         let nonplated = check(
             &board("NONPLATED", "geometry=\"land-stack\"", land),
             &pdk("nonplated"),
-            LayoutTarget::Board,
-        )
-        .unwrap();
+        );
         assert_eq!(nonplated.findings[0].measurement.actual_mm(), Some(0.0));
     }
 
@@ -374,16 +333,11 @@ limit = {{ minimum = "0.20 mm" }}
             "net=\"N1\"",
             &copper("net=\"N2\"").replace("layerRef=\"L0\"", "layerRef=\"L2\""),
         );
-        assert!(
-            check(&outside, &source, LayoutTarget::Board)
-                .unwrap()
-                .findings
-                .is_empty()
-        );
+        assert!(check(&outside, &source).findings.is_empty());
         let inside = outside.replace("layerRef=\"L2\"", "layerRef=\"L1\"");
         let panel = inside.replace("<StepRef name=\"board\"/>", "<StepRef name=\"panel\"/>")
             .replace("</CadData>", r#"<Step name="panel" type="PALLET"><StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="20" dy="0" mirror="true"/></Step></CadData>"#);
-        let repeated = check(&panel, &source, LayoutTarget::BoardArray).unwrap();
+        let repeated = fixtures::report(&panel, &source, LayoutTarget::BoardArray);
         assert_eq!(repeated.rules[0].checked, 4);
         let [finding] = repeated.findings.as_slice() else {
             panic!("the board is measured once: {:?}", repeated.findings);
@@ -402,7 +356,7 @@ limit = {{ minimum = "0.20 mm" }}
             "<Span fromLayer=\"L0\" toLayer=\"L1\"/>",
             "<Span fromLayer=\"L0\"/>",
         );
-        let unresolved = check(&missing, &source, LayoutTarget::Board).unwrap();
+        let unresolved = check(&missing, &source);
         assert!(matches!(unresolved.verdict, report::Verdict::Fail));
         assert!(unresolved.findings.is_empty());
         assert!(
@@ -414,10 +368,7 @@ limit = {{ minimum = "0.20 mm" }}
         );
         let inactive = source.replace("limit = { minimum = \"0.20 mm\" }", "cases = [{ id = \"two\", when = { copper_layers = { exact = 2 } }, limit = { minimum = \"0.20 mm\" } }]");
         assert!(matches!(
-            check(&missing, &inactive, LayoutTarget::Board)
-                .unwrap()
-                .rules[0]
-                .status,
+            check(&missing, &inactive).rules[0].status,
             report::RuleStatus::NotApplicable
         ));
     }
