@@ -469,7 +469,6 @@ pub(super) fn push_negative_layer_plane(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn extract_set_feature(
     context: &ExtractContext<'_>,
     layer_ref: Symbol,
@@ -526,7 +525,6 @@ pub(super) fn extract_set_feature(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn extract_feature_placement_group(
     context: &ExtractContext<'_>,
     layer_ref: Symbol,
@@ -633,7 +631,6 @@ pub(super) fn slot_applies_to_layer(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn extract_pad(
     context: &ExtractContext<'_>,
     layer_ref: Symbol,
@@ -785,7 +782,6 @@ pub(super) fn feature_location_transform(x: f64, y: f64) -> Affine2 {
 }
 
 /// A dictionary primitive placed directly as a set feature.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn extract_feature_primitive(
     context: &ExtractContext<'_>,
     net: Option<Symbol>,

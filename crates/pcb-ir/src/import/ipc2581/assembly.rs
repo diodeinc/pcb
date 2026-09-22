@@ -269,7 +269,6 @@ fn map_package_pin(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn map_package_view(
     design: &ImportedDesign,
     context: &super::ExtractContext<'_>,
