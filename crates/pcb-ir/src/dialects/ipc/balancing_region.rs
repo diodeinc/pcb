@@ -1325,11 +1325,7 @@ mod tests {
             [line_contour(0.0, 2.0, 10.0, 2.0)],
         );
         support.spec_items.push(SpecItem {
-            element: sym(1),
             kind: SpecItemKind::VCut,
-            item_type: None,
-            comment: None,
-            properties: Span::EMPTY,
         });
         support.specs.push(Spec {
             name: sym(10),

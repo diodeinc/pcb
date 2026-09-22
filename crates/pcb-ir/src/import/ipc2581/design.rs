@@ -667,7 +667,6 @@ impl ImportedDesign {
         target.diagnostics = self.geometry.diagnostics.clone();
         target.specs = self.geometry.specs.clone();
         target.spec_items = self.geometry.spec_items.clone();
-        target.spec_properties = self.geometry.spec_properties.clone();
 
         let mut bbox = BBox::empty();
         let mut source_set_offset = 0;

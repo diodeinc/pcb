@@ -724,11 +724,7 @@ mod tests {
             ])],
         );
         doc.spec_items.push(SpecItem {
-            element: sym(1),
             kind: SpecItemKind::VCut,
-            item_type: None,
-            comment: None,
-            properties: Span::EMPTY,
         });
         doc.specs.push(Spec {
             name: sym(10),

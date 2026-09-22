@@ -9,35 +9,16 @@ pub(super) fn populate_ipc_specs(doc: &mut GeometryDocument, ipc: &Ipc2581) {
 
     doc.specs.clear();
     doc.spec_items.clear();
-    doc.spec_properties.clear();
 
     let mut specs = ecad.cad_header.specs.values().collect::<Vec<_>>();
     specs.sort_by(|left, right| ipc.resolve(left.name).cmp(ipc.resolve(right.name)));
 
     for spec in specs {
         let item_start = doc.spec_items.len() as u32;
-        for item in &spec.items {
-            let property_start = doc.spec_properties.len() as u32;
-            doc.spec_properties
-                .extend(item.properties.iter().map(|property| SpecProperty {
-                    value: property.value,
-                    text: property.text,
-                    unit: property.unit,
-                    plus_tol: property.plus_tol,
-                    minus_tol: property.minus_tol,
-                    tol_percent: property.tol_percent,
-                }));
-            doc.spec_items.push(SpecItem {
-                element: item.element,
+        doc.spec_items
+            .extend(spec.items.iter().map(|item| SpecItem {
                 kind: map_spec_item_kind(item.kind),
-                item_type: item.item_type,
-                comment: item.comment,
-                properties: Span::new(
-                    property_start,
-                    doc.spec_properties.len() as u32 - property_start,
-                ),
-            });
-        }
+            }));
         doc.specs.push(Spec {
             name: spec.name,
             items: Span::new(item_start, doc.spec_items.len() as u32 - item_start),

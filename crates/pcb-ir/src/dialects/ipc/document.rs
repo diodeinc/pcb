@@ -1,6 +1,6 @@
 use crate::dialects::ipc::feature::{Feature, FeaturePlacementGroup, FeatureSet, PinRef};
 use crate::dialects::ipc::layout::{LayoutGraph, StepProfile, StepProfileCutout};
-use crate::dialects::ipc::spec::{Spec, SpecItem, SpecProperty, SpecRef};
+use crate::dialects::ipc::spec::{Spec, SpecItem, SpecRef};
 use crate::geom::path::ContourBuf;
 use crate::geom::{Affine2, BBox, Diagnostic, Paint, PathArena, Resolution};
 use ipc2581::Symbol;
@@ -20,7 +20,6 @@ pub struct Document {
     pub profile_cutouts: Vec<StepProfileCutout>,
     pub specs: Vec<Spec>,
     pub spec_items: Vec<SpecItem>,
-    pub spec_properties: Vec<SpecProperty>,
     pub spec_refs: Vec<SpecRef>,
     pub feature_sets: Vec<FeatureSet>,
     pub features: Vec<Feature>,

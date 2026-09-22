@@ -47,7 +47,7 @@ pub use lower::{
     lower_layer_to_artwork, lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with,
     lower_to_nc,
 };
-pub use spec::{Spec, SpecItem, SpecItemKind, SpecProperty, SpecRef};
+pub use spec::{Spec, SpecItem, SpecItemKind, SpecRef};
 pub use surface_layers::{
     PhysicalLayer, SurfaceLayerError, TwoSidedSurfaceLayers, resolve_two_sided_surface_layers,
 };

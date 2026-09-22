@@ -11,12 +11,7 @@ pub struct Spec {
 
 #[derive(Debug, Clone)]
 pub struct SpecItem {
-    pub element: Symbol,
     pub kind: SpecItemKind,
-    pub item_type: Option<Symbol>,
-    pub comment: Option<Symbol>,
-    /// Spans `doc.spec_properties`.
-    pub properties: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,16 +22,6 @@ pub enum SpecItemKind {
     SurfaceFinish,
     VCut,
     Other,
-}
-
-#[derive(Debug, Clone)]
-pub struct SpecProperty {
-    pub value: Option<f64>,
-    pub text: Option<Symbol>,
-    pub unit: Option<Symbol>,
-    pub plus_tol: Option<f64>,
-    pub minus_tol: Option<f64>,
-    pub tol_percent: Option<bool>,
 }
 
 /// A reference from a layer or feature set to a named spec.
