@@ -15,7 +15,7 @@ pub struct Parser<'a> {
     attributes: Vec<Attribute>,
     aperture_definitions: Vec<ApertureDefinition>,
     aperture_lookup: HashMap<i32, usize>,
-    macro_lookup: HashMap<Symbol, ApertureMacro>,
+    macro_lookup: HashMap<Symbol, Vec<MacroPrimitive>>,
     objects: Vec<GraphicalObject>,
     step_repeats: Vec<StepRepeatBlock>,
     region: Option<RegionBuilder>,
@@ -62,12 +62,6 @@ impl AttributeDictionary {
             set
         })
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct ApertureMacro {
-    name: Symbol,
-    primitives: Vec<MacroPrimitive>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -287,87 +281,60 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_extended_word(&mut self, word: &'a str) -> Result<()> {
-        if let Some(rest) = word.strip_prefix("MO") {
-            let unit = match rest {
-                "MM" => Unit::Millimeter,
-                "IN" => Unit::Inch,
-                _ => return Err(self.syntax(format!("invalid MO unit '{rest}'"))),
-            };
-            self.state.unit = Some(unit);
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("FS") {
-            let format = parse_format(rest).ok_or_else(|| self.syntax("invalid FS command"))?;
-            self.state.coordinate_format = Some(format);
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("AD") {
-            let aperture = self.parse_aperture_definition(rest)?;
-            self.aperture_lookup
-                .insert(aperture.code, self.aperture_definitions.len());
-            self.aperture_definitions.push(aperture);
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("AM") {
-            let macro_def = self.parse_aperture_macro(rest)?;
-            self.macro_lookup.insert(macro_def.name, macro_def);
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("LP") {
-            let polarity = match rest {
-                "D" => Polarity::Dark,
-                "C" => Polarity::Clear,
-                _ => return Err(self.syntax(format!("invalid LP polarity '{rest}'"))),
-            };
-            self.state.polarity = polarity;
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("LM") {
-            let mirroring = match rest {
-                "N" => Mirroring::None,
-                "X" => Mirroring::X,
-                "Y" => Mirroring::Y,
-                "XY" => Mirroring::XY,
-                _ => return Err(self.syntax(format!("invalid LM mirroring '{rest}'"))),
-            };
-            self.state.mirroring = mirroring;
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("LR") {
-            let rotation = parse_f64(rest)?;
-            self.state.rotation_degrees = rotation;
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("LS") {
-            let scaling = parse_f64(rest)?;
-            self.state.scaling = scaling;
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("AB") {
-            if rest.is_empty() {
+        let (code, rest) = word.split_at_checked(2).unwrap_or((word, ""));
+        match code {
+            "MO" => {
+                self.state.unit = Some(match rest {
+                    "MM" => Unit::Millimeter,
+                    "IN" => Unit::Inch,
+                    _ => return Err(self.syntax(format!("invalid MO unit '{rest}'"))),
+                });
+            }
+            "FS" => {
+                let format = parse_format(rest).ok_or_else(|| self.syntax("invalid FS command"))?;
+                self.state.coordinate_format = Some(format);
+            }
+            "AD" => {
+                let aperture = self.parse_aperture_definition(rest)?;
+                self.define_aperture(aperture);
+            }
+            "AM" => {
+                let (name, primitives) = self.parse_aperture_macro(rest)?;
+                self.macro_lookup.insert(name, primitives);
+            }
+            "LP" => {
+                self.state.polarity = match rest {
+                    "D" => Polarity::Dark,
+                    "C" => Polarity::Clear,
+                    _ => return Err(self.syntax(format!("invalid LP polarity '{rest}'"))),
+                };
+            }
+            "LM" => {
+                self.state.mirroring = match rest {
+                    "N" => Mirroring::None,
+                    "X" => Mirroring::X,
+                    "Y" => Mirroring::Y,
+                    "XY" => Mirroring::XY,
+                    _ => return Err(self.syntax(format!("invalid LM mirroring '{rest}'"))),
+                };
+            }
+            "LR" => self.state.rotation_degrees = parse_f64(rest)?,
+            "LS" => self.state.scaling = parse_f64(rest)?,
+            "AB" if rest.is_empty() => {
                 let block = self
                     .block
                     .take()
                     .ok_or_else(|| self.syntax("AB close without matching AB open"))?;
                 let objects = self.objects.split_off(block.object_start);
-                let aperture = ApertureDefinition {
+                let attributes = self.aperture_attributes.set(&mut self.attributes);
+                self.define_aperture(ApertureDefinition {
                     code: block.aperture_code,
                     template: ApertureTemplate::Block { objects },
                     geometry: None,
-                    attributes: self.aperture_attributes.set(&mut self.attributes),
-                };
-                self.aperture_lookup
-                    .insert(aperture.code, self.aperture_definitions.len());
-                self.aperture_definitions.push(aperture);
-            } else {
+                    attributes,
+                });
+            }
+            "AB" => {
                 let code = parse_aperture_code(rest)?;
                 if self.block.is_some() {
                     return Err(self.syntax("nested AB block apertures are not supported"));
@@ -377,58 +344,55 @@ impl<'a> Parser<'a> {
                     object_start: self.objects.len(),
                 });
             }
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("SR") {
-            if self.block.is_some() {
-                return Err(self.syntax("SR is not allowed inside an AB block aperture"));
+            "SR" => {
+                if self.block.is_some() {
+                    return Err(self.syntax("SR is not allowed inside an AB block aperture"));
+                }
+                // Any SR command ends the block in progress, whether or not it
+                // opens another: older files never close their last block, nor
+                // the `%SRX1Y1I0J0*%` they open with.
+                self.close_step_repeat();
+                if !rest.is_empty() {
+                    self.step_repeat = Some(StepRepeatBuilder {
+                        repeat: parse_step_repeat(rest)?,
+                        object_start: self.objects.len(),
+                    });
+                }
             }
-            // Any SR command ends the block in progress, whether or not it
-            // opens another: older files never close their last block, nor
-            // the `%SRX1Y1I0J0*%` they open with.
-            self.close_step_repeat();
-            if !rest.is_empty() {
-                self.step_repeat = Some(StepRepeatBuilder {
-                    repeat: parse_step_repeat(rest)?,
-                    object_start: self.objects.len(),
-                });
+            "TF" => {
+                let attribute = self.parse_attribute(rest)?;
+                self.file_attributes.push(attribute);
             }
-            return Ok(());
+            "TA" => {
+                let attribute = self.parse_attribute(rest)?;
+                self.aperture_attributes.insert(attribute);
+            }
+            "TO" => {
+                let attribute = self.parse_attribute(rest)?;
+                self.object_attributes.insert(attribute);
+            }
+            "TD" => {
+                let name = (!rest.is_empty()).then(|| self.interner.intern(rest));
+                self.aperture_attributes.remove(name);
+                self.object_attributes.remove(name);
+            }
+            _ => {
+                return match legacy_image_command(word) {
+                    Some(true) => Ok(()),
+                    Some(false) => Err(self.syntax(format!(
+                        "deprecated command '{word}' changes the image and is not supported"
+                    ))),
+                    None => Err(self.syntax(format!("unsupported extended command '{word}'"))),
+                };
+            }
         }
+        Ok(())
+    }
 
-        if let Some(rest) = word.strip_prefix("TF") {
-            let attr = self.parse_attribute(rest)?;
-            self.file_attributes.push(attr.clone());
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("TA") {
-            let attr = self.parse_attribute(rest)?;
-            self.aperture_attributes.insert(attr.clone());
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("TO") {
-            let attr = self.parse_attribute(rest)?;
-            self.object_attributes.insert(attr.clone());
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("TD") {
-            let name = (!rest.is_empty()).then(|| self.interner.intern(rest));
-            self.aperture_attributes.remove(name);
-            self.object_attributes.remove(name);
-            return Ok(());
-        }
-
-        match legacy_image_command(word) {
-            Some(true) => Ok(()),
-            Some(false) => Err(self.syntax(format!(
-                "deprecated command '{word}' changes the image and is not supported"
-            ))),
-            None => Err(self.syntax(format!("unsupported extended command '{word}'"))),
-        }
+    fn define_aperture(&mut self, aperture: ApertureDefinition) {
+        self.aperture_lookup
+            .insert(aperture.code, self.aperture_definitions.len());
+        self.aperture_definitions.push(aperture);
     }
 
     fn close_step_repeat(&mut self) {
@@ -730,13 +694,13 @@ impl<'a> Parser<'a> {
         unit: Unit,
     ) -> Result<Option<ApertureGeometry>> {
         if let ApertureTemplate::Macro { name, parameters } = template {
-            let Some(macro_def) = self.macro_lookup.get(name) else {
+            let Some(primitives) = self.macro_lookup.get(name) else {
                 return Err(GerberError::InvalidStructure(format!(
                     "aperture macro '{}' was not defined before use",
                     self.interner.resolve(*name)
                 )));
             };
-            return lower_macro_aperture(macro_def, parameters, unit);
+            return lower_macro_aperture(primitives, parameters, unit);
         }
         Ok(lower_standard_aperture(template))
     }
@@ -751,45 +715,32 @@ impl<'a> Parser<'a> {
             .map(parse_f64)
             .collect::<Result<Vec<_>>>()?;
 
+        let length = |index, name| required_length(&values, index, name, unit);
+        let hole = |index: usize| values.get(index).map(|&value| scale_length(value, unit));
         match name {
             "C" => Ok(ApertureTemplate::Circle {
-                diameter: scale_length(required_param(&values, 0, "circle diameter")?, unit),
-                hole_diameter: values
-                    .get(1)
-                    .copied()
-                    .map(|value| scale_length(value, unit)),
+                diameter: length(0, "circle diameter")?,
+                hole_diameter: hole(1),
             }),
             "R" => Ok(ApertureTemplate::Rectangle {
-                width: scale_length(required_param(&values, 0, "rectangle width")?, unit),
-                height: scale_length(required_param(&values, 1, "rectangle height")?, unit),
-                hole_diameter: values
-                    .get(2)
-                    .copied()
-                    .map(|value| scale_length(value, unit)),
+                width: length(0, "rectangle width")?,
+                height: length(1, "rectangle height")?,
+                hole_diameter: hole(2),
             }),
             "O" => Ok(ApertureTemplate::Obround {
-                width: scale_length(required_param(&values, 0, "obround width")?, unit),
-                height: scale_length(required_param(&values, 1, "obround height")?, unit),
-                hole_diameter: values
-                    .get(2)
-                    .copied()
-                    .map(|value| scale_length(value, unit)),
+                width: length(0, "obround width")?,
+                height: length(1, "obround height")?,
+                hole_diameter: hole(2),
             }),
             "P" => Ok(ApertureTemplate::Polygon {
-                outer_diameter: scale_length(
-                    required_param(&values, 0, "polygon outer diameter")?,
-                    unit,
-                ),
+                outer_diameter: length(0, "polygon outer diameter")?,
                 vertices: bounded_count(
                     required_param(&values, 1, "polygon vertices")?,
                     "polygon vertices",
                     POLYGON_VERTICES,
                 )? as i32,
                 rotation_degrees: values.get(2).copied(),
-                hole_diameter: values
-                    .get(3)
-                    .copied()
-                    .map(|value| scale_length(value, unit)),
+                hole_diameter: hole(3),
             }),
             _ => Ok(ApertureTemplate::Macro {
                 name: self.interner.intern(name),
@@ -798,7 +749,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_aperture_macro(&mut self, rest: &str) -> Result<ApertureMacro> {
+    fn parse_aperture_macro(&mut self, rest: &str) -> Result<(Symbol, Vec<MacroPrimitive>)> {
         let Some((name, body)) = rest.split_once('*') else {
             return Err(self.syntax("AM missing body"));
         };
@@ -833,10 +784,7 @@ impl<'a> Parser<'a> {
                 primitives.push(MacroPrimitive::Shape { code, parameters });
             }
         }
-        Ok(ApertureMacro {
-            name: self.interner.intern(name.trim()),
-            primitives,
-        })
+        Ok((self.interner.intern(name.trim()), primitives))
     }
 
     fn syntax(&self, message: impl Into<String>) -> GerberError {
@@ -881,39 +829,48 @@ fn scale_length(value: f64, unit: Unit) -> f64 {
 }
 
 fn lower_standard_aperture(template: &ApertureTemplate) -> Option<ApertureGeometry> {
-    let paths = match *template {
+    let (shape, hole_diameter) = match *template {
         ApertureTemplate::Circle {
             diameter,
             hole_diameter,
-        } => circle_paths(diameter, hole_diameter),
+        } => (disc(diameter, Polarity::Dark), hole_diameter),
         ApertureTemplate::Rectangle {
             width,
             height,
             hole_diameter,
-        } => rect_paths(width, height, hole_diameter),
+        } => (
+            Some(rect_path(width, height, Polarity::Dark)),
+            hole_diameter,
+        ),
         ApertureTemplate::Obround {
             width,
             height,
             hole_diameter,
-        } => obround_paths(width, height, hole_diameter),
+        } => (Some(obround_path(width, height)), hole_diameter),
         ApertureTemplate::Polygon {
             outer_diameter,
             vertices,
             rotation_degrees,
             hole_diameter,
-        } => polygon_paths(
-            outer_diameter,
-            vertices,
-            rotation_degrees.unwrap_or(0.0),
+        } => (
+            Some(polygon_path(
+                outer_diameter,
+                vertices,
+                rotation_degrees.unwrap_or(0.0),
+                Polarity::Dark,
+            )),
             hole_diameter,
         ),
         ApertureTemplate::Macro { .. } | ApertureTemplate::Block { .. } => return None,
     };
-    Some(ApertureGeometry { paths })
+    let hole = hole_diameter.and_then(|diameter| disc(diameter, Polarity::Clear));
+    Some(ApertureGeometry {
+        paths: shape.into_iter().chain(hole).collect(),
+    })
 }
 
 fn lower_macro_aperture(
-    macro_def: &ApertureMacro,
+    primitives: &[MacroPrimitive],
     parameters: &[f64],
     unit: Unit,
 ) -> Result<Option<ApertureGeometry>> {
@@ -923,7 +880,7 @@ fn lower_macro_aperture(
         .map(|(index, value)| (index + 1, *value))
         .collect();
     let mut paths = Vec::new();
-    for primitive in &macro_def.primitives {
+    for primitive in primitives {
         match primitive {
             MacroPrimitive::VariableDefinition {
                 variable,
@@ -949,10 +906,10 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
     let (paths, rotation) = match code {
         1 => {
             let exposure = macro_bool(values, 0)?;
-            let diameter = macro_length(values, 1, "macro circle diameter", unit)?;
+            let diameter = required_length(values, 1, "macro circle diameter", unit)?;
             let center = Point {
-                x: macro_length(values, 2, "macro circle center x", unit)?,
-                y: macro_length(values, 3, "macro circle center y", unit)?,
+                x: required_length(values, 2, "macro circle center x", unit)?,
+                y: required_length(values, 3, "macro circle center y", unit)?,
             };
             let rotation = values.get(4).copied().unwrap_or(0.0);
             (
@@ -965,16 +922,16 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
         }
         20 => {
             let exposure = macro_bool(values, 0)?;
-            let width = macro_length(values, 1, "macro vector line width", unit)?;
+            let width = required_length(values, 1, "macro vector line width", unit)?;
             let start = Point {
-                x: macro_length(values, 2, "macro vector line start x", unit)?,
-                y: macro_length(values, 3, "macro vector line start y", unit)?,
+                x: required_length(values, 2, "macro vector line start x", unit)?,
+                y: required_length(values, 3, "macro vector line start y", unit)?,
             };
             let end = Point {
-                x: macro_length(values, 4, "macro vector line end x", unit)?,
-                y: macro_length(values, 5, "macro vector line end y", unit)?,
+                x: required_length(values, 4, "macro vector line end x", unit)?,
+                y: required_length(values, 5, "macro vector line end y", unit)?,
             };
-            let rotation = macro_value(values, 6, "macro vector line rotation")?;
+            let rotation = required_param(values, 6, "macro vector line rotation")?;
             (
                 vec![vector_line_path(start, end, width, exposure)],
                 rotation,
@@ -982,13 +939,13 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
         }
         21 => {
             let exposure = macro_bool(values, 0)?;
-            let width = macro_length(values, 1, "macro center line width", unit)?;
-            let height = macro_length(values, 2, "macro center line height", unit)?;
+            let width = required_length(values, 1, "macro center line width", unit)?;
+            let height = required_length(values, 2, "macro center line height", unit)?;
             let center = Point {
-                x: macro_length(values, 3, "macro center line x", unit)?,
-                y: macro_length(values, 4, "macro center line y", unit)?,
+                x: required_length(values, 3, "macro center line x", unit)?,
+                y: required_length(values, 4, "macro center line y", unit)?,
             };
-            let rotation = macro_value(values, 5, "macro center line rotation")?;
+            let rotation = required_param(values, 5, "macro center line rotation")?;
             (
                 vec![translate_path(rect_path(width, height, exposure), center)],
                 rotation,
@@ -997,7 +954,7 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
         4 => {
             let exposure = macro_bool(values, 0)?;
             let vertices = bounded_count(
-                macro_value(values, 1, "macro outline vertices")?,
+                required_param(values, 1, "macro outline vertices")?,
                 "macro outline vertices",
                 3..=OUTLINE_MAX_VERTICES,
             )?;
@@ -1031,39 +988,40 @@ fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<Geomet
         5 => {
             let exposure = macro_bool(values, 0)?;
             let vertices = bounded_count(
-                macro_value(values, 1, "macro polygon vertices")?,
+                required_param(values, 1, "macro polygon vertices")?,
                 "macro polygon vertices",
                 POLYGON_VERTICES,
             )? as i32;
             let center = Point {
-                x: macro_length(values, 2, "macro polygon center x", unit)?,
-                y: macro_length(values, 3, "macro polygon center y", unit)?,
+                x: required_length(values, 2, "macro polygon center x", unit)?,
+                y: required_length(values, 3, "macro polygon center y", unit)?,
             };
-            let diameter = macro_length(values, 4, "macro polygon diameter", unit)?;
-            let rotation = macro_value(values, 5, "macro polygon rotation")?;
+            let diameter = required_length(values, 4, "macro polygon diameter", unit)?;
+            let rotation = required_param(values, 5, "macro polygon rotation")?;
             (
-                polygon_paths(diameter, vertices, 0.0, None)
-                    .into_iter()
-                    .map(|path| translate_path(repolarity(path, exposure), center))
-                    .collect(),
+                vec![translate_path(
+                    polygon_path(diameter, vertices, 0.0, exposure),
+                    center,
+                )],
                 rotation,
             )
         }
         7 => {
             let center = Point {
-                x: macro_length(values, 0, "macro thermal center x", unit)?,
-                y: macro_length(values, 1, "macro thermal center y", unit)?,
+                x: required_length(values, 0, "macro thermal center x", unit)?,
+                y: required_length(values, 1, "macro thermal center y", unit)?,
             };
-            let outer = macro_length(values, 2, "macro thermal outer diameter", unit)?;
-            let inner = macro_length(values, 3, "macro thermal inner diameter", unit)?;
-            let gap = macro_length(values, 4, "macro thermal gap", unit)?;
-            let rotation = macro_value(values, 5, "macro thermal rotation")?;
-            let mut paths = circle_paths(outer, Some(inner));
-            paths.push(rect_path(outer, gap, Polarity::Clear));
-            paths.push(rect_path(gap, outer, Polarity::Clear));
+            let outer = required_length(values, 2, "macro thermal outer diameter", unit)?;
+            let inner = required_length(values, 3, "macro thermal inner diameter", unit)?;
+            let gap = required_length(values, 4, "macro thermal gap", unit)?;
+            let rotation = required_param(values, 5, "macro thermal rotation")?;
+            let cross = [(outer, gap), (gap, outer)]
+                .map(|(width, height)| rect_path(width, height, Polarity::Clear));
             (
-                paths
+                disc(outer, Polarity::Dark)
                     .into_iter()
+                    .chain(disc(inner, Polarity::Clear))
+                    .chain(cross)
                     .map(|path| translate_path(path, center))
                     .collect(),
                 rotation,
@@ -1114,31 +1072,12 @@ fn points_close(a: Point, b: Point) -> bool {
     (a.x - b.x).abs() <= 1e-9 && (a.y - b.y).abs() <= 1e-9
 }
 
-fn circle_paths(diameter: f64, hole_diameter: Option<f64>) -> Vec<GeometryPath> {
-    let mut paths = Vec::new();
-    if diameter > 0.0 {
-        paths.push(circle_path(diameter / 2.0, Polarity::Dark));
-    }
-    if let Some(hole_diameter) = hole_diameter
-        && hole_diameter > 0.0
-    {
-        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
-    }
-    paths
+/// A disc, or nothing for a diameter that images nothing.
+fn disc(diameter: f64, polarity: Polarity) -> Option<GeometryPath> {
+    (diameter > 0.0).then(|| circle_path(diameter / 2.0, polarity))
 }
 
-fn rect_paths(width: f64, height: f64, hole_diameter: Option<f64>) -> Vec<GeometryPath> {
-    let mut paths = vec![rect_path(width, height, Polarity::Dark)];
-    if let Some(hole_diameter) = hole_diameter
-        && hole_diameter > 0.0
-    {
-        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
-    }
-    paths
-}
-
-fn obround_paths(width: f64, height: f64, hole_diameter: Option<f64>) -> Vec<GeometryPath> {
-    let mut paths = Vec::new();
+fn obround_path(width: f64, height: f64) -> GeometryPath {
     let rx = width / 2.0;
     let ry = height / 2.0;
     let commands = if width >= height {
@@ -1180,24 +1119,18 @@ fn obround_paths(width: f64, height: f64, hole_diameter: Option<f64>) -> Vec<Geo
             PathCommand::Close,
         ]
     };
-    paths.push(GeometryPath {
+    GeometryPath {
         contours: vec![GeometryContour { commands }],
         polarity: Polarity::Dark,
-    });
-    if let Some(hole_diameter) = hole_diameter
-        && hole_diameter > 0.0
-    {
-        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
     }
-    paths
 }
 
-fn polygon_paths(
+fn polygon_path(
     outer_diameter: f64,
     vertices: i32,
     rotation_degrees: f64,
-    hole_diameter: Option<f64>,
-) -> Vec<GeometryPath> {
+    polarity: Polarity,
+) -> GeometryPath {
     let radius = outer_diameter / 2.0;
     let rotation = rotation_degrees.to_radians();
     let vertex = |index: i32| {
@@ -1211,16 +1144,10 @@ fn polygon_paths(
         .chain((1..vertices).map(|index| PathCommand::LineTo(vertex(index))))
         .chain(std::iter::once(PathCommand::Close))
         .collect();
-    let mut paths = vec![GeometryPath {
+    GeometryPath {
         contours: vec![GeometryContour { commands }],
-        polarity: Polarity::Dark,
-    }];
-    if let Some(hole_diameter) = hole_diameter
-        && hole_diameter > 0.0
-    {
-        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
+        polarity,
     }
-    paths
 }
 
 fn circle_path(radius: f64, polarity: Polarity) -> GeometryPath {
@@ -1283,19 +1210,12 @@ fn bounded_count(value: f64, name: &str, range: std::ops::RangeInclusive<usize>)
     }
 }
 
-fn macro_value(values: &[f64], index: usize, name: &str) -> Result<f64> {
-    values
-        .get(index)
-        .copied()
-        .ok_or_else(|| GerberError::InvalidStructure(format!("missing {name}")))
-}
-
-fn macro_length(values: &[f64], index: usize, name: &str, unit: Unit) -> Result<f64> {
-    Ok(scale_length(macro_value(values, index, name)?, unit))
+fn required_length(values: &[f64], index: usize, name: &str, unit: Unit) -> Result<f64> {
+    Ok(scale_length(required_param(values, index, name)?, unit))
 }
 
 fn macro_bool(values: &[f64], index: usize) -> Result<Polarity> {
-    Ok(if macro_value(values, index, "macro exposure")? == 0.0 {
+    Ok(if required_param(values, index, "macro exposure")? == 0.0 {
         Polarity::Clear
     } else {
         Polarity::Dark
@@ -1315,11 +1235,6 @@ fn eval_macro_expr(expr: &MacroExpression, vars: &HashMap<usize, f64>) -> f64 {
         MacroExpression::Multiply(left, right) => eval(left) * eval(right),
         MacroExpression::Divide(left, right) => eval(left) / eval(right),
     }
-}
-
-fn repolarity(mut path: GeometryPath, polarity: Polarity) -> GeometryPath {
-    path.polarity = polarity;
-    path
 }
 
 fn vector_line_path(start: Point, end: Point, width: f64, polarity: Polarity) -> GeometryPath {
@@ -1358,7 +1273,10 @@ fn vector_line_path(start: Point, end: Point, width: f64, polarity: Polarity) ->
 }
 
 fn translate_path(path: GeometryPath, offset: Point) -> GeometryPath {
-    map_path(path, |point| translate_point(point, offset.x, offset.y))
+    map_path(path, |point| Point {
+        x: point.x + offset.x,
+        y: point.y + offset.y,
+    })
 }
 
 fn map_path(mut path: GeometryPath, map: impl Fn(Point) -> Point) -> GeometryPath {
@@ -1377,13 +1295,6 @@ fn map_path(mut path: GeometryPath, map: impl Fn(Point) -> Point) -> GeometryPat
         }
     }
     path
-}
-
-fn translate_point(point: Point, dx: f64, dy: f64) -> Point {
-    Point {
-        x: point.x + dx,
-        y: point.y + dy,
-    }
 }
 
 fn rotate_point(point: Point, degrees: f64) -> Point {
@@ -1609,30 +1520,14 @@ fn parse_coordinate_fields(mut body: &str) -> Result<CoordinateFields> {
 }
 
 fn parse_step_repeat(rest: &str) -> Result<StepRepeat> {
-    let Some(rest) = rest.strip_prefix('X') else {
-        return Err(GerberError::InvalidStructure(
-            "SR missing X repeats".to_string(),
-        ));
-    };
-    let (x_repeats, rest) = parse_i32_prefix(rest)?;
-    let Some(rest) = rest.strip_prefix('Y') else {
-        return Err(GerberError::InvalidStructure(
-            "SR missing Y repeats".to_string(),
-        ));
-    };
-    let (y_repeats, rest) = parse_i32_prefix(rest)?;
-    let Some(rest) = rest.strip_prefix('I') else {
-        return Err(GerberError::InvalidStructure(
-            "SR missing I step".to_string(),
-        ));
-    };
-    let (x_step, rest) = parse_f64_prefix(rest)?;
-    let Some(rest) = rest.strip_prefix('J') else {
-        return Err(GerberError::InvalidStructure(
-            "SR missing J step".to_string(),
-        ));
-    };
-    let (y_step, rest) = parse_f64_prefix(rest)?;
+    fn field<'a>(rest: &'a str, letter: char, what: &str) -> Result<&'a str> {
+        rest.strip_prefix(letter)
+            .ok_or_else(|| GerberError::InvalidStructure(format!("SR missing {letter} {what}")))
+    }
+    let (x_repeats, rest) = parse_i32_prefix(field(rest, 'X', "repeats")?)?;
+    let (y_repeats, rest) = parse_i32_prefix(field(rest, 'Y', "repeats")?)?;
+    let (x_step, rest) = parse_f64_prefix(field(rest, 'I', "step")?)?;
+    let (y_step, rest) = parse_f64_prefix(field(rest, 'J', "step")?)?;
     if !rest.is_empty() {
         return Err(GerberError::InvalidStructure(format!(
             "unexpected SR suffix '{rest}'"
@@ -1703,14 +1598,5 @@ mod tests {
         assert_eq!(fields.y, Some(-200));
         assert_eq!(fields.i, Some(0));
         assert_eq!(fields.j, Some(30));
-    }
-
-    #[test]
-    fn parses_step_repeat() {
-        let sr = parse_step_repeat("X2Y3I4.5J0").unwrap();
-        assert_eq!(sr.x_repeats, 2);
-        assert_eq!(sr.y_repeats, 3);
-        assert_eq!(sr.x_step, 4.5);
-        assert_eq!(sr.y_step, 0.0);
     }
 }

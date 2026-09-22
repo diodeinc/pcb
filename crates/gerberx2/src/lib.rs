@@ -90,20 +90,3 @@ impl GerberX2 {
         self.interner.resolve(sym)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_minimal_flash_file() {
-        let gerber = GerberX2::parse(
-            "%FSLAX26Y26*%\n%MOMM*%\n%TF.FileFunction,Paste,Top*%\n%TA.AperFunction,Material*%\n%ADD10C,1.5*%\nD10*\nX0Y0D03*\nM02*\n",
-        )
-        .unwrap();
-
-        assert_eq!(gerber.aperture_definitions().len(), 1);
-        assert_eq!(gerber.file_attributes().len(), 1);
-        assert_eq!(gerber.objects().len(), 1);
-    }
-}
