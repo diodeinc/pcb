@@ -573,40 +573,25 @@ impl SiteTable {
 
     /// An empty table able to admit any site in the bounding range of `span`.
     pub(super) fn spanning<'a>(span: impl Iterator<Item = &'a DenseCopperLatticeSite>) -> Self {
-        let (first, last) = span.fold(
-            (
-                DenseCopperLatticeSite {
-                    column: i64::MAX,
-                    row: i64::MAX,
-                },
-                DenseCopperLatticeSite {
-                    column: i64::MIN,
-                    row: i64::MIN,
-                },
-            ),
-            |(first, last), site| {
+        let ((first_column, last_column), (first_row, last_row)) = span.fold(
+            ((i64::MAX, i64::MIN), (i64::MAX, i64::MIN)),
+            |(columns, rows), site| {
                 (
-                    DenseCopperLatticeSite {
-                        column: first.column.min(site.column),
-                        row: first.row.min(site.row),
-                    },
-                    DenseCopperLatticeSite {
-                        column: last.column.max(site.column),
-                        row: last.row.max(site.row),
-                    },
+                    (columns.0.min(site.column), columns.1.max(site.column)),
+                    (rows.0.min(site.row), rows.1.max(site.row)),
                 )
             },
         );
         // No sites at all leaves an inverted range and an empty table.
-        let columns = last
-            .column
-            .saturating_sub(first.column)
-            .saturating_add(1)
-            .max(0);
-        let rows = last.row.saturating_sub(first.row).saturating_add(1).max(0);
+        let extent = |first: i64, last: i64| last.saturating_sub(first).saturating_add(1).max(0);
+        let columns = extent(first_column, last_column);
+        let rows = extent(first_row, last_row);
         Self {
             sites: Vec::new(),
-            first,
+            first: DenseCopperLatticeSite {
+                column: first_column,
+                row: first_row,
+            },
             columns,
             rows,
             samples: vec![Self::VACANT; (columns * rows) as usize],
