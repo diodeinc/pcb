@@ -378,7 +378,6 @@ pub struct FeatureSet {
     pub source_set_index: u32,
     pub source_geometry_ref: Option<Symbol>,
     pub component_ref: Option<Symbol>,
-    pub geometry_usage: Option<GeometryUsage>,
     pub net: Option<Symbol>,
     pub polarity: Polarity,
     /// Whether the set is generated copper balancing.
@@ -391,17 +390,6 @@ pub struct FeatureSet {
     /// Spans `doc.features`.
     pub features: Span,
     pub bbox: BBox,
-}
-
-/// Intended use declared by IPC `Set/geometryUsage`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum GeometryUsage {
-    Thieving,
-    ThermalRelief,
-    Text,
-    Teardrop,
-    Graphic,
-    None,
 }
 
 /// Shared placements for one IPC `Features` container.

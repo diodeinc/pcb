@@ -122,7 +122,6 @@ pub(super) fn push_feature_set_record(
         source_set_index,
         source_geometry_ref: set.geometry,
         component_ref: set.component_ref,
-        geometry_usage: set.geometry_usage.map(map_geometry_usage),
         net: set.net,
         polarity,
         copper_balance: copper_balance.is_some(),
@@ -140,17 +139,6 @@ pub(super) fn push_feature_set_record(
         bbox: BBox::empty(),
     });
     set_id
-}
-
-pub(super) fn map_geometry_usage(usage: ipc2581::types::GeometryUsage) -> GeometryUsage {
-    match usage {
-        ipc2581::types::GeometryUsage::Thieving => GeometryUsage::Thieving,
-        ipc2581::types::GeometryUsage::ThermalRelief => GeometryUsage::ThermalRelief,
-        ipc2581::types::GeometryUsage::Text => GeometryUsage::Text,
-        ipc2581::types::GeometryUsage::Teardrop => GeometryUsage::Teardrop,
-        ipc2581::types::GeometryUsage::Graphic => GeometryUsage::Graphic,
-        ipc2581::types::GeometryUsage::None => GeometryUsage::None,
-    }
 }
 
 pub(super) fn push_extracted_feature(
@@ -504,7 +492,6 @@ pub(super) fn push_negative_layer_plane(
         source_set_index,
         source_geometry_ref: None,
         component_ref: None,
-        geometry_usage: None,
         net: None,
         polarity: GeometryPolarity::Dark,
         copper_balance: false,

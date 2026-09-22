@@ -1397,7 +1397,6 @@ mod tests {
             source_set_index,
             source_geometry_ref: None,
             component_ref: None,
-            geometry_usage: None,
             net: None,
             polarity: Polarity::Dark,
             copper_balance: false,
