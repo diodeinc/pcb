@@ -1214,8 +1214,8 @@ mod tests {
     #[test]
     fn exact_backtracking_does_not_inherit_unrecorded_grid_uncertainty() {
         // This polygon states an approximately 2.1 µm narrowing. Its exact
-        // contacts qualify, even though the former snap-grid construction
-        // suppressed it. Only recorded boundary error can make it unresolved.
+        // contacts qualify: only recorded boundary error, never a snap grid,
+        // can make it unresolved.
         let hole_points = [
             (139.5, -98.5),
             (140.5, -98.5),

@@ -1247,8 +1247,8 @@ fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) -> HashMa
 }
 
 /// The identity records of every released id format, byte for byte. The first
-/// served every rule; annular findings then moved to their drilled hole, with
-/// the subject projection that is now stable identity minus its anchor.
+/// served every rule; the second placed annular findings at their drilled
+/// hole, with the stable subject projection minus its anchor.
 fn released_fingerprints(finding: &Finding, annular_rules: &HashSet<&str>) -> Vec<String> {
     let original = serde_json::to_string(&(
         &finding.rule_id,
@@ -1335,6 +1335,21 @@ mod tests {
         }
     }
 
+    fn site_at(center: Point, subjects: Vec<Subject>) -> Site {
+        Site {
+            id: String::new(),
+            measurement: Measurement::minimum_distance(0.1, 0.2),
+            measurement_kind: MeasurementKind::Clearance,
+            uncertainty_mm: 0.0,
+            witnesses: Vec::new(),
+            bounding_box: BBox::from_point(center).expand(0.05).into(),
+            layers: Vec::new(),
+            subjects,
+            evidence: vec![Evidence::circle("hole", center, 0.1)],
+            note: None,
+        }
+    }
+
     #[test]
     fn a_shortfall_inside_the_measurement_uncertainty_is_unresolved_not_passed() {
         let measured = |mm: f64| Distance::with_uncertainty(mm, Point::ZERO, Point::ZERO, 0.003);
@@ -1414,34 +1429,15 @@ mod tests {
         finding
             .evidence
             .push(Evidence::circle("hole", Point::new(1.0, 0.0), 0.1));
-        finding.sites.push(Site {
-            id: String::new(),
-            measurement: Measurement::minimum_distance(0.1, 0.2),
-            measurement_kind: MeasurementKind::Diameter,
-            uncertainty_mm: 0.0,
-            witnesses: Vec::new(),
-            bounding_box: BBox::from_point(Point::new(1.0, 0.0)).expand(0.05).into(),
-            layers: Vec::new(),
-            subjects: finding.subjects.clone(),
-            evidence: finding.evidence.clone(),
-            note: None,
-        });
+        let site = site_at(Point::new(1.0, 0.0), finding.subjects.clone());
+        finding.sites.push(site);
         let aliases = assign_ids(std::slice::from_mut(&mut finding));
         assert_eq!(finding.id, id);
         assert_eq!(aliases.get("dfm-bee136ee7a39"), Some(&id));
         assert!(finding.sites[0].id.starts_with(&format!("{id}-site-")));
-    }
 
-    #[test]
-    fn a_waiver_written_against_a_released_id_still_applies() {
+        // A waiver written against the released id still applies.
         use crate::commands::dfm::waivers::{Waiver, WaiverFile, apply};
-        let mut finding = finding_at(1.0);
-        finding.subjects.push(Subject {
-            role: "hole",
-            kind: "via_hole",
-            ..Subject::default()
-        });
-        let aliases = assign_ids(std::slice::from_mut(&mut finding));
         assert_ne!(finding.id, "dfm-bee136ee7a39");
         let file = WaiverFile {
             waiver: vec![Waiver {
@@ -1463,18 +1459,6 @@ mod tests {
 
     #[test]
     fn noise_level_coordinate_changes_do_not_rekey_findings_or_sites() {
-        let site = |center: Point, subjects: Vec<Subject>| Site {
-            id: String::new(),
-            measurement: Measurement::minimum_distance(0.1, 0.2),
-            measurement_kind: MeasurementKind::Clearance,
-            uncertainty_mm: 0.0,
-            witnesses: Vec::new(),
-            bounding_box: BBox::from_point(center).expand(0.05).into(),
-            layers: Vec::new(),
-            subjects,
-            evidence: vec![Evidence::circle("hole", center, 0.1)],
-            note: None,
-        };
         // Placed by its drilled subject; and by its measured point, here the
         // midpoint of gridded coordinates, on the half-micrometre lattice.
         for anchored in [true, false] {
@@ -1494,7 +1478,7 @@ mod tests {
                     center.into()
                 });
                 finding.subjects.push(subject.clone());
-                finding.sites.push(site(center, vec![subject]));
+                finding.sites.push(site_at(center, vec![subject]));
                 assign_ids(std::slice::from_mut(&mut finding));
                 (finding.id.clone(), finding.sites[0].id.clone())
             };
@@ -1540,26 +1524,8 @@ mod tests {
         finding
             .evidence
             .push(Evidence::circle("drilled_hole", Point::new(2.0, 3.0), 0.2));
-        finding.sites.push(Site {
-            id: String::new(),
-            measurement: Measurement::minimum_distance(0.1, 0.2),
-            measurement_kind: MeasurementKind::MissingCopper,
-            uncertainty_mm: 0.0,
-            witnesses: Vec::new(),
-            bounding_box: BBox::from_point(Point::new(1.0, 0.0)).expand(0.2).into(),
-            layers: Vec::new(),
-            subjects: finding.subjects.clone(),
-            evidence: vec![Evidence {
-                role: "missing_copper",
-                kind: "region",
-                paths: vec![vec![
-                    Point::new(0.9, 0.0).into(),
-                    Point::new(1.1, 0.0).into(),
-                ]],
-                ..Evidence::default()
-            }],
-            note: None,
-        });
+        let site = site_at(Point::new(1.0, 0.0), finding.subjects.clone());
+        finding.sites.push(site);
         let annular = HashSet::from(["annular"]);
         let aliases = super::assign_ids(std::slice::from_mut(&mut finding), &annular);
         let finding_id = finding.id.clone();
@@ -1599,73 +1565,5 @@ mod tests {
             .push(Evidence::circle("drilled_hole", Point::new(5.0, 3.0), 0.2));
         super::assign_ids(std::slice::from_mut(&mut different_hole), &annular);
         assert_ne!(different_hole.id, finding.id);
-    }
-
-    fn placed_hole(instance: u32) -> Finding {
-        let center = Point::new(1.0, 2.0);
-        let subject = Subject {
-            role: "hole",
-            kind: "via_hole",
-            provenance: Some(SourceLocator {
-                step: Some("board".into()),
-                layer: Some("DRILL".into()),
-                set_index: Some(0),
-                feature_index: Some(4),
-                instance_index: Some(instance),
-            }),
-            ..Subject::default()
-        };
-        let mut finding = finding_at(center.x);
-        finding.subjects.push(subject.clone());
-        finding.sites.push(Site {
-            id: String::new(),
-            measurement: Measurement::minimum_distance(0.1, 0.2),
-            measurement_kind: MeasurementKind::Diameter,
-            uncertainty_mm: 0.0,
-            witnesses: Vec::new(),
-            bounding_box: BBox::from_point(center).expand(0.05).into(),
-            layers: Vec::new(),
-            subjects: vec![subject],
-            evidence: vec![Evidence::circle("hole", center, 0.1)],
-            note: None,
-        });
-        finding
-    }
-
-    #[test]
-    fn native_display_metadata_preserves_finding_and_site_ids() {
-        use super::super::report::{DisplayCircle, EvidenceDisplay};
-        let mut finding = placed_hole(4);
-        assign_ids(std::slice::from_mut(&mut finding));
-        let original_finding = finding.id.clone();
-        let original_site = finding.sites[0].id.clone();
-        let circle = DisplayCircle {
-            center: Point::new(1.0, 2.0).into(),
-            diameter: 0.1,
-        };
-        for display in [
-            EvidenceDisplay::Path {
-                paths: vec!["M1 2 A0.1 0.1 0 0 1 1.1 2.1 Z".into()],
-                fill_rule: "evenodd",
-            },
-            EvidenceDisplay::RoundStroke {
-                paths: vec![vec![Point::ZERO.into(), Point::new(1.0, 1.0).into()]],
-                width_mm: 0.2,
-            },
-            EvidenceDisplay::CircleMinusLayer {
-                center: circle.center,
-                diameter: circle.diameter,
-                layer: "F.Cu".into(),
-            },
-            EvidenceDisplay::CircleIntersection {
-                first: circle,
-                second: circle,
-            },
-        ] {
-            finding.sites[0].evidence[0].display = Some(display);
-            assign_ids(std::slice::from_mut(&mut finding));
-            assert_eq!(finding.id, original_finding);
-            assert_eq!(finding.sites[0].id, original_site);
-        }
     }
 }

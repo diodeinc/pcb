@@ -378,29 +378,17 @@ fn build_report(file: &Path, options: &CheckOptions, resolution: Resolution) -> 
 /// The non-verdict counts worth surfacing next to the pass/fail line.
 #[cfg(feature = "cli")]
 fn annotations(summary: &report::Summary) -> String {
-    let mut notes = String::new();
-    if summary.rules_incomplete > 0 {
-        notes.push_str(&format!(", {} not evaluated", summary.rules_incomplete));
-    }
-    if summary.rules_not_applicable > 0 {
-        notes.push_str(&format!(
-            ", {} not applicable",
-            summary.rules_not_applicable
-        ));
-    }
-    if summary.warnings > 0 {
-        notes.push_str(&format!(", {} warning(s)", summary.warnings));
-    }
-    if summary.waived > 0 {
-        notes.push_str(&format!(", {} waived", summary.waived));
-    }
-    if summary.unresolved > 0 {
-        notes.push_str(&format!(
-            ", {} within measurement uncertainty",
-            summary.unresolved
-        ));
-    }
-    notes
+    [
+        (summary.rules_incomplete, "not evaluated"),
+        (summary.rules_not_applicable, "not applicable"),
+        (summary.warnings, "warning(s)"),
+        (summary.waived, "waived"),
+        (summary.unresolved, "within measurement uncertainty"),
+    ]
+    .into_iter()
+    .filter(|&(count, _)| count > 0)
+    .map(|(count, what)| format!(", {count} {what}"))
+    .collect()
 }
 
 /// Report generation time, honoring `SOURCE_DATE_EPOCH` so CI reports can be
@@ -415,33 +403,27 @@ fn generation_time() -> chrono::DateTime<chrono::Utc> {
 }
 
 fn summarize(checked: &checks::Results) -> report::Summary {
-    let status_count = |status: fn(&report::RuleStatus) -> bool| {
-        checked
-            .rules
-            .iter()
-            .filter(|rule| status(&rule.status))
+    use report::{RuleStatus, Severity};
+    let rules = |status: RuleStatus| {
+        let rules = checked.rules.iter();
+        rules.filter(|rule| rule.status == status).count()
+    };
+    let unwaived = |severity: Severity| {
+        let findings = checked.findings.iter();
+        findings
+            .filter(|finding| !finding.waived && finding.severity == severity)
             .count()
     };
     report::Summary {
         rules_configured: checked.rules.len(),
-        rules_passed: status_count(|status| matches!(status, report::RuleStatus::Pass)),
-        rules_warned: status_count(|status| matches!(status, report::RuleStatus::Warning)),
-        rules_failed: status_count(|status| matches!(status, report::RuleStatus::Fail)),
-        rules_not_applicable: status_count(|status| {
-            matches!(status, report::RuleStatus::NotApplicable)
-        }),
-        rules_incomplete: status_count(|status| matches!(status, report::RuleStatus::Incomplete)),
+        rules_passed: rules(RuleStatus::Pass),
+        rules_warned: rules(RuleStatus::Warning),
+        rules_failed: rules(RuleStatus::Fail),
+        rules_not_applicable: rules(RuleStatus::NotApplicable),
+        rules_incomplete: rules(RuleStatus::Incomplete),
         findings: checked.findings.len(),
-        errors: checked
-            .findings
-            .iter()
-            .filter(|finding| !finding.waived && finding.severity == report::Severity::Error)
-            .count(),
-        warnings: checked
-            .findings
-            .iter()
-            .filter(|finding| !finding.waived && finding.severity == report::Severity::Warning)
-            .count(),
+        errors: unwaived(Severity::Error),
+        warnings: unwaived(Severity::Warning),
         waived: checked
             .findings
             .iter()

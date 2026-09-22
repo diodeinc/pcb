@@ -763,11 +763,8 @@ impl PhysicalStackup {
                     position(span.last_copper_index)?,
                 );
                 let (first, last) = (first.min(last), first.max(last));
-                // Depth is what the drill removes. A blind hole enters at its
-                // outer layer and terminates on its target land, so IPC-T-50M
-                // measures it from the capture land foil to the target land:
-                // the target copper is not drilled. A buried hole is drilled
-                // through its whole sub-stack, both terminal layers included.
+                // Depth is what the drill removes: a blind hole stops on its
+                // target land, a buried hole goes through both terminal layers.
                 let bottom = self.copper_layers.len().saturating_sub(1);
                 let (from_top, from_bottom) = (
                     span.first_copper_index == 0,

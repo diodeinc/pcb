@@ -401,7 +401,7 @@ impl RuleResult {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleStatus {
     Pass,
