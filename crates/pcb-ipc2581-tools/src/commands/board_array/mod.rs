@@ -326,22 +326,6 @@ pub fn create_board_array(
     write_board_array_creation(xml, spec, balance_copper, resolution)
 }
 
-#[cfg(test)]
-/// Panelize without balancing copper, for the cases that are about the array
-/// itself. Balancing costs the panel's whole area, so the cases that are about
-/// it ask for it.
-#[cfg(test)]
-fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
-    let resolution = Resolution::default();
-
-    Ok(create_board_array(xml, options, false, Separation::VScore, resolution)?.xml)
-}
-
-#[cfg(test)]
-fn create_auto_board_array_xml(xml: &str) -> Result<String> {
-    create_auto_board_array_xml_with_sheet(xml, None)
-}
-
 /// Create an automatically sized board array and return its balance accounting.
 pub fn create_auto_board_array(
     xml: &str,
@@ -355,16 +339,6 @@ pub fn create_auto_board_array(
     let (options, panelization) = auto_board_array_options(&ipc, board, sheet, resolution)?;
     let spec = build_board_array_spec(&ipc, board, &options, panelization, separation, resolution)?;
     write_board_array_creation(xml, spec, balance_copper, resolution)
-}
-
-#[cfg(test)]
-fn create_auto_board_array_xml_with_sheet(
-    xml: &str,
-    sheet: Option<AutoSheetSize>,
-) -> Result<String> {
-    let resolution = Resolution::default();
-
-    Ok(create_auto_board_array(xml, sheet, false, Separation::VScore, resolution)?.xml)
 }
 
 fn auto_board_array_options(
@@ -515,11 +489,6 @@ fn finished_board_array_xml(doc: &ipc2581::edit::Doc<'_>, spec: &BoardArraySpec)
 
     Ipc2581::parse(&xml).context("Generated IPC-2581 board array XML did not parse")?;
     Ok(xml)
-}
-
-#[cfg(test)]
-fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
-    finished_board_array_xml(&ipc2581::edit::Doc::parse(xml)?, spec)
 }
 
 fn write_board_array_creation(
