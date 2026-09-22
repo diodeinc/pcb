@@ -184,8 +184,24 @@ impl IpcDocument {
             .map_err(|error| anyhow::anyhow!("{error}"))
     }
 
+    /// One layer as SVG and PNG export draw it.
+    fn layer_artwork(
+        &self,
+        layer: &str,
+        layout_target: pcb_ipc2581_tools::LayoutTarget,
+    ) -> Result<geometry::render::ArtworkDocument> {
+        let scope = layout_target.artwork_scope();
+        let resolution = Resolution::default();
+        Ok(
+            geometry::render::layer_artwork(self.design()?, layer, scope, true, resolution)?
+                .artwork,
+        )
+    }
+
     fn export_data(&self, options: ExportOptions) -> Result<Vec<ExportFile>> {
         let resolution = Resolution::default();
+        let render_options =
+            pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy);
 
         let file = match options {
             ExportOptions::Ipc2581 { mode } => ExportFile::new(
@@ -218,46 +234,26 @@ impl IpcDocument {
             ExportOptions::Svg {
                 layer,
                 layout_target,
-            } => {
-                let view = geometry::render::layer_artwork(
-                    self.design()?,
-                    &layer,
-                    layout_target.artwork_scope(),
-                    true,
-                    resolution,
-                )?;
-                ExportFile::new(
-                    format!("{}.svg", safe_name(&layer)),
-                    "image/svg+xml",
-                    pcb_ir::render::artwork_svg(
-                        &view.artwork,
-                        &pcb_ir::render::RenderOptions::default()
-                            .with_accuracy(resolution.accuracy),
-                    )?,
-                )
-            }
+            } => ExportFile::new(
+                format!("{}.svg", safe_name(&layer)),
+                "image/svg+xml",
+                pcb_ir::render::artwork_svg(
+                    &self.layer_artwork(&layer, layout_target)?,
+                    &render_options,
+                )?,
+            ),
             ExportOptions::Png {
                 layer,
                 layout_target,
-            } => {
-                let view = geometry::render::layer_artwork(
-                    self.design()?,
-                    &layer,
-                    layout_target.artwork_scope(),
-                    true,
-                    resolution,
-                )?;
-                ExportFile::new(
-                    format!("{}.png", safe_name(&layer)),
-                    "image/png",
-                    pcb_ir::render::artwork_png(
-                        &view.artwork,
-                        &pcb_ir::render::RenderOptions::default()
-                            .with_accuracy(resolution.accuracy),
-                    )
-                    .map_err(anyhow::Error::msg)?,
+            } => ExportFile::new(
+                format!("{}.png", safe_name(&layer)),
+                "image/png",
+                pcb_ir::render::artwork_png(
+                    &self.layer_artwork(&layer, layout_target)?,
+                    &render_options,
                 )
-            }
+                .map_err(anyhow::Error::msg)?,
+            ),
             ExportOptions::Dxf { layout_target } => ExportFile::new(
                 "outline.dxf",
                 "image/vnd.dxf",

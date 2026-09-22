@@ -14,7 +14,7 @@ use pcb_ir::dialects::{LayerRole, Side};
 use pcb_ir::geom::{BBox, Paint, Polarity, Span, StrokeStyle};
 use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign};
 
-type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerFunction, Option<Symbol>>;
+pub type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerFunction, Option<Symbol>>;
 
 const DISPLAY_PROFILE_STROKE_WIDTH_MM: f64 = 0.1;
 
