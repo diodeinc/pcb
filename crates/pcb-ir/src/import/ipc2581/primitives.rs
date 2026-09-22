@@ -138,11 +138,6 @@ pub(super) fn stroke_paint(line_desc: ipc2581::types::LineDesc, scale: f64) -> P
     Paint::Stroke(stroke)
 }
 
-/// Uniform scale of a placement, as placement-group expansion measures it.
-pub(super) fn placement_scale(transform: Affine2) -> f64 {
-    transform.m00.hypot(transform.m10)
-}
-
 /// Lower a standard primitive into paths under `transform` and report
 /// whether it is a VOID, which clears instead of painting.
 pub(super) fn lower_standard_primitive(
@@ -260,30 +255,19 @@ pub(super) fn lower_standard_primitive(
 }
 
 pub(super) fn standard_primitive_has_no_area(primitive: &StandardPrimitive) -> bool {
+    let flat = |size: ipc2581::types::Size| size.width <= 0.0 || size.height <= 0.0;
     match primitive {
         StandardPrimitive::Circle(circle) => circle.shape.diameter <= 0.0,
-        StandardPrimitive::Ellipse(ellipse) => {
-            ellipse.shape.size.width <= 0.0 || ellipse.shape.size.height <= 0.0
-        }
-        StandardPrimitive::Oval(oval) => {
-            oval.shape.size.width <= 0.0 || oval.shape.size.height <= 0.0
-        }
-        StandardPrimitive::RectCenter(rect) => {
-            rect.shape.size.width <= 0.0 || rect.shape.size.height <= 0.0
-        }
+        StandardPrimitive::Ellipse(ellipse) => flat(ellipse.shape.size),
+        StandardPrimitive::Oval(oval) => flat(oval.shape.size),
+        StandardPrimitive::RectCenter(rect) => flat(rect.shape.size),
         StandardPrimitive::RectCorner(rect) => {
             rect.shape.upper_right.x <= rect.shape.lower_left.x
                 || rect.shape.upper_right.y <= rect.shape.lower_left.y
         }
-        StandardPrimitive::RectRound(rect) => {
-            rect.shape.size.width <= 0.0 || rect.shape.size.height <= 0.0
-        }
-        StandardPrimitive::RectCham(rect) => {
-            rect.shape.size.width <= 0.0 || rect.shape.size.height <= 0.0
-        }
-        StandardPrimitive::Diamond(diamond) => {
-            diamond.shape.size.width <= 0.0 || diamond.shape.size.height <= 0.0
-        }
+        StandardPrimitive::RectRound(rect) => flat(rect.shape.size),
+        StandardPrimitive::RectCham(rect) => flat(rect.shape.size),
+        StandardPrimitive::Diamond(diamond) => flat(diamond.shape.size),
         StandardPrimitive::Hexagon(hexagon) => hexagon.shape.point_to_point <= 0.0,
         StandardPrimitive::Octagon(octagon) => octagon.shape.point_to_point <= 0.0,
         StandardPrimitive::Triangle(triangle) => {
@@ -549,9 +533,9 @@ pub(super) fn paint_paths(
     line_desc: Option<ipc2581::types::LineDesc>,
     transform: Affine2,
 ) {
-    let paint = line_desc.map_or(Paint::None, |line_desc| {
-        stroke_paint(line_desc, placement_scale(transform))
-    });
+    // The placement's uniform scale, as placement-group expansion measures it.
+    let scale = transform.m00.hypot(transform.m10);
+    let paint = line_desc.map_or(Paint::None, |line_desc| stroke_paint(line_desc, scale));
     let half_width = paint.stroke().map_or(0.0, |stroke| stroke.width / 2.0);
     for index in path_start as usize..doc.arena.paths.len() {
         let contours = doc.arena.paths[index].contours;
