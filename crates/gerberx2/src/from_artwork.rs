@@ -677,26 +677,19 @@ impl ApertureTable {
 }
 
 fn lower_layer_attributes(attributes: &LayerAttributes) -> Vec<AttributeValue> {
-    let mut values = vec![AttributeValue::new(
-        ".FileFunction",
-        attributes.file_function.iter().cloned(),
-    )];
-    if let Some(part) = &attributes.part {
-        values.push(AttributeValue::new(".Part", part.iter().cloned()));
-    }
-    if let Some(file_polarity) = &attributes.file_polarity {
-        values.push(AttributeValue::new(
+    let file_polarity = attributes.file_polarity.clone();
+    [
+        (".FileFunction", Some(attributes.file_function.clone())),
+        (".Part", attributes.part.clone()),
+        (
             ".FilePolarity",
-            [file_polarity.clone()],
-        ));
-    }
-    if let Some(same_coordinates) = &attributes.same_coordinates {
-        values.push(AttributeValue::new(
-            ".SameCoordinates",
-            same_coordinates.iter().cloned(),
-        ));
-    }
-    values
+            file_polarity.map(|polarity| vec![polarity]),
+        ),
+        (".SameCoordinates", attributes.same_coordinates.clone()),
+    ]
+    .into_iter()
+    .filter_map(|(name, fields)| Some(AttributeValue::new(name, fields?)))
+    .collect()
 }
 
 fn region_objects(

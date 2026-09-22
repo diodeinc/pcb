@@ -98,28 +98,21 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
             aperture: 10,
         }),
         WriterObject {
-            kind: ObjectKind::Region {
-                contours: vec![Contour {
-                    segments: vec![
-                        ContourSegment::Line {
-                            start: Point { x: 0.0, y: 0.0 },
-                            end: Point { x: 1.0, y: 0.0 },
-                        },
-                        ContourSegment::Line {
-                            start: Point { x: 1.0, y: 0.0 },
-                            end: Point { x: 1.0, y: 1.0 },
-                        },
-                        ContourSegment::Line {
-                            start: Point { x: 1.0, y: 1.0 },
-                            end: Point { x: 0.0, y: 0.0 },
-                        },
-                    ],
-                }],
-            },
-            polarity: Polarity::Dark,
-            repeat: None,
             aperture_attributes: conductor,
-            attributes: AttributeSets::EMPTY,
+            ..WriterObject::dark(ObjectKind::Region {
+                contours: vec![Contour {
+                    segments: [
+                        (0.0, 0.0, 1.0, 0.0),
+                        (1.0, 0.0, 1.0, 1.0),
+                        (1.0, 1.0, 0.0, 0.0),
+                    ]
+                    .map(|(x0, y0, x1, y1)| ContourSegment::Line {
+                        start: Point { x: x0, y: y0 },
+                        end: Point { x: x1, y: y1 },
+                    })
+                    .to_vec(),
+                }],
+            })
         },
     ];
 
@@ -195,38 +188,12 @@ fn objects_share_attribute_sets_until_the_dictionary_changes() {
 }
 
 #[test]
-fn writes_standard_step_repeat() {
-    let repeat = Some(StepRepeat {
+fn coalesces_compatible_step_repeats() {
+    let repeat = StepRepeat {
         x_repeats: 3,
         y_repeats: 2,
         x_step: 10.0,
         y_step: 20.0,
-    });
-    let layer = circle_layer(
-        1.0,
-        vec![WriterObject {
-            repeat,
-            ..flash(2.0, 3.0)
-        }],
-    );
-
-    let output = written(&layer);
-    assert!(output.contains("%SRX3Y2I10J20*%"));
-    assert!(output.contains("%SR*%"));
-    // The parsed stream holds the run once; imaging it repeats it.
-    let parsed = GerberX2::parse(&output).unwrap();
-    assert_eq!(parsed.objects().len(), 1);
-    assert_eq!(parsed.step_repeats().len(), 1);
-    assert_eq!(imaged(&parsed).len(), 6);
-}
-
-#[test]
-fn coalesces_compatible_step_repeats() {
-    let repeat = StepRepeat {
-        x_repeats: 3,
-        y_repeats: 1,
-        x_step: 10.0,
-        y_step: 0.0,
     };
     let repeated_flash = |x: f64, y: f64, attributes: u32| WriterObject {
         repeat: Some(repeat),
@@ -248,12 +215,16 @@ fn coalesces_compatible_step_repeats() {
     };
 
     let output = written(&layer);
-    assert_eq!(output.matches("%SRX3Y1I10J0*%").count(), 1);
+    assert_eq!(output.matches("%SRX3Y2I10J20*%").count(), 1);
     assert_eq!(output.matches("%SR*%").count(), 1);
     assert!(output.contains(
         "X2000000Y3000000D03*\n%TO.N,GND*%\nY4000000D03*\n%SR*%\n%TD*%\nX2000000Y4000000D03*"
     ));
-    assert_eq!(imaged(&GerberX2::parse(&output).unwrap()).len(), 7);
+    // The parsed stream holds the run once; imaging it repeats it.
+    let parsed = GerberX2::parse(&output).unwrap();
+    assert_eq!(parsed.objects().len(), 3);
+    assert_eq!(parsed.step_repeats().len(), 1);
+    assert_eq!(imaged(&parsed).len(), 13);
 }
 
 #[test]

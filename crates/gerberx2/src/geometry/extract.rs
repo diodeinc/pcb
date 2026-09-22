@@ -80,20 +80,12 @@ pub fn extract_document(
             &gerber.objects()[run.clone()],
             &tables,
         )?;
-        target.push(
-            &mut doc,
-            Object {
-                polarity: Polarity::Dark,
-                order: Default::default(),
-                geometry: Geometry::GridInstance {
-                    block,
-                    transform: Affine2::IDENTITY,
-                    repeat: grid_repeat(step.repeat),
-                },
-                bbox: BBox::empty(),
-                meta: GerberObjectMeta::default(),
-            },
-        );
+        let grid = Geometry::GridInstance {
+            block,
+            transform: Affine2::IDENTITY,
+            repeat: grid_repeat(step.repeat),
+        };
+        target.push(&mut doc, Object::new(Polarity::Dark, grid));
         next = run.end;
     }
     extract_objects(&mut doc, target, &gerber.objects()[next..], &tables)?;
@@ -260,11 +252,8 @@ fn extract_object(
             target.push(
                 doc,
                 Object {
-                    polarity: object.polarity,
-                    order: Default::default(),
-                    geometry,
-                    bbox: BBox::empty(),
                     meta: meta_from_object(object),
+                    ..Object::new(object.polarity, geometry)
                 },
             );
             return Ok(());
