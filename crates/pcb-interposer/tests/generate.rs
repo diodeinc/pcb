@@ -221,7 +221,7 @@ fn four_layers_add_inner_gnd_planes() {
     pcb_sexpr::parse(&four).expect("board parses");
     // One GND pour per copper layer, on the default 4-layer stackup.
     for layer in ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"] {
-        assert!(four.contains(&format!("(net_name \"GND\")\n\t\t(layer \"{layer}\")")));
+        assert!(four.contains(&format!("(net \"GND\")\n\t\t(layer \"{layer}\")")));
     }
     assert!(four.contains("(thickness 1.6062)"));
 }
