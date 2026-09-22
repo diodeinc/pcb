@@ -555,11 +555,7 @@ pub(super) fn void_set(
     lattice: DenseCopperLattice,
     resolution: Resolution,
 ) -> Result<ContourSet, AccuracyError> {
-    let candidates = voids
-        .iter()
-        .map(|void| (lattice.center(void.site), void.radius_mm))
-        .collect::<Vec<_>>();
-    hexagon_set_with_radii(&candidates, resolution)
+    hexagon_set_with_radii(&lattice.void_candidates(voids), resolution)
 }
 
 /// Sample sites in admission order, with a dense `(column, row) -> sample`

@@ -525,41 +525,27 @@ pub(super) fn spatial_result_from_squared_radii(
             radius_mm: level.sqrt(),
         })
         .collect::<Vec<_>>();
-    let full_void_area_mm2 = ROUNDED_HEXAGON_AREA_FACTOR
-        * full_voids
-            .iter()
-            .map(|void| void.radius_mm * void.radius_mm)
-            .sum::<f64>();
-    let clipped_edge_void_area_mm2 = baseline.edge_void_emission.area_mm2();
-    let void_area_mm2 = full_void_area_mm2 + clipped_edge_void_area_mm2;
+    let squared_radius_sum = full_voids
+        .iter()
+        .map(|void| void.radius_mm * void.radius_mm)
+        .sum::<f64>();
+    let void_area_mm2 = ROUNDED_HEXAGON_AREA_FACTOR * squared_radius_sum
+        + baseline.edge_void_emission.region.area();
     let generated_area_mm2 = (baseline.usable.area() - void_area_mm2).max(0.0);
     let achieved_density =
         (layer.existing_copper.area() + generated_area_mm2) / density_domain_area_mm2;
-    let equivalent_radius_mm = (full_voids
-        .iter()
-        .map(|void| void.radius_mm * void.radius_mm)
-        .sum::<f64>()
-        / full_voids.len() as f64)
-        .sqrt();
-    let solution = DenseCopperBalanceSolution {
-        mode: DenseCopperBalanceMode::Perforated {
-            void_radius_mm: equivalent_radius_mm,
-        },
-        desired_added_area_mm2: baseline.solution.desired_added_area_mm2,
-        generated_area_mm2,
-        initial_density: baseline.solution.initial_density,
-        achieved_density,
-        target_density: layer.target_density,
-        residual_error: (achieved_density - layer.target_density).abs(),
-    };
     DenseCopperBalanceResult {
-        solution,
-        lattice: baseline.lattice,
-        usable: baseline.usable,
-        voidable: baseline.voidable,
+        solution: DenseCopperBalanceSolution {
+            mode: DenseCopperBalanceMode::Perforated {
+                void_radius_mm: (squared_radius_sum / full_voids.len() as f64).sqrt(),
+            },
+            generated_area_mm2,
+            achieved_density,
+            residual_error: (achieved_density - layer.target_density).abs(),
+            ..baseline.solution
+        },
         full_voids,
-        edge_voids: baseline.edge_voids,
-        edge_void_emission: baseline.edge_void_emission,
+        ..baseline
     }
 }
 
