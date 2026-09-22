@@ -1007,7 +1007,7 @@ pub(super) fn extract_slot(
 
     match &slot.shape {
         SlotShape::Outline(polygon) => {
-            push_polygon_path(doc, polygon, placement.transform, FillRule::NonZero);
+            push_filled_shape(doc, placement.transform, Some(polygon_contour(polygon)));
         }
         SlotShape::Primitive(primitive) => {
             if let StandardPrimitive::Oval(oval) = primitive {

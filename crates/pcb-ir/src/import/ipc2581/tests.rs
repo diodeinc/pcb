@@ -884,11 +884,21 @@ fn contour_cutout_outside_its_outline_is_reported() {
         polygon: rect_polygon(0.0, 0.0, 10.0, 10.0),
         cutouts: vec![rect_polygon(2.0, 2.0, 4.0, 4.0)],
     };
-    push_contour_path(&mut doc, &contour, Affine2::identity());
+    push_outline_path(
+        &mut doc,
+        &contour.polygon,
+        &contour.cutouts,
+        Affine2::identity(),
+    );
     assert!(doc.diagnostics.is_empty());
 
     contour.cutouts.push(rect_polygon(8.0, 8.0, 12.0, 9.0));
-    push_contour_path(&mut doc, &contour, Affine2::identity());
+    push_outline_path(
+        &mut doc,
+        &contour.polygon,
+        &contour.cutouts,
+        Affine2::identity(),
+    );
     assert_eq!(doc.diagnostics.len(), 1);
 }
 

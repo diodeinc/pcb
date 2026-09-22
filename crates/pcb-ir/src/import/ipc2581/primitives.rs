@@ -159,73 +159,63 @@ pub(super) fn lower_standard_primitive(
     warn_patterned_fill(doc, fill);
 
     let path_start = doc.arena.paths.len() as u32;
-    match primitive {
-        StandardPrimitive::Circle(circle) => {
-            push_filled_shape(doc, transform, circle_outline(&circle.shape));
-        }
+    let outline = match primitive {
+        StandardPrimitive::Circle(circle) => shapes::circle(circle.shape.diameter),
         StandardPrimitive::Ellipse(ellipse) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::ellipse(ellipse.shape.size.width, ellipse.shape.size.height),
-            );
+            shapes::ellipse(ellipse.shape.size.width, ellipse.shape.size.height)
         }
         StandardPrimitive::Oval(oval) => {
-            push_filled_shape(doc, transform, oval_outline(&oval.shape));
+            shapes::obround(oval.shape.size.width, oval.shape.size.height)
         }
         StandardPrimitive::RectCenter(rect) => {
-            push_filled_shape(doc, transform, rect_center_outline(&rect.shape));
+            shapes::rect(rect.shape.size.width, rect.shape.size.height)
         }
         StandardPrimitive::RectCorner(rect) => {
-            let points = vec![
-                Point::new(rect.shape.lower_left.x, rect.shape.lower_left.y),
-                Point::new(rect.shape.upper_right.x, rect.shape.lower_left.y),
-                Point::new(rect.shape.upper_right.x, rect.shape.upper_right.y),
-                Point::new(rect.shape.lower_left.x, rect.shape.upper_right.y),
-            ];
-            push_filled_shape(doc, transform, shapes::closed_polygon(points));
+            let (min, max) = (rect.shape.lower_left, rect.shape.upper_right);
+            shapes::closed_polygon(vec![
+                Point::new(min.x, min.y),
+                Point::new(max.x, min.y),
+                Point::new(max.x, max.y),
+                Point::new(min.x, max.y),
+            ])
         }
         StandardPrimitive::Diamond(diamond) => {
             let hw = diamond.shape.size.width / 2.0;
             let hh = diamond.shape.size.height / 2.0;
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::closed_polygon(vec![
-                    Point::new(0.0, -hh),
-                    Point::new(hw, 0.0),
-                    Point::new(0.0, hh),
-                    Point::new(-hw, 0.0),
-                ]),
-            );
+            shapes::closed_polygon(vec![
+                Point::new(0.0, -hh),
+                Point::new(hw, 0.0),
+                Point::new(0.0, hh),
+                Point::new(-hw, 0.0),
+            ])
         }
         StandardPrimitive::Hexagon(hexagon) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::regular_polygon(hexagon.shape.point_to_point, 6, -90.0),
-            );
+            shapes::regular_polygon(hexagon.shape.point_to_point, 6, -90.0)
         }
         StandardPrimitive::Octagon(octagon) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::regular_polygon(octagon.shape.point_to_point, 8, -90.0),
-            );
+            shapes::regular_polygon(octagon.shape.point_to_point, 8, -90.0)
         }
         StandardPrimitive::Triangle(triangle) => {
             let hw = triangle.shape.base / 2.0;
             let hh = triangle.shape.height / 2.0;
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::closed_polygon(vec![
-                    Point::new(0.0, -hh),
-                    Point::new(hw, hh),
-                    Point::new(-hw, hh),
-                ]),
-            );
+            shapes::closed_polygon(vec![
+                Point::new(0.0, -hh),
+                Point::new(hw, hh),
+                Point::new(-hw, hh),
+            ])
         }
+        StandardPrimitive::RectRound(rect) => rect_round_outline(&rect.shape),
+        StandardPrimitive::RectCham(rect) => shapes::chamfered_rect(
+            rect.shape.size.width,
+            rect.shape.size.height,
+            rect.shape.chamfer,
+            [
+                rect.shape.upper_right,
+                rect.shape.lower_right,
+                rect.shape.lower_left,
+                rect.shape.upper_left,
+            ],
+        ),
         StandardPrimitive::Donut(donut) => {
             push_ring_path(
                 doc,
@@ -234,40 +224,26 @@ pub(super) fn lower_standard_primitive(
                 donut.shape.outer_diameter,
                 donut.shape.inner_diameter,
             );
+            None
         }
         StandardPrimitive::Thermal(thermal) => {
             push_thermal_path(doc, transform, &thermal.shape, context.resolution)?;
+            None
         }
         StandardPrimitive::Contour(contour) => {
-            push_contour_path(doc, contour, transform);
-        }
-        StandardPrimitive::RectRound(rect) => {
-            push_filled_shape(doc, transform, rect_round_outline(&rect.shape));
-        }
-        StandardPrimitive::RectCham(rect) => {
-            push_filled_shape(
-                doc,
-                transform,
-                shapes::chamfered_rect(
-                    rect.shape.size.width,
-                    rect.shape.size.height,
-                    rect.shape.chamfer,
-                    [
-                        rect.shape.upper_right,
-                        rect.shape.lower_right,
-                        rect.shape.lower_left,
-                        rect.shape.upper_left,
-                    ],
-                ),
-            );
+            push_outline_path(doc, &contour.polygon, &contour.cutouts, transform);
+            None
         }
         StandardPrimitive::Butterfly(butterfly) => {
             push_butterfly_path(doc, transform, butterfly.shape.shape, butterfly.shape.size);
+            None
         }
         StandardPrimitive::Moire(moire) => {
             push_moire_path(doc, transform, moire);
+            None
         }
-    }
+    };
+    push_filled_shape(doc, transform, outline);
 
     if fill == Some(FillProperty::Hollow) {
         let style = primitive_style(primitive);
@@ -356,53 +332,33 @@ pub(super) fn lower_user_shape(
     primitive_start: usize,
 ) -> Result<()> {
     let path_start = doc.arena.paths.len() as u32;
-    let mut strokes = false;
     let mut void = false;
+    let mut outline = None;
+    let mut centerline = None;
     match &shape.shape {
-        UserShapeType::Circle(circle) => {
-            push_filled_shape(doc, transform, circle_outline(circle));
-        }
+        UserShapeType::Circle(circle) => outline = shapes::circle(circle.diameter),
         UserShapeType::RectCenter(rect) => {
-            push_filled_shape(doc, transform, rect_center_outline(rect));
+            outline = shapes::rect(rect.size.width, rect.size.height)
         }
-        UserShapeType::Oval(oval) => {
-            push_filled_shape(doc, transform, oval_outline(oval));
-        }
-        UserShapeType::RectRound(rect) => {
-            push_filled_shape(doc, transform, rect_round_outline(rect));
-        }
-        UserShapeType::Polygon(polygon) => {
-            push_polygon_path(doc, polygon, transform, FillRule::NonZero);
-        }
+        UserShapeType::Oval(oval) => outline = shapes::obround(oval.size.width, oval.size.height),
+        UserShapeType::RectRound(rect) => outline = rect_round_outline(rect),
+        UserShapeType::Polygon(polygon) => outline = Some(polygon_contour(polygon)),
         UserShapeType::Contour(contour) => {
-            push_contour_path(doc, contour, transform);
+            push_outline_path(doc, &contour.polygon, &contour.cutouts, transform);
         }
         UserShapeType::Line(line) => {
-            strokes = true;
-            push_open_contour(
-                doc,
-                transform,
-                vec![
-                    PathCmd::move_to(Point::new(line.start.x, line.start.y)),
-                    PathCmd::line_to(Point::new(line.end.x, line.end.y)),
-                ],
-            );
+            centerline = Some(vec![
+                PathCmd::move_to(Point::new(line.start.x, line.start.y)),
+                PathCmd::line_to(Point::new(line.end.x, line.end.y)),
+            ]);
         }
         UserShapeType::Arc(arc) => {
-            strokes = true;
-            push_open_contour(
-                doc,
-                transform,
-                vec![
-                    PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
-                    arc_step(arc.end, arc.center, arc.clockwise),
-                ],
-            );
+            centerline = Some(vec![
+                PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
+                arc_step(arc.end, arc.center, arc.clockwise),
+            ]);
         }
-        UserShapeType::Polyline(polyline) => {
-            strokes = true;
-            push_open_contour(doc, transform, poly_step_commands(polyline));
-        }
+        UserShapeType::Polyline(polyline) => centerline = Some(poly_step_commands(polyline)),
         UserShapeType::StandardPrimitive(primitive) => {
             void = lower_standard_primitive(context, doc, primitive, transform)?;
         }
@@ -432,6 +388,13 @@ pub(super) fn lower_user_shape(
                 ));
             }
         }
+    }
+    push_filled_shape(doc, transform, outline);
+    // An open contour stays unpainted until `paint_paths` strokes it.
+    let strokes = centerline.is_some();
+    if let Some(cmds) = centerline {
+        let contour = ContourBuf::new(cmds).with_consistent_arcs();
+        doc.push_path(Paint::None, [contour.transformed(transform)]);
     }
 
     let fill_desc = shape.fill_desc.as_deref().copied().or_else(|| {
@@ -513,30 +476,6 @@ pub(super) fn subtract_trailing_paths(
         };
     }
     Ok(())
-}
-
-/// An open contour awaiting its stroke; see [`paint_paths`].
-pub(super) fn push_open_contour(
-    doc: &mut GeometryDocument,
-    transform: Affine2,
-    cmds: Vec<PathCmd>,
-) {
-    doc.push_path(
-        Paint::None,
-        [ContourBuf::new(cmds)
-            .with_consistent_arcs()
-            .transformed(transform)],
-    );
-}
-
-pub(super) fn push_polygon_path(
-    doc: &mut GeometryDocument,
-    polygon: &ipc2581::types::Polygon,
-    transform: Affine2,
-    fill_rule: FillRule,
-) {
-    let contour = polygon_contour(polygon).transformed(transform);
-    doc.push_path(Paint::Fill { rule: fill_rule }, [contour]);
 }
 
 /// HATCH and MESH fills are painted solid, which overstates their copper.
@@ -657,14 +596,6 @@ pub(super) fn polygon_contour(polygon: &ipc2581::types::Polygon) -> ContourBuf {
     ContourBuf::new(cmds).with_consistent_arcs()
 }
 
-pub(super) fn push_contour_path(
-    doc: &mut GeometryDocument,
-    contour: &ipc2581::types::Contour,
-    transform: Affine2,
-) {
-    push_outline_path(doc, &contour.polygon, &contour.cutouts, transform);
-}
-
 /// An outline with its cutouts as one even-odd path; returns the path index.
 ///
 /// Even-odd imaging equals outline minus cutouts only while every cutout
@@ -696,18 +627,6 @@ pub(super) fn push_outline_path(
 }
 
 // Outlines of the shapes standard and user primitives share.
-
-pub(super) fn circle_outline(circle: &ipc2581::types::Circle) -> Option<ContourBuf> {
-    shapes::circle(circle.diameter)
-}
-
-pub(super) fn rect_center_outline(rect: &ipc2581::types::RectCenter) -> Option<ContourBuf> {
-    shapes::rect(rect.size.width, rect.size.height)
-}
-
-pub(super) fn oval_outline(oval: &ipc2581::types::Oval) -> Option<ContourBuf> {
-    shapes::obround(oval.size.width, oval.size.height)
-}
 
 pub(super) fn rect_round_outline(rect: &ipc2581::types::RectRound) -> Option<ContourBuf> {
     shapes::rounded_rect(
