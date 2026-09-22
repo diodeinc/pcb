@@ -66,10 +66,6 @@ impl Span {
         &items[self.range()]
     }
 
-    pub fn slice_mut<T>(self, items: &mut [T]) -> &mut [T] {
-        &mut items[self.range()]
-    }
-
     pub(crate) fn validate(self, name: &str, index: usize, len: usize) -> Result<(), String> {
         let end = self.start as usize + self.count as usize;
         if self.start as usize > len || end > len {
@@ -100,27 +96,11 @@ pub struct Path {
 }
 
 impl Path {
-    pub fn filled(rule: FillRule) -> Self {
-        Self {
-            contours: Span::EMPTY,
-            bbox: BBox::empty(),
-            paint: Paint::Fill { rule },
-        }
-    }
-
     pub fn stroked(stroke: StrokeStyle) -> Self {
         Self {
             contours: Span::EMPTY,
             bbox: BBox::empty(),
             paint: Paint::Stroke(stroke),
-        }
-    }
-
-    pub fn unpainted() -> Self {
-        Self {
-            contours: Span::EMPTY,
-            bbox: BBox::empty(),
-            paint: Paint::None,
         }
     }
 

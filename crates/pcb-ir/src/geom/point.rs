@@ -86,17 +86,4 @@ impl Mirror {
     pub const X: Self = Self { x: true, y: false };
     pub const Y: Self = Self { x: false, y: true };
     pub const XY: Self = Self { x: true, y: true };
-
-    /// The conventional single-axis mirror used by placements: mirror across
-    /// the Y axis (negate X) when `mirrored` is set.
-    pub fn across_y(mirrored: bool) -> Self {
-        Self {
-            x: mirrored,
-            y: false,
-        }
-    }
-
-    pub fn any(self) -> bool {
-        self.x || self.y
-    }
 }

@@ -9,7 +9,6 @@ use crate::geom::{
     AccuracyError, Affine2, BBox, FillRule, GeometryAccuracy, Paint, Point, Polarity, Resolution,
 };
 
-/// A closed polygon boundary, flattened to line segments.
 /// Chords past which a single curve is being flattened to an absurd budget.
 const MAX_CHORDS_PER_SEGMENT: f64 = 1.0e6;
 

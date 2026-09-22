@@ -96,11 +96,6 @@ impl PathCmd {
         self.p0.is_finite() && self.p1.is_finite() && self.p2.is_finite() && self.p3.is_finite()
     }
 
-    /// Whether this command is a curve rather than a line or a move.
-    pub fn is_curve(self) -> bool {
-        matches!(self.op, PathOp::ArcTo | PathOp::EllipseTo)
-    }
-
     /// The elliptical arc of an `EllipseTo` command starting at `start`.
     fn elliptical_arc(self, start: Point) -> EllipticalArc {
         EllipticalArc {
@@ -754,7 +749,7 @@ mod tests {
             let flat = ellipse
                 .flattened_curves(GeometryAccuracy::new(budget).unwrap())
                 .unwrap();
-            assert!(flat.cmds.iter().all(|cmd| !cmd.is_curve()));
+            assert!(flat.cmds.iter().all(|cmd| cmd.op != PathOp::EllipseTo));
             assert!(flat.uncertainty_mm <= budget);
             let worst = flat
                 .segments()

@@ -266,7 +266,7 @@ fn rigid_transforms_preserve_eligible_lengths_and_full_footprint_checks() {
             .map(|i| i.end_mm - i.start_mm)
             .sum::<f64>()
     };
-    for mirror in [Mirror::NONE, Mirror::across_y(true)] {
+    for mirror in [Mirror::NONE, Mirror::X] {
         let transform = Affine2::placement(Point::new(100.0, -30.0), 37.0, mirror, 1.0);
         let moved = classify(
             &transform_region(&board, transform).unwrap(),
