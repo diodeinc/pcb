@@ -1523,14 +1523,9 @@ mod tests {
             parent_instance: None,
             child_step: 1,
             source_step_ref: sym(2),
-            parent_step_ref: sym(1),
             transform: Affine2::translation(Point::new(3.0, 2.0)),
             repeat_index_x: 0,
             repeat_index_y: 0,
-            repeat_count_x: 1,
-            repeat_count_y: 1,
-            repeat_pitch_x: 0.0,
-            repeat_pitch_y: 0.0,
             bbox: bbox(3.0, 2.0, 7.0, 5.0),
         });
 

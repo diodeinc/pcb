@@ -40,14 +40,9 @@ pub(super) struct LayoutInstanceSpec {
     parent_instance: Option<u32>,
     child_step: u32,
     source_step_ref: Symbol,
-    parent_step_ref: Symbol,
     transform: Affine2,
     repeat_index_x: u32,
     repeat_index_y: u32,
-    repeat_count_x: u32,
-    repeat_count_y: u32,
-    repeat_pitch_x: f64,
-    repeat_pitch_y: f64,
 }
 
 pub fn extract_layout(ipc: &Ipc2581) -> Result<GeometryDocument> {
@@ -200,14 +195,9 @@ pub(super) fn append_layout_repeats(
                         parent_instance: parent.instance,
                         child_step: child_layout_step,
                         source_step_ref: source_step.name,
-                        parent_step_ref: parent.step.name,
                         transform,
                         repeat_index_x: ix,
                         repeat_index_y: iy,
-                        repeat_count_x: repeat.nx,
-                        repeat_count_y: repeat.ny,
-                        repeat_pitch_x: repeat.dx,
-                        repeat_pitch_y: repeat.dy,
                     },
                 );
                 if is_panel_step(source_step) {
@@ -322,14 +312,9 @@ pub(super) fn push_layout_instance(doc: &mut GeometryDocument, spec: LayoutInsta
         parent_instance: spec.parent_instance,
         child_step: spec.child_step,
         source_step_ref: spec.source_step_ref,
-        parent_step_ref: spec.parent_step_ref,
         transform: spec.transform,
         repeat_index_x: spec.repeat_index_x,
         repeat_index_y: spec.repeat_index_y,
-        repeat_count_x: spec.repeat_count_x,
-        repeat_count_y: spec.repeat_count_y,
-        repeat_pitch_x: spec.repeat_pitch_x,
-        repeat_pitch_y: spec.repeat_pitch_y,
         bbox: BBox::empty(),
     });
     instance_index

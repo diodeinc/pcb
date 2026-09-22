@@ -84,14 +84,9 @@ pub struct LayoutInstance {
     pub parent_instance: Option<u32>,
     pub child_step: u32,
     pub source_step_ref: Symbol,
-    pub parent_step_ref: Symbol,
     pub transform: Affine2,
     pub repeat_index_x: u32,
     pub repeat_index_y: u32,
-    pub repeat_count_x: u32,
-    pub repeat_count_y: u32,
-    pub repeat_pitch_x: f64,
-    pub repeat_pitch_y: f64,
     pub bbox: BBox,
 }
 
