@@ -730,40 +730,24 @@ limit = { minimum = "300 mil" }
                 assert!(aspect_ratio.iter().any(|rule| rule.id.contains("via")));
                 assert!(aspect_ratio.iter().any(|rule| rule.id.contains("pth")));
 
-                let hole_clearance = rules
-                    .iter()
-                    .filter(|rule| matches!(rule.kind, rules::RuleKind::HoleToCopperClearance(_)))
-                    .collect::<Vec<_>>();
-                assert_eq!(hole_clearance.len(), 3);
-                assert!(
-                    hole_clearance
-                        .iter()
-                        .all(|rule| rule.limit.length().millimeters() == copper_clearance)
+                let limits = |of: fn(&rules::RuleKind) -> bool| {
+                    let rules = rules.iter().filter(|rule| of(&rule.kind));
+                    rules
+                        .map(|rule| rule.limit.length().millimeters())
+                        .collect::<Vec<_>>()
+                };
+                use rules::RuleKind::*;
+                assert_eq!(
+                    limits(|kind| matches!(kind, HoleToCopperClearance(_))),
+                    [copper_clearance; 3]
                 );
-
-                let hole_to_edge = rules
-                    .iter()
-                    .filter(|rule| {
-                        matches!(rule.kind, rules::RuleKind::HoleToBoardEdgeClearance(_))
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(hole_to_edge.len(), 3);
-                assert!(
-                    hole_to_edge
-                        .iter()
-                        .all(|rule| rule.limit.length().millimeters() == edge_clearance)
+                assert_eq!(
+                    limits(|kind| matches!(kind, HoleToBoardEdgeClearance(_))),
+                    [edge_clearance; 3]
                 );
-                let slot_to_edge = rules
-                    .iter()
-                    .filter(|rule| {
-                        matches!(rule.kind, rules::RuleKind::SlotToBoardEdgeClearance(_))
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(slot_to_edge.len(), 2);
-                assert!(
-                    slot_to_edge
-                        .iter()
-                        .all(|rule| rule.limit.length().millimeters() == edge_clearance)
+                assert_eq!(
+                    limits(|kind| matches!(kind, SlotToBoardEdgeClearance(_))),
+                    [edge_clearance; 2]
                 );
             }
         }

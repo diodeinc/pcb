@@ -947,43 +947,116 @@ limit = { minimum = "300 mil" }
     }
 
     #[test]
-    fn rejects_unknown_profiles_sources_and_duplicate_rule_ids() {
-        assert!(
-            Pdk::parse(&MIXED_UNIT_PDK.replace(
+    fn rejects_malformed_pdks() {
+        const VIA_HOLE: &str = "limit = { minimum = \"0.2 mm\" }";
+        const VIA_COPPER: &str = "select = { hole = \"via\" }\nlimit = { minimum = \"0.2 mm\", preferred = \"0.25 mm\" }";
+        const VIA_RATIO: &str = "select = { hole = \"via\" }\nlimit = { maximum = 8.0 }";
+        const MULTILAYER: &str =
+            "{ id = \"multilayer\", when = { copper_layers = { minimum = 3, maximum = 10 } }";
+        // What to replace, with what, and why that is rejected where it matters.
+        let cases = [
+            (
                 "default_profile = \"standard\"",
-                "default_profile = \"missing\""
-            ))
-            .is_err()
-        );
-        let unknown_profile = MIXED_UNIT_PDK.replace(
-            "id = \"via-hole\"",
-            "id = \"via-hole\"\nprofiles = [\"missing\"]",
-        );
-        assert!(
-            Pdk::parse(&unknown_profile)
-                .unwrap()
-                .validate_rule_references()
-                .is_err()
-        );
-        let duplicate = MIXED_UNIT_PDK.replace("id = \"via-spacing\"", "id = \"via-hole\"");
-        assert!(
-            Pdk::parse(&duplicate)
-                .unwrap()
-                .validate_rule_references()
-                .is_err()
-        );
-        let reserved = MIXED_UNIT_PDK.replace(
-            "id = \"via-hole\"",
-            "id = \"profile.support.copper_layers.minimum\"",
-        );
-        assert!(
-            Pdk::parse(&reserved)
-                .unwrap()
-                .validate_rule_references()
-                .unwrap_err()
-                .to_string()
-                .contains("duplicate lowered PDK rule id")
-        );
+                "default_profile = \"missing\"",
+                "",
+            ),
+            (
+                "id = \"via-hole\"",
+                "id = \"via-hole\"\nprofiles = [\"missing\"]",
+                "unknown profile",
+            ),
+            (
+                "id = \"via-spacing\"",
+                "id = \"via-hole\"",
+                "duplicate PDK rule id",
+            ),
+            (
+                "id = \"via-hole\"",
+                "id = \"profile.support.copper_layers.minimum\"",
+                "duplicate lowered PDK rule id",
+            ),
+            (
+                "schema_version = 2",
+                "schema_version = 1",
+                "unsupported PDK schema_version",
+            ),
+            ("\"0.2 mm\"", "0.2", ""),
+            (
+                VIA_HOLE,
+                "cases = [{ id = \"bad\", when = { copper_layers = { minimum = 4, maximum = 2 } }, limit = { minimum = \"0.2 mm\" } }]",
+                "must not exceed maximum",
+            ),
+            (
+                VIA_HOLE,
+                "cases = [{ id = \"bad\", when = { copper = { position = \"outer\" } }, limit = { minimum = \"0.2 mm\" } }]",
+                "supported only for copper rules",
+            ),
+            (
+                VIA_HOLE,
+                "limit = {}",
+                "requires a minimum, preferred, or both",
+            ),
+            (
+                MULTILAYER,
+                "{ id = \"overlap\", when = { copper_layers = { minimum = 2, maximum = 10 } }",
+                "overlap",
+            ),
+            (
+                VIA_COPPER,
+                "select = { hole = \"slot\" }\nlimit = { minimum = \"0.2 mm\" }",
+                "",
+            ),
+            (
+                VIA_COPPER,
+                "hole = \"via\"\nminimum = \"0.2 mm\"\npreferred = \"0.25 mm\"",
+                "",
+            ),
+            (
+                "preferred = \"0.25 mm\"",
+                "preferred = \"0.15 mm\"",
+                "preferred limit",
+            ),
+            (
+                "select = { hole = \"npth\" }",
+                "select = { hole = \"pad\" }",
+                "",
+            ),
+            (
+                "select = { hole = \"npth\" }",
+                "select = { plating = \"nonplated\" }",
+                "",
+            ),
+            (
+                "select = { plating = \"nonplated\" }",
+                "select = { plating = \"unplated\" }",
+                "",
+            ),
+            (
+                "cases = [\n  { id = \"2-to-8-layer\"",
+                "limit = { minimum = \"0.3 mm\" }\ncases = [\n  { id = \"2-to-8-layer\"",
+                "mutually exclusive",
+            ),
+            (
+                VIA_RATIO,
+                "select = { hole = \"npth\" }\nlimit = { maximum = 8.0 }",
+                "",
+            ),
+            (VIA_RATIO, "hole = \"via\"\nmaximum = 8.0", ""),
+            ("maximum = 8.0", "maximum = 0.0", ""),
+            ("maximum = 8.0", "maximum = -1.0", ""),
+            ("maximum = 8.0", "maximum = inf", ""),
+            ("maximum = 8.0", "maximum = nan", ""),
+            ("maximum = 8.0", "maximum = \"8.0\"", ""),
+        ];
+        for (from, to, why) in cases {
+            assert!(MIXED_UNIT_PDK.contains(from), "fixture lacks {from}");
+            let rejection = match Pdk::parse(&MIXED_UNIT_PDK.replace(from, to)) {
+                Ok(pdk) => pdk.validate_rule_references().err(),
+                Err(error) => Some(error),
+            };
+            let rejection = rejection.unwrap_or_else(|| panic!("accepted {to}"));
+            assert!(rejection.to_string().contains(why), "{to}: {rejection:#}");
+        }
     }
 
     #[test]
@@ -1000,132 +1073,6 @@ limit = { minimum = "300 mil" }
         for (ounces, class) in [(0.437, 0.5), (1.022, 1.0), (2.011, 2.0), (0.35, 1.0 / 3.0)] {
             assert_eq!(copper_weight_class(ounces), class);
         }
-    }
-
-    #[test]
-    fn rejects_old_shapes_bad_ranges_and_overlapping_cases() {
-        assert!(
-            Pdk::parse(&MIXED_UNIT_PDK.replace("schema_version = 2", "schema_version = 1"))
-                .is_err()
-        );
-        assert!(Pdk::parse(&MIXED_UNIT_PDK.replace("\"0.2 mm\"", "0.2")).is_err());
-        let invalid = MIXED_UNIT_PDK.replace(
-            "limit = { minimum = \"0.2 mm\" }",
-            "cases = [{ id = \"bad\", when = { copper_layers = { minimum = 4, maximum = 2 } }, limit = { minimum = \"0.2 mm\" } }]",
-        );
-        assert!(
-            Pdk::parse(&invalid)
-                .unwrap()
-                .validate_rule_references()
-                .is_err()
-        );
-        let unsupported = MIXED_UNIT_PDK.replace(
-            "limit = { minimum = \"0.2 mm\" }",
-            "cases = [{ id = \"bad\", when = { copper = { position = \"outer\" } }, limit = { minimum = \"0.2 mm\" } }]",
-        );
-        assert!(
-            Pdk::parse(&unsupported)
-                .unwrap()
-                .validate_rule_references()
-                .unwrap_err()
-                .to_string()
-                .contains("supported only for copper rules")
-        );
-        let overlapping = MIXED_UNIT_PDK.replace(
-            "{ id = \"multilayer\", when = { copper_layers = { minimum = 3, maximum = 10 } }, limit = { minimum = \"0.09 mm\" } }",
-            "{ id = \"overlap\", when = { copper_layers = { minimum = 2, maximum = 10 } }, limit = { minimum = \"0.09 mm\" } }",
-        );
-        assert!(
-            Pdk::parse(&overlapping)
-                .unwrap()
-                .validate_rule_references()
-                .unwrap_err()
-                .to_string()
-                .contains("overlap")
-        );
-
-        let malformed = MIXED_UNIT_PDK.replace(
-            "select = { hole = \"via\" }\nlimit = { minimum = \"0.2 mm\", preferred = \"0.25 mm\" }",
-            "select = { hole = \"slot\" }\nlimit = { minimum = \"0.2 mm\", preferred = \"0.25 mm\" }",
-        );
-        assert!(Pdk::parse(&malformed).is_err());
-
-        let invalid_tier = MIXED_UNIT_PDK.replace(
-            "limit = { minimum = \"0.2 mm\", preferred = \"0.25 mm\" }",
-            "limit = { minimum = \"0.2 mm\", preferred = \"0.15 mm\" }",
-        );
-        assert!(
-            Pdk::parse(&invalid_tier)
-                .unwrap()
-                .validate_rule_references()
-                .is_err()
-        );
-
-        let empty_limit = MIXED_UNIT_PDK.replace("limit = { minimum = \"0.2 mm\" }", "limit = {}");
-        assert!(
-            Pdk::parse(&empty_limit)
-                .unwrap()
-                .validate_rule_references()
-                .unwrap_err()
-                .to_string()
-                .contains("requires a minimum, preferred, or both")
-        );
-
-        for (selector, malformed) in [
-            ("hole = \"npth\"", "hole = \"pad\""),
-            ("hole = \"npth\"", "plating = \"nonplated\""),
-            ("plating = \"nonplated\"", "plating = \"unplated\""),
-        ] {
-            let selector = format!("select = {{ {selector} }}");
-            assert!(MIXED_UNIT_PDK.contains(&selector));
-            let malformed = format!("select = {{ {malformed} }}");
-            assert!(Pdk::parse(&MIXED_UNIT_PDK.replace(&selector, &malformed)).is_err());
-        }
-        let limit_and_cases = MIXED_UNIT_PDK.replace(
-            "cases = [\n  { id = \"2-to-8-layer\"",
-            "limit = { minimum = \"0.3 mm\" }\ncases = [\n  { id = \"2-to-8-layer\"",
-        );
-        assert!(
-            Pdk::parse(&limit_and_cases)
-                .unwrap()
-                .validate_rule_references()
-                .unwrap_err()
-                .to_string()
-                .contains("mutually exclusive")
-        );
-
-        let old_hole_shape = MIXED_UNIT_PDK.replace(
-            "select = { hole = \"via\" }\nlimit = { minimum = \"0.2 mm\", preferred = \"0.25 mm\" }",
-            "hole = \"via\"\nminimum = \"0.2 mm\"\npreferred = \"0.25 mm\"",
-        );
-        assert!(Pdk::parse(&old_hole_shape).is_err());
-    }
-
-    #[test]
-    fn rejects_npth_and_invalid_hole_aspect_ratios() {
-        assert!(
-            Pdk::parse(&MIXED_UNIT_PDK.replace(
-                "select = { hole = \"via\" }\nlimit = { maximum = 8.0 }",
-                "select = { hole = \"npth\" }\nlimit = { maximum = 8.0 }"
-            ))
-            .is_err()
-        );
-        for invalid in ["0.0", "-1.0", "inf", "nan", "\"8.0\""] {
-            assert!(
-                Pdk::parse(
-                    &MIXED_UNIT_PDK.replace("maximum = 8.0", &format!("maximum = {invalid}"))
-                )
-                .is_err(),
-                "accepted invalid ratio {invalid}"
-            );
-        }
-        assert!(
-            Pdk::parse(&MIXED_UNIT_PDK.replace(
-                "select = { hole = \"via\" }\nlimit = { maximum = 8.0 }",
-                "hole = \"via\"\nmaximum = 8.0"
-            ))
-            .is_err()
-        );
     }
 
     #[test]
