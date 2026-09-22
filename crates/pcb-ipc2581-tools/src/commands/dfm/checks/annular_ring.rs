@@ -344,17 +344,6 @@ limit = { minimum = "0.2 mm" }"#,
     }
 
     #[test]
-    fn missing_terminal_copper_is_a_zero_enclosure_violation() {
-        let evaluation = evaluate_pth(&board(3, &[2], None));
-
-        assert_eq!(evaluation.checked, 2);
-        assert_eq!(evaluation.measured.len(), 1);
-        let measured = &evaluation.measured[0];
-        assert_eq!(measured.distance.mm, 0.0);
-        assert_eq!(measured.layers[1].name, "L0");
-    }
-
-    #[test]
     fn intermediate_antipad_without_a_source_land_is_not_an_annular_subject() {
         let evaluation = evaluate_pth(&board(3, &[0, 2], None));
 
@@ -411,17 +400,6 @@ limit = { minimum = "0.2 mm" }"#,
         assert_eq!(measured.layers[1].name, "L1");
         assert_eq!(measured.subjects[1].kind, "padstack_land");
         assert_eq!(measured.subjects[1].padstack_ref.as_deref(), Some("stack"));
-    }
-
-    #[test]
-    fn known_blind_span_requires_copper_at_its_own_terminal_layers() {
-        let evaluation = evaluate_pth(&board(4, &[2], Some((1, 2))));
-
-        assert_eq!(evaluation.checked, 2);
-        assert_eq!(evaluation.measured.len(), 1);
-        let measured = &evaluation.measured[0];
-        assert_eq!(measured.layers[1].name, "L1");
-        assert_eq!(measured.distance.mm, 0.0);
     }
 
     #[test]

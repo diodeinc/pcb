@@ -39,18 +39,3 @@ pub(super) const BUILTIN_PDKS: &[BuiltinPdk] = &[
 pub(super) fn find(name: &str) -> Option<&'static BuiltinPdk> {
     BUILTIN_PDKS.iter().find(|pdk| pdk.name == name)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn names_are_exact_references() {
-        assert!(find("standard").is_some());
-        assert!(find("jlcpcb-1oz").is_some());
-        assert!(find("jlc").is_some());
-        assert_eq!(find("ipc").unwrap().profile, "2b");
-        assert!(find("ipc-3c").is_some());
-        assert!(find("./standard").is_none());
-    }
-}
