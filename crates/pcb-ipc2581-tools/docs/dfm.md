@@ -158,10 +158,7 @@ string containing a number and `mm`, `mil`, `mils`, or `um`; copper weight is a
 positive `oz` string. A hole-aspect-ratio `limit.maximum` is a positive finite
 unitless number; zero, nonfinite, string-valued, and otherwise malformed ratios
 are rejected. Units can be mixed. Checks normalize lengths to
-millimeters and retain both source spelling and normalized value. Profile
-defaults document an order's assumptions in the report; an outer/inner copper
-weight default is also the fallback for a weight-conditioned rule when the
-source stackup does not state that weight.
+millimeters and retain both source spelling and normalized value.
 
 Every direct dimensional limit or case has a `minimum`, a `preferred` tier, or
 both:
@@ -261,14 +258,12 @@ then measures only pairs of distinct owners. A net is scoped by its
 materialized Step occurrence, so repeated boards do not become electrically
 connected merely because they reuse the same net names.
 
-Hole-to-copper clearance uses the same attributed composition. For a via or
-PTH, copper proven to belong to the hole's occurrence-scoped net or a resolved
-physical land is excluded; other-net, auxiliary, and unattributed functional
-copper remains an offender. For an NPTH, every final copper owner is an
-offender, including a same-named net. A drill or rout layer that declares no
-`Span` is through-board, exactly as import reads it. A declared span that
-cannot be resolved in the physical stackup leaves the rule `incomplete` rather
-than guessing which copper layers the drill intersects.
+Hole- and slot-to-copper clearance use the same attributed composition; the
+[rule semantics](#rule-semantics) state which copper a drilled feature owns. A
+drill or rout layer that declares no `Span` is through-board, exactly as import
+reads it. A declared span that cannot be resolved in the physical stackup
+leaves the rule `incomplete` rather than guessing which copper layers the
+drill intersects.
 
 `--layout-target board` checks the canonical board step. `board-array` checks
 the root layout and every nested repeat. A layout is a few Step definitions
@@ -306,9 +301,7 @@ The same evaluators therefore run on a lone board, a board array or a
 fabrication panel without a second DFM code path: a lone board is a layout of
 one Step placed once. Rules are rigid-motion invariant, so a Step's findings
 hold wherever it is placed; the report lists those placements once per Step
-(see [frames](#frames)) instead of repeating findings. The
-board-array-spacing rule compares the board arrays one Step places directly
-and is not applicable when no Step places two.
+(see [frames](#frames)) instead of repeating findings.
 
 ## Rule semantics
 
@@ -388,7 +381,9 @@ and is not applicable when no Step places two.
   as plated slots: its own occurrence-scoped net, or a resolved land with the
   same stated padstack and no contradictory net, whose net it then owns on
   every layer. A land linked only because the drill overlaps it proves nothing,
-  so a drill through foreign copper is reported. NPTH copper is never exempt. An unresolvable drill span leaves the rule `incomplete`.
+  so a drill through foreign copper is reported. Other-net, auxiliary, and
+  unattributed functional copper remains an offender. NPTH copper is never
+  exempt, a same-named net included.
 - Slot-to-copper clearance (`rules.copper.slot_clearance`) measures the true
   materialized filled slot outline, including its ends, against unrelated
   final copper on its physical span. Touching or overlapping copper has zero
@@ -496,14 +491,13 @@ check via, PTH, and NPTH hole-to-copper clearance at 0.25 mm for Level A,
 plated-slot, and nonplated-slot clearance to the board edge at 0.50 mm for
 Level A, 0.40 mm for Level B, and 0.30 mm for Level C. Plated and nonplated
 slot-to-copper clearance prefers 0.50 / 0.40 / 0.30 mm for A/B/C and warns
-on shortfalls. Diode deliberately allows more routing margin than for circular
-drills; these are opinionated guidance, not IPC requirements.
-These values apply across all three performance classes. Each profile assumes 1.6 mm board
-thickness for the through-hole aspect-ratio fallback described above. Diode
-chose these opinionated values using IPC design topics as context; they are not
-licensed IPC numeric matrices, do not prove full IPC compliance, and do not
-imply IPC certification. A pass covers only the checks listed in the selected
-profile's `coverage` metadata.
+on shortfalls, deliberately allowing more routing margin than for circular
+drills. These values apply across all three performance classes. Each profile
+assumes 1.6 mm board thickness for the through-hole aspect-ratio fallback
+described above. Diode chose these opinionated values using IPC design topics
+as context; they are not licensed IPC numeric matrices, do not prove full IPC
+compliance, and do not imply IPC certification. A pass covers only the checks
+listed in the selected profile's `coverage` metadata.
 
 All nine IPC profiles also adopt the following thresholds from the bundled
 Diode `standard.toml` PDK, cited as `diode-standard`. These general-purpose
@@ -695,10 +689,8 @@ consumer's machine to render or validate the report.
   therefore has zero clearance. Witness-point separation is not necessarily
   the measured width or diameter. Scalar aspect-ratio sites have no measurement
   witnesses; their circle evidence locates the hole.
-- `frame` is the index of the finding's [frame](#frames): the Step whose
-  coordinates the location, witnesses, sites and evidence are in, and every
-  placement at which the finding occurs. An `unresolved` measurement carries
-  the same index.
+- `frame` is the index of the finding's [frame](#frames). An `unresolved`
+  measurement carries the same index.
 
 Check-owned sites, measurements, witnesses, and evidence paths are authoritative.
 The optional `evidence.display` construction uses the same world millimeters:
