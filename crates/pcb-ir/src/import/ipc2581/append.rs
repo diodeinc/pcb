@@ -21,7 +21,8 @@ pub(super) fn append_span<T: Clone>(target: &mut Vec<T>, source: &[T], span: Spa
     Span::new(start, span.count)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Append one source layer under `transform` to the target's only layer and
+/// return the bounds of what it added.
 pub(super) fn append_transformed_layer(
     target: &mut GeometryDocument,
     source: &GeometryDocument,
@@ -29,7 +30,6 @@ pub(super) fn append_transformed_layer(
     transform: Affine2,
     source_set_offset: u32,
     source_instance: Option<u32>,
-    target_layer: u32,
 ) -> Result<BBox> {
     let layer = &source.layers[layer_index];
     let mut layer_bbox = BBox::empty();
@@ -44,7 +44,7 @@ pub(super) fn append_transformed_layer(
         );
         let target_set = target.feature_sets.len() as u32;
         target.feature_sets.push(FeatureSet {
-            layer: target_layer,
+            layer: 0,
             source_set_index: source_set
                 .source_set_index
                 .checked_add(source_set_offset)
@@ -58,10 +58,8 @@ pub(super) fn append_transformed_layer(
         for feature in source_set.features.slice(&source.features) {
             let spec_refs =
                 append_span(&mut target.spec_refs, &source.spec_refs, feature.spec_refs);
-            let target_placement_group = if let Some(source_group_id) = feature.placement_group {
-                if let Some(&target_group_id) = placement_groups.get(&source_group_id) {
-                    Some(target_group_id)
-                } else {
+            let target_placement_group = feature.placement_group.map(|source_group_id| {
+                *placement_groups.entry(source_group_id).or_insert_with(|| {
                     let source_group = &source.feature_placement_groups[source_group_id as usize];
                     let placement_start = target.feature_placements.len() as u32;
                     target.feature_placements.extend(
@@ -71,23 +69,16 @@ pub(super) fn append_transformed_layer(
                             .iter()
                             .map(|&placement| transform.concat(placement)),
                     );
-                    let target_group_id = target.feature_placement_groups.len() as u32;
                     target.feature_placement_groups.push(FeaturePlacementGroup {
-                        placements: Span::new(
-                            placement_start,
-                            target.feature_placements.len() as u32 - placement_start,
-                        ),
+                        placements: Span::new(placement_start, source_group.placements.count),
                         features: Span::new(
                             target.features.len() as u32,
                             source_group.features.count,
                         ),
                     });
-                    placement_groups.insert(source_group_id, target_group_id);
-                    Some(target_group_id)
-                }
-            } else {
-                None
-            };
+                    target.feature_placement_groups.len() as u32 - 1
+                })
+            });
             // Grouped geometry stays local; its placements carry the transform.
             let paths = target.arena.append_paths_from(
                 &source.arena,

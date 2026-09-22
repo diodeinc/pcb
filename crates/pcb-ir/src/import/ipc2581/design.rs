@@ -695,7 +695,6 @@ impl ImportedDesign {
                     occurrence.root_from_step,
                     source_set_offset,
                     occurrence.layout.source_instance(),
-                    0,
                 )?);
             }
             // Sets are numbered across every occurrence, held or not.
