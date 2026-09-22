@@ -13,7 +13,8 @@
 //!   [`dialects::assembly`] joins source-independent component, BOM, package,
 //!   AVL, and layout facts and lowers to [`dialects::placement`].
 //!   [`dialects::nc`] carries drill and rout data.
-//! - [`render`] turns mask documents into SVG, PNG, or terminal output.
+//! - [`render`] turns artwork and mask documents into SVG, PNG, or terminal
+//!   output.
 //!
 //! All geometry is canonically in millimeters.
 //!
