@@ -112,7 +112,7 @@ pub fn build_gerber_x2_files(
             if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
                 bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
             }
-            artwork_from_ipc_layer(imported, &standard_primitives, &doc, 0, spec)
+            artwork_from_ipc_layer(imported, &standard_primitives, &doc, spec)
         };
         if matches!(plan.role, GerberLayerRole::Vcut | GerberLayerRole::Score)
             && artwork.layers[0].objects.is_empty()
@@ -272,7 +272,6 @@ fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
         LayerFunction::Silkscreen | LayerFunction::Legend => Some(GerberLayerRole::Legend),
         LayerFunction::Assembly => Some(GerberLayerRole::AssemblyDrawing),
         LayerFunction::BoardFab => Some(GerberLayerRole::FabricationDrawing),
-        LayerFunction::Drill | LayerFunction::Rout => None,
         LayerFunction::BoardOutline => Some(GerberLayerRole::Profile),
         LayerFunction::VCut => Some(GerberLayerRole::Vcut),
         LayerFunction::Score => Some(GerberLayerRole::Score),
@@ -423,10 +422,9 @@ fn artwork_from_ipc_layer(
     imported: &ImportedDesign,
     standard_primitives: &StandardPrimitives,
     doc: &GeometryDocument,
-    layer_index: usize,
     spec: GerberArtworkSpec,
 ) -> GerberArtwork {
-    let layer = &doc.layers[layer_index];
+    let layer = &doc.layers[0];
     let header = pcb_ir::dialects::artwork::Layer {
         name: layer.name.clone(),
         role: spec.role.ir_role(),
@@ -437,7 +435,7 @@ fn artwork_from_ipc_layer(
     };
     let mut artwork = lower_layer_to_artwork_with(
         doc,
-        layer_index,
+        0,
         header,
         &gerber_target(spec.role, &|primitive| {
             catalogue_aperture(standard_primitives, primitive)

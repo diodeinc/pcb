@@ -863,37 +863,26 @@ mod tests {
                 aperture: 10,
             })
         };
-        let layer = GerberLayer {
-            apertures: vec![WriterAperture {
-                code: 10,
-                template: WriterApertureTemplate::Circle {
-                    diameter: 0.1,
-                    hole_diameter: None,
-                },
-                attributes: AttributeSets::EMPTY,
-            }],
-            objects: vec![
-                draw(point(0.0, 0.0), point(1.0, 0.0)),
-                draw(point(1.0, 0.0), point(1.0, 1.0)),
-                draw(point(2.0, 2.0), point(3.0, 2.0)),
-                WriterObject::dark(ObjectKind::Region {
-                    contours: vec![Contour {
-                        segments: [
-                            (3.0, 2.0, 4.0, 2.0),
-                            (4.0, 2.0, 4.0, 3.0),
-                            (4.0, 3.0, 3.0, 2.0),
-                        ]
-                        .map(|(x0, y0, x1, y1)| ContourSegment::Line {
-                            start: point(x0, y0),
-                            end: point(x1, y1),
-                        })
-                        .to_vec(),
-                    }],
-                }),
-                draw(point(3.0, 2.0), point(5.0, 5.0)),
-            ],
-            ..GerberLayer::default()
-        };
+        let layer = stroke_layer(vec![
+            draw(point(0.0, 0.0), point(1.0, 0.0)),
+            draw(point(1.0, 0.0), point(1.0, 1.0)),
+            draw(point(2.0, 2.0), point(3.0, 2.0)),
+            WriterObject::dark(ObjectKind::Region {
+                contours: vec![Contour {
+                    segments: [
+                        (3.0, 2.0, 4.0, 2.0),
+                        (4.0, 2.0, 4.0, 3.0),
+                        (4.0, 3.0, 3.0, 2.0),
+                    ]
+                    .map(|(x0, y0, x1, y1)| ContourSegment::Line {
+                        start: point(x0, y0),
+                        end: point(x1, y1),
+                    })
+                    .to_vec(),
+                }],
+            }),
+            draw(point(3.0, 2.0), point(5.0, 5.0)),
+        ]);
 
         let output = write_layer(&layer).unwrap();
         // One move per disjoint stroke start, the region contour, and the
@@ -1014,16 +1003,7 @@ mod tests {
         assert_eq!(objects[3].attributes, AttributeSets::EMPTY);
         let layer = GerberLayer {
             attribute_sets,
-            apertures: vec![WriterAperture {
-                code: 10,
-                template: WriterApertureTemplate::Circle {
-                    diameter: 1.0,
-                    hole_diameter: None,
-                },
-                attributes: AttributeSets::EMPTY,
-            }],
-            objects,
-            ..GerberLayer::default()
+            ..stroke_layer(objects)
         };
 
         let output = write_layer(&layer).unwrap();

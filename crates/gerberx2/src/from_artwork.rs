@@ -1538,7 +1538,7 @@ mod tests {
     }
 
     #[test]
-    fn formerly_collapsing_cut_in_fixtures_are_all_serializable() {
+    fn collapsing_cut_in_fixtures_are_all_serializable() {
         for (top_y, dx) in [(3.001, 0.0), (3.003, 0.0), (3.001, -0.001), (3.003, -0.001)] {
             let (_, layer) = even_odd_region_layer(&[
                 polygon_payload([

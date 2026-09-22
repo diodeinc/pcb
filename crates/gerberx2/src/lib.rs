@@ -32,9 +32,6 @@ pub enum GerberError {
 
     #[error("Invalid numeric value: {0}")]
     InvalidNumber(String),
-
-    #[error("Render error: {0}")]
-    Render(String),
 }
 
 pub type Result<T> = std::result::Result<T, GerberError>;

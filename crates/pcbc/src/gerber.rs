@@ -116,15 +116,9 @@ fn compare(
         report.candidate.area_mm2 - report.reference.area_mm2
     );
     println!(
-        "reference bbox [{:.6},{:.6}]..[{:.6},{:.6}], candidate bbox [{:.6},{:.6}]..[{:.6},{:.6}]",
-        report.reference.bbox.min.x,
-        report.reference.bbox.min.y,
-        report.reference.bbox.max.x,
-        report.reference.bbox.max.y,
-        report.candidate.bbox.min.x,
-        report.candidate.bbox.min.y,
-        report.candidate.bbox.max.x,
-        report.candidate.bbox.max.y
+        "reference bbox {}, candidate bbox {}",
+        format_bbox(report.reference.bbox),
+        format_bbox(report.candidate.bbox)
     );
     println!(
         "reference objects {}, paths {}; candidate objects {}, paths {}",
@@ -159,15 +153,19 @@ fn print_difference_components(
 ) {
     for (index, component) in summary.components.iter().take(12).enumerate() {
         println!(
-            "{label} component {}: area {:.6} mm², bbox [{:.6},{:.6}]..[{:.6},{:.6}]",
+            "{label} component {}: area {:.6} mm², bbox {}",
             index + 1,
             component.area_mm2,
-            component.bbox.min.x,
-            component.bbox.min.y,
-            component.bbox.max.x,
-            component.bbox.max.y
+            format_bbox(component.bbox)
         );
     }
+}
+
+fn format_bbox(bbox: pcb_ir::geom::BBox) -> String {
+    format!(
+        "[{:.6},{:.6}]..[{:.6},{:.6}]",
+        bbox.min.x, bbox.min.y, bbox.max.x, bbox.max.y
+    )
 }
 
 /// Render the extracted artwork as it is: flashes, strokes and polarity runs
