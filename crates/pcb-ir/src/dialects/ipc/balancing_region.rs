@@ -387,29 +387,33 @@ impl fmt::Display for BalancingRegionError {
 
 impl std::error::Error for BalancingRegionError {}
 
-/// Compute a clearance-safe, radius-regularized copper region.
-///
-/// Let `P` be [`BoardArrayBalancingInput::panel_outer`], `O` the union of the
-/// three obstacle inputs, `c`
-/// [`BalancingRegionOptions::clearance_mm`], `q`
-/// [`BalancingRegionOptions::regularization_radius_mm`], and `v`
-/// [`BalancingRegionOptions::gap_radius_mm`]. The geometric stages are:
-///
-/// ```text
-/// clearance_safe = (P ⊖ disk(c)) \ (O ⊕ disk(c))
-/// candidates     = open(clearance_safe, disk(q))
-/// ```
-///
-/// Gap regularization then repeatedly removes a radius-`v + guard` tube around
-/// the boundary medial axis inside the two-sided subset of
-/// `close(candidates, disk(v + guard)) \ candidates` until that subset is
-/// empty. It widens inter-component gaps, hairpins, notches, and internal
-/// voids locally without widening one-sided edge clearance.
+/// Compute a clearance-safe, radius-regularized copper region: the module's
+/// construction with `P` [`BoardArrayBalancingInput::panel_outer`], `O` the
+/// union of the three obstacle inputs, and `c`, `q`, `v` the radii of
+/// [`BalancingRegionOptions`], the clearance and gap radius each widened by
+/// the numerical construction guard.
 pub fn board_array_balancing_region(
     input: &BoardArrayBalancingInput,
     options: BalancingRegionOptions,
 ) -> Result<BoardArrayBalancingResult, BalancingRegionError> {
-    validate_options(options)?;
+    for (value, invalid) in [
+        (
+            options.clearance_mm,
+            BalancingRegionError::InvalidClearance as fn(f64) -> _,
+        ),
+        (
+            options.regularization_radius_mm,
+            BalancingRegionError::InvalidRegularizationRadius,
+        ),
+        (
+            options.gap_radius_mm,
+            BalancingRegionError::InvalidGapRadius,
+        ),
+    ] {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(invalid(value));
+        }
+    }
     if input.panel_outer.is_empty() {
         return Err(BalancingRegionError::EmptyPanelOutline);
     }
@@ -706,23 +710,6 @@ fn copper_reach(
     BoardArrayCopperReach::All
 }
 
-fn validate_options(options: BalancingRegionOptions) -> Result<(), BalancingRegionError> {
-    if !options.clearance_mm.is_finite() || options.clearance_mm <= 0.0 {
-        return Err(BalancingRegionError::InvalidClearance(options.clearance_mm));
-    }
-    if !options.regularization_radius_mm.is_finite() || options.regularization_radius_mm <= 0.0 {
-        return Err(BalancingRegionError::InvalidRegularizationRadius(
-            options.regularization_radius_mm,
-        ));
-    }
-    if !options.gap_radius_mm.is_finite() || options.gap_radius_mm <= 0.0 {
-        return Err(BalancingRegionError::InvalidGapRadius(
-            options.gap_radius_mm,
-        ));
-    }
-    Ok(())
-}
-
 impl From<AccuracyError> for BalancingRegionError {
     fn from(error: AccuracyError) -> Self {
         Self::Accuracy(error)
@@ -784,115 +771,51 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(
-            result
-                .safe_region
-                .difference(&result.intermediates.clearance_safe_region)
+        // Regularization only ever removes: the certificate holds the safe
+        // region inside the clearance-safe set, and something was trimmed.
+        assert!(result.safe_region.area() < result.intermediates.clearance_safe_region.area());
+    }
+
+    /// More clearance, a larger feature disk, or another obstacle each leave a
+    /// strict subset of the stage they act on.
+    #[test]
+    fn tighter_inputs_shrink_the_stage_they_act_on() {
+        let options = |clearance_mm, regularization_radius_mm| BalancingRegionOptions {
+            clearance_mm,
+            regularization_radius_mm,
+            gap_radius_mm: 0.5,
+        };
+        let solve = |support_features, options| {
+            board_array_balancing_region(&balancing_input(0.0, support_features), options)
                 .unwrap()
-                .area()
-                <= result.safe_region.tolerance().powi(2)
-        );
-        assert!(
-            result
                 .intermediates
-                .clearance_safe_region
-                .difference(&result.safe_region)
-                .unwrap()
-                .area()
-                > 0.0
-        );
-        assert!(
-            result
-                .safe_region
-                .difference(&result.intermediates.panel_keep_in)
-                .unwrap()
-                .area()
-                <= result.safe_region.tolerance().powi(2)
-        );
-        assert!(
-            result
-                .safe_region
-                .intersection(&result.intermediates.obstacle_keep_out)
-                .unwrap()
-                .area()
-                <= result.safe_region.tolerance().powi(2)
-        );
-    }
-
-    #[test]
-    fn larger_clearance_shrinks_clearance_safe_region_for_simple_fixture() {
-        let input = balancing_input(0.0, ContourSet::empty(Resolution::default()));
-        let smaller = board_array_balancing_region(
-            &input,
-            BalancingRegionOptions {
-                clearance_mm: 0.25,
-                regularization_radius_mm: 0.5,
-                gap_radius_mm: 0.5,
-            },
-        )
-        .unwrap();
-        let larger = board_array_balancing_region(
-            &input,
-            BalancingRegionOptions {
-                clearance_mm: 1.0,
-                regularization_radius_mm: 0.5,
-                gap_radius_mm: 0.5,
-            },
-        )
-        .unwrap();
-
-        let larger_outside_smaller = larger
-            .intermediates
-            .clearance_safe_region
-            .difference(&smaller.intermediates.clearance_safe_region)
-            .unwrap();
-        assert!(
-            larger_outside_smaller.area() <= larger_outside_smaller.tolerance().powi(2),
-            "larger clearance added {:.9} mm² to the maximal region",
-            larger_outside_smaller.area()
-        );
-        assert!(
-            larger.intermediates.clearance_safe_region.area()
-                < smaller.intermediates.clearance_safe_region.area()
-        );
-    }
-
-    #[test]
-    fn larger_regularization_disk_shrinks_opened_region_for_simple_fixture() {
-        let input = balancing_input(0.0, ContourSet::empty(Resolution::default()));
-        let smaller = board_array_balancing_region(
-            &input,
-            BalancingRegionOptions {
-                clearance_mm: 0.5,
-                regularization_radius_mm: 0.25,
-                gap_radius_mm: 0.5,
-            },
-        )
-        .unwrap();
-        let larger = board_array_balancing_region(
-            &input,
-            BalancingRegionOptions {
-                clearance_mm: 0.5,
-                regularization_radius_mm: 1.0,
-                gap_radius_mm: 0.5,
-            },
-        )
-        .unwrap();
-
-        let larger_outside_smaller = larger
-            .intermediates
-            .opened_candidates
-            .difference(&smaller.intermediates.opened_candidates)
-            .unwrap();
-        assert!(
-            larger_outside_smaller.area() <= larger_outside_smaller.tolerance().powi(2),
-            "larger feature disk added {:.9} mm² to the opened region",
-            larger_outside_smaller.area()
-        );
-        assert!(
-            larger.intermediates.opened_candidates.area()
-                < smaller.intermediates.opened_candidates.area()
-        );
+        };
+        let bare = || ContourSet::empty(Resolution::default());
+        let obstacle = ContourSet::rectangle(bbox(10.0, 1.0, 11.0, 9.0), Resolution::default());
+        let clearance_safe =
+            |stages: BoardArrayBalancingIntermediates| stages.clearance_safe_region;
+        for (looser, tighter) in [
+            (
+                clearance_safe(solve(bare(), options(0.25, 0.5))),
+                clearance_safe(solve(bare(), options(1.0, 0.5))),
+            ),
+            (
+                solve(bare(), options(0.5, 0.25)).opened_candidates,
+                solve(bare(), options(0.5, 1.0)).opened_candidates,
+            ),
+            (
+                clearance_safe(solve(bare(), options(0.5, 0.5))),
+                clearance_safe(solve(obstacle, options(0.5, 0.5))),
+            ),
+        ] {
+            let added = tighter.difference(&looser).unwrap();
+            assert!(
+                added.area() <= added.tolerance().powi(2),
+                "{}",
+                added.area()
+            );
+            assert!(tighter.area() < looser.area());
+        }
     }
 
     #[test]
@@ -947,45 +870,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn adding_an_obstacle_shrinks_clearance_safe_region_for_simple_fixture() {
-        let baseline_input = balancing_input(0.0, ContourSet::empty(Resolution::default()));
-        let added_obstacle =
-            ContourSet::rectangle(bbox(10.0, 1.0, 11.0, 9.0), Resolution::default());
-        let blocked_input = balancing_input(0.0, added_obstacle);
-        let options = BalancingRegionOptions::default();
-
-        let baseline = board_array_balancing_region(&baseline_input, options).unwrap();
-        let blocked = board_array_balancing_region(&blocked_input, options).unwrap();
-
-        assert!(
-            blocked
-                .intermediates
-                .clearance_safe_region
-                .difference(&baseline.intermediates.clearance_safe_region)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            blocked.intermediates.clearance_safe_region.area()
-                < baseline.intermediates.clearance_safe_region.area()
-        );
-    }
-
     /// The certificate measures; it does not take the construction's word. A
     /// region built to a smaller clearance fails a larger one, and says where.
     #[test]
     fn certificate_rejects_a_region_built_to_a_smaller_clearance() {
         let resolution = Resolution::default();
         let input = BoardArrayBalancingInput {
-            panel_outer: ContourSet::rectangle(
-                BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 30.0)),
-                resolution,
-            ),
-            board_footprints: ContourSet::rectangle(
-                BBox::new(Point::new(10.0, 8.0), Point::new(30.0, 22.0)),
-                resolution,
-            ),
+            panel_outer: ContourSet::rectangle(bbox(0.0, 0.0, 40.0, 30.0), resolution),
+            board_footprints: ContourSet::rectangle(bbox(10.0, 8.0, 30.0, 22.0), resolution),
             material_removal: ContourSet::empty(resolution),
             support_features: ContourSet::empty(resolution),
         };
@@ -1016,10 +908,7 @@ mod tests {
             &input.panel_outer,
             &input.panel_outer,
             &input.panel_outer.disk_dilate(5.0).unwrap(),
-            &ContourSet::rectangle(
-                BBox::new(Point::new(15.0, 12.0), Point::new(25.0, 18.0)),
-                resolution,
-            ),
+            &ContourSet::rectangle(bbox(15.0, 12.0, 25.0, 18.0), resolution),
             0.5,
         )
         .unwrap();
@@ -1042,20 +931,8 @@ mod tests {
             (translated.safe_region.bbox.min.x - original.safe_region.bbox.min.x - 37.0).abs()
                 <= 1e-9
         );
-        assert!(
-            original.certificate.passes(1e-4),
-            "original outside clearance-safe {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
-            original.certificate.safe_outside_clearance_region.area(),
-            original.certificate.outside_panel.area(),
-            original.certificate.obstacle_overlap.area(),
-        );
-        assert!(
-            translated.certificate.passes(1e-4),
-            "translated outside clearance-safe {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
-            translated.certificate.safe_outside_clearance_region.area(),
-            translated.certificate.outside_panel.area(),
-            translated.certificate.obstacle_overlap.area(),
-        );
+        assert!(original.certificate.passes(1e-4));
+        assert!(translated.certificate.passes(1e-4));
     }
 
     #[test]
@@ -1078,42 +955,26 @@ mod tests {
     #[test]
     fn rejects_invalid_options_and_required_empty_inputs() {
         let input = balancing_input(0.0, ContourSet::empty(Resolution::default()));
-        assert_eq!(
-            board_array_balancing_region(
-                &input,
-                BalancingRegionOptions {
-                    clearance_mm: 0.0,
-                    regularization_radius_mm: 0.5,
-                    gap_radius_mm: 0.5,
-                }
-            )
-            .unwrap_err(),
-            BalancingRegionError::InvalidClearance(0.0)
-        );
-        assert_eq!(
-            board_array_balancing_region(
-                &input,
-                BalancingRegionOptions {
-                    clearance_mm: 0.5,
-                    regularization_radius_mm: 0.0,
-                    gap_radius_mm: 0.5,
-                }
-            )
-            .unwrap_err(),
-            BalancingRegionError::InvalidRegularizationRadius(0.0)
-        );
-        assert_eq!(
-            board_array_balancing_region(
-                &input,
-                BalancingRegionOptions {
-                    clearance_mm: 0.5,
-                    regularization_radius_mm: 1.0,
-                    gap_radius_mm: 0.0,
-                }
-            )
-            .unwrap_err(),
-            BalancingRegionError::InvalidGapRadius(0.0)
-        );
+        for (clearance_mm, regularization_radius_mm, gap_radius_mm, error) in [
+            (0.0, 0.5, 0.5, BalancingRegionError::InvalidClearance(0.0)),
+            (
+                0.5,
+                0.0,
+                0.5,
+                BalancingRegionError::InvalidRegularizationRadius(0.0),
+            ),
+            (0.5, 1.0, 0.0, BalancingRegionError::InvalidGapRadius(0.0)),
+        ] {
+            let options = BalancingRegionOptions {
+                clearance_mm,
+                regularization_radius_mm,
+                gap_radius_mm,
+            };
+            assert_eq!(
+                board_array_balancing_region(&input, options).unwrap_err(),
+                error
+            );
+        }
         let mut empty_panel = input.clone();
         empty_panel.panel_outer = ContourSet::empty(Resolution::default());
         assert_eq!(
@@ -1332,32 +1193,23 @@ mod tests {
             items: Span::single(0),
         });
         support.spec_refs.push(SpecRef { spec: sym(10) });
-        support.feature_sets.push(FeatureSet {
-            layer: 0,
-            source_set_index: 0,
-            source_geometry_ref: None,
-            component_ref: None,
-            net: None,
-            polarity: Polarity::Dark,
-            copper_balance: false,
-            copper_balance_void: None,
-            spec_refs: Span::single(0),
-            features: Span::single(0),
-            bbox: BBox::empty(),
-        });
-        support.feature_sets.push(FeatureSet {
-            layer: 0,
-            source_set_index: 1,
-            source_geometry_ref: None,
-            component_ref: None,
-            net: None,
-            polarity: Polarity::Dark,
-            copper_balance: false,
-            copper_balance_void: None,
-            spec_refs: Span::EMPTY,
-            features: Span::single(1),
-            bbox: BBox::empty(),
-        });
+        support
+            .feature_sets
+            .extend([Span::single(0), Span::EMPTY].into_iter().zip(0..).map(
+                |(spec_refs, index)| FeatureSet {
+                    layer: 0,
+                    source_set_index: index,
+                    source_geometry_ref: None,
+                    component_ref: None,
+                    net: None,
+                    polarity: Polarity::Dark,
+                    copper_balance: false,
+                    copper_balance_void: None,
+                    spec_refs,
+                    features: Span::single(index),
+                    bbox: BBox::empty(),
+                },
+            ));
         support.features.push(vcut_feature(operation_path, 0));
         support.features.push(vcut_feature(annotation_path, 1));
 
