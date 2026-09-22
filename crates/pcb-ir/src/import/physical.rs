@@ -1397,6 +1397,28 @@ mod tests {
     use crate::geom::{LineCap, Paint, StrokeStyle};
     use crate::import::ipc2581::import_design;
 
+    fn import(xml: &str) -> ImportedDesign {
+        import_design(&Ipc2581::parse(xml).unwrap(), Resolution::default()).unwrap()
+    }
+
+    /// Every drilled opening of the Board scope, which its one occurrence holds.
+    fn board_holes(imported: &ImportedDesign, resolution: Resolution) -> Result<Vec<PhysicalHole>> {
+        imported.physical_holes_of(ArtworkScope::Board, LayoutOccurrenceId::Root, resolution)
+    }
+
+    fn board_image(imported: &ImportedDesign, layer: &str) -> ContourSet {
+        let layer = imported.layer_id(layer).unwrap();
+        imported
+            .composed_layer_image(layer, ArtworkScope::Board, Resolution::default())
+            .unwrap()
+    }
+
+    /// Whether `image` leaves `hole` open, up to the uncertainty of both.
+    fn is_cut_out(image: &ContourSet, hole: &ContourSet) -> bool {
+        let core = hole.disk_erode(image.uncertainty_mm + hole.uncertainty_mm);
+        image.intersection(&core.unwrap()).unwrap().is_empty()
+    }
+
     #[test]
     fn stacked_spans_share_no_depth_but_single_layer_spans_meet_their_layer() {
         let mut interner = ipc2581::Interner::default();
@@ -1426,8 +1448,7 @@ mod tests {
 
     #[test]
     fn physical_associations_propagate_geometry_budget_errors() {
-        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
-        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let imported = import(physical_fixture());
         let scope = ArtworkScope::Board;
         let coarse = Resolution::default();
         let fine = coarse.with_accuracy(crate::geom::GeometryAccuracy::new(0.0001).unwrap());
@@ -1439,9 +1460,7 @@ mod tests {
             .unwrap_err();
         let mask_error = imported.mask_openings(scope, &lands, fine).unwrap_err();
         let terminations = imported.derive_physical_terminations(&lands);
-        let mut holes = imported
-            .physical_holes_of(scope, LayoutOccurrenceId::Root, fine)
-            .unwrap();
+        let mut holes = board_holes(&imported, fine).unwrap();
         holes[0].span = FeatureSpan::ThroughBoard;
         let assembly_error = imported
             .attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes, fine)
@@ -1459,64 +1478,31 @@ mod tests {
 
     #[test]
     fn domain_queries_do_not_materialize_unrelated_layers() {
-        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
-        let mut imported = import_design(&ipc, Resolution::default()).unwrap();
-        make_paste_artwork_invalid(&mut imported);
+        // Neither a paste layer nor a hole-protection layer is any business
+        // of the land and opening queries.
+        for function in ["SOLDERPASTE", "HOLEFILL"] {
+            let xml = physical_fixture().replace(
+                "<Layer name=\"PASTE\" layerFunction=\"SOLDERPASTE\"",
+                &format!("<Layer name=\"PASTE\" layerFunction=\"{function}\""),
+            );
+            let mut imported = import(&xml);
+            make_paste_artwork_invalid(&mut imported);
 
-        assert_eq!(
-            imported
-                .physical_lands(ArtworkScope::Board, Resolution::default())
-                .unwrap()
-                .len(),
-            7
-        );
-        assert_eq!(
-            imported
-                .physical_holes_of(
-                    ArtworkScope::Board,
-                    LayoutOccurrenceId::Root,
-                    Resolution::default()
-                )
-                .unwrap()
-                .len(),
-            1
-        );
-        assert!(
-            imported
-                .physical_view(ArtworkScope::Board, Resolution::default())
-                .unwrap_err()
-                .to_string()
-                .contains("mixes Fill and Stroke paths")
-        );
-    }
-
-    #[test]
-    fn physical_holes_do_not_materialize_assembly_protection_layers() {
-        let xml = physical_fixture().replace(
-            "<Layer name=\"PASTE\" layerFunction=\"SOLDERPASTE\" side=\"TOP\" polarity=\"POSITIVE\"/>",
-            "<Layer name=\"PASTE\" layerFunction=\"HOLEFILL\" side=\"TOP\" polarity=\"POSITIVE\"/>",
-        );
-        let ipc = Ipc2581::parse(&xml).unwrap();
-        let mut imported = import_design(&ipc, Resolution::default()).unwrap();
-        make_paste_artwork_invalid(&mut imported);
-
-        let holes = imported
-            .physical_holes_of(
-                ArtworkScope::Board,
-                LayoutOccurrenceId::Root,
-                Resolution::default(),
-            )
-            .unwrap();
-        assert_eq!(holes.len(), 1);
-        assert_eq!(holes[0].termination, Association::Unresolved);
-        assert!(holes[0].protection.is_empty());
-        assert!(
-            imported
-                .physical_view(ArtworkScope::Board, Resolution::default())
-                .unwrap_err()
-                .to_string()
-                .contains("mixes Fill and Stroke paths")
-        );
+            let lands = imported.physical_lands(ArtworkScope::Board, Resolution::default());
+            assert_eq!(lands.unwrap().len(), 7);
+            let holes = board_holes(&imported, Resolution::default()).unwrap();
+            assert_eq!(holes.len(), 1);
+            assert_eq!(holes[0].termination, Association::Unresolved);
+            assert!(holes[0].protection.is_empty());
+            assert!(
+                imported
+                    .physical_view(ArtworkScope::Board, Resolution::default())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("mixes Fill and Stroke paths"),
+                "{function}"
+            );
+        }
     }
 
     #[test]
@@ -1526,15 +1512,8 @@ mod tests {
             "<Layer name=\"DRILL\" layerFunction=\"DRILL\" side=\"ALL\" polarity=\"POSITIVE\"><Span fromLayer=\"TOP\"/></Layer>",
         );
         Ipc2581::validate(&xml).expect("one-ended drill span conforms to IPC-2581C");
-        let ipc = Ipc2581::parse(&xml).unwrap();
-        let imported = import_design(&ipc, Resolution::default()).unwrap();
-        let holes = imported
-            .physical_holes_of(
-                ArtworkScope::Board,
-                LayoutOccurrenceId::Root,
-                Resolution::default(),
-            )
-            .unwrap();
+        let imported = import(&xml);
+        let holes = board_holes(&imported, Resolution::default()).unwrap();
 
         assert_eq!(holes.len(), 1);
         assert_eq!(holes[0].lands.len(), 2);
@@ -1566,15 +1545,8 @@ mod tests {
                 &format!("<SlotCavity name=\"S1\" platingStatus=\"PLATED\" plusTol=\"0\" minusTol=\"0\"><Location x=\"5\" y=\"5\"/><Oval width=\"2\" height=\"{height}\"/></SlotCavity>"),
             );
             Ipc2581::validate(&xml).unwrap();
-            let imported =
-                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
-            let holes = imported
-                .physical_holes_of(
-                    ArtworkScope::Board,
-                    LayoutOccurrenceId::Root,
-                    Resolution::default(),
-                )
-                .unwrap();
+            let imported = import(&xml);
+            let holes = board_holes(&imported, Resolution::default()).unwrap();
             assert_eq!(holes.len(), 1);
             let hole = &holes[0];
             assert_eq!(hole.kind, PhysicalHoleKind::Slot);
@@ -1749,23 +1721,10 @@ mod tests {
     fn hole_land_links_follow_physical_order_under_declaration_permutations() {
         for order in [["L0", "L1", "L2"], ["L2", "L0", "L1"], ["L1", "L2", "L0"]] {
             let xml = spanned_slot_fixture(order, true);
-            let imported =
-                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
-            let holes = imported
-                .physical_holes_of(
-                    ArtworkScope::Board,
-                    LayoutOccurrenceId::Root,
-                    Resolution::default(),
-                )
-                .unwrap();
+            let imported = import(&xml);
+            let holes = board_holes(&imported, Resolution::default()).unwrap();
             assert_eq!(holes.len(), 1);
-            let inner = imported.layer_id("L1").unwrap();
-            assert!(
-                imported
-                    .composed_layer_image(inner, ArtworkScope::Board, Resolution::default())
-                    .unwrap()
-                    .is_empty()
-            );
+            assert!(board_image(&imported, "L1").is_empty());
             let linked_layers = holes[0]
                 .lands
                 .iter()
@@ -1787,31 +1746,13 @@ mod tests {
         let mut reference = None;
         for order in [["L0", "L1", "L2"], ["L2", "L0", "L1"], ["L1", "L2", "L0"]] {
             let xml = spanned_slot_fixture(order, false);
-            let imported =
-                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
-            let holes = imported
-                .physical_holes_of(
-                    ArtworkScope::Board,
-                    LayoutOccurrenceId::Root,
-                    Resolution::default(),
-                )
-                .unwrap();
+            let imported = import(&xml);
+            let holes = board_holes(&imported, Resolution::default()).unwrap();
             for name in ["L0", "L1", "L2"] {
-                let layer = imported.layer_id(name).unwrap();
-                let image = imported
-                    .composed_layer_image(layer, ArtworkScope::Board, Resolution::default())
-                    .unwrap();
+                let image = board_image(&imported, name);
                 assert!(!image.is_empty());
                 assert!(
-                    image
-                        .intersection(
-                            &holes[0]
-                                .image
-                                .disk_erode(image.uncertainty_mm + holes[0].image.uncertainty_mm)
-                                .unwrap()
-                        )
-                        .unwrap()
-                        .is_empty(),
+                    is_cut_out(&image, &holes[0].image),
                     "{name}, declarations {order:?}"
                 );
                 let expected = reference.get_or_insert_with(|| image.clone());
@@ -1860,13 +1801,7 @@ mod tests {
                 "{:?}",
                 imported.geometry.diagnostics
             );
-            let error = imported
-                .physical_holes_of(
-                    ArtworkScope::Board,
-                    LayoutOccurrenceId::Root,
-                    Resolution::default(),
-                )
-                .unwrap_err();
+            let error = board_holes(&imported, Resolution::default()).unwrap_err();
             assert!(error.to_string().contains(message), "{error}");
         }
     }
@@ -1944,40 +1879,19 @@ mod tests {
         ] {
             let mut xml = xml.clone();
             xml.replace_range(start..end, stackup);
-            let imported =
-                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
-            let holes = imported
-                .physical_holes_of(
-                    ArtworkScope::Board,
-                    LayoutOccurrenceId::Root,
-                    Resolution::default(),
-                )
-                .unwrap();
+            let imported = import(&xml);
+            let holes = board_holes(&imported, Resolution::default()).unwrap();
             assert_eq!(holes[0].lands.len(), 3);
-            let inner = imported.layer_id("L1").unwrap();
-            let image = imported
-                .composed_layer_image(inner, ArtworkScope::Board, Resolution::default())
-                .unwrap();
+            let image = board_image(&imported, "L1");
             assert!(!image.is_empty());
-            assert!(
-                image
-                    .intersection(
-                        &holes[0]
-                            .image
-                            .disk_erode(image.uncertainty_mm + holes[0].image.uncertainty_mm)
-                            .unwrap()
-                    )
-                    .unwrap()
-                    .is_empty()
-            );
+            assert!(is_cut_out(&image, &holes[0].image));
         }
     }
 
     #[test]
     fn derives_exact_physical_terminations_separately_from_paste() {
         Ipc2581::validate(physical_fixture()).expect("fixture conforms to IPC-2581C");
-        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
-        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let imported = import(physical_fixture());
         let physical = imported
             .physical_view(ArtworkScope::Board, Resolution::default())
             .unwrap();
@@ -2140,8 +2054,7 @@ mod tests {
 
     #[test]
     fn physical_preparation_can_refine_retained_source_geometry() {
-        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
-        let imported = crate::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
+        let imported = import(physical_fixture());
         let coarse = imported
             .physical_view(ArtworkScope::Board, Resolution::default())
             .unwrap();
@@ -2174,9 +2087,7 @@ mod tests {
 
     #[test]
     fn headless_preparation_rejects_already_coarse_feature_commands() {
-        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
-        let mut imported =
-            crate::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
+        let mut imported = import(physical_fixture());
         let layer = imported.layer_id("TOP").unwrap();
         let occurrence = imported
             .feature_occurrences(layer, ArtworkScope::Board)
