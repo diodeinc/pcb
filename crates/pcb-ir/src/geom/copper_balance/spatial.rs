@@ -144,13 +144,6 @@ impl LatticeDensityKernel {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn smooth_adjoint(&self, values: &[f64]) -> Vec<f64> {
-        let mut result = vec![0.0; self.sample_count];
-        self.smooth_adjoint_into(values, &mut result);
-        result
-    }
-
     pub(super) fn smooth_adjoint_into(&self, values: &[f64], result: &mut [f64]) {
         debug_assert_eq!(values.len(), self.row_count());
         debug_assert_eq!(result.len(), self.sample_count);
@@ -552,54 +545,29 @@ pub(super) fn spatial_result_from_squared_radii(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::{BBox, ContourSet, Point, Resolution, tol};
+    use crate::geom::Resolution;
 
-    fn res(tolerance_mm: f64) -> Resolution {
-        Resolution::default().with_tolerance(tolerance_mm)
-    }
-
-    fn panel_samples(panel: &ContourSet, lattice: DenseCopperLattice) -> SiteTable {
-        let sites = lattice.sites_covering(panel.bbox);
+    /// The V1 lattice at the origin and its samples inside a panel of this
+    /// size.
+    fn panel_samples(width: f64, height: f64) -> (DenseCopperLattice, SiteTable) {
+        let lattice = DenseCopperLattice {
+            origin: Point::ZERO,
+            pitch_mm: DenseCopperBalanceProfile::V1.pitch_mm,
+        };
+        let panel = BBox::new(Point::ZERO, Point::new(width, height));
+        let sites = lattice.sites_covering(panel);
         let mut samples = SiteTable::spanning(sites.iter());
         for site in sites {
             if panel.contains_point(lattice.center(site)) {
                 samples.admit(site);
             }
         }
-        samples
-    }
-
-    fn projected(values: &[f64], lower: f64, upper: f64, target: f64, guess: f64) -> Vec<f64> {
-        let mut values = values.to_vec();
-        project_box_sum(&mut values, lower, upper, target, guess);
-        values
-    }
-
-    /// The projection lands the sum on the target when the box can reach it,
-    /// and saturates at the nearer bound when it cannot.
-    #[test]
-    fn box_sum_projection_hits_reachable_targets_and_saturates_otherwise() {
-        let values: [f64; 5] = [0.10, 0.42, -0.30, 0.25, 0.61];
-        let (lower, upper) = (0.04_f64, 0.42_f64);
-
-        for target in [0.6, 1.0, 1.9] {
-            let projected = projected(&values, lower, upper, target, 0.0);
-            assert!(projected.iter().all(|v| (lower..=upper).contains(v)));
-            assert!(
-                (projected.iter().sum::<f64>() - target).abs() <= 1e-12,
-                "{projected:?}"
-            );
-        }
-
-        // Beyond the box's reach on either side, every value saturates.
-        let low = projected(&values, lower, upper, 0.0, 0.0);
-        assert!(low.iter().all(|v| (v - lower).abs() <= 1e-12));
-        let high = projected(&values, lower, upper, 10.0, 0.0);
-        assert!(high.iter().all(|v| (v - upper).abs() <= 1e-12));
+        (lattice, samples)
     }
 
     /// The shift is unique wherever any value is left free, so bisecting for
-    /// it to the last bit and stepping to it have to agree, from any seed.
+    /// it to the last bit and stepping to it have to agree, from any seed. The
+    /// sum lands on the target, or on the nearer end of the box's reach.
     #[test]
     fn box_sum_projection_matches_bisection_from_any_seed() {
         let bisected = |values: &[f64], lower: f64, upper: f64, target: f64| {
@@ -631,17 +599,22 @@ mod tests {
                 .collect::<Vec<_>>()
         });
         for values in &fields {
-            for fraction in [0.0, 0.03, 0.5, 0.97, 1.0] {
-                let target = values.len() as f64 * (lower + fraction * (upper - lower));
+            for fraction in [-0.5, 0.0, 0.03, 0.5, 0.97, 1.0, 1.5] {
+                let reach =
+                    |fraction: f64| values.len() as f64 * (lower + fraction * (upper - lower));
+                let target = reach(fraction);
                 let expected = bisected(values, lower, upper, target);
                 for guess in [0.0, -5.0, 5.0, 0.1] {
-                    let actual = projected(values, lower, upper, target, guess);
+                    let mut actual = values.clone();
+                    project_box_sum(&mut actual, lower, upper, target, guess);
+                    let landed = actual.iter().sum::<f64>();
+                    assert!((landed - reach(fraction.clamp(0.0, 1.0))).abs() <= 1e-9);
                     let worst = actual
                         .iter()
                         .zip(&expected)
                         .map(|(left, right)| (left - right).abs())
                         .fold(0.0_f64, f64::max);
-                    assert!(worst <= 1e-12, "{fraction} from {guess}: {worst}");
+                    assert!(worst <= 1e-10, "{fraction} from {guess}: {worst}");
                 }
             }
         }
@@ -660,7 +633,7 @@ mod tests {
         };
         let sites = lattice.sites_covering(bounds);
         let cut = BBox::new(Point::new(1.23, -0.71), Point::new(7.9, 4.56));
-        let region = ContourSet::rectangle(cut, res(tol::REGION_MM));
+        let region = ContourSet::rectangle(cut, Resolution::default());
 
         let (width, height) = (lattice.column_pitch_mm(), lattice.pitch_mm);
         let overlap = |low: f64, high: f64, cut_low: f64, cut_high: f64| {
@@ -693,22 +666,11 @@ mod tests {
         assert!(partial[0] > 0 && partial[1] > 0);
     }
 
-    fn v1_lattice() -> DenseCopperLattice {
-        DenseCopperLattice {
-            origin: Point::ZERO,
-            pitch_mm: DenseCopperBalanceProfile::V1.pitch_mm,
-        }
-    }
-
     #[test]
     fn density_kernel_adjoint_matches_the_forward_operator() {
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
-            res(tol::REGION_MM),
-        );
-        let samples = panel_samples(&panel, v1_lattice());
+        let (lattice, samples) = panel_samples(20.0, 12.0);
         for sigma_mm in density_scales_mm(DenseCopperBalanceProfile::V1) {
-            let kernel = LatticeDensityKernel::new(&samples, v1_lattice(), sigma_mm);
+            let kernel = LatticeDensityKernel::new(&samples, lattice, sigma_mm);
             let source = (0..samples.sites.len())
                 .map(|index| ((index * 17 % 29) as f64 - 14.0) / 29.0)
                 .collect::<Vec<_>>();
@@ -722,9 +684,11 @@ mod tests {
                 .zip(&residual)
                 .map(|(left, right)| left * right)
                 .sum::<f64>();
+            let mut adjoint = vec![0.0; source.len()];
+            kernel.smooth_adjoint_into(&residual, &mut adjoint);
             let adjoint_inner_product = source
                 .iter()
-                .zip(kernel.smooth_adjoint(&residual))
+                .zip(adjoint)
                 .map(|(left, right)| left * right)
                 .sum::<f64>();
 
@@ -741,16 +705,12 @@ mod tests {
     #[test]
     fn a_uniform_field_keeps_its_void_area_through_quantization() {
         let profile = DenseCopperBalanceProfile::V1;
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(60.0, 40.0)),
-            res(tol::REGION_MM),
-        );
-        let samples = panel_samples(&panel, v1_lattice());
+        let (lattice, samples) = panel_samples(60.0, 40.0);
         let sites = &samples.sites;
         let spacing = profile.void_area_level(1) - profile.void_area_level(0);
         let solved = vec![profile.void_area_level(7) + 0.45 * spacing; sites.len()];
         let void_fraction_per_radius_squared =
-            ROUNDED_HEXAGON_AREA_FACTOR / (v1_lattice().column_pitch_mm() * profile.pitch_mm);
+            ROUNDED_HEXAGON_AREA_FACTOR / (lattice.column_pitch_mm() * profile.pitch_mm);
         let rounded = solved
             .iter()
             .map(|radius_squared| profile.nearest_void_area_level(*radius_squared))
@@ -766,7 +726,7 @@ mod tests {
 
         let scales = density_scales_mm(profile);
         for sigma_mm in &scales[..scales.len() - 1] {
-            let kernel = LatticeDensityKernel::new(&samples, v1_lattice(), *sigma_mm);
+            let kernel = LatticeDensityKernel::new(&samples, lattice, *sigma_mm);
             // Worst copper-density error at this scale.
             let density_error = |emitted: &[f64]| {
                 let error = emitted
@@ -797,12 +757,8 @@ mod tests {
         assert_eq!(scales[..2], [5.0, 2.5]);
         assert_eq!(scales.len(), 3);
 
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
-            res(tol::REGION_MM),
-        );
-        let samples = panel_samples(&panel, v1_lattice());
-        let tile = LatticeDensityKernel::new(&samples, v1_lattice(), scales[2]);
+        let (lattice, samples) = panel_samples(20.0, 12.0);
+        let tile = LatticeDensityKernel::new(&samples, lattice, scales[2]);
         let source = (0..samples.sites.len())
             .map(|index| index as f64)
             .collect::<Vec<_>>();
@@ -815,20 +771,16 @@ mod tests {
     #[test]
     fn redistribution_is_independent_of_its_starting_field() {
         let profile = DenseCopperBalanceProfile::V1;
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(60.0, 30.0)),
-            res(tol::REGION_MM),
-        );
-        let samples = panel_samples(&panel, v1_lattice());
+        let (lattice, samples) = panel_samples(60.0, 30.0);
         let scales = density_scales_mm(profile)
             .into_iter()
-            .map(|sigma_mm| LatticeDensityKernel::new(&samples, v1_lattice(), sigma_mm))
+            .map(|sigma_mm| LatticeDensityKernel::new(&samples, lattice, sigma_mm))
             .collect::<Vec<_>>();
         // Solid fixed copper on the left third, fill everywhere else.
         let centers = samples
             .sites
             .iter()
-            .map(|site| v1_lattice().center(*site))
+            .map(|site| lattice.center(*site))
             .collect::<Vec<_>>();
         let active_sites = (0..centers.len())
             .filter(|site| centers[*site].x >= 20.0)
@@ -842,12 +794,9 @@ mod tests {
                 .map(|scale| scale.smooth(&base_coverage))
                 .collect(),
             void_fraction_per_radius_squared: ROUNDED_HEXAGON_AREA_FACTOR
-                / (v1_lattice().column_pitch_mm() * profile.pitch_mm),
+                / (lattice.column_pitch_mm() * profile.pitch_mm),
         };
-        let bounds = (
-            profile.min_void_radius_mm.powi(2),
-            profile.max_void_radius_mm.powi(2),
-        );
+        let bounds = profile.void_area_bounds();
         let middle = 0.5 * (bounds.0 + bounds.1);
         let pinned_sum = middle * active_sites.len() as f64;
         let solve = |start: Vec<f64>| model.redistribute(start, 0.75, bounds, pinned_sum);

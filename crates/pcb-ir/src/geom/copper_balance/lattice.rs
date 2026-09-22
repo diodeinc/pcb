@@ -638,12 +638,7 @@ impl SiteTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn res(tolerance_mm: f64) -> Resolution {
-        Resolution::default().with_tolerance(tolerance_mm)
-    }
-
-    use crate::geom::tol;
-    use crate::geom::{BBox, ContourSet, PathOp, Point};
+    use crate::geom::{Affine2, BBox, PathOp};
 
     fn lattice_at(origin: Point) -> DenseCopperLattice {
         DenseCopperLattice {
@@ -651,6 +646,41 @@ mod tests {
             pitch_mm: DenseCopperBalanceProfile::V1.pitch_mm,
         }
     }
+
+    fn rect(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ContourSet {
+        ContourSet::rectangle(
+            BBox::new(Point::new(min_x, min_y), Point::new(max_x, max_y)),
+            Resolution::default(),
+        )
+    }
+
+    /// A plate with a round and a slotted cutout, so its boundary is convex
+    /// and reflex, and the lattice centers that can reach it.
+    fn pierced_plate() -> (ContourSet, Vec<DenseCopperLatticeSite>, Vec<Point>) {
+        let cutouts = ContourSet::from_filled_contours(
+            &[
+                shapes::circle(3.1)
+                    .unwrap()
+                    .transformed(Affine2::translation(Point::new(4.2, 4.4))),
+                shapes::rect(2.3, 0.9)
+                    .unwrap()
+                    .transformed(Affine2::translation(Point::new(10.1, 5.2))),
+            ],
+            Resolution::default(),
+        )
+        .unwrap();
+        let voidable = rect(0.0, 0.0, 14.0, 9.0).difference(&cutouts).unwrap();
+        let lattice = lattice_at(PIERCED_PLATE_ORIGIN);
+        let sites = lattice.sites_covering(
+            voidable
+                .bbox
+                .expand(DenseCopperBalanceProfile::V1.max_void_radius_mm),
+        );
+        let centers = lattice.centers(&sites);
+        (voidable, sites, centers)
+    }
+
+    const PIERCED_PLATE_ORIGIN: Point = Point { x: 0.17, y: 0.31 };
 
     /// Samples are numbered in admission order, once each, and a site that was
     /// never admitted — inside the spanned range or beyond it — has none.
@@ -670,13 +700,12 @@ mod tests {
 
     #[test]
     fn rejects_partial_voids_that_cannot_hold_the_minimum_disk() {
-        let profile = DenseCopperBalanceProfile::V1;
-        let voidable = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(0.15, 10.0)),
-            res(tol::REGION_MM),
-        );
-        let lattice =
-            LatticeCandidates::build_lattice(&voidable, Point::new(0.0, 0.0), profile).unwrap();
+        let lattice = LatticeCandidates::build_lattice(
+            &rect(0.0, 0.0, 0.15, 10.0),
+            Point::ZERO,
+            DenseCopperBalanceProfile::V1,
+        )
+        .unwrap();
 
         assert!(lattice.edge_candidates.is_empty());
     }
@@ -684,11 +713,8 @@ mod tests {
     #[test]
     fn exact_hex_containment_is_not_circumcircle_conservative() {
         let profile = DenseCopperBalanceProfile::V1;
-        let voidable = ContourSet::rectangle(
-            BBox::new(Point::new(-0.66, -0.57), Point::new(0.66, 0.57)),
-            res(tol::REGION_MM),
-        );
-        let center = Point::new(0.0, 0.0);
+        let voidable = rect(-0.66, -0.57, 0.66, 0.57);
+        let center = Point::ZERO;
 
         let depth_mm = center_depths_mm(&voidable, &[center], profile.max_void_radius_mm)[0];
         assert!(!disk_fits(depth_mm, profile.max_void_radius_mm, &voidable));
@@ -703,24 +729,7 @@ mod tests {
     #[test]
     fn depth_classification_matches_testing_every_hexagon() {
         let profile = DenseCopperBalanceProfile::V1;
-        let resolution = res(tol::REGION_MM);
-        let plate = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(14.0, 9.0)),
-            resolution,
-        );
-        let cutout = ContourSet::from_filled_contours(
-            &[shapes::circle(3.1)
-                .unwrap()
-                .transformed(crate::geom::Affine2::translation(Point::new(4.2, 4.4)))],
-            resolution,
-        )
-        .unwrap();
-        let voidable = plate.difference(&cutout).unwrap();
-        let origin = Point::new(0.17, 0.31);
-
-        let sites =
-            lattice_at(origin).sites_covering(voidable.bbox.expand(profile.max_void_radius_mm));
-        let centers = lattice_at(origin).centers(&sites);
+        let (voidable, sites, centers) = pierced_plate();
         let mut expected = sites
             .iter()
             .zip(fully_contained_hexagons(&voidable, &centers, profile).unwrap())
@@ -729,7 +738,8 @@ mod tests {
             .collect::<Vec<_>>();
         expected.sort_unstable();
 
-        let lattice = LatticeCandidates::build_lattice(&voidable, origin, profile).unwrap();
+        let lattice =
+            LatticeCandidates::build_lattice(&voidable, PIERCED_PLATE_ORIGIN, profile).unwrap();
         let mut full = lattice
             .full_sites
             .iter()
@@ -744,16 +754,9 @@ mod tests {
     /// holes included, signed by which side of it the center is on.
     #[test]
     fn center_depth_is_the_signed_distance_to_the_nearest_boundary() {
-        let resolution = res(tol::REGION_MM);
-        let plate = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(10.0, 6.0)),
-            resolution,
-        );
-        let hole = ContourSet::rectangle(
-            BBox::new(Point::new(4.0, 2.0), Point::new(6.0, 4.0)),
-            resolution,
-        );
-        let region = plate.difference(&hole).unwrap();
+        let region = rect(0.0, 0.0, 10.0, 6.0)
+            .difference(&rect(4.0, 2.0, 6.0, 4.0))
+            .unwrap();
         let centers = [
             Point::new(1.0, 3.0),
             Point::new(3.25, 3.0),
@@ -777,10 +780,7 @@ mod tests {
     #[test]
     fn partial_void_activation_is_monotone_in_radius() {
         let profile = DenseCopperBalanceProfile::V1;
-        let voidable = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(4.0, 4.0)),
-            res(tol::REGION_MM),
-        );
+        let voidable = rect(0.0, 0.0, 4.0, 4.0);
         let lattice = lattice_at(Point::ZERO);
         let centers = lattice
             .centers(&lattice.sites_covering(voidable.bbox.expand(profile.max_void_radius_mm)));
@@ -808,7 +808,7 @@ mod tests {
     /// minimum disk, whether the disk is smaller or larger than the fillet.
     #[test]
     fn minimum_disk_centers_are_the_eroded_void() {
-        let resolution = res(tol::REGION_MM);
+        let resolution = Resolution::default();
         for (radius, min_void_radius_mm) in [(0.65, 0.2), (0.2, 0.2), (2.0, 0.2), (2.0, 0.9)] {
             let profile = DenseCopperBalanceProfile {
                 min_void_radius_mm,
@@ -844,35 +844,15 @@ mod tests {
     #[test]
     fn distributed_erosion_accepts_what_eroding_each_clipped_void_accepts() {
         let profile = DenseCopperBalanceProfile::V1;
-        let resolution = res(tol::REGION_MM);
-        let plate = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(14.0, 9.0)),
-            resolution,
-        );
-        let cutouts = ContourSet::from_filled_contours(
-            &[
-                shapes::circle(3.1)
-                    .unwrap()
-                    .transformed(crate::geom::Affine2::translation(Point::new(4.2, 4.4))),
-                shapes::rect(2.3, 0.9)
-                    .unwrap()
-                    .transformed(crate::geom::Affine2::translation(Point::new(10.1, 5.2))),
-            ],
-            resolution,
-        )
-        .unwrap();
-        let voidable = plate.difference(&cutouts).unwrap();
+        let (voidable, _, centers) = pierced_plate();
         let minimum_radius = profile.minimum_partial_void_inradius_mm();
         let disk_center_region = voidable.disk_erode(minimum_radius).unwrap();
-        let lattice = lattice_at(Point::new(0.17, 0.31));
-        let centers = lattice
-            .centers(&lattice.sites_covering(voidable.bbox.expand(profile.max_void_radius_mm)));
         let depths_mm = center_depths_mm(&voidable, &centers, profile.max_void_radius_mm);
 
         let mut accepted_anywhere = 0;
         for radius in [0.20, 0.35, 0.50, 0.65] {
             let candidates = uniform_candidates(&centers, radius);
-            let eroded = hexagon_set_with_radii(&candidates, resolution)
+            let eroded = hexagon_set_with_radii(&candidates, voidable.resolution)
                 .unwrap()
                 .intersection(&voidable)
                 .unwrap()
@@ -905,7 +885,7 @@ mod tests {
     /// individually prepared hexagons gives.
     #[test]
     fn placed_templates_match_the_union_of_prepared_hexagons() {
-        let resolution = res(tol::REGION_MM);
+        let resolution = Resolution::default();
         let bounds = BBox::new(Point::new(-3.0, -2.0), Point::new(9.0, 7.0));
         let radii = [0.2, 0.41, 0.65];
         let lattice = lattice_at(Point::new(0.3, -0.1));
@@ -920,7 +900,7 @@ mod tests {
             .map(|(center, radius)| {
                 rounded_hexagonal_void(*radius)
                     .unwrap()
-                    .transformed(crate::geom::Affine2::translation(*center))
+                    .transformed(Affine2::translation(*center))
             })
             .collect::<Vec<_>>();
         let unioned = ContourSet::from_filled_contours(&contours, resolution).unwrap();
@@ -950,7 +930,7 @@ mod tests {
             );
         }
 
-        let region = ContourSet::from_filled_contours(&[hexagon], res(tol::REGION_MM)).unwrap();
+        let region = ContourSet::from_filled_contours(&[hexagon], Resolution::default()).unwrap();
         let expected_area = ROUNDED_HEXAGON_AREA_FACTOR * radius.powi(2);
         assert!(
             (region.area() - expected_area).abs() <= expected_area * 2e-3,
