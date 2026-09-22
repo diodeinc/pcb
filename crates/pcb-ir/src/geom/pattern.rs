@@ -225,11 +225,11 @@ mod tests {
     }
 
     #[test]
-    fn pattern_phase_continues_across_contour_segments() {
+    fn dashes_and_their_phase_continue_across_source_segments() {
         let marks = stroke_pattern_marks(
             &[
-                line(Point::new(0.0, 0.0), Point::new(5.0, 0.0)),
-                line(Point::new(5.0, 0.0), Point::new(5.0, 5.0)),
+                line(Point::new(0.0, 0.0), Point::new(2.0, 0.0)),
+                line(Point::new(2.0, 0.0), Point::new(2.0, 10.0)),
             ],
             LinePattern::Dashed,
             1.0,
@@ -238,29 +238,12 @@ mod tests {
         assert_eq!(
             marks,
             vec![
-                StrokePatternMark::Dash(vec![line(Point::new(0.0, 0.0), Point::new(3.0, 0.0),)]),
-                StrokePatternMark::Dash(vec![line(Point::new(5.0, 1.0), Point::new(5.0, 4.0),)]),
+                StrokePatternMark::Dash(vec![
+                    line(Point::new(0.0, 0.0), Point::new(2.0, 0.0)),
+                    line(Point::new(2.0, 0.0), Point::new(2.0, 1.0)),
+                ]),
+                StrokePatternMark::Dash(vec![line(Point::new(2.0, 4.0), Point::new(2.0, 7.0))]),
             ]
-        );
-    }
-
-    #[test]
-    fn one_dash_remains_continuous_across_source_segments() {
-        let marks = stroke_pattern_marks(
-            &[
-                line(Point::new(0.0, 0.0), Point::new(2.0, 0.0)),
-                line(Point::new(2.0, 0.0), Point::new(2.0, 4.0)),
-            ],
-            LinePattern::Dashed,
-            1.0,
-        );
-
-        assert_eq!(
-            marks[0],
-            StrokePatternMark::Dash(vec![
-                line(Point::new(0.0, 0.0), Point::new(2.0, 0.0)),
-                line(Point::new(2.0, 0.0), Point::new(2.0, 1.0)),
-            ])
         );
     }
 

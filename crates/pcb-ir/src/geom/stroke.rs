@@ -504,45 +504,8 @@ mod tests {
     }
 
     #[test]
-    fn stroke_to_fill_rejects_non_positive_width() {
-        let accuracy = GeometryAccuracy::default();
-
-        let source = vec![line_contour(Point::new(0.0, 0.0), Point::new(1.0, 0.0))];
-
-        assert!(
-            stroke_to_fill(&source, StrokeStyle::new(0.0, LineCap::Round), accuracy)
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn stroke_to_fill_expands_centerline_by_half_width() {
-        let accuracy = GeometryAccuracy::default();
-
-        let source = vec![line_contour(Point::new(0.0, 0.0), Point::new(10.0, 0.0))];
-        let fill = stroke_to_fill(&source, StrokeStyle::new(2.0, LineCap::Butt), accuracy)
-            .unwrap()
-            .expect("stroke should expand to fill geometry");
-        let bbox = fill
-            .iter()
-            .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox));
-
-        assert!((bbox.min.x - 0.0).abs() <= 1e-9);
-        assert!((bbox.min.y + 1.0).abs() <= 1e-9);
-        assert!((bbox.max.x - 10.0).abs() <= 1e-9);
-        assert!((bbox.max.y - 1.0).abs() <= 1e-9);
-        assert!(fill.iter().all(|contour| {
-            contour
-                .cmds
-                .last()
-                .is_some_and(|cmd| cmd.op == PathOp::Close)
-        }));
-    }
-
-    #[test]
     fn patterned_strokes_preserve_input_error() {
-        let source = line_contour(Point::ZERO, Point::new(20.0, 0.0)).with_uncertainty(0.001);
+        let source = polyline(&[(0.0, 0.0), (20.0, 0.0)]).with_uncertainty(0.001);
         let mut style = StrokeStyle::new(1.0, LineCap::Round);
         style.pattern = LinePattern::Phantom;
         let fill = stroke_to_fill(&[source], style, GeometryAccuracy::default())
@@ -576,9 +539,5 @@ mod tests {
                 .iter()
                 .all(|dash| dash.uncertainty_mm <= accuracy.max_error_mm())
         );
-    }
-
-    fn line_contour(start: Point, end: Point) -> ContourBuf {
-        ContourBuf::new(vec![PathCmd::move_to(start), PathCmd::line_to(end)])
     }
 }

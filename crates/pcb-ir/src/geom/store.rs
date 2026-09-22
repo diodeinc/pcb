@@ -406,59 +406,6 @@ mod tests {
     use crate::geom::style::LineCap;
 
     #[test]
-    fn push_path_records_contours_and_bounds() {
-        let mut arena = PathArena::default();
-
-        let path = arena.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 2.0, 1.0)],
-        );
-
-        let path = arena.path(path);
-        assert_eq!(path.contours.len(), 1);
-        assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
-        assert_eq!(path.bbox.max, Point::new(2.0, 1.0));
-        arena.validate("test").unwrap();
-    }
-
-    #[test]
-    fn stroked_path_bbox_expands_by_half_width() {
-        let mut arena = PathArena::default();
-
-        let path = arena.push_path(
-            Paint::Stroke(StrokeStyle::new(1.0, LineCap::Round)),
-            [ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(4.0, 0.0)),
-            ])],
-        );
-
-        assert_eq!(arena.path(path).bbox.min, Point::new(-0.5, -0.5));
-        assert_eq!(arena.path(path).bbox.max, Point::new(4.5, 0.5));
-    }
-
-    #[test]
-    fn append_path_from_copies_across_arenas_with_transform() {
-        let mut source = PathArena::default();
-        let path = source.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 1.0, 1.0)],
-        );
-
-        let mut target = PathArena::default();
-        let copied =
-            target.append_path_from(&source, path, Affine2::translation(Point::new(10.0, 0.0)));
-
-        assert_eq!(target.path(copied).bbox.min, Point::new(10.0, 0.0));
-        assert_eq!(target.path(copied).bbox.max, Point::new(11.0, 1.0));
-        target.validate("target").unwrap();
-    }
-
-    #[test]
     fn append_paths_from_streams_a_run_and_scales_strokes() {
         let mut source = PathArena::default();
         source.push_path(

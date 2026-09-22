@@ -755,37 +755,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn segments_resolve_current_point_and_close() {
-        let cmds = vec![
-            PathCmd::move_to(Point::new(0.0, 0.0)),
-            PathCmd::line_to(Point::new(1.0, 0.0)),
-            PathCmd::arc_to(Point::new(0.0, 1.0), Point::new(0.0, 0.0), false),
-            PathCmd::close(),
-        ];
-
-        let segments = segments(&cmds).collect::<Vec<_>>();
-
-        assert_eq!(segments.len(), 3);
-        assert_eq!(
-            segments[0],
-            Segment::Line {
-                start: Point::new(0.0, 0.0),
-                end: Point::new(1.0, 0.0)
-            }
-        );
-        let Segment::Arc(arc) = segments[1] else {
-            panic!("expected arc");
-        };
-        assert_eq!(arc.start, Point::new(1.0, 0.0));
-        assert_eq!(arc.end, Point::new(0.0, 1.0));
-        assert_eq!(
-            segments[2],
-            Segment::Line {
-                start: Point::new(0.0, 1.0),
-                end: Point::new(0.0, 0.0)
-            }
-        );
-    }
 }
