@@ -706,11 +706,13 @@ fn test_publish_board_full() {
     let ipc =
         pcb_ipc2581_tools::ipc2581::Ipc2581::parse_file(manufacturing.join("ipc2581.xml")).unwrap();
     let accessor = pcb_ipc2581_tools::accessors::IpcAccessor::new(&ipc);
+    let resolution = pcb_ir::geom::Resolution::default()
+        .with_accuracy(pcb_ir::geom::GeometryAccuracy::micrometres(30));
     let expected_html = pcb_ipc2581_tools::commands::html_export::generate_html(
         &accessor,
+        &pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap(),
         pcb_ipc2581_tools::UnitFormat::Mm,
-        pcb_ir::geom::Resolution::default()
-            .with_accuracy(pcb_ir::geom::GeometryAccuracy::micrometres(30)),
+        resolution,
     )
     .unwrap();
     assert_eq!(

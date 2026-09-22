@@ -10,16 +10,14 @@
 use pcb_ir::geom::dfm::{Distance, circular_region, region_clearance_sites};
 use pcb_ir::geom::{BBox, Point};
 
-use crate::commands::dfm::design::{
-    ConductorId, CopperLayer, Design, Hole, HoleClass, HoleLand, Land,
-};
+use crate::commands::dfm::design::{Design, HoleClass, spans};
 use crate::commands::dfm::report::{Evidence, MeasurementKind};
 use crate::commands::dfm::rules::Conditions;
 
 use super::copper_clearance::conductor_subject;
 use super::{
-    Evaluation, Measured, MeasuredSite, hole_subject, holes_of_class, layers, linework_clearance,
-    violates,
+    Evaluation, Measured, MeasuredSite, Ownership, hole_subject, layers, linework_clearance,
+    spanned_layers, violates,
 };
 
 pub(super) fn evaluate(
@@ -31,24 +29,37 @@ pub(super) fn evaluate(
     let mut checked = 0;
     let mut measured = Vec::new();
 
-    for (hole_index, hole) in holes_of_class(design, class) {
+    // A placed hole is measured here too, against what its own Step's design
+    // does not hold: this Step's copper and that of the other placements.
+    for (hole_index, hole) in design
+        .holes
+        .iter()
+        .enumerate()
+        .filter(|(_, hole)| hole.class == class)
+    {
         let radius_mm = hole.diameter_mm / 2.0;
-        for (copper_index, copper) in design.copper_layers.iter().enumerate() {
-            if !hole.drill_span.contains_copper(copper_index)
-                || !conditions.applies_to_layer(copper)
-            {
-                continue;
-            }
-            checked += 1;
-            let own_lands = design.hole_lands[hole_index]
-                .iter()
-                .filter(|land| land.copper_index as usize == copper_index)
-                .collect::<Vec<_>>();
-            let nearest = copper
-                .conductors
-                .iter()
-                .zip(&design.conductor_boundaries[copper_index])
-                .filter(|(conductor, _)| !owned_by_hole(hole, copper, &own_lands, conductor.id))
+        let owner = Ownership::of(
+            design,
+            hole.net,
+            hole.padstack,
+            hole.step,
+            hole.provenance.instance_index,
+            &design.hole_lands[hole_index],
+        );
+        for (copper_index, copper) in spanned_layers(design, &hole.drill_span, conditions) {
+            checked += usize::from(hole.branch.is_none());
+            // Only a conductor whose bounds reach the keepout can enter it.
+            let nearest = design.conductors_near[copper_index]
+                .query(hole.bbox.expand(limit_mm))
+                .into_iter()
+                .map(|index| {
+                    (
+                        &copper.conductors[index],
+                        &design.conductor_boundaries[copper_index][index],
+                    )
+                })
+                .filter(|(conductor, _)| spans(hole.branch, conductor.branch))
+                .filter(|(conductor, _)| class == HoleClass::Npth || !owner.owns(conductor.id))
                 .filter_map(|(conductor, boundary)| {
                     disk_to_copper_clearance(
                         hole.center,
@@ -69,50 +80,51 @@ pub(super) fn evaluate(
                 hole_subject(design, hole, "hole"),
                 conductor_subject(design, offender.id, "offender", &copper.layer.name),
             ];
+            let drilled = Evidence::circle("drilled_hole", hole.center, hole.diameter_mm);
+            let keepout = Evidence::circle(
+                "required_copper_keepout",
+                hole.center,
+                hole.diameter_mm + 2.0 * limit_mm,
+            );
             let evidence = vec![
-                Evidence::circle("drilled_hole", hole.center, hole.diameter_mm),
+                drilled.clone(),
                 Evidence::bounds("offending_copper", offender.image.bbox),
             ];
-            let sites = if violates(&distance, limit_mm) {
+            let mut sites = Vec::new();
+            if violates(&distance, limit_mm) {
                 let drill = circular_region(hole.center, radius_mm, design.resolution)?;
-                let mut sites = region_clearance_sites(&drill, &offender.image, limit_mm)?
-                    .into_iter()
-                    .map(|geometry| {
-                        let mut site = linework_clearance::report_site(
-                            geometry,
-                            finding_layers.clone(),
-                            limit_mm,
-                            design.resolution,
-                        )?;
-                        site.subjects = subjects.clone();
-                        site.evidence.push(Evidence::circle(
-                            "drilled_hole",
-                            hole.center,
-                            hole.diameter_mm,
-                        ));
-                        site.evidence.push(Evidence::circle(
-                            "required_copper_keepout",
-                            hole.center,
-                            hole.diameter_mm + 2.0 * limit_mm,
-                        ));
-                        Ok::<_, anyhow::Error>(site)
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                if !sites.iter().any(|site| violates(&site.distance, limit_mm)) {
-                    sites.push(fallback_site(
-                        distance,
-                        hole,
-                        limit_mm,
-                        finding_layers.clone(),
-                        subjects.clone(),
-                    ));
+                sites = linework_clearance::report_sites(
+                    region_clearance_sites(&drill, &offender.image, limit_mm)?,
+                    &finding_layers,
+                    limit_mm,
+                    design.resolution,
+                )?;
+                for site in &mut sites {
+                    site.evidence.extend([drilled.clone(), keepout.clone()]);
                 }
-                sites
-            } else {
-                Vec::new()
-            };
+                // The flattened drill can clear what the analytic disk does not.
+                if !sites.iter().any(|site| violates(&site.distance, limit_mm)) {
+                    let mut site = MeasuredSite::new(
+                        distance,
+                        BBox::spanning(distance.first, distance.second)
+                            .union(hole.bbox.expand(limit_mm)),
+                        finding_layers.clone(),
+                        vec![drilled, keepout],
+                        if distance.mm == 0.0 {
+                            MeasurementKind::Overlap
+                        } else {
+                            MeasurementKind::Clearance
+                        },
+                    );
+                    site.note = Some(
+                        "The analytic drill clearance is below the configured limit.".to_owned(),
+                    );
+                    sites.push(site);
+                }
+                for site in &mut sites {
+                    site.subjects = subjects.clone();
+                }
+            }
             let mut bbox = hole.bbox.expand(limit_mm);
             bbox.include_point(distance.second);
             measured.push(Measured {
@@ -144,7 +156,7 @@ fn disk_to_copper_clearance(
             copper.uncertainty_mm,
         ));
     }
-    let nearest = boundary.nearest_within(center, radius_mm + limit_mm)?;
+    let nearest = boundary.canonical_nearest_within(center, radius_mm + limit_mm)?;
     let direction = nearest.second - center;
     let direction = if direction.length() <= f64::EPSILON {
         Point::new(1.0, 0.0)
@@ -169,104 +181,20 @@ fn disk_to_copper_clearance(
     ))
 }
 
-fn owned_by_hole(
-    hole: &Hole,
-    copper: &CopperLayer,
-    links: &[&HoleLand],
-    conductor: ConductorId,
-) -> bool {
-    if hole.class == HoleClass::Npth {
-        return false;
-    }
-    let hole_owner = hole.net.map(|net| ConductorId::Net {
-        step: hole.step,
-        instance: hole.provenance.instance_index,
-        net,
-    });
-    if hole_owner == Some(conductor) {
-        return true;
-    }
-    links.iter().any(|link| {
-        let land = &copper.lands[link.land_index as usize];
-        land_owns_conductor(land, conductor)
-    })
-}
-
-pub(super) fn land_owns_conductor(land: &Land, conductor: ConductorId) -> bool {
-    match conductor {
-        ConductorId::Net {
-            step,
-            instance,
-            net,
-        } => {
-            land.net == Some(net) && step == land.step && instance == land.provenance.instance_index
-        }
-        ConductorId::Auxiliary { .. } | ConductorId::Unattributed { .. } => false,
-        ConductorId::Isolated { occurrence, .. } => land.id.0 == occurrence,
-    }
-}
-
-fn fallback_site(
-    distance: Distance,
-    hole: &Hole,
-    limit_mm: f64,
-    layers: Vec<crate::commands::dfm::report::LayerRef>,
-    subjects: Vec<crate::commands::dfm::report::Subject>,
-) -> MeasuredSite {
-    let mut bbox = BBox::from_point(distance.first);
-    bbox.include_point(distance.second);
-    bbox = bbox.union(hole.bbox.expand(limit_mm));
-    let mut site = MeasuredSite::new(
-        distance,
-        bbox,
-        layers,
-        vec![
-            Evidence::circle("drilled_hole", hole.center, hole.diameter_mm),
-            Evidence::circle(
-                "required_copper_keepout",
-                hole.center,
-                hole.diameter_mm + 2.0 * limit_mm,
-            ),
-        ],
-        if distance.mm == 0.0 {
-            MeasurementKind::Overlap
-        } else {
-            MeasurementKind::Clearance
-        },
-    );
-    site.subjects = subjects;
-    site.note = Some("The analytic drill clearance is below the configured limit.".to_owned());
-    site
-}
-
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
-    use pcb_ir::dialects::ipc::ArtworkScope;
     use pcb_ir::geom::Resolution;
 
-    use crate::commands::dfm::{checks, design::Design, pdk::Pdk, rules};
-    use crate::ipc2581::Ipc2581;
+    use crate::commands::dfm::report::RuleStatus;
+    use crate::commands::dfm::{checks, design::Design, fixtures};
 
     fn pdk(hole: &str) -> String {
-        format!(
-            r#"schema_version = 2
-default_profile = "test"
-
-[pdk]
-id = "hole-clearance-test"
-name = "Hole clearance test"
-revision = "1"
-
-[profiles.test]
-name = "Test"
-
-[[rules.copper.hole_clearance]]
+        fixtures::pdk(&format!(
+            r#"[[rules.copper.hole_clearance]]
 id = "hole-clearance"
 select = {{ hole = "{hole}" }}
-limit = {{ minimum = "0.20 mm" }}
-"#
-        )
+limit = {{ minimum = "0.20 mm" }}"#
+        ))
     }
 
     fn copper(layer: usize, net: Option<&str>, x: f64) -> String {
@@ -360,24 +288,7 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     fn run(xml: &str, hole: &str) -> checks::Results {
-        let ipc = Ipc2581::parse(xml).unwrap();
-        let pdk = Pdk::parse(&pdk(hole)).unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-        let design = Design::extract(
-            &imported,
-            ArtworkScope::Board,
-            &rules,
-            Resolution::default(),
-        )
-        .unwrap();
-        checks::run(
-            &rules,
-            &design,
-            None,
-            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-        )
-        .unwrap()
+        fixtures::run_board(xml, &pdk(hole))
     }
 
     #[test]
@@ -411,62 +322,39 @@ limit = {{ minimum = "0.20 mm" }}
 
     #[test]
     fn hole_clearance_report_includes_spatial_view_and_native_context() {
-        let resolution = Resolution::default();
-
-        use crate::LayoutTarget;
-        use crate::commands::dfm::{CheckRequest, PdkSource, TextSource, report};
-
         let xml = board("VIA", Some((0, 2)), &[copper(0, Some("N2"), 0.65)]);
-        let source = pdk("via");
-        let ipc = Ipc2581::parse(&xml).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let checked = crate::commands::dfm::check(
-            &imported,
-            CheckRequest {
-                input: report::FileIdentity::new("board.xml", xml.as_bytes()),
-                pdk: PdkSource::Toml(TextSource {
-                    path: "pdk.toml",
-                    source: &source,
-                }),
-                waivers: None,
-                layout_target: LayoutTarget::Board,
-                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            },
-            resolution,
-        )
-        .unwrap();
+        let checked = fixtures::report(&xml, &pdk("via"), crate::LayoutTarget::Board);
 
-        assert!(matches!(checked.verdict, report::Verdict::Fail));
         assert_eq!(checked.rules[0].view.kind, "hole_to_copper_clearance");
         assert!(checked.rules[0].view.spatial);
         assert_eq!(
             checked.rules[0].view.features,
             ["copper", "drills", "board_outlines"]
         );
-        assert!(
-            checked
-                .scene
-                .passes
-                .iter()
-                .any(|pass| { pass.feature == "copper" && pass.layer.as_deref() == Some("L0") })
-        );
-        assert!(
-            checked
-                .scene
-                .passes
-                .iter()
-                .any(|pass| { pass.feature == "drills" && pass.layer.as_deref() == Some("DRILL") })
-        );
+        for (feature, layer) in [("copper", "L0"), ("drills", "DRILL")] {
+            let mut passes = checked.scene.passes.iter();
+            assert!(
+                passes.any(|pass| pass.feature == feature && pass.layer.as_deref() == Some(layer))
+            );
+        }
     }
 
     #[test]
-    fn excludes_own_net_for_vias_and_pths_but_not_unattributed_copper() {
-        for (hole, plating) in [("via", "VIA"), ("pth", "PLATED")] {
+    fn excludes_own_net_for_vias_and_pths_but_not_for_npth_or_unattributed_copper() {
+        for (hole, plating, own_net_offends) in [
+            ("via", "VIA", false),
+            ("pth", "PLATED", false),
+            ("npth", "NONPLATED", true),
+        ] {
             let own_net = run(
                 &board(plating, Some((0, 2)), &[copper(0, Some("N1"), 0.55)]),
                 hole,
             );
-            assert!(own_net.findings.is_empty(), "{hole} own net");
+            assert_eq!(
+                own_net.findings.len(),
+                usize::from(own_net_offends),
+                "{hole} own net"
+            );
 
             let unattributed = run(
                 &board(plating, Some((0, 2)), &[copper(0, None, 0.55)]),
@@ -502,6 +390,52 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     #[test]
+    fn a_drill_through_a_foreign_land_is_not_exempted_by_overlapping_it() {
+        // The hole is N1 with its own padstack; the only land it overlaps is
+        // N2 copper of another padstack. Overlap links them, identity does not.
+        let replace = |xml: String, from: &str, to: &str| {
+            assert!(xml.contains(from), "fixture no longer contains {from}");
+            xml.replace(from, to)
+        };
+        let xml = replace(
+            board_with_unowned_land(false),
+            r#"<PadStackDef name="land-stack">"#,
+            r#"<PadStackDef name="other-stack">
+        <PadstackPadDef layerRef="L0" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+      </PadStackDef>
+      <PadStackDef name="land-stack">"#,
+        );
+        let xml = replace(
+            xml,
+            r#"<LayerFeature layerRef="L0"><Set polarity="POSITIVE">
+        <Pad padstackDefRef="land-stack">"#,
+            r#"<LayerFeature layerRef="L0"><Set net="N2" polarity="POSITIVE">
+        <Pad padstackDefRef="other-stack">"#,
+        );
+        // With or without a stated padstack on the drill, which is what
+        // decides whether import links the two by overlap alone.
+        for drill in [
+            r#"<Set geometry="land-stack" net="N1" polarity="POSITIVE">"#,
+            r#"<Set net="N1" polarity="POSITIVE">"#,
+        ] {
+            let xml = replace(
+                xml.clone(),
+                r#"<Set geometry="land-stack" polarity="POSITIVE">"#,
+                drill,
+            );
+            let results = run(&xml, "pth");
+            assert_eq!(
+                results.findings.len(),
+                1,
+                "{drill}: {:?}",
+                results.rules[0].skip_reason
+            );
+            assert_eq!(results.findings[0].measurement.actual_mm(), Some(0.0));
+            assert_eq!(results.findings[0].subjects[1].net.as_deref(), Some("N2"));
+        }
+    }
+
+    #[test]
     fn checks_unattributed_copper_when_layer_features_reuse_land_source_indices() {
         // Both the owned land and the unrelated contour are set 0, feature 0,
         // but they belong to separate LayerFeatures on the same copper layer.
@@ -524,45 +458,90 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     #[test]
-    fn npth_treats_same_net_copper_as_an_offender() {
-        let results = run(
-            &board("NONPLATED", Some((0, 2)), &[copper(0, Some("N1"), 0.55)]),
-            "npth",
+    fn a_layer_or_stackup_no_case_matches_is_reported_not_left_unchecked() {
+        let cased = |cases: &str| {
+            pdk("via").replace(
+                "limit = { minimum = \"0.20 mm\" }",
+                &format!("cases = [{cases}]"),
+            )
+        };
+        let outer = r#"{ id = "outer", when = { copper = { position = "outer" } }, limit = { minimum = "0.20 mm" } }"#;
+        let inner = r#"{ id = "inner", when = { copper = { position = "inner" } }, limit = { preferred = "0.20 mm" } }"#;
+        let through = board("VIA", Some((0, 2)), &[copper(0, Some("N2"), 0.8)]);
+
+        // The through via meets the inner layer, which no case limits.
+        let partial = fixtures::run_board(&through, &cased(outer));
+        assert_eq!(partial.rules.len(), 2);
+        assert!(matches!(partial.rules[0].status, RuleStatus::Pass));
+        assert_eq!(
+            partial.rules[0].checked, 2,
+            "both outer layers are measured"
         );
-        assert_eq!(results.findings.len(), 1);
-        assert_eq!(results.findings[0].subjects[1].net.as_deref(), Some("N1"));
+        let coverage = &partial.rules[1];
+        assert_eq!(coverage.id, "hole-clearance");
+        assert!(
+            coverage.blocks_verdict(),
+            "the outer case is a required tier"
+        );
+        assert_eq!(
+            coverage.skip_reason.as_deref(),
+            Some("no case applies to copper layer(s) 'L1' (inner, 1.01 oz)")
+        );
+
+        let complete = fixtures::run_board(&through, &cased(&format!("{outer}, {inner}")));
+        assert_eq!(
+            complete
+                .rules
+                .iter()
+                .map(|rule| rule.id.as_str())
+                .collect::<Vec<_>>(),
+            ["hole-clearance.outer", "hole-clearance.inner.preferred"]
+        );
+
+        // Without a via there is nothing the uncovered layer leaves unchecked.
+        let no_vias = fixtures::run_board(&board("PLATED", Some((0, 2)), &[]), &cased(outer));
+        assert_eq!(no_vias.rules.len(), 1);
+        assert!(matches!(no_vias.rules[0].status, RuleStatus::NotApplicable));
+
+        let two_layer = r#"{ id = "two", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.20 mm" } }"#;
+        let count = fixtures::run_board(&through, &cased(two_layer));
+        assert!(matches!(count.rules[0].status, RuleStatus::NotApplicable));
+        assert_eq!(
+            count.rules[1].skip_reason.as_deref(),
+            Some("no case applies to a design with 3 copper layer(s)")
+        );
     }
 
     #[test]
-    fn checks_only_copper_layers_in_the_declared_drill_span() {
-        let outside = run(
-            &board("VIA", Some((0, 1)), &[copper(2, Some("N2"), 0.55)]),
-            "via",
+    fn a_drill_layer_without_a_span_is_through_board() {
+        // Offending copper on the bottom layer: only a through drill meets it.
+        let copper = [copper(2, Some("N2"), 0.55)];
+        let undeclared = run(&board("VIA", None, &copper), "via");
+        let declared = run(&board("VIA", Some((0, 2)), &copper), "via");
+        assert_eq!(undeclared.rules[0].checked, 3);
+        assert_eq!(undeclared.findings.len(), 1);
+        assert_eq!(undeclared.findings[0].layers[1].name, "L2");
+        assert_eq!(
+            undeclared.findings[0].measurement.actual_mm(),
+            declared.findings[0].measurement.actual_mm()
         );
-        assert_eq!(outside.rules[0].checked, 2);
-        assert!(outside.findings.is_empty());
-
-        let inside = run(
-            &board("VIA", Some((0, 1)), &[copper(1, Some("N2"), 0.55)]),
-            "via",
-        );
-        assert_eq!(inside.findings.len(), 1);
-        assert_eq!(inside.findings[0].layers[1].name, "L1");
     }
 
     #[test]
     fn rejects_a_hole_without_a_resolvable_drill_span() {
-        let resolution = Resolution::default();
-
-        let xml = board("VIA", None, &[copper(0, Some("N2"), 0.8)]);
-        let ipc = Ipc2581::parse(&xml).unwrap();
-        let pdk = Pdk::parse(&pdk("via")).unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let error = Design::extract(&imported, ArtworkScope::Board, &rules, resolution)
-            .err()
-            .expect("an unknown span must fail closed");
-        assert!(error.to_string().contains("no resolvable drill span"));
+        let xml = board("VIA", Some((0, 1)), &[copper(0, Some("N2"), 0.8)]).replace(
+            r#"<Span fromLayer="L0" toLayer="L1"/>"#,
+            r#"<Span fromLayer="L0"/>"#,
+        );
+        let results = run(&xml, "via");
+        let rule = &results.rules[0];
+        assert!(rule.blocks_verdict(), "an unknown span must fail closed");
+        assert!(
+            rule.skip_reason
+                .as_deref()
+                .unwrap()
+                .contains("no resolvable drill span")
+        );
     }
 
     #[test]
@@ -585,18 +564,8 @@ limit = {{ minimum = "0.20 mm" }}
                     &declarations.join("\n"),
                     &order.map(|i| declarations[i]).join("\n"),
                 );
-                let ipc = Ipc2581::parse(&xml).unwrap();
-                let pdk = Pdk::parse(&pdk("via")).unwrap();
-                let rules = rules::lower(&pdk, None).unwrap();
-                let imported =
-                    pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-                let design = Design::extract(
-                    &imported,
-                    ArtworkScope::Board,
-                    &rules,
-                    Resolution::default(),
-                )
-                .unwrap();
+                let (imported, rules) = (fixtures::import(&xml), fixtures::rules(&pdk("via")));
+                let design = Design::board(&imported, &rules, Resolution::default());
                 let mut included = design
                     .copper_layers
                     .iter()
@@ -606,13 +575,7 @@ limit = {{ minimum = "0.20 mm" }}
                     .collect::<Vec<_>>();
                 included.sort_unstable();
                 assert_eq!(included, ["L0", "L1"], "declarations {order:?}");
-                let results = checks::run(
-                    &rules,
-                    &design,
-                    None,
-                    NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-                )
-                .unwrap();
+                let results = run(&xml, "via");
                 assert_eq!(results.rules[0].checked, 2);
                 assert_eq!(
                     results.findings.len(),
@@ -625,30 +588,14 @@ limit = {{ minimum = "0.20 mm" }}
 
     #[test]
     fn does_not_require_a_span_for_a_nonapplicable_named_case() {
-        let resolution = Resolution::default();
-
         let xml = board("VIA", None, &[copper(0, Some("N2"), 0.55)]);
         let source = pdk("via").replace(
             "limit = { minimum = \"0.20 mm\" }",
             "cases = [{ id = \"two-layer\", when = { copper_layers = { exact = 2 } }, limit = { minimum = \"0.20 mm\" } }]",
         );
-        let ipc = Ipc2581::parse(&xml).unwrap();
-        let pdk = Pdk::parse(&source).unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
-        let results = checks::run(
-            &rules,
-            &design,
-            None,
-            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-        )
-        .unwrap();
+        let results = fixtures::run_board(&xml, &source);
 
-        assert!(matches!(
-            results.rules[0].status,
-            crate::commands::dfm::report::RuleStatus::Skipped
-        ));
+        assert!(matches!(results.rules[0].status, RuleStatus::NotApplicable));
         assert_eq!(
             results.rules[0].skip_reason.as_deref(),
             Some("rule conditions do not apply to this stackup")

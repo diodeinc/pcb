@@ -130,11 +130,12 @@ pub struct EntryUser {
     pub primitive: UserPrimitive,
 }
 
-/// Units of measurement
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Units {
-    Millimeter,
-    Inch,
-    Micron,
-    Mils,
+ipc_enum! {
+    /// Units of measurement
+    pub enum Units("units") {
+        Millimeter = "MILLIMETER",
+        Inch = "INCH",
+        Micron = "MICRON",
+        Mils = "MILS",
+    }
 }

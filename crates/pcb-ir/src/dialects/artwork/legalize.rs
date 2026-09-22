@@ -10,72 +10,48 @@ const TRANSFORM_EPSILON: f64 = 1e-9;
 pub fn bake_aperture_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
     let similarity = basis.preserves_circles(TRANSFORM_EPSILON);
     let scale = basis.m00.hypot(basis.m10);
-    let scaled_hole = || aperture.hole_diameter * scale;
-
-    match &aperture.shape {
-        ApertureShape::Circle { diameter } if similarity => Aperture {
-            shape: ApertureShape::Circle {
+    let sized = |width: f64, height: f64| axis_aligned_dimensions(width, height, basis);
+    let shape =
+        match &aperture.shape {
+            ApertureShape::Circle { diameter } if similarity => Some(ApertureShape::Circle {
                 diameter: diameter * scale,
-            },
-            hole_diameter: scaled_hole(),
-        },
-        ApertureShape::Rectangle { width, height } => {
-            if let Some((width, height)) = axis_aligned_dimensions(*width, *height, basis) {
-                Aperture {
-                    shape: ApertureShape::Rectangle { width, height },
-                    hole_diameter: scaled_hole(),
-                }
-            } else {
-                contour_aperture(aperture, basis)
-            }
-        }
-        ApertureShape::Obround { width, height } => {
-            if let Some((width, height)) = axis_aligned_dimensions(*width, *height, basis) {
-                Aperture {
-                    shape: ApertureShape::Obround { width, height },
-                    hole_diameter: scaled_hole(),
-                }
-            } else {
-                contour_aperture(aperture, basis)
-            }
-        }
-        ApertureShape::Polygon {
-            diameter,
-            vertices,
-            rotation_degrees,
-        } if similarity => {
-            let radians = rotation_degrees.to_radians();
-            let first_vertex = basis.transform_vector(Point::new(radians.cos(), radians.sin()));
-            Aperture {
-                shape: ApertureShape::Polygon {
+            }),
+            ApertureShape::Rectangle { width, height } => sized(*width, *height)
+                .map(|(width, height)| ApertureShape::Rectangle { width, height }),
+            ApertureShape::Obround { width, height } => sized(*width, *height)
+                .map(|(width, height)| ApertureShape::Obround { width, height }),
+            ApertureShape::Polygon {
+                diameter,
+                vertices,
+                rotation_degrees,
+            } if similarity => {
+                let radians = rotation_degrees.to_radians();
+                let first_vertex = basis.transform_vector(Point::new(radians.cos(), radians.sin()));
+                Some(ApertureShape::Polygon {
                     diameter: diameter * scale,
                     vertices: *vertices,
                     rotation_degrees: first_vertex.y.atan2(first_vertex.x).to_degrees(),
-                },
-                hole_diameter: scaled_hole(),
+                })
             }
-        }
-        ApertureShape::RoundRect {
-            width,
-            height,
-            radius,
-        } => {
-            if let Some((width, height)) = axis_aligned_dimensions(*width, *height, basis) {
-                Aperture {
-                    shape: ApertureShape::RoundRect {
-                        width,
-                        height,
-                        radius: radius * scale,
-                    },
-                    hole_diameter: scaled_hole(),
-                }
-            } else {
-                contour_aperture(aperture, basis)
-            }
-        }
-        ApertureShape::Contour { .. }
-        | ApertureShape::Circle { .. }
-        | ApertureShape::Polygon { .. } => contour_aperture(aperture, basis),
+            ApertureShape::RoundRect {
+                width,
+                height,
+                radius,
+            } => sized(*width, *height).map(|(width, height)| ApertureShape::RoundRect {
+                width,
+                height,
+                radius: radius * scale,
+            }),
+            ApertureShape::Contour { .. }
+            | ApertureShape::Circle { .. }
+            | ApertureShape::Polygon { .. } => None,
+        };
+    match shape {
+        Some(shape) => Aperture {
+            shape,
+            hole_diameter: aperture.hole_diameter * scale,
+        },
+        None => contour_aperture(aperture, basis),
     }
 }
 

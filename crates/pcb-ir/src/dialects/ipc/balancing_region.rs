@@ -39,7 +39,10 @@ use crate::dialects::ipc::{
     ProfileOccurrenceRole, ProfileSet, profile_occurrences_for, relief::is_vcut_operation_feature,
 };
 use crate::geom::accuracy::{ErrorAllocation, allocate_error};
+use crate::geom::dist::Distance;
+use crate::geom::region::ring_edges;
 use crate::geom::{ContourSet, FillRule, Paint};
+use ipc2581::Symbol;
 
 /// Default Euclidean clearance from every protected feature.
 pub const DEFAULT_BALANCING_CLEARANCE_MM: f64 = 0.5;
@@ -68,12 +71,12 @@ pub struct BoardArrayBalancingInput {
 /// The list passed to the collector is the only copper-stack description used
 /// to resolve feature spans and surface-side geometry to copper layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BoardArrayCopperLayer<Symbol> {
+pub struct BoardArrayCopperLayer {
     pub name: Symbol,
     pub side: Side,
 }
 
-impl<Symbol> BoardArrayCopperLayer<Symbol> {
+impl BoardArrayCopperLayer {
     pub fn new(name: Symbol, side: Side) -> Self {
         Self { name, side }
     }
@@ -81,15 +84,15 @@ impl<Symbol> BoardArrayCopperLayer<Symbol> {
 
 /// Copper layers affected by one physical support-geometry region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BoardArrayCopperReach<Symbol> {
+pub enum BoardArrayCopperReach {
     /// Through-stack or conservatively unresolved physical geometry.
     All,
     /// Geometry confined to one copper layer or its adjacent surface.
     Layer(Symbol),
 }
 
-impl<Symbol: PartialEq> BoardArrayCopperReach<Symbol> {
-    fn includes(&self, layer: &Symbol) -> bool {
+impl BoardArrayCopperReach {
+    fn includes(self, layer: Symbol) -> bool {
         match self {
             Self::All => true,
             Self::Layer(affected) => affected == layer,
@@ -99,8 +102,8 @@ impl<Symbol: PartialEq> BoardArrayCopperReach<Symbol> {
 
 /// One disjoint copper-reach bucket from an extracted support layer.
 #[derive(Debug, Clone)]
-pub struct BoardArrayScopedObstacle<Symbol> {
-    pub reach: BoardArrayCopperReach<Symbol>,
+pub struct BoardArrayScopedObstacle {
+    pub reach: BoardArrayCopperReach,
     pub region: ContourSet,
 }
 
@@ -148,36 +151,67 @@ pub struct BoardArrayBalancingIntermediates {
     pub removed_by_gap_regularization: ContourSet,
 }
 
-/// Independent proof geometry for a computed safe region.
+/// Independent proof that a computed safe region keeps its clearance.
+///
+/// The construction offsets regions; the proof measures distances between
+/// boundaries, so neither shares the other's failure modes. Boundaries closer
+/// than the clearance, or regions that overlap outright, are the only ways
+/// generated copper can come within the clearance of what it must avoid.
+///
+/// Feature width and void-gap width need no second proof: the construction's
+/// last step is an opening, and it stops only once
+/// [`ContourSet::disk_gap_violations`] finds nothing.
 #[derive(Debug, Clone)]
 pub struct ClearanceCertificate {
-    /// Safe region dilated by the nominal requested clearance.
-    pub swept_safe_region: ContourSet,
+    /// The nearest approach of the safe region's boundary to an obstacle's or
+    /// the panel's, where it is closer than the nominal clearance.
+    pub nearest_approach: Option<Distance>,
     /// Regularized safe material outside the clearance-safe set.
     pub safe_outside_clearance_region: ContourSet,
-    /// `safe_region \ open(safe_region, region_radius)`, after denoising.
-    pub regularization_violations: ContourSet,
-    /// Two-sided components of
-    /// `close(safe_region, disk(gap_radius)) \ safe_region`. Non-empty geometry
-    /// proves a void gap narrower than twice the gap radius, including within
-    /// one connected filled component.
-    pub gap_violations: ContourSet,
-    /// Nominal-clearance sweep outside the raw panel.
+    /// Safe material outside the raw panel.
     pub outside_panel: ContourSet,
-    /// Nominal-clearance sweep intersecting raw obstacles.
+    /// Safe material on raw obstacles.
     pub obstacle_overlap: ContourSet,
 }
 
 impl ClearanceCertificate {
-    /// Whether the two-sided gap set is empty and every other violation is
+    /// Measure `safe_region` against the nominal `clearance_mm` from the
+    /// panel's exterior and from `obstacles`.
+    pub fn of(
+        safe_region: &ContourSet,
+        clearance_safe_region: &ContourSet,
+        panel_outer: &ContourSet,
+        obstacles: &ContourSet,
+        clearance_mm: f64,
+    ) -> Result<Self, AccuracyError> {
+        let forbidden = [panel_outer.prepare_query(), obstacles.prepare_query()];
+        let nearest_approach = safe_region
+            .rings
+            .iter()
+            .flat_map(ring_edges)
+            .flat_map(|(start, end)| {
+                forbidden.iter().filter_map(move |boundary| {
+                    boundary.segment_nearest_within(start, end, clearance_mm)
+                })
+            })
+            .filter(|distance| distance.mm < clearance_mm)
+            .min_by(|left, right| left.mm.total_cmp(&right.mm));
+        Ok(Self {
+            nearest_approach,
+            safe_outside_clearance_region: safe_region.difference(clearance_safe_region)?,
+            outside_panel: safe_region.difference(panel_outer)?,
+            obstacle_overlap: safe_region.intersection(obstacles)?,
+        })
+    }
+
+    /// Whether no boundary comes within the clearance and every overlap is
     /// below the supplied area tolerance.
     pub fn passes(&self, area_tolerance_mm2: f64) -> bool {
         area_tolerance_mm2.is_finite()
             && area_tolerance_mm2 >= 0.0
-            && self.gap_violations.is_empty()
+            && self.nearest_approach.is_none()
             && [
                 &self.safe_outside_clearance_region,
-                &self.regularization_violations,
                 &self.outside_panel,
                 &self.obstacle_overlap,
             ]
@@ -208,23 +242,20 @@ pub enum BoardArraySupportLayerPolicy {
 
 /// One already-extracted IPC `ArraySupport` layer.
 #[derive(Debug, Clone, Copy)]
-pub struct BoardArraySupportDocument<'a, Symbol, LayerFunction> {
-    pub document: &'a Document<Symbol, LayerFunction>,
+pub struct BoardArraySupportDocument<'a> {
+    pub document: &'a Document,
     pub policy: BoardArraySupportLayerPolicy,
 }
 
-impl<'a, Symbol, LayerFunction> BoardArraySupportDocument<'a, Symbol, LayerFunction> {
-    pub fn new(
-        document: &'a Document<Symbol, LayerFunction>,
-        policy: BoardArraySupportLayerPolicy,
-    ) -> Self {
+impl<'a> BoardArraySupportDocument<'a> {
+    pub fn new(document: &'a Document, policy: BoardArraySupportLayerPolicy) -> Self {
         Self { document, policy }
     }
 }
 
 /// Geometry and coverage accounting for one array-support layer.
 #[derive(Debug, Clone)]
-pub struct BoardArraySupportLayerGeometry<Symbol> {
+pub struct BoardArraySupportLayerGeometry {
     pub source_feature_count: usize,
     pub feature_count: usize,
     pub source_path_count: usize,
@@ -233,13 +264,13 @@ pub struct BoardArraySupportLayerGeometry<Symbol> {
     pub unpainted_path_count: usize,
     /// Canonical physical geometry, partitioned by copper reach. Each included
     /// support path contributes to exactly one bucket.
-    pub obstacles: Vec<BoardArrayScopedObstacle<Symbol>>,
+    pub obstacles: Vec<BoardArrayScopedObstacle>,
     /// The resolution every bucket was prepared at, kept for layers whose
     /// buckets are all empty.
     pub resolution: Resolution,
 }
 
-impl<Symbol: Copy + PartialEq> BoardArraySupportLayerGeometry<Symbol> {
+impl BoardArraySupportLayerGeometry {
     /// Derive this source layer's physical obstacle region for one copper
     /// layer. The scoped buckets remain the sole stored geometry.
     pub fn region_for_layer(&self, layer: Symbol) -> Result<ContourSet, AccuracyError> {
@@ -247,7 +278,7 @@ impl<Symbol: Copy + PartialEq> BoardArraySupportLayerGeometry<Symbol> {
             self.resolution,
             self.obstacles
                 .iter()
-                .filter(|obstacle| obstacle.reach.includes(&layer))
+                .filter(|obstacle| obstacle.reach.includes(layer))
                 .map(|obstacle| obstacle.region.clone()),
         )
     }
@@ -255,15 +286,15 @@ impl<Symbol: Copy + PartialEq> BoardArraySupportLayerGeometry<Symbol> {
 
 /// IPC-derived inputs and diagnostics, before safe-region computation.
 #[derive(Debug, Clone)]
-pub struct BoardArrayBalancingCollection<Symbol> {
+pub struct BoardArrayBalancingCollection {
     pub panel_outer: ContourSet,
     pub board_footprints: ContourSet,
     pub material_removal: ContourSet,
     pub board_instance_count: usize,
-    pub support_layers: Vec<BoardArraySupportLayerGeometry<Symbol>>,
+    pub support_layers: Vec<BoardArraySupportLayerGeometry>,
 }
 
-impl<Symbol: Copy + PartialEq> BoardArrayBalancingCollection<Symbol> {
+impl BoardArrayBalancingCollection {
     /// Derive the geometry-only input for one copper layer from the canonical
     /// scoped support geometry.
     pub fn input_for_layer(
@@ -297,7 +328,7 @@ impl<Symbol: Copy + PartialEq> BoardArrayBalancingCollection<Symbol> {
         self.support_layers
             .iter()
             .flat_map(|source| &source.obstacles)
-            .all(|obstacle| obstacle.reach.includes(&left) == obstacle.reach.includes(&right))
+            .all(|obstacle| obstacle.reach.includes(left) == obstacle.reach.includes(right))
     }
 }
 
@@ -356,29 +387,33 @@ impl fmt::Display for BalancingRegionError {
 
 impl std::error::Error for BalancingRegionError {}
 
-/// Compute a clearance-safe, radius-regularized copper region.
-///
-/// Let `P` be [`BoardArrayBalancingInput::panel_outer`], `O` the union of the
-/// three obstacle inputs, `c`
-/// [`BalancingRegionOptions::construction_clearance_mm`], `q`
-/// [`BalancingRegionOptions::regularization_radius_mm`], and `v`
-/// [`BalancingRegionOptions::gap_radius_mm`]. The geometric stages are:
-///
-/// ```text
-/// clearance_safe = (P ⊖ disk(c)) \ (O ⊕ disk(c))
-/// candidates     = open(clearance_safe, disk(q))
-/// ```
-///
-/// Gap regularization then repeatedly removes a radius-`v + guard` tube around
-/// the boundary medial axis inside the two-sided subset of
-/// `close(candidates, disk(v + guard)) \ candidates` until that subset is
-/// empty. It widens inter-component gaps, hairpins, notches, and internal
-/// voids locally without widening one-sided edge clearance.
+/// Compute a clearance-safe, radius-regularized copper region: the module's
+/// construction with `P` [`BoardArrayBalancingInput::panel_outer`], `O` the
+/// union of the three obstacle inputs, and `c`, `q`, `v` the radii of
+/// [`BalancingRegionOptions`], the clearance and gap radius each widened by
+/// the numerical construction guard.
 pub fn board_array_balancing_region(
     input: &BoardArrayBalancingInput,
     options: BalancingRegionOptions,
 ) -> Result<BoardArrayBalancingResult, BalancingRegionError> {
-    validate_options(options)?;
+    for (value, invalid) in [
+        (
+            options.clearance_mm,
+            BalancingRegionError::InvalidClearance as fn(f64) -> _,
+        ),
+        (
+            options.regularization_radius_mm,
+            BalancingRegionError::InvalidRegularizationRadius,
+        ),
+        (
+            options.gap_radius_mm,
+            BalancingRegionError::InvalidGapRadius,
+        ),
+    ] {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(invalid(value));
+        }
+    }
     if input.panel_outer.is_empty() {
         return Err(BalancingRegionError::EmptyPanelOutline);
     }
@@ -415,20 +450,14 @@ pub fn board_array_balancing_region(
     let removed_by_gap_regularization = gap_regularization.removed;
 
     // Certify against the nominal requirement, independently of the
-    // construction guard used above.
-    let swept_safe_region = safe_region.disk_dilate(options.clearance_mm)?;
-    let regularization_violations = safe_region
-        .difference(&safe_region.disk_open(options.regularization_radius_mm)?)?
-        .disk_open(numerical_guard_mm)?;
-    let gap_violations = safe_region.disk_gap_violations(options.gap_radius_mm)?;
-    let certificate = ClearanceCertificate {
-        safe_outside_clearance_region: safe_region.difference(&clearance_safe_region)?,
-        regularization_violations,
-        gap_violations,
-        outside_panel: swept_safe_region.difference(&input.panel_outer)?,
-        obstacle_overlap: swept_safe_region.intersection(&raw_obstacles)?,
-        swept_safe_region,
-    };
+    // construction guard and the offsets used above.
+    let certificate = ClearanceCertificate::of(
+        &safe_region,
+        &clearance_safe_region,
+        &input.panel_outer,
+        &raw_obstacles,
+        options.clearance_mm,
+    )?;
 
     Ok(BoardArrayBalancingResult {
         safe_region,
@@ -450,17 +479,13 @@ pub fn board_array_balancing_region(
 ///
 /// Source-file traversal and view extraction stay outside `pcb-ir`; all
 /// geometry classification after extraction lives here.
-pub fn collect_board_array_balancing_input<'a, Symbol, LayerFunction>(
-    layout: &Document<Symbol, LayerFunction>,
+pub fn collect_board_array_balancing_input<'a>(
+    layout: &Document,
     fabrication_profile: &BoardArrayFabricationProfile,
-    copper_layers: &[BoardArrayCopperLayer<Symbol>],
-    support_documents: impl IntoIterator<Item = BoardArraySupportDocument<'a, Symbol, LayerFunction>>,
+    copper_layers: &[BoardArrayCopperLayer],
+    support_documents: impl IntoIterator<Item = BoardArraySupportDocument<'a>>,
     resolution: Resolution,
-) -> Result<BoardArrayBalancingCollection<Symbol>, BalancingRegionError>
-where
-    Symbol: Copy + PartialEq + 'a,
-    LayerFunction: 'a,
-{
+) -> Result<BoardArrayBalancingCollection, BalancingRegionError> {
     let collection = inspect_board_array_balancing_input(
         layout,
         fabrication_profile,
@@ -528,17 +553,13 @@ pub fn collect_fab_panel_balancing_input(
 /// Production consumers should use the fail-closed collector. This inspection
 /// entry point exists so a debug harness can serialize the offending geometry
 /// before reporting incomplete coverage.
-pub fn inspect_board_array_balancing_input<'a, Symbol, LayerFunction>(
-    layout: &Document<Symbol, LayerFunction>,
+pub fn inspect_board_array_balancing_input<'a>(
+    layout: &Document,
     fabrication_profile: &BoardArrayFabricationProfile,
-    copper_layers: &[BoardArrayCopperLayer<Symbol>],
-    support_documents: impl IntoIterator<Item = BoardArraySupportDocument<'a, Symbol, LayerFunction>>,
+    copper_layers: &[BoardArrayCopperLayer],
+    support_documents: impl IntoIterator<Item = BoardArraySupportDocument<'a>>,
     resolution: Resolution,
-) -> Result<BoardArrayBalancingCollection<Symbol>, BalancingRegionError>
-where
-    Symbol: Copy + PartialEq + 'a,
-    LayerFunction: 'a,
-{
+) -> Result<BoardArrayBalancingCollection, BalancingRegionError> {
     let panel_contours = fabrication_profile
         .array_outlines
         .iter()
@@ -585,11 +606,11 @@ where
     })
 }
 
-fn collect_support_layer_geometry<Symbol: Copy + PartialEq, LayerFunction>(
-    source: BoardArraySupportDocument<'_, Symbol, LayerFunction>,
-    copper_layers: &[BoardArrayCopperLayer<Symbol>],
+fn collect_support_layer_geometry(
+    source: BoardArraySupportDocument<'_>,
+    copper_layers: &[BoardArrayCopperLayer],
     resolution: Resolution,
-) -> Result<BoardArraySupportLayerGeometry<Symbol>, AccuracyError> {
+) -> Result<BoardArraySupportLayerGeometry, AccuracyError> {
     let source_path_count = source
         .document
         .features
@@ -613,8 +634,7 @@ fn collect_support_layer_geometry<Symbol: Copy + PartialEq, LayerFunction>(
         .iter()
         .filter(|path| matches!(path.paint, Paint::None))
         .count();
-    let mut scoped_features: Vec<(BoardArrayCopperReach<Symbol>, Vec<&Feature<Symbol>>)> =
-        Vec::new();
+    let mut scoped_features: Vec<(BoardArrayCopperReach, Vec<&Feature>)> = Vec::new();
     for feature in &features {
         let reach = copper_reach(feature, copper_layers);
         if let Some((_, grouped)) = scoped_features
@@ -667,10 +687,10 @@ fn collect_support_layer_geometry<Symbol: Copy + PartialEq, LayerFunction>(
 /// shapes or roles. Exact copper-layer spans stay local, surface geometry maps
 /// to the corresponding outer copper, and every unresolved/through span is
 /// conservatively stack-wide.
-fn copper_reach<Symbol: Copy + PartialEq>(
-    feature: &Feature<Symbol>,
-    copper_layers: &[BoardArrayCopperLayer<Symbol>],
-) -> BoardArrayCopperReach<Symbol> {
+fn copper_reach(
+    feature: &Feature,
+    copper_layers: &[BoardArrayCopperLayer],
+) -> BoardArrayCopperReach {
     if let FeatureSpan::Layer(layer) = feature.intent.span
         && copper_layers.iter().any(|copper| copper.name == layer)
     {
@@ -690,23 +710,6 @@ fn copper_reach<Symbol: Copy + PartialEq>(
     BoardArrayCopperReach::All
 }
 
-fn validate_options(options: BalancingRegionOptions) -> Result<(), BalancingRegionError> {
-    if !options.clearance_mm.is_finite() || options.clearance_mm <= 0.0 {
-        return Err(BalancingRegionError::InvalidClearance(options.clearance_mm));
-    }
-    if !options.regularization_radius_mm.is_finite() || options.regularization_radius_mm <= 0.0 {
-        return Err(BalancingRegionError::InvalidRegularizationRadius(
-            options.regularization_radius_mm,
-        ));
-    }
-    if !options.gap_radius_mm.is_finite() || options.gap_radius_mm <= 0.0 {
-        return Err(BalancingRegionError::InvalidGapRadius(
-            options.gap_radius_mm,
-        ));
-    }
-    Ok(())
-}
-
 impl From<AccuracyError> for BalancingRegionError {
     fn from(error: AccuracyError) -> Self {
         Self::Accuracy(error)
@@ -719,14 +722,12 @@ mod tests {
     use crate::dialects::ipc::{
         Feature, FeatureDomain, FeatureKind, FeaturePlacementGroup, FeatureRole, FeatureSet,
         LayoutInstance, LayoutPurpose, LayoutStep, LayoutStepKind, Spec, SpecItem, SpecItemKind,
-        SpecRef, StepProfile,
+        SpecRef, StepProfile, test_symbol as sym,
     };
     use crate::geom::{
         Affine2, BBox, ContourBuf, GeometryAccuracy, LineCap, Paint, PathCmd, Point, Polarity,
         Span, StrokeStyle,
     };
-
-    type TestDocument = Document<u32, ()>;
 
     #[test]
     fn computes_and_certifies_safe_region() {
@@ -738,122 +739,83 @@ mod tests {
         assert!(!result.safe_region.is_empty());
         assert!(
             result.certificate.passes(1e-4),
-            "outside clearance-safe {:.9}, filled-feature violations {:.9}, void-gap violations {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
+            "nearest approach {:?}, outside clearance-safe {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
+            result.certificate.nearest_approach,
             result.certificate.safe_outside_clearance_region.area(),
-            result.certificate.regularization_violations.area(),
-            result.certificate.gap_violations.area(),
             result.certificate.outside_panel.area(),
             result.certificate.obstacle_overlap.area(),
         );
+        // What the construction guarantees without a second proof: every
+        // filled feature admits the regularization disk and every two-sided
+        // void gap the gap disk.
+        let options = BalancingRegionOptions::default();
+        let opened = result
+            .safe_region
+            .disk_open(options.regularization_radius_mm)
+            .unwrap();
+        // Reopening a flattened arc shaves its chords' corners; anything a
+        // few micrometres thick is that, not a feature the disk does not fit.
         assert!(
             result
                 .safe_region
-                .difference(&result.intermediates.clearance_safe_region)
+                .difference(&opened)
                 .unwrap()
-                .area()
-                <= result.safe_region.tolerance().powi(2)
+                .disk_erode(0.005)
+                .unwrap()
+                .is_empty()
         );
         assert!(
             result
+                .safe_region
+                .disk_gap_violations(options.gap_radius_mm)
+                .unwrap()
+                .is_empty()
+        );
+        // Regularization only ever removes: the certificate holds the safe
+        // region inside the clearance-safe set, and something was trimmed.
+        assert!(result.safe_region.area() < result.intermediates.clearance_safe_region.area());
+    }
+
+    /// More clearance, a larger feature disk, or another obstacle each leave a
+    /// strict subset of the stage they act on.
+    #[test]
+    fn tighter_inputs_shrink_the_stage_they_act_on() {
+        let options = |clearance_mm, regularization_radius_mm| BalancingRegionOptions {
+            clearance_mm,
+            regularization_radius_mm,
+            gap_radius_mm: 0.5,
+        };
+        let solve = |support_features, options| {
+            board_array_balancing_region(&balancing_input(0.0, support_features), options)
+                .unwrap()
                 .intermediates
-                .clearance_safe_region
-                .difference(&result.safe_region)
-                .unwrap()
-                .area()
-                > 0.0
-        );
-        assert!(
-            result
-                .safe_region
-                .difference(&result.intermediates.panel_keep_in)
-                .unwrap()
-                .area()
-                <= result.safe_region.tolerance().powi(2)
-        );
-        assert!(
-            result
-                .safe_region
-                .intersection(&result.intermediates.obstacle_keep_out)
-                .unwrap()
-                .area()
-                <= result.safe_region.tolerance().powi(2)
-        );
-    }
-
-    #[test]
-    fn larger_clearance_shrinks_clearance_safe_region_for_simple_fixture() {
-        let input = balancing_input(0.0, ContourSet::empty(Resolution::default()));
-        let smaller = board_array_balancing_region(
-            &input,
-            BalancingRegionOptions {
-                clearance_mm: 0.25,
-                regularization_radius_mm: 0.5,
-                gap_radius_mm: 0.5,
-            },
-        )
-        .unwrap();
-        let larger = board_array_balancing_region(
-            &input,
-            BalancingRegionOptions {
-                clearance_mm: 1.0,
-                regularization_radius_mm: 0.5,
-                gap_radius_mm: 0.5,
-            },
-        )
-        .unwrap();
-
-        let larger_outside_smaller = larger
-            .intermediates
-            .clearance_safe_region
-            .difference(&smaller.intermediates.clearance_safe_region)
-            .unwrap();
-        assert!(
-            larger_outside_smaller.area() <= larger_outside_smaller.tolerance().powi(2),
-            "larger clearance added {:.9} mm² to the maximal region",
-            larger_outside_smaller.area()
-        );
-        assert!(
-            larger.intermediates.clearance_safe_region.area()
-                < smaller.intermediates.clearance_safe_region.area()
-        );
-    }
-
-    #[test]
-    fn larger_regularization_disk_shrinks_opened_region_for_simple_fixture() {
-        let input = balancing_input(0.0, ContourSet::empty(Resolution::default()));
-        let smaller = board_array_balancing_region(
-            &input,
-            BalancingRegionOptions {
-                clearance_mm: 0.5,
-                regularization_radius_mm: 0.25,
-                gap_radius_mm: 0.5,
-            },
-        )
-        .unwrap();
-        let larger = board_array_balancing_region(
-            &input,
-            BalancingRegionOptions {
-                clearance_mm: 0.5,
-                regularization_radius_mm: 1.0,
-                gap_radius_mm: 0.5,
-            },
-        )
-        .unwrap();
-
-        let larger_outside_smaller = larger
-            .intermediates
-            .opened_candidates
-            .difference(&smaller.intermediates.opened_candidates)
-            .unwrap();
-        assert!(
-            larger_outside_smaller.area() <= larger_outside_smaller.tolerance().powi(2),
-            "larger feature disk added {:.9} mm² to the opened region",
-            larger_outside_smaller.area()
-        );
-        assert!(
-            larger.intermediates.opened_candidates.area()
-                < smaller.intermediates.opened_candidates.area()
-        );
+        };
+        let bare = || ContourSet::empty(Resolution::default());
+        let obstacle = ContourSet::rectangle(bbox(10.0, 1.0, 11.0, 9.0), Resolution::default());
+        let clearance_safe =
+            |stages: BoardArrayBalancingIntermediates| stages.clearance_safe_region;
+        for (looser, tighter) in [
+            (
+                clearance_safe(solve(bare(), options(0.25, 0.5))),
+                clearance_safe(solve(bare(), options(1.0, 0.5))),
+            ),
+            (
+                solve(bare(), options(0.5, 0.25)).opened_candidates,
+                solve(bare(), options(0.5, 1.0)).opened_candidates,
+            ),
+            (
+                clearance_safe(solve(bare(), options(0.5, 0.5))),
+                clearance_safe(solve(obstacle, options(0.5, 0.5))),
+            ),
+        ] {
+            let added = tighter.difference(&looser).unwrap();
+            assert!(
+                added.area() <= added.tolerance().powi(2),
+                "{}",
+                added.area()
+            );
+            assert!(tighter.area() < looser.area());
+        }
     }
 
     #[test]
@@ -899,32 +861,59 @@ mod tests {
             "unexpected gap trimming {:.9} mm²",
             result.intermediates.removed_by_gap_regularization.area(),
         );
-        assert!(result.certificate.gap_violations.is_empty());
-    }
-
-    #[test]
-    fn adding_an_obstacle_shrinks_clearance_safe_region_for_simple_fixture() {
-        let baseline_input = balancing_input(0.0, ContourSet::empty(Resolution::default()));
-        let added_obstacle =
-            ContourSet::rectangle(bbox(10.0, 1.0, 11.0, 9.0), Resolution::default());
-        let blocked_input = balancing_input(0.0, added_obstacle);
-        let options = BalancingRegionOptions::default();
-
-        let baseline = board_array_balancing_region(&baseline_input, options).unwrap();
-        let blocked = board_array_balancing_region(&blocked_input, options).unwrap();
-
         assert!(
-            blocked
-                .intermediates
-                .clearance_safe_region
-                .difference(&baseline.intermediates.clearance_safe_region)
+            result
+                .safe_region
+                .disk_gap_violations(0.5)
                 .unwrap()
                 .is_empty()
         );
-        assert!(
-            blocked.intermediates.clearance_safe_region.area()
-                < baseline.intermediates.clearance_safe_region.area()
-        );
+    }
+
+    /// The certificate measures; it does not take the construction's word. A
+    /// region built to a smaller clearance fails a larger one, and says where.
+    #[test]
+    fn certificate_rejects_a_region_built_to_a_smaller_clearance() {
+        let resolution = Resolution::default();
+        let input = BoardArrayBalancingInput {
+            panel_outer: ContourSet::rectangle(bbox(0.0, 0.0, 40.0, 30.0), resolution),
+            board_footprints: ContourSet::rectangle(bbox(10.0, 8.0, 30.0, 22.0), resolution),
+            material_removal: ContourSet::empty(resolution),
+            support_features: ContourSet::empty(resolution),
+        };
+        let built = board_array_balancing_region(
+            &input,
+            BalancingRegionOptions {
+                clearance_mm: 0.3,
+                ..BalancingRegionOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(built.certificate.passes(1e-4));
+
+        let certificate = ClearanceCertificate::of(
+            &built.safe_region,
+            &built.intermediates.clearance_safe_region,
+            &input.panel_outer,
+            &input.board_footprints,
+            0.5,
+        )
+        .unwrap();
+        assert!(!certificate.passes(1e-4));
+        let nearest = certificate.nearest_approach.unwrap();
+        assert!((0.3..0.35).contains(&nearest.mm), "{}", nearest.mm);
+
+        // Overlap is caught even where no boundary is near another.
+        let overlapping = ClearanceCertificate::of(
+            &input.panel_outer,
+            &input.panel_outer,
+            &input.panel_outer.disk_dilate(5.0).unwrap(),
+            &ContourSet::rectangle(bbox(15.0, 12.0, 25.0, 18.0), resolution),
+            0.5,
+        )
+        .unwrap();
+        assert!(overlapping.nearest_approach.is_none());
+        assert!(!overlapping.passes(1e-4));
     }
 
     #[test]
@@ -942,20 +931,8 @@ mod tests {
             (translated.safe_region.bbox.min.x - original.safe_region.bbox.min.x - 37.0).abs()
                 <= 1e-9
         );
-        assert!(
-            original.certificate.passes(1e-4),
-            "original outside clearance-safe {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
-            original.certificate.safe_outside_clearance_region.area(),
-            original.certificate.outside_panel.area(),
-            original.certificate.obstacle_overlap.area(),
-        );
-        assert!(
-            translated.certificate.passes(1e-4),
-            "translated outside clearance-safe {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
-            translated.certificate.safe_outside_clearance_region.area(),
-            translated.certificate.outside_panel.area(),
-            translated.certificate.obstacle_overlap.area(),
-        );
+        assert!(original.certificate.passes(1e-4));
+        assert!(translated.certificate.passes(1e-4));
     }
 
     #[test]
@@ -978,42 +955,26 @@ mod tests {
     #[test]
     fn rejects_invalid_options_and_required_empty_inputs() {
         let input = balancing_input(0.0, ContourSet::empty(Resolution::default()));
-        assert_eq!(
-            board_array_balancing_region(
-                &input,
-                BalancingRegionOptions {
-                    clearance_mm: 0.0,
-                    regularization_radius_mm: 0.5,
-                    gap_radius_mm: 0.5,
-                }
-            )
-            .unwrap_err(),
-            BalancingRegionError::InvalidClearance(0.0)
-        );
-        assert_eq!(
-            board_array_balancing_region(
-                &input,
-                BalancingRegionOptions {
-                    clearance_mm: 0.5,
-                    regularization_radius_mm: 0.0,
-                    gap_radius_mm: 0.5,
-                }
-            )
-            .unwrap_err(),
-            BalancingRegionError::InvalidRegularizationRadius(0.0)
-        );
-        assert_eq!(
-            board_array_balancing_region(
-                &input,
-                BalancingRegionOptions {
-                    clearance_mm: 0.5,
-                    regularization_radius_mm: 1.0,
-                    gap_radius_mm: 0.0,
-                }
-            )
-            .unwrap_err(),
-            BalancingRegionError::InvalidGapRadius(0.0)
-        );
+        for (clearance_mm, regularization_radius_mm, gap_radius_mm, error) in [
+            (0.0, 0.5, 0.5, BalancingRegionError::InvalidClearance(0.0)),
+            (
+                0.5,
+                0.0,
+                0.5,
+                BalancingRegionError::InvalidRegularizationRadius(0.0),
+            ),
+            (0.5, 1.0, 0.0, BalancingRegionError::InvalidGapRadius(0.0)),
+        ] {
+            let options = BalancingRegionOptions {
+                clearance_mm,
+                regularization_radius_mm,
+                gap_radius_mm,
+            };
+            assert_eq!(
+                board_array_balancing_region(&input, options).unwrap_err(),
+                error
+            );
+        }
         let mut empty_panel = input.clone();
         empty_panel.panel_outer = ContourSet::empty(Resolution::default());
         assert_eq!(
@@ -1034,22 +995,17 @@ mod tests {
     #[test]
     fn collector_derives_panel_boards_material_removal_and_support() {
         let (layout, profile) = layout_and_profile();
-        let mut support = TestDocument::new();
-        let path = support.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rectangle_contour(1.0, 1.0, 2.0, 2.0)],
-        );
+        let mut support = Document::new();
+        let path = filled_rectangle(&mut support, 1.0, 1.0, 2.0, 2.0);
         let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         feature.paths = Span::single(path);
-        feature.intent.span = FeatureSpan::Layer(100);
+        feature.intent.span = FeatureSpan::Layer(sym(100));
         support.features.push(feature);
 
         let copper_layers = [
-            BoardArrayCopperLayer::new(100, Side::Top),
-            BoardArrayCopperLayer::new(200, Side::Inner),
-            BoardArrayCopperLayer::new(300, Side::Inner),
+            BoardArrayCopperLayer::new(sym(100), Side::Top),
+            BoardArrayCopperLayer::new(sym(200), Side::Inner),
+            BoardArrayCopperLayer::new(sym(300), Side::Inner),
         ];
 
         let collection = collect_board_array_balancing_input(
@@ -1070,34 +1026,37 @@ mod tests {
         assert!((collection.panel_outer.area() - 200.0).abs() <= 1e-6);
         assert!((collection.board_footprints.area() - 12.0).abs() <= 1e-6);
         assert!((collection.material_removal.area() - 1.0).abs() <= 1e-6);
-        assert!((collection.support_features_for_layer(100).unwrap().area() - 1.0).abs() <= 1e-6);
+        assert!(
+            (collection
+                .support_features_for_layer(sym(100))
+                .unwrap()
+                .area()
+                - 1.0)
+                .abs()
+                <= 1e-6
+        );
         assert!(
             collection
-                .support_features_for_layer(200)
+                .support_features_for_layer(sym(200))
                 .unwrap()
                 .is_empty()
         );
-        assert!(!collection.has_same_support_scope(100, 200));
-        assert!(collection.has_same_support_scope(200, 300));
+        assert!(!collection.has_same_support_scope(sym(100), sym(200)));
+        assert!(collection.has_same_support_scope(sym(200), sym(300)));
     }
 
     #[test]
     fn support_geometry_applies_shared_feature_placements() {
-        let mut support = TestDocument::new();
-        let path = support.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rectangle_contour(0.0, 0.0, 1.0, 1.0)],
-        );
+        let mut support = Document::new();
+        let path = filled_rectangle(&mut support, 0.0, 0.0, 1.0, 1.0);
         let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         feature.paths = Span::single(path);
-        feature.intent.span = FeatureSpan::Layer(100);
+        feature.intent.span = FeatureSpan::Layer(sym(100));
         feature.placement_group = Some(0);
         support.features.push(feature);
         support.feature_placements.extend([
-            Affine2::translation(crate::geom::Point::new(10.0, 0.0)),
-            Affine2::translation(crate::geom::Point::new(20.0, 0.0)),
+            Affine2::translation(Point::new(10.0, 0.0)),
+            Affine2::translation(Point::new(20.0, 0.0)),
         ]);
         support
             .feature_placement_groups
@@ -1111,45 +1070,30 @@ mod tests {
                 &support,
                 BoardArraySupportLayerPolicy::AllPaintedFeatures,
             ),
-            &[BoardArrayCopperLayer::new(100, Side::Top)],
+            &[BoardArrayCopperLayer::new(sym(100), Side::Top)],
             Resolution::default(),
         )
         .unwrap();
-        let region = geometry.region_for_layer(100).unwrap();
+        let region = geometry.region_for_layer(sym(100)).unwrap();
 
         assert_eq!(geometry.feature_count, 1);
         assert_eq!(geometry.path_count, 1);
         assert!((region.area() - 2.0).abs() <= 1e-6);
         assert_eq!(region.bbox.min.x, 10.0);
         assert_eq!(region.bbox.max.x, 21.0);
-        assert!(!region.contains_point(crate::geom::Point::new(0.5, 0.5)));
+        assert!(!region.contains_point(Point::new(0.5, 0.5)));
     }
 
     #[test]
     fn support_geometry_follows_ir_feature_span_and_surface_side() {
-        let mut support = TestDocument::new();
-        let top_surface_path = support.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rectangle_contour(1.0, 1.0, 2.0, 2.0)],
-        );
-        let through_path = support.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rectangle_contour(4.0, 1.0, 5.0, 2.0)],
-        );
-        let bottom_copper_path = support.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rectangle_contour(7.0, 1.0, 8.0, 2.0)],
-        );
+        let mut support = Document::new();
+        let top_surface_path = filled_rectangle(&mut support, 1.0, 1.0, 2.0, 2.0);
+        let through_path = filled_rectangle(&mut support, 4.0, 1.0, 5.0, 2.0);
+        let bottom_copper_path = filled_rectangle(&mut support, 7.0, 1.0, 8.0, 2.0);
 
         let mut top_surface = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         top_surface.paths = Span::single(top_surface_path);
-        top_surface.intent.span = FeatureSpan::Layer(900);
+        top_surface.intent.span = FeatureSpan::Layer(sym(900));
         top_surface.intent.side = Side::Top;
         support.features.push(top_surface);
 
@@ -1160,13 +1104,13 @@ mod tests {
 
         let mut bottom_copper = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         bottom_copper.paths = Span::single(bottom_copper_path);
-        bottom_copper.intent.span = FeatureSpan::Layer(200);
+        bottom_copper.intent.span = FeatureSpan::Layer(sym(200));
         bottom_copper.intent.side = Side::Bottom;
         support.features.push(bottom_copper);
 
         let copper_layers = [
-            BoardArrayCopperLayer::new(100, Side::Top),
-            BoardArrayCopperLayer::new(200, Side::Bottom),
+            BoardArrayCopperLayer::new(sym(100), Side::Top),
+            BoardArrayCopperLayer::new(sym(200), Side::Bottom),
         ];
         let geometry = collect_support_layer_geometry(
             BoardArraySupportDocument::new(
@@ -1177,8 +1121,8 @@ mod tests {
             Resolution::default(),
         )
         .unwrap();
-        let top = geometry.region_for_layer(100).unwrap();
-        let bottom = geometry.region_for_layer(200).unwrap();
+        let top = geometry.region_for_layer(sym(100)).unwrap();
+        let bottom = geometry.region_for_layer(sym(200)).unwrap();
 
         assert!((top.area() - 2.0).abs() <= 1e-6);
         assert!((bottom.area() - 2.0).abs() <= 1e-6);
@@ -1207,7 +1151,7 @@ mod tests {
 
     #[test]
     fn vcut_policy_excludes_documentation_but_keeps_operation_geometry() {
-        let mut support = TestDocument::new();
+        let mut support = Document::new();
         let operation_path = support.push_path(
             Paint::Stroke(StrokeStyle::new(0.1, LineCap::Round)),
             [line_contour(0.0, 0.0, 10.0, 0.0)],
@@ -1217,41 +1161,30 @@ mod tests {
             [line_contour(0.0, 2.0, 10.0, 2.0)],
         );
         support.spec_items.push(SpecItem {
-            element: 1,
             kind: SpecItemKind::VCut,
-            item_type: None,
-            comment: None,
-            properties: Span::EMPTY,
         });
         support.specs.push(Spec {
-            name: 10,
+            name: sym(10),
             items: Span::single(0),
         });
-        support.spec_refs.push(SpecRef { spec: 10 });
-        support.feature_sets.push(FeatureSet {
-            layer: 0,
-            source_set_index: 0,
-            source_geometry_ref: None,
-            component_ref: None,
-            geometry_usage: None,
-            net: None,
-            polarity: Polarity::Dark,
-            spec_refs: Span::single(0),
-            features: Span::single(0),
-            bbox: BBox::empty(),
-        });
-        support.feature_sets.push(FeatureSet {
-            layer: 0,
-            source_set_index: 1,
-            source_geometry_ref: None,
-            component_ref: None,
-            geometry_usage: None,
-            net: None,
-            polarity: Polarity::Dark,
-            spec_refs: Span::EMPTY,
-            features: Span::single(1),
-            bbox: BBox::empty(),
-        });
+        support.spec_refs.push(SpecRef { spec: sym(10) });
+        support
+            .feature_sets
+            .extend([Span::single(0), Span::EMPTY].into_iter().zip(0..).map(
+                |(spec_refs, index)| FeatureSet {
+                    layer: 0,
+                    source_set_index: index,
+                    source_geometry_ref: None,
+                    component_ref: None,
+                    net: None,
+                    polarity: Polarity::Dark,
+                    copper_balance: false,
+                    copper_balance_void: None,
+                    spec_refs,
+                    features: Span::single(index),
+                    bbox: BBox::empty(),
+                },
+            ));
         support.features.push(vcut_feature(operation_path, 0));
         support.features.push(vcut_feature(annotation_path, 1));
 
@@ -1260,7 +1193,7 @@ mod tests {
                 &support,
                 BoardArraySupportLayerPolicy::VCutOperationsOnly,
             ),
-            &[BoardArrayCopperLayer::new(100, Side::Top)],
+            &[BoardArrayCopperLayer::new(sym(100), Side::Top)],
             Resolution::default(),
         )
         .unwrap();
@@ -1270,7 +1203,7 @@ mod tests {
         assert_eq!(geometry.source_path_count, 2);
         assert_eq!(geometry.path_count, 1);
         assert_eq!(geometry.excluded_documentation_path_count, 1);
-        assert!(geometry.region_for_layer(100).unwrap().bbox.max.y < 1.0);
+        assert!(geometry.region_for_layer(sym(100)).unwrap().bbox.max.y < 1.0);
     }
 
     #[test]
@@ -1341,7 +1274,7 @@ mod tests {
     #[test]
     fn collector_fails_closed_on_unpainted_support_geometry() {
         let (layout, profile) = layout_and_profile();
-        let mut support = TestDocument::new();
+        let mut support = Document::new();
         let path = support.push_path(Paint::None, [rectangle_contour(1.0, 1.0, 2.0, 2.0)]);
         support.features.push(Feature {
             paths: Span::single(path),
@@ -1351,7 +1284,7 @@ mod tests {
         let error = collect_board_array_balancing_input(
             &layout,
             &profile,
-            &[BoardArrayCopperLayer::new(100, Side::Top)],
+            &[BoardArrayCopperLayer::new(sym(100), Side::Top)],
             [BoardArraySupportDocument::new(
                 &support,
                 BoardArraySupportLayerPolicy::AllPaintedFeatures,
@@ -1381,8 +1314,8 @@ mod tests {
         }
     }
 
-    fn layout_and_profile() -> (TestDocument, BoardArrayFabricationProfile) {
-        let mut layout = TestDocument::new();
+    fn layout_and_profile() -> (Document, BoardArrayFabricationProfile) {
+        let mut layout = Document::new();
         let panel_path = layout.push_path(Paint::None, [rectangle_contour(0.0, 0.0, 20.0, 10.0)]);
         let board_path = layout.push_path(Paint::None, [rectangle_contour(0.0, 0.0, 4.0, 3.0)]);
         layout.profiles.push(StepProfile {
@@ -1397,18 +1330,16 @@ mod tests {
         });
         layout.layout.root_step = Some(0);
         layout.layout.steps.push(LayoutStep {
-            source_step_ref: 1,
+            source_step_ref: sym(1),
             kind: LayoutStepKind::Panel,
             purpose: LayoutPurpose::Product,
-            datum: Point::default(),
             profiles: Span::single(0),
             bbox: bbox(0.0, 0.0, 20.0, 10.0),
         });
         layout.layout.steps.push(LayoutStep {
-            source_step_ref: 2,
+            source_step_ref: sym(2),
             kind: LayoutStepKind::Board,
             purpose: LayoutPurpose::Product,
-            datum: Point::default(),
             profiles: Span::single(1),
             bbox: bbox(0.0, 0.0, 4.0, 3.0),
         });
@@ -1416,15 +1347,10 @@ mod tests {
             repeat: 0,
             parent_instance: None,
             child_step: 1,
-            source_step_ref: 2,
-            parent_step_ref: 1,
+            source_step_ref: sym(2),
             transform: Affine2::translation(Point::new(3.0, 2.0)),
             repeat_index_x: 0,
             repeat_index_y: 0,
-            repeat_count_x: 1,
-            repeat_count_y: 1,
-            repeat_pitch_x: 0.0,
-            repeat_pitch_y: 0.0,
             bbox: bbox(3.0, 2.0, 7.0, 5.0),
         });
 
@@ -1437,7 +1363,22 @@ mod tests {
         (layout, profile)
     }
 
-    fn vcut_feature(path: u32, set: u32) -> Feature<u32> {
+    fn filled_rectangle(
+        document: &mut Document,
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+    ) -> u32 {
+        document.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rectangle_contour(min_x, min_y, max_x, max_y)],
+        )
+    }
+
+    fn vcut_feature(path: u32, set: u32) -> Feature {
         let mut feature = Feature::new(FeatureKind::Trace, Polarity::Dark);
         feature.intent.domain = FeatureDomain::VCut;
         feature.intent.role = FeatureRole::ArraySeparation;

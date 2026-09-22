@@ -1,29 +1,33 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result, bail};
-use ipc2581::edit::{self, Doc, Edit, Node};
+use ipc2581::edit::{Doc, Edit, Node};
 use ipc2581::types::Units;
 use ipc2581::{Ipc2581, XmlWriter};
 
 use super::{FabPanelSpec, SourcePanel};
+use crate::commands::board_array::xml::{rectangle_polygon, write_step_repeat};
 use crate::commands::fab_panel::packing::Placement;
-use crate::generated::{GeneratedLayerFeature, GeneratedNameState, write_generated_layer_feature};
+use crate::generated::{
+    GeneratedLayerFeature, GeneratedNameState, units_attr, write_double_attribute as write_double,
+    write_generated_layer_feature, write_nonstandard_attribute as write_metadata,
+};
 use crate::steps::FAB_PANEL_STEP_NAME;
 
 const FAB_ROLE_ID: &str = "fab_panel_role";
 const FAB_ENTERPRISE_ID: &str = "fab_panel_enterprise";
 const FAB_PERSON_NAME: &str = "pcb";
 
+/// The source `doc` indexes, with every source-local name prefixed.
 pub(super) fn namespace_source(
-    xml: &str,
+    doc: &Doc<'_>,
     prefix: &str,
     shared_stackup_layers: &HashSet<String>,
 ) -> Result<String> {
-    let doc = Doc::parse(xml)?;
     let root = doc.root()?;
     let mut edits = Vec::new();
-    collect_namespace_edits(&doc, root, prefix, shared_stackup_layers, &mut edits);
-    Ok(edit::apply(xml, edits)?)
+    collect_namespace_edits(doc, root, prefix, shared_stackup_layers, &mut edits);
+    Ok(doc.apply(edits)?)
 }
 
 fn collect_namespace_edits(
@@ -183,7 +187,8 @@ fn should_namespace_attr(
     }
 }
 
-/// Render the fabrication-panel document from already-stripped sources. The
+/// Render the fabrication-panel document from already-stripped sources, of
+/// which there is at least one. The
 /// provisional balancing pass consumes this directly; only the final document
 /// pays for reformatting via [`write_fab_panel_xml`].
 pub(super) fn render_fab_panel_xml(
@@ -197,21 +202,22 @@ pub(super) fn render_fab_panel_xml(
         .iter()
         .map(|source| Doc::parse(&source.namespaced_xml))
         .collect::<ipc2581::Result<Vec<_>>>()?;
-    let first = sources
-        .first()
-        .context("at least one assembly panel source is required")?;
     let mut writer = XmlWriter::new();
     writer.write_declaration();
     writer.start_element(
         "IPC-2581",
         &[
-            ("revision", first.revision.as_str()),
+            ("revision", sources[0].revision.as_str()),
             ("xmlns", "http://webstds.ipc.org/2581"),
         ],
     );
     write_content(&mut writer, &docs, shared_stackup_layers)?;
     write_logistic_header(&mut writer);
-    write_history_record(&mut writer);
+    crate::utils::history::write_history_record(
+        &mut writer,
+        &jiff::Timestamp::now().to_string(),
+        "Created fabrication panel",
+    );
     write_ecad(
         &mut writer,
         sources,
@@ -258,7 +264,7 @@ pub(super) fn write_fab_panel_xml(
         edits.extend(crate::generated::user_dictionary_edit(
             &doc, units, templates,
         )?);
-        edit::apply(provisional, edits)?
+        doc.apply(edits)?
     };
     let xml = crate::utils::format::reformat_xml(&xml)?;
     // Schema validation lives in the fab-panel tests; on documents this size
@@ -284,7 +290,7 @@ fn write_content(
     writer.empty_element("StepRef", &[("name", FAB_PANEL_STEP_NAME)]);
 
     for (doc_index, doc) in docs.iter().enumerate() {
-        let cad_data = cad_data(doc)?;
+        let cad_data = ecad_child(doc, "CadData")?;
         for layer in children_named(doc, cad_data, "Layer") {
             let name = doc
                 .attr(layer, "name")
@@ -378,39 +384,6 @@ fn write_logistic_header(writer: &mut XmlWriter) {
     writer.end_element("LogisticHeader");
 }
 
-fn write_history_record(writer: &mut XmlWriter) {
-    let now = jiff::Timestamp::now().to_string();
-    writer.start_element(
-        "HistoryRecord",
-        &[
-            ("number", "1"),
-            ("origination", now.as_str()),
-            ("software", "pcb"),
-            ("lastChange", now.as_str()),
-        ],
-    );
-    writer.start_element(
-        "FileRevision",
-        &[
-            ("fileRevisionId", "1"),
-            ("comment", "Created fabrication panel"),
-            ("label", ""),
-        ],
-    );
-    writer.start_element(
-        "SoftwarePackage",
-        &[
-            ("name", "pcb"),
-            ("vendor", "Diode"),
-            ("revision", env!("CARGO_PKG_VERSION")),
-        ],
-    );
-    writer.empty_element("Certification", &[("certificationStatus", "SELFTEST")]);
-    writer.end_element("SoftwarePackage");
-    writer.end_element("FileRevision");
-    writer.end_element("HistoryRecord");
-}
-
 fn write_ecad(
     writer: &mut XmlWriter,
     sources: &[SourcePanel],
@@ -420,14 +393,11 @@ fn write_ecad(
     shared_stackup_layers: &HashSet<String>,
     spec: FabPanelSpec,
 ) -> Result<()> {
-    let units = sources
-        .first()
-        .context("at least one assembly panel source is required")?
-        .units;
+    let units = sources[0].units;
     writer.start_element("Ecad", &[("name", FAB_PANEL_STEP_NAME)]);
     writer.start_element("CadHeader", &[("units", units_attr(units))]);
     for doc in docs {
-        let cad_header = cad_header(doc)?;
+        let cad_header = ecad_child(doc, "CadHeader")?;
         for spec in children_named(doc, cad_header, "Spec") {
             writer.raw(doc.source(spec));
         }
@@ -436,7 +406,7 @@ fn write_ecad(
 
     writer.start_element("CadData", &[]);
     for (doc_index, doc) in docs.iter().enumerate() {
-        let cad_data = cad_data(doc)?;
+        let cad_data = ecad_child(doc, "CadData")?;
         for layer in children_named(doc, cad_data, "Layer") {
             let name = doc
                 .attr(layer, "name")
@@ -447,15 +417,11 @@ fn write_ecad(
             writer.raw(doc.source(layer));
         }
     }
-    let first_doc = docs
-        .first()
-        .context("at least one assembly panel source is required")?;
-    let first_cad_data = cad_data(first_doc)?;
-    for stackup in children_named(first_doc, first_cad_data, "Stackup") {
-        writer.raw(first_doc.source(stackup));
+    for stackup in children_named(&docs[0], ecad_child(&docs[0], "CadData")?, "Stackup") {
+        writer.raw(docs[0].source(stackup));
     }
     for doc in docs {
-        let cad_data = cad_data(doc)?;
+        let cad_data = ecad_child(doc, "CadData")?;
         for step in children_named(doc, cad_data, "Step") {
             writer.raw(doc.source(step));
         }
@@ -479,30 +445,10 @@ fn write_fab_step(
     let output_usable = spec.output_usable_bbox()?;
     writer.start_element("Step", &[("name", FAB_PANEL_STEP_NAME), ("type", "PALLET")]);
     write_metadata(writer, "diode.fab_panel.schema_version", "INTEGER", "3");
-    write_metadata(
-        writer,
-        "diode.fab_panel.width_mm",
-        "DOUBLE",
-        &ipc2581::write::fmt_num(spec.width_mm()),
-    );
-    write_metadata(
-        writer,
-        "diode.fab_panel.height_mm",
-        "DOUBLE",
-        &ipc2581::write::fmt_num(spec.height_mm()),
-    );
-    write_metadata(
-        writer,
-        "diode.fab_panel.usable_width_mm",
-        "DOUBLE",
-        &ipc2581::write::fmt_num(usable.width()),
-    );
-    write_metadata(
-        writer,
-        "diode.fab_panel.usable_height_mm",
-        "DOUBLE",
-        &ipc2581::write::fmt_num(usable.height()),
-    );
+    write_double(writer, "diode.fab_panel.width_mm", spec.width_mm());
+    write_double(writer, "diode.fab_panel.height_mm", spec.height_mm());
+    write_double(writer, "diode.fab_panel.usable_width_mm", usable.width());
+    write_double(writer, "diode.fab_panel.usable_height_mm", usable.height());
     write_metadata(
         writer,
         "diode.fab_panel.output_region",
@@ -513,32 +459,14 @@ fn write_fab_step(
             "stock"
         },
     );
-    for (name, value) in [
-        (
-            "diode.fab_panel.edge_margin_top_mm",
-            spec.edge_margin_mm.top,
-        ),
-        (
-            "diode.fab_panel.edge_margin_right_mm",
-            spec.edge_margin_mm.right,
-        ),
-        (
-            "diode.fab_panel.edge_margin_bottom_mm",
-            spec.edge_margin_mm.bottom,
-        ),
-        (
-            "diode.fab_panel.edge_margin_left_mm",
-            spec.edge_margin_mm.left,
-        ),
-    ] {
-        write_metadata(writer, name, "DOUBLE", &ipc2581::write::fmt_num(value));
+    for (side, value) in spec.edge_margin_mm.sides() {
+        write_double(
+            writer,
+            &format!("diode.fab_panel.edge_margin_{side}_mm"),
+            value,
+        );
     }
-    write_metadata(
-        writer,
-        "diode.fab_panel.gap_mm",
-        "DOUBLE",
-        &ipc2581::write::fmt_num(spec.panel_gap_mm),
-    );
+    write_double(writer, "diode.fab_panel.gap_mm", spec.panel_gap_mm);
     write_metadata(
         writer,
         "diode.fab_panel.panel_count",
@@ -547,77 +475,54 @@ fn write_fab_step(
     );
 
     ipc2581::write::location(writer, "Datum", 0.0, 0.0, units);
-    writer.start_element("Profile", &[]);
-    writer.start_element("Polygon", &[]);
-    ipc2581::write::location(writer, "PolyBegin", 0.0, 0.0, units);
-    ipc2581::write::location(writer, "PolyStepSegment", output.max.x, 0.0, units);
-    ipc2581::write::location(writer, "PolyStepSegment", output.max.x, output.max.y, units);
-    ipc2581::write::location(writer, "PolyStepSegment", 0.0, output.max.y, units);
-    writer.end_element("Polygon");
-    writer.end_element("Profile");
+    ipc2581::write::profile(
+        writer,
+        units,
+        &rectangle_polygon(output.max.x, output.max.y),
+    );
 
     for placement in placements {
         let source_index = occurrences[placement.item_index];
         let source = &sources[source_index];
         let target_x_mm = output_usable.min.x + f64::from(placement.x) / 1_000.0;
         let target_y_mm = output_usable.min.y + f64::from(placement.y) / 1_000.0;
-        let (x_mm, y_mm, angle) = if placement.rotated {
+        let (origin_mm, angle) = if placement.rotated {
             (
-                target_x_mm + source.bbox.max.y,
-                target_y_mm - source.bbox.min.x,
+                (
+                    target_x_mm + source.bbox.max.y,
+                    target_y_mm - source.bbox.min.x,
+                ),
                 "90",
             )
         } else {
             (
-                target_x_mm - source.bbox.min.x,
-                target_y_mm - source.bbox.min.y,
+                (
+                    target_x_mm - source.bbox.min.x,
+                    target_y_mm - source.bbox.min.y,
+                ),
                 "0",
             )
         };
-        let x = ipc2581::write::fmt_units(x_mm, units);
-        let y = ipc2581::write::fmt_units(y_mm, units);
-        writer.empty_element(
-            "StepRepeat",
-            &[
-                ("stepRef", source.root_step_name.as_str()),
-                ("x", x.as_str()),
-                ("y", y.as_str()),
-                ("nx", "1"),
-                ("ny", "1"),
-                ("dx", "0"),
-                ("dy", "0"),
-                ("angle", angle),
-                ("mirror", "false"),
-            ],
+        write_step_repeat(
+            writer,
+            units,
+            &source.root_step_name,
+            origin_mm,
+            (1, 1),
+            (0.0, 0.0),
+            angle,
         );
     }
     writer.end_element("Step");
     Ok(())
 }
 
-fn write_metadata(writer: &mut XmlWriter, name: &str, property_type: &str, value: &str) {
-    writer.empty_element(
-        "NonstandardAttribute",
-        &[("name", name), ("type", property_type), ("value", value)],
-    );
-}
-
-fn cad_header<'a>(doc: &'a Doc<'a>) -> Result<Node> {
-    let root = doc.root()?;
+fn ecad_child<'a>(doc: &'a Doc<'a>, name: &str) -> Result<Node> {
     let ecad = doc
-        .child(root, "Ecad")
+        .child(doc.root()?, "Ecad")
         .context("assembly panel IPC-2581 has no Ecad element")?;
-    doc.child(ecad, "CadHeader")
-        .context("assembly panel IPC-2581 has no CadHeader element")
-}
-
-fn cad_data<'a>(doc: &'a Doc<'a>) -> Result<Node> {
-    let root = doc.root()?;
-    let ecad = doc
-        .child(root, "Ecad")
-        .context("assembly panel IPC-2581 has no Ecad element")?;
-    doc.child(ecad, "CadData")
-        .context("assembly panel IPC-2581 has no CadData element")
+    doc.child(ecad, name)
+        .with_context(|| format!("assembly panel IPC-2581 has no {name} element"))
 }
 
 fn children_named<'a>(doc: &'a Doc<'a>, parent: Node, name: &'a str) -> Vec<Node> {
@@ -625,15 +530,6 @@ fn children_named<'a>(doc: &'a Doc<'a>, parent: Node, name: &'a str) -> Vec<Node
         .into_iter()
         .filter(|child| doc.name(*child) == name)
         .collect()
-}
-
-fn units_attr(units: Units) -> &'static str {
-    match units {
-        Units::Millimeter => "MILLIMETER",
-        Units::Inch => "INCH",
-        Units::Micron => "MICRON",
-        Units::Mils => "MILS",
-    }
 }
 
 #[cfg(test)]
@@ -649,7 +545,8 @@ mod tests {
   </Set>
 </IPC-2581>"#;
 
-        let namespaced = namespace_source(source, "fab_3_", &HashSet::new()).unwrap();
+        let doc = Doc::parse(source).unwrap();
+        let namespaced = namespace_source(&doc, "fab_3_", &HashSet::new()).unwrap();
 
         assert!(namespaced.contains("<PadStackDef name=\"fab_3_PADSTACK_10\""));
         assert!(namespaced.contains("<Set geometry=\"fab_3_PADSTACK_10\""));

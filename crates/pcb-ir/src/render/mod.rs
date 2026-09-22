@@ -12,13 +12,15 @@ mod term;
 pub use png::{artwork_png, png};
 pub use svg::{artwork_svg, svg, svg_path_data};
 #[cfg(not(target_family = "wasm"))]
-pub use term::{artwork_to_terminal, can_render_to_terminal, to_terminal, write_kitty_png};
+pub use term::{artwork_to_terminal, can_render_to_terminal, write_kitty_png};
 
-use crate::dialects::{artwork, mask};
-use crate::geom::{BBox, Point};
+use crate::dialects::LayerRole;
+use crate::geom::path::{PathCmd, PathOp};
+use crate::geom::{AccuracyError, Arc, BBox, EllipticalArc, GeometryAccuracy, Point};
 
 pub(crate) const VIEWBOX_PADDING_MM: f64 = 1.0;
 pub(crate) const DEFAULT_MAX_DIMENSION_PX: u32 = 3200;
+const POINT_EPSILON_MM: f64 = 1e-9;
 
 #[derive(Debug, Clone, Default)]
 pub struct RenderOptions {
@@ -32,19 +34,20 @@ pub struct RenderOptions {
     /// Budget for geometry the target cannot draw natively (patterned
     /// strokes, contours already carrying approximation).
     pub accuracy: crate::geom::GeometryAccuracy,
+    /// Prefix for every element id the SVG defines. Ids are global to the
+    /// document an SVG is inlined into, so renders sharing one HTML page need
+    /// distinct prefixes or their apertures and masks resolve to each other's.
+    pub id_prefix: String,
+    /// Styles by layer index. A layer without one draws in its role's, so a
+    /// fabrication layer looks the same in every render; drawings whose
+    /// layers are not fabrication layers bring their own.
+    pub styles: Vec<LayerStyle>,
 }
 
 impl RenderOptions {
     pub fn layer(index: usize) -> Self {
         Self {
             layers: Some(vec![index]),
-            ..Self::default()
-        }
-    }
-
-    pub fn layers(indices: impl Into<Vec<usize>>) -> Self {
-        Self {
-            layers: Some(indices.into()),
             ..Self::default()
         }
     }
@@ -59,23 +62,47 @@ impl RenderOptions {
         self
     }
 
+    pub fn with_id_prefix(mut self, id_prefix: impl Into<String>) -> Self {
+        self.id_prefix = id_prefix.into();
+        self
+    }
+
     pub fn with_accuracy(mut self, accuracy: crate::geom::GeometryAccuracy) -> Self {
         self.accuracy = accuracy;
         self
     }
 
-    pub(crate) fn viewport_or(&self, fitted: BBox) -> BBox {
-        let Some(viewport) = self.viewport else {
-            return fitted;
-        };
-        assert!(
-            viewport.is_valid()
-                && !viewport.is_empty()
-                && viewport.width() > 0.0
-                && viewport.height() > 0.0,
-            "render viewport must be finite and have positive area"
-        );
-        viewport
+    pub fn with_styles(mut self, styles: impl Into<Vec<LayerStyle>>) -> Self {
+        self.styles = styles.into();
+        self
+    }
+
+    pub(crate) fn style(&self, layer: usize, role: LayerRole) -> LayerStyle {
+        self.styles
+            .get(layer)
+            .copied()
+            .unwrap_or_else(|| LayerStyle::of(role))
+    }
+
+    /// The viewport over layers with these bounds: the explicit one, else
+    /// the bounds padded, else a default for a document that draws nothing.
+    pub(crate) fn viewport_over(&self, layers: impl IntoIterator<Item = BBox>) -> BBox {
+        if let Some(viewport) = self.viewport {
+            assert!(
+                viewport.is_valid()
+                    && !viewport.is_empty()
+                    && viewport.width() > 0.0
+                    && viewport.height() > 0.0,
+                "render viewport must be finite and have positive area"
+            );
+            return viewport;
+        }
+        let bbox = layers.into_iter().fold(BBox::empty(), BBox::union);
+        if bbox.is_empty() {
+            BBox::new(Point::new(0.0, 0.0), Point::new(100.0, 100.0))
+        } else {
+            bbox.expand(VIEWBOX_PADDING_MM)
+        }
     }
 }
 
@@ -93,33 +120,17 @@ pub enum SizeConstraint {
     MaxDimension(u32),
 }
 
-/// The bbox a render of these layers covers (padded; falls back to a default
-/// viewport for empty documents).
-pub fn bbox<LayerMeta>(doc: &mask::Document<LayerMeta>, layers: Option<&[usize]>) -> BBox {
-    padded_bbox(
-        layer_indices(doc.layers.len(), layers)
-            .into_iter()
-            .map(|index| doc.layers[index].bbox),
-    )
-}
-
-pub(crate) fn artwork_bbox<LayerMeta, ObjectMeta>(
-    doc: &artwork::Document<LayerMeta, ObjectMeta>,
-    layers: Option<&[usize]>,
-) -> BBox {
-    padded_bbox(
-        layer_indices(doc.layers.len(), layers)
-            .into_iter()
-            .map(|index| doc.layers[index].bbox),
-    )
-}
-
-pub(crate) fn padded_bbox(bboxes: impl IntoIterator<Item = BBox>) -> BBox {
-    let bbox = bboxes.into_iter().fold(BBox::empty(), BBox::union);
-    if bbox.is_empty() {
-        BBox::new(Point::new(0.0, 0.0), Point::new(100.0, 100.0))
-    } else {
-        bbox.expand(VIEWBOX_PADDING_MM)
+impl SizeConstraint {
+    /// The pixel size this asks of a render of `bbox`; `Auto` asks none.
+    pub(crate) fn pixels(self, bbox: BBox) -> Option<(u32, u32)> {
+        match self {
+            Self::Auto => None,
+            Self::Fixed {
+                width_px,
+                height_px,
+            } => Some((width_px, height_px)),
+            Self::MaxDimension(max) => Some(pixel_size(bbox, max)),
+        }
     }
 }
 
@@ -140,4 +151,82 @@ pub(crate) fn pixel_size(bbox: BBox, max_dimension_px: u32) -> (u32, u32) {
         (bbox.width() * scale).ceil().max(1.0) as u32,
         (bbox.height() * scale).ceil().max(1.0) as u32,
     )
+}
+
+/// The budget shared geometry has in its own frame: what the largest scale
+/// it is placed at leaves of the document's.
+pub(crate) fn local_accuracy(
+    accuracy: GeometryAccuracy,
+    extent: BBox,
+    scale: f64,
+) -> Result<GeometryAccuracy, AccuracyError> {
+    let numeric = crate::geom::accuracy::numerical_error(extent);
+    GeometryAccuracy::new(accuracy.remaining(numeric)? / scale.max(f64::MIN_POSITIVE))
+}
+
+/// How a layer draws: one colour, and the opacity its whole image
+/// composites at, so overlapping objects never darken each other.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerStyle {
+    /// `0xRRGGBB`.
+    pub color: u32,
+    pub opacity: f64,
+}
+
+impl LayerStyle {
+    pub fn of(role: LayerRole) -> Self {
+        let (color, opacity) = match role {
+            LayerRole::Copper => (0xd87822, 0.9),
+            LayerRole::Soldermask => (0x159447, 0.55),
+            LayerRole::Paste => (0xaeb4bb, 0.9),
+            LayerRole::Legend => (0x000000, 0.95),
+            LayerRole::Profile => (0x000000, 1.0),
+            LayerRole::Drill | LayerRole::Mechanical | LayerRole::Other => (0x5c7cfa, 0.85),
+        };
+        Self { color, opacity }
+    }
+}
+
+/// A path command as a backend draws it: an arc knows where it starts, and
+/// one too small to curve is the line to its end.
+pub(crate) enum Drawn {
+    Move(Point),
+    Line(Point),
+    Arc(EllipticalArc),
+    Close,
+}
+
+pub(crate) fn drawn(cmds: impl IntoIterator<Item = PathCmd>) -> impl Iterator<Item = Drawn> {
+    let mut subpath = Point::default();
+    let mut current = Point::default();
+    cmds.into_iter().map(move |cmd| {
+        let start = current;
+        current = match cmd.op {
+            PathOp::Close => subpath,
+            _ => cmd.p0,
+        };
+        let arc = match cmd.op {
+            PathOp::MoveTo => {
+                subpath = cmd.p0;
+                return Drawn::Move(cmd.p0);
+            }
+            PathOp::LineTo => return Drawn::Line(cmd.p0),
+            PathOp::Close => return Drawn::Close,
+            PathOp::ArcTo => Arc::new(start, cmd.p0, cmd.p1, cmd.clockwise).to_elliptical(),
+            PathOp::EllipseTo => EllipticalArc {
+                start,
+                end: cmd.p0,
+                center: cmd.p1,
+                x_axis: cmd.p2,
+                y_axis: cmd.p3,
+                clockwise: cmd.clockwise,
+            },
+        };
+        let (_, minor, _) = arc.principal_axes();
+        if arc.is_degenerate() || minor <= POINT_EPSILON_MM {
+            Drawn::Line(arc.end)
+        } else {
+            Drawn::Arc(arc)
+        }
+    })
 }

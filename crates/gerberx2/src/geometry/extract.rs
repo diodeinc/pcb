@@ -1,58 +1,39 @@
 //! Lower parsed Gerber into a pcb-ir artwork document.
 //!
-//! Standard-aperture flashes and aperture-block instances are preserved so
-//! round trips keep both pad identity and reusable hierarchy. Macro flashes
-//! and shaped draws are flattened only where pcb-ir has no native equivalent.
+//! Flashes stay flashes, of a standard aperture or of a macro composed once
+//! into a contour aperture; block apertures stay block instances and
+//! step-repeats stay grids of one block. Round trips so keep both pad
+//! identity and reusable hierarchy, and a panel costs one board. Only draws
+//! through a shaped aperture are flattened: pcb-ir has no native equivalent.
 
 use pcb_ir::geom::{AccuracyError, GeometryAccuracy, Resolution};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::GerberX2;
 use crate::types as gerber;
-use pcb_ir::dialects::artwork::{self, Aperture, ApertureShape, Document, Geometry, Layer, Object};
+use pcb_ir::dialects::artwork::{
+    self, Aperture, ApertureShape, Document, Geometry, GridRepeat, Layer, Object,
+};
 use pcb_ir::geom::path::{ContourBuf, PathCmd};
 use pcb_ir::geom::region::{self, PaintComposer};
 use pcb_ir::geom::{Affine2, Arc, BBox, FillRule, Paint, Point, Polarity, Span, StrokeStyle};
 
 pub type GerberArtworkDocument = Document<Vec<String>, GerberObjectMeta>;
 
-/// Which Gerber operation produced an object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceKind {
-    Flash,
-    Draw,
-    Arc,
-    Region,
-}
-
-/// Coarse fabrication classification of a Gerber object.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObjectClass {
-    Pad,
-    Trace,
-    Fill,
-    Cutout,
-}
-
-#[derive(Debug, Clone, PartialEq)]
+/// The X2 attribute sets an extracted object was imaged under, in
+/// [`GerberX2::attributes`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GerberObjectMeta {
-    pub kind: SourceKind,
-    pub class: ObjectClass,
-    pub polarity: Polarity,
-    pub aperture: Option<i32>,
-    pub object_index: u32,
-    pub aperture_attributes: Vec<gerber::Attribute>,
-    pub object_attributes: Vec<gerber::Attribute>,
-    pub mirroring: gerber::Mirroring,
-    pub rotation_degrees: f64,
-    pub scaling: f64,
+    pub aperture_attributes: Span,
+    pub object_attributes: Span,
 }
 
 pub fn extract_document(
     gerber: &GerberX2,
     accuracy: GeometryAccuracy,
 ) -> std::result::Result<GerberArtworkDocument, AccuracyError> {
-    let file_function = file_function(gerber);
+    let file_function =
+        crate::from_artwork::file_attribute_fields(gerber, ".FileFunction").unwrap_or_default();
     let mut doc = Document::new();
     let layer = doc.push_layer(Layer {
         name: file_function.join(", "),
@@ -62,38 +43,158 @@ pub fn extract_document(
         bbox: BBox::empty(),
         meta: file_function,
     });
-    let apertures = gerber
-        .aperture_definitions()
-        .iter()
-        .map(|aperture| (aperture.code, aperture))
-        .collect::<HashMap<_, _>>();
-    let mut blocks = HashMap::<i32, u32>::new();
+    let mut tables = Tables {
+        definitions: gerber
+            .aperture_definitions()
+            .iter()
+            .map(|aperture| (aperture.code, aperture))
+            .collect(),
+        flashes: flash_apertures(gerber, &mut doc, accuracy)?,
+        blocks: HashMap::new(),
+        accuracy,
+    };
     for definition in gerber.aperture_definitions() {
         let gerber::ApertureTemplate::Block { objects } = &definition.template else {
             continue;
         };
         let block = doc.push_block();
+        extract_objects(&mut doc, ArtworkTarget::Block(block), objects, &tables)?;
+        tables.blocks.insert(definition.code, block);
+    }
+    // The stream lands on the layer in order, each step-repeated run as one
+    // block on a grid.
+    let target = ArtworkTarget::Layer(layer);
+    let mut next = 0;
+    for step in gerber.step_repeats() {
+        let run = step.objects.range();
+        extract_objects(
+            &mut doc,
+            target,
+            &gerber.objects()[next..run.start],
+            &tables,
+        )?;
+        let block = doc.push_block();
         extract_objects(
             &mut doc,
             ArtworkTarget::Block(block),
-            objects,
-            &apertures,
-            &blocks,
-            accuracy,
+            &gerber.objects()[run.clone()],
+            &tables,
         )?;
-        blocks.insert(definition.code, block);
+        let grid = Geometry::GridInstance {
+            block,
+            transform: Affine2::IDENTITY,
+            repeat: grid_repeat(step.repeat),
+        };
+        target.push(&mut doc, Object::new(Polarity::Dark, grid));
+        next = run.end;
     }
-    extract_objects(
-        &mut doc,
-        ArtworkTarget::Layer(layer),
-        gerber.objects(),
-        &apertures,
-        &blocks,
-        accuracy,
-    )?;
+    extract_objects(&mut doc, target, &gerber.objects()[next..], &tables)?;
 
     artwork::normalize_bounds(&mut doc);
     Ok(doc)
+}
+
+/// Gerber images a step-repeat column by column, so its Y axis is the
+/// grid's fast one; the order only shows where occurrences overlap.
+fn grid_repeat(repeat: gerber::StepRepeat) -> GridRepeat {
+    GridRepeat {
+        x_count: repeat.y_repeats as u32,
+        x_step: Point::new(0.0, repeat.y_step),
+        y_count: repeat.x_repeats as u32,
+        y_step: Point::new(repeat.x_step, 0.0),
+    }
+}
+
+/// Per-file lookups shared by every extracted object.
+struct Tables<'a> {
+    definitions: HashMap<i32, &'a gerber::ApertureDefinition>,
+    /// The artwork aperture of every flashed standard or macro aperture.
+    flashes: HashMap<i32, u32>,
+    /// The artwork block of every block aperture defined so far.
+    blocks: HashMap<i32, u32>,
+    accuracy: GeometryAccuracy,
+}
+
+/// Every object of the file, inside block apertures or not.
+fn all_objects(gerber: &GerberX2) -> impl Iterator<Item = &gerber::GraphicalObject> {
+    gerber
+        .aperture_definitions()
+        .iter()
+        .filter_map(|definition| match &definition.template {
+            gerber::ApertureTemplate::Block { objects } => Some(objects),
+            _ => None,
+        })
+        .flatten()
+        .chain(gerber.objects())
+}
+
+/// Define the artwork aperture of every standard or macro aperture the file
+/// flashes, so each macro is composed once however often it is flashed.
+fn flash_apertures(
+    gerber: &GerberX2,
+    doc: &mut GerberArtworkDocument,
+    accuracy: GeometryAccuracy,
+) -> std::result::Result<HashMap<i32, u32>, AccuracyError> {
+    let flashed = all_objects(gerber)
+        .filter_map(|object| match object.kind {
+            gerber::ObjectKind::Flash { aperture, .. } => Some(aperture),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    // A macro is composed in aperture space, so its budget shrinks by the
+    // largest scale a flash can image it under: `%LS`, compounded once
+    // through a block aperture.
+    let max_scale = all_objects(gerber)
+        .map(|object| object.scaling.abs())
+        .fold(1.0, f64::max);
+    let local = GeometryAccuracy::new(accuracy.max_error_mm() / (max_scale * max_scale))?;
+    let mut apertures = HashMap::new();
+    for definition in gerber
+        .aperture_definitions()
+        .iter()
+        .filter(|definition| flashed.contains(&definition.code))
+    {
+        let aperture = match (
+            standard_aperture(&definition.template),
+            &definition.geometry,
+        ) {
+            (Some(standard), _) => Some(standard),
+            (None, Some(geometry)) => macro_aperture(geometry, local)?,
+            (None, None) => None,
+        };
+        if let Some(aperture) = aperture {
+            apertures.insert(definition.code, doc.push_aperture(aperture));
+        }
+    }
+    Ok(apertures)
+}
+
+/// Compose a macro's primitives into one contour aperture. An exposure-off
+/// primitive erases only what the macro imaged before it, never the layer
+/// under a flash, so the composition is the aperture's whole image.
+fn macro_aperture(
+    geometry: &gerber::ApertureGeometry,
+    accuracy: GeometryAccuracy,
+) -> std::result::Result<Option<Aperture>, AccuracyError> {
+    let paths = aperture_paths(geometry, Affine2::IDENTITY);
+    let contours = match paths.as_slice() {
+        [path] if path.polarity == Polarity::Dark => path.contours.clone(),
+        _ => compose_paths(paths, accuracy)?.to_contours(),
+    };
+    let uncertainty_mm = contours
+        .iter()
+        .map(|contour| contour.uncertainty_mm)
+        .fold(0.0, f64::max);
+    let cmds = contours
+        .into_iter()
+        .flat_map(|contour| contour.cmds)
+        .collect::<Vec<_>>();
+    Ok((!cmds.is_empty()).then(|| {
+        Aperture::solid(ApertureShape::Contour {
+            outline: ContourBuf::new(cmds).with_uncertainty(uncertainty_mm),
+            fill_rule: FillRule::NonZero,
+        })
+    }))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -115,120 +216,56 @@ fn extract_objects(
     doc: &mut GerberArtworkDocument,
     target: ArtworkTarget,
     objects: &[gerber::GraphicalObject],
-    apertures: &HashMap<i32, &gerber::ApertureDefinition>,
-    blocks: &HashMap<i32, u32>,
-    accuracy: GeometryAccuracy,
+    tables: &Tables<'_>,
 ) -> std::result::Result<(), AccuracyError> {
-    for (object_index, object) in objects.iter().enumerate() {
-        extract_object(
-            doc,
-            target,
-            object_index,
-            object,
-            apertures,
-            blocks,
-            accuracy,
-        )?;
-    }
-    Ok(())
+    objects
+        .iter()
+        .try_for_each(|object| extract_object(doc, target, object, tables))
 }
 
 fn extract_object(
     doc: &mut GerberArtworkDocument,
     target: ArtworkTarget,
-    object_index: usize,
     object: &gerber::GraphicalObject,
-    apertures: &HashMap<i32, &gerber::ApertureDefinition>,
-    blocks: &HashMap<i32, u32>,
-    accuracy: GeometryAccuracy,
+    tables: &Tables<'_>,
 ) -> std::result::Result<(), AccuracyError> {
-    match &object.kind {
+    let accuracy = tables.accuracy;
+    // A draw is its aperture, its ends and, along an arc, its circle.
+    let (aperture, start, end, arc) = match &object.kind {
         gerber::ObjectKind::Flash { at, aperture } => {
-            let Some(definition) = apertures.get(aperture) else {
+            if !tables.definitions.contains_key(aperture) {
                 doc.warn(format!("flash references undefined aperture D{aperture}"));
                 return Ok(());
-            };
-            let transform = object_transform(object, point(*at));
-            let mut meta = meta_from_object(object, object_index, SourceKind::Flash);
-            meta.aperture = Some(*aperture);
-
-            if let Some(&block) = blocks.get(aperture) {
-                target.push(
-                    doc,
-                    Object {
-                        polarity: meta.polarity,
-                        order: Default::default(),
-                        geometry: Geometry::Instance { block, transform },
-                        bbox: BBox::empty(),
-                        meta,
-                    },
-                );
-            } else if let Some(standard) = standard_aperture(&definition.template) {
-                let aperture_id = doc.push_aperture(standard);
-                target.push(
-                    doc,
-                    Object {
-                        polarity: meta.polarity,
-                        order: Default::default(),
-                        geometry: Geometry::Flash {
-                            aperture: aperture_id,
-                            transform,
-                        },
-                        bbox: BBox::empty(),
-                        meta,
-                    },
-                );
-            } else if let Some(geometry) = &definition.geometry {
-                push_flattened_paths(
-                    doc,
-                    target,
-                    meta,
-                    aperture_paths(geometry, transform),
-                    accuracy,
-                )?;
-            } else {
-                doc.warn(format!(
-                    "flash aperture D{aperture} has no lowered geometry"
-                ));
             }
+            let transform = object_transform(object, point(*at));
+            let geometry = if let Some(&block) = tables.blocks.get(aperture) {
+                Geometry::Instance { block, transform }
+            } else if let Some(&aperture) = tables.flashes.get(aperture) {
+                Geometry::Flash {
+                    aperture,
+                    transform,
+                }
+            } else {
+                // The aperture images nothing.
+                return Ok(());
+            };
+            target.push(
+                doc,
+                Object {
+                    meta: meta_from_object(object),
+                    ..Object::new(object.polarity, geometry)
+                },
+            );
+            return Ok(());
+        }
+        gerber::ObjectKind::Region { contours } => {
+            return push_flattened_paths(doc, target, object, region_paths(contours), accuracy);
         }
         gerber::ObjectKind::Draw {
             start,
             end,
             aperture,
-        } => {
-            let mut meta = meta_from_object(object, object_index, SourceKind::Draw);
-            meta.aperture = Some(*aperture);
-            if let Some(width) = circular_aperture_diameter(apertures, *aperture) {
-                push_flattened_paths(
-                    doc,
-                    target,
-                    meta,
-                    vec![line_path(
-                        point(*start),
-                        point(*end),
-                        width * object.scaling.abs(),
-                    )],
-                    accuracy,
-                )?;
-            } else if let Some(geometry) = aperture_geometry(apertures, *aperture) {
-                push_flattened_paths(
-                    doc,
-                    target,
-                    meta,
-                    swept_aperture(
-                        &[point(*start), point(*end)],
-                        0.0,
-                        object,
-                        geometry,
-                        accuracy,
-                    )?,
-                    accuracy,
-                )?;
-            } else {
-                doc.warn(format!("D{aperture} draw aperture has no lowered geometry"));
-            }
-        }
+        } => (*aperture, point(*start), point(*end), None),
         gerber::ObjectKind::Arc {
             start,
             end,
@@ -236,55 +273,45 @@ fn extract_object(
             clockwise,
             aperture,
         } => {
-            let mut meta = meta_from_object(object, object_index, SourceKind::Arc);
-            meta.aperture = Some(*aperture);
-            let start = point(*start);
+            let (start, end) = (point(*start), point(*end));
             let center = Point::new(start.x + center_offset.x, start.y + center_offset.y);
-            if let Some(width) = circular_aperture_diameter(apertures, *aperture) {
-                push_flattened_paths(
-                    doc,
-                    target,
-                    meta,
-                    vec![arc_path(
-                        start,
-                        point(*end),
-                        center,
-                        *clockwise,
-                        width * object.scaling.abs(),
-                    )],
-                    accuracy,
-                )?;
-            } else if let Some(geometry) = aperture_geometry(apertures, *aperture) {
-                push_flattened_paths(
-                    doc,
-                    target,
-                    meta,
-                    arc_sweep(
-                        start,
-                        point(*end),
-                        center,
-                        *clockwise,
-                        object,
-                        geometry,
-                        accuracy,
-                    )?,
-                    accuracy,
-                )?;
-            } else {
-                doc.warn(format!("D{aperture} arc aperture has no lowered geometry"));
-            }
-        }
-        gerber::ObjectKind::Region { contours } => {
-            let meta = meta_from_object(object, object_index, SourceKind::Region);
-            push_flattened_paths(doc, target, meta, region_paths(contours), accuracy)?;
+            let arc = Arc::new(start, end, center, *clockwise);
+            (*aperture, start, end, Some(arc))
         }
     };
-    Ok(())
+    let definition = tables.definitions.get(&aperture);
+    let paths = if let Some(gerber::ApertureTemplate::Circle { diameter, .. }) =
+        definition.map(|definition| &definition.template)
+    {
+        let to = arc.map_or(PathCmd::line_to(end), |arc| {
+            PathCmd::arc_to(end, arc.center, arc.clockwise)
+        });
+        vec![ExtractedPath {
+            polarity: Polarity::Dark,
+            paint: Paint::Stroke(StrokeStyle::round(diameter * object.scaling.abs())),
+            contours: vec![ContourBuf::new(vec![PathCmd::move_to(start), to])],
+        }]
+    } else if let Some(geometry) = definition.and_then(|definition| definition.geometry.as_ref()) {
+        let (points, path_error) = match arc {
+            Some(arc) => arc_points(arc, accuracy)?,
+            None => (vec![start, end], 0.0),
+        };
+        swept_aperture(&points, path_error, object, geometry, accuracy)?
+    } else {
+        let kind = if arc.is_some() { "arc" } else { "draw" };
+        doc.warn(format!(
+            "D{aperture} {kind} aperture has no lowered geometry"
+        ));
+        return Ok(());
+    };
+    push_flattened_paths(doc, target, object, paths, accuracy)
 }
 
 /// Convert a standard aperture template into an artwork aperture. Macro and
 /// block templates return `None`; blocks are handled as instances and macros
-/// use their parsed fallback geometry.
+/// use their parsed fallback geometry. So does a standard template whose hole
+/// reaches outside its shape: its image is the shape less the hole, which
+/// only composing the two gives.
 fn standard_aperture(template: &gerber::ApertureTemplate) -> Option<Aperture> {
     let (shape, hole_diameter) = match *template {
         gerber::ApertureTemplate::Circle {
@@ -306,90 +333,29 @@ fn standard_aperture(template: &gerber::ApertureTemplate) -> Option<Aperture> {
             vertices,
             rotation_degrees,
             hole_diameter,
-        } => {
-            if vertices < 3 {
-                return None;
-            }
-            (
-                ApertureShape::Polygon {
-                    diameter: outer_diameter,
-                    vertices: vertices as u32,
-                    rotation_degrees: rotation_degrees.unwrap_or(0.0),
-                },
-                hole_diameter,
-            )
-        }
+        } => (
+            ApertureShape::Polygon {
+                diameter: outer_diameter,
+                vertices: vertices as u32,
+                rotation_degrees: rotation_degrees.unwrap_or(0.0),
+            },
+            hole_diameter,
+        ),
         gerber::ApertureTemplate::Macro { .. } | gerber::ApertureTemplate::Block { .. } => {
             return None;
         }
     };
-    Some(Aperture {
+    let aperture = Aperture {
         shape,
         hole_diameter: hole_diameter.unwrap_or(0.0),
-    })
+    };
+    aperture.hole_fits().then_some(aperture)
 }
 
-fn aperture_geometry<'a>(
-    apertures: &'a HashMap<i32, &gerber::ApertureDefinition>,
-    code: i32,
-) -> Option<&'a gerber::ApertureGeometry> {
-    apertures.get(&code)?.geometry.as_ref()
-}
-
-fn file_function(gerber: &GerberX2) -> Vec<String> {
-    gerber
-        .file_attributes()
-        .iter()
-        .find(|attr| gerber.resolve(attr.name) == ".FileFunction")
-        .map(|attr| {
-            attr.fields
-                .iter()
-                .map(|field| gerber.resolve(*field).to_string())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn meta_from_object(
-    object: &gerber::GraphicalObject,
-    object_index: usize,
-    kind: SourceKind,
-) -> GerberObjectMeta {
+fn meta_from_object(object: &gerber::GraphicalObject) -> GerberObjectMeta {
     GerberObjectMeta {
-        kind,
-        class: classify(object, kind),
-        polarity: object.polarity,
-        aperture: None,
-        object_index: object_index as u32,
-        aperture_attributes: object.aperture_attributes.clone(),
-        object_attributes: object.object_attributes.clone(),
-        mirroring: object.mirroring,
-        rotation_degrees: object.rotation_degrees,
-        scaling: object.scaling,
-    }
-}
-
-fn classify(object: &gerber::GraphicalObject, kind: SourceKind) -> ObjectClass {
-    if object.polarity == Polarity::Clear {
-        return ObjectClass::Cutout;
-    }
-    match kind {
-        SourceKind::Region => ObjectClass::Fill,
-        SourceKind::Draw | SourceKind::Arc => ObjectClass::Trace,
-        SourceKind::Flash => ObjectClass::Pad,
-    }
-}
-
-fn circular_aperture_diameter(
-    apertures: &HashMap<i32, &gerber::ApertureDefinition>,
-    code: i32,
-) -> Option<f64> {
-    match apertures.get(&code)?.template {
-        gerber::ApertureTemplate::Circle {
-            diameter,
-            hole_diameter: _,
-        } => Some(diameter),
-        _ => None,
+        aperture_attributes: object.aperture_attributes,
+        object_attributes: object.object_attributes,
     }
 }
 
@@ -405,35 +371,50 @@ struct ExtractedPath {
 fn push_flattened_paths(
     doc: &mut GerberArtworkDocument,
     target: ArtworkTarget,
-    meta: GerberObjectMeta,
-    paths: Vec<ExtractedPath>,
+    object: &gerber::GraphicalObject,
+    mut paths: Vec<ExtractedPath>,
     accuracy: GeometryAccuracy,
 ) -> std::result::Result<(), AccuracyError> {
-    if paths.is_empty() {
-        return Ok(());
-    }
-
-    if paths.len() == 1 && paths[0].polarity == Polarity::Dark {
-        let extracted = paths.into_iter().next().unwrap();
-        let is_stroked = matches!(extracted.paint, Paint::Stroke(_));
-        let path = doc.push_path(extracted.paint, extracted.contours);
-        target.push(
-            doc,
-            Object {
-                polarity: meta.polarity,
-                order: Default::default(),
-                geometry: if is_stroked {
-                    Geometry::Stroke { path }
-                } else {
-                    Geometry::Region { path }
-                },
-                bbox: doc.path_bbox(path),
-                meta,
+    // A lone dark piece keeps its own paint; anything else is composed.
+    let (paint, contours) = match paths.as_slice() {
+        [] => return Ok(()),
+        [path] if path.polarity == Polarity::Dark => {
+            let path = paths.pop().unwrap();
+            (path.paint, path.contours)
+        }
+        _ => {
+            let contours = compose_paths(paths, accuracy)?.to_contours();
+            if contours.is_empty() {
+                return Ok(());
+            }
+            let rule = FillRule::NonZero;
+            (Paint::Fill { rule }, contours)
+        }
+    };
+    let is_stroked = matches!(paint, Paint::Stroke(_));
+    let path = doc.push_path(paint, contours);
+    target.push(
+        doc,
+        Object {
+            polarity: object.polarity,
+            order: Default::default(),
+            geometry: if is_stroked {
+                Geometry::Stroke { path }
+            } else {
+                Geometry::Region { path }
             },
-        );
-        return Ok(());
-    }
+            bbox: doc.path_bbox(path),
+            meta: meta_from_object(object),
+        },
+    );
+    Ok(())
+}
 
+/// Paint the pieces in order into one non-zero filled image.
+fn compose_paths(
+    paths: Vec<ExtractedPath>,
+    accuracy: GeometryAccuracy,
+) -> std::result::Result<region::ContourSet, AccuracyError> {
     let resolution = Resolution::new(0.0, accuracy);
     let mut composer = PaintComposer::new(resolution);
     for extracted in paths {
@@ -446,29 +427,7 @@ fn push_flattened_paths(
             )?,
         );
     }
-    let contours = composer.finish()?.to_contours();
-    if contours.is_empty() {
-        return Ok(());
-    }
-
-    let path = doc.push_path(
-        Paint::Fill {
-            rule: FillRule::NonZero,
-        },
-        contours,
-    );
-    target.push(
-        doc,
-        Object {
-            polarity: meta.polarity,
-            order: Default::default(),
-            geometry: Geometry::Region { path },
-            bbox: doc.path_bbox(path),
-            meta,
-        },
-    );
-
-    Ok(())
+    composer.finish()
 }
 
 fn aperture_paths(geometry: &gerber::ApertureGeometry, transform: Affine2) -> Vec<ExtractedPath> {
@@ -506,28 +465,6 @@ fn transform_contour(commands: &[gerber::PathCommand], transform: Affine2) -> Co
     ContourBuf::new(cmds).transformed(transform)
 }
 
-fn line_path(start: Point, end: Point, width: f64) -> ExtractedPath {
-    ExtractedPath {
-        polarity: Polarity::Dark,
-        paint: Paint::Stroke(StrokeStyle::round(width)),
-        contours: vec![ContourBuf::new(vec![
-            PathCmd::move_to(start),
-            PathCmd::line_to(end),
-        ])],
-    }
-}
-
-fn arc_path(start: Point, end: Point, center: Point, clockwise: bool, width: f64) -> ExtractedPath {
-    ExtractedPath {
-        polarity: Polarity::Dark,
-        paint: Paint::Stroke(StrokeStyle::round(width)),
-        contours: vec![ContourBuf::new(vec![
-            PathCmd::move_to(start),
-            PathCmd::arc_to(end, center, clockwise),
-        ])],
-    }
-}
-
 fn swept_aperture(
     points: &[Point],
     path_error: f64,
@@ -536,14 +473,10 @@ fn swept_aperture(
     accuracy: GeometryAccuracy,
 ) -> std::result::Result<Vec<ExtractedPath>, AccuracyError> {
     let resolution = Resolution::new(0.0, accuracy);
-    let mut composer = PaintComposer::new(resolution);
-    for path in aperture_paths(geometry, object_transform(object, Point::ZERO)) {
-        composer.push(
-            path.polarity,
-            region::ContourSet::from_contours(&path.contours, FillRule::NonZero, resolution)?,
-        );
-    }
-    let aperture = composer.finish()?;
+    let aperture = compose_paths(
+        aperture_paths(geometry, object_transform(object, Point::ZERO)),
+        accuracy,
+    )?;
     let edge_count: usize = aperture.rings.iter().map(Vec::len).sum();
     if points.len().saturating_mul(edge_count) > 1_000_000 {
         return Err(AccuracyError::SubdivisionLimit);
@@ -590,16 +523,12 @@ fn swept_aperture(
     }])
 }
 
-fn arc_sweep(
-    start: Point,
-    end: Point,
-    center: Point,
-    clockwise: bool,
-    object: &gerber::GraphicalObject,
-    geometry: &gerber::ApertureGeometry,
+/// Points along `arc` whose chords stay within a quarter of the budget,
+/// and that chord error.
+fn arc_points(
+    arc: Arc,
     accuracy: GeometryAccuracy,
-) -> std::result::Result<Vec<ExtractedPath>, AccuracyError> {
-    let arc = Arc::new(start, end, center, clockwise);
+) -> std::result::Result<(Vec<Point>, f64), AccuracyError> {
     let radius = arc.radius();
     let sweep = arc.sweep_radians();
     let path_error = accuracy.max_error_mm() / 4.0;
@@ -609,12 +538,12 @@ fn arc_sweep(
         return Err(AccuracyError::SubdivisionLimit);
     }
     let steps = steps as usize;
-    let signed_sweep = if clockwise { -sweep } else { sweep };
-    let start_angle = start.angle_from(center);
+    let signed_sweep = if arc.clockwise { -sweep } else { sweep };
+    let start_angle = arc.start.angle_from(arc.center);
     let points = (0..=steps)
         .map(|index| arc.point_at(start_angle + signed_sweep * index as f64 / steps as f64))
-        .collect::<Vec<_>>();
-    swept_aperture(&points, path_error, object, geometry, accuracy)
+        .collect();
+    Ok((points, path_error))
 }
 
 fn object_transform(object: &gerber::GraphicalObject, at: Point) -> Affine2 {

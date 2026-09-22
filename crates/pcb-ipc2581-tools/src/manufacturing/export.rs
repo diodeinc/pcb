@@ -9,7 +9,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use gerberx2::GerberLayer;
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::import::ipc2581::ImportedDesign;
 #[cfg(feature = "cli")]
@@ -43,14 +42,7 @@ impl ManufacturingPackage {
 #[derive(Debug, Clone)]
 pub struct ManufacturingFile {
     pub filename: String,
-    pub kind: ManufacturingFileKind,
     pub contents: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum ManufacturingFileKind {
-    GerberX2(GerberLayer),
-    Xnc,
 }
 
 /// Every Gerber X2 layer plus the XNC drill files for one artwork scope.
@@ -70,7 +62,6 @@ pub fn build_manufacturing_package(
     .into_iter()
     .map(|file| ManufacturingFile {
         filename: file.filename,
-        kind: ManufacturingFileKind::GerberX2(file.layer),
         contents: file.contents,
     })
     .collect::<Vec<_>>();
@@ -175,12 +166,10 @@ mod tests {
             files: vec![
                 ManufacturingFile {
                     filename: "PTH.drl".to_owned(),
-                    kind: ManufacturingFileKind::Xnc,
                     contents: "M48\nMETRIC\nT01C0.6\n%\nT01\nX1.0Y2.0\nM30\n".to_owned(),
                 },
                 ManufacturingFile {
                     filename: "NPTH.drl".to_owned(),
-                    kind: ManufacturingFileKind::Xnc,
                     contents: "M48\nMETRIC\nT01C2.0\n%\nT01\nX3.0Y4.0\nM30\n".to_owned(),
                 },
             ],

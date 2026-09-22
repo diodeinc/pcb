@@ -35,7 +35,9 @@ use pcb_ir::geom::{BBox, ContourSet, Point, PreparedRegion};
 use rayon::prelude::*;
 
 use super::{Evaluation, Measured, MeasuredSite};
-use crate::commands::dfm::design::{CopperConductor, CopperLayer, Design, MaskLayer, MaskOwner};
+use crate::commands::dfm::design::{
+    CopperConductor, CopperLayer, Design, MaskLayer, MaskOwner, spans,
+};
 use crate::commands::dfm::report::{Evidence, LayerRef, MeasurementKind, SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
 
@@ -124,9 +126,14 @@ pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> anyhow::Result<E
                     measured_piece(&piece, limit_mm, &layer.layer, "soldermask_image")?;
                 let mut aggregate_owner = None;
                 let mut one_owner = true;
+                // A web walled by one placement alone is that placement's
+                // own design's to report.
+                let mut placed_in = None;
+                let mut spanned = false;
                 for (geometry, site) in piece.sites.iter().zip(&mut measured.sites) {
                     let Some(owners) = wall_owners(&geometry.walls, &boundaries) else {
                         one_owner = false;
+                        spanned = true;
                         continue;
                     };
                     if owners.len() != 1 || aggregate_owner.is_some_and(|owner| owners[0] != owner)
@@ -134,6 +141,10 @@ pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> anyhow::Result<E
                         one_owner = false;
                     }
                     aggregate_owner = aggregate_owner.or_else(|| owners.first().copied());
+                    for &index in &owners {
+                        let branch = layer.owners[index].branch;
+                        spanned |= spans(branch, *placed_in.get_or_insert(branch));
+                    }
                     site.subjects = owners
                         .into_iter()
                         .map(|index| mask_subject(design, &layer.owners[index], &layer.layer))
@@ -143,7 +154,7 @@ pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> anyhow::Result<E
                     measured.subjects[0].provenance =
                         mask_subject(design, &layer.owners[index], &layer.layer).provenance;
                 }
-                Ok::<_, anyhow::Error>(measured)
+                Ok::<_, anyhow::Error>(spanned.then_some(measured))
             })
             .collect::<anyhow::Result<Vec<_>>>()
     };
@@ -155,6 +166,7 @@ pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> anyhow::Result<E
         .map(measure)
         .collect::<anyhow::Result<Vec<_>>>()?
         .into_iter()
+        .flatten()
         .flatten()
         .collect();
     Ok(Evaluation {
@@ -255,9 +267,7 @@ fn wall_owners(
         return None;
     }
     for &(start, end) in walls {
-        let bbox = BBox::from_point(start)
-            .union(BBox::from_point(end))
-            .expand(BOUNDARY_EPSILON_MM);
+        let bbox = BBox::spanning(start, end).expand(BOUNDARY_EPSILON_MM);
         let length = start.distance_to(end);
         let mut intervals = boundaries
             .iter()
@@ -364,6 +374,7 @@ mod tests {
                 instance: Some(instance),
                 source_set_index: 0,
             },
+            branch: Some(instance),
             image,
         }
     }

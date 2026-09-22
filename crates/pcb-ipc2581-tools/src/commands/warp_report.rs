@@ -1,9 +1,9 @@
 //! A self-contained field report for [`crate::warp`].
 //!
-//! Bow and twist are the last step of the chain and they discard everything
-//! before them. Per-layer copper, the moment field and the deflection surface
-//! are all fields over the panel, all computed on the way to those two numbers,
-//! so the report renders the fields and leaves the scalars as a summary.
+//! Bow is the last step of the chain and it discards everything before it.
+//! Per-layer copper, the moment field and the deflection surface are all fields
+//! over the panel, all computed on the way to that one number, so the report
+//! renders the fields and leaves the scalar as a summary.
 //!
 //! Laid out as a technical report rather than a dashboard: numbered sections
 //! and figures, units in every heading, tabular figures throughout, rules
@@ -52,7 +52,6 @@ pub fn render(analysis: &WarpAnalysis) -> String {
     masthead(&mut html, analysis);
     results(&mut html, analysis);
     stack_table(&mut html, analysis);
-    mode_table(&mut html, analysis);
     field_figures(&mut html, analysis);
     layer_figures(&mut html, analysis);
     html.push_str(FOOT);
@@ -65,8 +64,8 @@ fn masthead(html: &mut String, analysis: &WarpAnalysis) {
         html,
         r#"<header>
 <h1>Panel warp analysis</h1>
-<p class="standfirst">Bow and twist estimated from the through-stack copper distribution,
-reported after the method of IPC-TM-650 2.4.22.</p>
+<p class="standfirst">Bow estimated from the through-stack copper distribution, reported after
+the method of IPC-TM-650 2.4.22.</p>
 <dl class="params">
 <div><dt>Panel</dt><dd>{:.1} &times; {:.1} mm</dd></div>
 <div><dt>Stack</dt><dd>{:.3} mm &middot; {} Cu</dd></div>
@@ -74,18 +73,20 @@ reported after the method of IPC-TM-650 2.4.22.</p>
 <div><dt>&Delta;T</dt><dd>{:.0} K</dd></div>
 <div><dt>Samples</dt><dd>{}</dd></div>
 </dl>
-<p class="caveat"><b>Modelled, not measured.</b> The absolute figure rests on textbook material
-constants and an assumed drop from where the laminate stops relaxing. Comparison between
-panelisations of one stackup is firmer by a wide margin, since that constant multiplies both
-and cancels.</p>
+<p class="caveat"><b>Modelled, not measured.</b> The figure is the elastic expansion mismatch
+between copper and laminate alone, on textbook material constants and an assumed drop from where
+the laminate stops relaxing. Cure shrinkage and resin expansion above the glass transition are
+outside the model, and the copper-balance rules fabricators work to put their effect well above
+it, so bow under the limit here does not clear a panel. Comparison between panelisations of one
+stackup is firmer by a wide margin, since the constant multiplies both and cancels.</p>
 </header>"#,
         analysis.bounds.width(),
         analysis.bounds.height(),
         stack.total_thickness_mm(),
         analysis.layers.len(),
-        stack.flexural_rigidity_gpa_mm3(),
+        analysis.response.flexural_rigidity_gpa_mm3(),
         analysis.temperature_drop_k,
-        analysis.samples.len(),
+        analysis.moment.values.len(),
     );
 }
 
@@ -100,26 +101,31 @@ fn results(html: &mut String, analysis: &WarpAnalysis) {
             warp.bow_percent / SURFACE_MOUNT_LIMIT_PERCENT
         )
     } else if margin > 999.0 {
-        r#"<span class="pass">PASS</span> &gt;999&times; margin"#.to_string()
+        "&gt;999&times; under, elastic term only".to_string()
     } else {
-        format!(r#"<span class="pass">PASS</span> {margin:.0}&times; margin"#)
+        format!("{margin:.0}&times; under, elastic term only")
     };
     let _ = write!(
         html,
         r#"<section><h2>1&emsp;Result</h2>
+<p class="blurb">The panel is solved as a free plate carrying the thermal moment of Fig&nbsp;2, and
+bow is its largest departure from the plane through its corners. No twist is estimated: a thermal
+moment is the same in every direction, so it does no work on the twist shape and a free panel
+keeps its four corners in one plane however the copper is distributed. Twist on a real panel comes
+from weave skew and unbalanced layup, which this model does not contain.</p>
 <table class="numeric"><thead><tr>
 <th>Quantity</th><th>mm</th><th>%</th><th>Limit %</th><th>Assessment</th>
 </tr></thead><tbody>
 <tr><td>Bow</td><td>{:.3}</td><td>{:.3}</td><td>{SURFACE_MOUNT_LIMIT_PERCENT:.2}</td>
 <td>{verdict}</td></tr>
-<tr><td>Twist</td><td>{:.3}</td><td>{:.3}</td><td>{SURFACE_MOUNT_LIMIT_PERCENT:.2}</td>
-<td class="muted">weakly determined, see &sect;3</td></tr>
+<tr><td>Twist</td><td>&mdash;</td><td>&mdash;</td><td>{SURFACE_MOUNT_LIMIT_PERCENT:.2}</td>
+<td class="muted">not driven by copper</td></tr>
 </tbody></table></section>"#,
-        warp.bow_mm, warp.bow_percent, warp.twist_mm, warp.twist_percent,
+        warp.bow_mm, warp.bow_percent,
     );
 }
 
-/// The stack, paired about the neutral axis. Mirrored layers carry opposite
+/// The stack, paired about the mid-plane. Mirrored layers carry opposite
 /// arms, so their coverage difference is what survives into the moment — which
 /// is the quantity fabricators put a rule of thumb on.
 fn stack_table(html: &mut String, analysis: &WarpAnalysis) {
@@ -148,7 +154,7 @@ fn stack_table(html: &mut String, analysis: &WarpAnalysis) {
     let _ = write!(
         html,
         r#"<section><h2>2&emsp;Through the stack</h2>
-<p class="blurb">Lever arms run from the stiffness-weighted neutral axis, so mirrored layers
+<p class="blurb">Lever arms run from the mid-plane of the stack, so mirrored layers
 carry equal and opposite values and equal copper on them cancels. The last column is each pair's
 coverage difference, which is what survives into the moment; fabricators advise keeping it under
 {:.0}&nbsp;%.</p>
@@ -160,48 +166,14 @@ coverage difference, which is what survives into the moment; fabricators advise 
     );
 }
 
-fn mode_table(html: &mut String, analysis: &WarpAnalysis) {
-    let total = analysis
-        .warp
-        .modes
-        .iter()
-        .map(|mode| mode.deflection_mm)
-        .sum::<f64>()
-        .max(f64::MIN_POSITIVE);
-    let mut rows = String::new();
-    for mode in &analysis.warp.modes {
-        let share = 100.0 * mode.deflection_mm / total;
-        let _ = write!(
-            rows,
-            r#"<tr><td>{}</td><td>{:+.5}</td><td>{:.4}</td>
-<td class="bar"><span style="width:{share:.1}%"></span></td><td>{share:.1}</td></tr>"#,
-            mode.mode.name(),
-            mode.amplitude,
-            mode.deflection_mm,
-        );
-    }
-    let _ = write!(
-        html,
-        r#"<section><h2>3&emsp;Deflection by shape</h2>
-<p class="blurb">The moment field resolved into low-order shapes. Deflection grows with the
-square of wavelength, so the broadest shapes dominate and copper detail finer than the panel
-contributes almost nothing. Twist reads off the saddle term, which the second integral of
-curvature fixes only up to a harmonic function; it is the least trustworthy number here, and a
-cross-ply layup gives copper no way to drive twist in any case.</p>
-<table class="numeric"><thead><tr>
-<th>Shape</th><th>Amplitude mm&#178;</th><th>Deflection mm</th><th>Share</th><th>%</th>
-</tr></thead><tbody>{rows}</tbody></table></section>"#
-    );
-}
-
 fn field_figures(html: &mut String, analysis: &WarpAnalysis) {
     let _ = write!(
         html,
-        r#"<section><h2>4&emsp;Fields</h2>
+        r#"<section><h2>3&emsp;Fields</h2>
 <div class="figures">
 <figure><figcaption><b>Fig 1</b>&emsp;Predicted panel shape, levelled onto the corners.
 Warm high, cool low.</figcaption>{}</figure>
-<figure><figcaption><b>Fig 2</b>&emsp;Copper moment about the neutral axis. Warm is copper
+<figure><figcaption><b>Fig 2</b>&emsp;Copper moment about the mid-plane. Warm is copper
 weighted above it, cool below, neutral is balanced.</figcaption>{}</figure>
 </div></section>"#,
         diverging(
@@ -212,7 +184,7 @@ weighted above it, cool below, neutral is balanced.</figcaption>{}</figure>
         diverging(
             &analysis.moment,
             analysis,
-            "moment about the neutral axis, mm\u{b2}"
+            "moment about the mid-plane, mm\u{b2}"
         ),
     );
 }
@@ -235,7 +207,7 @@ fn layer_figures(html: &mut String, analysis: &WarpAnalysis) {
     }
     let _ = write!(
         html,
-        r#"<section><h2>5&emsp;Copper by layer</h2>
+        r#"<section><h2>4&emsp;Copper by layer</h2>
 <p class="blurb">One plate per copper layer, top of the stack first, drawn in panel
 coordinates. Each cell is one {:.2}&nbsp;mm sample and its darkness is the fraction of that cell
 covered by copper, on a scale shared by every plate so the plates compare directly; the number
@@ -309,16 +281,10 @@ fn blend(from: [f64; 3], to: [f64; 3], amount: f64) -> String {
 
 /// One cell per sample, in panel coordinates.
 fn map(analysis: &WarpAnalysis, cells: &[String]) -> String {
-    let bounds = analysis.bounds;
-    let columns = analysis
-        .samples
-        .iter()
-        .filter(|point| (point.y - analysis.samples[0].y).abs() < 1e-9)
-        .count()
-        .max(1);
-    let rows = analysis.samples.len().div_ceil(columns);
-    let width = bounds.width() / columns as f64;
-    let height = bounds.height() / rows as f64;
+    let field = &analysis.moment;
+    let bounds = field.bounds;
+    let width = bounds.width() / field.columns as f64;
+    let height = bounds.height() / field.rows as f64;
     let mut svg = format!(
         r#"<svg viewBox="{} {} {} {}" preserveAspectRatio="xMidYMid meet">"#,
         bounds.min.x,
@@ -326,13 +292,14 @@ fn map(analysis: &WarpAnalysis, cells: &[String]) -> String {
         bounds.width(),
         bounds.height()
     );
-    for (point, colour) in analysis.samples.iter().zip(cells) {
+    for (index, colour) in cells.iter().enumerate() {
+        let center = field.cell_center(index);
         // Panel y runs up, SVG y runs down; mirror about the panel centre.
         let _ = write!(
             svg,
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{colour}"/>"#,
-            point.x - width / 2.0,
-            bounds.min.y + bounds.max.y - point.y - height / 2.0,
+            center.x - width / 2.0,
+            bounds.min.y + bounds.max.y - center.y - height / 2.0,
             width,
             height,
         );

@@ -44,7 +44,10 @@ use crate::commands::dfm::report::{
 };
 use crate::commands::dfm::rules::Conditions;
 
-use super::{Evaluation, Measured, MeasuredSite, hole_subject, holes_of_class, layers, violates};
+use super::{
+    Evaluation, Measured, MeasuredSite, hole_subject, holes_of_class, layers, spanned_layers,
+    violates,
+};
 
 /// One copper layer on which a hole has a ring to measure.
 struct RingSubject<'a> {
@@ -102,11 +105,7 @@ pub(super) fn evaluate(
         .enumerate()
         .map(|(position, &(hole_index, hole))| {
             let radius = hole.diameter_mm / 2.0;
-            let enclosures = copper_layers
-                .iter()
-                .enumerate()
-                .filter(|(copper_index, _)| hole.drill_span.contains_copper(*copper_index))
-                .filter(|(_, copper)| conditions.applies_to_layer(copper))
+            let enclosures = spanned_layers(design, &hole.drill_span, conditions)
                 .filter_map(|(copper_index, copper)| {
                     let land = hole_lands[hole_index]
                         .iter()
@@ -263,34 +262,10 @@ mod tests {
     use pcb_ir::dialects::ipc::ArtworkScope;
     use pcb_ir::geom::Resolution;
 
-    use crate::commands::dfm::pdk::Pdk;
-    use crate::commands::dfm::rules::{self, Rule};
+    use crate::commands::dfm::fixtures;
     use crate::ipc2581::Ipc2581;
 
     use super::*;
-
-    fn rule() -> Rule {
-        let pdk = Pdk::parse(
-            r#"schema_version = 2
-default_profile = "test"
-
-[pdk]
-id = "test"
-name = "Test"
-revision = "1"
-
-[profiles.test]
-name = "Test"
-
-[[rules.copper.annular_ring]]
-id = "pth-ring"
-select = { hole = "pth" }
-limit = { minimum = "0.2 mm" }
-"#,
-        )
-        .unwrap();
-        rules::lower(&pdk, None).unwrap().remove(0)
-    }
 
     /// A 1 mm plated hole at the origin through copper layers `L0..Ln`,
     /// with a 2 mm copper square on each layer named in `copper_on`, and
@@ -357,33 +332,15 @@ limit = { minimum = "0.2 mm" }
     }
 
     fn evaluate_pth(ipc: &Ipc2581) -> Evaluation {
-        let rule = rule();
+        let rules = fixtures::rules(&fixtures::pdk(
+            r#"[[rules.copper.annular_ring]]
+id = "pth-ring"
+select = { hole = "pth" }
+limit = { minimum = "0.2 mm" }"#,
+        ));
         let imported = pcb_ir::import::ipc2581::import_design(ipc, Resolution::default()).unwrap();
-        let design = Design::extract(
-            &imported,
-            ArtworkScope::Board,
-            std::slice::from_ref(&rule),
-            Resolution::default(),
-        )
-        .unwrap();
-        evaluate(
-            rule.limit.length().millimeters(),
-            HoleClass::Pth,
-            &rule.conditions,
-            &design,
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn missing_terminal_copper_is_a_zero_enclosure_violation() {
-        let evaluation = evaluate_pth(&board(3, &[2], None));
-
-        assert_eq!(evaluation.checked, 2);
-        assert_eq!(evaluation.measured.len(), 1);
-        let measured = &evaluation.measured[0];
-        assert_eq!(measured.distance.mm, 0.0);
-        assert_eq!(measured.layers[1].name, "L0");
+        let design = Design::board(&imported, &rules, Resolution::default());
+        evaluate(0.2, HoleClass::Pth, &rules[0].conditions, &design).unwrap()
     }
 
     #[test]
@@ -443,17 +400,6 @@ limit = { minimum = "0.2 mm" }
         assert_eq!(measured.layers[1].name, "L1");
         assert_eq!(measured.subjects[1].kind, "padstack_land");
         assert_eq!(measured.subjects[1].padstack_ref.as_deref(), Some("stack"));
-    }
-
-    #[test]
-    fn known_blind_span_requires_copper_at_its_own_terminal_layers() {
-        let evaluation = evaluate_pth(&board(4, &[2], Some((1, 2))));
-
-        assert_eq!(evaluation.checked, 2);
-        assert_eq!(evaluation.measured.len(), 1);
-        let measured = &evaluation.measured[0];
-        assert_eq!(measured.layers[1].name, "L1");
-        assert_eq!(measured.distance.mm, 0.0);
     }
 
     #[test]

@@ -3,22 +3,20 @@
 use crate::dialects::ipc::Document;
 use crate::dialects::ipc::feature::Feature;
 use crate::geom::path::{PathCmd, PathOp};
-use crate::geom::{Diagnostics, PaintKind, Point, Span, tol};
+use crate::geom::{Diagnostics, PaintKind, Point, tol};
 
 /// Check that every feature is exportable as native artwork: no unresolved
 /// set-void semantics, homogeneous paint per feature, and circular arcs.
 /// Clear polarity is native — ordered artwork paints it with exactly IPC's
 /// sequential semantics. All problems are collected.
-pub fn validate_artwork_ready<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Result<(), Diagnostics> {
+pub fn validate_artwork_ready(doc: &Document) -> Result<(), Diagnostics> {
     let mut diagnostics = Diagnostics::default();
     validate_homogeneous_features_into(doc, &mut diagnostics);
     for (feature_index, feature) in doc.features.iter().enumerate() {
         if feature.paths.is_empty() {
             continue;
         }
-        if feature.flags.clears_previous_in_set {
+        if feature.clears_previous_in_set {
             diagnostics.error(format!(
                 "feature {feature_index} still has unresolved set-void clear semantics"
             ));
@@ -28,30 +26,27 @@ pub fn validate_artwork_ready<Symbol, LayerFunction>(
     diagnostics.into_result()
 }
 
-/// Check that every feature's paths agree on one paint kind.
-pub fn validate_homogeneous_features<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Result<(), Diagnostics> {
-    let mut diagnostics = Diagnostics::default();
-    validate_homogeneous_features_into(doc, &mut diagnostics);
-    diagnostics.into_result()
-}
-
-fn validate_homogeneous_features_into<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    diagnostics: &mut Diagnostics,
-) {
-    for (group_index, group) in doc.feature_placement_groups.iter().enumerate() {
-        if let Err(error) = checked_span(group.features, "features", doc.features.len()) {
-            diagnostics.error(format!("feature placement group {group_index}: {error}"));
-        }
-        if let Err(error) = checked_span(
-            group.placements,
-            "feature placements",
-            doc.feature_placements.len(),
-        ) {
-            diagnostics.error(format!("feature placement group {group_index}: {error}"));
-        }
+fn validate_homogeneous_features_into(doc: &Document, diagnostics: &mut Diagnostics) {
+    let group_spans = doc
+        .feature_placement_groups
+        .iter()
+        .enumerate()
+        .flat_map(|(index, group)| {
+            [
+                group.features.validate(
+                    "feature placement group features",
+                    index,
+                    doc.features.len(),
+                ),
+                group.placements.validate(
+                    "feature placement group placements",
+                    index,
+                    doc.feature_placements.len(),
+                ),
+            ]
+        });
+    for error in group_spans.filter_map(Result::err) {
+        diagnostics.error(error);
     }
     for (feature_index, feature) in doc.features.iter().enumerate() {
         if let Some(group) = feature.placement_group
@@ -61,8 +56,12 @@ fn validate_homogeneous_features_into<Symbol, LayerFunction>(
                 "feature {feature_index} references missing placement group {group}"
             ));
         }
-        if let Err(error) = checked_span(feature.paths, "feature paths", doc.arena.paths.len()) {
-            diagnostics.error(format!("feature {feature_index}: {error}"));
+        if let Err(error) =
+            feature
+                .paths
+                .validate("feature paths", feature_index, doc.arena.paths.len())
+        {
+            diagnostics.error(error);
             continue;
         }
         let mut feature_kind = None;
@@ -88,10 +87,10 @@ fn validate_homogeneous_features_into<Symbol, LayerFunction>(
     }
 }
 
-fn validate_feature_arcs<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+fn validate_feature_arcs(
+    doc: &Document,
     feature_index: usize,
-    feature: &Feature<Symbol>,
+    feature: &Feature,
     diagnostics: &mut Diagnostics,
 ) {
     for path_index in feature.paths.indices() {
@@ -101,19 +100,20 @@ fn validate_feature_arcs<Symbol, LayerFunction>(
     }
 }
 
-fn validate_path_arcs<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    feature_index: usize,
-    path_index: u32,
-) -> Result<(), String> {
+fn validate_path_arcs(doc: &Document, feature_index: usize, path_index: u32) -> Result<(), String> {
     let path = &doc.arena.paths[path_index as usize];
-    checked_span(path.contours, "path contours", doc.arena.contours.len())
-        .map_err(|error| format!("feature {feature_index} path {path_index}: {error}"))?;
+    path.contours.validate(
+        "path contours",
+        path_index as usize,
+        doc.arena.contours.len(),
+    )?;
     for contour_index in path.contours.indices() {
         let contour = doc.arena.contours[contour_index as usize];
-        checked_span(contour.cmds, "contour commands", doc.arena.cmds.len()).map_err(|error| {
-            format!("feature {feature_index} path {path_index} contour {contour_index}: {error}")
-        })?;
+        contour.cmds.validate(
+            "contour commands",
+            contour_index as usize,
+            doc.arena.cmds.len(),
+        )?;
         let mut current = Point::default();
         for cmd_index in contour.cmds.indices() {
             let cmd = doc.arena.cmds[cmd_index as usize];
@@ -124,7 +124,6 @@ fn validate_path_arcs<Symbol, LayerFunction>(
                     current = cmd.p0;
                 }
                 PathOp::EllipseTo => current = cmd.p0,
-                PathOp::CubicTo => current = cmd.p2,
                 PathOp::Close => {}
             }
         }
@@ -149,20 +148,6 @@ fn validate_arc_command(
     if !arc_radii_nearly_equal(start_radius, end_radius) {
         return Err(format!(
             "feature {feature_index} path {path_index} command {cmd_index} has non-circular arc radii {start_radius} and {end_radius}"
-        ));
-    }
-    Ok(())
-}
-
-fn checked_span(span: Span, label: &str, len: usize) -> Result<(), String> {
-    let end = span
-        .start
-        .checked_add(span.count)
-        .ok_or_else(|| format!("{label} range overflows"))?;
-    if end as usize > len {
-        return Err(format!(
-            "{label} range {}..{end} exceeds available length {len}",
-            span.start
         ));
     }
     Ok(())

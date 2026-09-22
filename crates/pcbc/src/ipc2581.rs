@@ -168,7 +168,7 @@ enum Commands {
         #[command(subcommand)]
         command: DfmCommands,
     },
-    /// Estimate panel bow and twist from the through-stack copper distribution
+    /// Estimate panel bow from the through-stack copper distribution
     Warp {
         /// IPC-2581 XML file to analyze
         #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -358,7 +358,9 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             units,
         } => commands::info::execute(&file, format, units, resolution),
         Commands::Assembly { file, scope } => {
-            let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse_file(&file)?;
+            let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse(
+                &pcb_ipc2581_tools::utils::file::load_ipc_file(&file)?,
+            )?;
             let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
             let report = pcb_ipc2581_tools::assembly::build_report(&imported, scope, resolution)?;
             let output = serde_json::to_vec_pretty(&report)?;
@@ -599,7 +601,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             layout_target,
         } => commands::render::execute(
             &file,
-            &commands::render::RenderOptions {
+            &commands::render::LayerRenderOptions {
                 layer,
                 output,
                 format,

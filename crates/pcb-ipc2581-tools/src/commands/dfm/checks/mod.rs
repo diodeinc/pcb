@@ -7,6 +7,12 @@
 //! else — the verdict against the limit, finding text, witness roles, skip
 //! reasons, checked counts, finding order, stable ids, waivers, statuses —
 //! so a check only measures, and may assume its subject pools are non-empty.
+//!
+//! A check measures one [`Design`]: one Step with everything it places. It
+//! measures the Step's own subjects, and a pair of subjects unless both lie
+//! inside one placement ([`spans`](super::design::spans)), which that
+//! placement's own design measures. The engine runs every rule over every
+//! design and tells each finding which one it came from.
 
 mod annular_ring;
 mod board_array_spacing;
@@ -29,27 +35,29 @@ use std::collections::{HashMap, HashSet};
 use chrono::NaiveDate;
 use ipc2581::Symbol;
 use pcb_ir::dialects::ipc::ArtworkScope;
-use pcb_ir::geom::dfm::Distance;
-use pcb_ir::geom::{Affine2, BBox, Point};
+use pcb_ir::geom::dfm::{COMPARISON_EPSILON_MM, Distance};
+use pcb_ir::geom::{BBox, Point};
+use pcb_ir::import::ipc2581::LayoutOccurrenceId;
 use sha2::{Digest, Sha256};
 
 use super::design::{Design, Hole, HoleClass, Slot};
 use super::pdk::SlotPlating;
 use super::report::{
-    DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox,
-    ReportPoint, RuleResult, RuleStatus, Site, SourceLocator, Subject, Witness,
+    DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportPoint,
+    RuleResult, RuleStatus, Severity, Site, SourceLocator, Subject, Unresolved, Witness,
 };
-use super::rules::{Comparison, Linework, Rule, RuleKind};
+use super::rules::{Comparison, Linework, Pools, Rule, RuleKind, slot_label};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
-
-/// Absorbs floating-point unit conversion when a measurement sits exactly
-/// on its limit.
-const COMPARISON_EPSILON_MM: f64 = 1e-6;
 
 #[derive(Default)]
 pub(super) struct Results {
     pub(super) rules: Vec<RuleResult>,
+    /// What findings name as their frame: a design, by index, and the
+    /// placements of its Step, by index, that they hold at. Each design's
+    /// frame of all its placements comes first, at the design's own index.
+    pub(super) frames: Vec<(u32, Vec<u32>)>,
     pub(super) findings: Vec<Finding>,
+    pub(super) shared_evidence: Vec<Evidence>,
     pub(super) waivers: Option<WaiverOutcome>,
 }
 
@@ -131,24 +139,33 @@ struct RatioEvaluation {
 }
 
 enum RuleEvaluation {
-    Distance(Evaluation),
+    /// Each evaluation with the placements of the design's Step it holds at,
+    /// by index; `None` is all of them.
+    Distance(Vec<(Option<Vec<u32>>, Evaluation)>),
     Count(CountEvaluation),
     Ratio(RatioEvaluation),
 }
 
 impl From<Evaluation> for RuleEvaluation {
     fn from(evaluation: Evaluation) -> Self {
-        Self::Distance(evaluation)
+        Self::Distance(vec![(None, evaluation)])
     }
 }
 
 pub(super) fn run(
     rules: &[Rule],
-    design: &Design,
+    designs: &[Design],
     waiver_file: Option<&WaiverFile>,
     today: NaiveDate,
 ) -> anyhow::Result<Results> {
-    let mut results = Results::default();
+    let mut results = Results {
+        frames: designs
+            .iter()
+            .enumerate()
+            .map(|(index, design)| (index as u32, (0..design.placements.len() as u32).collect()))
+            .collect(),
+        ..Results::default()
+    };
     let annular_rules = rules
         .iter()
         .filter(|rule| matches!(rule.kind, RuleKind::AnnularRing(_)))
@@ -156,70 +173,46 @@ pub(super) fn run(
         .collect::<HashSet<_>>();
     for rule in rules {
         let mut result = RuleResult::new(rule);
-        match skip_reason(rule, design) {
-            Some(reason) => result.skip(reason),
-            None => {
-                let evaluation = evaluate(rule, design)?;
-                match evaluation {
-                    RuleEvaluation::Distance(evaluation) => {
-                        debug_assert_eq!(rule.comparison, Comparison::Minimum);
-                        let limit = rule.limit.length().millimeters();
-                        match evaluation.checked {
-                            // A nominally populated pool can still yield nothing to
-                            // measure (e.g. hole pairs with disjoint spans); an
-                            // unexercised rule must not read as validated.
-                            0 => result.skip(format!(
-                                "no measurable {} subjects in the selected layout target",
-                                rule.kind.semantics().subject
-                            )),
-                            checked => {
-                                result.checked = checked;
-                                results.findings.extend(
-                                    evaluation
-                                        .measured
-                                        .into_iter()
-                                        .filter(|measured| violates(&measured.distance, limit))
-                                        .map(|measured| finding(rule, measured)),
-                                );
-                            }
-                        }
-                    }
-                    RuleEvaluation::Count(evaluation) => {
-                        result.checked = 1;
-                        let limit = rule.limit.count();
-                        if violates_count(evaluation.actual, rule.comparison, limit) {
-                            results
-                                .findings
-                                .push(count_finding(rule, evaluation, limit));
-                        }
-                    }
-                    RuleEvaluation::Ratio(evaluation) => {
-                        debug_assert_eq!(rule.comparison, Comparison::Maximum);
-                        result.assumptions = evaluation.assumptions;
-                        if let Some(reason) = evaluation.incomplete_reason {
-                            result.skip(reason);
-                        } else if evaluation.checked == 0 {
-                            result.skip(format!(
-                                "no measurable {} subjects in the selected layout target",
-                                rule.kind.semantics().subject
-                            ));
-                        } else {
-                            result.checked = evaluation.checked;
-                            let maximum = rule.limit.ratio();
-                            results.findings.extend(
-                                evaluation
-                                    .measured
-                                    .into_iter()
-                                    .filter(|measured| measured.actual_ratio > maximum)
-                                    .map(|measured| ratio_finding(rule, measured, maximum)),
-                            );
-                        }
-                    }
+        // A rule is evaluated in the design of every Step. One design that
+        // cannot certify it leaves it uncertified; it measures nothing only
+        // when no design holds a subject for it.
+        let mut incomplete = Vec::new();
+        let mut not_applicable = None;
+        for (index, design) in designs.iter().enumerate() {
+            let unevaluated = unevaluated(rule, design).or_else(|| {
+                // A measurement that fails leaves its own rule uncertified.
+                judge_in(rule, (index as u32, design), &mut result, &mut results)
+                    .unwrap_or_else(|error| Some((RuleStatus::Incomplete, format!("{error:#}"))))
+            });
+            match unevaluated {
+                Some((RuleStatus::Incomplete, reason)) if !incomplete.contains(&reason) => {
+                    incomplete.push(reason);
                 }
+                Some((RuleStatus::NotApplicable, reason)) => {
+                    not_applicable.get_or_insert(reason);
+                }
+                _ => {}
             }
+        }
+        if !incomplete.is_empty() {
+            result.leave_unevaluated(RuleStatus::Incomplete, incomplete.join("; "));
+        } else if result.checked == 0 {
+            // A nominally populated pool can still yield nothing to measure
+            // (e.g. hole pairs with disjoint spans); an unexercised rule must
+            // not read as validated.
+            result.leave_unevaluated(
+                RuleStatus::NotApplicable,
+                not_applicable.unwrap_or_else(|| {
+                    format!(
+                        "no measurable {} subjects in the selected layout target",
+                        rule.kind.semantics().subject
+                    )
+                }),
+            );
         }
         results.rules.push(result);
     }
+    results.rules = report_uncovered(rules, std::mem::take(&mut results.rules), designs);
     // Every exercised fixture also checks the reporting contract. A spatial
     // failure without a local site must never masquerade as a stackup check.
     #[cfg(test)]
@@ -235,24 +228,7 @@ pub(super) fn run(
         );
     }
     let waiver_aliases = assign_ids(&mut results.findings, &annular_rules);
-    for finding in &mut results.findings {
-        let instance = finding
-            .subjects
-            .first()
-            .and_then(|subject| subject.provenance.as_ref())
-            .and_then(|source| source.instance_index);
-        finding.group_key = instance
-            .and_then(|index| {
-                design
-                    .imported
-                    .geometry
-                    .layout
-                    .instances
-                    .get(index as usize)
-            })
-            .and_then(|instance| instance.transform.inverse())
-            .and_then(|inverse| repeat_group_key(finding, inverse));
-    }
+    results.shared_evidence = share_evidence(&mut results.findings, &results.frames, designs);
     results.waivers =
         waiver_file.map(|file| waivers::apply(&mut results.findings, file, &waiver_aliases, today));
 
@@ -263,19 +239,177 @@ pub(super) fn run(
         *waived += usize::from(finding.waived);
     }
     for result in &mut results.rules {
-        if !matches!(result.status, RuleStatus::Skipped) {
-            let (total, waived) = per_rule.get(result.id.as_str()).copied().unwrap_or((0, 0));
-            result.finish(total, waived);
-        }
+        let (total, waived) = per_rule.get(result.id.as_str()).copied().unwrap_or((0, 0));
+        result.finish(total, waived);
     }
     Ok(results)
 }
 
+/// The frame of a design at some placements of its Step, all for `None`.
+fn frame_at(frames: &mut Vec<(u32, Vec<u32>)>, design: u32, placements: Option<Vec<u32>>) -> u32 {
+    let Some(placements) = placements else {
+        return design;
+    };
+    let known = frames
+        .iter()
+        .position(|frame| (frame.0, &frame.1) == (design, &placements));
+    known.unwrap_or_else(|| {
+        frames.push((design, placements));
+        frames.len() - 1
+    }) as u32
+}
+
+/// Evaluate a rule in one design and judge what it measured: findings and
+/// unresolved measurements join the rule's, and each subject decided counts
+/// once for every placement it is decided at. Returns why the rule stays
+/// unevaluated here, if it does.
+fn judge_in(
+    rule: &Rule,
+    (index, design): (u32, &Design),
+    result: &mut RuleResult,
+    results: &mut Results,
+) -> anyhow::Result<Option<(RuleStatus, String)>> {
+    let Results {
+        frames, findings, ..
+    } = results;
+    match evaluate(rule, design)? {
+        RuleEvaluation::Distance(evaluations) => {
+            debug_assert_eq!(rule.comparison, Comparison::Minimum);
+            let limit = rule.limit.length().millimeters();
+            for (placements, evaluation) in evaluations {
+                let frame = frame_at(frames, index, placements);
+                for measured in evaluation.measured {
+                    match judge(&measured.distance, limit) {
+                        Judgement::Violates => findings.push(Finding {
+                            frame,
+                            ..finding(rule, measured)
+                        }),
+                        Judgement::Unresolved => result.unresolved.push(Unresolved {
+                            frame,
+                            actual_mm: measured.distance.mm,
+                            uncertainty_mm: measured.distance.uncertainty_mm,
+                            point: measured.distance.midpoint().into(),
+                            layers: measured
+                                .layers
+                                .into_iter()
+                                .map(|layer| layer.name)
+                                .collect(),
+                        }),
+                        Judgement::Meets => {}
+                    }
+                }
+                result.checked += evaluation.checked * frames[frame as usize].1.len();
+            }
+        }
+        RuleEvaluation::Count(evaluation) => {
+            let limit = rule.limit.count();
+            if violates_count(evaluation.actual, rule.comparison, limit) {
+                findings.push(Finding {
+                    frame: index,
+                    ..count_finding(rule, evaluation, limit)
+                });
+            }
+            result.checked += design.placements.len();
+        }
+        RuleEvaluation::Ratio(evaluation) => {
+            debug_assert_eq!(rule.comparison, Comparison::Maximum);
+            for assumption in evaluation.assumptions {
+                if !result.assumptions.contains(&assumption) {
+                    result.assumptions.push(assumption);
+                }
+            }
+            if let Some(reason) = evaluation.incomplete_reason {
+                return Ok(Some((RuleStatus::Incomplete, reason)));
+            }
+            let maximum = rule.limit.ratio();
+            findings.extend(
+                evaluation
+                    .measured
+                    .into_iter()
+                    .filter(|measured| exceeds(measured, maximum))
+                    .map(|measured| Finding {
+                        frame: index,
+                        ..ratio_finding(rule, measured, maximum)
+                    }),
+            );
+            result.checked += evaluation.checked * design.placements.len();
+        }
+    }
+    Ok(None)
+}
+
+/// Build the report's shared-evidence table. A site names its board profile
+/// by its design's outline pool index; the table holds each referenced
+/// profile once, in design and pool order, so report size follows the
+/// findings rather than findings times the outline every one measures to.
+fn share_evidence(
+    findings: &mut [Finding],
+    frames: &[(u32, Vec<u32>)],
+    designs: &[Design],
+) -> Vec<Evidence> {
+    fn references<'a>(
+        findings: &'a mut [Finding],
+        frames: &'a [(u32, Vec<u32>)],
+    ) -> impl Iterator<Item = (u32, &'a mut u32)> {
+        findings.iter_mut().flat_map(|finding| {
+            let design = frames[finding.frame as usize].0;
+            finding
+                .sites
+                .iter_mut()
+                .flat_map(|site| &mut site.evidence)
+                .filter_map(move |evidence| Some((design, evidence.shared.as_mut()?)))
+        })
+    }
+    let outlines = references(findings, frames)
+        .map(|(design, index)| (design, *index))
+        .collect::<std::collections::BTreeSet<_>>();
+    for (design, index) in references(findings, frames) {
+        *index = outlines.range(..(design, *index)).count() as u32;
+    }
+    outlines
+        .into_iter()
+        .map(|(design, index)| {
+            drilled_board_edge_clearance::profile_evidence(
+                &designs[design as usize].board_outlines[index as usize],
+            )
+        })
+        .collect()
+}
+
+/// How a measured distance stands against a minimum.
+#[derive(PartialEq)]
+enum Judgement {
+    Meets,
+    /// Below the limit, but by less than the measurement's own uncertainty.
+    Unresolved,
+    Violates,
+}
+
 /// The one verdict: a distance violates a minimum when it is certainly
 /// below it, beyond both its own geometric uncertainty and the comparison
-/// epsilon.
+/// epsilon. One that is below it only within that uncertainty is neither a
+/// violation nor a pass, and is reported as unresolved.
+fn judge(distance: &Distance, limit_mm: f64) -> Judgement {
+    let limit_mm = limit_mm - COMPARISON_EPSILON_MM;
+    if distance.certainly_below(limit_mm) {
+        Judgement::Violates
+    } else if distance.mm < limit_mm {
+        Judgement::Unresolved
+    } else {
+        Judgement::Meets
+    }
+}
+
 fn violates(distance: &Distance, limit_mm: f64) -> bool {
-    distance.certainly_below(limit_mm - COMPARISON_EPSILON_MM)
+    judge(distance, limit_mm) == Judgement::Violates
+}
+
+/// A ratio exceeds its maximum when the drilled depth exceeds the depth the
+/// maximum allows for that diameter, by the same comparison epsilon: a span
+/// summed from decimal layer thicknesses must not fail a limit it sits on.
+fn exceeds(measured: &RatioMeasured, maximum: f64) -> bool {
+    measured.drilled_span_thickness_mm
+        > maximum * measured.finished_hole_diameter_mm + COMPARISON_EPSILON_MM
 }
 
 fn violates_count(actual: u32, comparison: Comparison, limit: u32) -> bool {
@@ -285,14 +419,144 @@ fn violates_count(actual: u32, comparison: Comparison, limit: u32) -> bool {
     }
 }
 
-/// The one skip policy: a rule is skipped when its subject pool or a
-/// required layer pool is empty for the selected layout target.
-fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
-    if !rule.conditions.applies_to_design(design) {
-        return Some("rule conditions do not apply to this stackup".to_owned());
+/// The one policy for a rule that is not evaluated, in order of what can be
+/// known. `Incomplete`: the rule applies, or might, but something it reads
+/// could not be built or resolved, so its limit is not certified.
+/// `NotApplicable`: the design holds nothing for it to measure.
+fn unevaluated(rule: &Rule, design: &Design) -> Option<(RuleStatus, String)> {
+    let pools = rule.pools(!design.imported.stackups.is_empty());
+    let blocked = |pools: Pools| {
+        let reasons = design
+            .blockers
+            .iter()
+            .filter(|blocker| blocker.pools.intersects(pools))
+            .map(|blocker| blocker.reason.as_str())
+            .collect::<Vec<_>>();
+        (!reasons.is_empty()).then(|| (RuleStatus::Incomplete, reasons.join("; ")))
+    };
+    // Conditions on the stackup cannot be decided without one.
+    if pools.intersects(Pools::STACKUP)
+        && let Some(blocked) = blocked(Pools::STACKUP)
+    {
+        return Some(blocked);
     }
-    let subjects = match rule.kind {
-        RuleKind::CopperLayerCount => None,
+    if !rule.conditions.applies_to_design(design) {
+        return Some((
+            RuleStatus::NotApplicable,
+            "rule conditions do not apply to this stackup".to_owned(),
+        ));
+    }
+    if let Some(blocked) = blocked(pools)
+        .or_else(|| unresolved_span(rule, design).map(|reason| (RuleStatus::Incomplete, reason)))
+    {
+        return Some(blocked);
+    }
+    let layers = (pools.intersects(Pools::COPPER)
+        && design
+            .copper_layers
+            .iter()
+            .all(|layer| !rule.conditions.applies_to_layer(layer)))
+    .then_some("applicable copper layers")
+    .or_else(|| {
+        (pools.intersects(Pools::MASKS) && design.mask_layers.is_empty())
+            .then_some("soldermask layers")
+    })
+    .map(|what| format!("no {what} in the selected layout target"));
+    missing_subjects(rule.kind, design)
+        .or(layers)
+        .map(|reason| (RuleStatus::NotApplicable, reason))
+}
+
+/// Follow each authored rule's results with one more when its cases leave
+/// part of the design outside all of them. Cases must not overlap but need
+/// not cover: a copper layer or stackup that no case matches lies outside the
+/// capability the PDK states, so it is uncertified, never silently unchecked.
+fn report_uncovered(
+    rules: &[Rule],
+    results: Vec<RuleResult>,
+    designs: &[Design],
+) -> Vec<RuleResult> {
+    // Layers and the stackup are the layout's, the same in every design.
+    let design = &designs[0];
+    let mut results = results.into_iter();
+    rules
+        .chunk_by(|left, right| left.authored_id == right.authored_id)
+        .flat_map(|cases| {
+            let mut reported = results.by_ref().take(cases.len()).collect::<Vec<_>>();
+            // Cases already incomplete say why; without subjects nothing is unchecked.
+            let decidable = reported
+                .iter()
+                .all(|result| !matches!(result.status, RuleStatus::Incomplete))
+                && designs
+                    .iter()
+                    .any(|design| missing_subjects(cases[0].kind, design).is_none());
+            if let Some(reason) = decidable.then(|| uncovered(cases, design)).flatten() {
+                // The strictest tier the cases declare is the one left uncertified.
+                let tier = cases
+                    .iter()
+                    .min_by_key(|case| case.severity != Severity::Error)
+                    .expect("an authored rule lowers to at least one rule");
+                let mut result = RuleResult::new(&Rule {
+                    id: tier.authored_id.clone(),
+                    ..tier.clone()
+                });
+                result.leave_unevaluated(RuleStatus::Incomplete, reason);
+                reported.push(result);
+            }
+            reported
+        })
+        .collect()
+}
+
+/// What in the design no case of one authored rule applies to.
+fn uncovered(cases: &[Rule], design: &Design) -> Option<String> {
+    let applicable = cases
+        .iter()
+        .filter(|case| case.conditions.applies_to_design(design))
+        .collect::<Vec<_>>();
+    if applicable.is_empty() {
+        let layers = design
+            .stackup
+            .as_ref()
+            .map_or(0, |stackup| stackup.copper_layers.len());
+        return Some(format!(
+            "no case applies to a design with {layers} copper layer(s)"
+        ));
+    }
+    if !cases[0].kind.semantics().pools.intersects(Pools::COPPER) {
+        return None;
+    }
+    let layers = design
+        .copper_layers
+        .iter()
+        .filter(|layer| {
+            applicable
+                .iter()
+                .all(|case| !case.conditions.applies_to_layer(layer))
+        })
+        .map(|layer| {
+            let position = match layer.position {
+                super::pdk::LayerPosition::Outer => "outer",
+                super::pdk::LayerPosition::Inner => "inner",
+            };
+            match layer.copper_weight_oz {
+                Some(weight) => format!("'{}' ({position}, {weight:.2} oz)", layer.layer.name),
+                None => format!("'{}' ({position})", layer.layer.name),
+            }
+        })
+        .collect::<Vec<_>>();
+    (!layers.is_empty())
+        .then(|| format!("no case applies to copper layer(s) {}", layers.join(", ")))
+}
+
+/// Why a design holds nothing for a rule kind to measure, whatever case
+/// conditions select among its layers.
+fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
+    let what = match kind {
+        // The stackup is the layout's: its root Step's design measures it.
+        RuleKind::CopperLayerCount => {
+            (design.placements[0] != LayoutOccurrenceId::Root).then(|| "stackup".to_owned())
+        }
         RuleKind::BoardArrayPairClearance if design.scope != ArtworkScope::ArrayFlattened => {
             return Some("board-array spacing requires --layout-target board-array".to_owned());
         }
@@ -301,7 +565,8 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
         RuleKind::HoleDiameter(class)
         | RuleKind::HoleAspectRatio(class)
         | RuleKind::AnnularRing(class)
-        | RuleKind::HoleToCopperClearance(class) => design
+        | RuleKind::HoleToCopperClearance(class)
+        | RuleKind::HoleToBoardEdgeClearance(class) => design
             .holes
             .iter()
             .all(|hole| hole.class != class)
@@ -315,49 +580,85 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
                 )
             })
         }
-        RuleKind::HoleToBoardEdgeClearance(class) => design
-            .holes
-            .iter()
-            .all(|hole| hole.class != class)
-            .then(|| format!("{} holes", class.label())),
         RuleKind::PlatedSlotEnclosure => design
             .slots
             .iter()
             .all(|slot| !slot_matches(slot.plating, SlotPlating::Plated))
             .then(|| "plated routed slots".to_owned()),
-        RuleKind::SlotWidth(plating) | RuleKind::SlotToCopperClearance(plating) => design
+        RuleKind::SlotWidth(plating)
+        | RuleKind::SlotToCopperClearance(plating)
+        | RuleKind::SlotToBoardEdgeClearance(plating) => design
             .slots
             .iter()
             .all(|slot| !slot_matches(slot.plating, plating))
-            .then(|| format!("{} routed slots", slot_plating_label(plating))),
-        RuleKind::SlotToBoardEdgeClearance(plating) => design
-            .slots
-            .iter()
-            .all(|slot| !slot_matches(slot.plating, plating))
-            .then(|| format!("{} routed slots", slot_plating_label(plating))),
-        RuleKind::LineworkToCopperClearance(Linework::VScore) => design
-            .scores
-            .is_empty()
-            .then(|| "V-score centerlines".to_owned()),
+            .then(|| format!("{} routed slots", slot_label(plating))),
+        RuleKind::LineworkToCopperClearance(Linework::VScore) => (design.scores.is_empty()
+            && design.inherited_scores.is_empty())
+        .then(|| "V-score centerlines".to_owned()),
         RuleKind::LineworkToCopperClearance(Linework::BoardEdge) => design
             .board_outlines
-            .is_empty()
+            .iter()
+            .all(|outline| !outline.is_board())
             .then(|| "board profile outlines".to_owned()),
         RuleKind::CopperFeatureWidth | RuleKind::CopperClearance | RuleKind::SoldermaskWeb => None,
     };
-    let pools = rule.kind.semantics().pools;
-    let layers = (pools.copper
-        && design
+    what.map(|what| format!("no {what} in the selected layout target"))
+}
+
+/// A rule measuring on the copper layers a drill spans cannot be certified
+/// for a drill whose declared span does not resolve in the physical stackup:
+/// which layers it meets would be a guess.
+fn unresolved_span(rule: &Rule, design: &Design) -> Option<String> {
+    let unresolved = |span: &DrillSpan| span.interpretation == "assumed_whole_stack";
+    let applies = |span: &DrillSpan| {
+        design
             .copper_layers
             .iter()
-            .all(|layer| !rule.conditions.applies_to_layer(layer)))
-    .then(|| "applicable copper layers".to_owned())
-    .or_else(|| {
-        (pools.masks && design.mask_layers.is_empty()).then(|| "soldermask layers".to_owned())
-    });
-    subjects
-        .or(layers)
-        .map(|what| format!("no {what} in the selected layout target"))
+            .enumerate()
+            .any(|(index, layer)| {
+                span.contains_copper(index) && rule.conditions.applies_to_layer(layer)
+            })
+    };
+    match rule.kind {
+        RuleKind::HoleToCopperClearance(class) => design
+            .holes
+            .iter()
+            .find(|hole| {
+                hole.class == class
+                    && hole.branch.is_none()
+                    && unresolved(&hole.drill_span)
+                    && applies(&hole.drill_span)
+            })
+            .map(|hole| {
+                format!(
+                    "{} hole on layer '{}' at ({:.6}, {:.6}) has no resolvable drill span",
+                    hole.class.label(),
+                    hole.layer.name,
+                    hole.center.x,
+                    hole.center.y
+                )
+            }),
+        RuleKind::SlotToCopperClearance(_) | RuleKind::PlatedSlotEnclosure => design
+            .slots
+            .iter()
+            .find(|slot| {
+                let selected = match rule.kind {
+                    RuleKind::SlotToCopperClearance(plating) => slot_matches(slot.plating, plating),
+                    _ => slot_matches(slot.plating, SlotPlating::Plated),
+                };
+                selected
+                    && slot.branch.is_none()
+                    && unresolved(&slot.drill_span)
+                    && applies(&slot.drill_span)
+            })
+            .map(|slot| {
+                format!(
+                    "routed slot on layer '{}' has no resolvable drill span",
+                    slot.layer.name
+                )
+            }),
+        _ => None,
+    }
 }
 
 fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
@@ -390,9 +691,9 @@ fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
         RuleKind::SlotToCopperClearance(plating) => {
             slot_clearance::evaluate(limit(), plating, &rule.conditions, design)?.into()
         }
-        RuleKind::LineworkToCopperClearance(linework) => {
-            linework_clearance::evaluate(limit(), linework, &rule.conditions, design)?.into()
-        }
+        RuleKind::LineworkToCopperClearance(linework) => RuleEvaluation::Distance(
+            linework_clearance::evaluate(limit(), linework, &rule.conditions, design)?,
+        ),
         RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit(), design)?.into(),
         RuleKind::CopperFeatureWidth => {
             thin_regions::copper_feature_width(limit(), &rule.conditions, design)?.into()
@@ -418,13 +719,6 @@ pub(super) fn slot_matches(
             SlotPlating::Nonplated
         )
     )
-}
-
-fn slot_plating_label(plating: SlotPlating) -> &'static str {
-    match plating {
-        SlotPlating::Plated => "plated",
-        SlotPlating::Nonplated => "non-plated",
-    }
 }
 
 fn has_hole_pair(design: &Design, first: HoleClass, second: HoleClass) -> bool {
@@ -511,7 +805,7 @@ fn finding(rule: &Rule, measured: Measured) -> Finding {
         subjects: measured.subjects,
         evidence: measured.evidence,
         sites,
-        group_key: None,
+        frame: 0,
     }
 }
 
@@ -545,7 +839,7 @@ fn count_finding(rule: &Rule, measured: CountEvaluation, limit: u32) -> Finding 
         subjects: measured.subjects,
         evidence: Vec::new(),
         sites: Vec::new(),
-        group_key: None,
+        frame: 0,
     }
 }
 
@@ -595,18 +889,106 @@ fn ratio_finding(rule: &Rule, measured: RatioMeasured, maximum: f64) -> Finding 
         subjects: measured.subjects,
         evidence: measured.evidence,
         sites: vec![site],
-        group_key: None,
+        frame: 0,
     }
 }
 
-/// Holes of one plating class, with their indices into the hole pool.
+/// The copper a plated drilled feature owns, for holes and slots alike.
+///
+/// A canonical land link can mean unique overlap rather than identity, and
+/// proximity never implies ownership: a linked land is the feature's own only
+/// with the same stated padstack and no contradicting net. The feature then
+/// owns, within its Step occurrence, its net and the nets of those lands on
+/// any layer, and the netless pads that are those lands.
+pub(super) struct Ownership {
+    step: Option<Symbol>,
+    instance: Option<u32>,
+    nets: Vec<Symbol>,
+    lands: Vec<pcb_ir::import::physical::LandId>,
+}
+
+impl Ownership {
+    pub(super) fn of(
+        design: &Design,
+        net: Option<Symbol>,
+        padstack: Option<Symbol>,
+        step: Option<Symbol>,
+        instance: Option<u32>,
+        links: &[super::design::HoleLand],
+    ) -> Self {
+        let lands = links
+            .iter()
+            .map(|link| {
+                &design.copper_layers[link.copper_index as usize].lands[link.land_index as usize]
+            })
+            .filter(|land| padstack == Some(land.padstack))
+            .filter(|land| net.zip(land.net).is_none_or(|(own, land)| own == land))
+            .collect::<Vec<_>>();
+        Self {
+            step,
+            instance,
+            nets: net
+                .into_iter()
+                .chain(lands.iter().filter_map(|land| land.net))
+                .collect(),
+            lands: lands.iter().map(|land| land.id).collect(),
+        }
+    }
+
+    pub(super) fn owns(&self, conductor: super::design::ConductorId) -> bool {
+        use super::design::ConductorId;
+        match conductor {
+            ConductorId::Net {
+                step,
+                instance,
+                net,
+            } => step == self.step && instance == self.instance && self.nets.contains(&net),
+            ConductorId::Isolated { occurrence, .. } => {
+                self.lands.iter().any(|land| land.0 == occurrence)
+            }
+            ConductorId::Auxiliary { .. } | ConductorId::Unattributed { .. } => false,
+        }
+    }
+}
+
+/// The copper layers a drilled span meets that a rule's conditions apply to,
+/// with their indices into the copper pool.
+fn spanned_layers<'a>(
+    design: &'a Design<'a>,
+    span: &'a DrillSpan,
+    conditions: &'a super::rules::Conditions,
+) -> impl Iterator<Item = (usize, &'a super::design::CopperLayer)> {
+    design
+        .copper_layers
+        .iter()
+        .enumerate()
+        .filter(move |(index, copper)| {
+            span.contains_copper(*index) && conditions.applies_to_layer(copper)
+        })
+}
+
+/// The Step's own holes of one plating class, with their indices into the
+/// hole pool: the subjects of every rule that measures a hole on its own.
 fn holes_of_class<'a>(design: &'a Design<'a>, class: HoleClass) -> Vec<(usize, &'a Hole)> {
     design
         .holes
         .iter()
         .enumerate()
-        .filter(|(_, hole)| hole.class == class)
+        .filter(|(_, hole)| hole.class == class && hole.branch.is_none())
         .collect()
+}
+
+/// The Step's own slots of one plating class, with their indices into the
+/// slot pool.
+fn slots_of_plating<'a>(
+    design: &'a Design<'a>,
+    plating: SlotPlating,
+) -> impl Iterator<Item = (usize, &'a Slot)> {
+    design
+        .slots
+        .iter()
+        .enumerate()
+        .filter(move |(_, slot)| slot_matches(slot.plating, plating) && slot.branch.is_none())
 }
 
 /// The shared subject shape of every drilled feature (holes and slots).
@@ -651,6 +1033,7 @@ fn hole_subject(design: &Design, hole: &Hole, role: &'static str) -> Subject {
         hole.source_feature_index,
     );
     subject.provenance = Some(hole.provenance.clone());
+    subject.anchor = Some(hole.center.into());
     subject.drill_span = Some(hole.drill_span.clone());
     subject
 }
@@ -668,6 +1051,7 @@ fn slot_subject(design: &Design, slot: &Slot, role: &'static str) -> Subject {
         slot.source_feature_index,
     );
     subject.provenance = Some(slot.provenance.clone());
+    subject.anchor = Some(slot.bbox.center().into());
     // Width and board-edge checks need not resolve the physical stackup.
     // Do not present their declaration-order fallback as a physical span.
     subject.drill_span = design.stackup.as_ref().map(|_| slot.drill_span.clone());
@@ -703,27 +1087,32 @@ impl<'a> From<&'a Subject> for LegacySubject<'a> {
     }
 }
 
-/// Stable annular identity excludes generated IPC primitive names and feature
-/// indices, which can change between equivalent clean exports.
+/// What identifies a subject across equivalent exports: who it is, not how
+/// the file happened to name or number it. Generated IPC primitive names,
+/// padstack ids, and set/feature indices change between clean exports of the
+/// same board and are excluded. A drilled subject is further identified by
+/// where the source drills it, in whole micrometres.
 #[derive(serde::Serialize)]
-struct AnnularSubject<'a> {
+struct StableSubject<'a> {
     role: &'static str,
     kind: &'static str,
     reference_designator: &'a Option<String>,
     pin: &'a Option<String>,
     net: &'a Option<String>,
-    source: Option<AnnularSource<'a>>,
+    source: Option<StableSource<'a>>,
     drill_span: &'a Option<DrillSpan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anchor: Option<[i64; 2]>,
 }
 
 #[derive(serde::Serialize)]
-struct AnnularSource<'a> {
+struct StableSource<'a> {
     step: &'a Option<String>,
     layer: &'a Option<String>,
     instance_index: Option<u32>,
 }
 
-impl<'a> From<&'a Subject> for AnnularSubject<'a> {
+impl<'a> From<&'a Subject> for StableSubject<'a> {
     fn from(subject: &'a Subject) -> Self {
         Self {
             role: subject.role,
@@ -731,43 +1120,24 @@ impl<'a> From<&'a Subject> for AnnularSubject<'a> {
             reference_designator: &subject.reference_designator,
             pin: &subject.pin,
             net: &subject.net,
-            source: subject.source.as_ref().map(|source| AnnularSource {
+            source: subject.source.as_ref().map(|source| StableSource {
                 step: &source.step,
                 layer: &source.layer,
                 instance_index: source.instance_index,
             }),
             drill_span: &subject.drill_span,
+            anchor: subject.anchor.map(micrometres),
         }
     }
 }
 
-/// The original evidence record, excluding display-only constructions.
-/// Borrow the potentially large rings rather than cloning them to hash IDs.
-#[derive(serde::Serialize)]
-struct LegacyEvidence<'a> {
-    role: &'static str,
-    kind: &'static str,
-    center: &'a Option<ReportPoint>,
-    diameter: &'a Option<f64>,
-    start: &'a Option<ReportPoint>,
-    end: &'a Option<ReportPoint>,
-    bounding_box: &'a Option<ReportBBox>,
-    paths: &'a [Vec<ReportPoint>],
-}
-
-impl<'a> From<&'a Evidence> for LegacyEvidence<'a> {
-    fn from(evidence: &'a Evidence) -> Self {
-        Self {
-            role: evidence.role,
-            kind: evidence.kind,
-            center: &evidence.center,
-            diameter: &evidence.diameter,
-            start: &evidence.start,
-            end: &evidence.end,
-            bounding_box: &evidence.bounding_box,
-            paths: &evidence.paths,
-        }
-    }
+/// Identity coordinates are whole micrometres: far above the noise that
+/// equivalent geometry differs by, far below anything that tells two
+/// violations apart. Any grid has cell edges where noise still flips a
+/// coordinate; offsetting them a quarter micrometre keeps them off the
+/// half-micrometre lattice, where midpoints of gridded CAD coordinates fall.
+fn micrometres(point: ReportPoint) -> [i64; 2] {
+    [point.x, point.y].map(|millimetres| (millimetres * 1000.0 + 0.25).floor() as i64)
 }
 
 /// The layers a finding spans, each named once.
@@ -778,115 +1148,96 @@ fn layers<'a>(layers: impl IntoIterator<Item = &'a LayerRef>) -> Vec<LayerRef> {
 }
 
 /// Sort findings into rule/location order and give each an id hashed from
-/// what it is about — rule, subjects, layers, and measured location. The id
-/// is deterministic per input and survives revisions only while those facts
-/// are unchanged: a violation whose representative point moves is a new
-/// finding, so its stale waiver surfaces as unmatched. The measured value
-/// is deliberately excluded — a waived violation that changes magnitude
+/// what it is about: its rule, its stable subjects, its layers, and where it
+/// is, in whole micrometres. A drilled subject carries its own source
+/// location; only a finding without one is placed by its measured point,
+/// which depends on which of several equally near boundaries was the witness.
+/// No raw float and no evidence geometry enters an id, so noise-level
+/// coordinate changes do not re-key findings and strand their waivers. The
+/// measured value is excluded too: a waived violation that changes magnitude
 /// in place keeps its waiver.
+///
+/// Ids released earlier hashed raw coordinates and export-specific indices.
+/// Each is still computed, exactly as it was, and returned as an alias of the
+/// finding's id so a waiver written against it keeps matching.
 fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) -> HashMap<String, String> {
     findings.sort_by(|left, right| {
         left.rule_id
             .cmp(&right.rule_id)
+            .then_with(|| left.frame.cmp(&right.frame))
             .then_with(|| compare_locations(&left.location, &right.location))
     });
+    let short = |fingerprint: &[u8]| hex::encode(&Sha256::digest(fingerprint)[..6]);
     let mut seen: HashMap<String, u32> = HashMap::new();
-    let mut legacy_seen: HashMap<String, u32> = HashMap::new();
+    let mut released_seen: HashMap<String, u32> = HashMap::new();
     let mut waiver_aliases = HashMap::new();
     for finding in findings.iter_mut() {
-        let legacy_fingerprint = serde_json::to_string(&(
-            &finding.rule_id,
-            finding
-                .subjects
-                .iter()
-                .map(LegacySubject::from)
-                .collect::<Vec<_>>(),
-            &finding.layers,
-            &finding.location.point,
-        ))
-        .expect("legacy finding identity serializes");
-        let annular = annular_rules.contains(finding.rule_id.as_str());
-        let fingerprint = if annular {
-            let hole = finding
-                .evidence
-                .iter()
-                .find(|evidence| evidence.role == "drilled_hole")
-                .expect("annular findings report their drilled hole");
-            serde_json::to_string(&(
+        let subjects = finding
+            .subjects
+            .iter()
+            .map(StableSubject::from)
+            .collect::<Vec<_>>();
+        let placed_by_subject = subjects.iter().any(|subject| subject.anchor.is_some());
+        let digest = short(
+            &serde_json::to_vec(&(
                 &finding.rule_id,
-                finding
-                    .subjects
-                    .iter()
-                    .map(AnnularSubject::from)
-                    .collect::<Vec<_>>(),
+                &subjects,
                 &finding.layers,
-                &hole.center,
-                &hole.diameter,
+                finding
+                    .location
+                    .point
+                    .filter(|_| !placed_by_subject)
+                    .map(micrometres),
             ))
-        } else {
-            Ok(legacy_fingerprint.clone())
-        }
-        .expect("finding identity serializes");
-        let digest = Sha256::digest(fingerprint.as_bytes());
-        let short = hex::encode(&digest[..6]);
+            .expect("finding identity serializes"),
+        );
         let repeat = seen
-            .entry(short.clone())
+            .entry(digest.clone())
             .and_modify(|n| *n += 1)
             .or_insert(1);
         finding.id = if *repeat == 1 {
-            format!("dfm-{short}")
+            format!("dfm-{digest}")
         } else {
-            format!("dfm-{short}-{repeat}")
+            format!("dfm-{digest}-{repeat}")
         };
-        if annular {
-            let digest = Sha256::digest(legacy_fingerprint.as_bytes());
-            let legacy_short = hex::encode(&digest[..6]);
-            let repeat = legacy_seen
-                .entry(legacy_short.clone())
+
+        for released in released_fingerprints(finding, annular_rules) {
+            let released_id = format!("dfm-{}", short(released.as_bytes()));
+            let repeat = released_seen
+                .entry(released_id.clone())
                 .and_modify(|n| *n += 1)
                 .or_insert(1);
-            let legacy_id = format!("dfm-{legacy_short}");
             if *repeat == 1 {
-                if legacy_id != finding.id {
-                    waiver_aliases.insert(legacy_id, finding.id.clone());
+                if released_id != finding.id {
+                    waiver_aliases.insert(released_id, finding.id.clone());
                 }
             } else {
-                // An ordinal legacy ID can move when equivalent findings are
+                // An ordinal id can move when equivalent findings are
                 // reordered. Do not transfer either waiver ambiguously.
-                waiver_aliases.remove(&legacy_id);
+                waiver_aliases.remove(&released_id);
             }
         }
+
         let mut sites_seen: HashMap<String, usize> = HashMap::new();
         for site in &mut finding.sites {
-            let bytes = if annular_rules.contains(finding.rule_id.as_str()) {
-                serde_json::to_vec(&(
+            let bounds = site.bounding_box;
+            let digest = short(
+                &serde_json::to_vec(&(
                     &site.layers,
                     &site.measurement_kind,
-                    &site.bounding_box,
                     site.subjects
                         .iter()
-                        .map(AnnularSubject::from)
+                        .map(StableSubject::from)
                         .collect::<Vec<_>>(),
+                    [micrometres(bounds.min), micrometres(bounds.max)],
                 ))
-            } else {
-                serde_json::to_vec(&(
-                    &site.layers,
-                    &site.measurement_kind,
-                    &site.bounding_box,
-                    site.evidence
-                        .iter()
-                        .map(LegacyEvidence::from)
-                        .collect::<Vec<_>>(),
-                ))
-            }
-            .expect("site identity serializes");
-            let digest = Sha256::digest(bytes);
-            let short = hex::encode(&digest[..6]);
+                .expect("site identity serializes"),
+            );
             let ordinal = sites_seen
-                .entry(short.clone())
+                .entry(digest.clone())
                 .and_modify(|n| *n += 1)
                 .or_insert(1);
-            site.id = format!("{}-site-{short}", finding.id);
+            site.id = format!("{}-site-{digest}", finding.id);
             if *ordinal > 1 {
                 site.id.push_str(&format!("-{ordinal}"));
             }
@@ -895,83 +1246,49 @@ fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) -> HashMa
     waiver_aliases
 }
 
-/// Collapse only proven repeats of the same definition-local subjects, with
-/// the same measured failure geometry. Cross-occurrence or unattributed
-/// findings remain separate. This affects presentation only, never waivers.
-fn repeat_group_key(finding: &Finding, inverse: Affine2) -> Option<String> {
-    let instance = finding
-        .subjects
-        .first()?
-        .provenance
-        .as_ref()?
-        .instance_index?;
-    if finding.sites.is_empty() {
-        return None;
-    }
-    let quantize = |n: f64| {
-        let n = (n * 1_000_000.0).round() / 1_000_000.0;
-        if n == 0.0 { 0.0 } else { n }
-    };
-    let point = |p: super::report::ReportPoint| {
-        let p = inverse.transform_point(Point::new(p.x, p.y));
-        [quantize(p.x), quantize(p.y)]
-    };
-    let bounds = |b: super::report::ReportBBox| {
-        let b = b.as_bbox().transformed(inverse);
-        [
-            quantize(b.min.x),
-            quantize(b.min.y),
-            quantize(b.max.x),
-            quantize(b.max.y),
-        ]
-    };
-    let subject_identity = |subject: &Subject| {
-        let source = subject.provenance.as_ref()?;
-        if source.step.is_none() || source.instance_index != Some(instance) {
-            return None;
-        }
-        Some(serde_json::json!([
-            subject.role,
-            subject.kind,
-            subject.net,
-            subject.padstack_ref,
-            source.step,
-            source.layer,
-            source.set_index,
-            source.feature_index,
-            subject.drill_span
-        ]))
-    };
-    let subjects = finding
-        .subjects
-        .iter()
-        .map(subject_identity)
-        .collect::<Option<Vec<_>>>()?;
-    let sites = finding.sites.iter().map(|site| {
-        if site.subjects.is_empty() {
-            return None;
-        }
-        let subjects = site.subjects.iter().map(subject_identity).collect::<Option<Vec<_>>>()?;
-        let measurement = match site.measurement {
-            Measurement::Distance { actual_mm, required_mm, .. } => [quantize(actual_mm), quantize(required_mm)],
-            Measurement::Count { actual_count, required_count, .. } => [f64::from(actual_count), f64::from(required_count)],
-            Measurement::Ratio { actual_ratio, maximum_ratio, .. } => [quantize(actual_ratio), quantize(maximum_ratio)],
-        };
-        let evidence = site.evidence.iter().map(|evidence| serde_json::json!({
-            "role": evidence.role, "kind": evidence.kind,
-            "center": evidence.center.map(point), "diameter": evidence.diameter.map(quantize),
-            "start": evidence.start.map(point), "end": evidence.end.map(point),
-            "bounds": evidence.bounding_box.map(bounds),
-            "paths": evidence.paths.iter().map(|path| path.iter().copied().map(point).collect::<Vec<_>>()).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>();
-        let witnesses = site.witnesses.iter().map(|witness| serde_json::json!([witness.role, point(witness.point)])).collect::<Vec<_>>();
-        Some(serde_json::json!([site.measurement_kind, measurement, quantize(site.uncertainty_mm), site.layers, subjects, witnesses, evidence, site.note]))
-    }).collect::<Option<Vec<_>>>()?;
-    let bytes = serde_json::to_vec(&(&finding.rule_id, subjects, sites)).ok()?;
-    Some(format!(
-        "cause-{}",
-        hex::encode(&Sha256::digest(bytes)[..10])
-    ))
+/// The identity records of every released id format, byte for byte. The first
+/// served every rule; the second placed annular findings at their drilled
+/// hole, with the stable subject projection minus its anchor.
+fn released_fingerprints(finding: &Finding, annular_rules: &HashSet<&str>) -> Vec<String> {
+    let original = serde_json::to_string(&(
+        &finding.rule_id,
+        finding
+            .subjects
+            .iter()
+            .map(LegacySubject::from)
+            .collect::<Vec<_>>(),
+        &finding.layers,
+        &finding.location.point,
+    ));
+    let annular = annular_rules
+        .contains(finding.rule_id.as_str())
+        .then(|| {
+            finding
+                .evidence
+                .iter()
+                .find(|evidence| evidence.role == "drilled_hole")
+        })
+        .flatten()
+        .map(|hole| {
+            serde_json::to_string(&(
+                &finding.rule_id,
+                finding
+                    .subjects
+                    .iter()
+                    .map(|subject| StableSubject {
+                        anchor: None,
+                        ..StableSubject::from(subject)
+                    })
+                    .collect::<Vec<_>>(),
+                &finding.layers,
+                &hole.center,
+                &hole.diameter,
+            ))
+        });
+    std::iter::once(original)
+        .chain(annular)
+        .map(|fingerprint| fingerprint.expect("released finding identity serializes"))
+        .collect()
 }
 
 fn compare_locations(left: &Location, right: &Location) -> Ordering {
@@ -991,8 +1308,8 @@ mod tests {
     use super::*;
     use crate::commands::dfm::report::ReportPoint;
 
-    fn assign_ids(findings: &mut [Finding]) {
-        super::assign_ids(findings, &HashSet::new());
+    fn assign_ids(findings: &mut [Finding]) -> HashMap<String, String> {
+        super::assign_ids(findings, &HashSet::new())
     }
 
     fn finding_at(x: f64) -> Finding {
@@ -1014,8 +1331,57 @@ mod tests {
             subjects: Vec::new(),
             evidence: Vec::new(),
             sites: Vec::new(),
-            group_key: None,
+            frame: 0,
         }
+    }
+
+    fn site_at(center: Point, subjects: Vec<Subject>) -> Site {
+        Site {
+            id: String::new(),
+            measurement: Measurement::minimum_distance(0.1, 0.2),
+            measurement_kind: MeasurementKind::Clearance,
+            uncertainty_mm: 0.0,
+            witnesses: Vec::new(),
+            bounding_box: BBox::from_point(center).expand(0.05).into(),
+            layers: Vec::new(),
+            subjects,
+            evidence: vec![Evidence::circle("hole", center, 0.1)],
+            note: None,
+        }
+    }
+
+    #[test]
+    fn a_shortfall_inside_the_measurement_uncertainty_is_unresolved_not_passed() {
+        let measured = |mm: f64| Distance::with_uncertainty(mm, Point::ZERO, Point::ZERO, 0.003);
+        assert!(judge(&measured(0.0960), 0.1) == Judgement::Violates);
+        assert!(judge(&measured(0.0985), 0.1) == Judgement::Unresolved);
+        assert!(judge(&measured(0.1000), 0.1) == Judgement::Meets);
+        // Unit conversion noise on the limit itself is not a shortfall.
+        assert!(judge(&measured(0.1 - 1e-9), 0.1) == Judgement::Meets);
+        // An exact measurement is never unresolved.
+        let exact = Distance::exact(0.0999, Point::ZERO, Point::ZERO);
+        assert!(judge(&exact, 0.1) == Judgement::Violates);
+    }
+
+    #[test]
+    fn a_ratio_sitting_on_its_maximum_does_not_exceed_it() {
+        let ratio = |thickness_mm: f64| RatioMeasured {
+            actual_ratio: thickness_mm / 0.1,
+            drilled_span_thickness_mm: thickness_mm,
+            finished_hole_diameter_mm: 0.1,
+            thickness_source: "test",
+            center: Point::ZERO,
+            bbox: BBox::from_point(Point::ZERO),
+            layers: Vec::new(),
+            subjects: Vec::new(),
+            evidence: Vec::new(),
+            note: String::new(),
+        };
+        // Summed decimal layer thicknesses: 0.1 + 0.2 is 0.30000000000000004.
+        let summed = ratio(0.1 + 0.2);
+        assert!(summed.actual_ratio > 3.0);
+        assert!(!exceeds(&summed, 3.0));
+        assert!(exceeds(&ratio(0.31), 3.0));
     }
 
     #[test]
@@ -1042,16 +1408,17 @@ mod tests {
     }
 
     #[test]
-    fn visual_metadata_does_not_change_the_original_waiver_id() {
+    fn visual_metadata_does_not_change_the_id_and_the_released_id_still_resolves() {
         let mut finding = finding_at(1.0);
         finding.subjects.push(Subject {
             role: "hole",
             kind: "via_hole",
             ..Subject::default()
         });
-        assign_ids(std::slice::from_mut(&mut finding));
+        let aliases = assign_ids(std::slice::from_mut(&mut finding));
+        let id = finding.id.clone();
         // Independently computed from the pre-sites v1 JSON identity record.
-        assert_eq!(finding.id, "dfm-bee136ee7a39");
+        assert_eq!(aliases.get("dfm-bee136ee7a39"), Some(&id));
         finding.subjects[0].provenance = Some(SourceLocator {
             step: Some("board".into()),
             layer: Some("DRILL".into()),
@@ -1062,21 +1429,69 @@ mod tests {
         finding
             .evidence
             .push(Evidence::circle("hole", Point::new(1.0, 0.0), 0.1));
-        finding.sites.push(Site {
-            id: String::new(),
-            measurement: Measurement::minimum_distance(0.1, 0.2),
-            measurement_kind: MeasurementKind::Diameter,
-            uncertainty_mm: 0.0,
-            witnesses: Vec::new(),
-            bounding_box: BBox::from_point(Point::new(1.0, 0.0)).expand(0.05).into(),
-            layers: Vec::new(),
-            subjects: finding.subjects.clone(),
-            evidence: finding.evidence.clone(),
-            note: None,
-        });
-        assign_ids(std::slice::from_mut(&mut finding));
-        assert_eq!(finding.id, "dfm-bee136ee7a39");
-        assert!(finding.sites[0].id.starts_with("dfm-bee136ee7a39-site-"));
+        let site = site_at(Point::new(1.0, 0.0), finding.subjects.clone());
+        finding.sites.push(site);
+        let aliases = assign_ids(std::slice::from_mut(&mut finding));
+        assert_eq!(finding.id, id);
+        assert_eq!(aliases.get("dfm-bee136ee7a39"), Some(&id));
+        assert!(finding.sites[0].id.starts_with(&format!("{id}-site-")));
+
+        // A waiver written against the released id still applies.
+        use crate::commands::dfm::waivers::{Waiver, WaiverFile, apply};
+        assert_ne!(finding.id, "dfm-bee136ee7a39");
+        let file = WaiverFile {
+            waiver: vec![Waiver {
+                finding: "dfm-bee136ee7a39".to_owned(),
+                reason: "approved by fab".to_owned(),
+                expires: None,
+            }],
+        };
+        let outcome = apply(
+            std::slice::from_mut(&mut finding),
+            &file,
+            &aliases,
+            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+        );
+        assert!(finding.waived);
+        assert_eq!(outcome.applied, 1);
+        assert!(outcome.unmatched.is_empty());
+    }
+
+    #[test]
+    fn noise_level_coordinate_changes_do_not_rekey_findings_or_sites() {
+        // Placed by its drilled subject; and by its measured point, here the
+        // midpoint of gridded coordinates, on the half-micrometre lattice.
+        for anchored in [true, false] {
+            let ids = |noise: f64| {
+                let center = Point::new(12.3455 + noise, -4.0005 - noise);
+                let subject = Subject {
+                    role: "hole",
+                    kind: "via_hole",
+                    anchor: anchored.then(|| center.into()),
+                    ..Subject::default()
+                };
+                let mut finding = finding_at(0.0);
+                // The witness of an anchored finding may be any equally near point.
+                finding.location.point = Some(if anchored {
+                    Point::new(12.0 + 1e3 * noise, -4.0).into()
+                } else {
+                    center.into()
+                });
+                finding.subjects.push(subject.clone());
+                finding.sites.push(site_at(center, vec![subject]));
+                assign_ids(std::slice::from_mut(&mut finding));
+                (finding.id.clone(), finding.sites[0].id.clone())
+            };
+            let reference = ids(0.0);
+            for noise in [1e-12, -1e-12, 3e-10] {
+                assert_eq!(ids(noise), reference, "anchored {anchored}, noise {noise}");
+            }
+            assert_ne!(
+                ids(0.002).0,
+                reference.0,
+                "two micrometres away is elsewhere"
+            );
+        }
     }
 
     #[test]
@@ -1103,40 +1518,25 @@ mod tests {
                 last_copper_index: 1,
                 interpretation: "declared",
             }),
+            anchor: Some(Point::new(2.0, 3.0).into()),
             ..Subject::default()
         });
         finding
             .evidence
             .push(Evidence::circle("drilled_hole", Point::new(2.0, 3.0), 0.2));
-        finding.sites.push(Site {
-            id: String::new(),
-            measurement: Measurement::minimum_distance(0.1, 0.2),
-            measurement_kind: MeasurementKind::MissingCopper,
-            uncertainty_mm: 0.0,
-            witnesses: Vec::new(),
-            bounding_box: BBox::from_point(Point::new(1.0, 0.0)).expand(0.2).into(),
-            layers: Vec::new(),
-            subjects: finding.subjects.clone(),
-            evidence: vec![Evidence {
-                role: "missing_copper",
-                kind: "region",
-                paths: vec![vec![
-                    Point::new(0.9, 0.0).into(),
-                    Point::new(1.1, 0.0).into(),
-                ]],
-                ..Evidence::default()
-            }],
-            note: None,
-        });
+        let site = site_at(Point::new(1.0, 0.0), finding.subjects.clone());
+        finding.sites.push(site);
         let annular = HashSet::from(["annular"]);
         let aliases = super::assign_ids(std::slice::from_mut(&mut finding), &annular);
         let finding_id = finding.id.clone();
         let site_id = finding.sites[0].id.clone();
-        assert_eq!(
-            aliases.get("dfm-ed8c542f1d5c"),
-            Some(&finding_id),
-            "the released annular ID remains a waiver alias"
-        );
+        for released in ["dfm-ed8c542f1d5c", "dfm-96a22f500f68"] {
+            assert_eq!(
+                aliases.get(released),
+                Some(&finding_id),
+                "both released annular id formats remain waiver aliases"
+            );
+        }
 
         for subject in [&mut finding.subjects[0], &mut finding.sites[0].subjects[0]] {
             subject.name = Some("OVAL_10".into());
@@ -1158,141 +1558,12 @@ mod tests {
         let mut different_hole = finding_at(9.0);
         different_hole.rule_id = "annular".to_owned();
         different_hole.subjects = finding.subjects.clone();
+        different_hole.subjects[0].anchor = Some(Point::new(5.0, 3.0).into());
         different_hole.layers = finding.layers.clone();
         different_hole
             .evidence
-            .push(Evidence::circle("drilled_hole", Point::new(2.0, 3.0), 0.3));
+            .push(Evidence::circle("drilled_hole", Point::new(5.0, 3.0), 0.2));
         super::assign_ids(std::slice::from_mut(&mut different_hole), &annular);
         assert_ne!(different_hole.id, finding.id);
-    }
-
-    fn repeated_hole(offset: f64, instance: u32) -> Finding {
-        let center = Point::new(1.0 + offset, 2.0);
-        let subject = Subject {
-            role: "hole",
-            kind: "via_hole",
-            provenance: Some(SourceLocator {
-                step: Some("board".into()),
-                layer: Some("DRILL".into()),
-                set_index: Some(0),
-                feature_index: Some(4),
-                instance_index: Some(instance),
-            }),
-            ..Subject::default()
-        };
-        let mut finding = finding_at(center.x);
-        finding.subjects.push(subject.clone());
-        finding.sites.push(Site {
-            id: String::new(),
-            measurement: Measurement::minimum_distance(0.1, 0.2),
-            measurement_kind: MeasurementKind::Diameter,
-            uncertainty_mm: 0.0,
-            witnesses: Vec::new(),
-            bounding_box: BBox::from_point(center).expand(0.05).into(),
-            layers: Vec::new(),
-            subjects: vec![subject],
-            evidence: vec![Evidence::circle("hole", center, 0.1)],
-            note: None,
-        });
-        finding
-    }
-
-    #[test]
-    fn native_display_metadata_preserves_site_ids_waivers_and_repeat_groups() {
-        use super::super::report::{DisplayCircle, EvidenceDisplay};
-        let mut finding = repeated_hole(0.0, 4);
-        let evidence = &finding.sites[0].evidence[0];
-        assert_eq!(
-            serde_json::to_string(evidence).unwrap(),
-            serde_json::to_string(&LegacyEvidence::from(evidence)).unwrap(),
-            "the identity projection preserves the original field order and nulls"
-        );
-        assign_ids(std::slice::from_mut(&mut finding));
-        let original_finding = finding.id.clone();
-        let original_site = finding.sites[0].id.clone();
-        let original_group = repeat_group_key(&finding, Affine2::IDENTITY).unwrap();
-        let circle = DisplayCircle {
-            center: Point::new(1.0, 2.0).into(),
-            diameter: 0.1,
-        };
-        for display in [
-            EvidenceDisplay::Path {
-                paths: vec!["M1 2 A0.1 0.1 0 0 1 1.1 2.1 Z".into()],
-                fill_rule: "evenodd",
-            },
-            EvidenceDisplay::RoundStroke {
-                paths: vec![vec![Point::ZERO.into(), Point::new(1.0, 1.0).into()]],
-                width_mm: 0.2,
-            },
-            EvidenceDisplay::CircleMinusLayer {
-                center: circle.center,
-                diameter: circle.diameter,
-                layer: "F.Cu".into(),
-            },
-            EvidenceDisplay::CircleIntersection {
-                first: circle,
-                second: circle,
-            },
-        ] {
-            finding.sites[0].evidence[0].display = Some(display);
-            assign_ids(std::slice::from_mut(&mut finding));
-            assert_eq!(finding.id, original_finding);
-            assert_eq!(finding.sites[0].id, original_site);
-            assert_eq!(
-                repeat_group_key(&finding, Affine2::IDENTITY).as_deref(),
-                Some(original_group.as_str())
-            );
-        }
-    }
-
-    #[test]
-    fn grouping_requires_the_same_definition_and_local_failure() {
-        let first = repeated_hole(0.0, 0);
-        let mut repeated = repeated_hole(30.0, 1);
-        let local = Affine2::translation(Point::new(-30.0, 0.0));
-        assert_eq!(
-            repeat_group_key(&first, Affine2::IDENTITY),
-            repeat_group_key(&repeated, local)
-        );
-        repeated.sites[0].subjects[0].net = Some("different contributor".into());
-        assert_ne!(
-            repeat_group_key(&first, Affine2::IDENTITY),
-            repeat_group_key(&repeated, local),
-            "local geometry alone cannot establish the same source contributors"
-        );
-        repeated.sites[0].subjects[0].net = None;
-        repeated.sites[0].subjects[0]
-            .provenance
-            .as_mut()
-            .unwrap()
-            .instance_index = Some(0);
-        assert!(
-            repeat_group_key(&repeated, local).is_none(),
-            "a secondary site's cross-occurrence subject prevents grouping"
-        );
-        repeated.sites[0].subjects[0]
-            .provenance
-            .as_mut()
-            .unwrap()
-            .instance_index = Some(1);
-        repeated.subjects[0]
-            .provenance
-            .as_mut()
-            .unwrap()
-            .feature_index = Some(5);
-        assert_ne!(
-            repeat_group_key(&first, Affine2::IDENTITY),
-            repeat_group_key(&repeated, local)
-        );
-        repeated.subjects.push(first.subjects[0].clone());
-        assert!(
-            repeat_group_key(&repeated, local).is_none(),
-            "cross-occurrence findings cannot collapse into one board cause"
-        );
-        repeated.subjects[0].provenance = None;
-        assert!(
-            repeat_group_key(&repeated, local).is_none(),
-            "missing provenance cannot be guessed from position"
-        );
     }
 }

@@ -6,11 +6,11 @@
 
 use super::attachment::{
     BoundaryId, BoundaryQuery, Decision, Obstacle, PolygonTopology, QueryError, QueryTolerance,
-    check_footprints, material_after_break, transform_region,
+    check_footprint, material_after_break, validate_region,
 };
 use super::{
-    Affine2, ContourBuf, ContourSet, LineCap, LineJoin, PathCmd, Point, Resolution,
-    StrokeToFillStyle,
+    AccuracyError, Affine2, ContourBuf, ContourSet, LineCap, PathCmd, Point, Resolution,
+    StrokeStyle,
 };
 
 /// Opinionated, experimental shallow-intrusion adaptation of SparkFun's pattern.
@@ -64,13 +64,8 @@ pub struct TabGeometry {
     /// This is a proposed fracture locus, NOT a predicted crack trajectory.
     pub break_path: ContourBuf,
     /// The straight bridge from the board boundary to the support anchor,
-    /// before the cutter's fillets: subtract it from a wider void and open
-    /// with the cutter to continue the footprint beyond this construction.
+    /// before the cutter's fillets: what [`routed_void`] keeps out of a void.
     pub neck: ContourSet,
-    /// Complete unperforated footprint for downstream obstacle clearance checks.
-    pub attachment_footprint: ContourSet,
-    /// Rounded material added by disk-opening the ideal routing void.
-    pub shoulders: ContourSet,
     /// Minimum all-pairs chord clearance, not arc pitch minus diameter on curves.
     pub minimum_ligament_mm: f64,
 }
@@ -102,10 +97,22 @@ impl TabGeometry {
     }
 }
 
+/// What the router removes of `void`, the ideal gap between a board and the
+/// material around it, where `necks` bridge it. The cutter's disk cannot reach
+/// into the corners a neck makes with the void's walls, so the void is opened
+/// by the cutter around the necks, leaving rounded shoulders beside them, and
+/// follows its walls exactly everywhere else.
+pub fn routed_void(void: &ContourSet, necks: &ContourSet) -> Result<ContourSet, AccuracyError> {
+    let radius = SparkFunShallow::CUTTER_RADIUS_MM;
+    let void = void.difference(necks)?;
+    void.disk_open(radius)?
+        .union(&void.difference(&necks.disk_dilate(2.0 * radius)?)?)
+}
+
 fn stroke(path: &ContourBuf, width: f64, resolution: Resolution) -> Result<ContourSet, QueryError> {
     let contours = super::path::stroke_to_fill(
         std::slice::from_ref(path),
-        StrokeToFillStyle::new(width, LineCap::Round, LineJoin::Round),
+        StrokeStyle::new(width, LineCap::Round),
         resolution.accuracy,
     )?
     .ok_or(QueryError::InvalidInput("expected positive stroke width"))?;
@@ -230,8 +237,8 @@ fn chord_step(
 /// in its actual panel workspace, not just this local construction.
 pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
     let query = BoundaryQuery::new(input.board, input.tolerance)?;
-    BoundaryQuery::new(input.stock, input.tolerance)?;
-    BoundaryQuery::new(input.support, input.tolerance)?;
+    validate_region(input.stock)?;
+    validate_region(input.support)?;
     let site = query.site(input.boundary, input.station_mm)?;
     let interior = |region: &ContourSet, point: Point| {
         point.is_finite()
@@ -243,6 +250,14 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
                         - input.tolerance.numerical_mm
                 })
     };
+    let protected = input.board.union(input.support)?;
+    // Operands that share an edge, as a frame clipped to its cell shares the
+    // cell's, leave residue along it no thicker than the rounding of the
+    // booleans that made it. Material is what survives eroding by the
+    // caller's own tolerance.
+    let slack =
+        input.tolerance.boundary_mm.max(protected.uncertainty_mm) + input.tolerance.numerical_mm;
+    let is_residue = |region: ContourSet| region.disk_erode(slack).map(|core| core.is_empty());
     let expected = [
         (
             input.board.connected_components().len() == 1,
@@ -253,15 +268,11 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
             "expected one connected support",
         ),
         (
-            input.board.intersection(input.support)?.is_empty(),
+            is_residue(input.board.intersection(input.support)?)?,
             "expected disjoint board and support",
         ),
         (
-            input
-                .board
-                .union(input.support)?
-                .difference(input.stock)?
-                .is_empty(),
+            is_residue(protected.difference(input.stock)?)?,
             "expected board and support inside stock",
         ),
         (
@@ -293,29 +304,8 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
         SparkFunShallow::NECK_WIDTH_MM,
         resolution,
     )?;
-    let protected = input.board.union(input.support)?.union(&neck)?;
-    // Open the void with the actual cutter disk: its circular sweeps leave
-    // rounded concave shoulders instead of demanding a square inside corner.
-    // Extend beyond stock so stock-edge corners do not create retained islands.
-    let routed_removal = input
-        .stock
-        .disk_dilate(2.0 * radius)?
-        .difference(&protected)?
-        .disk_open(radius)?
-        .intersection(input.stock)?;
+    let routed_removal = routed_void(&input.stock.difference(&protected)?, &neck)?;
     let undrilled = input.stock.difference(&routed_removal)?;
-    // Opening can also leave material in slivers of void too narrow for the
-    // cutter anywhere in the stock; the attachment is only what joins the neck.
-    let mut attachment_footprint = ContourSet::empty(resolution);
-    for piece in undrilled
-        .difference(&input.board.union(input.support)?)?
-        .connected_components()
-    {
-        if !piece.intersection(&neck)?.is_empty() {
-            attachment_footprint = attachment_footprint.union(&piece)?;
-        }
-    }
-    let shoulders = attachment_footprint.difference(&protected)?;
 
     // Offset the whole region first, rather than guessing normals on a curved
     // row or assigning straight-line pitch to the source curve's arc length.
@@ -358,13 +348,16 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
             "drill web below the pattern's ligament",
         ));
     }
-    let circle = ContourSet::from_filled_contours(
-        &[super::shapes::circle(diameter)
-            .unwrap()
-            .with_uncertainty(offset.uncertainty_mm)],
+    let circle = super::shapes::circle(diameter)
+        .unwrap()
+        .with_uncertainty(offset.uncertainty_mm);
+    let perforations = ContourSet::from_filled_contours(
+        &centers
+            .iter()
+            .map(|&center| circle.clone().transformed(Affine2::translation(center)))
+            .collect::<Vec<_>>(),
         resolution,
     )?;
-    let mut perforations = ContourSet::empty(resolution);
     let npth = centers
         .iter()
         .map(|&center| Npth {
@@ -372,15 +365,10 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
             diameter_mm: diameter,
         })
         .collect();
-    for &center in &centers {
-        perforations =
-            perforations.union(&transform_region(&circle, Affine2::translation(center))?)?;
-    }
     // Only the board interface is perforated. Require the complete drill mask
     // to clear support, including both stored and caller-supplied uncertainty.
-    if check_footprints(
+    if check_footprint(
         &perforations,
-        &ContourSet::empty(resolution),
         &[Obstacle {
             id: "support",
             region: input.support,
@@ -402,8 +390,6 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
         perforations,
         break_path,
         neck,
-        attachment_footprint,
-        shoulders,
         minimum_ligament_mm,
     };
     // Check every inter-hole ligament as material, not merely positive spacing.

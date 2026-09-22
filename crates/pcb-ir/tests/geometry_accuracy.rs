@@ -19,14 +19,8 @@ fn prepare(contours: &[ContourBuf], mm: f64) -> ContourSet {
 }
 fn distance(region: &ContourSet, p: Point) -> f64 {
     region
-        .rings
-        .iter()
-        .flat_map(|ring| {
-            ring.iter()
-                .zip(ring.iter().cycle().skip(1))
-                .take(ring.len())
-        })
-        .map(|(&a, &b)| point_segment(p, Point::new(a[0], a[1]), Point::new(b[0], b[1])).0)
+        .edges()
+        .map(|(a, b)| point_segment(p, a, b).0)
         .fold(f64::INFINITY, f64::min)
 }
 fn radial_error(region: &ContourSet, rx: f64, ry: f64) -> f64 {
@@ -184,11 +178,12 @@ fn holes_islands_and_fifty_micron_gaps_survive_fine_preparation() {
     assert!(!region.contains_point(Point::ZERO));
     assert!(region.contains_point(Point::new(0.2, 0.0)));
     assert!(!region.contains_point(Point::new(0.325, 0.0)));
+    // Three covered spans along the axis: the ring on either side of its
+    // hole, and the island past the fifty micron gap.
+    let along_axis = [-0.2, 0.0, 0.2, 0.325, 0.45].map(|x| Point::new(x, 0.0));
     assert_eq!(
-        region
-            .segment_spans(Point::new(-1.0, 0.0), Point::new(1.0, 0.0))
-            .len(),
-        3
+        region.contains_points_batch(&along_axis),
+        [true, false, true, false, true]
     );
     let inset = region
         .clone()
@@ -269,7 +264,7 @@ fn circles_and_ellipses_survive_arena_copies_and_affine_placement_exactly() {
 }
 
 #[test]
-fn stroke_expansion_carries_its_own_round_cap_floor() {
+fn stroke_expansion_is_exact_so_only_flattening_spends_the_budget() {
     use pcb_ir::geom::{PathCmd, StrokeStyle};
     let line = ContourBuf::new(vec![
         PathCmd::move_to(Point::ZERO),
@@ -287,14 +282,13 @@ fn stroke_expansion_carries_its_own_round_cap_floor() {
         let angle = std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * i as f64 / 1023.0;
         assert!(distance(&fine, Point::new(angle.cos(), angle.sin()) * 0.1) <= fine.uncertainty_mm);
     }
-    assert!(
-        ContourSet::from_placed_painted_paths(
-            &arena,
-            [(arena.path(path), Affine2::IDENTITY)],
-            Resolution::new(0.0, accuracy(0.000001))
-        )
-        .is_err()
-    );
+    let finest = ContourSet::from_placed_painted_paths(
+        &arena,
+        [(arena.path(path), Affine2::IDENTITY)],
+        Resolution::new(0.0, accuracy(0.000001)),
+    )
+    .unwrap();
+    assert!(finest.uncertainty_mm <= 0.000001);
 }
 
 #[test]
@@ -344,22 +338,21 @@ fn fine_artwork_budgets_reach_flashes_and_instanced_arcs() {
 
 #[test]
 fn stroke_budget_reserves_and_records_coordinate_error() {
-    use pcb_ir::geom::{
-        LineCap, LineJoin, PathCmd,
-        path::{StrokeToFillStyle, stroke_to_fill},
-    };
+    use pcb_ir::geom::{LineCap, PathCmd, StrokeStyle, path::stroke_to_fill};
     let line = ContourBuf::new(vec![
         PathCmd::move_to(Point::new(1e9, 0.0)),
         PathCmd::line_to(Point::new(1e9 + 1.0, 0.0)),
     ])
     .with_uncertainty(0.00005);
-    let style = StrokeToFillStyle::new(0.2, LineCap::Round, LineJoin::Round);
-    assert!(stroke_to_fill(std::slice::from_ref(&line), style, accuracy(0.0001)).is_err());
+    let style = StrokeStyle::new(0.2, LineCap::Round);
+    // The outline is exact in exact arithmetic; out here the coordinates
+    // themselves round by more than the first budget leaves.
+    assert!(stroke_to_fill(std::slice::from_ref(&line), style, accuracy(0.00006)).is_err());
     let outlines = stroke_to_fill(&[line], style, accuracy(0.0002))
         .unwrap()
         .unwrap();
     for outline in outlines {
-        assert!(outline.uncertainty_mm >= 0.00005 + 0.00004 + 64.0 * f64::EPSILON * 1e9);
+        assert!(outline.uncertainty_mm >= 0.00005 + 64.0 * f64::EPSILON * 1e9);
         assert!(outline.uncertainty_mm <= 0.0002);
     }
 }
@@ -387,16 +380,13 @@ fn tiny_rings_do_not_suppress_clearance_findings() {
 #[test]
 fn stroke_preparation_uses_the_total_inherited_error_budget() {
     use pcb_ir::dialects::{LayerRole, Side, artwork};
-    use pcb_ir::geom::{LineCap, LineJoin, PathCmd, Polarity, StrokeStyle};
+    use pcb_ir::geom::{LineCap, PathCmd, Polarity, StrokeStyle};
     let source = ContourBuf::new(vec![
         PathCmd::move_to(Point::ZERO),
         PathCmd::line_to(Point::new(1.0, 0.0)),
     ])
     .with_uncertainty(0.008);
-    let paint = Paint::Stroke(StrokeStyle {
-        join: LineJoin::Miter,
-        ..StrokeStyle::new(0.2, LineCap::Butt)
-    });
+    let paint = Paint::Stroke(StrokeStyle::new(0.2, LineCap::Butt));
     let mut doc = artwork::Document::<(), ()>::new();
     let layer = doc.push_layer(artwork::Layer::new("F.Cu", LayerRole::Copper, Side::Top));
     let path = doc.push_path(paint, vec![source]);

@@ -133,21 +133,32 @@ Case conditions use structured ranges such as
 rules may also condition on `copper = { position = "outer", weight = "1 oz" }`.
 The parser rejects unsupported conditions and any pair of cases whose domains
 overlap. Therefore, at most one case from a rule applies to a design or copper
-layer; non-applicable case rules are reported as skipped. A condition that
-needs stackup context fails extraction when the IPC-2581 file has no
-unambiguous physical stackup. The `technologies` list remains descriptive
+layer; non-applicable case rules are reported as `not_applicable`. Cases need
+not cover every design, but what they leave out is outside the capability the
+PDK states: when the design holds subjects for the rule and no case applies to
+its stackup, or to one of its copper layers, one more result under the authored
+rule id reports `incomplete` and names what no case matched. It carries the
+strictest severity the cases declare, so an uncovered required limit fails the
+verdict instead of leaving the layer silently unchecked. A condition
+that needs stackup context leaves its rule `incomplete` when the IPC-2581 file
+has no unambiguous physical stackup. The `technologies` list remains descriptive
 metadata because imported designs do not yet state rigid, flex, and HDI
 technology reliably enough for qualification.
+
+A copper-weight condition names a nominal weight, while a stackup states a
+thickness that only approximates one: 1 oz is 34.3 µm nominal (IPC-4562A), is
+allowed down to 90 % as foil, typically finishes near 88 %, and plates up on
+outer layers. A layer therefore matches the condition whose standard weight
+(⅛, ¼, ⅓, ½, then whole ounces) is nearest its own as a ratio, so 1.4 mil is
+1 oz, 0.07 mm is 2 oz, and a 0.0152 mm finished inner layer is 0.5 oz. Two
+cases naming the same standard weight overlap.
 
 Layer counts are positive integers. Every dimensional minimum is a positive
 string containing a number and `mm`, `mil`, `mils`, or `um`; copper weight is a
 positive `oz` string. A hole-aspect-ratio `limit.maximum` is a positive finite
 unitless number; zero, nonfinite, string-valued, and otherwise malformed ratios
 are rejected. Units can be mixed. Checks normalize lengths to
-millimeters and retain both source spelling and normalized value. Profile
-defaults document an order's assumptions in the report; an outer/inner copper
-weight default is also the fallback for a weight-conditioned rule when the
-source stackup does not state that weight.
+millimeters and retain both source spelling and normalized value.
 
 Every direct dimensional limit or case has a `minimum`, a `preferred` tier, or
 both:
@@ -202,7 +213,16 @@ curve; zero for stated primitives and analytic shapes). A pair of witness
 points does not always encode a length: widths, diameters, and annular
 enclosures retain their own measurement constructions. The engine fails a
 minimum only when the measured value falls short beyond its own uncertainty,
-so curve tessellation by itself cannot manufacture a violation. Profile
+so curve tessellation by itself cannot manufacture a violation. A value that
+falls short by less than its uncertainty is neither a violation nor proof the
+limit is met: the rule lists it under `unresolved` with its value, uncertainty,
+location, and layers, `summary.unresolved` counts them, and the CLI reports how
+many measurements were within measurement uncertainty. They do not affect the
+verdict. Copper-width and soldermask-web candidates are extracted only where
+they are certainly below the limit, so those two rules list none. An aspect
+ratio exceeds its maximum only when the drilled depth exceeds what the maximum
+allows for that diameter by more than the same comparison epsilon, so a span
+summed from decimal layer thicknesses does not fail a limit it sits on. Profile
 copper-layer qualification instead compares one exact integer with the
 configured support bounds.
 
@@ -238,54 +258,93 @@ then measures only pairs of distinct owners. A net is scoped by its
 materialized Step occurrence, so repeated boards do not become electrically
 connected merely because they reuse the same net names.
 
-Hole-to-copper clearance uses the same attributed composition. For a via or
-PTH, copper proven to belong to the hole's occurrence-scoped net or a resolved
-physical land is excluded; other-net, auxiliary, and unattributed functional
-copper remains an offender. For an NPTH, every final copper owner is an
-offender, including a same-named net. The rule requires a declared through or
-resolvable layer span and fails extraction when the span is unavailable rather
-than guessing which copper layers the drill intersects.
+Hole- and slot-to-copper clearance use the same attributed composition; the
+[rule semantics](#rule-semantics) state which copper a drilled feature owns. A
+drill or rout layer that declares no `Span` is through-board, exactly as import
+reads it. A declared span that cannot be resolved in the physical stackup
+leaves the rule `incomplete` rather than guessing which copper layers the
+drill intersects.
 
-`--layout-target board` extracts the canonical board step. `board-array`
-materializes the root layout and every nested repeat, so the same evaluators
-operate on a board array or on a fabrication panel without a second DFM code
-path. Instance transforms therefore affect only extracted coordinates and
-subject multiplicity. The board-array-spacing rule is intentionally narrower:
-it compares direct sibling array instances of a fabrication panel and skips
-when fewer than two exist.
+`--layout-target board` checks the canonical board step. `board-array` checks
+the root layout and every nested repeat. A layout is a few Step definitions
+placed many times, so every Step is checked once, in its own coordinates,
+together with everything it places: a board, the cell that carries it, the
+array of cells, the fabrication panel of arrays. A measurement belongs to the
+lowest Step that holds all of its subjects:
+
+- What one Step's content decides on its own — a hole's diameter, aspect
+  ratio, annular ring and distance to its own Step's profile, a slot's width
+  and enclosure, the width of the Step's own copper, the distance between two
+  of its features — is measured in that Step's frame, once, however often the
+  layout repeats it.
+- What takes two Steps — a rail's tooling hole against board copper, a cell's
+  mouse-bite holes or routed slots against the board they carry, copper,
+  holes or mask openings of neighbouring boards — is measured in the frame of
+  the Step that places both, between its own content and each thing it places
+  and across placements, never again inside one placement.
+- A V-score line crosses every board along it, so it is a reference for the
+  Step that draws it and for every Step placed under that one. Each measures
+  its own copper against the line wherever the line comes within the rule's
+  limit of that copper, in its own frame, once for all the placements the
+  line crosses alike. A board profile is measured against the copper of its
+  own Step.
+
+A frame holds of what its Step places only what such a measurement can reach:
+placed copper within the largest conductor clearance limit of something
+outside its placement, and placed mask openings within the web check's reach
+of something outside theirs, together with the openings that chain to them.
+Bounds decide this conservatively, so nothing a rule could measure is left
+out; everything else a Step places is measured in its own frame and only
+counted here.
+
+The same evaluators therefore run on a lone board, a board array or a
+fabrication panel without a second DFM code path: a lone board is a layout of
+one Step placed once. Rules are rigid-motion invariant, so a Step's findings
+hold wherever it is placed; the report lists those placements once per Step
+(see [frames](#frames)) instead of repeating findings.
 
 ## Rule semantics
 
 - Profile copper-layer qualification requires exactly one physical stackup.
   Every declared copper layer must occur exactly once in it; missing or
-  ambiguous stackup data fails extraction rather than guessing from artwork
-  layer names.
+  ambiguous stackup data leaves every rule that reads the stackup `incomplete`
+  rather than guessing from artwork layer names.
 - Hole diameter rules measure every drilled hole of the rule's class. Slot
   width rules measure routed slots of the selected plating class. A slot's width is settled
   at extraction: the stated primitive width when present — exact, and
   verified against the materialized outline — and otherwise the outline's
-  narrowest local width. Drill extraction fails rather than silently
-  discarding a hole whose plating class or diameter is missing, or a slot
-  whose stated width its outline contradicts.
+  narrowest local width. A hole whose plating class or diameter is missing, a
+  square hole, which no circular measurement describes, or a slot whose stated
+  width its outline contradicts, is never silently discarded or measured as
+  something it is not: it leaves every hole rule, or every slot rule,
+  `incomplete`.
 - Hole aspect ratio is physical drilled-span thickness divided by finished
   circular hole diameter. A through hole uses IPC-2581 `overallThickness` when
   it is positive and finite, otherwise a complete sum of physical stackup
-  layer thicknesses. A resolved blind or buried hole sums only layers from its
-  first copper endpoint through its last endpoint, inclusive. Routed slots and
+  layer thicknesses. A resolved blind or buried hole sums only the depth its
+  drill removes. A blind hole enters at its outer layer and terminates on its
+  target land, so its depth runs from the capture land foil to the target land,
+  as IPC-T-50M measures a microvia: the entry copper, the dielectric, and any
+  intermediate copper, but not the target copper it lands on. A buried hole is
+  drilled through its whole sub-stack, both terminal layers included. Routed slots and
   NPTH holes are never subjects. If IPC thickness is incomplete, a selected
   profile's `defaults.board_thickness` may be assumed only for a declared
   through hole; the rule reports that assumption. An incomplete resolved span,
-  or an incomplete through span without that default, skips the rule with the
-  precise missing-data reason rather than claiming a pass.
+  or an incomplete through span without that default, leaves the rule
+  `incomplete` with the precise missing-data reason rather than claiming a pass.
 - Hole-to-hole clearance measures edge-to-edge distance between hole pairs
-  whose drill spans overlap; stacked blind and buried vias on disjoint spans
-  do not interact.
+  whose drill spans share board depth. Blind and buried vias on disjoint
+  spans do not interact, and neither do vias stacked on a shared terminal
+  layer (L1–L2 over L2–L3): each drills only the dielectric between its own
+  terminal layers.
 - Hole- and slot-to-board-edge clearance measure true edge-to-edge distance
   from each circular hole or materialized routed-slot outline to the boundary
   of its enclosing physical board profile. Profile cutouts are board edges.
-  The profile must have the feature's exact physical occurrence, so a repeated
-  board never measures against another board or its panel outline. A feature
-  crossing or outside its board material has zero clearance.
+  The profile is that of the Step that owns the feature, so a repeated board
+  never measures against another board or its panel outline. A feature
+  owned by a panel or array step, such as a rail tooling hole, is measured to
+  that panel's or array's own profile. A feature crossing or outside its
+  material has zero clearance.
 - Annular ring measures the radial copper enclosure of each via or PTH hole
   from its nominal circular geometry on every applicable layer. It is not
   tolerance-aware finished-board acceptance: drill size/position, registration,
@@ -302,8 +361,8 @@ when fewer than two exist.
   asymmetric and curved outlines, not a circular or bounding-box proxy. Within
   the slot's span, terminal layers and matching physical source lands require
   copper; an intermediate layer without a land or copper meeting the slot is exempt.
-  The rule requires one physical stackup and a declared, resolvable slot span;
-  missing data fails extraction rather than assuming a passing whole-stack check.
+  The rule requires one physical stackup and a resolvable slot span; missing
+  data leaves it `incomplete` rather than assuming a passing whole-stack check.
   Layers use physical stackup order, not XML declaration order. Copper is
   required around the opening, not inside the routed cavity:
   the query fills that cavity, then measures the minimum distance from the slot
@@ -318,8 +377,13 @@ when fewer than two exist.
 - Hole-to-copper clearance measures the edge-to-edge distance from each
   circular drill to the nearest unrelated final copper owner on every copper
   layer in its declared span. Via and PTH copper is exempt only when net or
-  physical-land identity proves that it belongs to the hole. NPTH copper is
-  never exempt. Missing drill-span identity makes the check incomplete.
+  physical-land identity proves that it belongs to the hole, by the same rule
+  as plated slots: its own occurrence-scoped net, or a resolved land with the
+  same stated padstack and no contradictory net, whose net it then owns on
+  every layer. A land linked only because the drill overlaps it proves nothing,
+  so a drill through foreign copper is reported. Other-net, auxiliary, and
+  unattributed functional copper remains an offender. NPTH copper is never
+  exempt, a same-named net included.
 - Slot-to-copper clearance (`rules.copper.slot_clearance`) measures the true
   materialized filled slot outline, including its ends, against unrelated
   final copper on its physical span. Touching or overlapping copper has zero
@@ -328,32 +392,42 @@ when fewer than two exist.
   with matching stated padstack identity and no contradictory stated net;
   netless functional and foreign copper remain offenders. Nonplated slots
   exempt nothing. The rule requires one unambiguous physical stackup and a
-  declared through or resolvable layer span; missing data fails extraction.
-  This eligibility requirement also applies to preferred warning tiers: missing
-  data is an incomplete check, not a geometric shortfall or a valid pass.
+  resolvable layer span; missing data leaves it `incomplete`. This eligibility
+  requirement also applies to preferred warning tiers: missing data is an
+  incomplete check, not a geometric shortfall or a valid pass.
   Copper layer declaration order does not determine the physical span.
 - Copper feature-width rules report narrow copper piece by piece after final
   polarity composition. Copper-clearance rules measure the shortest
   boundary distance between distinct final conductor images. Same-net
   notches and same-net islands are not clearance subjects; touching or
   overlapping distinct conductors have zero clearance. Functional copper
-  without a net fails extraction when this rule is configured instead of
-  being guessed into an electrical domain. Fiducials, copper-balance
+  without a net leaves this rule `incomplete` instead of being guessed into an
+  electrical domain; rules that measure the composed image are unaffected. Fiducials, copper-balance
   support, and netless pads remain explicit auxiliary conductors.
 - Soldermask-web rules report mask webs — gaps between mask openings —
   narrower than the limit. Morphology finds candidates; the medial-axis
   width decides each finding.
 - V-score and board-edge clearance measure the shortest distance from the
   centerlines or profile outlines (cutouts included) to each layer's
-  composed copper image.
+  composed copper image. A centerline is measured over its drawn extent, to
+  the copper of the Step that draws it and of every Step placed under it.
 - Board-array spacing measures boundary-to-boundary distance between the
-  sibling board arrays a fabrication panel places; it requires
-  `--layout-target board-array` and at least two arrays.
+  sibling board arrays one Step places, as a fabrication panel does; it
+  requires `--layout-target board-array` and at least two arrays.
 
-A rule that measures nothing reports `skipped` with a reason instead of a
-vacuous `pass` — whether its subject pool is empty (no holes of its class,
-no copper layers, no V-score lines) or the pool yields no eligible
-measurements (`checked` would be zero).
+A rule that measures nothing never reports a vacuous `pass`; `skip_reason`
+says why, under one of two statuses:
+
+- `not_applicable`: the design holds nothing for the rule to measure — its
+  subject pool is empty (no holes of its class, no copper layers, no V-score
+  lines), its case conditions do not match this stackup, or the pool yields no
+  eligible measurements (`checked` would be zero).
+- `incomplete`: the rule applies, or might, but something it reads could not be
+  built, resolved, or measured. The problem is local: it blocks the rules that
+  read the affected data and every other rule is still evaluated and reported.
+  An `incomplete` rule of error severity fails the verdict, because a limit
+  that was not measured is never reported as met. The CLI names each one as
+  `not evaluated: <rule>: <reason>`.
 
 ## Waivers
 
@@ -417,14 +491,13 @@ check via, PTH, and NPTH hole-to-copper clearance at 0.25 mm for Level A,
 plated-slot, and nonplated-slot clearance to the board edge at 0.50 mm for
 Level A, 0.40 mm for Level B, and 0.30 mm for Level C. Plated and nonplated
 slot-to-copper clearance prefers 0.50 / 0.40 / 0.30 mm for A/B/C and warns
-on shortfalls. Diode deliberately allows more routing margin than for circular
-drills; these are opinionated guidance, not IPC requirements.
-These values apply across all three performance classes. Each profile assumes 1.6 mm board
-thickness for the through-hole aspect-ratio fallback described above. Diode
-chose these opinionated values using IPC design topics as context; they are not
-licensed IPC numeric matrices, do not prove full IPC compliance, and do not
-imply IPC certification. A pass covers only the checks listed in the selected
-profile's `coverage` metadata.
+on shortfalls, deliberately allowing more routing margin than for circular
+drills. These values apply across all three performance classes. Each profile
+assumes 1.6 mm board thickness for the through-hole aspect-ratio fallback
+described above. Diode chose these opinionated values using IPC design topics
+as context; they are not licensed IPC numeric matrices, do not prove full IPC
+compliance, and do not imply IPC certification. A pass covers only the checks
+listed in the selected profile's `coverage` metadata.
 
 All nine IPC profiles also adopt the following thresholds from the bundled
 Diode `standard.toml` PDK, cited as `diode-standard`. These general-purpose
@@ -467,7 +540,8 @@ Reports over 16 MiB or encoded URLs over 900 KiB must be selected in the
 viewer manually.
 
 A completed report is written before the command returns a failing status.
-Only unwaived error findings fail its verdict. Preparation and output errors
+Unwaived error findings fail its verdict, and so does a required rule that
+could not be evaluated. Preparation and output errors
 also return a failing status. Preparation errors emit an explicit
 [incomplete report](#incomplete-reports). File output is replaced atomically,
 including incomplete reports. I/O, serialization, or size-limit failures can
@@ -500,31 +574,42 @@ A complete report has these fields:
   step, repeat indices, and transform into the checked frame; see
   [coordinates and topology](#coordinates-and-topology).
 - `coordinate_system`: the unit, axis convention, and origin for all report
-  geometry: `mm`, `x_right_y_up`, and `ipc_2581_design` in version 1.
+  geometry: `mm`, `x_right_y_up`, and `ipc_2581_design` in versions 1 and 2.
 - `summary`: rule counts by status and finding counts by severity and
   waiver state.
+- `frames`: the Steps the checked layout places, its root first; see
+  [frames](#frames).
 - `rules`: one result per lowered rule. A direct limit uses its authored id; a
   named case uses `<id>.<case>`; a preferred tier appends `.preferred` to
   either form. Each result includes severity, source and normalized limit,
-  status (`pass`, `warning`, `fail`, or `skipped`), skip reason, and the
+  status (`pass`, `warning`, `fail`, `not_applicable`, or `incomplete`), the
+  reason a rule was not evaluated (`skip_reason`), and the
   measurement contract shared by all of its findings — `subject` (what one
   checked unit is), `quantity`, `method`, `comparison` (`minimum` or
-  `maximum`), and `checked`, the number of measurements evaluated. `view`
+  `maximum`), and `checked`, the number of subjects decided across the
+  physical layout: each Step's own subjects count once per placement of that
+  Step. Findings are not multiplied: `finding_count` counts entries of
+  `findings`, each of which names its frame. `view`
   specifies the diagnostic family, whether it is spatial, and its semantic
   rendering features; `tier` distinguishes required and preferred limits.
   `assumptions` lists profile defaults actually used while evaluating that
   rule, and is empty when no assumption was needed.
-- `findings`: violations in deterministic rule/location order.
+- `findings`: violations in deterministic rule, frame, and location order.
+- `shared_evidence`: evidence records that sites reference by index rather
+  than repeat; see [findings](#findings).
 - `scene`: required native artwork for the complete checked layout; see
   [native scene](#native-scene).
 
 `rule.finding_count` includes waived findings, and `waived_count` counts that
-subset. A rule whose findings are all waived reports `pass`; active findings
-determine `warning` or `fail` from rule severity. Skipped rules retain `skipped`
-and their reason rather than becoming a pass from zero counts. Similarly,
-`summary.findings` includes all findings, `summary.waived` counts the waived
-subset, and `summary.errors`/`warnings` count only unwaived findings. A complete
-verdict fails exactly when `summary.errors > 0`.
+subset. A rule that one Step's design could not certify is `incomplete` and
+still lists and counts what the other Steps found. A rule whose findings are all waived reports `pass`; active findings
+determine `warning` or `fail` from rule severity. Unevaluated rules retain
+`not_applicable` or `incomplete` and their reason rather than becoming a pass
+from zero counts; `summary.rules_not_applicable` and `summary.rules_incomplete`
+count them. Similarly, `summary.findings` includes all findings,
+`summary.waived` counts the waived subset, and `summary.errors`/`warnings` count
+only unwaived findings. A complete verdict fails exactly when
+`summary.errors > 0` or a rule of error severity is `incomplete`.
 
 ### Source identity
 
@@ -549,11 +634,20 @@ consumer's machine to render or validate the report.
 
 ### Findings
 
-- `id` hashes the rule, subjects, layers, and measured location. It remains
-  stable while those facts are unchanged. Moving the representative point
-  creates a new finding; its old waiver becomes `unmatched`. The measured
-  value, added sites, presentation grouping, and extended provenance do not
-  affect identity: a violation that shrinks or grows in place keeps its waiver.
+- `id` hashes the rule, the subjects' stable identity, the layers, and where
+  the finding is in its frame, in whole micrometres. A drilled subject is
+  placed by where the source drills it; only a finding without one is placed
+  by its measured point. A board's findings therefore keep their ids however
+  it is panelized, and a waiver written against a board check applies to the
+  same finding in a check of its array. Generated primitive names, padstack ids, set and feature indices, raw
+  floating-point coordinates, and evidence geometry never enter an id, so an
+  equivalent re-export or a noise-level coordinate change does not re-key a
+  finding. Moving a violation by micrometres creates a new finding; its old
+  waiver becomes `unmatched`. The measured value, added sites, presentation
+  grouping, and extended provenance do not affect identity: a violation that
+  shrinks or grows in place keeps its waiver. Ids in every format released
+  earlier are still computed and accepted as aliases, so existing waiver files
+  keep matching while the geometry they were written against is unchanged.
 - `rule_id`, `severity`, `title`, and `message` identify and explain the
   violation; `waived` and `waiver_reason` record acceptance.
 - `measurement` carries `actual_mm`, `required_mm`, and signed `margin_mm` for
@@ -572,13 +666,21 @@ consumer's machine to render or validate the report.
   determines it.
 - `subjects` preserve role, kind, component, pin, net, padstack, and source
   indices when IPC-2581 provides them. `provenance` identifies the source
-  definition and physical occurrence separately from the legacy flattened
-  `source` locator; `drill_span` records the applicable copper-layer span.
+  definition and its occurrence separately from the legacy `source` locator:
+  `instance_index` is `null` for the frame's own Step and otherwise names,
+  in `layout.instances`, the occurrence under the frame's first placement.
+  A V-score line a Step meets from above keeps the provenance of the Step
+  that draws it. `drill_span` records the applicable copper-layer span.
   Unavailable fields remain `null` so consumers see one stable shape.
 - `evidence` records `kind`, `role`, and applicable circle, segment, or bounds
   fields; unused fields remain `null`. `paths` contains closed region rings or
   open paths, preserving the checked material's winding and holes. Optional
   `display` retains native constructions for rendering, as specified below.
+  Evidence of kind `shared` carries only its `role`, bounds, and `shared`, the
+  index of the complete record in the report's `shared_evidence` table. The
+  board profile that every hole- and slot-to-board-edge site of one board
+  measures to is shared this way, so a report grows with its findings rather
+  than with findings times the outline.
 - `sites` retain individual failing regions or layers with their measurement,
   `measurement_kind`, `witnesses`, uncertainty, bounds, layers, subjects, and
   evidence. Nonspatial findings use `sites: []`. Site bounds describe the
@@ -587,9 +689,8 @@ consumer's machine to render or validate the report.
   therefore has zero clearance. Witness-point separation is not necessarily
   the measured width or diameter. Scalar aspect-ratio sites have no measurement
   witnesses; their circle evidence locates the hole.
-- `group_key`, when available, groups proven equivalent causes for display.
-  It does not replace the finding id or change the waiver unit. Every finding
-  and physical occurrence remains accessible.
+- `frame` is the index of the finding's [frame](#frames). An `unresolved`
+  measurement carries the same index.
 
 Check-owned sites, measurements, witnesses, and evidence paths are authoritative.
 The optional `evidence.display` construction uses the same world millimeters:
@@ -601,7 +702,7 @@ The optional `evidence.display` construction uses the same world millimeters:
 | `circle_intersection` | `first` and `second` circles, each with `center` and `diameter` |
 | `circle_minus_layer` | `center`, `diameter`, and exact copper `layer`; subtract that layer's composed native image from the circle |
 
-Display constructions do not affect finding, site, or repeat-group identity.
+Display constructions do not affect finding or site identity.
 `circle_minus_layer` needs its named scene pass even when the pass is hidden as
 artwork. A missing required operand makes the scene invalid. Do not fit curves
 to measured polygons, invent precision by changing tessellation tolerance, or
@@ -618,8 +719,29 @@ design in a mixed fabrication panel.
 
 Each occurrence's cumulative `[a,b,c,d,tx,ty]` transform maps definition-local
 coordinates to the checked frame: `x' = a*x + c*y + tx`,
-`y' = b*x + d*y + ty`. Site, evidence, and scene coordinates are already placed;
-do not transform them again. A parent occurrence filter includes descendants.
+`y' = b*x + d*y + ty`. Scene coordinates are already placed; do not transform
+them again. A parent occurrence filter includes descendants.
+
+### Frames
+
+`frames` lists every Step the checked layout places, the checked root first.
+Each entry has the Step's `step` name and its `placements`: one per occurrence
+of that Step, with `instance`, its index in `layout.instances` (`null` for the
+checked frame itself), and the occurrence's `transform` as above. A lone board,
+or the `board` target, has one frame with the single placement
+`{instance: null, transform: [1,0,0,1,0,0]}`. After these, a Step has a
+further frame for each smaller set of its placements that some finding holds
+at: a V-score line that crosses only the boards of one row is found at those
+placements only.
+
+A finding is measured once, in the coordinates of the Step its `frame` names,
+and occurs at every placement of that frame: its location, witnesses, site
+bounds, evidence and display constructions are all in those Step coordinates.
+To show an occurrence in the scene, apply that placement's transform; a
+`circle_minus_layer` construction subtracts the scene pass as seen through
+the same transform. The root frame's transform is the identity, so its
+findings are already placed. Waivers, ids and counts are per finding, not per
+placement.
 
 ### Native scene
 
@@ -687,7 +809,17 @@ replaces the current load.
 
 ### Schema evolution
 
-Report and scene versions are independent; both currently use integer `1`.
+Report and scene versions are independent; the report uses integer `2` and the
+scene integer `1`. Report version 2 checks every Step once: findings and
+unresolved measurements are in the coordinates of their `frame` and occur at
+each of its placements instead of being repeated per board, and `group_key`,
+which grouped those repeats, is gone. It also moved each edge-clearance site's
+`board_profile` region into the `shared_evidence` table, and split the rule
+status `skipped` (and `summary.rules_skipped`) into `not_applicable` and
+`incomplete`, the latter failing the verdict for a required rule. Rules list
+`unresolved` measurements and the summary counts them. `rules` may
+hold one extra `incomplete` result per authored rule whose cases do not cover
+the design.
 New fields and new `kind`, `role`, `status`, rule, and method values may be
 added within a version. Unknown optional fields can be ignored; unknown required
 semantics must produce an explicit unsupported state, never a guessed rendering

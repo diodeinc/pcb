@@ -8,6 +8,26 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop exporting slots and routed cutouts as copper in Gerber copper layers.
+- Fix IPC-2581 import of negative planes, inline pads, donuts, thermals, imprecise arcs and MD5 trailers.
+- Fix donut, scaled and slot-cut fiducials, and square holes drilled round.
+- Fix DFM false positives on stacked vias and array tooling holes.
+- Reject mouse-bite board margins too small for the routed slot, and keep rail fiducials off V-score lines.
+- Fix `pcb ipc warp` overstating bow about 20×.
+- Fix Gerber macro rotation, non-round line ends and attribute escaping.
+
+### Changed
+
+- DFM checks each board of an array once; reports use schema v2 with a `frames` table.
+- Fail the DFM verdict when a required rule cannot be evaluated.
+- Speed up Gerber export, DFM, rendering, copper balancing and array generation.
+- Shrink board-array SVGs over 100×.
+- Grade copper-balance fill more evenly.
+- `pcb ipc warp` supports single boards and no longer reports twist.
+- Report malformed IPC-2581 attribute values as errors.
+
 ## [0.4.57] - 2026-09-21
 
 ### Added

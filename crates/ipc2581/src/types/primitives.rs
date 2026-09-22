@@ -1,6 +1,6 @@
 use super::Xform;
 use crate::Symbol;
-use std::str::FromStr;
+use std::fmt;
 
 /// 2D point
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -102,10 +102,11 @@ pub struct Butterfly {
     pub size: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ButterflyShape {
-    Round,
-    Square,
+ipc_enum! {
+    pub enum ButterflyShape("butterflyShape") {
+        Round = "ROUND",
+        Square = "SQUARE",
+    }
 }
 
 /// Diamond (4-sided with equal sides)
@@ -122,13 +123,14 @@ pub struct Donut {
     pub inner_diameter: f64,
 }
 
-/// Shape used for Donut and Thermal primitives
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConcentricShape {
-    Round,
-    Square,
-    Hexagon,
-    Octagon,
+ipc_enum! {
+    /// Shape used for Donut and Thermal primitives
+    pub enum ConcentricShape("concentricShape") {
+        Round = "ROUND",
+        Square = "SQUARE",
+        Hexagon = "HEXAGON",
+        Octagon = "OCTAGON",
+    }
 }
 
 /// Ellipse
@@ -186,15 +188,101 @@ pub struct Contour {
     pub cutouts: Vec<Polygon>,
 }
 
-/// Polygon (closed shape)
-#[derive(Debug, Clone, PartialEq)]
+/// `Polygon`, `Cutout` or `Polyline`: a begin point and the steps from it.
+///
+/// A zone fill is tens of thousands of straight steps, so the points are one
+/// table and the few curved steps a sparse one beside it.
+#[derive(Clone, PartialEq)]
 pub struct Polygon {
-    pub begin: PolyBegin,
-    pub steps: Vec<PolyStep>,
+    /// `PolyBegin`, then the end point of every step.
+    pub(crate) points: Vec<Point>,
+    /// The curved steps, by ascending `point`.
+    pub(crate) curves: Vec<PolyCurve>,
 }
 
-/// Polygon starting point
-pub type PolyBegin = Point;
+/// The arc that ends at `points[point]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PolyCurve {
+    pub(crate) point: u32,
+    pub(crate) clockwise: bool,
+    pub(crate) center: Point,
+}
+
+impl Polygon {
+    pub fn new(begin: Point, steps: impl IntoIterator<Item = PolyStep>) -> Self {
+        let steps = steps.into_iter();
+        let mut polygon = Self {
+            points: Vec::with_capacity(steps.size_hint().0 + 1),
+            curves: Vec::new(),
+        };
+        polygon.points.push(begin);
+        for step in steps {
+            let point = match step {
+                PolyStep::Segment(segment) => segment.point,
+                PolyStep::Curve(curve) => {
+                    polygon.curves.push(PolyCurve {
+                        point: polygon.points.len() as u32,
+                        clockwise: curve.clockwise,
+                        center: curve.center,
+                    });
+                    curve.point
+                }
+            };
+            polygon.points.push(point);
+        }
+        polygon
+    }
+
+    pub fn begin(&self) -> Point {
+        self.points[0]
+    }
+
+    /// `begin`, then the end point of every step.
+    pub fn points(&self) -> &[Point] {
+        &self.points
+    }
+
+    pub fn steps(&self) -> impl Iterator<Item = PolyStep> + '_ {
+        let mut curves = self.curves.iter().peekable();
+        (1..self.points.len()).map(move |index| {
+            let point = self.points[index];
+            match curves.next_if(|curve| curve.point as usize == index) {
+                Some(curve) => PolyStep::Curve(PolyStepCurve {
+                    point,
+                    center: curve.center,
+                    clockwise: curve.clockwise,
+                }),
+                None => PolyStep::Segment(PolyStepSegment { point }),
+            }
+        })
+    }
+
+    pub(crate) fn translate(&mut self, offset: Point) {
+        let centers = self.curves.iter_mut().map(|curve| &mut curve.center);
+        for point in self.points.iter_mut().chain(centers) {
+            point.x += offset.x;
+            point.y += offset.y;
+        }
+    }
+}
+
+/// Prints the begin point and each step, however they are stored.
+impl fmt::Debug for Polygon {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Steps<'a>(&'a Polygon);
+
+        impl fmt::Debug for Steps<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_list().entries(self.0.steps()).finish()
+            }
+        }
+
+        f.debug_struct("Polygon")
+            .field("begin", &self.begin())
+            .field("steps", &Steps(self))
+            .finish()
+    }
+}
 
 /// Polygon continuation step
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -217,12 +305,8 @@ pub struct PolyStepCurve {
     pub clockwise: bool,
 }
 
-/// Polyline (open shape - series of connected lines)
-#[derive(Debug, Clone, PartialEq)]
-pub struct Polyline {
-    pub begin: PolyBegin,
-    pub steps: Vec<PolyStep>,
-}
+/// An open run of steps, which is a [`Polygon`] that need not close.
+pub type Polyline = Polygon;
 
 /// Line segment
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -255,21 +339,23 @@ pub enum LineDescGroup {
     Ref(Symbol),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LineEnd {
-    None,
-    Round,
-    Square,
+ipc_enum! {
+    pub enum LineEnd("lineEnd") {
+        None = "NONE",
+        Round = "ROUND",
+        Square = "SQUARE",
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LineProperty {
-    Solid,
-    Dashed,
-    Dotted,
-    Center,
-    Phantom,
-    Erase,
+ipc_enum! {
+    pub enum LineProperty("lineProperty") {
+        Solid = "SOLID",
+        Dashed = "DASHED",
+        Dotted = "DOTTED",
+        Center = "CENTER",
+        Phantom = "PHANTOM",
+        Erase = "ERASE",
+    }
 }
 
 /// Fill description (fill style and color)
@@ -284,13 +370,14 @@ pub struct FillDesc {
     pub color: Option<ColorGroup>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FillProperty {
-    Fill,
-    Hollow,
-    Void,
-    Hatch,
-    Mesh,
+ipc_enum! {
+    pub enum FillProperty("fillProperty") {
+        Fill = "FILL",
+        Hollow = "HOLLOW",
+        Void = "VOID",
+        Hatch = "HATCH",
+        Mesh = "MESH",
+    }
 }
 
 /// Color (RGB)
@@ -331,12 +418,6 @@ pub struct BoundingBox {
     pub upper_right: Point,
 }
 
-/// Reference to a dictionary entry
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DictRef {
-    pub id: Symbol,
-}
-
 /// User-defined geometric primitives (from DictionaryUser)
 #[derive(Debug, Clone, PartialEq)]
 pub enum UserPrimitive {
@@ -351,16 +432,20 @@ pub struct UserSpecial {
 }
 
 /// A shape within a UserSpecial, with optional line and fill descriptions
+///
+/// A zone fill is a `UserSpecial` of thousands of contours, so what few of
+/// them carry is boxed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserShape {
     pub shape: UserShapeType,
     pub line_desc: Option<LineDesc>,
     pub line_desc_ref: Option<Symbol>,
-    pub fill_desc: Option<FillDesc>,
+    pub fill_desc: Option<Box<FillDesc>>,
     pub fill_desc_ref: Option<Symbol>,
 }
 
-/// Types of shapes that can appear in UserSpecial
+/// Types of shapes that can appear in UserSpecial: the `Feature`
+/// substitution group, plus the bare `Polygon` KiCad writes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UserShapeType {
     Circle(Circle),
@@ -368,37 +453,61 @@ pub enum UserShapeType {
     Oval(Oval),
     RectRound(RectRound),
     Contour(Contour),
+    /// Any standard primitive without a variant of its own above.
+    StandardPrimitive(Box<StandardPrimitive>),
+    StandardPrimitiveRef(Symbol),
     Polygon(Polygon),
     Line(Line),
     Arc(Arc),
     Polyline(Polyline),
+    Outline(Box<super::PackageOutline>),
+    Text(Box<Text>),
     UserPrimitiveRef(Symbol),
     UserPrimitive(UserPrimitive),
 }
 
-// FromStr implementations for shape enums
-impl FromStr for ButterflyShape {
-    type Err = String;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ROUND" => Ok(ButterflyShape::Round),
-            "SQUARE" => Ok(ButterflyShape::Square),
-            _ => Err(format!("Unknown butterflyShape: {}", s)),
-        }
-    }
-}
+    #[test]
+    fn a_polygon_yields_the_steps_it_was_made_of() {
+        let point = |x, y| Point { x, y };
+        let curve = |x, y, clockwise| {
+            PolyStep::Curve(PolyStepCurve {
+                point: point(x, y),
+                center: point(x, 0.0),
+                clockwise,
+            })
+        };
+        let segment = |x, y| PolyStep::Segment(PolyStepSegment { point: point(x, y) });
+        let steps = [
+            curve(1.0, 1.0, true),
+            segment(2.0, 0.0),
+            segment(3.0, 0.0),
+            curve(4.0, 1.0, false),
+            curve(5.0, 1.0, true),
+        ];
 
-impl FromStr for ConcentricShape {
-    type Err = String;
+        let mut polygon = Polygon::new(point(0.0, 0.0), steps);
+        assert_eq!(polygon.begin(), point(0.0, 0.0));
+        assert_eq!(polygon.points().len(), 6);
+        assert_eq!(polygon.steps().collect::<Vec<_>>(), steps);
+        assert_eq!(
+            format!("{:?}", Polygon::new(point(0.0, 0.0), [segment(2.0, 0.0)])),
+            "Polygon { begin: Point { x: 0.0, y: 0.0 }, steps: [Segment(PolyStepSegment { point: Point { x: 2.0, y: 0.0 } })] }"
+        );
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ROUND" => Ok(ConcentricShape::Round),
-            "SQUARE" => Ok(ConcentricShape::Square),
-            "HEXAGON" => Ok(ConcentricShape::Hexagon),
-            "OCTAGON" => Ok(ConcentricShape::Octagon),
-            _ => Err(format!("Unknown concentricShape: {}", s)),
-        }
+        polygon.translate(point(10.0, 20.0));
+        assert_eq!(polygon.begin(), point(10.0, 20.0));
+        assert_eq!(
+            polygon.steps().next(),
+            Some(PolyStep::Curve(PolyStepCurve {
+                point: point(11.0, 21.0),
+                center: point(11.0, 20.0),
+                clockwise: true,
+            }))
+        );
+        assert_eq!(Polygon::new(point(1.0, 2.0), []).steps().count(), 0);
     }
 }

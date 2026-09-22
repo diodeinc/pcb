@@ -5,7 +5,7 @@ use serde::Serialize;
 use super::pdk::Pdk;
 use super::rules::{LimitValue, Rule};
 
-pub const REPORT_SCHEMA_VERSION: u32 = 1;
+pub const REPORT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize)]
 pub struct DfmReport {
@@ -22,7 +22,13 @@ pub struct DfmReport {
     pub waivers: Option<WaiversApplied>,
     pub summary: Summary,
     pub rules: Vec<RuleResult>,
+    /// The Steps the layout places, the layout root first. Each is checked
+    /// once, in its own coordinates, wherever and however often it is placed.
+    pub frames: Vec<Frame>,
     pub findings: Vec<Finding>,
+    /// Evidence that many sites reference by index instead of repeating, such
+    /// as the board profile every edge-clearance site of one board measures to.
+    pub shared_evidence: Vec<Evidence>,
     /// Full native artwork for external diagnostic viewers.
     pub scene: Scene,
 }
@@ -236,6 +242,23 @@ pub struct LayoutContext {
     pub instances: Vec<LayoutOccurrence>,
 }
 
+/// One Step of the checked layout and everywhere the layout places it. A
+/// finding is measured once in the Step's own coordinates and occurs at every
+/// placement: a placement's transform carries it into the checked frame.
+#[derive(Debug, Clone, Serialize)]
+pub struct Frame {
+    pub step: String,
+    pub placements: Vec<Placement>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Placement {
+    /// Index into `layout.instances`; `null` for the checked frame itself.
+    pub instance: Option<u32>,
+    /// Step-local to checked-frame affine matrix [a, b, c, d, tx, ty].
+    pub transform: [f64; 6],
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LayoutOccurrence {
     pub index: u32,
@@ -266,13 +289,19 @@ pub struct Summary {
     pub rules_passed: usize,
     pub rules_warned: usize,
     pub rules_failed: usize,
-    pub rules_skipped: usize,
+    /// Rules with nothing to measure in this design.
+    pub rules_not_applicable: usize,
+    /// Rules that apply but could not be evaluated. One of error severity
+    /// fails the verdict: what was not measured is never reported as passing.
+    pub rules_incomplete: usize,
     pub findings: usize,
-    /// Unwaived error-severity findings; the verdict fails on these alone.
+    /// Unwaived error-severity findings.
     pub errors: usize,
     /// Unwaived warning-severity findings.
     pub warnings: usize,
     pub waived: usize,
+    /// Measurements no rule could decide; see [`RuleResult::unresolved`].
+    pub unresolved: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -294,6 +323,11 @@ pub struct RuleResult {
     pub checked: usize,
     pub finding_count: usize,
     pub waived_count: usize,
+    /// Measurements below the limit by less than their own uncertainty. They
+    /// are not findings, since tessellation alone could account for the
+    /// shortfall, and they are not proof the limit is met either.
+    pub unresolved: Vec<Unresolved>,
+    /// Why a `not_applicable` or `incomplete` rule was not evaluated.
     pub skip_reason: Option<String>,
     /// Input assumptions actually used while evaluating this rule.
     pub assumptions: Vec<String>,
@@ -317,6 +351,7 @@ impl RuleResult {
             checked: 0,
             finding_count: 0,
             waived_count: 0,
+            unresolved: Vec::new(),
             skip_reason: None,
             assumptions: Vec::new(),
             view: rule.kind.view_recipe(),
@@ -329,10 +364,15 @@ impl RuleResult {
     }
 
     /// Settle the rule's status from its finding counts: unwaived findings
-    /// carry the rule's severity, a fully waived or clean rule passes.
+    /// carry the rule's severity, a fully waived or clean rule passes. A rule
+    /// one Step's design could not certify stays incomplete, and still
+    /// counts what the others found.
     pub fn finish(&mut self, finding_count: usize, waived_count: usize) {
         self.finding_count = finding_count;
         self.waived_count = waived_count;
+        if !self.evaluated() {
+            return;
+        }
         self.status = if finding_count == waived_count {
             RuleStatus::Pass
         } else if self.severity == Severity::Warning {
@@ -342,19 +382,46 @@ impl RuleResult {
         };
     }
 
-    pub fn skip(&mut self, reason: impl Into<String>) {
-        self.status = RuleStatus::Skipped;
+    /// Whether findings were judged against the limit.
+    pub fn evaluated(&self) -> bool {
+        !matches!(
+            self.status,
+            RuleStatus::NotApplicable | RuleStatus::Incomplete
+        )
+    }
+
+    /// Whether this rule leaves a required limit uncertified.
+    pub fn blocks_verdict(&self) -> bool {
+        matches!(self.status, RuleStatus::Incomplete) && self.severity == Severity::Error
+    }
+
+    pub fn leave_unevaluated(&mut self, status: RuleStatus, reason: impl Into<String>) {
+        self.status = status;
         self.skip_reason = Some(reason.into());
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleStatus {
     Pass,
     Warning,
     Fail,
-    Skipped,
+    /// The design holds nothing this rule measures.
+    NotApplicable,
+    /// The rule applies, but its subjects could not be measured.
+    Incomplete,
+}
+
+/// One measurement the limit falls inside the uncertainty band of.
+#[derive(Debug, Serialize)]
+pub struct Unresolved {
+    /// Index into the report's `frames`, as for a finding.
+    pub frame: u32,
+    pub actual_mm: f64,
+    pub uncertainty_mm: f64,
+    pub point: ReportPoint,
+    pub layers: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -402,8 +469,9 @@ pub struct Finding {
     pub evidence: Vec<Evidence>,
     /// Check-owned connected regions/layers. The finding remains the waiver unit.
     pub sites: Vec<Site>,
-    /// Presentation-only identity for proven equivalent repeated causes.
-    pub group_key: Option<String>,
+    /// Index into the report's `frames`: the Step whose own coordinates every
+    /// point of this finding is in, and every place the layout repeats it.
+    pub frame: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -603,6 +671,10 @@ pub struct Subject {
     /// retains the historical flattened locator for compatibility.
     pub provenance: Option<SourceLocator>,
     pub drill_span: Option<DrillSpan>,
+    /// Where the source places a drilled subject. Identity only: the report
+    /// already states it as evidence.
+    #[serde(skip)]
+    pub anchor: Option<ReportPoint>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -618,10 +690,17 @@ impl DrillSpan {
             .contains(&copper_index)
     }
 
-    /// Whether two drill spans coexist at some board depth.
+    /// Whether two drill spans coexist at some board depth. A span drills
+    /// the dielectric between its terminal layers, so spans that only meet at
+    /// a shared terminal layer — stacked or staggered microvias — share no
+    /// depth. A span confined to one copper layer has no dielectric interval
+    /// of its own and meets every span that reaches its layer; that keeps
+    /// every hole of a single-layer board interacting.
     pub(super) fn overlaps(&self, other: &Self) -> bool {
-        self.first_copper_index <= other.last_copper_index
-            && other.first_copper_index <= self.last_copper_index
+        let first = self.first_copper_index.max(other.first_copper_index);
+        let last = self.last_copper_index.min(other.last_copper_index);
+        let single_layer = |span: &Self| span.first_copper_index == span.last_copper_index;
+        first < last || (first == last && (single_layer(self) || single_layer(other)))
     }
 
     /// Whether this is an end of the span, where the plating must land.
@@ -656,6 +735,10 @@ pub struct Evidence {
     /// witness points, and uncertainty remain the check's authoritative data.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display: Option<EvidenceDisplay>,
+    /// For `shared` evidence, the index of its record in the report's
+    /// `shared_evidence` table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared: Option<u32>,
 }
 
 /// Compact display geometry in the report's millimeter, Y-up frame. These
@@ -718,6 +801,18 @@ impl Evidence {
             role,
             kind: "bounds",
             bounding_box: Some(bounding_box.into()),
+            ..Self::default()
+        }
+    }
+
+    /// A reference to evidence held once in the report's shared table. Until
+    /// the engine builds that table, `index` is the check's own pool index.
+    pub fn shared(role: &'static str, index: u32, bounding_box: BBox) -> Self {
+        Self {
+            role,
+            kind: "shared",
+            bounding_box: Some(bounding_box.into()),
+            shared: Some(index),
             ..Self::default()
         }
     }

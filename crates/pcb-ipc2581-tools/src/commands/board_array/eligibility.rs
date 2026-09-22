@@ -12,6 +12,7 @@ use pcb_ir::{
             QueryTolerance,
             outline::{OutlineFootprint, OutlineObstacle, eligible_outline},
         },
+        region::ring_signed_area,
     },
     import::ipc2581::{ImportedDesign, LayerId, import_design},
 };
@@ -24,12 +25,17 @@ pub(super) struct Evidence {
 }
 
 pub(super) struct Prepared {
-    pub report: Value,
     /// Overall stackup thickness, when the source states one.
     pub thickness_mm: Option<f64>,
     pub substrate: ContourSet,
     pub evidence: Vec<Evidence>,
     pub intervals: Vec<pcb_ir::geom::attachment::outline::OutlineInterval>,
+    /// What the analysis report states beside the geometry.
+    footprint: OutlineFootprint,
+    clearance_mm: f64,
+    resolution: Resolution,
+    ignored_footprints: Vec<String>,
+    diagnostics: Vec<(String, String)>,
 }
 
 struct CourtyardGroup {
@@ -51,7 +57,7 @@ pub fn analyze(
     resolution: Resolution,
 ) -> Result<Value> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let mut report = prepare(&ipc, footprint, clearance_mm, exclusions, resolution)?.report;
+    let mut report = prepare(&ipc, footprint, clearance_mm, exclusions, resolution)?.report();
     report["source_xml_sha256"] = json!(hex::encode(Sha256::digest(xml.as_bytes())));
     Ok(report)
 }
@@ -90,7 +96,11 @@ pub(super) fn prepare(
     }
     let profiles = profile_occurrences_for(doc, ProfileSet::BoardOutlines);
     if profiles.is_empty() {
-        bail!("unsupported input: canonical board has no substrate profile");
+        bail!(
+            "unsupported input: the board step has no Profile: the layout has no closed board \
+             outline on its edge-cuts layer, so there is no outline to place tabs on; draw the \
+             outline and export again"
+        );
     }
     let mut substrate = ContourSet::empty(resolution);
     for occurrence in profiles {
@@ -126,50 +136,78 @@ pub(super) fn prepare(
             region: e.region.as_ref(),
         })
         .collect::<Vec<_>>();
-    let tolerance = QueryTolerance {
-        boundary_mm: 0.0,
-        numerical_mm: pcb_ir::geom::tol::EPSILON_MM,
-    };
-    let intervals = eligible_outline(&substrate, &obstacles, footprint, tolerance)?;
-    let report = json!({
-        "phase": "outline-eligibility-only",
-        "manufacturing_ready": false,
-        "scope": "canonical-board",
-        "units": "mm",
-        "ignored_footprints": ignored_footprints,
-        "policy": {
-            "missing_courtyard": "ignore-footprint",
-            "width_mm": footprint.width_mm, "inward_mm": footprint.inward_mm,
-            "outward_mm": footprint.outward_mm, "clearance_mm": clearance_mm,
-            "accuracy_mm": resolution.accuracy.max_error_mm(),
-            "significance_mm": resolution.tolerance_mm,
-            "boundary_mm": tolerance.boundary_mm, "numerical_mm": tolerance.numerical_mm,
-        },
-        "limitations": [
-            "Eligible means clear only of supplied courtyard/exclusion evidence on the prepared polygon model; interval endpoints carry no guarantee.",
-            "Closed courtyard contours are filled conservatively, regardless of outline ink styling. Both board sides are included without additional mirroring.",
-            "Footprints without courtyard evidence contribute no obstruction and are listed in ignored_footprints. Clearance is conditional on supplied courtyards being complete; ignored physical components may overhang. Present but unusable courtyards are errors.",
-            "General keep-out export coverage is not established. No copper, pad, drill, stackup or 3D collision checks are performed.",
-            "No tabs, perforations, frame connections, router access, mechanics or panel export are generated."
-        ],
-        "diagnostics": doc.diagnostics.iter().map(|d| json!({"severity": format!("{:?}", d.severity), "message": d.message})).collect::<Vec<_>>(),
-        "evidence": evidence.iter().map(|e| json!({"id": e.id, "available": e.region.as_ref().is_some_and(|r| !r.is_empty())})).collect::<Vec<_>>(),
-        "intervals": intervals.iter().map(|i| json!({
-            "ring": i.boundary.ring, "edge": i.edge,
-            "start_mm": i.start_mm, "end_mm": i.end_mm,
-            "start": [i.start.x, i.start.y], "end": [i.end.x, i.end.y],
-            "state": format!("{:?}", i.state), "landing": format!("{:?}", i.landing),
-            "obstacles": i.obstacles.iter().map(|&index| &evidence[index].id).collect::<Vec<_>>(),
-            "uncertainty_mm": i.uncertainty_mm,
-        })).collect::<Vec<_>>(),
-    });
+    // Only an outer ring faces the frame a tab has to reach; a hole's ring
+    // can never carry one.
+    let outer_rings = (0..substrate.rings.len())
+        .filter(|&ring| ring_signed_area(&substrate.rings[ring]) > 0.0)
+        .collect::<Vec<_>>();
+    let intervals = eligible_outline(&substrate, &outer_rings, &obstacles, footprint, TOLERANCE)?;
     Ok(Prepared {
-        report,
         thickness_mm,
         substrate,
         evidence,
         intervals,
+        footprint,
+        clearance_mm,
+        resolution,
+        ignored_footprints,
+        diagnostics: doc
+            .diagnostics
+            .iter()
+            .map(|d| (format!("{:?}", d.severity), d.message.clone()))
+            .collect(),
     })
+}
+
+const TOLERANCE: QueryTolerance = QueryTolerance {
+    boundary_mm: 0.0,
+    numerical_mm: pcb_ir::geom::tol::EPSILON_MM,
+};
+
+impl Prepared {
+    /// The eligibility analysis as JSON. Building a panel never asks for it.
+    pub(super) fn report(&self) -> Value {
+        let Self {
+            footprint,
+            clearance_mm,
+            resolution,
+            evidence,
+            intervals,
+            ..
+        } = self;
+        json!({
+            "phase": "outline-eligibility-only",
+            "manufacturing_ready": false,
+            "scope": "canonical-board",
+            "units": "mm",
+            "ignored_footprints": self.ignored_footprints,
+            "policy": {
+                "missing_courtyard": "ignore-footprint",
+                "width_mm": footprint.width_mm, "inward_mm": footprint.inward_mm,
+                "outward_mm": footprint.outward_mm, "clearance_mm": clearance_mm,
+                "accuracy_mm": resolution.accuracy.max_error_mm(),
+                "significance_mm": resolution.tolerance_mm,
+                "boundary_mm": TOLERANCE.boundary_mm, "numerical_mm": TOLERANCE.numerical_mm,
+            },
+            "limitations": [
+                "Eligible means clear only of supplied courtyard/exclusion evidence on the prepared polygon model; interval endpoints carry no guarantee.",
+                "Closed courtyard contours are filled conservatively, regardless of outline ink styling. Both board sides are included without additional mirroring.",
+                "Footprints without courtyard evidence contribute no obstruction and are listed in ignored_footprints. Clearance is conditional on supplied courtyards being complete; ignored physical components may overhang. Present but unusable courtyards are errors.",
+                "General keep-out export coverage is not established. No copper, pad, drill, stackup or 3D collision checks are performed.",
+                "No tabs, perforations, frame connections, router access, mechanics or panel export are generated."
+            ],
+            "diagnostics": self.diagnostics.iter().map(|(severity, message)| json!({"severity": severity, "message": message})).collect::<Vec<_>>(),
+            "evidence": evidence.iter().map(|e| json!({"id": e.id, "available": e.region.as_ref().is_some_and(|r| !r.is_empty())})).collect::<Vec<_>>(),
+            "intervals": intervals.iter().map(|i| json!({
+                "ring": i.boundary.ring, "edge": i.edge,
+                "start_mm": i.start_mm, "end_mm": i.end_mm,
+                "start": [i.start.x, i.start.y], "end": [i.end.x, i.end.y],
+                "state": format!("{:?}", i.state), "landing": format!("{:?}", i.landing),
+                "obstacles": i.obstacles.iter().map(|&index| &evidence[index].id).collect::<Vec<_>>(),
+                "uncertainty_mm": i.uncertainty_mm,
+            })).collect::<Vec<_>>(),
+        })
+    }
 }
 
 fn courtyard_evidence(
@@ -294,8 +332,7 @@ fn validate_courtyard_references(ipc: &Ipc2581) -> Result<()> {
                 layer.name == features.layer_ref && layer.layer_function == LayerFunction::Courtyard
             })
         })
-        .flat_map(|layer| &layer.sets)
-        .flat_map(|set| &set.features)
+        .flat_map(|layer| &layer.features)
         .collect::<Vec<_>>();
     while let Some(feature) = features.pop() {
         match feature {
@@ -499,7 +536,7 @@ mod tests {
             <Polygon><PolyBegin x="0" y="0"/>
             <PolyStepSegment x="4" y="0"/><PolyStepSegment x="4" y="2"/>
             <PolyStepSegment x="0" y="2"/><PolyStepSegment x="0" y="0"/>
-            <LineDesc lineWidth="0.05"/><FillDesc fillProperty="HOLLOW"/>
+            <LineDesc lineWidth="0.05" lineEnd="ROUND"/><FillDesc fillProperty="HOLLOW"/>
             </Polygon></Features></Set>"#;
         format!(
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -601,7 +638,7 @@ mod tests {
         let start = xml.find("<LayerFeature layerRef=\"F.Courtyard\">").unwrap();
         let end = start + xml[start..].find("</LayerFeature>").unwrap();
         let lines = [(0, 0, 4, 0), (4, 2, 4, 0), (0, 2, 4, 2), (0, 2, 0, 0)];
-        let sets = lines.iter().map(|(x1, y1, x2, y2)| format!(r#"<Set componentRef="U1"><Features><Xform rotation="90"/><Location x="8" y="1"/><Line startX="{x1}" startY="{y1}" endX="{x2}" endY="{y2}"><LineDesc lineWidth="0.05"/></Line></Features></Set>"#)).collect::<Vec<_>>();
+        let sets = lines.iter().map(|(x1, y1, x2, y2)| format!(r#"<Set componentRef="U1"><Features><Xform rotation="90"/><Location x="8" y="1"/><Line startX="{x1}" startY="{y1}" endX="{x2}" endY="{y2}"><LineDesc lineWidth="0.05" lineEnd="ROUND"/></Line></Features></Set>"#)).collect::<Vec<_>>();
         for count in [4, 3] {
             let mut xml = xml.clone();
             xml.replace_range(
@@ -794,12 +831,14 @@ mod tests {
                 .iter()
                 .any(|i| i["state"] == "Eligible")
         );
+        // The profile cutout is substrate a landing may lack, never an
+        // outline a tab could sit on.
         assert!(
             report["intervals"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|i| i["ring"] == 1)
+                .all(|i| i["ring"] == 0)
         );
         assert!(report["intervals"].as_array().unwrap().iter().any(|i| {
             i["state"] == "Blocked"

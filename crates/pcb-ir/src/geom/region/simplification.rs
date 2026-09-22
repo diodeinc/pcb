@@ -4,6 +4,7 @@ use super::{ContourSet, Ring, Shape, flatten_shapes, overlay_fill_rule, rings_bb
 use crate::geom::accuracy::numerical_error;
 use crate::geom::dist;
 use crate::geom::{AccuracyError, BBox, FillRule, Point};
+use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay::IntOverlayOptions;
 use i_overlay::core::simplify::Simplify;
 use i_overlay::float::simplify::SimplifyShape;
@@ -24,11 +25,35 @@ pub(crate) fn simplify_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring>
 /// not the layer, which matters for silkscreen and mask images made of
 /// thousands of small, locally overlapping features.
 pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
-    let rule = overlay_fill_rule(fill_rule);
+    regularize(rings, overlay_fill_rule(fill_rule))
+}
+
+fn regularize(rings: Vec<Ring>, rule: OverlayFillRule) -> Vec<Shape> {
+    bounds_connected_groups(rings.into_iter().map(|ring| (ring, ())).collect())
+        .into_iter()
+        .flat_map(|group| untagged(group).simplify_shape_as::<i64>(rule))
+        .collect()
+}
+
+/// Resolve tagged rings one bounds-connected group at a time.
+///
+/// Rings whose bounds never touch cannot interact under any set operation,
+/// so `resolve` sees only rings that can, each tagged with the operand it
+/// came from, and decides what that group contributes. An operation over a
+/// panel then costs what its local neighbourhoods cost, however the caller
+/// happened to batch it.
+pub(super) fn resolve_groups<T>(
+    rings: Vec<(Ring, T)>,
+    resolve: impl FnMut(Vec<(Ring, T)>) -> Vec<Ring>,
+) -> Vec<Ring> {
     bounds_connected_groups(rings)
         .into_iter()
-        .flat_map(|group| group.simplify_shape_as::<i64>(rule))
+        .flat_map(resolve)
         .collect()
+}
+
+pub(super) fn untagged<T>(group: Vec<(Ring, T)>) -> Vec<Ring> {
+    group.into_iter().map(|(ring, _)| ring).collect()
 }
 
 /// Partition rings into groups connected by overlapping bounds, each in
@@ -42,61 +67,61 @@ pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
 /// in for its members, so it may merge groups no member pair joins; that
 /// costs only partitioning benefit, never correctness, and lets a layer of
 /// long features degenerate to the single overlay it needed before.
-fn bounds_connected_groups(rings: Vec<Ring>) -> Vec<Vec<Ring>> {
+fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>) -> Vec<Vec<(Ring, T)>> {
     struct Group {
         hull: BBox,
-        members: Vec<usize>,
+        root: usize,
     }
-    let slack = numerical_error(rings_bbox(&rings));
-    let mut order = rings
+    let bounds = rings
         .iter()
-        .map(|ring| rings_bbox(std::slice::from_ref(ring)).expand(slack))
+        .map(|(ring, _)| rings_bbox(std::slice::from_ref(ring)))
+        .collect::<Vec<_>>();
+    let slack = numerical_error(bounds.iter().copied().fold(BBox::empty(), BBox::union));
+    let mut order = bounds
+        .into_iter()
+        .map(|bbox| bbox.expand(slack))
         .enumerate()
         .collect::<Vec<_>>();
     order.sort_by(|(_, a), (_, b)| a.min.x.total_cmp(&b.min.x));
+    // Membership is a forest over ring indices: a group absorbed by a later
+    // ring hangs its root under that ring, so a chain of touching rings
+    // merges in constant time per link instead of recopying its members.
+    let mut parent = (0..rings.len()).collect::<Vec<_>>();
     let mut open: Vec<Group> = Vec::new();
-    let mut closed: Vec<Group> = Vec::new();
     for (index, bbox) in order {
-        let mut merged = Group {
-            hull: bbox,
-            members: vec![index],
-        };
+        let mut hull = bbox;
         let mut i = 0;
         while i < open.len() {
             // A sweep line crossing a band of many separate features would
             // compare every ring against all of them; the surplus folds into
             // this group instead, bounding the work per ring.
             if open[i].hull.max.x < bbox.min.x {
-                closed.push(open.swap_remove(i));
+                open.swap_remove(i);
             } else if open[i].hull.intersects(bbox) || open.len() > MAX_OPEN_GROUPS {
                 let group = open.swap_remove(i);
-                merged.hull = merged.hull.union(group.hull);
-                merged.members.extend(group.members);
+                hull = hull.union(group.hull);
+                parent[group.root] = index;
             } else {
                 i += 1;
             }
         }
-        open.push(merged);
+        open.push(Group { hull, root: index });
     }
-    closed.extend(open);
-    let mut groups = closed
-        .into_iter()
-        .map(|mut group| {
-            group.members.sort_unstable();
-            group.members
-        })
-        .collect::<Vec<_>>();
-    groups.sort_unstable_by_key(|members| members[0]);
-    let mut rings = rings.into_iter().map(Some).collect::<Vec<_>>();
+    let mut group_of_root = vec![usize::MAX; rings.len()];
+    let mut groups: Vec<Vec<(Ring, T)>> = Vec::new();
+    for (index, ring) in rings.into_iter().enumerate() {
+        let mut root = index;
+        while parent[root] != root {
+            parent[root] = parent[parent[root]];
+            root = parent[root];
+        }
+        if group_of_root[root] == usize::MAX {
+            group_of_root[root] = groups.len();
+            groups.push(Vec::new());
+        }
+        groups[group_of_root[root]].push(ring);
+    }
     groups
-        .into_iter()
-        .map(|members| {
-            members
-                .into_iter()
-                .filter_map(|index| rings[index].take())
-                .collect()
-        })
-        .collect()
 }
 
 /// Open groups a sweep line compares each ring against before folding them.
@@ -135,16 +160,18 @@ pub(super) fn integer_shapes_on_grid(
 /// Decimate rings so the region only shrinks: the result covers no point the
 /// source did not, and no source vertex ends farther than `deviation_mm`
 /// from the decimated boundary.
-pub(crate) fn decimate_rings_inward(rings: &[Ring], deviation_mm: f64) -> Vec<Ring> {
+pub(crate) fn decimate_rings_inward<'a>(
+    rings: impl Iterator<Item = &'a [[f64; 2]]>,
+    deviation_mm: f64,
+) -> Vec<Ring> {
     rings
-        .iter()
         .map(|ring| decimate_ring_inward(ring, deviation_mm))
         .collect()
 }
 
-fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
+fn decimate_ring_inward(ring: &[[f64; 2]], deviation_mm: f64) -> Ring {
     if ring.len() < 4 {
-        return ring.clone();
+        return ring.to_vec();
     }
     let point = |index: usize| {
         let [x, y] = ring[index % ring.len()];
@@ -158,8 +185,8 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
         let start = point(anchor);
         let endpoint = point(end);
         let chord = endpoint - start;
-        let length = chord.length();
-        if length <= f64::EPSILON {
+        // A chord back to its own anchor has no side for a vertex to be on.
+        if start == endpoint {
             return false;
         }
         (anchor + 1..end).all(|index| {
@@ -185,22 +212,26 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
         anchor = end;
     }
     if kept.len() < 3 {
-        return ring.clone();
+        return ring.to_vec();
     }
     kept
 }
 
 impl ContourSet {
     /// Decimate the region's boundary so it only shrinks; see
-    /// [`decimate_rings_inward`].
+    /// `decimate_rings_inward`.
+    ///
+    /// A chord takes one turn of winding off what it cuts from its ring and
+    /// changes nothing elsewhere, so the decimated rings wind no point more
+    /// than the source did and positive winding keeps a subset of it. The
+    /// nonzero rule would not: a hole left outside its ring by a chord winds
+    /// negatively there and would fill.
     pub fn decimate_inward(&self) -> Result<Self, AccuracyError> {
         let inherited = self.uncertainty_mm + numerical_error(self.bbox);
         let deviation_mm = self.budget().allowance(inherited)?;
+        let decimated = decimate_rings_inward(self.rings(), deviation_mm);
         Ok(Self::from_regularized(
-            simplify_rings(
-                decimate_rings_inward(&self.rings, deviation_mm),
-                FillRule::NonZero,
-            ),
+            flatten_shapes(regularize(decimated, OverlayFillRule::Positive)),
             self.resolution,
             inherited + deviation_mm,
         ))
@@ -212,7 +243,7 @@ mod tests {
     use super::super::ring_edges;
     use super::super::tests::res;
     use super::*;
-    use crate::geom::{shapes, tol};
+    use crate::geom::{GeometryAccuracy, Resolution, shapes, tol};
 
     #[test]
     fn inward_decimation_only_shrinks_and_respects_deviation() {
@@ -238,6 +269,28 @@ mod tests {
             .map(|(start, end)| start.distance_to(end))
             .sum();
         assert!(ring.area() - decimated.area() <= deviation * perimeter);
+    }
+
+    #[test]
+    fn inward_decimation_does_not_fill_a_hole_inside_the_bulge_it_cuts() {
+        // The chord across the shallow bulge passes above a hole within it,
+        // which leaves the hole outside its ring, wound the wrong way.
+        let outer = vec![
+            [0.0, 0.0],
+            [5.0, -0.01],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+        ];
+        let hole = vec![[4.0, -0.002], [6.0, -0.002], [5.0, -0.008]];
+        let resolution = Resolution::new(tol::REGION_MM, GeometryAccuracy::new(0.05).unwrap());
+        let region = ContourSet::from_regularized(vec![outer, hole], resolution, 0.0);
+        assert!((region.area() - 100.044).abs() < 1e-9);
+
+        let decimated = region.decimate_inward().unwrap();
+
+        assert_eq!(decimated.rings.len(), 1);
+        assert!(decimated.difference(&region).unwrap().is_empty());
     }
 
     #[test]

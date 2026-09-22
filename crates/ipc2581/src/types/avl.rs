@@ -194,47 +194,17 @@ impl AvlMpn {
     }
 }
 
-/// J-STD-020 Moisture Sensitivity Levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MoistureSensitivity {
-    Unlimited,
-    OneYear,
-    FourWeeks,
-    Hours168,
-    Hours72,
-    Hours48,
-    Hours24,
-    Bake,
-}
-
-impl MoistureSensitivity {
-    /// Parse from IPC-2581 string value
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "UNLIMITED" => Some(Self::Unlimited),
-            "1_YEAR" => Some(Self::OneYear),
-            "4_WEEKS" => Some(Self::FourWeeks),
-            "168_HOURS" => Some(Self::Hours168),
-            "72_HOURS" => Some(Self::Hours72),
-            "48_HOURS" => Some(Self::Hours48),
-            "24_HOURS" => Some(Self::Hours24),
-            "BAKE" => Some(Self::Bake),
-            _ => None,
-        }
-    }
-
-    /// Convert to IPC-2581 string value
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Unlimited => "UNLIMITED",
-            Self::OneYear => "1_YEAR",
-            Self::FourWeeks => "4_WEEKS",
-            Self::Hours168 => "168_HOURS",
-            Self::Hours72 => "72_HOURS",
-            Self::Hours48 => "48_HOURS",
-            Self::Hours24 => "24_HOURS",
-            Self::Bake => "BAKE",
-        }
+ipc_enum! {
+    /// J-STD-020 Moisture Sensitivity Levels
+    pub enum MoistureSensitivity("moistureSensitivity") {
+        Unlimited = "UNLIMITED",
+        OneYear = "1_YEAR",
+        FourWeeks = "4_WEEKS",
+        Hours168 = "168_HOURS",
+        Hours72 = "72_HOURS",
+        Hours48 = "48_HOURS",
+        Hours24 = "24_HOURS",
+        Bake = "BAKE",
     }
 }
 
@@ -258,31 +228,6 @@ impl AvlVendor {
 mod tests {
     use super::*;
     use crate::Interner;
-
-    #[test]
-    fn test_moisture_sensitivity_parse() {
-        assert_eq!(
-            MoistureSensitivity::parse("UNLIMITED"),
-            Some(MoistureSensitivity::Unlimited)
-        );
-        assert_eq!(
-            MoistureSensitivity::parse("1_YEAR"),
-            Some(MoistureSensitivity::OneYear)
-        );
-        assert_eq!(
-            MoistureSensitivity::parse("168_HOURS"),
-            Some(MoistureSensitivity::Hours168)
-        );
-        assert_eq!(MoistureSensitivity::parse("INVALID"), None);
-    }
-
-    #[test]
-    fn test_moisture_sensitivity_as_str() {
-        assert_eq!(MoistureSensitivity::Unlimited.as_str(), "UNLIMITED");
-        assert_eq!(MoistureSensitivity::OneYear.as_str(), "1_YEAR");
-        assert_eq!(MoistureSensitivity::Hours168.as_str(), "168_HOURS");
-        assert_eq!(MoistureSensitivity::Bake.as_str(), "BAKE");
-    }
 
     #[test]
     fn test_avl_mpn_xml_with_dangerous_characters() {

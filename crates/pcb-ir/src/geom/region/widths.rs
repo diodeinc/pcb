@@ -1,7 +1,7 @@
 //! Widths on unsnapped segment bisectors. All classification boundaries are
 //! quadratic roots; polylines are made only after measurement, for display.
 
-use super::{ContourSet, PreparedRegion, ring_edges, ring_winding};
+use super::PreparedRegion;
 use crate::geom::{BBox, Point, accuracy::numerical_error, dist};
 
 type Polynomial = [f64; 3];
@@ -71,16 +71,14 @@ fn point_key(point: Point) -> (u64, u64) {
 
 impl ContactIndex {
     pub(crate) fn for_segments(segments: &[(Point, Point)]) -> Self {
-        let mut map = std::collections::HashMap::new();
+        let mut index = Self::default();
         for (id, &(start, end)) in segments.iter().enumerate() {
-            map.entry(point_key(start))
-                .or_insert_with(Vec::new)
-                .push(id);
+            index.map.entry(point_key(start)).or_default().push(id);
             if point_key(end) != point_key(start) {
-                map.entry(point_key(end)).or_insert_with(Vec::new).push(id);
+                index.map.entry(point_key(end)).or_default().push(id);
             }
         }
-        Self { map }
+        index
     }
 
     /// Ids of segments sharing `point`, in source order.
@@ -309,16 +307,16 @@ impl WidthAxis {
 
     pub(crate) fn in_region_with_contact_index(
         self,
-        region: &ContourSet,
+        region: &PreparedRegion,
         boundary: &PreparedRegion,
         radius_cap: f64,
         contact_index: &ContactIndex,
     ) -> Vec<Self> {
         let bounds = self.bounds();
-        if !bounds.intersects(region.bbox) {
+        if !bounds.intersects(region.bounds()) {
             return Vec::new();
         }
-        let error = numerical_error(bounds.union(region.bbox));
+        let error = numerical_error(bounds.union(region.bounds()));
         // Endpoint contact constraints must match the un-narrowed query
         // exactly: they cut along half-planes through far contact vertices,
         // so a spatial box around the axis cannot decide them. Resolve every
@@ -351,14 +349,12 @@ impl WidthAxis {
         // hence safe.
         let mut narrowed = self;
         if radius_cap.is_finite() {
-            match narrowed.range_with_radius_below(radius_cap + error) {
-                Some(range) => {
-                    narrowed.range = (narrowed.range.0.max(range.0), narrowed.range.1.min(range.1));
-                    if narrowed.range.0 > narrowed.range.1 {
-                        return Vec::new();
-                    }
-                }
-                None => return Vec::new(),
+            let Some(range) = narrowed.range_with_radius_below(radius_cap + error) else {
+                return Vec::new();
+            };
+            narrowed.range = (narrowed.range.0.max(range.0), narrowed.range.1.min(range.1));
+            if narrowed.range.0 > narrowed.range.1 {
+                return Vec::new();
             }
         }
         let bounds = narrowed.bounds();
@@ -421,7 +417,7 @@ impl WidthAxis {
 
     fn in_region_narrowed(
         self,
-        region: &ContourSet,
+        region: &PreparedRegion,
         error: f64,
         nearby: Vec<(Point, Point)>,
         cones: Vec<(Point, Point)>,
@@ -459,7 +455,10 @@ impl WidthAxis {
             .flat_map(|&polynomial| roots(polynomial))
             .collect::<Vec<_>>();
         cuts.extend(roots(self.radius));
-        for (a, b) in region.rings.iter().flat_map(ring_edges) {
+        // Every edge's line cuts the axis, even one the axis never reaches:
+        // a cut is also a point where the axis is judged within tolerance,
+        // and a tapering sliver may validate at such points alone.
+        for &(a, b) in &region.segments {
             cuts.extend(roots(self.projection(a, perpendicular(b - a))));
         }
         let mut clearance = Vec::new();
@@ -510,35 +509,37 @@ impl WidthAxis {
         self.clip(cuts, |t, isolated| {
             let center = self.at(t);
             let radius = self.radius_at(t);
-            let inside = region
-                .rings
-                .iter()
-                .map(|ring| ring_winding(ring, center))
-                .sum::<i32>()
-                != 0
-                || region.rings.iter().flat_map(ring_edges).any(|(a, b)| {
-                    dot(center - a, perpendicular(b - a)) == 0.0
-                        && dot(center - a, center - b) <= 0.0
-                });
+            // Exactly on an edge counts as inside whatever the winding rule
+            // makes of it; rounding keeps such a point within `error` of the
+            // edge's bounds.
+            let inside = || {
+                region.winding(center) != 0
+                    || region
+                        .segments_meeting(BBox::from_point(center).expand(error))
+                        .any(|(a, b)| {
+                            dot(center - a, perpendicular(b - a)) == 0.0
+                                && dot(center - a, center - b) <= 0.0
+                        })
+            };
             if isolated {
                 let vectors = self
                     .contacts
                     .map(|(a, b)| dist::point_segment(center, a, b).1 - center);
                 radius > error
-                    && inside
                     && constraints.iter().all(|&p| value(p, t) >= -error)
                     && dot(vectors[0], vectors[1])
                         < -error * (vectors[0].length() + vectors[1].length())
                     && nearby
                         .iter()
                         .all(|&(a, b)| dist::point_segment(center, a, b).0 >= radius - error)
+                    && inside()
             } else {
                 // Tolerant point checks must never certify an open interval:
                 // its membership is constant only for these exact root predicates.
                 radius > 0.0
-                    && inside
                     && constraints.iter().all(|&p| value(p, t) >= 0.0)
                     && clearance.iter().all(|wall| wall.contains(t))
+                    && inside()
             }
         })
     }
@@ -602,7 +603,7 @@ impl WidthAxis {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::Resolution;
+    use crate::geom::{ContourSet, Resolution};
 
     fn region() -> ContourSet {
         ContourSet::rectangle(
@@ -613,7 +614,7 @@ mod tests {
 
     fn validate(axis: WidthAxis, region: &ContourSet, boundary: &PreparedRegion) -> Vec<WidthAxis> {
         let index = ContactIndex::for_segments(&boundary.segments);
-        axis.in_region_with_contact_index(region, boundary, f64::INFINITY, &index)
+        axis.in_region_with_contact_index(&region.prepare_query(), boundary, f64::INFINITY, &index)
     }
 
     #[test]

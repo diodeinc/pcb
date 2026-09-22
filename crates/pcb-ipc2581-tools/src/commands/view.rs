@@ -1,12 +1,10 @@
 #[cfg(feature = "cli")]
 use std::path::Path;
 
-#[cfg(feature = "cli")]
-use anyhow::Context;
 use anyhow::Result;
 #[cfg(feature = "cli")]
 use ipc2581::Ipc2581;
-use ipc2581::edit::{self, Doc};
+use ipc2581::edit::{Doc, Edit};
 use ipc2581::{Mode, XmlWriter};
 
 use crate::ViewMode;
@@ -81,19 +79,26 @@ fn excluded_sections(mode: Mode) -> &'static [&'static str] {
 #[cfg(feature = "cli")]
 pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let mut filtered_xml = filter_by_mode(&content, mode)?;
 
-    // Append a schema-valid history change to HistoryRecord.
-    let comment = format!("Filtered to {} view", mode.as_str());
-    filtered_xml = crate::utils::history::append_file_revision(&filtered_xml, &comment)?;
-
-    // Reformat XML with proper indentation
-    filtered_xml = crate::utils::format::reformat_xml(&filtered_xml)?;
+    // The projection and the schema-valid history change splice into the
+    // source together, against one parse.
+    let doc = Doc::parse(&content)?;
+    let mut edits = mode_edits(&doc, mode)?;
+    edits.extend(crate::utils::history::file_revision_edits(
+        &doc,
+        &format!("Filtered to {} view", mode.as_str()),
+    )?);
+    let filtered_xml = crate::utils::format::reformat_xml(&doc.apply(edits)?)?;
     if matches!(mode, ViewMode::Fabrication) {
-        Ipc2581::validate(&filtered_xml)
-            .context("fabrication view failed IPC-2581C schema validation")?;
-        Ipc2581::parse(&filtered_xml)
-            .context("fabrication view was not accepted by the IPC-2581 parser")?;
+        Ipc2581::parse_validated(&filtered_xml).map_err(|error| {
+            let context = match error {
+                ipc2581::Ipc2581Error::SchemaValidation(_) => {
+                    "fabrication view failed IPC-2581C schema validation"
+                }
+                _ => "fabrication view was not accepted by the IPC-2581 parser",
+            };
+            anyhow::Error::new(error).context(context)
+        })?;
     }
 
     file_utils::save_ipc_file(output, &filtered_xml)?;
@@ -104,12 +109,17 @@ pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
 
 /// Project XML to a function mode, preserving retained content without adding a history record.
 pub fn filter_by_mode(xml: &str, mode: ViewMode) -> Result<String> {
+    let doc = Doc::parse(xml)?;
+    Ok(doc.apply(mode_edits(&doc, mode)?)?)
+}
+
+/// The edits that project a parsed document to a function mode.
+fn mode_edits(doc: &Doc<'_>, mode: ViewMode) -> Result<Vec<Edit>> {
     if matches!(mode, ViewMode::Fabrication) {
-        return super::fabrication::strip_non_manufacturing(xml);
+        return super::fabrication::fabrication_edits(doc);
     }
 
     let excluded = excluded_sections(mode.as_ipc_mode());
-    let doc = Doc::parse(xml)?;
     let mut edits = Vec::new();
 
     // Delete excluded sections wherever they appear, skipping any nested
@@ -151,7 +161,7 @@ pub fn filter_by_mode(xml: &str, mode: ViewMode) -> Result<String> {
         edits.push(doc.replace(function_mode, writer.into_string()));
     }
 
-    Ok(edit::apply(xml, edits)?)
+    Ok(edits)
 }
 
 #[cfg(test)]

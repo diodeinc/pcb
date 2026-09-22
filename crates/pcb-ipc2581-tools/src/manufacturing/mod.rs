@@ -2,7 +2,7 @@ mod drill;
 mod export;
 
 pub use export::{
-    ManufacturingExportOptions, ManufacturingFile, ManufacturingFileKind, ManufacturingPackage,
+    ManufacturingExportOptions, ManufacturingFile, ManufacturingPackage,
     build_manufacturing_package,
 };
 #[cfg(feature = "cli")]

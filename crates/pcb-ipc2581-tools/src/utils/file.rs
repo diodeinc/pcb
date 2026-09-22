@@ -1,14 +1,17 @@
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 
-/// XML text from already-read IPC bytes, decompressing `.zst` inputs.
+/// XML text from already-read IPC bytes. Zstandard input is recognized by
+/// its frame magic, so a compressed file reads under any name.
 pub fn ipc_text<'a>(path: &Path, bytes: &'a [u8]) -> Result<std::borrow::Cow<'a, str>> {
-    if path.extension().and_then(|s| s.to_str()) == Some("zst") {
-        let decoded = zstd::decode_all(bytes).context("Failed to decompress file")?;
+    if is_zstd(bytes) {
+        let decoded = zstd::decode_all(bytes)
+            .with_context(|| format!("Failed to decompress file: {path:?}"))?;
         Ok(std::borrow::Cow::Owned(
-            String::from_utf8(decoded).context("Decompressed file is not UTF-8")?,
+            String::from_utf8(decoded)
+                .with_context(|| format!("Decompressed file is not UTF-8: {path:?}"))?,
         ))
     } else {
         Ok(std::borrow::Cow::Borrowed(
@@ -17,23 +20,18 @@ pub fn ipc_text<'a>(path: &Path, bytes: &'a [u8]) -> Result<std::borrow::Cow<'a,
     }
 }
 
+/// The one way commands read IPC-2581 input, plain or Zstandard-compressed.
 pub fn load_ipc_file(path: &Path) -> Result<String> {
-    if path.extension().and_then(|s| s.to_str()) == Some("zst") {
-        // Decompress zstd file
-        let file = std::fs::File::open(path)
-            .with_context(|| format!("Failed to open compressed file: {:?}", path))?;
+    let bytes = std::fs::read(path).with_context(|| format!("Failed to read file: {path:?}"))?;
+    Ok(ipc_text(path, &bytes)?.into_owned())
+}
 
-        let mut decoder = zstd::Decoder::new(file).context("Failed to create zstd decoder")?;
-        let mut content = String::new();
-        decoder
-            .read_to_string(&mut content)
-            .context("Failed to decompress file")?;
-
-        Ok(content)
-    } else {
-        // Read plain XML
-        std::fs::read_to_string(path).with_context(|| format!("Failed to read file: {:?}", path))
-    }
+/// A Zstandard or skippable frame, either of which may open a `.zst` file.
+fn is_zstd(bytes: &[u8]) -> bool {
+    matches!(
+        bytes,
+        [0x28, 0xb5, 0x2f, 0xfd, ..] | [0x50..=0x5f, 0x2a, 0x4d, 0x18, ..]
+    )
 }
 
 /// Save an IPC-2581 file, automatically compressing if path has .zst extension
@@ -53,5 +51,35 @@ pub fn save_ipc_file(path: &Path, content: &str) -> Result<()> {
     } else {
         // Write plain XML
         std::fs::write(path, content).with_context(|| format!("Failed to write file: {:?}", path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_plain_and_zstandard_input_under_any_name() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><IPC-2581 revision="C"/>"#;
+        let dir = tempfile::tempdir().unwrap();
+        let compressed = zstd::encode_all(xml.as_bytes(), 0).unwrap();
+        for (name, bytes) in [
+            ("board.xml", xml.as_bytes()),
+            ("board.xml.zst", &compressed),
+            ("compressed-without-extension.xml", &compressed),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(load_ipc_file(&path).unwrap(), xml, "{name}");
+        }
+    }
+
+    #[test]
+    fn saved_zst_files_load_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("board.xml.zst");
+        save_ipc_file(&path, "<IPC-2581/>").unwrap();
+        assert_ne!(std::fs::read(&path).unwrap(), b"<IPC-2581/>");
+        assert_eq!(load_ipc_file(&path).unwrap(), "<IPC-2581/>");
     }
 }

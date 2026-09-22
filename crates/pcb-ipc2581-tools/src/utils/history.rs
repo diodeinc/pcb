@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use ipc2581::XmlWriter;
-use ipc2581::edit::{self, Doc, Edit, Node};
+use ipc2581::edit::{Doc, Edit, Node};
 
 /// PCB tool version from Cargo.toml
 const PCB_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,7 +25,7 @@ const PCB_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String> {
     let doc = Doc::parse(original_xml)?;
     let edits = file_revision_edits(&doc, comment)?;
-    Ok(edit::apply(original_xml, edits)?)
+    Ok(doc.apply(edits)?)
 }
 
 /// The edits behind [`append_file_revision`], for composing with other edits
@@ -56,7 +56,8 @@ pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
             }
 
             let mut start_tag = XmlWriter::new();
-            start_tag.start_element_with("HistoryRecord", updated_history_attrs(doc, record, &now));
+            start_tag
+                .start_element_with("HistoryRecord", updated_history_attrs(doc, record, &now)?);
             let mut changes = XmlWriter::new();
             let legacy_datetime = doc.attr(record, "lastChange").unwrap_or(&now);
             for revision in file_revisions.iter().skip(1) {
@@ -84,17 +85,7 @@ pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
         }
         None => {
             let mut writer = XmlWriter::new();
-            writer.start_element(
-                "HistoryRecord",
-                &[
-                    ("number", "1"),
-                    ("origination", now.as_str()),
-                    ("software", "pcb"),
-                    ("lastChange", now.as_str()),
-                ],
-            );
-            write_file_revision(&mut writer, 1, comment);
-            writer.end_element("HistoryRecord");
+            write_history_record(&mut writer, &now, comment);
             // Per the schema, HistoryRecord follows Content and LogisticHeader.
             let anchor = doc
                 .children(root)
@@ -109,6 +100,22 @@ pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
     };
 
     Ok(edits)
+}
+
+/// The first HistoryRecord of a document pcb originates at `now`, its one
+/// FileRevision recording `comment`.
+pub fn write_history_record(writer: &mut XmlWriter, now: &str, comment: &str) {
+    writer.start_element(
+        "HistoryRecord",
+        &[
+            ("number", "1"),
+            ("origination", now),
+            ("software", "pcb"),
+            ("lastChange", now),
+        ],
+    );
+    write_file_revision(writer, 1, comment);
+    writer.end_element("HistoryRecord");
 }
 
 /// Attributes for expanding a childless HistoryRecord: number stays "1",
@@ -127,21 +134,33 @@ fn initial_history_attrs(doc: &Doc, record: Node, now: &str) -> Vec<(String, Str
 
 /// Attributes for an existing HistoryRecord: number is incremented,
 /// lastChange/software are updated, everything else is preserved.
-fn updated_history_attrs(doc: &Doc, record: Node, now: &str) -> Vec<(String, String)> {
+fn updated_history_attrs(doc: &Doc, record: Node, now: &str) -> Result<Vec<(String, String)>> {
     doc.attrs(record)
-        .map(|(key, value)| match key {
-            "number" => {
-                let incremented = value
-                    .parse::<u32>()
-                    .map(|n| (n + 1).to_string())
-                    .unwrap_or_else(|_| format!("{value}.1"));
-                (key.to_string(), incremented)
-            }
-            "lastChange" => (key.to_string(), now.to_string()),
-            "software" => (key.to_string(), "pcb".to_string()),
-            _ => (key.to_string(), value.to_string()),
+        .map(|(key, value)| {
+            Ok(match key {
+                "number" => (key.to_string(), next_history_number(value)?),
+                "lastChange" => (key.to_string(), now.to_string()),
+                "software" => (key.to_string(), "pcb".to_string()),
+                _ => (key.to_string(), value.to_string()),
+            })
         })
         .collect()
+}
+
+/// The schema's history number is a dotted revision (`2`, `1.0`, `1.0.3`);
+/// the next one counts its last component up.
+fn next_history_number(number: &str) -> Result<String> {
+    let (prefix, last) = match number.rsplit_once('.') {
+        Some((head, last)) => (&number[..=head.len()], last),
+        None => ("", number),
+    };
+    let dotted_digits = number
+        .split('.')
+        .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
+    match last.parse::<u64>().ok().and_then(|n| n.checked_add(1)) {
+        Some(next) if dotted_digits => Ok(format!("{prefix}{next}")),
+        _ => bail!("HistoryRecord number '{number}' is not a dotted revision number"),
+    }
 }
 
 fn write_file_revision(writer: &mut XmlWriter, revision_id: u32, comment: &str) {
@@ -305,6 +324,35 @@ mod tests {
         assert!(result.contains("<ChangeRec"));
         assert!(result.contains("application=\"pcb\""));
         assert!(result.contains("change=\"BOM alternatives added\""));
+    }
+
+    #[test]
+    fn history_number_counts_up_its_last_component() {
+        for (number, next) in [
+            ("1", "2"),
+            ("9", "10"),
+            ("1.0", "1.1"),
+            ("1.09", "1.10"),
+            ("1.0.3", "1.0.4"),
+        ] {
+            assert_eq!(next_history_number(number).unwrap(), next);
+        }
+        for number in ["", "1.", ".5", "1e3", "v2", "-1"] {
+            assert!(next_history_number(number).is_err(), "{number}");
+        }
+
+        // A dotted number stays one the typed parser reads back.
+        let original = r#"<?xml version="1.0"?>
+<IPC-2581>
+  <HistoryRecord number="1.0" origination="2025-10-23T16:30:12" software="KiCad EDA" lastChange="2025-10-23T16:30:12">
+    <FileRevision fileRevisionId="1" comment="Initial export" label=""/>
+  </HistoryRecord>
+</IPC-2581>"#;
+        let result = append_file_revision(original, "edit").unwrap();
+        assert!(
+            result.contains(r#"<HistoryRecord number="1.1""#),
+            "{result}"
+        );
     }
 
     #[test]

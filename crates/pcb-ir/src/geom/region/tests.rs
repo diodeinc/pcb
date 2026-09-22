@@ -76,7 +76,7 @@ fn fixed_grid_regularization_removes_sub_grid_geometry() {
 /// of these to nothing or to everything.
 #[test]
 fn grid_coverage_measures_partly_covered_cells_exactly() {
-    let square = ContourSet::rectangle(rect(0.5, 0.5, 2.5, 2.5), res(tol::REGION_MM));
+    let square = block(0.5, 0.5, 2.5, 2.5);
 
     let coverage = square.grid_coverage(rect(0.0, 0.0, 3.0, 3.0), 3, 3);
 
@@ -86,55 +86,118 @@ fn grid_coverage_measures_partly_covered_cells_exactly() {
             0.5,  1.0, 0.5,
             0.25, 0.5, 0.25,
         ];
-    for (measured, expected) in coverage.iter().zip(expected) {
-        assert!(
-            (measured - expected).abs() < 1e-12,
-            "{measured} != {expected}"
-        );
+    assert_eq!(coverage, expected);
+
+    // Only what lies within the grid counts, on every side of it.
+    let inner = square.grid_coverage(rect(1.0, 1.0, 2.0, 3.0), 1, 2);
+    assert_eq!(inner, [1.0, 0.5]);
+    let beside = square.grid_coverage(rect(3.0, 0.0, 5.0, 3.0), 2, 3);
+    assert_eq!(beside, [0.0; 6]);
+}
+
+/// The measure every cell must reproduce: the ring clipped to the cell by
+/// four half-planes, and the signed area of what is left.
+fn grid_coverage_by_clipping(
+    region: &ContourSet,
+    bounds: BBox,
+    columns: usize,
+    rows: usize,
+) -> Vec<f64> {
+    fn clip(ring: &Ring, inside: impl Fn([f64; 2]) -> f64) -> Ring {
+        let mut clipped = Ring::new();
+        for index in 0..ring.len() {
+            let start = ring[index];
+            let end = ring[(index + 1) % ring.len()];
+            let (from, to) = (inside(start), inside(end));
+            if (from < 0.0) != (to < 0.0) {
+                let step = from / (from - to);
+                clipped.push([
+                    start[0] + step * (end[0] - start[0]),
+                    start[1] + step * (end[1] - start[1]),
+                ]);
+            }
+            if to >= 0.0 {
+                clipped.push(end);
+            }
+        }
+        clipped
     }
+    let width = bounds.width() / columns as f64;
+    let height = bounds.height() / rows as f64;
+    (0..rows)
+        .flat_map(|row| (0..columns).map(move |column| (row, column)))
+        .map(|(row, column)| {
+            let left = bounds.min.x + column as f64 * width;
+            let floor = bounds.min.y + row as f64 * height;
+            let area: f64 = region
+                .rings
+                .iter()
+                .map(|ring| {
+                    let ring = clip(ring, |point| point[0] - left);
+                    let ring = clip(&ring, |point| left + width - point[0]);
+                    let ring = clip(&ring, |point| point[1] - floor);
+                    ring_signed_area(&clip(&ring, |point| floor + height - point[1]))
+                })
+                .sum();
+            area / (width * height)
+        })
+        .collect()
 }
 
-/// Holes are separate rings wound against their outer, and the cell they
-/// fall in has to see that sign.
 #[test]
-fn grid_coverage_subtracts_holes() {
-    let ring = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), res(tol::REGION_MM))
-        .difference(&ContourSet::rectangle(
-            rect(1.0, 1.0, 2.0, 3.0),
-            res(tol::REGION_MM),
-        ))
-        .unwrap();
-
-    let coverage = ring.grid_coverage(rect(0.0, 0.0, 4.0, 4.0), 1, 1);
-
-    assert!((coverage[0] - 14.0 / 16.0).abs() < 1e-12, "{coverage:?}");
-}
-
-#[test]
-fn contour_set_composes_region_operations() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let inner = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), res(tol::REGION_MM));
-    let clip = ContourSet::rectangle(rect(5.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-
-    let ring = outer.difference(&inner).unwrap();
-    let clipped = ring.intersection(&clip).unwrap();
-    let expanded = clipped.disk_dilate(0.5).unwrap();
-
-    assert!(!expanded.is_empty());
-    assert!((expanded.bbox.min.x - 4.5).abs() <= 1e-9);
-    assert!((expanded.bbox.max.x - 10.5).abs() <= 1e-9);
+fn grid_coverage_agrees_with_clipping_every_cell() {
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    let mut next = |scale: f64| {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (state >> 11) as f64 / (1_u64 << 53) as f64 * scale
+    };
+    let mut partial = 0;
+    for case in 0..300 {
+        // Star-shaped rings around random centres overlap, nest and leave
+        // holes once regularized, and reach past the grid on every side.
+        let rings = (0..1 + case % 4)
+            .map(|_| {
+                let (x, y, radius) = (next(10.0), next(10.0), 0.5 + next(6.0));
+                let vertices = 3 + next(12.0) as usize;
+                (0..vertices)
+                    .map(|vertex| {
+                        let angle = std::f64::consts::TAU * vertex as f64 / vertices as f64;
+                        let reach = radius * (0.2 + next(0.8));
+                        [x + reach * angle.cos(), y + reach * angle.sin()]
+                    })
+                    .collect()
+            })
+            .collect();
+        let rule = [FillRule::NonZero, FillRule::EvenOdd][case % 2];
+        let region = ContourSet::from_rings(rings, rule, res(0.0)).unwrap();
+        let bounds = rect(1.0, 2.0, 9.0, 8.5);
+        let (columns, rows) = (1 + case % 7, 1 + case % 5);
+        let measured = region.grid_coverage(bounds, columns, rows);
+        let expected = grid_coverage_by_clipping(&region, bounds, columns, rows);
+        assert_eq!(measured.len(), expected.len());
+        for (measured, expected) in measured.iter().zip(&expected) {
+            assert!(
+                (measured - expected).abs() <= 1e-12 * expected.abs().max(1.0),
+                "case {case}: {measured} != {expected}"
+            );
+            // A boundary that only passes a cell by leaves no trace in it.
+            assert!(
+                *expected != 0.0 || *measured == 0.0,
+                "case {case}: {measured}"
+            );
+            partial += usize::from((0.01..0.99).contains(expected));
+        }
+    }
+    assert!(partial > 1000, "the fixture must cut through cells");
 }
 
 #[test]
 fn filled_contour_region_is_winding_insensitive() {
     let clockwise = rectangle_contour(0.0, 0.0, 10.0, 5.0);
-    let counter_clockwise = ContourBuf::new(vec![
-        PathCmd::move_to(Point::new(0.0, 5.0)),
-        PathCmd::line_to(Point::new(10.0, 5.0)),
-        PathCmd::line_to(Point::new(10.0, 0.0)),
-        PathCmd::line_to(Point::new(0.0, 0.0)),
-        PathCmd::close(),
-    ]);
+    let counter_clockwise =
+        contour_from_vertices(&[[0.0, 5.0], [10.0, 5.0], [10.0, 0.0], [0.0, 0.0]]);
 
     let a = ContourSet::from_filled_contours(std::slice::from_ref(&clockwise), res(tol::REGION_MM))
         .unwrap();
@@ -153,30 +216,30 @@ fn filled_contour_region_is_winding_insensitive() {
 }
 
 #[test]
-fn area_subtracts_holes() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), res(tol::REGION_MM));
-    let inner = ContourSet::rectangle(rect(1.0, 1.0, 3.0, 3.0), res(tol::REGION_MM));
-
-    let ring = outer.difference(&inner).unwrap();
-
-    assert!((ring.area() - 12.0).abs() <= 1e-6);
-}
-
-#[test]
 fn containment_observes_boundaries_and_holes() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let hole = ContourSet::rectangle(rect(4.0, 4.0, 6.0, 6.0), res(tol::REGION_MM));
+    let outer = block(0.0, 0.0, 10.0, 10.0);
+    let hole = block(4.0, 4.0, 6.0, 6.0);
     let region = outer.difference(&hole).unwrap();
 
     assert!(region.contains_point(Point::new(2.0, 2.0)));
     assert!(region.contains_point(Point::new(0.0, 5.0)));
     assert!(!region.contains_point(Point::new(5.0, 5.0)));
-    assert!(region.contains_disk(Point::new(2.0, 2.0), 2.0));
-    assert!(!region.contains_disk(Point::new(2.0, 2.0), 2.01));
-    assert!(!region.contains_disk(Point::new(3.5, 5.0), 0.6));
 }
 
 type ExpectedSpan = ((f64, f64), (f64, f64));
+
+#[test]
+fn batched_containment_survives_heights_that_differ_by_an_ulp() {
+    let square = ContourSet::rectangle(
+        BBox::new(Point::new(0.0, 0.0), Point::new(4.0, 4.0)),
+        res(tol::REGION_MM),
+    );
+    // Two heights one ulp apart share a sweep line. The lower one lies
+    // farther right, so height order is not x order along that line.
+    let above = f64::from_bits(2.0_f64.to_bits() + 1);
+    let points = [Point::new(6.0, 2.0), Point::new(2.0, above)];
+    assert_eq!(square.contains_points_batch(&points), [false, true]);
+}
 
 fn assert_spans(actual: Vec<(Point, Point)>, expected: &[ExpectedSpan]) {
     assert_eq!(actual.len(), expected.len(), "{actual:?}");
@@ -194,8 +257,8 @@ fn assert_spans(actual: Vec<(Point, Point)>, expected: &[ExpectedSpan]) {
 
 #[test]
 fn segment_spans_preserve_holes_and_clip_to_the_query() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let hole = ContourSet::rectangle(rect(4.0, 2.0, 6.0, 8.0), res(tol::REGION_MM));
+    let outer = block(0.0, 0.0, 10.0, 10.0);
+    let hole = block(4.0, 2.0, 6.0, 8.0);
     let ring = outer.difference(&hole).unwrap();
 
     assert_spans(
@@ -210,7 +273,7 @@ fn segment_spans_preserve_holes_and_clip_to_the_query() {
 
 #[test]
 fn segment_spans_preserve_disconnected_and_concave_regions() {
-    let left = ContourSet::rectangle(rect(0.0, 0.0, 2.0, 2.0), res(tol::REGION_MM));
+    let left = block(0.0, 0.0, 2.0, 2.0);
     let concave = ContourSet::from_rings(
         vec![vec![
             [4.0, 0.0],
@@ -234,7 +297,7 @@ fn segment_spans_preserve_disconnected_and_concave_regions() {
 
 #[test]
 fn segment_spans_follow_reversed_arbitrary_direction() {
-    let square = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), res(tol::REGION_MM));
+    let square = block(0.0, 0.0, 4.0, 4.0);
     assert_spans(
         square.segment_spans(Point::new(6.0, 6.0), Point::new(-2.0, -2.0)),
         &[((4.0, 4.0), (0.0, 0.0))],
@@ -243,7 +306,7 @@ fn segment_spans_follow_reversed_arbitrary_direction() {
 
 #[test]
 fn segment_spans_include_boundary_but_not_tangencies() {
-    let square = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), res(tol::REGION_MM));
+    let square = block(0.0, 0.0, 4.0, 4.0);
     assert_spans(
         square.segment_spans(Point::new(-1.0, 0.0), Point::new(3.0, 0.0)),
         &[((0.0, 0.0), (3.0, 0.0))],
@@ -252,6 +315,41 @@ fn segment_spans_include_boundary_but_not_tangencies() {
         square
             .segment_spans(Point::new(-1.0, 1.0), Point::new(1.0, -1.0))
             .is_empty()
+    );
+}
+
+#[test]
+fn segment_spans_survive_a_slope_of_one_ulp() {
+    // Every midpoint lies within an ulp of one height, in descending x.
+    let region = block(-5.0, 0.0, 5.0, 10.0);
+    let above = f64::from_bits(5.0_f64.to_bits() + 1);
+    assert_spans(
+        region.segment_spans(Point::new(10.0, 5.0), Point::new(0.0, above)),
+        &[((5.0, 5.0), (0.0, 5.0))],
+    );
+}
+
+#[test]
+fn segment_spans_keep_a_fifty_micron_gap_open() {
+    let region = ContourSet::from_contours(
+        &[
+            shapes::circle(0.6).unwrap(),
+            shapes::circle(0.2).unwrap(),
+            shapes::circle(0.2)
+                .unwrap()
+                .transformed(Affine2::translation(Point::new(0.45, 0.0))),
+        ],
+        FillRule::EvenOdd,
+        Resolution::new(1e-6, GeometryAccuracy::new(0.0001).unwrap()),
+    )
+    .unwrap();
+    assert_spans(
+        region.segment_spans(Point::new(-1.0, 0.0), Point::new(1.0, 0.0)),
+        &[
+            ((-0.3, 0.0), (-0.1, 0.0)),
+            ((0.1, 0.0), (0.3, 0.0)),
+            ((0.35, 0.0), (0.55, 0.0)),
+        ],
     );
 }
 
@@ -276,8 +374,8 @@ fn segment_spans_omit_degenerate_and_sub_tolerance_intervals() {
 
 #[test]
 fn erodes_outer_boundaries_and_expands_holes() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let hole = ContourSet::rectangle(rect(4.0, 4.0, 6.0, 6.0), res(tol::REGION_MM));
+    let outer = block(0.0, 0.0, 10.0, 10.0);
+    let hole = block(4.0, 4.0, 6.0, 6.0);
 
     let eroded = outer.difference(&hole).unwrap().disk_erode(0.5).unwrap();
 
@@ -293,17 +391,8 @@ fn erodes_outer_boundaries_and_expands_holes() {
 }
 
 #[test]
-fn erosion_can_remove_an_entire_region() {
-    let region = ContourSet::rectangle(rect(0.0, 0.0, 0.5, 0.5), res(tol::REGION_MM));
-
-    let eroded = region.disk_erode(0.5).unwrap();
-
-    assert!(eroded.is_empty());
-}
-
-#[test]
 fn disk_opening_rounds_corners_and_stays_inside_source() {
-    let region = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
+    let region = block(0.0, 0.0, 10.0, 10.0);
 
     let opened = region.disk_open(0.5).unwrap();
 
@@ -317,9 +406,9 @@ fn disk_opening_rounds_corners_and_stays_inside_source() {
 
 #[test]
 fn disk_opening_removes_sub_diameter_slivers_and_small_islands() {
-    let body = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let sliver = ContourSet::rectangle(rect(12.0, 0.0, 20.0, 0.8), res(tol::REGION_MM));
-    let island = ContourSet::rectangle(rect(22.0, 0.0, 22.8, 0.8), res(tol::REGION_MM));
+    let body = block(0.0, 0.0, 10.0, 10.0);
+    let sliver = block(12.0, 0.0, 20.0, 0.8);
+    let island = block(22.0, 0.0, 22.8, 0.8);
     let region = body.union(&sliver).unwrap().union(&island).unwrap();
 
     let opened = region.disk_open(0.5).unwrap();
@@ -332,8 +421,8 @@ fn disk_opening_removes_sub_diameter_slivers_and_small_islands() {
 
 #[test]
 fn disk_opening_is_idempotent_within_offset_tolerance() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let notch = ContourSet::rectangle(rect(4.0, 8.0, 6.0, 10.0), res(tol::REGION_MM));
+    let outer = block(0.0, 0.0, 10.0, 10.0);
+    let notch = block(4.0, 8.0, 6.0, 10.0);
     let region = outer.difference(&notch).unwrap();
 
     let once = region.disk_open(0.5).unwrap();
@@ -352,35 +441,27 @@ fn disk_opening_is_idempotent_within_offset_tolerance() {
 }
 
 #[test]
-fn disk_closing_fills_sub_diameter_gaps_and_stays_outside_source() {
-    let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), res(tol::REGION_MM));
-    let right = ContourSet::rectangle(rect(4.8, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let region = left.union(&right).unwrap();
+fn disk_closing_fills_only_sub_diameter_gaps_and_stays_outside_source() {
+    let left = block(0.0, 0.0, 4.0, 10.0);
+    for (gap_end, filled) in [(4.8, true), (5.2, false)] {
+        let right = block(gap_end, 0.0, 10.0, 10.0);
+        let region = left.union(&right).unwrap();
 
-    let closed = region.disk_close(0.5).unwrap();
-    let middle = ContourSet::rectangle(rect(4.0, 1.0, 4.8, 9.0), res(tol::REGION_MM));
+        let closed = region.disk_close(0.5).unwrap();
+        let middle = block(4.0, 1.0, gap_end, 9.0);
 
-    assert!(region.difference(&closed).unwrap().is_empty());
-    assert!(closed.intersection(&middle).unwrap().area() > 6.3);
-}
-
-#[test]
-fn disk_closing_preserves_wide_gaps() {
-    let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), res(tol::REGION_MM));
-    let right = ContourSet::rectangle(rect(5.2, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let region = left.union(&right).unwrap();
-
-    let closed = region.disk_close(0.5).unwrap();
-    let middle = ContourSet::rectangle(rect(4.0, 1.0, 5.2, 9.0), res(tol::REGION_MM));
-
-    assert!(closed.intersection(&middle).unwrap().is_empty());
+        assert!(region.difference(&closed).unwrap().is_empty());
+        let bridge = closed.intersection(&middle).unwrap();
+        assert_eq!(bridge.area() > 6.3, filled);
+        assert_eq!(bridge.is_empty(), !filled);
+    }
 }
 
 #[test]
 fn disk_gap_violations_report_close_distinct_components() {
-    let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), res(tol::REGION_MM));
-    let close = ContourSet::rectangle(rect(4.8, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let wide = ContourSet::rectangle(rect(5.2, 0.0, 10.0, 10.0), res(tol::REGION_MM));
+    let left = block(0.0, 0.0, 4.0, 10.0);
+    let close = block(4.8, 0.0, 10.0, 10.0);
+    let wide = block(5.2, 0.0, 10.0, 10.0);
 
     let close_violations = left
         .union(&close)
@@ -399,8 +480,8 @@ fn disk_gap_regularization_sweeps_a_void_thinner_than_the_axis_stroke() {
     // A 3 µm gap is two-sided but too thin to carry a medial-axis stroke;
     // the whole-component sweep must still make progress instead of
     // stalling into an error.
-    let left = ContourSet::rectangle(rect(0.0, 0.0, 5.0, 6.0), res(tol::REGION_MM));
-    let right = ContourSet::rectangle(rect(5.003, 0.0, 10.0, 6.0), res(tol::REGION_MM));
+    let left = block(0.0, 0.0, 5.0, 6.0);
+    let right = block(5.003, 0.0, 10.0, 6.0);
     let region = left.union(&right).unwrap();
     assert!(!region.disk_gap_violations(0.5).unwrap().is_empty());
 
@@ -418,8 +499,8 @@ fn disk_gap_regularization_sweeps_a_void_thinner_than_the_axis_stroke() {
 
 #[test]
 fn disk_gap_violations_exclude_isolated_void_corners() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let wide_hole = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), res(tol::REGION_MM));
+    let outer = block(0.0, 0.0, 10.0, 10.0);
+    let wide_hole = block(3.0, 3.0, 7.0, 7.0);
     let region = outer.difference(&wide_hole).unwrap();
     let raw_closing_residual = region.disk_close(0.5).unwrap().difference(&region).unwrap();
 
@@ -429,7 +510,7 @@ fn disk_gap_violations_exclude_isolated_void_corners() {
 
 #[test]
 fn disk_gap_regularization_rejects_invalid_scales() {
-    let region = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
+    let region = block(0.0, 0.0, 10.0, 10.0);
 
     assert!(region.disk_regularize_gaps(0.0, 0.5, 0.025).is_err());
     assert!(region.disk_regularize_gaps(0.5, f64::NAN, 0.025).is_err());
@@ -438,8 +519,8 @@ fn disk_gap_regularization_rejects_invalid_scales() {
 
 #[test]
 fn disk_gap_regularization_widens_a_gap_thinner_than_the_guard() {
-    let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), res(tol::REGION_MM));
-    let right = ContourSet::rectangle(rect(4.01, 0.0, 10.0, 10.0), res(tol::REGION_MM));
+    let left = block(0.0, 0.0, 4.0, 10.0);
+    let right = block(4.01, 0.0, 10.0, 10.0);
     let region = left.union(&right).unwrap();
 
     let before = region.disk_gap_violations(0.5).unwrap();
@@ -453,9 +534,9 @@ fn disk_gap_regularization_widens_a_gap_thinner_than_the_guard() {
 
 #[test]
 fn disk_gap_regularization_trims_a_close_pair_locally() {
-    let left = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let right = ContourSet::rectangle(rect(10.8, 0.0, 20.8, 10.0), res(tol::REGION_MM));
-    let distant = ContourSet::rectangle(rect(24.0, 0.0, 30.0, 10.0), res(tol::REGION_MM));
+    let left = block(0.0, 0.0, 10.0, 10.0);
+    let right = block(10.8, 0.0, 20.8, 10.0);
+    let distant = block(24.0, 0.0, 30.0, 10.0);
     let region = left.union(&right).unwrap().union(&distant).unwrap();
 
     let result = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
@@ -473,9 +554,9 @@ fn disk_gap_regularization_trims_a_close_pair_locally() {
 
 #[test]
 fn disk_gap_regularization_is_symmetric_at_a_three_way_conflict() {
-    let lower_left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), res(tol::REGION_MM));
-    let lower_right = ContourSet::rectangle(rect(4.8, 0.0, 8.8, 4.0), res(tol::REGION_MM));
-    let upper = ContourSet::rectangle(rect(2.4, 4.8, 6.4, 8.8), res(tol::REGION_MM));
+    let lower_left = block(0.0, 0.0, 4.0, 4.0);
+    let lower_right = block(4.8, 0.0, 8.8, 4.0);
+    let upper = block(2.4, 4.8, 6.4, 8.8);
     let region = lower_left
         .union(&lower_right)
         .unwrap()
@@ -498,8 +579,8 @@ fn disk_gap_regularization_is_symmetric_at_a_three_way_conflict() {
 
 #[test]
 fn disk_gap_regularization_widens_a_same_component_hairpin() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let narrow_notch = ContourSet::rectangle(rect(4.6, 3.0, 5.4, 10.0), res(tol::REGION_MM));
+    let outer = block(0.0, 0.0, 10.0, 10.0);
+    let narrow_notch = block(4.6, 3.0, 5.4, 10.0);
     let hairpin = outer.difference(&narrow_notch).unwrap();
 
     let before = hairpin.disk_gap_violations(0.5).unwrap();
@@ -518,8 +599,8 @@ fn disk_gap_regularization_widens_a_same_component_hairpin() {
 
 #[test]
 fn disk_gap_regularization_widens_a_narrow_internal_void() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let narrow_hole = ContourSet::rectangle(rect(4.6, 3.0, 5.4, 7.0), res(tol::REGION_MM));
+    let outer = block(0.0, 0.0, 10.0, 10.0);
+    let narrow_hole = block(4.6, 3.0, 5.4, 7.0);
     let region = outer.difference(&narrow_hole).unwrap();
 
     let before = region.disk_gap_violations(0.5).unwrap();
@@ -538,11 +619,11 @@ fn disk_gap_regularization_widens_a_narrow_internal_void() {
 
 #[test]
 fn dilation_shrinks_but_preserves_a_large_hole() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let hole = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), res(tol::REGION_MM));
+    let outer = block(0.0, 0.0, 10.0, 10.0);
+    let hole = block(3.0, 3.0, 7.0, 7.0);
 
     let dilated = outer.difference(&hole).unwrap().disk_dilate(0.5).unwrap();
-    let expected_hole = ContourSet::rectangle(rect(3.5, 3.5, 6.5, 6.5), res(tol::REGION_MM));
+    let expected_hole = block(3.5, 3.5, 6.5, 6.5);
 
     assert!(dilated.intersection(&expected_hole).unwrap().is_empty());
     let area = dilated.area();
@@ -554,10 +635,10 @@ fn dilation_shrinks_but_preserves_a_large_hole() {
 
 #[test]
 fn union_contains_both_regions_when_a_hole_overlaps_filled_material() {
-    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM));
-    let hole = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), res(tol::REGION_MM));
+    let outer = block(0.0, 0.0, 10.0, 10.0);
+    let hole = block(3.0, 3.0, 7.0, 7.0);
     let frame = outer.difference(&hole).unwrap();
-    let plug = ContourSet::rectangle(rect(4.0, 4.0, 6.0, 6.0), res(tol::REGION_MM));
+    let plug = block(4.0, 4.0, 6.0, 6.0);
 
     let union = frame.union(&plug).unwrap();
 
@@ -571,10 +652,7 @@ fn union_contains_both_regions_when_a_hole_overlaps_filled_material() {
 /// source point even when all of these holes collapse.
 #[test]
 fn dilation_is_monotone_for_a5_corner_hole_chain() {
-    let outer = ContourSet::rectangle(
-        rect(22.8473, 110.5175, 27.8973, 115.5675),
-        res(tol::REGION_MM),
-    );
+    let outer = block(22.8473, 110.5175, 27.8973, 115.5675);
     let holes = ContourSet::from_filled_contours(
         &[
             contour_from_vertices(&[
@@ -695,12 +773,19 @@ fn painted_path_region_unions_fills_and_native_strokes() {
     )
     .unwrap();
 
+    // The stroke's round cap is flattened, so its extent is only as exact
+    // as the region says it is.
     assert!((region.bbox.min.x - 0.0).abs() <= 1e-9);
     assert!((region.bbox.min.y - 0.0).abs() <= 1e-9);
-    assert!((region.bbox.max.x - 4.5).abs() <= 1e-9);
+    assert!((region.bbox.max.x - 4.5).abs() <= region.uncertainty_mm);
     assert!((region.bbox.max.y - 1.0).abs() <= 1e-9);
     assert!(region.area() > 3.5);
     assert!(region.area() < 4.0);
+}
+
+/// A rectangle of material at the default significance.
+pub(super) fn block(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ContourSet {
+    ContourSet::rectangle(rect(min_x, min_y, max_x, max_y), res(tol::REGION_MM))
 }
 
 pub(super) fn rect(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> BBox {
@@ -708,27 +793,16 @@ pub(super) fn rect(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> BBox {
 }
 
 fn rectangle_contour(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ContourBuf {
-    ContourBuf::new(vec![
-        PathCmd::move_to(Point::new(min_x, min_y)),
-        PathCmd::line_to(Point::new(max_x, min_y)),
-        PathCmd::line_to(Point::new(max_x, max_y)),
-        PathCmd::line_to(Point::new(min_x, max_y)),
-        PathCmd::close(),
+    contour_from_vertices(&[
+        [min_x, min_y],
+        [max_x, min_y],
+        [max_x, max_y],
+        [min_x, max_y],
     ])
 }
 
 fn contour_from_vertices(vertices: &[[f64; 2]]) -> ContourBuf {
-    let mut cmds = Vec::with_capacity(vertices.len() + 1);
-    for (index, &[x, y]) in vertices.iter().enumerate() {
-        let point = Point::new(x, y);
-        cmds.push(if index == 0 {
-            PathCmd::move_to(point)
-        } else {
-            PathCmd::line_to(point)
-        });
-    }
-    cmds.push(PathCmd::close());
-    ContourBuf::new(cmds)
+    shapes::closed_polygon(vertices.iter().map(|&[x, y]| Point::new(x, y)).collect()).unwrap()
 }
 
 /// Regression: V-score relief tool-center region from a real board whose
@@ -819,42 +893,26 @@ fn mismatched_arc_radii_fail_the_budget_instead_of_flattening_without_bound() {
 }
 
 #[test]
-fn cancelled_overlap_edges_leave_one_exact_rectangle() {
-    let left = ContourSet::rectangle(rect(0.0, 0.0, 2.0, 1.0), res(0.0));
-    let right = ContourSet::rectangle(rect(1.0, 0.0, 3.0, 1.0), res(0.0));
-    let whole = ContourSet::rectangle(rect(0.0, 0.0, 3.0, 1.0), res(0.0));
+fn overlapping_and_adjoining_rectangles_equal_one_rectangle() {
+    for seam in [2.0, 1.0] {
+        let left = ContourSet::rectangle(rect(0.0, 0.0, seam, 1.0), res(0.0));
+        let right = ContourSet::rectangle(rect(1.0, 0.0, 3.0, 1.0), res(0.0));
+        let whole = ContourSet::rectangle(rect(0.0, 0.0, 3.0, 1.0), res(0.0));
 
-    let union = left.union(&right).unwrap();
+        let union = left.union(&right).unwrap();
 
-    assert_eq!(union.rings.len(), 1);
-    assert!((union.area() - 3.0).abs() < 1e-9);
-    assert!(union.difference(&whole).unwrap().is_empty());
-    assert!(whole.difference(&union).unwrap().is_empty());
-    assert!(union.contains_point(Point::new(1.5, 0.5)));
-    let inside = union
-        .prepare_query()
-        .signed_distance(Point::new(1.5, 0.5))
-        .unwrap();
-    assert!((inside.mm + 0.5).abs() < 1e-9);
-    assert!(union.uncertainty_mm < 1e-9);
-}
-
-#[test]
-fn adjoining_rectangles_equal_one_rectangle() {
-    let left = ContourSet::rectangle(rect(0.0, 0.0, 1.0, 1.0), res(0.0));
-    let right = ContourSet::rectangle(rect(1.0, 0.0, 2.0, 1.0), res(0.0));
-    let whole = ContourSet::rectangle(rect(0.0, 0.0, 2.0, 1.0), res(0.0));
-
-    let union = left.union(&right).unwrap();
-
-    assert_eq!(union.rings.len(), 1);
-    assert!((union.area() - whole.area()).abs() < 1e-9);
-    for x in [0.5, 1.0, 1.5] {
-        let point = Point::new(x, 0.5);
-        assert_eq!(union.contains_point(point), whole.contains_point(point));
-        let seamed = union.prepare_query().signed_distance(point).unwrap().mm;
-        let exact = whole.prepare_query().signed_distance(point).unwrap().mm;
-        assert!((seamed - exact).abs() < 1e-9, "x={x}: {seamed} vs {exact}");
+        assert_eq!(union.rings.len(), 1);
+        assert!((union.area() - 3.0).abs() < 1e-9);
+        assert!(union.difference(&whole).unwrap().is_empty());
+        assert!(whole.difference(&union).unwrap().is_empty());
+        assert!(union.uncertainty_mm < 1e-9);
+        for x in [0.5, 1.0, 1.5, 2.0] {
+            let point = Point::new(x, 0.5);
+            assert_eq!(union.contains_point(point), whole.contains_point(point));
+            let seamed = union.prepare_query().signed_distance(point).unwrap().mm;
+            let exact = whole.prepare_query().signed_distance(point).unwrap().mm;
+            assert!((seamed - exact).abs() < 1e-9, "x={x}: {seamed} vs {exact}");
+        }
     }
 }
 

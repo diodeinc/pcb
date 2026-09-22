@@ -7,27 +7,26 @@ pub mod eligibility;
 pub mod mouse_bite;
 pub mod placement;
 
+use super::PanelCreation;
 use super::board_array_auto::{
-    AutoBoardArrayPlan, AutoSheetSize, TargetSizeMm, auto_board_array_plan,
-    auto_board_array_plan_for_sheet,
+    AutoSheetSize, TargetSizeMm, auto_board_array_plan, auto_board_array_plan_for_sheet,
 };
-use crate::copper_balance::CopperBalanceReport;
 use crate::generated::GeneratedLayerFeature;
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 #[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
 use crate::utils::format::fmt_num;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use ipc2581::types::{
     Units,
     ecad::{
-        Fiducial, FiducialKind as IpcFiducialKind, FiducialShape, Hole, LayerFunction, Line,
-        PlatingStatus, Polarity, SetFeature, Side, StepType,
+        Fiducial, FiducialKind as IpcFiducialKind, FiducialShape, Hole, LayerFunction,
+        PlatingStatus, Polarity, SetFeature, Side, Stroke, StrokePath,
     },
     primitives::{
-        Circle, LineEnd, LineProperty, Point as IpcPoint, PolyStep, PolyStepCurve, PolyStepSegment,
-        Polygon, StandardPrimitive, Styled,
+        Circle, Line, LineDesc, LineDescGroup, LineEnd, LineProperty, Point as IpcPoint, PolyStep,
+        PolyStepCurve, PolyStepSegment, Polygon, StandardPrimitive, Styled,
     },
     transform::Location,
 };
@@ -39,7 +38,6 @@ use pcb_ir::{
 const EPSILON: f64 = 1e-9;
 const MIN_BOARD_ARRAY_DIMENSION_MM: f64 = 70.0;
 const MAX_BOARD_ARRAY_DIMENSION_MM: f64 = 297.0;
-const MAX_VCUT_LINES_PER_AXIS: usize = 25;
 const MIN_VCUT_CLEARANCE_MM: f64 = 5.0;
 const MIN_EDGE_RAIL_WIDTH_MM: f64 = 5.0;
 const MAX_MANUAL_EDGE_RAIL_WIDTH_MM: f64 = 30.0;
@@ -78,110 +76,19 @@ const SECONDARY_TOOLING_HOLE_SPAN_INSET_MM: f64 = 6.5;
 const BOTTOM_SECONDARY_FIDUCIAL_SPAN_INSET_MM: f64 = 11.0;
 const SECONDARY_FIDUCIAL_SPAN_INSET_MM: f64 = 12.0;
 const SINGLE_BOARD_TOOLING_MIN_SPAN_MM: f64 = 28.0;
-const MULTI_BOARD_TOOLING_MIN_SPAN_MM: f64 = 12.0;
 const MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM: f64 = 5.0;
 const MIN_BOARD_CELL_FIDUCIAL_SPAN_MM: f64 = 17.0;
 const BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM: f64 = 2.0;
 const PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = 3.0;
 const SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = 7.0;
 
-#[derive(Debug, Clone, PartialEq)]
-enum BoardArrayCreateValidationError {
-    U32Range {
-        field: &'static str,
-        value: u32,
-        min: u32,
-        max: u32,
-    },
-    MmRange {
-        field: &'static str,
-        value: f64,
-        min: f64,
-        max: f64,
-    },
-    MmMin {
-        field: &'static str,
-        value: f64,
-        min: f64,
-    },
-    ZeroOrMinMm {
-        field: &'static str,
-        value: f64,
-        min: f64,
-    },
-    ArrayDimensionMin {
-        axis: &'static str,
-        value: f64,
-        min: f64,
-    },
-    ArrayDimensionMax {
-        axis: &'static str,
-        value: f64,
-        max: f64,
-    },
-    VcutLineCount {
-        axis: &'static str,
-        count: usize,
-        max: usize,
-    },
-}
-
-impl std::fmt::Display for BoardArrayCreateValidationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::U32Range {
-                field,
-                value,
-                min,
-                max,
-            } => write!(f, "{field} must be between {min} and {max}; got {value}"),
-            Self::MmRange {
-                field,
-                value,
-                min,
-                max,
-            } => write!(
-                f,
-                "{field} must be between {} and {} mm; got {} mm",
-                fmt_num(*min),
-                fmt_num(*max),
-                fmt_num(*value)
-            ),
-            Self::MmMin { field, value, min } => write!(
-                f,
-                "{field} must be at least {} mm; got {} mm",
-                fmt_num(*min),
-                fmt_num(*value)
-            ),
-            Self::ZeroOrMinMm { field, value, min } => write!(
-                f,
-                "{field} must be 0 mm or at least {} mm; got {} mm",
-                fmt_num(*min),
-                fmt_num(*value)
-            ),
-            Self::ArrayDimensionMin { axis, value, min } => write!(
-                f,
-                "array {axis} must be at least {} mm; got {} mm",
-                fmt_num(*min),
-                fmt_num(*value)
-            ),
-            Self::ArrayDimensionMax { axis, value, max } => write!(
-                f,
-                "array {axis} must be at most {} mm; got {} mm",
-                fmt_num(*max),
-                fmt_num(*value)
-            ),
-            Self::VcutLineCount { axis, count, max } => {
-                write!(
-                    f,
-                    "{axis}-axis V-cut line count must be at most {max}; got {count}"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for BoardArrayCreateValidationError {}
+// Board-cell fiducials sit at the outer edge of the margin a routed slot is
+// cut from; the smallest margin that carries them keeps the slot clear of
+// their mask openings.
+const _: () = assert!(
+    MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM - placement::PRESET.routing_gap_mm
+        >= BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM + FIDUCIAL_MASK_OPENING_DIAMETER_MM / 2.0
+);
 
 #[derive(Debug, Clone)]
 pub struct BoardArrayCreateOptions {
@@ -208,49 +115,7 @@ impl Separation {
     }
 }
 
-/// Generated board-array IPC plus optional per-layer copper-balance accounting.
-#[derive(Debug, Clone)]
-pub struct BoardArrayCreation {
-    pub xml: String,
-    pub copper_balance: Option<CopperBalanceReport>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BoardArrayValidationMode {
-    Manual,
-    Auto,
-    AutoMinimumPanel,
-}
-
 pub type BoardMarginMm = super::EdgeInsetsMm;
-
-impl BoardMarginMm {
-    fn horizontal_gap(self) -> f64 {
-        self.horizontal_sum()
-    }
-
-    fn vertical_gap(self) -> f64 {
-        self.vertical_sum()
-    }
-
-    fn board_margin_sides(self) -> [(&'static str, f64); 4] {
-        [
-            ("board margin top", self.top),
-            ("board margin right", self.right),
-            ("board margin bottom", self.bottom),
-            ("board margin left", self.left),
-        ]
-    }
-
-    fn edge_rail_sides(self) -> [(&'static str, f64); 4] {
-        [
-            ("edge rail top", self.top),
-            ("edge rail right", self.right),
-            ("edge rail bottom", self.bottom),
-            ("edge rail left", self.left),
-        ]
-    }
-}
 
 #[derive(Debug, Clone)]
 struct BoardArraySpec {
@@ -265,16 +130,9 @@ struct BoardArraySpec {
     board_outline_layer_names: Vec<String>,
     content_step_refs: Vec<String>,
     content_layer_refs: Vec<String>,
-    columns: u32,
-    rows: u32,
-    array_repeat_x_mm: f64,
-    array_repeat_y_mm: f64,
+    grid: ArrayGrid,
     board_repeat_x_mm: f64,
     board_repeat_y_mm: f64,
-    pitch_x_mm: f64,
-    pitch_y_mm: f64,
-    array_width_mm: f64,
-    array_height_mm: f64,
     board_margin_mm: BoardMarginMm,
     edge_rail_mm: BoardMarginMm,
     panelization: BoardArrayPanelizationMetadata,
@@ -282,21 +140,34 @@ struct BoardArraySpec {
     units: Units,
 }
 
+/// The array's grid of boards, in array coordinates.
+#[derive(Debug, Clone, Copy)]
+struct ArrayGrid {
+    columns: u32,
+    rows: u32,
+    board_width_mm: f64,
+    board_height_mm: f64,
+    /// Lower-left corner of the first board.
+    margin_x_mm: f64,
+    margin_y_mm: f64,
+    pitch_x_mm: f64,
+    pitch_y_mm: f64,
+    array_width_mm: f64,
+    array_height_mm: f64,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct BoardArrayPanelizationMetadata {
     mode: BoardArrayPanelizationMode,
-    sheet: Option<AutoSheetSize>,
-    sheet_target_mm: Option<TargetSizeMm>,
+    /// The sheet an automatic array fills, with its orientation.
+    sheet: Option<(AutoSheetSize, TargetSizeMm)>,
 }
 
 impl BoardArrayPanelizationMetadata {
-    fn for_auto_plan(mode: BoardArrayPanelizationMode, plan: AutoBoardArrayPlan) -> Self {
-        Self {
-            mode,
-            sheet: Some(plan.sheet),
-            sheet_target_mm: Some(plan.target),
-        }
-    }
+    const MANUAL: Self = Self {
+        mode: BoardArrayPanelizationMode::Manual,
+        sheet: None,
+    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,108 +197,43 @@ struct BoardArrayGeneratedGeometry {
 }
 
 impl BoardArrayGeneratedGeometry {
-    fn add_layer(&mut self, layer: GeneratedLayer) {
-        self.layers.push(layer);
-    }
-
+    /// One positive `Set` of `features` on a layer, returned so a caller can
+    /// attach spec refs.
     fn add_layer_feature(
         &mut self,
         scope: GeneratedFeatureScope,
-        layer_name: impl Into<String>,
-        polarity: Polarity,
+        layer_name: &str,
         features: Vec<SetFeature>,
-    ) {
-        self.add_layer_feature_with_spec_refs(scope, layer_name, polarity, Vec::new(), features);
-    }
-
-    fn add_layer_feature_with_spec_refs(
-        &mut self,
-        scope: GeneratedFeatureScope,
-        layer_name: impl Into<String>,
-        polarity: Polarity,
-        spec_refs: Vec<String>,
-        features: Vec<SetFeature>,
-    ) {
+    ) -> &mut GeneratedLayerFeature {
         self.layer_features.push((
             scope,
             GeneratedLayerFeature {
-                layer_name: layer_name.into(),
-                polarity,
+                layer_name: layer_name.to_string(),
+                polarity: Polarity::Positive,
                 copper_balance: None,
-                spec_refs,
+                spec_refs: Vec::new(),
                 features,
                 void_set: None,
             },
         ));
-    }
-
-    /// Attach one balanced layer: its ordered generated feature sets and the
-    /// shared templates the void sets reference.
-    fn add_balance_layer(
-        &mut self,
-        scope: GeneratedFeatureScope,
-        layer_name: &str,
-        sets: crate::copper_balance::BalanceFeatureSets,
-    ) {
-        let (templates, features) = sets.into_layer_features(layer_name);
-        self.layer_features
-            .extend(features.into_iter().map(|feature| (scope, feature)));
-        for template in templates {
-            if !self
-                .user_entries
-                .iter()
-                .any(|entry| entry.id == template.id)
-            {
-                self.user_entries.push(template);
-            }
-        }
-    }
-
-    fn referenced_layer_names(&self) -> impl Iterator<Item = &str> {
-        self.layers.iter().map(|layer| layer.name.as_str()).chain(
-            self.layer_features
-                .iter()
-                .map(|(_, layer_feature)| layer_feature.layer_name.as_str()),
-        )
+        &mut self.layer_features.last_mut().expect("just pushed").1
     }
 }
 
+/// A generated positive layer.
 #[derive(Debug, Clone)]
 struct GeneratedLayer {
     name: String,
     layer_function: LayerFunction,
-    side: Option<Side>,
-    polarity: Option<Polarity>,
-}
-
-impl GeneratedLayer {
-    fn new(
-        name: impl Into<String>,
-        layer_function: LayerFunction,
-        side: Option<Side>,
-        polarity: Option<Polarity>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            layer_function,
-            side,
-            polarity,
-        }
-    }
+    side: Side,
+    /// The layers a drill layer's holes run between, from and to.
+    span: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GeneratedFeatureScope {
     Array,
     BoardCell,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct VcutLine {
-    start_x_mm: f64,
-    start_y_mm: f64,
-    end_x_mm: f64,
-    end_y_mm: f64,
 }
 
 #[cfg(feature = "cli")]
@@ -440,10 +246,8 @@ pub fn execute(
     resolution: Resolution,
 ) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_board_array(&content, options, balance_copper, separation, resolution)?;
-    print_copper_balance_summary(creation.copper_balance.as_ref());
-    write_board_array_output(output, &creation.xml)?;
-    Ok(())
+    create_board_array(&content, options, balance_copper, separation, resolution)?
+        .write(output, "board array")
 }
 
 #[cfg(feature = "cli")]
@@ -456,33 +260,8 @@ pub fn execute_auto(
     resolution: Resolution,
 ) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation =
-        create_auto_board_array(&content, sheet, balance_copper, separation, resolution)?;
-    print_copper_balance_summary(creation.copper_balance.as_ref());
-    write_board_array_output(output, &creation.xml)?;
-    Ok(())
-}
-
-#[cfg(feature = "cli")]
-fn print_copper_balance_summary(report: Option<&CopperBalanceReport>) {
-    if let Some(report) = report {
-        for line in report.summary_lines() {
-            eprintln!("  {line}");
-        }
-    }
-}
-
-#[cfg(feature = "cli")]
-fn write_board_array_output(output: &Path, content: &str) -> Result<()> {
-    if output.as_os_str() == "-" {
-        pcb_ui::write_stdout(|stdout| stdout.write_all(content.as_bytes()))?;
-        eprintln!("✓ Created IPC-2581 board array on stdout");
-    } else {
-        file_utils::save_ipc_file(output, content)?;
-        eprintln!("✓ Created IPC-2581 board array at {}", output.display());
-    }
-
-    Ok(())
+    create_auto_board_array(&content, sheet, balance_copper, separation, resolution)?
+        .write(output, "board array")
 }
 
 /// Create a manually configured board array and return its balance accounting.
@@ -492,37 +271,17 @@ pub fn create_board_array(
     balance_copper: bool,
     separation: Separation,
     resolution: Resolution,
-) -> Result<BoardArrayCreation> {
+) -> Result<PanelCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let spec = build_board_array_spec(
         &ipc,
+        primary_board_layout(&ipc)?,
         options,
-        BoardArrayValidationMode::Manual,
-        BoardArrayPanelizationMetadata {
-            mode: BoardArrayPanelizationMode::Manual,
-            sheet: None,
-            sheet_target_mm: None,
-        },
+        BoardArrayPanelizationMetadata::MANUAL,
         separation,
         resolution,
     )?;
     write_board_array_creation(xml, spec, balance_copper, resolution)
-}
-
-#[cfg(test)]
-/// Panelize without balancing copper, for the cases that are about the array
-/// itself. Balancing costs the panel's whole area, so the cases that are about
-/// it ask for it.
-#[cfg(test)]
-fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
-    let resolution = Resolution::default();
-
-    Ok(create_board_array(xml, options, false, Separation::VScore, resolution)?.xml)
-}
-
-#[cfg(test)]
-fn create_auto_board_array_xml(xml: &str) -> Result<String> {
-    create_auto_board_array_xml_with_sheet(xml, None)
 }
 
 /// Create an automatically sized board array and return its balance accounting.
@@ -532,41 +291,20 @@ pub fn create_auto_board_array(
     balance_copper: bool,
     separation: Separation,
     resolution: Resolution,
-) -> Result<BoardArrayCreation> {
+) -> Result<PanelCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let (options, validation_mode, panelization) =
-        auto_board_array_options(&ipc, sheet, resolution)?;
-    let spec = build_board_array_spec(
-        &ipc,
-        &options,
-        validation_mode,
-        panelization,
-        separation,
-        resolution,
-    )?;
+    let board = primary_board_layout(&ipc)?;
+    let (options, panelization) = auto_board_array_options(&ipc, board, sheet, resolution)?;
+    let spec = build_board_array_spec(&ipc, board, &options, panelization, separation, resolution)?;
     write_board_array_creation(xml, spec, balance_copper, resolution)
-}
-
-#[cfg(test)]
-fn create_auto_board_array_xml_with_sheet(
-    xml: &str,
-    sheet: Option<AutoSheetSize>,
-) -> Result<String> {
-    let resolution = Resolution::default();
-
-    Ok(create_auto_board_array(xml, sheet, false, Separation::VScore, resolution)?.xml)
 }
 
 fn auto_board_array_options(
     ipc: &Ipc2581,
+    board: PrimaryBoardLayout,
     sheet: Option<AutoSheetSize>,
     resolution: Resolution,
-) -> Result<(
-    BoardArrayCreateOptions,
-    BoardArrayValidationMode,
-    BoardArrayPanelizationMetadata,
-)> {
-    let board = primary_board_layout(ipc)?;
+) -> Result<(BoardArrayCreateOptions, BoardArrayPanelizationMetadata)> {
     let board_margin = auto_board_margin(ipc, board.bbox, resolution)?;
     let board_width = board.bbox.width();
     let board_height = board.bbox.height();
@@ -584,38 +322,63 @@ fn auto_board_array_options(
     // A board too large for any sheet still gets a minimum single-board panel.
     Ok(match plan {
         Some((plan, mode)) => (
-            options_for_auto_plan(plan),
-            BoardArrayValidationMode::Auto,
-            BoardArrayPanelizationMetadata::for_auto_plan(mode, plan),
+            BoardArrayCreateOptions {
+                columns: plan.columns,
+                rows: plan.rows,
+                board_margin_mm: plan.board_margin_mm,
+                edge_rail_mm: plan.edge_rail_mm,
+            },
+            BoardArrayPanelizationMetadata {
+                mode,
+                sheet: Some((plan.sheet, plan.target)),
+            },
         ),
         None => (
-            minimum_single_board_auto_options(board_margin),
-            BoardArrayValidationMode::AutoMinimumPanel,
+            minimum_auto_options(1, 1, board_margin),
             BoardArrayPanelizationMetadata {
                 mode: BoardArrayPanelizationMode::AutoMinimumPanel,
                 sheet: None,
-                sheet_target_mm: None,
             },
         ),
     })
 }
 
-fn options_for_auto_plan(plan: AutoBoardArrayPlan) -> BoardArrayCreateOptions {
+/// The tightest array automatic panelization produces around boards with
+/// `board_margin_mm`: the narrowest edge rails.
+fn minimum_auto_options(
+    columns: u32,
+    rows: u32,
+    board_margin_mm: BoardMarginMm,
+) -> BoardArrayCreateOptions {
     BoardArrayCreateOptions {
-        columns: plan.columns,
-        rows: plan.rows,
-        board_margin_mm: plan.board_margin_mm,
-        edge_rail_mm: plan.edge_rail_mm,
+        columns,
+        rows,
+        board_margin_mm,
+        edge_rail_mm: BoardMarginMm::all(MIN_EDGE_RAIL_WIDTH_MM),
     }
 }
 
-fn minimum_single_board_auto_options(board_margin: BoardMarginMm) -> BoardArrayCreateOptions {
-    BoardArrayCreateOptions {
-        columns: 1,
-        rows: 1,
-        board_margin_mm: board_margin,
-        edge_rail_mm: BoardMarginMm::all(MIN_EDGE_RAIL_WIDTH_MM),
-    }
+/// The narrowest rail a tab of this array lands on once a slot of
+/// `routing_gap_mm` is routed around every board: the strip between two
+/// boards, or between an outer board and the array edge.
+fn narrowest_rail_mm(options: &BoardArrayCreateOptions, routing_gap_mm: f64) -> f64 {
+    let (margin, rail) = (options.board_margin_mm, options.edge_rail_mm);
+    let outer = [
+        rail.top + margin.top,
+        rail.right + margin.right,
+        rail.bottom + margin.bottom,
+        rail.left + margin.left,
+    ]
+    .map(|width| width - routing_gap_mm);
+    let between = [
+        (options.columns > 1).then(|| margin.horizontal_sum()),
+        (options.rows > 1).then(|| margin.vertical_sum()),
+    ]
+    .map(|gap| gap.map(|gap| gap - 2.0 * routing_gap_mm));
+    outer
+        .into_iter()
+        .chain(between.into_iter().flatten())
+        .fold(f64::INFINITY, f64::min)
 }
 
 fn auto_board_margin(
@@ -634,6 +397,8 @@ fn auto_board_margin(
 
 fn board_courtyard_bbox(ipc: &Ipc2581, resolution: Resolution) -> Result<BBox> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    // One import serves every courtyard layer.
+    let imported = pcb_ir::import::ipc2581::import_design(ipc, resolution)?;
     let mut bbox = BBox::empty();
 
     for layer in ecad
@@ -643,13 +408,15 @@ fn board_courtyard_bbox(ipc: &Ipc2581, resolution: Resolution) -> Result<BBox> {
         .filter(|layer| layer.layer_function == LayerFunction::Courtyard)
     {
         let layer_name = ipc.resolve(layer.name);
-        let doc = geometry::extract_layer_for_view(
-            ipc,
-            layer_name,
-            pcb_ir::dialects::ipc::ArtworkScope::Board,
-            resolution,
-        )
-        .with_context(|| format!("failed to extract IPC-2581 courtyard layer '{layer_name}'"))?;
+        let doc = imported
+            .layer_id(layer_name)
+            .with_context(|| format!("IPC-2581 layer '{layer_name}' was not found"))
+            .and_then(|id| {
+                imported.materialize_layer(id, pcb_ir::dialects::ipc::ArtworkScope::Board)
+            })
+            .with_context(|| {
+                format!("failed to extract IPC-2581 courtyard layer '{layer_name}'")
+            })?;
         for feature in doc
             .features
             .iter()
@@ -662,30 +429,20 @@ fn board_courtyard_bbox(ipc: &Ipc2581, resolution: Resolution) -> Result<BBox> {
     Ok(bbox)
 }
 
-fn board_array_edited_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
-    let generated_spec_xml = write_generated_specs_xml(spec);
-    let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry);
-    let generated_steps_xml = write_generated_steps_xml(spec)?;
-
-    // One parse serves both the board-array patch and the history append;
-    // all edits splice in a single pass.
-    let doc = ipc2581::edit::Doc::parse(xml)?;
-    let mut edits = board_array_edits(
-        &doc,
-        spec,
-        &generated_spec_xml,
-        generated_layer_xml.as_deref(),
-        &generated_steps_xml,
-    )?;
+/// The source `doc` indexes with the array spliced in: one parse serves the
+/// board-array patch and the history append of every pass, and all edits of a
+/// pass splice at once.
+fn board_array_edited_xml(doc: &ipc2581::edit::Doc<'_>, spec: &BoardArraySpec) -> Result<String> {
+    let mut edits = board_array_edits(doc, spec)?;
     edits.extend(crate::utils::history::file_revision_edits(
-        &doc,
+        doc,
         "Created board array",
     )?);
-    Ok(ipc2581::edit::apply(xml, edits)?)
+    Ok(doc.apply(edits)?)
 }
 
-fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
-    let xml = board_array_edited_xml(xml, spec)?;
+fn finished_board_array_xml(doc: &ipc2581::edit::Doc<'_>, spec: &BoardArraySpec) -> Result<String> {
+    let xml = board_array_edited_xml(doc, spec)?;
     let xml = crate::utils::format::reformat_xml(&xml)?;
 
     Ipc2581::parse(&xml).context("Generated IPC-2581 board array XML did not parse")?;
@@ -697,36 +454,31 @@ fn write_board_array_creation(
     mut spec: BoardArraySpec,
     balance_copper: bool,
     resolution: Resolution,
-) -> Result<BoardArrayCreation> {
-    if !balance_copper {
-        return Ok(BoardArrayCreation {
-            xml: write_board_array_xml(xml, &spec)?,
-            copper_balance: None,
-        });
-    }
-
-    // The provisional array only feeds safe-region discovery; parsing it below
-    // already validates it, so skip the cosmetic reformat pass.
-    let provisional_xml = board_array_edited_xml(xml, &spec)?;
-    let provisional = Ipc2581::parse(&provisional_xml)
-        .context("Failed to parse provisional IPC-2581 board array")?;
-    let balance = balance::generate_automatic_board_array_copper_balance(
-        &provisional,
-        resolution.tolerance_mm,
-    )?;
-    let copper_balance = balance.report();
-
-    for layer in balance.layers {
-        spec.generated_geometry.add_balance_layer(
-            GeneratedFeatureScope::Array,
-            &layer.layer_name,
-            layer.features,
+) -> Result<PanelCreation> {
+    let doc = ipc2581::edit::Doc::parse(xml)?;
+    let mut copper_balance = None;
+    if balance_copper {
+        // The provisional array only feeds safe-region discovery; parsing it
+        // below already validates it, so skip the cosmetic reformat pass.
+        let provisional_xml = board_array_edited_xml(&doc, &spec)?;
+        let provisional = Ipc2581::parse(&provisional_xml)
+            .context("Failed to parse provisional IPC-2581 board array")?;
+        let balance = balance::generate_automatic_board_array_copper_balance(
+            &provisional,
+            resolution.tolerance_mm,
+        )?;
+        copper_balance = Some(balance.report());
+        let (templates, features) = balance::generated_features(balance);
+        spec.generated_geometry.user_entries = templates;
+        spec.generated_geometry.layer_features.extend(
+            features
+                .into_iter()
+                .map(|feature| (GeneratedFeatureScope::Array, feature)),
         );
     }
-
-    Ok(BoardArrayCreation {
-        xml: write_board_array_xml(xml, &spec)?,
-        copper_balance: Some(copper_balance),
+    Ok(PanelCreation {
+        xml: finished_board_array_xml(&doc, &spec)?,
+        copper_balance,
     })
 }
 
@@ -739,11 +491,20 @@ struct PrimaryBoardLayout {
 fn primary_board_layout(ipc: &Ipc2581) -> Result<PrimaryBoardLayout> {
     let layout = geometry::extract_layout(ipc)?;
     let (_, root) = root_step(&layout).context("IPC-2581 board step has no layout root")?;
-    if root.kind != LayoutStepKind::Board {
-        bail!("primary IPC-2581 layout root is not a board step");
+    match root.kind {
+        LayoutStepKind::Board => {}
+        LayoutStepKind::Panel => bail!(
+            "primary IPC-2581 step is already a board array; board array create expects a board step"
+        ),
+        _ => bail!("primary IPC-2581 step is not a board step"),
     }
     if root.bbox.is_empty() {
-        bail!("primary IPC-2581 board step has no Profile outline");
+        bail!(
+            "board step '{}' has no Profile: the layout has no closed board outline on its \
+             edge-cuts layer, so there is nothing to derive the board's shape from; draw the \
+             outline and export again",
+            ipc.resolve(root.source_step_ref)
+        );
     }
 
     let board_width = root.bbox.width();
@@ -760,28 +521,16 @@ fn primary_board_layout(ipc: &Ipc2581) -> Result<PrimaryBoardLayout> {
 
 fn build_board_array_spec(
     ipc: &Ipc2581,
+    root: PrimaryBoardLayout,
     options: &BoardArrayCreateOptions,
-    validation_mode: BoardArrayValidationMode,
     panelization: BoardArrayPanelizationMetadata,
     separation: Separation,
     resolution: Resolution,
 ) -> Result<BoardArraySpec> {
-    validate_options(options, validation_mode)?;
+    let mode = panelization.mode;
+    validate_options(options, mode, separation)?;
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let primary_step = crate::steps::primary_step(ipc, &ecad.cad_data.steps)
-        .context("IPC-2581 ECAD section has no Step")?;
-
-    if is_panel_step(primary_step) {
-        bail!(
-            "primary IPC-2581 step is already a board array; board array create expects a board step"
-        );
-    }
-    if !is_board_step(primary_step) {
-        bail!("primary IPC-2581 step is not a board step");
-    }
-
-    let root = primary_board_layout(ipc)?;
     let board_width = root.bbox.width();
     let board_height = root.bbox.height();
 
@@ -789,19 +538,29 @@ fn build_board_array_spec(
     let rows = options.rows;
     let board_margin = options.board_margin_mm;
     let edge_rail = options.edge_rail_mm;
-    let margin_x = edge_rail.left + board_margin.left;
-    let margin_y = edge_rail.bottom + board_margin.bottom;
-    let pitch_x = board_width + board_margin.horizontal_gap();
-    let pitch_y = board_height + board_margin.vertical_gap();
+    let pitch_x = board_width + board_margin.horizontal_sum();
+    let pitch_y = board_height + board_margin.vertical_sum();
     let array_width = columns as f64 * board_width
-        + columns as f64 * board_margin.horizontal_gap()
+        + columns as f64 * board_margin.horizontal_sum()
         + edge_rail.left
         + edge_rail.right;
     let array_height = rows as f64 * board_height
-        + rows as f64 * board_margin.vertical_gap()
+        + rows as f64 * board_margin.vertical_sum()
         + edge_rail.bottom
         + edge_rail.top;
-    validate_array_dimensions(array_width, array_height, validation_mode)?;
+    validate_array_dimensions(array_width, array_height, mode)?;
+    let grid = ArrayGrid {
+        columns,
+        rows,
+        board_width_mm: board_width,
+        board_height_mm: board_height,
+        margin_x_mm: edge_rail.left + board_margin.left,
+        margin_y_mm: edge_rail.bottom + board_margin.bottom,
+        pitch_x_mm: pitch_x,
+        pitch_y_mm: pitch_y,
+        array_width_mm: array_width,
+        array_height_mm: array_height,
+    };
     let board_repeat_x = board_margin.left - root.bbox.min.x;
     let board_repeat_y = board_margin.bottom - root.bbox.min.y;
 
@@ -835,27 +594,22 @@ fn build_board_array_spec(
         add_vcut_lines(
             &mut generated_geometry,
             &mut used_layer_names,
-            vcut_spec_name.clone(),
-            array_width,
-            vcut_lines(VcutLineSpec {
-                columns,
-                rows,
-                board_width_mm: board_width,
-                board_height_mm: board_height,
-                margin_x_mm: margin_x,
-                margin_y_mm: margin_y,
-                pitch_x_mm: pitch_x,
-                pitch_y_mm: pitch_y,
-                array_width_mm: array_width,
-                array_height_mm: array_height,
-            })?,
+            vcut_spec_name,
+            &grid,
         );
     }
+    let tooling_hole_layer =
+        add_tooling_hole_layer(&mut generated_geometry, &mut used_layer_names, ipc, ecad);
     let (profile_cutouts, tabs_per_board) = match separation {
         Separation::VScore => (Vec::new(), 0),
         Separation::MouseBite => {
             let preset = &placement::PRESET;
-            let placement = placement::place(ipc, preset, resolution)?;
+            let placement = placement::place(
+                ipc,
+                preset,
+                narrowest_rail_mm(options, preset.routing_gap_mm),
+                resolution,
+            )?;
             let stock = array_stock(array_width, array_height, resolution)?;
             let offsets = (0..rows)
                 .flat_map(|row| {
@@ -867,13 +621,15 @@ fn build_board_array_spec(
                     })
                 })
                 .collect::<Vec<_>>();
-            let tabs = mouse_bite::generate(&placement, &stock, &offsets, preset, resolution)?;
-            let layer =
-                ensure_tooling_hole_layer_name(&mut generated_geometry, &mut used_layer_names);
+            let cell = BBox::new(
+                root.bbox.min - Point::new(board_margin.left, board_margin.bottom),
+                root.bbox.max + Point::new(board_margin.right, board_margin.top),
+            );
+            let tabs =
+                mouse_bite::generate(&placement, cell, &stock, &offsets, preset, resolution)?;
             generated_geometry.add_layer_feature(
                 GeneratedFeatureScope::Array,
-                layer,
-                Polarity::Positive,
+                &tooling_hole_layer,
                 round_nonplated_hole_features(
                     tabs.holes.iter().map(|hole| (hole.center.x, hole.center.y)),
                     pcb_ir::geom::mouse_bite::SparkFunShallow::HOLE_DIAMETER_MM,
@@ -888,27 +644,8 @@ fn build_board_array_spec(
             )
         }
     };
-    add_board_array_corner_tooling(
-        &mut generated_geometry,
-        &mut used_layer_names,
-        array_width,
-        array_height,
-    );
-    let tooling_spec = BoardArrayToolingSpec {
-        columns,
-        rows,
-        board_width_mm: board_width,
-        board_height_mm: board_height,
-        margin_x_mm: margin_x,
-        margin_y_mm: margin_y,
-        pitch_x_mm: pitch_x,
-        pitch_y_mm: pitch_y,
-        array_width_mm: array_width,
-        array_height_mm: array_height,
-    };
-    if validation_mode != BoardArrayValidationMode::Manual
-        && board_array_tooling_orientation(&tooling_spec).is_none()
-    {
+    add_board_array_corner_tooling(&mut generated_geometry, &tooling_hole_layer, &grid);
+    if mode != BoardArrayPanelizationMode::Manual && board_array_tooling_rails(&grid).is_none() {
         bail!(
             "auto board array cannot fit rail fiducials and tooling holes on either rail pair; \
              panelize manually to skip rail tooling"
@@ -918,19 +655,10 @@ fn build_board_array_spec(
         &mut generated_geometry,
         ipc,
         ecad,
-        &mut used_layer_names,
-        tooling_spec,
+        &tooling_hole_layer,
+        &grid,
     )?;
-    add_board_cell_fiducials(
-        &mut generated_geometry,
-        ipc,
-        ecad,
-        BoardCellFiducialSpec {
-            board_width_mm: board_width,
-            board_height_mm: board_height,
-            board_margin,
-        },
-    )?;
+    add_board_cell_fiducials(&mut generated_geometry, ipc, ecad, &grid, board_margin)?;
     let board_outline_layer_names = board_outline_layer_names(ipc, ecad);
     let content_step_refs = content_step_refs(ipc, &array_name, &board_cell_name, &board_name);
     let content_layer_refs =
@@ -947,16 +675,9 @@ fn build_board_array_spec(
         board_outline_layer_names,
         content_step_refs,
         content_layer_refs,
-        columns,
-        rows,
-        array_repeat_x_mm: edge_rail.left,
-        array_repeat_y_mm: edge_rail.bottom,
+        grid,
         board_repeat_x_mm: board_repeat_x,
         board_repeat_y_mm: board_repeat_y,
-        pitch_x_mm: pitch_x,
-        pitch_y_mm: pitch_y,
-        array_width_mm: array_width,
-        array_height_mm: array_height,
         board_margin_mm: board_margin,
         edge_rail_mm: edge_rail,
         panelization,
@@ -986,145 +707,115 @@ fn array_stock(width_mm: f64, height_mm: f64, resolution: Resolution) -> Result<
 
 fn validate_options(
     options: &BoardArrayCreateOptions,
-    validation_mode: BoardArrayValidationMode,
+    mode: BoardArrayPanelizationMode,
+    separation: Separation,
 ) -> Result<()> {
     validate_u32_range("columns", options.columns, 1, 10)?;
     validate_u32_range("rows", options.rows, 1, 10)?;
-    for (field, value) in options.board_margin_mm.board_margin_sides() {
-        validate_mm_min(field, value, 0.0)?;
+    for (side, value) in options.board_margin_mm.sides() {
+        validate_mm_min(&format!("board margin {side}"), value, 0.0)?;
     }
-    for (field, value) in options.edge_rail_mm.edge_rail_sides() {
-        match validation_mode {
-            BoardArrayValidationMode::Manual => validate_mm_range(
-                field,
-                value,
-                MIN_EDGE_RAIL_WIDTH_MM,
-                MAX_MANUAL_EDGE_RAIL_WIDTH_MM,
-            )?,
-            BoardArrayValidationMode::Auto | BoardArrayValidationMode::AutoMinimumPanel => {
-                validate_mm_min(field, value, MIN_EDGE_RAIL_WIDTH_MM)?
-            }
+    for (side, value) in options.edge_rail_mm.sides() {
+        let field = format!("edge rail {side}");
+        match mode {
+            BoardArrayPanelizationMode::Manual => ensure!(
+                (MIN_EDGE_RAIL_WIDTH_MM..=MAX_MANUAL_EDGE_RAIL_WIDTH_MM).contains(&value),
+                "{field} must be between {} and {} mm; got {} mm",
+                fmt_num(MIN_EDGE_RAIL_WIDTH_MM),
+                fmt_num(MAX_MANUAL_EDGE_RAIL_WIDTH_MM),
+                fmt_num(value)
+            ),
+            // Automatic rails take up whatever the sheet leaves over.
+            _ => validate_mm_min(&field, value, MIN_EDGE_RAIL_WIDTH_MM)?,
         }
     }
-    if options.columns > 1 {
-        validate_zero_or_min_mm(
-            "horizontal board clearance",
-            options.board_margin_mm.horizontal_gap(),
-            MIN_VCUT_CLEARANCE_MM,
-        )?;
-    }
-    if options.rows > 1 {
-        validate_zero_or_min_mm(
-            "vertical board clearance",
-            options.board_margin_mm.vertical_gap(),
-            MIN_VCUT_CLEARANCE_MM,
-        )?;
+    match separation {
+        Separation::VScore => {
+            for (field, count, gap) in [
+                (
+                    "horizontal board clearance",
+                    options.columns,
+                    options.board_margin_mm.horizontal_sum(),
+                ),
+                (
+                    "vertical board clearance",
+                    options.rows,
+                    options.board_margin_mm.vertical_sum(),
+                ),
+            ] {
+                ensure!(
+                    count == 1 || gap.abs() <= EPSILON || gap + EPSILON >= MIN_VCUT_CLEARANCE_MM,
+                    "{field} must be 0 mm or at least {} mm; got {} mm",
+                    fmt_num(MIN_VCUT_CLEARANCE_MM),
+                    fmt_num(gap)
+                );
+            }
+        }
+        // The slot and the frame a tab lands on are cut from the board's own
+        // margin, so a routed board never reaches a neighbour's material or
+        // the tooling in the edge rails.
+        Separation::MouseBite => {
+            let (slot, landing) = (
+                placement::PRESET.routing_gap_mm,
+                placement::PRESET.frame_landing_mm,
+            );
+            for (side, value) in options.board_margin_mm.sides() {
+                ensure!(
+                    value + EPSILON >= slot + landing,
+                    "board margin {side} must be at least {} mm for mouse-bite separation: it \
+                     holds the {} mm routed slot and the {} mm of frame each tab lands on; got {} mm",
+                    fmt_num(slot + landing),
+                    fmt_num(slot),
+                    fmt_num(landing),
+                    fmt_num(value)
+                );
+            }
+        }
     }
     Ok(())
 }
 
-fn validate_u32_range(field: &'static str, value: u32, min: u32, max: u32) -> Result<()> {
-    if (min..=max).contains(&value) {
-        Ok(())
-    } else {
-        Err(BoardArrayCreateValidationError::U32Range {
-            field,
-            value,
-            min,
-            max,
-        }
-        .into())
-    }
+fn validate_u32_range(field: &str, value: u32, min: u32, max: u32) -> Result<()> {
+    ensure!(
+        (min..=max).contains(&value),
+        "{field} must be between {min} and {max}; got {value}"
+    );
+    Ok(())
 }
 
-fn validate_mm_range(field: &'static str, value: f64, min: f64, max: f64) -> Result<()> {
-    if value.is_finite() && (min..=max).contains(&value) {
-        Ok(())
-    } else {
-        Err(BoardArrayCreateValidationError::MmRange {
-            field,
-            value,
-            min,
-            max,
-        }
-        .into())
-    }
-}
-
-fn validate_mm_min(field: &'static str, value: f64, min: f64) -> Result<()> {
-    if value.is_finite() && value + EPSILON >= min {
-        Ok(())
-    } else {
-        Err(BoardArrayCreateValidationError::MmMin { field, value, min }.into())
-    }
-}
-
-fn validate_zero_or_min_mm(field: &'static str, value: f64, min: f64) -> Result<()> {
-    if value.abs() <= EPSILON || value + EPSILON >= min {
-        Ok(())
-    } else {
-        Err(BoardArrayCreateValidationError::ZeroOrMinMm { field, value, min }.into())
-    }
+fn validate_mm_min(field: &str, value: f64, min: f64) -> Result<()> {
+    ensure!(
+        value.is_finite() && value + EPSILON >= min,
+        "{field} must be at least {} mm; got {} mm",
+        fmt_num(min),
+        fmt_num(value)
+    );
+    Ok(())
 }
 
 fn validate_array_dimensions(
     width_mm: f64,
     height_mm: f64,
-    validation_mode: BoardArrayValidationMode,
+    mode: BoardArrayPanelizationMode,
 ) -> Result<()> {
-    validate_array_dimension("width", width_mm, validation_mode)?;
-    validate_array_dimension("height", height_mm, validation_mode)
-}
-
-fn validate_array_dimension(
-    axis: &'static str,
-    value: f64,
-    validation_mode: BoardArrayValidationMode,
-) -> Result<()> {
-    if validation_mode == BoardArrayValidationMode::AutoMinimumPanel {
-        return validate_minimum_panel_array_dimension(axis, value);
-    }
-
-    if !value.is_finite() || value + EPSILON < MIN_BOARD_ARRAY_DIMENSION_MM {
-        Err(BoardArrayCreateValidationError::ArrayDimensionMin {
-            axis,
-            value,
-            min: MIN_BOARD_ARRAY_DIMENSION_MM,
+    for (field, value) in [("array width", width_mm), ("array height", height_mm)] {
+        if mode == BoardArrayPanelizationMode::AutoMinimumPanel {
+            ensure!(
+                value.is_finite() && value > EPSILON,
+                "{field} must be at least 0 mm; got {} mm",
+                fmt_num(value)
+            );
+            continue;
         }
-        .into())
-    } else if value > MAX_BOARD_ARRAY_DIMENSION_MM + EPSILON {
-        Err(BoardArrayCreateValidationError::ArrayDimensionMax {
-            axis,
-            value,
-            max: MAX_BOARD_ARRAY_DIMENSION_MM,
-        }
-        .into())
-    } else {
-        Ok(())
+        validate_mm_min(field, value, MIN_BOARD_ARRAY_DIMENSION_MM)?;
+        ensure!(
+            value <= MAX_BOARD_ARRAY_DIMENSION_MM + EPSILON,
+            "{field} must be at most {} mm; got {} mm",
+            fmt_num(MAX_BOARD_ARRAY_DIMENSION_MM),
+            fmt_num(value)
+        );
     }
-}
-
-fn validate_minimum_panel_array_dimension(axis: &'static str, value: f64) -> Result<()> {
-    if value.is_finite() && value > EPSILON {
-        Ok(())
-    } else {
-        Err(BoardArrayCreateValidationError::ArrayDimensionMin {
-            axis,
-            value,
-            min: 0.0,
-        }
-        .into())
-    }
-}
-
-fn is_panel_step(step: &ipc2581::types::ecad::Step) -> bool {
-    step.step_type == Some(StepType::Pallet)
-        || (step.step_type.is_none() && !step.step_repeats.is_empty())
-}
-
-fn is_board_step(step: &ipc2581::types::ecad::Step) -> bool {
-    step.step_type == Some(StepType::Board)
-        || (step.step_type.is_none() && step.step_repeats.is_empty())
+    Ok(())
 }
 
 fn unique_name(existing_names: &HashSet<String>, base: &str) -> String {
@@ -1144,44 +835,46 @@ fn content_step_refs(
     board_cell_name: &str,
     board_name: &str,
 ) -> Vec<String> {
-    let mut refs = vec![array_name.to_string()];
-    let mut seen = HashSet::from([array_name.to_string()]);
-    refs.push(board_cell_name.to_string());
-    seen.insert(board_cell_name.to_string());
-    for step_ref in &ipc.content().step_refs {
-        let name = ipc.resolve(*step_ref).to_string();
-        if seen.insert(name.clone()) {
-            refs.push(name);
-        }
-    }
-    if seen.insert(board_name.to_string()) {
-        refs.push(board_name.to_string());
-    }
-    refs
+    let mut seen = HashSet::new();
+    let source = ipc
+        .content()
+        .step_refs
+        .iter()
+        .map(|name| ipc.resolve(*name));
+    [array_name, board_cell_name]
+        .into_iter()
+        .chain(source)
+        .chain([board_name])
+        .filter(|name| seen.insert(*name))
+        .map(str::to_string)
+        .collect()
 }
 
+/// The source's layer refs less the removed layers, then every layer the
+/// generated geometry declares or draws on.
 fn content_layer_refs(
     ipc: &Ipc2581,
     generated_geometry: &BoardArrayGeneratedGeometry,
     removed_layer_names: &[String],
 ) -> Vec<String> {
-    let mut refs = Vec::new();
     let mut seen = HashSet::new();
-    for layer_ref in &ipc.content().layer_refs {
-        let name = ipc.resolve(*layer_ref).to_string();
-        if removed_layer_names.iter().any(|removed| removed == &name) {
-            continue;
-        }
-        if seen.insert(name.clone()) {
-            refs.push(name);
-        }
-    }
-    for layer_name in generated_geometry.referenced_layer_names() {
-        if seen.insert(layer_name.to_string()) {
-            refs.push(layer_name.to_string());
-        }
-    }
-    refs
+    let source = ipc
+        .content()
+        .layer_refs
+        .iter()
+        .map(|name| ipc.resolve(*name));
+    let layers = generated_geometry.layers.iter().map(|layer| &*layer.name);
+    let drawn = generated_geometry
+        .layer_features
+        .iter()
+        .map(|(_, layer_feature)| &*layer_feature.layer_name);
+    source
+        .filter(|name| !removed_layer_names.iter().any(|removed| removed == name))
+        .chain(layers)
+        .chain(drawn)
+        .filter(|name| seen.insert(*name))
+        .map(str::to_string)
+        .collect()
 }
 
 fn board_outline_layer_names(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Vec<String> {
@@ -1193,25 +886,30 @@ fn board_outline_layer_names(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Vec<
         .collect()
 }
 
-fn ensure_tooling_hole_layer_name(
+/// The drill layer every generated hole goes on. Its holes run through the
+/// whole board, declared the way the source's own drill layers declare it:
+/// as a span between the outer copper layers.
+fn add_tooling_hole_layer(
     generated_geometry: &mut BoardArrayGeneratedGeometry,
     used_layer_names: &mut HashSet<String>,
+    ipc: &Ipc2581,
+    ecad: &ipc2581::types::Ecad,
 ) -> String {
-    if let Some(layer) = generated_geometry.layers.iter().find(|layer| {
-        layer.layer_function == LayerFunction::Drill
-            && layer.name.starts_with(TOOLING_HOLE_LAYER_BASE_NAME)
-    }) {
-        return layer.name.clone();
-    }
-
-    let layer_name = reserve_unique_name(used_layer_names, TOOLING_HOLE_LAYER_BASE_NAME);
-    generated_geometry.add_layer(GeneratedLayer::new(
-        layer_name.clone(),
-        LayerFunction::Drill,
-        Some(Side::All),
-        Some(Polarity::Positive),
-    ));
-    layer_name
+    let copper = crate::layers::copper_layers(ecad);
+    let outer = |side| {
+        copper
+            .iter()
+            .find(|layer| layer.side == side)
+            .map(|layer| ipc.resolve(layer.name).to_string())
+    };
+    let name = reserve_unique_name(used_layer_names, TOOLING_HOLE_LAYER_BASE_NAME);
+    generated_geometry.layers.push(GeneratedLayer {
+        name: name.clone(),
+        layer_function: LayerFunction::Drill,
+        side: Side::All,
+        span: outer(pcb_ir::dialects::Side::Top).zip(outer(pcb_ir::dialects::Side::Bottom)),
+    });
+    name
 }
 
 fn reserve_unique_name(used_names: &mut HashSet<String>, base: &str) -> String {
@@ -1223,7 +921,7 @@ fn reserve_unique_name(used_names: &mut HashSet<String>, base: &str) -> String {
 pub mod balance;
 mod tooling;
 mod vcut;
-mod xml;
+pub(crate) mod xml;
 
 #[cfg(test)]
 mod tests;

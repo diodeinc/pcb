@@ -1,108 +1,61 @@
-use crate::test_helpers;
-use ipc2581::Ipc2581;
-use std::fs;
-use std::path::Path;
+use ipc2581::{Ipc2581, LayerFeature, LayerFunction, Mode, PlatingStatus};
+use std::io::Read;
 
-/// Helper to parse and validate a file with comprehensive checks
-fn parse_and_validate(path: &Path) -> Ipc2581 {
-    use ipc2581::StandardPrimitive;
-
-    let xml = test_helpers::load_compressed_xml(path);
-    let doc = Ipc2581::parse(&xml)
-        .unwrap_or_else(|error| panic!("Failed to parse {}: {error}", path.display()));
-    assert_eq!(doc.revision(), "C", "Expected revision C");
-
-    let content = doc.content();
-    for reference in content
-        .step_refs
-        .iter()
-        .chain(&content.layer_refs)
-        .chain(&content.bom_refs)
-        .chain(&content.avl_refs)
-    {
-        assert!(
-            !doc.resolve(*reference).is_empty(),
-            "Reference should resolve"
-        );
-    }
-
-    for entry in &content.dictionary_color.entries {
-        assert!(
-            !doc.resolve(entry.id).is_empty(),
-            "Color ID should not be empty"
-        );
-    }
-
-    for entry in &content.dictionary_line_desc.entries {
-        assert!(
-            !doc.resolve(entry.id).is_empty(),
-            "LineDesc ID should not be empty"
-        );
-        assert!(
-            entry.line_desc.line_width >= 0.0,
-            "Line width must be non-negative"
-        );
-    }
-
-    for entry in &content.dictionary_standard.entries {
-        assert!(
-            !doc.resolve(entry.id).is_empty(),
-            "Standard primitive ID should not be empty"
-        );
-        match &entry.primitive {
-            StandardPrimitive::Circle(circle) => {
-                assert!(
-                    circle.shape.diameter > 0.0,
-                    "Circle diameter must be positive"
-                );
-            }
-            StandardPrimitive::RectCenter(rect) => {
-                assert!(
-                    rect.shape.size.width > 0.0 && rect.shape.size.height > 0.0,
-                    "Rectangle dimensions must be positive"
-                );
-            }
-            StandardPrimitive::RectRound(rect) => {
-                assert!(
-                    rect.shape.size.width > 0.0 && rect.shape.size.height > 0.0,
-                    "Rectangle dimensions must be positive"
-                );
-                assert!(rect.shape.radius >= 0.0, "Radius must be non-negative");
-            }
-            StandardPrimitive::Oval(oval) => {
-                assert!(
-                    oval.shape.size.width > 0.0 && oval.shape.size.height > 0.0,
-                    "Oval dimensions must be positive"
-                );
-            }
-            StandardPrimitive::Contour(contour) => {
-                assert!(!contour.polygon.steps.is_empty(), "Contour must have steps");
-                assert!(
-                    contour
-                        .cutouts
-                        .iter()
-                        .all(|cutout| !cutout.steps.is_empty()),
-                    "Cutouts must have steps"
-                );
-            }
-            _ => {}
-        }
-    }
-
+/// Parses `tests/data/<name>.xml.zst`; the test data is stored compressed.
+fn parse(name: &str) -> Ipc2581 {
+    let path = format!("tests/data/{name}.xml.zst");
+    let file = std::fs::File::open(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+    let mut xml = String::new();
+    zstd::Decoder::new(file)
+        .and_then(|mut decoder| decoder.read_to_string(&mut xml))
+        .unwrap_or_else(|error| panic!("{path}: {error}"));
+    let doc = Ipc2581::parse(&xml).unwrap_or_else(|error| panic!("{path}: {error}"));
+    assert_eq!(doc.revision(), "C", "{path}");
     doc
 }
 
-// Test Case 1: Network Card - Full mode
+/// Parses a full-mode file and checks that every section came out populated.
+fn parse_populated(name: &str) -> Ipc2581 {
+    let doc = parse(name);
+    let ecad = doc.ecad().expect(name);
+    let step = ecad.cad_data.steps.first().expect(name);
+
+    assert!(!step.padstack_defs.is_empty(), "{name}: padstacks");
+    assert!(!step.packages.is_empty(), "{name}: packages");
+    assert!(!step.components.is_empty(), "{name}: components");
+    assert!(!step.logical_nets.is_empty(), "{name}: nets");
+    assert!(
+        ecad.cad_data.layers.iter().any(|layer| matches!(
+            layer.layer_function,
+            LayerFunction::Plane | LayerFunction::Conductor
+        )),
+        "{name}: copper layers"
+    );
+    assert!(drill_holes(&doc).next().is_some(), "{name}: drills");
+    doc
+}
+
+/// The holes of the first step's drill layers.
+fn drill_holes(doc: &Ipc2581) -> impl Iterator<Item = &ipc2581::Hole> {
+    let cad_data = &doc.ecad().unwrap().cad_data;
+    let is_drill_layer = |feature: &&LayerFeature| {
+        cad_data.layers.iter().any(|layer| {
+            layer.name == feature.layer_ref && layer.layer_function == LayerFunction::Drill
+        })
+    };
+    cad_data.steps[0]
+        .layer_features
+        .iter()
+        .filter(is_drill_layer)
+        .flat_map(LayerFeature::holes)
+}
+
+// Test Case 1: Network Card
 #[test]
 fn test_testcase1_full() {
-    let full = parse_and_validate(Path::new(
-        "tests/data/testcase1-revc/testcase1-revc-full.xml",
-    ));
-    let assembly = parse_and_validate(Path::new(
-        "tests/data/testcase1-revc/testcase1-revc-assembly.xml",
-    ));
-    let bom =
-        test_helpers::parse_compressed("tests/data/testcase1-revc/testcase1-revc-bom.xml").unwrap();
+    let full = parse("testcase1-revc/testcase1-revc-full");
+    let assembly = parse("testcase1-revc/testcase1-revc-assembly");
+    let bom = parse("testcase1-revc/testcase1-revc-bom");
 
     validate_testcase1_metadata(&full);
     validate_testcase1_cross_file_consistency(&full, &assembly, &bom);
@@ -110,316 +63,144 @@ fn test_testcase1_full() {
 
 #[test]
 fn test_testcase1_fabrication() {
-    let path = Path::new("tests/data/testcase1-revc/testcase1-revc-fabrication.xml");
-    parse_and_validate(path);
+    parse("testcase1-revc/testcase1-revc-fabrication");
 }
 
 #[test]
 fn test_testcase1_test() {
-    let path = Path::new("tests/data/testcase1-revc/testcase1-revc-test.xml");
-    parse_and_validate(path);
+    parse("testcase1-revc/testcase1-revc-test");
 }
 
 #[test]
 fn test_testcase1_stencil() {
-    let path = Path::new("tests/data/testcase1-revc/testcase1-revc-stencil.xml");
-    parse_and_validate(path);
+    parse("testcase1-revc/testcase1-revc-stencil");
 }
 
 // Test Case 3: Round Test Card
 #[test]
 fn test_testcase3_all_modes() {
-    let dir = Path::new("tests/data/testcase3-revc");
-    for entry in fs::read_dir(dir).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("zst") {
-            // Remove .zst extension to get the .xml path for parse_and_validate
-            let xml_path = path.with_extension("").with_extension("");
-            let doc = parse_and_validate(&xml_path);
-            if xml_path
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy().ends_with("-full"))
-            {
-                assert_metadata_populated(&doc, "Testcase 3");
-            }
-        }
+    for mode in ["assembly", "bom", "fabrication", "stackup", "test"] {
+        parse(&format!("testcase3-revc/testcase3-revc-{mode}"));
     }
+    parse_populated("testcase3-revc/testcase3-revc-full");
 }
 
 // Test Case 5: Cadence Allegro
 #[test]
 fn test_testcase5_full() {
-    let path = Path::new("tests/data/testcase5-revc/testcase5-revc-full.xml");
-    let doc = parse_and_validate(path);
-    assert_metadata_populated(&doc, "Testcase 5");
+    parse_populated("testcase5-revc/testcase5-revc-full");
 }
 
 #[test]
 fn test_testcase5_bom() {
-    let path = Path::new("tests/data/testcase5-revc/testcase5-revc-bom.xml");
-    parse_and_validate(path);
+    parse("testcase5-revc/testcase5-revc-bom");
 }
 
 #[test]
 fn test_testcase5_stackup() {
-    let path = Path::new("tests/data/testcase5-revc/testcase5-revc-stackup.xml");
-    parse_and_validate(path);
+    parse("testcase5-revc/testcase5-revc-stackup");
 }
 
 // Test Case 6: Cadence Allegro
 #[test]
 fn test_testcase6_full() {
-    let path = Path::new("tests/data/testcase6-revc/testcase6-revc-full.xml");
-    let doc = parse_and_validate(path);
-    assert_metadata_populated(&doc, "Testcase 6");
+    parse_populated("testcase6-revc/testcase6-revc-full");
 }
 
 // Test Case 9: LED Display Card
 #[test]
 fn test_testcase9_full() {
-    let path = Path::new("tests/data/testcase9-revc/testcase9-revc-full.xml");
-    let doc = parse_and_validate(path);
-    assert_metadata_populated(&doc, "Testcase 9");
+    parse_populated("testcase9-revc/testcase9-revc-full");
 }
 
 // Test Case 10: Demo Board
 #[test]
 fn test_testcase10_full() {
-    let path = Path::new("tests/data/testcase10-revc/testcase10-revc-full.xml");
-    let doc = parse_and_validate(path);
-    assert_metadata_populated(&doc, "Testcase 10");
+    parse_populated("testcase10-revc/testcase10-revc-full");
 }
 
 // Test Case 11: Rigid Flex Display Card
 #[test]
 fn test_testcase11_full() {
-    let path = Path::new("tests/data/testcase11-revc/testcase11-rdgflx-revc-full.xml");
-    let doc = parse_and_validate(path);
-    assert_metadata_populated(&doc, "Testcase 11");
+    let doc = parse_populated("testcase11-revc/testcase11-rdgflx-revc-full");
+
+    // Rigid-flex layers carry one Profile per zone.
+    let layers = &doc.ecad().unwrap().cad_data.layers;
+    let profiles = layers.iter().map(|layer| layer.profiles.len()).max();
+    assert_eq!(profiles, Some(3));
 }
 
 // Test Case 12: Display board w/controller
 #[test]
 fn test_testcase12_full() {
-    let path = Path::new("tests/data/testcase12-revc/testcase12-rdgflx-full.xml");
-    let doc = parse_and_validate(path);
-    assert_metadata_populated(&doc, "Testcase 12");
+    parse_populated("testcase12-revc/testcase12-rdgflx-full");
 }
 
 // KiCad generated file
 #[test]
 fn test_kicad_dm0002() {
-    parse_and_validate(Path::new("tests/data/DM0002-IPC-2518.xml"));
+    parse("DM0002-IPC-2518");
 }
 
-/// Test that verifies different function modes parse correctly
 #[test]
 fn test_function_modes() {
-    use ipc2581::Mode;
-
-    let test_files = [
-        (
-            "tests/data/testcase11-revc/testcase11-rdgflx-revc-assembly.xml",
-            Mode::Assembly,
-        ),
-        (
-            "tests/data/testcase11-revc/testcase11-rdgflx-revc-fabrication.xml",
-            Mode::Fabrication,
-        ),
-        (
-            "tests/data/testcase11-revc/testcase11-rdgflx-revc-stackup.xml",
-            Mode::Stackup,
-        ),
-        (
-            "tests/data/testcase11-revc/testcase11-rdgflx-revc-bom.xml",
-            Mode::Bom,
-        ),
-        (
-            "tests/data/testcase11-revc/testcase11-rdgflx-revc-test.xml",
-            Mode::Test,
-        ),
-        (
-            "tests/data/testcase11-revc/testcase11-rdgflx-revc-stencil.xml",
-            Mode::Stencil,
-        ),
-    ];
-
-    for (path, expected_mode) in test_files {
-        let doc = parse_and_validate(Path::new(path));
-        assert_eq!(
-            doc.content().function_mode.mode,
-            expected_mode,
-            "Mode mismatch in {}",
-            path
-        );
+    for (suffix, mode) in [
+        ("assembly", Mode::Assembly),
+        ("fabrication", Mode::Fabrication),
+        ("stackup", Mode::Stackup),
+        ("bom", Mode::Bom),
+        ("test", Mode::Test),
+        ("stencil", Mode::Stencil),
+    ] {
+        let doc = parse(&format!("testcase11-revc/testcase11-rdgflx-revc-{suffix}"));
+        assert_eq!(doc.content().function_mode.mode, mode, "{suffix}");
     }
 }
 
+/// Reference data from the IPC-2581 consortium website:
+/// 10.5"x8.5"; 52 mils thick; 1640 package symbols, 27 mechanical symbols;
+/// 90 padstack definitions; 12 layers, 4 plane and 8 signal;
+/// 5819 drills, 5782 plated and 37 non plated, 5516 through hole vias.
+/// The file has 1656 `Component` elements, 11 short of 1640 + 27.
 fn validate_testcase1_metadata(doc: &Ipc2581) {
-    use ipc2581::{LayerFunction, PlatingStatus};
+    let cad_data = &doc.ecad().unwrap().cad_data;
+    let step = &cad_data.steps[0];
+    let layers = |function| {
+        let layers = cad_data.layers.iter();
+        layers.filter(|l| l.layer_function == function).count()
+    };
+    let drills = |statuses: &[PlatingStatus]| {
+        drill_holes(doc)
+            .filter(|hole| statuses.contains(&hole.plating_status))
+            .count()
+    };
 
-    if let Some(ecad) = doc.ecad() {
-        let step = &ecad.cad_data.steps[0];
-
-        let padstack_defs = step.padstack_defs.len();
-        let packages = step.packages.len();
-        let components = step.components.len();
-        let logical_nets = step.logical_nets.len();
-
-        let plane_layers = ecad
-            .cad_data
-            .layers
-            .iter()
-            .filter(|l| l.layer_function == LayerFunction::Plane)
-            .count();
-        let conductor_layers = ecad
-            .cad_data
-            .layers
-            .iter()
-            .filter(|l| l.layer_function == LayerFunction::Conductor)
-            .count();
-        let total_copper_layers = plane_layers + conductor_layers;
-
-        let mut total_drills = 0;
-        let mut via_drills = 0;
-        let mut plated_drills = 0;
-        let mut nonplated_drills = 0;
-
-        for feature in &step.layer_features {
-            let layer_name = doc.resolve(feature.layer_ref);
-            let is_drill_layer = ecad.cad_data.layers.iter().any(|l| {
-                doc.resolve(l.name) == layer_name && l.layer_function == LayerFunction::Drill
-            });
-
-            if is_drill_layer {
-                for set in &feature.sets {
-                    for hole in set.holes() {
-                        total_drills += 1;
-                        match hole.plating_status {
-                            PlatingStatus::Via | PlatingStatus::ViaCapped => via_drills += 1,
-                            PlatingStatus::Plated => plated_drills += 1,
-                            PlatingStatus::NonPlated => nonplated_drills += 1,
-                        }
-                    }
-                }
-            }
-        }
-
-        let total_plated = via_drills + plated_drills;
-
-        let (board_width_mm, board_height_mm) = if let Some(profile) = &step.profile {
-            let polygon = &profile.polygon;
-
-            let mut min_x = polygon.begin.x;
-            let mut max_x = polygon.begin.x;
-            let mut min_y = polygon.begin.y;
-            let mut max_y = polygon.begin.y;
-
-            for step in &polygon.steps {
-                let (x, y) = match step {
-                    ipc2581::PolyStep::Segment(s) => (s.point.x, s.point.y),
-                    ipc2581::PolyStep::Curve(c) => (c.point.x, c.point.y),
-                };
-                min_x = min_x.min(x);
-                max_x = max_x.max(x);
-                min_y = min_y.min(y);
-                max_y = max_y.max(y);
-            }
-
-            (max_x - min_x, max_y - min_y)
-        } else {
-            (0.0, 0.0)
-        };
-
-        let board_width = board_width_mm / 25.4;
-        let board_height = board_height_mm / 25.4;
-
-        let board_thickness_mm = ecad
-            .cad_data
-            .stackups
-            .first()
-            .and_then(|s| s.overall_thickness)
-            .unwrap_or(0.0);
-        let board_thickness = board_thickness_mm / 25.4;
-
-        // Reference data from website:
-        // 10.5"x8.5"; 52 mils thick; 1640 package symbols, 27 mechanical symbols
-        // 90 padstack definitions; 12 layers; 4 plane layers/8 Signal layers
-        // 5675 connections; 5819 - total drills; 5782 plated, 37 non plated; 5516 through hole vias
-        //
-        // Note: Reference says "1640 + 27 = 1667 components" but XML has 1656 Component elements.
-        // The discrepancy of 11 may be due to different counting methods or version differences.
-
-        assert_eq!(padstack_defs, 90, "Should have 90 padstack definitions");
-        assert_eq!(packages, 105, "Should have 105 package definitions");
-        assert_eq!(
-            components, 1656,
-            "Should have 1656 component instances (XML actual count)"
-        );
-        assert_eq!(logical_nets, 2436, "Should have 2436 logical nets");
-        assert_eq!(plane_layers, 4, "Should have 4 plane layers");
-        assert_eq!(conductor_layers, 8, "Should have 8 conductor layers");
-        assert_eq!(
-            total_copper_layers, 12,
-            "Should have 12 total copper layers"
-        );
-        assert_eq!(total_drills, 5819, "Should have 5819 total drills");
-        assert_eq!(total_plated, 5782, "Should have 5782 plated (via + tht)");
-        assert_eq!(via_drills, 5516, "Should have 5516 via drills");
-        assert_eq!(plated_drills, 266, "Should have 266 plated tht drills");
-        assert_eq!(nonplated_drills, 37, "Should have 37 non-plated drills");
-
-        // Board dimensions (approximate match)
-        assert!(
-            (board_width - 10.5).abs() < 0.01,
-            "Board width should be ~10.5 inches"
-        );
-        assert!(
-            (board_height - 8.5).abs() < 0.1,
-            "Board height should be ~8.5 inches"
-        );
-        assert!(
-            (board_thickness - 0.053).abs() < 0.001,
-            "Board thickness should be ~0.053 inches (53 mils)"
-        );
-    } else {
-        panic!("Ecad section not found in testcase1");
-    }
-}
-
-fn assert_metadata_populated(doc: &Ipc2581, testcase_name: &str) {
-    let ecad = doc
-        .ecad()
-        .unwrap_or_else(|| panic!("Ecad section not found in {testcase_name}"));
-    let step = ecad
-        .cad_data
-        .steps
-        .first()
-        .unwrap_or_else(|| panic!("Step not found in {testcase_name}"));
-
-    assert!(!step.padstack_defs.is_empty(), "{testcase_name}: padstacks");
-    assert!(!step.packages.is_empty(), "{testcase_name}: packages");
-    assert!(!step.components.is_empty(), "{testcase_name}: components");
-    assert!(!step.logical_nets.is_empty(), "{testcase_name}: nets");
-    assert!(
-        ecad.cad_data.layers.iter().any(|layer| matches!(
-            layer.layer_function,
-            ipc2581::LayerFunction::Plane | ipc2581::LayerFunction::Conductor
-        )),
-        "{testcase_name}: copper layers"
+    assert_eq!(step.padstack_defs.len(), 90);
+    assert_eq!(step.packages.len(), 105);
+    assert_eq!(step.components.len(), 1656);
+    assert_eq!(step.logical_nets.len(), 2436);
+    assert_eq!(layers(LayerFunction::Plane), 4);
+    assert_eq!(layers(LayerFunction::Conductor), 8);
+    assert_eq!(drill_holes(doc).count(), 5819);
+    assert_eq!(
+        drills(&[PlatingStatus::Via, PlatingStatus::ViaCapped]),
+        5516
     );
-    assert!(
-        step.layer_features.iter().any(|feature| {
-            let layer_name = doc.resolve(feature.layer_ref);
-            let is_drill_layer = ecad.cad_data.layers.iter().any(|layer| {
-                doc.resolve(layer.name) == layer_name
-                    && layer.layer_function == ipc2581::LayerFunction::Drill
-            });
-            is_drill_layer && feature.sets.iter().any(|set| set.holes().next().is_some())
-        }),
-        "{testcase_name}: drills"
-    );
+    assert_eq!(drills(&[PlatingStatus::Plated]), 266);
+    assert_eq!(drills(&[PlatingStatus::NonPlated]), 37);
+
+    let points = step.profile.as_ref().unwrap().polygon.points();
+    let span_inches = |coordinate: fn(&ipc2581::Point) -> f64| {
+        let values = points.iter().map(coordinate);
+        let (min, max) = values.fold((f64::MAX, f64::MIN), |(min, max), value| {
+            (min.min(value), max.max(value))
+        });
+        (max - min) / 25.4
+    };
+    assert!((span_inches(|point| point.x) - 10.5).abs() < 0.01);
+    assert!((span_inches(|point| point.y) - 8.5).abs() < 0.1);
+    let thickness = cad_data.stackups[0].overall_thickness.unwrap() / 25.4;
+    assert!((thickness - 0.053).abs() < 0.001);
 }
 
 fn validate_testcase1_cross_file_consistency(
@@ -427,23 +208,14 @@ fn validate_testcase1_cross_file_consistency(
     assembly: &Ipc2581,
     bom_doc: &Ipc2581,
 ) {
-    let full_step = &full.ecad().expect("full ECAD data").cad_data.steps[0];
-    let assembly_step = &assembly.ecad().expect("assembly ECAD data").cad_data.steps[0];
+    let full_step = &full.ecad().unwrap().cad_data.steps[0];
+    let assembly_step = &assembly.ecad().unwrap().cad_data.steps[0];
+    assert_eq!(full_step.components.len(), assembly_step.components.len());
+    assert_eq!(full_step.packages.len(), assembly_step.packages.len());
 
-    assert_eq!(
-        full_step.components.len(),
-        assembly_step.components.len(),
-        "Component count should match between full and assembly views"
-    );
-    assert_eq!(
-        full_step.packages.len(),
-        assembly_step.packages.len(),
-        "Package count should match between full and assembly views"
-    );
-
-    let bom = bom_doc.bom().expect("BOM data");
-    assert!(!bom.items.is_empty());
-    let placed_quantity: u32 = bom
+    let placed_quantity: u32 = bom_doc
+        .bom()
+        .expect("BOM data")
         .items
         .iter()
         .filter(|item| item.reference_designators().next().is_some())

@@ -81,28 +81,23 @@ pub fn segments(
     if let Some(point) = crossing_point(first_start, first_end, second_start, second_end) {
         return (0.0, point, point);
     }
-    let candidates = [
-        {
-            let (distance, closest) = point_segment(first_start, second_start, second_end);
-            (distance, first_start, closest)
-        },
-        {
-            let (distance, closest) = point_segment(first_end, second_start, second_end);
-            (distance, first_end, closest)
-        },
-        {
-            let (distance, closest) = point_segment(second_start, first_start, first_end);
-            (distance, closest, second_start)
-        },
-        {
-            let (distance, closest) = point_segment(second_end, first_start, first_end);
-            (distance, closest, second_end)
-        },
-    ];
-    candidates
-        .into_iter()
-        .min_by(|left, right| left.0.total_cmp(&right.0))
-        .expect("four segment endpoint candidates")
+    let to_second = |end: Point| {
+        let (distance, closest) = point_segment(end, second_start, second_end);
+        (distance, end, closest)
+    };
+    let to_first = |end: Point| {
+        let (distance, closest) = point_segment(end, first_start, first_end);
+        (distance, closest, end)
+    };
+    [
+        to_second(first_start),
+        to_second(first_end),
+        to_first(second_start),
+        to_first(second_end),
+    ]
+    .into_iter()
+    .min_by(|left, right| left.0.total_cmp(&right.0))
+    .expect("four segment endpoint candidates")
 }
 
 /// The intersection of two properly crossing segments. Touching, collinear,

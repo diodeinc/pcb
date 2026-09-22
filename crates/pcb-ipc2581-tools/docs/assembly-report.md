@@ -34,7 +34,7 @@ board-local-to-scope transform.
 ## Physical profiles
 
 `profiles` contains each IPC-2581C Step profile as an outer contour and
-explicit cutout contours. Contours retain line, arc, cubic, and close commands
+explicit cutout contours. Contours retain line, arc, and close commands
 in source order. Each profile also has local bounds and net material area.
 
 The selected scope and each board occurrence reference their profile

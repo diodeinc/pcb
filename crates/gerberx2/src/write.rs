@@ -2,13 +2,14 @@ use crate::types::*;
 use crate::{GerberError, Result};
 use pcb_ir::geom::Polarity;
 use pcb_ir::geom::region::Ring;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 /// String-backed X2 attribute used by the Gerber writer.
 ///
 /// Attribute names should include the leading X2 dot, for example
 /// `.FileFunction`, `.AperFunction`, `.N`, `.C`, or `.P`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AttributeValue {
     pub name: String,
     pub fields: Vec<String>,
@@ -26,34 +27,101 @@ impl AttributeValue {
     }
 }
 
-/// Convert arbitrary metadata into a Gerber X2 attribute field.
+/// Encode free-form metadata as one X2 attribute field, for Gerber and XNC
+/// alike.
 ///
-/// Gerber attributes are comma-separated and commands are terminated by `*`
-/// inside `%...%` extended commands, so those characters cannot appear
-/// literally in a field. The writer keeps validation strict; source dialects
-/// should normalize free-form metadata through this helper when lowering into
-/// Gerber writer IR.
-pub fn sanitize_attribute_field(field: &str) -> String {
-    let sanitized = field
-        .chars()
-        .map(|ch| match ch {
-            '*' | '%' | ',' => '_',
-            _ => ch,
-        })
-        .collect::<String>();
-    if sanitized.is_empty() {
-        "_".to_string()
-    } else {
-        sanitized
+/// A field is printable ASCII. The command delimiters `*` and `%`, the field
+/// separator `,`, the XNC comment mark `;`, the escape character `\` itself,
+/// control characters and everything beyond ASCII are written as `\uXXXX`
+/// UTF-16 escapes, which is what the format specifies and what KiCad writes.
+/// The writers keep validation strict; source dialects pass free-form
+/// metadata through this encoding when lowering into writer IR.
+pub fn escape_attribute_field(field: &str) -> String {
+    if field.is_empty() {
+        return "_".to_string();
+    }
+    let mut escaped = String::with_capacity(field.len());
+    for ch in field.chars() {
+        if matches!(ch, ' '..='~') && !matches!(ch, '\\' | '*' | '%' | ',' | ';') {
+            escaped.push(ch);
+        } else {
+            for unit in ch.encode_utf16(&mut [0; 2]) {
+                write!(escaped, "\\u{unit:04X}").unwrap();
+            }
+        }
+    }
+    escaped
+}
+
+/// Decode the `\uXXXX` escapes of an attribute field read from a file.
+pub fn unescape_attribute_field(field: &str) -> String {
+    let mut units = Vec::with_capacity(field.len());
+    let mut rest = field;
+    while let Some(ch) = rest.chars().next() {
+        let escape = rest
+            .strip_prefix("\\u")
+            .and_then(|hex| hex.get(..4))
+            .filter(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        if let Some(hex) = escape {
+            units.push(u16::from_str_radix(hex, 16).expect("four hex digits"));
+            rest = &rest[6..];
+        } else {
+            units.extend_from_slice(ch.encode_utf16(&mut [0; 2]));
+            rest = &rest[ch.len_utf8()..];
+        }
+    }
+    String::from_utf16_lossy(&units)
+}
+
+/// The distinct X2 attribute sets of one layer. Apertures and objects name
+/// their set by id, so the handful of sets a layer uses is stored once and
+/// equal sets compare as one integer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttributeSets {
+    sets: Vec<Vec<AttributeValue>>,
+    ids: HashMap<Vec<AttributeValue>, u32>,
+}
+
+impl AttributeSets {
+    /// The set without attributes, present in every layer.
+    pub const EMPTY: u32 = 0;
+
+    pub fn intern(&mut self, set: Vec<AttributeValue>) -> u32 {
+        if let Some(&id) = self.ids.get(&set) {
+            return id;
+        }
+        let id = self.sets.len() as u32;
+        self.sets.push(set.clone());
+        self.ids.insert(set, id);
+        id
+    }
+
+    pub fn get(&self, id: u32) -> Option<&[AttributeValue]> {
+        self.sets.get(id as usize).map(Vec::as_slice)
+    }
+
+    /// Every set, indexed by id.
+    pub fn sets(&self) -> &[Vec<AttributeValue>] {
+        &self.sets
     }
 }
 
-/// One aperture definition plus X2 aperture attributes active while defining it.
+impl Default for AttributeSets {
+    fn default() -> Self {
+        Self {
+            sets: vec![Vec::new()],
+            ids: HashMap::from([(Vec::new(), Self::EMPTY)]),
+        }
+    }
+}
+
+/// One aperture definition plus the X2 aperture attributes active while
+/// defining it, as a set of [`GerberLayer::attribute_sets`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriterAperture {
     pub code: i32,
     pub template: WriterApertureTemplate,
-    pub attributes: Vec<AttributeValue>,
+    pub attributes: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,30 +151,31 @@ pub enum WriterApertureTemplate {
     Outline { outlines: Vec<Ring> },
 }
 
-/// One ordered graphical object plus X2 object attributes active while emitting it.
+/// One ordered graphical object plus the X2 object attributes active while
+/// emitting it, as a set of [`GerberLayer::attribute_sets`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriterObject {
     pub kind: ObjectKind,
     pub polarity: Polarity,
     pub repeat: Option<StepRepeat>,
     /// Aperture attributes attached directly to a region object.
-    pub aperture_attributes: Vec<AttributeValue>,
-    pub attributes: Vec<AttributeValue>,
+    pub aperture_attributes: u32,
+    pub attributes: u32,
 }
 
 impl WriterObject {
-    pub fn new(kind: ObjectKind, polarity: Polarity, attributes: Vec<AttributeValue>) -> Self {
+    pub fn new(kind: ObjectKind, polarity: Polarity, attributes: u32) -> Self {
         Self {
             kind,
             polarity,
             repeat: None,
-            aperture_attributes: Vec::new(),
+            aperture_attributes: AttributeSets::EMPTY,
             attributes,
         }
     }
 
     pub fn dark(kind: ObjectKind) -> Self {
-        Self::new(kind, Polarity::Dark, Vec::new())
+        Self::new(kind, Polarity::Dark, AttributeSets::EMPTY)
     }
 }
 
@@ -122,6 +191,7 @@ pub struct GerberLayer {
     pub unit: Unit,
     pub coordinate_format: CoordinateFormat,
     pub file_attributes: Vec<AttributeValue>,
+    pub attribute_sets: AttributeSets,
     pub apertures: Vec<WriterAperture>,
     pub objects: Vec<WriterObject>,
 }
@@ -137,6 +207,7 @@ impl Default for GerberLayer {
                 y_decimal_digits: 6,
             },
             file_attributes: Vec::new(),
+            attribute_sets: AttributeSets::default(),
             apertures: Vec::new(),
             objects: Vec::new(),
         }
@@ -161,8 +232,14 @@ struct Writer<'a> {
     current_coordinates: Option<(i64, i64)>,
     /// The current point while it is known to continue a stroke.
     current_point: Option<(i64, i64)>,
-    current_aperture_attributes: Vec<AttributeValue>,
-    current_object_attributes: Vec<AttributeValue>,
+    /// Where the previous object's draw ended, while no other operation has
+    /// intervened.
+    stroke_end: Option<(i64, i64)>,
+    /// The aperture and object attribute sets of the last object, whose
+    /// attributes are the file's dictionary at this point.
+    current_attribute_sets: (u32, u32),
+    current_aperture_attributes: &'a [AttributeValue],
+    current_object_attributes: &'a [AttributeValue],
 }
 
 impl<'a> Writer<'a> {
@@ -176,16 +253,34 @@ impl<'a> Writer<'a> {
             current_repeat: None,
             current_coordinates: None,
             current_point: None,
-            current_aperture_attributes: Vec::new(),
-            current_object_attributes: Vec::new(),
+            stroke_end: None,
+            current_attribute_sets: (AttributeSets::EMPTY, AttributeSets::EMPTY),
+            current_aperture_attributes: &[],
+            current_object_attributes: &[],
         }
     }
 
+    fn attribute_set(&self, id: u32) -> Result<&'a [AttributeValue]> {
+        self.layer.attribute_sets.get(id).ok_or_else(|| {
+            GerberError::InvalidStructure(format!("attribute set {id} is not in the layer"))
+        })
+    }
+
     fn write_layer(&mut self) -> Result<()> {
-        self.output.push_str("G04 generated by gerberx2*\n");
-        self.write_format();
-        self.write_unit();
-        self.output.push_str("G75*\n");
+        let format = self.layer.coordinate_format;
+        let unit = match self.layer.unit {
+            Unit::Millimeter => "MM",
+            Unit::Inch => "IN",
+        };
+        writeln!(
+            self.output,
+            "G04 generated by gerberx2*\n%FSLAX{}{}Y{}{}*%\n%MO{unit}*%\nG75*",
+            format.x_integer_digits,
+            format.x_decimal_digits,
+            format.y_integer_digits,
+            format.y_decimal_digits
+        )
+        .unwrap();
 
         for attr in &self.layer.file_attributes {
             self.write_attribute("TF", attr)?;
@@ -198,11 +293,12 @@ impl<'a> Writer<'a> {
         }
 
         for aperture in &self.layer.apertures {
-            for attr in &aperture.attributes {
+            let attributes = self.attribute_set(aperture.attributes)?;
+            for attr in attributes {
                 self.write_attribute("TA", attr)?;
             }
             self.write_aperture(aperture)?;
-            if !aperture.attributes.is_empty() {
+            if !attributes.is_empty() {
                 self.output.push_str("%TD*%\n");
             }
         }
@@ -236,25 +332,6 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
-    fn write_format(&mut self) {
-        let format = self.layer.coordinate_format;
-        self.output.push_str(&format!(
-            "%FSLAX{}{}Y{}{}*%\n",
-            format.x_integer_digits,
-            format.x_decimal_digits,
-            format.y_integer_digits,
-            format.y_decimal_digits
-        ));
-    }
-
-    fn write_unit(&mut self) {
-        let unit = match self.layer.unit {
-            Unit::Millimeter => "MM",
-            Unit::Inch => "IN",
-        };
-        self.output.push_str(&format!("%MO{unit}*%\n"));
-    }
-
     fn write_attribute(&mut self, command: &str, attr: &AttributeValue) -> Result<()> {
         validate_attribute(attr)?;
         self.output.push('%');
@@ -276,80 +353,120 @@ impl<'a> Writer<'a> {
             )));
         }
 
-        self.output.push_str(&format!("%ADD{}", aperture.code));
-        match &aperture.template {
+        // A template is its letter and `X`-separated parameters, the hole last.
+        let (letter, parameters, hole_diameter) = match aperture.template {
             WriterApertureTemplate::Circle {
                 diameter,
                 hole_diameter,
-            } => {
-                self.output.push_str("C,");
-                self.write_decimal(*diameter);
-                if let Some(hole_diameter) = hole_diameter {
-                    self.output.push('X');
-                    self.write_decimal(*hole_diameter);
-                }
-            }
+            } => ('C', vec![diameter], hole_diameter),
             WriterApertureTemplate::Rectangle {
                 width,
                 height,
                 hole_diameter,
-            } => {
-                self.output.push_str("R,");
-                self.write_decimal(*width);
-                self.output.push('X');
-                self.write_decimal(*height);
-                if let Some(hole_diameter) = hole_diameter {
-                    self.output.push('X');
-                    self.write_decimal(*hole_diameter);
-                }
-            }
+            } => ('R', vec![width, height], hole_diameter),
             WriterApertureTemplate::Obround {
                 width,
                 height,
                 hole_diameter,
-            } => {
-                self.output.push_str("O,");
-                self.write_decimal(*width);
-                self.output.push('X');
-                self.write_decimal(*height);
-                if let Some(hole_diameter) = hole_diameter {
-                    self.output.push('X');
-                    self.write_decimal(*hole_diameter);
-                }
-            }
+            } => ('O', vec![width, height], hole_diameter),
             WriterApertureTemplate::Polygon {
                 outer_diameter,
                 vertices,
                 rotation_degrees,
                 hole_diameter,
             } => {
-                self.output.push_str("P,");
-                self.write_decimal(*outer_diameter);
-                self.output.push('X');
-                self.output.push_str(&vertices.to_string());
-                if rotation_degrees.is_some() || hole_diameter.is_some() {
-                    self.output.push('X');
-                    self.write_decimal(rotation_degrees.unwrap_or(0.0));
-                }
-                if let Some(hole_diameter) = hole_diameter {
-                    self.output.push('X');
-                    self.write_decimal(*hole_diameter);
-                }
+                // A hole is positional after the rotation.
+                let rotation = rotation_degrees.or(hole_diameter.map(|_| 0.0));
+                let mut parameters = vec![outer_diameter, f64::from(vertices)];
+                parameters.extend(rotation);
+                ('P', parameters, hole_diameter)
             }
             WriterApertureTemplate::Outline { .. } => {
-                write!(self.output, "OUTLINE{}", aperture.code).unwrap();
+                writeln!(self.output, "%ADD{0}OUTLINE{0}*%", aperture.code).unwrap();
+                return Ok(());
             }
+        };
+        write!(self.output, "%ADD{}{letter}", aperture.code).unwrap();
+        for (index, value) in parameters.into_iter().chain(hole_diameter).enumerate() {
+            self.output.push(if index == 0 { ',' } else { 'X' });
+            self.write_decimal(value);
         }
         self.output.push_str("*%\n");
         Ok(())
     }
 
     fn write_objects(&mut self, objects: &[WriterObject]) -> Result<()> {
-        for object in objects {
-            self.write_object(object)?;
+        for (index, object) in objects.iter().enumerate() {
+            if !self.is_covered_dot(object, objects.get(index + 1)) {
+                self.write_object(object)?;
+            }
         }
         self.close_step_repeat();
         Ok(())
+    }
+
+    /// Whether a segment's endpoints coincide at output precision. A full
+    /// circle is exempt; every other arc must not reach the file this way,
+    /// because G75 reads coincident arc endpoints as 360 degrees.
+    fn collapses(&self, start: Point, end: Point, arc: Option<(Point, bool)>) -> bool {
+        self.coordinates(start) == self.coordinates(end)
+            && arc.is_none_or(|(offset, clockwise)| {
+                geometry_arc(start, end, offset, clockwise).sweep_radians() <= std::f64::consts::PI
+            })
+    }
+
+    /// The point and aperture of a draw that images as a single dot.
+    fn dot(&self, kind: &ObjectKind) -> Option<((i64, i64), i32)> {
+        let (start, end, arc, aperture) = match *kind {
+            ObjectKind::Draw {
+                start,
+                end,
+                aperture,
+            } => (start, end, None, aperture),
+            ObjectKind::Arc {
+                start,
+                end,
+                center_offset,
+                clockwise,
+                aperture,
+            } => (start, end, Some((center_offset, clockwise)), aperture),
+            ObjectKind::Flash { .. } | ObjectKind::Region { .. } => return None,
+        };
+        self.collapses(start, end, arc)
+            .then(|| (self.coordinates(end), aperture))
+    }
+
+    /// A dot is redundant when the neighbouring draw of the same stroke
+    /// already images its disc; a dot on its own is the whole image.
+    fn is_covered_dot(&self, object: &WriterObject, next: Option<&WriterObject>) -> bool {
+        let Some((at, aperture)) = self.dot(&object.kind) else {
+            return false;
+        };
+        let before = self.stroke_end == Some(at)
+            && self.current_aperture == Some(aperture)
+            && self.current_polarity == object.polarity
+            && self.current_repeat == object.repeat
+            && self.current_attribute_sets.1 == object.attributes;
+        let after = next.is_some_and(|next| {
+            let continues = match next.kind {
+                ObjectKind::Draw {
+                    start,
+                    aperture: next_aperture,
+                    ..
+                }
+                | ObjectKind::Arc {
+                    start,
+                    aperture: next_aperture,
+                    ..
+                } => next_aperture == aperture && self.coordinates(start) == at,
+                ObjectKind::Flash { .. } | ObjectKind::Region { .. } => false,
+            };
+            continues
+                && next.polarity == object.polarity
+                && next.repeat == object.repeat
+                && next.attributes == object.attributes
+        });
+        before || after
     }
 
     fn write_object(&mut self, object: &WriterObject) -> Result<()> {
@@ -360,7 +477,7 @@ impl<'a> Writer<'a> {
         }
 
         self.set_polarity(object.polarity);
-        self.set_attributes(&object.aperture_attributes, &object.attributes)?;
+        self.set_attributes(object.aperture_attributes, object.attributes)?;
         self.open_step_repeat(object.repeat)?;
 
         match &object.kind {
@@ -395,6 +512,10 @@ impl<'a> Writer<'a> {
                 self.write_region(contours)?;
             }
         }
+        self.stroke_end = match object.kind {
+            ObjectKind::Draw { .. } | ObjectKind::Arc { .. } => self.current_point,
+            ObjectKind::Flash { .. } | ObjectKind::Region { .. } => None,
+        };
 
         Ok(())
     }
@@ -418,11 +539,12 @@ impl<'a> Writer<'a> {
                     .to_string(),
             ));
         }
-        self.output.push_str("%SRX");
-        self.output.push_str(&repeat.x_repeats.to_string());
-        self.output.push('Y');
-        self.output.push_str(&repeat.y_repeats.to_string());
-        self.output.push('I');
+        write!(
+            self.output,
+            "%SRX{}Y{}I",
+            repeat.x_repeats, repeat.y_repeats
+        )
+        .unwrap();
         self.write_decimal(repeat.x_step);
         self.output.push('J');
         self.write_decimal(repeat.y_step);
@@ -439,30 +561,23 @@ impl<'a> Writer<'a> {
         }
     }
 
-    fn set_attributes(
-        &mut self,
-        aperture_attributes: &[AttributeValue],
-        object_attributes: &[AttributeValue],
-    ) -> Result<()> {
-        if self.current_aperture_attributes == aperture_attributes
-            && self.current_object_attributes == object_attributes
-        {
+    fn set_attributes(&mut self, aperture_set: u32, object_set: u32) -> Result<()> {
+        if self.current_attribute_sets == (aperture_set, object_set) {
             return Ok(());
         }
-        let dropped_aperture = self.current_aperture_attributes.iter().any(|current| {
-            !aperture_attributes
+        let aperture_attributes = self.attribute_set(aperture_set)?;
+        let object_attributes = self.attribute_set(object_set)?;
+        let drops = |current: &[AttributeValue], next: &[AttributeValue]| {
+            current
                 .iter()
-                .any(|attribute| attribute.name == current.name)
-        });
-        let dropped_object = self.current_object_attributes.iter().any(|current| {
-            !object_attributes
-                .iter()
-                .any(|attribute| attribute.name == current.name)
-        });
-        if dropped_aperture || dropped_object {
+                .any(|current| !next.iter().any(|next| next.name == current.name))
+        };
+        if drops(self.current_aperture_attributes, aperture_attributes)
+            || drops(self.current_object_attributes, object_attributes)
+        {
             self.output.push_str("%TD*%\n");
-            self.current_aperture_attributes.clear();
-            self.current_object_attributes.clear();
+            self.current_aperture_attributes = &[];
+            self.current_object_attributes = &[];
         }
         for attribute in aperture_attributes {
             if !self.current_aperture_attributes.contains(attribute) {
@@ -474,39 +589,46 @@ impl<'a> Writer<'a> {
                 self.write_attribute("TO", attribute)?;
             }
         }
-        self.current_aperture_attributes = aperture_attributes.to_vec();
-        self.current_object_attributes = object_attributes.to_vec();
+        self.current_attribute_sets = (aperture_set, object_set);
+        self.current_aperture_attributes = aperture_attributes;
+        self.current_object_attributes = object_attributes;
         Ok(())
     }
 
     fn write_region(&mut self, contours: &[Contour]) -> Result<()> {
         self.output.push_str("G36*\n");
         for contour in contours {
-            let Some(first) = contour.segments.first() else {
+            let Some(ContourSegment::Line { start, .. } | ContourSegment::Arc { start, .. }) =
+                contour.segments.first()
+            else {
                 continue;
             };
             self.set_plot_mode(PlotMode::Linear);
             // A contour always opens with its own move.
             self.current_point = None;
-            self.write_move(segment_start(first));
+            self.write_move(*start);
             for segment in &contour.segments {
-                match *segment {
-                    ContourSegment::Line { start, end } => {
-                        if self.coordinates(start) == self.coordinates(end) {
-                            return Err(GerberError::InvalidStructure(format!(
-                                "region segment from ({}, {}) to ({}, {}) collapses at output precision; increase precision or repair the source geometry",
-                                start.x, start.y, end.x, end.y
-                            )));
-                        }
-                        self.set_plot_mode(PlotMode::Linear);
-                        self.write_plot(end, None);
-                    }
+                let (start, end, arc) = match *segment {
+                    ContourSegment::Line { start, end } => (start, end, None),
                     ContourSegment::Arc {
                         start,
                         end,
                         center_offset,
                         clockwise,
-                    } => {
+                    } => (start, end, Some((center_offset, clockwise))),
+                };
+                if self.collapses(start, end, arc) {
+                    return Err(GerberError::InvalidStructure(format!(
+                        "region segment from ({}, {}) to ({}, {}) collapses at output precision; increase precision or repair the source geometry",
+                        start.x, start.y, end.x, end.y
+                    )));
+                }
+                match arc {
+                    None => {
+                        self.set_plot_mode(PlotMode::Linear);
+                        self.write_plot(end, None);
+                    }
+                    Some((center_offset, clockwise)) => {
                         self.write_arc(start, end, center_offset, clockwise);
                     }
                 }
@@ -519,7 +641,7 @@ impl<'a> Writer<'a> {
 
     fn set_aperture(&mut self, aperture: i32) {
         if self.current_aperture != Some(aperture) {
-            self.output.push_str(&format!("D{aperture}*\n"));
+            writeln!(self.output, "D{aperture}*").unwrap();
             self.current_aperture = Some(aperture);
         }
     }
@@ -530,7 +652,7 @@ impl<'a> Writer<'a> {
                 Polarity::Dark => "D",
                 Polarity::Clear => "C",
             };
-            self.output.push_str(&format!("%LP{code}*%\n"));
+            writeln!(self.output, "%LP{code}*%").unwrap();
             self.current_polarity = polarity;
         }
     }
@@ -564,13 +686,12 @@ impl<'a> Writer<'a> {
     /// G75 interprets as a full circle.
     /// Equal subdivisions avoid leaving a tiny remainder for near-full circles.
     fn write_arc(&mut self, start: Point, end: Point, offset: Point, clockwise: bool) {
-        use pcb_ir::geom::{Arc, Point as GeometryPoint, Segment};
-        let arc = Arc::new(
-            GeometryPoint::new(start.x, start.y),
-            GeometryPoint::new(end.x, end.y),
-            GeometryPoint::new(start.x + offset.x, start.y + offset.y),
-            clockwise,
-        );
+        // A collapsed arc images as its dot.
+        if self.collapses(start, end, Some((offset, clockwise))) {
+            self.set_plot_mode(PlotMode::Linear);
+            return self.write_plot(end, None);
+        }
+        let arc = geometry_arc(start, end, offset, clockwise);
         let sweep = arc.sweep_radians();
         let count = (sweep / std::f64::consts::PI).ceil().max(1.0) as usize;
         self.set_plot_mode(if clockwise {
@@ -584,7 +705,7 @@ impl<'a> Writer<'a> {
             let next = if index == count {
                 end
             } else {
-                let point = Segment::Arc(arc).point_at(index as f64 / count as f64);
+                let point = pcb_ir::geom::Segment::Arc(arc).point_at(index as f64 / count as f64);
                 Point {
                     x: point.x,
                     y: point.y,
@@ -645,7 +766,7 @@ impl<'a> Writer<'a> {
     }
 
     fn write_decimal(&mut self, value: f64) {
-        self.output.push_str(&trim_decimal(value));
+        self.output.push_str(&trim_decimal(value, 9));
     }
 }
 
@@ -677,14 +798,20 @@ fn validate_no_command_delimiters(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn segment_start(segment: &ContourSegment) -> Point {
-    match *segment {
-        ContourSegment::Line { start, .. } | ContourSegment::Arc { start, .. } => start,
-    }
+fn geometry_arc(start: Point, end: Point, offset: Point, clockwise: bool) -> pcb_ir::geom::Arc {
+    use pcb_ir::geom::Point as GeometryPoint;
+    pcb_ir::geom::Arc::new(
+        GeometryPoint::new(start.x, start.y),
+        GeometryPoint::new(end.x, end.y),
+        GeometryPoint::new(start.x + offset.x, start.y + offset.y),
+        clockwise,
+    )
 }
 
-fn trim_decimal(value: f64) -> String {
-    let mut text = format!("{value:.9}");
+/// `value` in fixed-point notation with at most `decimals` decimals and no
+/// trailing zeros.
+pub fn trim_decimal(value: f64, decimals: usize) -> String {
+    let mut text = format!("{value:.decimals$}");
     while text.contains('.') && text.ends_with('0') {
         text.pop();
     }
@@ -699,9 +826,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sanitizes_freeform_attribute_fields() {
-        assert_eq!(sanitize_attribute_field("PWR_RST*,A%B"), "PWR_RST__A_B");
-        assert_eq!(sanitize_attribute_field(""), "_");
+    fn escapes_freeform_attribute_fields() {
+        for (field, escaped) in [
+            ("PWR RST-1", "PWR RST-1"),
+            ("PWR_RST*,A%B;", "PWR_RST\\u002A\\u002CA\\u0025B\\u003B"),
+            ("R\\E\\S", "R\\u005CE\\u005CS"),
+            ("\u{b5}C_RST\t", "\\u00B5C_RST\\u0009"),
+            ("\u{1f600}", "\\uD83D\\uDE00"),
+        ] {
+            assert_eq!(escape_attribute_field(field), escaped);
+            assert_eq!(unescape_attribute_field(escaped), field);
+        }
+        assert_eq!(escape_attribute_field(""), "_");
+        // Anything short of a full escape is literal text.
+        assert_eq!(unescape_attribute_field("\\u00B"), "\\u00B");
     }
 
     #[test]
@@ -725,37 +863,26 @@ mod tests {
                 aperture: 10,
             })
         };
-        let layer = GerberLayer {
-            apertures: vec![WriterAperture {
-                code: 10,
-                template: WriterApertureTemplate::Circle {
-                    diameter: 0.1,
-                    hole_diameter: None,
-                },
-                attributes: Vec::new(),
-            }],
-            objects: vec![
-                draw(point(0.0, 0.0), point(1.0, 0.0)),
-                draw(point(1.0, 0.0), point(1.0, 1.0)),
-                draw(point(2.0, 2.0), point(3.0, 2.0)),
-                WriterObject::dark(ObjectKind::Region {
-                    contours: vec![Contour {
-                        segments: [
-                            (3.0, 2.0, 4.0, 2.0),
-                            (4.0, 2.0, 4.0, 3.0),
-                            (4.0, 3.0, 3.0, 2.0),
-                        ]
-                        .map(|(x0, y0, x1, y1)| ContourSegment::Line {
-                            start: point(x0, y0),
-                            end: point(x1, y1),
-                        })
-                        .to_vec(),
-                    }],
-                }),
-                draw(point(3.0, 2.0), point(5.0, 5.0)),
-            ],
-            ..GerberLayer::default()
-        };
+        let layer = stroke_layer(vec![
+            draw(point(0.0, 0.0), point(1.0, 0.0)),
+            draw(point(1.0, 0.0), point(1.0, 1.0)),
+            draw(point(2.0, 2.0), point(3.0, 2.0)),
+            WriterObject::dark(ObjectKind::Region {
+                contours: vec![Contour {
+                    segments: [
+                        (3.0, 2.0, 4.0, 2.0),
+                        (4.0, 2.0, 4.0, 3.0),
+                        (4.0, 3.0, 3.0, 2.0),
+                    ]
+                    .map(|(x0, y0, x1, y1)| ContourSegment::Line {
+                        start: point(x0, y0),
+                        end: point(x1, y1),
+                    })
+                    .to_vec(),
+                }],
+            }),
+            draw(point(3.0, 2.0), point(5.0, 5.0)),
+        ]);
 
         let output = write_layer(&layer).unwrap();
         // One move per disjoint stroke start, the region contour, and the
@@ -766,35 +893,117 @@ mod tests {
         assert_eq!(parsed.objects().len(), 5);
     }
 
+    fn stroke_layer(objects: Vec<WriterObject>) -> GerberLayer {
+        GerberLayer {
+            apertures: [10, 11]
+                .map(|code| WriterAperture {
+                    code,
+                    template: WriterApertureTemplate::Circle {
+                        diameter: 0.1,
+                        hole_diameter: None,
+                    },
+                    attributes: AttributeSets::EMPTY,
+                })
+                .to_vec(),
+            objects,
+            ..GerberLayer::default()
+        }
+    }
+
+    #[test]
+    fn sub_grid_arc_serializes_as_a_dot_not_a_full_circle() {
+        let output = write_layer(&stroke_layer(vec![WriterObject::dark(ObjectKind::Arc {
+            start: Point { x: 10.0, y: 0.0 },
+            end: Point {
+                x: 10.000_000_3,
+                y: 0.000_000_2,
+            },
+            center_offset: Point { x: -5.0, y: 0.0 },
+            clockwise: false,
+            aperture: 10,
+        })]))
+        .unwrap();
+        assert!(
+            output.contains("X10000000Y0D02*\nG01*\nX10000000D01*\n"),
+            "{output}"
+        );
+        let parsed = crate::GerberX2::parse(&output).unwrap();
+        assert!(matches!(parsed.objects()[0].kind, ObjectKind::Draw { .. }));
+    }
+
+    #[test]
+    fn zero_length_draws_survive_only_as_a_whole_stroke() {
+        let point = |x: f64, y: f64| Point { x, y };
+        let draw = |start, end, aperture| {
+            WriterObject::dark(ObjectKind::Draw {
+                start,
+                end,
+                aperture,
+            })
+        };
+        let nudge = 0.000_000_3;
+        let plots = |objects| {
+            let output = write_layer(&stroke_layer(objects)).unwrap();
+            (
+                output.matches("D01*").count(),
+                output.matches("D02*").count(),
+            )
+        };
+        // Inside a polyline the neighbouring draws already image the point,
+        // whether the collapsed draw leads, sits inside, or trails.
+        assert_eq!(
+            plots(vec![
+                draw(point(0.0, 0.0), point(nudge, 0.0), 10),
+                draw(point(nudge, 0.0), point(1.0, 0.0), 10),
+                draw(point(1.0, 0.0), point(1.0, nudge), 10),
+                draw(point(1.0, nudge), point(1.0, 1.0), 10),
+                draw(point(1.0, 1.0), point(1.0, 1.0), 10),
+            ]),
+            (2, 1)
+        );
+        // A dot on its own is the whole image, as is one whose neighbour
+        // draws through a different aperture.
+        assert_eq!(
+            plots(vec![draw(point(2.0, 2.0), point(2.0, 2.0), 10)]),
+            (1, 1)
+        );
+        assert_eq!(
+            plots(vec![
+                draw(point(0.0, 0.0), point(1.0, 0.0), 10),
+                draw(point(1.0, 0.0), point(1.0, 0.0), 11),
+            ]),
+            (2, 1)
+        );
+    }
+
     #[test]
     fn object_attributes_persist_across_objects() {
-        let flash = |x: f64, attributes: Vec<AttributeValue>| WriterObject {
-            kind: ObjectKind::Flash {
-                at: Point { x, y: 0.0 },
-                aperture: 10,
-            },
-            polarity: Polarity::Dark,
-            repeat: None,
-            aperture_attributes: Vec::new(),
-            attributes,
-        };
-        let net = |name: &str| AttributeValue::new(".N", [name]);
-        let layer = GerberLayer {
-            apertures: vec![WriterAperture {
-                code: 10,
-                template: WriterApertureTemplate::Circle {
-                    diameter: 1.0,
-                    hole_diameter: None,
+        let mut attribute_sets = AttributeSets::default();
+        let mut flash = |x: f64, net: Option<&str>| {
+            WriterObject::new(
+                ObjectKind::Flash {
+                    at: Point { x, y: 0.0 },
+                    aperture: 10,
                 },
-                attributes: Vec::new(),
-            }],
-            objects: vec![
-                flash(0.0, vec![net("GND")]),
-                flash(1.0, vec![net("GND")]),
-                flash(2.0, vec![net("V3V3")]),
-                flash(3.0, Vec::new()),
-            ],
-            ..GerberLayer::default()
+                Polarity::Dark,
+                attribute_sets.intern(
+                    net.map(|net| AttributeValue::new(".N", [net]))
+                        .into_iter()
+                        .collect(),
+                ),
+            )
+        };
+        let objects = vec![
+            flash(0.0, Some("GND")),
+            flash(1.0, Some("GND")),
+            flash(2.0, Some("V3V3")),
+            flash(3.0, None),
+        ];
+        assert_eq!(objects[0].attributes, objects[1].attributes);
+        assert_eq!(objects[3].attributes, AttributeSets::EMPTY);
+        let layer = GerberLayer {
+            attribute_sets,
+            ..stroke_layer(objects)
         };
 
         let output = write_layer(&layer).unwrap();

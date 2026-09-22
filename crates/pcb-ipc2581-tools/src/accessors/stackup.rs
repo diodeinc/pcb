@@ -1,4 +1,4 @@
-use ipc2581::types::LayerFunction;
+use ipc2581::types::{Layer, LayerFunction, Side};
 use serde::{Deserialize, Serialize};
 
 use super::IpcAccessor;
@@ -20,90 +20,54 @@ pub struct StackupDetails {
     pub silkscreen_color: Option<ColorInfo>,
     /// Surface finish specification
     pub surface_finish: Option<SurfaceFinishInfo>,
+    /// Copper weight shared by the top and bottom conductors, in oz/ft².
+    pub outer_copper_oz: Option<f64>,
+    /// Copper weight shared by the internal conductors, in oz/ft².
+    pub inner_copper_oz: Option<f64>,
 }
 
 impl StackupDetails {
-    pub fn outer_copper_oz(&self) -> Option<f64> {
-        let outer_layers: Vec<_> = self
-            .layers
-            .iter()
-            .filter(|l| {
-                l.layer_type == StackupLayerType::Conductor
-                    && (l.name.contains("F.Cu") || l.name.contains("B.Cu"))
-            })
-            .collect();
-
-        outer_layers.first().and_then(|first| {
-            first.thickness_mm.and_then(|thickness| {
-                let all_same = outer_layers.iter().all(|l| {
-                    l.thickness_mm
-                        .map(|t| (t - thickness).abs() < 0.001)
-                        .unwrap_or(false)
-                });
-                if all_same {
-                    Some(Self::copper_weight_oz(thickness))
-                } else {
-                    None
-                }
-            })
-        })
-    }
-
-    /// Calculate outer copper weight if consistent across all outer layers
     pub fn outer_copper_weight(&self) -> Option<String> {
-        self.outer_copper_oz()
-            .map(Self::format_copper_weight_from_oz)
+        self.outer_copper_oz.map(format_copper_weight)
     }
 
-    pub fn inner_copper_oz(&self) -> Option<f64> {
-        let inner_layers: Vec<_> = self
-            .layers
-            .iter()
-            .filter(|l| l.layer_type == StackupLayerType::Conductor && l.name.contains("In"))
-            .collect();
-
-        inner_layers.first().and_then(|first| {
-            first.thickness_mm.and_then(|thickness| {
-                let all_same = inner_layers.iter().all(|l| {
-                    l.thickness_mm
-                        .map(|t| (t - thickness).abs() < 0.001)
-                        .unwrap_or(false)
-                });
-                if all_same {
-                    Some(Self::copper_weight_oz(thickness))
-                } else {
-                    None
-                }
-            })
-        })
-    }
-
-    /// Calculate inner copper weight if consistent across all inner layers
     pub fn inner_copper_weight(&self) -> Option<String> {
-        self.inner_copper_oz()
-            .map(Self::format_copper_weight_from_oz)
+        self.inner_copper_oz.map(format_copper_weight)
     }
+}
 
-    fn copper_weight_oz(thickness_mm: f64) -> f64 {
-        thickness_mm / 0.0348
-    }
+/// The copper weight every conductor on the given sides shares, if they
+/// agree. A layer's side is the source's own statement of where it sits;
+/// its name says nothing outside one exporter's conventions.
+fn uniform_copper_oz(conductors: &[(Option<Side>, Option<f64>)], sides: &[Side]) -> Option<f64> {
+    let mut thicknesses = conductors
+        .iter()
+        .filter(|(side, _)| side.is_some_and(|side| sides.contains(&side)))
+        .map(|&(_, thickness_mm)| thickness_mm);
+    let first = thicknesses.next()??;
+    thicknesses
+        .all(|thickness| thickness.is_some_and(|thickness| (thickness - first).abs() < 0.001))
+        .then_some(first / COPPER_MM_PER_OZ)
+}
 
-    fn format_copper_weight_from_oz(oz: f64) -> String {
-        let standard_oz = if oz < 0.75 {
-            0.5
-        } else if oz < 1.25 {
-            1.0
-        } else if oz < 1.75 {
-            1.5
-        } else if oz < 2.5 {
-            2.0
-        } else if oz < 3.5 {
-            3.0
-        } else {
-            4.0
-        };
-        format!("{:.2} oz (~{} oz)", oz, standard_oz)
-    }
+/// Finished thickness of one ounce per square foot of copper.
+const COPPER_MM_PER_OZ: f64 = 0.0348;
+
+fn format_copper_weight(oz: f64) -> String {
+    let standard_oz = if oz < 0.75 {
+        0.5
+    } else if oz < 1.25 {
+        1.0
+    } else if oz < 1.75 {
+        1.5
+    } else if oz < 2.5 {
+        2.0
+    } else if oz < 3.5 {
+        3.0
+    } else {
+        4.0
+    };
+    format!("{:.2} oz (~{} oz)", oz, standard_oz)
 }
 
 /// Surface finish information
@@ -113,8 +77,6 @@ pub struct SurfaceFinishInfo {
     pub name: String,
     /// Canonical category used for downstream quoting logic.
     pub category: SurfaceFinishCategory,
-    /// Whether this was parsed from standard IPC-2581 location (true) or fallback (false)
-    pub is_standard: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -258,17 +220,11 @@ impl<'a> IpcAccessor<'a> {
         let ecad = self.ecad()?;
         let stackup = ecad.cad_data.stackups.first()?;
 
-        // Build a map of layer names to layer functions
         let layer_map: std::collections::HashMap<_, _> = ecad
             .cad_data
             .layers
             .iter()
-            .map(|layer| {
-                (
-                    self.ipc.resolve(layer.name).to_string(),
-                    layer.layer_function,
-                )
-            })
+            .map(|layer| (layer.name, layer))
             .collect();
 
         // Build a map of spec names to specs for material properties
@@ -284,8 +240,9 @@ impl<'a> IpcAccessor<'a> {
         let mut silkscreen_color = None;
 
         for stackup_layer in &stackup.layers {
-            let layer_name = self.ipc.resolve(stackup_layer.layer_ref).to_string();
-            let layer_function = layer_map.get(&layer_name).copied();
+            let layer_function = layer_map
+                .get(&stackup_layer.layer_ref)
+                .map(|layer| layer.layer_function);
 
             // Check if this is a soldermask or silkscreen layer
             if let Some(spec_ref) = &stackup_layer.spec_ref {
@@ -327,19 +284,16 @@ impl<'a> IpcAccessor<'a> {
         }
 
         let mut layers = Vec::new();
+        let mut conductors = Vec::new();
 
         for (idx, stackup_layer) in stackup.layers.iter().enumerate() {
             let layer_name = self.ipc.resolve(stackup_layer.layer_ref).to_string();
-            let layer_function = layer_map.get(&layer_name).copied();
+            let layer = layer_map.get(&stackup_layer.layer_ref).copied();
+            let layer_function = layer.map(|layer| layer.layer_function);
 
             // Determine layer type from layer function
             let layer_type = match layer_function {
-                Some(LayerFunction::Conductor)
-                | Some(LayerFunction::Signal)
-                | Some(LayerFunction::Plane)
-                | Some(LayerFunction::Mixed)
-                | Some(LayerFunction::CondFilm)
-                | Some(LayerFunction::CondFoil) => StackupLayerType::Conductor,
+                Some(function) if crate::layers::is_copper(function) => StackupLayerType::Conductor,
                 Some(LayerFunction::Soldermask) => StackupLayerType::Soldermask,
                 Some(LayerFunction::DielCore) => StackupLayerType::DielectricCore,
                 Some(LayerFunction::DielPreg) => StackupLayerType::DielectricPrepreg,
@@ -349,6 +303,9 @@ impl<'a> IpcAccessor<'a> {
                 | Some(LayerFunction::DielCoverlay) => StackupLayerType::DielectricOther,
                 _ => StackupLayerType::Other,
             };
+            if layer_type == StackupLayerType::Conductor {
+                conductors.push((layer.and_then(|layer| layer.side), stackup_layer.thickness));
+            }
 
             // Get material properties from spec if available
             let (material, spec_dk, spec_loss_tan) = if let Some(spec_ref) = &stackup_layer.spec_ref
@@ -396,6 +353,8 @@ impl<'a> IpcAccessor<'a> {
             soldermask_color,
             silkscreen_color,
             surface_finish,
+            outer_copper_oz: uniform_copper_oz(&conductors, &[Side::Top, Side::Bottom]),
+            inner_copper_oz: uniform_copper_oz(&conductors, &[Side::Internal]),
         })
     }
 
@@ -404,14 +363,15 @@ impl<'a> IpcAccessor<'a> {
         &self,
         stackup_layers: &[ipc2581::types::StackupLayer],
         spec_map: &std::collections::HashMap<String, &ipc2581::types::Spec>,
-        layer_map: &std::collections::HashMap<String, LayerFunction>,
+        layer_map: &std::collections::HashMap<ipc2581::Symbol, &Layer>,
     ) -> Option<SurfaceFinishInfo> {
         // Per IPC-2581C spec section 8.1.1.16: SurfaceFinish is referenced by
         // StackupLayer elements that reference a Layer with layerFunction
         // COATINGCOND or COATINGNONCOND
         for stackup_layer in stackup_layers {
-            let layer_name = self.ipc.resolve(stackup_layer.layer_ref).to_string();
-            let layer_function = layer_map.get(&layer_name).copied();
+            let layer_function = layer_map
+                .get(&stackup_layer.layer_ref)
+                .map(|layer| layer.layer_function);
 
             // Only check coating layers
             if !matches!(
@@ -431,7 +391,6 @@ impl<'a> IpcAccessor<'a> {
                     return Some(SurfaceFinishInfo {
                         name: format_finish_type(surface_finish.finish_type),
                         category,
-                        is_standard: true,
                     });
                 }
             }
@@ -551,7 +510,7 @@ impl<'a> IpcAccessor<'a> {
 
     /// Extract distinct nonstandard TEXT attribute values from layer feature sets.
     pub fn nonstandard_text_attributes(&self) -> Vec<String> {
-        let Some(step) = self.first_step() else {
+        let Some(step) = self.board_step() else {
             return Vec::new();
         };
 
@@ -560,7 +519,10 @@ impl<'a> IpcAccessor<'a> {
 
         for layer_feature in &step.layer_features {
             for set in &layer_feature.sets {
-                for attr in &set.nonstandard_attributes {
+                for attr in set
+                    .nonstandard_attributes
+                    .slice(&layer_feature.nonstandard_attributes)
+                {
                     if self.ipc.resolve(attr.name) != "TEXT" {
                         continue;
                     }
@@ -613,5 +575,61 @@ fn format_finish_type(finish_type: ipc2581::types::FinishType) -> String {
         FinishType::GwbOneG | FinishType::GwbOneN => "Gold Wire Bond Type 1".to_string(),
         FinishType::GwbTwoG | FinishType::GwbTwoN => "Gold Wire Bond Type 2".to_string(),
         FinishType::Other => "Other".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copper_weights_follow_layer_sides_not_names() {
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="PRIMARY" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="CORE" layerFunction="DIELCORE" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="GND" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="PWR" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="In_SECONDARY" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+      <Stackup name="Primary" overallThickness="1.6">
+        <StackupGroup name="Group">
+          <StackupLayer layerOrGroupRef="PRIMARY" thickness="0.0696" sequence="1"/>
+          <StackupLayer layerOrGroupRef="GND" thickness="0.0174" sequence="2"/>
+          <StackupLayer layerOrGroupRef="CORE" thickness="1.4" sequence="3"/>
+          <StackupLayer layerOrGroupRef="PWR" thickness="0.0174" sequence="4"/>
+          <StackupLayer layerOrGroupRef="In_SECONDARY" thickness="0.0696" sequence="5"/>
+        </StackupGroup>
+      </Stackup>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let stackup = IpcAccessor::new(&ipc).stackup_details().unwrap();
+
+        assert!((stackup.outer_copper_oz.unwrap() - 2.0).abs() < 1e-9);
+        assert!((stackup.inner_copper_oz.unwrap() - 0.5).abs() < 1e-9);
+        assert_eq!(stackup.outer_copper_weight().unwrap(), "2.00 oz (~2 oz)");
+    }
+
+    #[test]
+    fn disagreeing_conductors_report_no_common_weight() {
+        let conductors = [
+            (Some(Side::Top), Some(0.035)),
+            (Some(Side::Bottom), Some(0.070)),
+        ];
+        assert_eq!(
+            uniform_copper_oz(&conductors, &[Side::Top, Side::Bottom]),
+            None
+        );
+        assert_eq!(uniform_copper_oz(&conductors, &[Side::Internal]), None);
     }
 }

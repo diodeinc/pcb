@@ -62,15 +62,22 @@ impl Arc {
             return bbox;
         }
 
+        // The same sweep flattening follows, so an arc it takes for a full
+        // circle is bounded as one.
         let start_angle = self.start.angle_from(self.center);
-        let end_angle = self.end.angle_from(self.center);
+        let sweep = self.sweep_radians();
         for angle in [
             0.0,
             std::f64::consts::FRAC_PI_2,
             std::f64::consts::PI,
             std::f64::consts::PI * 1.5,
         ] {
-            if angle_is_on_arc(start_angle, end_angle, angle, self.clockwise) {
+            let offset = if self.clockwise {
+                normalize_angle(start_angle - angle)
+            } else {
+                normalize_angle(angle - start_angle)
+            };
+            if offset <= sweep + 1e-12 {
                 bbox.include_point(Point::new(
                     self.center.x + radius * angle.cos(),
                     self.center.y + radius * angle.sin(),
@@ -78,6 +85,36 @@ impl Arc {
             }
         }
         bbox
+    }
+
+    /// Chord end points approximating the arc within `tolerance`, excluding
+    /// its start, and how far the chords stray from it.
+    ///
+    /// Every vertex lies on the arc, so the polygon stays inside a convex
+    /// curve. Copper flattened this way never reaches past its true outline,
+    /// which matters wherever source data adjoins a curve with its own
+    /// approximation of it: a pad set into a pour's polygonal cutout must not
+    /// weave across that cutout.
+    pub fn chords(&self, tolerance: f64) -> (Vec<Point>, f64) {
+        let radius = self.radius();
+        let mismatch = (radius - self.end.distance_to(self.center)).abs();
+        let sweep = self.sweep_radians();
+        if radius <= 0.0 || sweep <= 0.0 {
+            return (vec![self.end], mismatch);
+        }
+        // A chord spanning `step` sags `radius · (1 − cos(step / 2))`.
+        let widest = 2.0 * (1.0 - (tolerance / radius).min(1.0)).acos();
+        let count = (sweep / widest).ceil().max(1.0);
+        let step = sweep / count;
+        let sag = radius * (1.0 - (step / 2.0).cos());
+
+        let start_angle = self.start.angle_from(self.center);
+        let signed_step = if self.clockwise { -step } else { step };
+        let points = (1..count as usize)
+            .map(|index| self.point_at(start_angle + signed_step * index as f64))
+            .chain([self.end])
+            .collect();
+        (points, sag + mismatch)
     }
 
     pub fn reversed(&self) -> Self {
@@ -258,32 +295,14 @@ impl EllipticalArc {
 
     /// Exact image under an affine transform.
     pub fn transformed(&self, transform: Affine2) -> Self {
-        let linear = |p: Point| {
-            Point::new(
-                transform.m00 * p.x + transform.m01 * p.y,
-                transform.m10 * p.x + transform.m11 * p.y,
-            )
-        };
         Self {
             start: transform.transform_point(self.start),
             end: transform.transform_point(self.end),
             center: transform.transform_point(self.center),
-            x_axis: linear(self.x_axis),
-            y_axis: linear(self.y_axis),
+            x_axis: transform.transform_vector(self.x_axis),
+            y_axis: transform.transform_vector(self.y_axis),
             clockwise: self.clockwise != (transform.determinant() < 0.0),
         }
-    }
-}
-
-fn angle_is_on_arc(start: f64, end: f64, angle: f64, clockwise: bool) -> bool {
-    if normalize_angle(end - start) <= 1e-12 {
-        return true;
-    }
-
-    if clockwise {
-        normalize_angle(start - angle) <= normalize_angle(start - end) + 1e-12
-    } else {
-        normalize_angle(angle - start) <= normalize_angle(end - start) + 1e-12
     }
 }
 
@@ -336,5 +355,20 @@ mod tests {
         let mid = mirrored.point_at(mirrored.start_angle() + mirrored.signed_sweep_radians() / 2.0);
         assert!((mid.x + 0.5_f64.sqrt()).abs() < 1e-12);
         assert!((mid.y - 0.5_f64.sqrt()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn an_arc_flattened_as_a_full_circle_is_bounded_as_one() {
+        // The ends differ by less than a coincidence but more than the old
+        // angular slack, so the sweep is a whole turn.
+        let arc = Arc::new(
+            Point::new(1.0, 0.0),
+            Point::new(1.0, 1e-10),
+            Point::ZERO,
+            false,
+        );
+        assert!(arc.is_full_circle());
+        let bbox = arc.bbox();
+        assert!((bbox.min.x + 1.0).abs() < 1e-12 && (bbox.max.y - 1.0).abs() < 1e-12);
     }
 }

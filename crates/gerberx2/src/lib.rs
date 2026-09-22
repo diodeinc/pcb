@@ -5,11 +5,11 @@ pub mod types;
 pub mod write;
 
 pub use pcb_intern::{Interner, Symbol};
-use pcb_ir::geom::AccuracyError;
+use pcb_ir::geom::{AccuracyError, Span};
 pub use types::*;
 pub use write::{
-    AttributeValue, GerberLayer, WriterAperture, WriterApertureTemplate, WriterObject,
-    sanitize_attribute_field, write_layer,
+    AttributeSets, AttributeValue, GerberLayer, WriterAperture, WriterApertureTemplate,
+    WriterObject, escape_attribute_field, trim_decimal, unescape_attribute_field, write_layer,
 };
 
 use parse::Parser;
@@ -32,9 +32,6 @@ pub enum GerberError {
 
     #[error("Invalid numeric value: {0}")]
     InvalidNumber(String),
-
-    #[error("Render error: {0}")]
-    Render(String),
 }
 
 pub type Result<T> = std::result::Result<T, GerberError>;
@@ -42,14 +39,12 @@ pub type Result<T> = std::result::Result<T, GerberError>;
 #[derive(Debug)]
 pub struct GerberX2 {
     interner: Interner,
-    commands: Vec<Command>,
     file_attributes: Vec<Attribute>,
-    aperture_attributes: Vec<Attribute>,
-    object_attributes: Vec<Attribute>,
+    /// Every attribute set an aperture or object refers to.
+    attributes: Vec<Attribute>,
     aperture_definitions: Vec<ApertureDefinition>,
-    aperture_macros: Vec<ApertureMacro>,
     objects: Vec<GraphicalObject>,
-    final_state: GraphicsState,
+    step_repeats: Vec<StepRepeatBlock>,
 }
 
 impl GerberX2 {
@@ -64,61 +59,31 @@ impl GerberX2 {
         Self::parse(&source)
     }
 
-    pub fn commands(&self) -> &[Command] {
-        &self.commands
-    }
-
     pub fn file_attributes(&self) -> &[Attribute] {
         &self.file_attributes
     }
 
-    pub fn aperture_attributes(&self) -> &[Attribute] {
-        &self.aperture_attributes
-    }
-
-    pub fn object_attributes(&self) -> &[Attribute] {
-        &self.object_attributes
+    /// The attribute set an aperture definition or object refers to.
+    pub fn attributes(&self, set: Span) -> &[Attribute] {
+        set.slice(&self.attributes)
     }
 
     pub fn aperture_definitions(&self) -> &[ApertureDefinition] {
         &self.aperture_definitions
     }
 
-    pub fn aperture_macros(&self) -> &[ApertureMacro] {
-        &self.aperture_macros
-    }
-
+    /// The object stream in file order. A step-repeated run appears once;
+    /// [`Self::step_repeats`] says where it repeats.
     pub fn objects(&self) -> &[GraphicalObject] {
         &self.objects
     }
 
-    pub fn final_state(&self) -> &GraphicsState {
-        &self.final_state
+    /// The step-repeated runs of [`Self::objects`], in stream order.
+    pub fn step_repeats(&self) -> &[StepRepeatBlock] {
+        &self.step_repeats
     }
 
     pub fn resolve(&self, sym: Symbol) -> &str {
         self.interner.resolve(sym)
-    }
-
-    pub fn interner(&self) -> &Interner {
-        &self.interner
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_minimal_flash_file() {
-        let gerber = GerberX2::parse(
-            "%FSLAX26Y26*%\n%MOMM*%\n%TF.FileFunction,Paste,Top*%\n%TA.AperFunction,Material*%\n%ADD10C,1.5*%\nD10*\nX0Y0D03*\nM02*\n",
-        )
-        .unwrap();
-
-        assert_eq!(gerber.aperture_definitions().len(), 1);
-        assert_eq!(gerber.file_attributes().len(), 1);
-        assert_eq!(gerber.objects().len(), 1);
-        assert!(matches!(gerber.commands().last(), Some(Command::EndOfFile)));
     }
 }

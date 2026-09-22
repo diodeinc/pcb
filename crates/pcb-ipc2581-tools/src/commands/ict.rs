@@ -50,7 +50,7 @@ pub struct IctContact {
 
 #[cfg(feature = "cli")]
 pub fn execute(file: &Path, options: &IctOptions, resolution: Resolution) -> Result<()> {
-    let ipc = Ipc2581::parse_file(file)?;
+    let ipc = Ipc2581::parse(&crate::utils::file::load_ipc_file(file)?)?;
     let contacts = extract_contacts(&ipc, &import_design(&ipc, resolution)?, resolution)?;
     let csv = emit_ict_csv(&contacts, options.side);
 
@@ -113,7 +113,7 @@ pub fn extract_contacts(
         at: Option<(f64, f64)>,
     }
     let mut pins: BTreeMap<(String, String), PinInfo> = BTreeMap::new();
-    for step in &imported.steps {
+    for step in ipc.ecad().map_or(&[][..], |ecad| &ecad.cad_data.steps) {
         for net in &step.logical_nets {
             for pin_ref in &net.pin_refs {
                 let Some(component_ref) = pin_ref.component_ref else {
@@ -132,7 +132,7 @@ pub fn extract_contacts(
         // remains authoritative when one exists.
         for layer_feature in &step.layer_features {
             for set in &layer_feature.sets {
-                for feature in &set.features {
+                for feature in set.features.slice(&layer_feature.features) {
                     let ipc2581::types::SetFeature::Pad(pad) = feature else {
                         continue;
                     };
@@ -331,6 +331,26 @@ fn write_csv_field(output: &mut String, field: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn reads_compressed_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("ict.csv");
+        execute(
+            Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../ipc2581/tests/data/DM0002-IPC-2518.xml.zst"
+            )),
+            &IctOptions {
+                output: Some(output.clone()),
+                side: CplSideFilter::Both,
+            },
+            pcb_ir::geom::Resolution::default(),
+        )
+        .unwrap();
+        assert!(fs::read_to_string(output).unwrap().contains(','));
+    }
 
     #[test]
     fn ict_package_names_match_with_dedupe_suffix() {

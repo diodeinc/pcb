@@ -2,14 +2,8 @@ use std::collections::BTreeMap;
 
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::{ArtworkScope, FeatureKind, PlatingKind};
-use pcb_ir::geom::Resolution;
+use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign, LayerId};
 use serde::{Deserialize, Serialize};
-
-use super::IpcAccessor;
-use crate::geometry;
-
-type GeometryDocument =
-    pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 /// Drill hole statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,52 +48,27 @@ pub struct DrillSize {
     pub count: usize,
 }
 
-impl<'a> IpcAccessor<'a> {
-    /// Get board-local drill hole statistics with per-type distribution.
-    pub fn board_drill_stats(&self, resolution: Resolution) -> anyhow::Result<Option<DrillStats>> {
-        self.drill_stats_for_view(ArtworkScope::Board, resolution)
+/// Drill hole statistics with per-type distribution for one artwork scope:
+/// `Board` counts one board, `ArrayLocal` only the array's own drills.
+pub fn drill_stats(
+    imported: &ImportedDesign,
+    scope: ArtworkScope,
+) -> anyhow::Result<Option<DrillStats>> {
+    let mut collector = DrillStatsCollector::default();
+    let mut has_drill_layer = false;
+    for (index, _) in imported
+        .layer_definitions
+        .iter()
+        .enumerate()
+        .filter(|(_, layer)| layer.layer_function == LayerFunction::Drill)
+    {
+        has_drill_layer = true;
+        collect_drill_info(
+            &imported.materialize_layer(LayerId(index as u32), scope)?,
+            &mut collector,
+        );
     }
-
-    /// Get array-local drill hole statistics, excluding repeated board drills.
-    pub fn board_array_drill_stats(
-        &self,
-        resolution: Resolution,
-    ) -> anyhow::Result<Option<DrillStats>> {
-        self.drill_stats_for_view(ArtworkScope::ArrayLocal, resolution)
-    }
-
-    /// Get flattened board-array drill statistics, including repeated board drills
-    /// and array-local drill features.
-    pub fn board_array_flattened_drill_stats(
-        &self,
-        resolution: Resolution,
-    ) -> anyhow::Result<Option<DrillStats>> {
-        self.drill_stats_for_view(ArtworkScope::ArrayFlattened, resolution)
-    }
-
-    fn drill_stats_for_view(
-        &self,
-        view: ArtworkScope,
-        resolution: Resolution,
-    ) -> anyhow::Result<Option<DrillStats>> {
-        let Some(ecad) = self.ecad() else {
-            return Ok(None);
-        };
-        let mut collector = DrillStatsCollector::default();
-        let mut has_drill_layer = false;
-
-        for layer in &ecad.cad_data.layers {
-            if layer.layer_function != LayerFunction::Drill {
-                continue;
-            }
-            has_drill_layer = true;
-            let layer_name = self.ipc.resolve(layer.name);
-            let doc = geometry::extract_layer_for_view(self.ipc, layer_name, view, resolution)?;
-            collect_drill_info(&doc, &mut collector);
-        }
-
-        Ok(has_drill_layer.then(|| collector.finish()))
-    }
+    Ok(has_drill_layer.then(|| collector.finish()))
 }
 
 #[derive(Default)]
@@ -163,20 +132,14 @@ fn collect_drill_info(doc: &GeometryDocument, collector: &mut DrillStatsCollecto
     }
 }
 
-fn drill_hole(
-    feature: &pcb_ir::dialects::ipc::Feature<ipc2581::Symbol>,
-) -> Option<(f64, DrillHoleType)> {
-    if !feature.is_drill_like()
-        || feature.kind != FeatureKind::Hole
-        || feature.outer_diameter <= 0.0
-    {
+fn drill_hole(feature: &pcb_ir::dialects::ipc::Feature) -> Option<(f64, DrillHoleType)> {
+    if !feature.is_drill_like() || feature.kind != FeatureKind::Hole {
         return None;
     }
-
-    Some((
-        feature.outer_diameter,
-        drill_hole_type(feature.intent.plating),
-    ))
+    let size = feature
+        .shape
+        .and_then(pcb_ir::dialects::ipc::SimpleShape::hole_size)?;
+    (size > 0.0).then_some((size, drill_hole_type(feature.intent.plating)))
 }
 
 fn drill_hole_type(plating: PlatingKind) -> DrillHoleType {
@@ -245,24 +208,23 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
+        let imported =
+            pcb_ir::import::ipc2581::import_design(&ipc, pcb_ir::geom::Resolution::default())
+                .unwrap();
 
-        let board = accessor
-            .board_drill_stats(Resolution::default())
+        let board = drill_stats(&imported, ArtworkScope::Board)
             .unwrap()
             .unwrap();
         assert_eq!(board.total_holes, 1);
         assert_eq!(board.distribution[0].hole_type, DrillHoleType::Via);
 
-        let array = accessor
-            .board_array_drill_stats(Resolution::default())
+        let array = drill_stats(&imported, ArtworkScope::ArrayLocal)
             .unwrap()
             .unwrap();
         assert_eq!(array.total_holes, 1);
         assert_eq!(array.distribution[0].hole_type, DrillHoleType::NonPlated);
 
-        let flattened = accessor
-            .board_array_flattened_drill_stats(Resolution::default())
+        let flattened = drill_stats(&imported, ArtworkScope::ArrayFlattened)
             .unwrap()
             .unwrap();
         assert_eq!(flattened.total_holes, 3);

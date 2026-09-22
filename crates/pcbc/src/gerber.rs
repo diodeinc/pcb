@@ -2,7 +2,9 @@ use pcb_ir::geom::{GeometryAccuracy, Resolution};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
+use pcb_ipc2581_tools::RenderFormat;
+use pcb_ipc2581_tools::commands::render::{RenderTarget, render_artwork};
 
 #[derive(Args)]
 pub struct GerberArgs {
@@ -48,19 +50,6 @@ enum Commands {
         #[arg(short, long, default_value = "auto")]
         format: RenderFormat,
     },
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-enum RenderFormat {
-    Auto,
-    Svg,
-    Png,
-}
-
-enum RenderTarget {
-    Svg,
-    Png,
-    Terminal,
 }
 
 pub fn execute(args: GerberArgs, resolution: Resolution) -> Result<()> {
@@ -127,15 +116,9 @@ fn compare(
         report.candidate.area_mm2 - report.reference.area_mm2
     );
     println!(
-        "reference bbox [{:.6},{:.6}]..[{:.6},{:.6}], candidate bbox [{:.6},{:.6}]..[{:.6},{:.6}]",
-        report.reference.bbox.min.x,
-        report.reference.bbox.min.y,
-        report.reference.bbox.max.x,
-        report.reference.bbox.max.y,
-        report.candidate.bbox.min.x,
-        report.candidate.bbox.min.y,
-        report.candidate.bbox.max.x,
-        report.candidate.bbox.max.y
+        "reference bbox {}, candidate bbox {}",
+        format_bbox(report.reference.bbox),
+        format_bbox(report.candidate.bbox)
     );
     println!(
         "reference objects {}, paths {}; candidate objects {}, paths {}",
@@ -170,63 +153,37 @@ fn print_difference_components(
 ) {
     for (index, component) in summary.components.iter().take(12).enumerate() {
         println!(
-            "{label} component {}: area {:.6} mm², bbox [{:.6},{:.6}]..[{:.6},{:.6}]",
+            "{label} component {}: area {:.6} mm², bbox {}",
             index + 1,
             component.area_mm2,
-            component.bbox.min.x,
-            component.bbox.min.y,
-            component.bbox.max.x,
-            component.bbox.max.y
+            format_bbox(component.bbox)
         );
     }
 }
 
+fn format_bbox(bbox: pcb_ir::geom::BBox) -> String {
+    format!(
+        "[{:.6},{:.6}]..[{:.6},{:.6}]",
+        bbox.min.x, bbox.min.y, bbox.max.x, bbox.max.y
+    )
+}
+
+/// Render the extracted artwork as it is: flashes, strokes and polarity runs
+/// draw natively, so viewing a layer never composes it.
 fn render(
     file: &Path,
     output: Option<&Path>,
     format: RenderFormat,
     resolution: Resolution,
 ) -> Result<()> {
-    let target = resolve_target(output, format)?;
-    let geometry = load_geometry(file, resolution.accuracy)?;
-
-    for diagnostic in &geometry.diagnostics {
-        eprintln!("warning: {}", diagnostic.message);
-    }
-
-    match target {
-        RenderTarget::Svg => {
-            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, resolution)?;
-            let svg = pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::default());
-            if let Some(output) = output {
-                std::fs::write(output, svg)
-                    .with_context(|| format!("Failed to write SVG to {}", output.display()))?;
-                println!("✓ Gerber layer rendered to {}", output.display());
-            } else {
-                print!("{svg}");
-            }
-        }
-        RenderTarget::Png => {
-            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, resolution)?;
-            let png = pcb_ir::render::png(&mask, &pcb_ir::render::RenderOptions::default())
-                .map_err(gerberx2::GerberError::Render)?;
-            if let Some(output) = output {
-                std::fs::write(output, png)
-                    .with_context(|| format!("Failed to write PNG to {}", output.display()))?;
-                println!("✓ Gerber layer rendered to {}", output.display());
-            } else {
-                pcb_ui::write_stdout(|stdout| stdout.write_all(&png))
-                    .context("Failed to write PNG to stdout")?;
-            }
-        }
-        RenderTarget::Terminal => {
-            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, resolution)?;
-            pcb_ir::render::to_terminal(&mask, &pcb_ir::render::RenderOptions::default())
-                .map_err(gerberx2::GerberError::Render)?;
-        }
-    }
-
-    Ok(())
+    let target = RenderTarget::resolve(output, format, "Gerber layer")?;
+    render_artwork(
+        &load_geometry(file, resolution.accuracy)?,
+        target,
+        output,
+        "Gerber layer",
+        &pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy),
+    )
 }
 
 fn load_geometry(
@@ -236,38 +193,4 @@ fn load_geometry(
     let gerber = gerberx2::GerberX2::parse_file(file)
         .with_context(|| format!("Failed to parse Gerber file {}", file.display()))?;
     Ok(gerberx2::geometry::extract_document(&gerber, accuracy)?)
-}
-
-fn resolve_target(output: Option<&Path>, format: RenderFormat) -> Result<RenderTarget> {
-    match format {
-        RenderFormat::Auto => {
-            if let Some(output) = output {
-                infer_format_from_output(output)
-            } else if pcb_ir::render::can_render_to_terminal() {
-                Ok(RenderTarget::Terminal)
-            } else {
-                bail!(
-                    "Could not render Gerber layer to stdout; run from an interactive terminal or pass --output <path>.svg or <path>.png"
-                )
-            }
-        }
-        RenderFormat::Svg => Ok(RenderTarget::Svg),
-        RenderFormat::Png => Ok(RenderTarget::Png),
-    }
-}
-
-fn infer_format_from_output(output: &Path) -> Result<RenderTarget> {
-    match output
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("svg") => Ok(RenderTarget::Svg),
-        Some("png") => Ok(RenderTarget::Png),
-        _ => bail!(
-            "Could not infer Gerber render format from {}; pass --format svg or --format png",
-            output.display()
-        ),
-    }
 }

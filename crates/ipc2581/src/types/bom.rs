@@ -114,13 +114,14 @@ pub enum BomFirmwarePayload {
     Cached(Symbol),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BomCategory {
-    Electrical,
-    Programmable,
-    Mechanical,
-    Material,
-    Document,
+ipc_enum! {
+    pub enum BomCategory("category") {
+        Electrical = "ELECTRICAL",
+        Programmable = "PROGRAMMABLE",
+        Mechanical = "MECHANICAL",
+        Material = "MATERIAL",
+        Document = "DOCUMENT",
+    }
 }
 
 /// Characteristics for a BOM item

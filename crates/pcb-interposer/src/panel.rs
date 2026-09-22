@@ -13,9 +13,9 @@
 
 use anyhow::{Context, Result, bail};
 use ipc2581::Ipc2581;
-use ipc2581::types::{
-    FiducialKind, LayerFunction, PlatingStatus, PolyStep, SetFeature, Side, Step,
-};
+use ipc2581::types::{FiducialKind, LayerFunction, PlatingStatus, PolyStep, SetFeature, Side};
+
+use pcb_ir::import::ipc2581::primary_step;
 
 use crate::pattern::mate_dims;
 
@@ -63,8 +63,9 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
 
     // Sheet dimensions from the profile bounding box; the generator anchors
     // the array at the origin.
-    let mut points: Vec<[f64; 2]> = vec![[profile.polygon.begin.x, profile.polygon.begin.y]];
-    for poly_step in &profile.polygon.steps {
+    let begin = profile.polygon.begin();
+    let mut points: Vec<[f64; 2]> = vec![[begin.x, begin.y]];
+    for poly_step in profile.polygon.steps() {
         match poly_step {
             PolyStep::Segment(segment) => points.push([segment.point.x, segment.point.y]),
             PolyStep::Curve(curve) => points.push([curve.point.x, curve.point.y]),
@@ -99,8 +100,8 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
     let flip = |p: [f64; 2]| [p[0], height - p[1]];
 
     let mut outline = Vec::new();
-    let mut cursor = [profile.polygon.begin.x, profile.polygon.begin.y];
-    for poly_step in &profile.polygon.steps {
+    let mut cursor = [begin.x, begin.y];
+    for poly_step in profile.polygon.steps() {
         match poly_step {
             PolyStep::Segment(segment) => {
                 let end = [segment.point.x, segment.point.y];
@@ -169,7 +170,7 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
         let on_drill = drill_layers.contains(&layer_feature.layer_ref);
         let side = copper_side(layer_feature.layer_ref);
         for set in &layer_feature.sets {
-            for feature in &set.features {
+            for feature in set.features.slice(&layer_feature.features) {
                 match feature {
                     SetFeature::Hole(hole)
                         if on_drill && hole.plating_status == PlatingStatus::NonPlated =>
@@ -233,14 +234,4 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
         fids_top,
         fids_bottom,
     })
-}
-
-/// The step the file is about: the Content section's first step reference,
-/// falling back to document order.
-pub(crate) fn primary_step<'a>(ipc: &Ipc2581, steps: &'a [Step]) -> Option<&'a Step> {
-    ipc.content()
-        .step_refs
-        .first()
-        .and_then(|step_ref| steps.iter().find(|step| step.name == *step_ref))
-        .or_else(|| steps.first())
 }

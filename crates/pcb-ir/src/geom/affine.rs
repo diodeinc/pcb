@@ -115,10 +115,6 @@ impl Affine2 {
         *self == Self::IDENTITY
     }
 
-    pub fn is_translation(&self) -> bool {
-        self.m00 == 1.0 && self.m01 == 0.0 && self.m10 == 0.0 && self.m11 == 1.0
-    }
-
     /// True when the linear part is a similarity (uniform scale + rotation,
     /// possibly mirrored), i.e. circles map to circles.
     pub fn preserves_circles(&self, epsilon: f64) -> bool {

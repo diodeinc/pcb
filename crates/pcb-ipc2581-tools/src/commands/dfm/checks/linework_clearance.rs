@@ -2,8 +2,11 @@
 //!
 //! The reference is a set of segments `S = {s₁ … sₙ}` — a V-score tool
 //! centerline, or a board profile's outer and cutout rings — and the target
-//! is one layer's composed copper image `M`, a regularized closed filled
-//! region. The measured quantity is the Euclidean set distance
+//! is one layer's composed copper image `M` of the design's own Step, a
+//! regularized closed filled region. A V-score line is a reference for every
+//! Step it crosses: the one that draws it and each one placed under that,
+//! which meets it as [`Design::inherited_scores`]. The measured quantity is
+//! the Euclidean set distance
 //!
 //! ```text
 //! dist(S, M) = minᵢ inf { ‖x − y‖ : x ∈ sᵢ, y ∈ M },
@@ -29,7 +32,7 @@ use pcb_ir::geom::dfm::{ClearanceSite, Distance, linework_clearance_sites, linew
 use pcb_ir::geom::region::ring_edges;
 use pcb_ir::geom::{BBox, Point};
 
-use crate::commands::dfm::design::{BoardOutline, CopperLayer, Design};
+use crate::commands::dfm::design::{BoardOutline, CopperLayer, Design, Score};
 use crate::commands::dfm::report::{
     Evidence, EvidenceDisplay, LayerRef, MeasurementKind, ReportPoint, SourceLocator, Subject,
 };
@@ -49,60 +52,106 @@ struct LineworkItem {
 
 /// The reference items and their segments, flattened into one pool so the
 /// endpoint containment sweep runs once per layer.
+#[derive(Default)]
 struct LineworkPool {
     items: Vec<LineworkItem>,
     segments: Vec<(Point, Point)>,
 }
 
-fn linework_items(linework: Linework, design: &Design) -> LineworkPool {
-    let mut segments = Vec::new();
-    let mut push = |item_segments: Vec<(Point, Point)>| {
-        let start = segments.len();
-        segments.extend(item_segments);
-        start..segments.len()
-    };
-    let items = match linework {
-        Linework::VScore => design
-            .scores
-            .iter()
-            .map(|score| LineworkItem {
-                segments: push(vec![(score.start, score.end)]),
-                uncertainty_mm: 0.0,
-                layer: Some(score.layer.clone()),
-                subject: Subject {
-                    role: "reference",
-                    kind: "vscore_centerline",
-                    name: Some(score.layer.name.clone()),
-                    provenance: Some(score.provenance.clone()),
-                    ..Subject::default()
-                },
-                evidence: Evidence::segment("vscore_centerline", score.start, score.end),
-            })
-            .collect(),
-        Linework::BoardEdge => design
-            .board_outlines
-            .iter()
-            .map(|outline| LineworkItem {
-                segments: push(outline.contours.iter().flat_map(ring_edges).collect()),
-                uncertainty_mm: outline.region.uncertainty_mm,
-                layer: None,
-                subject: outline_subject(outline, "reference"),
-                evidence: Evidence::bounds("board_outline", outline.bbox),
-            })
-            .collect(),
-    };
-    LineworkPool { items, segments }
+impl LineworkPool {
+    fn push(
+        &mut self,
+        segments: Vec<(Point, Point)>,
+        item: impl FnOnce(Range<usize>) -> LineworkItem,
+    ) {
+        let start = self.segments.len();
+        self.segments.extend(segments);
+        self.items.push(item(start..self.segments.len()));
+    }
+
+    fn push_score(&mut self, score: &Score) {
+        self.push(vec![(score.start, score.end)], |segments| LineworkItem {
+            segments,
+            uncertainty_mm: 0.0,
+            layer: Some(score.layer.clone()),
+            subject: Subject {
+                role: "reference",
+                kind: "vscore_centerline",
+                name: Some(score.layer.name.clone()),
+                provenance: Some(score.provenance.clone()),
+                ..Subject::default()
+            },
+            evidence: Evidence::segment("vscore_centerline", score.start, score.end),
+        });
+    }
 }
 
+/// The reference items, pooled by the placements of the design's Step they
+/// exist at: all of them (`None`) for what the Step draws itself, and those
+/// a line from above crosses the Step at.
+fn linework_pools(linework: Linework, design: &Design) -> Vec<(Option<Vec<u32>>, LineworkPool)> {
+    let mut pools = vec![(None, LineworkPool::default())];
+    match linework {
+        Linework::VScore => {
+            for score in &design.scores {
+                pools[0].1.push_score(score);
+            }
+            for (score, placements) in &design.inherited_scores {
+                let at = Some(placements);
+                let pool = match pools.iter().position(|(known, _)| known.as_ref() == at) {
+                    Some(pool) => pool,
+                    None => {
+                        pools.push((at.cloned(), LineworkPool::default()));
+                        pools.len() - 1
+                    }
+                };
+                pools[pool].1.push_score(score);
+            }
+        }
+        Linework::BoardEdge => {
+            for outline in design
+                .board_outlines
+                .iter()
+                .filter(|outline| outline.is_board())
+            {
+                pools[0].1.push(
+                    outline.region.rings.iter().flat_map(ring_edges).collect(),
+                    |segments| LineworkItem {
+                        segments,
+                        uncertainty_mm: outline.region.uncertainty_mm,
+                        layer: None,
+                        subject: outline_subject(outline, "reference"),
+                        evidence: Evidence::bounds("board_outline", outline.bbox),
+                    },
+                );
+            }
+        }
+    }
+    pools.retain(|(_, pool)| !pool.items.is_empty());
+    pools
+}
+
+/// Every pool's evaluation, with the placements it holds at.
 pub(super) fn evaluate(
     limit_mm: f64,
     linework: Linework,
     conditions: &Conditions,
     design: &Design,
+) -> anyhow::Result<Vec<(Option<Vec<u32>>, Evaluation)>> {
+    linework_pools(linework, design)
+        .into_iter()
+        .map(|(placements, pool)| Ok((placements, measure(limit_mm, &pool, conditions, design)?)))
+        .collect()
+}
+
+fn measure(
+    limit_mm: f64,
+    pool: &LineworkPool,
+    conditions: &Conditions,
+    design: &Design,
 ) -> anyhow::Result<Evaluation> {
     let copper_layers = &design.copper_layers;
     let boundaries = &design.copper_boundaries;
-    let pool = linework_items(linework, design);
     let (items, segments) = (&pool.items, &pool.segments);
     let endpoints = segments
         .iter()
@@ -150,24 +199,20 @@ pub(super) fn evaluate(
             let distance = nearest.also_uncertain(item.uncertainty_mm);
             let site_layers = layers(item.layer.iter().chain([&copper.layer]));
             let sites = if violates(&distance, limit_mm) {
-                linework_clearance_sites(
+                let geometry = linework_clearance_sites(
                     &segments[item.segments.clone()],
                     &copper.image,
                     &boundaries[copper_index],
                     limit_mm,
                     item.uncertainty_mm,
-                )
-                .into_iter()
-                .map(|site| report_site(site, site_layers.clone(), limit_mm, design.resolution))
-                .collect::<anyhow::Result<Vec<_>>>()?
-                .into_iter()
-                .collect()
+                );
+                report_sites(geometry, &site_layers, limit_mm, design.resolution)?
             } else {
                 Vec::new()
             };
             measured.push(Measured {
                 distance,
-                bbox: BBox::from_point(distance.first).union(BBox::from_point(distance.second)),
+                bbox: BBox::spanning(distance.first, distance.second),
                 layers: site_layers,
                 subjects: vec![item.subject.clone(), copper_subject(copper)],
                 evidence: vec![item.evidence.clone()],
@@ -185,9 +230,22 @@ pub(super) fn evaluate(
     })
 }
 
+/// The report sites of a violating measurement's local clearance geometry.
+pub(super) fn report_sites(
+    geometry: Vec<ClearanceSite>,
+    layers: &[LayerRef],
+    limit_mm: f64,
+    resolution: Resolution,
+) -> anyhow::Result<Vec<MeasuredSite>> {
+    geometry
+        .into_iter()
+        .map(|site| report_site(site, layers.to_vec(), limit_mm, resolution))
+        .collect()
+}
+
 /// All clearance families share the same local path/constraint construction;
 /// the rule and inherited subjects give these boundaries their physical roles.
-pub(super) fn report_site(
+fn report_site(
     geometry: ClearanceSite,
     layers: Vec<LayerRef>,
     limit_mm: f64,
@@ -278,24 +336,19 @@ fn copper_subject(copper: &CopperLayer) -> Subject {
 }
 
 pub(super) fn outline_subject(outline: &BoardOutline, role: &'static str) -> Subject {
+    let locator = SourceLocator {
+        step: Some(outline.name.clone()),
+        layer: None,
+        set_index: None,
+        feature_index: None,
+        instance_index: None,
+    };
     Subject {
         role,
         kind: "board_outline",
         name: Some(outline.name.clone()),
-        source: Some(SourceLocator {
-            step: Some(outline.name.clone()),
-            layer: None,
-            set_index: None,
-            feature_index: None,
-            instance_index: outline.instance_index,
-        }),
-        provenance: Some(SourceLocator {
-            step: Some(outline.name.clone()),
-            layer: None,
-            set_index: None,
-            feature_index: None,
-            instance_index: outline.instance_index,
-        }),
+        source: Some(locator.clone()),
+        provenance: Some(locator),
         ..Subject::default()
     }
 }

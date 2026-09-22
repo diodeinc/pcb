@@ -38,40 +38,118 @@ fn manufacturing_package(
     )
 }
 
+/// A package file's contents, if the package has it.
+fn gerber<'a>(package: &'a ManufacturingPackage, filename: &str) -> Option<&'a str> {
+    let file = package.files.iter().find(|file| file.filename == filename);
+    file.map(|file| file.contents.as_str())
+}
+
+/// The generated array's size from the origin and its board count.
+fn assert_array(xml: &str, width_mm: f64, height_mm: f64, boards: usize) {
+    let layout = geometry::extract_layout(&Ipc2581::parse(xml).unwrap()).unwrap();
+    let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
+    assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
+    assert_point_close(panel_step.bbox.max, Point::new(width_mm, height_mm));
+    assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), boards);
+}
+
+fn options(
+    columns: u32,
+    rows: u32,
+    board_margin_mm: BoardMarginMm,
+    edge_rail_mm: BoardMarginMm,
+) -> BoardArrayCreateOptions {
+    BoardArrayCreateOptions {
+        columns,
+        rows,
+        board_margin_mm,
+        edge_rail_mm,
+    }
+}
+
+/// Thirty-six boards 5 mm apart inside 5 mm rails.
+fn six_by_six() -> BoardArrayCreateOptions {
+    options(6, 6, board_margin(5.0, 5.0), BoardMarginMm::all(5.0))
+}
+
+/// Panelize without balancing copper, for the cases that are about the array
+/// itself. Balancing costs the panel's whole area, so the cases that are about
+/// it ask for it.
+fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
+    Ok(create_board_array(
+        xml,
+        options,
+        false,
+        Separation::VScore,
+        Resolution::default(),
+    )?
+    .xml)
+}
+
+fn create_auto_board_array_xml(xml: &str, sheet: Option<AutoSheetSize>) -> Result<String> {
+    Ok(create_auto_board_array(xml, sheet, false, Separation::VScore, Resolution::default())?.xml)
+}
+
+fn manual_spec(
+    ipc: &Ipc2581,
+    options: &BoardArrayCreateOptions,
+    separation: Separation,
+) -> BoardArraySpec {
+    build_board_array_spec(
+        ipc,
+        primary_board_layout(ipc).unwrap(),
+        options,
+        BoardArrayPanelizationMetadata::MANUAL,
+        separation,
+        Resolution::default(),
+    )
+    .unwrap()
+}
+
+fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
+    finished_board_array_xml(&ipc2581::edit::Doc::parse(xml)?, spec)
+}
+
+/// What balancing collects from an unbalanced array, and its copper layers.
+fn balancing_collection(
+    ipc: &Ipc2581,
+) -> (
+    pcb_ir::dialects::ipc::balancing_region::BoardArrayBalancingCollection,
+    Vec<pcb_ir::dialects::ipc::BoardArrayCopperLayer>,
+) {
+    let resolution = Resolution::default();
+    let imported = design(ipc);
+    let layout = geometry::extract_layout(ipc).unwrap();
+    let score_lines = geometry::board_array_vscore_lines(&imported).unwrap();
+    let fabrication_profile =
+        geometry::board_array_fabrication_profile(&imported, &layout, &score_lines, resolution)
+            .unwrap();
+    let support_layers = extract_array_support_layers(&imported).unwrap();
+    let copper_layers = crate::layers::copper_layers(ipc.ecad().unwrap());
+    let collection = collect_board_array_balancing_input(
+        &layout,
+        &fabrication_profile,
+        &copper_layers,
+        support_layers
+            .iter()
+            .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
+        resolution,
+    )
+    .unwrap();
+    (collection, copper_layers)
+}
+
 #[test]
 fn parses_board_margin_css_shorthand() {
-    let cases = [
+    for (values, expected) in [
         (&[1.0][..], BoardMarginMm::all(1.0)),
+        (&[1.0, 2.0], BoardMarginMm::new(1.0, 2.0, 1.0, 2.0)),
+        (&[1.0, 2.0, 3.0], BoardMarginMm::new(1.0, 2.0, 3.0, 2.0)),
         (
-            &[1.0, 2.0][..],
-            BoardMarginMm {
-                top: 1.0,
-                right: 2.0,
-                bottom: 1.0,
-                left: 2.0,
-            },
+            &[1.0, 2.0, 3.0, 4.0],
+            BoardMarginMm::new(1.0, 2.0, 3.0, 4.0),
         ),
-        (
-            &[1.0, 2.0, 3.0][..],
-            BoardMarginMm {
-                top: 1.0,
-                right: 2.0,
-                bottom: 3.0,
-                left: 2.0,
-            },
-        ),
-        (
-            &[1.0, 2.0, 3.0, 4.0][..],
-            BoardMarginMm {
-                top: 1.0,
-                right: 2.0,
-                bottom: 3.0,
-                left: 4.0,
-            },
-        ),
-    ];
-
-    for (values, expected) in cases {
+    ] {
         assert_eq!(BoardMarginMm::from_css_shorthand(values).unwrap(), expected);
     }
     assert!(BoardMarginMm::from_css_shorthand(&[]).is_err());
@@ -80,66 +158,38 @@ fn parses_board_margin_css_shorthand() {
 
 #[test]
 fn creates_rounded_panel_step_from_board_bbox() {
-    let xml = create_board_array_xml(
-        board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 6,
-            rows: 6,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap();
+    let xml = create_board_array_xml(&board_fixture_mm(), &six_by_six()).unwrap();
 
-    assert!(xml.contains(r#"<StepRef name="array"/>"#));
-    assert!(xml.contains(r#"<StepRef name="board_cell"/>"#));
-    assert!(xml.contains(r#"<StepRef name="board"/>"#));
-    assert!(xml.contains(r#"<LayerRef name="V-Score"/>"#));
-    assert!(xml.contains(
-        r#"<Layer name="V-Score" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>"#
-    ));
-    assert!(xml.contains(r#"<Step name="array" type="PALLET">"#));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.schema_version" type="INTEGER" value="1"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="manual"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.columns" type="INTEGER" value="6"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.rows" type="INTEGER" value="6"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.board_margin_top_mm" type="DOUBLE" value="2.5"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.edge_rail_left_mm" type="DOUBLE" value="5"/>"#
-    ));
-    assert!(xml.contains(r#"<Step name="board_cell" type="PALLET">"#));
-    assert!(xml.contains(
-        r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<StepRepeat stepRef="board" x="4.5" y="5.5" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
-    ));
-    assert!(xml.contains(r#"<LayerFeature layerRef="V-Score">"#));
-    assert!(xml.contains(r#"<Spec name="Board_Array_VCut">"#));
-    assert!(xml.contains(r#"<SpecRef id="Board_Array_VCut"/>"#));
-    assert!(
-        xml.contains(r#"<PolyStepCurve x="3" y="100" centerX="3" centerY="97" clockwise="true"/>"#)
-    );
-    assert!(xml.contains(r#"<Line startX="7.5" startY="0" endX="7.5" endY="100">"#));
-    assert!(xml.contains(r#"<Line startX="0" startY="7.5" endX="100" endY="7.5">"#));
+    for expected in [
+        r#"<StepRef name="array"/>"#,
+        r#"<StepRef name="board_cell"/>"#,
+        r#"<StepRef name="board"/>"#,
+        r#"<LayerRef name="V-Score"/>"#,
+        r#"<Layer name="V-Score" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>"#,
+        r#"<Step name="array" type="PALLET">"#,
+        r#"<NonstandardAttribute name="diode.panelize.schema_version" type="INTEGER" value="1"/>"#,
+        r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="manual"/>"#,
+        r#"<NonstandardAttribute name="diode.panelize.columns" type="INTEGER" value="6"/>"#,
+        r#"<NonstandardAttribute name="diode.panelize.rows" type="INTEGER" value="6"/>"#,
+        r#"<NonstandardAttribute name="diode.panelize.board_margin_top_mm" type="DOUBLE" value="2.5"/>"#,
+        r#"<NonstandardAttribute name="diode.panelize.edge_rail_left_mm" type="DOUBLE" value="5"/>"#,
+        r#"<Step name="board_cell" type="PALLET">"#,
+        r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#,
+        r#"<StepRepeat stepRef="board" x="4.5" y="5.5" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#,
+        r#"<LayerFeature layerRef="V-Score">"#,
+        r#"<Spec name="Board_Array_VCut">"#,
+        r#"<SpecRef id="Board_Array_VCut"/>"#,
+        r#"<PolyStepCurve x="3" y="100" centerX="3" centerY="97" clockwise="true"/>"#,
+        r#"<Line startX="7.5" startY="0" endX="7.5" endY="100">"#,
+        r#"<Line startX="0" startY="7.5" endX="100" endY="7.5">"#,
+    ] {
+        assert!(xml.contains(expected), "{expected}");
+    }
 
+    assert_array(&xml, 100.0, 100.0, 36);
     let ipc = Ipc2581::parse(&xml).unwrap();
     let layout = geometry::extract_layout(&ipc).unwrap();
-    let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
-    assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
-    assert_point_close(panel_step.bbox.max, Point::new(100.0, 100.0));
     assert_eq!(pcb_ir::dialects::ipc::board_step_count(&layout), 1);
-    assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 36);
 
     let first_instance = layout
         .layout
@@ -175,47 +225,11 @@ fn creates_rounded_panel_step_from_board_bbox() {
 
 #[test]
 fn generated_board_array_has_a_certified_safe_balancing_region() {
-    let resolution = Resolution::default();
-
-    let input = board_fixture_with_mask_bbox_mm(12.0, 10.0);
-    let source = Ipc2581::parse(&input).unwrap();
-    let (options, validation_mode, panelization) =
-        auto_board_array_options(&source, None, resolution).unwrap();
-    let spec = build_board_array_spec(
-        &source,
-        &options,
-        validation_mode,
-        panelization,
-        Separation::VScore,
-        resolution,
-    )
-    .unwrap();
     // Safe-region discovery runs on the completed but not-yet-balanced array;
     // otherwise the generated balance copper becomes its own obstacle.
-    let xml = write_board_array_xml(&input, &spec).unwrap();
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    let layout = geometry::extract_layout(&ipc).unwrap();
-    let score_lines = geometry::board_array_vscore_lines(&design(&ipc)).unwrap();
-    let fabrication_profile =
-        geometry::board_array_fabrication_profile(&design(&ipc), &layout, &score_lines, resolution)
-            .unwrap();
-    let ecad = ipc.ecad().unwrap();
-    let support_layers = extract_array_support_layers(
-        &pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap(),
-    )
-    .unwrap();
-    let copper_layers = crate::layers::copper_layers(ecad);
-
-    let collection = collect_board_array_balancing_input(
-        &layout,
-        &fabrication_profile,
-        &copper_layers,
-        support_layers
-            .iter()
-            .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
-        resolution,
-    )
-    .unwrap();
+    let xml =
+        create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(13.0, 10.0), None).unwrap();
+    let (collection, copper_layers) = balancing_collection(&Ipc2581::parse(&xml).unwrap());
     let input = collection.input_for_layer(copper_layers[0].name).unwrap();
     let result = board_array_balancing_region(&input, BalancingRegionOptions::default()).unwrap();
 
@@ -247,21 +261,8 @@ fn two_layer_board_xml() -> String {
 fn board_array_balancing_solves_every_copper_layer() {
     let resolution = Resolution::default();
 
-    let input = two_layer_board_xml();
-    let ipc = Ipc2581::parse(&input).unwrap();
-    let sheet = Some(AutoSheetSize::A7);
-    let (options, validation_mode, panelization) =
-        auto_board_array_options(&ipc, sheet, resolution).unwrap();
-    let spec = build_board_array_spec(
-        &ipc,
-        &options,
-        validation_mode,
-        panelization,
-        Separation::VScore,
-        resolution,
-    )
-    .unwrap();
-    let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
+    let provisional_xml =
+        create_auto_board_array_xml(&two_layer_board_xml(), Some(AutoSheetSize::A7)).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let balance =
         generate_automatic_board_array_copper_balance(&provisional, resolution.tolerance_mm)
@@ -373,12 +374,7 @@ fn board_array_creation_accepts_no_source_copper_layers() {
     );
     let creation = create_board_array(
         &input,
-        &BoardArrayCreateOptions {
-            columns: 2,
-            rows: 2,
-            board_margin_mm: board_margin(10.0, 10.0),
-            edge_rail_mm: BoardMarginMm::all(20.0),
-        },
+        &options(2, 2, board_margin(10.0, 10.0), BoardMarginMm::all(20.0)),
         true,
         Separation::VScore,
         resolution,
@@ -389,68 +385,17 @@ fn board_array_creation_accepts_no_source_copper_layers() {
 }
 
 #[test]
-fn board_array_creation_can_skip_copper_balancing() {
-    let resolution = Resolution::default();
-
-    let creation = create_auto_board_array(
-        board_fixture_with_top_line_mm(),
-        None,
-        false,
-        Separation::VScore,
-        resolution,
-    )
-    .unwrap();
-
-    assert!(creation.copper_balance.is_none());
-    Ipc2581::parse(&creation.xml).unwrap();
-}
-
-#[test]
 fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_layers() {
     let resolution = Resolution::default();
-
-    let input = large_board_fixture_mm();
-    let ipc = Ipc2581::parse(input).unwrap();
     // The smallest sheet the board fits: fiducial scoping does not depend on
     // how much panel surrounds it.
-    let sheet = Some(AutoSheetSize::A6);
-    let (options, validation_mode, panelization) =
-        auto_board_array_options(&ipc, sheet, resolution).unwrap();
-    let spec = build_board_array_spec(
-        &ipc,
-        &options,
-        validation_mode,
-        panelization,
-        Separation::VScore,
-        resolution,
+    let xml = create_auto_board_array_xml(
+        &board_fixture_with_mask_bbox_mm(60.0, 60.0),
+        Some(AutoSheetSize::A6),
     )
     .unwrap();
-    let provisional_xml = write_board_array_xml(input, &spec).unwrap();
-    let provisional = Ipc2581::parse(&provisional_xml).unwrap();
-    let layout = geometry::extract_layout(&provisional).unwrap();
-    let score_lines = geometry::board_array_vscore_lines(&design(&provisional)).unwrap();
-    let fabrication_profile = geometry::board_array_fabrication_profile(
-        &design(&provisional),
-        &layout,
-        &score_lines,
-        resolution,
-    )
-    .unwrap();
-    let support_layers = extract_array_support_layers(
-        &pcb_ir::import::ipc2581::import_design(&provisional, resolution).unwrap(),
-    )
-    .unwrap();
-    let copper_layers = crate::layers::copper_layers(provisional.ecad().unwrap());
-    let collection = collect_board_array_balancing_input(
-        &layout,
-        &fabrication_profile,
-        &copper_layers,
-        support_layers
-            .iter()
-            .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
-        resolution,
-    )
-    .unwrap();
+    let provisional = Ipc2581::parse(&xml).unwrap();
+    let (collection, copper_layers) = balancing_collection(&provisional);
 
     let support_area = |name: &str| {
         let layer = copper_layers
@@ -471,205 +416,141 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
 }
 
 #[test]
-fn board_array_creation_adds_history_record() {
-    let xml = create_board_array_xml(
-        board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 6,
-            rows: 6,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap();
-
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    assert!(ipc.history_record().is_some());
-    assert!(xml.contains(r#"<HistoryRecord number="1""#));
-    assert!(xml.contains("Created board array"));
-}
-
-#[test]
 fn generated_board_array_xml_validates_with_existing_history_and_callouts() {
-    let input = schema_valid_board_fixture_mm();
-    let xml = create_board_array_xml(
-        &input,
-        &BoardArrayCreateOptions {
-            columns: 6,
-            rows: 6,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap();
+    // A dotted history number counts up in its last component.
+    for (number, next) in [("1", "2"), ("1.0", "1.1")] {
+        let input = schema_valid_board_fixture_mm().replace(
+            r#"<HistoryRecord number="1""#,
+            &format!(r#"<HistoryRecord number="{number}""#),
+        );
+        let xml = create_board_array_xml(&input, &six_by_six()).unwrap();
 
-    assert_eq!(xml.matches("<FileRevision").count(), 1);
-    assert_eq!(xml.matches("<ChangeRec").count(), 1);
-    assert!(xml.matches("<Line ").count() > 1);
-    assert_eq!(
-        xml.matches("<Features>").count(),
-        xml.matches("<Line ").count() + xml.matches("<Contour>").count()
-    );
-
-    crate::ipc2581::validate(&xml).expect("generated board array XML should validate");
+        assert!(xml.contains(&format!(r#"<HistoryRecord number="{next}""#)));
+        assert!(xml.contains("Created board array"));
+        assert_eq!(xml.matches("<FileRevision").count(), 1);
+        assert_eq!(xml.matches("<ChangeRec").count(), 1);
+        assert!(xml.matches("<Line ").count() > 1);
+        assert_eq!(
+            xml.matches("<Features>").count(),
+            xml.matches("<Line ").count() + xml.matches("<Contour>").count()
+        );
+        crate::ipc2581::validate(&xml).expect("generated board array XML should validate");
+    }
 }
 
 #[test]
-fn auto_create_projects_board_to_a7_array() {
-    let xml = create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(12.0, 10.0)).unwrap();
+fn auto_create_projects_board_to_the_smallest_or_the_requested_sheet() {
+    let attribute = |name: &str, kind: &str, value: &str| {
+        format!(
+            r#"<NonstandardAttribute name="diode.panelize.{name}" type="{kind}" value="{value}"/>"#
+        )
+    };
+    for (sheet, mode, name, (width, height), repeat, rails, boards) in [
+        (
+            None,
+            "auto",
+            "A7",
+            (105.0, 74.0),
+            r#"x="6.5" y="7" nx="4" ny="3""#,
+            ("6.5", "7"),
+            12,
+        ),
+        (
+            Some(AutoSheetSize::A5),
+            "auto_sheet",
+            "A5",
+            (148.0, 210.0),
+            r#"x="5" y="5" nx="6" ny="10""#,
+            ("5", "5"),
+            60,
+        ),
+    ] {
+        let xml = create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(13.0, 10.0), sheet)
+            .unwrap();
 
-    assert!(xml.contains(
-        r#"<StepRepeat stepRef="board_cell" x="8.5" y="7" nx="4" ny="3" dx="22" dy="20" angle="0.00" mirror="false"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.sheet" type="STRING" value="A7"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.sheet_width_mm" type="DOUBLE" value="105"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.sheet_height_mm" type="DOUBLE" value="74"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.edge_rail_left_mm" type="DOUBLE" value="8.5"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.edge_rail_top_mm" type="DOUBLE" value="7"/>"#
-    ));
+        assert!(xml.contains(&format!(
+            r#"<StepRepeat stepRef="board_cell" {repeat} dx="23" dy="20" angle="0.00" mirror="false"/>"#
+        )));
+        for (key, kind, value) in [
+            ("mode", "STRING", mode),
+            ("sheet", "STRING", name),
+            ("sheet_width_mm", "DOUBLE", &width.to_string()),
+            ("sheet_height_mm", "DOUBLE", &height.to_string()),
+            ("edge_rail_left_mm", "DOUBLE", rails.0),
+            ("edge_rail_top_mm", "DOUBLE", rails.1),
+        ] {
+            assert!(xml.contains(&attribute(key, kind, value)), "{key}");
+        }
 
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    let layout = geometry::extract_layout(&ipc).unwrap();
-    let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
-    assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
-    assert_point_close(panel_step.bbox.max, Point::new(105.0, 74.0));
-    assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 12);
-}
-
-#[test]
-fn auto_create_projects_board_to_requested_a5_array() {
-    let xml = create_auto_board_array_xml_with_sheet(
-        &board_fixture_with_mask_bbox_mm(12.0, 10.0),
-        Some(AutoSheetSize::A5),
-    )
-    .unwrap();
-
-    assert!(xml.contains(
-        r#"<StepRepeat stepRef="board_cell" x="8" y="5" nx="6" ny="10" dx="22" dy="20" angle="0.00" mirror="false"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto_sheet"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.sheet" type="STRING" value="A5"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.sheet_width_mm" type="DOUBLE" value="148"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.sheet_height_mm" type="DOUBLE" value="210"/>"#
-    ));
-
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    let layout = geometry::extract_layout(&ipc).unwrap();
-    let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
-    assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
-    assert_point_close(panel_step.bbox.max, Point::new(148.0, 210.0));
-    assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 60);
+        assert_array(&xml, width, height, boards);
+    }
 }
 
 #[test]
 fn auto_create_derives_board_margin_from_courtyard_overhang() {
-    let input = board_fixture_with_courtyard_overhang_mm();
-    let ipc = Ipc2581::parse(input).unwrap();
-    let board = primary_board_layout(&ipc).unwrap();
-    let margin = auto_board_margin(&ipc, board.bbox, Resolution::default()).unwrap();
+    // The margin grows by the overhang on each side, however large.
+    for (courtyard, expected, repeats, boards) in [
+        (
+            board_fixture_with_courtyard_mm(-2.0, -1.0, 14.0, 12.0),
+            BoardMarginMm::new(7.0, 6.0, 6.0, 7.0),
+            [
+                r#"stepRef="board_cell" x="11" y="6.5" nx="2" ny="4" dx="26" dy="23""#,
+                r#"stepRef="board" x="7" y="6" nx="1" ny="1" dx="0" dy="0""#,
+            ],
+            8,
+        ),
+        (
+            board_fixture_with_courtyard_mm(0.0, 0.0, 32.0, 10.0),
+            BoardMarginMm::new(5.0, 24.0, 5.0, 5.0),
+            [r#"stepRef="board_cell""#, r#"stepRef="board""#],
+            6,
+        ),
+    ] {
+        let ipc = Ipc2581::parse(&courtyard).unwrap();
+        let board = primary_board_layout(&ipc).unwrap();
+        let margin = auto_board_margin(&ipc, board.bbox, Resolution::default()).unwrap();
+        assert_eq!(margin, expected);
 
-    assert_eq!(
-        margin,
-        BoardMarginMm {
-            top: 7.0,
-            right: 6.0,
-            bottom: 6.0,
-            left: 7.0,
+        let xml = create_auto_board_array_xml(&courtyard, None).unwrap();
+        for repeat in repeats {
+            assert!(xml.contains(&format!("<StepRepeat {repeat}")), "{repeat}");
         }
-    );
-
-    let xml = create_auto_board_array_xml(input).unwrap();
-    assert!(xml.contains(
-        r#"<StepRepeat stepRef="board_cell" x="12" y="6.5" nx="2" ny="4" dx="25" dy="23" angle="0.00" mirror="false"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<StepRepeat stepRef="board" x="7" y="6" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
-    ));
-}
-
-#[test]
-fn auto_create_allows_large_computed_board_margins() {
-    let input = board_fixture_with_large_courtyard_overhang_mm();
-    let ipc = Ipc2581::parse(input).unwrap();
-    let board = primary_board_layout(&ipc).unwrap();
-    let margin = auto_board_margin(&ipc, board.bbox, Resolution::default()).unwrap();
-
-    assert_eq!(
-        margin,
-        BoardMarginMm {
-            top: 5.0,
-            right: 24.0,
-            bottom: 5.0,
-            left: 5.0,
-        }
-    );
-
-    let xml = create_auto_board_array_xml(input).unwrap();
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    let layout = geometry::extract_layout(&ipc).unwrap();
-    assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 6);
+        let layout = geometry::extract_layout(&Ipc2581::parse(&xml).unwrap()).unwrap();
+        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), boards);
+    }
 }
 
 #[test]
 fn auto_create_allows_large_leftover_edge_rails() {
-    let xml = create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(124.0, 110.0)).unwrap();
+    let xml =
+        create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(124.0, 110.0), None).unwrap();
 
     assert!(xml.contains(
         r#"<StepRepeat stepRef="board_cell" x="38" y="14" nx="1" ny="1" dx="134" dy="120" angle="0.00" mirror="false"/>"#
     ));
 
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    let layout = geometry::extract_layout(&ipc).unwrap();
-    let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
-    assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
-    assert_point_close(panel_step.bbox.max, Point::new(210.0, 148.0));
-    assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 1);
+    assert_array(&xml, 210.0, 148.0, 1);
 }
 
 #[test]
 fn auto_create_falls_back_to_minimum_single_board_panel_when_a4_does_not_fit() {
-    let xml = create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(278.0, 10.0)).unwrap();
+    let xml =
+        create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(278.0, 10.0), None).unwrap();
 
-    assert!(xml.contains(
-        r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="1" ny="1" dx="288" dy="20" angle="0.00" mirror="false"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto_minimum_panel"/>"#
-    ));
+    for expected in [
+        r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="1" ny="1" dx="288" dy="20" angle="0.00" mirror="false"/>"#,
+        r#"<StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#,
+        r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto_minimum_panel"/>"#,
+    ] {
+        assert!(xml.contains(expected), "{expected}");
+    }
 
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    let layout = geometry::extract_layout(&ipc).unwrap();
-    let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
-    assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
-    assert_point_close(panel_step.bbox.max, Point::new(298.0, 30.0));
-    assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 1);
+    assert_array(&xml, 298.0, 30.0, 1);
 }
 
 #[test]
 fn auto_create_requested_sheet_still_errors_when_sheet_does_not_fit() {
-    let error = create_auto_board_array_xml_with_sheet(
+    let error = create_auto_board_array_xml(
         &board_fixture_with_mask_bbox_mm(278.0, 278.0),
         Some(AutoSheetSize::A4),
     )
@@ -681,18 +562,13 @@ fn auto_create_requested_sheet_still_errors_when_sheet_does_not_fit() {
 #[test]
 fn creates_board_array_with_asymmetric_edge_rails() {
     let xml = create_board_array_xml(
-        board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 6,
-            rows: 6,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm {
-                top: 8.0,
-                right: 6.0,
-                bottom: 5.0,
-                left: 7.0,
-            },
-        },
+        &board_fixture_mm(),
+        &options(
+            6,
+            6,
+            board_margin(5.0, 5.0),
+            BoardMarginMm::new(8.0, 6.0, 5.0, 7.0),
+        ),
     )
     .unwrap();
 
@@ -700,41 +576,33 @@ fn creates_board_array_with_asymmetric_edge_rails() {
         r#"<StepRepeat stepRef="board_cell" x="7" y="5" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
     ));
 
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    let layout = geometry::extract_layout(&ipc).unwrap();
-    let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
-    assert_point_close(panel_step.bbox.max, Point::new(103.0, 103.0));
+    assert_array(&xml, 103.0, 103.0, 36);
 }
 
 #[test]
 fn created_board_array_vcuts_flow_to_svg_and_gerber() {
     let resolution = Resolution::default();
 
-    let xml = create_board_array_xml(
-        board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 6,
-            rows: 6,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap();
+    let xml = create_board_array_xml(&board_fixture_mm(), &six_by_six()).unwrap();
     let ipc = Ipc2581::parse(&xml).unwrap();
     let accessor = IpcAccessor::new(&ipc);
 
-    let svg = crate::board_array::render_board_array_overview_svg(&accessor, resolution)
-        .unwrap()
-        .unwrap();
-    assert!(svg.matches("vcut-guide").count() > 24);
-    assert!(svg.contains("stroke='#dc2626'"));
-    assert!(svg.contains("stroke-width='0.12'"));
-    assert!(svg.contains("stroke-linecap='round'"));
-    assert!(!svg.contains("stroke-dasharray"));
-    assert!(!svg.contains("class='score-guide'"));
+    let svg =
+        crate::board_array::render_board_array_overview_svg(&accessor, &design(&ipc), resolution)
+            .unwrap()
+            .unwrap();
+    // Guides draw in their own layer at the score lines' own width.
+    assert!(svg.contains("<g fill='#dc2626' stroke='#dc2626' opacity='1'>"));
+    assert!(
+        svg.matches("stroke-width='0.12' stroke-linecap='round'")
+            .count()
+            > 24
+    );
     let viewbox = svg_viewbox(&svg);
     assert!(viewbox.0 + viewbox.2 > 100.0);
-    assert!(viewbox.1 + viewbox.3 > 100.0);
+    // The overview draws world y up under one flip group, so the viewBox
+    // starts at the negated top edge.
+    assert!(-viewbox.1 > 100.0);
     assert_eq!(
         geometry::board_array_vscore_lines(&design(&ipc))
             .unwrap()
@@ -744,38 +612,30 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
 
     let package = manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
 
-    let vcut = package
-        .files
-        .iter()
-        .find(|file| file.filename == "V_Cut.gbr")
-        .unwrap();
-    assert!(vcut.contents.contains("%TF.FileFunction,Vcut*%"));
-    assert!(vcut.contents.contains("%TF.Part,Array*%"));
-    assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
-    assert!(!vcut.contents.contains("G36*"));
-    assert!(vcut.contents.matches("D01*").count() > 24);
+    let vcut = gerber(&package, "V_Cut.gbr").unwrap();
+    assert!(vcut.contains("%TF.FileFunction,Vcut*%"));
+    assert!(vcut.contains("%TF.Part,Array*%"));
+    assert!(vcut.contains("%TA.AperFunction,Other,Vcut*%"));
+    assert!(!vcut.contains("G36*"));
+    assert!(vcut.matches("D01*").count() > 24);
 
     let board_package = manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
-    assert!(
-        board_package
-            .files
-            .iter()
-            .all(|file| file.filename != "V_Cut.gbr")
-    );
+    assert!(gerber(&board_package, "V_Cut.gbr").is_none());
 }
 
 #[test]
 fn created_board_array_profile_gerber_derives_vscore_reliefs() {
     let resolution = Resolution::default();
 
+    let rounded_corner = r#"<PolyBegin x="0" y="0"/>
+        <PolyStepSegment x="10" y="0"/>
+        <PolyStepSegment x="10" y="10"/>
+        <PolyStepSegment x="4" y="10"/>
+        <PolyStepCurve x="0" y="6" centerX="4" centerY="6" clockwise="false"/>
+        <PolyStepSegment x="0" y="0"/>"#;
     let xml = create_board_array_xml(
-        rounded_corner_board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 6,
-            rows: 6,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
+        &board_fixture(TOP_LAYER, "", rounded_corner, ""),
+        &six_by_six(),
     )
     .unwrap();
 
@@ -797,49 +657,43 @@ fn created_board_array_profile_gerber_derives_vscore_reliefs() {
     assert!(fabrication_profile.assembly_panel_outlines.is_empty());
 
     let package = manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
-    let vcut = package
-        .files
-        .iter()
-        .find(|file| file.filename == "V_Cut.gbr")
-        .unwrap();
-    assert!(!vcut.contents.contains("G36*"));
+    let vcut = gerber(&package, "V_Cut.gbr").unwrap();
+    assert!(!vcut.contains("G36*"));
+    assert!(gerber(&package, "Edge_Cuts.gm1").is_none());
+    let profile = gerber(&package, "Board_Array_Profile.gm1").unwrap();
+    assert!(profile.contains("%TF.FileFunction,Profile,NP*%"));
+    assert!(profile.contains("%TF.Part,Array*%"));
+    assert!(profile.contains("%TA.AperFunction,Profile*%"));
+    assert!(profile.contains("%ADD10C,0.05*%"));
+    assert!(!profile.contains("%ADD11C,1*%"));
+    assert!(!profile.contains("G36*"));
     assert!(
-        package
-            .files
-            .iter()
-            .all(|file| file.filename != "Edge_Cuts.gm1")
-    );
-    let profile = package
-        .files
-        .iter()
-        .find(|file| file.filename == "Board_Array_Profile.gm1")
-        .unwrap();
-    assert!(profile.contents.contains("%TF.FileFunction,Profile,NP*%"));
-    assert!(profile.contents.contains("%TF.Part,Array*%"));
-    assert!(profile.contents.contains("%TA.AperFunction,Profile*%"));
-    assert!(profile.contents.contains("%ADD10C,0.05*%"));
-    assert!(!profile.contents.contains("%ADD11C,1*%"));
-    assert!(!profile.contents.contains("G36*"));
-    assert!(
-        profile.contents.matches("D01*").count()
+        profile.matches("D01*").count()
             > geometry::board_array_vscore_lines(&design(&ipc))
                 .unwrap()
                 .len(),
         "routed reliefs should emit closed contour strokes, not only the V-cut guide lines"
     );
-    gerberx2::GerberX2::parse(&profile.contents).unwrap();
+    gerberx2::GerberX2::parse(profile).unwrap();
 }
 
 #[test]
 fn board_array_creation_drops_source_board_outline_layer_features() {
+    let layers = format!(
+        r#"{SURFACE_LAYERS}
+  <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL" polarity="POSITIVE"/>"#
+    );
+    let features = line_feature("TOP", (1.0, 1.0), (5.0, 1.0), 0.2)
+        + &line_feature("Edge.Cuts", (0.0, 0.0), (40.0, 0.0), 0.05);
+    let input = board_fixture(
+        &layers,
+        r#"<LayerRef name="Edge.Cuts"/>"#,
+        &rectangle(0.0, 0.0, 40.0, 40.0),
+        &features,
+    );
     let xml = create_board_array_xml(
-        board_fixture_with_edge_cuts_layer_mm(),
-        &BoardArrayCreateOptions {
-            columns: 2,
-            rows: 2,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
+        &input,
+        &options(2, 2, board_margin(5.0, 5.0), BoardMarginMm::all(5.0)),
     )
     .unwrap();
 
@@ -850,24 +704,14 @@ fn board_array_creation_drops_source_board_outline_layer_features() {
 
     let ipc = Ipc2581::parse(&xml).unwrap();
     let package = manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
-    assert!(
-        package
-            .files
-            .iter()
-            .all(|file| file.filename != "Edge_Cuts.gm1")
-    );
-    assert!(
-        package
-            .files
-            .iter()
-            .any(|file| file.filename == "Board_Array_Profile.gm1")
-    );
+    assert!(gerber(&package, "Edge_Cuts.gm1").is_none());
+    assert!(gerber(&package, "Board_Array_Profile.gm1").is_some());
 }
 
 #[test]
 fn board_array_creation_preserves_board_target_geometry() {
     let input = board_fixture_with_top_line_mm();
-    let before_ipc = Ipc2581::parse(input).unwrap();
+    let before_ipc = Ipc2581::parse(&input).unwrap();
     let before = geometry::extract_layer_for_view(
         &before_ipc,
         "TOP",
@@ -876,16 +720,7 @@ fn board_array_creation_preserves_board_target_geometry() {
     )
     .unwrap();
 
-    let xml = create_board_array_xml(
-        input,
-        &BoardArrayCreateOptions {
-            columns: 6,
-            rows: 6,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap();
+    let xml = create_board_array_xml(&input, &six_by_six()).unwrap();
     let after_ipc = Ipc2581::parse(&xml).unwrap();
     let after = geometry::extract_layer_for_view(
         &after_ipc,
@@ -918,50 +753,30 @@ fn board_array_creation_preserves_board_target_geometry() {
 
 #[test]
 fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
-    let input = board_fixture_with_mask_mm();
-    let ipc = Ipc2581::parse(input).unwrap();
-    let options = BoardArrayCreateOptions {
-        columns: 6,
-        rows: 6,
-        board_margin_mm: board_margin(5.0, 5.0),
-        edge_rail_mm: BoardMarginMm::all(5.0),
-    };
-    let mut spec = build_board_array_spec(
-        &ipc,
-        &options,
-        BoardArrayValidationMode::Manual,
-        BoardArrayPanelizationMetadata {
-            mode: BoardArrayPanelizationMode::Manual,
-            sheet: None,
-            sheet_target_mm: None,
-        },
-        Separation::VScore,
-        Resolution::default(),
-    )
-    .unwrap();
+    // Boards this small carry no tooling of the array's own.
+    let input = board_fixture(SURFACE_LAYERS, "", &rectangle(-2.0, -3.0, 8.0, 7.0), "");
+    let ipc = Ipc2581::parse(&input).unwrap();
+    let mut spec = manual_spec(&ipc, &six_by_six(), Separation::VScore);
 
     spec.generated_geometry.add_layer_feature(
         GeneratedFeatureScope::Array,
         "TOP",
-        Polarity::Positive,
         round_fiducial_features(IpcFiducialKind::Global, [(12.5, 12.5)], 1.0),
     );
     spec.generated_geometry.add_layer_feature(
         GeneratedFeatureScope::Array,
         "F.Mask",
-        Polarity::Positive,
         round_fiducial_features(IpcFiducialKind::Global, [(12.5, 12.5)], 2.0),
     );
-    spec.generated_geometry.add_layer(GeneratedLayer::new(
-        "Array_Drill",
-        LayerFunction::Drill,
-        Some(Side::All),
-        Some(Polarity::Positive),
-    ));
+    spec.generated_geometry.layers.push(GeneratedLayer {
+        name: "Array_Drill".to_string(),
+        layer_function: LayerFunction::Drill,
+        side: Side::All,
+        span: None,
+    });
     spec.generated_geometry.add_layer_feature(
         GeneratedFeatureScope::Array,
         "Array_Drill",
-        Polarity::Positive,
         round_nonplated_hole_features([(20.0, 20.0)], 2.0),
     );
     spec.content_layer_refs = content_layer_refs(
@@ -970,18 +785,24 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
         &spec.board_outline_layer_names,
     );
 
-    let xml = write_board_array_xml(input, &spec).unwrap();
+    let xml = write_board_array_xml(&input, &spec).unwrap();
 
-    assert!(xml.contains(r#"<LayerRef name="F.Mask"/>"#));
-    assert!(xml.contains(r#"<LayerRef name="Array_Drill"/>"#));
-    assert!(xml.contains(
-        r#"<Layer name="Array_Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>"#
-    ));
+    for expected in [
+        r#"<LayerRef name="F.Mask"/>"#,
+        r#"<LayerRef name="Array_Drill"/>"#,
+        r#"<Layer name="Array_Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>"#,
+    ] {
+        assert!(xml.contains(expected), "{expected}");
+    }
     assert_eq!(xml.matches("<GlobalFiducial>").count(), 2);
-    assert!(xml.contains(r#"<Circle diameter="1"/>"#));
-    assert!(xml.contains(r#"<Circle diameter="2"/>"#));
-    assert!(xml.contains(r#"diameter="2" platingStatus="NONPLATED""#));
-    assert!(xml.contains(r#"x="20" y="20""#));
+    for expected in [
+        r#"<Circle diameter="1"/>"#,
+        r#"<Circle diameter="2"/>"#,
+        r#"diameter="2" platingStatus="NONPLATED""#,
+        r#"x="20" y="20""#,
+    ] {
+        assert!(xml.contains(expected), "{expected}");
+    }
 
     let parsed = Ipc2581::parse(&xml).unwrap();
     let top = geometry::extract_layer_for_view(
@@ -1012,37 +833,18 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
     assert_eq!(drill.features[0].intent.plating, PlatingKind::NonPlated);
 
     let package = manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
-    let top = package
-        .files
-        .iter()
-        .find(|file| file.filename == "F_Cu.gtl")
-        .unwrap();
-    let mask = package
-        .files
-        .iter()
-        .find(|file| file.filename == "F_Mask.gts")
-        .unwrap();
-    let drill = package
-        .files
-        .iter()
-        .find(|file| file.filename == "NPTH.drl")
-        .unwrap();
+    let top = gerber(&package, "F_Cu.gtl").unwrap();
+    let mask = gerber(&package, "F_Mask.gts").unwrap();
+    let drill = gerber(&package, "NPTH.drl").unwrap();
 
-    assert!(
-        top.contents
-            .contains("%TA.AperFunction,FiducialPad,Global*%")
-    );
-    assert!(mask.contents.contains("%TA.AperFunction,Material*%"));
-    assert!(!mask.contents.contains("%TA.AperFunction,FiducialPad"));
-    assert!(drill.contents.contains("; #@! TF.FileFunction,NonPlated"));
-    assert!(
-        drill
-            .contents
-            .contains("; #@! TA.AperFunction,NonPlated,NPTH,ComponentDrill")
-    );
-    assert!(drill.contents.contains("X20.0Y20.0"));
-    assert!(!top.contents.contains("%TA.AperFunction,Other,Drill*%"));
-    assert!(!mask.contents.contains("%TA.AperFunction,Other,Drill*%"));
+    assert!(top.contains("%TA.AperFunction,FiducialPad,Global*%"));
+    assert!(mask.contains("%TA.AperFunction,Material*%"));
+    assert!(!mask.contains("%TA.AperFunction,FiducialPad"));
+    assert!(drill.contains("; #@! TF.FileFunction,NonPlated"));
+    assert!(drill.contains("; #@! TA.AperFunction,NonPlated,NPTH,ComponentDrill"));
+    assert!(drill.contains("X20.0Y20.0"));
+    assert!(!top.contains("%TA.AperFunction,Other,Drill*%"));
+    assert!(!mask.contains("%TA.AperFunction,Other,Drill*%"));
 }
 
 #[test]
@@ -1050,26 +852,8 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     let resolution = Resolution::default();
 
     let input = board_fixture_with_top_line_mm();
-    let ipc = Ipc2581::parse(input).unwrap();
-    let options = BoardArrayCreateOptions {
-        columns: 6,
-        rows: 6,
-        board_margin_mm: board_margin(5.0, 5.0),
-        edge_rail_mm: BoardMarginMm::all(5.0),
-    };
-    let mut spec = build_board_array_spec(
-        &ipc,
-        &options,
-        BoardArrayValidationMode::Manual,
-        BoardArrayPanelizationMetadata {
-            mode: BoardArrayPanelizationMode::Manual,
-            sheet: None,
-            sheet_target_mm: None,
-        },
-        Separation::VScore,
-        Resolution::default(),
-    )
-    .unwrap();
+    let ipc = Ipc2581::parse(&input).unwrap();
+    let mut spec = manual_spec(&ipc, &six_by_six(), Separation::VScore);
     let safe_region = ContourSet::rectangle(
         BBox::new(Point::new(0.0, 10.0), Point::new(5.0, 90.0)),
         resolution,
@@ -1101,15 +885,20 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         .iter()
         .map(|set| set.sites.len())
         .sum::<usize>();
-    spec.generated_geometry
-        .add_balance_layer(GeneratedFeatureScope::Array, "TOP", features);
+    let (templates, features) = features.into_layer_features("TOP");
+    spec.generated_geometry.user_entries = templates;
+    spec.generated_geometry.layer_features.extend(
+        features
+            .into_iter()
+            .map(|feature| (GeneratedFeatureScope::Array, feature)),
+    );
     assert!(matches!(
         balance.solution.mode,
         DenseCopperBalanceMode::Perforated { .. }
     ));
     assert!(void_count > 0);
 
-    let xml = write_board_array_xml(input, &spec).unwrap();
+    let xml = write_board_array_xml(&input, &spec).unwrap();
     assert!(xml.contains(r#"<Set polarity="NEGATIVE">"#));
     for kind in ["plane", "full_void", "edge_void", "boundary_web"] {
         assert!(xml.contains(&format!(
@@ -1135,12 +924,16 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         "shared IPC Locations should remain a placement group"
     );
     pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut top);
+    let copper_balance = |feature: &pcb_ir::dialects::ipc::Feature| {
+        top.feature_set(feature)
+            .is_some_and(|set| set.copper_balance)
+    };
     assert!(
         top.features
             .iter()
             .filter(|feature| feature.source_step_kind == LayoutStepKind::Panel
                 && !feature.is_fiducial())
-            .all(|feature| feature.flags.copper_balance)
+            .all(copper_balance)
     );
     // Paint the balance features in order: the plane, the voids that clear
     // it, then the boundary web.
@@ -1150,7 +943,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         .filter(|feature| {
             feature.source_step_kind == LayoutStepKind::Panel
                 && feature.kind == FeatureKind::Primitive
-                && feature.flags.copper_balance
+                && copper_balance(feature)
         })
         .fold(ContourSet::empty(resolution), |image, feature| {
             let paint = ContourSet::from_painted_paths(
@@ -1176,26 +969,18 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     );
 
     let package = manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
-    let top_gerber = package
-        .files
-        .iter()
-        .find(|file| file.filename == "F_Cu.gtl")
-        .unwrap();
-    assert!(top_gerber.contents.contains("G36*"));
-    assert!(top_gerber.contents.contains("G37*"));
-    assert!(top_gerber.contents.contains("%SRX"));
-    assert!(
-        top_gerber
-            .contents
-            .contains("%TA.AperFunction,CopperBalancing*%")
-    );
+    let top_gerber = gerber(&package, "F_Cu.gtl").unwrap();
+    assert!(top_gerber.contains("G36*"));
+    assert!(top_gerber.contains("G37*"));
+    assert!(top_gerber.contains("%SRX"));
+    assert!(top_gerber.contains("%TA.AperFunction,CopperBalancing*%"));
     // Manufacturing Gerbers expand array hierarchy for broad CAM compatibility.
-    assert!(!top_gerber.contents.contains("%ABD"));
+    assert!(!top_gerber.contains("%ABD"));
     // CAM importers composite every clear object, so the lattice ships
     // dark-only: shared cell-ring flashes where the plane is solid, regions
     // along its boundary.
-    assert!(top_gerber.contents.contains("%AMOUTLINE"));
-    assert!(!top_gerber.contents.contains("%LPC*%"));
+    assert!(top_gerber.contains("%AMOUTLINE"));
+    assert!(!top_gerber.contains("%LPC*%"));
 
     // The composed Gerber image must match the composed IPC image.
     let ipc_copper = {
@@ -1208,9 +993,9 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         )
     }
     .unwrap();
-    let gerber = gerberx2::GerberX2::parse(&top_gerber.contents).unwrap();
+    let parsed_gerber = gerberx2::GerberX2::parse(top_gerber).unwrap();
     let mask = pcb_ir::dialects::artwork::compose_to_mask(
-        &gerberx2::geometry::extract_document(&gerber, resolution.accuracy).unwrap(),
+        &gerberx2::geometry::extract_document(&parsed_gerber, resolution.accuracy).unwrap(),
         resolution,
     )
     .unwrap();
@@ -1243,12 +1028,7 @@ fn board_array_creation_adds_default_tooling_at_single_column_min_width() {
     let input = board_fixture_with_mask_bbox_mm(28.0, 40.0);
     let xml = create_board_array_xml(
         &input,
-        &BoardArrayCreateOptions {
-            columns: 1,
-            rows: 1,
-            board_margin_mm: board_margin(5.0, 0.0),
-            edge_rail_mm: edge_rail(18.5, 15.0),
-        },
+        &options(1, 1, board_margin(5.0, 0.0), edge_rail(18.5, 15.0)),
     )
     .unwrap();
 
@@ -1291,12 +1071,7 @@ fn board_array_creation_rejects_missing_bottom_soldermask_for_fiducials() {
     );
     let error = create_board_array_xml(
         &input,
-        &BoardArrayCreateOptions {
-            columns: 1,
-            rows: 1,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(20.0),
-        },
+        &options(1, 1, board_margin(5.0, 5.0), BoardMarginMm::all(20.0)),
     )
     .unwrap_err();
 
@@ -1316,12 +1091,7 @@ fn board_array_creation_uses_declared_surface_layers_regardless_of_name() {
         .replace(r#"name="B.Mask""#, r#"name="rear-coating""#);
     let xml = create_board_array_xml(
         &input,
-        &BoardArrayCreateOptions {
-            columns: 1,
-            rows: 1,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(20.0),
-        },
+        &options(1, 1, board_margin(5.0, 5.0), BoardMarginMm::all(20.0)),
     )
     .unwrap();
 
@@ -1339,15 +1109,10 @@ fn board_array_creation_uses_declared_surface_layers_regardless_of_name() {
 
 #[test]
 fn board_array_creation_adds_default_tooling_at_multi_column_min_width() {
-    let input = board_fixture_with_mask_bbox_mm(12.0, 40.0);
+    let input = board_fixture_with_mask_bbox_mm(13.0, 40.0);
     let xml = create_board_array_xml(
         &input,
-        &BoardArrayCreateOptions {
-            columns: 2,
-            rows: 1,
-            board_margin_mm: board_margin(5.0, 0.0),
-            edge_rail_mm: edge_rail(18.0, 15.0),
-        },
+        &options(2, 1, board_margin(5.0, 0.0), edge_rail(18.0, 16.0)),
     )
     .unwrap();
 
@@ -1363,14 +1128,56 @@ fn board_array_creation_adds_default_tooling_at_multi_column_min_width() {
     assert_eq!(mask_fiducials.len(), 4);
     assert_eq!(corner_holes.len(), 4);
     assert_eq!(rail_holes.len(), 4);
-    assert_corner_holes(&corner_holes, 70.0, 70.0);
+    assert_corner_holes(&corner_holes, 72.0, 72.0);
     assert_points_close(
         fiducial_points(&top_fiducials),
-        vec![(28.5, 66.15), (41.5, 66.15), (32.5, 3.85), (37.5, 3.85)],
+        vec![(28.5, 68.15), (43.5, 68.15), (32.5, 3.85), (39.5, 3.85)],
     );
     assert_points_close(
         hole_points(&rail_holes),
-        vec![(23.0, 67.5), (47.0, 67.5), (27.0, 2.5), (43.0, 2.5)],
+        vec![(23.0, 69.5), (49.0, 69.5), (27.0, 2.5), (45.0, 2.5)],
+    );
+    // The array is scored along every board edge, through the rails. No
+    // fiducial's mask opening may reach a score line, on either side.
+    let score_x = [20.5, 33.5, 38.5, 51.5];
+    for line in score_x {
+        assert!(xml.contains(&format!(
+            r#"<Line startX="{line}" startY="0" endX="{line}" endY="72">"#
+        )));
+    }
+    for layer in ["TOP", "BOTTOM"] {
+        for (x, _) in fiducial_points(&fiducials_on_layer(&ipc, step, layer)) {
+            for line in score_x {
+                assert!(
+                    (x - line).abs() + 1e-9 >= FIDUCIAL_MASK_OPENING_DIAMETER_MM / 2.0,
+                    "{layer} fiducial at x={x} reaches the score line at x={line}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn rail_tooling_needs_room_between_the_score_lines_of_an_outer_board() {
+    // 12 mm is the deepest fiducial inset: there it would sit on the score
+    // line along the far edge of the outer board.
+    let grid = |board_width_mm| ArrayGrid {
+        columns: 2,
+        rows: 1,
+        board_width_mm,
+        board_height_mm: 10.0,
+        margin_x_mm: 20.5,
+        margin_y_mm: 15.0,
+        pitch_x_mm: board_width_mm + 5.0,
+        pitch_y_mm: 10.0,
+        array_width_mm: 2.0 * board_width_mm + 46.0,
+        array_height_mm: 40.0,
+    };
+    assert_eq!(board_array_tooling_rails(&grid(12.0)), None);
+    assert_eq!(board_array_tooling_rails(&grid(12.99)), None);
+    assert_eq!(
+        board_array_tooling_rails(&grid(13.0)),
+        Some(RailPair::TopBottom)
     );
 }
 
@@ -1379,12 +1186,7 @@ fn board_array_creation_places_array_tooling_on_left_right_for_landscape_arrays(
     let input = board_fixture_with_mask_bbox_mm(40.0, 28.0);
     let xml = create_board_array_xml(
         &input,
-        &BoardArrayCreateOptions {
-            columns: 1,
-            rows: 1,
-            board_margin_mm: board_margin(5.0, 0.0),
-            edge_rail_mm: edge_rail(15.0, 21.0),
-        },
+        &options(1, 1, board_margin(5.0, 0.0), edge_rail(15.0, 21.0)),
     )
     .unwrap();
 
@@ -1411,15 +1213,10 @@ fn board_array_creation_places_array_tooling_on_left_right_for_landscape_arrays(
 
 #[test]
 fn board_array_tooling_falls_back_to_the_other_rail_pair() {
-    let input = board_fixture_with_mask_bbox_mm(11.99, 40.0);
+    let input = board_fixture_with_mask_bbox_mm(12.99, 40.0);
     let xml = create_board_array_xml(
         &input,
-        &BoardArrayCreateOptions {
-            columns: 2,
-            rows: 1,
-            board_margin_mm: board_margin(5.0, 0.0),
-            edge_rail_mm: edge_rail(18.5, 20.0),
-        },
+        &options(2, 1, board_margin(5.0, 0.0), edge_rail(18.5, 20.0)),
     )
     .unwrap();
 
@@ -1431,18 +1228,18 @@ fn board_array_tooling_falls_back_to_the_other_rail_pair() {
 
     assert_points_close(
         fiducial_points(&top_fiducials),
-        vec![(3.85, 52.0), (3.85, 28.0), (67.13, 48.0), (67.13, 32.0)],
+        vec![(3.85, 52.0), (3.85, 28.0), (69.13, 48.0), (69.13, 32.0)],
     );
     assert_points_close(
         hole_points(&rail_holes),
-        vec![(2.5, 57.5), (2.5, 22.5), (68.48, 53.5), (68.48, 26.5)],
+        vec![(2.5, 57.5), (2.5, 22.5), (70.48, 53.5), (70.48, 26.5)],
     );
 }
 
 #[test]
 fn auto_create_errors_when_rail_tooling_cannot_fit() {
     let input = board_fixture_with_mask_bbox_mm(10.0, 10.0);
-    let error = create_auto_board_array_xml(&input).unwrap_err();
+    let error = create_auto_board_array_xml(&input, None).unwrap_err();
     assert!(
         format!("{error:#}").contains("cannot fit rail fiducials and tooling holes"),
         "{error:#}"
@@ -1451,15 +1248,10 @@ fn auto_create_errors_when_rail_tooling_cannot_fit() {
 
 #[test]
 fn board_array_tooling_skips_when_no_rail_pair_fits() {
-    let input = board_fixture_with_mask_bbox_mm(11.99, 27.99);
+    let input = board_fixture_with_mask_bbox_mm(12.99, 27.99);
     let xml = create_board_array_xml(
         &input,
-        &BoardArrayCreateOptions {
-            columns: 2,
-            rows: 1,
-            board_margin_mm: board_margin(5.0, 0.0),
-            edge_rail_mm: edge_rail(18.5, 21.5),
-        },
+        &options(2, 1, board_margin(5.0, 0.0), edge_rail(18.5, 21.5)),
     )
     .unwrap();
 
@@ -1468,8 +1260,7 @@ fn board_array_tooling_skips_when_no_rail_pair_fits() {
     let fiducial_count = step
         .layer_features
         .iter()
-        .flat_map(|layer_feature| &layer_feature.sets)
-        .flat_map(|set| set.fiducials())
+        .flat_map(|layer_feature| layer_feature.fiducials())
         .count();
     let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
 
@@ -1479,7 +1270,7 @@ fn board_array_tooling_skips_when_no_rail_pair_fits() {
             .iter()
             .all(|hole| close(hole.diameter, CORNER_TOOLING_HOLE_DIAMETER_MM))
     );
-    assert_corner_holes(&tooling_holes, 70.98, 70.99);
+    assert_corner_holes(&tooling_holes, 72.98, 70.99);
 }
 
 #[test]
@@ -1487,17 +1278,12 @@ fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
     let input = board_fixture_with_mask_bbox_mm(40.0, 30.0);
     let xml = create_board_array_xml(
         &input,
-        &BoardArrayCreateOptions {
-            columns: 2,
-            rows: 1,
-            board_margin_mm: BoardMarginMm {
-                top: 5.0,
-                right: 0.0,
-                bottom: 5.0,
-                left: 0.0,
-            },
-            edge_rail_mm: BoardMarginMm::all(15.0),
-        },
+        &options(
+            2,
+            1,
+            BoardMarginMm::new(5.0, 0.0, 5.0, 0.0),
+            BoardMarginMm::all(15.0),
+        ),
     )
     .unwrap();
 
@@ -1531,149 +1317,75 @@ fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
 }
 
 #[test]
-fn board_array_creation_adds_board_cell_fiducials_on_left_right_margins() {
-    let input = board_fixture_with_mask_bbox_mm(30.0, 40.0);
-    let xml = create_board_array_xml(
-        &input,
-        &BoardArrayCreateOptions {
-            columns: 1,
-            rows: 2,
-            board_margin_mm: BoardMarginMm {
-                top: 0.0,
-                right: 5.0,
-                bottom: 0.0,
-                left: 5.0,
-            },
-            edge_rail_mm: BoardMarginMm::all(15.0),
-        },
-    )
-    .unwrap();
+fn board_cell_fiducials_follow_the_longer_board_side_with_room_for_them() {
+    let none: &[(f64, f64)] = &[];
+    for (board, (columns, rows), margin, rail, expected) in [
+        // A tall board takes them in its left and right margins.
+        (
+            (30.0, 40.0),
+            (1, 2),
+            BoardMarginMm::new(0.0, 5.0, 0.0, 5.0),
+            15.0,
+            &[(2.0, 37.0), (2.0, 3.0), (38.0, 33.0), (38.0, 7.0)][..],
+        ),
+        // A single-board array carries them as well as its rail fiducials.
+        (
+            (40.0, 30.0),
+            (1, 1),
+            BoardMarginMm::all(5.0),
+            15.0,
+            &[(8.0, 38.0), (42.0, 38.0), (12.0, 2.0), (38.0, 2.0)],
+        ),
+        // A margin too narrow for them, then a board too short.
+        (
+            (40.0, 35.0),
+            (2, 1),
+            BoardMarginMm::new(4.99, 0.0, 4.99, 0.0),
+            15.0,
+            none,
+        ),
+        ((16.99, 16.99), (2, 1), BoardMarginMm::all(5.0), 30.0, none),
+    ] {
+        let xml = create_board_array_xml(
+            &board_fixture_with_mask_bbox_mm(board.0, board.1),
+            &options(columns, rows, margin, BoardMarginMm::all(rail)),
+        )
+        .unwrap();
 
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    let top_fiducials = fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP");
-
-    assert_eq!(top_fiducials.len(), 4);
-    assert_points_close(
-        fiducial_points(&top_fiducials),
-        vec![(2.0, 37.0), (2.0, 3.0), (38.0, 33.0), (38.0, 7.0)],
-    );
-}
-
-#[test]
-fn board_array_creation_adds_board_cell_fiducials_when_single_board_array_is_eligible() {
-    let input = board_fixture_with_mask_bbox_mm(40.0, 30.0);
-    let xml = create_board_array_xml(
-        &input,
-        &BoardArrayCreateOptions {
-            columns: 1,
-            rows: 1,
-            board_margin_mm: BoardMarginMm {
-                top: 5.0,
-                right: 5.0,
-                bottom: 5.0,
-                left: 5.0,
-            },
-            edge_rail_mm: BoardMarginMm::all(15.0),
-        },
-    )
-    .unwrap();
-
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    let top_fiducials = fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP");
-    let mask_fiducials = fiducials_on_layer(&ipc, board_cell_step(&ipc), "F.Mask");
-
-    assert_eq!(top_fiducials.len(), 4);
-    assert_eq!(mask_fiducials.len(), 4);
-    assert_points_close(
-        fiducial_points(&top_fiducials),
-        vec![(8.0, 38.0), (42.0, 38.0), (12.0, 2.0), (38.0, 2.0)],
-    );
-    assert_eq!(fiducials_on_layer(&ipc, array_step(&ipc), "TOP").len(), 4);
-}
-
-#[test]
-fn board_array_creation_skips_board_cell_fiducials_without_eligible_margin() {
-    let input = board_fixture_with_mask_bbox_mm(40.0, 35.0);
-    let xml = create_board_array_xml(
-        &input,
-        &BoardArrayCreateOptions {
-            columns: 2,
-            rows: 1,
-            board_margin_mm: BoardMarginMm {
-                top: 4.99,
-                right: 0.0,
-                bottom: 4.99,
-                left: 0.0,
-            },
-            edge_rail_mm: BoardMarginMm::all(15.0),
-        },
-    )
-    .unwrap();
-
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP").is_empty());
-    assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "F.Mask").is_empty());
-}
-
-#[test]
-fn board_array_creation_skips_board_cell_fiducials_without_eligible_span() {
-    let input = board_fixture_with_mask_bbox_mm(16.99, 16.99);
-    let xml = create_board_array_xml(
-        &input,
-        &BoardArrayCreateOptions {
-            columns: 2,
-            rows: 1,
-            board_margin_mm: BoardMarginMm {
-                top: 5.0,
-                right: 5.0,
-                bottom: 5.0,
-                left: 5.0,
-            },
-            edge_rail_mm: BoardMarginMm::all(30.0),
-        },
-    )
-    .unwrap();
-
-    let ipc = Ipc2581::parse(&xml).unwrap();
-    assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP").is_empty());
-    assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "F.Mask").is_empty());
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        for layer in ["TOP", "F.Mask"] {
+            let fiducials = fiducials_on_layer(&ipc, board_cell_step(&ipc), layer);
+            assert_points_close(fiducial_points(&fiducials), expected.to_vec());
+        }
+        if (columns, rows) == (1, 1) {
+            assert_eq!(fiducials_on_layer(&ipc, array_step(&ipc), "TOP").len(), 4);
+        }
+    }
 }
 
 #[test]
 fn writes_generated_board_array_values_in_cad_header_units() {
     let xml = create_board_array_xml(
-        board_fixture_inch(),
-        &BoardArrayCreateOptions {
-            columns: 1,
-            rows: 1,
-            board_margin_mm: board_margin(0.0, 0.0),
-            edge_rail_mm: BoardMarginMm::all(25.4),
-        },
+        &board_fixture_with_mask_bbox_mm(1.0, 1.0).replace("MILLIMETER", "INCH"),
+        &options(1, 1, board_margin(0.0, 0.0), BoardMarginMm::all(25.4)),
     )
     .unwrap();
 
-    assert!(xml.contains(r#"<PolyStepSegment x="0" y="2.88189"/>"#));
-    assert!(xml.contains(
-        r#"<PolyStepCurve x="0.11811" y="3" centerX="0.11811" centerY="2.88189" clockwise="true"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<StepRepeat stepRef="board_cell" x="1" y="1" nx="1" ny="1" dx="1" dy="1" angle="0.00" mirror="false"/>"#
-    ));
-    assert!(xml.contains(
-        r#"<StepRepeat stepRef="board" x="0" y="0" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
-    ));
+    for expected in [
+        r#"<PolyStepSegment x="0" y="2.88188976"/>"#,
+        r#"<PolyStepCurve x="0.11811024" y="3" centerX="0.11811024" centerY="2.88188976" clockwise="true"/>"#,
+        r#"<StepRepeat stepRef="board_cell" x="1" y="1" nx="1" ny="1" dx="1" dy="1" angle="0.00" mirror="false"/>"#,
+        r#"<StepRepeat stepRef="board" x="0" y="0" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#,
+    ] {
+        assert!(xml.contains(expected), "{expected}");
+    }
 }
 
 #[test]
 fn rejects_primary_panel_step() {
     let error = create_board_array_xml(
-        panel_fixture(),
-        &BoardArrayCreateOptions {
-            columns: 1,
-            rows: 1,
-            board_margin_mm: board_margin(0.0, 0.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
+        &board_fixture_mm().replace(r#"type="BOARD""#, r#"type="PALLET""#),
+        &options(1, 1, board_margin(0.0, 0.0), BoardMarginMm::all(5.0)),
     )
     .unwrap_err();
 
@@ -1685,200 +1397,93 @@ fn rejects_primary_panel_step() {
 }
 
 #[test]
-fn validates_simple_api_ranges() {
-    let error = create_board_array_xml(
-        board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 11,
-            rows: 1,
-            board_margin_mm: board_margin(0.0, 0.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap_err();
-
-    assert!(
-        error
-            .to_string()
-            .contains("columns must be between 1 and 10")
-    );
-}
-
-#[test]
-fn rejects_small_clearance_and_edge_rail() {
-    let horizontal_gap_error = create_board_array_xml(
-        board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 2,
-            rows: 1,
-            board_margin_mm: board_margin(4.99, 0.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap_err();
-    assert!(
-        horizontal_gap_error
-            .to_string()
-            .contains("horizontal board clearance must be 0 mm or at least 5 mm")
-    );
-
-    let vertical_gap_error = create_board_array_xml(
-        board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 1,
-            rows: 2,
-            board_margin_mm: board_margin(0.0, 4.99),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap_err();
-    assert!(
-        vertical_gap_error
-            .to_string()
-            .contains("vertical board clearance must be 0 mm or at least 5 mm")
-    );
-
-    let rail_error = create_board_array_xml(
-        board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 1,
-            rows: 1,
-            board_margin_mm: board_margin(0.0, 0.0),
-            edge_rail_mm: BoardMarginMm::all(0.0),
-        },
-    )
-    .unwrap_err();
-    assert!(
-        rail_error
-            .to_string()
-            .contains("edge rail top must be between 5 and 30 mm; got 0 mm")
-    );
-}
-
-#[test]
-fn rejects_more_than_25_vcut_lines_per_axis() {
-    let x_error = vcut_lines(VcutLineSpec {
-        columns: 13,
-        rows: 1,
-        board_width_mm: 10.0,
-        board_height_mm: 10.0,
-        margin_x_mm: 5.0,
-        margin_y_mm: 5.0,
-        pitch_x_mm: 15.0,
-        pitch_y_mm: 15.0,
-        array_width_mm: 210.0,
-        array_height_mm: 25.0,
-    })
-    .unwrap_err();
-    assert!(
-        x_error
-            .to_string()
-            .contains("X-axis V-cut line count must be at most 25; got 26")
-    );
-
-    let y_error = vcut_lines(VcutLineSpec {
-        columns: 1,
-        rows: 13,
-        board_width_mm: 10.0,
-        board_height_mm: 10.0,
-        margin_x_mm: 5.0,
-        margin_y_mm: 5.0,
-        pitch_x_mm: 15.0,
-        pitch_y_mm: 15.0,
-        array_width_mm: 25.0,
-        array_height_mm: 210.0,
-    })
-    .unwrap_err();
-    assert!(
-        y_error
-            .to_string()
-            .contains("Y-axis V-cut line count must be at most 25; got 26")
-    );
-}
-
-#[test]
-fn rejects_array_dimensions_outside_limits() {
-    let narrow_error = create_board_array_xml(
-        board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 3,
-            rows: 2,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap_err();
-    assert!(
-        narrow_error
-            .to_string()
-            .contains("array width must be at least 70 mm; got 55 mm")
-    );
-
-    let short_error = create_board_array_xml(
-        board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 4,
-            rows: 2,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap_err();
-    assert!(
-        short_error
-            .to_string()
-            .contains("array height must be at least 70 mm; got 40 mm")
-    );
-
-    let wide_error = create_board_array_xml(
-        large_board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 6,
-            rows: 1,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap_err();
-    assert!(
-        wide_error
-            .to_string()
-            .contains("array width must be at most 297 mm; got 400 mm")
-    );
-
-    let tall_error = create_board_array_xml(
-        large_board_fixture_mm(),
-        &BoardArrayCreateOptions {
-            columns: 1,
-            rows: 6,
-            board_margin_mm: board_margin(5.0, 5.0),
-            edge_rail_mm: BoardMarginMm::all(5.0),
-        },
-    )
-    .unwrap_err();
-    assert!(
-        tall_error
-            .to_string()
-            .contains("array height must be at most 297 mm; got 400 mm")
-    );
+fn rejects_options_outside_their_ranges() {
+    let small = board_fixture_mm();
+    let large = board_fixture_with_mask_bbox_mm(60.0, 60.0);
+    let spaced = board_margin(5.0, 5.0);
+    for (input, columns, rows, margin, rail, expected) in [
+        (
+            &small,
+            11,
+            1,
+            board_margin(0.0, 0.0),
+            5.0,
+            "columns must be between 1 and 10; got 11",
+        ),
+        (
+            &small,
+            2,
+            1,
+            board_margin(4.99, 0.0),
+            5.0,
+            "horizontal board clearance must be 0 mm or at least 5 mm; got 4.99 mm",
+        ),
+        (
+            &small,
+            1,
+            2,
+            board_margin(0.0, 4.99),
+            5.0,
+            "vertical board clearance must be 0 mm or at least 5 mm; got 4.99 mm",
+        ),
+        (
+            &small,
+            1,
+            1,
+            board_margin(0.0, 0.0),
+            0.0,
+            "edge rail top must be between 5 and 30 mm; got 0 mm",
+        ),
+        (
+            &small,
+            3,
+            2,
+            spaced,
+            5.0,
+            "array width must be at least 70 mm; got 55 mm",
+        ),
+        (
+            &small,
+            4,
+            2,
+            spaced,
+            5.0,
+            "array height must be at least 70 mm; got 40 mm",
+        ),
+        (
+            &large,
+            6,
+            1,
+            spaced,
+            5.0,
+            "array width must be at most 297 mm; got 400 mm",
+        ),
+        (
+            &large,
+            1,
+            6,
+            spaced,
+            5.0,
+            "array height must be at most 297 mm; got 400 mm",
+        ),
+    ] {
+        let options = options(columns, rows, margin, BoardMarginMm::all(rail));
+        let error = create_board_array_xml(input, &options).unwrap_err();
+        assert_eq!(error.to_string(), expected);
+    }
 }
 
 fn board_margin(horizontal_gap_mm: f64, vertical_gap_mm: f64) -> BoardMarginMm {
-    BoardMarginMm {
-        top: vertical_gap_mm / 2.0,
-        right: horizontal_gap_mm / 2.0,
-        bottom: vertical_gap_mm / 2.0,
-        left: horizontal_gap_mm / 2.0,
-    }
+    BoardMarginMm::new(
+        vertical_gap_mm / 2.0,
+        horizontal_gap_mm / 2.0,
+        vertical_gap_mm / 2.0,
+        horizontal_gap_mm / 2.0,
+    )
 }
 
 fn edge_rail(horizontal_mm: f64, vertical_mm: f64) -> BoardMarginMm {
-    BoardMarginMm {
-        top: vertical_mm,
-        right: horizontal_mm,
-        bottom: vertical_mm,
-        left: horizontal_mm,
-    }
+    BoardMarginMm::new(vertical_mm, horizontal_mm, vertical_mm, horizontal_mm)
 }
 
 fn svg_viewbox(svg: &str) -> (f64, f64, f64, f64) {
@@ -1905,8 +1510,8 @@ fn assert_point_close(actual: Point, expected: Point) {
 fn assert_intent_eq(
     before_ipc: &Ipc2581,
     after_ipc: &Ipc2581,
-    before: &FeatureIntent<ipc2581::Symbol>,
-    after: &FeatureIntent<ipc2581::Symbol>,
+    before: &FeatureIntent,
+    after: &FeatureIntent,
 ) {
     assert_eq!(before.domain, after.domain);
     assert_eq!(before.role, after.role);
@@ -1920,7 +1525,7 @@ fn assert_intent_eq(
     );
 }
 
-fn resolved_feature_span(ipc: &Ipc2581, span: FeatureSpan<ipc2581::Symbol>) -> String {
+fn resolved_feature_span(ipc: &Ipc2581, span: FeatureSpan) -> String {
     match span {
         FeatureSpan::Unknown => "Unknown".to_string(),
         FeatureSpan::ThroughBoard => "ThroughBoard".to_string(),
@@ -1965,8 +1570,7 @@ fn fiducials_on_layer<'a>(
     step.layer_features
         .iter()
         .filter(|layer_feature| ipc.resolve(layer_feature.layer_ref) == layer_name)
-        .flat_map(|layer_feature| &layer_feature.sets)
-        .flat_map(|set| set.fiducials())
+        .flat_map(|layer_feature| layer_feature.fiducials())
         .collect()
 }
 
@@ -2010,24 +1614,15 @@ fn assert_two_sided_fiducials(
 fn assert_fiducial_gerbers(package: &ManufacturingPackage, kind: &str) {
     let attribute = format!("%TA.AperFunction,FiducialPad,{kind}*%");
     for filename in ["F_Cu.gtl", "B_Cu.gbl"] {
-        let file = package
-            .files
-            .iter()
-            .find(|file| file.filename == filename)
-            .unwrap();
         assert!(
-            file.contents.contains(&attribute),
+            gerber(package, filename).unwrap().contains(&attribute),
             "{filename} is missing {kind} fiducial metadata"
         );
     }
     for filename in ["F_Mask.gts", "B_Mask.gbs"] {
-        let file = package
-            .files
-            .iter()
-            .find(|file| file.filename == filename)
-            .unwrap();
-        assert!(file.contents.contains("%TA.AperFunction,Material*%"));
-        assert!(!file.contents.contains("%TA.AperFunction,FiducialPad"));
+        let mask = gerber(package, filename).unwrap();
+        assert!(mask.contains("%TA.AperFunction,Material*%"));
+        assert!(!mask.contains("%TA.AperFunction,FiducialPad"));
     }
 }
 
@@ -2039,8 +1634,7 @@ fn holes_on_layer<'a>(
     step.layer_features
         .iter()
         .filter(|layer_feature| ipc.resolve(layer_feature.layer_ref) == layer_name)
-        .flat_map(|layer_feature| &layer_feature.sets)
-        .flat_map(|set| set.holes())
+        .flat_map(|layer_feature| layer_feature.holes())
         .collect()
 }
 
@@ -2104,33 +1698,73 @@ fn sorted_points(mut points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     points
 }
 
-fn board_fixture_mm() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
+const TOP_LAYER: &str =
+    r#"  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#;
+const SURFACE_LAYERS: &str = r#"  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>"#;
+
+/// A millimeter board Step named "board" with `layers`, the steps of its
+/// `profile` polygon and its `features`. Content references TOP and
+/// `layer_ref`.
+fn board_fixture(layers: &str, layer_ref: &str, profile: &str, features: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
 <FunctionMode mode="FABRICATION"/>
 <StepRef name="board"/>
 <LayerRef name="TOP"/>
+{layer_ref}
   </Content>
   <Ecad>
 <CadHeader units="MILLIMETER"/>
 <CadData>
-  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+{layers}
   <Step name="board" type="BOARD">
     <Datum x="0" y="0"/>
     <Profile>
       <Polygon>
-        <PolyBegin x="-2" y="-3"/>
-        <PolyStepSegment x="8" y="-3"/>
-        <PolyStepSegment x="8" y="7"/>
-        <PolyStepSegment x="-2" y="7"/>
-        <PolyStepSegment x="-2" y="-3"/>
+{profile}
       </Polygon>
     </Profile>
+{features}
   </Step>
 </CadData>
   </Ecad>
 </IPC-2581>"#
+    )
+}
+
+fn rectangle(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
+    format!(
+        r#"<PolyBegin x="{x0}" y="{y0}"/>
+        <PolyStepSegment x="{x1}" y="{y0}"/>
+        <PolyStepSegment x="{x1}" y="{y1}"/>
+        <PolyStepSegment x="{x0}" y="{y1}"/>
+        <PolyStepSegment x="{x0}" y="{y0}"/>"#
+    )
+}
+
+fn line_feature(layer: &str, start: (f64, f64), end: (f64, f64), width: f64) -> String {
+    format!(
+        r#"<LayerFeature layerRef="{layer}">
+      <Set polarity="POSITIVE">
+        <Features>
+          <Line startX="{}" startY="{}" endX="{}" endY="{}">
+            <LineDesc lineWidth="{width}" lineEnd="ROUND"/>
+          </Line>
+        </Features>
+      </Set>
+    </LayerFeature>"#,
+        start.0, start.1, end.0, end.1
+    )
+}
+
+/// One copper layer under a board from (-2, -3) to (8, 7).
+fn board_fixture_mm() -> String {
+    board_fixture(TOP_LAYER, "", &rectangle(-2.0, -3.0, 8.0, 7.0), "")
 }
 
 fn schema_valid_board_fixture_mm() -> String {
@@ -2152,392 +1786,54 @@ fn schema_valid_board_fixture_mm() -> String {
     )
 }
 
-fn rounded_corner_board_fixture_mm() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-<FunctionMode mode="FABRICATION"/>
-<StepRef name="board"/>
-<LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-<CadHeader units="MILLIMETER"/>
-<CadData>
-  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Step name="board" type="BOARD">
-    <Datum x="0" y="0"/>
-    <Profile>
-      <Polygon>
-        <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="10" y="0"/>
-        <PolyStepSegment x="10" y="10"/>
-        <PolyStepSegment x="4" y="10"/>
-        <PolyStepCurve x="0" y="6" centerX="4" centerY="6" clockwise="false"/>
-        <PolyStepSegment x="0" y="0"/>
-      </Polygon>
-    </Profile>
-  </Step>
-</CadData>
-  </Ecad>
-</IPC-2581>"#
+/// Both surfaces' copper and mask under a board from the origin.
+fn board_fixture_with_mask_bbox_mm(width_mm: f64, height_mm: f64) -> String {
+    let profile = rectangle(0.0, 0.0, width_mm, height_mm);
+    board_fixture(SURFACE_LAYERS, "", &profile, "")
 }
 
-fn board_fixture_with_mask_bbox_mm(width_mm: f64, height_mm: f64) -> String {
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-<FunctionMode mode="FABRICATION"/>
-<StepRef name="board"/>
-<LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-<CadHeader units="MILLIMETER"/>
-<CadData>
-  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
-  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
-  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
-  <Step name="board" type="BOARD">
-    <Datum x="0" y="0"/>
-    <Profile>
-      <Polygon>
-        <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="{width_mm}" y="0"/>
-        <PolyStepSegment x="{width_mm}" y="{height_mm}"/>
-        <PolyStepSegment x="0" y="{height_mm}"/>
-        <PolyStepSegment x="0" y="0"/>
-      </Polygon>
-    </Profile>
-  </Step>
-</CadData>
-  </Ecad>
-</IPC-2581>"#
+/// A 13 x 10 mm board under one courtyard rectangle.
+fn board_fixture_with_courtyard_mm(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
+    let layers = format!(
+        r#"{SURFACE_LAYERS}
+  <Layer name="F.Courtyard" layerFunction="COURTYARD" side="TOP" polarity="POSITIVE"/>"#
+    );
+    let courtyard = format!(
+        r#"<LayerFeature layerRef="F.Courtyard">
+      <Set polarity="POSITIVE">
+        <Features>
+          <Polygon>
+        {}
+          </Polygon>
+        </Features>
+      </Set>
+    </LayerFeature>"#,
+        rectangle(x0, y0, x1, y1)
+    );
+    board_fixture(
+        &layers,
+        r#"<LayerRef name="F.Courtyard"/>"#,
+        &rectangle(0.0, 0.0, 13.0, 10.0),
+        &courtyard,
     )
 }
 
-fn board_fixture_with_courtyard_overhang_mm() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-<FunctionMode mode="FABRICATION"/>
-<StepRef name="board"/>
-<LayerRef name="TOP"/>
-<LayerRef name="F.Courtyard"/>
-  </Content>
-  <Ecad>
-<CadHeader units="MILLIMETER"/>
-<CadData>
-  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
-  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
-  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
-  <Layer name="F.Courtyard" layerFunction="COURTYARD" side="TOP" polarity="POSITIVE"/>
-  <Step name="board" type="BOARD">
-    <Datum x="0" y="0"/>
-    <Profile>
-      <Polygon>
-        <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="12" y="0"/>
-        <PolyStepSegment x="12" y="10"/>
-        <PolyStepSegment x="0" y="10"/>
-        <PolyStepSegment x="0" y="0"/>
-      </Polygon>
-    </Profile>
-    <LayerFeature layerRef="F.Courtyard">
-      <Set polarity="POSITIVE">
-        <Features>
-          <Polygon>
-            <PolyBegin x="-2" y="-1"/>
-            <PolyStepSegment x="13" y="-1"/>
-            <PolyStepSegment x="13" y="12"/>
-            <PolyStepSegment x="-2" y="12"/>
-            <PolyStepSegment x="-2" y="-1"/>
-          </Polygon>
-        </Features>
-      </Set>
-    </LayerFeature>
-  </Step>
-</CadData>
-  </Ecad>
-</IPC-2581>"#
-}
-
-fn board_fixture_with_large_courtyard_overhang_mm() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-<FunctionMode mode="FABRICATION"/>
-<StepRef name="board"/>
-<LayerRef name="TOP"/>
-<LayerRef name="F.Courtyard"/>
-  </Content>
-  <Ecad>
-<CadHeader units="MILLIMETER"/>
-<CadData>
-  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
-  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
-  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
-  <Layer name="F.Courtyard" layerFunction="COURTYARD" side="TOP" polarity="POSITIVE"/>
-  <Step name="board" type="BOARD">
-    <Datum x="0" y="0"/>
-    <Profile>
-      <Polygon>
-        <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="12" y="0"/>
-        <PolyStepSegment x="12" y="10"/>
-        <PolyStepSegment x="0" y="10"/>
-        <PolyStepSegment x="0" y="0"/>
-      </Polygon>
-    </Profile>
-    <LayerFeature layerRef="F.Courtyard">
-      <Set polarity="POSITIVE">
-        <Features>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="31" y="0"/>
-            <PolyStepSegment x="31" y="10"/>
-            <PolyStepSegment x="0" y="10"/>
-            <PolyStepSegment x="0" y="0"/>
-          </Polygon>
-        </Features>
-      </Set>
-    </LayerFeature>
-  </Step>
-</CadData>
-  </Ecad>
-</IPC-2581>"#
-}
-
-fn board_fixture_with_mask_mm() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-<FunctionMode mode="FABRICATION"/>
-<StepRef name="board"/>
-<LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-<CadHeader units="MILLIMETER"/>
-<CadData>
-  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
-  <Step name="board" type="BOARD">
-    <Datum x="0" y="0"/>
-    <Profile>
-      <Polygon>
-        <PolyBegin x="-2" y="-3"/>
-        <PolyStepSegment x="8" y="-3"/>
-        <PolyStepSegment x="8" y="7"/>
-        <PolyStepSegment x="-2" y="7"/>
-        <PolyStepSegment x="-2" y="-3"/>
-      </Polygon>
-    </Profile>
-  </Step>
-</CadData>
-  </Ecad>
-</IPC-2581>"#
-}
-
-fn board_fixture_with_top_line_mm() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-<FunctionMode mode="FABRICATION"/>
-<StepRef name="board"/>
-<LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-<CadHeader units="MILLIMETER"/>
-<CadData>
-  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
-  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
-  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
-  <Step name="board" type="BOARD">
-    <Datum x="0" y="0"/>
-    <Profile>
-      <Polygon>
-        <PolyBegin x="-2" y="-3"/>
-        <PolyStepSegment x="10" y="-3"/>
-        <PolyStepSegment x="10" y="7"/>
-        <PolyStepSegment x="-2" y="7"/>
-        <PolyStepSegment x="-2" y="-3"/>
-      </Polygon>
-    </Profile>
-    <LayerFeature layerRef="TOP">
-      <Set polarity="POSITIVE">
-        <Features>
-          <Line startX="0" startY="0" endX="5" endY="0">
-            <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
-          </Line>
-        </Features>
-      </Set>
-    </LayerFeature>
-  </Step>
-</CadData>
-  </Ecad>
-</IPC-2581>"#
-}
-
-fn board_fixture_with_edge_cuts_layer_mm() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-<FunctionMode mode="FABRICATION"/>
-<StepRef name="board"/>
-<LayerRef name="TOP"/>
-<LayerRef name="Edge.Cuts"/>
-  </Content>
-  <Ecad>
-<CadHeader units="MILLIMETER"/>
-<CadData>
-  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
-  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
-  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
-  <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL" polarity="POSITIVE"/>
-  <Step name="board" type="BOARD">
-    <Datum x="0" y="0"/>
-    <Profile>
-      <Polygon>
-        <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="40" y="0"/>
-        <PolyStepSegment x="40" y="40"/>
-        <PolyStepSegment x="0" y="40"/>
-        <PolyStepSegment x="0" y="0"/>
-      </Polygon>
-    </Profile>
-    <LayerFeature layerRef="TOP">
-      <Set polarity="POSITIVE">
-        <Features>
-          <Line startX="1" startY="1" endX="5" endY="1">
-            <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
-          </Line>
-        </Features>
-      </Set>
-    </LayerFeature>
-    <LayerFeature layerRef="Edge.Cuts">
-      <Set polarity="POSITIVE">
-        <Features>
-          <Line startX="0" startY="0" endX="40" endY="0">
-            <LineDesc lineWidth="0.05" lineEnd="ROUND"/>
-          </Line>
-        </Features>
-      </Set>
-    </LayerFeature>
-  </Step>
-</CadData>
-  </Ecad>
-</IPC-2581>"#
-}
-
-fn board_fixture_inch() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-<FunctionMode mode="FABRICATION"/>
-<StepRef name="board"/>
-<LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-<CadHeader units="INCH"/>
-<CadData>
-  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
-  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
-  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
-  <Step name="board" type="BOARD">
-    <Datum x="0" y="0"/>
-    <Profile>
-      <Polygon>
-        <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="1" y="0"/>
-        <PolyStepSegment x="1" y="1"/>
-        <PolyStepSegment x="0" y="1"/>
-        <PolyStepSegment x="0" y="0"/>
-      </Polygon>
-    </Profile>
-  </Step>
-</CadData>
-  </Ecad>
-</IPC-2581>"#
-}
-
-fn large_board_fixture_mm() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-<FunctionMode mode="FABRICATION"/>
-<StepRef name="board"/>
-<LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-<CadHeader units="MILLIMETER"/>
-<CadData>
-  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
-  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
-  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
-  <Step name="board" type="BOARD">
-    <Datum x="0" y="0"/>
-    <Profile>
-      <Polygon>
-        <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="60" y="0"/>
-        <PolyStepSegment x="60" y="60"/>
-        <PolyStepSegment x="0" y="60"/>
-        <PolyStepSegment x="0" y="0"/>
-      </Polygon>
-    </Profile>
-  </Step>
-</CadData>
-  </Ecad>
-</IPC-2581>"#
-}
-
-fn panel_fixture() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-<FunctionMode mode="FABRICATION"/>
-<StepRef name="panel"/>
-<LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-<CadHeader units="MILLIMETER"/>
-<CadData>
-  <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Step name="panel" type="PALLET">
-    <Datum x="0" y="0"/>
-    <Profile>
-      <Polygon>
-        <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="10" y="0"/>
-        <PolyStepSegment x="10" y="10"/>
-        <PolyStepSegment x="0" y="10"/>
-        <PolyStepSegment x="0" y="0"/>
-      </Polygon>
-    </Profile>
-  </Step>
-</CadData>
-  </Ecad>
-</IPC-2581>"#
+/// A 13 x 10 mm board from (-2, -3) with one TOP trace.
+fn board_fixture_with_top_line_mm() -> String {
+    board_fixture(
+        SURFACE_LAYERS,
+        "",
+        &rectangle(-2.0, -3.0, 11.0, 7.0),
+        &line_feature("TOP", (0.0, 0.0), (5.0, 0.0), 0.2),
+    )
 }
 
 #[test]
 fn mouse_bite_array_routes_slots_bridged_by_perforated_tabs() {
     let resolution = Resolution::default();
-    let input = board_fixture_with_top_line_mm();
     let creation = create_board_array(
-        input,
-        &BoardArrayCreateOptions {
-            columns: 2,
-            rows: 2,
-            board_margin_mm: BoardMarginMm::all(5.0),
-            edge_rail_mm: BoardMarginMm::all(20.0),
-        },
+        &board_fixture_with_top_line_mm(),
+        &options(2, 2, BoardMarginMm::all(5.0), BoardMarginMm::all(20.0)),
         false,
         Separation::MouseBite,
         resolution,
@@ -2571,4 +1867,127 @@ fn mouse_bite_array_routes_slots_bridged_by_perforated_tabs() {
         array.profile.as_ref().unwrap().cutouts.len(),
         4 * tabs_per_board
     );
+}
+
+#[test]
+fn mouse_bite_margins_must_hold_the_routed_slot_and_tab_landing() {
+    let create = |board_margin_mm| {
+        create_board_array(
+            &board_fixture_with_mask_bbox_mm(60.0, 60.0),
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 1,
+                board_margin_mm,
+                edge_rail_mm: BoardMarginMm::all(20.0),
+            },
+            false,
+            Separation::MouseBite,
+            Resolution::default(),
+        )
+    };
+    // Abutting boards are a V-score layout: a slot routed around one would be
+    // cut out of its neighbour.
+    let error = create(BoardMarginMm::all(0.0)).unwrap_err().to_string();
+    assert!(
+        error.contains("board margin top must be at least 2.4 mm for mouse-bite separation"),
+        "{error}"
+    );
+    // One short side is enough: there the slot would run into the edge rail
+    // and its tooling.
+    let error = create(BoardMarginMm {
+        left: 2.0,
+        ..BoardMarginMm::all(5.0)
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("board margin left must be at least 2.4 mm") && error.contains("got 2 mm"),
+        "{error}"
+    );
+    // The scored-array clearance rule does not apply to routed arrays.
+    create(BoardMarginMm::all(2.4)).unwrap();
+}
+
+#[test]
+fn generated_drill_layer_spans_the_outer_copper_layers() {
+    let xml = create_board_array_xml(
+        &board_fixture_with_mask_bbox_mm(60.0, 60.0),
+        &options(1, 1, BoardMarginMm::all(5.0), BoardMarginMm::all(5.0)),
+    )
+    .unwrap();
+    assert!(xml.contains(r#"<Span fromLayer="TOP" toLayer="BOTTOM"/>"#));
+
+    // The importer resolves tooling holes to that span, as it does for the
+    // source's own drill layers, instead of assuming the whole stack.
+    let ipc = Ipc2581::parse(&xml).unwrap();
+    let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
+    let layer = imported.layer_id("Board_Array_Drill").unwrap();
+    let doc = imported
+        .materialize_layer(layer, ArtworkScope::ArrayFlattened)
+        .unwrap();
+    assert!(!doc.features.is_empty());
+    for feature in &doc.features {
+        assert_eq!(
+            resolved_feature_span(&ipc, feature.intent.span),
+            "FromTo(TOP,BOTTOM)"
+        );
+    }
+}
+
+#[test]
+fn tabs_land_on_the_narrowest_rail_the_array_leaves() {
+    let gap = placement::PRESET.routing_gap_mm;
+    let options = |columns, rows, margin, rail| BoardArrayCreateOptions {
+        columns,
+        rows,
+        board_margin_mm: BoardMarginMm::all(margin),
+        edge_rail_mm: BoardMarginMm::all(rail),
+    };
+    // One board: only the strip to the array edge, less its one slot.
+    assert!(close(narrowest_rail_mm(&options(1, 1, 5.0, 5.0), gap), 8.6));
+    // Between boards a slot is routed on both sides of the shared strip.
+    assert!(close(narrowest_rail_mm(&options(2, 1, 5.0, 5.0), gap), 7.2));
+    assert!(close(
+        narrowest_rail_mm(&options(1, 2, 2.4, 20.0), gap),
+        2.0
+    ));
+    // A short side counts even where nothing is repeated.
+    let lopsided = BoardArrayCreateOptions {
+        board_margin_mm: BoardMarginMm {
+            left: 2.4,
+            ..BoardMarginMm::all(10.0)
+        },
+        ..options(1, 1, 10.0, 5.0)
+    };
+    assert!(close(narrowest_rail_mm(&lopsided, gap), 6.0));
+}
+
+#[test]
+fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
+    let ipc = Ipc2581::parse(&board_fixture_with_mask_bbox_mm(60.0, 60.0)).unwrap();
+    let options = options(3, 2, BoardMarginMm::all(5.0), BoardMarginMm::all(10.0));
+    let spec = manual_spec(&ipc, &options, Separation::MouseBite);
+    let points = |polygon: &Polygon| {
+        polygon
+            .points()
+            .iter()
+            .map(|p| (p.x, p.y))
+            .collect::<Vec<_>>()
+    };
+    // One void per tab per board, board by board along each row: every
+    // board's are the first board's moved by whole pitches.
+    let per_board = spec.tabs_per_board;
+    assert_eq!(spec.profile_cutouts.len(), 6 * per_board);
+    for (index, cutout) in spec.profile_cutouts.iter().enumerate() {
+        let (board, void) = (index / per_board, index % per_board);
+        let shift = (
+            (board % 3) as f64 * spec.grid.pitch_x_mm,
+            (board / 3) as f64 * spec.grid.pitch_y_mm,
+        );
+        let expected = points(&spec.profile_cutouts[void])
+            .into_iter()
+            .map(|(x, y)| (x + shift.0, y + shift.1))
+            .collect::<Vec<_>>();
+        assert_points_close(points(cutout), expected);
+    }
 }

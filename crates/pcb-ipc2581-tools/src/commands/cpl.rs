@@ -40,7 +40,7 @@ pub struct CplOptions {
 
 #[cfg(feature = "cli")]
 pub fn execute(file: &Path, options: &CplOptions, resolution: Resolution) -> Result<()> {
-    let ipc = Ipc2581::parse_file(file)?;
+    let ipc = Ipc2581::parse(&crate::utils::file::load_ipc_file(file)?)?;
     let placements = extract_single_board_placements(&import_design(&ipc, resolution)?)?;
     let cpl = emit_cpl_csv(&placements, options);
 
@@ -187,6 +187,29 @@ mod tests {
     use crate::placement::extract_single_board_placements;
 
     use super::*;
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn reads_compressed_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("cpl.csv");
+        execute(
+            Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../ipc2581/tests/data/DM0002-IPC-2518.xml.zst"
+            )),
+            &CplOptions {
+                output: Some(output.clone()),
+                side: CplSideFilter::Both,
+                exclude_dnp: false,
+            },
+            pcb_ir::geom::Resolution::default(),
+        )
+        .unwrap();
+        let csv = fs::read_to_string(output).unwrap();
+        assert!(csv.starts_with("Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n"));
+        assert!(csv.lines().count() > 1);
+    }
 
     #[test]
     fn imported_cpl_preserves_rotation_before_mirroring() {

@@ -1,8 +1,10 @@
 //! Two-sided morphology residues, local widths, and void-gap regularization.
 
+use super::simplification::integer_shapes_on_grid;
 use super::widths::{ContactIndex, WidthAxis};
 use super::{
-    ContourSet, PreparedRegion, Ring, ring_edges, ring_signed_area, ring_winding, simplify_rings,
+    ContourSet, PreparedRegion, edges_of, horizontal_crossing, ring_winding, signed_area_of,
+    simplify_rings,
 };
 use crate::geom::accuracy::numerical_error;
 use crate::geom::dist;
@@ -17,6 +19,7 @@ use boostvoronoi::prelude::{
     VoronoiVisualUtils,
 };
 use boostvoronoi::utils::visual_utils::SimpleAffine;
+use i_overlay::core::overlay::IntOverlayOptions;
 
 /// Result of enforcing a minimum width for every two-sided void gap.
 #[derive(Debug, Clone)]
@@ -55,33 +58,39 @@ impl From<AccuracyError> for GapRegularizationError {
 }
 
 impl ContourSet {
-    /// The component of each ring, by ring index, and the outer ring of
-    /// each component. Regularized rings nest without crossing and holes
-    /// are wound opposite their outer ring, so a hole belongs to the
-    /// smallest outer ring around it.
+    /// The component of each ring, by ring index, and the ring bounding each
+    /// component. Regularized rings nest without crossing and holes are
+    /// wound opposite their outer ring, so a hole belongs to the smallest
+    /// outer ring that is larger than it and contains a point of its
+    /// interior. A vertex of the hole would not do: it may be a contact with
+    /// the outer ring, where winding decides nothing. A point of the hole's
+    /// interior may in turn lie in an island within the hole, but any such
+    /// island is smaller than the hole. A clockwise ring nothing encloses is
+    /// not regularized input and bounds a component of its own, so every
+    /// ring has one.
     pub(crate) fn ring_components(&self) -> (Vec<usize>, Vec<usize>) {
-        let areas = self.rings.iter().map(ring_signed_area).collect::<Vec<_>>();
-        let mut outers = (0..self.rings.len())
+        let areas = self.rings().map(signed_area_of).collect::<Vec<_>>();
+        let mut outers = (0..self.ring_count())
             .filter(|&ring| areas[ring] > 0.0)
             .collect::<Vec<_>>();
         outers.sort_by(|&left, &right| areas[left].total_cmp(&areas[right]));
-        let mut components = vec![usize::MAX; self.rings.len()];
+        let mut components = vec![usize::MAX; self.ring_count()];
         for (component, &outer) in outers.iter().enumerate() {
             components[outer] = component;
         }
-        for (index, ring) in self.rings.iter().enumerate() {
-            if areas[index] > 0.0 {
-                continue;
-            }
-            let Some(&[x, y]) = ring.first() else {
-                continue;
-            };
-            let point = Point::new(x, y);
-            if let Some(&outer) = outers.iter().find(|&&outer| {
-                self.ring_bounds[outer].contains_point(point)
-                    && ring_winding(&self.rings[outer], point) != 0
-            }) {
-                components[index] = components[outer];
+        let enclosing = outers.len();
+        for hole in (0..self.ring_count()).filter(|&ring| areas[ring] <= 0.0) {
+            let larger = outers[..enclosing].partition_point(|&outer| areas[outer] <= -areas[hole]);
+            let outer =
+                ring_interior_point(self.ring(hole), self.ring_bounds(hole)).and_then(|point| {
+                    outers[larger..enclosing].iter().copied().find(|&outer| {
+                        self.ring_bounds(outer).contains_point(point)
+                            && ring_winding(self.ring(outer), point) != 0
+                    })
+                });
+            components[hole] = outer.map_or(outers.len(), |outer| components[outer]);
+            if outer.is_none() {
+                outers.push(hole);
             }
         }
         (components, outers)
@@ -114,13 +123,7 @@ impl ContourSet {
     ) -> Result<Self, AccuracyError> {
         let (components, outers) = self.ring_components();
         let segments = source_boundary_segments(self);
-        let boundary = PreparedRegion::from_segments(
-            segments
-                .iter()
-                .map(|segment| (segment.start, segment.end))
-                .collect(),
-            self.uncertainty_mm,
-        );
+        let boundary = boundary_index(&segments, self.uncertainty_mm);
         let sees_left = |wall: &OrientedBoundarySegment, across: Point| {
             let along = wall.end - wall.start;
             let turn = along.x * across.y - along.y * across.x;
@@ -169,7 +172,7 @@ impl ContourSet {
                 facing[other] = true;
             }
         }
-        let mut kept = vec![false; self.rings.len()];
+        let mut kept = vec![false; self.ring_count()];
         let mut windows = Vec::new();
         for segment in segments
             .iter()
@@ -193,11 +196,10 @@ impl ContourSet {
             }
         }
         let material = Self::from_regularized(
-            self.rings
-                .iter()
+            self.rings()
                 .zip(&kept)
                 .filter(|&(_, &keep)| keep)
-                .map(|(ring, _)| ring.clone())
+                .map(|(ring, _)| ring.to_vec())
                 .collect(),
             self.resolution,
             self.uncertainty_mm,
@@ -254,7 +256,7 @@ impl ContourSet {
     /// filled-region disk:
     ///
     /// ```text
-    /// T(S) = open(S \ (Γ(G_gap_radius(S)) ⊕ disk(gap_radius + guard)), disk(filled_radius)) ∩ S
+    /// T(S) = open(S \ (Γ(G_gap_radius(S)) ⊕ disk(gap_radius + guard)), disk(filled_radius))
     /// ```
     ///
     /// `G_r(X)` is the two-sided part of `close(X, disk(r)) \ X`, and `Γ(N)`
@@ -263,9 +265,9 @@ impl ContourSet {
     /// clearance. The guard keeps every checked quantity strictly separated
     /// from every constructed one: a cut leaves a `2 (gap_radius + guard)`
     /// void, so construction noise cannot push a trimmed gap back under the
-    /// nominal test. `T` only removes material, so iterating from the source
-    /// converges; a step that removes almost nothing is reported as an error
-    /// instead of a silent stall.
+    /// nominal test. An opening lies within what it opens, so `T` only removes
+    /// material and iterating from the source converges; a step that removes
+    /// almost nothing is reported as an error instead of a silent stall.
     pub fn disk_regularize_gaps(
         &self,
         gap_radius: f64,
@@ -289,7 +291,8 @@ impl ContourSet {
 
         let mut kept = self.clone();
         while let Some(next) = kept.narrow_gap_trim(gap_radius, filled_radius, guard)? {
-            if kept.difference(&next)?.area() <= self.tolerance().powi(2) {
+            // `next` lies within `kept`, so what the step removed is the area lost.
+            if kept.area() - next.area() <= self.tolerance().powi(2) {
                 return Err(GapRegularizationError(format!(
                     "gap regularization stalled with {:.9} mm² of void-gap violations",
                     kept.disk_gap_violations(gap_radius)?.area()
@@ -317,11 +320,7 @@ impl ContourSet {
             return Ok(None);
         }
         let keep_out = narrow_void_keep_out(self, &narrow_voids, gap_radius + guard)?;
-        Ok(Some(
-            self.difference(&keep_out)?
-                .disk_open(filled_radius)?
-                .intersection(self)?,
-        ))
+        Ok(Some(self.difference(&keep_out)?.disk_open(filled_radius)?))
     }
 
     /// Unfilled material that violates the two-sided void-gap radius.
@@ -386,7 +385,7 @@ impl ContourSet {
         // facing walls is the closing of the whole region there.
         self.two_sided_residual(radius, minimum_mm, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance();
-            let reach = 4.0 * (radius + 2.0 * region.tolerance());
+            let reach = gap_reach_mm(radius, region.tolerance());
             let candidates = region.facing_components(0.0, facing, reach)?;
             closing_residual(&candidates, radius)
         })
@@ -407,6 +406,34 @@ impl ContourSet {
         let components = two_sided_residual_components(self, &residue, radius, minimum_mm);
         Ok(components)
     }
+}
+
+/// How far from the bounds of facing walls the closing by `radius` reads the
+/// material: two diameters, as [`ContourSet::disk_gap_violation_components`]
+/// derives. Material beyond it changes nothing the closing finds there.
+pub(crate) fn gap_reach_mm(radius: f64, tolerance_mm: f64) -> f64 {
+    4.0 * (radius + 2.0 * tolerance_mm)
+}
+
+/// A point strictly inside a ring that encloses area: the middle of the
+/// widest span the ring covers along the horizontal line at its mid-height.
+/// That line runs strictly between the ring's lowest and highest vertices,
+/// so it passes through the ring's interior.
+fn ring_interior_point(ring: &[[f64; 2]], bounds: BBox) -> Option<Point> {
+    let y = bounds.min.y.midpoint(bounds.max.y);
+    let mut crossings = edges_of(ring)
+        .filter_map(|(start, end)| horizontal_crossing(start, end, y))
+        .collect::<Vec<_>>();
+    crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
+    crossings
+        .windows(2)
+        .scan(0, |winding, pair| {
+            *winding += pair[0].1;
+            Some((*winding != 0).then_some((pair[0].0, pair[1].0)))
+        })
+        .flatten()
+        .max_by(|left, right| (left.1 - left.0).total_cmp(&(right.1 - right.0)))
+        .map(|(from, to)| Point::new(from.midpoint(to), y))
 }
 
 const VORONOI_COORDINATES_PER_MM: f64 = 100_000.0;
@@ -439,8 +466,7 @@ fn closing_residual(region: &ContourSet, radius: f64) -> Result<ContourSet, Accu
 /// across a dropped sub-tolerance edge remain adjacent.
 fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment> {
     source
-        .rings
-        .iter()
+        .rings()
         .enumerate()
         .flat_map(|(ring_id, ring)| {
             let metric = RingArcLength::new(ring);
@@ -451,7 +477,7 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
                 .max(source.tolerance())
                 .max(numerical_error(source.bbox))
                 .min(metric.perimeter() / 8.0);
-            let kept = ring_edges(ring)
+            let kept = edges_of(ring)
                 .enumerate()
                 .filter(|(_, (start, end))| start.distance_to(*end) > source.tolerance())
                 .collect::<Vec<_>>();
@@ -475,17 +501,28 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
         .collect()
 }
 
+/// A spatial index over boundary segments, keeping their ids.
+fn boundary_index(segments: &[OrientedBoundarySegment], uncertainty_mm: f64) -> PreparedRegion {
+    PreparedRegion::from_segments(
+        segments
+            .iter()
+            .map(|segment| (segment.start, segment.end))
+            .collect(),
+        uncertainty_mm,
+    )
+}
+
 /// Canonical arc-length parameterization of a closed polygonal ring.
 /// Consecutive entries are the stations at the ends of each source edge.
 struct RingArcLength<'a> {
-    ring: &'a Ring,
+    ring: &'a [[f64; 2]],
     stations: Vec<f64>,
 }
 
 impl<'a> RingArcLength<'a> {
-    fn new(ring: &'a Ring) -> Self {
+    fn new(ring: &'a [[f64; 2]]) -> Self {
         let stations = std::iter::once(0.0)
-            .chain(ring_edges(ring).scan(0.0, |station, (start, end)| {
+            .chain(edges_of(ring).scan(0.0, |station, (start, end)| {
                 *station += start.distance_to(end);
                 Some(*station)
             }))
@@ -542,13 +579,7 @@ fn two_sided_residual_components(
         return Vec::new();
     }
     let segments = source_boundary_segments(source);
-    let boundary = PreparedRegion::from_segments(
-        segments
-            .iter()
-            .map(|segment| (segment.start, segment.end))
-            .collect(),
-        source.uncertainty_mm,
-    );
+    let boundary = boundary_index(&segments, source.uncertainty_mm);
     let complete_boundary = source.prepare_query();
     let boundary_uncertainty = source.uncertainty_mm + numerical_error(source.bbox);
     // The downstream measurement only keeps axis portions whose radius is at
@@ -558,113 +589,50 @@ fn two_sided_residual_components(
     // Contact constraints are resolved through this index so they match the
     // un-narrowed spatial query exactly (see `in_region_with_contact_index`).
     let contact_index = ContactIndex::for_segments(&complete_boundary.segments);
+    // Candidate axes use the source edges near the component, while
+    // validation sees every (including short) source edge through
+    // `complete_boundary`. A component without an axis has no width.
+    let measure = |component: ContourSet| {
+        let axis = component_axis(
+            &boundary.segment_ids_meeting(component.bbox.expand(reach)),
+            &segments,
+            &boundary,
+            &component.prepare_query(),
+            &complete_boundary,
+            reach,
+            radius_cap,
+            &contact_index,
+        );
+        (!axis.is_empty()).then_some(TwoSidedResidualComponent {
+            region: component,
+            boundary_uncertainty_mm: boundary_uncertainty,
+            axis,
+        })
+    };
     // Components are independent: each measures its own medial axis against
     // shared read-only indexes. Parallel iteration preserves component order,
-    // so reports are identical to the sequential run.
+    // so reports are identical to the sequential run on wasm, which has no
+    // threads.
     #[cfg(not(target_family = "wasm"))]
-    {
-        use rayon::prelude::*;
-        residual
-            .connected_components()
-            .into_par_iter()
-            .filter_map(|component| {
-                measure_component(
-                    component,
-                    &segments,
-                    &boundary,
-                    &complete_boundary,
-                    &contact_index,
-                    boundary_uncertainty,
-                    reach,
-                    radius_cap,
-                )
-            })
-            .collect()
-    }
+    use rayon::prelude::*;
+    let components = residual.connected_components();
+    #[cfg(not(target_family = "wasm"))]
+    let components = components.into_par_iter();
     #[cfg(target_family = "wasm")]
-    {
-        residual
-            .connected_components()
-            .into_iter()
-            .filter_map(|component| {
-                measure_component(
-                    component,
-                    &segments,
-                    &boundary,
-                    &complete_boundary,
-                    &contact_index,
-                    boundary_uncertainty,
-                    reach,
-                    radius_cap,
-                )
-            })
-            .collect()
-    }
-}
-
-/// Measure one residue component's medial axis, or `None` when it has none.
-#[allow(clippy::too_many_arguments)]
-fn measure_component(
-    component: ContourSet,
-    segments: &[OrientedBoundarySegment],
-    boundary: &PreparedRegion,
-    complete_boundary: &PreparedRegion,
-    contact_index: &ContactIndex,
-    boundary_uncertainty: f64,
-    reach: f64,
-    radius_cap: f64,
-) -> Option<TwoSidedResidualComponent> {
-    // Preserve the source-boundary index: candidate axes use the
-    // nearby subset, while validation sees every (including short)
-    // source edge through `complete_boundary`.
-    let sites = boundary
-        .segment_ids_meeting(component.bbox.expand(reach))
-        .into_iter()
-        .map(|id| segments[id])
-        .collect::<Vec<_>>();
-    let axis = component_axis(
-        &sites,
-        &component,
-        complete_boundary,
-        reach,
-        radius_cap,
-        contact_index,
-    );
-    (!axis.is_empty()).then_some(TwoSidedResidualComponent {
-        region: component,
-        boundary_uncertainty_mm: boundary_uncertainty,
-        axis,
-    })
-}
-
-/// Validate one wall pair's bisectors. Pure over shared read-only inputs, so
-/// pairs validate in parallel.
-fn validate_pair(
-    first_wall: (Point, Point),
-    second_wall: (Point, Point),
-    component: &ContourSet,
-    complete_boundary: &PreparedRegion,
-    radius_cap: f64,
-    contact_index: &ContactIndex,
-) -> Vec<WidthAxis> {
-    let mut validated = Vec::new();
-    for axis in WidthAxis::between(first_wall, second_wall, component.bbox) {
-        validated.extend(axis.in_region_with_contact_index(
-            component,
-            complete_boundary,
-            radius_cap,
-            contact_index,
-        ));
-    }
-    validated
+    let components = components.into_iter();
+    components.filter_map(measure).collect()
 }
 
 /// Enumerate exact bisectors of every reachable pair of nonincident walls,
 /// then let the analytic axis clip and validate itself against the residue
-/// and the complete source boundary.
+/// and the complete source boundary. `sites` are the ids, ascending, of the
+/// `segments` near the component, and `boundary` indexes all of `segments`.
+#[allow(clippy::too_many_arguments)]
 fn component_axis(
-    sites: &[OrientedBoundarySegment],
-    component: &ContourSet,
+    sites: &[usize],
+    segments: &[OrientedBoundarySegment],
+    boundary: &PreparedRegion,
+    component: &PreparedRegion,
     complete_boundary: &PreparedRegion,
     reach: f64,
     radius_cap: f64,
@@ -673,10 +641,8 @@ fn component_axis(
     if sites.len() < 2 {
         return Vec::new();
     }
-    let error = numerical_error(component.bbox);
-    let incident = |i: usize, j: usize| {
-        let a = &sites[i];
-        let b = &sites[j];
+    let error = numerical_error(component.bounds());
+    let incident = |a: &OrientedBoundarySegment, b: &OrientedBoundarySegment| {
         if a.topology.ring == b.topology.ring {
             boundary_segments_are_incident(a.topology, b.topology)
         } else {
@@ -685,80 +651,76 @@ fn component_axis(
                 .any(|point| [b.start, b.end].contains(point))
         }
     };
-    let component_edges = component
-        .rings
-        .iter()
-        .flat_map(ring_edges)
-        .collect::<Vec<_>>();
     // A component disk is no larger than its clearance to its nearest
     // source site. The farthest component vertex from that site is an exact
     // upper bound, so walls farther from the component cannot participate.
-    let farthest_vertex = |site: &OrientedBoundarySegment| {
+    // A site with any vertex beyond the bound so far cannot lower it.
+    let farthest_vertex_below = |bound: f64, site: &OrientedBoundarySegment| {
         component
-            .rings
+            .segments
             .iter()
-            .flat_map(|ring| ring.iter())
-            .map(|&[x, y]| dist::point_segment(Point::new(x, y), site.start, site.end).0)
-            .fold(0.0, f64::max)
-    };
-    let clearance_bound = sites
-        .iter()
-        .map(farthest_vertex)
-        .fold(f64::INFINITY, f64::min)
-        + error;
-    let within_reach = sites
-        .iter()
-        .map(|site| {
-            component_edges.iter().any(|&(start, end)| {
-                dist::segments(start, end, site.start, site.end).0 <= clearance_bound
+            .try_fold(0.0, |farthest: f64, &(vertex, _)| {
+                let distance = dist::point_segment(vertex, site.start, site.end).0;
+                (distance < bound).then_some(farthest.max(distance))
             })
-        })
+    };
+    let clearance_bound = sites.iter().fold(f64::INFINITY, |bound, &site| {
+        farthest_vertex_below(bound, &segments[site]).unwrap_or(bound)
+    }) + error;
+    let reachable = sites
+        .iter()
+        .map(|&site| &segments[site])
+        .map(|site| component.has_segment_within(site.start, site.end, clearance_bound))
         .collect::<Vec<_>>();
+    let reachable = reachable.as_slice();
     let candidate_diameter = 2.0 * reach + error;
 
-    let mut axes = Vec::new();
     // Passing wall pairs, in first-major order. Validation is the expensive
     // part; it runs in parallel below while preserving this order exactly.
-    let mut passing = Vec::new();
-    for first in 0..sites.len() {
-        for second in first + 1..sites.len() {
-            if !within_reach[first] || !within_reach[second] || incident(first, second) {
-                continue;
-            }
-            let first_wall = (sites[first].start, sites[first].end);
-            let second_wall = (sites[second].start, sites[second].end);
-            let separation =
-                dist::segments(first_wall.0, first_wall.1, second_wall.0, second_wall.1).0;
-            if separation > candidate_diameter {
-                continue;
-            }
-            passing.push((first_wall, second_wall));
-        }
-    }
+    let passing = sites
+        .iter()
+        .enumerate()
+        .filter(|&(first, _)| reachable[first])
+        .flat_map(|(first, &site)| {
+            let wall = &segments[site];
+            boundary
+                .segment_ids_near(wall.start, wall.end, candidate_diameter)
+                .into_iter()
+                .filter_map(|id| sites.binary_search(&id).ok())
+                .filter(move |&second| second > first && reachable[second])
+                .map(|second| &segments[sites[second]])
+                .filter(move |partner| {
+                    !incident(wall, partner)
+                        && dist::segments(wall.start, wall.end, partner.start, partner.end).0
+                            <= candidate_diameter
+                })
+                .map(move |partner| ((wall.start, wall.end), (partner.start, partner.end)))
+        })
+        .collect::<Vec<_>>();
     // Validate pairs in parallel; the ordered collect keeps axis order
     // identical to the sequential loop. Rayon has no threads on wasm, so the
     // wasm target below runs the same closure sequentially.
     let validate = |(first_wall, second_wall): ((Point, Point), (Point, Point))| {
-        validate_pair(
-            first_wall,
-            second_wall,
-            component,
-            complete_boundary,
-            radius_cap,
-            contact_index,
-        )
+        WidthAxis::between(first_wall, second_wall, component.bounds())
+            .into_iter()
+            .flat_map(|axis| {
+                axis.in_region_with_contact_index(
+                    component,
+                    complete_boundary,
+                    radius_cap,
+                    contact_index,
+                )
+            })
+            .collect::<Vec<_>>()
     };
     #[cfg(not(target_family = "wasm"))]
-    let validated_all = {
+    let validated = {
         use rayon::prelude::*;
         passing.into_par_iter().map(validate).collect::<Vec<_>>()
     };
     #[cfg(target_family = "wasm")]
-    let validated_all = passing.into_iter().map(validate).collect::<Vec<_>>();
-    for validated in validated_all {
-        axes.extend(validated);
-    }
-    axes
+    let validated = passing.into_iter().map(validate).collect::<Vec<_>>();
+    validated.into_iter().flatten().collect()
 }
 
 /// The closing residue kept only where two distinct source-boundary
@@ -768,13 +730,7 @@ fn component_axis(
 /// the rounded bite of one smooth concavity is not mistaken for a gap.
 fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> ContourSet {
     let source_segments = source_boundary_segments(source);
-    let boundary = PreparedRegion::from_segments(
-        source_segments
-            .iter()
-            .map(|segment| (segment.start, segment.end))
-            .collect(),
-        source.uncertainty_mm,
-    );
+    let boundary = boundary_index(&source_segments, source.uncertainty_mm);
     let contact_tolerance = source
         .tolerance()
         .max(residual.tolerance())
@@ -784,17 +740,13 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
         .connected_components()
         .into_iter()
         .filter(|component| {
+            let edges = component.prepare_query();
             let contacts = boundary
                 .segment_ids_meeting(component.bbox.expand(contact_tolerance))
                 .into_iter()
                 .map(|id| &source_segments[id])
                 .filter(|segment| {
-                    region_boundary_within_distance(
-                        component,
-                        segment.start,
-                        segment.end,
-                        contact_tolerance,
-                    )
+                    edges.has_segment_within(segment.start, segment.end, contact_tolerance)
                 })
                 .collect::<Vec<_>>();
             contacts.iter().enumerate().any(|(index, left)| {
@@ -813,30 +765,13 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
                 })
             })
         })
-        .flat_map(|component| component.rings)
+        .flat_map(ContourSet::into_rings)
         .collect();
     ContourSet::from_regularized(
         simplify_rings(rings, FillRule::NonZero),
         residual.resolution,
         residual.uncertainty_mm,
     )
-}
-
-fn region_boundary_within_distance(
-    region: &ContourSet,
-    start: Point,
-    end: Point,
-    distance: f64,
-) -> bool {
-    let expanded = BBox::spanning(start, end).expand(distance);
-    region
-        .rings
-        .iter()
-        .flat_map(ring_edges)
-        .any(|(other_start, other_end)| {
-            expanded.intersects(BBox::spanning(other_start, other_end))
-                && dist::segments(start, end, other_start, other_end).0 <= distance
-        })
 }
 
 fn boundary_tangents_oppose(
@@ -856,14 +791,17 @@ fn narrow_void_keep_out(
     narrow_voids: &ContourSet,
     radius: f64,
 ) -> Result<ContourSet, GapRegularizationError> {
-    let axis_keep_out = narrow_void_medial_axis_keep_out(source, narrow_voids, radius)?;
-    let mut keep_out = axis_keep_out.clone();
+    let mut keep_out = vec![narrow_void_medial_axis_keep_out(
+        source,
+        narrow_voids,
+        radius,
+    )?];
     for component in narrow_voids.connected_components() {
-        if component.intersection(&axis_keep_out)?.is_empty() {
-            keep_out = keep_out.union(&component.disk_dilate(radius)?)?;
+        if component.intersection(&keep_out[0])?.is_empty() {
+            keep_out.push(component.disk_dilate(radius)?);
         }
     }
-    Ok(keep_out)
+    Ok(ContourSet::union_all(source.resolution, keep_out)?)
 }
 
 fn narrow_void_medial_axis_keep_out(
@@ -875,52 +813,61 @@ fn narrow_void_medial_axis_keep_out(
         return Ok(ContourSet::empty(source.resolution));
     }
     let accuracy = source.budget();
-    let boundary = PreparedRegion::from_segments(
-        source.rings.iter().flat_map(ring_edges).collect(),
+    // The diagram takes integer segments that meet only at their ends.
+    // Rounding each vertex on its own can swap walls a few nanometres
+    // apart, so the material near the voids is resolved on the diagram's
+    // grid instead, which keeps a vertex at every contact it creates.
+    let walls = ContourSet::from_regularized(
+        integer_shapes_on_grid(
+            source
+                .reaching(narrow_voids.bbox.expand(radius))
+                .into_rings(),
+            FillRule::NonZero,
+            1.0 / VORONOI_COORDINATES_PER_MM,
+            IntOverlayOptions::keep_output_points(),
+        )
+        .into_iter()
+        .flatten()
+        .map(|ring| {
+            let millimetres = |units: i64| units as f64 / VORONOI_COORDINATES_PER_MM;
+            ring.into_iter()
+                .map(|point| [millimetres(point.x), millimetres(point.y)])
+                .collect()
+        })
+        .collect(),
+        source.resolution,
         source.uncertainty_mm,
     );
+    // Walls are numbered as every other judgement of incidence numbers
+    // them, so two that meet across a sub-tolerance edge stay adjacent.
+    let walls_segments = source_boundary_segments(&walls);
+    let boundary = boundary_index(&walls_segments, source.uncertainty_mm);
     // A closing residual is within the disk radius of its nearest source boundary.
     let void_boundary = narrow_voids.prepare_query();
-    let relevant = narrow_voids
-        .ring_bounds
-        .iter()
-        .flat_map(|bounds| boundary.segment_ids_meeting(bounds.expand(radius)))
+    let mut relevant = narrow_voids
+        .bounded_rings()
+        .flat_map(|(_, bounds)| boundary.segment_ids_meeting(bounds.expand(radius)))
         .filter(|&id| {
             let (start, end) = boundary.segments[id];
             void_boundary
                 .segment_nearest_within(start, end, radius)
                 .is_some()
         })
-        .collect::<std::collections::HashSet<_>>();
-    let mut source_index = 0;
-    let origin = Point::new(source.bbox.min.x, source.bbox.min.y);
-    let mut segments = Vec::<VoronoiLine<i32>>::new();
-    let mut boundary_segments = Vec::new();
-    for (ring_id, ring) in source.rings.iter().enumerate() {
-        for index in 0..ring.len() {
-            let needed = relevant.contains(&source_index);
-            source_index += 1;
-            if !needed {
-                continue;
-            }
-            let [start_x, start_y] = ring[index];
-            let [end_x, end_y] = ring[(index + 1) % ring.len()];
-            if (end_x - start_x).hypot(end_y - start_y) <= source.tolerance() {
-                continue;
-            }
-            let start = quantize_voronoi_point(ring[index], origin)?;
-            let end = quantize_voronoi_point(ring[(index + 1) % ring.len()], origin)?;
-            if start == end {
-                continue;
-            }
-            segments.push(VoronoiLine::new(start, end));
-            boundary_segments.push(BoundarySegment {
-                ring: ring_id,
-                index,
-                ring_len: ring.len(),
-            });
-        }
-    }
+        .collect::<Vec<_>>();
+    relevant.sort_unstable();
+    relevant.dedup();
+    let origin = walls.bbox.min;
+    let (segments, boundary_segments): (Vec<_>, Vec<_>) = relevant
+        .into_iter()
+        .map(|id| &walls_segments[id])
+        .map(|wall| {
+            let start = quantize_voronoi_point(wall.start, origin)?;
+            let end = quantize_voronoi_point(wall.end, origin)?;
+            Ok((VoronoiLine::new(start, end), wall.topology))
+        })
+        .collect::<Result<Vec<_>, GapRegularizationError>>()?
+        .into_iter()
+        .unzip();
 
     let diagram = VoronoiBuilder::<i32>::default()
         .with_segments(segments.iter())
@@ -947,21 +894,17 @@ fn narrow_void_medial_axis_keep_out(
                     .map_err(gap_regularization_error)?,
             )
             .map_err(gap_regularization_error)?;
-        let left_boundary = boundary_segments
-            .get(left.source_index().usize())
-            .ok_or_else(|| {
+        let wall = |source: usize| {
+            boundary_segments.get(source).copied().ok_or_else(|| {
                 GapRegularizationError(
                     "Voronoi cell references an unknown boundary segment".to_string(),
                 )
-            })?;
-        let right_boundary = boundary_segments
-            .get(right.source_index().usize())
-            .ok_or_else(|| {
-                GapRegularizationError(
-                    "Voronoi cell references an unknown boundary segment".to_string(),
-                )
-            })?;
-        if boundary_segments_are_incident(*left_boundary, *right_boundary) {
+            })
+        };
+        if boundary_segments_are_incident(
+            wall(left.source_index().usize())?,
+            wall(right.source_index().usize())?,
+        ) {
             continue;
         }
         let samples = voronoi_edge_samples(
@@ -1033,7 +976,7 @@ fn boundary_segments_are_incident(left: BoundarySegment, right: BoundarySegment)
 }
 
 fn quantize_voronoi_point(
-    [x, y]: [f64; 2],
+    point: Point,
     origin: Point,
 ) -> Result<VoronoiPoint<i32>, GapRegularizationError> {
     fn coordinate(value: f64, origin: f64) -> Result<i32, GapRegularizationError> {
@@ -1047,8 +990,8 @@ fn quantize_voronoi_point(
     }
 
     Ok(VoronoiPoint::new(
-        coordinate(x, origin.x)?,
-        coordinate(y, origin.y)?,
+        coordinate(point.x, origin.x)?,
+        coordinate(point.y, origin.y)?,
     ))
 }
 
@@ -1169,34 +1112,25 @@ fn clip_infinite_voronoi_edge(
     }
     let coefficient = reach / direction_scale;
     let affine = SimpleAffine::default();
-    let start = edge
-        .vertex0()
-        .map(|vertex| {
-            diagram
-                .vertex(vertex)
-                .map(|vertex| affine.transform(vertex.x(), vertex.y()))
-        })
-        .transpose()
-        .map_err(gap_regularization_error)?
-        .unwrap_or([
-            origin[0] - direction[0] * coefficient,
-            origin[1] - direction[1] * coefficient,
-        ]);
-    let end = diagram
+    // The edge's own vertex where it has one, else the point `reach` along it.
+    let end = |vertex: Option<_>, toward: f64| -> Result<_, GapRegularizationError> {
+        let vertex = vertex
+            .map(|vertex| diagram.vertex(vertex))
+            .transpose()
+            .map_err(gap_regularization_error)?;
+        Ok(vertex.map_or(
+            [
+                origin[0] + toward * direction[0] * coefficient,
+                origin[1] + toward * direction[1] * coefficient,
+            ],
+            |vertex| affine.transform(vertex.x(), vertex.y()),
+        ))
+    };
+    let start = end(edge.vertex0(), -1.0)?;
+    let vertex1 = diagram
         .edge_get_vertex1(edge_id)
-        .map_err(gap_regularization_error)?
-        .map(|vertex| {
-            diagram
-                .vertex(vertex)
-                .map(|vertex| affine.transform(vertex.x(), vertex.y()))
-        })
-        .transpose()
-        .map_err(gap_regularization_error)?
-        .unwrap_or([
-            origin[0] + direction[0] * coefficient,
-            origin[1] + direction[1] * coefficient,
-        ]);
-    Ok(vec![start, end])
+        .map_err(gap_regularization_error)?;
+    Ok(vec![start, end(vertex1, 1.0)?])
 }
 
 fn voronoi_cell_point(
@@ -1240,61 +1174,29 @@ fn regions_within_distance(left: &ContourSet, right: &ContourSet, distance: f64)
         return false;
     }
     let threshold = distance + left.tolerance().max(right.tolerance());
-    for left_ring in &left.rings {
-        for left_index in 0..left_ring.len() {
-            let [left_start_x, left_start_y] = left_ring[left_index];
-            let [left_end_x, left_end_y] = left_ring[(left_index + 1) % left_ring.len()];
-            let left_start = Point::new(left_start_x, left_start_y);
-            let left_end = Point::new(left_end_x, left_end_y);
-            let left_bbox = BBox::spanning(left_start, left_end).expand(threshold);
-            for right_ring in &right.rings {
-                for right_index in 0..right_ring.len() {
-                    let [right_start_x, right_start_y] = right_ring[right_index];
-                    let [right_end_x, right_end_y] =
-                        right_ring[(right_index + 1) % right_ring.len()];
-                    let right_start = Point::new(right_start_x, right_start_y);
-                    let right_end = Point::new(right_end_x, right_end_y);
-                    if !left_bbox.intersects(BBox::spanning(right_start, right_end)) {
-                        continue;
-                    }
-                    let (separation, _, _) =
-                        dist::segments(left_start, left_end, right_start, right_end);
-                    if separation <= threshold {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
+    left.edges().any(|(left_start, left_end)| {
+        let left_bbox = BBox::spanning(left_start, left_end).expand(threshold);
+        right.edges().any(|(right_start, right_end)| {
+            left_bbox.intersects(BBox::spanning(right_start, right_end))
+                && dist::segments(left_start, left_end, right_start, right_end).0 <= threshold
+        })
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{rect, res};
+    use super::super::tests::{block, res};
     use super::*;
     #[test]
     fn ring_components_group_holes_with_the_smallest_outer_ring_around_them() {
-        let region = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM))
-            .difference(&ContourSet::rectangle(
-                rect(2.0, 2.0, 8.0, 8.0),
-                res(tol::REGION_MM),
-            ))
+        let region = block(0.0, 0.0, 10.0, 10.0)
+            .difference(&block(2.0, 2.0, 8.0, 8.0))
             .unwrap()
-            .union(&ContourSet::rectangle(
-                rect(3.0, 3.0, 7.0, 7.0),
-                res(tol::REGION_MM),
-            ))
+            .union(&block(3.0, 3.0, 7.0, 7.0))
             .unwrap()
-            .difference(&ContourSet::rectangle(
-                rect(4.0, 4.0, 6.0, 6.0),
-                res(tol::REGION_MM),
-            ))
+            .difference(&block(4.0, 4.0, 6.0, 6.0))
             .unwrap()
-            .union(&ContourSet::rectangle(
-                rect(20.0, 0.0, 30.0, 10.0),
-                res(tol::REGION_MM),
-            ))
+            .union(&block(20.0, 0.0, 30.0, 10.0))
             .unwrap();
         assert_eq!(region.rings.len(), 5);
 
@@ -1315,10 +1217,87 @@ mod tests {
     }
 
     #[test]
+    fn a_hole_touching_its_outer_ring_at_its_first_vertex_joins_that_component() {
+        // The hole starts at its contact with the outer ring's top edge, where
+        // the half-open winding rule sees no edge of the outer ring at all.
+        let outer = vec![[0.0, 0.0], [20.0, 0.0], [20.0, 15.0], [0.0, 15.0]];
+        let hole = vec![[5.0, 15.0], [8.0, 14.0], [8.0, 12.0]];
+        let region = ContourSet::from_regularized(vec![outer, hole], res(tol::REGION_MM), 0.0);
+        assert_eq!(region.ring_components(), (vec![0, 0], vec![0]));
+        // The hole's walls face the outer wall they touch, which brings the
+        // hole's component along.
+        let facing = region.facing_components(0.0, 0.3, 1.0).unwrap();
+        assert!(!facing.is_empty());
+    }
+
+    #[test]
+    fn a_clockwise_ring_nothing_encloses_is_its_own_component() {
+        let island = vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]];
+        let orphan = vec![[10.0, 0.0], [10.0, 4.0], [10.2, 4.0], [10.2, 0.0]];
+        let region = ContourSet::from_regularized(vec![island, orphan], res(tol::REGION_MM), 0.0);
+        let (components, outers) = region.ring_components();
+        assert_eq!(outers, [0, 1]);
+        assert_eq!(components, [0, 1]);
+        assert!(region.facing_components(0.3, 0.3, 1.0).is_ok());
+    }
+
+    fn notch(corner: &[[f64; 2]]) -> ContourSet {
+        let mut ring = vec![
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [5.4, 10.0],
+            [5.4, 3.0],
+        ];
+        ring.extend_from_slice(corner);
+        ring.extend([[4.6, 10.0], [0.0, 10.0]]);
+        ContourSet::from_rings(vec![ring], FillRule::NonZero, res(tol::REGION_MM)).unwrap()
+    }
+
+    #[test]
+    fn a_sub_tolerance_edge_at_a_corner_leaves_its_walls_incident() {
+        // Debris a quarter of a micron long chamfers one corner at the foot
+        // of the notch. The walls it separates still meet there, so their
+        // bisector is a corner spoke and no part of the medial axis.
+        let keep_out = |region: &ContourSet| {
+            let narrow_voids = region.disk_gap_violations(0.5).unwrap();
+            narrow_void_medial_axis_keep_out(region, &narrow_voids, 0.525).unwrap()
+        };
+        let clean = keep_out(&notch(&[[4.6, 3.0]]));
+        let chamfered = keep_out(&notch(&[[4.6002, 3.0], [4.6, 3.0002]]));
+        assert!(clean.area() > 1.0);
+        assert!(
+            (chamfered.area() - clean.area()).abs() < 1e-3,
+            "{} mm² against {} mm²",
+            chamfered.area(),
+            clean.area()
+        );
+    }
+
+    #[test]
+    fn walls_that_cross_once_rounded_still_have_a_medial_axis() {
+        // The upper wall clears the lower by under a nanometre at x = 6, and
+        // rounding each vertex to the diagram's grid on its own would swap
+        // them there.
+        let lower = vec![
+            [0.0, -1.0],
+            [10.0, -1.0],
+            [10.0, 0.0000151],
+            [0.0, 0.0000049],
+        ];
+        let upper = vec![[2.0, 0.00002], [6.0, 0.0000114], [6.0, 1.0], [2.0, 1.0]];
+        let region =
+            ContourSet::from_rings(vec![lower, upper], FillRule::NonZero, res(0.0)).unwrap();
+        assert_eq!(region.rings.len(), 2);
+        let narrow_voids = region.disk_gap_violations(0.5).unwrap();
+        assert!(narrow_void_medial_axis_keep_out(&region, &narrow_voids, 0.525).is_ok());
+    }
+
+    #[test]
     fn facing_components_keep_only_walls_within_reach_of_each_other() {
-        let trace = ContourSet::rectangle(rect(0.0, 0.0, 5.0, 0.1), res(tol::REGION_MM));
-        let pad = ContourSet::rectangle(rect(10.0, 0.0, 12.0, 2.0), res(tol::REGION_MM));
-        let neighbour = ContourSet::rectangle(rect(12.15, 0.0, 14.0, 2.0), res(tol::REGION_MM));
+        let trace = block(0.0, 0.0, 5.0, 0.1);
+        let pad = block(10.0, 0.0, 12.0, 2.0);
+        let neighbour = block(12.15, 0.0, 14.0, 2.0);
         let region = trace.union(&pad).unwrap().union(&neighbour).unwrap();
         assert_eq!(region.rings.len(), 3);
 
@@ -1341,11 +1320,8 @@ mod tests {
         assert_eq!(with_context.rings.len(), 3);
 
         // A notch faces across void; a plane web between holes across material.
-        let notched = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), res(tol::REGION_MM))
-            .difference(&ContourSet::rectangle(
-                rect(1.9, 2.0, 2.1, 4.5),
-                res(tol::REGION_MM),
-            ))
+        let notched = block(0.0, 0.0, 4.0, 4.0)
+            .difference(&block(1.9, 2.0, 2.1, 4.5))
             .unwrap();
         assert_eq!(
             notched
@@ -1361,21 +1337,12 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let webbed = ContourSet::rectangle(rect(0.0, 0.0, 8.0, 4.0), res(tol::REGION_MM))
-            .difference(&ContourSet::rectangle(
-                rect(1.0, 1.0, 1.9, 3.0),
-                res(tol::REGION_MM),
-            ))
+        let webbed = block(0.0, 0.0, 8.0, 4.0)
+            .difference(&block(1.0, 1.0, 1.9, 3.0))
             .unwrap()
-            .difference(&ContourSet::rectangle(
-                rect(2.1, 1.0, 3.0, 3.0),
-                res(tol::REGION_MM),
-            ))
+            .difference(&block(2.1, 1.0, 3.0, 3.0))
             .unwrap()
-            .difference(&ContourSet::rectangle(
-                rect(6.0, 1.0, 7.0, 3.0),
-                res(tol::REGION_MM),
-            ))
+            .difference(&block(6.0, 1.0, 7.0, 3.0))
             .unwrap();
         let nearby_web = webbed.facing_components(0.3, 0.0, 1.0).unwrap();
         assert_eq!(nearby_web.rings.len(), 3);

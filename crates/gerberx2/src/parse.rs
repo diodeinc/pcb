@@ -1,22 +1,23 @@
 use crate::types::Mirroring;
 use crate::types::*;
 use crate::{GerberError, GerberX2, Interner, Result, Symbol};
-use pcb_ir::geom::Polarity;
+use pcb_ir::geom::{Polarity, Span};
 use std::collections::HashMap;
 
 pub struct Parser<'a> {
     source: &'a str,
     pos: usize,
     interner: Interner,
-    commands: Vec<Command>,
     file_attributes: Vec<Attribute>,
-    aperture_attributes: HashMap<Symbol, Attribute>,
-    object_attributes: HashMap<Symbol, Attribute>,
+    aperture_attributes: AttributeDictionary,
+    object_attributes: AttributeDictionary,
+    /// Arena of the attribute sets objects and apertures refer to.
+    attributes: Vec<Attribute>,
     aperture_definitions: Vec<ApertureDefinition>,
     aperture_lookup: HashMap<i32, usize>,
-    macro_lookup: HashMap<Symbol, ApertureMacro>,
-    aperture_macros: Vec<ApertureMacro>,
+    macro_lookup: HashMap<Symbol, Vec<MacroPrimitive>>,
     objects: Vec<GraphicalObject>,
+    step_repeats: Vec<StepRepeatBlock>,
     region: Option<RegionBuilder>,
     block: Option<BlockBuilder>,
     step_repeat: Option<StepRepeatBuilder>,
@@ -24,10 +25,131 @@ pub struct Parser<'a> {
     saw_m02: bool,
 }
 
+/// One X2 attribute dictionary. A handful of entries at most, so a vector in
+/// insertion order is both faster than hashing and deterministic.
+#[derive(Debug, Default)]
+struct AttributeDictionary {
+    entries: Vec<Attribute>,
+    /// The arena copy of `entries`, until the dictionary next changes.
+    set: Option<Span>,
+}
+
+impl AttributeDictionary {
+    fn insert(&mut self, attribute: Attribute) {
+        match self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.name == attribute.name)
+        {
+            Some(entry) => *entry = attribute,
+            None => self.entries.push(attribute),
+        }
+        self.set = None;
+    }
+
+    /// Delete one attribute, or all of them.
+    fn remove(&mut self, name: Option<Symbol>) {
+        self.entries
+            .retain(|entry| name.is_some_and(|name| entry.name != name));
+        self.set = None;
+    }
+
+    /// The current entries as a set in `arena`, copied once per change.
+    fn set(&mut self, arena: &mut Vec<Attribute>) -> Span {
+        *self.set.get_or_insert_with(|| {
+            let set = Span::new(arena.len() as u32, self.entries.len() as u32);
+            arena.extend_from_slice(&self.entries);
+            set
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum MacroPrimitive {
+    VariableDefinition {
+        variable: usize,
+        expression: MacroExpression,
+    },
+    Shape {
+        code: i32,
+        parameters: Vec<MacroExpression>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum MacroExpression {
+    Number(f64),
+    Variable(usize),
+    UnaryMinus(Box<MacroExpression>),
+    Add(Box<MacroExpression>, Box<MacroExpression>),
+    Subtract(Box<MacroExpression>, Box<MacroExpression>),
+    Multiply(Box<MacroExpression>, Box<MacroExpression>),
+    Divide(Box<MacroExpression>, Box<MacroExpression>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperationCode {
+    Plot,
+    Move,
+    Flash,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CoordinateFields {
+    x: Option<i64>,
+    y: Option<i64>,
+    i: Option<i64>,
+    j: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct GraphicsState {
+    unit: Option<Unit>,
+    coordinate_format: Option<CoordinateFormat>,
+    current_point: Option<Point>,
+    current_aperture: Option<i32>,
+    plot_mode: Option<PlotMode>,
+    /// The last D01/D02/D03, which coordinates without a D-code repeat.
+    operation: Option<OperationCode>,
+    polarity: Polarity,
+    mirroring: Mirroring,
+    rotation_degrees: f64,
+    scaling: f64,
+}
+
+impl Default for GraphicsState {
+    fn default() -> Self {
+        Self {
+            unit: None,
+            coordinate_format: None,
+            current_point: None,
+            current_aperture: None,
+            plot_mode: None,
+            operation: None,
+            polarity: Polarity::Dark,
+            mirroring: Mirroring::None,
+            rotation_degrees: 0.0,
+            scaling: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct RegionBuilder {
     contours: Vec<Contour>,
     current: Option<Contour>,
+}
+
+impl RegionBuilder {
+    /// End the contour in progress. One without segments images nothing:
+    /// Altium ends every region with a bare `D02`.
+    fn end_contour(&mut self) {
+        self.contours.extend(
+            self.current
+                .take()
+                .filter(|contour| !contour.segments.is_empty()),
+        );
+    }
 }
 
 #[derive(Debug)]
@@ -48,15 +170,15 @@ impl<'a> Parser<'a> {
             source,
             pos: 0,
             interner: Interner::new(),
-            commands: Vec::new(),
             file_attributes: Vec::new(),
-            aperture_attributes: HashMap::new(),
-            object_attributes: HashMap::new(),
+            aperture_attributes: AttributeDictionary::default(),
+            object_attributes: AttributeDictionary::default(),
+            attributes: Vec::new(),
             aperture_definitions: Vec::new(),
             aperture_lookup: HashMap::new(),
             macro_lookup: HashMap::new(),
-            aperture_macros: Vec::new(),
             objects: Vec::new(),
+            step_repeats: Vec::new(),
             region: None,
             block: None,
             step_repeat: None,
@@ -95,24 +217,14 @@ impl<'a> Parser<'a> {
                 "AB block aperture was not closed before M02".to_string(),
             ));
         }
-        if self.step_repeat.is_some() {
-            return Err(GerberError::InvalidStructure(
-                "SR step-repeat was not closed before M02".to_string(),
-            ));
-        }
 
-        let aperture_attributes = self.aperture_attributes.values().cloned().collect();
-        let object_attributes = self.object_attributes.values().cloned().collect();
         Ok(GerberX2 {
             interner: std::mem::take(&mut self.interner),
-            commands: std::mem::take(&mut self.commands),
             file_attributes: std::mem::take(&mut self.file_attributes),
-            aperture_attributes,
-            object_attributes,
+            attributes: std::mem::take(&mut self.attributes),
             aperture_definitions: std::mem::take(&mut self.aperture_definitions),
-            aperture_macros: std::mem::take(&mut self.aperture_macros),
             objects: std::mem::take(&mut self.objects),
-            final_state: self.state.clone(),
+            step_repeats: std::mem::take(&mut self.step_repeats),
         })
     }
 
@@ -155,113 +267,74 @@ impl<'a> Parser<'a> {
         Ok(&self.source[start..self.pos])
     }
 
+    /// Words may sit on their own lines inside one `%...%` block.
     fn parse_extended_command(&mut self, command: &'a str) -> Result<()> {
+        let command = command.trim();
         if command.starts_with("AM") {
             return self.parse_extended_word(command.trim_end_matches('*'));
         }
-        for word in command.split_terminator('*') {
-            if word.is_empty() {
-                continue;
-            }
-            self.parse_extended_word(word)?;
-        }
-        Ok(())
+        command
+            .split_terminator('*')
+            .map(str::trim)
+            .filter(|word| !word.is_empty())
+            .try_for_each(|word| self.parse_extended_word(word))
     }
 
     fn parse_extended_word(&mut self, word: &'a str) -> Result<()> {
-        if let Some(rest) = word.strip_prefix("MO") {
-            let unit = match rest {
-                "MM" => Unit::Millimeter,
-                "IN" => Unit::Inch,
-                _ => return Err(self.syntax(format!("invalid MO unit '{rest}'"))),
-            };
-            self.state.unit = Some(unit);
-            self.commands.push(Command::Unit(unit));
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("FS") {
-            let format = parse_format(rest).ok_or_else(|| self.syntax("invalid FS command"))?;
-            self.state.coordinate_format = Some(format);
-            self.commands.push(Command::Format(format));
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("AD") {
-            let aperture = self.parse_aperture_definition(rest)?;
-            self.commands
-                .push(Command::ApertureDefinition(aperture.clone()));
-            self.aperture_lookup
-                .insert(aperture.code, self.aperture_definitions.len());
-            self.aperture_definitions.push(aperture);
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("AM") {
-            let macro_def = self.parse_aperture_macro(rest)?;
-            self.commands
-                .push(Command::ApertureMacro(macro_def.clone()));
-            self.macro_lookup.insert(macro_def.name, macro_def.clone());
-            self.aperture_macros.push(macro_def);
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("LP") {
-            let polarity = match rest {
-                "D" => Polarity::Dark,
-                "C" => Polarity::Clear,
-                _ => return Err(self.syntax(format!("invalid LP polarity '{rest}'"))),
-            };
-            self.state.polarity = polarity;
-            self.commands.push(Command::LoadPolarity(polarity));
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("LM") {
-            let mirroring = match rest {
-                "N" => Mirroring::None,
-                "X" => Mirroring::X,
-                "Y" => Mirroring::Y,
-                "XY" => Mirroring::XY,
-                _ => return Err(self.syntax(format!("invalid LM mirroring '{rest}'"))),
-            };
-            self.state.mirroring = mirroring;
-            self.commands.push(Command::LoadMirroring(mirroring));
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("LR") {
-            let rotation = parse_f64(rest)?;
-            self.state.rotation_degrees = rotation;
-            self.commands.push(Command::LoadRotation(rotation));
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("LS") {
-            let scaling = parse_f64(rest)?;
-            self.state.scaling = scaling;
-            self.commands.push(Command::LoadScaling(scaling));
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("AB") {
-            if rest.is_empty() {
+        let (code, rest) = word.split_at_checked(2).unwrap_or((word, ""));
+        match code {
+            "MO" => {
+                self.state.unit = Some(match rest {
+                    "MM" => Unit::Millimeter,
+                    "IN" => Unit::Inch,
+                    _ => return Err(self.syntax(format!("invalid MO unit '{rest}'"))),
+                });
+            }
+            "FS" => {
+                let format = parse_format(rest).ok_or_else(|| self.syntax("invalid FS command"))?;
+                self.state.coordinate_format = Some(format);
+            }
+            "AD" => {
+                let aperture = self.parse_aperture_definition(rest)?;
+                self.define_aperture(aperture);
+            }
+            "AM" => {
+                let (name, primitives) = self.parse_aperture_macro(rest)?;
+                self.macro_lookup.insert(name, primitives);
+            }
+            "LP" => {
+                self.state.polarity = match rest {
+                    "D" => Polarity::Dark,
+                    "C" => Polarity::Clear,
+                    _ => return Err(self.syntax(format!("invalid LP polarity '{rest}'"))),
+                };
+            }
+            "LM" => {
+                self.state.mirroring = match rest {
+                    "N" => Mirroring::None,
+                    "X" => Mirroring::X,
+                    "Y" => Mirroring::Y,
+                    "XY" => Mirroring::XY,
+                    _ => return Err(self.syntax(format!("invalid LM mirroring '{rest}'"))),
+                };
+            }
+            "LR" => self.state.rotation_degrees = parse_f64(rest)?,
+            "LS" => self.state.scaling = parse_f64(rest)?,
+            "AB" if rest.is_empty() => {
                 let block = self
                     .block
                     .take()
                     .ok_or_else(|| self.syntax("AB close without matching AB open"))?;
                 let objects = self.objects.split_off(block.object_start);
-                let aperture = ApertureDefinition {
+                let attributes = self.aperture_attributes.set(&mut self.attributes);
+                self.define_aperture(ApertureDefinition {
                     code: block.aperture_code,
                     template: ApertureTemplate::Block { objects },
                     geometry: None,
-                    attributes: self.aperture_attributes.values().cloned().collect(),
-                };
-                self.aperture_lookup
-                    .insert(aperture.code, self.aperture_definitions.len());
-                self.aperture_definitions.push(aperture);
-                self.commands.push(Command::EndBlockAperture);
-            } else {
+                    attributes,
+                });
+            }
+            "AB" => {
                 let code = parse_aperture_code(rest)?;
                 if self.block.is_some() {
                     return Err(self.syntax("nested AB block apertures are not supported"));
@@ -270,158 +343,149 @@ impl<'a> Parser<'a> {
                     aperture_code: code,
                     object_start: self.objects.len(),
                 });
-                self.commands.push(Command::BeginBlockAperture(code));
             }
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("SR") {
-            if rest.is_empty() {
-                let step = self
-                    .step_repeat
-                    .take()
-                    .ok_or_else(|| self.syntax("SR close without matching SR open"))?;
-                let seed = self.objects.split_off(step.object_start);
-                let mut expanded = Vec::new();
-                for ix in 0..step.repeat.x_repeats {
-                    for iy in 0..step.repeat.y_repeats {
-                        let dx = ix as f64 * step.repeat.x_step;
-                        let dy = iy as f64 * step.repeat.y_step;
-                        expanded.extend(
-                            seed.iter()
-                                .cloned()
-                                .map(|object| translate_object(object, dx, dy)),
-                        );
-                    }
+            "SR" => {
+                if self.block.is_some() {
+                    return Err(self.syntax("SR is not allowed inside an AB block aperture"));
                 }
-                self.objects.extend(expanded);
-                self.commands.push(Command::EndStepRepeat);
-            } else {
-                let sr = parse_step_repeat(rest)?;
-                if self.step_repeat.is_some() {
-                    return Err(self.syntax("nested SR statements are not supported"));
+                // Any SR command ends the block in progress, whether or not it
+                // opens another: older files never close their last block, nor
+                // the `%SRX1Y1I0J0*%` they open with.
+                self.close_step_repeat();
+                if !rest.is_empty() {
+                    self.step_repeat = Some(StepRepeatBuilder {
+                        repeat: parse_step_repeat(rest)?,
+                        object_start: self.objects.len(),
+                    });
                 }
-                self.step_repeat = Some(StepRepeatBuilder {
-                    repeat: sr,
-                    object_start: self.objects.len(),
-                });
-                self.commands.push(Command::BeginStepRepeat(sr));
             }
-            return Ok(());
+            "TF" => {
+                let attribute = self.parse_attribute(rest)?;
+                self.file_attributes.push(attribute);
+            }
+            "TA" => {
+                let attribute = self.parse_attribute(rest)?;
+                self.aperture_attributes.insert(attribute);
+            }
+            "TO" => {
+                let attribute = self.parse_attribute(rest)?;
+                self.object_attributes.insert(attribute);
+            }
+            "TD" => {
+                let name = (!rest.is_empty()).then(|| self.interner.intern(rest));
+                self.aperture_attributes.remove(name);
+                self.object_attributes.remove(name);
+            }
+            _ => {
+                return match legacy_image_command(word) {
+                    Some(true) => Ok(()),
+                    Some(false) => Err(self.syntax(format!(
+                        "deprecated command '{word}' changes the image and is not supported"
+                    ))),
+                    None => Err(self.syntax(format!("unsupported extended command '{word}'"))),
+                };
+            }
         }
+        Ok(())
+    }
 
-        if let Some(rest) = word.strip_prefix("TF") {
-            let attr = self.parse_attribute(rest)?;
-            self.file_attributes.push(attr.clone());
-            self.commands.push(Command::FileAttribute(attr));
-            return Ok(());
+    fn define_aperture(&mut self, aperture: ApertureDefinition) {
+        self.aperture_lookup
+            .insert(aperture.code, self.aperture_definitions.len());
+        self.aperture_definitions.push(aperture);
+    }
+
+    fn close_step_repeat(&mut self) {
+        let Some(step) = self.step_repeat.take() else {
+            return;
+        };
+        let objects = Span::new(
+            step.object_start as u32,
+            (self.objects.len() - step.object_start) as u32,
+        );
+        // A single occurrence is the run itself.
+        if !objects.is_empty() && (step.repeat.x_repeats > 1 || step.repeat.y_repeats > 1) {
+            self.step_repeats.push(StepRepeatBlock {
+                repeat: step.repeat,
+                objects,
+            });
         }
-
-        if let Some(rest) = word.strip_prefix("TA") {
-            let attr = self.parse_attribute(rest)?;
-            self.aperture_attributes.insert(attr.name, attr.clone());
-            self.commands.push(Command::ApertureAttribute(attr));
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("TO") {
-            let attr = self.parse_attribute(rest)?;
-            self.object_attributes.insert(attr.name, attr.clone());
-            self.commands.push(Command::ObjectAttribute(attr));
-            return Ok(());
-        }
-
-        if let Some(rest) = word.strip_prefix("TD") {
-            let name = if rest.is_empty() {
-                self.aperture_attributes.clear();
-                self.object_attributes.clear();
-                None
-            } else {
-                let name = self.interner.intern(rest);
-                self.aperture_attributes.remove(&name);
-                self.object_attributes.remove(&name);
-                Some(name)
-            };
-            self.commands.push(Command::DeleteAttribute(name));
-            return Ok(());
-        }
-
-        Err(self.syntax(format!("unsupported extended command '{word}'")))
     }
 
     fn parse_word_command(&mut self, command: &'a str) -> Result<()> {
-        let word = command.strip_suffix('*').unwrap_or(command);
-        if let Some(comment) = word.strip_prefix("G04") {
-            let comment = self.interner.intern(comment);
-            self.commands.push(Command::Comment(comment));
-            return Ok(());
+        let mut word = command.strip_suffix('*').unwrap_or(command).trim();
+        // Older files fuse G-codes with the operation they precede
+        // (`G01X0Y0D01`, `G54D10`), so each leading code applies in turn to
+        // whatever follows it.
+        while let Some((code, rest)) = split_g_code(word) {
+            match code {
+                1 => self.state.plot_mode = Some(PlotMode::Linear),
+                2 => self.state.plot_mode = Some(PlotMode::ClockwiseArc),
+                3 => self.state.plot_mode = Some(PlotMode::CounterclockwiseArc),
+                // A comment runs to the end of the word.
+                4 => return Ok(()),
+                36 => {
+                    if self.region.is_some() {
+                        return Err(self.syntax("nested region statements are not allowed"));
+                    }
+                    self.region = Some(RegionBuilder::default());
+                }
+                37 => self.end_region()?,
+                // Deprecated spellings of `%MO`.
+                70 => self.state.unit = Some(Unit::Inch),
+                71 => self.state.unit = Some(Unit::Millimeter),
+                // What this parser assumes anyway: the select-aperture and
+                // prepare-to-flash prefixes, multi-quadrant arcs, absolute
+                // coordinates.
+                54 | 55 | 75 | 90 => {}
+                74 => return Err(self.syntax("G74 single-quadrant arcs are not supported")),
+                91 => return Err(self.syntax("G91 incremental coordinates are not supported")),
+                _ => return Err(self.syntax(format!("unsupported G-code in '{word}'"))),
+            }
+            word = rest;
         }
-
         match word {
-            "G01" => {
-                self.state.plot_mode = Some(PlotMode::Linear);
-                self.commands.push(Command::PlotMode(PlotMode::Linear));
-                return Ok(());
-            }
-            "G02" => {
-                self.state.plot_mode = Some(PlotMode::ClockwiseArc);
-                self.commands
-                    .push(Command::PlotMode(PlotMode::ClockwiseArc));
-                return Ok(());
-            }
-            "G03" => {
-                self.state.plot_mode = Some(PlotMode::CounterclockwiseArc);
-                self.commands
-                    .push(Command::PlotMode(PlotMode::CounterclockwiseArc));
-                return Ok(());
-            }
-            "G75" => {
-                self.commands.push(Command::QuadrantModeMulti);
-                return Ok(());
-            }
-            "G36" => {
-                if self.region.is_some() {
-                    return Err(self.syntax("nested region statements are not allowed"));
-                }
-                self.region = Some(RegionBuilder::default());
-                self.commands.push(Command::BeginRegion);
-                return Ok(());
-            }
-            "G37" => {
-                let mut region = self
-                    .region
-                    .take()
-                    .ok_or_else(|| self.syntax("G37 without matching G36"))?;
-                if let Some(contour) = region.current.take() {
-                    region.contours.push(contour);
-                }
-                if region.contours.is_empty() {
-                    return Err(self.syntax("empty region statement"));
-                }
-                validate_region_contours(&region.contours)?;
-                self.objects.push(self.graphical_object(ObjectKind::Region {
-                    contours: region.contours,
-                }));
-                self.commands.push(Command::EndRegion);
-                return Ok(());
-            }
+            "" => Ok(()),
             "M02" => {
+                self.close_step_repeat();
                 self.saw_m02 = true;
-                self.commands.push(Command::EndOfFile);
-                return Ok(());
+                Ok(())
             }
-            _ => {}
+            _ => {
+                let (fields, d_code) = parse_operation(word)?;
+                let operation = match d_code {
+                    Some(1) => OperationCode::Plot,
+                    Some(2) => OperationCode::Move,
+                    Some(3) => OperationCode::Flash,
+                    Some(aperture) if aperture >= 10 && fields == CoordinateFields::default() => {
+                        self.state.current_aperture = Some(aperture);
+                        return Ok(());
+                    }
+                    Some(_) => return Err(self.syntax(format!("invalid D-code in '{word}'"))),
+                    // Coordinates without a D-code repeat the last operation.
+                    None => self.state.operation.ok_or_else(|| {
+                        self.syntax("coordinates without a D-code require a previous operation")
+                    })?,
+                };
+                self.state.operation = Some(operation);
+                self.interpret_operation(fields, operation)
+            }
         }
+    }
 
-        if let Some(code) = parse_set_aperture(word) {
-            self.state.current_aperture = Some(code);
-            self.commands.push(Command::SetCurrentAperture(code));
-            return Ok(());
+    fn end_region(&mut self) -> Result<()> {
+        let mut region = self
+            .region
+            .take()
+            .ok_or_else(|| self.syntax("G37 without matching G36"))?;
+        region.end_contour();
+        if region.contours.is_empty() {
+            return Err(self.syntax("empty region statement"));
         }
-
-        let (fields, code) = parse_operation(word)?;
-        self.interpret_operation(fields, code)?;
-        self.commands.push(Command::Operation { fields, code });
+        validate_region_contours(&region.contours)?;
+        self.push_object(ObjectKind::Region {
+            contours: region.contours,
+        });
         Ok(())
     }
 
@@ -430,9 +494,7 @@ impl<'a> Parser<'a> {
         match code {
             OperationCode::Move => {
                 if let Some(region) = &mut self.region {
-                    if let Some(contour) = region.current.take() {
-                        region.contours.push(contour);
-                    }
+                    region.end_contour();
                     region.current = Some(Contour {
                         segments: Vec::new(),
                     });
@@ -444,10 +506,10 @@ impl<'a> Parser<'a> {
                     return Err(self.syntax("D03 flash is not allowed inside a region"));
                 }
                 let aperture = self.current_aperture()?;
-                self.objects.push(self.graphical_object(ObjectKind::Flash {
+                self.push_object(ObjectKind::Flash {
                     at: point,
                     aperture,
-                }));
+                });
                 self.state.current_point = Some(point);
             }
             OperationCode::Plot => {
@@ -459,16 +521,19 @@ impl<'a> Parser<'a> {
                     .state
                     .plot_mode
                     .ok_or_else(|| self.syntax("D01 plot requires G01/G02/G03 plot mode"))?;
-                let segment = match plot_mode {
-                    PlotMode::Linear => ContourSegment::Line { start, end: point },
-                    PlotMode::ClockwiseArc | PlotMode::CounterclockwiseArc => {
-                        let center_offset = self.coordinate_offset(fields)?;
-                        ContourSegment::Arc {
-                            start,
-                            end: point,
-                            center_offset,
-                            clockwise: plot_mode == PlotMode::ClockwiseArc,
-                        }
+                // An arc without a centre offset has no radius: it is the
+                // straight segment. Altium draws lines this way whenever a
+                // region leaves arc mode on.
+                let center_offset = self.coordinate_offset(fields)?;
+                let segment = if plot_mode == PlotMode::Linear || center_offset == Point::default()
+                {
+                    ContourSegment::Line { start, end: point }
+                } else {
+                    ContourSegment::Arc {
+                        start,
+                        end: point,
+                        center_offset,
+                        clockwise: plot_mode == PlotMode::ClockwiseArc,
                     }
                 };
                 if let Some(region) = &mut self.region {
@@ -500,7 +565,7 @@ impl<'a> Parser<'a> {
                             aperture,
                         },
                     };
-                    self.objects.push(self.graphical_object(kind));
+                    self.push_object(kind);
                 }
                 self.state.current_point = Some(point);
             }
@@ -525,16 +590,11 @@ impl<'a> Parser<'a> {
         Ok(Point { x, y })
     }
 
+    /// The arc centre offset; an omitted `I` or `J` is zero.
     fn coordinate_offset(&self, fields: CoordinateFields) -> Result<Point> {
-        let i = fields
-            .i
-            .ok_or_else(|| self.syntax("arc D01 requires I offset"))?;
-        let j = fields
-            .j
-            .ok_or_else(|| self.syntax("arc D01 requires J offset"))?;
         Ok(Point {
-            x: self.decode_x(i)?,
-            y: self.decode_y(j)?,
+            x: self.decode_x(fields.i.unwrap_or(0))?,
+            y: self.decode_y(fields.j.unwrap_or(0))?,
         })
     }
 
@@ -574,7 +634,8 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| self.syntax("operation requires current aperture"))
     }
 
-    fn graphical_object(&self, kind: ObjectKind) -> GraphicalObject {
+    /// Append an object imaged under the current graphics state.
+    fn push_object(&mut self, kind: ObjectKind) {
         let aperture_attributes = match &kind {
             ObjectKind::Draw { aperture, .. }
             | ObjectKind::Arc { aperture, .. }
@@ -582,19 +643,19 @@ impl<'a> Parser<'a> {
                 .aperture_lookup
                 .get(aperture)
                 .and_then(|&index| self.aperture_definitions.get(index))
-                .map(|definition| definition.attributes.clone())
-                .unwrap_or_default(),
-            ObjectKind::Region { .. } => self.aperture_attributes.values().cloned().collect(),
+                .map_or(Span::EMPTY, |definition| definition.attributes),
+            ObjectKind::Region { .. } => self.aperture_attributes.set(&mut self.attributes),
         };
-        GraphicalObject {
+        let object_attributes = self.object_attributes.set(&mut self.attributes);
+        self.objects.push(GraphicalObject {
             kind,
             polarity: self.state.polarity,
             mirroring: self.state.mirroring,
             rotation_degrees: self.state.rotation_degrees,
             scaling: self.state.scaling,
             aperture_attributes,
-            object_attributes: self.object_attributes.values().cloned().collect(),
-        }
+            object_attributes,
+        });
     }
 
     fn parse_attribute(&mut self, rest: &str) -> Result<Attribute> {
@@ -623,7 +684,7 @@ impl<'a> Parser<'a> {
             code,
             template,
             geometry,
-            attributes: self.aperture_attributes.values().cloned().collect(),
+            attributes: self.aperture_attributes.set(&mut self.attributes),
         })
     }
 
@@ -633,13 +694,13 @@ impl<'a> Parser<'a> {
         unit: Unit,
     ) -> Result<Option<ApertureGeometry>> {
         if let ApertureTemplate::Macro { name, parameters } = template {
-            let Some(macro_def) = self.macro_lookup.get(name) else {
+            let Some(primitives) = self.macro_lookup.get(name) else {
                 return Err(GerberError::InvalidStructure(format!(
                     "aperture macro '{}' was not defined before use",
                     self.interner.resolve(*name)
                 )));
             };
-            return lower_macro_aperture(macro_def, parameters, unit);
+            return lower_macro_aperture(primitives, parameters, unit);
         }
         Ok(lower_standard_aperture(template))
     }
@@ -654,41 +715,32 @@ impl<'a> Parser<'a> {
             .map(parse_f64)
             .collect::<Result<Vec<_>>>()?;
 
+        let length = |index, name| required_length(&values, index, name, unit);
+        let hole = |index: usize| values.get(index).map(|&value| scale_length(value, unit));
         match name {
             "C" => Ok(ApertureTemplate::Circle {
-                diameter: scale_length(required_param(&values, 0, "circle diameter")?, unit),
-                hole_diameter: values
-                    .get(1)
-                    .copied()
-                    .map(|value| scale_length(value, unit)),
+                diameter: length(0, "circle diameter")?,
+                hole_diameter: hole(1),
             }),
             "R" => Ok(ApertureTemplate::Rectangle {
-                width: scale_length(required_param(&values, 0, "rectangle width")?, unit),
-                height: scale_length(required_param(&values, 1, "rectangle height")?, unit),
-                hole_diameter: values
-                    .get(2)
-                    .copied()
-                    .map(|value| scale_length(value, unit)),
+                width: length(0, "rectangle width")?,
+                height: length(1, "rectangle height")?,
+                hole_diameter: hole(2),
             }),
             "O" => Ok(ApertureTemplate::Obround {
-                width: scale_length(required_param(&values, 0, "obround width")?, unit),
-                height: scale_length(required_param(&values, 1, "obround height")?, unit),
-                hole_diameter: values
-                    .get(2)
-                    .copied()
-                    .map(|value| scale_length(value, unit)),
+                width: length(0, "obround width")?,
+                height: length(1, "obround height")?,
+                hole_diameter: hole(2),
             }),
             "P" => Ok(ApertureTemplate::Polygon {
-                outer_diameter: scale_length(
-                    required_param(&values, 0, "polygon outer diameter")?,
-                    unit,
-                ),
-                vertices: required_param(&values, 1, "polygon vertices")? as i32,
+                outer_diameter: length(0, "polygon outer diameter")?,
+                vertices: bounded_count(
+                    required_param(&values, 1, "polygon vertices")?,
+                    "polygon vertices",
+                    POLYGON_VERTICES,
+                )? as i32,
                 rotation_degrees: values.get(2).copied(),
-                hole_diameter: values
-                    .get(3)
-                    .copied()
-                    .map(|value| scale_length(value, unit)),
+                hole_diameter: hole(3),
             }),
             _ => Ok(ApertureTemplate::Macro {
                 name: self.interner.intern(name),
@@ -697,21 +749,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_aperture_macro(&mut self, rest: &str) -> Result<ApertureMacro> {
+    fn parse_aperture_macro(&mut self, rest: &str) -> Result<(Symbol, Vec<MacroPrimitive>)> {
         let Some((name, body)) = rest.split_once('*') else {
             return Err(self.syntax("AM missing body"));
         };
         let mut primitives = Vec::new();
+        // Primitive code 0 is a comment.
         for word in body
             .split_terminator('*')
             .map(str::trim)
-            .filter(|word| !word.is_empty())
+            .filter(|word| !word.is_empty() && !word.starts_with('0'))
         {
-            if let Some(text) = word.strip_prefix('0') {
-                primitives.push(MacroPrimitive::Comment(
-                    self.interner.intern(text.trim_start()),
-                ));
-            } else if let Some((variable, expression)) = word.split_once('=') {
+            if let Some((variable, expression)) = word.split_once('=') {
                 let variable = variable
                     .strip_prefix('$')
                     .ok_or_else(|| self.syntax("macro variable definition missing $ prefix"))?
@@ -735,10 +784,7 @@ impl<'a> Parser<'a> {
                 primitives.push(MacroPrimitive::Shape { code, parameters });
             }
         }
-        Ok(ApertureMacro {
-            name: self.interner.intern(name),
-            primitives,
-        })
+        Ok((self.interner.intern(name.trim()), primitives))
     }
 
     fn syntax(&self, message: impl Into<String>) -> GerberError {
@@ -783,39 +829,48 @@ fn scale_length(value: f64, unit: Unit) -> f64 {
 }
 
 fn lower_standard_aperture(template: &ApertureTemplate) -> Option<ApertureGeometry> {
-    let paths = match *template {
+    let (shape, hole_diameter) = match *template {
         ApertureTemplate::Circle {
             diameter,
             hole_diameter,
-        } => circle_paths(diameter, hole_diameter),
+        } => (disc(diameter, Polarity::Dark), hole_diameter),
         ApertureTemplate::Rectangle {
             width,
             height,
             hole_diameter,
-        } => rect_paths(width, height, hole_diameter),
+        } => (
+            Some(rect_path(width, height, Polarity::Dark)),
+            hole_diameter,
+        ),
         ApertureTemplate::Obround {
             width,
             height,
             hole_diameter,
-        } => obround_paths(width, height, hole_diameter),
+        } => (Some(obround_path(width, height)), hole_diameter),
         ApertureTemplate::Polygon {
             outer_diameter,
             vertices,
             rotation_degrees,
             hole_diameter,
-        } => polygon_paths(
-            outer_diameter,
-            vertices,
-            rotation_degrees.unwrap_or(0.0),
+        } => (
+            Some(polygon_path(
+                outer_diameter,
+                vertices,
+                rotation_degrees.unwrap_or(0.0),
+                Polarity::Dark,
+            )),
             hole_diameter,
         ),
         ApertureTemplate::Macro { .. } | ApertureTemplate::Block { .. } => return None,
     };
-    Some(ApertureGeometry { paths })
+    let hole = hole_diameter.and_then(|diameter| disc(diameter, Polarity::Clear));
+    Some(ApertureGeometry {
+        paths: shape.into_iter().chain(hole).collect(),
+    })
 }
 
 fn lower_macro_aperture(
-    macro_def: &ApertureMacro,
+    primitives: &[MacroPrimitive],
     parameters: &[f64],
     unit: Unit,
 ) -> Result<Option<ApertureGeometry>> {
@@ -825,20 +880,19 @@ fn lower_macro_aperture(
         .map(|(index, value)| (index + 1, *value))
         .collect();
     let mut paths = Vec::new();
-    for primitive in &macro_def.primitives {
+    for primitive in primitives {
         match primitive {
-            MacroPrimitive::Comment(_) => {}
             MacroPrimitive::VariableDefinition {
                 variable,
                 expression,
             } => {
-                vars.insert(*variable, eval_macro_expr(expression, &vars)?);
+                vars.insert(*variable, eval_macro_expr(expression, &vars));
             }
             MacroPrimitive::Shape { code, parameters } => {
                 let values = parameters
                     .iter()
                     .map(|expr| eval_macro_expr(expr, &vars))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Vec<_>>();
                 paths.extend(lower_macro_shape(*code, &values, unit)?);
             }
         }
@@ -846,146 +900,147 @@ fn lower_macro_aperture(
     Ok(Some(ApertureGeometry { paths }))
 }
 
+/// Lower one macro primitive. Every primitive is built unrotated at its own
+/// position and then rotated about the macro origin, as the format specifies.
 fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<GeometryPath>> {
-    match code {
+    let (paths, rotation) = match code {
         1 => {
             let exposure = macro_bool(values, 0)?;
-            let diameter = macro_length(values, 1, "macro circle diameter", unit)?;
+            let diameter = required_length(values, 1, "macro circle diameter", unit)?;
             let center = Point {
-                x: macro_length(values, 2, "macro circle center x", unit)?,
-                y: macro_length(values, 3, "macro circle center y", unit)?,
+                x: required_length(values, 2, "macro circle center x", unit)?,
+                y: required_length(values, 3, "macro circle center y", unit)?,
             };
             let rotation = values.get(4).copied().unwrap_or(0.0);
-            Ok(vec![transform_path(
-                circle_path(diameter / 2.0, exposure),
-                center,
+            (
+                vec![translate_path(
+                    circle_path(diameter / 2.0, exposure),
+                    center,
+                )],
                 rotation,
-            )])
+            )
         }
         20 => {
             let exposure = macro_bool(values, 0)?;
-            let width = macro_length(values, 1, "macro vector line width", unit)?;
+            let width = required_length(values, 1, "macro vector line width", unit)?;
             let start = Point {
-                x: macro_length(values, 2, "macro vector line start x", unit)?,
-                y: macro_length(values, 3, "macro vector line start y", unit)?,
+                x: required_length(values, 2, "macro vector line start x", unit)?,
+                y: required_length(values, 3, "macro vector line start y", unit)?,
             };
             let end = Point {
-                x: macro_length(values, 4, "macro vector line end x", unit)?,
-                y: macro_length(values, 5, "macro vector line end y", unit)?,
+                x: required_length(values, 4, "macro vector line end x", unit)?,
+                y: required_length(values, 5, "macro vector line end y", unit)?,
             };
-            let rotation = macro_value(values, 6, "macro vector line rotation")?;
-            Ok(vec![vector_line_path(
-                start, end, width, exposure, rotation,
-            )])
+            let rotation = required_param(values, 6, "macro vector line rotation")?;
+            (
+                vec![vector_line_path(start, end, width, exposure)],
+                rotation,
+            )
         }
         21 => {
             let exposure = macro_bool(values, 0)?;
-            let width = macro_length(values, 1, "macro center line width", unit)?;
-            let height = macro_length(values, 2, "macro center line height", unit)?;
+            let width = required_length(values, 1, "macro center line width", unit)?;
+            let height = required_length(values, 2, "macro center line height", unit)?;
             let center = Point {
-                x: macro_length(values, 3, "macro center line x", unit)?,
-                y: macro_length(values, 4, "macro center line y", unit)?,
+                x: required_length(values, 3, "macro center line x", unit)?,
+                y: required_length(values, 4, "macro center line y", unit)?,
             };
-            let rotation = macro_value(values, 5, "macro center line rotation")?;
-            Ok(vec![transform_path(
-                rect_path(width, height, exposure),
-                center,
+            let rotation = required_param(values, 5, "macro center line rotation")?;
+            (
+                vec![translate_path(rect_path(width, height, exposure), center)],
                 rotation,
-            )])
+            )
         }
         4 => {
             let exposure = macro_bool(values, 0)?;
-            let vertices = macro_value(values, 1, "macro outline vertices")? as usize;
+            let vertices = bounded_count(
+                required_param(values, 1, "macro outline vertices")?,
+                "macro outline vertices",
+                3..=OUTLINE_MAX_VERTICES,
+            )?;
             let expected = 2 + (vertices + 1) * 2 + 1;
             if values.len() != expected {
                 return Err(GerberError::InvalidStructure(
                     "macro outline has the wrong number of parameters".to_string(),
                 ));
             }
-            if vertices < 3 {
-                return Err(GerberError::InvalidStructure(
-                    "macro outline requires at least 3 vertices".to_string(),
-                ));
-            }
-            let rotation = values[expected - 1];
-            let first = Point {
-                x: values[2],
-                y: values[3],
+            let point = |index: usize| Point {
+                x: scale_length(values[2 + index * 2], unit),
+                y: scale_length(values[3 + index * 2], unit),
             };
-            let last = Point {
-                x: values[2 + vertices * 2],
-                y: values[3 + vertices * 2],
-            };
-            if !points_close(first, last) {
+            if !points_close(point(0), point(vertices)) {
                 return Err(GerberError::InvalidStructure(
                     "macro outline last vertex must equal first vertex".to_string(),
                 ));
             }
-            let mut commands = Vec::new();
-            for index in 0..=vertices {
-                let point = rotate_point(
-                    Point {
-                        x: scale_length(values[2 + index * 2], unit),
-                        y: scale_length(values[3 + index * 2], unit),
-                    },
-                    rotation,
-                );
-                if index == 0 {
-                    commands.push(PathCommand::MoveTo(point));
-                } else {
-                    commands.push(PathCommand::LineTo(point));
-                }
-            }
-            commands.push(PathCommand::Close);
-            Ok(vec![GeometryPath {
-                contours: vec![GeometryContour { commands }],
-                polarity: exposure,
-            }])
+            let commands = std::iter::once(PathCommand::MoveTo(point(0)))
+                .chain((1..=vertices).map(|index| PathCommand::LineTo(point(index))))
+                .chain(std::iter::once(PathCommand::Close))
+                .collect();
+            (
+                vec![GeometryPath {
+                    contours: vec![GeometryContour { commands }],
+                    polarity: exposure,
+                }],
+                values[expected - 1],
+            )
         }
         5 => {
             let exposure = macro_bool(values, 0)?;
-            let vertices = macro_value(values, 1, "macro polygon vertices")? as i32;
+            let vertices = bounded_count(
+                required_param(values, 1, "macro polygon vertices")?,
+                "macro polygon vertices",
+                POLYGON_VERTICES,
+            )? as i32;
             let center = Point {
-                x: macro_length(values, 2, "macro polygon center x", unit)?,
-                y: macro_length(values, 3, "macro polygon center y", unit)?,
+                x: required_length(values, 2, "macro polygon center x", unit)?,
+                y: required_length(values, 3, "macro polygon center y", unit)?,
             };
-            let diameter = macro_length(values, 4, "macro polygon diameter", unit)?;
-            let rotation = macro_value(values, 5, "macro polygon rotation")?;
-            Ok(polygon_paths(diameter, vertices, rotation, None)
-                .into_iter()
-                .map(|path| transform_path(repolarity(path, exposure), center, 0.0))
-                .collect())
+            let diameter = required_length(values, 4, "macro polygon diameter", unit)?;
+            let rotation = required_param(values, 5, "macro polygon rotation")?;
+            (
+                vec![translate_path(
+                    polygon_path(diameter, vertices, 0.0, exposure),
+                    center,
+                )],
+                rotation,
+            )
         }
         7 => {
             let center = Point {
-                x: macro_length(values, 0, "macro thermal center x", unit)?,
-                y: macro_length(values, 1, "macro thermal center y", unit)?,
+                x: required_length(values, 0, "macro thermal center x", unit)?,
+                y: required_length(values, 1, "macro thermal center y", unit)?,
             };
-            let outer = macro_length(values, 2, "macro thermal outer diameter", unit)?;
-            let inner = macro_length(values, 3, "macro thermal inner diameter", unit)?;
-            let gap = macro_length(values, 4, "macro thermal gap", unit)?;
-            let rotation = macro_value(values, 5, "macro thermal rotation")?;
-            let mut paths = circle_paths(outer, Some(inner));
-            paths.push(rect_path(outer, gap, Polarity::Clear));
-            paths.push(rect_path(gap, outer, Polarity::Clear));
-            Ok(paths
-                .into_iter()
-                .map(|path| transform_path(path, center, rotation))
-                .collect())
+            let outer = required_length(values, 2, "macro thermal outer diameter", unit)?;
+            let inner = required_length(values, 3, "macro thermal inner diameter", unit)?;
+            let gap = required_length(values, 4, "macro thermal gap", unit)?;
+            let rotation = required_param(values, 5, "macro thermal rotation")?;
+            let cross = [(outer, gap), (gap, outer)]
+                .map(|(width, height)| rect_path(width, height, Polarity::Clear));
+            (
+                disc(outer, Polarity::Dark)
+                    .into_iter()
+                    .chain(disc(inner, Polarity::Clear))
+                    .chain(cross)
+                    .map(|path| translate_path(path, center))
+                    .collect(),
+                rotation,
+            )
         }
-        _ => Err(GerberError::InvalidStructure(format!(
-            "unsupported aperture macro primitive {code}"
-        ))),
-    }
+        _ => {
+            return Err(GerberError::InvalidStructure(format!(
+                "unsupported aperture macro primitive {code}"
+            )));
+        }
+    };
+    Ok(paths
+        .into_iter()
+        .map(|path| map_path(path, |point| rotate_point(point, rotation)))
+        .collect())
 }
 
 fn validate_region_contours(contours: &[Contour]) -> Result<()> {
     for contour in contours {
-        if contour.segments.is_empty() {
-            return Err(GerberError::InvalidStructure(
-                "region contour has no segments".to_string(),
-            ));
-        }
         let mut first = None;
         let mut previous = None;
         for segment in &contour.segments {
@@ -1017,31 +1072,12 @@ fn points_close(a: Point, b: Point) -> bool {
     (a.x - b.x).abs() <= 1e-9 && (a.y - b.y).abs() <= 1e-9
 }
 
-fn circle_paths(diameter: f64, hole_diameter: Option<f64>) -> Vec<GeometryPath> {
-    let mut paths = Vec::new();
-    if diameter > 0.0 {
-        paths.push(circle_path(diameter / 2.0, Polarity::Dark));
-    }
-    if let Some(hole_diameter) = hole_diameter
-        && hole_diameter > 0.0
-    {
-        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
-    }
-    paths
+/// A disc, or nothing for a diameter that images nothing.
+fn disc(diameter: f64, polarity: Polarity) -> Option<GeometryPath> {
+    (diameter > 0.0).then(|| circle_path(diameter / 2.0, polarity))
 }
 
-fn rect_paths(width: f64, height: f64, hole_diameter: Option<f64>) -> Vec<GeometryPath> {
-    let mut paths = vec![rect_path(width, height, Polarity::Dark)];
-    if let Some(hole_diameter) = hole_diameter
-        && hole_diameter > 0.0
-    {
-        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
-    }
-    paths
-}
-
-fn obround_paths(width: f64, height: f64, hole_diameter: Option<f64>) -> Vec<GeometryPath> {
-    let mut paths = Vec::new();
+fn obround_path(width: f64, height: f64) -> GeometryPath {
     let rx = width / 2.0;
     let ry = height / 2.0;
     let commands = if width >= height {
@@ -1083,53 +1119,35 @@ fn obround_paths(width: f64, height: f64, hole_diameter: Option<f64>) -> Vec<Geo
             PathCommand::Close,
         ]
     };
-    paths.push(GeometryPath {
+    GeometryPath {
         contours: vec![GeometryContour { commands }],
         polarity: Polarity::Dark,
-    });
-    if let Some(hole_diameter) = hole_diameter
-        && hole_diameter > 0.0
-    {
-        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
     }
-    paths
 }
 
-fn polygon_paths(
+fn polygon_path(
     outer_diameter: f64,
     vertices: i32,
     rotation_degrees: f64,
-    hole_diameter: Option<f64>,
-) -> Vec<GeometryPath> {
-    let mut paths = Vec::new();
-    if vertices >= 3 {
-        let radius = outer_diameter / 2.0;
-        let rotation = rotation_degrees.to_radians();
-        let mut commands = Vec::new();
-        for i in 0..vertices {
-            let angle = rotation + i as f64 * std::f64::consts::TAU / vertices as f64;
-            let point = Point {
-                x: radius * angle.cos(),
-                y: radius * angle.sin(),
-            };
-            if i == 0 {
-                commands.push(PathCommand::MoveTo(point));
-            } else {
-                commands.push(PathCommand::LineTo(point));
-            }
+    polarity: Polarity,
+) -> GeometryPath {
+    let radius = outer_diameter / 2.0;
+    let rotation = rotation_degrees.to_radians();
+    let vertex = |index: i32| {
+        let angle = rotation + index as f64 * std::f64::consts::TAU / vertices as f64;
+        Point {
+            x: radius * angle.cos(),
+            y: radius * angle.sin(),
         }
-        commands.push(PathCommand::Close);
-        paths.push(GeometryPath {
-            contours: vec![GeometryContour { commands }],
-            polarity: Polarity::Dark,
-        });
+    };
+    let commands = std::iter::once(PathCommand::MoveTo(vertex(0)))
+        .chain((1..vertices).map(|index| PathCommand::LineTo(vertex(index))))
+        .chain(std::iter::once(PathCommand::Close))
+        .collect();
+    GeometryPath {
+        contours: vec![GeometryContour { commands }],
+        polarity,
     }
-    if let Some(hole_diameter) = hole_diameter
-        && hole_diameter > 0.0
-    {
-        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
-    }
-    paths
 }
 
 fn circle_path(radius: f64, polarity: Polarity) -> GeometryPath {
@@ -1171,68 +1189,64 @@ fn rect_path(width: f64, height: f64, polarity: Polarity) -> GeometryPath {
     }
 }
 
-fn macro_value(values: &[f64], index: usize, name: &str) -> Result<f64> {
-    values
-        .get(index)
-        .copied()
-        .ok_or_else(|| GerberError::InvalidStructure(format!("missing {name}")))
+/// Vertex counts the format allows for regular polygons.
+const POLYGON_VERTICES: std::ops::RangeInclusive<usize> = 3..=12;
+/// Most vertices the format allows in one outline primitive.
+const OUTLINE_MAX_VERTICES: usize = 5000;
+/// The format sets no limit; this one only stops malformed input, far above
+/// any real panel.
+const STEP_REPEAT_MAX_OCCURRENCES: i64 = 1_000_000;
+
+/// A count read from the file, bounded before it sizes any loop or allocation.
+fn bounded_count(value: f64, name: &str, range: std::ops::RangeInclusive<usize>) -> Result<usize> {
+    if value.fract() == 0.0 && (*range.start() as f64..=*range.end() as f64).contains(&value) {
+        Ok(value as usize)
+    } else {
+        Err(GerberError::InvalidStructure(format!(
+            "{name} must be an integer in {}..={}, got {value}",
+            range.start(),
+            range.end()
+        )))
+    }
 }
 
-fn macro_length(values: &[f64], index: usize, name: &str, unit: Unit) -> Result<f64> {
-    Ok(scale_length(macro_value(values, index, name)?, unit))
+fn required_length(values: &[f64], index: usize, name: &str, unit: Unit) -> Result<f64> {
+    Ok(scale_length(required_param(values, index, name)?, unit))
 }
 
 fn macro_bool(values: &[f64], index: usize) -> Result<Polarity> {
-    Ok(if macro_value(values, index, "macro exposure")? == 0.0 {
+    Ok(if required_param(values, index, "macro exposure")? == 0.0 {
         Polarity::Clear
     } else {
         Polarity::Dark
     })
 }
 
-fn eval_macro_expr(expr: &MacroExpression, vars: &HashMap<usize, f64>) -> Result<f64> {
-    Ok(match expr {
+/// Evaluate a macro expression. A variable no parameter or definition has
+/// set is zero, as the format specifies.
+fn eval_macro_expr(expr: &MacroExpression, vars: &HashMap<usize, f64>) -> f64 {
+    let eval = |expr| eval_macro_expr(expr, vars);
+    match expr {
         MacroExpression::Number(value) => *value,
-        MacroExpression::Variable(index) => *vars.get(index).ok_or_else(|| {
-            GerberError::InvalidStructure(format!("macro variable ${index} used before definition"))
-        })?,
-        MacroExpression::UnaryMinus(inner) => -eval_macro_expr(inner, vars)?,
-        MacroExpression::Add(left, right) => {
-            eval_macro_expr(left, vars)? + eval_macro_expr(right, vars)?
-        }
-        MacroExpression::Subtract(left, right) => {
-            eval_macro_expr(left, vars)? - eval_macro_expr(right, vars)?
-        }
-        MacroExpression::Multiply(left, right) => {
-            eval_macro_expr(left, vars)? * eval_macro_expr(right, vars)?
-        }
-        MacroExpression::Divide(left, right) => {
-            eval_macro_expr(left, vars)? / eval_macro_expr(right, vars)?
-        }
-    })
+        MacroExpression::Variable(index) => vars.get(index).copied().unwrap_or(0.0),
+        MacroExpression::UnaryMinus(inner) => -eval(inner),
+        MacroExpression::Add(left, right) => eval(left) + eval(right),
+        MacroExpression::Subtract(left, right) => eval(left) - eval(right),
+        MacroExpression::Multiply(left, right) => eval(left) * eval(right),
+        MacroExpression::Divide(left, right) => eval(left) / eval(right),
+    }
 }
 
-fn repolarity(mut path: GeometryPath, polarity: Polarity) -> GeometryPath {
-    path.polarity = polarity;
-    path
-}
-
-fn vector_line_path(
-    start: Point,
-    end: Point,
-    width: f64,
-    polarity: Polarity,
-    rotation: f64,
-) -> GeometryPath {
+fn vector_line_path(start: Point, end: Point, width: f64, polarity: Polarity) -> GeometryPath {
     let dx = end.x - start.x;
     let dy = end.y - start.y;
     let len = (dx * dx + dy * dy).sqrt();
     if len == 0.0 {
-        return transform_path(rect_path(0.0, width, polarity), start, rotation);
+        return translate_path(rect_path(0.0, width, polarity), start);
     }
     let nx = -dy / len * width / 2.0;
     let ny = dx / len * width / 2.0;
-    let mut path = GeometryPath {
+    GeometryPath {
         contours: vec![GeometryContour {
             commands: vec![
                 PathCommand::MoveTo(Point {
@@ -1255,185 +1269,32 @@ fn vector_line_path(
             ],
         }],
         polarity,
-    };
-    if rotation != 0.0 {
-        path = transform_path(path, Point { x: 0.0, y: 0.0 }, rotation);
+    }
+}
+
+fn translate_path(path: GeometryPath, offset: Point) -> GeometryPath {
+    map_path(path, |point| Point {
+        x: point.x + offset.x,
+        y: point.y + offset.y,
+    })
+}
+
+fn map_path(mut path: GeometryPath, map: impl Fn(Point) -> Point) -> GeometryPath {
+    for command in path
+        .contours
+        .iter_mut()
+        .flat_map(|contour| &mut contour.commands)
+    {
+        match command {
+            PathCommand::MoveTo(point) | PathCommand::LineTo(point) => *point = map(*point),
+            PathCommand::ArcTo { end, center, .. } => {
+                *end = map(*end);
+                *center = map(*center);
+            }
+            PathCommand::Close => {}
+        }
     }
     path
-}
-
-fn transform_path(mut path: GeometryPath, offset: Point, rotation: f64) -> GeometryPath {
-    for contour in &mut path.contours {
-        for command in &mut contour.commands {
-            match command {
-                PathCommand::MoveTo(point) | PathCommand::LineTo(point) => {
-                    *point = translate_point(rotate_point(*point, rotation), offset.x, offset.y);
-                }
-                PathCommand::ArcTo { end, center, .. } => {
-                    *end = translate_point(rotate_point(*end, rotation), offset.x, offset.y);
-                    *center = translate_point(rotate_point(*center, rotation), offset.x, offset.y);
-                }
-                PathCommand::Close => {}
-            }
-        }
-    }
-    path
-}
-
-fn translate_object(object: GraphicalObject, dx: f64, dy: f64) -> GraphicalObject {
-    transform_object(object, LinearTransform::identity(), Point { x: dx, y: dy })
-}
-
-fn transform_object(
-    mut object: GraphicalObject,
-    outer: LinearTransform,
-    origin: Point,
-) -> GraphicalObject {
-    let flips_orientation = outer.determinant() < 0.0;
-    match &mut object.kind {
-        ObjectKind::Draw { start, end, .. } => {
-            *start = outer.transform_point(*start, origin);
-            *end = outer.transform_point(*end, origin);
-        }
-        ObjectKind::Arc {
-            start,
-            end,
-            center_offset,
-            clockwise,
-            ..
-        } => {
-            *start = outer.transform_point(*start, origin);
-            *end = outer.transform_point(*end, origin);
-            *center_offset = outer.transform_vector(*center_offset);
-            *clockwise ^= flips_orientation;
-        }
-        ObjectKind::Flash { at, .. } => *at = outer.transform_point(*at, origin),
-        ObjectKind::Region { contours } => {
-            for contour in contours {
-                for segment in &mut contour.segments {
-                    match segment {
-                        ContourSegment::Line { start, end } => {
-                            *start = outer.transform_point(*start, origin);
-                            *end = outer.transform_point(*end, origin);
-                        }
-                        ContourSegment::Arc {
-                            start,
-                            end,
-                            center_offset,
-                            clockwise,
-                        } => {
-                            *start = outer.transform_point(*start, origin);
-                            *end = outer.transform_point(*end, origin);
-                            *center_offset = outer.transform_vector(*center_offset);
-                            *clockwise ^= flips_orientation;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let modifiers = outer.compose(LinearTransform::from_parts(
-        object.mirroring,
-        object.rotation_degrees,
-        object.scaling,
-    ));
-    let (mirroring, rotation_degrees, scaling) = modifiers.decompose();
-    object.mirroring = mirroring;
-    object.rotation_degrees = rotation_degrees;
-    object.scaling = scaling;
-    object
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LinearTransform {
-    m00: f64,
-    m01: f64,
-    m10: f64,
-    m11: f64,
-}
-
-impl LinearTransform {
-    fn identity() -> Self {
-        Self {
-            m00: 1.0,
-            m01: 0.0,
-            m10: 0.0,
-            m11: 1.0,
-        }
-    }
-
-    fn from_parts(mirroring: Mirroring, rotation_degrees: f64, scale: f64) -> Self {
-        let sx = match mirroring {
-            Mirroring::X | Mirroring::XY => -scale,
-            _ => scale,
-        };
-        let sy = match mirroring {
-            Mirroring::Y | Mirroring::XY => -scale,
-            _ => scale,
-        };
-        let (sin, cos) = rotation_degrees.to_radians().sin_cos();
-        Self {
-            m00: cos * sx,
-            m01: -sin * sy,
-            m10: sin * sx,
-            m11: cos * sy,
-        }
-    }
-
-    fn transform_point(self, point: Point, origin: Point) -> Point {
-        let vector = self.transform_vector(point);
-        Point {
-            x: origin.x + vector.x,
-            y: origin.y + vector.y,
-        }
-    }
-
-    fn transform_vector(self, point: Point) -> Point {
-        Point {
-            x: self.m00 * point.x + self.m01 * point.y,
-            y: self.m10 * point.x + self.m11 * point.y,
-        }
-    }
-
-    fn compose(self, rhs: Self) -> Self {
-        Self {
-            m00: self.m00 * rhs.m00 + self.m01 * rhs.m10,
-            m01: self.m00 * rhs.m01 + self.m01 * rhs.m11,
-            m10: self.m10 * rhs.m00 + self.m11 * rhs.m10,
-            m11: self.m10 * rhs.m01 + self.m11 * rhs.m11,
-        }
-    }
-
-    fn determinant(self) -> f64 {
-        self.m00 * self.m11 - self.m01 * self.m10
-    }
-
-    fn decompose(self) -> (Mirroring, f64, f64) {
-        let scale = self.m00.hypot(self.m10);
-        if scale == 0.0 {
-            return (Mirroring::None, 0.0, 0.0);
-        }
-        let mirroring = if self.determinant() < 0.0 {
-            Mirroring::X
-        } else {
-            Mirroring::None
-        };
-        let sx = if mirroring == Mirroring::X {
-            -scale
-        } else {
-            scale
-        };
-        let cos = self.m00 / sx;
-        let sin = self.m10 / sx;
-        (mirroring, sin.atan2(cos).to_degrees(), scale)
-    }
-}
-
-fn translate_point(point: Point, dx: f64, dy: f64) -> Point {
-    Point {
-        x: point.x + dx,
-        y: point.y + dy,
-    }
 }
 
 fn rotate_point(point: Point, degrees: f64) -> Point {
@@ -1576,25 +1437,51 @@ fn parse_aperture_code(value: &str) -> Result<i32> {
     Ok(code)
 }
 
-fn parse_set_aperture(word: &str) -> Option<i32> {
-    let code = word.strip_prefix('D')?.parse::<i32>().ok()?;
-    (code >= 10).then_some(code)
+/// Split a leading G-code, with or without its leading zero, off a word. A
+/// code is two digits at most: a comment's text may start with more.
+fn split_g_code(word: &str) -> Option<(u32, &str)> {
+    let rest = word.strip_prefix('G')?;
+    let digits = rest.bytes().take(2).take_while(u8::is_ascii_digit).count();
+    Some((rest[..digits].parse().ok()?, &rest[digits..]))
 }
 
-fn parse_operation(word: &str) -> Result<(CoordinateFields, OperationCode)> {
-    let (body, code) = if let Some(body) = word.strip_suffix("D01") {
-        (body, OperationCode::Plot)
-    } else if let Some(body) = word.strip_suffix("D02") {
-        (body, OperationCode::Move)
-    } else if let Some(body) = word.strip_suffix("D03") {
-        (body, OperationCode::Flash)
-    } else {
-        return Err(GerberError::InvalidStructure(format!(
-            "unsupported word command '{word}'"
-        )));
+/// Deprecated image-level commands. Older files carry them everywhere at
+/// values that change nothing; `Some(false)` is a value that would change
+/// the image, which this parser does not model.
+fn legacy_image_command(word: &str) -> Option<bool> {
+    let (code, value) = word.split_at_checked(2)?;
+    let both_axes = |identity: f64| {
+        value
+            .split(['A', 'B'])
+            .filter(|axis| !axis.is_empty())
+            .all(|axis| axis.parse() == Ok(identity))
     };
+    Some(match code {
+        // Layer and image names.
+        "LN" | "IN" => true,
+        "IP" => value == "POS",
+        "AS" => value == "AXBY",
+        "IR" => value.parse() == Ok(0.0),
+        "OF" | "MI" => both_axes(0.0),
+        "SF" => both_axes(1.0),
+        _ => return None,
+    })
+}
 
-    Ok((parse_coordinate_fields(body)?, code))
+/// The coordinate fields of an operation and its D-code, with or without
+/// leading zeros, if it carries one.
+fn parse_operation(word: &str) -> Result<(CoordinateFields, Option<i32>)> {
+    let (body, d_code) = match word.rsplit_once('D') {
+        Some((body, code)) => (
+            body,
+            Some(
+                code.parse()
+                    .map_err(|_| GerberError::InvalidNumber(word.to_string()))?,
+            ),
+        ),
+        None => (word, None),
+    };
+    Ok((parse_coordinate_fields(body)?, d_code))
 }
 
 fn parse_coordinate_fields(mut body: &str) -> Result<CoordinateFields> {
@@ -1633,33 +1520,26 @@ fn parse_coordinate_fields(mut body: &str) -> Result<CoordinateFields> {
 }
 
 fn parse_step_repeat(rest: &str) -> Result<StepRepeat> {
-    let Some(rest) = rest.strip_prefix('X') else {
-        return Err(GerberError::InvalidStructure(
-            "SR missing X repeats".to_string(),
-        ));
-    };
-    let (x_repeats, rest) = parse_i32_prefix(rest)?;
-    let Some(rest) = rest.strip_prefix('Y') else {
-        return Err(GerberError::InvalidStructure(
-            "SR missing Y repeats".to_string(),
-        ));
-    };
-    let (y_repeats, rest) = parse_i32_prefix(rest)?;
-    let Some(rest) = rest.strip_prefix('I') else {
-        return Err(GerberError::InvalidStructure(
-            "SR missing I step".to_string(),
-        ));
-    };
-    let (x_step, rest) = parse_f64_prefix(rest)?;
-    let Some(rest) = rest.strip_prefix('J') else {
-        return Err(GerberError::InvalidStructure(
-            "SR missing J step".to_string(),
-        ));
-    };
-    let (y_step, rest) = parse_f64_prefix(rest)?;
+    fn field<'a>(rest: &'a str, letter: char, what: &str) -> Result<&'a str> {
+        rest.strip_prefix(letter)
+            .ok_or_else(|| GerberError::InvalidStructure(format!("SR missing {letter} {what}")))
+    }
+    let (x_repeats, rest) = parse_i32_prefix(field(rest, 'X', "repeats")?)?;
+    let (y_repeats, rest) = parse_i32_prefix(field(rest, 'Y', "repeats")?)?;
+    let (x_step, rest) = parse_f64_prefix(field(rest, 'I', "step")?)?;
+    let (y_step, rest) = parse_f64_prefix(field(rest, 'J', "step")?)?;
     if !rest.is_empty() {
         return Err(GerberError::InvalidStructure(format!(
             "unexpected SR suffix '{rest}'"
+        )));
+    }
+    if x_repeats < 1
+        || y_repeats < 1
+        || i64::from(x_repeats) * i64::from(y_repeats) > STEP_REPEAT_MAX_OCCURRENCES
+        || !(x_step.is_finite() && y_step.is_finite())
+    {
+        return Err(GerberError::InvalidStructure(format!(
+            "SR repeats {x_repeats} x {y_repeats} must be positive, finite, and at most {STEP_REPEAT_MAX_OCCURRENCES} occurrences"
         )));
     }
     Ok(StepRepeat {
@@ -1718,14 +1598,5 @@ mod tests {
         assert_eq!(fields.y, Some(-200));
         assert_eq!(fields.i, Some(0));
         assert_eq!(fields.j, Some(30));
-    }
-
-    #[test]
-    fn parses_step_repeat() {
-        let sr = parse_step_repeat("X2Y3I4.5J0").unwrap();
-        assert_eq!(sr.x_repeats, 2);
-        assert_eq!(sr.y_repeats, 3);
-        assert_eq!(sr.x_step, 4.5);
-        assert_eq!(sr.y_step, 0.0);
     }
 }

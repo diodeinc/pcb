@@ -10,15 +10,17 @@ use anyhow::Result;
 
 use super::design::HoleClass;
 use super::pdk::{
-    CopperWeight, HoleKind, LayerPosition, Length, LengthCase, LengthLimit, Pdk, PlatedHoleKind,
-    Profile, ProfileStatus, Ratio, RatioCase, RatioLimit, RuleConditions, RuleMetadata,
-    SlotPlating,
+    Case, CopperWeight, HoleKind, LayerPosition, Length, LengthCase, LengthLimit, Pdk,
+    PlatedHoleKind, Profile, ProfileStatus, Ratio, RatioLimit, RuleConditions, RuleMetadata,
+    SelectingRule, SlotPlating, copper_weight_class,
 };
 use super::report::{Severity, ViewRecipe};
 
 #[derive(Debug, Clone)]
 pub(super) struct Rule {
     pub id: String,
+    /// The PDK rule this was lowered from. Its cases and tiers share it.
+    pub authored_id: String,
     pub title: String,
     pub severity: Severity,
     pub comparison: Comparison,
@@ -74,7 +76,10 @@ impl Conditions {
             LayerPosition::Outer => self.assumed_outer_copper_weight_oz,
             LayerPosition::Inner => self.assumed_inner_copper_weight_oz,
         });
-        actual_oz.is_some_and(|actual| (actual - required_oz).abs() <= 0.01)
+        // A stated thickness only approximates a nominal weight, so both
+        // sides are compared as the standard weight they belong to.
+        actual_oz
+            .is_some_and(|actual| copper_weight_class(actual) == copper_weight_class(required_oz))
     }
 }
 
@@ -187,183 +192,103 @@ pub(super) struct Semantics {
     pub pools: Pools,
 }
 
-/// The entity pools a rule reads. Extraction builds exactly the union over
-/// the configured rules, so a rule set pays only for what it measures.
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct Pools {
-    pub stackup: bool,
-    pub drilled: bool,
-    pub copper: bool,
-    pub conductor_ownership: bool,
-    pub copper_boundaries: bool,
-    pub conductor_boundaries: bool,
-    pub hole_lands: bool,
-    pub slot_lands: bool,
-    pub resolved_drill_spans: bool,
-    pub masks: bool,
-    pub scores: bool,
-    pub board_outlines: bool,
-    pub board_arrays: bool,
+/// The entity pools a rule reads, as a set. Extraction builds exactly the
+/// union over the configured rules, so a rule set pays only for what it
+/// measures.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct Pools(u16);
+
+impl Pools {
+    pub const NONE: Self = Self(0);
+    pub const STACKUP: Self = Self(1 << 0);
+    pub const HOLES: Self = Self(1 << 1);
+    pub const SLOTS: Self = Self(1 << 13);
+    pub const COPPER: Self = Self(1 << 2);
+    pub const CONDUCTOR_OWNERSHIP: Self = Self(1 << 3);
+    pub const COPPER_BOUNDARIES: Self = Self(1 << 4);
+    pub const CONDUCTOR_BOUNDARIES: Self = Self(1 << 5);
+    pub const HOLE_LANDS: Self = Self(1 << 6);
+    pub const SLOT_LANDS: Self = Self(1 << 7);
+    pub const RESOLVED_DRILL_SPANS: Self = Self(1 << 8);
+    pub const MASKS: Self = Self(1 << 9);
+    pub const SCORES: Self = Self(1 << 10);
+    pub const BOARD_OUTLINES: Self = Self(1 << 11);
+    pub const BOARD_ARRAYS: Self = Self(1 << 12);
+
+    pub fn intersects(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
 }
 
 impl std::ops::BitOr for Pools {
     type Output = Self;
 
     fn bitor(self, other: Self) -> Self {
-        Self {
-            stackup: self.stackup || other.stackup,
-            drilled: self.drilled || other.drilled,
-            copper: self.copper || other.copper,
-            conductor_ownership: self.conductor_ownership || other.conductor_ownership,
-            copper_boundaries: self.copper_boundaries || other.copper_boundaries,
-            conductor_boundaries: self.conductor_boundaries || other.conductor_boundaries,
-            hole_lands: self.hole_lands || other.hole_lands,
-            slot_lands: self.slot_lands || other.slot_lands,
-            resolved_drill_spans: self.resolved_drill_spans || other.resolved_drill_spans,
-            masks: self.masks || other.masks,
-            scores: self.scores || other.scores,
-            board_outlines: self.board_outlines || other.board_outlines,
-            board_arrays: self.board_arrays || other.board_arrays,
-        }
+        Self(self.0 | other.0)
     }
 }
 
-const DRILLED: Pools = Pools {
-    stackup: false,
-    drilled: true,
-    copper: false,
-    conductor_ownership: false,
-    copper_boundaries: false,
-    conductor_boundaries: false,
-    hole_lands: false,
-    slot_lands: false,
-    resolved_drill_spans: false,
-    masks: false,
-    scores: false,
-    board_outlines: false,
-    board_arrays: false,
-};
-const COPPER: Pools = Pools {
-    copper: true,
-    ..DRILLED
-};
-const COPPER_BOUNDARIES: Pools = Pools {
-    copper_boundaries: true,
-    ..COPPER
-};
-const NONE: Pools = Pools {
-    stackup: false,
-    drilled: false,
-    ..DRILLED
-};
-
 impl RuleKind {
     pub fn view_recipe(self) -> ViewRecipe {
-        let (kind, title, spatial, features): (_, _, _, &[_]) = match self {
-            Self::CopperLayerCount => (
-                "copper_layer_count",
-                "Copper layer count",
-                false,
-                &["stackup"],
-            ),
-            Self::HoleDiameter(_) => (
-                "hole_diameter",
-                "Hole diameter",
-                true,
-                &["drills", "board_outlines"],
-            ),
-            Self::HoleAspectRatio(_) => (
-                "hole_aspect_ratio",
-                "Plated-hole aspect ratio",
-                true,
-                &["drills", "board_outlines"],
-            ),
-            Self::SlotWidth(_) => (
-                "slot_width",
-                "Slot width",
-                true,
-                &["drills", "board_outlines"],
-            ),
-            Self::HolePairClearance(_, _) => (
-                "hole_clearance",
-                "Hole-to-hole clearance",
-                true,
-                &["drills", "board_outlines"],
-            ),
+        const DRILLS: &[&str] = &["drills", "board_outlines"];
+        const COPPER: &[&str] = &["copper", "board_outlines"];
+        const COPPER_AND_DRILLS: &[&str] = &["copper", "drills", "board_outlines"];
+        let (kind, title, features): (_, _, &[_]) = match self {
+            Self::CopperLayerCount => ("copper_layer_count", "Copper layer count", &["stackup"]),
+            Self::HoleDiameter(_) => ("hole_diameter", "Hole diameter", DRILLS),
+            Self::HoleAspectRatio(_) => ("hole_aspect_ratio", "Plated-hole aspect ratio", DRILLS),
+            Self::SlotWidth(_) => ("slot_width", "Slot width", DRILLS),
+            Self::HolePairClearance(_, _) => ("hole_clearance", "Hole-to-hole clearance", DRILLS),
             Self::HoleToBoardEdgeClearance(_) => (
                 "hole_to_board_edge_clearance",
                 "Hole-to-board-edge clearance",
-                true,
-                &["drills", "board_outlines"],
+                DRILLS,
             ),
             Self::SlotToBoardEdgeClearance(_) => (
                 "slot_to_board_edge_clearance",
                 "Slot-to-board-edge clearance",
-                true,
-                &["drills", "board_outlines"],
+                DRILLS,
             ),
             Self::PlatedSlotEnclosure => (
                 "plated_slot_enclosure",
                 "Plated-slot copper enclosure",
-                true,
-                &["copper", "drills", "board_outlines"],
+                COPPER_AND_DRILLS,
             ),
-            Self::AnnularRing(_) => (
-                "annular_ring",
-                "Annular ring",
-                true,
-                &["copper", "drills", "board_outlines"],
-            ),
+            Self::AnnularRing(_) => ("annular_ring", "Annular ring", COPPER_AND_DRILLS),
             Self::HoleToCopperClearance(_) => (
                 "hole_to_copper_clearance",
                 "Hole-to-copper clearance",
-                true,
-                &["copper", "drills", "board_outlines"],
+                COPPER_AND_DRILLS,
             ),
             Self::SlotToCopperClearance(_) => (
                 "slot_to_copper_clearance",
                 "Slot-to-copper clearance",
-                true,
-                &["copper", "drills", "board_outlines"],
+                COPPER_AND_DRILLS,
             ),
-            Self::LineworkToCopperClearance(Linework::BoardEdge) => (
-                "board_edge_clearance",
-                "Board-edge clearance",
-                true,
-                &["copper", "board_outlines"],
-            ),
+            Self::LineworkToCopperClearance(Linework::BoardEdge) => {
+                ("board_edge_clearance", "Board-edge clearance", COPPER)
+            }
             Self::LineworkToCopperClearance(Linework::VScore) => (
                 "vscore_clearance",
                 "V-score clearance",
-                true,
                 &["copper", "scores", "board_outlines"],
             ),
             Self::BoardArrayPairClearance => {
-                ("array_spacing", "Array spacing", true, &["array_outlines"])
+                ("array_spacing", "Array spacing", &["array_outlines"])
             }
-            Self::CopperFeatureWidth => (
-                "copper_width",
-                "Copper width",
-                true,
-                &["copper", "board_outlines"],
-            ),
-            Self::CopperClearance => (
-                "copper_clearance",
-                "Copper clearance",
-                true,
-                &["copper", "board_outlines"],
-            ),
+            Self::CopperFeatureWidth => ("copper_width", "Copper width", COPPER),
+            Self::CopperClearance => ("copper_clearance", "Copper clearance", COPPER),
             Self::SoldermaskWeb => (
                 "soldermask_web",
                 "Soldermask web",
-                true,
                 &["mask_openings", "board_outlines"],
             ),
         };
         ViewRecipe {
             kind,
             title,
-            spatial,
+            // Only the layer count is a fact of the stackup rather than a place.
+            spatial: self != Self::CopperLayerCount,
             features: features.to_vec(),
         }
     }
@@ -377,10 +302,7 @@ impl RuleKind {
                 finding_title: "Copper layer count is outside the supported range".to_owned(),
                 quantity_label: "copper layer count".to_owned(),
                 witness_roles: None,
-                pools: Pools {
-                    stackup: true,
-                    ..NONE
-                },
+                pools: Pools::STACKUP,
             },
             Self::HoleDiameter(class) => Semantics {
                 subject: "hole",
@@ -389,7 +311,7 @@ impl RuleKind {
                 finding_title: format!("{} hole is below minimum diameter", class.label()),
                 quantity_label: format!("{} hole diameter", class.label()),
                 witness_roles: Some(["hole_boundary", "hole_boundary"]),
-                pools: DRILLED,
+                pools: Pools::HOLES,
             },
             Self::HoleAspectRatio(class) => Semantics {
                 subject: "hole",
@@ -398,10 +320,7 @@ impl RuleKind {
                 finding_title: format!("{} hole exceeds maximum aspect ratio", class.label()),
                 quantity_label: format!("{} hole aspect ratio", class.label()),
                 witness_roles: None,
-                pools: Pools {
-                    stackup: true,
-                    ..DRILLED
-                },
+                pools: Pools::STACKUP | Pools::HOLES,
             },
             Self::SlotWidth(plating) => Semantics {
                 subject: "slot",
@@ -410,7 +329,7 @@ impl RuleKind {
                 finding_title: format!("{} slot is below minimum width", slot_label(plating)),
                 quantity_label: format!("{} routed slot width", slot_label(plating)),
                 witness_roles: Some(["first_slot_boundary", "second_slot_boundary"]),
-                pools: DRILLED,
+                pools: Pools::SLOTS,
             },
             Self::HolePairClearance(first, second) => Semantics {
                 subject: "hole",
@@ -427,7 +346,7 @@ impl RuleKind {
                     second.label()
                 ),
                 witness_roles: Some(["first_hole_boundary", "second_hole_boundary"]),
-                pools: DRILLED,
+                pools: Pools::HOLES,
             },
             Self::HoleToBoardEdgeClearance(class) => Semantics {
                 subject: "hole",
@@ -436,10 +355,7 @@ impl RuleKind {
                 finding_title: format!("{} hole is too close to the board edge", class.label()),
                 quantity_label: format!("{} hole-to-board-edge clearance", class.label()),
                 witness_roles: Some(["hole_boundary", "board_outline"]),
-                pools: Pools {
-                    board_outlines: true,
-                    ..DRILLED
-                },
+                pools: Pools::HOLES | Pools::BOARD_OUTLINES,
             },
             Self::SlotToBoardEdgeClearance(plating) => Semantics {
                 subject: "slot",
@@ -454,10 +370,7 @@ impl RuleKind {
                     slot_label(plating)
                 ),
                 witness_roles: Some(["slot_boundary", "board_outline"]),
-                pools: Pools {
-                    board_outlines: true,
-                    ..DRILLED
-                },
+                pools: Pools::SLOTS | Pools::BOARD_OUTLINES,
             },
             Self::PlatedSlotEnclosure => Semantics {
                 subject: "slot_layer_pair",
@@ -466,12 +379,12 @@ impl RuleKind {
                 finding_title: "Plated-slot copper enclosure is below minimum".to_owned(),
                 quantity_label: "plated-slot copper enclosure".to_owned(),
                 witness_roles: Some(["slot_boundary", "copper_boundary"]),
-                pools: Pools {
-                    stackup: true,
-                    slot_lands: true,
-                    resolved_drill_spans: true,
-                    ..COPPER_BOUNDARIES
-                },
+                pools: Pools::STACKUP
+                    | Pools::SLOTS
+                    | Pools::COPPER
+                    | Pools::COPPER_BOUNDARIES
+                    | Pools::SLOT_LANDS
+                    | Pools::RESOLVED_DRILL_SPANS,
             },
             Self::AnnularRing(class) => Semantics {
                 subject: "hole_layer_pair",
@@ -480,10 +393,7 @@ impl RuleKind {
                 finding_title: format!("{} annular ring is below minimum", class.label()),
                 quantity_label: format!("{} annular ring", class.label()),
                 witness_roles: Some(["hole_boundary", "copper_boundary"]),
-                pools: Pools {
-                    hole_lands: true,
-                    ..COPPER_BOUNDARIES
-                },
+                pools: Pools::HOLES | Pools::COPPER | Pools::COPPER_BOUNDARIES | Pools::HOLE_LANDS,
             },
             Self::HoleToCopperClearance(class) => Semantics {
                 subject: "hole_layer_pair",
@@ -498,12 +408,11 @@ impl RuleKind {
                     class.label()
                 ),
                 witness_roles: Some(["drilled_hole", "offending_copper"]),
-                pools: Pools {
-                    conductor_boundaries: true,
-                    hole_lands: true,
-                    resolved_drill_spans: true,
-                    ..COPPER
-                },
+                pools: Pools::HOLES
+                    | Pools::COPPER
+                    | Pools::CONDUCTOR_BOUNDARIES
+                    | Pools::HOLE_LANDS
+                    | Pools::RESOLVED_DRILL_SPANS,
             },
             Self::SlotToCopperClearance(plating) => Semantics {
                 subject: "slot_layer_pair",
@@ -518,13 +427,12 @@ impl RuleKind {
                     slot_label(plating)
                 ),
                 witness_roles: Some(["routed_slot", "offending_copper"]),
-                pools: Pools {
-                    stackup: true,
-                    conductor_boundaries: true,
-                    slot_lands: true,
-                    resolved_drill_spans: true,
-                    ..COPPER
-                },
+                pools: Pools::STACKUP
+                    | Pools::SLOTS
+                    | Pools::COPPER
+                    | Pools::CONDUCTOR_BOUNDARIES
+                    | Pools::SLOT_LANDS
+                    | Pools::RESOLVED_DRILL_SPANS,
             },
             Self::LineworkToCopperClearance(Linework::VScore) => Semantics {
                 subject: "score_layer_pair",
@@ -533,11 +441,7 @@ impl RuleKind {
                 finding_title: "V-score centerline is too close to copper".to_owned(),
                 quantity_label: "V-score centerline-to-copper clearance".to_owned(),
                 witness_roles: Some(["vscore_centerline", "copper_boundary"]),
-                pools: Pools {
-                    scores: true,
-                    drilled: false,
-                    ..COPPER_BOUNDARIES
-                },
+                pools: Pools::SCORES | Pools::COPPER | Pools::COPPER_BOUNDARIES,
             },
             Self::LineworkToCopperClearance(Linework::BoardEdge) => Semantics {
                 subject: "outline_layer_pair",
@@ -546,11 +450,7 @@ impl RuleKind {
                 finding_title: "Board edge is too close to copper".to_owned(),
                 quantity_label: "board-edge-to-copper clearance".to_owned(),
                 witness_roles: Some(["board_outline", "copper_boundary"]),
-                pools: Pools {
-                    board_outlines: true,
-                    drilled: false,
-                    ..COPPER_BOUNDARIES
-                },
+                pools: Pools::BOARD_OUTLINES | Pools::COPPER | Pools::COPPER_BOUNDARIES,
             },
             Self::BoardArrayPairClearance => Semantics {
                 subject: "array_pair",
@@ -559,10 +459,7 @@ impl RuleKind {
                 finding_title: "Board arrays are too close together".to_owned(),
                 quantity_label: "board-array outline spacing".to_owned(),
                 witness_roles: Some(["first_board_array", "second_board_array"]),
-                pools: Pools {
-                    board_arrays: true,
-                    ..NONE
-                },
+                pools: Pools::BOARD_ARRAYS,
             },
             Self::CopperFeatureWidth => Semantics {
                 subject: "copper_layer",
@@ -571,10 +468,7 @@ impl RuleKind {
                 finding_title: "Copper feature is below minimum width".to_owned(),
                 quantity_label: "copper feature width".to_owned(),
                 witness_roles: Some(["first_boundary", "second_boundary"]),
-                pools: Pools {
-                    drilled: false,
-                    ..COPPER
-                },
+                pools: Pools::COPPER,
             },
             Self::CopperClearance => Semantics {
                 subject: "conductor_pair",
@@ -583,11 +477,7 @@ impl RuleKind {
                 finding_title: "Copper spacing is below minimum".to_owned(),
                 quantity_label: "copper-to-copper clearance".to_owned(),
                 witness_roles: Some(["first_conductor", "second_conductor"]),
-                pools: Pools {
-                    drilled: false,
-                    conductor_ownership: true,
-                    ..COPPER
-                },
+                pools: Pools::COPPER | Pools::CONDUCTOR_OWNERSHIP,
             },
             Self::SoldermaskWeb => Semantics {
                 subject: "soldermask_layer",
@@ -596,24 +486,37 @@ impl RuleKind {
                 finding_title: "Soldermask web is below minimum".to_owned(),
                 quantity_label: "soldermask web width".to_owned(),
                 witness_roles: Some(["first_boundary", "second_boundary"]),
-                pools: Pools {
-                    masks: true,
-                    ..NONE
-                },
+                pools: Pools::MASKS,
             },
         }
     }
 }
 
-pub(super) fn pools(rules: &[Rule]) -> Pools {
+impl Rule {
+    /// Every pool this rule depends on. Drill-span checks must use the
+    /// declared physical order whenever the file carries a stackup, even
+    /// though they measure no thickness; so must stackup-conditioned cases.
+    pub fn pools(&self, has_stackup: bool) -> Pools {
+        let spans = matches!(
+            self.kind,
+            RuleKind::HoleToCopperClearance(_)
+                | RuleKind::AnnularRing(_)
+                | RuleKind::HolePairClearance(_, _)
+        );
+        let pools = self.kind.semantics().pools;
+        if self.conditions.requires_stackup() || (spans && has_stackup) {
+            pools | Pools::STACKUP
+        } else {
+            pools
+        }
+    }
+}
+
+pub(super) fn pools(rules: &[Rule], has_stackup: bool) -> Pools {
     rules
         .iter()
-        .map(|rule| {
-            let mut pools = rule.kind.semantics().pools;
-            pools.stackup |= rule.conditions.requires_stackup();
-            pools
-        })
-        .fold(Pools::default(), |union, pools| union | pools)
+        .map(|rule| rule.pools(has_stackup))
+        .fold(Pools::NONE, |union, pools| union | pools)
 }
 
 /// Lower the selected profile's support envelope and typed rules. Rules with
@@ -633,6 +536,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         if let Some(limit) = range.minimum() {
             rules.push(Rule {
                 id: "profile.support.copper_layers.minimum".to_owned(),
+                authored_id: "profile.support.copper_layers".to_owned(),
                 title: "Profile minimum copper layer count".to_owned(),
                 severity: Severity::Error,
                 comparison: Comparison::Minimum,
@@ -644,6 +548,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         if let Some(limit) = range.maximum() {
             rules.push(Rule {
                 id: "profile.support.copper_layers.maximum".to_owned(),
+                authored_id: "profile.support.copper_layers".to_owned(),
                 title: "Profile maximum copper layer count".to_owned(),
                 severity: Severity::Error,
                 comparison: Comparison::Maximum,
@@ -654,127 +559,125 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         }
     }
 
-    for rule in &pdk.rules.drilling.hole_diameter {
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
-            format!(
-                "Minimum {} hole diameter",
-                hole_class(rule.select.hole).label()
-            ),
-            RuleKind::HoleDiameter(hole_class(rule.select.hole)),
-        ));
+    // Every selecting family lowers alike; what a rule selects names its
+    // kind and its title.
+    fn selecting<Select>(
+        family: &[SelectingRule<Select>],
+        selected: (&str, &Profile),
+        describe: impl Fn(&Select) -> (String, RuleKind),
+    ) -> Vec<Rule> {
+        let lower = |rule: &SelectingRule<Select>| {
+            let (title, kind) = describe(&rule.select);
+            let (limit, cases) = (rule.limit.as_ref(), &rule.cases);
+            lower_length_rule(&rule.metadata, limit, cases, selected, title, kind)
+        };
+        family.iter().flat_map(lower).collect()
     }
-    for rule in &pdk.rules.drilling.hole_aspect_ratio {
+    let (drilling, copper, selected) = (
+        &pdk.rules.drilling,
+        &pdk.rules.copper,
+        (profile_name, profile),
+    );
+    rules.extend(selecting(&drilling.hole_diameter, selected, |select| {
+        let class = hole_class(select.hole);
+        (
+            format!("Minimum {} hole diameter", class.label()),
+            RuleKind::HoleDiameter(class),
+        )
+    }));
+    for rule in &drilling.hole_aspect_ratio {
         let class = plated_hole_class(rule.select.hole);
-        rules.extend(lower_ratio_rule(
-            &rule.metadata,
+        let (metadata, cases) = (&rule.metadata, &rule.cases);
+        rules.extend(lower_rule(
+            metadata,
             rule.limit.as_ref(),
-            &rule.cases,
+            cases,
             profile_name,
-            profile,
-            format!("Maximum {} hole aspect ratio", class.label()),
-            RuleKind::HoleAspectRatio(class),
+            |id, limit: &RatioLimit, when| {
+                vec![Rule {
+                    id: id.to_owned(),
+                    authored_id: metadata.id.clone(),
+                    title: format!("Maximum {} hole aspect ratio", class.label()),
+                    severity: Severity::Error,
+                    comparison: Comparison::Maximum,
+                    limit: LimitValue::Ratio(limit.maximum.clone()),
+                    kind: RuleKind::HoleAspectRatio(class),
+                    conditions: conditions(when, profile),
+                }]
+            },
         ));
     }
-    for rule in &pdk.rules.drilling.slot_width {
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
-            format!(
-                "Minimum {} routed slot width",
-                slot_label(rule.select.plating)
-            ),
-            RuleKind::SlotWidth(rule.select.plating),
-        ));
-    }
-    for rule in &pdk.rules.drilling.hole_to_hole_clearance {
-        let first = hole_class(rule.select.first_hole);
-        let second = hole_class(rule.select.second_hole);
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
-            format!(
-                "Minimum {}-to-{} hole clearance",
-                first.label(),
-                second.label()
-            ),
-            RuleKind::HolePairClearance(first, second),
-        ));
-    }
-    for rule in &pdk.rules.drilling.hole_to_board_edge_clearance {
-        let class = hole_class(rule.select.hole);
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
-            format!("Minimum {} hole-to-board-edge clearance", class.label()),
-            RuleKind::HoleToBoardEdgeClearance(class),
-        ));
-    }
-    for rule in &pdk.rules.drilling.slot_to_board_edge_clearance {
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
-            format!(
-                "Minimum {} routed-slot-to-board-edge clearance",
-                slot_label(rule.select.plating)
-            ),
-            RuleKind::SlotToBoardEdgeClearance(rule.select.plating),
-        ));
-    }
-    for rule in &pdk.rules.copper.annular_ring {
-        let class = plated_hole_class(rule.select.hole);
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
+    rules.extend(selecting(&drilling.slot_width, selected, |select| {
+        (
+            format!("Minimum {} routed slot width", slot_label(select.plating)),
+            RuleKind::SlotWidth(select.plating),
+        )
+    }));
+    rules.extend(selecting(
+        &drilling.hole_to_hole_clearance,
+        selected,
+        |select| {
+            let (first, second) = (
+                hole_class(select.first_hole),
+                hole_class(select.second_hole),
+            );
+            (
+                format!(
+                    "Minimum {}-to-{} hole clearance",
+                    first.label(),
+                    second.label()
+                ),
+                RuleKind::HolePairClearance(first, second),
+            )
+        },
+    ));
+    rules.extend(selecting(
+        &drilling.hole_to_board_edge_clearance,
+        selected,
+        |select| {
+            let class = hole_class(select.hole);
+            (
+                format!("Minimum {} hole-to-board-edge clearance", class.label()),
+                RuleKind::HoleToBoardEdgeClearance(class),
+            )
+        },
+    ));
+    rules.extend(selecting(
+        &drilling.slot_to_board_edge_clearance,
+        selected,
+        |select| {
+            (
+                format!(
+                    "Minimum {} routed-slot-to-board-edge clearance",
+                    slot_label(select.plating)
+                ),
+                RuleKind::SlotToBoardEdgeClearance(select.plating),
+            )
+        },
+    ));
+    rules.extend(selecting(&copper.annular_ring, selected, |select| {
+        let class = plated_hole_class(select.hole);
+        (
             format!("Minimum {} annular ring", class.label()),
             RuleKind::AnnularRing(class),
-        ));
-    }
-    for rule in &pdk.rules.copper.hole_clearance {
-        let class = hole_class(rule.select.hole);
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
+        )
+    }));
+    rules.extend(selecting(&copper.hole_clearance, selected, |select| {
+        let class = hole_class(select.hole);
+        (
             format!("Minimum {} hole-to-copper clearance", class.label()),
             RuleKind::HoleToCopperClearance(class),
-        ));
-    }
-    for rule in &pdk.rules.copper.slot_clearance {
-        rules.extend(lower_length_rule(
-            &rule.metadata,
-            rule.limit.as_ref(),
-            &rule.cases,
-            profile_name,
-            profile,
+        )
+    }));
+    rules.extend(selecting(&copper.slot_clearance, selected, |select| {
+        (
             format!(
                 "Minimum {} slot-to-copper clearance",
-                slot_label(rule.select.plating)
+                slot_label(select.plating)
             ),
-            RuleKind::SlotToCopperClearance(rule.select.plating),
-        ));
-    }
+            RuleKind::SlotToCopperClearance(select.plating),
+        )
+    }));
     for (ruleset, title, kind) in [
         (
             &pdk.rules.copper.plated_slot_enclosure,
@@ -813,13 +716,13 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         ),
     ] {
         for rule in ruleset {
+            let (limit, cases, title) = (rule.limit.as_ref(), &rule.cases, title.to_owned());
             rules.extend(lower_length_rule(
                 &rule.metadata,
-                rule.limit.as_ref(),
-                &rule.cases,
-                profile_name,
-                profile,
-                title.to_owned(),
+                limit,
+                cases,
+                selected,
+                title,
                 kind,
             ));
         }
@@ -827,45 +730,45 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
     Ok(rules)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn lower_length_rule(
+/// The rules of one authored rule in a profile it applies to: those of its
+/// one limit, or of each named case under `<id>.<case>`.
+fn lower_rule<Limit>(
     metadata: &RuleMetadata,
-    limit: Option<&LengthLimit>,
-    cases: &[LengthCase],
+    limit: Option<&Limit>,
+    cases: &[Case<Limit>],
     profile_name: &str,
-    profile: &Profile,
-    title: String,
-    kind: RuleKind,
+    lower: impl Fn(&str, &Limit, &RuleConditions) -> Vec<Rule>,
 ) -> Vec<Rule> {
     if !metadata.applies_to(profile_name) {
         return Vec::new();
     }
     match limit {
-        Some(limit) => lower_limit(
-            &metadata.id,
-            limit,
-            &RuleConditions::default(),
-            profile,
-            title,
-            kind,
-        ),
+        Some(limit) => lower(&metadata.id, limit, &RuleConditions::default()),
         None => cases
             .iter()
             .flat_map(|case| {
-                lower_limit(
-                    &format!("{}.{}", metadata.id, case.id),
-                    &case.limit,
-                    &case.when,
-                    profile,
-                    title.clone(),
-                    kind,
-                )
+                let id = format!("{}.{}", metadata.id, case.id);
+                lower(&id, &case.limit, &case.when)
             })
             .collect(),
     }
 }
 
+fn lower_length_rule(
+    metadata: &RuleMetadata,
+    limit: Option<&LengthLimit>,
+    cases: &[LengthCase],
+    (profile_name, profile): (&str, &Profile),
+    title: String,
+    kind: RuleKind,
+) -> Vec<Rule> {
+    lower_rule(metadata, limit, cases, profile_name, |id, limit, when| {
+        lower_limit(&metadata.id, id, limit, when, profile, title.clone(), kind)
+    })
+}
+
 fn lower_limit(
+    authored_id: &str,
     id: &str,
     limit: &LengthLimit,
     when: &RuleConditions,
@@ -876,6 +779,7 @@ fn lower_limit(
     let conditions = conditions(when, profile);
     let required = limit.minimum.as_ref().map(|minimum| Rule {
         id: id.to_owned(),
+        authored_id: authored_id.to_owned(),
         title: title.clone(),
         severity: Severity::Error,
         comparison: Comparison::Minimum,
@@ -887,6 +791,7 @@ fn lower_limit(
         .into_iter()
         .chain(limit.preferred.as_ref().map(|preferred| Rule {
             id: format!("{id}.preferred"),
+            authored_id: authored_id.to_owned(),
             title: format!("{title} (preferred)"),
             severity: Severity::Warning,
             comparison: Comparison::Minimum,
@@ -895,63 +800,6 @@ fn lower_limit(
             conditions,
         }))
         .collect()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn lower_ratio_rule(
-    metadata: &RuleMetadata,
-    limit: Option<&RatioLimit>,
-    cases: &[RatioCase],
-    profile_name: &str,
-    profile: &Profile,
-    title: String,
-    kind: RuleKind,
-) -> Vec<Rule> {
-    if !metadata.applies_to(profile_name) {
-        return Vec::new();
-    }
-    match limit {
-        Some(limit) => vec![lower_ratio_limit(
-            &metadata.id,
-            limit,
-            &RuleConditions::default(),
-            profile,
-            title,
-            kind,
-        )],
-        None => cases
-            .iter()
-            .map(|case| {
-                lower_ratio_limit(
-                    &format!("{}.{}", metadata.id, case.id),
-                    &case.limit,
-                    &case.when,
-                    profile,
-                    title.clone(),
-                    kind,
-                )
-            })
-            .collect(),
-    }
-}
-
-fn lower_ratio_limit(
-    id: &str,
-    limit: &RatioLimit,
-    when: &RuleConditions,
-    profile: &Profile,
-    title: String,
-    kind: RuleKind,
-) -> Rule {
-    Rule {
-        id: id.to_owned(),
-        title,
-        severity: Severity::Error,
-        comparison: Comparison::Maximum,
-        limit: LimitValue::Ratio(limit.maximum.clone()),
-        kind,
-        conditions: conditions(when, profile),
-    }
 }
 
 fn conditions(rule: &RuleConditions, profile: &Profile) -> Conditions {
@@ -993,7 +841,7 @@ fn plated_hole_class(kind: PlatedHoleKind) -> HoleClass {
     }
 }
 
-fn slot_label(plating: SlotPlating) -> &'static str {
+pub(super) fn slot_label(plating: SlotPlating) -> &'static str {
     match plating {
         SlotPlating::Plated => "plated",
         SlotPlating::Nonplated => "non-plated",
@@ -1057,6 +905,43 @@ limit = { minimum = "0.30 mm" }
     }
 
     #[test]
+    fn a_stated_thickness_matches_the_standard_weight_it_approximates() {
+        use super::super::design::CopperLayer;
+        use super::super::report::LayerRef;
+        let layer = |thickness_mm: f64| CopperLayer {
+            layer: LayerRef {
+                name: "L".to_owned(),
+                function: "SIGNAL".to_owned(),
+                side: Some("top"),
+            },
+            position: LayerPosition::Outer,
+            copper_weight_oz: Some(thickness_mm / 0.0348),
+            image: pcb_ir::geom::ContourSet::empty(pcb_ir::geom::Resolution::default()),
+            conductors: Vec::new(),
+            piece_pairs: 0,
+            lands: Vec::new(),
+        };
+        let weighs = |ounces: f64, thickness_mm: f64| {
+            Conditions {
+                copper_weight_oz: Some(ounces),
+                ..Conditions::default()
+            }
+            .applies_to_layer(&layer(thickness_mm))
+        };
+        // 1.4 mil foil, 0.07 mm, and 0.5 oz as finished: none is within
+        // 0.01 oz of the nominal weight its stackup means.
+        for (ounces, thickness_mm) in [(1.0, 0.03556), (2.0, 0.07), (0.5, 0.0152)] {
+            assert!(
+                weighs(ounces, thickness_mm),
+                "{thickness_mm} mm is {ounces} oz"
+            );
+        }
+        assert!(weighs(1.0, 0.030), "1 oz as finished");
+        assert!(!weighs(1.0, 0.0152) && !weighs(0.5, 0.035) && !weighs(2.0, 0.035));
+        assert!(!weighs(1.0, 0.07) && !weighs(3.0, 0.07) && weighs(3.0, 0.105));
+    }
+
+    #[test]
     fn lowers_preferred_only_limit_to_warning() {
         let pdk = Pdk::parse(
             r#"schema_version = 2
@@ -1082,73 +967,5 @@ limit = { preferred = "4 mil" }
         assert_eq!(lowered[0].id, "soldermask.minimum_web.preferred");
         assert_eq!(lowered[0].severity, Severity::Warning);
         assert_eq!(lowered[0].limit.length().millimeters(), 0.1016);
-    }
-
-    const EDGE_CLEARANCE_PDK: &str = r#"
-schema_version = 2
-default_profile = "primary"
-
-[pdk]
-id = "edge-clearance"
-name = "Edge clearance"
-revision = "1"
-
-[profiles.primary]
-name = "Primary"
-technologies = ["rigid"]
-
-[profiles.secondary]
-name = "Secondary"
-technologies = ["rigid"]
-
-[[rules.drilling.hole_to_board_edge_clearance]]
-id = "via-edge"
-profiles = ["primary"]
-select = { hole = "via" }
-cases = [
-  { id = "4-to-12-layer", when = { copper_layers = { minimum = 4, maximum = 12 } }, limit = { minimum = "0.3 mm", preferred = "0.4 mm" } },
-]
-
-[[rules.drilling.slot_to_board_edge_clearance]]
-id = "plated-slot-edge"
-profiles = ["primary"]
-select = { plating = "plated" }
-limit = { minimum = "0.5 mm" }
-"#;
-
-    #[test]
-    fn lowers_typed_board_edge_clearance_rules_and_tiers() {
-        let pdk = Pdk::parse(EDGE_CLEARANCE_PDK).unwrap();
-        let rules = lower(&pdk, Some("primary")).unwrap();
-        assert_eq!(rules.len(), 3);
-
-        let required = &rules[0];
-        assert_eq!(required.id, "via-edge.4-to-12-layer");
-        assert!(matches!(
-            required.kind,
-            RuleKind::HoleToBoardEdgeClearance(HoleClass::Via)
-        ));
-        assert_eq!(required.severity, Severity::Error);
-        assert_eq!(required.limit.length().millimeters(), 0.3);
-        assert_eq!(required.conditions.minimum_copper_layers, Some(4));
-        assert_eq!(required.conditions.maximum_copper_layers, Some(12));
-
-        let preferred = &rules[1];
-        assert_eq!(preferred.id, "via-edge.4-to-12-layer.preferred");
-        assert!(matches!(
-            preferred.kind,
-            RuleKind::HoleToBoardEdgeClearance(HoleClass::Via)
-        ));
-        assert_eq!(preferred.severity, Severity::Warning);
-        assert_eq!(preferred.limit.length().millimeters(), 0.4);
-
-        assert_eq!(rules[2].id, "plated-slot-edge");
-        assert!(matches!(
-            rules[2].kind,
-            RuleKind::SlotToBoardEdgeClearance(SlotPlating::Plated)
-        ));
-        assert_eq!(rules[2].limit.length().millimeters(), 0.5);
-
-        assert!(lower(&pdk, Some("secondary")).unwrap().is_empty());
     }
 }

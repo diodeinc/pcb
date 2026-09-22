@@ -1,4 +1,4 @@
-//! Report estimated panel bow and twist.
+//! Report estimated panel bow.
 
 #[cfg(feature = "cli")]
 use pcb_ir::geom::Resolution;
@@ -19,8 +19,7 @@ const SURFACE_MOUNT_LIMIT_PERCENT: f64 = 0.75;
 
 #[cfg(feature = "cli")]
 pub fn execute(file: &Path, report: Option<&Path>, resolution: Resolution) -> Result<()> {
-    let xml = std::fs::read_to_string(file)
-        .with_context(|| format!("failed to read {}", file.display()))?;
+    let xml = crate::utils::file::load_ipc_file(file)?;
     let ipc = Ipc2581::parse(&xml).context("failed to parse IPC-2581 file")?;
     let analysis = warp::analyze(&ipc, resolution)?;
 
@@ -62,13 +61,19 @@ pub fn summary_lines(analysis: &WarpAnalysis) -> Vec<String> {
          for surface mount",
         warp.bow_mm, warp.bow_percent,
     ));
-    lines.push(format!(
-        "estimated twist {:.3} mm ({:.3} %)",
-        warp.twist_mm, warp.twist_percent,
-    ));
+    lines.push(
+        "no twist estimated: copper cannot twist a free panel at first order, weave skew and \
+         unbalanced layup can"
+            .to_string(),
+    );
     lines.push(format!(
         "modelled from the stackup and copper distribution at a {:.0} K drop, not measured",
         analysis.temperature_drop_k,
     ));
+    lines.push(
+        "elastic copper-laminate mismatch only: cure shrinkage is not modelled, so compare \
+         panelizations rather than reading the figure against the limit"
+            .to_string(),
+    );
     lines
 }

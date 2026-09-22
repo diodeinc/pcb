@@ -9,7 +9,7 @@
 pub mod compare;
 pub mod legalize;
 
-use crate::geom::{AccuracyError, GeometryAccuracy, Resolution};
+use crate::geom::{AccuracyError, Resolution};
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -18,8 +18,7 @@ use crate::dialects::{LayerRole, Side};
 use crate::geom::path::ContourBuf;
 use crate::geom::region::{self};
 use crate::geom::{
-    Affine2, BBox, Diagnostic, FillRule, Paint, PathArena, Point, Polarity, Span, StrokeStyle,
-    shapes,
+    Affine2, BBox, Diagnostic, FillRule, Paint, PathArena, Point, Polarity, Span, shapes,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -157,6 +156,13 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
                 diagnostics.error(message);
             }
         }
+        for (index, aperture) in self.apertures.iter().enumerate() {
+            if !aperture.hole_fits() {
+                diagnostics.error(format!(
+                    "artwork aperture {index} has a hole reaching outside its shape"
+                ));
+            }
+        }
         self.arena.validate_into("artwork", &mut diagnostics);
         diagnostics.into_result()
     }
@@ -245,11 +251,18 @@ impl<Meta: Default> Object<Meta> {
     }
 }
 
+/// Where an object stands in its layer's paint.
+///
+/// Paint is sequential: a clear removes whatever was painted before it, in
+/// source order, whatever the stages involved. `Base` and `Overlay` only
+/// say what kind of material an object is, for targets that group their
+/// output by it; `FinalCutout` alone changes the image, by painting after
+/// everything else.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PaintStage {
-    /// Base images such as pours that local clear objects may subtract.
+    /// Base images such as pours.
     Base,
-    /// Dark objects that must survive base-stage clears: pads, vias, traces, fiducials.
+    /// Pads, vias, traces, fiducials.
     #[default]
     Overlay,
     /// Deliberate final removals applied after all material has been painted.
@@ -291,6 +304,9 @@ impl GridRepeat {
 
     /// Bounds of one occurrence's `base` bounds repeated across the grid.
     pub fn bbox(self, base: BBox) -> BBox {
+        if self.x_count == 0 || self.y_count == 0 {
+            return BBox::empty();
+        }
         let x = self.x_count.saturating_sub(1);
         let y = self.y_count.saturating_sub(1);
         [(0, 0), (x, 0), (0, y), (x, y)]
@@ -320,20 +336,13 @@ pub enum Geometry {
     },
 }
 
-impl Geometry {
-    pub fn path(self) -> Option<u32> {
-        match self {
-            Self::Flash { .. } | Self::Instance { .. } | Self::GridInstance { .. } => None,
-            Self::Stroke { path } | Self::Region { path } => Some(path),
-        }
-    }
-}
-
 /// A standard aperture: a primitive shape with an optional round hole.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Aperture {
     pub shape: ApertureShape,
     /// Diameter of the round hole through the aperture; `0.0` means solid.
+    /// The hole lies inside the shape ([`Aperture::hole_fits`]): the image is
+    /// the shape less the hole, which even-odd fill gives only then.
     pub hole_diameter: f64,
 }
 
@@ -412,6 +421,24 @@ impl Aperture {
         contours
     }
 
+    /// Whether the hole lies inside the shape, so that filling the two
+    /// even-odd images the shape less the hole. A hole reaching outside
+    /// would paint its overhang, so such an image is not an aperture with a
+    /// hole; its source composes it into a contour instead.
+    pub fn hole_fits(&self) -> bool {
+        let inscribed = match &self.shape {
+            ApertureShape::Circle { diameter } => *diameter,
+            ApertureShape::Rectangle { width, height }
+            | ApertureShape::Obround { width, height }
+            | ApertureShape::RoundRect { width, height, .. } => width.min(*height),
+            ApertureShape::Polygon {
+                diameter, vertices, ..
+            } => diameter * (std::f64::consts::PI / f64::from(*vertices)).cos(),
+            ApertureShape::Contour { .. } => return self.hole_diameter <= 0.0,
+        };
+        self.hole_diameter <= inscribed
+    }
+
     pub fn fill_rule(&self) -> FillRule {
         match &self.shape {
             ApertureShape::Contour { fill_rule, .. } => *fill_rule,
@@ -422,7 +449,7 @@ impl Aperture {
 
     pub fn bbox(&self) -> BBox {
         match &self.shape {
-            ApertureShape::Circle { diameter } => {
+            ApertureShape::Circle { diameter } | ApertureShape::Polygon { diameter, .. } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
             ApertureShape::Rectangle { width, height }
@@ -431,9 +458,6 @@ impl Aperture {
                 Point::new(-width / 2.0, -height / 2.0),
                 Point::new(width / 2.0, height / 2.0),
             ),
-            ApertureShape::Polygon { diameter, .. } => {
-                BBox::from_point(Point::ZERO).expand(diameter / 2.0)
-            }
             ApertureShape::Contour { outline, .. } => outline.bbox,
         }
     }
@@ -468,214 +492,325 @@ pub fn normalize_bounds<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, Obj
     }
 }
 
-/// Rewrite flashes and strokes into filled region objects.
+/// A layer's objects in paint order, each with the polarity it images with.
 ///
-/// Flashes and instances are exact; stroke outlines are the one
-/// approximation, prepared within `accuracy`.
-pub fn expand_native_geometry_to_regions<LayerMeta: Clone, ObjectMeta: Clone>(
-    doc: Document<LayerMeta, ObjectMeta>,
-    accuracy: GeometryAccuracy,
-) -> Result<Document<LayerMeta, ObjectMeta>, AccuracyError> {
-    let mut doc = if doc.blocks.is_empty() {
-        doc
-    } else {
-        expand_instances(&doc)
-    };
-    expand_strokes_to_regions(&mut doc, accuracy)?;
-    expand_flashes_to_regions(&mut doc);
-    normalize_bounds(&mut doc);
-    Ok(doc)
-}
-
-/// Compose ordered dark/clear objects into final positive per-layer images.
-///
-/// Objects paint stage by stage — [`PaintStage::Base`], then
-/// [`PaintStage::Overlay`], then [`PaintStage::FinalCutout`] — preserving
-/// paint order within each stage, so overlay objects survive base-stage
-/// clears and final cutouts remove painted material. A non-copper layer
-/// containing only final-cutout objects, such as a drill or rout document,
-/// images the removals themselves; cutout-only copper layers remain empty.
-/// Order a layer's objects for painting.
-///
-/// Dark paint commutes with dark paint and clear with clear, but not across
-/// a polarity change, so stage ordering may only permute objects within each
-/// maximal same-polarity run. Final cutouts are terminal by definition and
-/// paint after everything.
-pub fn paint_ordered<ObjectMeta>(objects: &[Object<ObjectMeta>]) -> Vec<&Object<ObjectMeta>> {
-    let (cutouts, mut painted): (Vec<_>, Vec<_>) = objects
+/// Objects paint in source order, then the final cutouts. A final cutout
+/// removes material wherever the layer has any, and on every copper layer;
+/// on a layer of nothing but cutouts, such as a drill or rout document, the
+/// cutouts are the image and keep their own polarity.
+pub fn paint_ordered<'a, LayerMeta, ObjectMeta>(
+    layer: &Layer<LayerMeta>,
+    objects: &'a [Object<ObjectMeta>],
+) -> Vec<(Polarity, &'a Object<ObjectMeta>)> {
+    let (cutouts, painted): (Vec<_>, Vec<_>) = objects
         .iter()
         .partition(|object| object.order.stage == PaintStage::FinalCutout);
-    let mut start = 0;
-    while start < painted.len() {
-        let polarity = painted[start].polarity;
-        let mut end = start + 1;
-        while end < painted.len() && painted[end].polarity == polarity {
-            end += 1;
-        }
-        painted[start..end].sort_by_key(|object| object.order.stage);
-        start = end;
-    }
-    painted.extend(cutouts);
+    let removes = !painted.is_empty() || layer.role == LayerRole::Copper;
     painted
-}
-
-/// One fully composed layer image together with the surviving material
-/// attributed to each caller-defined owner. Owner images may overlap when
-/// different source objects claim the same physical copper; their union is
-/// always exactly `image`.
-#[derive(Debug)]
-pub struct AttributedImage<Owner> {
-    pub image: region::ContourSet,
-    pub owners: Vec<(Owner, region::ContourSet)>,
-}
-
-/// Ordered artwork composition with caller-defined ownership.
-///
-/// Dark objects add material to their owner. Clear objects and final cutouts
-/// subtract from every owner painted before them. This is the same canonical
-/// paint fold used by [`compose_to_mask`], with labels retained instead of
-/// discarded after unioning.
-pub fn compose_attributed<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq + Hash>(
-    doc: &Document<LayerMeta, ObjectMeta>,
-    owner: impl Fn(&ObjectMeta) -> Owner,
-    resolution: Resolution,
-) -> Result<(Vec<AttributedImage<Owner>>, Vec<Diagnostic>), AccuracyError> {
-    compose_selected_attributed(doc, |meta| Some(owner(meta)), resolution)
-}
-
-/// Ordered artwork composition for only the owners selected by the caller,
-/// with each layer's image as the union of its owners.
-///
-/// Unselected dark objects cannot change a selected owner's image and are
-/// skipped. Clear objects and final cutouts still subtract from selected
-/// owners in source paint order.
-pub(crate) fn compose_selected_attributed<
-    LayerMeta: Clone,
-    ObjectMeta: Clone,
-    Owner: Clone + Eq + Hash,
->(
-    doc: &Document<LayerMeta, ObjectMeta>,
-    owner: impl Fn(&ObjectMeta) -> Option<Owner>,
-    resolution: Resolution,
-) -> Result<(Vec<AttributedImage<Owner>>, Vec<Diagnostic>), AccuracyError> {
-    let resolution = resolution.strict();
-    let (layers, diagnostics) = compose_owner_regions(doc, owner, resolution)?;
-    let layers = layers
         .into_iter()
-        .map(|owners| {
-            let image = region::ContourSet::union_all(
-                resolution,
-                owners.iter().map(|(_, image)| image.clone()),
-            )?;
-            Ok(AttributedImage { image, owners })
-        })
-        .collect::<Result<_, AccuracyError>>()?;
-    Ok((layers, diagnostics))
+        .map(|object| (object.polarity, object))
+        .chain(cutouts.into_iter().map(|object| {
+            let polarity = if removes {
+                Polarity::Clear
+            } else {
+                object.polarity
+            };
+            (polarity, object)
+        }))
+        .collect()
 }
 
 /// One layer's owner images in first-paint order; every image is a
 /// regularized ring set.
 pub type OwnerImages<Owner> = Vec<(Owner, region::ContourSet)>;
 
-pub type OwnerRegionLayers<Owner> = Vec<Vec<(Owner, region::ContourSet)>>;
+pub type OwnerRegionLayers<Owner> = Vec<OwnerImages<Owner>>;
+
+/// A flash or path as one placement images it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Primitive {
+    Flash(u32),
+    Path(u32),
+}
+
+/// One primitive of a layer's paint, with every enclosing block instance
+/// resolved into its polarity and placement.
+pub(crate) struct Placed<'a, ObjectMeta> {
+    pub(crate) polarity: Polarity,
+    pub(crate) primitive: Primitive,
+    pub(crate) transform: Affine2,
+    /// Whether another placement can image the same primitive: apertures and
+    /// block content are shared, a layer's own paths are not.
+    shared: bool,
+    meta: &'a ObjectMeta,
+}
+
+/// A layer's paint as the sequence of primitives that images it: what the
+/// region fold composes and what a raster paints, in the same order.
+pub(crate) fn placed_layer<'a, LayerMeta, ObjectMeta>(
+    doc: &'a Document<LayerMeta, ObjectMeta>,
+    layer: &Layer<LayerMeta>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<Placed<'a, ObjectMeta>> {
+    let mut placed = Vec::new();
+    for (polarity, object) in paint_ordered(layer, layer.objects.slice(&doc.objects)) {
+        // A final cutout images clear whatever its own polarity says.
+        let context = polarity.compose(object.polarity);
+        place_primitives(
+            doc,
+            object,
+            (context, Affine2::IDENTITY, doc.blocks.len()),
+            &mut placed,
+            diagnostics,
+        );
+    }
+    placed
+}
+
+/// Walk one object down to its primitives without materializing anything.
+fn place_primitives<'a, LayerMeta, ObjectMeta>(
+    doc: &'a Document<LayerMeta, ObjectMeta>,
+    object: &'a Object<ObjectMeta>,
+    (polarity, transform, block_limit): (Polarity, Affine2, usize),
+    out: &mut Vec<Placed<'a, ObjectMeta>>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let polarity = polarity.compose(object.polarity);
+    let shared = block_limit < doc.blocks.len();
+    let (block, placements): (u32, Vec<Affine2>) = match object.geometry {
+        Geometry::Flash {
+            aperture,
+            transform: placement,
+        } => {
+            if aperture as usize >= doc.apertures.len() {
+                diagnostics.push(Diagnostic::warning(
+                    "Skipping artwork flash with invalid aperture reference",
+                ));
+                return;
+            }
+            out.push(Placed {
+                polarity,
+                primitive: Primitive::Flash(aperture),
+                transform: transform.concat(placement),
+                shared: true,
+                meta: &object.meta,
+            });
+            return;
+        }
+        Geometry::Stroke { path } | Geometry::Region { path } => {
+            if path as usize >= doc.arena.paths.len() {
+                diagnostics.push(Diagnostic::warning(
+                    "Skipping artwork path with invalid path reference",
+                ));
+                return;
+            }
+            out.push(Placed {
+                polarity,
+                primitive: Primitive::Path(path),
+                transform,
+                shared,
+                meta: &object.meta,
+            });
+            return;
+        }
+        Geometry::Instance {
+            block,
+            transform: placement,
+        } => (block, vec![placement]),
+        Geometry::GridInstance {
+            block,
+            transform: placement,
+            repeat,
+        } => (
+            block,
+            repeat
+                .offsets()
+                .map(|offset| Affine2::translation(offset).concat(placement))
+                .collect(),
+        ),
+    };
+    // Blocks reference only earlier blocks, so a walk always terminates.
+    if block as usize >= block_limit {
+        diagnostics.push(Diagnostic::warning(format!(
+            "Skipping artwork instance of missing or non-earlier block {block}"
+        )));
+        return;
+    }
+    for placement in placements {
+        for child in &doc.blocks[block as usize].objects {
+            place_primitives(
+                doc,
+                child,
+                (polarity, transform.concat(placement), block as usize),
+                out,
+                diagnostics,
+            );
+        }
+    }
+}
+
+/// Images of placed primitives. A shared primitive is prepared once per
+/// orientation at the origin and translated to each placement, which is
+/// exact for polygons: a panel of one board images that board once.
+struct PrimitiveImages {
+    resolution: Resolution,
+    prepared: HashMap<(Primitive, [u64; 4]), region::ContourSet>,
+}
+
+impl PrimitiveImages {
+    fn image<LayerMeta, ObjectMeta>(
+        &mut self,
+        doc: &Document<LayerMeta, ObjectMeta>,
+        placed: &Placed<'_, ObjectMeta>,
+    ) -> Result<region::ContourSet, AccuracyError> {
+        let Affine2 {
+            m00,
+            m01,
+            m02,
+            m10,
+            m11,
+            m12,
+        } = placed.transform;
+        if !placed.shared {
+            return prepare(doc, placed.primitive, placed.transform, self.resolution);
+        }
+        let orientation = Affine2 {
+            m02: 0.0,
+            m12: 0.0,
+            ..placed.transform
+        };
+        let key = (placed.primitive, [m00, m01, m10, m11].map(f64::to_bits));
+        let prepared = match self.prepared.entry(key) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => entry.insert(prepare(
+                doc,
+                placed.primitive,
+                orientation,
+                self.resolution,
+            )?),
+        };
+        prepared.translated(Point::new(m02, m12))
+    }
+}
+
+fn prepare<LayerMeta, ObjectMeta>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    primitive: Primitive,
+    transform: Affine2,
+    resolution: Resolution,
+) -> Result<region::ContourSet, AccuracyError> {
+    match primitive {
+        Primitive::Flash(aperture) => {
+            let aperture = &doc.apertures[aperture as usize];
+            let contours = aperture
+                .contours()
+                .into_iter()
+                .map(|contour| contour.transformed(transform))
+                .collect::<Vec<_>>();
+            region::ContourSet::from_contours(&contours, aperture.fill_rule(), resolution)
+        }
+        // Strokes outline in the path's own frame, so a placement that is
+        // not a similarity images the stroke it actually transforms.
+        Primitive::Path(path) => region::ContourSet::from_placed_painted_paths(
+            &doc.arena,
+            [(doc.arena.path(path), transform)],
+            resolution,
+        ),
+    }
+}
 
 /// Compose owner regions from retained source curves at one resolution.
-/// This is where artwork is prepared: the returned regions carry the cost
-/// of strokes, flattening and paint folds, and every region derived from
-/// them inherits the budget.
-pub fn compose_owner_regions<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq + Hash>(
+///
+/// Dark objects add material to the owner the caller names for them; owners
+/// the caller declines are skipped, since they cannot change another owner's
+/// image. Clear objects and final cutouts subtract from every owner painted
+/// before them. This is where artwork is prepared: the returned regions
+/// carry the cost of strokes, flattening and paint folds, and every region
+/// derived from them inherits the budget.
+pub fn compose_owner_regions<LayerMeta, ObjectMeta, Owner: Clone + Eq + Hash>(
     doc: &Document<LayerMeta, ObjectMeta>,
     owner: impl Fn(&ObjectMeta) -> Option<Owner>,
     resolution: Resolution,
 ) -> Result<(OwnerRegionLayers<Owner>, Vec<Diagnostic>), AccuracyError> {
-    let doc = expand_native_geometry_to_regions(doc.clone(), resolution.accuracy)?;
-    struct OwnerState {
-        composer: region::PaintComposer,
-        bbox: BBox,
-    }
+    let mut diagnostics = doc.diagnostics.clone();
+    let mut images = PrimitiveImages {
+        resolution: resolution.strict(),
+        prepared: HashMap::new(),
+    };
 
     let mut layers = Vec::with_capacity(doc.layers.len());
     for layer in &doc.layers {
-        let objects = paint_ordered(layer.objects.slice(&doc.objects));
-        let has_material = objects
-            .iter()
-            .any(|object| object.order.stage != PaintStage::FinalCutout);
+        let placed = placed_layer(doc, layer, &mut diagnostics);
+
         // Preserve first-paint order for deterministic attributed output and
         // retain constant-time lookup for later objects of the same owner.
         let mut owner_indices: HashMap<Owner, usize> = HashMap::new();
-        let mut states: Vec<(Owner, OwnerState)> = Vec::new();
-        for object in objects {
-            let polarity = if object.order.stage == PaintStage::FinalCutout
-                && (has_material || layer.role == LayerRole::Copper)
-            {
-                Polarity::Clear
-            } else {
-                object.polarity
-            };
-            let selected_owner = match polarity {
-                Polarity::Dark => {
-                    let Some(owner) = owner(&object.meta) else {
-                        continue;
-                    };
-                    Some(owner)
-                }
+        let mut states: Vec<(Owner, region::PaintComposer, BBox)> = Vec::new();
+        for placed in &placed {
+            let selected = match placed.polarity {
+                Polarity::Dark => match owner(placed.meta) {
+                    Some(owner) => Some(owner),
+                    None => continue,
+                },
                 Polarity::Clear => None,
             };
-            let image = object_image_region(&doc, object, resolution.strict())?;
+            let image = images.image(doc, placed)?;
             if image.is_empty() {
                 continue;
             }
-            match polarity {
-                Polarity::Dark => {
-                    let owner = selected_owner.expect("dark object has a selected owner");
-                    let index = match owner_indices.get(&owner) {
-                        Some(&index) => index,
-                        None => {
-                            let index = states.len();
-                            owner_indices.insert(owner.clone(), index);
-                            states.push((
-                                owner,
-                                OwnerState {
-                                    composer: region::PaintComposer::new(resolution),
-                                    bbox: BBox::empty(),
-                                },
-                            ));
-                            index
-                        }
-                    };
-                    let state = &mut states[index].1;
-                    state.bbox = state.bbox.union(object.bbox);
-                    state.composer.push(Polarity::Dark, image);
+            match selected {
+                Some(owner) => {
+                    let index = *owner_indices.entry(owner.clone()).or_insert_with(|| {
+                        states.push((owner, region::PaintComposer::new(resolution), BBox::empty()));
+                        states.len() - 1
+                    });
+                    let (_, composer, bbox) = &mut states[index];
+                    *bbox = bbox.union(image.bbox);
+                    composer.push(Polarity::Dark, image);
                 }
-                Polarity::Clear => {
-                    for state in states
+                None => {
+                    for (_, composer, _) in states
                         .iter_mut()
-                        .map(|(_, state)| state)
-                        .filter(|state| state.bbox.intersects(object.bbox))
+                        .filter(|(_, _, bbox)| bbox.intersects(image.bbox))
                     {
-                        state.composer.push(Polarity::Clear, image.clone());
+                        composer.push(Polarity::Clear, image.clone());
                     }
                 }
             }
         }
 
-        let mut images = Vec::with_capacity(states.len());
-        for (owner, state) in states {
-            let image = state.composer.finish()?;
+        let mut owners = Vec::with_capacity(states.len());
+        for (owner, composer, _) in states {
+            let image = composer.finish()?;
             if !image.is_empty() {
-                images.push((owner, image));
+                owners.push((owner, image));
             }
         }
-        layers.push(images);
+        layers.push(owners);
     }
-    Ok((layers, doc.diagnostics))
+    Ok((layers, diagnostics))
 }
 
-pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
+/// The composed image of the document's first layer, whatever owns it.
+pub fn compose_layer_image<LayerMeta, ObjectMeta>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    resolution: Resolution,
+) -> Result<region::ContourSet, AccuracyError> {
+    let (layers, _) = compose_owner_regions(doc, |_| Some(()), resolution)?;
+    let image = layers
+        .into_iter()
+        .next()
+        .and_then(|mut owners| owners.pop());
+    Ok(image.map_or_else(|| region::ContourSet::empty(resolution), |(_, image)| image))
+}
+
+/// Compose each layer's ordered dark/clear paint into its final positive
+/// image.
+pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta>(
     doc: &Document<LayerMeta, ObjectMeta>,
     resolution: Resolution,
 ) -> Result<mask::Document<LayerMeta>, AccuracyError> {
-    let (images, diagnostics) = compose_attributed(doc, |_| (), resolution)?;
+    let (images, diagnostics) = compose_owner_regions(doc, |_| Some(()), resolution.strict())?;
     let mut mask = mask::Document::new();
 
     for layer in &doc.layers {
@@ -689,8 +824,11 @@ pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
         });
     }
 
-    for (layer_index, image) in images.into_iter().enumerate() {
-        let contours = image.image.to_contours();
+    for (layer_index, owners) in images.into_iter().enumerate() {
+        let contours = owners
+            .into_iter()
+            .flat_map(|(_, image)| image.to_contours())
+            .collect::<Vec<_>>();
         if !contours.is_empty() {
             mask.push_shape(layer_index as u32, FillRule::NonZero, contours);
         }
@@ -700,124 +838,33 @@ pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     Ok(mask)
 }
 
-fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(
-    doc: &mut Document<LayerMeta, ObjectMeta>,
-    accuracy: GeometryAccuracy,
-) -> Result<(), AccuracyError> {
-    for object_index in 0..doc.objects.len() {
-        let Geometry::Stroke { path: path_index } = doc.objects[object_index].geometry else {
-            continue;
-        };
-        let Some(path) = doc.arena.paths.get(path_index as usize).copied() else {
-            doc.warn("Skipping artwork stroke with invalid path reference");
-            continue;
-        };
-        let Some(stroke) = path.stroke() else {
-            doc.warn("Skipping artwork stroke with fill paint");
-            continue;
-        };
-        let source = doc.arena.path_contours(&path);
-        let contours = crate::geom::path::stroke_to_fill(&source, stroke.into(), accuracy)?;
-        let Some(contours) = contours else {
-            continue;
-        };
-        let path_id = doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            contours,
-        );
-        doc.objects[object_index].geometry = Geometry::Region { path: path_id };
-        doc.objects[object_index].bbox = doc.path_bbox(path_id);
-    }
-    Ok(())
-}
-
-fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
-    for object_index in 0..doc.objects.len() {
-        let Geometry::Flash {
-            aperture,
-            transform,
-        } = doc.objects[object_index].geometry
-        else {
-            continue;
-        };
-        let Some(aperture) = doc.apertures.get(aperture as usize).cloned() else {
-            doc.warn("Skipping artwork flash with invalid aperture reference");
-            continue;
-        };
-        let contours = aperture
-            .contours()
-            .into_iter()
-            .map(|contour| contour.transformed(transform))
-            .collect::<Vec<_>>();
-        let path_id = doc.push_path(
-            Paint::Fill {
-                rule: aperture.fill_rule(),
-            },
-            contours,
-        );
-        doc.objects[object_index].geometry = Geometry::Region { path: path_id };
-        doc.objects[object_index].bbox = doc.path_bbox(path_id);
-    }
-}
-
-fn object_image_region<LayerMeta, ObjectMeta>(
-    doc: &Document<LayerMeta, ObjectMeta>,
-    object: &Object<ObjectMeta>,
-    resolution: Resolution,
-) -> Result<region::ContourSet, AccuracyError> {
-    let Geometry::Region { path } = object.geometry else {
-        return Ok(region::ContourSet::empty(resolution));
-    };
-    let Some(path) = doc.arena.paths.get(path as usize) else {
-        return Ok(region::ContourSet::empty(resolution));
-    };
-    let contours = doc.arena.path_contours(path);
-    let rule = path.fill_rule().unwrap_or(FillRule::NonZero);
-    region::ContourSet::from_contours(&contours, rule, resolution)
-}
-
 fn geometry_bbox<LayerMeta, ObjectMeta>(
     doc: &Document<LayerMeta, ObjectMeta>,
     geometry: Geometry,
 ) -> BBox {
-    match geometry {
-        Geometry::Region { path } | Geometry::Stroke { path } => doc
-            .arena
-            .paths
-            .get(path as usize)
-            .map(|path| path.bbox)
-            .unwrap_or_else(BBox::empty),
+    let block_bbox = |block: u32, transform| {
+        let block = doc.blocks.get(block as usize)?;
+        Some(block.bbox.transformed(transform))
+    };
+    let bbox = match geometry {
+        Geometry::Region { path } | Geometry::Stroke { path } => {
+            doc.arena.paths.get(path as usize).map(|path| path.bbox)
+        }
         Geometry::Flash {
             aperture,
             transform,
         } => doc
             .apertures
             .get(aperture as usize)
-            .map(|aperture| {
-                aperture
-                    .contours()
-                    .into_iter()
-                    .map(|contour| contour.bbox.transformed(transform))
-                    .fold(BBox::empty(), |bbox, bound| bbox.union(bound))
-            })
-            .unwrap_or_else(BBox::empty),
-        Geometry::Instance { block, transform } => doc
-            .blocks
-            .get(block as usize)
-            .map(|block| block.bbox.transformed(transform))
-            .unwrap_or_else(BBox::empty),
+            .map(|aperture| aperture.bbox().transformed(transform)),
+        Geometry::Instance { block, transform } => block_bbox(block, transform),
         Geometry::GridInstance {
             block,
             transform,
             repeat,
-        } => doc
-            .blocks
-            .get(block as usize)
-            .map(|block| repeat.bbox(block.bbox.transformed(transform)))
-            .unwrap_or_else(BBox::empty),
-    }
+        } => block_bbox(block, transform).map(|bbox| repeat.bbox(bbox)),
+    };
+    bbox.unwrap_or_else(BBox::empty)
 }
 
 /// Materialize all reusable block instances into ordinary layer objects.
@@ -1002,65 +1049,49 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
 ) {
     let transform = expansion.transform;
     let polarity = expansion.polarity.compose(object.polarity);
-    if let Geometry::Instance {
-        block,
-        transform: placement,
-    } = object.geometry
-    {
-        let Some(block_definition) = source.blocks.get(block as usize) else {
-            target.warn(format!(
-                "Skipping artwork instance of missing block {block}"
-            ));
-            return;
-        };
-        if block as usize >= block_limit {
-            target.warn(format!(
-                "Skipping artwork instance of non-earlier block {block}"
-            ));
-            return;
-        }
-        let transform = transform.concat(placement);
-        for child in &block_definition.objects {
-            expand_object_into_layer(
-                source,
-                target,
+    let (block, placement, repeat) = match object.geometry {
+        Geometry::Instance { block, transform } => (block, transform, None),
+        Geometry::GridInstance {
+            block,
+            transform,
+            repeat,
+        } => (block, transform, Some(repeat)),
+        geometry => {
+            // The target arena starts as a clone of the source arena, so
+            // source path indices resolve identically in the target.
+            let geometry = transform_primitive_geometry(target, geometry, transform);
+            target.push_object(
                 layer,
-                child,
-                InstanceExpansion {
-                    transform,
+                Object {
                     polarity,
-                    ..expansion
+                    order: object.order,
+                    geometry,
+                    bbox: BBox::empty(),
+                    meta: object.meta.clone(),
                 },
-                block as usize,
             );
+            return;
         }
+    };
+    let kind = if repeat.is_some() {
+        "grid instance"
+    } else {
+        "instance"
+    };
+    let Some(block_definition) = source.blocks.get(block as usize) else {
+        target.warn(format!("Skipping artwork {kind} of missing block {block}"));
+        return;
+    };
+    if block as usize >= block_limit {
+        target.warn(format!(
+            "Skipping artwork {kind} of non-earlier block {block}"
+        ));
         return;
     }
-
-    if let Geometry::GridInstance {
-        block,
-        transform: placement,
-        repeat,
-    } = object.geometry
-    {
-        let Some(block_definition) = source.blocks.get(block as usize) else {
-            target.warn(format!(
-                "Skipping artwork grid instance of missing block {block}"
-            ));
-            return;
-        };
-        if block as usize >= block_limit {
-            target.warn(format!(
-                "Skipping artwork grid instance of non-earlier block {block}"
-            ));
-            return;
-        }
-        if expansion.preserve_grids
-            && !expansion
-                .block_contains_grid
-                .get(block as usize)
-                .copied()
-                .unwrap_or(false)
+    let placements = match repeat {
+        None => vec![placement],
+        Some(repeat)
+            if expansion.preserve_grids && !expansion.block_contains_grid[block as usize] =>
         {
             target.push_object(
                 layer,
@@ -1071,10 +1102,9 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
                         block,
                         transform: transform.concat(placement),
                         repeat: GridRepeat {
-                            x_count: repeat.x_count,
-                            y_count: repeat.y_count,
                             x_step: transform.transform_vector(repeat.x_step),
                             y_step: transform.transform_vector(repeat.y_step),
+                            ..repeat
                         },
                     },
                     bbox: BBox::empty(),
@@ -1083,80 +1113,82 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
             );
             return;
         }
-        for offset in repeat.offsets() {
-            let placement = Affine2 {
+        Some(repeat) => repeat
+            .offsets()
+            .map(|offset| Affine2 {
                 m02: placement.m02 + offset.x,
                 m12: placement.m12 + offset.y,
                 ..placement
-            };
-            let occurrence = transform.concat(placement);
-            for child in &block_definition.objects {
-                expand_object_into_layer(
-                    source,
-                    target,
-                    layer,
-                    child,
-                    InstanceExpansion {
-                        transform: occurrence,
-                        polarity,
-                        ..expansion
-                    },
-                    block as usize,
-                );
-            }
+            })
+            .collect(),
+    };
+    for placement in placements {
+        for child in &block_definition.objects {
+            expand_object_into_layer(
+                source,
+                target,
+                layer,
+                child,
+                InstanceExpansion {
+                    transform: transform.concat(placement),
+                    polarity,
+                    ..expansion
+                },
+                block as usize,
+            );
         }
-        return;
     }
-
-    // The target arena starts as a clone of the source arena, so source path
-    // indices resolve identically in the target.
-    let geometry = transform_primitive_geometry(target, object.geometry, transform);
-    target.push_object(
-        layer,
-        Object {
-            polarity,
-            order: object.order,
-            geometry,
-            bbox: BBox::empty(),
-            meta: object.meta.clone(),
-        },
-    );
-}
-
-/// Convenience constructors for stroked paths shared by lowerings.
-pub fn stroke_paint(width: f64, cap: crate::geom::LineCap) -> Paint {
-    Paint::Stroke(StrokeStyle::new(width, cap))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::geom::path::PathCmd;
-    use crate::geom::{LineCap, LinePattern};
+    use crate::geom::{LineCap, StrokeStyle};
 
-    #[test]
-    fn stores_layers_objects_and_paths_in_fat_struct_arenas() {
-        let mut doc = Document::<(), ()>::new();
-        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let path = doc.push_path(
+    fn rect<Meta>(doc: &mut Document<(), Meta>, x0: f64, y0: f64, x1: f64, y1: f64) -> u32 {
+        doc.push_path(
             Paint::Fill {
                 rule: FillRule::NonZero,
             },
             vec![ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::move_to(Point::new(x0, y0)),
+                PathCmd::line_to(Point::new(x1, y0)),
+                PathCmd::line_to(Point::new(x1, y1)),
+                PathCmd::line_to(Point::new(x0, y1)),
                 PathCmd::close(),
             ])],
-        );
+        )
+    }
 
-        doc.push_object(
-            layer,
-            Object::new(Polarity::Dark, Geometry::Region { path }),
-        );
+    #[test]
+    fn an_aperture_hole_must_lie_inside_its_shape() {
+        let holed = |shape, hole_diameter| Aperture {
+            shape,
+            hole_diameter,
+        };
+        let rectangle = |hole| {
+            let (width, height) = (1.0, 0.4);
+            holed(ApertureShape::Rectangle { width, height }, hole)
+        };
+        let hexagon = |hole| {
+            let shape = ApertureShape::Polygon {
+                diameter: 2.0,
+                vertices: 6,
+                rotation_degrees: 0.0,
+            };
+            holed(shape, hole)
+        };
+        assert!(rectangle(0.0).hole_fits() && rectangle(0.4).hole_fits());
+        assert!(!rectangle(0.5).hole_fits());
+        // A hexagon's flats sit cos 30° of the way to its vertices.
+        assert!(hexagon(1.73).hole_fits() && !hexagon(1.74).hole_fits());
 
-        assert_eq!(doc.layers[0].objects, Span::new(0, 1));
-        assert_eq!(doc.objects.len(), 1);
-        assert_eq!(doc.arena.path(path).contours.len(), 1);
-        doc.validate().unwrap();
+        let mut doc = Document::<(), ()>::new();
+        doc.push_aperture(rectangle(0.4));
+        assert!(doc.validate().is_ok());
+        doc.push_aperture(rectangle(0.5));
+        assert!(doc.validate().is_err());
     }
 
     #[test]
@@ -1269,48 +1301,9 @@ mod tests {
     }
 
     #[test]
-    fn composes_ordered_artwork_to_mask() {
-        let mut doc = Document::<(), ()>::new();
-        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let path = doc.push_path(
-            Paint::Stroke(StrokeStyle::new(0.15, LineCap::Round)),
-            vec![ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(1.0, 0.0)),
-            ])],
-        );
-
-        doc.push_object(
-            layer,
-            Object::new(Polarity::Dark, Geometry::Stroke { path }),
-        );
-
-        let mask = compose_to_mask(&doc, Resolution::default()).unwrap();
-
-        assert_eq!(mask.layers.len(), 1);
-        assert_eq!(mask.layers[0].shapes.len(), 1);
-        assert!(!mask.layers[0].bbox.is_empty());
-        mask.validate().unwrap();
-    }
-
-    #[test]
     fn composition_stages_overlays_over_base_clears_and_final_cutouts_last() {
         let mut doc = Document::<(), ()>::new();
         let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let rect = |doc: &mut Document<(), ()>, x0: f64, y0: f64, x1: f64, y1: f64| {
-            doc.push_path(
-                Paint::Fill {
-                    rule: FillRule::NonZero,
-                },
-                vec![ContourBuf::new(vec![
-                    PathCmd::move_to(Point::new(x0, y0)),
-                    PathCmd::line_to(Point::new(x1, y0)),
-                    PathCmd::line_to(Point::new(x1, y1)),
-                    PathCmd::line_to(Point::new(x0, y1)),
-                    PathCmd::close(),
-                ])],
-            )
-        };
         let stage_object = |polarity, path, stage| {
             let mut object = Object::new(polarity, Geometry::Region { path });
             object.order = PaintOrder { stage };
@@ -1361,20 +1354,6 @@ mod tests {
     fn attributed_composition_preserves_owner_claims_through_clear_and_overlay() {
         let mut doc = Document::<(), &'static str>::new();
         let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let rect = |doc: &mut Document<(), &'static str>, x0, y0, x1, y1| {
-            doc.push_path(
-                Paint::Fill {
-                    rule: FillRule::NonZero,
-                },
-                vec![ContourBuf::new(vec![
-                    PathCmd::move_to(Point::new(x0, y0)),
-                    PathCmd::line_to(Point::new(x1, y0)),
-                    PathCmd::line_to(Point::new(x1, y1)),
-                    PathCmd::line_to(Point::new(x0, y1)),
-                    PathCmd::close(),
-                ])],
-            )
-        };
         let object = |polarity, path, stage, meta| {
             let mut object = Object::new(polarity, Geometry::Region { path });
             object.order = PaintOrder { stage };
@@ -1401,29 +1380,22 @@ mod tests {
         );
 
         let (mut layers, diagnostics) =
-            compose_attributed(&doc, |meta| *meta, Resolution::default()).unwrap();
+            compose_owner_regions(&doc, |meta| Some(*meta), Resolution::default()).unwrap();
         assert!(diagnostics.is_empty());
         let composed = layers.remove(0);
-        let physical = composed.image;
         assert_eq!(
-            composed
-                .owners
-                .iter()
-                .map(|(owner, _)| *owner)
-                .collect::<Vec<_>>(),
+            composed.iter().map(|(owner, _)| *owner).collect::<Vec<_>>(),
             ["A", "B", "C"]
         );
-        let owners = composed.owners.into_iter().collect::<HashMap<_, _>>();
+        let owners = composed.into_iter().collect::<HashMap<_, _>>();
 
         assert!(owners["A"].contains_point(Point::new(2.0, 2.0)));
         assert!(!owners["A"].contains_point(Point::new(5.0, 5.0)));
         assert!(owners["B"].contains_point(Point::new(5.0, 5.0)));
         assert!(owners["A"].contains_point(Point::new(8.5, 8.5)));
         assert!(owners["C"].contains_point(Point::new(8.5, 8.5)));
-        assert!(physical.contains_point(Point::new(5.0, 5.0)));
-        assert!(physical.contains_point(Point::new(8.5, 8.5)));
 
-        let (mut selected, diagnostics) = compose_selected_attributed(
+        let (mut selected, diagnostics) = compose_owner_regions(
             &doc,
             |meta| (*meta != "C").then_some(*meta),
             Resolution::default(),
@@ -1432,52 +1404,67 @@ mod tests {
         assert!(diagnostics.is_empty());
         let selected = selected.remove(0);
         assert_eq!(
-            selected
-                .owners
-                .iter()
-                .map(|(owner, _)| *owner)
-                .collect::<Vec<_>>(),
+            selected.iter().map(|(owner, _)| *owner).collect::<Vec<_>>(),
             ["A", "B"]
         );
-        let selected = selected.owners.into_iter().collect::<HashMap<_, _>>();
+        let selected = selected.into_iter().collect::<HashMap<_, _>>();
         assert!(!selected["A"].contains_point(Point::new(5.0, 5.0)));
         assert!(selected["B"].contains_point(Point::new(5.0, 5.0)));
     }
 
     #[test]
-    fn flash_expansion_honors_aperture_holes() {
+    fn a_block_placed_many_times_images_like_its_expansion() {
         let mut doc = Document::<(), ()>::new();
-        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-        let aperture = doc.push_aperture(Aperture {
-            shape: ApertureShape::Circle { diameter: 2.0 },
-            hole_diameter: 1.0,
-        });
-        doc.push_object(
-            layer,
+        let aperture = doc.push_aperture(Aperture::circle(1.0));
+        let block = doc.push_block();
+        let path = doc.push_path(
+            Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round)),
+            vec![ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(3.0, 1.0)),
+            ])],
+        );
+        doc.push_block_object(
+            block,
+            Object::new(Polarity::Dark, Geometry::Stroke { path }),
+        );
+        doc.push_block_object(
+            block,
             Object::new(
                 Polarity::Dark,
                 Geometry::Flash {
                     aperture,
-                    transform: Affine2::IDENTITY,
+                    transform: Affine2::translation(Point::new(3.0, 1.0)),
                 },
             ),
         );
+        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        for (x, degrees) in [(0.0, 0.0), (10.0, 90.0), (20.0, 0.0)] {
+            doc.push_object(
+                layer,
+                Object::new(
+                    Polarity::Dark,
+                    Geometry::Instance {
+                        block,
+                        transform: Affine2::placement(
+                            Point::new(x, 5.0),
+                            degrees,
+                            crate::geom::Mirror::NONE,
+                            1.0,
+                        ),
+                    },
+                ),
+            );
+        }
+        normalize_bounds(&mut doc);
 
-        let mask = compose_to_mask(&doc, Resolution::default()).unwrap();
-        let expected = std::f64::consts::PI * (1.0 - 0.25);
-        let shape = mask.layers[0].shapes.slice(&mask.arena.paths)[0];
-        let area = region::ContourSet::from_contours(
-            &mask.arena.path_contours(&shape),
-            FillRule::NonZero,
-            Resolution::default(),
-        )
-        .unwrap()
-        .area();
-
-        assert!(
-            (area - expected).abs() < 0.02,
-            "expected annulus area ~{expected}, got {area}"
-        );
+        let image =
+            |doc: &Document<(), ()>| compose_layer_image(doc, Resolution::default()).unwrap();
+        let shared = image(&doc);
+        let expanded = image(&expand_instances(&doc));
+        assert!((shared.area() - expanded.area()).abs() < 1e-9);
+        assert!(shared.difference(&expanded).unwrap().area() < 1e-9);
+        assert!(shared.contains_point(Point::new(9.0, 8.0)));
     }
 
     #[test]
@@ -1492,19 +1479,4 @@ mod tests {
         assert_ne!(a, c);
         assert_eq!(doc.apertures.len(), 2);
     }
-
-    #[test]
-    fn stroked_paths_preserve_line_pattern() {
-        let stroke = StrokeStyle {
-            width: 0.1,
-            cap: LineCap::Round,
-            join: crate::geom::LineJoin::Round,
-            pattern: LinePattern::Phantom,
-        };
-        let path = Path::stroked(stroke);
-
-        assert_eq!(path.stroke().unwrap().pattern, LinePattern::Phantom);
-    }
-
-    use crate::geom::Path;
 }

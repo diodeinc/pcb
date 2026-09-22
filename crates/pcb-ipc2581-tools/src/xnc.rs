@@ -1,34 +1,31 @@
-//! XNC / Excellon 2 CAD-CAM drill/rout emitter.
+//! XNC / Excellon 2 CAD-CAM drill emitter.
 //!
 //! This file implements a compact CAD/CAM Exchange NC dialect for
-//! Excellon-compatible drill/rout output. The core is the Ucamco XNC subset of
-//! IPC-NC-349, with the common Excellon `G85` canned cycle for simple straight
-//! slots. The target dialect is intentionally decimal and self-describing; it
-//! does not use legacy implied decimal coordinates.
+//! Excellon-compatible drill output: the drill subset of Ucamco XNC
+//! (IPC-NC-349) plus the Excellon `G85` canned cycle. Slots are always
+//! `G85`. That cycle is not part of XNC, which routs slots instead, but it is
+//! what fabricators ask for and what ships today, so it is the one slot
+//! encoding here and rout mode is not written at all. The target dialect is
+//! intentionally decimal and self-describing; it does not use legacy implied
+//! decimal coordinates.
 //!
 //! Format summary:
 //! - Files are printable 7-bit ASCII plus CR/LF. One command is written per
 //!   line. Commands are uppercase and case-sensitive.
 //! - A file is `header`, `body`, `M30`. No data follows `M30`.
-//! - Header commands are `M48`, exactly one unit command (`METRIC` for mm or
-//!   `INCH`), zero or more tool declarations, then `%`.
+//! - Header commands are `M48`, the unit command `METRIC` (coordinates and
+//!   diameters are millimeters), zero or more tool declarations, then `%`.
 //! - Tool declarations are `TnnCdiameter`, where `nn` is `01..99` and diameter
 //!   is a positive decimal in the file unit. Tool diameter is the finished hole
-//!   or route width.
-//! - Body state consists of current unit, current point, selected tool, and
-//!   drill/rout mode. Tools are selected with `Tnn`.
+//!   or slot width.
+//! - Body state consists of current point, selected tool, and drill mode.
+//!   Tools are selected with `Tnn`.
 //! - Drill mode is selected with `G05`. A drill hit is `XxYy` and creates one
 //!   circular hole at that coordinate with the selected tool.
 //! - A straight slot is `XxYyG85XxYy`, where the first coordinate is the slot
 //!   start, the second coordinate is the slot end, and the selected tool
 //!   diameter is the slot width. `G05` is emitted after the slot cycle to return
 //!   to drill mode.
-//! - Rout mode is entered with `G00XxYy`, which moves to the route start point.
-//!   `M15` lowers the tool and starts a route path; `M16` raises it and ends the
-//!   route path.
-//! - Linear route segments are `G01XxYy`. Clockwise and counter-clockwise arc
-//!   route segments are `G02XxYyAr` and `G03XxYyAr`; the `A` value is a positive
-//!   radius and the represented arc is at most 180 degrees.
 //! - Coordinates are signed decimal numbers in file units. They must share the
 //!   same origin, axes, and orientation as the companion Gerber layers.
 //! - Comments start with `;` and may appear anywhere. Spaces are only allowed in
@@ -42,15 +39,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Result, bail};
-use gerberx2::sanitize_attribute_field;
+use gerberx2::{escape_attribute_field, trim_decimal};
 use pcb_ir::geom::Point;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum XncUnit {
-    Metric,
-    Inch,
-}
-
+/// One X2 attribute comment. Construction escapes every field, so whatever
+/// the source names contain, the file stays printable ASCII.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct XncAttribute {
     command: String,
@@ -76,7 +69,7 @@ impl XncAttribute {
             fields: fields
                 .into_iter()
                 .map(Into::into)
-                .map(|field| sanitize_attribute_field(&field))
+                .map(|field| escape_attribute_field(&field))
                 .collect(),
         }
     }
@@ -112,24 +105,10 @@ pub enum XncObject {
         end: Point,
         attributes: Vec<XncAttribute>,
     },
-    Route {
-        tool: u8,
-        start: Point,
-        segments: Vec<XncRouteSegment>,
-        attributes: Vec<XncAttribute>,
-    },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum XncRouteSegment {
-    Line { to: Point },
-    ClockwiseArc { to: Point, radius: f64 },
-    CounterClockwiseArc { to: Point, radius: f64 },
 }
 
 #[derive(Debug, Clone)]
 pub struct XncDocument {
-    pub unit: XncUnit,
     pub file_attributes: Vec<XncAttribute>,
     pub tools: Vec<XncTool>,
     pub objects: Vec<XncObject>,
@@ -143,7 +122,6 @@ impl XncDocument {
 
 #[derive(Debug)]
 pub struct XncBuilder {
-    unit: XncUnit,
     file_attributes: Vec<XncAttribute>,
     tool_by_key: BTreeMap<XncToolKey, u8>,
     tools: Vec<XncTool>,
@@ -151,9 +129,8 @@ pub struct XncBuilder {
 }
 
 impl XncBuilder {
-    pub fn new(unit: XncUnit, file_attributes: Vec<XncAttribute>) -> Self {
+    pub fn new(file_attributes: Vec<XncAttribute>) -> Self {
         Self {
-            unit,
             file_attributes,
             tool_by_key: BTreeMap::new(),
             tools: Vec::new(),
@@ -196,27 +173,6 @@ impl XncBuilder {
         Ok(())
     }
 
-    pub fn add_route(
-        &mut self,
-        diameter: f64,
-        start: Point,
-        segments: Vec<XncRouteSegment>,
-        tool_attributes: Vec<XncAttribute>,
-        object_attributes: Vec<XncAttribute>,
-    ) -> Result<()> {
-        if segments.is_empty() {
-            bail!("XNC route object has no segments");
-        }
-        let tool = self.tool(diameter, tool_attributes)?;
-        self.objects.push(XncObject::Route {
-            tool,
-            start,
-            segments,
-            attributes: object_attributes,
-        });
-        Ok(())
-    }
-
     pub fn finish(self) -> XncDocument {
         let mut tools = self.tools;
         let mut objects = self.objects;
@@ -230,13 +186,12 @@ impl XncBuilder {
             tool.number = index as u8 + 1;
         }
         for object in &mut objects {
-            let (XncObject::Drill { tool, .. }
-            | XncObject::Slot { tool, .. }
-            | XncObject::Route { tool, .. }) = object;
+            let (XncObject::Drill { tool, .. } | XncObject::Slot { tool, .. }) = object;
             *tool = renumbered[tool];
         }
+        // One pass per tool, keeping source order within it.
+        objects.sort_by_key(XncObject::tool);
         XncDocument {
-            unit: self.unit,
             file_attributes: self.file_attributes,
             tools,
             objects,
@@ -283,10 +238,7 @@ pub fn write_xnc(doc: &XncDocument) -> Result<String> {
     for attribute in &doc.file_attributes {
         attribute.write_line(&mut out);
     }
-    out.push_str(match doc.unit {
-        XncUnit::Metric => "METRIC\n",
-        XncUnit::Inch => "INCH\n",
-    });
+    out.push_str("METRIC\n");
     for tool in &doc.tools {
         for attribute in &tool.attributes {
             attribute.write_line(&mut out);
@@ -299,105 +251,67 @@ pub fn write_xnc(doc: &XncDocument) -> Result<String> {
     }
     out.push_str("%\n");
 
-    let mut mode = XncMode::Unknown;
+    let mut drilling = false;
     let mut selected_tool = None;
+    // Object attributes persist until deleted, so only the difference from
+    // the previous object is written and a dropped attribute resets them.
+    let mut current_attributes: &[XncAttribute] = &[];
     for object in &doc.objects {
         let tool = object.tool();
         if selected_tool != Some(tool) {
             out.push_str(&format!("T{tool:02}\n"));
             selected_tool = Some(tool);
         }
-        for attribute in object.attributes() {
-            attribute.write_line(&mut out);
+        let attributes = object.attributes();
+        let dropped = current_attributes.iter().any(|current| {
+            !attributes
+                .iter()
+                .any(|attribute| attribute.command == current.command)
+        });
+        if dropped {
+            out.push_str("; #@! TD\n");
+            current_attributes = &[];
+        }
+        for attribute in attributes {
+            if !current_attributes.contains(attribute) {
+                attribute.write_line(&mut out);
+            }
+        }
+        current_attributes = attributes;
+        if !drilling {
+            out.push_str("G05\n");
+            drilling = true;
         }
         match object {
-            XncObject::Drill { at, .. } => {
-                if mode != XncMode::Drill {
-                    out.push_str("G05\n");
-                    mode = XncMode::Drill;
-                }
-                out.push_str(&format!(
-                    "X{}Y{}\n",
-                    format_decimal(at.x),
-                    format_decimal(at.y)
-                ));
-            }
-            XncObject::Slot { start, end, .. } => {
-                if mode != XncMode::Drill {
-                    out.push_str("G05\n");
-                }
-                out.push_str(&format!(
-                    "X{}Y{}G85X{}Y{}\n",
-                    format_decimal(start.x),
-                    format_decimal(start.y),
-                    format_decimal(end.x),
-                    format_decimal(end.y)
-                ));
-                out.push_str("G05\n");
-                mode = XncMode::Drill;
-            }
-            XncObject::Route {
-                start, segments, ..
-            } => {
-                out.push_str(&format!(
-                    "G00X{}Y{}\n",
-                    format_decimal(start.x),
-                    format_decimal(start.y)
-                ));
-                mode = XncMode::Route;
-                out.push_str("M15\n");
-                for segment in segments {
-                    match segment {
-                        XncRouteSegment::Line { to } => out.push_str(&format!(
-                            "G01X{}Y{}\n",
-                            format_decimal(to.x),
-                            format_decimal(to.y)
-                        )),
-                        XncRouteSegment::ClockwiseArc { to, radius } => out.push_str(&format!(
-                            "G02X{}Y{}A{}\n",
-                            format_decimal(to.x),
-                            format_decimal(to.y),
-                            format_decimal(*radius)
-                        )),
-                        XncRouteSegment::CounterClockwiseArc { to, radius } => {
-                            out.push_str(&format!(
-                                "G03X{}Y{}A{}\n",
-                                format_decimal(to.x),
-                                format_decimal(to.y),
-                                format_decimal(*radius)
-                            ))
-                        }
-                    }
-                }
-                out.push_str("M16\n");
-            }
+            XncObject::Drill { at, .. } => out.push_str(&format!(
+                "X{}Y{}\n",
+                format_decimal(at.x),
+                format_decimal(at.y)
+            )),
+            // The canned cycle leaves drill mode.
+            XncObject::Slot { start, end, .. } => out.push_str(&format!(
+                "X{}Y{}G85X{}Y{}\nG05\n",
+                format_decimal(start.x),
+                format_decimal(start.y),
+                format_decimal(end.x),
+                format_decimal(end.y)
+            )),
         }
     }
     out.push_str("M30\n");
-
-    validate_ascii(&out)?;
     Ok(out)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum XncMode {
-    Unknown,
-    Drill,
-    Route,
 }
 
 impl XncObject {
     fn tool(&self) -> u8 {
         match self {
-            Self::Drill { tool, .. } | Self::Slot { tool, .. } | Self::Route { tool, .. } => *tool,
+            Self::Drill { tool, .. } | Self::Slot { tool, .. } => *tool,
         }
     }
 
     fn attributes(&self) -> &[XncAttribute] {
         match self {
-            Self::Drill { attributes, .. }
-            | Self::Slot { attributes, .. }
-            | Self::Route { attributes, .. } => attributes,
+            Self::Drill { attributes, .. } | Self::Slot { attributes, .. } => attributes,
         }
     }
 }
@@ -412,71 +326,18 @@ fn validate_document(doc: &XncDocument) -> Result<()> {
             bail!("XNC tool T{:02} is declared more than once", tool.number);
         }
         validate_positive("tool diameter", tool.diameter)?;
-        validate_attributes(&tool.attributes)?;
     }
-    validate_attributes(&doc.file_attributes)?;
 
     for object in &doc.objects {
         if !tools.contains(&object.tool()) {
             bail!("XNC object references undefined tool T{:02}", object.tool());
         }
-        validate_attributes(object.attributes())?;
         match object {
             XncObject::Drill { at, .. } => validate_point(*at)?,
-            XncObject::Slot { start, end, .. } => {
-                validate_point(*start)?;
-                validate_point(*end)?;
-                validate_slot_endpoints(*start, *end)?;
-            }
-            XncObject::Route {
-                start, segments, ..
-            } => {
-                validate_point(*start)?;
-                if segments.is_empty() {
-                    bail!("XNC route object has no segments");
-                }
-                let mut current = *start;
-                for segment in segments {
-                    match *segment {
-                        XncRouteSegment::Line { to } => {
-                            validate_point(to)?;
-                            current = to;
-                        }
-                        XncRouteSegment::ClockwiseArc { to, radius }
-                        | XncRouteSegment::CounterClockwiseArc { to, radius } => {
-                            validate_point(to)?;
-                            validate_positive("arc radius", radius)?;
-                            if current.distance_to(to) > radius * 2.0 + 1e-9 {
-                                bail!("XNC arc chord is larger than its diameter");
-                            }
-                            current = to;
-                        }
-                    }
-                }
-            }
+            XncObject::Slot { start, end, .. } => validate_slot_endpoints(*start, *end)?,
         }
     }
     Ok(())
-}
-
-fn validate_attributes(attributes: &[XncAttribute]) -> Result<()> {
-    for attribute in attributes {
-        validate_token("XNC attribute command", &attribute.command)?;
-        for field in &attribute.fields {
-            validate_token("XNC attribute field", field)?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_token(label: &str, value: &str) -> Result<()> {
-    if value.is_empty() {
-        bail!("{label} is empty");
-    }
-    if value.contains([',', ';', '\n', '\r']) {
-        bail!("{label} contains an invalid separator");
-    }
-    validate_ascii(value)
 }
 
 fn validate_point(point: Point) -> Result<()> {
@@ -502,17 +363,6 @@ fn validate_positive(label: &str, value: f64) -> Result<()> {
     Ok(())
 }
 
-fn validate_ascii(text: &str) -> Result<()> {
-    if text
-        .bytes()
-        .all(|byte| byte == b'\n' || byte == b'\r' || (32..=126).contains(&byte))
-    {
-        Ok(())
-    } else {
-        bail!("XNC output contains non-ASCII characters")
-    }
-}
-
 fn sanitize_attribute_name(name: &str) -> String {
     name.chars()
         .map(|ch| match ch {
@@ -526,20 +376,10 @@ fn quantize_mm(value: f64) -> i64 {
     (value * 1_000_000.0).round() as i64
 }
 
+/// A decimal that reads as one even when integral; zero stays `0`.
 fn format_decimal(value: f64) -> String {
-    if value.abs() < 0.0000000005 {
-        return "0".to_string();
-    }
-    let mut text = format!("{value:.6}");
-    while text.contains('.') && text.ends_with('0') {
-        text.pop();
-    }
-    if text.ends_with('.') {
-        text.pop();
-    }
-    if text == "-0" {
-        "0".to_string()
-    } else if text.contains('.') {
+    let text = trim_decimal(value, 6);
+    if text == "0" || text.contains('.') {
         text
     } else {
         format!("{text}.0")
@@ -552,7 +392,7 @@ mod tests {
 
     #[test]
     fn tools_snap_to_micrometers_and_sort_by_diameter() {
-        let mut builder = XncBuilder::new(XncUnit::Metric, vec![]);
+        let mut builder = XncBuilder::new(vec![]);
         // Float dust from EDA unit conversion snaps to the intended tool,
         // merging with an exact duplicate, and the table sorts by diameter.
         builder
@@ -580,14 +420,90 @@ mod tests {
     }
 
     #[test]
-    fn emits_decimal_metric_drill_slot_and_route_xnc() {
-        let mut builder = XncBuilder::new(
-            XncUnit::Metric,
-            vec![XncAttribute::file(
-                "FileFunction",
-                ["Plated", "1", "4", "PTH"],
-            )],
+    fn formats_coordinates_as_trimmed_decimals() {
+        for (value, text) in [
+            (5.0, "5.0"),
+            (-2.5, "-2.5"),
+            (1.234_567_8, "1.234568"),
+            (0.0, "0"),
+            (-0.000_000_1, "0"),
+        ] {
+            assert_eq!(format_decimal(value), text);
+        }
+    }
+
+    #[test]
+    fn hits_group_by_tool_in_source_order() {
+        let mut builder = XncBuilder::new(vec![]);
+        for (diameter, x) in [(1.0, 1.0), (0.3, 2.0), (1.0, 3.0), (0.3, 4.0)] {
+            builder
+                .add_drill(diameter, Point::new(x, 5.0), vec![], vec![])
+                .unwrap();
+        }
+
+        let output = write_xnc(&builder.finish()).unwrap();
+        assert!(output.contains("%\nT01\nG05\nX2.0Y5.0\nX4.0Y5.0\nT02\nX1.0Y5.0\nX3.0Y5.0\nM30\n"));
+    }
+
+    #[test]
+    fn object_attributes_never_leak_into_later_holes() {
+        let mut builder = XncBuilder::new(vec![]);
+        let net = |name: &str| XncAttribute::object("N", [name]);
+        let pin = vec![
+            net("VCC"),
+            XncAttribute::object("C", ["J1"]),
+            XncAttribute::object("P", ["J1", "1"]),
+        ];
+        for (x, attributes) in [
+            (1.0, pin.clone()),
+            (2.0, pin),
+            (3.0, vec![net("GND")]),
+            (4.0, vec![net("V3V3")]),
+        ] {
+            builder
+                .add_drill(0.3, Point::new(x, 5.0), vec![], attributes)
+                .unwrap();
+        }
+
+        let output = write_xnc(&builder.finish()).unwrap();
+        // The repeated pin rides existing state, the via drops the pin's
+        // component attributes, and a changed net overrides in place.
+        assert!(
+            output.contains(
+                "; #@! TO.N,VCC\n; #@! TO.C,J1\n; #@! TO.P,J1,1\nG05\nX1.0Y5.0\nX2.0Y5.0\n\
+                 ; #@! TD\n; #@! TO.N,GND\nX3.0Y5.0\n; #@! TO.N,V3V3\nX4.0Y5.0\n"
+            ),
+            "{output}"
         );
+    }
+
+    #[test]
+    fn free_form_names_stay_printable_ascii() {
+        let mut builder = XncBuilder::new(vec![]);
+        builder
+            .add_drill(
+                0.3,
+                Point::new(1.0, 1.0),
+                vec![],
+                vec![
+                    XncAttribute::object("N", ["\u{b5}C_RST;1"]),
+                    XncAttribute::object("P", ["R\\1", "\u{3a9}"]),
+                ],
+            )
+            .unwrap();
+
+        let output = write_xnc(&builder.finish()).unwrap();
+        assert!(output.is_ascii());
+        assert!(output.contains("; #@! TO.N,\\u00B5C_RST\\u003B1\n"));
+        assert!(output.contains("; #@! TO.P,R\\u005C1,\\u03A9\n"));
+    }
+
+    #[test]
+    fn emits_decimal_metric_drill_and_slot_xnc() {
+        let mut builder = XncBuilder::new(vec![XncAttribute::file(
+            "FileFunction",
+            ["Plated", "1", "4", "PTH"],
+        )]);
         builder
             .add_drill(
                 0.3,
@@ -611,28 +527,12 @@ mod tests {
                 vec![],
             )
             .unwrap();
-        builder
-            .add_route(
-                0.7,
-                Point::new(4.0, 4.0),
-                vec![XncRouteSegment::Line {
-                    to: Point::new(5.0, 4.0),
-                }],
-                vec![XncAttribute::tool(
-                    "AperFunction",
-                    ["Plated", "PTH", "ComponentDrill"],
-                )],
-                vec![],
-            )
-            .unwrap();
-
         let output = write_xnc(&builder.finish()).unwrap();
 
         assert!(output.contains("; #@! TF.FileFunction,Plated,1,4,PTH\n"));
         assert!(output.contains("; #@! TA.AperFunction,Plated,PTH,ViaDrill\nT01C0.3\n"));
         assert!(output.contains("T01\n; #@! TO.N,GND\nG05\nX1.0Y-2.5\n"));
-        assert!(output.contains("T02\nX3.0Y4.0G85X3.0Y5.1\nG05\n"));
-        assert!(output.contains("T03\nG00X4.0Y4.0\nM15\nG01X5.0Y4.0\nM16\n"));
+        assert!(output.contains("T02\n; #@! TD\nX3.0Y4.0G85X3.0Y5.1\nG05\n"));
         assert!(output.ends_with("M30\n"));
     }
 }

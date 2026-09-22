@@ -3,15 +3,18 @@
 //! net ownership or canonical physical lands; proximity never implies ownership.
 
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
+use pcb_ir::geom::tol;
 
-use crate::commands::dfm::design::{ConductorId, Design};
+use crate::commands::dfm::design::{Design, spans};
 use crate::commands::dfm::pdk::SlotPlating;
 use crate::commands::dfm::report::Evidence;
 use crate::commands::dfm::rules::Conditions;
 
 use super::copper_clearance::conductor_subject;
-use super::hole_clearance::land_owns_conductor;
-use super::{Evaluation, Measured, layers, linework_clearance, slot_matches, slot_subject};
+use super::{
+    Evaluation, Measured, Ownership, layers, linework_clearance, slot_matches, slot_subject,
+    spanned_layers, violates,
+};
 
 pub(super) fn evaluate(
     limit_mm: f64,
@@ -21,6 +24,8 @@ pub(super) fn evaluate(
 ) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
+    // A placed slot is measured here too, against what its own Step's design
+    // does not hold: this Step's copper and that of the other placements.
     for (slot_index, slot) in design
         .slots
         .iter()
@@ -28,43 +33,31 @@ pub(super) fn evaluate(
         .filter(|(_, slot)| slot_matches(slot.plating, plating))
     {
         let boundary = slot.outline.prepare_query();
-        let owner = slot.net.map(|net| ConductorId::Net {
-            step: slot.step,
-            instance: slot.provenance.instance_index,
-            net,
-        });
-        for (copper_index, copper) in design.copper_layers.iter().enumerate() {
-            // Extraction orders copper layers and drill spans by the same
-            // validated physical stackup.
-            if !slot.drill_span.contains_copper(copper_index)
-                || !conditions.applies_to_layer(copper)
-            {
-                continue;
-            }
-            checked += 1;
-            // A canonical link can mean unique overlap, not identity. Exempt
-            // a land only with stated padstack identity and no conflicting net.
-            let own_lands = design.slot_lands[slot_index]
-                .iter()
-                .filter(|link| link.copper_index as usize == copper_index)
-                .map(|link| &copper.lands[link.land_index as usize])
-                .filter(|land| slot.padstack == Some(land.padstack))
-                .filter(|land| {
-                    slot.net
-                        .zip(land.net)
-                        .is_none_or(|(slot_net, land_net)| slot_net == land_net)
+        let owner = Ownership::of(
+            design,
+            slot.net,
+            slot.padstack,
+            slot.step,
+            slot.provenance.instance_index,
+            &design.slot_lands[slot_index],
+        );
+        // Extraction orders copper layers and drill spans by the same
+        // validated physical stackup.
+        for (copper_index, copper) in spanned_layers(design, &slot.drill_span, conditions) {
+            checked += usize::from(slot.branch.is_none());
+            // Only a conductor whose bounds reach the limit can come within it.
+            let nearest = design.conductors_near[copper_index]
+                .query(slot.outline.bbox.expand(limit_mm + tol::EPSILON_MM))
+                .into_iter()
+                .map(|index| {
+                    (
+                        &copper.conductors[index],
+                        &design.conductor_boundaries[copper_index][index],
+                    )
                 })
-                .collect::<Vec<_>>();
-            let nearest = copper
-                .conductors
-                .iter()
-                .zip(&design.conductor_boundaries[copper_index])
+                .filter(|(conductor, _)| spans(slot.branch, conductor.branch))
                 .filter(|(conductor, _)| {
-                    plating == SlotPlating::Nonplated
-                        || !(owner == Some(conductor.id)
-                            || own_lands
-                                .iter()
-                                .any(|land| land_owns_conductor(land, conductor.id)))
+                    plating == SlotPlating::Nonplated || !owner.owns(conductor.id)
                 })
                 .filter_map(|(conductor, copper_boundary)| {
                     region_clearance_within(
@@ -89,25 +82,25 @@ pub(super) fn evaluate(
                 Evidence::region("routed_slot", &slot.outline),
                 Evidence::bounds("offending_copper", offender.image.bbox),
             ];
-            let sites = region_clearance_sites_with_index(
-                &slot.outline,
-                &offender.image,
-                copper_boundary,
-                limit_mm,
-            )?
-            .into_iter()
-            .map(|geometry| {
-                let mut site = linework_clearance::report_site(
-                    geometry,
-                    finding_layers.clone(),
+            // Sites describe a violation; a clear candidate needs none.
+            let mut sites = Vec::new();
+            if violates(&distance, limit_mm) {
+                sites = linework_clearance::report_sites(
+                    region_clearance_sites_with_index(
+                        &slot.outline,
+                        &offender.image,
+                        copper_boundary,
+                        limit_mm,
+                    )?,
+                    &finding_layers,
                     limit_mm,
                     design.resolution,
                 )?;
-                site.subjects = subjects.clone();
-                site.evidence.extend(evidence.clone());
-                Ok(site)
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+                for site in &mut sites {
+                    site.subjects = subjects.clone();
+                    site.evidence.extend(evidence.clone());
+                }
+            }
             measured.push(Measured {
                 distance,
                 bbox: slot
@@ -126,26 +119,16 @@ pub(super) fn evaluate(
 #[cfg(test)]
 mod tests {
     use crate::LayoutTarget;
-    use crate::commands::dfm::{self, CheckRequest, PdkSource, TextSource, report};
-    use crate::ipc2581::Ipc2581;
-    use pcb_ir::geom::Resolution;
+    use crate::commands::dfm::fixtures;
+    use crate::commands::dfm::{self, report};
 
     fn pdk(plating: &str) -> String {
-        format!(
-            r#"schema_version = 2
-default_profile = "test"
-[pdk]
-id = "slot-test"
-name = "Slot test"
-revision = "1"
-[profiles.test]
-name = "Test"
-[[rules.copper.slot_clearance]]
+        fixtures::pdk(&format!(
+            r#"[[rules.copper.slot_clearance]]
 id = "slot-clearance"
 select = {{ plating = "{plating}" }}
-limit = {{ minimum = "0.20 mm" }}
-"#
-        )
+limit = {{ minimum = "0.20 mm" }}"#
+        ))
     }
 
     // Declaration order deliberately differs from physical copper order.
@@ -175,6 +158,10 @@ limit = {{ minimum = "0.20 mm" }}
         )
     }
 
+    fn check(xml: &str, pdk: &str) -> report::DfmReport {
+        fixtures::report(xml, pdk, LayoutTarget::Board)
+    }
+
     fn copper(net: &str) -> String {
         format!(
             r#"<LayerFeature layerRef="L0"><Set {net}><Features><Contour><Polygon>
@@ -184,31 +171,12 @@ limit = {{ minimum = "0.20 mm" }}
         )
     }
 
-    fn check(xml: &str, source: &str, target: LayoutTarget) -> anyhow::Result<report::DfmReport> {
-        let imported =
-            pcb_ir::import::ipc2581::import_design(&Ipc2581::parse(xml)?, Resolution::default())?;
-        dfm::check(
-            &imported,
-            CheckRequest {
-                input: report::FileIdentity::new("slot.xml", xml.as_bytes()),
-                pdk: PdkSource::Toml(TextSource {
-                    path: "slot.toml",
-                    source,
-                }),
-                waivers: None,
-                layout_target: target,
-                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            },
-            Resolution::default(),
-        )
-    }
-
     #[test]
     fn width_only_report_omits_unproven_span_with_shuffled_layers() {
         let source = pdk("plated")
             .replace("rules.copper.slot_clearance", "rules.drilling.slot_width")
             .replace("0.20 mm", "0.80 mm");
-        let result = check(&board("PLATED", "", ""), &source, LayoutTarget::Board).unwrap();
+        let result = check(&board("PLATED", "", ""), &source);
         let finding = &result.findings[0];
         assert!((finding.measurement.actual_mm().unwrap() - 0.6).abs() < 1e-8);
         assert!(finding.subjects[0].drill_span.is_none());
@@ -230,7 +198,7 @@ limit = {{ minimum = "0.20 mm" }}
 <PolyStepSegment x="10" y="10"/><PolyStepSegment x="-10" y="10"/>
 <PolyStepSegment x="-10" y="-10"/></Polygon></Profile>"#,
                 );
-            let result = check(&xml, standard.source, LayoutTarget::Board).unwrap();
+            let result = check(&xml, standard.source);
             assert!(matches!(result.verdict, report::Verdict::Pass));
             assert_eq!(result.summary.errors, 0);
             let finding = result
@@ -254,11 +222,25 @@ limit = {{ minimum = "0.20 mm" }}
                 assert!(enclosure.is_none(), "nonplated slots need no copper land");
             }
 
-            let missing = xml.replace("<Span fromLayer=\"L0\" toLayer=\"L1\"/>", "");
+            let missing = xml.replace(
+                "<Span fromLayer=\"L0\" toLayer=\"L1\"/>",
+                "<Span fromLayer=\"L0\"/>",
+            );
+            let unresolved = check(&missing, standard.source);
+            let slot_rule = unresolved
+                .rules
+                .iter()
+                .find(|rule| {
+                    rule.id
+                        .contains(&format!(".{}_slot_clearance", plating.to_lowercase()))
+                })
+                .unwrap();
+            assert!(matches!(slot_rule.status, report::RuleStatus::Incomplete));
             assert!(
-                check(&missing, standard.source, LayoutTarget::Board)
-                    .unwrap_err()
-                    .to_string()
+                slot_rule
+                    .skip_reason
+                    .as_deref()
+                    .unwrap()
                     .contains("no resolvable drill span")
             );
         }
@@ -272,12 +254,7 @@ limit = {{ minimum = "0.20 mm" }}
             ("PLATED", "plated", "", true),
             ("NONPLATED", "nonplated", "net=\"N1\"", true),
         ] {
-            let result = check(
-                &board(plating, "net=\"N1\"", &copper(net)),
-                &pdk(selector),
-                LayoutTarget::Board,
-            )
-            .unwrap();
+            let result = check(&board(plating, "net=\"N1\"", &copper(net)), &pdk(selector));
             assert_eq!(result.rules[0].checked, 2);
             assert_eq!(result.findings.len(), usize::from(fails), "{result:#?}");
             if fails {
@@ -310,9 +287,7 @@ limit = {{ minimum = "0.20 mm" }}
         let own = check(
             &board("PLATED", "geometry=\"land-stack\"", land),
             &pdk("plated"),
-            LayoutTarget::Board,
-        )
-        .unwrap();
+        );
         assert!(own.findings.is_empty());
         for (identity, copper_land) in [
             ("", land.to_owned()),
@@ -321,12 +296,7 @@ limit = {{ minimum = "0.20 mm" }}
                 land.replace("<Set>", "<Set net=\"N2\">"),
             ),
         ] {
-            let unproven = check(
-                &board("PLATED", identity, &copper_land),
-                &pdk("plated"),
-                LayoutTarget::Board,
-            )
-            .unwrap();
+            let unproven = check(&board("PLATED", identity, &copper_land), &pdk("plated"));
             assert_eq!(
                 unproven.findings.len(),
                 1,
@@ -340,69 +310,61 @@ limit = {{ minimum = "0.20 mm" }}
                 &format!("{land}{}", copper("")),
             ),
             &pdk("plated"),
-            LayoutTarget::Board,
-        )
-        .unwrap();
+        );
         assert_eq!(foreign.findings.len(), 1);
         assert_eq!(foreign.findings[0].subjects[1].kind, "unattributed_copper");
         let nonplated = check(
             &board("NONPLATED", "geometry=\"land-stack\"", land),
             &pdk("nonplated"),
-            LayoutTarget::Board,
-        )
-        .unwrap();
+        );
         assert_eq!(nonplated.findings[0].measurement.actual_mm(), Some(0.0));
     }
 
     #[test]
-    fn physical_span_survives_mirrored_repeats_and_missing_span_fails_closed() {
+    fn a_mirrored_repeat_is_measured_once_and_a_missing_span_fails_closed() {
         let source = pdk("plated");
         let outside = board(
             "PLATED",
             "net=\"N1\"",
             &copper("net=\"N2\"").replace("layerRef=\"L0\"", "layerRef=\"L2\""),
         );
-        assert!(
-            check(&outside, &source, LayoutTarget::Board)
-                .unwrap()
-                .findings
-                .is_empty()
-        );
+        assert!(check(&outside, &source).findings.is_empty());
         let inside = outside.replace("layerRef=\"L2\"", "layerRef=\"L1\"");
         let panel = inside.replace("<StepRef name=\"board\"/>", "<StepRef name=\"panel\"/>")
             .replace("</CadData>", r#"<Step name="panel" type="PALLET"><StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="20" dy="0" mirror="true"/></Step></CadData>"#);
-        let repeated = check(&panel, &source, LayoutTarget::BoardArray).unwrap();
+        let repeated = fixtures::report(&panel, &source, LayoutTarget::BoardArray);
         assert_eq!(repeated.rules[0].checked, 4);
-        assert_eq!(repeated.findings.len(), 2);
-        for finding in &repeated.findings {
-            assert!((finding.measurement.actual_mm().unwrap() - 0.1).abs() < 1e-8);
-            assert_eq!(
-                finding.subjects[0]
-                    .provenance
-                    .as_ref()
-                    .unwrap()
-                    .instance_index,
-                finding.subjects[1]
-                    .provenance
-                    .as_ref()
-                    .unwrap()
-                    .instance_index
-            );
-        }
-        let missing = inside.replace("<Span fromLayer=\"L0\" toLayer=\"L1\"/>", "");
+        let [finding] = repeated.findings.as_slice() else {
+            panic!("the board is measured once: {:?}", repeated.findings);
+        };
+        assert!((finding.measurement.actual_mm().unwrap() - 0.1).abs() < 1e-8);
+        let placements = &repeated.frames[finding.frame as usize].placements;
+        assert_eq!(placements.len(), 2);
         assert!(
-            check(&missing, &source, LayoutTarget::Board)
-                .unwrap_err()
-                .to_string()
+            placements.iter().all(|placement| {
+                let [a, b, c, d, ..] = placement.transform;
+                a * d - b * c < 0.0
+            }),
+            "it occurs at both mirrored placements"
+        );
+        let missing = inside.replace(
+            "<Span fromLayer=\"L0\" toLayer=\"L1\"/>",
+            "<Span fromLayer=\"L0\"/>",
+        );
+        let unresolved = check(&missing, &source);
+        assert!(matches!(unresolved.verdict, report::Verdict::Fail));
+        assert!(unresolved.findings.is_empty());
+        assert!(
+            unresolved.rules[0]
+                .skip_reason
+                .as_deref()
+                .unwrap()
                 .contains("no resolvable drill span")
         );
         let inactive = source.replace("limit = { minimum = \"0.20 mm\" }", "cases = [{ id = \"two\", when = { copper_layers = { exact = 2 } }, limit = { minimum = \"0.20 mm\" } }]");
         assert!(matches!(
-            check(&missing, &inactive, LayoutTarget::Board)
-                .unwrap()
-                .rules[0]
-                .status,
-            report::RuleStatus::Skipped
+            check(&missing, &inactive).rules[0].status,
+            report::RuleStatus::NotApplicable
         ));
     }
 }

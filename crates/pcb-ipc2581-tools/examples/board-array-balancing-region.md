@@ -25,7 +25,8 @@ All geometry is a filled planar point set in panel coordinates, in millimeters:
 - `r = 0.5`: required feature and panel-edge clearance.
 - `q = 0.5`: filled-region rolling-disk radius.
 - `v = 0.5`: void-gap rolling-disk radius.
-- `e = 0.025`: numerical construction guard.
+- `e`: numerical construction guard, half the geometry accuracy budget
+  (0.025 at the balancing profile's 50 µm).
 
 Clearance and filled-region regularization are direct morphology:
 
@@ -70,17 +71,23 @@ meaningful geometric progress reports an error.
 The independent nominal certificate is:
 
 ```text
-C = safe ⊕ disk(r)
-
 safe \ F_l = ∅
-safe \ open(safe, disk(q)) = ∅, after numerical denoising
-G_v(safe) = ∅
-C \ P = ∅
-C ∩ O_l = ∅
+safe \ P = ∅
+safe ∩ O_l = ∅
+dist(∂safe, ∂P ∪ ∂O_l) >= r
 ```
 
-Construction uses the guard; certification uses the nominal requirements.
-Every violation remains available as geometry for debugging.
+Construction uses the guard and offsets; certification uses the nominal
+clearance and measures boundary-to-boundary distance exactly, so the proof
+shares none of the construction's machinery. Regions that do not overlap can
+only come within `r` of each other where their boundaries do, so the four
+statements together are the clearance requirement.
+
+Filled-feature and void-gap width need no second proof. The last step of the
+construction is an opening by `disk(q)`, and it stops only once `G_v` of its
+own result is empty — that loop condition is the certificate. The harness
+still draws `safe ⊕ disk(r)`, `safe \ open(safe, disk(q))` and `G_v(safe)` as
+overlays for debugging.
 
 ## IPC boundary
 
@@ -99,7 +106,6 @@ pub struct BalancingRegionOptions {
     pub clearance_mm: f64,
     pub regularization_radius_mm: f64,
     pub gap_radius_mm: f64,
-    pub numerical_guard_mm: f64,
 }
 ```
 
@@ -134,7 +140,6 @@ Options:
 --clearance-mm <mm>                  nominal clearance; default 0.5
 --regularization-radius-mm <mm>      filled-region disk radius; default 0.5
 --gap-radius-mm <mm>                 void-gap disk radius; default 0.5
---numerical-guard-mm <mm>            construction guard; default 0.025
 --check-area-tolerance-mm2 <mm²>     certificate threshold; default 0.0001
 --copper-layer <name>                layer to inspect; default first copper layer
 --require-a-series-auto              reject non-A-series auto arrays

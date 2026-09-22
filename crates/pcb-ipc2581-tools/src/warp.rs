@@ -6,10 +6,10 @@
 use anyhow::{Context, Result, bail};
 use pcb_ir::geom::Resolution;
 use pcb_ir::geom::warp::{
-    LAMINATE_RELAXATION_DROP_K, Material, PanelField, StackLayer, ThermalStack, WarpEstimate,
-    estimate_warp,
+    LAMINATE_RELAXATION_DROP_K, Material, PanelField, PlateResponse, StackLayer, ThermalStack,
+    WarpEstimate, estimate_warp,
 };
-use pcb_ir::geom::{BBox, ContourSet, Point};
+use pcb_ir::geom::{BBox, ContourSet};
 
 use crate::ipc2581::Ipc2581;
 use pcb_ir::dialects::ipc::ArtworkScope;
@@ -43,8 +43,8 @@ pub struct LayerCoverage {
 /// Everything the report needs about one panel.
 pub struct WarpAnalysis {
     pub stack: ThermalStack,
-    /// Sample positions shared by every field below.
-    pub samples: Vec<Point>,
+    /// The stack's response at each layer's mean coverage.
+    pub response: PlateResponse,
     pub bounds: BBox,
     pub layers: Vec<LayerCoverage>,
     /// `sum_l t_l z_l rho_l(x)`, the geometric copper moment.
@@ -58,17 +58,16 @@ pub struct WarpAnalysis {
 /// Analyze the panel described by `ipc`.
 ///
 /// Requires a stackup carrying a thickness for every layer: without it there is
-/// no neutral axis, no lever arms, and nothing to estimate.
+/// no rigidity, no lever arms, and nothing to estimate.
 pub fn analyze(ipc: &Ipc2581, resolution: Resolution) -> Result<WarpAnalysis> {
     let imported = import_design(ipc, resolution)?;
     let (stack, copper_names) = physical_stack(ipc)?;
     let conductors = stack.conductor_weights();
-    let bounds = panel_bounds(ipc, &imported, resolution)?;
+    let bounds = panel_bounds(&imported)?;
     let sample_pitch_mm =
         (bounds.width().max(bounds.height()) / SAMPLES_ACROSS).max(MIN_SAMPLE_PITCH_MM);
     let columns = (bounds.width() / sample_pitch_mm).ceil().max(1.0) as usize;
     let rows = (bounds.height() / sample_pitch_mm).ceil().max(1.0) as usize;
-    let samples = grid(bounds, columns, rows);
 
     let layers = copper_names
         .iter()
@@ -92,7 +91,7 @@ pub fn analyze(ipc: &Ipc2581, resolution: Resolution) -> Result<WarpAnalysis> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let values = (0..samples.len())
+    let values = (0..columns * rows)
         .map(|sample| {
             layers
                 .iter()
@@ -102,17 +101,16 @@ pub fn analyze(ipc: &Ipc2581, resolution: Resolution) -> Result<WarpAnalysis> {
         })
         .collect::<Vec<f64>>();
     let moment =
-        PanelField::new(samples.clone(), values, bounds).context("panel has no area to sample")?;
+        PanelField::new(bounds, columns, rows, values).context("panel has no area to sample")?;
 
-    let warp = estimate_warp(
-        &stack,
-        Material::LAMINATE,
-        &moment,
-        LAMINATE_RELAXATION_DROP_K,
-    );
+    let means = layers.iter().map(|layer| layer.mean).collect::<Vec<_>>();
+    let response = stack
+        .response(Material::LAMINATE, &means)
+        .context("physical stackup has no bending stiffness")?;
+    let warp = estimate_warp(&response, &moment, LAMINATE_RELAXATION_DROP_K);
     Ok(WarpAnalysis {
         stack,
-        samples,
+        response,
         bounds,
         layers,
         moment,
@@ -190,37 +188,10 @@ pub(crate) fn physical_stack(ipc: &Ipc2581) -> Result<(ThermalStack, Vec<String>
     Ok((stack, copper_names))
 }
 
-fn panel_bounds(ipc: &Ipc2581, imported: &ImportedDesign, resolution: Resolution) -> Result<BBox> {
-    let layout =
-        crate::geometry::extract_layout(ipc).context("failed to extract the panel outline")?;
-    let profile =
-        crate::geometry::board_array_fabrication_profile(imported, &layout, &[], resolution)
-            .context("failed to derive the panel profile")?;
-    let outline = ContourSet::from_filled_contours(
-        &profile
-            .array_outlines
-            .iter()
-            .flatten()
-            .cloned()
-            .collect::<Vec<_>>(),
-        resolution,
-    )?;
-    if outline.is_empty() {
-        bail!("panel has no outline to measure");
-    }
-    Ok(outline.bbox)
-}
-
-/// Centres of the cells [`ContourSet::grid_coverage`] measures.
-fn grid(bounds: BBox, columns: usize, rows: usize) -> Vec<Point> {
-    (0..rows)
-        .flat_map(|row| {
-            (0..columns).map(move |column| {
-                Point::new(
-                    bounds.min.x + bounds.width() * (column as f64 + 0.5) / columns as f64,
-                    bounds.min.y + bounds.height() * (row as f64 + 0.5) / rows as f64,
-                )
-            })
-        })
-        .collect()
+/// The plate warp is estimated for: the root Step, a panel or a lone board.
+fn panel_bounds(imported: &ImportedDesign) -> Result<BBox> {
+    pcb_ir::dialects::ipc::root_step(&imported.geometry)
+        .map(|(_, step)| step.bbox)
+        .filter(|bbox| !bbox.is_empty())
+        .context("the design's root step has no outline to measure")
 }

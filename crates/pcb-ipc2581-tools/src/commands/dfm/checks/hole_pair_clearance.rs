@@ -11,18 +11,20 @@
 //! witness points ([`pcb_ir::geom::dfm::disk_clearance`]). The check
 //! requires `dist(Dᵢ, Dⱼ) ≥ L` for every unordered pair whose drill spans
 //! overlap in the copper stackup — holes that share no board depth cannot
-//! interact, so stacked blind and buried vias on disjoint spans are exempt.
+//! interact, so blind and buried vias on disjoint spans are exempt, as are
+//! vias stacked on a shared terminal layer (L1–L2 over L2–L3).
 //!
 //! Enumeration is a plane sweep: with holes sorted by their bounds' minimum
 //! x, the inner scan stops at the first hole separated from the current one
 //! by at least `L` along x, and an axis-aligned y-interval gap test prunes
 //! the rest, so only genuinely close pairs are measured. A pruned pair is
 //! thereby *proven* clear, not left unexamined, so `checked` counts the
-//! holes entering the sweep: every hole is decided against every other.
+//! Step's own holes entering the sweep: every hole is decided against every
+//! other, a pair inside one placement in that placement's own design.
 
 use pcb_ir::geom::dfm::{circular_region, disk_clearance};
 
-use crate::commands::dfm::design::{Design, HoleClass};
+use crate::commands::dfm::design::{Design, HoleClass, spans};
 use crate::commands::dfm::report::{DisplayCircle, Evidence, EvidenceDisplay, MeasurementKind};
 
 use super::{COMPARISON_EPSILON_MM, Evaluation, Measured, MeasuredSite, hole_subject, layers};
@@ -56,6 +58,7 @@ pub(super) fn evaluate(
                             .max(0.0);
                         classes_match
                             && y_gap < reach
+                            && spans(first.branch, second.branch)
                             && first.drill_span.overlaps(&second.drill_span)
                     })
                     .map(move |second| {
@@ -143,7 +146,7 @@ pub(super) fn evaluate(
         .flatten()
         .collect();
     Ok(Evaluation {
-        checked: holes.len(),
+        checked: holes.iter().filter(|hole| hole.branch.is_none()).count(),
         measured,
     })
 }
@@ -151,19 +154,36 @@ pub(super) fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::dfm::{pdk::Pdk, rules};
-    use crate::ipc2581::Ipc2581;
-    use pcb_ir::dialects::ipc::ArtworkScope;
+    use crate::commands::dfm::fixtures;
     use pcb_ir::geom::Resolution;
+
+    /// The PTH-to-PTH pairs of `xml` measured against a 0.2 mm limit.
+    fn evaluate_pth_pairs(xml: &str) -> Evaluation {
+        let rules = fixtures::rules(&fixtures::pdk(
+            r#"[[rules.drilling.hole_to_hole_clearance]]
+id = "hole-clearance"
+select = { first_hole = "pth", second_hole = "pth" }
+limit = { minimum = "0.2 mm" }"#,
+        ));
+        let imported = fixtures::import(xml);
+        let design = Design::board(&imported, &rules, Resolution::default());
+        evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design).unwrap()
+    }
 
     #[test]
     fn physical_overlap_is_independent_of_copper_declaration_order() {
         for order in [[0, 1, 2, 3], [0, 2, 1, 3], [0, 3, 1, 2]] {
-            // Disjoint blind spans must not interact; nested spans must.
-            for (first, second, findings) in [((0, 1), (2, 3), 0), ((0, 3), (1, 2), 1)] {
+            // Disjoint blind spans must not interact, nor spans stacked on a
+            // shared terminal layer; nested spans must.
+            for (first, second, findings) in [
+                ((0, 1), (2, 3), 0),
+                ((0, 1), (1, 2), 0),
+                ((0, 3), (1, 2), 1),
+            ] {
                 let layers = order.map(|i| format!(r#"<Layer name="L{i}" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE"/>"#)).join("");
                 let stackup = [0, 1, 2, 3].map(|i| format!(r#"<StackupLayer layerOrGroupRef="L{i}" thickness="0.035" tolPlus="0" tolMinus="0" sequence="{i}"/>"#)).join("");
-                let ipc = Ipc2581::parse(&format!(r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+                let evaluation = evaluate_pth_pairs(&format!(
+                    r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
                   <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/>
                     <LayerRef name="L0"/><LayerRef name="L1"/><LayerRef name="L2"/><LayerRef name="L3"/><LayerRef name="D1"/><LayerRef name="D2"/>
                   </Content><Ecad><CadHeader units="MILLIMETER"/><CadData>{layers}
@@ -176,34 +196,9 @@ mod tests {
                       <LayerFeature layerRef="D1"><Set><Hole name="H1" diameter="1" platingStatus="PLATED" x="0" y="0"/></Set></LayerFeature>
                       <LayerFeature layerRef="D2"><Set><Hole name="H2" diameter="1" platingStatus="PLATED" x="0.1" y="0"/></Set></LayerFeature>
                     </Step>
-                  </CadData></Ecad></IPC-2581>"#, first.0, first.1, second.0, second.1)).unwrap();
-                let pdk = Pdk::parse(
-                    r#"schema_version = 2
-                    default_profile = "test"
-                    [pdk]
-                    id = "test"
-                    name = "Test"
-                    revision = "1"
-                    [profiles.test]
-                    name = "Test"
-                    [[rules.drilling.hole_to_hole_clearance]]
-                    id = "hole-clearance"
-                    select = { first_hole = "pth", second_hole = "pth" }
-                    limit = { minimum = "0.2 mm" }
-                "#,
-                )
-                .unwrap();
-                let rules = rules::lower(&pdk, None).unwrap();
-                let imported =
-                    pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-                let design = Design::extract(
-                    &imported,
-                    ArtworkScope::Board,
-                    &rules,
-                    Resolution::default(),
-                )
-                .unwrap();
-                let evaluation = evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design).unwrap();
+                  </CadData></Ecad></IPC-2581>"#,
+                    first.0, first.1, second.0, second.1
+                ));
                 assert_eq!(evaluation.checked, 2);
                 assert_eq!(
                     evaluation.measured.len(),
@@ -216,9 +211,8 @@ mod tests {
 
     #[test]
     fn overlapping_drills_retain_exact_circle_intersection_parameters() {
-        let resolution = Resolution::default();
-
-        let ipc = Ipc2581::parse(r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+        let evaluation = evaluate_pth_pairs(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
           <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/><LayerRef name="DRILL"/></Content>
           <Ecad><CadHeader units="MILLIMETER"/><CadData>
             <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
@@ -227,27 +221,8 @@ mod tests {
               <Hole name="H2" diameter="0.8" platingStatus="PLATED" x="10.5" y="-20"/>
             </Set></LayerFeature></Step>
           </CadData></Ecad>
-        </IPC-2581>"#).unwrap();
-        let pdk = Pdk::parse(
-            r#"schema_version = 2
-          default_profile = "test"
-          [pdk]
-          id = "test"
-          name = "Test"
-          revision = "1"
-          [profiles.test]
-          name = "Test"
-          [[rules.drilling.hole_to_hole_clearance]]
-          id = "hole-clearance"
-          select = { first_hole = "pth", second_hole = "pth" }
-          limit = { minimum = "0.2 mm" }
-        "#,
-        )
-        .unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
-        let evaluation = evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design).unwrap();
+        </IPC-2581>"#,
+        );
         assert_eq!(evaluation.measured.len(), 1);
         let site = &evaluation.measured[0].sites[0];
         let overlap = site

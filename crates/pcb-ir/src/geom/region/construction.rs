@@ -6,10 +6,9 @@ use crate::geom::accuracy::numerical_error;
 use crate::geom::path::{ContourBuf, Segment, stroke_to_fill};
 use crate::geom::store::{Path, PathArena};
 use crate::geom::{
-    AccuracyError, Affine2, BBox, FillRule, GeometryAccuracy, Paint, Polarity, Resolution,
+    AccuracyError, Affine2, BBox, FillRule, GeometryAccuracy, Paint, Point, Polarity, Resolution,
 };
 
-/// A closed polygon boundary, flattened to line segments.
 /// Chords past which a single curve is being flattened to an absurd budget.
 const MAX_CHORDS_PER_SEGMENT: f64 = 1.0e6;
 
@@ -19,12 +18,7 @@ pub fn flatten_within(
     contours: &[ContourBuf],
     accuracy: GeometryAccuracy,
 ) -> Result<(Vec<Ring>, f64), AccuracyError> {
-    if contours.iter().any(|c| {
-        !c.bbox.is_valid()
-            || !c.uncertainty_mm.is_finite()
-            || c.uncertainty_mm < 0.0
-            || !c.cmds.iter().all(|cmd| cmd.is_finite())
-    }) {
+    if contours.iter().any(|contour| !contour.is_valid()) {
         return Err(AccuracyError::InvalidGeometry(
             "invalid coordinates or significance tolerance",
         ));
@@ -52,7 +46,7 @@ pub fn flatten_within(
     {
         return Err(AccuracyError::SubdivisionLimit);
     }
-    let (rings, added) = flatten_contours(contours, remaining);
+    let (rings, added) = flatten_contours(contours, remaining)?;
     Ok((rings, prior + added + numeric))
 }
 
@@ -98,13 +92,7 @@ impl ContourSet {
     }
 
     pub fn empty(resolution: Resolution) -> Self {
-        Self {
-            bbox: BBox::empty(),
-            rings: Vec::new(),
-            ring_bounds: Vec::new(),
-            resolution,
-            uncertainty_mm: 0.0,
-        }
+        Self::from_regularized(Vec::new(), resolution, 0.0)
     }
 
     /// Prepare source contours under one fill rule. Curves are flattened
@@ -191,7 +179,7 @@ impl ContourSet {
                 Paint::Stroke(stroke) => {
                     let local =
                         GeometryAccuracy::new(accuracy.max_error_mm() / placement.max_scale())?;
-                    stroke_to_fill(&contours, stroke.into(), local)?.unwrap_or_default()
+                    stroke_to_fill(&contours, stroke, local)?.unwrap_or_default()
                 }
                 Paint::None => continue,
             };
@@ -206,6 +194,37 @@ impl ContourSet {
             );
         }
         composer.finish()
+    }
+
+    /// The same region moved by `offset`. A polygon translates exactly, so
+    /// only the sums' own rounding is charged.
+    pub fn translated(&self, offset: Point) -> Result<Self, AccuracyError> {
+        let shift = |bbox: BBox| {
+            if bbox.is_empty() {
+                bbox
+            } else {
+                BBox::new(bbox.min + offset, bbox.max + offset)
+            }
+        };
+        let bbox = shift(self.bbox);
+        Self {
+            bbox,
+            rings: self
+                .rings()
+                .map(|ring| {
+                    ring.iter()
+                        .map(|&[x, y]| [x + offset.x, y + offset.y])
+                        .collect()
+                })
+                .collect(),
+            ring_bounds: self
+                .bounded_rings()
+                .map(|(_, bounds)| shift(bounds))
+                .collect(),
+            resolution: self.resolution,
+            uncertainty_mm: self.uncertainty_mm + numerical_error(bbox),
+        }
+        .checked()
     }
 
     pub fn rectangle(bbox: BBox, resolution: Resolution) -> Self {

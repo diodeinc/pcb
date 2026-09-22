@@ -1,7 +1,7 @@
-use super::{Units, UserPrimitive};
+use super::{Span, Units, UserPrimitive};
 use crate::Symbol;
 use std::collections::HashMap;
-use std::str::FromStr;
+use std::fmt;
 
 /// CadHeader defines units and specifications for the ECAD section
 ///
@@ -89,8 +89,10 @@ pub struct Stackup {
     pub name: Symbol,
     pub overall_thickness: Option<f64>,
     pub where_measured: Option<WhereMeasured>,
+    /// Millimeters, or percent of the thickness when `tol_percent`.
     pub tol_plus: Option<f64>,
     pub tol_minus: Option<f64>,
+    pub tol_percent: bool,
     pub layers: Vec<StackupLayer>,
 }
 
@@ -99,8 +101,10 @@ pub struct Stackup {
 pub struct StackupLayer {
     pub layer_ref: Symbol,
     pub thickness: Option<f64>,
+    /// Millimeters, or percent of the thickness when `tol_percent`.
     pub tol_plus: Option<f64>,
     pub tol_minus: Option<f64>,
+    pub tol_percent: bool,
     pub material: Option<Symbol>,
     pub spec_ref: Option<Symbol>, // Reference to Spec for looking up properties
     pub dielectric_constant: Option<f64>,
@@ -124,12 +128,13 @@ pub struct Step {
     pub layer_features: Vec<LayerFeature>,
 }
 
-/// IPC-2581 Step type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StepType {
-    Board,
-    Pallet,
-    Ic,
+ipc_enum! {
+    /// IPC-2581 Step type.
+    pub enum StepType("Step type") {
+        Board = "BOARD",
+        Pallet = "PALLET",
+        Ic = "IC",
+    }
 }
 
 /// StepRepeat places one Step within another Step, usually a board within a panel.
@@ -185,27 +190,34 @@ pub struct PadstackHoleDef {
 pub struct PadstackPadDef {
     pub layer_ref: Symbol,
     pub pad_use: PadUse,
+    /// Transform of the layer shape about the padstack origin, offsets in
+    /// millimeters. Allegro writes the shape offset here and leaves
+    /// `Location` at the origin; KiCad does the opposite.
+    pub xform: Option<super::Xform>,
     /// Shape offset from the padstack origin, in millimeters. The pad's
     /// `Xform` rotates and mirrors this offset together with the shape.
     pub x: f64,
     pub y: f64,
-    pub standard_primitive_ref: Option<Symbol>,
-    pub user_primitive_ref: Option<Symbol>,
+    /// The layer shape: a dictionary reference or any inline `Feature`.
+    pub feature: Option<FeatureShape>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlatingStatus {
-    Plated,
-    NonPlated,
-    Via,
-    ViaCapped,
+ipc_enum! {
+    pub enum PlatingStatus("platingStatus") {
+        Plated = "PLATED",
+        NonPlated = "NONPLATED",
+        Via = "VIA",
+        ViaCapped = "VIA_CAPPED",
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PadUse {
-    Regular,
-    Antipad,
-    Thermal,
+ipc_enum! {
+    pub enum PadUse("padUse") {
+        Regular = "REGULAR",
+        Antipad = "ANTIPAD",
+        Thermal = "THERMAL",
+        Other = "OTHER",
+    }
 }
 
 /// Package describes a component package (land pattern + outline)
@@ -228,7 +240,7 @@ pub struct Package {
     pub other_side_view: Option<PackageOtherSideView>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PackageOutline {
     pub polygon: super::Polygon,
     pub polygon_xform: Option<super::Xform>,
@@ -274,7 +286,7 @@ pub struct PackageMarking {
     pub feature: FeatureShape,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PackageSideView {
     pub outline: Option<PackageOutline>,
     pub land_pattern: Option<PackageLandPattern>,
@@ -306,55 +318,62 @@ pub struct PackagePin {
 /// Shape content allowed by the IPC-2581C `StandardShape` substitution group.
 #[derive(Debug, Clone)]
 pub enum StandardShape {
-    Primitive(super::StandardPrimitive),
+    Primitive(Box<super::StandardPrimitive>),
     PrimitiveRef(Symbol),
 }
 
 /// Shape content allowed by the broader IPC-2581C `Feature` substitution group.
+///
+/// Nearly every shape is a dictionary reference, so the inline definitions
+/// are boxed to keep each pad that holds one of these small.
 #[derive(Debug, Clone)]
 pub enum FeatureShape {
-    StandardPrimitive(super::StandardPrimitive),
+    StandardPrimitive(Box<super::StandardPrimitive>),
     StandardPrimitiveRef(Symbol),
-    UserPrimitive(super::UserPrimitive),
+    UserPrimitive(Box<super::UserPrimitive>),
     UserPrimitiveRef(Symbol),
-    UserShape(super::UserShape),
-    Text(super::Text),
-    Outline(PackageOutline),
+    UserShape(Box<super::UserShape>),
+    Text(Box<super::Text>),
+    Outline(Box<PackageOutline>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PackagePinType {
-    Through,
-    Blind,
-    Surface,
+ipc_enum! {
+    pub enum PackagePinType("Pin type") {
+        Through = "THRU",
+        Blind = "BLIND",
+        Surface = "SURFACE",
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PackagePinElectricalType {
-    Electrical,
-    Mechanical,
-    Undefined,
+ipc_enum! {
+    pub enum PackagePinElectricalType("Pin electricalType") {
+        Electrical = "ELECTRICAL",
+        Mechanical = "MECHANICAL",
+        Undefined = "UNDEFINED",
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PackagePinMountType {
-    SurfaceMountPin,
-    SurfaceMountPad,
-    ThroughHolePin,
-    ThroughHoleHole,
-    PressFit,
-    NonBoard,
-    Hole,
-    WireBond,
-    Undefined,
+ipc_enum! {
+    pub enum PackagePinMountType("Pin mountType") {
+        SurfaceMountPin = "SURFACE_MOUNT_PIN",
+        SurfaceMountPad = "SURFACE_MOUNT_PAD",
+        ThroughHolePin = "THROUGH_HOLE_PIN",
+        ThroughHoleHole = "THROUGH_HOLE_HOLE",
+        PressFit = "PRESSFIT",
+        NonBoard = "NONBOARD",
+        Hole = "HOLE",
+        WireBond = "WIRE_BOND",
+        Undefined = "UNDEFINED",
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PackagePinPolarity {
-    Plus,
-    Minus,
-    Anode,
-    Cathode,
+ipc_enum! {
+    pub enum PackagePinPolarity("pinPolarity") {
+        Plus = "PLUS",
+        Minus = "MINUS",
+        Anode = "ANODE",
+        Cathode = "CATHODE",
+    }
 }
 
 /// Component instance on the board
@@ -378,18 +397,19 @@ pub struct Component {
     pub spec_refs: Vec<Symbol>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MountType {
-    Smt,
-    Thmt,
-    Embedded,
-    PressFit,
-    WireBonded,
-    Glued,
-    Clamped,
-    Socketed,
-    Formed,
-    Other,
+ipc_enum! {
+    pub enum MountType("Component mountType") {
+        Smt = "SMT",
+        Thmt = "THMT",
+        Embedded = "EMBEDDED",
+        PressFit = "PRESSFIT",
+        WireBonded = "WIRE_BONDED",
+        Glued = "GLUED",
+        Clamped = "CLAMPED",
+        Socketed = "SOCKETED",
+        Formed = "FORMED",
+        Other = "OTHER",
+    }
 }
 
 /// LogicalNet represents electrical connectivity
@@ -422,7 +442,8 @@ pub struct Layer {
     pub polarity: Option<Polarity>,
     pub span: Option<LayerSpan>,
     pub spec_refs: Vec<Symbol>,
-    pub profile: Option<Profile>, // Layer-specific outline (for rigid-flex)
+    /// Layer-specific outlines; a rigid-flex layer can have several.
+    pub profiles: Vec<Profile>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -432,10 +453,16 @@ pub struct LayerSpan {
 }
 
 /// LayerFeature contains features on a layer
-#[derive(Debug, Clone)]
+///
+/// Allegro writes one `Set` per pad, so a layer holds its sets' features,
+/// spec refs and attributes in three tables that each set spans.
+#[derive(Clone)]
 pub struct LayerFeature {
     pub layer_ref: Symbol,
     pub sets: Vec<FeatureSet>,
+    pub features: Vec<SetFeature>,
+    pub spec_refs: Vec<Symbol>,
+    pub nonstandard_attributes: Vec<NonstandardAttribute>,
 }
 
 /// FeatureSet groups features with common properties
@@ -446,46 +473,34 @@ pub struct FeatureSet {
     pub component_ref: Option<Symbol>,
     pub geometry_usage: Option<GeometryUsage>,
     pub polarity: Option<Polarity>,
-    pub spec_refs: Vec<Symbol>,
-    pub features: Vec<SetFeature>,
-    pub nonstandard_attributes: Vec<NonstandardAttribute>,
+    /// Into [`LayerFeature::spec_refs`].
+    pub spec_refs: Span,
+    /// Into [`LayerFeature::features`], in source document order.
+    pub features: Span,
+    /// Into [`LayerFeature::nonstandard_attributes`].
+    pub nonstandard_attributes: Span,
 }
 
-/// Intended use of geometry in a feature set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GeometryUsage {
-    Thieving,
-    ThermalRelief,
-    Text,
-    Teardrop,
-    Graphic,
-    None,
-}
-
-impl FromStr for GeometryUsage {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "THIEVING" => Ok(Self::Thieving),
-            "THERMAL_RELIEF" => Ok(Self::ThermalRelief),
-            "TEXT" => Ok(Self::Text),
-            "TEARDROP" => Ok(Self::Teardrop),
-            "GRAPHIC" => Ok(Self::Graphic),
-            "NONE" => Ok(Self::None),
-            _ => Err(format!("Unknown geometryUsage: {}", s)),
-        }
+ipc_enum! {
+    /// Intended use of geometry in a feature set.
+    pub enum GeometryUsage("geometryUsage") {
+        Thieving = "THIEVING",
+        ThermalRelief = "THERMAL_RELIEF",
+        Text = "TEXT",
+        Teardrop = "TEARDROP",
+        Graphic = "GRAPHIC",
+        None = "NONE",
     }
 }
 
-impl FeatureSet {
-    /// Iterate features, descending into placement groups.
+impl LayerFeature {
+    /// Every feature of the layer, descending into placement groups.
     ///
     /// Placement-group members are yielded once, in group-local coordinates:
     /// the group's `locations` and `xform` are NOT applied. Consumers that
     /// need placed occurrences must match [`SetFeature::PlacementGroup`]
     /// directly and apply its placements themselves.
-    fn iter_features(&self) -> impl Iterator<Item = &SetFeature> {
+    fn flat_features(&self) -> impl Iterator<Item = &SetFeature> {
         self.features.iter().flat_map(|feature| match feature {
             SetFeature::PlacementGroup(group) => group.features.iter(),
             _ => std::slice::from_ref(feature).iter(),
@@ -493,81 +508,85 @@ impl FeatureSet {
     }
 
     pub fn holes(&self) -> impl Iterator<Item = &Hole> {
-        self.iter_features().filter_map(|feature| match feature {
+        self.flat_features().filter_map(|feature| match feature {
             SetFeature::Hole(hole) => Some(hole),
             _ => None,
         })
     }
 
     pub fn slots(&self) -> impl Iterator<Item = &Slot> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Slot(slot) => Some(slot),
-            _ => None,
-        })
-    }
-
-    pub fn pads(&self) -> impl Iterator<Item = &Pad> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Pad(pad) => Some(pad),
+        self.flat_features().filter_map(|feature| match feature {
+            SetFeature::Slot(slot) => Some(&**slot),
             _ => None,
         })
     }
 
     pub fn fiducials(&self) -> impl Iterator<Item = &Fiducial> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Fiducial(fiducial) => Some(fiducial),
-            _ => None,
-        })
-    }
-
-    pub fn traces(&self) -> impl Iterator<Item = &Trace> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Trace(trace) => Some(trace),
-            _ => None,
-        })
-    }
-
-    pub fn polygons(&self) -> impl Iterator<Item = &super::Polygon> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Polygon(polygon) => Some(polygon),
-            _ => None,
-        })
-    }
-
-    pub fn lines(&self) -> impl Iterator<Item = &Line> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Line(line) => Some(line),
-            _ => None,
-        })
-    }
-
-    pub fn polylines(&self) -> impl Iterator<Item = &FeaturePolyline> {
-        self.iter_features().filter_map(|feature| match feature {
-            SetFeature::Polyline(polyline) => Some(polyline),
+        self.flat_features().filter_map(|feature| match feature {
+            SetFeature::Fiducial(fiducial) => Some(&**fiducial),
             _ => None,
         })
     }
 }
 
+/// Prints each set with the features, spec refs and attributes it spans.
+impl fmt::Debug for LayerFeature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Sets<'a>(&'a LayerFeature);
+        struct Set<'a>(&'a LayerFeature, &'a FeatureSet);
+
+        impl fmt::Debug for Sets<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let sets = self.0.sets.iter().map(|set| Set(self.0, set));
+                f.debug_list().entries(sets).finish()
+            }
+        }
+
+        impl fmt::Debug for Set<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let Self(layer, set) = self;
+                let attributes = set
+                    .nonstandard_attributes
+                    .slice(&layer.nonstandard_attributes);
+                f.debug_struct("FeatureSet")
+                    .field("net", &set.net)
+                    .field("geometry", &set.geometry)
+                    .field("component_ref", &set.component_ref)
+                    .field("geometry_usage", &set.geometry_usage)
+                    .field("polarity", &set.polarity)
+                    .field("spec_refs", &set.spec_refs.slice(&layer.spec_refs))
+                    .field("features", &set.features.slice(&layer.features))
+                    .field("nonstandard_attributes", &attributes)
+                    .finish()
+            }
+        }
+
+        f.debug_struct("LayerFeature")
+            .field("layer_ref", &self.layer_ref)
+            .field("sets", &Sets(self))
+            .finish()
+    }
+}
+
 /// Geometry-bearing children of a Set in source document order.
+///
+/// A pad, hole or line is what a layer holds by the hundred thousand, so the
+/// rare fat kinds are boxed and do not size the rest.
 #[derive(Debug, Clone)]
 pub enum SetFeature {
     Hole(Hole),
-    Slot(Slot),
+    Slot(Box<Slot>),
     Pad(Pad),
-    Fiducial(Fiducial),
-    Trace(Trace),
+    Fiducial(Box<Fiducial>),
+    Stroke(Stroke),
     UserPrimitive(FeatureUserPrimitive),
     Polygon(super::Polygon),
-    Line(Line),
-    Arc(FeatureArc),
-    Polyline(FeaturePolyline),
     StandardPrimitiveRef(FeaturePrimitiveRef),
     UserPrimitiveRef(FeaturePrimitiveRef),
     /// One or more local feature definitions placed at shared IPC
     /// `Features/Location` transforms. Keeping the definitions separate from
     /// their placements avoids cloning arbitrary contours for every location.
-    PlacementGroup(FeaturePlacementGroup),
+    PlacementGroup(Box<FeaturePlacementGroup>),
 }
 
 #[derive(Debug, Clone)]
@@ -595,12 +614,13 @@ pub struct Fiducial {
     pub pin_ref: Option<PinRef>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FiducialKind {
-    BadBoardMark,
-    Global,
-    GoodPanelMark,
-    Local,
+ipc_enum! {
+    pub enum FiducialKind("fiducial element") {
+        BadBoardMark = "BadBoardMark",
+        Global = "GlobalFiducial",
+        GoodPanelMark = "GoodPanelMark",
+        Local = "LocalFiducial",
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -617,41 +637,20 @@ pub struct NonstandardAttribute {
     pub attr_type: Option<Symbol>,
 }
 
-/// Line represents a straight trace segment
+/// A stroked `Line`, `Arc` or `Polyline` of a Set, in step coordinates.
 #[derive(Debug, Clone)]
-pub struct Line {
-    pub start_x: f64,
-    pub start_y: f64,
-    pub end_x: f64,
-    pub end_y: f64,
-    pub line_desc_ref: Option<Symbol>,
-    pub line_width: f64,
-    pub line_end: Option<super::LineEnd>,
-    pub line_property: Option<super::LineProperty>,
+pub struct Stroke {
+    pub path: StrokePath,
+    /// The `LineDescRef` if the feature has one, else its inline `LineDesc`.
+    /// Without either there is no width to draw.
+    pub line_desc: Option<super::LineDescGroup>,
 }
 
-/// Open polyline feature preserving straight and curved PolyStep order.
 #[derive(Debug, Clone)]
-pub struct FeaturePolyline {
-    pub begin: super::Point,
-    pub steps: Vec<super::PolyStep>,
-    pub line_desc_ref: Option<Symbol>,
-    pub line_width: f64,
-    pub line_end: Option<super::LineEnd>,
-    pub line_property: Option<super::LineProperty>,
-}
-
-/// Arc feature preserving center and direction.
-#[derive(Debug, Clone)]
-pub struct FeatureArc {
-    pub start: super::Point,
-    pub end: super::Point,
-    pub center: super::Point,
-    pub clockwise: bool,
-    pub line_desc_ref: Option<Symbol>,
-    pub line_width: f64,
-    pub line_end: Option<super::LineEnd>,
-    pub line_property: Option<super::LineProperty>,
+pub enum StrokePath {
+    Line(super::Line),
+    Arc(super::Arc),
+    Polyline(super::Polyline),
 }
 
 /// Primitive reference used directly as feature geometry.
@@ -675,10 +674,11 @@ pub struct Hole {
     pub y: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HoleShape {
-    Circle,
-    Square,
+ipc_enum! {
+    pub enum HoleShape("Hole type") {
+        Circle = "CIRCLE",
+        Square = "SQUARE",
+    }
 }
 
 /// Shape definition for a SlotCavity
@@ -713,159 +713,89 @@ pub struct Pad {
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub xform: Option<super::Xform>,
-    /// Source feature shape, including inline definitions that cannot be
-    /// represented by the reference-only convenience fields below.
+    /// The pad's own shape, which takes precedence over its padstack's.
     pub feature: Option<FeatureShape>,
-    /// Inline primitive override (takes precedence over padstack definition)
-    pub standard_primitive_ref: Option<Symbol>,
-    /// Inline user primitive override (takes precedence over padstack definition)
-    pub user_primitive_ref: Option<Symbol>,
     pub pin_ref: Option<PinRef>,
 }
 
-/// Trace represents a copper trace or line on a layer
-#[derive(Debug, Clone)]
-pub struct Trace {
-    pub line_desc_ref: Option<Symbol>,
-    pub points: Vec<TracePoint>,
-    pub steps: Vec<super::PolyStep>,
-}
+ipc_enum! {
+    /// `ROUTE`, `SCORE` and `BOARD_FAB` are not schema tokens but are read.
+    pub enum LayerFunction("layerFunction") {
+        // Conductive layers
+        Conductor = "CONDUCTOR",
+        CondFilm = "CONDFILM",
+        CondFoil = "CONDFOIL",
+        Plane = "PLANE",
+        Signal = "SIGNAL",
+        Mixed = "MIXED",
 
-/// Point in a trace
-#[derive(Debug, Clone)]
-pub struct TracePoint {
-    pub x: f64,
-    pub y: f64,
-}
+        // Coating layers (surface finishes)
+        CoatingCond = "COATINGCOND", // Conductive coating (ENIG, immersion silver, etc.)
+        CoatingNonCond = "COATINGNONCOND", // Non-conductive coating (OSP)
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LayerFunction {
-    // Conductive layers
-    Conductor,
-    CondFilm,
-    CondFoil,
-    Plane,
-    Signal,
-    Mixed,
+        // Soldermask and paste
+        Soldermask = "SOLDERMASK",
+        Solderpaste = "SOLDERPASTE",
+        Pastemask = "PASTEMASK", // Paste mask (can be different from solderpaste)
 
-    // Coating layers (surface finishes)
-    CoatingCond,    // Conductive coating (ENIG, immersion silver, etc.)
-    CoatingNonCond, // Non-conductive coating (OSP)
+        // Silkscreen/Legend
+        Silkscreen = "SILKSCREEN",
+        Legend = "LEGEND",
 
-    // Soldermask and paste
-    Soldermask,
-    Solderpaste,
-    Pastemask, // Paste mask (can be different from solderpaste)
+        // Drilling and routing
+        Drill = "DRILL",
+        Rout = "ROUT" | "ROUTE",
+        VCut = "V_CUT",
+        Score = "SCORE",
+        EdgeChamfer = "EDGE_CHAMFER",
+        EdgePlating = "EDGE_PLATING",
 
-    // Silkscreen/Legend
-    Silkscreen,
-    Legend,
+        // Dielectric layers
+        DielBase = "DIELBASE",
+        DielCore = "DIELCORE",
+        DielPreg = "DIELPREG",
+        DielAdhv = "DIELADHV", // Dielectric adhesive high voltage
+        DielBondPly = "DIELBONDPLY", // Dielectric bond ply
+        DielCoverlay = "DIELCOVERLAY", // Dielectric coverlay (flex circuits)
 
-    // Drilling and routing
-    Drill,
-    Rout,
-    VCut,
-    Score,
-    EdgeChamfer,
-    EdgePlating,
+        // Component layers
+        Component = "COMPONENT",
+        ComponentTop = "COMPONENT_TOP",
+        ComponentBottom = "COMPONENT_BOTTOM",
+        ComponentEmbedded = "COMPONENT_EMBEDDED",
+        ComponentFormed = "COMPONENT_FORMED", // Formed components (thin-film, resistors, etc.)
+        Assembly = "ASSEMBLY",
 
-    // Dielectric layers
-    DielBase,
-    DielCore,
-    DielPreg,
-    DielAdhv,     // Dielectric adhesive high voltage
-    DielBondPly,  // Dielectric bond ply
-    DielCoverlay, // Dielectric coverlay (flex circuits)
+        // Specialized material layers
+        ConductiveAdhesive = "CONDUCTIVE_ADHESIVE",
+        Glue = "GLUE",
+        HoleFill = "HOLEFILL",
+        SolderBump = "SOLDERBUMP",
+        Stiffener = "STIFFENER",
+        Capacitive = "CAPACITIVE", // Capacitive material layer
+        Resistive = "RESISTIVE", // Resistive material layer
 
-    // Component layers
-    ComponentTop,
-    ComponentBottom,
-    ComponentEmbedded,
-    ComponentFormed, // Formed components (thin-film, resistors, etc.)
-    Assembly,
+        // Documentation and tooling
+        Document = "DOCUMENT",
+        Graphic = "GRAPHIC",
+        BoardOutline = "BOARD_OUTLINE",
+        BoardFab = "BOARDFAB" | "BOARD_FAB",
+        Rework = "REWORK",
+        Fixture = "FIXTURE",
+        Probe = "PROBE",
+        Courtyard = "COURTYARD",
+        LandPattern = "LANDPATTERN",
+        Pin = "PIN",
+        ThievingKeepInout = "THIEVING_KEEP_INOUT", // Copper thieving constraints
 
-    // Specialized material layers
-    ConductiveAdhesive,
-    Glue,
-    HoleFill,
-    SolderBump,
-    Stiffener,
-    Capacitive, // Capacitive material layer
-    Resistive,  // Resistive material layer
+        // Composite
+        StackupComposite = "STACKUP_COMPOSITE",
 
-    // Documentation and tooling
-    Document,
-    Graphic,
-    BoardOutline,
-    BoardFab,
-    Rework,
-    Fixture,
-    Probe,
-    Courtyard,
-    LandPattern,
-    ThievingKeepInout, // Copper thieving constraints
-
-    // Composite
-    StackupComposite,
-
-    Other,
+        Other = "OTHER",
+    }
 }
 
 impl LayerFunction {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Conductor => "CONDUCTOR",
-            Self::CondFilm => "CONDFILM",
-            Self::CondFoil => "CONDFOIL",
-            Self::Plane => "PLANE",
-            Self::Signal => "SIGNAL",
-            Self::Mixed => "MIXED",
-            Self::CoatingCond => "COATINGCOND",
-            Self::CoatingNonCond => "COATINGNONCOND",
-            Self::Soldermask => "SOLDERMASK",
-            Self::Solderpaste => "SOLDERPASTE",
-            Self::Pastemask => "PASTEMASK",
-            Self::Silkscreen => "SILKSCREEN",
-            Self::Legend => "LEGEND",
-            Self::Drill => "DRILL",
-            Self::Rout => "ROUT",
-            Self::VCut => "V_CUT",
-            Self::Score => "SCORE",
-            Self::EdgeChamfer => "EDGE_CHAMFER",
-            Self::EdgePlating => "EDGE_PLATING",
-            Self::DielBase => "DIELBASE",
-            Self::DielCore => "DIELCORE",
-            Self::DielPreg => "DIELPREG",
-            Self::DielAdhv => "DIELADHV",
-            Self::DielBondPly => "DIELBONDPLY",
-            Self::DielCoverlay => "DIELCOVERLAY",
-            Self::ComponentTop => "COMPONENT_TOP",
-            Self::ComponentBottom => "COMPONENT_BOTTOM",
-            Self::ComponentEmbedded => "COMPONENT_EMBEDDED",
-            Self::ComponentFormed => "COMPONENT_FORMED",
-            Self::Assembly => "ASSEMBLY",
-            Self::ConductiveAdhesive => "CONDUCTIVE_ADHESIVE",
-            Self::Glue => "GLUE",
-            Self::HoleFill => "HOLEFILL",
-            Self::SolderBump => "SOLDERBUMP",
-            Self::Stiffener => "STIFFENER",
-            Self::Capacitive => "CAPACITIVE",
-            Self::Resistive => "RESISTIVE",
-            Self::Document => "DOCUMENT",
-            Self::Graphic => "GRAPHIC",
-            Self::BoardOutline => "BOARD_OUTLINE",
-            Self::BoardFab => "BOARD_FAB",
-            Self::Rework => "REWORK",
-            Self::Fixture => "FIXTURE",
-            Self::Probe => "PROBE",
-            Self::Courtyard => "COURTYARD",
-            Self::LandPattern => "LANDPATTERN",
-            Self::ThievingKeepInout => "THIEVING_KEEP_INOUT",
-            Self::StackupComposite => "STACKUP_COMPOSITE",
-            Self::Other => "OTHER",
-        }
-    }
-
     pub fn is_dielectric(self) -> bool {
         matches!(
             self,
@@ -896,95 +826,87 @@ impl LayerFunction {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Side {
-    Top,
-    Bottom,
-    Both,
-    Internal,
-    All,
-    None,
-}
-
-impl Side {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Top => "Top",
-            Self::Bottom => "Bottom",
-            Self::Both => "Both",
-            Self::Internal => "Internal",
-            Self::All => "All",
-            Self::None => "None",
-        }
+ipc_enum! {
+    pub enum Side("side") {
+        Top = "TOP",
+        Bottom = "BOTTOM",
+        Both = "BOTH",
+        Internal = "INTERNAL",
+        All = "ALL",
+        None = "NONE",
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Polarity {
-    Positive,
-    Negative,
+ipc_enum! {
+    pub enum Polarity("polarity") {
+        Positive = "POSITIVE",
+        Negative = "NEGATIVE",
+    }
 }
 
-/// WhereMeasured indicates where overall thickness is measured
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WhereMeasured {
-    Metal,
-    Mask,
-    Laminate,
-    Other,
+ipc_enum! {
+    /// WhereMeasured indicates where overall thickness is measured
+    pub enum WhereMeasured("whereMeasured") {
+        Metal = "METAL",
+        Mask = "MASK",
+        Laminate = "LAMINATE",
+        Other = "OTHER",
+    }
 }
 
-/// Surface finish material type according to IPC-6012
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FinishType {
-    // Solder leveling
-    S, // Solder (Hot Air Solder Leveling - HASL)
+ipc_enum! {
+    /// Surface finish material type according to IPC-6012
+    pub enum FinishType("SurfaceFinish type") {
+        // Solder leveling
+        S = "S", // Solder (Hot Air Solder Leveling - HASL)
 
-    // Tin-lead
-    T,   // Tin-lead
-    X,   // Tin-lead unfused
-    TLU, // Tin-lead unfused
+        // Tin-lead
+        T = "T", // Tin-lead
+        X = "X", // Tin-lead unfused
+        TLU = "TLU", // Tin-lead unfused
 
-    // Immersion/electroless finishes
-    EnigN,   // Electroless Nickel Immersion Gold (normal)
-    EnigG,   // Electroless Nickel Immersion Gold (high current)
-    EnepigN, // Electroless Nickel Electroless Palladium Immersion Gold (normal)
-    EnepigG, // Electroless Nickel Electroless Palladium Immersion Gold (high current)
-    EnepigP, // Electroless Nickel Electroless Palladium Immersion Gold (probe)
-    Dig,     // Direct Immersion Gold
-    IAg,     // Immersion Silver
-    ISn,     // Immersion Tin
+        // Immersion/electroless finishes
+        EnigN = "ENIG-N", // Electroless Nickel Immersion Gold (normal)
+        EnigG = "ENIG-G", // Electroless Nickel Immersion Gold (high current)
+        EnepigN = "ENEPIG-N", // Electroless Nickel Electroless Palladium Immersion Gold (normal)
+        EnepigG = "ENEPIG-G", // Electroless Nickel Electroless Palladium Immersion Gold (high current)
+        EnepigP = "ENEPIG-P", // Electroless Nickel Electroless Palladium Immersion Gold (probe)
+        Dig = "DIG", // Direct Immersion Gold
+        IAg = "IAg", // Immersion Silver
+        ISn = "ISn", // Immersion Tin
 
-    // Organic finishes
-    Osp,   // Organic Solderability Preservative
-    HtOsp, // High Temperature OSP
+        // Organic finishes
+        Osp = "OSP", // Organic Solderability Preservative
+        HtOsp = "HT_OSP", // High Temperature OSP
 
-    // Bare copper
-    N,  // Bare copper (none)
-    NB, // Bare copper no bondability requirement
+        // Bare copper
+        N = "N", // Bare copper (none)
+        NB = "NB", // Bare copper no bondability requirement
 
-    // Carbon contact
-    C, // Carbon contact
+        // Carbon contact
+        C = "C", // Carbon contact
 
-    // Gold wire bond finishes
-    G,       // Gold (wire bond)
-    GS,      // Gold over electroless nickel (soft)
-    GwbOneG, // Gold wire bond Type 1, Grade G (IPC-4556)
-    GwbOneN, // Gold wire bond Type 1, Grade N (IPC-4556)
-    GwbTwoG, // Gold wire bond Type 2, Grade G (IPC-4556)
-    GwbTwoN, // Gold wire bond Type 2, Grade N (IPC-4556)
+        // Gold wire bond finishes
+        G = "G", // Gold (wire bond)
+        GS = "GS", // Gold over electroless nickel (soft)
+        GwbOneG = "GWB-1-G", // Gold wire bond Type 1, Grade G (IPC-4556)
+        GwbOneN = "GWB-1-N", // Gold wire bond Type 1, Grade N (IPC-4556)
+        GwbTwoG = "GWB-2-G", // Gold wire bond Type 2, Grade G (IPC-4556)
+        GwbTwoN = "GWB-2-N", // Gold wire bond Type 2, Grade N (IPC-4556)
 
-    Other,
+        Other = "OTHER",
+    }
 }
 
-/// Product criteria for surface finish product selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProductCriteria {
-    Allowed,
-    Suggested,
-    Preferred,
-    Required,
-    Chosen,
+ipc_enum! {
+    /// Product criteria for surface finish product selection
+    pub enum ProductCriteria("criteria") {
+        Allowed = "ALLOWED",
+        Suggested = "SUGGESTED",
+        Preferred = "PREFERRED",
+        Required = "REQUIRED",
+        Chosen = "CHOSEN",
+    }
 }
 
 /// Product specification for a surface finish
@@ -1000,4 +922,20 @@ pub struct SurfaceFinish {
     pub finish_type: FinishType,
     pub comment: Option<Symbol>,
     pub products: Vec<FinishProduct>,
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod tests {
+    use super::*;
+
+    /// Allegro writes a `Set` and a `Pad` per pad, a hundred thousand on a
+    /// board, and KiCad a shape per zone-fill island, so what each costs is
+    /// the size of the model.
+    #[test]
+    fn per_feature_records_stay_small() {
+        assert!(size_of::<FeatureSet>() <= 56);
+        assert!(size_of::<SetFeature>() <= 128);
+        assert!(size_of::<FeatureShape>() <= 16);
+        assert!(size_of::<crate::types::UserShape>() <= 112);
+    }
 }

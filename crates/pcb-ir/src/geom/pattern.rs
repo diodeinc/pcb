@@ -45,14 +45,14 @@ pub fn stroke_pattern_marks(
     let mut cursor = 0.0;
     let mut element_index = 0;
     while cursor < total_length - EPSILON {
-        let element = elements[element_index];
-        let length = element.widths * line_width;
+        let (kind, widths) = elements[element_index];
+        let length = widths * line_width;
         let next = cursor + length;
         if next <= cursor {
             break;
         }
         let end = next.min(total_length);
-        match element.kind {
+        match kind {
             PatternElementKind::Dash => {
                 let dash = slice_segments(&measured, cursor, end);
                 if !dash.is_empty() {
@@ -86,9 +86,7 @@ fn measured_segments(segments: &[Segment]) -> Vec<MeasuredSegment> {
     let mut measured = Vec::with_capacity(segments.len());
     let mut cursor = 0.0;
     for &segment in segments {
-        if let Segment::Cubic { start, .. } | Segment::Ellipse(EllipticalArc { start, .. }) =
-            segment
-        {
+        if let Segment::Ellipse(EllipticalArc { start, .. }) = segment {
             const STEPS: usize = 32;
             let mut points = Vec::with_capacity(STEPS);
             segment.sample_points(STEPS, &mut points);
@@ -128,7 +126,7 @@ fn segment_length(segment: Segment) -> f64 {
     match segment {
         Segment::Line { start, end } => start.distance_to(end),
         Segment::Arc(arc) => arc.radius() * arc.sweep_radians(),
-        Segment::Cubic { .. } | Segment::Ellipse(_) => {
+        Segment::Ellipse(_) => {
             unreachable!("curved segments are flattened before measurement")
         }
     }
@@ -162,36 +160,15 @@ fn point_at_distance(measured: &[MeasuredSegment], distance: f64) -> Option<Poin
         .find(|entry| distance <= entry.end + EPSILON)
         .or_else(|| measured.last())?;
     let t = ((distance - entry.start) / (entry.end - entry.start)).clamp(0.0, 1.0);
-    Some(segment_point(entry.segment, t))
+    Some(entry.segment.point_at(t))
 }
 
 fn segment_slice(segment: Segment, start_t: f64, end_t: f64) -> Segment {
+    let (start, end) = (segment.point_at(start_t), segment.point_at(end_t));
     match segment {
-        Segment::Line { .. } => Segment::Line {
-            start: segment_point(segment, start_t),
-            end: segment_point(segment, end_t),
-        },
-        Segment::Arc(arc) => Segment::Arc(Arc::new(
-            segment_point(segment, start_t),
-            segment_point(segment, end_t),
-            arc.center,
-            arc.clockwise,
-        )),
-        Segment::Cubic { .. } | Segment::Ellipse(_) => Segment::Line {
-            start: segment_point(segment, start_t),
-            end: segment_point(segment, end_t),
-        },
+        Segment::Arc(arc) => Segment::Arc(Arc::new(start, end, arc.center, arc.clockwise)),
+        Segment::Line { .. } | Segment::Ellipse(_) => Segment::Line { start, end },
     }
-}
-
-fn segment_point(segment: Segment, t: f64) -> Point {
-    segment.point_at(t)
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PatternElement {
-    kind: PatternElementKind,
-    widths: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -201,39 +178,21 @@ enum PatternElementKind {
     Gap,
 }
 
-const fn element(kind: PatternElementKind, widths: f64) -> PatternElement {
-    PatternElement { kind, widths }
-}
-
-const DOTTED_PATTERN: [PatternElement; 2] = [
-    element(PatternElementKind::Dot, 1.0),
-    element(PatternElementKind::Gap, 2.0),
-];
-const DASHED_PATTERN: [PatternElement; 2] = [
-    element(PatternElementKind::Dash, 3.0),
-    element(PatternElementKind::Gap, 3.0),
-];
-const CENTER_PATTERN: [PatternElement; 4] = [
-    element(PatternElementKind::Dash, 6.0),
-    element(PatternElementKind::Gap, 2.0),
-    element(PatternElementKind::Dot, 1.0),
-    element(PatternElementKind::Gap, 2.0),
-];
-const PHANTOM_PATTERN: [PatternElement; 6] = [
-    element(PatternElementKind::Dash, 6.0),
-    element(PatternElementKind::Gap, 2.0),
-    element(PatternElementKind::Dot, 1.0),
-    element(PatternElementKind::Gap, 2.0),
-    element(PatternElementKind::Dot, 1.0),
-    element(PatternElementKind::Gap, 2.0),
-];
-
-fn pattern_elements(pattern: LinePattern) -> &'static [PatternElement] {
+/// The repeating elements of a pattern, each with its length in line widths.
+fn pattern_elements(pattern: LinePattern) -> &'static [(PatternElementKind, f64)] {
+    use PatternElementKind::{Dash, Dot, Gap};
     match pattern {
-        LinePattern::Dotted => &DOTTED_PATTERN,
-        LinePattern::Dashed => &DASHED_PATTERN,
-        LinePattern::Center => &CENTER_PATTERN,
-        LinePattern::Phantom => &PHANTOM_PATTERN,
+        LinePattern::Dotted => &[(Dot, 1.0), (Gap, 2.0)],
+        LinePattern::Dashed => &[(Dash, 3.0), (Gap, 3.0)],
+        LinePattern::Center => &[(Dash, 6.0), (Gap, 2.0), (Dot, 1.0), (Gap, 2.0)],
+        LinePattern::Phantom => &[
+            (Dash, 6.0),
+            (Gap, 2.0),
+            (Dot, 1.0),
+            (Gap, 2.0),
+            (Dot, 1.0),
+            (Gap, 2.0),
+        ],
         LinePattern::Solid | LinePattern::Erase => &[],
     }
 }
@@ -266,11 +225,11 @@ mod tests {
     }
 
     #[test]
-    fn pattern_phase_continues_across_contour_segments() {
+    fn dashes_and_their_phase_continue_across_source_segments() {
         let marks = stroke_pattern_marks(
             &[
-                line(Point::new(0.0, 0.0), Point::new(5.0, 0.0)),
-                line(Point::new(5.0, 0.0), Point::new(5.0, 5.0)),
+                line(Point::new(0.0, 0.0), Point::new(2.0, 0.0)),
+                line(Point::new(2.0, 0.0), Point::new(2.0, 10.0)),
             ],
             LinePattern::Dashed,
             1.0,
@@ -279,29 +238,12 @@ mod tests {
         assert_eq!(
             marks,
             vec![
-                StrokePatternMark::Dash(vec![line(Point::new(0.0, 0.0), Point::new(3.0, 0.0),)]),
-                StrokePatternMark::Dash(vec![line(Point::new(5.0, 1.0), Point::new(5.0, 4.0),)]),
+                StrokePatternMark::Dash(vec![
+                    line(Point::new(0.0, 0.0), Point::new(2.0, 0.0)),
+                    line(Point::new(2.0, 0.0), Point::new(2.0, 1.0)),
+                ]),
+                StrokePatternMark::Dash(vec![line(Point::new(2.0, 4.0), Point::new(2.0, 7.0))]),
             ]
-        );
-    }
-
-    #[test]
-    fn one_dash_remains_continuous_across_source_segments() {
-        let marks = stroke_pattern_marks(
-            &[
-                line(Point::new(0.0, 0.0), Point::new(2.0, 0.0)),
-                line(Point::new(2.0, 0.0), Point::new(2.0, 4.0)),
-            ],
-            LinePattern::Dashed,
-            1.0,
-        );
-
-        assert_eq!(
-            marks[0],
-            StrokePatternMark::Dash(vec![
-                line(Point::new(0.0, 0.0), Point::new(2.0, 0.0)),
-                line(Point::new(2.0, 0.0), Point::new(2.0, 1.0)),
-            ])
         );
     }
 

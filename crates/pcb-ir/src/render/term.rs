@@ -4,27 +4,34 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use terminal_size::{Width, terminal_size};
 
-use crate::dialects::mask;
 use crate::render::{RenderOptions, SizeConstraint};
 
 const KITTY_CHUNK_SIZE: usize = 4096;
 const MAX_TERMINAL_DIMENSION_PX: u32 = 1200;
 
+/// Whether stdout is a terminal that displays kitty graphics. Any other
+/// terminal prints the image payload as text, so only ones known to speak
+/// the protocol qualify.
 pub fn can_render_to_terminal() -> bool {
-    io::stdout().is_terminal()
+    io::stdout().is_terminal() && speaks_kitty_graphics(|name| std::env::var(name).ok())
 }
 
-/// Render mask layers as an inline image using the kitty graphics protocol.
-/// Any size constraint in `options` is replaced by the terminal width.
-pub fn to_terminal<LayerMeta>(
-    doc: &mask::Document<LayerMeta>,
-    options: &RenderOptions,
-) -> Result<(), String> {
-    write_terminal_png(crate::render::png(doc, &terminal_options(options))?)
+/// kitty, Ghostty and WezTerm announce themselves through the environment.
+/// A multiplexer inherits those variables but swallows the graphics.
+fn speaks_kitty_graphics(env: impl Fn(&str) -> Option<String>) -> bool {
+    let is = |name: &str, values: &[&str]| {
+        env(name).is_some_and(|value| values.contains(&value.as_str()))
+    };
+    env("TMUX").is_none()
+        && (env("KITTY_WINDOW_ID").is_some()
+            || is("TERM", &["xterm-kitty", "xterm-ghostty"])
+            || is("TERM_PROGRAM", &["ghostty", "WezTerm"]))
 }
 
-/// Render artwork layers as an inline terminal image.
-pub fn artwork_to_terminal<LayerMeta: Clone, ObjectMeta: Clone>(
+/// Render artwork layers as an inline image using the kitty graphics
+/// protocol. Any size constraint in `options` is replaced by the terminal
+/// width.
+pub fn artwork_to_terminal<LayerMeta, ObjectMeta>(
     doc: &crate::dialects::artwork::Document<LayerMeta, ObjectMeta>,
     options: &RenderOptions,
 ) -> Result<(), String> {
@@ -33,17 +40,16 @@ pub fn artwork_to_terminal<LayerMeta: Clone, ObjectMeta: Clone>(
 
 fn terminal_options(options: &RenderOptions) -> RenderOptions {
     RenderOptions {
-        layers: options.layers.clone(),
         size: SizeConstraint::MaxDimension(terminal_max_dimension_px()),
-        viewport: options.viewport,
-        accuracy: options.accuracy,
+        ..options.clone()
     }
 }
 
 fn write_terminal_png(png: Vec<u8>) -> Result<(), String> {
-    if !io::stdout().is_terminal() {
+    if !can_render_to_terminal() {
         return Err(
-            "stdout is not an interactive terminal; pass an SVG or PNG output path".to_string(),
+            "stdout is not a terminal with kitty graphics; pass an SVG or PNG output path"
+                .to_string(),
         );
     }
     let mut stdout = io::stdout().lock();
@@ -82,6 +88,32 @@ fn terminal_max_dimension_px() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_kitty_graphics_terminals_qualify() {
+        let speaks = |vars: &[(&str, &str)]| {
+            speaks_kitty_graphics(|name| {
+                vars.iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.to_string())
+            })
+        };
+
+        assert!(speaks(&[("KITTY_WINDOW_ID", "1")]));
+        assert!(speaks(&[("TERM", "xterm-kitty")]));
+        assert!(speaks(&[("TERM", "xterm-ghostty")]));
+        assert!(speaks(&[("TERM_PROGRAM", "WezTerm")]));
+        assert!(!speaks(&[]));
+        assert!(!speaks(&[
+            ("TERM", "xterm-256color"),
+            ("TERM_PROGRAM", "Apple_Terminal")
+        ]));
+        assert!(!speaks(&[("TERM_PROGRAM", "vscode")]));
+        assert!(!speaks(&[
+            ("KITTY_WINDOW_ID", "1"),
+            ("TMUX", "/tmp/tmux-501/default,1,0")
+        ]));
+    }
 
     #[test]
     fn kitty_png_writer_chunks_payload() {

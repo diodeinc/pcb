@@ -11,7 +11,7 @@
 
 use super::{BoundaryId, BoundaryQuery, QueryError, QueryTolerance};
 use crate::geom::region::ring_edges;
-use crate::geom::{BBox, ContourSet, FillRule, Point};
+use crate::geom::{BBox, ContourSet, FillRule, Point, Resolution};
 
 /// Explicit millimeters; no manufacturing allowances are inferred.
 #[derive(Debug, Clone, Copy)]
@@ -60,13 +60,14 @@ struct Span {
     certain: bool,
 }
 
-/// Partition all rings without changing their geometry or provenance.
+/// Partition the chosen rings without changing their geometry or provenance.
 ///
 /// Expanded/contracted depths and arclength spans bracket positional uncertainty.
 /// The band is anchored to the polygon boundary; it is not a full 3D collision
 /// test. Missing evidence is unknown; a resolved blocker takes precedence.
 pub fn eligible_outline(
     substrate: &ContourSet,
+    rings: &[usize],
     obstacles: &[OutlineObstacle<'_>],
     footprint: OutlineFootprint,
     tolerance: QueryTolerance,
@@ -87,9 +88,11 @@ pub fn eligible_outline(
         return Err(QueryError::InvalidInput("missing board substrate"));
     }
     let mut missing = Vec::new();
+    let mut present = Vec::new();
     for (i, obstacle) in obstacles.iter().enumerate() {
         if let Some(region) = obstacle.region.filter(|r| !r.is_empty()) {
             super::validate_region(region)?;
+            present.push((i, region));
         } else {
             missing.push(i);
         }
@@ -106,40 +109,42 @@ pub fn eligible_outline(
     {
         return Err(QueryError::InvalidInput("outline uncertainty overflow"));
     }
+    let material = substrate.prepare_query();
+    let resolution = substrate.resolution.strict();
     let mut result: Vec<OutlineInterval> = Vec::new();
-    for id in boundary.boundaries() {
+    for id in boundary.boundaries().filter(|id| rings.contains(&id.ring)) {
         let edges = ring_edges(&substrate.rings[id.ring]).collect::<Vec<_>>();
         let perimeter = boundary.perimeter(id)?;
         let mut spans = Vec::new();
         let mut station = 0.0;
         for (edge, &(start, end)) in edges.iter().enumerate() {
-            let delta = end - start;
-            let length = delta.length();
-            let t = delta / length;
-            let n = Point::new(t.y, -t.x);
+            let probe = Probe::new(start, end);
+            let Probe { length, t, n, .. } = probe;
             let (prev, _) = edges[(edge + edges.len() - 1) % edges.len()];
             let (_, next) = edges[(edge + 1) % edges.len()];
             let incoming = (start - prev) / start.distance_to(prev);
             let outgoing = (next - end) / next.distance_to(end);
             let prev_n = Point::new(incoming.y, -incoming.x);
             let next_n = Point::new(outgoing.y, -outgoing.x);
-            let local = edge_frame(substrate, start, delta)?;
-            let local_obstacles = obstacles
+            // Only an obstacle the widest probe reaches can touch any of them.
+            let reach = probe
+                .reach(
+                    prev_n,
+                    footprint.inward_mm + band,
+                    footprint.outward_mm + band,
+                )
+                .expand(band);
+            let near = present
                 .iter()
-                .map(|o| {
-                    o.region
-                        .filter(|r| !r.is_empty())
-                        .map(|r| edge_frame(r, start, delta))
-                        .transpose()
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+                .filter(|(_, region)| region.bbox().intersects(reach))
+                .collect::<Vec<_>>();
             for (certain, padding) in [(false, band), (true, -band)] {
                 let half = (footprint.width_mm / 2.0 + padding).max(0.0);
                 let inward = (footprint.inward_mm + padding).max(0.0);
                 let outward = (footprint.outward_mm + padding).max(0.0);
                 let joins = [
-                    bevel(&local, prev_n, t, n, -inward)?,
-                    bevel(&local, prev_n, t, n, outward)?,
+                    probe.bevel(prev_n, -inward, resolution)?,
+                    probe.bevel(prev_n, outward, resolution)?,
                 ];
                 let mut add = |lo, hi, obstacle, certain| {
                     expand_span(
@@ -170,15 +175,16 @@ pub fn eligible_outline(
                     add(0.0, length, None, false);
                 }
                 if footprint.inward_mm > 0.0 && inward > 0.0 {
-                    let strip = rectangle(&local, length, -inward, 0.0);
-                    let mut void = strip.difference(&local)?;
+                    let mut void = probe
+                        .strip(-inward, 0.0, resolution)
+                        .difference(substrate)?;
                     if certain {
                         void = void.disk_erode(band)?;
                     }
-                    for (lo, hi) in projections(&void) {
+                    for (lo, hi) in probe.projections(&void) {
                         add(lo, hi, None, certain);
                     }
-                    let mut void = joins[0].difference(&local)?;
+                    let mut void = joins[0].difference(substrate)?;
                     if certain {
                         void = void.disk_erode(band)?;
                     }
@@ -189,23 +195,19 @@ pub fn eligible_outline(
                     // Such contact is unresolved, including exact right angles;
                     // numerical slivers must not turn it into a definite block.
                     if !certain
-                        && local
-                            .prepare_query()
-                            .signed_distance(Point::new(0.0, -inward))
+                        && material
+                            .signed_distance(probe.point(0.0, -inward))
                             .is_none_or(|d| d.mm >= -band)
                     {
                         add(0.0, 0.0, None, false);
                     }
                 }
-                for (i, obstacle) in local_obstacles.iter().enumerate() {
-                    let Some(obstacle) = obstacle else {
-                        continue;
-                    };
-                    for (lo, hi) in strip_contacts(obstacle, length, -inward, outward)? {
+                for &&(i, obstacle) in &near {
+                    for (lo, hi) in probe.strip_contacts(obstacle, -inward, outward)? {
                         add(lo, hi, Some(i), certain);
                     }
                     for join in &joins {
-                        if intersects_closed(obstacle, join)? {
+                        if intersects_closed(join, obstacle)? {
                             add(0.0, 0.0, Some(i), certain);
                         }
                     }
@@ -285,113 +287,176 @@ pub fn eligible_outline(
     Ok(result)
 }
 
-// Relative cross products keep attachment endpoints exactly on y=0 without
-// snapping or losing the source preparation history.
-fn edge_frame(region: &ContourSet, start: Point, delta: Point) -> Result<ContourSet, QueryError> {
-    let length = delta.length();
-    let rings = region
-        .rings
-        .iter()
-        .map(|ring| {
-            ring.iter()
-                .map(|&[x, y]| {
-                    let p = Point::new(x, y) - start;
-                    [
-                        dot(delta, p) / length,
-                        (delta.y * p.x - delta.x * p.y) / length,
-                    ]
-                })
-                .collect()
-        })
-        .collect();
-    let mut local = ContourSet::from_rings(rings, FillRule::NonZero, region.resolution.strict())?;
-    local.uncertainty_mm = local.uncertainty_mm.max(region.uncertainty_mm);
-    local.budget().check(local.uncertainty_mm)?;
-    Ok(local)
-}
-
-fn rectangle(region: &ContourSet, length: f64, bottom: f64, top: f64) -> ContourSet {
-    ContourSet::rectangle(
-        BBox::new(Point::new(0.0, bottom), Point::new(length, top)),
-        region.resolution.strict(),
-    )
-}
-
-fn bevel(
-    region: &ContourSet,
-    previous: Point,
+/// One outline edge as the frame its probes are built and read in: stations
+/// run from `start` along `t`, depths along the outward normal `n`. Probes are
+/// world polygons cut against the untouched substrate and obstacles, so an
+/// edge costs only what lies near it, and the strip's base is the substrate's
+/// own edge, vertex for vertex.
+#[derive(Clone, Copy)]
+struct Probe {
+    start: Point,
+    end: Point,
+    delta: Point,
+    length: f64,
     t: Point,
     n: Point,
-    depth: f64,
-) -> Result<ContourSet, QueryError> {
-    Ok(ContourSet::from_rings(
-        vec![vec![
-            [0.0, 0.0],
-            [depth * dot(previous, t), depth * dot(previous, n)],
-            [0.0, depth],
-        ]],
-        FillRule::NonZero,
-        region.resolution.strict(),
-    )?)
+}
+
+impl Probe {
+    fn new(start: Point, end: Point) -> Self {
+        let delta = end - start;
+        let length = delta.length();
+        let t = delta / length;
+        Self {
+            start,
+            end,
+            delta,
+            length,
+            t,
+            n: Point::new(t.y, -t.x),
+        }
+    }
+
+    fn point(&self, station: f64, depth: f64) -> Point {
+        self.start + self.t * station + self.n * depth
+    }
+
+    /// Station and depth of a world point. Relative products keep the edge's
+    /// own endpoints at depth zero exactly.
+    fn local(&self, point: Point) -> Point {
+        let p = point - self.start;
+        Point::new(
+            dot(self.delta, p) / self.length,
+            (self.delta.y * p.x - self.delta.x * p.y) / self.length,
+        )
+    }
+
+    /// The edge swept between two depths.
+    fn strip(&self, bottom: f64, top: f64, resolution: Resolution) -> ContourSet {
+        let (low, high) = (self.n * bottom, self.n * top);
+        // (t, n) is a left-handed frame: counter-clockwise runs up the start.
+        let corners = [
+            self.start + low,
+            self.start + high,
+            self.end + high,
+            self.end + low,
+        ];
+        ContourSet::from_regularized(vec![corners.map(|p| [p.x, p.y]).to_vec()], resolution, 0.0)
+    }
+
+    /// The triangle joining this edge's strip to the previous edge's at
+    /// `depth`.
+    fn bevel(
+        &self,
+        previous: Point,
+        depth: f64,
+        resolution: Resolution,
+    ) -> Result<ContourSet, QueryError> {
+        let corners = [
+            self.start,
+            self.start + previous * depth,
+            self.start + self.n * depth,
+        ];
+        Ok(ContourSet::from_rings(
+            vec![corners.map(|p| [p.x, p.y]).to_vec()],
+            FillRule::NonZero,
+            resolution,
+        )?)
+    }
+
+    /// Bounds of every probe up to the given depths.
+    fn reach(&self, previous: Point, inward: f64, outward: f64) -> BBox {
+        [-inward, outward]
+            .into_iter()
+            .flat_map(|depth| {
+                [
+                    self.start + self.n * depth,
+                    self.end + self.n * depth,
+                    self.start + previous * depth,
+                ]
+            })
+            .fold(BBox::empty(), |bounds, p| bounds.union(BBox::new(p, p)))
+    }
+
+    /// Station extent of every connected piece of `region`.
+    fn projections(&self, region: &ContourSet) -> Vec<(f64, f64)> {
+        region
+            .connected_components()
+            .iter()
+            .map(|piece| {
+                piece
+                    .rings
+                    .iter()
+                    .flatten()
+                    .map(|&[x, y]| self.local(Point::new(x, y)).x)
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| {
+                        (lo.min(s), hi.max(s))
+                    })
+            })
+            .collect()
+    }
+
+    // Regularized booleans discard line/point contacts. Clip original edges to
+    // the CLOSED strip as well: even a point contact blocks a nonzero centre
+    // interval.
+    fn strip_contacts(
+        &self,
+        region: &ContourSet,
+        bottom: f64,
+        top: f64,
+    ) -> Result<Vec<(f64, f64)>, QueryError> {
+        if bottom >= top {
+            return Ok(Vec::new());
+        }
+        // The strip leads, so the clip is kept at its zero significance and
+        // not filtered again by the obstacle's.
+        let strip = self.strip(bottom, top, region.resolution.strict());
+        let mut spans = self.projections(&strip.intersection(region)?);
+        for (a, b) in region.rings.iter().flat_map(ring_edges) {
+            let (a, b) = (self.local(a), self.local(b));
+            let mut lo: f64 = 0.0;
+            let mut hi: f64 = 1.0;
+            for (v, d, min, max) in [
+                (a.x, b.x - a.x, 0.0, self.length),
+                (a.y, b.y - a.y, bottom, top),
+            ] {
+                if d == 0.0 {
+                    if v < min || v > max {
+                        hi = -1.0;
+                    }
+                } else {
+                    let p = (min - v) / d;
+                    let q = (max - v) / d;
+                    lo = lo.max(p.min(q));
+                    hi = hi.min(p.max(q));
+                }
+            }
+            if lo <= hi {
+                let p = a.x + lo * (b.x - a.x);
+                let q = a.x + hi * (b.x - a.x);
+                spans.push((p.min(q), p.max(q)));
+            }
+        }
+        Ok(spans)
+    }
 }
 
 fn dot(a: Point, b: Point) -> f64 {
     a.x * b.x + a.y * b.y
 }
 
-fn projections(region: &ContourSet) -> Vec<(f64, f64)> {
-    region
-        .connected_components()
-        .iter()
-        .map(|r| (r.bbox().min.x, r.bbox().max.x))
-        .collect()
-}
-
-// Regularized booleans discard line/point contacts. Clip original edges to the
-// CLOSED strip as well: even a point contact blocks a nonzero centre interval.
-fn strip_contacts(
-    region: &ContourSet,
-    length: f64,
-    bottom: f64,
-    top: f64,
-) -> Result<Vec<(f64, f64)>, QueryError> {
-    if bottom >= top {
-        return Ok(Vec::new());
-    }
-    let mut spans = projections(&region.intersection(&rectangle(region, length, bottom, top))?);
-    for (a, b) in region.rings.iter().flat_map(ring_edges) {
-        let mut lo: f64 = 0.0;
-        let mut hi: f64 = 1.0;
-        for (v, d, min, max) in [(a.x, b.x - a.x, 0.0, length), (a.y, b.y - a.y, bottom, top)] {
-            if d == 0.0 {
-                if v < min || v > max {
-                    hi = -1.0;
-                }
-            } else {
-                let p = (min - v) / d;
-                let q = (max - v) / d;
-                lo = lo.max(p.min(q));
-                hi = hi.min(p.max(q));
-            }
-        }
-        if lo <= hi {
-            let p = a.x + lo * (b.x - a.x);
-            let q = a.x + hi * (b.x - a.x);
-            spans.push((p.min(q), p.max(q)));
-        }
-    }
-    Ok(spans)
-}
-
-fn intersects_closed(a: &ContourSet, b: &ContourSet) -> Result<bool, QueryError> {
-    if b.is_empty() {
+/// Whether the closed regions meet. `probe` leads the boolean so the overlap
+/// is judged at its zero significance.
+fn intersects_closed(probe: &ContourSet, region: &ContourSet) -> Result<bool, QueryError> {
+    if probe.is_empty() {
         return Ok(false);
     }
-    if !a.intersection(b)?.is_empty() {
+    if !probe.intersection(region)?.is_empty() {
         return Ok(true);
     }
-    Ok(a.rings.iter().flat_map(ring_edges).any(|(p, q)| {
-        b.rings
+    Ok(region.rings.iter().flat_map(ring_edges).any(|(p, q)| {
+        probe
+            .rings
             .iter()
             .flat_map(ring_edges)
             .any(|(u, v)| crate::geom::dist::segments(p, q, u, v).0 == 0.0)
@@ -407,30 +472,22 @@ fn expand_span(
     obstacle: Option<usize>,
     certain: bool,
 ) {
-    if hi - lo + 2.0 * half >= perimeter {
+    let mut push = |lo, hi| {
         spans.push(Span {
-            lo: 0.0,
-            hi: perimeter,
+            lo,
+            hi,
             obstacle,
             certain,
-        });
-        return;
+        })
+    };
+    if hi - lo + 2.0 * half >= perimeter {
+        return push(0.0, perimeter);
     }
     let start = (lo - half).rem_euclid(perimeter);
     let end = start + hi - lo + 2.0 * half;
-    spans.push(Span {
-        lo: start,
-        hi: end.min(perimeter),
-        obstacle,
-        certain,
-    });
+    push(start, end.min(perimeter));
     if end > perimeter {
-        spans.push(Span {
-            lo: 0.0,
-            hi: end - perimeter,
-            obstacle,
-            certain,
-        });
+        push(0.0, end - perimeter);
     }
 }
 

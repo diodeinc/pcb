@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use ipc2581::types::{BomCategory, Characteristics};
+use ipc2581::types::Characteristics;
 use serde::{Deserialize, Serialize};
 
 use super::IpcAccessor;
@@ -10,24 +10,6 @@ use super::IpcAccessor;
 pub struct Alternative {
     pub mpn: String,
     pub manufacturer: String,
-}
-
-/// BOM statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BomStats {
-    pub total_unique_parts: usize,
-    pub total_instances: usize,
-    pub has_avl: bool,
-}
-
-impl BomStats {
-    pub fn new(total_unique_parts: usize, total_instances: usize, has_avl: bool) -> Self {
-        Self {
-            total_unique_parts,
-            total_instances,
-            has_avl,
-        }
-    }
 }
 
 /// Extracted characteristics data from IPC-2581 BOM items
@@ -59,37 +41,6 @@ pub struct AvlLookup {
 }
 
 impl<'a> IpcAccessor<'a> {
-    /// Get BOM statistics
-    ///
-    /// Returns None if no BOM section exists
-    pub fn bom_stats(&self) -> Option<BomStats> {
-        let bom = self.ipc.bom()?;
-
-        let mut total_unique_parts = 0;
-        let mut total_instances = 0;
-
-        for item in &bom.items {
-            // Skip document category items (test points, etc.)
-            if matches!(item.category, Some(BomCategory::Document)) {
-                continue;
-            }
-
-            total_unique_parts += 1;
-
-            // Count reference designators
-            for ref_des in item.reference_designators() {
-                if self.ipc.resolve(ref_des.name).is_empty() {
-                    continue;
-                }
-                total_instances += 1;
-            }
-        }
-
-        let has_avl = self.ipc.avl().is_some();
-
-        Some(BomStats::new(total_unique_parts, total_instances, has_avl))
-    }
-
     /// Extract characteristics from IPC-2581 Characteristics
     ///
     /// Returns package, value, alternatives, and custom properties.

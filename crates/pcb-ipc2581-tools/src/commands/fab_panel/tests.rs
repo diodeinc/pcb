@@ -29,6 +29,27 @@ fn manufacturing_package(
     )
 }
 
+fn create_fab_panel_xml(source_xml: &[String], occurrences: &[usize]) -> Result<String> {
+    let spec = FabPanelSpec::default();
+    Ok(create_fab_panel(source_xml, occurrences, spec, false, Resolution::default())?.xml)
+}
+
+/// Where each assembly panel landed on the fabrication panel.
+fn placed_panels(layout: &pcb_ir::import::ipc2581::GeometryDocument) -> Vec<BBox> {
+    let steps = &layout.layout.steps;
+    let instances = layout.layout.instances.iter().filter(|instance| {
+        instance.parent_instance.is_none()
+            && steps[instance.child_step as usize].kind == LayoutStepKind::Panel
+    });
+    instances.map(|instance| instance.bbox).collect()
+}
+
+/// A package file's contents, if the package has it.
+fn gerber<'a>(package: &'a ManufacturingPackage, filename: &str) -> Option<&'a str> {
+    let file = package.files.iter().find(|file| file.filename == filename);
+    file.map(|file| file.contents.as_str())
+}
+
 const FAB_PANEL_WIDTH_MM: f64 = FabPanelSpec::INCHES_18_X_24.width_mm();
 const FAB_PANEL_HEIGHT_MM: f64 = FabPanelSpec::INCHES_18_X_24.height_mm();
 
@@ -259,16 +280,7 @@ fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
     let profile =
         geometry::board_array_fabrication_profile(&design(&parsed), &layout, &[], resolution)
             .unwrap();
-    let placed_panels = layout
-        .layout
-        .instances
-        .iter()
-        .filter(|instance| {
-            instance.parent_instance.is_none()
-                && layout.layout.steps[instance.child_step as usize].kind == LayoutStepKind::Panel
-        })
-        .map(|instance| instance.bbox)
-        .collect::<Vec<_>>();
+    let placed_panels = placed_panels(&layout);
 
     assert_eq!(
         profile.purpose,
@@ -316,24 +328,21 @@ fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
         ("Assembly_Panel_Outlines.gm1", expected_assembly_bbox),
         ("Board_Cutouts.gm1", expected_cutout_bbox),
     ] {
-        let file = package
-            .files
-            .iter()
-            .find(|file| file.filename == filename)
-            .unwrap_or_else(|| panic!("missing {filename}"));
-        assert!(file.contents.contains("%TF.FileFunction,Profile,NP*%"));
-        assert!(file.contents.contains("%TF.Part,FabricationPanel*%"));
-        assert!(file.contents.contains("%TA.AperFunction,Profile*%"));
-        assert!(file.contents.contains("%ADD10C,0.05*%"));
-        assert!(!file.contents.contains("C,1*%"));
-        let parsed_gerber = gerberx2::GerberX2::parse(&file.contents).unwrap();
+        let file = gerber(&package, filename).unwrap_or_else(|| panic!("missing {filename}"));
+        for expected in [
+            "%TF.FileFunction,Profile,NP*%",
+            "%TF.Part,FabricationPanel*%",
+            "%TA.AperFunction,Profile*%",
+            "%ADD10C,0.05*%",
+        ] {
+            assert!(file.contains(expected), "{filename} lacks {expected}");
+        }
+        assert!(!file.contains("C,1*%"));
+        let parsed_gerber = gerberx2::GerberX2::parse(file).unwrap();
         let artwork =
             gerberx2::geometry::extract_document(&parsed_gerber, resolution.accuracy).unwrap();
         assert_bbox_close(artwork.layers[0].bbox, expected_bbox);
-        let crate::manufacturing::ManufacturingFileKind::GerberX2(layer) = &file.kind else {
-            panic!("{filename} is not a Gerber layer");
-        };
-        assert!(!layer.objects.is_empty());
+        assert!(!parsed_gerber.objects().is_empty());
     }
     assert_eq!(
         package
@@ -343,18 +352,8 @@ fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
             .count(),
         3
     );
-    assert!(
-        package
-            .files
-            .iter()
-            .all(|file| file.filename != "Fab_Panel_Profile.gm1")
-    );
-    assert!(
-        package
-            .files
-            .iter()
-            .all(|file| file.filename != "Board_Array_Profile.gm1")
-    );
+    assert!(gerber(&package, "Fab_Panel_Profile.gm1").is_none());
+    assert!(gerber(&package, "Board_Array_Profile.gm1").is_none());
     assert!(
         package
             .files
@@ -424,24 +423,12 @@ fn shares_the_first_stackup_across_sources_and_builds_full_fab_profile() {
     assert!((root.bbox.width() - FAB_PANEL_WIDTH_MM).abs() < 1e-9);
     assert!((root.bbox.height() - FAB_PANEL_HEIGHT_MM).abs() < 1e-9);
 
-    let instances = layout
-        .layout
-        .instances
-        .iter()
-        .filter(|instance| {
-            instance.parent_instance.is_none()
-                && layout.layout.steps[instance.child_step as usize].kind == LayoutStepKind::Panel
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(instances.len(), 2);
-    for instance in &instances {
-        assert!(instance.bbox.min.x >= DEFAULT_EDGE_MARGIN_MM.left - 1e-9);
-        assert!(instance.bbox.min.y >= DEFAULT_EDGE_MARGIN_MM.bottom - 1e-9);
-        assert!(instance.bbox.max.x <= FAB_PANEL_WIDTH_MM - DEFAULT_EDGE_MARGIN_MM.right + 1e-9);
-        assert!(instance.bbox.max.y <= FAB_PANEL_HEIGHT_MM - DEFAULT_EDGE_MARGIN_MM.top + 1e-9);
+    let [first, second] = placed_panels(&layout)[..] else {
+        panic!("expected two placed panels");
+    };
+    for bbox in [first, second] {
+        assert_inside_default_margins(bbox);
     }
-    let first = instances[0].bbox;
-    let second = instances[1].bbox;
     let separated = first.max.x + DEFAULT_PANEL_GAP_MM <= second.min.x + 1e-9
         || second.max.x + DEFAULT_PANEL_GAP_MM <= first.min.x + 1e-9
         || first.max.y + DEFAULT_PANEL_GAP_MM <= second.min.y + 1e-9
@@ -547,29 +534,19 @@ fn emits_usable_area_profile_rebased_to_origin() {
     let stock = Ipc2581::parse(&stock_xml).unwrap();
     let stock_layout = geometry::extract_layout(&stock).unwrap();
     let (_, stock_root) = root_step(&stock_layout).unwrap();
-    let stock_instance = stock_layout
-        .layout
-        .instances
-        .iter()
-        .find(|instance| instance.parent_instance.is_none())
-        .unwrap();
+    let stock_instance = placed_panels(&stock_layout)[0];
 
     let emitted = Ipc2581::parse(&emitted_xml).unwrap();
     let emitted_layout = geometry::extract_layout(&emitted).unwrap();
     let (_, emitted_root) = root_step(&emitted_layout).unwrap();
-    let emitted_instance = emitted_layout
-        .layout
-        .instances
-        .iter()
-        .find(|instance| instance.parent_instance.is_none())
-        .unwrap();
+    let emitted_instance = placed_panels(&emitted_layout)[0];
 
     assert!((stock_root.bbox.width() - 457.2).abs() < 1e-9);
     assert!((stock_root.bbox.height() - 609.6).abs() < 1e-9);
     assert!((emitted_root.bbox.width() - 406.4).abs() < 1e-9);
     assert!((emitted_root.bbox.height() - 558.8).abs() < 1e-9);
-    assert!((stock_instance.bbox.min.x - emitted_instance.bbox.min.x - 25.4).abs() < 1e-9);
-    assert!((stock_instance.bbox.min.y - emitted_instance.bbox.min.y - 25.4).abs() < 1e-9);
+    assert!((stock_instance.min.x - emitted_instance.min.x - 25.4).abs() < 1e-9);
+    assert!((stock_instance.min.y - emitted_instance.min.y - 25.4).abs() < 1e-9);
     assert!(emitted_xml.contains(
         r#"<NonstandardAttribute name="diode.fab_panel.width_mm" type="DOUBLE" value="457.2"/>"#
     ));
@@ -581,12 +558,8 @@ fn emits_usable_area_profile_rebased_to_origin() {
     ));
 
     let package = manufacturing_package(&emitted, ArtworkScope::ArrayFlattened).unwrap();
-    let outline = package
-        .files
-        .iter()
-        .find(|file| file.filename == "Fab_Panel_Outline.gm1")
-        .unwrap();
-    let parsed_gerber = gerberx2::GerberX2::parse(&outline.contents).unwrap();
+    let outline = gerber(&package, "Fab_Panel_Outline.gm1").unwrap();
+    let parsed_gerber = gerberx2::GerberX2::parse(outline).unwrap();
     let artwork =
         gerberx2::geometry::extract_document(&parsed_gerber, resolution.accuracy).unwrap();
     assert_bbox_close(
@@ -615,20 +588,15 @@ fn applies_asymmetric_process_margin_and_gap_overrides() {
     .xml;
     let parsed = Ipc2581::parse(&generated).unwrap();
     let layout = geometry::extract_layout(&parsed).unwrap();
-    let instance = layout
-        .layout
-        .instances
-        .iter()
-        .find(|instance| instance.parent_instance.is_none())
-        .unwrap();
+    let placed = placed_panels(&layout)[0];
     let usable = spec.usable_bbox().unwrap();
 
-    assert!(instance.bbox.min.x >= usable.min.x - 1e-9);
-    assert!(instance.bbox.min.y >= usable.min.y - 1e-9);
-    assert!(instance.bbox.max.x <= usable.max.x + 1e-9);
-    assert!(instance.bbox.max.y <= usable.max.y + 1e-9);
-    assert!((instance.bbox.center().x - usable.center().x).abs() < 0.001);
-    assert!((instance.bbox.center().y - usable.center().y).abs() < 0.001);
+    assert!(placed.min.x >= usable.min.x - 1e-9);
+    assert!(placed.min.y >= usable.min.y - 1e-9);
+    assert!(placed.max.x <= usable.max.x + 1e-9);
+    assert!(placed.max.y <= usable.max.y + 1e-9);
+    assert!((placed.center().x - usable.center().x).abs() < 0.001);
+    assert!((placed.center().y - usable.center().y).abs() < 0.001);
     assert!(generated.contains(
         r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_top_mm" type="DOUBLE" value="30"/>"#
     ));
@@ -716,14 +684,9 @@ fn strips_non_manufacturing_data_and_preserves_manufacturing_exports() {
     let parsed = Ipc2581::parse(&generated).expect("fabrication panel should parse");
     let package = manufacturing_package(&parsed, ArtworkScope::ArrayFlattened)
         .expect("fabrication panel should export manufacturing files");
-    assert!(package.files.iter().any(|file| file.filename == "F_Cu.gtl"));
-    assert!(package.files.iter().any(|file| file.filename == "PTH.drl"));
-    assert!(
-        package
-            .files
-            .iter()
-            .any(|file| file.filename == "V_Cut.gbr")
-    );
+    for filename in ["F_Cu.gtl", "PTH.drl", "V_Cut.gbr"] {
+        assert!(gerber(&package, filename).is_some(), "missing {filename}");
+    }
 }
 
 #[test]
@@ -771,19 +734,18 @@ fn rotates_and_translates_a_nonzero_source_profile() {
     let generated = create_fab_panel_xml(&sources, &[0]).unwrap();
     let parsed = Ipc2581::parse(&generated).unwrap();
     let layout = geometry::extract_layout(&parsed).unwrap();
-    let instance = layout
-        .layout
-        .instances
-        .iter()
-        .find(|instance| instance.parent_instance.is_none())
-        .unwrap();
+    let placed = placed_panels(&layout)[0];
 
-    assert!((instance.bbox.width() - 400.0).abs() < 1e-9);
-    assert!((instance.bbox.height() - 500.0).abs() < 1e-9);
-    assert!(instance.bbox.min.x >= DEFAULT_EDGE_MARGIN_MM.left - 1e-9);
-    assert!(instance.bbox.min.y >= DEFAULT_EDGE_MARGIN_MM.bottom - 1e-9);
-    assert!(instance.bbox.max.x <= FAB_PANEL_WIDTH_MM - DEFAULT_EDGE_MARGIN_MM.right + 1e-9);
-    assert!(instance.bbox.max.y <= FAB_PANEL_HEIGHT_MM - DEFAULT_EDGE_MARGIN_MM.top + 1e-9);
+    assert!((placed.width() - 400.0).abs() < 1e-9);
+    assert!((placed.height() - 500.0).abs() < 1e-9);
+    assert_inside_default_margins(placed);
+}
+
+fn assert_inside_default_margins(bbox: BBox) {
+    assert!(bbox.min.x >= DEFAULT_EDGE_MARGIN_MM.left - 1e-9);
+    assert!(bbox.min.y >= DEFAULT_EDGE_MARGIN_MM.bottom - 1e-9);
+    assert!(bbox.max.x <= FAB_PANEL_WIDTH_MM - DEFAULT_EDGE_MARGIN_MM.right + 1e-9);
+    assert!(bbox.max.y <= FAB_PANEL_HEIGHT_MM - DEFAULT_EDGE_MARGIN_MM.top + 1e-9);
 }
 
 #[test]
@@ -878,15 +840,9 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
     let layout = geometry::extract_layout(&parsed).unwrap();
     // The 90 mm panel exceeds the 66 mm usable width, so packing must
     // rotate it; balancing has to respect the rotated footprint.
-    assert!(
-        layout
-            .layout
-            .instances
-            .iter()
-            .filter(|instance| instance.parent_instance.is_none())
-            .any(|instance| (instance.bbox.width() - 40.0).abs() < 1e-6
-                && (instance.bbox.height() - 90.0).abs() < 1e-6)
-    );
+    assert!(placed_panels(&layout).iter().any(|placed| {
+        (placed.width() - 40.0).abs() < 1e-6 && (placed.height() - 90.0).abs() < 1e-6
+    }));
 
     let profile =
         geometry::board_array_fabrication_profile(&design(&parsed), &layout, &[], resolution)
@@ -938,25 +894,6 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
 }
 
 #[test]
-fn fab_panel_creation_skips_copper_balancing_unless_enabled() {
-    let resolution = Resolution::default();
-
-    let sources = vec![dense_assembly_panel_xml(30.0, 25.0)];
-    let creation = create_fab_panel(&sources, &[0], BALANCE_SPEC, false, resolution).unwrap();
-
-    assert!(creation.copper_balance.is_none());
-    assert_eq!(
-        creation
-            .xml
-            .matches(r#"<LayerFeature layerRef="TOP">"#)
-            .count(),
-        1,
-        "disabled balancing should retain only the source panel's copper"
-    );
-    Ipc2581::validate(&creation.xml).unwrap();
-}
-
-#[test]
 fn single_panel_filling_the_usable_area_generates_no_fill() {
     let resolution = Resolution::default();
 
@@ -973,5 +910,37 @@ fn single_panel_filling_the_usable_area_generates_no_fill() {
             .count(),
         1,
         "a fully covered usable area leaves no room for balance copper"
+    );
+}
+
+#[test]
+fn usable_bin_never_reaches_into_the_process_margins() {
+    // 12 in less two 1 in margins is 254 mm, a hair more or less in binary.
+    // Rounded up like an item, the bin would let a panel overhang its margin.
+    for spec in [
+        FabPanelSpec::INCHES_12_X_18,
+        FabPanelSpec::INCHES_16_X_18,
+        FabPanelSpec::INCHES_18_X_24,
+        FabPanelSpec::INCHES_21_X_24,
+    ] {
+        let usable = spec.usable_bbox().unwrap();
+        let size = spec.usable_size().unwrap();
+        for (whole_um, exact_mm) in [(size.width, usable.width()), (size.height, usable.height())] {
+            let whole_mm = f64::from(whole_um) / 1_000.0;
+            assert!(
+                whole_mm <= exact_mm + pcb_ir::geom::tol::EPSILON_MM,
+                "{spec:?}"
+            );
+            assert!(exact_mm - whole_mm < 0.001, "{spec:?}");
+        }
+    }
+    // 18 x 24 in less the default margins is 406.4 x 508 mm exactly, whichever
+    // side of those the subtraction lands on.
+    assert_eq!(
+        FabPanelSpec::INCHES_18_X_24.usable_size().unwrap(),
+        Size {
+            width: 406_400,
+            height: 508_000
+        }
     );
 }

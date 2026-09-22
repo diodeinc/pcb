@@ -12,8 +12,7 @@ use ipc2581::types::{Spec, Units};
 use pcb_ir::dialects::ipc::{LayoutStepKind, root_step};
 use pcb_ir::geom::{BBox, Point};
 
-use super::EdgeInsetsMm;
-use crate::copper_balance::CopperBalanceReport;
+use super::{EdgeInsetsMm, PanelCreation};
 use crate::geometry;
 #[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
@@ -27,7 +26,7 @@ use packing::MAX_ITEM_COUNT;
 use packing::{Size, pack};
 
 const DEFAULT_EDGE_MARGIN_MM: EdgeInsetsMm = EdgeInsetsMm::new(50.8, 25.4, 50.8, 25.4);
-const DEFAULT_PANEL_GAP_MM: f64 = 7.62;
+pub(crate) const DEFAULT_PANEL_GAP_MM: f64 = 7.62;
 const MICROMETERS_PER_MM: f64 = 1_000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,12 +65,7 @@ impl FabPanelSpec {
     /// The rectangular packing domain after reserving fabrication process
     /// margins. The physical panel profile remains the full stock size.
     fn usable_bbox(self) -> Result<BBox> {
-        for (side, value) in [
-            ("top", self.edge_margin_mm.top),
-            ("right", self.edge_margin_mm.right),
-            ("bottom", self.edge_margin_mm.bottom),
-            ("left", self.edge_margin_mm.left),
-        ] {
+        for (side, value) in self.edge_margin_mm.sides() {
             if !value.is_finite() || value < 0.0 {
                 bail!("fabrication panel {side} edge margin must be non-negative; got {value} mm");
             }
@@ -97,28 +91,35 @@ impl FabPanelSpec {
         ))
     }
 
+    /// The packing bin in whole micrometres. Items round up and the bin
+    /// rounds down, so a packed panel never reaches into a process margin;
+    /// a size that is a whole count but for arithmetic noise keeps it.
     fn usable_size(self) -> Result<Size> {
         let usable = self.usable_bbox()?;
+        let whole_um = |value_mm: f64| {
+            let value = ((value_mm + pcb_ir::geom::tol::EPSILON_MM) * MICROMETERS_PER_MM).floor();
+            if !(1.0..=f64::from(u32::MAX)).contains(&value) {
+                bail!(
+                    "usable fabrication panel dimension {value_mm} mm is outside the supported range"
+                );
+            }
+            Ok(value as u32)
+        };
         Ok(Size {
-            width: dimension_um(usable.width())?,
-            height: dimension_um(usable.height())?,
+            width: whole_um(usable.width())?,
+            height: whole_um(usable.height())?,
         })
     }
 
     /// The profile represented by the generated IPC document.
     fn output_bbox(self) -> Result<BBox> {
-        if self.emit_usable_area {
+        let (width, height) = if self.emit_usable_area {
             let usable = self.usable_bbox()?;
-            Ok(BBox::new(
-                Point::new(0.0, 0.0),
-                Point::new(usable.width(), usable.height()),
-            ))
+            (usable.width(), usable.height())
         } else {
-            Ok(BBox::new(
-                Point::new(0.0, 0.0),
-                Point::new(self.width_mm, self.height_mm),
-            ))
-        }
+            (self.width_mm, self.height_mm)
+        };
+        Ok(BBox::new(Point::new(0.0, 0.0), Point::new(width, height)))
     }
 
     /// The usable packing domain expressed in generated-output coordinates.
@@ -209,14 +210,6 @@ struct SurfaceFinishSignature {
     products: Vec<(String, Option<String>)>,
 }
 
-/// Generated fabrication-panel IPC plus optional per-layer copper-balance
-/// accounting.
-#[derive(Debug, Clone)]
-pub struct FabPanelCreation {
-    pub xml: String,
-    pub copper_balance: Option<CopperBalanceReport>,
-}
-
 #[cfg(feature = "cli")]
 pub fn execute(
     inputs: &[PathBuf],
@@ -252,37 +245,8 @@ pub fn execute(
         occurrences.push(source_index);
     }
 
-    let creation = create_fab_panel(&source_xml, &occurrences, spec, balance_copper, resolution)?;
-    if let Some(report) = &creation.copper_balance {
-        for line in report.summary_lines() {
-            eprintln!("  {line}");
-        }
-    }
-    if output.as_os_str() == "-" {
-        pcb_ui::write_stdout(|stdout| stdout.write_all(creation.xml.as_bytes()))?;
-        eprintln!("✓ Created IPC-2581 fabrication panel on stdout");
-    } else {
-        file_utils::save_ipc_file(output, &creation.xml)?;
-        eprintln!(
-            "✓ Created IPC-2581 fabrication panel at {}",
-            output.display()
-        );
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn create_fab_panel_xml(source_xml: &[String], occurrences: &[usize]) -> Result<String> {
-    let resolution = Resolution::default();
-
-    create_fab_panel(
-        source_xml,
-        occurrences,
-        FabPanelSpec::default(),
-        false,
-        resolution,
-    )
-    .map(|creation| creation.xml)
+    create_fab_panel(&source_xml, &occurrences, spec, balance_copper, resolution)?
+        .write(output, "fabrication panel")
 }
 
 pub fn create_fab_panel(
@@ -291,44 +255,34 @@ pub fn create_fab_panel(
     spec: FabPanelSpec,
     balance_copper: bool,
     resolution: Resolution,
-) -> Result<FabPanelCreation> {
+) -> Result<PanelCreation> {
     if occurrences.is_empty() {
         bail!("at least one assembly panel is required");
     }
     // Reduce every source to manufacturing content once, up front: assembling
     // already-stripped sources keeps the fabrication panel a pure composition
     // and avoids stripping the much larger composed document.
-    let strip = |(source_index, xml): (usize, &String)| {
+    let source_xml = per_source(source_xml.iter().collect(), |source_index, xml| {
         super::fabrication::strip_non_manufacturing(xml).with_context(|| {
             format!(
                 "failed to reduce assembly panel input {} to manufacturing content",
                 source_index + 1
             )
         })
-    };
-    #[cfg(not(target_family = "wasm"))]
-    let source_xml = std::thread::scope(|scope| {
-        let strips = source_xml
-            .iter()
-            .enumerate()
-            .map(|source| scope.spawn(move || strip(source)))
-            .collect::<Vec<_>>();
-        strips
-            .into_iter()
-            .map(|strip| strip.join().expect("assembly panel stripping panicked"))
-            .collect::<Result<Vec<_>>>()
     })?;
-    #[cfg(target_family = "wasm")]
-    let source_xml = source_xml
-        .iter()
-        .enumerate()
-        .map(strip)
-        .collect::<Result<Vec<_>>>()?;
+    // Each stripped source is read once, typed and as source text, for
+    // everything that follows.
+    let parsed = per_source(source_xml.iter().collect(), |source_index, xml| {
+        let ipc = Ipc2581::parse(xml).with_context(|| {
+            format!("Failed to parse assembly panel input {}", source_index + 1)
+        })?;
+        Ok((ipc, Doc::parse(xml)?))
+    })?;
 
-    let stackups = source_xml
+    let stackups = parsed
         .iter()
         .enumerate()
-        .map(|(source_index, xml)| physical_stackup(xml, source_index))
+        .map(|(source_index, (ipc, doc))| physical_stackup(ipc, doc, source_index))
         .collect::<Result<Vec<_>>>()?;
     let first_stackup = stackups
         .first()
@@ -342,14 +296,12 @@ pub fn create_fab_panel(
         .map(|layer| layer.name.clone())
         .collect::<HashSet<_>>();
 
-    let sources = source_xml
-        .iter()
-        .enumerate()
-        .map(|(source_index, xml)| prepare_source_panel(xml, source_index, &shared_stackup_layers))
-        .collect::<Result<Vec<_>>>()?;
-    let first = sources
-        .first()
-        .context("at least one assembly panel source is required")?;
+    let sources = per_source(parsed.iter().collect(), |source_index, (ipc, doc)| {
+        prepare_source_panel(ipc, doc, source_index, &shared_stackup_layers)
+    })?;
+    // Nothing below reads the sources again, and their parses are large.
+    drop(parsed);
+    let first = &sources[0];
     for source in &sources[1..] {
         if source.units != first.units {
             bail!("all assembly panel IPC-2581 files must use the same units");
@@ -365,13 +317,15 @@ pub fn create_fab_panel(
             let source = sources
                 .get(*source_index)
                 .with_context(|| format!("invalid assembly panel source index {source_index}"))?;
+            let size_um = |value_mm| ceil_um(value_mm, 1.0, "assembly panel dimension");
             Ok(Size {
-                width: dimension_um(source.bbox.width())?,
-                height: dimension_um(source.bbox.height())?,
+                width: size_um(source.bbox.width())?,
+                height: size_um(source.bbox.height())?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let placements = pack(&items, spec.usable_size()?, spacing_um(spec.panel_gap_mm)?)?;
+    let (bin, gap) = (spec.usable_size()?, spec.panel_gap_mm);
+    let placements = pack(&items, bin, ceil_um(gap, 0.0, "fabrication panel spacing")?)?;
 
     // The provisional panel only feeds copper-balance planning: gutters and
     // placed-panel copper must exist before balance copper can be derived.
@@ -384,8 +338,7 @@ pub fn create_fab_panel(
         &shared_stackup_layers,
         spec,
     )?;
-    let mut templates = Vec::new();
-    let (balance_features, copper_balance) = if balance_copper {
+    let (templates, balance_features, copper_balance) = if balance_copper {
         let parsed = Ipc2581::parse(&provisional)
             .context("Failed to parse provisional IPC-2581 fabrication panel")?;
         let balance = balance::generate_automatic_fab_panel_copper_balance(
@@ -394,54 +347,61 @@ pub fn create_fab_panel(
             resolution.tolerance_mm,
         )?;
         let report = balance.report();
-        let features = balance
-            .layers
-            .into_iter()
-            .flat_map(|layer| {
-                let (layer_templates, features) =
-                    layer.features.into_layer_features(&layer.layer_name);
-                for template in layer_templates {
-                    if !templates.iter().any(
-                        |entry: &crate::copper_balance::BalanceVoidTemplate| {
-                            entry.id == template.id
-                        },
-                    ) {
-                        templates.push(template);
-                    }
-                }
-                features
-            })
-            .collect::<Vec<_>>();
-        (features, Some(report))
+        let (templates, features) =
+            crate::commands::board_array::balance::generated_features(balance);
+        (templates, features, Some(report))
     } else {
-        (Vec::new(), None)
+        (Vec::new(), Vec::new(), None)
     };
 
-    let units = sources
-        .first()
-        .context("at least one assembly panel source is required")?
-        .units;
-    let xml = xml::write_fab_panel_xml(&provisional, units, &balance_features, &templates)?;
-    Ok(FabPanelCreation {
+    let xml = xml::write_fab_panel_xml(&provisional, first.units, &balance_features, &templates)?;
+    Ok(PanelCreation {
         xml,
         copper_balance,
     })
 }
 
+/// Independent per-source work, in source order, one source per thread where
+/// threads exist.
+fn per_source<T: Send, R: Send>(
+    items: Vec<T>,
+    work: impl Fn(usize, T) -> Result<R> + Sync,
+) -> Result<Vec<R>> {
+    #[cfg(not(target_family = "wasm"))]
+    let results = std::thread::scope(|scope| {
+        let work = &work;
+        let handles = items
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| scope.spawn(move || work(index, item)))
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("assembly panel preparation panicked"))
+            .collect::<Vec<_>>()
+    });
+    #[cfg(target_family = "wasm")]
+    let results = items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| work(index, item))
+        .collect::<Vec<_>>();
+    results.into_iter().collect()
+}
+
 fn prepare_source_panel(
-    xml: &str,
+    ipc: &Ipc2581,
+    doc: &Doc<'_>,
     source_index: usize,
     shared_stackup_layers: &HashSet<String>,
 ) -> Result<SourcePanel> {
-    let ipc = Ipc2581::parse(xml)
-        .with_context(|| format!("Failed to parse assembly panel input {}", source_index + 1))?;
     let ecad = ipc.ecad().with_context(|| {
         format!(
             "assembly panel input {} has no ECAD section",
             source_index + 1
         )
     })?;
-    let layout = geometry::extract_layout(&ipc).with_context(|| {
+    let layout = geometry::extract_layout(ipc).with_context(|| {
         format!(
             "failed to extract layout from assembly panel input {}",
             source_index + 1
@@ -468,7 +428,7 @@ fn prepare_source_panel(
 
     let prefix = format!("fab_{source_index}_");
     Ok(SourcePanel {
-        namespaced_xml: xml::namespace_source(xml, &prefix, shared_stackup_layers)?,
+        namespaced_xml: xml::namespace_source(doc, &prefix, shared_stackup_layers)?,
         root_step_name: format!("{prefix}{}", ipc.resolve(root.source_step_ref)),
         bbox: root.bbox,
         units: ecad.cad_header.units,
@@ -476,10 +436,8 @@ fn prepare_source_panel(
     })
 }
 
-fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
+fn physical_stackup(ipc: &Ipc2581, doc: &Doc<'_>, source_index: usize) -> Result<PhysicalStackup> {
     let input_number = source_index + 1;
-    let ipc = Ipc2581::parse(xml)
-        .with_context(|| format!("Failed to parse assembly panel input {input_number}"))?;
     let ecad = ipc
         .ecad()
         .with_context(|| format!("assembly panel input {input_number} has no ECAD section"))?;
@@ -491,7 +449,6 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
     }
     let stackup = &ecad.cad_data.stackups[0];
 
-    let doc = Doc::parse(xml)?;
     let stackup_nodes = doc.find_all("Stackup");
     if stackup_nodes.len() != 1 {
         bail!(
@@ -500,12 +457,12 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
         );
     }
     let stackup_node = stackup_nodes[0];
-    let attributes = sorted_attributes(&doc, stackup_node, &["name"]);
+    let attributes = sorted_attributes(doc, stackup_node, &["name"]);
     let group_attributes = doc
         .children(stackup_node)
         .into_iter()
         .filter(|child| doc.name(*child) == "StackupGroup")
-        .map(|group| sorted_attributes(&doc, group, &["name"]))
+        .map(|group| sorted_attributes(doc, group, &["name"]))
         .collect::<Vec<_>>();
 
     let layers = stackup
@@ -529,13 +486,13 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
                 .spec_refs
                 .iter()
                 .filter_map(|spec_ref| ecad.cad_header.specs.get(spec_ref))
-                .map(|spec| spec_signature(&ipc, spec))
+                .map(|spec| spec_signature(ipc, spec))
                 .collect::<Vec<_>>();
             if let Some(spec_ref) = stackup_layer.spec_ref
                 && !layer.spec_refs.contains(&spec_ref)
                 && let Some(spec) = ecad.cad_header.specs.get(&spec_ref)
             {
-                specs.push(spec_signature(&ipc, spec));
+                specs.push(spec_signature(ipc, spec));
             }
 
             Ok(PhysicalStackupLayer {
@@ -689,18 +646,11 @@ fn float_bits(value: Option<f64>) -> Option<u64> {
     value.map(f64::to_bits)
 }
 
-fn dimension_um(value_mm: f64) -> Result<u32> {
+/// `value_mm` rounded up to whole micrometres, no fewer than `min_um`.
+fn ceil_um(value_mm: f64, min_um: f64, what: &str) -> Result<u32> {
     let value = (value_mm * MICROMETERS_PER_MM).ceil();
-    if !value.is_finite() || value <= 0.0 || value > f64::from(u32::MAX) {
-        bail!("assembly panel dimension {value_mm} mm is outside the supported range");
-    }
-    Ok(value as u32)
-}
-
-fn spacing_um(value_mm: f64) -> Result<u32> {
-    let value = (value_mm * MICROMETERS_PER_MM).ceil();
-    if !value.is_finite() || value < 0.0 || value > f64::from(u32::MAX) {
-        bail!("fabrication panel spacing {value_mm} mm is outside the supported range");
+    if !(min_um..=f64::from(u32::MAX)).contains(&value) {
+        bail!("{what} {value_mm} mm is outside the supported range");
     }
     Ok(value as u32)
 }

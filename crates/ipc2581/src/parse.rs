@@ -1,94 +1,98 @@
+use crate::dom::{Dom, Node};
 use crate::types::*;
-use crate::{Interner, Ipc2581Error, Result, Symbol};
-use uppsala::{Document, NodeId as Node};
+use crate::{Interner, Ipc2581, Ipc2581Error, Result, Symbol};
+use std::collections::HashMap;
 
-type ShapeStyle = (
-    Option<LineDesc>,
-    Option<Symbol>,
-    Option<FillDesc>,
-    Option<Symbol>,
-);
+/// The `LineDescGroup` and `FillDescGroup` children of a shape.
+#[derive(Default)]
+struct ShapeStyle {
+    line_desc: Option<LineDesc>,
+    line_desc_ref: Option<Symbol>,
+    fill_desc: Option<FillDesc>,
+    fill_desc_ref: Option<Symbol>,
+}
 
+/// A `Polygon`, `Polyline` or `Cutout` read in one pass over its children.
+struct Poly {
+    polygon: Polygon,
+    xform: Option<Xform>,
+    style: ShapeStyle,
+}
+
+const ORIGIN: Point = Point { x: 0.0, y: 0.0 };
+
+/// Where a `Features` member sits: at the container's one `Location`, unless
+/// the container places its members as a group.
 fn single_feature_offset(locations: &[Point], xform: Option<Xform>) -> Point {
-    if locations.len() <= 1 && xform.is_none() {
-        locations
-            .first()
-            .copied()
-            .unwrap_or(Point { x: 0.0, y: 0.0 })
-    } else {
-        Point { x: 0.0, y: 0.0 }
+    match (locations, xform) {
+        ([location], None) => *location,
+        _ => ORIGIN,
     }
 }
 
-/// Parser context holding the string interner and unit context
-pub struct Parser<'a> {
-    pub interner: Interner,
-    /// Current ECAD units for converting dimensions (set when parsing CadHeader)
+/// Parses the typed model of `doc`.
+pub(crate) fn parse(doc: &Dom) -> Result<Ipc2581> {
+    let parser = Parser {
+        doc,
+        interner: Interner::new(),
+        ecad_units: None,
+        specs: HashMap::new(),
+    };
+    parser.parse_document()
+}
+
+struct Parser<'a> {
+    doc: &'a Dom<'a>,
+    interner: Interner,
+    /// `CadHeader` units, which the dimensions of the Ecad section are in.
     ecad_units: Option<Units>,
-    /// Specs from CadHeader (set when parsing CadHeader, used by StackupLayer parsing)
-    specs: std::collections::HashMap<Symbol, ecad::Spec>,
-    doc: Option<&'a Document<'a>>,
+    /// `CadHeader` specs, for the stackup layers that reference them.
+    specs: HashMap<Symbol, Spec>,
 }
 
 impl<'a> Parser<'a> {
-    pub fn new() -> Self {
-        Self {
-            interner: Interner::new(),
-            ecad_units: None,
-            specs: std::collections::HashMap::new(),
-            doc: None,
-        }
+    fn name(&self, node: &Node) -> &'a str {
+        self.doc.name(*node)
     }
 
-    fn doc(&self) -> &'a Document<'a> {
-        self.doc.expect("parser document is set while parsing")
+    fn attr(&self, node: &Node, attr: &str) -> Option<&'a str> {
+        self.doc.attr(*node, attr)
     }
 
-    fn name<'n>(&self, node: &'n Node) -> &'a str {
-        self.doc()
-            .element(*node)
-            .expect("expected XML element")
-            .name
-            .local_name
-            .as_ref()
+    /// Child elements in document order. The iterator borrows the document,
+    /// not the parser, so its items can be parsed as they come.
+    fn element_children(&self, node: &Node) -> impl Iterator<Item = Node> + use<'a> {
+        self.doc.children(*node)
     }
 
-    fn attr<'n>(&self, node: &'n Node, attr: &str) -> Option<&'a str> {
-        self.doc().get_attribute(*node, attr)
+    fn children_named(
+        &self,
+        node: &Node,
+        name: &'static str,
+    ) -> impl Iterator<Item = Node> + use<'a> {
+        let doc = self.doc;
+        doc.children(*node)
+            .filter(move |child| doc.name(*child) == name)
     }
 
-    fn element_children(&self, node: &Node) -> std::vec::IntoIter<Node> {
-        self.doc()
-            .children_iter(*node)
-            .filter(|child| self.doc().element(*child).is_some())
-            .collect::<Vec<_>>()
-            .into_iter()
+    fn child(&self, node: &Node, name: &'static str) -> Option<Node> {
+        self.children_named(node, name).next()
     }
 
-    pub fn parse_document(&mut self, doc: &'a Document<'a>) -> Result<ParsedIpc2581> {
-        self.doc = Some(doc);
-        let root = doc
-            .document_element()
-            .ok_or(Ipc2581Error::MissingElement("IPC-2581"))?;
+    fn units(&self) -> Units {
+        self.ecad_units.unwrap_or(Units::Millimeter)
+    }
 
-        // Verify root element
+    fn parse_document(mut self) -> Result<Ipc2581> {
+        let root = self.doc.root();
         if self.name(&root) != "IPC-2581" {
             return Err(Ipc2581Error::InvalidStructure(format!(
                 "Expected root element 'IPC-2581', found '{}'",
                 self.name(&root)
             )));
         }
+        let revision = self.required_attr(&root, "revision", "IPC-2581")?;
 
-        // Parse revision
-        let revision = self
-            .attr(&root, "revision")
-            .ok_or(Ipc2581Error::MissingAttribute {
-                element: "IPC-2581",
-                attr: "revision",
-            })?;
-        let revision = self.interner.intern(revision);
-
-        // Single pass through children
         let mut content_node = None;
         let mut logistic_header = None;
         let mut history_record = None;
@@ -111,7 +115,8 @@ impl<'a> Parser<'a> {
         let content =
             self.parse_content(&content_node.ok_or(Ipc2581Error::MissingElement("Content"))?)?;
 
-        Ok(ParsedIpc2581 {
+        Ok(Ipc2581 {
+            interner: self.interner,
             revision,
             content,
             logistic_header,
@@ -125,19 +130,18 @@ impl<'a> Parser<'a> {
     fn parse_content(&mut self, node: &Node) -> Result<Content> {
         let role_ref = self.required_attr(node, "roleRef", "Content")?;
 
-        // Single pass through children
         let mut function_mode_node = None;
         let mut step_refs = Vec::new();
         let mut layer_refs = Vec::new();
         let mut bom_refs = Vec::new();
         let mut avl_refs = Vec::new();
-        let mut dictionary_color = None;
-        let mut dictionary_line_desc = None;
-        let mut dictionary_fill_desc = None;
-        let mut dictionary_font = None;
-        let mut dictionary_firmware = None;
-        let mut dictionary_standard = None;
-        let mut dictionary_user = None;
+        let mut dictionary_color = DictionaryColor::default();
+        let mut dictionary_line_desc = DictionaryLineDesc::default();
+        let mut dictionary_fill_desc = DictionaryFillDesc::default();
+        let mut dictionary_font = DictionaryFont::default();
+        let mut dictionary_firmware = DictionaryFirmware::default();
+        let mut dictionary_standard = DictionaryStandard::default();
+        let mut dictionary_user = DictionaryUser::default();
 
         for child in self.element_children(node) {
             match self.name(&child) {
@@ -146,28 +150,34 @@ impl<'a> Parser<'a> {
                 "LayerRef" => layer_refs.push(self.required_attr(&child, "name", "LayerRef")?),
                 "BomRef" => bom_refs.push(self.required_attr(&child, "name", "BomRef")?),
                 "AvlRef" => avl_refs.push(self.required_attr(&child, "name", "AvlRef")?),
-                "DictionaryColor" => dictionary_color = Some(self.parse_dictionary_color(&child)?),
+                "DictionaryColor" => dictionary_color = self.parse_dictionary_color(&child)?,
                 "DictionaryLineDesc" => {
-                    dictionary_line_desc = Some(self.parse_dictionary_line_desc(&child)?)
+                    dictionary_line_desc = self.parse_dictionary_line_desc(&child)?
                 }
                 "DictionaryFillDesc" => {
-                    dictionary_fill_desc = Some(self.parse_dictionary_fill_desc(&child)?)
+                    dictionary_fill_desc = self.parse_dictionary_fill_desc(&child)?
                 }
-                "DictionaryFont" => dictionary_font = Some(self.parse_dictionary_font(&child)?),
+                "DictionaryFont" => dictionary_font = self.parse_dictionary_font(&child)?,
                 "DictionaryFirmware" => {
-                    dictionary_firmware = Some(self.parse_dictionary_firmware(&child)?)
+                    dictionary_firmware = self.parse_dictionary_firmware(&child)?
                 }
                 "DictionaryStandard" => {
-                    dictionary_standard = Some(self.parse_dictionary_standard(&child)?)
+                    dictionary_standard = self.parse_dictionary_standard(&child)?
                 }
-                "DictionaryUser" => dictionary_user = Some(self.parse_dictionary_user(&child)?),
+                "DictionaryUser" => dictionary_user = self.parse_dictionary_user(&child)?,
                 _ => {}
             }
         }
 
-        let function_mode = self.parse_function_mode(
-            &function_mode_node.ok_or(Ipc2581Error::MissingElement("FunctionMode"))?,
-        )?;
+        let function_mode =
+            function_mode_node.ok_or(Ipc2581Error::MissingElement("FunctionMode"))?;
+        let function_mode = FunctionMode {
+            mode: Mode::from_ipc(self.required_str(&function_mode, "mode", "FunctionMode")?)?,
+            level: self
+                .attr(&function_mode, "level")
+                .map(parse_level)
+                .transpose()?,
+        };
 
         Ok(Content {
             role_ref,
@@ -176,142 +186,77 @@ impl<'a> Parser<'a> {
             layer_refs,
             bom_refs,
             avl_refs,
-            dictionary_color: dictionary_color.unwrap_or_default(),
-            dictionary_line_desc: dictionary_line_desc.unwrap_or_default(),
-            dictionary_fill_desc: dictionary_fill_desc.unwrap_or_default(),
-            dictionary_font: dictionary_font.unwrap_or_default(),
-            dictionary_firmware: dictionary_firmware.unwrap_or_default(),
-            dictionary_standard: dictionary_standard.unwrap_or_default(),
-            dictionary_user: dictionary_user.unwrap_or_default(),
+            dictionary_color,
+            dictionary_line_desc,
+            dictionary_fill_desc,
+            dictionary_font,
+            dictionary_firmware,
+            dictionary_standard,
+            dictionary_user,
         })
     }
 
-    fn parse_function_mode(&mut self, node: &Node) -> Result<FunctionMode> {
-        let mode_str = self.required_attr(node, "mode", "FunctionMode")?;
-        let mode = self.parse_mode(self.interner.resolve(mode_str))?;
-
-        let level = self
-            .attr(node, "level")
-            .map(|s| self.parse_level(s))
-            .transpose()?;
-
-        Ok(FunctionMode { mode, level })
+    /// A dictionary's `units` as written, and the units its entries are in.
+    fn dictionary_units(&self, node: &Node) -> Result<(Option<Units>, Units)> {
+        let units = self.opt_enum(node, "units", Units::from_ipc)?;
+        Ok((units, units.unwrap_or(Units::Millimeter)))
     }
 
-    fn parse_mode(&self, s: &str) -> Result<Mode> {
-        match s {
-            "USERDEF" => Ok(Mode::UserDef),
-            "BOM" => Ok(Mode::Bom),
-            "STACKUP" => Ok(Mode::Stackup),
-            "FABRICATION" => Ok(Mode::Fabrication),
-            "ASSEMBLY" => Ok(Mode::Assembly),
-            "TEST" => Ok(Mode::Test),
-            "STENCIL" => Ok(Mode::Stencil),
-            "DFX" => Ok(Mode::Dfx),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Unknown mode: {}",
-                s
-            ))),
-        }
+    /// The `entry` children of a dictionary, each parsed from its `id`.
+    fn parse_entries<T>(
+        &mut self,
+        node: &Node,
+        entry: &'static str,
+        mut parse: impl FnMut(&mut Self, &Node, Symbol) -> Result<T>,
+    ) -> Result<Vec<T>> {
+        self.children_named(node, entry)
+            .map(|child| {
+                let id = self.required_attr(&child, "id", entry)?;
+                parse(self, &child, id)
+            })
+            .collect()
     }
 
-    fn parse_level(&self, s: &str) -> Result<Level> {
-        let level: u8 = s.parse().map_err(|_| {
-            Ipc2581Error::InvalidAttribute(format!(
-                "Invalid level (expected positive integer): {}",
-                s
-            ))
-        })?;
-
-        if level == 0 {
-            return Err(Ipc2581Error::InvalidAttribute(
-                "Invalid level (expected positive integer): 0".to_string(),
-            ));
-        }
-
-        Ok(Level(level))
+    fn required_child(
+        &self,
+        node: &Node,
+        name: &'static str,
+        missing: &'static str,
+    ) -> Result<Node> {
+        self.child(node, name)
+            .ok_or(Ipc2581Error::MissingElement(missing))
     }
 
     fn parse_dictionary_color(&mut self, node: &Node) -> Result<DictionaryColor> {
-        let entry_nodes = self
-            .element_children(node)
-            .filter(|n| self.name(n) == "EntryColor")
-            .collect::<Vec<_>>();
-        let entries = entry_nodes
-            .into_iter()
-            .map(|n| self.parse_entry_color(&n))
-            .collect::<Result<Vec<_>>>()?;
-
+        let entries = self.parse_entries(node, "EntryColor", |this, entry, id| {
+            let color = this.required_child(entry, "Color", "Color")?;
+            let color = this.color(&color)?;
+            Ok(EntryColor { id, color })
+        })?;
         Ok(DictionaryColor { entries })
     }
 
-    fn parse_entry_color(&mut self, node: &Node) -> Result<EntryColor> {
-        let id = self.required_attr(node, "id", "EntryColor")?;
-
-        let color_node = self
-            .element_children(node)
-            .find(|n| self.name(n) == "Color")
-            .ok_or(Ipc2581Error::MissingElement("Color"))?;
-
-        let r = self.parse_u8_attr(&color_node, "r", "Color")?;
-        let g = self.parse_u8_attr(&color_node, "g", "Color")?;
-        let b = self.parse_u8_attr(&color_node, "b", "Color")?;
-
-        Ok(EntryColor {
-            id,
-            color: Color { r, g, b },
-        })
-    }
-
     fn parse_dictionary_line_desc(&mut self, node: &Node) -> Result<DictionaryLineDesc> {
-        let units = self
-            .attr(node, "units")
-            .map(|s| self.parse_units(s))
-            .transpose()?;
-
-        // Use MILLIMETER as default if not specified
-        let dict_units = units.unwrap_or(Units::Millimeter);
-
-        let entry_nodes = self
-            .element_children(node)
-            .filter(|n| self.name(n) == "EntryLineDesc")
-            .collect::<Vec<_>>();
-        let entries = entry_nodes
-            .into_iter()
-            .map(|n| self.parse_entry_line_desc(&n, dict_units))
-            .collect::<Result<Vec<_>>>()?;
-
+        let (units, entry_units) = self.dictionary_units(node)?;
+        let entries = self.parse_entries(node, "EntryLineDesc", |this, entry, id| {
+            let line_desc = this.required_child(entry, "LineDesc", "LineDesc")?;
+            let line_desc = this.parse_line_desc(&line_desc, entry_units)?;
+            Ok(EntryLineDesc { id, line_desc })
+        })?;
         Ok(DictionaryLineDesc { units, entries })
     }
 
-    fn parse_entry_line_desc(&mut self, node: &Node, units: Units) -> Result<EntryLineDesc> {
-        let id = self.required_attr(node, "id", "EntryLineDesc")?;
-
-        let line_desc_node = self
-            .element_children(node)
-            .find(|n| self.name(n) == "LineDesc")
-            .ok_or(Ipc2581Error::MissingElement("LineDesc"))?;
-
-        let line_desc = self.parse_line_desc(&line_desc_node, units)?;
-
-        Ok(EntryLineDesc { id, line_desc })
-    }
-
     fn parse_line_desc(&mut self, node: &Node, units: Units) -> Result<LineDesc> {
-        let line_width =
-            self.parse_non_negative_f64_attr_with_units(node, "lineWidth", "LineDesc", units)?;
-        let line_end_str = self.required_attr(node, "lineEnd", "LineDesc")?;
-        let line_end = self.parse_line_end(self.interner.resolve(line_end_str))?;
-
-        let line_property = self
-            .attr(node, "lineProperty")
-            .map(|s| self.parse_line_property(s))
-            .transpose()?;
-
+        let line_width = self
+            .number(node, "lineWidth", Sign::NonNegative, Some(units))?
+            .ok_or(Ipc2581Error::MissingAttribute {
+                element: "LineDesc",
+                attr: "lineWidth",
+            })?;
         Ok(LineDesc {
             line_width,
-            line_end,
-            line_property,
+            line_end: LineEnd::from_ipc(self.required_str(node, "lineEnd", "LineDesc")?)?,
+            line_property: self.opt_enum(node, "lineProperty", LineProperty::from_ipc)?,
         })
     }
 
@@ -321,8 +266,8 @@ impl<'a> Parser<'a> {
         units: Units,
         context: &'static str,
     ) -> Result<LineDescGroup> {
-        let (line_desc, line_desc_ref, _, _) = self.parse_fill_and_line_desc(node, units)?;
-        match (line_desc, line_desc_ref) {
+        let style = self.parse_fill_and_line_desc(node, units)?;
+        match (style.line_desc, style.line_desc_ref) {
             (Some(line_desc), None) => Ok(LineDescGroup::Inline(line_desc)),
             (None, Some(line_desc_ref)) => Ok(LineDescGroup::Ref(line_desc_ref)),
             (None, None) => Err(Ipc2581Error::MissingElement(context)),
@@ -332,206 +277,114 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_line_end(&self, s: &str) -> Result<LineEnd> {
-        match s {
-            "NONE" => Ok(LineEnd::None),
-            "ROUND" => Ok(LineEnd::Round),
-            "SQUARE" => Ok(LineEnd::Square),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Unknown lineEnd: {}",
-                s
-            ))),
-        }
-    }
-
-    fn parse_line_property(&self, s: &str) -> Result<LineProperty> {
-        match s {
-            "SOLID" => Ok(LineProperty::Solid),
-            "DOTTED" => Ok(LineProperty::Dotted),
-            "DASHED" => Ok(LineProperty::Dashed),
-            "CENTER" => Ok(LineProperty::Center),
-            "PHANTOM" => Ok(LineProperty::Phantom),
-            "ERASE" => Ok(LineProperty::Erase),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Unknown lineProperty: {}",
-                s
-            ))),
-        }
-    }
-
-    fn parse_feature_line_desc(
-        &self,
-        node: &Node,
-        units: Units,
-    ) -> Result<(f64, Option<LineEnd>, Option<LineProperty>)> {
-        let line_width = self
-            .attr(node, "lineWidth")
-            .map(|s| self.parse_f64_str_with_units(s, units))
-            .transpose()?
-            .unwrap_or(0.25);
-        let line_end = self
-            .attr(node, "lineEnd")
-            .map(|s| self.parse_line_end(s))
-            .transpose()?;
-        let line_property = self
-            .attr(node, "lineProperty")
-            .map(|s| self.parse_line_property(s))
-            .transpose()?;
-
-        Ok((line_width, line_end, line_property))
-    }
-
     fn parse_dictionary_fill_desc(&mut self, node: &Node) -> Result<DictionaryFillDesc> {
-        let units = self
-            .attr(node, "units")
-            .map(|value| self.parse_units(value))
-            .transpose()?;
-        let fill_units = units.unwrap_or(Units::Millimeter);
-        let mut entries = Vec::new();
-        for child in self.element_children(node) {
-            if self.name(&child) != "EntryFillDesc" {
-                continue;
-            }
-            let id = self.required_attr(&child, "id", "EntryFillDesc")?;
-            let fill = self
-                .element_children(&child)
-                .find(|entry| self.name(entry) == "FillDesc")
-                .ok_or(Ipc2581Error::MissingElement("FillDesc in EntryFillDesc"))?;
-            entries.push(EntryFillDesc {
-                id,
-                fill_desc: self.parse_fill_desc(&fill, fill_units)?,
-            });
-        }
+        let (units, entry_units) = self.dictionary_units(node)?;
+        let entries = self.parse_entries(node, "EntryFillDesc", |this, entry, id| {
+            let fill_desc = this.required_child(entry, "FillDesc", "FillDesc in EntryFillDesc")?;
+            let fill_desc = this.parse_fill_desc(&fill_desc, entry_units)?;
+            Ok(EntryFillDesc { id, fill_desc })
+        })?;
         Ok(DictionaryFillDesc { units, entries })
     }
 
     fn parse_fill_desc(&mut self, node: &Node, units: Units) -> Result<FillDesc> {
-        let fill_property_str = self.required_attr(node, "fillProperty", "FillDesc")?;
-        let fill_property = self.parse_fill_property(self.interner.resolve(fill_property_str))?;
-        let color = self
-            .element_children(node)
-            .find_map(|child| self.parse_color_group(&child).transpose())
-            .transpose()?;
+        let fill_property =
+            FillProperty::from_ipc(self.required_str(node, "fillProperty", "FillDesc")?)?;
+        let color = self.parse_color_group_child(node)?;
 
         Ok(FillDesc {
             fill_property,
-            line_width: self.parse_optional_non_negative_f64_attr_with_units(
-                node,
-                "lineWidth",
-                units,
-            )?,
-            pitch1: self.parse_optional_non_negative_f64_attr_with_units(node, "pitch1", units)?,
-            pitch2: self.parse_optional_non_negative_f64_attr_with_units(node, "pitch2", units)?,
-            angle1: self.parse_optional_f64_attr(node, "angle1")?,
-            angle2: self.parse_optional_f64_attr(node, "angle2")?,
+            line_width: self.number(node, "lineWidth", Sign::NonNegative, Some(units))?,
+            pitch1: self.number(node, "pitch1", Sign::NonNegative, Some(units))?,
+            pitch2: self.number(node, "pitch2", Sign::NonNegative, Some(units))?,
+            angle1: self.opt_num(node, "angle1")?,
+            angle2: self.opt_num(node, "angle2")?,
             color,
         })
     }
 
-    fn parse_color_group(&mut self, node: &Node) -> Result<Option<ColorGroup>> {
-        let color = match self.name(node) {
-            "Color" => Some(ColorGroup::Color(Color {
-                r: self.parse_u8_attr(node, "r", "Color")?,
-                g: self.parse_u8_attr(node, "g", "Color")?,
-                b: self.parse_u8_attr(node, "b", "Color")?,
-            })),
-            "ColorRef" => Some(ColorGroup::Ref(self.required_attr(node, "id", "ColorRef")?)),
-            "ColorTerm" => Some(ColorGroup::Term {
-                name: self.required_attr(node, "name", "ColorTerm")?,
-                comment: self.optional_attr(node, "comment"),
-            }),
-            _ => None,
-        };
-        Ok(color)
+    /// The first `ColorGroup` child of `node`.
+    fn parse_color_group_child(&mut self, node: &Node) -> Result<Option<ColorGroup>> {
+        for child in self.element_children(node) {
+            let color = match self.name(&child) {
+                "Color" => ColorGroup::Color(self.color(&child)?),
+                "ColorRef" => ColorGroup::Ref(self.required_attr(&child, "id", "ColorRef")?),
+                "ColorTerm" => ColorGroup::Term {
+                    name: self.required_attr(&child, "name", "ColorTerm")?,
+                    comment: self.optional_attr(&child, "comment"),
+                },
+                _ => continue,
+            };
+            return Ok(Some(color));
+        }
+        Ok(None)
     }
 
     fn parse_dictionary_firmware(&mut self, node: &Node) -> Result<DictionaryFirmware> {
-        let mut entries = Vec::new();
-        for child in self.element_children(node) {
-            if self.name(&child) != "EntryFirmware" {
-                continue;
-            }
-            let id = self.required_attr(&child, "id", "EntryFirmware")?;
-            let cached = self
-                .element_children(&child)
-                .find(|entry| self.name(entry) == "CachedFirmware")
-                .ok_or(Ipc2581Error::MissingElement(
-                    "CachedFirmware in EntryFirmware",
-                ))?;
-            entries.push(EntryFirmware {
+        let entries = self.parse_entries(node, "EntryFirmware", |this, entry, id| {
+            let cached =
+                this.required_child(entry, "CachedFirmware", "CachedFirmware in EntryFirmware")?;
+            let hex_encoded_binary =
+                this.required_attr(&cached, "hexEncodedBinary", "CachedFirmware")?;
+            Ok(EntryFirmware {
                 id,
-                hex_encoded_binary: self.required_attr(
-                    &cached,
-                    "hexEncodedBinary",
-                    "CachedFirmware",
-                )?,
-            });
-        }
+                hex_encoded_binary,
+            })
+        })?;
         Ok(DictionaryFirmware { entries })
     }
 
     fn parse_dictionary_font(&mut self, node: &Node) -> Result<DictionaryFont> {
-        let units = self
-            .attr(node, "units")
-            .map(|value| self.parse_units(value))
-            .transpose()?;
-        let font_units = units.unwrap_or(Units::Millimeter);
-        let mut entries = Vec::new();
-        for child in self.element_children(node) {
-            if self.name(&child) != "EntryFont" {
-                continue;
-            }
-            let id = self.required_attr(&child, "id", "EntryFont")?;
-            let definition_node = self
-                .element_children(&child)
-                .find(|entry| matches!(self.name(entry), "FontDefEmbedded" | "FontDefExternal"))
+        let (units, entry_units) = self.dictionary_units(node)?;
+        let entries = self.parse_entries(node, "EntryFont", |this, entry, id| {
+            let font = this
+                .element_children(entry)
+                .find(|font| matches!(this.name(font), "FontDefEmbedded" | "FontDefExternal"))
                 .ok_or(Ipc2581Error::MissingElement("FontDef in EntryFont"))?;
-            let definition = match self.name(&definition_node) {
-                "FontDefEmbedded" => FontDefinition::Embedded(
-                    self.parse_embedded_font(&definition_node, font_units)?,
-                ),
-                "FontDefExternal" => FontDefinition::External(ExternalFont {
-                    name: self.required_attr(&definition_node, "name", "FontDefExternal")?,
-                    urn: self.required_attr(&definition_node, "urn", "FontDefExternal")?,
+            let definition = match this.name(&font) {
+                "FontDefEmbedded" => {
+                    FontDefinition::Embedded(this.parse_embedded_font(&font, entry_units)?)
+                }
+                _ => FontDefinition::External(ExternalFont {
+                    name: this.required_attr(&font, "name", "FontDefExternal")?,
+                    urn: this.required_attr(&font, "urn", "FontDefExternal")?,
                 }),
-                _ => unreachable!("font definition was filtered above"),
             };
-            entries.push(EntryFont { id, definition });
-        }
+            Ok(EntryFont { id, definition })
+        })?;
         Ok(DictionaryFont { units, entries })
     }
 
     fn parse_embedded_font(&mut self, node: &Node, units: Units) -> Result<EmbeddedFont> {
-        let name = self.required_attr(node, "name", "FontDefEmbedded")?;
-        let line_desc =
-            self.parse_line_desc_group(node, units, "LineDescGroup in FontDefEmbedded")?;
-        let glyph_nodes = self
-            .element_children(node)
-            .filter(|child| self.name(child) == "Glyph")
-            .collect::<Vec<_>>();
-        let mut glyphs = Vec::with_capacity(glyph_nodes.len());
-        for glyph in glyph_nodes {
-            glyphs.push(self.parse_font_glyph(&glyph, units)?);
-        }
         Ok(EmbeddedFont {
-            name,
-            line_desc,
-            glyphs,
+            name: self.required_attr(node, "name", "FontDefEmbedded")?,
+            line_desc: self.parse_line_desc_group(
+                node,
+                units,
+                "LineDescGroup in FontDefEmbedded",
+            )?,
+            glyphs: self
+                .children_named(node, "Glyph")
+                .map(|glyph| self.parse_font_glyph(&glyph, units))
+                .collect::<Result<_>>()?,
+        })
+    }
+
+    fn bounding_box(
+        &self,
+        node: &Node,
+        element: &'static str,
+        units: Units,
+    ) -> Result<BoundingBox> {
+        Ok(BoundingBox {
+            lower_left: self.point(node, "lowerLeftX", "lowerLeftY", element, units)?,
+            upper_right: self.point(node, "upperRightX", "upperRightY", element, units)?,
         })
     }
 
     fn parse_font_glyph(&mut self, node: &Node, units: Units) -> Result<FontGlyph> {
         let char_code = self.required_attr(node, "charCode", "Glyph")?;
-        let bounding_box = BoundingBox {
-            lower_left: Point {
-                x: self.parse_f64_attr_with_units(node, "lowerLeftX", "Glyph", units)?,
-                y: self.parse_f64_attr_with_units(node, "lowerLeftY", "Glyph", units)?,
-            },
-            upper_right: Point {
-                x: self.parse_f64_attr_with_units(node, "upperRightX", "Glyph", units)?,
-                y: self.parse_f64_attr_with_units(node, "upperRightY", "Glyph", units)?,
-            },
-        };
+        let bounding_box = self.bounding_box(node, "Glyph", units)?;
         let mut shapes = Vec::new();
         for child in self.element_children(node) {
             match self.name(&child) {
@@ -557,809 +410,486 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_fill_property(&self, s: &str) -> Result<FillProperty> {
-        match s {
-            "FILL" => Ok(FillProperty::Fill),
-            "HOLLOW" => Ok(FillProperty::Hollow),
-            "VOID" => Ok(FillProperty::Void),
-            "HATCH" => Ok(FillProperty::Hatch),
-            "MESH" => Ok(FillProperty::Mesh),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Unknown fillProperty: {}",
-                s
-            ))),
-        }
-    }
-
-    /// Generic enum parser using FromStr trait
-    fn parse_enum_attr<T: std::str::FromStr<Err = String>>(&self, s: &str) -> Result<T> {
-        s.parse().map_err(Ipc2581Error::InvalidAttribute)
-    }
-
-    /// Parse optional FillDesc and LineDesc children from a primitive node
+    /// The `LineDescGroup` and `FillDescGroup` children of `node`.
     fn parse_fill_and_line_desc(&mut self, node: &Node, units: Units) -> Result<ShapeStyle> {
-        let mut line_desc = None;
-        let mut line_desc_ref = None;
-        let mut fill_desc = None;
-        let mut fill_desc_ref = None;
-
+        let mut style = ShapeStyle::default();
         for child in self.element_children(node) {
-            match self.name(&child) {
-                "LineDesc" => line_desc = Some(self.parse_line_desc(&child, units)?),
-                "LineDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        line_desc_ref = Some(self.interner.intern(id));
-                    }
-                }
-                "FillDesc" => fill_desc = Some(self.parse_fill_desc(&child, units)?),
-                "FillDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        fill_desc_ref = Some(self.interner.intern(id));
-                    }
-                }
-                _ => {}
-            }
+            self.parse_style_child(&child, units, &mut style)?;
         }
-
-        Ok((line_desc, line_desc_ref, fill_desc, fill_desc_ref))
+        Ok(style)
     }
 
-    /// Wrap a shape with styling (fill_property and line_desc_ref)
+    /// Reads `child` into `style` if it is a LineDescGroup or FillDescGroup member.
+    fn parse_style_child(
+        &mut self,
+        child: &Node,
+        units: Units,
+        style: &mut ShapeStyle,
+    ) -> Result<()> {
+        match self.name(child) {
+            "LineDesc" => style.line_desc = Some(self.parse_line_desc(child, units)?),
+            "LineDescRef" => {
+                style.line_desc_ref = Some(self.required_attr(child, "id", "LineDescRef")?)
+            }
+            "FillDesc" => style.fill_desc = Some(self.parse_fill_desc(child, units)?),
+            "FillDescRef" => {
+                style.fill_desc_ref = Some(self.required_attr(child, "id", "FillDescRef")?)
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn styled<T>(&mut self, node: &Node, shape: T, units: Units) -> Result<Styled<T>> {
-        let (line_desc, line_desc_ref, fill_desc, fill_desc_ref) =
-            self.parse_fill_and_line_desc(node, units)?;
+        let style = self.parse_fill_and_line_desc(node, units)?;
         Ok(Styled {
             shape,
-            fill_property: fill_desc.map(|desc| desc.fill_property),
-            line_desc,
-            line_desc_ref,
-            fill_desc,
-            fill_desc_ref,
+            fill_property: style.fill_desc.map(|desc| desc.fill_property),
+            line_desc: style.line_desc,
+            line_desc_ref: style.line_desc_ref,
+            fill_desc: style.fill_desc,
+            fill_desc_ref: style.fill_desc_ref,
         })
     }
 
     fn parse_dictionary_standard(&mut self, node: &Node) -> Result<DictionaryStandard> {
-        let units = self
-            .attr(node, "units")
-            .map(|s| self.parse_units(s))
-            .transpose()?;
-
-        // Use MILLIMETER as default if not specified
-        let dict_units = units.unwrap_or(Units::Millimeter);
-
-        let entry_nodes = self
-            .element_children(node)
-            .filter(|n| self.name(n) == "EntryStandard")
-            .collect::<Vec<_>>();
-        let entries = entry_nodes
-            .into_iter()
-            .map(|n| self.parse_entry_standard(&n, dict_units))
-            .collect::<Result<Vec<_>>>()?;
-
+        let (units, entry_units) = self.dictionary_units(node)?;
+        let entries = self.parse_entries(node, "EntryStandard", |this, entry, id| {
+            let primitive = this
+                .element_children(entry)
+                .next()
+                .ok_or(Ipc2581Error::MissingElement("StandardPrimitive"))?;
+            let primitive = this.parse_standard_primitive(&primitive, entry_units)?;
+            Ok(EntryStandard { id, primitive })
+        })?;
         Ok(DictionaryStandard { units, entries })
     }
 
-    fn parse_entry_standard(&mut self, node: &Node, units: Units) -> Result<EntryStandard> {
-        let id = self.required_attr(node, "id", "EntryStandard")?;
-
-        // Find the primitive child element
-        let primitive_node = self
-            .element_children(node)
-            .find(|n| self.doc().element(*n).is_some())
-            .ok_or(Ipc2581Error::MissingElement("StandardPrimitive"))?;
-
-        let primitive = self.parse_standard_primitive(&primitive_node, units)?;
-
-        Ok(EntryStandard { id, primitive })
-    }
-
     fn parse_standard_primitive(&mut self, node: &Node, units: Units) -> Result<StandardPrimitive> {
-        match self.name(node) {
-            "Circle" => Ok(StandardPrimitive::Circle(self.styled(
-                node,
-                Circle {
-                    diameter: self.parse_f64_attr_with_units(node, "diameter", "Circle", units)?,
-                },
-                units,
-            )?)),
-            "RectCenter" => Ok(StandardPrimitive::RectCenter(self.styled(
-                node,
-                RectCenter {
-                    size: Size {
-                        width: self.parse_f64_attr_with_units(
-                            node,
-                            "width",
-                            "RectCenter",
-                            units,
-                        )?,
-                        height: self.parse_f64_attr_with_units(
-                            node,
-                            "height",
-                            "RectCenter",
-                            units,
-                        )?,
-                    },
-                },
-                units,
-            )?)),
-            "RectRound" => Ok(StandardPrimitive::RectRound(self.styled(
-                node,
-                RectRound {
-                    size: Size {
-                        width: self.parse_f64_attr_with_units(node, "width", "RectRound", units)?,
-                        height: self.parse_f64_attr_with_units(
-                            node,
-                            "height",
-                            "RectRound",
-                            units,
-                        )?,
-                    },
-                    radius: self.parse_f64_attr_with_units(node, "radius", "RectRound", units)?,
-                    upper_right: self.parse_bool_attr(node, "upperRight").unwrap_or(false),
-                    upper_left: self.parse_bool_attr(node, "upperLeft").unwrap_or(false),
-                    lower_right: self.parse_bool_attr(node, "lowerRight").unwrap_or(false),
-                    lower_left: self.parse_bool_attr(node, "lowerLeft").unwrap_or(false),
-                },
-                units,
-            )?)),
-            "RectCham" => Ok(StandardPrimitive::RectCham(self.styled(
-                node,
-                RectCham {
-                    size: Size {
-                        width: self.parse_f64_attr_with_units(node, "width", "RectCham", units)?,
-                        height:
-                            self.parse_f64_attr_with_units(node, "height", "RectCham", units)?,
-                    },
-                    chamfer: self.parse_f64_attr_with_units(node, "chamfer", "RectCham", units)?,
-                    upper_right: self.parse_bool_attr(node, "upperRight").unwrap_or(false),
-                    upper_left: self.parse_bool_attr(node, "upperLeft").unwrap_or(false),
-                    lower_right: self.parse_bool_attr(node, "lowerRight").unwrap_or(false),
-                    lower_left: self.parse_bool_attr(node, "lowerLeft").unwrap_or(false),
-                },
-                units,
-            )?)),
-            "RectCorner" => Ok(StandardPrimitive::RectCorner(self.styled(
-                node,
-                RectCorner {
-                    lower_left: Point {
-                        x: self.parse_f64_attr_with_units(
-                            node,
-                            "lowerLeftX",
-                            "RectCorner",
-                            units,
-                        )?,
-                        y: self.parse_f64_attr_with_units(
-                            node,
-                            "lowerLeftY",
-                            "RectCorner",
-                            units,
-                        )?,
-                    },
-                    upper_right: Point {
-                        x: self.parse_f64_attr_with_units(
-                            node,
-                            "upperRightX",
-                            "RectCorner",
-                            units,
-                        )?,
-                        y: self.parse_f64_attr_with_units(
-                            node,
-                            "upperRightY",
-                            "RectCorner",
-                            units,
-                        )?,
-                    },
-                },
-                units,
-            )?)),
+        /// `StandardPrimitive::$shape` of a `$shape` with the styling of `node`.
+        macro_rules! styled {
+            ($shape:ident { $($fields:tt)* }) => {
+                StandardPrimitive::$shape(self.styled(node, $shape { $($fields)* }, units)?)
+            };
+        }
+        Ok(match self.name(node) {
+            "Circle" => styled!(Circle {
+                diameter: self.mm(node, "diameter", "Circle", units)?,
+            }),
+            "RectCenter" => styled!(RectCenter {
+                size: self.size(node, "RectCenter", units)?,
+            }),
+            "RectRound" => styled!(RectRound {
+                size: self.size(node, "RectRound", units)?,
+                radius: self.mm(node, "radius", "RectRound", units)?,
+                upper_right: self.parse_flag_attr(node, "upperRight")?,
+                upper_left: self.parse_flag_attr(node, "upperLeft")?,
+                lower_right: self.parse_flag_attr(node, "lowerRight")?,
+                lower_left: self.parse_flag_attr(node, "lowerLeft")?,
+            }),
+            "RectCham" => styled!(RectCham {
+                size: self.size(node, "RectCham", units)?,
+                chamfer: self.mm(node, "chamfer", "RectCham", units)?,
+                upper_right: self.parse_flag_attr(node, "upperRight")?,
+                upper_left: self.parse_flag_attr(node, "upperLeft")?,
+                lower_right: self.parse_flag_attr(node, "lowerRight")?,
+                lower_left: self.parse_flag_attr(node, "lowerLeft")?,
+            }),
+            "RectCorner" => styled!(RectCorner {
+                lower_left: self.point(node, "lowerLeftX", "lowerLeftY", "RectCorner", units)?,
+                upper_right: self.point(node, "upperRightX", "upperRightY", "RectCorner", units)?,
+            }),
             "Butterfly" => {
-                let shape_attr = self.required_attr(node, "shape", "Butterfly")?;
                 let shape =
-                    self.parse_enum_attr::<ButterflyShape>(self.interner.resolve(shape_attr))?;
+                    ButterflyShape::from_ipc(self.required_str(node, "shape", "Butterfly")?)?;
                 let attr_name = if matches!(shape, ButterflyShape::Round) {
                     "diameter"
                 } else {
                     "side"
                 };
-                Ok(StandardPrimitive::Butterfly(self.styled(
-                    node,
-                    Butterfly {
-                        shape,
-                        size: self.parse_f64_attr_with_units(
-                            node,
-                            attr_name,
-                            "Butterfly",
-                            units,
-                        )?,
-                    },
-                    units,
-                )?))
+                styled!(Butterfly {
+                    shape,
+                    size: self.mm(node, attr_name, "Butterfly", units)?,
+                })
             }
-            "Diamond" => Ok(StandardPrimitive::Diamond(self.styled(
-                node,
-                Diamond {
-                    size: Size {
-                        width: self.parse_f64_attr_with_units(node, "width", "Diamond", units)?,
-                        height: self.parse_f64_attr_with_units(node, "height", "Diamond", units)?,
-                    },
-                },
-                units,
-            )?)),
-            "Donut" => {
-                let shape_attr = self.required_attr(node, "shape", "Donut")?;
-                let shape =
-                    self.parse_enum_attr::<ConcentricShape>(self.interner.resolve(shape_attr))?;
-                Ok(StandardPrimitive::Donut(self.styled(
-                    node,
-                    Donut {
-                        shape,
-                        outer_diameter: self.parse_f64_attr_with_units(
-                            node,
-                            "outerDiameter",
-                            "Donut",
-                            units,
-                        )?,
-                        inner_diameter: self.parse_f64_attr_with_units(
-                            node,
-                            "innerDiameter",
-                            "Donut",
-                            units,
-                        )?,
-                    },
-                    units,
-                )?))
+            "Diamond" => styled!(Diamond {
+                size: self.size(node, "Diamond", units)?,
+            }),
+            "Donut" => styled!(Donut {
+                shape: ConcentricShape::from_ipc(self.required_str(node, "shape", "Donut")?)?,
+                outer_diameter: self.mm(node, "outerDiameter", "Donut", units)?,
+                inner_diameter: self.mm(node, "innerDiameter", "Donut", units)?,
+            }),
+            "Ellipse" => styled!(Ellipse {
+                size: self.size(node, "Ellipse", units)?,
+            }),
+            "Hexagon" => styled!(Hexagon {
+                point_to_point: self.mm(node, "length", "Hexagon", units)?,
+            }),
+            "Moire" => StandardPrimitive::Moire(Moire {
+                diameter: self.mm(node, "diameter", "Moire", units)?,
+                ring_width: self.mm(node, "ringWidth", "Moire", units)?,
+                ring_gap: self.mm(node, "ringGap", "Moire", units)?,
+                ring_number: self
+                    .parse_optional_count_attr(node, "ringNumber", MAX_MOIRE_RINGS)?
+                    .ok_or(Ipc2581Error::MissingAttribute {
+                        element: "Moire",
+                        attr: "ringNumber",
+                    })?,
+                line_width: self.opt_mm(node, "lineWidth", units)?,
+                line_length: self.opt_mm(node, "lineLength", units)?,
+                line_angle: self.opt_num(node, "lineAngle")?,
+            }),
+            "Octagon" => styled!(Octagon {
+                point_to_point: self.mm(node, "length", "Octagon", units)?,
+            }),
+            "Thermal" => styled!(Thermal {
+                shape: ConcentricShape::from_ipc(self.required_str(node, "shape", "Thermal")?)?,
+                outer_diameter: self.mm(node, "outerDiameter", "Thermal", units)?,
+                inner_diameter: self.mm(node, "innerDiameter", "Thermal", units)?,
+                // IPC-2581C spokeCountType.
+                spoke_count: self
+                    .parse_optional_count_attr(node, "spokeCount", 4)?
+                    .unwrap_or(4),
+                spoke_width: self.opt_mm(node, "spokeWidth", units)?,
+                spoke_start_angle: self.opt_num(node, "spokeStartAngle")?,
+            }),
+            "Triangle" => styled!(Triangle {
+                base: self.mm(node, "base", "Triangle", units)?,
+                height: self.mm(node, "height", "Triangle", units)?,
+            }),
+            "Oval" => styled!(Oval {
+                size: self.size(node, "Oval", units)?,
+            }),
+            "Contour" => {
+                let (polygon, cutouts) = self.parse_polygon_and_cutouts(node, units, "Polygon")?;
+                StandardPrimitive::Contour(Contour { polygon, cutouts })
             }
-            "Ellipse" => Ok(StandardPrimitive::Ellipse(self.styled(
-                node,
-                Ellipse {
-                    size: Size {
-                        width: self.parse_f64_attr_with_units(node, "width", "Ellipse", units)?,
-                        height: self.parse_f64_attr_with_units(node, "height", "Ellipse", units)?,
-                    },
-                },
-                units,
-            )?)),
-            "Hexagon" => Ok(StandardPrimitive::Hexagon(self.styled(
-                node,
-                Hexagon {
-                    point_to_point:
-                        self.parse_f64_attr_with_units(node, "length", "Hexagon", units)?,
-                },
-                units,
-            )?)),
-            "Moire" => Ok(StandardPrimitive::Moire(Moire {
-                diameter: self.parse_f64_attr_with_units(node, "diameter", "Moire", units)?,
-                ring_width: self.parse_f64_attr_with_units(node, "ringWidth", "Moire", units)?,
-                ring_gap: self.parse_f64_attr_with_units(node, "ringGap", "Moire", units)?,
-                ring_number: self.parse_u32_attr(node, "ringNumber", "Moire")?,
-                line_width: self.parse_optional_f64_attr_with_units(node, "lineWidth", units)?,
-                line_length: self.parse_optional_f64_attr_with_units(node, "lineLength", units)?,
-                line_angle: self.parse_optional_f64_attr(node, "lineAngle")?,
-            })),
-            "Octagon" => Ok(StandardPrimitive::Octagon(self.styled(
-                node,
-                Octagon {
-                    point_to_point:
-                        self.parse_f64_attr_with_units(node, "length", "Octagon", units)?,
-                },
-                units,
-            )?)),
-            "Thermal" => {
-                let shape_attr = self.required_attr(node, "shape", "Thermal")?;
-                let shape =
-                    self.parse_enum_attr::<ConcentricShape>(self.interner.resolve(shape_attr))?;
-                Ok(StandardPrimitive::Thermal(
-                    self.styled(
-                        node,
-                        Thermal {
-                            shape,
-                            outer_diameter: self.parse_f64_attr_with_units(
-                                node,
-                                "outerDiameter",
-                                "Thermal",
-                                units,
-                            )?,
-                            inner_diameter: self.parse_f64_attr_with_units(
-                                node,
-                                "innerDiameter",
-                                "Thermal",
-                                units,
-                            )?,
-                            spoke_count: self
-                                .parse_optional_u32_attr(node, "spokeCount")?
-                                .unwrap_or(4),
-                            spoke_width: self.parse_optional_f64_attr_with_units(
-                                node,
-                                "spokeWidth",
-                                units,
-                            )?,
-                            spoke_start_angle: self
-                                .parse_optional_f64_attr(node, "spokeStartAngle")?,
-                        },
-                        units,
-                    )?,
-                ))
+            name => {
+                return Err(Ipc2581Error::InvalidStructure(format!(
+                    "Unknown standard primitive: {name}"
+                )));
             }
-            "Triangle" => Ok(StandardPrimitive::Triangle(self.styled(
-                node,
-                Triangle {
-                    base: self.parse_f64_attr_with_units(node, "base", "Triangle", units)?,
-                    height: self.parse_f64_attr_with_units(node, "height", "Triangle", units)?,
-                },
-                units,
-            )?)),
-            "Oval" => Ok(StandardPrimitive::Oval(self.styled(
-                node,
-                Oval {
-                    size: Size {
-                        width: self.parse_f64_attr_with_units(node, "width", "Oval", units)?,
-                        height: self.parse_f64_attr_with_units(node, "height", "Oval", units)?,
-                    },
-                },
-                units,
-            )?)),
-            "Contour" => Ok(StandardPrimitive::Contour(self.parse_contour(node, units)?)),
-            name => Err(Ipc2581Error::InvalidStructure(format!(
-                "Unknown standard primitive: {}",
-                name
-            ))),
-        }
+        })
     }
 
-    fn parse_contour(&mut self, node: &Node, units: Units) -> Result<Contour> {
-        let polygon_node = self
-            .element_children(node)
-            .find(|n| self.name(n) == "Polygon")
-            .ok_or(Ipc2581Error::MissingElement("Polygon"))?;
-
-        let polygon = self.parse_polygon(&polygon_node, units)?;
-        let cutout_nodes = self
-            .element_children(node)
-            .filter(|n| self.name(n) == "Cutout")
-            .collect::<Vec<_>>();
-        let cutouts = cutout_nodes
-            .into_iter()
-            .map(|n| self.parse_polygon_container(&n, units))
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(Contour { polygon, cutouts })
+    fn size(&self, node: &Node, element: &'static str, units: Units) -> Result<Size> {
+        Ok(Size {
+            width: self.mm(node, "width", element, units)?,
+            height: self.mm(node, "height", element, units)?,
+        })
     }
 
-    fn parse_polygon_container(&mut self, node: &Node, units: Units) -> Result<Polygon> {
-        match self
-            .element_children(node)
-            .find(|child| self.name(child) == "Polygon")
-        {
-            Some(polygon) => self.parse_polygon(&polygon, units),
-            None => self.parse_polygon(node, units),
-        }
-    }
-
-    fn parse_polygon(&mut self, node: &Node, units: Units) -> Result<Polygon> {
-        let mut begin: Option<Point> = None;
-        let mut steps = Vec::new();
-
+    /// The `Polygon` and `Cutout` children shared by `Contour` and `Profile`.
+    fn parse_polygon_and_cutouts(
+        &mut self,
+        node: &Node,
+        units: Units,
+        missing: &'static str,
+    ) -> Result<(Polygon, Vec<Polygon>)> {
+        let mut polygon = None;
+        let mut cutouts = Vec::new();
         for child in self.element_children(node) {
             match self.name(&child) {
-                "PolyBegin" => {
-                    begin = Some(Point {
-                        x: self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units)?,
-                        y: self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units)?,
-                    })
+                "Polygon" if polygon.is_none() => {
+                    polygon = Some(self.parse_polygon(&child, units)?)
                 }
-                "PolyStepSegment" => steps.push(PolyStep::Segment(PolyStepSegment {
-                    point: Point {
-                        x: self.parse_f64_attr_with_units(&child, "x", "PolyStepSegment", units)?,
-                        y: self.parse_f64_attr_with_units(&child, "y", "PolyStepSegment", units)?,
-                    },
-                })),
-                "PolyStepCurve" => steps.push(PolyStep::Curve(PolyStepCurve {
-                    point: Point {
-                        x: self.parse_f64_attr_with_units(&child, "x", "PolyStepCurve", units)?,
-                        y: self.parse_f64_attr_with_units(&child, "y", "PolyStepCurve", units)?,
-                    },
-                    center: Point {
-                        x: self.parse_f64_attr_with_units(
-                            &child,
-                            "centerX",
-                            "PolyStepCurve",
-                            units,
-                        )?,
-                        y: self.parse_f64_attr_with_units(
-                            &child,
-                            "centerY",
-                            "PolyStepCurve",
-                            units,
-                        )?,
-                    },
-                    clockwise: self.parse_bool_attr(&child, "clockwise")?,
-                })),
+                "Cutout" => cutouts.push(self.parse_polygon_container(&child, units)?),
                 _ => {}
             }
         }
+        Ok((
+            polygon.ok_or(Ipc2581Error::MissingElement(missing))?,
+            cutouts,
+        ))
+    }
 
-        Ok(Polygon {
-            begin: begin.ok_or(Ipc2581Error::MissingElement("PolyBegin"))?,
-            steps,
+    fn parse_polygon_container(&mut self, node: &Node, units: Units) -> Result<Polygon> {
+        let polygon = self.child(node, "Polygon").unwrap_or(*node);
+        self.parse_polygon(&polygon, units)
+    }
+
+    fn parse_polygon(&mut self, node: &Node, units: Units) -> Result<Polygon> {
+        Ok(self.parse_poly(node, units, "PolyBegin")?.polygon)
+    }
+
+    fn parse_poly(&mut self, node: &Node, units: Units, missing: &'static str) -> Result<Poly> {
+        // Nearly every child is a point, so their count sizes the table once.
+        let mut points = Vec::with_capacity(self.element_children(node).count());
+        let mut curves = Vec::new();
+        let mut begin = None;
+        let mut xform = None;
+        let mut style = ShapeStyle::default();
+        // `PolyBegin` comes first in every file seen but is accepted anywhere.
+        points.push(ORIGIN);
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "PolyBegin" => begin = Some(self.point(&child, "x", "y", "PolyBegin", units)?),
+                "PolyStepSegment" => {
+                    points.push(self.point(&child, "x", "y", "PolyStepSegment", units)?)
+                }
+                "PolyStepCurve" => {
+                    curves.push(PolyCurve {
+                        point: points.len() as u32,
+                        clockwise: self.parse_bool_attr(&child, "clockwise")?,
+                        center: self.point(&child, "centerX", "centerY", "PolyStepCurve", units)?,
+                    });
+                    points.push(self.point(&child, "x", "y", "PolyStepCurve", units)?);
+                }
+                "Xform" => xform = Some(self.parse_xform(&child, units)?),
+                _ => self.parse_style_child(&child, units, &mut style)?,
+            }
+        }
+        points[0] = begin.ok_or(Ipc2581Error::MissingElement(missing))?;
+        Ok(Poly {
+            polygon: Polygon { points, curves },
+            xform,
+            style,
+        })
+    }
+
+    fn point(
+        &self,
+        node: &Node,
+        x: &'static str,
+        y: &'static str,
+        element: &'static str,
+        units: Units,
+    ) -> Result<Point> {
+        Ok(Point {
+            x: self.mm(node, x, element, units)?,
+            y: self.mm(node, y, element, units)?,
         })
     }
 
     fn parse_dictionary_user(&mut self, node: &Node) -> Result<DictionaryUser> {
-        let units = self
-            .attr(node, "units")
-            .map(|s| self.parse_units(s))
-            .transpose()?;
-
-        // Use MILLIMETER as default if not specified
-        let dict_units = units.unwrap_or(Units::Millimeter);
-
-        let entry_nodes = self
-            .element_children(node)
-            .filter(|n| self.name(n) == "EntryUser")
-            .collect::<Vec<_>>();
-        let entries = entry_nodes
-            .into_iter()
-            .map(|n| self.parse_entry_user(&n, dict_units))
-            .collect::<Result<Vec<_>>>()?;
-
+        let (units, entry_units) = self.dictionary_units(node)?;
+        let entries = self.parse_entries(node, "EntryUser", |this, entry, id| {
+            let (child, shape) = this
+                .parse_feature_child(entry, entry_units)?
+                .ok_or(Ipc2581Error::MissingElement("UserPrimitive"))?;
+            let primitive = this.user_primitive(&child, shape, entry_units)?;
+            Ok(EntryUser { id, primitive })
+        })?;
         Ok(DictionaryUser { units, entries })
     }
 
-    fn parse_entry_user(&mut self, node: &Node, units: Units) -> Result<EntryUser> {
-        let id = self.required_attr(node, "id", "EntryUser")?;
-
-        // Find the primitive child element (currently only supporting UserSpecial)
-        let primitive_node = self
-            .element_children(node)
-            .find(|n| self.name(n) == "UserSpecial")
-            .ok_or(Ipc2581Error::MissingElement("UserPrimitive"))?;
-
-        let primitive = self.parse_user_special(&primitive_node, units)?;
-
-        Ok(EntryUser { id, primitive })
+    /// The first child of `node` in the `Feature` group, and its shape.
+    fn parse_feature_child(
+        &mut self,
+        node: &Node,
+        units: Units,
+    ) -> Result<Option<(Node, FeatureShape)>> {
+        for child in self.element_children(node) {
+            if let Some(shape) = self.parse_feature_shape(&child, units)? {
+                return Ok(Some((child, shape)));
+            }
+        }
+        Ok(None)
     }
 
     fn parse_user_special(&mut self, node: &Node, units: Units) -> Result<UserPrimitive> {
-        let mut shapes = Vec::new();
-
+        let mut shapes = Vec::with_capacity(self.element_children(node).count());
         for child in self.element_children(node) {
-            if let Some(shape) = self.parse_user_shape(&child, units)? {
-                shapes.push(shape);
-            }
+            let shape = self.parse_feature_shape(&child, units)?.ok_or_else(|| {
+                Ipc2581Error::InvalidStructure(format!(
+                    "Unexpected {} in UserSpecial",
+                    self.name(&child)
+                ))
+            })?;
+            shapes.push(self.user_shape(&child, shape, units)?);
         }
 
         Ok(UserPrimitive::UserSpecial(UserSpecial { shapes }))
     }
 
-    fn parse_user_shape(&mut self, node: &Node, units: Units) -> Result<Option<UserShape>> {
-        let tag_name = self.name(node);
-        let shape = match tag_name {
-            // Preserve the scope of ordered VOID operations in nested primitives.
-            "UserSpecial" => Some(UserShapeType::UserPrimitive(
-                self.parse_user_special(node, units)?,
-            )),
-            "Contour" => Some(UserShapeType::Contour(self.parse_contour(node, units)?)),
-            "Circle" => Some(UserShapeType::Circle(Circle {
-                diameter: self.parse_f64_attr_with_units(node, "diameter", "Circle", units)?,
-            })),
-            "RectCenter" => Some(UserShapeType::RectCenter(RectCenter {
-                size: Size {
-                    width: self.parse_f64_attr_with_units(node, "width", "RectCenter", units)?,
-                    height: self.parse_f64_attr_with_units(node, "height", "RectCenter", units)?,
-                },
-            })),
-            "Oval" => Some(UserShapeType::Oval(Oval {
-                size: Size {
-                    width: self.parse_f64_attr_with_units(node, "width", "Oval", units)?,
-                    height: self.parse_f64_attr_with_units(node, "height", "Oval", units)?,
-                },
-            })),
-            "RectRound" => Some(UserShapeType::RectRound(RectRound {
-                size: Size {
-                    width: self.parse_f64_attr_with_units(node, "width", "RectRound", units)?,
-                    height: self.parse_f64_attr_with_units(node, "height", "RectRound", units)?,
-                },
-                radius: self.parse_f64_attr_with_units(node, "radius", "RectRound", units)?,
-                upper_right: self.parse_bool_attr(node, "upperRight").unwrap_or(false),
-                upper_left: self.parse_bool_attr(node, "upperLeft").unwrap_or(false),
-                lower_right: self.parse_bool_attr(node, "lowerRight").unwrap_or(false),
-                lower_left: self.parse_bool_attr(node, "lowerLeft").unwrap_or(false),
-            })),
-            "Polygon" => Some(UserShapeType::Polygon(self.parse_polygon(node, units)?)),
-            "Line" => Some(UserShapeType::Line(crate::types::primitives::Line {
-                start: Point {
-                    x: self.parse_f64_attr_with_units(node, "startX", "Line", units)?,
-                    y: self.parse_f64_attr_with_units(node, "startY", "Line", units)?,
-                },
-                end: Point {
-                    x: self.parse_f64_attr_with_units(node, "endX", "Line", units)?,
-                    y: self.parse_f64_attr_with_units(node, "endY", "Line", units)?,
-                },
-            })),
-            "Arc" => Some(UserShapeType::Arc(self.parse_user_arc(node, units)?)),
-            "Polyline" => Some(UserShapeType::Polyline(
-                self.parse_user_polyline(node, units)?,
-            )),
-            "UserPrimitiveRef" => self
-                .attr(node, "id")
-                .map(|id| UserShapeType::UserPrimitiveRef(self.interner.intern(id))),
-            _ => None,
-        };
-        let Some(shape) = shape else {
-            return Ok(None);
-        };
-        let style_node = if tag_name == "Contour" {
-            self.element_children(node)
-                .find(|child| self.name(child) == "Polygon")
-                .unwrap_or(*node)
-        } else {
-            *node
-        };
-        let (line_desc, line_desc_ref, fill_desc, fill_desc_ref) =
-            self.parse_fill_and_line_desc(&style_node, units)?;
-        Ok(Some(UserShape {
-            shape,
-            line_desc,
-            line_desc_ref,
-            fill_desc,
-            fill_desc_ref,
-        }))
+    /// A `Feature` as a user primitive: a `UserSpecial` as itself, anything
+    /// else as the only shape of one.
+    fn user_primitive(
+        &mut self,
+        node: &Node,
+        shape: FeatureShape,
+        units: Units,
+    ) -> Result<UserPrimitive> {
+        Ok(match shape {
+            FeatureShape::UserPrimitive(primitive) => *primitive,
+            shape => UserPrimitive::UserSpecial(UserSpecial {
+                shapes: vec![self.user_shape(node, shape, units)?],
+            }),
+        })
     }
 
-    fn parse_user_polyline(&mut self, node: &Node, units: Units) -> Result<Polyline> {
-        let mut begin = None;
-        let mut steps = Vec::new();
-
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "PolyBegin" => {
-                    begin = Some(Point {
-                        x: self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units)?,
-                        y: self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units)?,
-                    });
+    /// A `Feature` parsed from `node` as a member of a `UserSpecial`.
+    fn user_shape(&mut self, node: &Node, shape: FeatureShape, units: Units) -> Result<UserShape> {
+        let mut style_node = *node;
+        let shape = match shape {
+            FeatureShape::UserShape(shape) => return Ok(*shape),
+            FeatureShape::StandardPrimitive(primitive) => match *primitive {
+                StandardPrimitive::Circle(circle) => UserShapeType::Circle(circle.shape),
+                StandardPrimitive::RectCenter(rect) => UserShapeType::RectCenter(rect.shape),
+                StandardPrimitive::Oval(oval) => UserShapeType::Oval(oval.shape),
+                StandardPrimitive::RectRound(rect) => UserShapeType::RectRound(rect.shape),
+                StandardPrimitive::Contour(contour) => {
+                    // A Contour is styled through its Polygon.
+                    style_node = self.child(node, "Polygon").unwrap_or(*node);
+                    UserShapeType::Contour(contour)
                 }
-                "PolyStepSegment" => steps.push(PolyStep::Segment(PolyStepSegment {
-                    point: Point {
-                        x: self.parse_f64_attr_with_units(&child, "x", "PolyStepSegment", units)?,
-                        y: self.parse_f64_attr_with_units(&child, "y", "PolyStepSegment", units)?,
-                    },
-                })),
-                "PolyStepCurve" => steps.push(PolyStep::Curve(PolyStepCurve {
-                    point: Point {
-                        x: self.parse_f64_attr_with_units(&child, "x", "PolyStepCurve", units)?,
-                        y: self.parse_f64_attr_with_units(&child, "y", "PolyStepCurve", units)?,
-                    },
-                    center: Point {
-                        x: self.parse_f64_attr_with_units(
-                            &child,
-                            "centerX",
-                            "PolyStepCurve",
-                            units,
-                        )?,
-                        y: self.parse_f64_attr_with_units(
-                            &child,
-                            "centerY",
-                            "PolyStepCurve",
-                            units,
-                        )?,
-                    },
-                    clockwise: self.parse_bool_attr(&child, "clockwise")?,
-                })),
-                _ => {}
-            }
-        }
-
-        Ok(Polyline {
-            begin: begin.ok_or(Ipc2581Error::MissingElement("PolyBegin in Polyline"))?,
-            steps,
-        })
+                primitive => UserShapeType::StandardPrimitive(Box::new(primitive)),
+            },
+            FeatureShape::StandardPrimitiveRef(id) => UserShapeType::StandardPrimitiveRef(id),
+            FeatureShape::UserPrimitive(primitive) => UserShapeType::UserPrimitive(*primitive),
+            FeatureShape::UserPrimitiveRef(id) => UserShapeType::UserPrimitiveRef(id),
+            FeatureShape::Text(text) => UserShapeType::Text(text),
+            FeatureShape::Outline(outline) => UserShapeType::Outline(outline),
+        };
+        let style = self.parse_fill_and_line_desc(&style_node, units)?;
+        Ok(user_shape(shape, style))
     }
 
-    fn parse_user_arc(&mut self, node: &Node, units: Units) -> Result<Arc> {
-        Ok(Arc {
-            start: Point {
-                x: self.parse_f64_attr_with_units(node, "startX", "Arc", units)?,
-                y: self.parse_f64_attr_with_units(node, "startY", "Arc", units)?,
-            },
-            end: Point {
-                x: self.parse_f64_attr_with_units(node, "endX", "Arc", units)?,
-                y: self.parse_f64_attr_with_units(node, "endY", "Arc", units)?,
-            },
-            center: Point {
-                x: self.parse_f64_attr_with_units(node, "centerX", "Arc", units)?,
-                y: self.parse_f64_attr_with_units(node, "centerY", "Arc", units)?,
-            },
-            clockwise: self.parse_bool_attr(node, "clockwise")?,
-        })
+    /// The stroked `Simple` members of the `Feature` group, plus the bare
+    /// `Polygon` that KiCad writes where a `Feature` belongs.
+    fn parse_user_shape(&mut self, node: &Node, units: Units) -> Result<Option<UserShape>> {
+        let (shape, style) = match self.name(node) {
+            "Polygon" => {
+                let Poly { polygon, style, .. } = self.parse_poly(node, units, "PolyBegin")?;
+                (UserShapeType::Polygon(polygon), style)
+            }
+            "Polyline" => {
+                let Poly { polygon, style, .. } =
+                    self.parse_poly(node, units, "PolyBegin in Polyline")?;
+                (UserShapeType::Polyline(polygon), style)
+            }
+            "Line" => (
+                UserShapeType::Line(Line {
+                    start: self.point(node, "startX", "startY", "Line", units)?,
+                    end: self.point(node, "endX", "endY", "Line", units)?,
+                }),
+                self.parse_fill_and_line_desc(node, units)?,
+            ),
+            "Arc" => (
+                UserShapeType::Arc(Arc {
+                    start: self.point(node, "startX", "startY", "Arc", units)?,
+                    end: self.point(node, "endX", "endY", "Arc", units)?,
+                    center: self.point(node, "centerX", "centerY", "Arc", units)?,
+                    clockwise: self.parse_bool_attr(node, "clockwise")?,
+                }),
+                self.parse_fill_and_line_desc(node, units)?,
+            ),
+            _ => return Ok(None),
+        };
+        Ok(Some(user_shape(shape, style)))
     }
 
     fn parse_logistic_header(&mut self, node: &Node) -> Result<LogisticHeader> {
-        let mut roles = Vec::new();
-        let mut enterprises = Vec::new();
-        let mut persons = Vec::new();
-
+        let mut header = LogisticHeader {
+            roles: Vec::new(),
+            enterprises: Vec::new(),
+            persons: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Role" => {
-                    let id = self.required_attr(&child, "id", "Role")?;
-                    let role_function = self.required_attr(&child, "roleFunction", "Role")?;
-                    roles.push(Role { id, role_function });
-                }
-                "Enterprise" => {
-                    let id = self.required_attr(&child, "id", "Enterprise")?;
-                    let code = self.required_attr(&child, "code", "Enterprise")?;
-                    let name = self.optional_attr(&child, "name");
-                    enterprises.push(Enterprise { id, code, name });
-                }
-                "Person" => {
-                    let name = self.required_attr(&child, "name", "Person")?;
-                    let email = self.optional_attr(&child, "email");
-                    persons.push(Person { name, email });
-                }
+                "Role" => header.roles.push(Role {
+                    id: self.required_attr(&child, "id", "Role")?,
+                    role_function: self.required_attr(&child, "roleFunction", "Role")?,
+                }),
+                "Enterprise" => header.enterprises.push(Enterprise {
+                    id: self.required_attr(&child, "id", "Enterprise")?,
+                    code: self.required_attr(&child, "code", "Enterprise")?,
+                    name: self.optional_attr(&child, "name"),
+                }),
+                "Person" => header.persons.push(Person {
+                    name: self.required_attr(&child, "name", "Person")?,
+                    email: self.optional_attr(&child, "email"),
+                }),
                 _ => {}
             }
         }
-
-        Ok(LogisticHeader {
-            roles,
-            enterprises,
-            persons,
-        })
+        Ok(header)
     }
 
     fn parse_history_record(&mut self, node: &Node) -> Result<HistoryRecord> {
-        // Parse number as f64 first, then convert to u32 (some files use "1.0")
-        let number = match self.attr(node, "number") {
-            Some(s) => {
-                if let Ok(f) = s.parse::<f64>() {
-                    f as u32
-                } else {
-                    return Err(Ipc2581Error::InvalidAttribute(format!(
-                        "Invalid number value: {}",
-                        s
-                    )));
-                }
-            }
-            None => {
-                return Err(Ipc2581Error::MissingAttribute {
-                    element: "HistoryRecord",
-                    attr: "number",
-                });
-            }
-        };
-
-        let origination = self.required_attr(node, "origination", "HistoryRecord")?;
-        let software = self.optional_attr(node, "software");
-        let last_change = self.required_attr(node, "lastChange", "HistoryRecord")?;
-
-        // HistoryRecordType is FileRevision followed by zero or more ChangeRec
-        // elements. Keep the typed parser strict here so it cannot silently
-        // accept the invalid repeated-FileRevision structure emitted by older
-        // writers.
-        let mut file_revision = None;
-        let mut saw_change_record = false;
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "FileRevision" => {
-                    if saw_change_record {
-                        return Err(Ipc2581Error::InvalidStructure(
-                            "FileRevision must precede ChangeRec in HistoryRecord".to_string(),
-                        ));
-                    }
-                    if file_revision.is_some() {
-                        return Err(Ipc2581Error::InvalidStructure(
-                            "HistoryRecord allows exactly one FileRevision".to_string(),
-                        ));
-                    }
-                    file_revision = Some(self.parse_file_revision(&child)?);
-                }
-                "ChangeRec" => {
-                    if file_revision.is_none() {
-                        return Err(Ipc2581Error::InvalidStructure(
-                            "ChangeRec must follow FileRevision in HistoryRecord".to_string(),
-                        ));
-                    }
-                    self.validate_change_record(&child)?;
-                    saw_change_record = true;
-                }
-                name => {
-                    return Err(Ipc2581Error::InvalidStructure(format!(
-                        "Unexpected {name} in HistoryRecord"
-                    )));
-                }
-            }
-        }
-        let file_revision = file_revision.ok_or(Ipc2581Error::MissingElement(
-            "FileRevision in HistoryRecord",
-        ))?;
+        // historyNumberType is a dotted revision such as "2" or "1.2.3"; the
+        // leading component counts the saves.
+        let number = self.required_str(node, "number", "HistoryRecord")?;
+        let number = number
+            .split('.')
+            .next()
+            .and_then(|major| major.trim().parse().ok())
+            .ok_or_else(|| {
+                Ipc2581Error::InvalidAttribute(format!("Invalid number value: {number}"))
+            })?;
 
         Ok(HistoryRecord {
             number,
-            origination,
-            software,
-            last_change,
-            file_revision: Some(file_revision),
+            origination: self.required_attr(node, "origination", "HistoryRecord")?,
+            software: self.optional_attr(node, "software"),
+            last_change: self.required_attr(node, "lastChange", "HistoryRecord")?,
+            // The schema allows one FileRevision, but pcb up to 0.4.11 appended
+            // one per save. The first is the file's own; saving again turns the
+            // rest into ChangeRec entries.
+            file_revision: self
+                .child(node, "FileRevision")
+                .map(|child| self.parse_file_revision(&child))
+                .transpose()?,
         })
     }
 
-    fn validate_change_record(&mut self, node: &Node) -> Result<()> {
-        self.required_attr(node, "datetime", "ChangeRec")?;
-        self.required_attr(node, "personRef", "ChangeRec")?;
-        self.required_attr(node, "application", "ChangeRec")?;
-        self.required_attr(node, "change", "ChangeRec")?;
-
-        for child in self.element_children(node) {
-            if self.name(&child) != "Approval" {
-                return Err(Ipc2581Error::InvalidStructure(format!(
-                    "Unexpected {} in ChangeRec",
-                    self.name(&child)
-                )));
-            }
-            self.required_attr(&child, "datetime", "Approval")?;
-            self.required_attr(&child, "personRef", "Approval")?;
-        }
-
-        Ok(())
-    }
-
     fn parse_file_revision(&mut self, node: &Node) -> Result<metadata::FileRevision> {
-        let file_revision = self.required_attr(node, "fileRevisionId", "FileRevision")?;
-        let comment = self.optional_attr(node, "comment");
-
-        // Parse SoftwarePackage child element
-        let mut software_package = None;
-        for child in self.element_children(node) {
-            if self.name(&child) == "SoftwarePackage" {
-                software_package = Some(self.parse_software_package(&child)?);
-                break;
-            }
-        }
-
         Ok(metadata::FileRevision {
-            file_revision,
-            comment,
-            software_package,
+            file_revision: self.required_attr(node, "fileRevisionId", "FileRevision")?,
+            comment: self.optional_attr(node, "comment"),
+            software_package: self
+                .child(node, "SoftwarePackage")
+                .map(|package| self.parse_software_package(&package))
+                .transpose()?,
         })
     }
 
     fn parse_software_package(&mut self, node: &Node) -> Result<metadata::SoftwarePackage> {
-        let name = self.required_attr(node, "name", "SoftwarePackage")?;
-        let revision = self.optional_attr(node, "revision");
-        let vendor = self.optional_attr(node, "vendor");
-
         Ok(metadata::SoftwarePackage {
-            name,
-            revision,
-            vendor,
+            name: self.required_attr(node, "name", "SoftwarePackage")?,
+            revision: self.optional_attr(node, "revision"),
+            vendor: self.optional_attr(node, "vendor"),
         })
     }
 
-    fn parse_units(&self, s: &str) -> Result<Units> {
-        match s {
-            "MILLIMETER" => Ok(Units::Millimeter),
-            "INCH" => Ok(Units::Inch),
-            "MICRON" => Ok(Units::Micron),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Unknown units: {}",
-                s
-            ))),
-        }
-    }
-
-    // Helper methods
     fn required_attr(
         &mut self,
         node: &Node,
         attr: &'static str,
         element: &'static str,
     ) -> Result<Symbol> {
+        let value = self.required_str(node, attr, element)?;
+        Ok(self.interner.intern(value))
+    }
+
+    /// A required attribute that is parsed rather than kept, so not interned.
+    fn required_str(
+        &self,
+        node: &Node,
+        attr: &'static str,
+        element: &'static str,
+    ) -> Result<&'a str> {
         self.attr(node, attr)
             .ok_or(Ipc2581Error::MissingAttribute { element, attr })
-            .map(|s| self.interner.intern(s))
+    }
+
+    /// The `id` of a `SpecRef`.
+    fn spec_ref(&mut self, node: &Node) -> Result<Symbol> {
+        self.required_attr(node, "id", "SpecRef")
     }
 
     fn optional_attr(&mut self, node: &Node, attr: &str) -> Option<Symbol> {
         self.attr(node, attr).map(|s| self.interner.intern(s))
+    }
+
+    fn opt_enum<T>(
+        &self,
+        node: &Node,
+        attr: &str,
+        from_ipc: fn(&str) -> Result<T>,
+    ) -> Result<Option<T>> {
+        self.attr(node, attr).map(from_ipc).transpose()
     }
 
     fn parse_ipc_integer(&self, value: Symbol, attr: &str, positive: bool) -> Result<u32> {
@@ -1375,185 +905,115 @@ impl<'a> Parser<'a> {
         Ok(parsed)
     }
 
-    fn parse_f64_attr(
-        &self,
-        node: &Node,
-        attr: &'static str,
-        element: &'static str,
-    ) -> Result<f64> {
-        let attr_val = self
-            .attr(node, attr)
-            .ok_or(Ipc2581Error::MissingAttribute { element, attr })?;
-        attr_val
-            .parse()
-            .map_err(|_| Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {}", attr)))
-    }
-
-    /// Parse an f64 attribute and convert it to millimeters (canonical unit)
-    ///
-    /// This function takes the source units and converts the value to mm.
-    /// All dimensional values in the parsed document are stored in mm.
-    fn parse_f64_attr_with_units(
+    /// A required length attribute, in millimeters.
+    fn mm(
         &self,
         node: &Node,
         attr: &'static str,
         element: &'static str,
         units: Units,
     ) -> Result<f64> {
-        let value = self.parse_f64_attr(node, attr, element)?;
-        Ok(crate::units::to_mm(value, units))
+        self.opt_mm(node, attr, units)?
+            .ok_or(Ipc2581Error::MissingAttribute { element, attr })
     }
 
-    fn parse_non_negative_f64_attr_with_units(
+    /// An optional length attribute, in millimeters.
+    fn opt_mm(&self, node: &Node, attr: &'static str, units: Units) -> Result<Option<f64>> {
+        self.number(node, attr, Sign::Any, Some(units))
+    }
+
+    /// An optional dimensionless attribute.
+    fn opt_num(&self, node: &Node, attr: &'static str) -> Result<Option<f64>> {
+        self.number(node, attr, Sign::Any, None)
+    }
+
+    /// An optional numeric attribute, scaled to millimeters when it has `units`.
+    fn number(
         &self,
         node: &Node,
         attr: &'static str,
-        element: &'static str,
-        units: Units,
-    ) -> Result<f64> {
-        let value = self.parse_f64_attr(node, attr, element)?;
-        self.validate_non_negative_f64(value, attr)?;
-        Ok(crate::units::to_mm(value, units))
+        sign: Sign,
+        units: Option<Units>,
+    ) -> Result<Option<f64>> {
+        self.attr(node, attr)
+            .map(|value| parse_f64(value, attr, sign, units))
+            .transpose()
     }
 
-    fn parse_u8_attr(&self, node: &Node, attr: &'static str, element: &'static str) -> Result<u8> {
-        let attr_val = self
-            .attr(node, attr)
-            .ok_or(Ipc2581Error::MissingAttribute { element, attr })?;
-        attr_val.parse().map_err(|_| {
-            Ipc2581Error::InvalidAttribute(format!("Invalid u8 value for {} in {}", attr, element))
+    fn color(&self, node: &Node) -> Result<Color> {
+        let channel = |attr| {
+            self.required_str(node, attr, "Color")?
+                .parse()
+                .map_err(|_| {
+                    Ipc2581Error::InvalidAttribute(format!("Invalid u8 value for {attr} in Color"))
+                })
+        };
+        Ok(Color {
+            r: channel("r")?,
+            g: channel("g")?,
+            b: channel("b")?,
         })
     }
 
-    fn parse_u32_attr(
+    /// Parse an optional count, which the importer loops over, within the
+    /// bounds the schema gives it.
+    fn parse_optional_count_attr(
         &self,
         node: &Node,
         attr: &'static str,
-        element: &'static str,
-    ) -> Result<u32> {
-        let attr_val = self
-            .attr(node, attr)
-            .ok_or(Ipc2581Error::MissingAttribute { element, attr })?;
-        attr_val.parse().map_err(|_| {
-            Ipc2581Error::InvalidAttribute(format!("Invalid u32 value for {} in {}", attr, element))
-        })
-    }
-
-    /// Parse an f64 from a string value and convert to mm using the given units
-    fn parse_f64_str_with_units(&self, s: &str, units: Units) -> Result<f64> {
-        let value = s
-            .parse::<f64>()
-            .map_err(|_| Ipc2581Error::InvalidAttribute("Invalid f64 value".to_string()))?;
-        Ok(crate::units::to_mm(value, units))
-    }
-
-    /// Parse optional f64 attribute (no unit conversion)
-    fn parse_optional_f64_attr(&self, node: &Node, attr: &'static str) -> Result<Option<f64>> {
+        max: u32,
+    ) -> Result<Option<u32>> {
         self.attr(node, attr)
-            .map(|v| {
-                v.parse::<f64>().map_err(|_| {
-                    Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {}", attr))
-                })
+            .map(|value| {
+                value
+                    .trim()
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|count| *count <= max)
+                    .ok_or_else(|| {
+                        Ipc2581Error::InvalidAttribute(format!(
+                            "Value for {attr} is not an integer in 0..={max}: {value}"
+                        ))
+                    })
             })
             .transpose()
     }
 
-    /// Parse optional u32 attribute
-    fn parse_optional_u32_attr(&self, node: &Node, attr: &'static str) -> Result<Option<u32>> {
+    fn opt_bool(&self, node: &Node, attr: &'static str) -> Result<Option<bool>> {
         self.attr(node, attr)
-            .map(|v| {
-                v.parse::<u32>().map_err(|_| {
-                    Ipc2581Error::InvalidAttribute(format!("Invalid u32 value for {}", attr))
-                })
+            .map(|value| match value.trim() {
+                "true" | "1" => Ok(true),
+                "false" | "0" => Ok(false),
+                _ => Err(Ipc2581Error::InvalidAttribute(format!(
+                    "Invalid bool value for {attr}"
+                ))),
             })
             .transpose()
     }
 
-    /// Parse optional f64 attribute with unit conversion
-    fn parse_optional_f64_attr_with_units(
-        &self,
-        node: &Node,
-        attr: &'static str,
-        units: Units,
-    ) -> Result<Option<f64>> {
-        self.attr(node, attr)
-            .map(|v| self.parse_f64_str_with_units(v, units))
-            .transpose()
-    }
-
-    fn parse_optional_non_negative_f64_attr_with_units(
-        &self,
-        node: &Node,
-        attr: &'static str,
-        units: Units,
-    ) -> Result<Option<f64>> {
-        self.attr(node, attr)
-            .map(|source| {
-                let value = source.parse::<f64>().map_err(|_| {
-                    Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {attr}"))
-                })?;
-                self.validate_non_negative_f64(value, attr)?;
-                Ok(crate::units::to_mm(value, units))
-            })
-            .transpose()
-    }
-
-    fn parse_optional_non_negative_f64_attr(
-        &self,
-        node: &Node,
-        attr: &'static str,
-    ) -> Result<Option<f64>> {
-        self.attr(node, attr)
-            .map(|source| {
-                let value = source.parse::<f64>().map_err(|_| {
-                    Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {attr}"))
-                })?;
-                self.validate_non_negative_f64(value, attr)
-            })
-            .transpose()
-    }
-
-    fn validate_non_negative_f64(&self, value: f64, attr: &str) -> Result<f64> {
-        if !value.is_finite() || !(0.0..=3.4e38).contains(&value) {
-            return Err(Ipc2581Error::InvalidAttribute(format!(
-                "Value for {attr} is outside the IPC-2581C non-negative range"
-            )));
-        }
-        Ok(value)
+    /// An optional boolean attribute: absent is `false`, malformed an error.
+    fn parse_flag_attr(&self, node: &Node, attr: &'static str) -> Result<bool> {
+        Ok(self.opt_bool(node, attr)?.unwrap_or(false))
     }
 
     fn parse_bool_attr(&self, node: &Node, attr: &'static str) -> Result<bool> {
-        match self.attr(node, attr) {
-            Some(value) => parse_xsd_bool(value, attr),
-            None => Err(Ipc2581Error::MissingAttribute {
+        self.opt_bool(node, attr)?
+            .ok_or(Ipc2581Error::MissingAttribute {
                 element: "unknown",
                 attr,
-            }),
-        }
+            })
     }
 
     fn parse_ecad(&mut self, node: &Node) -> Result<Ecad> {
-        // Parse CadHeader first to establish units for the ECAD section
-        let cad_header_node = self
-            .element_children(node)
-            .find(|n| self.name(n) == "CadHeader")
-            .ok_or(Ipc2581Error::MissingElement("CadHeader"))?;
-        let mut cad_header = self.parse_cad_header(&cad_header_node)?;
-
-        // Store ECAD units for use when parsing dimensions
+        // CadData is read with the header's units and, for stackup layers,
+        // its specs, which go back into the header afterwards.
+        let cad_header = self.required_child(node, "CadHeader", "CadHeader")?;
+        let mut cad_header = self.parse_cad_header(&cad_header)?;
         self.ecad_units = Some(cad_header.units);
-
-        // Move specs into parser context to avoid cloning
-        // We'll move them back after parsing CadData
         self.specs = std::mem::take(&mut cad_header.specs);
 
-        let cad_data_node = self
-            .element_children(node)
-            .find(|n| self.name(n) == "CadData")
-            .ok_or(Ipc2581Error::MissingElement("CadData"))?;
-        let cad_data = self.parse_cad_data(&cad_data_node)?;
-
-        // Move specs back into cad_header
+        let cad_data = self.required_child(node, "CadData", "CadData")?;
+        let cad_data = self.parse_cad_data(&cad_data)?;
         cad_header.specs = std::mem::take(&mut self.specs);
 
         Ok(Ecad {
@@ -1563,27 +1023,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_cad_header(&mut self, node: &Node) -> Result<CadHeader> {
-        let units = self
-            .attr(node, "units")
-            .ok_or(Ipc2581Error::MissingAttribute {
-                element: "CadHeader",
-                attr: "units",
-            })?;
-        let units = self.parse_units(units)?;
-
-        // Parse Spec elements
-        let mut specs = std::collections::HashMap::new();
-        for child in self.element_children(node) {
-            if self.name(&child) == "Spec" {
-                let spec = self.parse_spec(&child)?;
-                specs.insert(spec.name, spec);
-            }
+        let units = Units::from_ipc(self.required_str(node, "units", "CadHeader")?)?;
+        let mut specs = HashMap::new();
+        for child in self.children_named(node, "Spec") {
+            let spec = self.parse_spec(&child)?;
+            specs.insert(spec.name, spec);
         }
-
         Ok(CadHeader { units, specs })
     }
 
-    fn parse_spec(&mut self, node: &Node) -> Result<ecad::Spec> {
+    fn parse_spec(&mut self, node: &Node) -> Result<Spec> {
         let name = self.required_attr(node, "name", "Spec")?;
 
         let mut material = None;
@@ -1596,44 +1045,31 @@ impl<'a> Parser<'a> {
         let mut color_rgb = None;
         let mut items = Vec::new();
 
-        // Parse child elements for material and dielectric properties
         for child in self.element_children(node) {
-            items.push(self.parse_spec_item(&child));
+            let item = self.parse_spec_item(&child)?;
+            let values = item
+                .properties
+                .iter()
+                .filter_map(|property| Some((property.value?, property.unit)));
             match self.name(&child) {
                 "General" if self.attr(&child, "type") == Some("MATERIAL") => {
-                    // Look for Property, ColorTerm, and Color elements
                     for prop in self.element_children(&child) {
                         match self.name(&prop) {
                             "Property" => {
                                 if let Some(text) = self.attr(&prop, "text")
                                     && !text.is_empty()
                                 {
-                                    let text_sym = self.interner.intern(text);
-                                    // Store all property texts
-                                    properties.push(text_sym);
-                                    // Take the first non-empty material text we find
-                                    if material.is_none() {
-                                        material = Some(text_sym);
-                                    }
+                                    let text = self.interner.intern(text);
+                                    properties.push(text);
+                                    material.get_or_insert(text);
                                 }
                             }
                             "ColorTerm" => {
-                                // Parse ColorTerm name attribute (e.g., "GREEN", "WHITE", "BLACK")
-                                if let Some(color_name) = self.attr(&prop, "name") {
-                                    color_term = Some(self.interner.intern(color_name));
-                                }
+                                color_term = self.optional_attr(&prop, "name").or(color_term)
                             }
+                            // A malformed colour is ignored here, not an error.
                             "Color" => {
-                                // Parse Color r, g, b attributes (0-255)
-                                if let (Some(r_str), Some(g_str), Some(b_str)) = (
-                                    self.attr(&prop, "r"),
-                                    self.attr(&prop, "g"),
-                                    self.attr(&prop, "b"),
-                                ) && let (Ok(r), Ok(g), Ok(b)) = (
-                                    r_str.parse::<u8>(),
-                                    g_str.parse::<u8>(),
-                                    b_str.parse::<u8>(),
-                                ) {
+                                if let Ok(Color { r, g, b }) = self.color(&prop) {
                                     color_rgb = Some((r, g, b));
                                 }
                             }
@@ -1642,43 +1078,34 @@ impl<'a> Parser<'a> {
                     }
                 }
                 "Dielectric" => {
-                    let dielectric_type = self.attr(&child, "type");
-                    // Look for Property with value attribute
-                    for prop in self.element_children(&child) {
-                        if self.name(&prop) == "Property"
-                            && let Some(value_str) = self.attr(&prop, "value")
-                            && let Ok(value) = value_str.parse::<f64>()
-                        {
-                            match dielectric_type {
-                                Some("DIELECTRIC_CONSTANT") => dielectric_constant = Some(value),
-                                Some("LOSS_TANGENT") => loss_tangent = Some(value),
-                                _ => {}
-                            }
+                    let value = values.map(|(value, _)| value).next_back();
+                    match self.attr(&child, "type") {
+                        Some("DIELECTRIC_CONSTANT") => {
+                            dielectric_constant = value.or(dielectric_constant)
                         }
+                        Some("LOSS_TANGENT") => loss_tangent = value.or(loss_tangent),
+                        _ => {}
                     }
                 }
                 "Conductor" if self.attr(&child, "type") == Some("WEIGHT") => {
-                    for prop in self.element_children(&child) {
-                        if self.name(&prop) == "Property"
-                            && let Some(value_str) = self.attr(&prop, "value")
-                            && let Ok(value) = value_str.parse::<f64>()
-                        {
-                            // Check unit - should be OZ
-                            let unit = self.attr(&prop, "unit").unwrap_or("OZ");
-                            if unit.to_uppercase() == "OZ" {
-                                copper_weight_oz = Some(value);
-                            }
-                        }
-                    }
+                    // The weight is in ounces unless a unit says otherwise.
+                    copper_weight_oz = values
+                        .filter(|(_, unit)| {
+                            unit.is_none_or(|unit| {
+                                self.interner.resolve(unit).eq_ignore_ascii_case("OZ")
+                            })
+                        })
+                        .map(|(value, _)| value)
+                        .next_back()
+                        .or(copper_weight_oz);
                 }
-                "SurfaceFinish" => {
-                    surface_finish = self.parse_surface_finish(&child).ok();
-                }
+                "SurfaceFinish" => surface_finish = Some(self.parse_surface_finish(&child)?),
                 _ => {}
             }
+            items.push(item);
         }
 
-        Ok(ecad::Spec {
+        Ok(Spec {
             name,
             items,
             material,
@@ -1692,226 +1119,112 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_spec_item(&mut self, node: &Node) -> ecad::SpecItem {
-        let element_name = self.name(node).to_string();
-        let element = self.interner.intern(&element_name);
-        let item_type = self.attr(node, "type").map(|s| self.interner.intern(s));
-        let comment = self.attr(node, "comment").map(|s| self.interner.intern(s));
-        let property_nodes = self
-            .element_children(node)
-            .filter(|child| self.name(child) == "Property")
-            .collect::<Vec<_>>();
-        let properties = property_nodes
-            .into_iter()
+    fn parse_spec_item(&mut self, node: &Node) -> Result<SpecItem> {
+        let element_name = self.name(node);
+        let element = self.interner.intern(element_name);
+        let item_type = self.optional_attr(node, "type");
+        let comment = self.optional_attr(node, "comment");
+        let properties = self
+            .children_named(node, "Property")
             .map(|child| self.parse_spec_property(&child))
-            .collect();
+            .collect::<Result<_>>()?;
 
-        ecad::SpecItem {
+        Ok(SpecItem {
             element,
-            kind: spec_item_kind(&element_name),
+            kind: spec_item_kind(element_name),
             item_type,
             comment,
             properties,
-        }
-    }
-
-    fn parse_spec_property(&mut self, node: &Node) -> ecad::SpecProperty {
-        ecad::SpecProperty {
-            value: self
-                .attr(node, "value")
-                .and_then(|value| value.parse::<f64>().ok()),
-            text: self.attr(node, "text").map(|s| self.interner.intern(s)),
-            unit: self.attr(node, "unit").map(|s| self.interner.intern(s)),
-            plus_tol: self
-                .attr(node, "plusTol")
-                .and_then(|value| value.parse::<f64>().ok()),
-            minus_tol: self
-                .attr(node, "minusTol")
-                .and_then(|value| value.parse::<f64>().ok()),
-            tol_percent: self.attr(node, "tolPercent").and_then(parse_optional_bool),
-        }
-    }
-
-    fn parse_surface_finish(&mut self, node: &Node) -> Result<ecad::SurfaceFinish> {
-        // Per IPC-2581C XSD, SurfaceFinish has:
-        //   - required attribute "type" (surfaceFinishType)
-        //   - optional attribute "comment"
-        //   - optional child elements "Product" (0..n)
-        //
-        // Correct format: <SurfaceFinish type="S"/>
-        // KiCad bug format: <SurfaceFinish><Finish type="S"/></SurfaceFinish>
-
-        // First, try the correct IPC-2581C format: type attribute directly on SurfaceFinish
-        if let Some(finish_type_str) = self.attr(node, "type") {
-            let finish_type = self.parse_finish_type(finish_type_str)?;
-            let comment = self.attr(node, "comment").map(|s| self.interner.intern(s));
-
-            let mut products = Vec::new();
-            for product_node in self.element_children(node) {
-                if self.name(&product_node) == "Product"
-                    && let Some(product_name) = self.attr(&product_node, "name")
-                {
-                    let criteria = self
-                        .attr(&product_node, "criteria")
-                        .and_then(|s| self.parse_product_criteria(s).ok());
-
-                    products.push(ecad::FinishProduct {
-                        name: self.interner.intern(product_name),
-                        criteria,
-                    });
-                }
-            }
-
-            return Ok(ecad::SurfaceFinish {
-                finish_type,
-                comment,
-                products,
-            });
-        }
-
-        // TODO: Remove this fallback once KiCad fixes their IPC-2581 exporter.
-        // See: https://gitlab.com/kicad/code/kicad/-/issues/XXXXX
-        // Fallback: support incorrect KiCad format with nested Finish element
-        // This is non-compliant but allows parsing legacy KiCad exports
-        for child in self.element_children(node) {
-            if self.name(&child) == "Finish" {
-                let finish_type_str = self.attr(&child, "type").unwrap_or("OTHER");
-                let finish_type = self.parse_finish_type(finish_type_str)?;
-                let comment = self
-                    .attr(&child, "comment")
-                    .map(|s| self.interner.intern(s));
-
-                let mut products = Vec::new();
-                for product_node in self.element_children(&child) {
-                    if self.name(&product_node) == "Product"
-                        && let Some(product_name) = self.attr(&product_node, "name")
-                    {
-                        let criteria = self
-                            .attr(&product_node, "criteria")
-                            .and_then(|s| self.parse_product_criteria(s).ok());
-
-                        products.push(ecad::FinishProduct {
-                            name: self.interner.intern(product_name),
-                            criteria,
-                        });
-                    }
-                }
-
-                return Ok(ecad::SurfaceFinish {
-                    finish_type,
-                    comment,
-                    products,
-                });
-            }
-        }
-
-        // No type attribute and no Finish element found
-        Err(Ipc2581Error::MissingElement(
-            "SurfaceFinish: missing required 'type' attribute",
-        ))
-    }
-
-    fn parse_finish_type(&self, s: &str) -> Result<ecad::FinishType> {
-        match s {
-            "S" => Ok(ecad::FinishType::S),
-            "T" => Ok(ecad::FinishType::T),
-            "X" => Ok(ecad::FinishType::X),
-            "TLU" => Ok(ecad::FinishType::TLU),
-            "ENIG-N" => Ok(ecad::FinishType::EnigN),
-            "ENIG-G" => Ok(ecad::FinishType::EnigG),
-            "ENEPIG-N" => Ok(ecad::FinishType::EnepigN),
-            "ENEPIG-G" => Ok(ecad::FinishType::EnepigG),
-            "ENEPIG-P" => Ok(ecad::FinishType::EnepigP),
-            "DIG" => Ok(ecad::FinishType::Dig),
-            "IAg" => Ok(ecad::FinishType::IAg),
-            "ISn" => Ok(ecad::FinishType::ISn),
-            "OSP" => Ok(ecad::FinishType::Osp),
-            "HT_OSP" => Ok(ecad::FinishType::HtOsp),
-            "N" => Ok(ecad::FinishType::N),
-            "NB" => Ok(ecad::FinishType::NB),
-            "C" => Ok(ecad::FinishType::C),
-            "G" => Ok(ecad::FinishType::G),
-            "GS" => Ok(ecad::FinishType::GS),
-            "GWB-1-G" => Ok(ecad::FinishType::GwbOneG),
-            "GWB-1-N" => Ok(ecad::FinishType::GwbOneN),
-            "GWB-2-G" => Ok(ecad::FinishType::GwbTwoG),
-            "GWB-2-N" => Ok(ecad::FinishType::GwbTwoN),
-            _ => Ok(ecad::FinishType::Other),
-        }
-    }
-
-    fn parse_product_criteria(&self, s: &str) -> Result<ecad::ProductCriteria> {
-        match s {
-            "ALLOWED" => Ok(ecad::ProductCriteria::Allowed),
-            "SUGGESTED" => Ok(ecad::ProductCriteria::Suggested),
-            "PREFERRED" => Ok(ecad::ProductCriteria::Preferred),
-            "REQUIRED" => Ok(ecad::ProductCriteria::Required),
-            "CHOSEN" => Ok(ecad::ProductCriteria::Chosen),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Invalid product criteria: {}",
-                s
-            ))),
-        }
-    }
-
-    fn parse_cad_data(&mut self, node: &Node) -> Result<CadData> {
-        let mut steps = Vec::new();
-        let mut layers = Vec::new();
-        let mut stackups = Vec::new();
-
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "Step" => steps.push(self.parse_step(&child)?),
-                "Layer" => layers.push(self.parse_layer(&child)?),
-                "Stackup" => stackups.push(self.parse_stackup(&child)?),
-                _ => {}
-            }
-        }
-
-        Ok(CadData {
-            steps,
-            layers,
-            stackups,
         })
     }
 
+    fn parse_spec_property(&mut self, node: &Node) -> Result<SpecProperty> {
+        Ok(SpecProperty {
+            value: self.opt_num(node, "value")?,
+            text: self.optional_attr(node, "text"),
+            unit: self.optional_attr(node, "unit"),
+            plus_tol: self.opt_num(node, "plusTol")?,
+            minus_tol: self.opt_num(node, "minusTol")?,
+            tol_percent: self.opt_bool(node, "tolPercent")?,
+        })
+    }
+
+    fn parse_surface_finish(&mut self, node: &Node) -> Result<SurfaceFinish> {
+        // IPC-2581C puts `type`, `comment` and the Products on SurfaceFinish;
+        // older KiCad nested them in a Finish child.
+        let finish = if self.attr(node, "type").is_some() {
+            *node
+        } else {
+            self.child(node, "Finish")
+                .ok_or(Ipc2581Error::MissingAttribute {
+                    element: "SurfaceFinish",
+                    attr: "type",
+                })?
+        };
+        // A finish outside the schema's list is still a finish.
+        let finish_type = self
+            .attr(&finish, "type")
+            .and_then(|finish_type| FinishType::from_ipc(finish_type).ok())
+            .unwrap_or(FinishType::Other);
+        let comment = self.optional_attr(&finish, "comment");
+        let products = self
+            .children_named(&finish, "Product")
+            .map(|product| {
+                Ok(FinishProduct {
+                    name: self.required_attr(&product, "name", "Product")?,
+                    criteria: self.opt_enum(&product, "criteria", ProductCriteria::from_ipc)?,
+                })
+            })
+            .collect::<Result<_>>()?;
+
+        Ok(SurfaceFinish {
+            finish_type,
+            comment,
+            products,
+        })
+    }
+
+    fn parse_cad_data(&mut self, node: &Node) -> Result<CadData> {
+        let mut cad_data = CadData {
+            steps: Vec::new(),
+            layers: Vec::new(),
+            stackups: Vec::new(),
+        };
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "Step" => cad_data.steps.push(self.parse_step(&child)?),
+                "Layer" => cad_data.layers.push(self.parse_layer(&child)?),
+                "Stackup" => cad_data.stackups.push(self.parse_stackup(&child)?),
+                _ => {}
+            }
+        }
+        Ok(cad_data)
+    }
+
+    /// `tolPercent`, `tolPlus` and `tolMinus`. A percentage is not a length.
+    fn parse_tolerances(
+        &self,
+        node: &Node,
+        units: Units,
+    ) -> Result<(bool, Option<f64>, Option<f64>)> {
+        let tol_percent = self.parse_flag_attr(node, "tolPercent")?;
+        let tol_units = (!tol_percent).then_some(units);
+        let tol_plus = self.number(node, "tolPlus", Sign::Any, tol_units)?;
+        let tol_minus = self.number(node, "tolMinus", Sign::Any, tol_units)?;
+        Ok((tol_percent, tol_plus, tol_minus))
+    }
+
     fn parse_stackup(&mut self, node: &Node) -> Result<Stackup> {
-        // Stackup is in ECAD section, use ECAD units
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
-
+        let units = self.units();
         let name = self.required_attr(node, "name", "Stackup")?;
-
-        // Convert overall thickness if present
-        let overall_thickness = self
-            .attr(node, "overallThickness")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
-
-        // Parse whereMeasured attribute
-        let where_measured = self
-            .attr(node, "whereMeasured")
-            .and_then(|s| self.parse_where_measured(s).ok());
-
-        // Parse tolerances
-        let tol_plus = self
-            .attr(node, "tolPlus")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
-
-        let tol_minus = self
-            .attr(node, "tolMinus")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
+        let overall_thickness = self.opt_mm(node, "overallThickness", units)?;
+        let where_measured = self.opt_enum(node, "whereMeasured", WhereMeasured::from_ipc)?;
+        let (tol_percent, tol_plus, tol_minus) = self.parse_tolerances(node, units)?;
 
         let mut layers = Vec::new();
-        for child in self.element_children(node) {
-            if self.name(&child) == "StackupGroup" {
-                // StackupGroup contains StackupLayer elements
-                for layer_node in self.element_children(&child) {
-                    if self.name(&layer_node) == "StackupLayer" {
-                        layers.push(self.parse_stackup_layer(&layer_node)?);
-                    }
-                }
+        for group in self.children_named(node, "StackupGroup") {
+            for layer in self.children_named(&group, "StackupLayer") {
+                layers.push(self.parse_stackup_layer(&layer)?);
             }
         }
 
@@ -1921,59 +1234,45 @@ impl<'a> Parser<'a> {
             where_measured,
             tol_plus,
             tol_minus,
+            tol_percent,
             layers,
         })
     }
 
     fn parse_stackup_layer(&mut self, node: &Node) -> Result<StackupLayer> {
-        // StackupLayer is in ECAD section, use ECAD units
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
-
+        let units = self.units();
         let layer_ref = self.required_attr(node, "layerOrGroupRef", "StackupLayer")?;
+        let thickness = self.opt_mm(node, "thickness", units)?;
+        let (tol_percent, tol_plus, tol_minus) = self.parse_tolerances(node, units)?;
 
-        // Convert thickness if present
-        let thickness = self
-            .attr(node, "thickness")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
+        // `sequence` is a double in the schema; layers are numbered with whole ones.
+        let layer_number = self
+            .number(node, "sequence", Sign::NonNegative, None)?
+            .map(|sequence| {
+                (sequence.fract() == 0.0 && sequence <= f64::from(u32::MAX))
+                    .then_some(sequence as u32)
+                    .ok_or_else(|| {
+                        Ipc2581Error::InvalidAttribute(format!(
+                            "StackupLayer sequence is not a whole number: {sequence}"
+                        ))
+                    })
+            })
+            .transpose()?;
 
-        // Convert tolerances if present
-        // NOTE: IPC-2581 spec allows tolPercent attribute to indicate if these are percentages
-        // For a pure parser, we should keep the raw values and let downstream code handle interpretation
-        // Currently we convert to mm for convenience (TODO: make this a separate normalization step)
-        let tol_plus = self
-            .attr(node, "tolPlus")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
-
-        let tol_minus = self
-            .attr(node, "tolMinus")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
-
-        let layer_number = self.attr(node, "sequence").and_then(|s| s.parse().ok());
-
-        // Look up material and dielectric properties from Spec via SpecRef
+        // Material and dielectric properties come from the referenced Spec,
+        // which need not be in this document.
         let mut material = None;
         let mut spec_ref = None;
         let mut dielectric_constant = None;
         let mut loss_tangent = None;
-
-        // Parse SpecRef child element
-        for child in self.element_children(node) {
-            if self.name(&child) == "SpecRef"
-                && let Some(spec_id) = self.attr(&child, "id")
+        for child in self.children_named(node, "SpecRef") {
+            if let Some(id) = self.optional_attr(&child, "id")
+                && let Some(spec) = self.specs.get(&id)
             {
-                // Exact match - pure IPC-2581 spec
-                let spec_symbol = self.interner.intern(spec_id);
-                if let Some(spec) = self.specs.get(&spec_symbol) {
-                    spec_ref = Some(spec_symbol);
-                    material = spec.material;
-                    dielectric_constant = spec.dielectric_constant;
-                    loss_tangent = spec.loss_tangent;
-                }
-                // If spec not found, silently continue - this is valid per spec
-                // (SpecRef may reference specs not in this document)
+                spec_ref = Some(id);
+                material = spec.material;
+                dielectric_constant = spec.dielectric_constant;
+                loss_tangent = spec.loss_tangent;
             }
         }
 
@@ -1982,6 +1281,7 @@ impl<'a> Parser<'a> {
             thickness,
             tol_plus,
             tol_minus,
+            tol_percent,
             material,
             spec_ref,
             dielectric_constant,
@@ -1991,172 +1291,99 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_step(&mut self, node: &Node) -> Result<Step> {
-        let name = self.required_attr(node, "name", "Step")?;
-        let step_type = self
-            .attr(node, "type")
-            .map(|step_type| self.parse_step_type(step_type))
-            .transpose()?;
-
-        // Single pass through children
-        let mut datum = None;
-        let mut profile = None;
-        let mut step_repeats = Vec::new();
-        let mut padstack_defs = Vec::new();
-        let mut packages = Vec::new();
-        let mut components = Vec::new();
-        let mut logical_nets = Vec::new();
-        let mut phy_net_groups = Vec::new();
-        let mut layer_features = Vec::new();
-
+        let mut step = Step {
+            name: self.required_attr(node, "name", "Step")?,
+            step_type: self.opt_enum(node, "type", StepType::from_ipc)?,
+            datum: None,
+            profile: None,
+            step_repeats: Vec::new(),
+            padstack_defs: Vec::new(),
+            packages: Vec::new(),
+            components: Vec::new(),
+            logical_nets: Vec::new(),
+            phy_net_groups: Vec::new(),
+            layer_features: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Datum" => datum = Some(self.parse_datum(&child)?),
-                "Profile" => profile = Some(self.parse_profile(&child)?),
-                "StepRepeat" => step_repeats.push(self.parse_step_repeat(&child)?),
-                "PadStackDef" => padstack_defs.push(self.parse_padstack_def(&child)?),
-                "Package" => packages.push(self.parse_package(&child)?),
-                "Component" => components.push(self.parse_component(&child)?),
-                "LogicalNet" => logical_nets.push(self.parse_logical_net(&child)?),
-                "PhyNetGroup" => phy_net_groups.push(self.parse_phy_net_group(&child)?),
-                "LayerFeature" => layer_features.push(self.parse_layer_feature(&child)?),
+                "Datum" => step.datum = Some(self.parse_datum(&child)?),
+                "Profile" => step.profile = Some(self.parse_profile(&child)?),
+                "StepRepeat" => step.step_repeats.push(self.parse_step_repeat(&child)?),
+                "PadStackDef" => step.padstack_defs.push(self.parse_padstack_def(&child)?),
+                "Package" => step.packages.push(self.parse_package(&child)?),
+                "Component" => step.components.push(self.parse_component(&child)?),
+                "LogicalNet" => step.logical_nets.push(self.parse_logical_net(&child)?),
+                "PhyNetGroup" => step.phy_net_groups.push(PhyNetGroup {
+                    name: self.required_attr(&child, "name", "PhyNetGroup")?,
+                }),
+                "LayerFeature" => step.layer_features.push(self.parse_layer_feature(&child)?),
                 _ => {}
             }
         }
-
-        Ok(Step {
-            name,
-            step_type,
-            datum,
-            profile,
-            step_repeats,
-            padstack_defs,
-            packages,
-            components,
-            logical_nets,
-            phy_net_groups,
-            layer_features,
-        })
-    }
-
-    fn parse_step_type(&self, s: &str) -> Result<ecad::StepType> {
-        match s {
-            "BOARD" => Ok(ecad::StepType::Board),
-            "PALLET" => Ok(ecad::StepType::Pallet),
-            "IC" => Ok(ecad::StepType::Ic),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Invalid Step type: {}",
-                s
-            ))),
-        }
+        Ok(step)
     }
 
     fn parse_step_repeat(&mut self, node: &Node) -> Result<StepRepeat> {
-        // StepRepeat is in ECAD section, use ECAD units.
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
-
+        let units = self.units();
         let step_ref = self.required_attr(node, "stepRef", "StepRepeat")?;
-        let x = self
-            .parse_optional_f64_attr_with_units(node, "x", units)?
-            .unwrap_or(0.0);
-        let y = self
-            .parse_optional_f64_attr_with_units(node, "y", units)?
-            .unwrap_or(0.0);
-        let nx = self.parse_optional_u32_attr(node, "nx")?.unwrap_or(1);
-        let ny = self.parse_optional_u32_attr(node, "ny")?.unwrap_or(1);
-        let dx = self
-            .parse_optional_f64_attr_with_units(node, "dx", units)?
-            .unwrap_or(0.0);
-        let dy = self
-            .parse_optional_f64_attr_with_units(node, "dy", units)?
-            .unwrap_or(0.0);
-        let angle = self.parse_optional_f64_attr(node, "angle")?.unwrap_or(0.0);
-        let mirror = self
-            .attr(node, "mirror")
-            .map(|value| parse_xsd_bool(value, "mirror"))
-            .transpose()?
-            .unwrap_or(false);
-
+        let count = |attr| self.parse_optional_count_attr(node, attr, u32::MAX);
         Ok(StepRepeat {
             step_ref,
-            x,
-            y,
-            nx,
-            ny,
-            dx,
-            dy,
-            angle,
-            mirror,
+            x: self.opt_mm(node, "x", units)?.unwrap_or(0.0),
+            y: self.opt_mm(node, "y", units)?.unwrap_or(0.0),
+            // The importer bounds the expanded instance count.
+            nx: count("nx")?.unwrap_or(1),
+            ny: count("ny")?.unwrap_or(1),
+            dx: self.opt_mm(node, "dx", units)?.unwrap_or(0.0),
+            dy: self.opt_mm(node, "dy", units)?.unwrap_or(0.0),
+            angle: self.opt_num(node, "angle")?.unwrap_or(0.0),
+            mirror: self.parse_flag_attr(node, "mirror")?,
         })
     }
 
-    fn parse_datum(&mut self, node: &Node) -> Result<Datum> {
-        // Datum is in ECAD section, use ECAD units
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
-        let x = self.parse_f64_attr_with_units(node, "x", "Datum", units)?;
-        let y = self.parse_f64_attr_with_units(node, "y", "Datum", units)?;
+    fn parse_datum(&self, node: &Node) -> Result<Datum> {
+        let Point { x, y } = self.point(node, "x", "y", "Datum", self.units())?;
         Ok(Datum { x, y })
     }
 
     fn parse_profile(&mut self, node: &Node) -> Result<Profile> {
-        let polygon_node = self
-            .element_children(node)
-            .find(|n| self.name(n) == "Polygon")
-            .ok_or(Ipc2581Error::MissingElement("Polygon in Profile"))?;
-
-        // Profile is in ECAD section, use ECAD units
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
-        let polygon = self.parse_polygon(&polygon_node, units)?;
-
-        let mut cutouts = Vec::new();
-        for child in self.element_children(node) {
-            if self.name(&child) == "Cutout" {
-                cutouts.push(self.parse_polygon_container(&child, units)?);
-            }
-        }
-
+        let (polygon, cutouts) =
+            self.parse_polygon_and_cutouts(node, self.units(), "Polygon in Profile")?;
         Ok(Profile { polygon, cutouts })
     }
 
     fn parse_package(&mut self, node: &Node) -> Result<Package> {
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+        let units = self.units();
         let name = self.required_attr(node, "name", "Package")?;
         let package_type = self.required_attr(node, "type", "Package")?;
         let pin_one = self.optional_attr(node, "pinOne");
         let pin_one_orientation = self.optional_attr(node, "pinOneOrientation");
-        let height = self.parse_optional_non_negative_f64_attr_with_units(node, "height", units)?;
-        let negative_body_extension = self.parse_optional_non_negative_f64_attr_with_units(
+        let height = self.number(node, "height", Sign::NonNegative, Some(units))?;
+        let negative_body_extension = self.number(
             node,
             "negativeBodyExtension",
-            units,
+            Sign::NonNegative,
+            Some(units),
         )?;
         let comment = self.optional_attr(node, "comment");
 
-        let mut outline = None;
+        let mut view = PackageSideView::default();
         let mut pickup_point = None;
-        let mut land_pattern = None;
-        let mut silkscreen = None;
-        let mut assembly_drawing = None;
-        let mut pins = Vec::new();
         let mut topside = None;
         let mut other_side_view = None;
-
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Outline" => outline = Some(self.parse_package_outline(&child, units)?),
                 "PickupPoint" => pickup_point = Some(self.parse_location(&child, units)?),
-                "LandPattern" => {
-                    land_pattern = Some(self.parse_package_land_pattern(&child, units)?)
-                }
-                "SilkScreen" => silkscreen = Some(self.parse_package_silkscreen(&child, units)?),
-                "AssemblyDrawing" => {
-                    assembly_drawing = Some(self.parse_package_assembly_drawing(&child, units)?)
-                }
-                "Pin" => pins.push(self.parse_package_pin(&child, units)?),
                 "Topside" => topside = Some(self.parse_package_side_view(&child, units)?),
                 "OtherSideView" => {
-                    other_side_view = Some(self.parse_package_other_side_view(&child, units)?)
+                    let view = self.parse_package_side_view(&child, units)?;
+                    other_side_view = Some(PackageOtherSideView {
+                        outline: view.outline,
+                        silkscreen: view.silkscreen,
+                        assembly_drawing: view.assembly_drawing,
+                    });
                 }
-                _ => {}
+                _ => self.parse_package_view_child(&child, units, &mut view)?,
             }
         }
 
@@ -2168,78 +1395,106 @@ impl<'a> Parser<'a> {
             height,
             negative_body_extension,
             comment,
-            outline,
+            outline: view.outline,
             pickup_point,
-            land_pattern,
-            silkscreen,
-            assembly_drawing,
-            pins,
+            land_pattern: view.land_pattern,
+            silkscreen: view.silkscreen,
+            assembly_drawing: view.assembly_drawing,
+            pins: view.pins,
             topside,
             other_side_view,
         })
     }
 
+    /// A `Topside` or, without land pattern and pins, an `OtherSideView`.
+    fn parse_package_side_view(&mut self, node: &Node, units: Units) -> Result<PackageSideView> {
+        let other_side = self.name(node) == "OtherSideView";
+        let mut view = PackageSideView::default();
+        for child in self.element_children(node) {
+            if !(other_side && matches!(self.name(&child), "LandPattern" | "Pin")) {
+                self.parse_package_view_child(&child, units, &mut view)?;
+            }
+        }
+        Ok(view)
+    }
+
+    /// Reads `child` into `view` if it is one of the views a package has of
+    /// itself and of each of its sides.
+    fn parse_package_view_child(
+        &mut self,
+        child: &Node,
+        units: Units,
+        view: &mut PackageSideView,
+    ) -> Result<()> {
+        match self.name(child) {
+            "Outline" => view.outline = Some(self.parse_package_outline(child, units)?),
+            "LandPattern" => {
+                let mut pads = Vec::new();
+                let mut targets = Vec::new();
+                for land in self.element_children(child) {
+                    match self.name(&land) {
+                        "Pad" => pads.push(self.parse_pad(&land)?),
+                        "Target" => targets.push(self.parse_package_target(&land, units)?),
+                        _ => {}
+                    }
+                }
+                view.land_pattern = Some(PackageLandPattern { pads, targets });
+            }
+            "SilkScreen" => {
+                let (outlines, markings) = self.parse_outlines_and_markings(child, units)?;
+                view.silkscreen = Some(PackageSilkscreen { outlines, markings });
+            }
+            "AssemblyDrawing" => {
+                let (mut outlines, markings) = self.parse_outlines_and_markings(child, units)?;
+                let outline = outlines.pop();
+                view.assembly_drawing = Some(PackageAssemblyDrawing { outline, markings });
+            }
+            "Pin" => view.pins.push(self.parse_package_pin(child, units)?),
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn parse_package_outline(&mut self, node: &Node, units: Units) -> Result<PackageOutline> {
-        let polygon_node = self
-            .element_children(node)
-            .find(|child| self.name(child) == "Polygon")
-            .ok_or(Ipc2581Error::MissingElement("Polygon in Package Outline"))?;
-        let polygon = self.parse_polygon(&polygon_node, units)?;
-        let polygon_xform = self.parse_xform_child(&polygon_node, units)?;
-        let (polygon_line_desc, polygon_line_desc_ref, polygon_fill_desc, polygon_fill_desc_ref) =
-            self.parse_fill_and_line_desc(&polygon_node, units)?;
+        let polygon = self.required_child(node, "Polygon", "Polygon in Package Outline")?;
+        let Poly {
+            polygon,
+            xform,
+            style,
+        } = self.parse_poly(&polygon, units, "PolyBegin")?;
         let line_desc =
             self.parse_line_desc_group(node, units, "LineDescGroup in Package Outline")?;
         Ok(PackageOutline {
             polygon,
-            polygon_xform,
-            polygon_line_desc,
-            polygon_line_desc_ref,
-            polygon_fill_desc,
-            polygon_fill_desc_ref,
+            polygon_xform: xform,
+            polygon_line_desc: style.line_desc,
+            polygon_line_desc_ref: style.line_desc_ref,
+            polygon_fill_desc: style.fill_desc,
+            polygon_fill_desc_ref: style.fill_desc_ref,
             line_desc,
         })
     }
 
-    fn parse_package_land_pattern(
-        &mut self,
-        node: &Node,
-        units: Units,
-    ) -> Result<PackageLandPattern> {
-        let mut pads = Vec::new();
-        let mut targets = Vec::new();
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "Pad" => pads.push(self.parse_pad(&child)?),
-                "Target" => targets.push(self.parse_package_target(&child, units)?),
-                _ => {}
-            }
-        }
-        Ok(PackageLandPattern { pads, targets })
-    }
-
     fn parse_package_target(&mut self, node: &Node, units: Units) -> Result<PackageTarget> {
-        let xform = self.parse_xform_child(node, units)?;
-        let location_node = self
-            .element_children(node)
-            .find(|child| self.name(child) == "Location")
-            .ok_or(Ipc2581Error::MissingElement("Location in Package Target"))?;
-        let location = self.parse_location(&location_node, units)?;
-        let shape = self
-            .element_children(node)
-            .find_map(|child| self.parse_standard_shape(&child, units).transpose())
-            .transpose()?
-            .ok_or(Ipc2581Error::MissingElement(
-                "StandardShape in Package Target",
-            ))?;
         Ok(PackageTarget {
-            xform,
-            location,
-            shape,
+            xform: self.parse_xform_child(node, units)?,
+            location: self
+                .parse_location_child(node, units)?
+                .ok_or(Ipc2581Error::MissingElement("Location in Package Target"))?,
+            shape: self.parse_standard_shape_child(
+                node,
+                units,
+                "StandardShape in Package Target",
+            )?,
         })
     }
 
-    fn parse_package_silkscreen(&mut self, node: &Node, units: Units) -> Result<PackageSilkscreen> {
+    /// The `Outline` and `Marking` children of a `SilkScreen` or `AssemblyDrawing`.
+    fn parse_outlines_and_markings(
+        &mut self,
+        node: &Node,
+        units: Units,
+    ) -> Result<(Vec<PackageOutline>, Vec<PackageMarking>)> {
         let mut outlines = Vec::new();
         let mut markings = Vec::new();
         for child in self.element_children(node) {
@@ -2249,189 +1504,94 @@ impl<'a> Parser<'a> {
                 _ => {}
             }
         }
-        Ok(PackageSilkscreen { outlines, markings })
-    }
-
-    fn parse_package_assembly_drawing(
-        &mut self,
-        node: &Node,
-        units: Units,
-    ) -> Result<PackageAssemblyDrawing> {
-        let mut outline = None;
-        let mut markings = Vec::new();
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "Outline" => outline = Some(self.parse_package_outline(&child, units)?),
-                "Marking" => markings.push(self.parse_package_marking(&child, units)?),
-                _ => {}
-            }
-        }
-        Ok(PackageAssemblyDrawing { outline, markings })
+        Ok((outlines, markings))
     }
 
     fn parse_package_marking(&mut self, node: &Node, units: Units) -> Result<PackageMarking> {
-        let usage = self.optional_attr(node, "markingUsage");
-        let xform = self.parse_xform_child(node, units)?;
-        let location = self
-            .element_children(node)
-            .find(|child| self.name(child) == "Location")
-            .map(|child| self.parse_location(&child, units))
-            .transpose()?;
-        let feature = self
-            .element_children(node)
-            .find_map(|child| self.parse_feature_shape(&child, units).transpose())
-            .transpose()?
-            .ok_or(Ipc2581Error::MissingElement("Feature in Package Marking"))?;
         Ok(PackageMarking {
-            usage,
-            xform,
-            location,
-            feature,
-        })
-    }
-
-    fn parse_package_side_view(&mut self, node: &Node, units: Units) -> Result<PackageSideView> {
-        let mut outline = None;
-        let mut land_pattern = None;
-        let mut silkscreen = None;
-        let mut assembly_drawing = None;
-        let mut pins = Vec::new();
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "Outline" => outline = Some(self.parse_package_outline(&child, units)?),
-                "LandPattern" => {
-                    land_pattern = Some(self.parse_package_land_pattern(&child, units)?)
-                }
-                "SilkScreen" => silkscreen = Some(self.parse_package_silkscreen(&child, units)?),
-                "AssemblyDrawing" => {
-                    assembly_drawing = Some(self.parse_package_assembly_drawing(&child, units)?)
-                }
-                "Pin" => pins.push(self.parse_package_pin(&child, units)?),
-                _ => {}
-            }
-        }
-        Ok(PackageSideView {
-            outline,
-            land_pattern,
-            silkscreen,
-            assembly_drawing,
-            pins,
-        })
-    }
-
-    fn parse_package_other_side_view(
-        &mut self,
-        node: &Node,
-        units: Units,
-    ) -> Result<PackageOtherSideView> {
-        let mut outline = None;
-        let mut silkscreen = None;
-        let mut assembly_drawing = None;
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "Outline" => outline = Some(self.parse_package_outline(&child, units)?),
-                "SilkScreen" => silkscreen = Some(self.parse_package_silkscreen(&child, units)?),
-                "AssemblyDrawing" => {
-                    assembly_drawing = Some(self.parse_package_assembly_drawing(&child, units)?)
-                }
-                _ => {}
-            }
-        }
-        Ok(PackageOtherSideView {
-            outline,
-            silkscreen,
-            assembly_drawing,
+            usage: self.optional_attr(node, "markingUsage"),
+            xform: self.parse_xform_child(node, units)?,
+            location: self.parse_location_child(node, units)?,
+            feature: self
+                .parse_feature_child(node, units)?
+                .ok_or(Ipc2581Error::MissingElement("Feature in Package Marking"))?
+                .1,
         })
     }
 
     fn parse_package_pin(&mut self, node: &Node, units: Units) -> Result<PackagePin> {
-        let number = self.required_attr(node, "number", "Pin")?;
-        let name = self.optional_attr(node, "name");
-        let pin_type = match self
-            .required_attr(node, "type", "Pin")
-            .map(|symbol| self.interner.resolve(symbol))?
-        {
-            "THRU" => PackagePinType::Through,
-            "BLIND" => PackagePinType::Blind,
-            "SURFACE" => PackagePinType::Surface,
-            value => {
-                return Err(Ipc2581Error::InvalidAttribute(format!(
-                    "Invalid Pin type: {value}"
-                )));
-            }
-        };
-        let electrical_type = self
-            .attr(node, "electricalType")
-            .map(parse_package_pin_electrical_type)
-            .transpose()?;
-        let mount_type = self
-            .attr(node, "mountType")
-            .map(parse_package_pin_mount_type)
-            .transpose()?;
-        let polarity = self
-            .attr(node, "pinPolarity")
-            .map(parse_package_pin_polarity)
-            .transpose()?;
-        let xform = self.parse_xform_child(node, units)?;
-        let location = self
-            .element_children(node)
-            .find(|child| self.name(child) == "Location")
-            .map(|child| self.parse_location(&child, units))
-            .transpose()?;
-        let shape = self
-            .element_children(node)
-            .find_map(|child| self.parse_standard_shape(&child, units).transpose())
-            .transpose()?
-            .ok_or(Ipc2581Error::MissingElement("StandardShape in Package Pin"))?;
         Ok(PackagePin {
-            number,
-            name,
-            pin_type,
-            electrical_type,
-            mount_type,
-            polarity,
-            xform,
-            location,
-            shape,
+            number: self.required_attr(node, "number", "Pin")?,
+            name: self.optional_attr(node, "name"),
+            pin_type: PackagePinType::from_ipc(self.required_str(node, "type", "Pin")?)?,
+            electrical_type: self.opt_enum(
+                node,
+                "electricalType",
+                PackagePinElectricalType::from_ipc,
+            )?,
+            mount_type: self.opt_enum(node, "mountType", PackagePinMountType::from_ipc)?,
+            polarity: self.opt_enum(node, "pinPolarity", PackagePinPolarity::from_ipc)?,
+            xform: self.parse_xform_child(node, units)?,
+            location: self.parse_location_child(node, units)?,
+            shape: self.parse_standard_shape_child(node, units, "StandardShape in Package Pin")?,
         })
     }
 
-    fn parse_standard_shape(&mut self, node: &Node, units: Units) -> Result<Option<StandardShape>> {
-        let shape = match self.name(node) {
-            "StandardPrimitiveRef" => self
-                .attr(node, "id")
-                .map(|id| StandardShape::PrimitiveRef(self.interner.intern(id))),
-            name if is_standard_primitive_name(name) => Some(StandardShape::Primitive(
-                self.parse_standard_primitive(node, units)?,
-            )),
-            _ => None,
-        };
-        Ok(shape)
+    /// The first `StandardShape` child of `node`.
+    fn parse_standard_shape_child(
+        &mut self,
+        node: &Node,
+        units: Units,
+        missing: &'static str,
+    ) -> Result<StandardShape> {
+        for child in self.element_children(node) {
+            if let Some(shape) = self.parse_standard_shape(&child, units)? {
+                return Ok(shape);
+            }
+        }
+        Err(Ipc2581Error::MissingElement(missing))
     }
 
+    /// The `StandardShape` half of the `Feature` group.
+    fn parse_standard_shape(&mut self, node: &Node, units: Units) -> Result<Option<StandardShape>> {
+        Ok(match self.parse_feature_shape(node, units)? {
+            Some(FeatureShape::StandardPrimitive(primitive)) => {
+                Some(StandardShape::Primitive(primitive))
+            }
+            Some(FeatureShape::StandardPrimitiveRef(id)) => Some(StandardShape::PrimitiveRef(id)),
+            _ => None,
+        })
+    }
+
+    /// The IPC-2581C `Feature` substitution group; `None` for any other
+    /// element. Every element that holds a `Feature` parses it through here.
     fn parse_feature_shape(&mut self, node: &Node, units: Units) -> Result<Option<FeatureShape>> {
         let shape = match self.name(node) {
-            "StandardPrimitiveRef" => self
-                .attr(node, "id")
-                .map(|id| FeatureShape::StandardPrimitiveRef(self.interner.intern(id))),
-            "UserPrimitiveRef" => self
-                .attr(node, "id")
-                .map(|id| FeatureShape::UserPrimitiveRef(self.interner.intern(id))),
-            "UserSpecial" => Some(FeatureShape::UserPrimitive(
-                self.parse_user_special(node, units)?,
-            )),
-            "Text" => Some(FeatureShape::Text(self.parse_text(node, units)?)),
-            "Outline" => Some(FeatureShape::Outline(
-                self.parse_package_outline(node, units)?,
-            )),
-            name if is_standard_primitive_name(name) => Some(FeatureShape::StandardPrimitive(
+            "StandardPrimitiveRef" => FeatureShape::StandardPrimitiveRef(self.required_attr(
+                node,
+                "id",
+                "StandardPrimitiveRef",
+            )?),
+            "UserPrimitiveRef" => FeatureShape::UserPrimitiveRef(self.required_attr(
+                node,
+                "id",
+                "UserPrimitiveRef",
+            )?),
+            "UserSpecial" => {
+                FeatureShape::UserPrimitive(Box::new(self.parse_user_special(node, units)?))
+            }
+            "Text" => FeatureShape::Text(Box::new(self.parse_text(node, units)?)),
+            "Outline" => FeatureShape::Outline(Box::new(self.parse_package_outline(node, units)?)),
+            name if is_standard_primitive_name(name) => FeatureShape::StandardPrimitive(Box::new(
                 self.parse_standard_primitive(node, units)?,
             )),
-            _ => self
-                .parse_user_shape(node, units)?
-                .map(FeatureShape::UserShape),
+            _ => {
+                return Ok(self
+                    .parse_user_shape(node, units)?
+                    .map(|shape| FeatureShape::UserShape(Box::new(shape))));
+            }
         };
-        Ok(shape)
+        Ok(Some(shape))
     }
 
     fn parse_text(&mut self, node: &Node, units: Units) -> Result<Text> {
@@ -2439,86 +1599,45 @@ impl<'a> Parser<'a> {
         let font_size_raw = self.required_attr(node, "fontSize", "Text")?;
         let font_size = self.parse_ipc_integer(font_size_raw, "fontSize", true)?;
         let xform = self.parse_xform_child(node, units)?;
-        let bounding_box_node = self
-            .element_children(node)
-            .find(|child| self.name(child) == "BoundingBox")
-            .ok_or(Ipc2581Error::MissingElement("BoundingBox in Text"))?;
-        let bounding_box = BoundingBox {
-            lower_left: Point {
-                x: self.parse_f64_attr_with_units(
-                    &bounding_box_node,
-                    "lowerLeftX",
-                    "BoundingBox",
-                    units,
-                )?,
-                y: self.parse_f64_attr_with_units(
-                    &bounding_box_node,
-                    "lowerLeftY",
-                    "BoundingBox",
-                    units,
-                )?,
-            },
-            upper_right: Point {
-                x: self.parse_f64_attr_with_units(
-                    &bounding_box_node,
-                    "upperRightX",
-                    "BoundingBox",
-                    units,
-                )?,
-                y: self.parse_f64_attr_with_units(
-                    &bounding_box_node,
-                    "upperRightY",
-                    "BoundingBox",
-                    units,
-                )?,
-            },
-        };
-        let font_ref = self
-            .element_children(node)
-            .find(|child| self.name(child) == "FontRef")
-            .map(|child| self.required_attr(&child, "id", "FontRef"))
-            .transpose()?;
-        let color = self
-            .element_children(node)
-            .find_map(|child| self.parse_color_group(&child).transpose())
-            .transpose()?;
+        let bounding_box = self.required_child(node, "BoundingBox", "BoundingBox in Text")?;
         Ok(Text {
             text_string,
             font_size,
             font_size_raw,
             xform,
-            bounding_box,
-            font_ref,
-            color,
+            bounding_box: self.bounding_box(&bounding_box, "BoundingBox", units)?,
+            font_ref: self
+                .child(node, "FontRef")
+                .map(|child| self.required_attr(&child, "id", "FontRef"))
+                .transpose()?,
+            color: self.parse_color_group_child(node)?,
         })
     }
 
     fn parse_location(&self, node: &Node, units: Units) -> Result<Location> {
-        Ok(Location {
-            x: self.parse_f64_attr_with_units(node, "x", "Location", units)?,
-            y: self.parse_f64_attr_with_units(node, "y", "Location", units)?,
-        })
+        let Point { x, y } = self.point(node, "x", "y", "Location", units)?;
+        Ok(Location { x, y })
+    }
+
+    fn parse_location_child(&self, node: &Node, units: Units) -> Result<Option<Location>> {
+        self.child(node, "Location")
+            .map(|child| self.parse_location(&child, units))
+            .transpose()
     }
 
     fn parse_component(&mut self, node: &Node) -> Result<Component> {
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+        let units = self.units();
         let ref_des = self.optional_attr(node, "refDes");
         let package_ref = self.optional_attr(node, "packageRef");
         let mat_des = self.optional_attr(node, "matDes");
         let layer_ref = self.required_attr(node, "layerRef", "Component")?;
         let layer_ref_topside = self.optional_attr(node, "layerRefTopside");
-        let mount_type = self.parse_mount_type(self.attr(node, "mountType").ok_or(
-            Ipc2581Error::MissingAttribute {
-                element: "Component",
-                attr: "mountType",
-            },
-        )?)?;
+        let mount_type = MountType::from_ipc(self.required_str(node, "mountType", "Component")?)?;
         let part = self.required_attr(node, "part", "Component")?;
         let model_ref = self.optional_attr(node, "modelRef");
-        let weight = self.parse_optional_non_negative_f64_attr(node, "weight")?;
-        let height = self.parse_optional_non_negative_f64_attr_with_units(node, "height", units)?;
-        let standoff =
-            self.parse_optional_non_negative_f64_attr_with_units(node, "standoff", units)?;
+        let weight = self.number(node, "weight", Sign::NonNegative, None)?;
+        let height = self.number(node, "height", Sign::NonNegative, Some(units))?;
+        let standoff = self.number(node, "standoff", Sign::NonNegative, Some(units))?;
 
         let mut nonstandard_attributes = Vec::new();
         let mut xform = None;
@@ -2531,23 +1650,10 @@ impl<'a> Parser<'a> {
                 "NonstandardAttribute" => {
                     nonstandard_attributes.push(self.parse_nonstandard_attribute(&child)?);
                 }
-                "Xform" => {
-                    xform = Some(self.parse_xform(&child, units)?);
-                }
-                "Location" => {
-                    location = Some(Location {
-                        x: self.parse_f64_attr_with_units(&child, "x", "Location", units)?,
-                        y: self.parse_f64_attr_with_units(&child, "y", "Location", units)?,
-                    });
-                }
-                "SlotCavityRef" => {
-                    slot_cavity_ref = self.optional_attr(&child, "id");
-                }
-                "SpecRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        spec_refs.push(self.interner.intern(id));
-                    }
-                }
+                "Xform" => xform = Some(self.parse_xform(&child, units)?),
+                "Location" => location = Some(self.parse_location(&child, units)?),
+                "SlotCavityRef" => slot_cavity_ref = self.optional_attr(&child, "id"),
+                "SpecRef" => spec_refs.push(self.spec_ref(&child)?),
                 _ => {}
             }
         }
@@ -2572,225 +1678,136 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_mount_type(&self, value: &str) -> Result<MountType> {
-        match value {
-            "SMT" => Ok(MountType::Smt),
-            "THMT" => Ok(MountType::Thmt),
-            "EMBEDDED" => Ok(MountType::Embedded),
-            "PRESSFIT" => Ok(MountType::PressFit),
-            "WIRE_BONDED" => Ok(MountType::WireBonded),
-            "GLUED" => Ok(MountType::Glued),
-            "CLAMPED" => Ok(MountType::Clamped),
-            "SOCKETED" => Ok(MountType::Socketed),
-            "FORMED" => Ok(MountType::Formed),
-            "OTHER" => Ok(MountType::Other),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Invalid Component mountType: {value}"
-            ))),
-        }
-    }
-
     fn parse_logical_net(&mut self, node: &Node) -> Result<LogicalNet> {
-        let name = self.required_attr(node, "name", "LogicalNet")?;
-
-        let pin_ref_nodes = self
-            .element_children(node)
-            .filter(|n| self.name(n) == "PinRef")
-            .collect::<Vec<_>>();
-        let pin_refs = pin_ref_nodes
-            .into_iter()
-            .map(|n| self.parse_pin_ref(&n))
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(LogicalNet { name, pin_refs })
+        Ok(LogicalNet {
+            name: self.required_attr(node, "name", "LogicalNet")?,
+            pin_refs: self
+                .children_named(node, "PinRef")
+                .map(|pin_ref| self.parse_pin_ref(&pin_ref))
+                .collect::<Result<_>>()?,
+        })
     }
 
     fn parse_pin_ref(&mut self, node: &Node) -> Result<PinRef> {
-        let component_ref = self
-            .attr(node, "componentRef")
-            .map(|s| self.interner.intern(s));
-        let pin = self.required_attr(node, "pin", "PinRef")?;
-        let title = self.attr(node, "title").map(|s| self.interner.intern(s));
         Ok(PinRef {
-            component_ref,
-            pin,
-            title,
+            component_ref: self.optional_attr(node, "componentRef"),
+            pin: self.required_attr(node, "pin", "PinRef")?,
+            title: self.optional_attr(node, "title"),
         })
-    }
-
-    fn parse_phy_net_group(&mut self, node: &Node) -> Result<PhyNetGroup> {
-        let name = self.required_attr(node, "name", "PhyNetGroup")?;
-        Ok(PhyNetGroup { name })
     }
 
     fn parse_layer(&mut self, node: &Node) -> Result<Layer> {
-        let name = self.required_attr(node, "name", "Layer")?;
-        let layer_function_str = self.required_attr(node, "layerFunction", "Layer")?;
-        let layer_function =
-            self.parse_layer_function(self.interner.resolve(layer_function_str))?;
-
-        let side = self
-            .attr(node, "side")
-            .map(|s| self.parse_side(s))
-            .transpose()?;
-        let polarity = self
-            .attr(node, "polarity")
-            .map(|s| self.parse_polarity(s))
-            .transpose()?;
-
-        let mut span = None;
-        let mut profile = None;
-        let mut spec_refs = Vec::new();
+        let mut layer = Layer {
+            name: self.required_attr(node, "name", "Layer")?,
+            layer_function: LayerFunction::from_ipc(self.required_str(
+                node,
+                "layerFunction",
+                "Layer",
+            )?)?,
+            side: self.opt_enum(node, "side", Side::from_ipc)?,
+            polarity: self.opt_enum(node, "polarity", Polarity::from_ipc)?,
+            span: None,
+            spec_refs: Vec::new(),
+            profiles: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "SpecRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        spec_refs.push(self.interner.intern(id));
-                    }
-                }
+                "SpecRef" => layer.spec_refs.push(self.spec_ref(&child)?),
                 "Span" => {
-                    span = Some(ecad::LayerSpan {
-                        from_layer: self
-                            .attr(&child, "fromLayer")
-                            .map(|s| self.interner.intern(s)),
-                        to_layer: self
-                            .attr(&child, "toLayer")
-                            .map(|s| self.interner.intern(s)),
+                    layer.span = Some(LayerSpan {
+                        from_layer: self.optional_attr(&child, "fromLayer"),
+                        to_layer: self.optional_attr(&child, "toLayer"),
                     });
                 }
-                "Profile" => {
-                    profile = Some(self.parse_profile(&child)?);
-                }
+                "Profile" => layer.profiles.push(self.parse_profile(&child)?),
                 _ => {}
             }
         }
-
-        Ok(Layer {
-            name,
-            layer_function,
-            side,
-            polarity,
-            span,
-            spec_refs,
-            profile,
-        })
+        Ok(layer)
     }
 
     fn parse_layer_feature(&mut self, node: &Node) -> Result<LayerFeature> {
-        let layer_ref = self.required_attr(node, "layerRef", "LayerFeature")?;
-
-        let set_nodes = self
-            .element_children(node)
-            .filter(|n| self.name(n) == "Set")
-            .collect::<Vec<_>>();
-        let sets = set_nodes
-            .into_iter()
-            .map(|n| self.parse_feature_set(&n))
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(LayerFeature { layer_ref, sets })
+        let mut layer = LayerFeature {
+            layer_ref: self.required_attr(node, "layerRef", "LayerFeature")?,
+            sets: Vec::new(),
+            features: Vec::new(),
+            spec_refs: Vec::new(),
+            nonstandard_attributes: Vec::new(),
+        };
+        for set in self.children_named(node, "Set") {
+            self.parse_feature_set(&set, &mut layer)?;
+        }
+        layer.sets.shrink_to_fit();
+        layer.features.shrink_to_fit();
+        layer.spec_refs.shrink_to_fit();
+        layer.nonstandard_attributes.shrink_to_fit();
+        Ok(layer)
     }
 
-    fn parse_feature_set(&mut self, node: &Node) -> Result<FeatureSet> {
-        let net = self.attr(node, "net").map(|s| self.interner.intern(s));
-        let geometry = self.attr(node, "geometry").map(|s| self.interner.intern(s));
-        let component_ref = self
-            .attr(node, "componentRef")
-            .map(|s| self.interner.intern(s));
-        let geometry_usage = self
-            .attr(node, "geometryUsage")
-            .map(|s| self.parse_enum_attr::<GeometryUsage>(s))
-            .transpose()?;
+    /// Appends the `Set` at `node`, and what it spans, to `layer`.
+    fn parse_feature_set(&mut self, node: &Node, layer: &mut LayerFeature) -> Result<()> {
+        let net = self.optional_attr(node, "net");
+        let geometry = self.optional_attr(node, "geometry");
+        let component_ref = self.optional_attr(node, "componentRef");
+        let geometry_usage = self.opt_enum(node, "geometryUsage", GeometryUsage::from_ipc)?;
+        let polarity = self.opt_enum(node, "polarity", Polarity::from_ipc)?;
 
-        // Parse polarity attribute
-        let polarity = self.attr(node, "polarity").and_then(|s| match s {
-            "POSITIVE" => Some(Polarity::Positive),
-            "NEGATIVE" => Some(Polarity::Negative),
-            _ => None,
-        });
-
-        let mut features = Vec::new();
-        let mut spec_refs = Vec::new();
-        let mut nonstandard_attributes = Vec::new();
+        let LayerFeature {
+            features,
+            spec_refs,
+            nonstandard_attributes,
+            ..
+        } = layer;
+        let starts = (
+            features.len(),
+            spec_refs.len(),
+            nonstandard_attributes.len(),
+        );
 
         for child in self.element_children(node) {
             match self.name(&child) {
-                "SpecRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        spec_refs.push(self.interner.intern(id));
-                    }
-                }
-                "Hole" => {
-                    let hole = self.parse_hole(&child)?;
-                    features.push(ecad::SetFeature::Hole(hole));
-                }
+                "SpecRef" => spec_refs.push(self.spec_ref(&child)?),
+                "Hole" => features.push(SetFeature::Hole(self.parse_hole(&child)?)),
                 "SlotCavity" => {
-                    let slot = self.parse_slot_cavity(&child)?;
-                    features.push(ecad::SetFeature::Slot(slot));
+                    features.push(SetFeature::Slot(Box::new(self.parse_slot_cavity(&child)?)))
                 }
-                "Pad" => {
-                    let pad = self.parse_pad(&child)?;
-                    features.push(ecad::SetFeature::Pad(pad));
-                }
-                "BadBoardMark" | "GlobalFiducial" | "GoodPanelMark" | "LocalFiducial" => {
-                    let fiducial = self.parse_fiducial(&child)?;
-                    features.push(ecad::SetFeature::Fiducial(fiducial));
-                }
-                "Polyline" => {
-                    let trace = self.parse_trace(&child)?;
-                    features.push(ecad::SetFeature::Trace(trace));
-                }
-                "Features" => {
-                    for feature in self.parse_features(&child)? {
-                        features.push(feature);
-                    }
-                }
+                "Pad" => features.push(SetFeature::Pad(self.parse_pad(&child)?)),
+                "Polyline" => features.push(SetFeature::Stroke(self.parse_set_polyline(&child)?)),
+                "Features" => self.parse_features(&child, features)?,
                 "NonstandardAttribute" => {
-                    if let Ok(attr) = self.parse_nonstandard_attribute(&child) {
-                        nonstandard_attributes.push(attr);
-                    }
+                    nonstandard_attributes.push(self.parse_nonstandard_attribute(&child)?);
+                }
+                name if FiducialKind::from_ipc(name).is_ok() => {
+                    features.push(SetFeature::Fiducial(Box::new(self.parse_fiducial(&child)?)))
                 }
                 _ => {}
             }
         }
 
-        Ok(FeatureSet {
+        layer.sets.push(FeatureSet {
             net,
             geometry,
             component_ref,
             geometry_usage,
             polarity,
-            spec_refs,
-            features,
-            nonstandard_attributes,
+            spec_refs: span(starts.1, layer.spec_refs.len()),
+            features: span(starts.0, layer.features.len()),
+            nonstandard_attributes: span(starts.2, layer.nonstandard_attributes.len()),
+        });
+        Ok(())
+    }
+
+    fn parse_nonstandard_attribute(&mut self, node: &Node) -> Result<NonstandardAttribute> {
+        Ok(NonstandardAttribute {
+            name: self.required_attr(node, "name", "NonstandardAttribute")?,
+            value: self.optional_attr(node, "value"),
+            attr_type: self.optional_attr(node, "type"),
         })
     }
 
-    fn parse_nonstandard_attribute(&mut self, node: &Node) -> Result<ecad::NonstandardAttribute> {
-        let name = self.required_attr(node, "name", "NonstandardAttribute")?;
-        let value = self.attr(node, "value").map(|s| self.interner.intern(s));
-        let attr_type = self.attr(node, "type").map(|s| self.interner.intern(s));
-
-        Ok(ecad::NonstandardAttribute {
-            name,
-            value,
-            attr_type,
-        })
-    }
-
-    fn parse_fiducial(&mut self, node: &Node) -> Result<ecad::Fiducial> {
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
-        let kind = match self.name(node) {
-            "BadBoardMark" => ecad::FiducialKind::BadBoardMark,
-            "GlobalFiducial" => ecad::FiducialKind::Global,
-            "GoodPanelMark" => ecad::FiducialKind::GoodPanelMark,
-            "LocalFiducial" => ecad::FiducialKind::Local,
-            name => {
-                return Err(Ipc2581Error::InvalidStructure(format!(
-                    "Unknown fiducial element: {name}"
-                )));
-            }
-        };
+    fn parse_fiducial(&mut self, node: &Node) -> Result<Fiducial> {
+        let units = self.units();
+        let kind = FiducialKind::from_ipc(self.name(node))?;
 
         let mut location = None;
         let xform = self.parse_xform_child(node, units)?;
@@ -2799,30 +1816,21 @@ impl<'a> Parser<'a> {
 
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Location" => {
-                    location = Some(Location {
-                        x: self.parse_f64_attr_with_units(&child, "x", "Location", units)?,
-                        y: self.parse_f64_attr_with_units(&child, "y", "Location", units)?,
-                    });
-                }
+                "Location" => location = Some(self.parse_location(&child, units)?),
                 "PinRef" => pin_ref = Some(self.parse_pin_ref(&child)?),
-                "StandardPrimitiveRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        shape = Some(ecad::FiducialShape::StandardPrimitiveRef(
-                            self.interner.intern(id),
-                        ));
+                _ => match self.parse_standard_shape(&child, units)? {
+                    Some(StandardShape::Primitive(primitive)) => {
+                        shape = Some(FiducialShape::Primitive(*primitive));
                     }
-                }
-                name if is_standard_primitive_name(name) => {
-                    shape = Some(ecad::FiducialShape::Primitive(
-                        self.parse_standard_primitive(&child, units)?,
-                    ));
-                }
-                _ => {}
+                    Some(StandardShape::PrimitiveRef(id)) => {
+                        shape = Some(FiducialShape::StandardPrimitiveRef(id));
+                    }
+                    None => {}
+                },
             }
         }
 
-        Ok(ecad::Fiducial {
+        Ok(Fiducial {
             kind,
             location: location.ok_or(Ipc2581Error::MissingElement("Location"))?,
             xform,
@@ -2831,21 +1839,22 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_features(&mut self, features_node: &Node) -> Result<Vec<ecad::SetFeature>> {
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+    /// Appends the members of the `Features` at `features_node` to `out`.
+    fn parse_features(&mut self, features_node: &Node, out: &mut Vec<SetFeature>) -> Result<()> {
+        let units = self.units();
         let mut locations = Vec::new();
         let mut xform = None;
         // IPC-2581C specifies one Feature child, but KiCad emits multiple
         // substitution-group children in a single Features container. Accept
         // that de facto shape without relaxing the container's child ordering.
-        let mut features = Vec::new();
+        let start = out.len();
 
         for child in self.element_children(features_node) {
             let child_name = self.name(&child);
             let offset = single_feature_offset(&locations, xform);
             match child_name {
                 "Xform" => {
-                    if xform.is_some() || !locations.is_empty() || !features.is_empty() {
+                    if xform.is_some() || !locations.is_empty() || out.len() > start {
                         return Err(Ipc2581Error::InvalidStructure(
                             "Xform must be the first child of Features".to_string(),
                         ));
@@ -2853,456 +1862,173 @@ impl<'a> Parser<'a> {
                     xform = Some(self.parse_xform(&child, units)?);
                 }
                 "Location" => {
-                    if !features.is_empty() {
+                    if out.len() > start {
                         return Err(Ipc2581Error::InvalidStructure(
                             "Location must precede the Feature in Features".to_string(),
                         ));
                     }
-                    locations.push(Point {
-                        x: self.parse_f64_attr_with_units(&child, "x", "Location", units)?,
-                        y: self.parse_f64_attr_with_units(&child, "y", "Location", units)?,
-                    });
-                }
-                "Polygon" => {
-                    let polygon = self.parse_polygon(&child, units)?;
-                    features.push(ecad::SetFeature::Polygon(Self::translate_polygon(
-                        polygon, offset,
-                    )));
-                }
-                "Polyline" => {
-                    features.push(ecad::SetFeature::Polyline(
-                        self.parse_feature_polyline(&child, units, offset.x, offset.y)?,
-                    ));
-                }
-                "Line" => {
-                    features.push(ecad::SetFeature::Line(
-                        self.parse_line(&child, units, offset.x, offset.y)?,
-                    ));
-                }
-                "Arc" => {
-                    features.push(ecad::SetFeature::Arc(
-                        self.parse_feature_arc(&child, units, offset.x, offset.y)?,
-                    ));
-                }
-                "Contour" => {
-                    features.push(self.parse_contour_feature(&child, units, offset)?);
-                }
-                "UserSpecial" => {
-                    let primitive = self.parse_user_special(&child, units)?;
-                    features.push(ecad::SetFeature::UserPrimitive(
-                        ecad::FeatureUserPrimitive {
-                            primitive,
-                            x: offset.x,
-                            y: offset.y,
-                        },
-                    ));
-                }
-                "StandardPrimitiveRef" => {
-                    let id = self.required_attr(&child, "id", "StandardPrimitiveRef")?;
-                    features.push(ecad::SetFeature::StandardPrimitiveRef(
-                        ecad::FeaturePrimitiveRef {
-                            id,
-                            x: offset.x,
-                            y: offset.y,
-                        },
-                    ));
-                }
-                "UserPrimitiveRef" => {
-                    let id = self.required_attr(&child, "id", "UserPrimitiveRef")?;
-                    features.push(ecad::SetFeature::UserPrimitiveRef(
-                        ecad::FeaturePrimitiveRef {
-                            id,
-                            x: offset.x,
-                            y: offset.y,
-                        },
-                    ));
+                    locations.push(self.point(&child, "x", "y", "Location", units)?);
                 }
                 name => {
-                    return Err(Ipc2581Error::InvalidStructure(format!(
-                        "Unexpected {name} in Features"
-                    )));
+                    let shape = self.parse_feature_shape(&child, units)?.ok_or_else(|| {
+                        Ipc2581Error::InvalidStructure(format!("Unexpected {name} in Features"))
+                    })?;
+                    out.push(self.set_feature(&child, shape, units, offset)?);
                 }
             }
         }
 
-        if features.is_empty() {
+        if out.len() == start {
             return Err(Ipc2581Error::MissingElement("Feature in Features"));
         }
 
         if locations.len() > 1 || xform.is_some() {
             if locations.is_empty() {
-                locations.push(Point { x: 0.0, y: 0.0 });
+                locations.push(ORIGIN);
             }
-            Ok(vec![ecad::SetFeature::PlacementGroup(
-                ecad::FeaturePlacementGroup {
+            let features = out.split_off(start);
+            out.push(SetFeature::PlacementGroup(Box::new(
+                FeaturePlacementGroup {
                     xform,
                     locations,
                     features,
                 },
-            )])
-        } else {
-            Ok(features)
+            )));
         }
+        Ok(())
     }
 
-    fn parse_contour_feature(
+    /// A `Feature` parsed from `node` as a `Features` member placed at `at`.
+    fn set_feature(
         &mut self,
         node: &Node,
+        shape: FeatureShape,
         units: Units,
-        offset: Point,
-    ) -> Result<ecad::SetFeature> {
-        let contour = self.parse_contour(node, units)?;
-        let style_node = self
-            .element_children(node)
-            .find(|child| self.name(child) == "Polygon")
-            .unwrap_or(*node);
-        let (line_desc, line_desc_ref, fill_desc, fill_desc_ref) =
-            self.parse_fill_and_line_desc(&style_node, units)?;
-
-        Ok(ecad::SetFeature::UserPrimitive(
-            ecad::FeatureUserPrimitive {
-                primitive: UserPrimitive::UserSpecial(UserSpecial {
-                    shapes: vec![UserShape {
-                        shape: UserShapeType::Contour(contour),
-                        line_desc,
-                        line_desc_ref,
-                        fill_desc,
-                        fill_desc_ref,
-                    }],
-                }),
-                x: offset.x,
-                y: offset.y,
-            },
-        ))
-    }
-
-    fn translate_polygon(mut polygon: Polygon, offset: Point) -> Polygon {
-        Self::translate_point(&mut polygon.begin, offset);
-        for step in &mut polygon.steps {
-            match step {
-                PolyStep::Segment(segment) => {
-                    Self::translate_point(&mut segment.point, offset);
-                }
-                PolyStep::Curve(curve) => {
-                    Self::translate_point(&mut curve.point, offset);
-                    Self::translate_point(&mut curve.center, offset);
-                }
+        at: Point,
+    ) -> Result<SetFeature> {
+        let (x, y) = (at.x, at.y);
+        let stroked = match shape {
+            FeatureShape::StandardPrimitiveRef(id) => {
+                return Ok(SetFeature::StandardPrimitiveRef(FeaturePrimitiveRef {
+                    id,
+                    x,
+                    y,
+                }));
             }
-        }
-        polygon
-    }
-
-    fn translate_point(point: &mut Point, offset: Point) {
-        point.x += offset.x;
-        point.y += offset.y;
-    }
-
-    fn parse_line(
-        &mut self,
-        node: &Node,
-        units: Units,
-        offset_x: f64,
-        offset_y: f64,
-    ) -> Result<ecad::Line> {
-        let start_x = self.parse_f64_attr_with_units(node, "startX", "Line", units)? + offset_x;
-        let start_y = self.parse_f64_attr_with_units(node, "startY", "Line", units)? + offset_y;
-        let end_x = self.parse_f64_attr_with_units(node, "endX", "Line", units)? + offset_x;
-        let end_y = self.parse_f64_attr_with_units(node, "endY", "Line", units)? + offset_y;
-
-        let mut line_width = 0.25;
-        let mut line_end = None;
-        let mut line_property = None;
-        let mut line_desc_ref = None;
-
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "LineDesc" => {
-                    (line_width, line_end, line_property) =
-                        self.parse_feature_line_desc(&child, units)?;
-                }
-                "LineDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        line_desc_ref = Some(self.interner.intern(id));
-                    }
-                }
-                _ => {}
+            FeatureShape::UserPrimitiveRef(id) => {
+                return Ok(SetFeature::UserPrimitiveRef(FeaturePrimitiveRef {
+                    id,
+                    x,
+                    y,
+                }));
             }
-        }
-
-        Ok(ecad::Line {
-            start_x,
-            start_y,
-            end_x,
-            end_y,
-            line_desc_ref,
-            line_width,
-            line_end,
-            line_property,
-        })
-    }
-
-    fn parse_feature_arc(
-        &mut self,
-        node: &Node,
-        units: Units,
-        offset_x: f64,
-        offset_y: f64,
-    ) -> Result<ecad::FeatureArc> {
-        let arc = self.parse_user_arc(node, units)?;
-        let mut line_width = 0.25;
-        let mut line_end = None;
-        let mut line_property = None;
-        let mut line_desc_ref = None;
-
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "LineDesc" => {
-                    (line_width, line_end, line_property) =
-                        self.parse_feature_line_desc(&child, units)?;
-                }
-                "LineDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        line_desc_ref = Some(self.interner.intern(id));
-                    }
-                }
-                _ => {}
+            FeatureShape::UserShape(shape) => *shape,
+            shape => {
+                let primitive = self.user_primitive(node, shape, units)?;
+                return Ok(SetFeature::UserPrimitive(FeatureUserPrimitive {
+                    primitive,
+                    x,
+                    y,
+                }));
             }
-        }
+        };
 
-        Ok(ecad::FeatureArc {
-            start: Point {
-                x: arc.start.x + offset_x,
-                y: arc.start.y + offset_y,
-            },
-            end: Point {
-                x: arc.end.x + offset_x,
-                y: arc.end.y + offset_y,
-            },
-            center: Point {
-                x: arc.center.x + offset_x,
-                y: arc.center.y + offset_y,
-            },
-            clockwise: arc.clockwise,
-            line_desc_ref,
-            line_width,
-            line_end,
-            line_property,
-        })
-    }
-
-    fn parse_feature_polyline(
-        &mut self,
-        node: &Node,
-        units: Units,
-        offset_x: f64,
-        offset_y: f64,
-    ) -> Result<ecad::FeaturePolyline> {
-        let mut begin = None;
-        let mut steps = Vec::new();
-        let mut line_width = 0.25;
-        let mut line_end = None;
-        let mut line_property = None;
-        let mut line_desc_ref = None;
-
-        for child in self.element_children(node) {
-            match self.name(&child) {
-                "PolyBegin" => {
-                    begin = Some(Point {
-                        x: self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units)?
-                            + offset_x,
-                        y: self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units)?
-                            + offset_y,
-                    });
-                }
-                "PolyStepSegment" => {
-                    steps.push(PolyStep::Segment(PolyStepSegment {
-                        point: Point {
-                            x: self.parse_f64_attr_with_units(
-                                &child,
-                                "x",
-                                "PolyStepSegment",
-                                units,
-                            )? + offset_x,
-                            y: self.parse_f64_attr_with_units(
-                                &child,
-                                "y",
-                                "PolyStepSegment",
-                                units,
-                            )? + offset_y,
-                        },
-                    }));
-                }
-                "PolyStepCurve" => {
-                    steps.push(PolyStep::Curve(PolyStepCurve {
-                        point: Point {
-                            x: self.parse_f64_attr_with_units(
-                                &child,
-                                "x",
-                                "PolyStepCurve",
-                                units,
-                            )? + offset_x,
-                            y: self.parse_f64_attr_with_units(
-                                &child,
-                                "y",
-                                "PolyStepCurve",
-                                units,
-                            )? + offset_y,
-                        },
-                        center: Point {
-                            x: self.parse_f64_attr_with_units(
-                                &child,
-                                "centerX",
-                                "PolyStepCurve",
-                                units,
-                            )? + offset_x,
-                            y: self.parse_f64_attr_with_units(
-                                &child,
-                                "centerY",
-                                "PolyStepCurve",
-                                units,
-                            )? + offset_y,
-                        },
-                        clockwise: self.parse_bool_attr(&child, "clockwise")?,
-                    }));
-                }
-                "LineDesc" => {
-                    (line_width, line_end, line_property) =
-                        self.parse_feature_line_desc(&child, units)?;
-                }
-                "LineDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        line_desc_ref = Some(self.interner.intern(id));
-                    }
-                }
-                _ => {}
+        let line_desc = line_desc_group(stroked.line_desc_ref, stroked.line_desc);
+        let moved = |point: Point| Point {
+            x: point.x + x,
+            y: point.y + y,
+        };
+        let path = match stroked.shape {
+            UserShapeType::Polygon(mut polygon) => {
+                polygon.translate(at);
+                return Ok(SetFeature::Polygon(polygon));
             }
-        }
-
-        Ok(ecad::FeaturePolyline {
-            begin: begin.ok_or(Ipc2581Error::MissingElement("PolyBegin in Polyline"))?,
-            steps,
-            line_desc_ref,
-            line_width,
-            line_end,
-            line_property,
-        })
+            UserShapeType::Line(line) => StrokePath::Line(Line {
+                start: moved(line.start),
+                end: moved(line.end),
+            }),
+            UserShapeType::Arc(arc) => StrokePath::Arc(Arc {
+                start: moved(arc.start),
+                end: moved(arc.end),
+                center: moved(arc.center),
+                clockwise: arc.clockwise,
+            }),
+            UserShapeType::Polyline(mut polyline) => {
+                polyline.translate(at);
+                StrokePath::Polyline(polyline)
+            }
+            _ => unreachable!("parse_user_shape yields only stroked shapes and polygons"),
+        };
+        Ok(SetFeature::Stroke(Stroke { path, line_desc }))
     }
 
     fn parse_hole(&mut self, node: &Node) -> Result<Hole> {
-        // Hole is in ECAD section, use ECAD units
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
-
-        let name = self.attr(node, "name").map(|s| self.interner.intern(s));
-        let shape = match self.attr(node, "type").unwrap_or("CIRCLE") {
-            "CIRCLE" => ecad::HoleShape::Circle,
-            "SQUARE" => ecad::HoleShape::Square,
-            value => {
-                return Err(Ipc2581Error::InvalidAttribute(format!(
-                    "Invalid Hole type: {value}"
-                )));
-            }
+        let units = self.units();
+        let mut hole = Hole {
+            name: self.optional_attr(node, "name"),
+            shape: HoleShape::from_ipc(self.attr(node, "type").unwrap_or("CIRCLE"))?,
+            diameter: self.mm(node, "diameter", "Hole", units)?,
+            plating_status: PlatingStatus::from_ipc(self.required_str(
+                node,
+                "platingStatus",
+                "Hole",
+            )?)?,
+            x: self.mm(node, "x", "Hole", units)?,
+            y: self.mm(node, "y", "Hole", units)?,
+            xform: None,
+            spec_refs: Vec::new(),
         };
-        let diameter = self.parse_f64_attr_with_units(node, "diameter", "Hole", units)?;
-        let plating_status_str = self.required_attr(node, "platingStatus", "Hole")?;
-        let plating_status =
-            self.parse_plating_status(self.interner.resolve(plating_status_str))?;
-        let x = self.parse_f64_attr_with_units(node, "x", "Hole", units)?;
-        let y = self.parse_f64_attr_with_units(node, "y", "Hole", units)?;
-        let mut xform = None;
-        let mut spec_refs = Vec::new();
         for child in self.element_children(node) {
             match self.name(&child) {
-                "SpecRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        spec_refs.push(self.interner.intern(id));
-                    }
-                }
-                "Xform" => xform = Some(self.parse_xform(&child, units)?),
+                "SpecRef" => hole.spec_refs.push(self.spec_ref(&child)?),
+                "Xform" => hole.xform = Some(self.parse_xform(&child, units)?),
                 _ => {}
             }
         }
-
-        Ok(Hole {
-            name,
-            shape,
-            diameter,
-            plating_status,
-            xform,
-            spec_refs,
-            x,
-            y,
-        })
+        Ok(hole)
     }
 
     fn parse_slot_cavity(&mut self, node: &Node) -> Result<Slot> {
-        // SlotCavity is in ECAD section, use ECAD units
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+        let units = self.units();
 
-        let name = self.attr(node, "name").map(|s| self.interner.intern(s));
-        let plating_status_str = self.required_attr(node, "platingStatus", "SlotCavity")?;
+        let name = self.optional_attr(node, "name");
         let plating_status =
-            self.parse_plating_status(self.interner.resolve(plating_status_str))?;
+            PlatingStatus::from_ipc(self.required_str(node, "platingStatus", "SlotCavity")?)?;
 
-        // Parse Location child element
-        let (x, y) = if let Some(location_node) = self
-            .element_children(node)
-            .find(|n| self.name(n) == "Location")
-        {
-            let x = self.parse_f64_attr_with_units(&location_node, "x", "Location", units)?;
-            let y = self.parse_f64_attr_with_units(&location_node, "y", "Location", units)?;
-            (x, y)
-        } else {
-            (0.0, 0.0)
-        };
-
-        // Parse shape - can be Outline OR StandardPrimitive
-        // Per IPC-2581 spec 8.2.3.10.6: "The shape is defined by the substitution
-        // group Feature, which can be either a user defined shape or a standard
-        // primitive shape."
-        let shape = if let Some(outline_node) = self
-            .element_children(node)
-            .find(|n| self.name(n) == "Outline")
-        {
-            // Outline path with polygon
-            if let Some(polygon_node) = self
-                .element_children(&outline_node)
-                .find(|n| self.name(n) == "Polygon")
-            {
-                SlotShape::Outline(self.parse_polygon(&polygon_node, units)?)
-            } else {
-                return Err(Ipc2581Error::MissingElement(
-                    "Polygon in SlotCavity Outline",
-                ));
+        // Allegro and KiCad revision B omit the Location; the shape is then
+        // in step coordinates.
+        let (mut x, mut y) = (0.0, 0.0);
+        let mut xform = None;
+        let mut shape = None;
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "Location" => {
+                    x = self.mm(&child, "x", "Location", units)?;
+                    y = self.mm(&child, "y", "Location", units)?;
+                }
+                "Xform" => xform = Some(self.parse_xform(&child, units)?),
+                name if shape.is_none() => {
+                    shape = match self.parse_feature_shape(&child, units)? {
+                        Some(FeatureShape::Outline(outline)) => {
+                            Some(SlotShape::Outline(outline.polygon))
+                        }
+                        Some(FeatureShape::StandardPrimitive(primitive)) => {
+                            Some(SlotShape::Primitive(*primitive))
+                        }
+                        Some(_) => {
+                            return Err(Ipc2581Error::InvalidStructure(format!(
+                                "Unsupported {name} shape in SlotCavity"
+                            )));
+                        }
+                        None => None,
+                    };
+                }
+                _ => {}
             }
-        } else {
-            // Try to parse as StandardPrimitive (Circle, Oval, RectCenter, etc.)
-            // Find first child that is a StandardPrimitive
-            let primitive_node = self
-                .element_children(node)
-                .find(|n| {
-                    matches!(
-                        self.name(n),
-                        "Circle"
-                            | "Oval"
-                            | "RectCenter"
-                            | "RectRound"
-                            | "Ellipse"
-                            | "Diamond"
-                            | "Hexagon"
-                            | "Octagon"
-                            | "Triangle"
-                    )
-                })
-                .ok_or(Ipc2581Error::MissingElement(
-                    "Shape (Outline or StandardPrimitive) in SlotCavity",
-                ))?;
+        }
+        let shape = shape.ok_or(Ipc2581Error::MissingElement("Feature in SlotCavity"))?;
 
-            SlotShape::Primitive(self.parse_standard_primitive(&primitive_node, units)?)
-        };
-
-        let xform = self.parse_xform_child(node, units)?;
-
-        let z_axis_dim = has_z_axis_dim(self.doc(), node);
+        let z_axis_dim = has_z_axis_dim(self.doc, node);
 
         Ok(Slot {
             name,
@@ -3316,497 +2042,205 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_pad(&mut self, node: &Node) -> Result<Pad> {
-        // Pad is in ECAD section, use ECAD units
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
-
-        let padstack_def_ref = self
-            .attr(node, "padstackDefRef")
-            .map(|s| self.interner.intern(s));
-
-        // Check for x, y as attributes first (legacy format)
-        let mut x = self
-            .attr(node, "x")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
-        let mut y = self
-            .attr(node, "y")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| crate::units::to_mm(v, units));
-
-        // Look for Location child element (standard format)
-        for child in self.element_children(node) {
-            if self.name(&child) == "Location" {
-                x = self
-                    .attr(&child, "x")
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|v| crate::units::to_mm(v, units));
-                y = self
-                    .attr(&child, "y")
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|v| crate::units::to_mm(v, units));
-                break;
-            }
-        }
-
-        let xform = self.parse_xform_child(node, units)?;
-
-        let feature = self
-            .element_children(node)
-            .find_map(|child| self.parse_feature_shape(&child, units).transpose())
-            .transpose()?;
-
-        // Parse inline StandardPrimitiveRef if present
-        let standard_primitive_ref = self
-            .element_children(node)
-            .find(|n| self.name(n) == "StandardPrimitiveRef")
-            .and_then(|n| self.attr(&n, "id"))
-            .map(|id| self.interner.intern(id));
-
-        // Parse inline UserPrimitiveRef if present
-        let user_primitive_ref = self
-            .element_children(node)
-            .find(|n| self.name(n) == "UserPrimitiveRef")
-            .and_then(|n| self.attr(&n, "id"))
-            .map(|id| self.interner.intern(id));
-
-        let mut pin_ref = None;
-        for child in self.element_children(node) {
-            if self.name(&child) == "PinRef" {
-                pin_ref = Some(self.parse_pin_ref(&child)?);
-                break;
-            }
-        }
-
-        Ok(Pad {
-            padstack_def_ref,
-            x,
-            y,
-            xform,
-            feature,
-            standard_primitive_ref,
-            user_primitive_ref,
-            pin_ref,
-        })
-    }
-
-    fn parse_trace(&mut self, node: &Node) -> Result<Trace> {
-        // Trace is in ECAD section, use ECAD units
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
-
-        // LineDescRef can be attribute OR child element <LineDescRef id="..."/>
-        let mut line_desc_ref = self
-            .attr(node, "lineDescRef")
-            .map(|s| self.interner.intern(s));
-
-        let mut points = Vec::new();
-        let mut steps = Vec::new();
+        let units = self.units();
+        let mut pad = Pad {
+            padstack_def_ref: self.optional_attr(node, "padstackDefRef"),
+            // x and y attributes are a legacy form of the Location child.
+            x: self.opt_mm(node, "x", units)?,
+            y: self.opt_mm(node, "y", units)?,
+            xform: None,
+            feature: None,
+            pin_ref: None,
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "PolyBegin" => {
-                    let x = self.parse_f64_attr_with_units(&child, "x", "TracePoint", units)?;
-                    let y = self.parse_f64_attr_with_units(&child, "y", "TracePoint", units)?;
-                    points.push(TracePoint { x, y });
+                "Location" => {
+                    let location = self.parse_location(&child, units)?;
+                    (pad.x, pad.y) = (Some(location.x), Some(location.y));
                 }
-                "PolyStepSegment" => {
-                    let x = self.parse_f64_attr_with_units(&child, "x", "TracePoint", units)?;
-                    let y = self.parse_f64_attr_with_units(&child, "y", "TracePoint", units)?;
-                    let point = Point { x, y };
-                    points.push(TracePoint { x, y });
-                    steps.push(PolyStep::Segment(PolyStepSegment { point }));
-                }
-                "PolyStepCurve" => {
-                    let x = self.parse_f64_attr_with_units(&child, "x", "TracePoint", units)?;
-                    let y = self.parse_f64_attr_with_units(&child, "y", "TracePoint", units)?;
-                    let center_x =
-                        self.parse_f64_attr_with_units(&child, "centerX", "PolyStepCurve", units)?;
-                    let center_y =
-                        self.parse_f64_attr_with_units(&child, "centerY", "PolyStepCurve", units)?;
-                    let clockwise = self.parse_bool_attr(&child, "clockwise")?;
-                    points.push(TracePoint { x, y });
-                    steps.push(PolyStep::Curve(PolyStepCurve {
-                        point: Point { x, y },
-                        center: Point {
-                            x: center_x,
-                            y: center_y,
-                        },
-                        clockwise,
-                    }));
-                }
-                "LineDescRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        line_desc_ref = Some(self.interner.intern(id));
-                    }
+                "Xform" => pad.xform = Some(self.parse_xform(&child, units)?),
+                "PinRef" => pad.pin_ref = Some(self.parse_pin_ref(&child)?),
+                _ if pad.feature.is_none() => {
+                    pad.feature = self.parse_feature_shape(&child, units)?
                 }
                 _ => {}
             }
         }
+        Ok(pad)
+    }
 
-        Ok(Trace {
-            line_desc_ref,
-            points,
-            steps,
+    /// A `Polyline` directly inside a `Set`, which may name its `LineDescRef`
+    /// in an attribute.
+    fn parse_set_polyline(&mut self, node: &Node) -> Result<Stroke> {
+        let units = self.units();
+        let Poly { polygon, style, .. } = self.parse_poly(node, units, "PolyBegin in Polyline")?;
+        let reference = style
+            .line_desc_ref
+            .or_else(|| self.optional_attr(node, "lineDescRef"));
+        let line_desc = line_desc_group(reference, style.line_desc);
+        Ok(Stroke {
+            path: StrokePath::Polyline(polygon),
+            line_desc,
         })
-    }
-
-    fn parse_layer_function(&self, s: &str) -> Result<LayerFunction> {
-        match s {
-            // Conductive layers
-            "CONDUCTOR" => Ok(LayerFunction::Conductor),
-            "CONDFILM" => Ok(LayerFunction::CondFilm),
-            "CONDFOIL" => Ok(LayerFunction::CondFoil),
-            "PLANE" => Ok(LayerFunction::Plane),
-            "SIGNAL" => Ok(LayerFunction::Signal),
-            "MIXED" => Ok(LayerFunction::Mixed),
-
-            // Coating layers (surface finishes)
-            "COATINGCOND" => Ok(LayerFunction::CoatingCond),
-            "COATINGNONCOND" => Ok(LayerFunction::CoatingNonCond),
-
-            // Soldermask and paste
-            "SOLDERMASK" => Ok(LayerFunction::Soldermask),
-            "SOLDERPASTE" => Ok(LayerFunction::Solderpaste),
-            "PASTEMASK" => Ok(LayerFunction::Pastemask),
-
-            // Silkscreen/Legend
-            "SILKSCREEN" => Ok(LayerFunction::Silkscreen),
-            "LEGEND" => Ok(LayerFunction::Legend),
-
-            // Drilling and routing
-            "DRILL" => Ok(LayerFunction::Drill),
-            "ROUT" | "ROUTE" => Ok(LayerFunction::Rout),
-            "V_CUT" => Ok(LayerFunction::VCut),
-            "SCORE" => Ok(LayerFunction::Score),
-            "EDGE_CHAMFER" => Ok(LayerFunction::EdgeChamfer),
-            "EDGE_PLATING" => Ok(LayerFunction::EdgePlating),
-
-            // Dielectric layers
-            "DIELBASE" => Ok(LayerFunction::DielBase),
-            "DIELCORE" => Ok(LayerFunction::DielCore),
-            "DIELPREG" => Ok(LayerFunction::DielPreg),
-            "DIELADHV" => Ok(LayerFunction::DielAdhv),
-            "DIELBONDPLY" => Ok(LayerFunction::DielBondPly),
-            "DIELCOVERLAY" => Ok(LayerFunction::DielCoverlay),
-
-            // Component layers
-            "COMPONENT_TOP" => Ok(LayerFunction::ComponentTop),
-            "COMPONENT_BOTTOM" => Ok(LayerFunction::ComponentBottom),
-            "COMPONENT_EMBEDDED" => Ok(LayerFunction::ComponentEmbedded),
-            "COMPONENT_FORMED" => Ok(LayerFunction::ComponentFormed),
-            "ASSEMBLY" => Ok(LayerFunction::Assembly),
-
-            // Specialized material layers
-            "CONDUCTIVE_ADHESIVE" => Ok(LayerFunction::ConductiveAdhesive),
-            "GLUE" => Ok(LayerFunction::Glue),
-            "HOLEFILL" => Ok(LayerFunction::HoleFill),
-            "SOLDERBUMP" => Ok(LayerFunction::SolderBump),
-            "STIFFENER" => Ok(LayerFunction::Stiffener),
-            "CAPACITIVE" => Ok(LayerFunction::Capacitive),
-            "RESISTIVE" => Ok(LayerFunction::Resistive),
-
-            // Documentation and tooling
-            "DOCUMENT" => Ok(LayerFunction::Document),
-            "GRAPHIC" => Ok(LayerFunction::Graphic),
-            "BOARD_OUTLINE" => Ok(LayerFunction::BoardOutline),
-            "BOARD_FAB" => Ok(LayerFunction::BoardFab),
-            "REWORK" => Ok(LayerFunction::Rework),
-            "FIXTURE" => Ok(LayerFunction::Fixture),
-            "PROBE" => Ok(LayerFunction::Probe),
-            "COURTYARD" => Ok(LayerFunction::Courtyard),
-            "LANDPATTERN" => Ok(LayerFunction::LandPattern),
-            "THIEVING_KEEP_INOUT" => Ok(LayerFunction::ThievingKeepInout),
-
-            // Composite
-            "STACKUP_COMPOSITE" => Ok(LayerFunction::StackupComposite),
-
-            _ => Ok(LayerFunction::Other),
-        }
-    }
-
-    fn parse_side(&self, s: &str) -> Result<Side> {
-        match s {
-            "TOP" => Ok(Side::Top),
-            "BOTTOM" => Ok(Side::Bottom),
-            "BOTH" => Ok(Side::Both),
-            "INTERNAL" => Ok(Side::Internal),
-            "ALL" => Ok(Side::All),
-            "NONE" => Ok(Side::None),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Invalid side: {}",
-                s
-            ))),
-        }
-    }
-
-    fn parse_polarity(&self, s: &str) -> Result<Polarity> {
-        match s {
-            "POSITIVE" => Ok(Polarity::Positive),
-            "NEGATIVE" => Ok(Polarity::Negative),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Invalid polarity: {}",
-                s
-            ))),
-        }
-    }
-
-    fn parse_where_measured(&self, s: &str) -> Result<WhereMeasured> {
-        match s {
-            "METAL" => Ok(WhereMeasured::Metal),
-            "MASK" => Ok(WhereMeasured::Mask),
-            "LAMINATE" => Ok(WhereMeasured::Laminate),
-            "OTHER" => Ok(WhereMeasured::Other),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Invalid whereMeasured: {}",
-                s
-            ))),
-        }
     }
 
     fn parse_padstack_def(&mut self, node: &Node) -> Result<PadStackDef> {
-        let name = self.required_attr(node, "name", "PadStackDef")?;
-
-        let mut hole_def = None;
-        let mut pad_defs = Vec::new();
-
+        let mut padstack = PadStackDef {
+            name: self.required_attr(node, "name", "PadStackDef")?,
+            hole_def: None,
+            pad_defs: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "PadstackHoleDef" => hole_def = Some(self.parse_padstack_hole_def(&child)?),
-                "PadstackPadDef" => pad_defs.push(self.parse_padstack_pad_def(&child)?),
+                "PadstackHoleDef" => {
+                    padstack.hole_def = Some(self.parse_padstack_hole_def(&child)?)
+                }
+                "PadstackPadDef" => padstack.pad_defs.push(self.parse_padstack_pad_def(&child)?),
                 _ => {}
             }
         }
-
-        Ok(PadStackDef {
-            name,
-            hole_def,
-            pad_defs,
-        })
+        Ok(padstack)
     }
 
     fn parse_padstack_hole_def(&mut self, node: &Node) -> Result<PadstackHoleDef> {
-        // PadstackHoleDef is in ECAD section, use ECAD units
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
-
-        let name = self.required_attr(node, "name", "PadstackHoleDef")?;
-        let diameter =
-            self.parse_f64_attr_with_units(node, "diameter", "PadstackHoleDef", units)?;
-        let plating_status_str = self.required_attr(node, "platingStatus", "PadstackHoleDef")?;
-        let plating_status =
-            self.parse_plating_status(self.interner.resolve(plating_status_str))?;
-        let plus_tol = self.parse_f64_attr_with_units(node, "plusTol", "PadstackHoleDef", units)?;
-        let minus_tol =
-            self.parse_f64_attr_with_units(node, "minusTol", "PadstackHoleDef", units)?;
-        let x = self.parse_f64_attr_with_units(node, "x", "PadstackHoleDef", units)?;
-        let y = self.parse_f64_attr_with_units(node, "y", "PadstackHoleDef", units)?;
-
+        let units = self.units();
+        let element = "PadstackHoleDef";
         Ok(PadstackHoleDef {
-            name,
-            diameter,
-            plating_status,
-            plus_tol,
-            minus_tol,
-            x,
-            y,
+            name: self.required_attr(node, "name", element)?,
+            diameter: self.mm(node, "diameter", element, units)?,
+            plating_status: PlatingStatus::from_ipc(self.required_str(
+                node,
+                "platingStatus",
+                element,
+            )?)?,
+            plus_tol: self.mm(node, "plusTol", element, units)?,
+            minus_tol: self.mm(node, "minusTol", element, units)?,
+            x: self.mm(node, "x", element, units)?,
+            y: self.mm(node, "y", element, units)?,
         })
     }
 
     fn parse_padstack_pad_def(&mut self, node: &Node) -> Result<PadstackPadDef> {
-        let layer_ref = self.required_attr(node, "layerRef", "PadstackPadDef")?;
-        let pad_use_str = self.required_attr(node, "padUse", "PadstackPadDef")?;
-        let pad_use = self.parse_pad_use(self.interner.resolve(pad_use_str))?;
-
-        // The optional Location is the layer shape's offset from the
-        // padstack origin.
-        let units = self.ecad_units.unwrap_or(Units::Millimeter);
-        let location = self
-            .element_children(node)
-            .find(|n| self.name(n) == "Location");
-        let coordinate = |axis: &str| {
-            location
-                .as_ref()
-                .and_then(|n| self.attr(n, axis))
-                .and_then(|value| value.parse::<f64>().ok())
-                .map(|value| crate::units::to_mm(value, units))
-                .unwrap_or(0.0)
+        let units = self.units();
+        let mut pad_def = PadstackPadDef {
+            layer_ref: self.required_attr(node, "layerRef", "PadstackPadDef")?,
+            pad_use: PadUse::from_ipc(self.required_str(node, "padUse", "PadstackPadDef")?)?,
+            xform: None,
+            x: 0.0,
+            y: 0.0,
+            feature: None,
         };
-        let x = coordinate("x");
-        let y = coordinate("y");
-
-        // Parse StandardPrimitiveRef if present
-        let standard_primitive_ref = self
-            .element_children(node)
-            .find(|n| self.name(n) == "StandardPrimitiveRef")
-            .and_then(|n| self.attr(&n, "id"))
-            .map(|id| self.interner.intern(id));
-
-        // Parse UserPrimitiveRef if present
-        let user_primitive_ref = self
-            .element_children(node)
-            .find(|n| self.name(n) == "UserPrimitiveRef")
-            .and_then(|n| self.attr(&n, "id"))
-            .map(|id| self.interner.intern(id));
-
-        Ok(PadstackPadDef {
-            layer_ref,
-            pad_use,
-            x,
-            y,
-            standard_primitive_ref,
-            user_primitive_ref,
-        })
-    }
-
-    fn parse_plating_status(&self, s: &str) -> Result<PlatingStatus> {
-        match s {
-            "PLATED" => Ok(PlatingStatus::Plated),
-            "NONPLATED" => Ok(PlatingStatus::NonPlated),
-            "VIA" => Ok(PlatingStatus::Via),
-            "VIA_CAPPED" => Ok(PlatingStatus::ViaCapped),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Invalid plating status: {}",
-                s
-            ))),
-        }
-    }
-
-    fn parse_pad_use(&self, s: &str) -> Result<PadUse> {
-        match s {
-            "REGULAR" => Ok(PadUse::Regular),
-            "ANTIPAD" => Ok(PadUse::Antipad),
-            "THERMAL" => Ok(PadUse::Thermal),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Invalid pad use: {}",
-                s
-            ))),
-        }
-    }
-
-    fn parse_bom(&mut self, node: &Node) -> Result<Bom> {
-        let name = self.required_attr(node, "name", "Bom")?;
-        let mut header = None;
-        let mut items = Vec::new();
         for child in self.element_children(node) {
             match self.name(&child) {
-                "BomHeader" => header = Some(self.parse_bom_header(&child)?),
-                "BomItem" => items.push(self.parse_bom_item(&child)?),
+                "Xform" => pad_def.xform = Some(self.parse_xform(&child, units)?),
+                "Location" => {
+                    let location = self.parse_location(&child, units)?;
+                    (pad_def.x, pad_def.y) = (location.x, location.y);
+                }
+                _ if pad_def.feature.is_none() => {
+                    pad_def.feature = self.parse_feature_shape(&child, units)?
+                }
                 _ => {}
             }
         }
-        Ok(Bom {
-            name,
-            header,
-            items,
-        })
+        Ok(pad_def)
+    }
+
+    fn parse_bom(&mut self, node: &Node) -> Result<Bom> {
+        let mut bom = Bom {
+            name: self.required_attr(node, "name", "Bom")?,
+            header: None,
+            items: Vec::new(),
+        };
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "BomHeader" => bom.header = Some(self.parse_bom_header(&child)?),
+                "BomItem" => bom.items.push(self.parse_bom_item(&child)?),
+                _ => {}
+            }
+        }
+        Ok(bom)
     }
 
     fn parse_bom_header(&mut self, node: &Node) -> Result<BomHeader> {
-        let assembly = self.required_attr(node, "assembly", "BomHeader")?;
-        let revision = self.required_attr(node, "revision", "BomHeader")?;
-        let affecting = self
-            .attr(node, "affecting")
-            .map(|value| parse_xsd_bool(value, "affecting"))
-            .transpose()?;
-        let mut step_refs = Vec::new();
-        for child in self.element_children(node) {
-            if self.name(&child) == "StepRef" {
-                step_refs.push(self.required_attr(&child, "name", "StepRef")?);
-            }
-        }
         Ok(BomHeader {
-            assembly,
-            revision,
-            affecting,
-            step_refs,
+            assembly: self.required_attr(node, "assembly", "BomHeader")?,
+            revision: self.required_attr(node, "revision", "BomHeader")?,
+            affecting: self.opt_bool(node, "affecting")?,
+            step_refs: self
+                .children_named(node, "StepRef")
+                .map(|step| self.required_attr(&step, "name", "StepRef"))
+                .collect::<Result<_>>()?,
         })
     }
 
     fn parse_bom_item(&mut self, node: &Node) -> Result<BomItem> {
         let oem_design_number_ref = self.required_attr(node, "OEMDesignNumberRef", "BomItem")?;
         let quantity_raw = self.required_attr(node, "quantity", "BomItem")?;
-        let quantity = self.interner.resolve(quantity_raw).parse().ok();
         let pin_count_raw = self.optional_attr(node, "pinCount");
-        let pin_count = pin_count_raw
-            .map(|value| self.parse_ipc_integer(value, "pinCount", false))
-            .transpose()?;
-        let category = self
-            .attr(node, "category")
-            .map(parse_bom_category)
-            .transpose()?;
-        let internal_part_number = self.optional_attr(node, "internalPartNumber");
-        let description = self.optional_attr(node, "description");
-
-        let mut designators = Vec::new();
-        let mut characteristics = None;
-        let mut spec_refs = Vec::new();
-
+        let mut item = BomItem {
+            oem_design_number_ref,
+            quantity: self.interner.resolve(quantity_raw).parse().ok(),
+            quantity_raw,
+            pin_count: pin_count_raw
+                .map(|value| self.parse_ipc_integer(value, "pinCount", false))
+                .transpose()?,
+            pin_count_raw,
+            category: self.opt_enum(node, "category", BomCategory::from_ipc)?,
+            internal_part_number: self.optional_attr(node, "internalPartNumber"),
+            description: self.optional_attr(node, "description"),
+            designators: Vec::new(),
+            characteristics: None,
+            spec_refs: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "RefDes" => {
-                    designators.push(BomDesignator::Reference(self.parse_bom_ref_des(&child)?))
-                }
-                "MatDes" => designators.push(BomDesignator::Material(
+                "RefDes" => item
+                    .designators
+                    .push(BomDesignator::Reference(self.parse_bom_ref_des(&child)?)),
+                "MatDes" => item.designators.push(BomDesignator::Material(
                     self.parse_bom_named_designator(&child, "MatDes")?,
                 )),
-                "DocDes" => designators.push(BomDesignator::Document(
+                "DocDes" => item.designators.push(BomDesignator::Document(
                     self.parse_bom_named_designator(&child, "DocDes")?,
                 )),
-                "ToolDes" => designators.push(BomDesignator::Tool(
+                "ToolDes" => item.designators.push(BomDesignator::Tool(
                     self.parse_bom_named_designator(&child, "ToolDes")?,
                 )),
-                "FindDes" => {
-                    designators.push(BomDesignator::Find(self.parse_bom_find_designator(&child)?))
+                "FindDes" => item
+                    .designators
+                    .push(BomDesignator::Find(self.parse_bom_find_designator(&child)?)),
+                "Characteristics" => {
+                    item.characteristics = Some(self.parse_characteristics(&child)?)
                 }
-                "Characteristics" => characteristics = Some(self.parse_characteristics(&child)?),
-                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
+                "SpecRef" => item.spec_refs.push(self.spec_ref(&child)?),
                 _ => {}
             }
         }
-
-        Ok(BomItem {
-            oem_design_number_ref,
-            quantity,
-            quantity_raw,
-            pin_count,
-            pin_count_raw,
-            category,
-            internal_part_number,
-            description,
-            designators,
-            characteristics,
-            spec_refs,
-        })
+        Ok(item)
     }
 
     fn parse_bom_ref_des(&mut self, node: &Node) -> Result<BomRefDes> {
-        let name = self.required_attr(node, "name", "RefDes")?;
-        let package_ref = self.optional_attr(node, "packageRef");
-        let layer_ref = self.optional_attr(node, "layerRef");
-        let model_ref = self.optional_attr(node, "modelRef");
-        let populate = self
-            .attr(node, "populate")
-            .map(|value| parse_xsd_bool(value, "populate"))
-            .transpose()?;
-        let mut tunings = Vec::new();
-        let mut firmwares = Vec::new();
+        let mut ref_des = BomRefDes {
+            name: self.required_attr(node, "name", "RefDes")?,
+            package_ref: self.optional_attr(node, "packageRef"),
+            layer_ref: self.optional_attr(node, "layerRef"),
+            model_ref: self.optional_attr(node, "modelRef"),
+            populate: self.opt_bool(node, "populate")?,
+            tunings: Vec::new(),
+            firmwares: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Tuning" => tunings.push(BomTuning {
+                "Tuning" => ref_des.tunings.push(BomTuning {
                     value: self.required_attr(&child, "value", "Tuning")?,
                     comments: self.optional_attr(&child, "comments"),
                 }),
-                "Firmware" => firmwares.push(self.parse_bom_firmware(&child)?),
+                "Firmware" => ref_des.firmwares.push(self.parse_bom_firmware(&child)?),
                 _ => {}
             }
         }
-
-        Ok(BomRefDes {
-            name,
-            package_ref,
-            populate,
-            layer_ref,
-            model_ref,
-            tunings,
-            firmwares,
-        })
+        Ok(ref_des)
     }
 
     fn parse_bom_named_designator(
@@ -3870,365 +2304,240 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_characteristics(&mut self, node: &Node) -> Result<Characteristics> {
-        let category = self
-            .attr(node, "category")
-            .map(parse_bom_category)
-            .transpose()?;
-        let mut measured = Vec::new();
-        let mut ranged = Vec::new();
-        let mut enumerated = Vec::new();
-        let mut textuals = Vec::new();
+        let mut out = Characteristics {
+            category: self.opt_enum(node, "category", BomCategory::from_ipc)?,
+            measured: Vec::new(),
+            ranged: Vec::new(),
+            enumerated: Vec::new(),
+            textuals: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Measured" => measured.push(self.parse_measured_characteristic(&child)?),
-                "Ranged" => ranged.push(self.parse_ranged_characteristic(&child)?),
-                "Enumerated" => enumerated.push(self.parse_enumerated_characteristic(&child)),
-                "Textual" => textuals.push(self.parse_textual_characteristic(&child)?),
+                "Measured" => out.measured.push(MeasuredCharacteristic {
+                    definition_source: self.optional_attr(&child, "definitionSource"),
+                    name: self.optional_attr(&child, "measuredCharacteristicName"),
+                    value: self.opt_num(&child, "measuredCharacteristicValue")?,
+                    engineering_unit: self.optional_attr(&child, "engineeringUnitOfMeasure"),
+                    negative_tolerance: self.opt_num(&child, "engineeringNegativeTolerance")?,
+                    positive_tolerance: self.opt_num(&child, "engineeringPositiveTolerance")?,
+                }),
+                "Ranged" => out.ranged.push(RangedCharacteristic {
+                    definition_source: self.optional_attr(&child, "definitionSource"),
+                    name: self.optional_attr(&child, "rangedCharacteristicName"),
+                    lower_value: self.opt_num(&child, "rangedCharacteristicLowerValue")?,
+                    upper_value: self.opt_num(&child, "rangedCharacteristicUpperValue")?,
+                    engineering_unit: self.optional_attr(&child, "engineeringUnitOfMeasure"),
+                    negative_tolerance: self.opt_num(&child, "engineeringNegativeTolerance")?,
+                    positive_tolerance: self.opt_num(&child, "engineeringPositiveTolerance")?,
+                }),
+                "Enumerated" => out.enumerated.push(EnumeratedCharacteristic {
+                    definition_source: self.optional_attr(&child, "definitionSource"),
+                    name: self.optional_attr(&child, "enumeratedCharacteristicName"),
+                    value: self.optional_attr(&child, "enumeratedCharacteristicValue"),
+                }),
+                "Textual" => out.textuals.push(TextualCharacteristic {
+                    definition_source: self.optional_attr(&child, "definitionSource"),
+                    name: self.optional_attr(&child, "textualCharacteristicName"),
+                    value: self.optional_attr(&child, "textualCharacteristicValue"),
+                }),
                 _ => {}
             }
         }
-        Ok(Characteristics {
-            category,
-            measured,
-            ranged,
-            enumerated,
-            textuals,
-        })
-    }
-
-    fn parse_measured_characteristic(&mut self, node: &Node) -> Result<MeasuredCharacteristic> {
-        Ok(MeasuredCharacteristic {
-            definition_source: self.optional_attr(node, "definitionSource"),
-            name: self.optional_attr(node, "measuredCharacteristicName"),
-            value: self.parse_optional_f64_attr(node, "measuredCharacteristicValue")?,
-            engineering_unit: self.optional_attr(node, "engineeringUnitOfMeasure"),
-            negative_tolerance: self
-                .parse_optional_f64_attr(node, "engineeringNegativeTolerance")?,
-            positive_tolerance: self
-                .parse_optional_f64_attr(node, "engineeringPositiveTolerance")?,
-        })
-    }
-
-    fn parse_ranged_characteristic(&mut self, node: &Node) -> Result<RangedCharacteristic> {
-        Ok(RangedCharacteristic {
-            definition_source: self.optional_attr(node, "definitionSource"),
-            name: self.optional_attr(node, "rangedCharacteristicName"),
-            lower_value: self.parse_optional_f64_attr(node, "rangedCharacteristicLowerValue")?,
-            upper_value: self.parse_optional_f64_attr(node, "rangedCharacteristicUpperValue")?,
-            engineering_unit: self.optional_attr(node, "engineeringUnitOfMeasure"),
-            negative_tolerance: self
-                .parse_optional_f64_attr(node, "engineeringNegativeTolerance")?,
-            positive_tolerance: self
-                .parse_optional_f64_attr(node, "engineeringPositiveTolerance")?,
-        })
-    }
-
-    fn parse_enumerated_characteristic(&mut self, node: &Node) -> EnumeratedCharacteristic {
-        EnumeratedCharacteristic {
-            definition_source: self.optional_attr(node, "definitionSource"),
-            name: self.optional_attr(node, "enumeratedCharacteristicName"),
-            value: self.optional_attr(node, "enumeratedCharacteristicValue"),
-        }
-    }
-
-    fn parse_textual_characteristic(&mut self, node: &Node) -> Result<TextualCharacteristic> {
-        let definition_source = self
-            .attr(node, "definitionSource")
-            .map(|s| self.interner.intern(s));
-        let name = self
-            .attr(node, "textualCharacteristicName")
-            .map(|s| self.interner.intern(s));
-        let value = self
-            .attr(node, "textualCharacteristicValue")
-            .map(|s| self.interner.intern(s));
-
-        Ok(TextualCharacteristic {
-            definition_source,
-            name,
-            value,
-        })
+        Ok(out)
     }
 
     fn parse_avl(&mut self, node: &Node) -> Result<Avl> {
-        let name = self.required_attr(node, "name", "Avl")?;
-
-        let mut header = None;
-        let mut items = Vec::new();
-
+        let mut avl = Avl {
+            name: self.required_attr(node, "name", "Avl")?,
+            header: None,
+            items: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "AvlHeader" => header = Some(self.parse_avl_header(&child)?),
-                "AvlItem" => items.push(self.parse_avl_item(&child)?),
+                "AvlHeader" => avl.header = Some(self.parse_avl_header(&child)?),
+                "AvlItem" => avl.items.push(self.parse_avl_item(&child)?),
                 _ => {}
             }
         }
-
-        Ok(Avl {
-            name,
-            header,
-            items,
-        })
+        Ok(avl)
     }
 
     fn parse_avl_header(&mut self, node: &Node) -> Result<AvlHeader> {
-        let title = self.required_attr(node, "title", "AvlHeader")?;
-        let source = self.required_attr(node, "source", "AvlHeader")?;
-        let author = self.required_attr(node, "author", "AvlHeader")?;
-        let datetime = self.required_attr(node, "datetime", "AvlHeader")?;
-
-        let version = self
-            .attr(node, "version")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1);
-
-        let comment = self.optional_attr(node, "comment");
-        let mod_ref = self.optional_attr(node, "modRef");
-
         Ok(AvlHeader {
-            title,
-            source,
-            author,
-            datetime,
-            version,
-            comment,
-            mod_ref,
+            title: self.required_attr(node, "title", "AvlHeader")?,
+            source: self.required_attr(node, "source", "AvlHeader")?,
+            author: self.required_attr(node, "author", "AvlHeader")?,
+            datetime: self.required_attr(node, "datetime", "AvlHeader")?,
+            version: self
+                .parse_optional_count_attr(node, "version", u32::MAX)?
+                .unwrap_or(1),
+            comment: self.optional_attr(node, "comment"),
+            mod_ref: self.optional_attr(node, "modRef"),
         })
     }
 
     fn parse_avl_item(&mut self, node: &Node) -> Result<AvlItem> {
-        let oem_design_number = self.required_attr(node, "OEMDesignNumber", "AvlItem")?;
-
-        let mut vmpn_list = Vec::new();
-        let mut spec_refs = Vec::new();
-
+        let mut item = AvlItem {
+            oem_design_number: self.required_attr(node, "OEMDesignNumber", "AvlItem")?,
+            vmpn_list: Vec::new(),
+            spec_refs: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "AvlVmpn" => vmpn_list.push(self.parse_avl_vmpn(&child)?),
-                "SpecRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        spec_refs.push(self.interner.intern(id));
-                    }
-                }
+                "AvlVmpn" => item.vmpn_list.push(self.parse_avl_vmpn(&child)?),
+                "SpecRef" => item.spec_refs.push(self.spec_ref(&child)?),
                 _ => {}
             }
         }
-
-        Ok(AvlItem {
-            oem_design_number,
-            vmpn_list,
-            spec_refs,
-        })
+        Ok(item)
     }
 
     fn parse_avl_vmpn(&mut self, node: &Node) -> Result<AvlVmpn> {
-        let evpl_vendor = self.optional_attr(node, "evplVendor");
-        let evpl_mpn = self.optional_attr(node, "evplMpn");
-
-        let qualified = self
-            .attr(node, "qualified")
-            .map(|value| parse_xsd_bool(value, "qualified"))
-            .transpose()?;
-
-        let chosen = self
-            .attr(node, "chosen")
-            .map(|value| parse_xsd_bool(value, "chosen"))
-            .transpose()?;
-
-        let mut mpns = Vec::new();
-        let mut vendors = Vec::new();
-
+        let mut vmpn = AvlVmpn {
+            evpl_vendor: self.optional_attr(node, "evplVendor"),
+            evpl_mpn: self.optional_attr(node, "evplMpn"),
+            qualified: self.opt_bool(node, "qualified")?,
+            chosen: self.opt_bool(node, "chosen")?,
+            mpns: Vec::new(),
+            vendors: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "AvlMpn" => mpns.push(self.parse_avl_mpn(&child)?),
-                "AvlVendor" => vendors.push(self.parse_avl_vendor(&child)?),
+                "AvlMpn" => vmpn.mpns.push(self.parse_avl_mpn(&child)?),
+                "AvlVendor" => vmpn.vendors.push(AvlVendor {
+                    enterprise_ref: self.required_attr(&child, "enterpriseRef", "AvlVendor")?,
+                }),
                 _ => {}
             }
         }
-
-        Ok(AvlVmpn {
-            evpl_vendor,
-            evpl_mpn,
-            qualified,
-            chosen,
-            mpns,
-            vendors,
-        })
+        Ok(vmpn)
     }
 
     fn parse_avl_mpn(&mut self, node: &Node) -> Result<AvlMpn> {
-        let name = self.required_attr(node, "name", "AvlMpn")?;
-
-        let rank = self.attr(node, "rank").and_then(|s| s.parse().ok());
-
-        let cost = self.attr(node, "cost").and_then(|s| s.parse().ok());
-
-        let moisture_sensitivity = self
-            .attr(node, "moistureSensitivity")
-            .and_then(MoistureSensitivity::parse);
-
-        let availability = self
-            .attr(node, "availability")
-            .map(|value| parse_xsd_bool(value, "availability"))
-            .transpose()?;
-
-        let other = self.optional_attr(node, "other");
-
         Ok(AvlMpn {
-            name,
-            rank,
-            cost,
-            moisture_sensitivity,
-            availability,
-            other,
+            name: self.required_attr(node, "name", "AvlMpn")?,
+            rank: self.parse_optional_count_attr(node, "rank", u32::MAX)?,
+            cost: self.opt_num(node, "cost")?,
+            moisture_sensitivity: self.opt_enum(
+                node,
+                "moistureSensitivity",
+                MoistureSensitivity::from_ipc,
+            )?,
+            availability: self.opt_bool(node, "availability")?,
+            other: self.optional_attr(node, "other"),
         })
     }
 
-    fn parse_avl_vendor(&mut self, node: &Node) -> Result<AvlVendor> {
-        let enterprise_ref = self.required_attr(node, "enterpriseRef", "AvlVendor")?;
-
-        Ok(AvlVendor { enterprise_ref })
-    }
-
     fn parse_xform(&self, node: &Node, units: Units) -> Result<Xform> {
-        let x_offset = self
-            .attr(node, "xOffset")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|value| crate::units::to_mm(value, units))
-            .unwrap_or(0.0);
-        let y_offset = self
-            .attr(node, "yOffset")
-            .and_then(|s| s.parse::<f64>().ok())
-            .map(|value| crate::units::to_mm(value, units))
-            .unwrap_or(0.0);
-        let rotation = self
-            .attr(node, "rotation")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
-        let mirror = self
-            .attr(node, "mirror")
-            .map(|value| parse_xsd_bool(value, "mirror"))
-            .transpose()?
-            .unwrap_or(false);
-        let face_up = self
-            .attr(node, "faceUp")
-            .map(|value| parse_xsd_bool(value, "faceUp"))
-            .transpose()?
-            .unwrap_or(false);
-        let scale = self
-            .attr(node, "scale")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1.0);
-
+        let identity = Xform::default();
         Ok(Xform {
-            x_offset,
-            y_offset,
-            rotation,
-            mirror,
-            face_up,
-            scale,
+            x_offset: self
+                .opt_mm(node, "xOffset", units)?
+                .unwrap_or(identity.x_offset),
+            y_offset: self
+                .opt_mm(node, "yOffset", units)?
+                .unwrap_or(identity.y_offset),
+            rotation: self.opt_num(node, "rotation")?.unwrap_or(identity.rotation),
+            mirror: self.parse_flag_attr(node, "mirror")?,
+            face_up: self.parse_flag_attr(node, "faceUp")?,
+            scale: self.opt_num(node, "scale")?.unwrap_or(identity.scale),
         })
     }
 
     fn parse_xform_child(&self, node: &Node, units: Units) -> Result<Option<Xform>> {
-        self.element_children(node)
-            .find(|n| self.name(n) == "Xform")
+        self.child(node, "Xform")
             .map(|n| self.parse_xform(&n, units))
             .transpose()
     }
 }
 
-fn has_z_axis_dim(doc: &Document, node: &Node) -> bool {
-    doc.children_iter(*node)
-        .filter(|child| doc.element(*child).is_some())
-        .any(|child| {
-            let name = doc.element(child).unwrap().name.local_name.as_ref();
-            matches!(name, "MaterialCut" | "MaterialLeft")
-                || (matches!(name, "Z_AxisDim" | "ZAxisDim")
-                    && doc
-                        .children_iter(child)
-                        .filter(|grandchild| doc.element(*grandchild).is_some())
-                        .any(|grandchild| {
-                            let grandchild_name =
-                                doc.element(grandchild).unwrap().name.local_name.as_ref();
-                            matches!(grandchild_name, "MaterialCut" | "MaterialLeft")
-                        }))
-        })
-}
-
-fn parse_optional_bool(value: &str) -> Option<bool> {
-    match value.trim() {
-        "true" | "1" => Some(true),
-        "false" | "0" => Some(false),
-        _ => None,
+fn parse_level(level: &str) -> Result<Level> {
+    let invalid = |level| {
+        Ipc2581Error::InvalidAttribute(format!(
+            "Invalid level (expected positive integer): {level}"
+        ))
+    };
+    match level.parse::<u8>() {
+        Ok(0) => Err(invalid("0")),
+        Ok(level) => Ok(Level(level)),
+        Err(_) => Err(invalid(level)),
     }
 }
 
-fn parse_xsd_bool(value: &str, attr: &str) -> Result<bool> {
-    parse_optional_bool(value)
-        .ok_or_else(|| Ipc2581Error::InvalidAttribute(format!("Invalid bool value for {attr}")))
-}
+/// The schema leaves `ringNumber` unbounded; a target has a handful of rings
+/// and the importer images each one.
+const MAX_MOIRE_RINGS: u32 = 256;
 
-fn parse_package_pin_electrical_type(value: &str) -> Result<PackagePinElectricalType> {
-    match value {
-        "ELECTRICAL" => Ok(PackagePinElectricalType::Electrical),
-        "MECHANICAL" => Ok(PackagePinElectricalType::Mechanical),
-        "UNDEFINED" => Ok(PackagePinElectricalType::Undefined),
-        _ => Err(Ipc2581Error::InvalidAttribute(format!(
-            "Invalid Pin electricalType: {value}"
-        ))),
+/// The span of a table that grew from `start` to `end` items. Every item
+/// comes from an element of its own, and `Dom` numbers those in a `u32`.
+fn span(start: usize, end: usize) -> Span {
+    Span {
+        start: start as u32,
+        count: (end - start) as u32,
     }
 }
 
-fn parse_package_pin_mount_type(value: &str) -> Result<PackagePinMountType> {
-    match value {
-        "SURFACE_MOUNT_PIN" => Ok(PackagePinMountType::SurfaceMountPin),
-        "SURFACE_MOUNT_PAD" => Ok(PackagePinMountType::SurfaceMountPad),
-        "THROUGH_HOLE_PIN" => Ok(PackagePinMountType::ThroughHolePin),
-        "THROUGH_HOLE_HOLE" => Ok(PackagePinMountType::ThroughHoleHole),
-        "PRESSFIT" => Ok(PackagePinMountType::PressFit),
-        "NONBOARD" => Ok(PackagePinMountType::NonBoard),
-        "HOLE" => Ok(PackagePinMountType::Hole),
-        "WIRE_BOND" => Ok(PackagePinMountType::WireBond),
-        "UNDEFINED" => Ok(PackagePinMountType::Undefined),
-        _ => Err(Ipc2581Error::InvalidAttribute(format!(
-            "Invalid Pin mountType: {value}"
-        ))),
+/// A shape's one line description: its reference if it names one.
+fn line_desc_group(reference: Option<Symbol>, inline: Option<LineDesc>) -> Option<LineDescGroup> {
+    reference
+        .map(LineDescGroup::Ref)
+        .or(inline.map(LineDescGroup::Inline))
+}
+
+fn user_shape(shape: UserShapeType, style: ShapeStyle) -> UserShape {
+    UserShape {
+        shape,
+        line_desc: style.line_desc,
+        line_desc_ref: style.line_desc_ref,
+        fill_desc: style.fill_desc.map(Box::new),
+        fill_desc_ref: style.fill_desc_ref,
     }
 }
 
-fn parse_package_pin_polarity(value: &str) -> Result<PackagePinPolarity> {
-    match value {
-        "PLUS" => Ok(PackagePinPolarity::Plus),
-        "MINUS" => Ok(PackagePinPolarity::Minus),
-        "ANODE" => Ok(PackagePinPolarity::Anode),
-        "CATHODE" => Ok(PackagePinPolarity::Cathode),
-        _ => Err(Ipc2581Error::InvalidAttribute(format!(
-            "Invalid Pin pinPolarity: {value}"
-        ))),
-    }
+#[derive(Clone, Copy)]
+enum Sign {
+    Any,
+    /// IPC-2581C `nonNegativeDoubleType`.
+    NonNegative,
 }
 
-fn parse_bom_category(value: &str) -> Result<BomCategory> {
-    match value {
-        "ELECTRICAL" => Ok(BomCategory::Electrical),
-        "PROGRAMMABLE" => Ok(BomCategory::Programmable),
-        "MECHANICAL" => Ok(BomCategory::Mechanical),
-        "MATERIAL" => Ok(BomCategory::Material),
-        "DOCUMENT" => Ok(BomCategory::Document),
-        _ => Err(Ipc2581Error::InvalidAttribute(format!(
-            "Invalid BOM category: {value}"
-        ))),
+/// The one place attribute text becomes an `f64`. `NaN` and `INF` are valid
+/// `xsd:double`s that no geometry can use, and a finite source value can still
+/// overflow once scaled to millimeters.
+fn parse_f64(value: &str, attr: &str, sign: Sign, units: Option<Units>) -> Result<f64> {
+    let invalid =
+        |why: &str| Ipc2581Error::InvalidAttribute(format!("Value for {attr} {why}: {value}"));
+    let parsed = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| invalid("is not a number"))?;
+    if matches!(sign, Sign::NonNegative) && !(0.0..=3.4e38).contains(&parsed) {
+        return Err(invalid("is outside the IPC-2581C non-negative range"));
     }
+    let scaled = units.map_or(parsed, |units| crate::units::to_mm(parsed, units));
+    scaled
+        .is_finite()
+        .then_some(scaled)
+        .ok_or_else(|| invalid("is not finite"))
 }
 
-fn spec_item_kind(element: &str) -> ecad::SpecItemKind {
+fn has_z_axis_dim(doc: &Dom, node: &Node) -> bool {
+    let cuts = |node: Node| matches!(doc.name(node), "MaterialCut" | "MaterialLeft");
+    doc.children(*node).any(|child| {
+        cuts(child)
+            || (matches!(doc.name(child), "Z_AxisDim" | "ZAxisDim")
+                && doc.children(child).any(cuts))
+    })
+}
+
+fn spec_item_kind(element: &str) -> SpecItemKind {
     match element {
-        "General" => ecad::SpecItemKind::General,
-        "Dielectric" => ecad::SpecItemKind::Dielectric,
-        "Conductor" => ecad::SpecItemKind::Conductor,
-        "SurfaceFinish" => ecad::SpecItemKind::SurfaceFinish,
-        "V_Cut" => ecad::SpecItemKind::VCut,
-        _ => ecad::SpecItemKind::Other,
+        "General" => SpecItemKind::General,
+        "Dielectric" => SpecItemKind::Dielectric,
+        "Conductor" => SpecItemKind::Conductor,
+        "SurfaceFinish" => SpecItemKind::SurfaceFinish,
+        "V_Cut" => SpecItemKind::VCut,
+        _ => SpecItemKind::Other,
     }
 }
 
@@ -4259,25 +2568,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_slot_cavity_z_axis_substitution_children() {
-        let doc = uppsala::parse(
+    fn detects_bare_and_wrapped_slot_cavity_z_axis_dimensions() {
+        for xml in [
             r#"<SlotCavity><Location x="0" y="0"/><MaterialCut depth="0.1"/></SlotCavity>"#,
-        )
-        .unwrap();
-        let root = doc.document_element().unwrap();
-
-        assert!(has_z_axis_dim(&doc, &root));
-    }
-
-    #[test]
-    fn detects_wrapped_slot_cavity_z_axis_dimensions() {
-        let doc = uppsala::parse(
             r#"<SlotCavity><Location x="0" y="0"/><ZAxisDim><MaterialLeft thickness="0.1"/></ZAxisDim></SlotCavity>"#,
-        )
-        .unwrap();
-        let root = doc.document_element().unwrap();
-
-        assert!(has_z_axis_dim(&doc, &root));
+        ] {
+            let doc = Dom::parse(xml, crate::dom::Keep::Tree).unwrap();
+            assert!(has_z_axis_dim(&doc, &doc.root()), "{xml}");
+        }
     }
 
     #[test]
@@ -4310,22 +2608,8 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let slot = ipc
-            .ecad()
-            .unwrap()
-            .cad_data
-            .steps
-            .first()
-            .unwrap()
-            .layer_features
-            .first()
-            .unwrap()
-            .sets
-            .first()
-            .unwrap()
-            .slots()
-            .next()
-            .unwrap();
+        let layer_feature = &ipc.ecad().unwrap().cad_data.steps[0].layer_features[0];
+        let slot = layer_feature.slots().next().unwrap();
 
         let xform = slot.xform.unwrap();
         assert_eq!(xform.rotation, 90.0);
@@ -4334,16 +2618,4 @@ mod tests {
         assert_eq!(xform.x_offset, 0.5);
         assert_eq!(xform.y_offset, 0.25);
     }
-}
-
-/// Parsed IPC-2581 document (before transferring to user arena)
-#[derive(Debug)]
-pub struct ParsedIpc2581 {
-    pub revision: Symbol,
-    pub content: Content,
-    pub logistic_header: Option<LogisticHeader>,
-    pub history_record: Option<HistoryRecord>,
-    pub ecad: Option<Ecad>,
-    pub boms: Vec<Bom>,
-    pub avl: Option<Avl>,
 }

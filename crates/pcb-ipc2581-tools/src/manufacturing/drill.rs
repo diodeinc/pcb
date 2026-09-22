@@ -4,8 +4,8 @@ use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::dialects::nc;
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
-use crate::manufacturing::{ManufacturingFile, ManufacturingFileKind};
-use crate::xnc::{XncAttribute, XncBuilder, XncUnit, write_xnc};
+use crate::manufacturing::ManufacturingFile;
+use crate::xnc::{XncAttribute, XncBuilder, write_xnc};
 
 pub(crate) fn build_xnc_drill_files_from_design(
     imported: &ImportedDesign,
@@ -55,7 +55,7 @@ enum XncSpanKey {
 
 fn xnc_files_from_nc(
     imported: &ImportedDesign,
-    nc: &nc::Document<ipc2581::Symbol>,
+    nc: &nc::Document,
     copper_layers: &[ipc2581::Symbol],
 ) -> Result<Vec<ManufacturingFile>> {
     let mut groups = std::collections::BTreeMap::<XncGroupKey, XncBuilder>::new();
@@ -67,7 +67,7 @@ fn xnc_files_from_nc(
         let file_function = xnc_file_function(&key, copper_layers);
         let builder = groups
             .entry(key)
-            .or_insert_with(|| XncBuilder::new(XncUnit::Metric, vec![file_function]));
+            .or_insert_with(|| XncBuilder::new(vec![file_function]));
         let tool_attributes = xnc_tool_attributes(object);
         let object_attributes = xnc_object_attributes(imported, object);
         match &object.geometry {
@@ -81,32 +81,6 @@ fn xnc_files_from_nc(
             } => {
                 builder.add_slot(*diameter, *start, *end, tool_attributes, object_attributes)?;
             }
-            nc::Geometry::Route {
-                start,
-                diameter,
-                segments,
-            } => {
-                builder.add_route(
-                    *diameter,
-                    *start,
-                    segments
-                        .iter()
-                        .map(|segment| match *segment {
-                            nc::RouteSegment::Line { to } => {
-                                crate::xnc::XncRouteSegment::Line { to }
-                            }
-                            nc::RouteSegment::ClockwiseArc { to, radius } => {
-                                crate::xnc::XncRouteSegment::ClockwiseArc { to, radius }
-                            }
-                            nc::RouteSegment::CounterClockwiseArc { to, radius } => {
-                                crate::xnc::XncRouteSegment::CounterClockwiseArc { to, radius }
-                            }
-                        })
-                        .collect(),
-                    tool_attributes,
-                    object_attributes,
-                )?;
-            }
         }
     }
 
@@ -119,7 +93,6 @@ fn xnc_files_from_nc(
         .map(|(key, document)| {
             Ok(ManufacturingFile {
                 filename: xnc_filename(&key),
-                kind: ManufacturingFileKind::Xnc,
                 contents: write_xnc(&document)?,
             })
         })
@@ -143,7 +116,7 @@ fn xnc_file_function(key: &XncGroupKey, copper_layers: &[ipc2581::Symbol]) -> Xn
     )
 }
 
-fn xnc_tool_attributes(object: &nc::Object<ipc2581::Symbol>) -> Vec<XncAttribute> {
+fn xnc_tool_attributes(object: &nc::Object) -> Vec<XncAttribute> {
     let drill_function = match object.function {
         nc::Function::Via => "ViaDrill",
         nc::Function::Component => "ComponentDrill",
@@ -155,10 +128,7 @@ fn xnc_tool_attributes(object: &nc::Object<ipc2581::Symbol>) -> Vec<XncAttribute
     vec![XncAttribute::tool("AperFunction", fields)]
 }
 
-fn xnc_object_attributes(
-    imported: &ImportedDesign,
-    object: &nc::Object<ipc2581::Symbol>,
-) -> Vec<XncAttribute> {
+fn xnc_object_attributes(imported: &ImportedDesign, object: &nc::Object) -> Vec<XncAttribute> {
     let mut attributes = Vec::new();
     if let Some(net) = object.net {
         attributes.push(XncAttribute::object("N", [imported.resolve(net)]));
@@ -175,10 +145,7 @@ fn xnc_object_attributes(
     attributes
 }
 
-fn xnc_span_key(
-    copper_layers: &[ipc2581::Symbol],
-    span: &nc::DrillSpan<ipc2581::Symbol>,
-) -> XncSpanKey {
+fn xnc_span_key(copper_layers: &[ipc2581::Symbol], span: &nc::DrillSpan) -> XncSpanKey {
     match span {
         nc::DrillSpan::FromTo { from, to } => {
             let Some(from) = from.and_then(|layer| copper_layer_index(copper_layers, layer)) else {

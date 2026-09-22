@@ -9,8 +9,10 @@
 
 use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
+#[cfg(not(target_family = "wasm"))]
+use rayon::prelude::*;
 
-use crate::commands::dfm::design::{ConductorId, Design};
+use crate::commands::dfm::design::{ConductorId, CopperLayer, Design, spans};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
 
@@ -26,23 +28,38 @@ pub(super) fn evaluate(
     conditions: &Conditions,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
-    let mut checked = 0;
-    let mut measured = Vec::new();
-
-    for layer in &design.copper_layers {
-        if !conditions.applies_to_layer(layer) {
-            continue;
+    let measure = |layer: &CopperLayer| {
+        // A conductor whose bounds come within the limit of no other's is
+        // proven clear whole; only the rest are taken apart into pieces.
+        let mut by_x = (0..layer.conductors.len()).collect::<Vec<_>>();
+        by_x.sort_by(|&left, &right| {
+            let bounds = |index: usize| layer.conductors[index].image.bbox;
+            bounds(left).min.x.total_cmp(&bounds(right).min.x)
+        });
+        let mut near = vec![false; layer.conductors.len()];
+        for (position, &left_index) in by_x.iter().enumerate() {
+            let left = &layer.conductors[left_index];
+            for &right_index in by_x[position + 1..].iter().take_while(|&&right_index| {
+                layer.conductors[right_index].image.bbox.min.x - left.image.bbox.max.x < limit_mm
+            }) {
+                let right = &layer.conductors[right_index];
+                if spans(left.branch, right.branch)
+                    && left.image.bbox.distance_to(right.image.bbox) < limit_mm
+                {
+                    near[left_index] = true;
+                    near[right_index] = true;
+                }
+            }
         }
         let components = layer
             .conductors
             .iter()
-            .map(|conductor| conductor.image.connected_components())
+            .zip(near)
+            .map(|(conductor, near)| match near {
+                true => conductor.image.connected_components(),
+                false => Vec::new(),
+            })
             .collect::<Vec<_>>();
-        let mut earlier_components = 0;
-        for conductor_components in &components {
-            checked += earlier_components * conductor_components.len();
-            earlier_components += conductor_components.len();
-        }
 
         let mut pieces = components
             .into_iter()
@@ -80,13 +97,17 @@ pub(super) fn evaluate(
                     })
                     .filter(move |(_, right)| {
                         left.conductor_index != right.conductor_index
+                            && spans(
+                                layer.conductors[left.conductor_index].branch,
+                                layer.conductors[right.conductor_index].branch,
+                            )
                             && left.region.bbox.distance_to(right.region.bbox) < limit_mm
                     })
                     .map(move |(offset, _)| (left_index, left_index + 1 + offset))
             })
             .collect::<Vec<_>>();
 
-        for (left_index, right_index) in pairs {
+        let measure_pair = |(left_index, right_index): (usize, usize)| {
             let (left, right) = (&pieces[left_index], &pieces[right_index]);
             let right_boundary = &boundaries[right_index];
             let Some(distance) = region_clearance_within(
@@ -96,16 +117,14 @@ pub(super) fn evaluate(
                 right_boundary,
                 limit_mm,
             ) else {
-                continue;
+                return Ok(None);
             };
 
             let left_id = layer.conductors[left.conductor_index].id;
             let right_id = layer.conductors[right.conductor_index].id;
-            let mut bbox = BBox::from_point(distance.first);
-            bbox.include_point(distance.second);
-            measured.push(Measured {
+            Ok::<_, anyhow::Error>(Some(Measured {
                 distance,
-                bbox,
+                bbox: BBox::spanning(distance.first, distance.second),
                 layers: vec![layer.layer.clone()],
                 subjects: vec![
                     conductor_subject(design, left_id, "first_conductor", &layer.layer.name),
@@ -116,32 +135,53 @@ pub(super) fn evaluate(
                     Evidence::bounds("second_conductor_component", right.region.bbox),
                 ],
                 sites: if violates(&distance, limit_mm) {
-                    region_clearance_sites_with_index(
-                        &left.region,
-                        &right.region,
-                        right_boundary,
-                        limit_mm,
-                    )?
-                    .into_iter()
-                    .map(|site| {
-                        linework_clearance::report_site(
-                            site,
-                            vec![layer.layer.clone()],
+                    linework_clearance::report_sites(
+                        region_clearance_sites_with_index(
+                            &left.region,
+                            &right.region,
+                            right_boundary,
                             limit_mm,
-                            design.resolution,
-                        )
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?
-                    .into_iter()
-                    .collect()
+                        )?,
+                        std::slice::from_ref(&layer.layer),
+                        limit_mm,
+                        design.resolution,
+                    )?
                 } else {
                     Vec::new()
                 },
-            });
-        }
-    }
+            }))
+        };
+        #[cfg(not(target_family = "wasm"))]
+        let pairs = pairs.into_par_iter();
+        #[cfg(target_family = "wasm")]
+        let pairs = pairs.into_iter();
+        pairs.map(measure_pair).collect::<anyhow::Result<Vec<_>>>()
+    };
 
-    Ok(Evaluation { checked, measured })
+    // Layers are independent, and so are the pairs on one.
+    #[cfg(not(target_family = "wasm"))]
+    let layers = design.copper_layers.par_iter();
+    #[cfg(target_family = "wasm")]
+    let layers = design.copper_layers.iter();
+    let measured = layers
+        .filter(|layer| conditions.applies_to_layer(layer))
+        .map(measure)
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect();
+    Ok(Evaluation {
+        // Every pair of connected pieces of two conductors is decided, those
+        // inside one placement in that placement's own design.
+        checked: design
+            .copper_layers
+            .iter()
+            .filter(|layer| conditions.applies_to_layer(layer))
+            .map(|layer| layer.piece_pairs)
+            .sum(),
+        measured,
+    })
 }
 
 pub(super) fn conductor_subject(
@@ -209,30 +249,9 @@ pub(super) fn conductor_subject(
 
 #[cfg(test)]
 mod tests {
-    use pcb_ir::geom::Resolution;
     use std::collections::BTreeSet;
 
-    use chrono::NaiveDate;
-    use pcb_ir::dialects::ipc::ArtworkScope;
-
-    use crate::commands::dfm::{checks, design::Design, pdk::Pdk, rules};
-    use crate::ipc2581::Ipc2581;
-
-    const PDK: &str = r#"schema_version = 2
-default_profile = "test"
-
-[pdk]
-id = "clearance-test"
-name = "Clearance test"
-revision = "1"
-
-[profiles.test]
-name = "Test"
-
-[[rules.copper.clearance]]
-id = "copper-clearance"
-limit = { minimum = "0.15 mm" }
-"#;
+    use crate::commands::dfm::{checks, fixtures};
 
     const BOARD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -291,24 +310,8 @@ limit = { minimum = "0.15 mm" }
 </IPC-2581>"#;
 
     fn run(xml: &str) -> checks::Results {
-        let ipc = Ipc2581::parse(xml).unwrap();
-        let pdk = Pdk::parse(PDK).unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-        let design = Design::extract(
-            &imported,
-            ArtworkScope::Board,
-            &rules,
-            Resolution::default(),
-        )
-        .unwrap();
-        checks::run(
-            &rules,
-            &design,
-            None,
-            NaiveDate::from_ymd_opt(2026, 8, 25).unwrap(),
-        )
-        .unwrap()
+        let rule = "[[rules.copper.clearance]]\nid = \"copper-clearance\"\nlimit = { minimum = \"0.15 mm\" }";
+        fixtures::run_board(xml, &fixtures::pdk(rule))
     }
 
     #[test]
@@ -352,24 +355,24 @@ limit = { minimum = "0.15 mm" }
     }
 
     #[test]
-    fn rejects_surviving_functional_copper_without_net_ownership() {
-        let resolution = Resolution::default();
-
-        let xml = BOARD.replace("<Set net=\"N2\">", "<Set>");
-        let ipc = Ipc2581::parse(&xml).unwrap();
-        let pdk = Pdk::parse(PDK).unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-
-        let error = Design::extract(&imported, ArtworkScope::Board, &rules, resolution)
-            .err()
-            .expect("unattributed copper must fail closed");
+    fn surviving_functional_copper_without_net_ownership_leaves_the_rule_incomplete() {
+        let results = run(&BOARD.replace("<Set net=\"N2\">", "<Set>"));
+        let rule = &results.rules[0];
+        assert!(matches!(
+            rule.status,
+            crate::commands::dfm::report::RuleStatus::Incomplete
+        ));
         assert!(
-            error
-                .to_string()
-                .contains("final functional copper without net attribution"),
-            "{error:#}"
+            rule.blocks_verdict(),
+            "unattributed copper must fail closed"
         );
+        assert!(
+            rule.skip_reason
+                .as_deref()
+                .unwrap()
+                .contains("final functional copper without net attribution")
+        );
+        assert!(results.findings.is_empty());
     }
 
     #[test]

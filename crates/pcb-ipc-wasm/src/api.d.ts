@@ -72,8 +72,9 @@ export interface PdkIdentity {
 }
 export interface DfmSummary {
   rules_configured: number; rules_passed: number; rules_warned: number;
-  rules_failed: number; rules_skipped: number; findings: number;
-  errors: number; warnings: number; waived: number;
+  rules_failed: number; rules_not_applicable: number; rules_incomplete: number;
+  findings: number;
+  errors: number; warnings: number; waived: number; unresolved: number;
 }
 export interface DfmFinding {
   id: string; rule_id: string; severity: "error" | "warning";
@@ -83,8 +84,16 @@ export interface DfmFinding {
   subjects: Array<Record<string, unknown>>;
   evidence: unknown;
   sites: Array<{ id: string; bounding_box: DfmBounds; [key: string]: unknown }>;
-  group_key: string | null;
+  /** Index into `DfmReport.frames`: whose coordinates the finding is in, and where it occurs. */
+  frame: number;
   [key: string]: unknown;
+}
+/** One Step of the checked layout, checked once in its own coordinates. */
+export interface DfmFrame {
+  step: string;
+  /** Everywhere the layout places the Step: `instance` indexes `layout.instances`
+   * (`null` is the checked frame itself) and `transform` is `[a, b, c, d, tx, ty]`. */
+  placements: Array<{ instance: number | null; transform: [number, number, number, number, number, number] }>;
 }
 export interface DfmBounds { min: { x: number; y: number }; max: { x: number; y: number }; }
 export interface DfmScene {
@@ -106,8 +115,11 @@ export interface DfmReport {
   };
   scene: DfmScene;
   summary: DfmSummary;
+  frames: DfmFrame[];
   findings: DfmFinding[];
-  rules: Array<{ id: string; status: "pass" | "warning" | "fail" | "skipped"; [key: string]: unknown }>;
+  /** Evidence that sites reference by `shared` index instead of repeating. */
+  shared_evidence: Array<Record<string, unknown>>;
+  rules: Array<{ id: string; status: "pass" | "warning" | "fail" | "not_applicable" | "incomplete"; [key: string]: unknown }>;
   waivers: null | { path: string; sha256: string; applied: number; expired: string[]; unmatched: string[] };
   [key: string]: unknown;
 }

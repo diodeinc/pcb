@@ -1,5 +1,5 @@
 use crate::Symbol;
-use pcb_ir::geom::{Mirror, Polarity};
+use pcb_ir::geom::{Mirror, Polarity, Span};
 
 /// Gerber load-mirroring state (`LM`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,8 +46,9 @@ pub struct ApertureDefinition {
     pub code: i32,
     pub template: ApertureTemplate,
     pub geometry: Option<ApertureGeometry>,
-    /// Aperture attributes active at definition time.
-    pub attributes: Vec<Attribute>,
+    /// Aperture attributes active at definition time, in
+    /// [`crate::GerberX2::attributes`].
+    pub attributes: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,36 +80,6 @@ pub enum ApertureTemplate {
     Block {
         objects: Vec<GraphicalObject>,
     },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ApertureMacro {
-    pub name: Symbol,
-    pub primitives: Vec<MacroPrimitive>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum MacroPrimitive {
-    Comment(Symbol),
-    VariableDefinition {
-        variable: usize,
-        expression: MacroExpression,
-    },
-    Shape {
-        code: i32,
-        parameters: Vec<MacroExpression>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum MacroExpression {
-    Number(f64),
-    Variable(usize),
-    UnaryMinus(Box<MacroExpression>),
-    Add(Box<MacroExpression>, Box<MacroExpression>),
-    Subtract(Box<MacroExpression>, Box<MacroExpression>),
-    Multiply(Box<MacroExpression>, Box<MacroExpression>),
-    Divide(Box<MacroExpression>, Box<MacroExpression>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -146,52 +117,6 @@ pub enum PlotMode {
     CounterclockwiseArc,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OperationCode {
-    Plot,
-    Move,
-    Flash,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CoordinateFields {
-    pub x: Option<i64>,
-    pub y: Option<i64>,
-    pub i: Option<i64>,
-    pub j: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Command {
-    Comment(Symbol),
-    Unit(Unit),
-    Format(CoordinateFormat),
-    ApertureDefinition(ApertureDefinition),
-    ApertureMacro(ApertureMacro),
-    SetCurrentAperture(i32),
-    PlotMode(PlotMode),
-    QuadrantModeMulti,
-    Operation {
-        fields: CoordinateFields,
-        code: OperationCode,
-    },
-    LoadPolarity(Polarity),
-    LoadMirroring(Mirroring),
-    LoadRotation(f64),
-    LoadScaling(f64),
-    BeginRegion,
-    EndRegion,
-    BeginBlockAperture(i32),
-    EndBlockAperture,
-    BeginStepRepeat(StepRepeat),
-    EndStepRepeat,
-    FileAttribute(Attribute),
-    ApertureAttribute(Attribute),
-    ObjectAttribute(Attribute),
-    DeleteAttribute(Option<Symbol>),
-    EndOfFile,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StepRepeat {
     pub x_repeats: i32,
@@ -200,33 +125,13 @@ pub struct StepRepeat {
     pub y_step: f64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct GraphicsState {
-    pub unit: Option<Unit>,
-    pub coordinate_format: Option<CoordinateFormat>,
-    pub current_point: Option<Point>,
-    pub current_aperture: Option<i32>,
-    pub plot_mode: Option<PlotMode>,
-    pub polarity: Polarity,
-    pub mirroring: Mirroring,
-    pub rotation_degrees: f64,
-    pub scaling: f64,
-}
-
-impl Default for GraphicsState {
-    fn default() -> Self {
-        Self {
-            unit: None,
-            coordinate_format: None,
-            current_point: None,
-            current_aperture: None,
-            plot_mode: None,
-            polarity: Polarity::Dark,
-            mirroring: Mirroring::None,
-            rotation_degrees: 0.0,
-            scaling: 1.0,
-        }
-    }
+/// One `%SR` block: a run of the object stream imaged at every position of
+/// a regular grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StepRepeatBlock {
+    pub repeat: StepRepeat,
+    /// The repeated run within [`crate::GerberX2::objects`].
+    pub objects: Span,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -265,13 +170,10 @@ pub struct GraphicalObject {
     pub mirroring: Mirroring,
     pub rotation_degrees: f64,
     pub scaling: f64,
-    pub aperture_attributes: Vec<Attribute>,
-    pub object_attributes: Vec<Attribute>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ObjectStream {
-    pub objects: Vec<GraphicalObject>,
+    /// Attribute sets in [`crate::GerberX2::attributes`]. Objects imaged
+    /// under one dictionary state share one set.
+    pub aperture_attributes: Span,
+    pub object_attributes: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]

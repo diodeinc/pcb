@@ -6,8 +6,9 @@ use pcb_ir::geom::{GeometryAccuracy, Resolution};
 fn accuracy_reaches_gerber_normalize_compare_and_render() {
     let directory = tempfile::tempdir().unwrap();
     let file = directory.path().join("curve.gbr");
-    // A round-ended arc requires preparation rather than just copying vertices.
-    let source = "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.2*%\nD10*\nG75*\nX1000000Y0D02*\nG03*\nX0Y1000000I-1000000J0D01*\nM02*\n";
+    // A round-ended arc requires preparation to normalize or compare, and a
+    // compound macro to render: its flashes share one composed aperture.
+    let source = "%FSLAX26Y26*%\n%MOMM*%\n%AMRING*\n1,1,1,0,0*\n1,0,0.5,0,0*\n%\n%ADD10C,0.2*%\n%ADD11RING*%\nD10*\nG75*\nX1000000Y0D02*\nG03*\nX0Y1000000I-1000000J0D01*\nD11*\nX3000000Y0D03*\nM02*\n";
     std::fs::write(&file, source).unwrap();
     let parsed = gerberx2::GerberX2::parse(source).unwrap();
     let mut renders = Vec::new();
@@ -59,10 +60,14 @@ fn accuracy_reaches_gerber_normalize_compare_and_render() {
             String::from_utf8_lossy(&render.stderr)
         );
         let artwork = gerberx2::geometry::extract_document(&parsed, resolution.accuracy).unwrap();
-        let mask = pcb_ir::dialects::artwork::compose_to_mask(&artwork, resolution).unwrap();
         assert_eq!(
             render.stdout,
-            pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::default()).as_bytes()
+            pcb_ir::render::artwork_svg(
+                &artwork,
+                &pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy)
+            )
+            .unwrap()
+            .as_bytes()
         );
         renders.push(render.stdout);
     }

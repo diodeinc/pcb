@@ -1,5 +1,6 @@
 pub mod dxf;
 pub mod render;
+pub mod step_artwork;
 
 use anyhow::{Context, Result, bail};
 use ipc2581::{Symbol, types::LayerFunction};
@@ -14,13 +15,10 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::geom::Resolution;
 use pcb_ir::geom::dfm::BBoxIndex;
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
+pub(crate) use pcb_ir::import::ipc2581::GeometryDocument;
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
 pub use pcb_ir::import::ipc2581::{extract_layer, extract_layer_for_view, extract_layout};
-pub(crate) use pcb_ir::import::ipc2581::{is_panel_step, step_repeat_transform};
-
-pub(crate) type GeometryDocument =
-    pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 /// V-score centerlines per scoring layer (`VCut` and `Score` functions) for
 /// the given artwork scope.
@@ -67,8 +65,7 @@ pub fn board_array_fabrication_profile(
     score_lines: &[VScoreLine],
     resolution: Resolution,
 ) -> Result<BoardArrayFabricationProfile> {
-    let (profile, _) =
-        board_array_fabrication_profile_with_debug(imported, layout, score_lines, resolution)?;
+    let (profile, _) = fabrication_profile(imported, layout, score_lines, resolution, false)?;
     Ok(profile)
 }
 
@@ -81,13 +78,26 @@ pub fn board_array_fabrication_profile_with_debug(
     BoardArrayFabricationProfile,
     pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
 )> {
+    fabrication_profile(imported, layout, score_lines, resolution, true)
+}
+
+fn fabrication_profile(
+    imported: &ImportedDesign,
+    layout: &GeometryDocument,
+    score_lines: &[VScoreLine],
+    resolution: Resolution,
+    debug: bool,
+) -> Result<(
+    BoardArrayFabricationProfile,
+    pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
+)> {
     let relief_features = board_array_relief_features(imported, score_lines, resolution)?;
     Ok(pcb_ir::dialects::ipc::board_array_fabrication_profile(
         layout,
         score_lines,
         pcb_ir::dialects::ipc::FabricationProfileOptions {
             relief_features,
-            debug: true,
+            debug,
         },
         resolution,
     )?)
@@ -224,7 +234,7 @@ struct ReliefRegion {
 }
 
 impl ReliefFeatureCandidate {
-    fn new(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Self {
+    fn new(doc: &GeometryDocument, feature: &Feature) -> Self {
         Self {
             contours: doc.placed_feature_contours(feature),
             bbox: feature.bbox,
@@ -276,7 +286,7 @@ fn relief_feature_layer(layer_function: LayerFunction) -> bool {
         || crate::layers::is_copper(layer_function)
 }
 
-fn is_through_cutout(feature: &Feature<Symbol>) -> bool {
+fn is_through_cutout(feature: &Feature) -> bool {
     matches!(feature.kind, FeatureKind::Hole | FeatureKind::Slot)
         && feature.bucket == FeatureBucket::Cutout
         && matches!(
@@ -288,7 +298,7 @@ fn is_through_cutout(feature: &Feature<Symbol>) -> bool {
         )
 }
 
-fn is_pad_envelope(feature: &Feature<Symbol>) -> bool {
+fn is_pad_envelope(feature: &Feature) -> bool {
     feature.kind == FeatureKind::Padstack
         && feature.polarity == Polarity::Dark
         && feature.intent.domain == FeatureDomain::Copper

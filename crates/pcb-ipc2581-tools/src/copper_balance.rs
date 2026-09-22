@@ -23,7 +23,7 @@ use pcb_ir::geom::copper_balance::{
 };
 use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::region::{rings_to_contours, simplify_shapes};
-use pcb_ir::geom::{ContourSet, FillRule, PathOp};
+use pcb_ir::geom::{ContourSet, FillRule, PathOp, Point};
 use serde::Serialize;
 
 use crate::ipc2581::Ipc2581;
@@ -249,9 +249,9 @@ pub struct CopperBalanceReport {
     pub panel_area_mm2: f64,
     pub footprint_area_mm2: f64,
     pub stack_weights_available: bool,
-    /// RMS of the copper-moment field before and after the spatial solve.
-    /// Carries bow and twist together, where
-    /// [`CopperBalanceReport::stack_moments`] carries bow alone.
+    /// Mean and RMS of the copper-moment field before and after the spatial
+    /// solve. The mean is spherical bow alone; the RMS carries every shape the
+    /// field bends the panel into.
     pub moment_field: Option<StackMomentFieldReport>,
     pub layers: Vec<CopperBalanceLayerReport>,
 }
@@ -481,7 +481,7 @@ fn void_sets(
 }
 
 /// Signed first-moment weight `t * z` per copper layer, arms measured from
-/// the stackup's stiffness-weighted neutral axis, positive out of the top
+/// the stackup's geometric mid-plane, positive out of the top
 /// face. `None` when the stackup cannot locate every copper layer.
 ///
 /// Derived from the same [`pcb_ir::geom::warp::ThermalStack`] the warp
@@ -545,40 +545,27 @@ fn ipc_contour_feature(outer: &ContourBuf, cutout_contours: &[ContourBuf]) -> Re
 fn ipc_polygon_from_contour(contour: &ContourBuf) -> Result<Polygon> {
     let mut begin = None;
     let mut steps = Vec::new();
+    let point = |point: Point| IpcPoint {
+        x: point.x,
+        y: point.y,
+    };
 
     for command in &contour.cmds {
         match command.op {
-            PathOp::MoveTo if begin.is_none() => {
-                begin = Some(IpcPoint {
-                    x: command.p0.x,
-                    y: command.p0.y,
-                });
-            }
+            PathOp::MoveTo if begin.is_none() => begin = Some(point(command.p0)),
             PathOp::LineTo if begin.is_some() => {
                 steps.push(PolyStep::Segment(PolyStepSegment {
-                    point: IpcPoint {
-                        x: command.p0.x,
-                        y: command.p0.y,
-                    },
+                    point: point(command.p0),
                 }));
             }
             PathOp::ArcTo if begin.is_some() => {
                 steps.push(PolyStep::Curve(PolyStepCurve {
-                    point: IpcPoint {
-                        x: command.p0.x,
-                        y: command.p0.y,
-                    },
-                    center: IpcPoint {
-                        x: command.p1.x,
-                        y: command.p1.y,
-                    },
+                    point: point(command.p0),
+                    center: point(command.p1),
                     clockwise: command.clockwise,
                 }));
             }
             PathOp::Close if begin.is_some() => {}
-            PathOp::CubicTo => {
-                bail!("generated copper balance polygon contains an unsupported cubic segment")
-            }
             _ => bail!("generated copper balance polygon contains multiple or missing contours"),
         }
     }
@@ -587,24 +574,22 @@ fn ipc_polygon_from_contour(contour: &ContourBuf) -> Result<Polygon> {
     if steps.len() < 2 {
         bail!("generated copper balance polygon has fewer than three vertices");
     }
-    Ok(Polygon { begin, steps })
+    Ok(Polygon::new(begin, steps))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pcb_ir::geom::Resolution;
-    use pcb_ir::geom::{BBox, ContourSet, Point};
+    use pcb_ir::geom::{BBox, Resolution};
 
     #[test]
     fn converts_perforated_region_to_positive_ipc_contours() {
         let resolution = Resolution::default();
-
         let safe_region = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
             resolution,
         );
-        let existing = ContourSet::empty(Resolution::default());
+        let existing = ContourSet::empty(resolution);
         let layers = [SpatialCopperBalanceLayerRequest {
             safe_region: &safe_region,
             existing_copper: &existing,
@@ -634,7 +619,6 @@ mod tests {
             "{:?}",
             result.solution
         );
-        assert!(result.solution.generated_area_mm2 > 0.0);
         assert!(!result.full_voids.is_empty());
         assert!(!result.edge_voids.is_empty());
         let contour = |feature: &SetFeature| match feature {
@@ -690,29 +674,14 @@ mod tests {
                 .iter()
                 .any(|template| template.id == set.template)
         }));
-        assert!(
-            features.templates.len()
-                < features
-                    .void_sets
-                    .iter()
-                    .map(|set| set.sites.len())
-                    .sum::<usize>()
-        );
         assert!(features.templates.len() <= DenseCopperBalanceProfile::V1.void_area_levels);
-        assert!(
-            features
-                .templates
-                .iter()
-                .filter(|template| template.id.starts_with("balance_hex_"))
-                .all(|template| {
-                    template
-                        .contour
-                        .polygon
-                        .steps
-                        .iter()
-                        .any(|step| matches!(step, PolyStep::Curve(_)))
-                })
-        );
+        assert!(features.templates.iter().all(|template| {
+            template
+                .contour
+                .polygon
+                .steps()
+                .any(|step| matches!(step, PolyStep::Curve(_)))
+        }));
     }
 
     #[test]

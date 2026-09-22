@@ -26,30 +26,16 @@ pub struct FunctionMode {
     pub level: Option<Level>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    UserDef,
-    Bom,
-    Stackup,
-    Fabrication,
-    Assembly,
-    Test,
-    Stencil,
-    Dfx,
-}
-
-impl Mode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::UserDef => "USERDEF",
-            Self::Bom => "BOM",
-            Self::Stackup => "STACKUP",
-            Self::Fabrication => "FABRICATION",
-            Self::Assembly => "ASSEMBLY",
-            Self::Test => "TEST",
-            Self::Stencil => "STENCIL",
-            Self::Dfx => "DFX",
-        }
+ipc_enum! {
+    pub enum Mode("mode") {
+        UserDef = "USERDEF",
+        Bom = "BOM",
+        Stackup = "STACKUP",
+        Fabrication = "FABRICATION",
+        Assembly = "ASSEMBLY",
+        Test = "TEST",
+        Stencil = "STENCIL",
+        Dfx = "DFX",
     }
 }
 

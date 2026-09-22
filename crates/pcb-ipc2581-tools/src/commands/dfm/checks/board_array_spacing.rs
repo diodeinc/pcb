@@ -16,9 +16,9 @@
 //! boundary-crossing test inside the segment-pair distance.
 //!
 //! The check requires `dist(Aᵢ, Aⱼ) ≥ L` for every unordered pair of
-//! direct board-array instances of the panel's root step. A panel-kind
-//! child that places a single board is per-board packaging, not an array,
-//! and is excluded at extraction. Bounds distance is a lower bound on
+//! board arrays the design's Step places directly. A panel-kind child that
+//! places a single board is per-board packaging, not an array, and is
+//! excluded at extraction. Bounds distance is a lower bound on
 //! region distance, so a pair whose bounds already clear `L` is proven
 //! clear without walking its boundary segments; every pair counts as
 //! checked either way.
@@ -64,27 +64,18 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> anyhow::Result<Evaluat
                     Evidence::bounds("second_board_array", second.region.bbox),
                 ],
                 sites: if violates(&distance, limit_mm) {
-                    region_clearance_sites(&first.region, &second.region, limit_mm)?
-                        .into_iter()
-                        .map(|site| {
-                            linework_clearance::report_site(
-                                site,
-                                Vec::new(),
-                                limit_mm,
-                                design.resolution,
-                            )
-                        })
-                        .collect::<anyhow::Result<Vec<_>>>()?
-                        .into_iter()
-                        .collect()
+                    linework_clearance::report_sites(
+                        region_clearance_sites(&first.region, &second.region, limit_mm)?,
+                        &[],
+                        limit_mm,
+                        design.resolution,
+                    )?
                 } else {
                     Vec::new()
                 },
             })
         })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .collect();
+        .collect::<anyhow::Result<_>>()?;
     Ok(Evaluation {
         checked: pairs.count(),
         measured,
@@ -92,24 +83,19 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> anyhow::Result<Evaluat
 }
 
 fn board_array_subject(array: &BoardArray, role: &'static str) -> Subject {
+    let locator = SourceLocator {
+        step: Some(array.name.clone()),
+        layer: None,
+        set_index: None,
+        feature_index: None,
+        instance_index: Some(array.instance_index),
+    };
     Subject {
         role,
         kind: "board_array_outline",
         name: Some(array.name.clone()),
-        source: Some(SourceLocator {
-            step: Some(array.name.clone()),
-            layer: None,
-            set_index: None,
-            feature_index: None,
-            instance_index: Some(array.instance_index),
-        }),
-        provenance: Some(SourceLocator {
-            step: Some(array.name.clone()),
-            layer: None,
-            set_index: None,
-            feature_index: None,
-            instance_index: Some(array.instance_index),
-        }),
+        source: Some(locator.clone()),
+        provenance: Some(locator),
         ..Subject::default()
     }
 }

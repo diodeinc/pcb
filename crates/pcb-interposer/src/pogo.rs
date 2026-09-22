@@ -98,8 +98,7 @@ impl PogoTemplate {
             let close = layers + piece[layers..].find(')').expect("layers list closes");
             bound.push_str(&piece[..=close]);
             bound.push_str(&format!(
-                "\n\t\t(net {} {})",
-                net.0,
+                "\n\t\t(net {})",
                 pcb_ir::dialects::kicad::quote(&net.1)
             ));
             bound.push_str(&piece[close + 1..]);
@@ -143,7 +142,7 @@ mod tests {
         assert!(text.starts_with("(footprint \"Interposer:806-22-001-30-0xx191\"\n"));
         assert!(text.contains("(at 12.5 30)"));
         assert!(text.contains("(property \"Reference\" \"P7\""));
-        assert!(text.contains("(net 3 \"B0.TP_X.TP\")"));
+        assert!(text.contains("(net \"B0.TP_X.TP\")"));
         // File-only header lines are stripped; the embedded STEP model
         // rides along verbatim.
         assert!(!text.contains("(version"));
@@ -157,7 +156,7 @@ mod tests {
         )
         .expect("alt template validates");
         let alt_text = alt.stamp([0.0, 0.0], "P1", (5, "N".into()), &mut UuidGen::new());
-        assert!(alt_text.contains("(layers \"*.Cu\" \"*.Mask\" \"F.Paste\")\n\t\t(net 5 \"N\")"));
+        assert!(alt_text.contains("(layers \"*.Cu\" \"*.Mask\" \"F.Paste\")\n\t\t(net \"N\")"));
 
         // A pad without a layers list is rejected at load.
         assert!(

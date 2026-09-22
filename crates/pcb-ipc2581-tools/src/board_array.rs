@@ -1,61 +1,58 @@
-use pcb_ir::geom::Resolution;
-use std::fmt::Write;
+use std::collections::HashMap;
 
-use anyhow::{Context, Result};
-use ipc2581::types::LayerFunction;
-use pcb_ir::dialects::ipc::{ArtworkScope, LayoutStep, LayoutStepKind};
-use pcb_ir::geom::{Affine2, BBox, ContourBuf, Point};
-use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, import_design};
-use pcb_ir::render::svg_path_data;
+use anyhow::Result;
+use pcb_ir::dialects::artwork::{self, Geometry, Object};
+use pcb_ir::dialects::ipc::process::{normalize_for_artwork, retain_features};
+use pcb_ir::dialects::ipc::{
+    ArtworkScope, ArtworkTarget, Feature, LayoutStepKind, lower_layer_to_artwork_objects_with,
+};
+use pcb_ir::dialects::{LayerRole, Side};
+use pcb_ir::geom::{BBox, ContourBuf, FillRule, LineCap, Paint, Point, Polarity, Resolution};
+use pcb_ir::geom::{PathCmd, StrokeStyle};
+use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign, LayerId};
+use pcb_ir::render::{LayerStyle, RenderOptions};
 
-use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
-use crate::utils::format::fmt_num;
-
-type GeometryDocument =
-    pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
+use crate::accessors::{BoardArrayGridInfo, IpcAccessor};
+use crate::layers::layer_role;
 
 const OVERVIEW_STROKE_WIDTH_MM: f64 = 0.1;
-const OVERVIEW_VIEWBOX_PADDING_MM: f64 = 1.0;
+
+fn outline() -> Paint {
+    Paint::Stroke(StrokeStyle::round(OVERVIEW_STROKE_WIDTH_MM))
+}
+
+const fn style(color: u32, opacity: f64) -> LayerStyle {
+    LayerStyle { color, opacity }
+}
+
+const BOARD_FILL: LayerStyle = style(0xf1f5f9, 1.0);
+const RAIL_GUIDE: LayerStyle = style(0xcbd5e1, 0.62);
+const ARRAY_OUTLINE: LayerStyle = style(0x111827, 1.0);
+const BOARD_OUTLINE: LayerStyle = style(0x064e3b, 1.0);
+/// The edge of the material the fabrication profile removes: routed slots,
+/// perforations and V-score reliefs.
+const MATERIAL_REMOVAL: LayerStyle = style(0x111827, 0.95);
+const VSCORE_GUIDE: LayerStyle = style(0xdc2626, 1.0);
 
 pub fn render_board_array_overview_svg(
     accessor: &IpcAccessor<'_>,
-    resolution: Resolution,
-) -> Result<Option<String>> {
-    let Some(layout) = accessor.board_layout_info() else {
-        return Ok(None);
-    };
-    let Some(board_array) = layout.board_array.as_ref() else {
-        return Ok(None);
-    };
-    let doc = crate::geometry::extract_layout(accessor.ipc())
-        .context("failed to extract board-array geometry for overview")?;
-    let Some(dimensions) = board_array.dimensions.as_ref() else {
-        return Ok(None);
-    };
-    let array_height = dimensions.height_mm();
-    let imported = import_design(accessor.ipc(), resolution)?;
-    let layer_overlays = board_array_layer_overlays(&imported, array_height, resolution)?;
-    render_board_array_svg(&imported, board_array, &doc, &layer_overlays, resolution)
-}
-
-fn render_board_array_svg(
     imported: &ImportedDesign,
-    board_array: &BoardArrayInfo,
-    doc: &GeometryDocument,
-    layer_overlays: &[BoardArrayLayerOverlay],
     resolution: Resolution,
 ) -> Result<Option<String>> {
-    let Some(dimensions) = board_array.dimensions.as_ref() else {
+    let Some(grid) = accessor
+        .board_layout_info()
+        .and_then(|layout| layout.board_array?.grid)
+    else {
         return Ok(None);
     };
-    let Some(grid) = board_array.grid.as_ref() else {
+    let Some(doc) = accessor.layout() else {
         return Ok(None);
     };
-    let array_width = dimensions.width_mm();
-    let array_height = dimensions.height_mm();
-
-    if array_width <= 0.0
-        || array_height <= 0.0
+    let Some(panel) = pcb_ir::dialects::ipc::panel_bbox(doc) else {
+        return Ok(None);
+    };
+    if panel.width() <= 0.0
+        || panel.height() <= 0.0
         || grid.board_width.mm() <= 0.0
         || grid.board_height.mm() <= 0.0
         || grid.columns == 0
@@ -64,578 +61,262 @@ fn render_board_array_svg(
         return Ok(None);
     }
 
-    let board_fill_paths = board_instance_paths(doc, array_height, true)?;
-    let board_outline_paths = board_instance_paths(doc, array_height, false)?;
-    if board_outline_paths.is_empty() {
+    let mut overview = Overview::default();
+    let [board_fills, board_outlines] = overview.boards(doc);
+    if board_fills.is_empty() {
         return Ok(None);
     }
-    let profile_paths = board_array_profile_paths(imported, doc, array_height, resolution)?;
-    let viewbox = overview_viewbox(array_width, array_height, layer_overlays);
-    let viewbox_width = viewbox.width();
-    let viewbox_height = viewbox.height();
-
-    let mut svg = String::new();
-    writeln!(
-        svg,
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{} {} {} {}' role='img' data-board-array-overview='true'>",
-        fmt_num(viewbox.min.x),
-        fmt_num(viewbox.min.y),
-        fmt_num(viewbox_width),
-        fmt_num(viewbox_height)
-    )
-    .unwrap();
-    writeln!(
-        svg,
-        "  <title>{}</title>",
-        escape_xml(&format!(
-            "Board array overview: {} columns by {} rows",
-            grid.columns, grid.rows
-        ))
-    )
-    .unwrap();
-    writeln!(
-        svg,
-        "  <rect x='{}' y='{}' width='{}' height='{}' fill='#ffffff'/>",
-        fmt_num(viewbox.min.x),
-        fmt_num(viewbox.min.y),
-        fmt_num(viewbox_width),
-        fmt_num(viewbox_height)
-    )
-    .unwrap();
-
-    write_board_paths(
-        &mut svg,
-        &board_fill_paths,
-        "board-fill",
-        "#f1f5f9",
-        "none",
-        0.0,
-    );
-
-    write_rail_guides(
-        &mut svg,
-        grid,
-        array_width,
-        array_height,
-        OVERVIEW_STROKE_WIDTH_MM,
-    );
-    for outline_path in &profile_paths.array_outlines {
-        writeln!(
-            svg,
-            "  <path class='board-array-outline' d='{outline_path}' fill='none' stroke='#111827' stroke-width='{}'/>",
-            fmt_num(OVERVIEW_STROKE_WIDTH_MM)
-        )
-        .unwrap();
-    }
-
-    write_board_paths(
-        &mut svg,
-        &board_outline_paths,
-        "board-outline",
-        "none",
-        "#064e3b",
-        OVERVIEW_STROKE_WIDTH_MM,
-    );
-    write_profile_cutout_paths(&mut svg, &profile_paths.material_removal);
-    write_layer_overlays(&mut svg, layer_overlays);
-
-    writeln!(svg, "</svg>").unwrap();
-    Ok(Some(svg))
-}
-
-struct BoardArrayLayerOverlay {
-    function: LayerFunction,
-    paths: Vec<BoardArrayLayerPath>,
-}
-
-struct BoardArrayLayerPath {
-    data: String,
-    bbox: BBox,
-    stroke_width: f64,
-    filled: bool,
-    stroked: bool,
-    vscore: bool,
-}
-
-struct BoardArrayLayerStyle {
-    class_name: &'static str,
-    fill: &'static str,
-    stroke: &'static str,
-    fill_opacity: f64,
-    stroke_opacity: f64,
-}
-
-fn board_array_layer_overlays(
-    imported: &ImportedDesign,
-    array_height: f64,
-    resolution: Resolution,
-) -> anyhow::Result<Vec<BoardArrayLayerOverlay>> {
-    Ok(imported
-        .layer_definitions
-        .iter()
-        .enumerate()
-        .map(|(layer_index, layer)| {
-            let doc = imported
-                .materialize_layer(LayerId(layer_index as u32), ArtworkScope::ArraySupport)?;
-            let Some(mut native) = crate::geometry::render::native_layer_document(&doc)? else {
-                return Ok(None);
-            };
-            pcb_ir::dialects::ipc::process::compose_for_rendering(&mut native, resolution)?;
-            let paths = layer_paths(&native, array_height, resolution)?;
-            Ok::<_, anyhow::Error>((!paths.is_empty()).then_some(BoardArrayLayerOverlay {
-                function: layer.layer_function,
-                paths,
-            }))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect())
-}
-
-struct BoardArrayProfileSvgPaths {
-    array_outlines: Vec<String>,
-    material_removal: Vec<String>,
-}
-
-fn board_array_profile_paths(
-    imported: &ImportedDesign,
-    doc: &GeometryDocument,
-    array_height: f64,
-    resolution: Resolution,
-) -> Result<BoardArrayProfileSvgPaths> {
     let score_lines = crate::geometry::board_array_vscore_lines(imported)?;
     let profile =
         crate::geometry::board_array_fabrication_profile(imported, doc, &score_lines, resolution)?;
-    let transform = y_flip_transform(array_height);
 
-    Ok(BoardArrayProfileSvgPaths {
-        array_outlines: payload_groups_path_data(&profile.array_outlines, transform)?,
-        material_removal: payloads_path_data(&profile.material_removal, transform)?
-            .into_iter()
-            .collect(),
-    })
-}
-
-fn payload_groups_path_data(
-    payload_groups: &[Vec<ContourBuf>],
-    transform: Affine2,
-) -> anyhow::Result<Vec<String>> {
-    Ok(payload_groups
-        .iter()
-        .map(|payloads| payloads_path_data(payloads, transform))
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect())
-}
-
-fn layer_paths(
-    doc: &GeometryDocument,
-    panel_height: f64,
-    resolution: Resolution,
-) -> anyhow::Result<Vec<BoardArrayLayerPath>> {
-    let Some(layer) = doc.layers.first() else {
-        return Ok(Vec::new());
-    };
-    let transform = y_flip_transform(panel_height);
-
-    // V-score features draw as stroked guides; everything else composes
-    // through the shared layer image fold, which resolves paint polarity.
-    let features = layer.features.slice(&doc.features);
-    let mut paths = features
-        .iter()
-        .filter(|feature| feature.is_vscore())
-        .map(|feature| feature_paths(doc, feature, transform))
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-
-    let image_features = features
-        .iter()
-        .filter(|feature| !feature.is_vscore())
-        .cloned()
-        .collect::<Vec<_>>();
-    if !image_features.is_empty() {
-        let mut image = doc.clone();
-        image.layers[0].features = pcb_ir::geom::Span::new(0, image_features.len() as u32);
-        image.features = image_features;
-        let mask = crate::geometry::render::layer_mask(
-            &image,
-            false,
-            pcb_ir::dialects::ipc::ProfileSet::RootOnly,
-            resolution,
-        )?;
-        paths.extend(mask_paths(&mask, transform)?);
+    let guide = Paint::Stroke(StrokeStyle::new(OVERVIEW_STROKE_WIDTH_MM, LineCap::Butt));
+    overview.place_layer("Boards", BOARD_FILL, board_fills);
+    overview.draw_layer("Rails", RAIL_GUIDE, guide, rail_guides(&grid, panel));
+    overview.draw_layer(
+        "Array outline",
+        ARRAY_OUTLINE,
+        outline(),
+        profile.array_outlines,
+    );
+    overview.place_layer("Board outlines", BOARD_OUTLINE, board_outlines);
+    overview.draw_layer(
+        "Material removal",
+        MATERIAL_REMOVAL,
+        outline(),
+        [profile.material_removal],
+    );
+    for layer_index in 0..imported.layer_definitions.len() {
+        let support =
+            imported.materialize_layer(LayerId(layer_index as u32), ArtworkScope::ArraySupport)?;
+        overview.draw_support_layer(support, resolution)?;
     }
 
-    Ok(paths)
+    artwork::normalize_bounds(&mut overview.artwork);
+    let options = RenderOptions::default()
+        .with_accuracy(resolution.accuracy)
+        .with_id_prefix("overview-")
+        .with_styles(overview.styles);
+    Ok(Some(pcb_ir::render::artwork_svg(
+        &overview.artwork,
+        &options,
+    )?))
 }
 
-fn mask_paths(
-    mask: &pcb_ir::dialects::mask::Document<LayerFunction>,
-    transform: Affine2,
-) -> anyhow::Result<Vec<BoardArrayLayerPath>> {
-    let Some(layer) = mask.layers.first() else {
-        return Ok(Vec::new());
-    };
+/// The overview as artwork: drawing layers first, then every layer's array
+/// support geometry, each with the style it draws in.
+#[derive(Default)]
+struct Overview {
+    artwork: artwork::Document<(), Option<ipc2581::Symbol>>,
+    styles: Vec<LayerStyle>,
+}
 
-    Ok(mask
-        .shapes(layer)
-        .iter()
-        .map(|shape| {
-            let contours = mask
-                .arena
-                .contour_bufs(shape.contours)
-                .into_iter()
-                .map(|contour| contour.transformed(transform))
-                .collect::<Vec<_>>();
-            let data = svg_path_data(&contours);
-            Ok::<_, anyhow::Error>((!data.is_empty()).then_some(BoardArrayLayerPath {
-                data,
-                bbox: transform_bbox(shape.bbox, transform),
-                stroke_width: 0.0,
-                filled: true,
-                stroked: false,
-                vscore: false,
-            }))
+impl Overview {
+    fn layer(&mut self, name: &str, style: LayerStyle) -> u32 {
+        self.role_layer(name, LayerRole::Other, style)
+    }
+
+    fn role_layer(&mut self, name: &str, role: LayerRole, style: LayerStyle) -> u32 {
+        self.styles.push(style);
+        self.artwork
+            .push_layer(artwork::Layer::new(name, role, Side::None))
+    }
+
+    fn place_layer(
+        &mut self,
+        name: &str,
+        style: LayerStyle,
+        geometry: impl IntoIterator<Item = Geometry>,
+    ) {
+        let layer = self.layer(name, style);
+        for geometry in geometry {
+            self.artwork
+                .push_object(layer, Object::new(Polarity::Dark, geometry));
+        }
+    }
+
+    /// Every placed board, as its fill and as its outline. A board Step's
+    /// profile is one block, so the array draws its board once.
+    fn boards(&mut self, doc: &GeometryDocument) -> [Vec<Geometry>; 2] {
+        let mut blocks = HashMap::new();
+        let placed = doc
+            .layout
+            .instances
+            .iter()
+            .filter_map(|instance| {
+                let step = doc.layout.steps.get(instance.child_step as usize)?;
+                if step.kind != LayoutStepKind::Board {
+                    return None;
+                }
+                let blocks = *blocks
+                    .entry(instance.child_step)
+                    .or_insert_with(|| self.board_blocks(doc, instance.child_step));
+                Some((blocks?, instance.transform))
+            })
+            .collect::<Vec<_>>();
+        [0, 1].map(|kind| {
+            placed
+                .iter()
+                .map(|&(blocks, transform)| Geometry::Instance {
+                    block: blocks[kind],
+                    transform,
+                })
+                .collect()
         })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect())
-}
+    }
 
-fn board_instance_paths(
-    doc: &GeometryDocument,
-    panel_height: f64,
-    include_cutouts: bool,
-) -> anyhow::Result<Vec<String>> {
-    let flip_y = y_flip_transform(panel_height);
-    let mut paths = Vec::new();
-
-    for instance in &doc.layout.instances {
-        let Some(step) = doc.layout.steps.get(instance.child_step as usize) else {
-            continue;
+    /// A board Step's profile as a filled block, cutouts open, and as a
+    /// block of its outer outline; `None` for a Step without a profile.
+    fn board_blocks(&mut self, doc: &GeometryDocument, step: u32) -> Option<[u32; 2]> {
+        let profiles = doc.layout.steps[step as usize]
+            .profiles
+            .indices()
+            .filter_map(|profile| doc.profiles.get(profile as usize))
+            .collect::<Vec<_>>();
+        let contours = |paths: &mut dyn Iterator<Item = u32>| {
+            paths
+                .flat_map(|path| doc.arena.path_contours(doc.arena.path(path)))
+                .collect::<Vec<_>>()
         };
-        if step.kind != LayoutStepKind::Board {
-            continue;
+        let outer = contours(&mut profiles.iter().map(|profile| profile.outer_path));
+        if outer.is_empty() {
+            return None;
         }
-
-        let transform = flip_y.concat(instance.transform);
-        if let Some(path) = step_profile_path_data(doc, step, transform, include_cutouts)? {
-            paths.push(path);
-        }
-    }
-
-    Ok(paths)
-}
-
-fn y_flip_transform(panel_height: f64) -> Affine2 {
-    Affine2 {
-        m00: 1.0,
-        m01: 0.0,
-        m02: 0.0,
-        m10: 0.0,
-        m11: -1.0,
-        m12: panel_height,
-    }
-}
-
-fn step_profile_path_data(
-    doc: &GeometryDocument,
-    step: &LayoutStep<ipc2581::Symbol>,
-    transform: Affine2,
-    include_cutouts: bool,
-) -> anyhow::Result<Option<String>> {
-    let mut path_data = String::new();
-    for profile_index in step.profiles.indices() {
-        let Some(profile) = doc.profiles.get(profile_index as usize) else {
-            return Ok(None);
+        let cutouts = contours(&mut profiles.iter().flat_map(|profile| {
+            let cutouts = profile.cutouts.slice(&doc.profile_cutouts);
+            cutouts.iter().map(|cutout| cutout.path)
+        }));
+        let filled = outer.iter().cloned().chain(cutouts).collect::<Vec<_>>();
+        let fill = Paint::Fill {
+            rule: FillRule::EvenOdd,
         };
-        append_transformed_path_data(&mut path_data, doc, profile.outer_path, transform)?;
-        if !include_cutouts {
-            continue;
-        }
-        for cutout in profile.cutouts.slice(&doc.profile_cutouts) {
-            append_transformed_path_data(&mut path_data, doc, cutout.path, transform)?;
-        }
-    }
-
-    Ok((!path_data.is_empty()).then_some(path_data))
-}
-
-fn overview_viewbox(
-    array_width: f64,
-    array_height: f64,
-    layer_overlays: &[BoardArrayLayerOverlay],
-) -> BBox {
-    let mut bbox = BBox {
-        min: Point::new(0.0, 0.0),
-        max: Point::new(array_width, array_height),
-    };
-    for path in layer_overlays
-        .iter()
-        .flat_map(|overlay| overlay.paths.iter())
-        .filter(|path| !path.bbox.is_empty())
-    {
-        bbox = bbox.union(path.bbox);
-    }
-    bbox.expand(OVERVIEW_VIEWBOX_PADDING_MM)
-}
-
-fn feature_paths(
-    doc: &GeometryDocument,
-    feature: &pcb_ir::dialects::ipc::Feature<ipc2581::Symbol>,
-    transform: Affine2,
-) -> anyhow::Result<Vec<BoardArrayLayerPath>> {
-    Ok(feature
-        .paths
-        .indices()
-        .map(|path_index| {
-            let Some(path) = doc.arena.paths.get(path_index as usize) else {
-                return Ok(None);
-            };
-            let mut data = String::new();
-            append_transformed_path_data(&mut data, doc, path_index, transform)?;
-            Ok::<_, anyhow::Error>((!data.is_empty()).then_some(BoardArrayLayerPath {
-                data,
-                bbox: transform_bbox(path.bbox, transform),
-                stroke_width: path.stroke().map(|stroke| stroke.width).unwrap_or(0.0),
-                filled: path.is_filled(),
-                stroked: path.is_stroked(),
-                vscore: feature.is_vscore(),
-            }))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect())
-}
-
-fn transform_bbox(bbox: BBox, transform: Affine2) -> BBox {
-    if bbox.is_empty() {
-        return BBox::empty();
-    }
-
-    [
-        bbox.min,
-        Point::new(bbox.max.x, bbox.min.y),
-        bbox.max,
-        Point::new(bbox.min.x, bbox.max.y),
-    ]
-    .into_iter()
-    .fold(BBox::empty(), |mut transformed, point| {
-        transformed.include_point(transform.transform_point(point));
-        transformed
-    })
-}
-
-fn append_transformed_path_data(
-    path_data: &mut String,
-    doc: &GeometryDocument,
-    path_index: u32,
-    transform: Affine2,
-) -> anyhow::Result<Option<()>> {
-    let Some(path) = doc.arena.paths.get(path_index as usize) else {
-        return Ok(None);
-    };
-    let contours = doc
-        .arena
-        .path_contours(path)
-        .into_iter()
-        .map(|contour| contour.transformed(transform))
-        .collect::<Vec<_>>();
-    if !path_data.is_empty() {
-        path_data.push(' ');
-    }
-    path_data.push_str(&svg_path_data(&contours));
-    Ok(Some(()))
-}
-
-fn payloads_path_data(
-    payloads: &[ContourBuf],
-    transform: Affine2,
-) -> anyhow::Result<Option<String>> {
-    let transformed = payloads
-        .iter()
-        .map(|payload| payload.clone().transformed(transform))
-        .collect::<Vec<_>>();
-    let path_data = svg_path_data(&transformed);
-    Ok((!path_data.is_empty()).then_some(path_data))
-}
-
-fn write_board_paths(
-    svg: &mut String,
-    paths: &[String],
-    class_name: &str,
-    fill: &str,
-    stroke: &str,
-    stroke_width: f64,
-) {
-    for path in paths {
-        writeln!(
-            svg,
-            "  <path class='{class_name}' d='{path}' fill='{fill}' stroke='{stroke}' stroke-width='{}' fill-rule='evenodd'/>",
-            fmt_num(stroke_width)
+        Some(
+            [(fill, filled), (outline(), outer)].map(|(paint, contours)| {
+                let block = self.artwork.push_block();
+                let shape = Object::new(Polarity::Dark, self.shape(paint, contours));
+                self.artwork.push_block_object(block, shape);
+                block
+            }),
         )
-        .unwrap();
     }
-}
 
-fn write_layer_overlays(svg: &mut String, layer_overlays: &[BoardArrayLayerOverlay]) {
-    for overlay in layer_overlays {
-        for path in &overlay.paths {
-            let style = board_array_layer_style(overlay.function, path.vscore);
-            let force_stroke = path.vscore;
-            if force_stroke || (path.stroked && !path.filled) {
-                writeln!(
-                    svg,
-                    "  <path class='array-layer {}' d='{}' fill='none' stroke='{}' stroke-width='{}' stroke-linecap='round' stroke-linejoin='round' opacity='{}'/>",
-                    style.class_name,
-                    path.data,
-                    style.stroke,
-                    fmt_num(path.stroke_width.max(OVERVIEW_STROKE_WIDTH_MM)),
-                    fmt_num(style.stroke_opacity)
-                )
-                .unwrap();
-            } else if path.filled {
-                writeln!(
-                    svg,
-                    "  <path class='array-layer {}' d='{}' fill='{}' fill-opacity='{}' stroke='none' fill-rule='evenodd'/>",
-                    style.class_name,
-                    path.data,
-                    style.fill,
-                    fmt_num(style.fill_opacity)
-                )
-                .unwrap();
+    fn shape(&mut self, paint: Paint, contours: Vec<ContourBuf>) -> Geometry {
+        let path = self.artwork.push_path(paint, contours);
+        match paint {
+            Paint::Stroke(_) => Geometry::Stroke { path },
+            _ => Geometry::Region { path },
+        }
+    }
+
+    fn draw_layer(
+        &mut self,
+        name: &str,
+        style: LayerStyle,
+        paint: Paint,
+        shapes: impl IntoIterator<Item = Vec<ContourBuf>>,
+    ) {
+        let layer = self.layer(name, style);
+        for contours in shapes {
+            self.draw(layer, paint, contours);
+        }
+    }
+
+    fn draw(&mut self, layer: u32, paint: Paint, contours: Vec<ContourBuf>) {
+        if contours.is_empty() {
+            return;
+        }
+        let shape = Object::new(Polarity::Dark, self.shape(paint, contours));
+        self.artwork.push_object(layer, shape);
+    }
+
+    /// Draw the features native to a single-layer support document. V-score
+    /// features draw as guides wide enough to see; everything else lowers as
+    /// the artwork it is, so paint polarity images as it fabricates.
+    fn draw_support_layer(
+        &mut self,
+        mut doc: GeometryDocument,
+        resolution: Resolution,
+    ) -> Result<()> {
+        let Some(layer) = doc.layers.first() else {
+            return Ok(());
+        };
+        let (name, source_layer) = (layer.name.clone(), layer.source_layer_ref);
+        let role = layer_role(layer.layer_function);
+        let native = |feature: &Feature| feature.source_layer_ref == Some(source_layer);
+
+        let scores = doc
+            .features
+            .iter()
+            .filter(|feature| native(feature) && feature.is_vscore())
+            .flat_map(|feature| vscore_guides(&doc, feature))
+            .collect::<Vec<_>>();
+        if !scores.is_empty() {
+            let guides = self.layer(&format!("{name} guides"), VSCORE_GUIDE);
+            for (stroke, contours) in scores {
+                self.draw(guides, Paint::Stroke(stroke), contours);
             }
         }
-    }
-}
 
-fn write_profile_cutout_paths(svg: &mut String, paths: &[String]) {
-    for path in paths {
-        writeln!(
-            svg,
-            "  <path class='board-array-profile-cutout' d='{path}' fill='#ffffff' stroke='#111827' stroke-width='{}' stroke-linejoin='round' fill-rule='nonzero' opacity='0.95'/>",
-            fmt_num(OVERVIEW_STROKE_WIDTH_MM)
-        )
-        .unwrap();
-    }
-}
-
-fn board_array_layer_style(function: LayerFunction, vscore: bool) -> BoardArrayLayerStyle {
-    if vscore {
-        return BoardArrayLayerStyle {
-            class_name: "vcut-guide array-layer-vscore",
-            fill: "none",
-            stroke: "#dc2626",
-            fill_opacity: 0.0,
-            stroke_opacity: 1.0,
-        };
-    }
-
-    match function {
-        LayerFunction::Drill => BoardArrayLayerStyle {
-            class_name: "array-layer-drill",
-            fill: "#2563eb",
-            stroke: "#1d4ed8",
-            fill_opacity: 0.85,
-            stroke_opacity: 0.85,
-        },
-        LayerFunction::Conductor
-        | LayerFunction::CondFilm
-        | LayerFunction::CondFoil
-        | LayerFunction::Plane
-        | LayerFunction::Signal
-        | LayerFunction::Mixed => BoardArrayLayerStyle {
-            class_name: "array-layer-copper",
-            fill: "#d87822",
-            stroke: "#b45309",
-            fill_opacity: 0.90,
-            stroke_opacity: 0.85,
-        },
-        LayerFunction::Soldermask => BoardArrayLayerStyle {
-            class_name: "array-layer-mask",
-            fill: "#159447",
-            stroke: "#15803d",
-            fill_opacity: 0.55,
-            stroke_opacity: 0.70,
-        },
-        LayerFunction::Solderpaste | LayerFunction::Pastemask => BoardArrayLayerStyle {
-            class_name: "array-layer-paste",
-            fill: "#64748b",
-            stroke: "#475569",
-            fill_opacity: 0.90,
-            stroke_opacity: 0.85,
-        },
-        LayerFunction::Silkscreen | LayerFunction::Legend => BoardArrayLayerStyle {
-            class_name: "array-layer-legend",
-            fill: "#111827",
-            stroke: "#111827",
-            fill_opacity: 0.95,
-            stroke_opacity: 0.90,
-        },
-        _ => BoardArrayLayerStyle {
-            class_name: "array-layer-fab",
-            fill: "#334155",
-            stroke: "#334155",
-            fill_opacity: 0.85,
-            stroke_opacity: 0.85,
-        },
-    }
-}
-
-fn write_rail_guides(
-    svg: &mut String,
-    grid: &BoardArrayGridInfo,
-    array_width: f64,
-    array_height: f64,
-    stroke_width: f64,
-) {
-    for x in [
-        grid.edge_rail.left.mm(),
-        array_width - grid.edge_rail.right.mm(),
-    ] {
-        if x > 0.0 && x < array_width {
-            writeln!(
-                svg,
-                "  <line class='rail-guide' x1='{}' y1='0' x2='{}' y2='{}' stroke='#cbd5e1' stroke-width='{}' opacity='0.62'/>",
-                fmt_num(x),
-                fmt_num(x),
-                fmt_num(array_height),
-                fmt_num(stroke_width)
-            )
-            .unwrap();
+        retain_features(&mut doc, |feature| native(feature) && !feature.is_vscore());
+        if doc.features.is_empty() {
+            return Ok(());
         }
-    }
-    for y in [
-        grid.edge_rail.bottom.mm(),
-        array_height - grid.edge_rail.top.mm(),
-    ] {
-        if y > 0.0 && y < array_height {
-            writeln!(
-                svg,
-                "  <line class='rail-guide' x1='0' y1='{}' x2='{}' y2='{}' stroke='#cbd5e1' stroke-width='{}' opacity='0.62'/>",
-                fmt_num(y),
-                fmt_num(array_width),
-                fmt_num(y),
-                fmt_num(stroke_width)
-            )
-            .unwrap();
+        normalize_for_artwork(&mut doc, resolution)?;
+        let objects = lower_layer_to_artwork_objects_with(
+            &doc,
+            0,
+            &mut self.artwork,
+            &ArtworkTarget::default(),
+            &|_, feature| feature.net,
+        );
+        if !objects.is_empty() {
+            let layer = self.role_layer(&name, role, LayerStyle::of(role));
+            for object in objects {
+                self.artwork.push_object(layer, object);
+            }
         }
+        Ok(())
     }
 }
 
-fn escape_xml(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+fn vscore_guides(doc: &GeometryDocument, feature: &Feature) -> Vec<(StrokeStyle, Vec<ContourBuf>)> {
+    doc.placements_for_feature(feature)
+        .iter()
+        .flat_map(|&placement| {
+            feature.paths.indices().map(move |path| {
+                let width = doc.arena.path(path).stroke().map_or(0.0, |s| s.width);
+                (
+                    StrokeStyle::round(width.max(OVERVIEW_STROKE_WIDTH_MM)),
+                    doc.transformed_path_contours(path, placement),
+                )
+            })
+        })
+        .collect()
+}
+
+/// The inner edges of the panel's rails, where a rail has any width.
+fn rail_guides(grid: &BoardArrayGridInfo, panel: BBox) -> Vec<Vec<ContourBuf>> {
+    let line = |from: Point, to: Point| {
+        vec![ContourBuf::new(vec![
+            PathCmd::move_to(from),
+            PathCmd::line_to(to),
+        ])]
+    };
+    let vertical = [
+        panel.min.x + grid.edge_rail.left.mm(),
+        panel.max.x - grid.edge_rail.right.mm(),
+    ]
+    .into_iter()
+    .filter(|&x| x > panel.min.x && x < panel.max.x)
+    .map(|x| line(Point::new(x, panel.min.y), Point::new(x, panel.max.y)));
+    let horizontal = [
+        panel.min.y + grid.edge_rail.bottom.mm(),
+        panel.max.y - grid.edge_rail.top.mm(),
+    ]
+    .into_iter()
+    .filter(|&y| y > panel.min.y && y < panel.max.y)
+    .map(|y| line(Point::new(panel.min.x, y), Point::new(panel.max.x, y)));
+    vertical.chain(horizontal).collect()
 }
 
 #[cfg(test)]
@@ -644,100 +325,171 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn renders_simple_board_array_overview_svg() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER">
-      <Spec name="VCut_1">
+    const VCUT_SPEC: &str = r#"<Spec name="VCut_1">
         <V_Cut type="OFFSET">
           <Property value="0" unit="MM"/>
         </V_Cut>
-      </Spec>
-    </CadHeader>
-    <CadData>
-      <Step name="board" type="BOARD">
-        <Profile>
+      </Spec>"#;
+    const VCUT_LAYER: Option<[&str; 3]> = Some(["VCUT", "V_CUT", "NONE"]);
+    const TOP_LAYER: Option<[&str; 3]> = Some(["TOP", "SIGNAL", "TOP"]);
+    const BOARD_10X5: &str = r#"<Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
             <PolyStepSegment x="10" y="0"/>
             <PolyStepSegment x="10" y="5"/>
             <PolyStepSegment x="0" y="5"/>
           </Polygon>
-        </Profile>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
+        </Profile>"#;
+    const PANEL_44X24: &str = r#"<Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
             <PolyStepSegment x="0" y="24"/>
             <PolyStepSegment x="44" y="24"/>
             <PolyStepSegment x="44" y="0"/>
           </Polygon>
-        </Profile>
-        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
+        </Profile>"#;
+    const SIX_BOARDS: &str =
+        r#"<StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>"#;
 
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
-
-        assert!(svg.contains("data-board-array-overview='true'"));
-        assert!(svg.contains("viewBox='-1 -1 46 26'"));
-        assert_eq!(svg.matches("class='board-outline'").count(), 3 * 2);
-        assert!(svg.contains("fill='#f1f5f9'"));
-        assert!(svg.contains("stroke='#064e3b'"));
-        assert!(svg.contains("class='board-array-outline'"));
-        assert!(!svg.contains("class='board-array-outline' x="));
-        assert!(!svg.contains("class='vcut-guide'"));
-        assert!(!svg.contains("class='score-guide'"));
-        assert!(svg.contains("class='rail-guide'"));
-
-        let board_outline_start = svg.find("class='board-outline'").unwrap();
-        let rail_start = svg.find("class='rail-guide'").unwrap();
-        assert!(rail_start < board_outline_start);
-    }
-
-    #[test]
-    fn renders_board_array_overview_from_array_profile() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc2581::Ipc2581::parse(
+    /// The overview of a document with `specs` in its header, one optional
+    /// layer as name, function and side, the `board` Step's content, the
+    /// `steps` before the root "panel" Step, and that Step's content.
+    fn overview(
+        specs: &str,
+        layer: Option<[&str; 3]>,
+        board: &str,
+        steps: &str,
+        panel: &str,
+    ) -> String {
+        let (layer_ref, layer) = layer.map_or_else(Default::default, |[name, function, side]| {
+            (
+                format!(r#"<LayerRef name="{name}"/>"#),
+                format!(
+                    r#"<Layer name="{name}" layerFunction="{function}" side="{side}" polarity="POSITIVE"/>"#
+                ),
+            )
+        });
+        let xml = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
     <FunctionMode mode="FABRICATION"/>
     <StepRef name="panel"/>
+    {layer_ref}
   </Content>
   <Ecad>
-    <CadHeader units="MILLIMETER"/>
+    <CadHeader units="MILLIMETER">
+      {specs}
+    </CadHeader>
     <CadData>
+      {layer}
       <Step name="board" type="BOARD">
-        <Profile>
+        {board}
+      </Step>
+      {steps}
+      <Step name="panel" type="PALLET">
+        {panel}
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+        );
+        let ipc = ipc2581::Ipc2581::parse(&xml).unwrap();
+        let resolution = Resolution::default();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
+        render_board_array_overview_svg(&IpcAccessor::new(&ipc), &imported, resolution)
+            .unwrap()
+            .unwrap()
+    }
+
+    fn vcut_lines(lines: &[[f64; 4]]) -> String {
+        let features = lines.iter().map(|[x0, y0, x1, y1]| {
+            format!(
+                r#"<Features>
+              <Line startX="{x0}" startY="{y0}" endX="{x1}" endY="{y1}">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>"#
+            )
+        });
+        format!(
+            r#"<LayerFeature layerRef="VCUT">
+          <Set>
+            <SpecRef id="VCut_1"/>
+            {}
+          </Set>
+        </LayerFeature>"#,
+            features.collect::<String>()
+        )
+    }
+
+    /// The first overview layer drawn in `color`, from its group tag to the
+    /// end of its paint.
+    fn layer<'a>(svg: &'a str, color: &str) -> &'a str {
+        let open = format!("<g fill='{color}' stroke='{color}'");
+        let start = svg
+            .find(&open)
+            .unwrap_or_else(|| panic!("no {color} layer in {svg}"));
+        let end = svg[start..].find("\n    </g>").unwrap();
+        &svg[start..start + end]
+    }
+
+    #[test]
+    fn renders_simple_board_array_overview_svg() {
+        let panel = format!("{PANEL_44X24}{SIX_BOARDS}");
+        let svg = overview(VCUT_SPEC, None, BOARD_10X5, "", &panel);
+
+        assert!(svg.contains("viewBox='-1.05 -25.05 46.1 26.1'"));
+        // The board draws once, as a fill block and an outline block.
+        assert_eq!(svg.matches("M0 0 L10 0 L10 5 L0 5 Z").count(), 2);
+        assert_eq!(layer(&svg, "#f1f5f9").matches("<use").count(), 3 * 2);
+        assert_eq!(layer(&svg, "#064e3b").matches("<use").count(), 3 * 2);
+        assert_eq!(layer(&svg, "#111827").matches("<path").count(), 1);
+        assert_eq!(layer(&svg, "#cbd5e1").matches("<path").count(), 4);
+        assert!(!svg.contains("#dc2626"), "no V-score layer, no guides");
+
+        let board_outline_start = svg.find("stroke='#064e3b'").unwrap();
+        let rail_start = svg.find("stroke='#cbd5e1'").unwrap();
+        assert!(rail_start < board_outline_start);
+    }
+
+    #[test]
+    fn draws_a_panel_away_from_the_origin_inside_the_viewbox() {
+        let panel = r#"<Profile>
           <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
+            <PolyBegin x="10" y="20"/>
+            <PolyStepSegment x="10" y="44"/>
+            <PolyStepSegment x="54" y="44"/>
+            <PolyStepSegment x="54" y="20"/>
           </Polygon>
         </Profile>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
+        <StepRepeat stepRef="board" x="15" y="25.5" nx="3" ny="2" dx="12" dy="8"/>"#;
+        let svg = overview("", None, BOARD_10X5, "", panel);
+
+        // The flip group maps world y to screen -y, so the padded outline
+        // stroke [8.95, 55.05] x [18.95, 45.05] is this viewBox, and every
+        // drawn coordinate below lies inside it.
+        assert!(svg.contains("viewBox='8.95 -45.05 46.1 26.1'"));
+        assert!(svg.contains("<g transform='scale(1 -1)'>"));
+        assert!(layer(&svg, "#111827").contains("d='M10 20 L10 44 L54 44 L54 20 Z'"));
+        let board_outlines = layer(&svg, "#064e3b");
+        assert!(board_outlines.contains("transform='matrix(1 0 0 1 15 25.5)'"));
+        assert!(board_outlines.contains("transform='matrix(1 0 0 1 39 33.5)'"));
+        let rails = layer(&svg, "#cbd5e1");
+        for guide in [
+            "d='M14 20 L14 44'",
+            "d='M50 20 L50 44'",
+            "d='M10 24 L54 24'",
+            "d='M10 40 L54 40'",
+        ] {
+            assert!(rails.contains(guide), "{guide} not in {rails}");
+        }
+    }
+
+    #[test]
+    fn renders_board_array_overview_from_array_profile() {
+        let panel = format!(
+            r#"<Profile>
           <Polygon>
             <PolyBegin x="0" y="3"/>
             <PolyStepSegment x="0" y="21"/>
@@ -750,124 +502,33 @@ mod tests {
             <PolyStepCurve x="0" y="3" centerX="3" centerY="3" clockwise="true"/>
           </Polygon>
         </Profile>
-        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
+        {SIX_BOARDS}"#
+        );
+        let svg = overview("", None, BOARD_10X5, "", &panel);
 
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
-
-        assert!(svg.contains("class='board-array-outline'"));
-        assert!(svg.contains(" A3 3"));
-        assert!(!svg.contains("class='board-array-outline' x="));
+        assert!(layer(&svg, "#111827").contains(" A3 3"));
     }
 
     #[test]
     fn renders_board_array_overview_vcuts_from_vcut_layer_only() {
-        let resolution = Resolution::default();
+        let scores = vcut_lines(&[[5.0, 0.0, 5.0, 24.0], [0.0, 5.5, 44.0, 5.5]]);
+        let panel = format!("{PANEL_44X24}{SIX_BOARDS}{scores}");
+        let svg = overview("", VCUT_LAYER, BOARD_10X5, "", &panel);
 
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-    <LayerRef name="VCUT"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="VCUT" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="0" y="24"/>
-            <PolyStepSegment x="44" y="24"/>
-            <PolyStepSegment x="44" y="0"/>
-          </Polygon>
-        </Profile>
-        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
-        <LayerFeature layerRef="VCUT">
-          <Set>
-            <SpecRef id="VCut_1"/>
-            <Features>
-              <Line startX="5" startY="0" endX="5" endY="24">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-            <Features>
-              <Line startX="0" startY="5.5" endX="44" endY="5.5">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
+        let guides = layer(&svg, "#dc2626");
+        assert_eq!(guides.matches("<path").count(), 2);
+        assert!(guides.contains("d='M5 0 L5 24'"));
+        assert!(guides.contains("d='M0 5.5 L44 5.5'"));
+        assert_eq!(guides.matches("stroke-width='0.1'").count(), 2);
 
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(svg.matches("vcut-guide").count(), 2);
-        assert!(svg.contains("d='M5 24 L5 0'"));
-        assert!(svg.contains("d='M0 18.5 L44 18.5'"));
-        assert!(svg.contains("stroke='#dc2626'"));
-        assert!(svg.contains("stroke-width='0.1'"));
-        assert!(!svg.contains("stroke-dasharray"));
-        assert!(!svg.contains("class='score-guide'"));
-
-        let vcut_start = svg.find("vcut-guide").unwrap();
-        let board_outline_start = svg.find("class='board-outline'").unwrap();
+        let vcut_start = svg.find("stroke='#dc2626'").unwrap();
+        let board_outline_start = svg.find("stroke='#064e3b'").unwrap();
         assert!(board_outline_start < vcut_start);
     }
 
     #[test]
     fn renders_board_array_overview_vcut_relief_contours() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-    <LayerRef name="VCUT"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER">
-      <Spec name="VCut_1">
-        <V_Cut type="OFFSET">
-          <Property value="0" unit="MM"/>
-        </V_Cut>
-      </Spec>
-    </CadHeader>
-    <CadData>
-      <Layer name="VCUT" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
+        let board = r#"<Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
             <PolyStepSegment x="10" y="0"/>
@@ -883,10 +544,9 @@ mod tests {
             <PolyStepSegment x="2" y="4"/>
             <PolyStepSegment x="0" y="4"/>
           </Cutout>
-        </Profile>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
+        </Profile>"#;
+        let panel = format!(
+            r#"<Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
             <PolyStepSegment x="0" y="20"/>
@@ -895,79 +555,31 @@ mod tests {
           </Polygon>
         </Profile>
         <StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0"/>
-        <LayerFeature layerRef="VCUT">
-          <Set>
-            <SpecRef id="VCut_1"/>
-            <Features>
-              <Line startX="5" startY="0" endX="5" endY="20">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-            <Features>
-              <Line startX="15" startY="0" endX="15" endY="20">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-            <Features>
-              <Line startX="0" startY="5" endX="20" endY="5">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-            <Features>
-              <Line startX="0" startY="15" endX="20" endY="15">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
+        {}"#,
+            vcut_lines(&[
+                [5.0, 0.0, 5.0, 20.0],
+                [15.0, 0.0, 15.0, 20.0],
+                [0.0, 5.0, 20.0, 5.0],
+                [0.0, 15.0, 20.0, 15.0],
+            ])
+        );
+        let svg = overview(VCUT_SPEC, VCUT_LAYER, board, "", &panel);
 
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
-
-        assert!(svg.contains("class='board-array-profile-cutout'"));
-        assert!(svg.contains("fill='#ffffff'"));
-        assert!(svg.contains("stroke='#111827'"));
-        assert!(svg.contains(" Z"));
-        let board_outline = svg
-            .lines()
-            .find(|line| line.contains("class='board-outline'"))
-            .unwrap();
-        assert_eq!(board_outline.matches(" M").count(), 0);
+        let removal = &svg[svg.find("stroke='#111827' opacity='0.95'>").unwrap()..];
+        assert!(removal[..removal.find("</g>").unwrap()].contains(" Z"));
+        let blocks = &svg[..svg.find("</defs>").unwrap()];
+        let subpaths = |attribute: &str| {
+            let path = blocks.lines().find(|line| line.contains(attribute));
+            path.unwrap().matches('M').count()
+        };
+        assert_eq!(subpaths("stroke-width"), 1, "the outline omits cutouts");
+        assert_eq!(subpaths("evenodd"), 2, "the fill opens at cutouts");
     }
 
     #[test]
     fn renders_nested_board_cell_support_geometry_without_board_features() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="array"/>
-    <LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
+        let board = format!(
+            r#"{BOARD_10X5}
         <LayerFeature layerRef="TOP">
           <Set>
             <Features>
@@ -976,9 +588,9 @@ mod tests {
               </Line>
             </Features>
           </Set>
-        </LayerFeature>
-      </Step>
-      <Step name="board_cell" type="PALLET">
+        </LayerFeature>"#
+        );
+        let board_cell = r#"<Step name="board_cell" type="PALLET">
         <Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
@@ -996,9 +608,8 @@ mod tests {
           </Set>
         </LayerFeature>
         <StepRepeat stepRef="board" x="2" y="2" nx="1" ny="1" dx="0" dy="0"/>
-      </Step>
-      <Step name="array" type="PALLET">
-        <Profile>
+      </Step>"#;
+        let array = r#"<Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
             <PolyStepSegment x="20" y="0"/>
@@ -1006,116 +617,58 @@ mod tests {
             <PolyStepSegment x="0" y="15"/>
           </Polygon>
         </Profile>
-        <StepRepeat stepRef="board_cell" x="4" y="5" nx="1" ny="1" dx="12" dy="8"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
+        <StepRepeat stepRef="board_cell" x="4" y="5" nx="1" ny="1" dx="12" dy="8"/>"#;
+        let svg = overview("", TOP_LAYER, &board, board_cell, array);
 
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(svg.matches("array-layer-copper").count(), 1);
-        assert!(!svg.contains("M7 5.5 L15 5.5"));
+        assert_eq!(svg.matches("<g fill='#d87822'").count(), 1);
+        assert_eq!(layer(&svg, "#d87822").matches("<use").count(), 1);
+        assert!(!svg.contains("M7 9.5 L15 9.5"));
     }
 
     #[test]
     fn renders_clear_features_as_holes_in_the_layer_overlay() {
-        let resolution = Resolution::default();
-
-        let ipc = ipc2581::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-    <LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="0" y="24"/>
-            <PolyStepSegment x="44" y="24"/>
-            <PolyStepSegment x="44" y="0"/>
-          </Polygon>
-        </Profile>
+        let square = |polarity: &str, [min, max]: [(f64, f64); 2]| {
+            format!(
+                r#"<Set polarity="{polarity}">
+            <Features>
+              <UserSpecial>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="{x0}" y="{y0}"/>
+                    <PolyStepSegment x="{x1}" y="{y0}"/>
+                    <PolyStepSegment x="{x1}" y="{y1}"/>
+                    <PolyStepSegment x="{x0}" y="{y1}"/>
+                    <PolyStepSegment x="{x0}" y="{y0}"/>
+                  </Polygon>
+                </Contour>
+              </UserSpecial>
+            </Features>
+          </Set>"#,
+                x0 = min.0,
+                y0 = min.1,
+                x1 = max.0,
+                y1 = max.1,
+            )
+        };
+        let panel = format!(
+            r#"{PANEL_44X24}
         <LayerFeature layerRef="TOP">
-          <Set>
-            <Features>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="1" y="19"/>
-                    <PolyStepSegment x="9" y="19"/>
-                    <PolyStepSegment x="9" y="23"/>
-                    <PolyStepSegment x="1" y="23"/>
-                    <PolyStepSegment x="1" y="19"/>
-                  </Polygon>
-                </Contour>
-              </UserSpecial>
-            </Features>
-          </Set>
-          <Set polarity="NEGATIVE">
-            <Features>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="4" y="20"/>
-                    <PolyStepSegment x="6" y="20"/>
-                    <PolyStepSegment x="6" y="22"/>
-                    <PolyStepSegment x="4" y="22"/>
-                    <PolyStepSegment x="4" y="20"/>
-                  </Polygon>
-                </Contour>
-              </UserSpecial>
-            </Features>
-          </Set>
+          {}
+          {}
         </LayerFeature>
-        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let accessor = IpcAccessor::new(&ipc);
-
-        let svg = render_board_array_overview_svg(&accessor, resolution)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            svg.matches("array-layer-copper").count(),
-            1,
-            "the layer composes to one image path"
+        {SIX_BOARDS}"#,
+            square("POSITIVE", [(1.0, 19.0), (9.0, 23.0)]),
+            square("NEGATIVE", [(4.0, 20.0), (6.0, 22.0)]),
         );
-        let copper = svg
-            .lines()
-            .find(|line| line.contains("array-layer-copper"))
-            .unwrap();
-        assert_eq!(
-            copper.matches('M').count(),
-            2,
-            "the clear feature survives as a hole subpath, not a copper fill"
+        let svg = overview("", TOP_LAYER, BOARD_10X5, "", &panel);
+
+        let copper = layer(&svg, "#d87822");
+        assert!(copper.contains("<g mask='url(#overview-m0)'>"));
+        assert!(copper.contains("M1 19") && !copper.contains("M4 20"));
+        let mask = &svg[svg.find("<mask id='overview-m0'").unwrap()..];
+        assert!(
+            mask[..mask.find("</mask>").unwrap()].contains("M4 20"),
+            "the clear feature masks the copper instead of filling"
         );
     }
 }

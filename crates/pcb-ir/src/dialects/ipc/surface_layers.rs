@@ -3,16 +3,17 @@
 use std::fmt;
 
 use crate::dialects::{LayerRole, Side};
+use ipc2581::Symbol;
 
 /// One declared physical layer, classified independently of its source name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PhysicalLayer<Symbol> {
+pub struct PhysicalLayer {
     pub name: Symbol,
     pub role: LayerRole,
     pub side: Side,
 }
 
-impl<Symbol> PhysicalLayer<Symbol> {
+impl PhysicalLayer {
     pub fn new(name: Symbol, role: LayerRole, side: Side) -> Self {
         Self { name, role, side }
     }
@@ -20,7 +21,7 @@ impl<Symbol> PhysicalLayer<Symbol> {
 
 /// The four declared artwork layers needed for two-sided fiducials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TwoSidedSurfaceLayers<Symbol> {
+pub struct TwoSidedSurfaceLayers {
     pub top_copper: Symbol,
     pub top_soldermask: Symbol,
     pub bottom_copper: Symbol,
@@ -65,9 +66,9 @@ impl std::error::Error for SurfaceLayerError {}
 ///
 /// Physical layers are never inferred or created. Every required role and side
 /// must have exactly one declaration, regardless of its source layer name.
-pub fn resolve_two_sided_surface_layers<Symbol: Copy>(
-    layers: impl IntoIterator<Item = PhysicalLayer<Symbol>>,
-) -> Result<TwoSidedSurfaceLayers<Symbol>, SurfaceLayerError> {
+pub fn resolve_two_sided_surface_layers(
+    layers: impl IntoIterator<Item = PhysicalLayer>,
+) -> Result<TwoSidedSurfaceLayers, SurfaceLayerError> {
     let layers = layers.into_iter().collect::<Vec<_>>();
     Ok(TwoSidedSurfaceLayers {
         top_copper: resolve_one(&layers, LayerRole::Copper, Side::Top)?,
@@ -77,8 +78,8 @@ pub fn resolve_two_sided_surface_layers<Symbol: Copy>(
     })
 }
 
-fn resolve_one<Symbol: Copy>(
-    layers: &[PhysicalLayer<Symbol>],
+fn resolve_one(
+    layers: &[PhysicalLayer],
     role: LayerRole,
     side: Side,
 ) -> Result<Symbol, SurfaceLayerError> {
@@ -120,26 +121,27 @@ fn side_name(side: Side) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialects::ipc::test_symbol as sym;
 
     #[test]
     fn resolves_two_sided_layers_by_role_and_side_not_name() {
         let resolved = resolve_two_sided_surface_layers([
-            PhysicalLayer::new(10, LayerRole::Soldermask, Side::Bottom),
-            PhysicalLayer::new(20, LayerRole::Copper, Side::Top),
-            PhysicalLayer::new(30, LayerRole::Other, Side::Top),
-            PhysicalLayer::new(40, LayerRole::Copper, Side::Bottom),
-            PhysicalLayer::new(50, LayerRole::Soldermask, Side::Top),
-            PhysicalLayer::new(60, LayerRole::Copper, Side::Inner),
+            PhysicalLayer::new(sym(10), LayerRole::Soldermask, Side::Bottom),
+            PhysicalLayer::new(sym(20), LayerRole::Copper, Side::Top),
+            PhysicalLayer::new(sym(30), LayerRole::Other, Side::Top),
+            PhysicalLayer::new(sym(40), LayerRole::Copper, Side::Bottom),
+            PhysicalLayer::new(sym(50), LayerRole::Soldermask, Side::Top),
+            PhysicalLayer::new(sym(60), LayerRole::Copper, Side::Inner),
         ])
         .unwrap();
 
         assert_eq!(
             resolved,
             TwoSidedSurfaceLayers {
-                top_copper: 20,
-                top_soldermask: 50,
-                bottom_copper: 40,
-                bottom_soldermask: 10,
+                top_copper: sym(20),
+                top_soldermask: sym(50),
+                bottom_copper: sym(40),
+                bottom_soldermask: sym(10),
             }
         );
     }
@@ -147,9 +149,9 @@ mod tests {
     #[test]
     fn rejects_a_missing_surface_layer() {
         let error = resolve_two_sided_surface_layers([
-            PhysicalLayer::new(10, LayerRole::Copper, Side::Top),
-            PhysicalLayer::new(20, LayerRole::Soldermask, Side::Top),
-            PhysicalLayer::new(30, LayerRole::Copper, Side::Bottom),
+            PhysicalLayer::new(sym(10), LayerRole::Copper, Side::Top),
+            PhysicalLayer::new(sym(20), LayerRole::Soldermask, Side::Top),
+            PhysicalLayer::new(sym(30), LayerRole::Copper, Side::Bottom),
         ])
         .unwrap_err();
 
@@ -165,11 +167,11 @@ mod tests {
     #[test]
     fn rejects_an_ambiguous_surface_layer() {
         let error = resolve_two_sided_surface_layers([
-            PhysicalLayer::new(10, LayerRole::Copper, Side::Top),
-            PhysicalLayer::new(11, LayerRole::Copper, Side::Top),
-            PhysicalLayer::new(20, LayerRole::Soldermask, Side::Top),
-            PhysicalLayer::new(30, LayerRole::Copper, Side::Bottom),
-            PhysicalLayer::new(40, LayerRole::Soldermask, Side::Bottom),
+            PhysicalLayer::new(sym(10), LayerRole::Copper, Side::Top),
+            PhysicalLayer::new(sym(11), LayerRole::Copper, Side::Top),
+            PhysicalLayer::new(sym(20), LayerRole::Soldermask, Side::Top),
+            PhysicalLayer::new(sym(30), LayerRole::Copper, Side::Bottom),
+            PhysicalLayer::new(sym(40), LayerRole::Soldermask, Side::Bottom),
         ])
         .unwrap_err();
 

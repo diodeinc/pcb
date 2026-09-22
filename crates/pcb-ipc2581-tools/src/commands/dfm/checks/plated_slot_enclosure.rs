@@ -14,7 +14,10 @@ use crate::commands::dfm::report::{Evidence, MeasurementKind};
 use crate::commands::dfm::rules::Conditions;
 
 use super::drilled_board_edge_clearance::slot_evidence;
-use super::{Evaluation, Measured, MeasuredSite, layers, slot_matches, slot_subject, violates};
+use super::{
+    Evaluation, Measured, MeasuredSite, layers, slot_subject, slots_of_plating, spanned_layers,
+    violates,
+};
 
 pub(super) fn evaluate(
     limit_mm: f64,
@@ -23,21 +26,12 @@ pub(super) fn evaluate(
 ) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
-    for (slot_index, slot) in design
-        .slots
-        .iter()
-        .enumerate()
-        .filter(|(_, slot)| slot_matches(slot.plating, SlotPlating::Plated))
-    {
+    for (slot_index, slot) in slots_of_plating(design, SlotPlating::Plated) {
         let mut sites = Vec::new();
-        for (index, copper) in design
-            .copper_layers
-            .iter()
-            .enumerate()
-            .filter(|(index, copper)| {
-                slot.drill_span.contains_copper(*index) && conditions.applies_to_layer(copper)
-            })
-        {
+        // The least enclosure on any layer, violating or not: the engine
+        // judges it, so one inside its own uncertainty is not lost here.
+        let mut least: Option<(pcb_ir::geom::dfm::Distance, Vec<_>)> = None;
+        for (index, copper) in spanned_layers(design, &slot.drill_span, conditions) {
             let required = slot.drill_span.terminates_on(index)
                 || design.slot_lands[slot_index]
                     .iter()
@@ -59,8 +53,12 @@ pub(super) fn evaluate(
             // Boolean composition may quantize the cutout and the extracted
             // slot on slightly different grids. Heal their shared boundary
             // within the existing flattening uncertainty, not a fab tolerance.
+            // Only copper within the limit of the slot can bound the
+            // enclosure, so the query is prepared over that neighbourhood
+            // rather than the whole layer.
             let filled = copper
                 .image
+                .reaching(slot.outline.bbox.expand(limit_mm + 2.0 * tol::REGION_MM))
                 .union(&slot.outline.disk_dilate(tol::REGION_MM)?)?;
             let boundary = filled.prepare_query();
             let distance = slot
@@ -78,9 +76,18 @@ pub(super) fn evaluate(
                     }
                     distance
                 });
-            let Some(distance) = distance.filter(|distance| violates(distance, limit_mm)) else {
+            let Some(distance) = distance else {
                 continue;
             };
+            if least
+                .as_ref()
+                .is_none_or(|(least, _)| distance.mm < least.mm)
+            {
+                least = Some((distance, layers([&slot.layer, &copper.layer])));
+            }
+            if !violates(&distance, limit_mm) {
+                continue;
+            }
             let envelope = slot.outline.disk_dilate(limit_mm)?;
             let mut site = MeasuredSite::new(
                 distance,
@@ -118,6 +125,15 @@ pub(super) fn evaluate(
                 evidence: worst.evidence.clone(),
                 sites,
             });
+        } else if let Some((distance, layers)) = least {
+            measured.push(Measured {
+                distance,
+                bbox: slot.bbox,
+                layers,
+                subjects: vec![slot_subject(design, slot, "slot")],
+                evidence: Vec::new(),
+                sites: Vec::new(),
+            });
         }
     }
     Ok(Evaluation { checked, measured })
@@ -127,24 +143,13 @@ pub(super) fn evaluate(
 mod tests {
     use super::*;
     use crate::LayoutTarget;
-    use crate::commands::dfm::report::{FileIdentity, RuleStatus, Verdict};
-    use crate::commands::dfm::{self, CheckRequest, PdkSource, TextSource};
-    use crate::ipc2581::Ipc2581;
+    use crate::commands::dfm::report::{RuleStatus, Verdict};
+    use crate::commands::dfm::{self, fixtures};
     use pcb_ir::geom::Resolution;
-    use pcb_ir::import::ipc2581::import_design;
 
-    const PDK: &str = r#"schema_version = 2
-default_profile = "test"
-[pdk]
-id = "test"
-name = "Test"
-revision = "1"
-[profiles.test]
-name = "Test"
-[[rules.copper.plated_slot_enclosure]]
+    const RULE: &str = r#"[[rules.copper.plated_slot_enclosure]]
 id = "slot-enclosure"
-limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
-"#;
+limit = { minimum = "0.2 mm", preferred = "0.3 mm" }"#;
 
     fn copper(right: f64) -> String {
         format!(
@@ -189,22 +194,7 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
     }
 
     fn check(xml: &str) -> dfm::DfmReport {
-        let imported = import_design(&Ipc2581::parse(xml).unwrap(), Resolution::default()).unwrap();
-        dfm::check(
-            &imported,
-            CheckRequest {
-                input: FileIdentity::new("slot.xml", xml.as_bytes()),
-                pdk: PdkSource::Toml(TextSource {
-                    path: "slot.toml",
-                    source: PDK,
-                }),
-                waivers: None,
-                layout_target: LayoutTarget::Board,
-                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
-            },
-            Resolution::default(),
-        )
-        .unwrap()
+        fixtures::report(xml, &fixtures::pdk(RULE), LayoutTarget::Board)
     }
 
     const OVAL: &str = r#"<Location x="0" y="0"/><Oval width="2" height="0.6"/>"#;
@@ -307,7 +297,7 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
         let shape = r#"<Outline><Polygon><PolyBegin x="-1" y="-1"/>
           <PolyStepSegment x="1" y="1"/><PolyStepSegment x="1" y="1.4"/>
           <PolyStepSegment x="-1" y="-0.6"/><PolyStepSegment x="-1" y="-1"/>
-        </Polygon></Outline>"#;
+        </Polygon><LineDesc lineEnd="ROUND" lineWidth="0"/></Outline>"#;
         let copper = r#"<Set><Features><Contour><Polygon><PolyBegin x="-2" y="-2.3"/>
           <PolyStepSegment x="2" y="1.7"/><PolyStepSegment x="2" y="2.7"/>
           <PolyStepSegment x="-2" y="-1.3"/><PolyStepSegment x="-2" y="-2.3"/>
@@ -321,32 +311,47 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
     }
 
     #[test]
-    fn missing_stackup_or_span_cannot_be_certified_even_with_adequate_copper() {
-        use crate::commands::dfm::{pdk::Pdk, rules};
-        use pcb_ir::dialects::ipc::ArtworkScope;
-
+    fn a_rout_layer_without_a_span_is_through_board() {
         let copper = copper(1.4);
-        let rules = rules::lower(&Pdk::parse(PDK).unwrap(), None).unwrap();
-        for span in ["", r#"<Span fromLayer="L0"/>"#, THROUGH] {
-            let xml = board(OVAL, [&copper, "", &copper], span);
-            let mut imported =
-                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
+        let undeclared = check(&board(OVAL, [&copper, "", &copper], ""));
+        let declared = check(&board(OVAL, [&copper, "", &copper], THROUGH));
+        assert_eq!(undeclared.rules[0].checked, 2);
+        assert_eq!(undeclared.rules[0].checked, declared.rules[0].checked);
+        assert_eq!(undeclared.findings.len(), declared.findings.len());
+    }
+
+    #[test]
+    fn missing_stackup_or_span_cannot_be_certified_even_with_adequate_copper() {
+        let copper = copper(1.4);
+        let rules = fixtures::rules(&fixtures::pdk(RULE));
+        for span in [r#"<Span fromLayer="L0"/>"#, THROUGH] {
+            let mut imported = fixtures::import(&board(OVAL, [&copper, "", &copper], span));
             if span == THROUGH {
                 imported.stackups.clear();
             }
-            let error = Design::extract(
-                &imported,
-                ArtworkScope::Board,
+            let design = Design::board(&imported, &rules, Resolution::default());
+            let results = crate::commands::dfm::checks::run(
                 &rules,
-                Resolution::default(),
+                std::slice::from_ref(&design),
+                None,
+                chrono::NaiveDate::default(),
             )
-            .err()
             .unwrap();
-            assert!(error.to_string().contains(if span == THROUGH {
-                "physical stackup"
-            } else {
-                "no resolvable drill span"
-            }));
+            assert!(results.findings.is_empty());
+            for rule in &results.rules {
+                assert!(matches!(rule.status, RuleStatus::Incomplete));
+                assert!(
+                    rule.skip_reason
+                        .as_deref()
+                        .unwrap()
+                        .contains(if span == THROUGH {
+                            "physical stackup"
+                        } else {
+                            "no resolvable drill span"
+                        })
+                );
+            }
+            assert!(results.rules[0].blocks_verdict());
         }
     }
 }

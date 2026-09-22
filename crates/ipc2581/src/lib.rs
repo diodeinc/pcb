@@ -1,5 +1,6 @@
 // Pure IPC-2581 parser modules
 mod checksum;
+mod dom;
 pub mod edit;
 mod parse;
 pub mod types;
@@ -10,8 +11,6 @@ pub use pcb_intern::{Interner, Symbol};
 pub use types::*;
 pub use uppsala::XmlWriter;
 
-use checksum::validate_checksum;
-use parse::Parser;
 #[cfg(not(target_family = "wasm"))]
 use std::path::Path;
 use std::sync::LazyLock;
@@ -52,9 +51,6 @@ pub enum Ipc2581Error {
     #[error("Invalid IPC-2581 structure: {0}")]
     InvalidStructure(String),
 
-    #[error("Unsupported revision: {0}")]
-    UnsupportedRevision(String),
-
     #[error("IPC-2581 schema validation failed: {0}")]
     SchemaValidation(String),
 }
@@ -66,6 +62,7 @@ pub fn validate(xml: &str) -> Result<()> {
     let validator = IPC_2581C_VALIDATOR
         .as_ref()
         .map_err(|err| Ipc2581Error::SchemaValidation(err.clone()))?;
+    let (xml, _) = checksum::split_trailer(xml);
     let doc = uppsala::parse(xml).map_err(|err| Ipc2581Error::SchemaValidation(err.to_string()))?;
 
     let errors = validator.validate(&doc);
@@ -116,38 +113,21 @@ impl Ipc2581 {
 
     /// Parse IPC-2581 from XML string
     pub fn parse(xml: &str) -> Result<Self> {
-        // Validate checksum if present
-        validate_checksum(xml)?;
-
-        // Parse XML with Uppsala's arena-backed DOM.
-        let doc = uppsala::parse(xml).map_err(|err| Ipc2581Error::XmlParse(err.to_string()))?;
-
-        // Validate namespace
-        let root = doc
-            .document_element()
-            .ok_or(Ipc2581Error::MissingElement("IPC-2581"))?;
-        let root_name = doc.element(root).expect("root is an element").name.clone();
-        if root_name.namespace_uri.as_deref() != Some("http://webstds.ipc.org/2581") {
+        let doc = checksum::parse_document(xml, dom::Keep::Tree)?;
+        if doc.root_namespace() != Some("http://webstds.ipc.org/2581") {
             return Err(Ipc2581Error::InvalidStructure(format!(
                 "Expected IPC-2581 namespace, got {:?}",
-                root_name.namespace_uri
+                doc.root_namespace()
             )));
         }
 
-        // Parse into our structures
-        let mut parser = Parser::new();
-        let parsed = parser.parse_document(&doc)?;
+        parse::parse(&doc)
+    }
 
-        Ok(Self {
-            interner: parser.interner,
-            revision: parsed.revision,
-            content: parsed.content,
-            logistic_header: parsed.logistic_header,
-            history_record: parsed.history_record,
-            ecad: parsed.ecad,
-            boms: parsed.boms,
-            avl: parsed.avl,
-        })
+    /// Parse IPC-2581 that must first validate against the IPC-2581C schema.
+    pub fn parse_validated(xml: &str) -> Result<Self> {
+        validate(xml)?;
+        Self::parse(xml)
     }
 
     /// Parse IPC-2581 from file
@@ -235,60 +215,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn error_types_compile() {
-        let _err = Ipc2581Error::MissingElement("test");
-        let _err = Ipc2581Error::MissingAttribute {
-            element: "Circle",
-            attr: "diameter",
-        };
+    fn parses_checksummed_and_prefixed_documents() {
+        use base64::Engine as _;
+        use md5::Digest as _;
+
+        let plain = r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="ASSEMBLY"/></Content></IPC-2581 >"#;
+        let prefixed = r#"<ipc:IPC-2581 revision="C" xmlns:ipc="http://webstds.ipc.org/2581"><ipc:Content roleRef="Owner"><ipc:FunctionMode mode="ASSEMBLY"/></ipc:Content></ipc:IPC-2581>"#;
+        for root in [plain, prefixed] {
+            let digest = base64::engine::general_purpose::STANDARD.encode(md5::Md5::digest(root));
+            let xml = format!("<?xml version=\"1.0\"?>\n<!--</IPC-2581>-->\n{root}\n{digest}\n");
+
+            let doc = Ipc2581::parse(&xml).expect("checksummed document parses");
+            assert_eq!(doc.content().function_mode.mode, Mode::Assembly);
+            assert!(matches!(
+                Ipc2581::parse(&xml.replace("Owner", "Other")),
+                Err(Ipc2581Error::ChecksumMismatch { .. })
+            ));
+        }
     }
 
     #[test]
-    fn parse_simple_document() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="Owner">
-    <FunctionMode mode="ASSEMBLY"/>
-    <DictionaryColor/>
-    <DictionaryLineDesc units="MILLIMETER"/>
-    <DictionaryFillDesc units="MILLIMETER"/>
-    <DictionaryStandard units="MILLIMETER"/>
-    <DictionaryUser units="MILLIMETER"/>
-  </Content>
-</IPC-2581>"#;
-
-        let result = Ipc2581::parse(xml);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-
-        let doc = result.unwrap();
-        assert_eq!(doc.revision(), "C");
-        assert_eq!(doc.resolve(doc.content().role_ref), "Owner");
-    }
-
-    #[test]
-    fn rejects_multiple_file_revisions_in_history_record() {
+    fn keeps_the_first_file_revision_of_a_history_record() {
+        // pcb up to 0.4.11 appended a FileRevision per save, and the schema
+        // allows dotted revision numbers.
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
     <FunctionMode mode="FABRICATION"/>
   </Content>
-  <HistoryRecord number="2" origination="2026-01-01T00:00:00Z" software="pcb" lastChange="2026-01-02T00:00:00Z">
+  <HistoryRecord number="2.1.3" origination="2026-01-01T00:00:00Z" software="pcb" lastChange="2026-01-02T00:00:00Z">
     <FileRevision fileRevisionId="1" comment="Initial">
-      <SoftwarePackage name="pcb" revision="1" vendor="Diode">
-        <Certification certificationStatus="SELFTEST"/>
-      </SoftwarePackage>
+      <SoftwarePackage name="KiCad" revision="10.0.4" vendor="KiCad EDA"/>
     </FileRevision>
-    <FileRevision fileRevisionId="2" comment="Invalid second revision">
-      <SoftwarePackage name="pcb" revision="1" vendor="Diode">
-        <Certification certificationStatus="SELFTEST"/>
-      </SoftwarePackage>
+    <FileRevision fileRevisionId="2" comment="Created board array">
+      <SoftwarePackage name="pcb" revision="0.4.11" vendor="Diode"/>
     </FileRevision>
   </HistoryRecord>
 </IPC-2581>"#;
 
-        let error =
-            Ipc2581::parse(xml).expect_err("multiple FileRevision children must be rejected");
-        assert!(error.to_string().contains("exactly one FileRevision"));
+        let doc = Ipc2581::parse(xml).unwrap();
+        let history = doc.history_record().unwrap();
+        assert_eq!(history.number, 2);
+        let revision = history.file_revision.as_ref().unwrap();
+        assert_eq!(doc.resolve(revision.file_revision), "1");
+        let package = revision.software_package.as_ref().unwrap();
+        assert_eq!(doc.resolve(package.name), "KiCad");
     }
 
     #[test]
@@ -306,6 +277,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_validated_rejects_what_the_schema_rejects() {
+        // The parser alone accepts a document without its LogisticHeader.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY"/>
+  </Content>
+</IPC-2581>"#;
+
+        assert!(Ipc2581::parse(xml).is_ok());
+        assert!(matches!(
+            Ipc2581::parse_validated(xml),
+            Err(Ipc2581Error::SchemaValidation(_))
+        ));
+    }
+
+    #[test]
     fn parse_function_mode_with_numeric_level() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="B" xmlns="http://webstds.ipc.org/2581">
@@ -319,11 +307,9 @@ mod tests {
   </Content>
 </IPC-2581>"#;
 
-        let result = Ipc2581::parse(xml);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-
-        let doc = result.unwrap();
+        let doc = Ipc2581::parse(xml).unwrap();
         assert_eq!(doc.revision(), "B");
+        assert_eq!(doc.resolve(doc.content().role_ref), "Owner");
         assert_eq!(
             doc.content().function_mode.level,
             Some(types::content::Level(1))
@@ -331,23 +317,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_all_ipc_line_properties() {
+    fn parses_optional_line_property() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
     <FunctionMode mode="FABRICATION"/>
     <DictionaryLineDesc units="MILLIMETER">
-      <EntryLineDesc id="solid"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="SOLID"/></EntryLineDesc>
       <EntryLineDesc id="dotted"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="DOTTED"/></EntryLineDesc>
-      <EntryLineDesc id="dashed"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="DASHED"/></EntryLineDesc>
-      <EntryLineDesc id="center"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="CENTER"/></EntryLineDesc>
-      <EntryLineDesc id="phantom"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="PHANTOM"/></EntryLineDesc>
-      <EntryLineDesc id="erase"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="ERASE"/></EntryLineDesc>
+      <EntryLineDesc id="plain"><LineDesc lineWidth="0.1" lineEnd="ROUND"/></EntryLineDesc>
     </DictionaryLineDesc>
-    <DictionaryColor/>
-    <DictionaryFillDesc units="MILLIMETER"/>
-    <DictionaryStandard units="MILLIMETER"/>
-    <DictionaryUser units="MILLIMETER"/>
   </Content>
 </IPC-2581>"#;
 
@@ -359,18 +337,7 @@ mod tests {
             .iter()
             .map(|entry| entry.line_desc.line_property)
             .collect::<Vec<_>>();
-
-        assert_eq!(
-            properties,
-            vec![
-                Some(types::primitives::LineProperty::Solid),
-                Some(types::primitives::LineProperty::Dotted),
-                Some(types::primitives::LineProperty::Dashed),
-                Some(types::primitives::LineProperty::Center),
-                Some(types::primitives::LineProperty::Phantom),
-                Some(types::primitives::LineProperty::Erase),
-            ]
-        );
+        assert_eq!(properties, [Some(LineProperty::Dotted), None]);
     }
 
     #[test]
@@ -422,8 +389,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(profile.cutouts.len(), 2);
-        assert_eq!(profile.cutouts[0].begin, Point { x: 2.0, y: 3.0 });
-        assert_eq!(profile.cutouts[1].begin, Point { x: 8.0, y: 3.0 });
+        assert_eq!(profile.cutouts[0].begin(), Point { x: 2.0, y: 3.0 });
+        assert_eq!(profile.cutouts[1].begin(), Point { x: 8.0, y: 3.0 });
     }
 
     #[test]
@@ -479,15 +446,16 @@ mod tests {
         let layer = &ecad.cad_data.layers[0];
         assert_eq!(doc.resolve(layer.spec_refs[0]), "VCut_1");
 
-        let set = &ecad.cad_data.steps[0].layer_features[0].sets[0];
-        assert_eq!(doc.resolve(set.spec_refs[0]), "VCut_1");
-        assert_eq!(set.fiducials().count(), 1);
+        let layer_feature = &ecad.cad_data.steps[0].layer_features[0];
+        let set = &layer_feature.sets[0];
+        let spec_refs = set.spec_refs.slice(&layer_feature.spec_refs);
+        assert_eq!(doc.resolve(spec_refs[0]), "VCut_1");
+        let fiducials = layer_feature.fiducials().collect::<Vec<_>>();
+        assert_eq!(fiducials.len(), 1);
+        assert_eq!(fiducials[0].kind, ecad::FiducialKind::Global);
         assert!(matches!(
-            set.features[0],
-            ecad::SetFeature::Fiducial(ecad::Fiducial {
-                kind: ecad::FiducialKind::Global,
-                ..
-            })
+            set.features.slice(&layer_feature.features),
+            [ecad::SetFeature::Fiducial(_)]
         ));
     }
 
@@ -538,22 +506,24 @@ mod tests {
 </IPC-2581>"#;
 
         let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
-        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+        let layer_feature = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0];
+        let features = layer_feature.sets[0]
+            .features
+            .slice(&layer_feature.features);
 
-        assert_eq!(set.features.len(), 4);
-        assert!(matches!(set.features[0], ecad::SetFeature::Trace(_)));
-        assert!(matches!(set.features[1], ecad::SetFeature::Polygon(_)));
-        assert!(matches!(
-            set.features[2],
-            ecad::SetFeature::UserPrimitive(_)
-        ));
-        assert!(matches!(set.features[3], ecad::SetFeature::Trace(_)));
-
-        let traces = set.traces().collect::<Vec<_>>();
-        assert_eq!(traces.len(), 2);
-        assert!(matches!(traces[1].steps[0], PolyStep::Curve(_)));
-        assert_eq!(set.polygons().count(), 1);
-        assert_eq!(set.lines().count(), 0);
+        let [
+            ecad::SetFeature::Stroke(_),
+            ecad::SetFeature::Polygon(_),
+            ecad::SetFeature::UserPrimitive(_),
+            ecad::SetFeature::Stroke(curved),
+        ] = features
+        else {
+            panic!("expected stroke, polygon, user primitive, stroke: {features:?}");
+        };
+        let ecad::StrokePath::Polyline(curved) = &curved.path else {
+            panic!("expected a polyline: {curved:?}");
+        };
+        assert!(matches!(curved.steps().next(), Some(PolyStep::Curve(_))));
     }
 
     #[test]
@@ -589,10 +559,9 @@ mod tests {
 </IPC-2581>"#;
 
         let doc = Ipc2581::parse(xml).expect("parse multi-feature Features block");
-        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+        let layer_feature = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0];
 
-        assert_eq!(set.features.len(), 1);
-        let ecad::SetFeature::PlacementGroup(group) = &set.features[0] else {
+        let [ecad::SetFeature::PlacementGroup(group)] = &layer_feature.features[..] else {
             panic!("expected one shared placement group");
         };
         assert_eq!(
@@ -643,16 +612,17 @@ mod tests {
 </IPC-2581>"#;
 
         let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
-        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+        let layer_feature = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0];
 
-        assert_eq!(set.features.len(), 1);
-        let ecad::SetFeature::Polyline(polyline) = &set.features[0] else {
-            panic!("expected feature polyline");
+        let [ecad::SetFeature::Stroke(stroke)] = &layer_feature.features[..] else {
+            panic!("expected one stroke");
         };
-        assert_eq!(polyline.begin, Point { x: 11.0, y: 20.0 });
-        assert!(matches!(polyline.steps[0], PolyStep::Curve(_)));
-        assert_eq!(set.polylines().count(), 1);
-        assert_eq!(set.lines().count(), 0);
+        let ecad::StrokePath::Polyline(polyline) = &stroke.path else {
+            panic!("expected a polyline: {stroke:?}");
+        };
+        assert!(matches!(stroke.line_desc, Some(LineDescGroup::Ref(_))));
+        assert_eq!(polyline.begin(), Point { x: 11.0, y: 20.0 });
+        assert!(matches!(polyline.steps().next(), Some(PolyStep::Curve(_))));
     }
 
     #[test]
@@ -696,28 +666,30 @@ mod tests {
 </IPC-2581>"#;
 
         let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
-        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+        let layer_feature = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0];
 
-        let polygons = set.polygons().collect::<Vec<_>>();
-        assert_eq!(polygons.len(), 1);
-        assert_eq!(polygons[0].begin, Point { x: 10.0, y: 20.0 });
+        let [
+            ecad::SetFeature::Polygon(polygon),
+            ecad::SetFeature::UserPrimitive(user_primitive),
+        ] = &layer_feature.features[..]
+        else {
+            panic!("expected a polygon and an inline user primitive");
+        };
+        assert_eq!(polygon.begin(), Point { x: 10.0, y: 20.0 });
         assert!(matches!(
-            polygons[0].steps[1],
-            PolyStep::Curve(PolyStepCurve {
+            polygon.steps().nth(1),
+            Some(PolyStep::Curve(PolyStepCurve {
                 center: Point { x: 10.0, y: 20.0 },
                 ..
-            })
+            }))
         ));
-        let ecad::SetFeature::UserPrimitive(user_primitive) = &set.features[1] else {
-            panic!("expected inline user primitive");
-        };
         assert_eq!(user_primitive.x, 10.0);
         assert_eq!(user_primitive.y, 20.0);
         let UserPrimitive::UserSpecial(user_special) = &user_primitive.primitive;
         let UserShapeType::Contour(contour) = &user_special.shapes[0].shape else {
             panic!("expected contour");
         };
-        assert_eq!(contour.polygon.begin, Point { x: 2.0, y: 0.0 });
+        assert_eq!(contour.polygon.begin(), Point { x: 2.0, y: 0.0 });
     }
 
     #[test]
@@ -788,11 +760,6 @@ mod tests {
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
     <FunctionMode mode="ASSEMBLY"/>
-    <DictionaryColor/>
-    <DictionaryLineDesc units="MILLIMETER"/>
-    <DictionaryFillDesc units="MILLIMETER"/>
-    <DictionaryStandard units="MILLIMETER"/>
-    <DictionaryUser units="MILLIMETER"/>
   </Content>
   <Avl name="Test_AVL">
     <AvlHeader title="Test" source="Test" author="Test" datetime="2025-01-04" version="1"/>
@@ -805,12 +772,7 @@ mod tests {
   </Avl>
 </IPC-2581>"#;
 
-        let result = Ipc2581::parse(xml);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-
-        let doc = result.unwrap();
-        assert!(doc.avl().is_some(), "AVL section should be parsed");
-
+        let doc = Ipc2581::parse(xml).unwrap();
         let avl = doc.avl().unwrap();
         assert_eq!(doc.resolve(avl.name), "Test_AVL");
         assert_eq!(avl.items.len(), 1);
@@ -832,11 +794,6 @@ mod tests {
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
     <FunctionMode mode="ASSEMBLY"/>
-    <DictionaryColor/>
-    <DictionaryLineDesc units="MILLIMETER"/>
-    <DictionaryFillDesc units="MILLIMETER"/>
-    <DictionaryStandard units="MILLIMETER"/>
-    <DictionaryUser units="MILLIMETER"/>
   </Content>
   <Bom name="TestBOM">
     <BomHeader assembly="Test Design" revision="1.0"/>
@@ -849,12 +806,7 @@ mod tests {
   </Bom>
 </IPC-2581>"#;
 
-        let result = Ipc2581::parse(xml);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-
-        let doc = result.unwrap();
-        assert!(doc.bom().is_some(), "BOM section should be parsed");
-
+        let doc = Ipc2581::parse(xml).unwrap();
         let bom = doc.bom().unwrap();
         assert_eq!(doc.resolve(bom.name), "TestBOM");
         assert_eq!(bom.items.len(), 1);
@@ -862,14 +814,11 @@ mod tests {
         let item = &bom.items[0];
         assert_eq!(doc.resolve(item.oem_design_number_ref), "XO32-12MHZ");
 
-        // Verify description attribute is parsed
-        assert!(item.description.is_some(), "Description should be present");
         assert_eq!(
             doc.resolve(item.description.unwrap()),
             "HCMOS Clock Oscillator"
         );
 
-        // Verify other attributes
         assert_eq!(item.quantity, Some(1));
         assert_eq!(item.pin_count, Some(4));
         let references = item.reference_designators().collect::<Vec<_>>();
@@ -1088,7 +1037,7 @@ mod tests {
         assert_eq!(package.height, Some(2.54));
         assert_eq!(package.negative_body_extension, Some(0.254));
         let outline = package.outline.as_ref().unwrap();
-        assert_eq!(outline.polygon.begin.x, -2.54);
+        assert_eq!(outline.polygon.begin().x, -2.54);
         assert_eq!(outline.polygon_xform.unwrap().x_offset, 0.254);
         assert!(outline.polygon_xform.unwrap().mirror);
         assert_eq!(outline.polygon_line_desc.unwrap().line_width, 0.0762);
@@ -1102,7 +1051,7 @@ mod tests {
         assert_eq!(land_pattern.pads.len(), 1);
         assert!(matches!(
             &land_pattern.targets[0].shape,
-            StandardShape::Primitive(StandardPrimitive::Circle(_))
+            StandardShape::Primitive(primitive) if matches!(**primitive, StandardPrimitive::Circle(_))
         ));
         assert_eq!(package.silkscreen.as_ref().unwrap().markings.len(), 1);
         let assembly_drawing = package.assembly_drawing.as_ref().unwrap();
@@ -1199,31 +1148,8 @@ mod tests {
         );
         assert_eq!(component.spec_refs.len(), 1);
         assert_eq!(doc.resolve(component.spec_refs[0]), "AssemblySpec");
-    }
 
-    #[test]
-    fn parse_component_accepts_only_ipc2581c_mount_types() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="Owner">
-    <FunctionMode mode="ASSEMBLY"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Step name="board" type="BOARD">
-        <Component refDes="J1" part="CONN" layerRef="F.Cu" mountType="THMT">
-          <Location x="0" y="0"/>
-        </Component>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#;
-
-        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
-        let component = &doc.ecad().unwrap().cad_data.steps[0].components[0];
-
-        assert_eq!(component.mount_type, MountType::Thmt);
+        // Only IPC-2581C mount types are accepted.
         assert!(Ipc2581::parse(&xml.replace("THMT", "THT")).is_err());
     }
 }

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use anyhow::Result;
 use ipc2581::Symbol;
 use ipc2581::types;
@@ -7,7 +5,7 @@ use ipc2581::types;
 use super::ImportedDesign;
 use crate::dialects::assembly as ir;
 use crate::dialects::ipc::ArtworkScope;
-use crate::geom::{Affine2, Paint, Point, Polarity, StrokeStyle};
+use crate::geom::{Affine2, Paint, Point, Polarity};
 
 impl ImportedDesign {
     /// Lower source-faithful IPC-2581 assembly data into the canonical
@@ -271,7 +269,6 @@ fn map_package_pin(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn map_package_view(
     design: &ImportedDesign,
     context: &super::ExtractContext<'_>,
@@ -339,14 +336,7 @@ fn map_package_outline(
         || outline.polygon_fill_desc_ref.is_some();
     let paint = line_desc
         .filter(|_| !unresolved_style)
-        .map_or(Paint::None, |line_desc| {
-            let mut stroke = StrokeStyle::new(
-                line_desc.line_width,
-                super::map_line_cap(line_desc.line_end),
-            );
-            stroke.pattern = super::map_line_pattern(line_desc.line_property);
-            Paint::Stroke(stroke)
-        });
+        .map_or(Paint::None, |line_desc| super::stroke_paint(line_desc, 1.0));
     ir::PackageOutline {
         transform: outline.polygon_xform.map(map_transform),
         shape: ir::PackageShape {
@@ -371,20 +361,11 @@ fn map_land_pattern(
             .pads
             .iter()
             .map(|pad| {
-                let graphic = match (
-                    pad.feature.as_ref(),
-                    pad.standard_primitive_ref,
-                    pad.user_primitive_ref,
-                ) {
-                    (Some(feature), _, _) => Some(map_feature_shape(design, context, feature)?),
-                    (None, Some(reference), _) => Some(ir::PackageGraphic::Shape(
-                        map_standard_reference(design, context, reference)?,
-                    )),
-                    (None, None, Some(reference)) => Some(ir::PackageGraphic::Shape(
-                        map_user_reference(design, context, reference),
-                    )),
-                    (None, None, None) => None,
-                };
+                let graphic = pad
+                    .feature
+                    .as_ref()
+                    .map(|feature| map_feature_shape(design, context, feature))
+                    .transpose()?;
                 Ok(ir::PackagePad {
                     padstack_ref: resolve_optional(design, pad.padstack_def_ref),
                     x: pad.x,
@@ -589,7 +570,7 @@ fn lower_standard_primitive(
         Some(types::FillProperty::Hatch | types::FillProperty::Mesh)
     );
     let mut geometry = super::GeometryDocument::new();
-    let primitive_paint =
+    let void =
         super::lower_standard_primitive(context, &mut geometry, primitive, Affine2::IDENTITY)?;
     let status = geometry_status(
         unresolved_style,
@@ -606,7 +587,7 @@ fn lower_standard_primitive(
     Ok(ir::PackageShape {
         status,
         references,
-        polarity: if primitive_paint == super::PrimitivePaint::Void {
+        polarity: if void {
             Polarity::Clear
         } else {
             Polarity::Dark
@@ -659,39 +640,11 @@ fn geometry_reference(
 }
 
 fn package_shape_context(design: &ImportedDesign) -> super::ExtractContext<'_> {
-    super::ExtractContext {
-        strings: &design.strings,
-        resolution: crate::geom::Resolution::default(),
-        padstacks: HashMap::new(),
-        line_descs: design
-            .content
-            .dictionary_line_desc
-            .entries
-            .iter()
-            .map(|entry| (entry.id, entry.line_desc))
-            .collect(),
-        fill_descs: design
-            .content
-            .dictionary_fill_desc
-            .entries
-            .iter()
-            .map(|entry| (entry.id, entry.fill_desc))
-            .collect(),
-        standard_primitives: design
-            .content
-            .dictionary_standard
-            .entries
-            .iter()
-            .map(|entry| (entry.id, &entry.primitive))
-            .collect(),
-        user_primitives: design
-            .content
-            .dictionary_user
-            .entries
-            .iter()
-            .map(|entry| (entry.id, &entry.primitive))
-            .collect(),
-    }
+    super::ExtractContext::new(
+        &design.strings,
+        &design.content,
+        crate::geom::Resolution::default(),
+    )
 }
 
 fn map_bom(design: &ImportedDesign, bom: &types::Bom) -> ir::Bom {

@@ -16,9 +16,10 @@ use pcb_ipc2581_tools::commands::board_array::balance::{
 use pcb_ipc2581_tools::geometry::{
     board_array_fabrication_profile_with_debug, board_array_vscore_lines, extract_layout,
 };
-use pcb_ipc2581_tools::ipc2581::{Ipc2581, Symbol, types::LayerFunction};
+use pcb_ipc2581_tools::ipc2581::{Ipc2581, Symbol};
 use pcb_ipc2581_tools::layers::copper_layers;
 use pcb_ipc2581_tools::utils::file::load_ipc_file;
+use pcb_ipc2581_tools::utils::format::fmt_num as num;
 use pcb_ir::dialects::ipc::{
     BalancingRegionOptions, BoardArrayBalancingResult, BoardArraySupportDocument,
     BoardArraySupportLayerGeometry, DEFAULT_BALANCING_CLEARANCE_MM,
@@ -71,7 +72,8 @@ struct Args {
     copper_layer: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SupportLayer {
     name: String,
     function: String,
@@ -81,32 +83,51 @@ struct SupportLayer {
     path_count: usize,
     excluded_documentation_path_count: usize,
     unpainted_path_count: usize,
-    region: ContourSet,
+    region: Region,
 }
 
+/// A region that serializes as its metrics and exact rings.
 #[derive(Debug)]
+struct Region(ContourSet);
+
+impl std::ops::Deref for Region {
+    type Target = ContourSet;
+
+    fn deref(&self) -> &ContourSet {
+        &self.0
+    }
+}
+
+impl Serialize for Region {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        RegionJson::from(&self.0).serialize(serializer)
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Regions {
-    panel_outer: ContourSet,
-    board_footprints: ContourSet,
-    material_removal: ContourSet,
-    support_features: ContourSet,
-    raw_obstacles: ContourSet,
-    panel_keep_in: ContourSet,
-    obstacle_keep_out: ContourSet,
-    clearance_safe_region: ContourSet,
-    opened_candidates: ContourSet,
-    removed_by_opening: ContourSet,
-    narrow_voids: ContourSet,
-    removed_by_gap_regularization: ContourSet,
-    removed_by_regularization: ContourSet,
-    safe_region: ContourSet,
-    undersized_final_components: ContourSet,
-    clearance_certificate: ContourSet,
-    safe_outside_clearance_region: ContourSet,
-    regularization_violations: ContourSet,
-    gap_violations: ContourSet,
-    certificate_outside_panel: ContourSet,
-    certificate_obstacle_overlap: ContourSet,
+    panel_outer: Region,
+    board_footprints: Region,
+    material_removal: Region,
+    support_features: Region,
+    raw_obstacles: Region,
+    panel_keep_in: Region,
+    obstacle_keep_out: Region,
+    clearance_safe_region: Region,
+    opened_candidates: Region,
+    removed_by_opening: Region,
+    narrow_voids: Region,
+    removed_by_gap_regularization: Region,
+    removed_by_regularization: Region,
+    safe_region: Region,
+    undersized_final_components: Region,
+    clearance_certificate: Region,
+    safe_outside_clearance_region: Region,
+    regularization_violations: Region,
+    gap_violations: Region,
+    certificate_outside_panel: Region,
+    certificate_obstacle_overlap: Region,
 }
 
 #[derive(Debug, Serialize)]
@@ -127,8 +148,8 @@ struct DebugArtifact {
     coverage: CoverageJson,
     regularization: RegularizationJson,
     checks: ChecksJson,
-    support_layers: Vec<SupportLayerJson>,
-    regions: RegionsJson,
+    support_layers: Vec<SupportLayer>,
+    regions: Regions,
 }
 
 #[derive(Debug, Serialize)]
@@ -184,6 +205,8 @@ struct CoverageJson {
 #[serde(rename_all = "camelCase")]
 struct ChecksJson {
     passed: bool,
+    /// Where a boundary comes closer than the clearance; absent when none does.
+    nearest_approach_mm: Option<f64>,
     safe_outside_clearance_region_area_mm2: f64,
     regularization_violation_area_mm2: f64,
     gap_violation_area_mm2: f64,
@@ -207,46 +230,6 @@ struct RegularizationJson {
     smallest_final_component_area_mm2: Option<f64>,
     minimum_final_component_bbox_span_mm: Option<f64>,
     undersized_final_component_count: usize,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SupportLayerJson {
-    name: String,
-    function: String,
-    source_feature_count: usize,
-    feature_count: usize,
-    source_path_count: usize,
-    path_count: usize,
-    excluded_documentation_path_count: usize,
-    unpainted_path_count: usize,
-    region: RegionJson,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RegionsJson {
-    panel_outer: RegionJson,
-    board_footprints: RegionJson,
-    material_removal: RegionJson,
-    support_features: RegionJson,
-    raw_obstacles: RegionJson,
-    panel_keep_in: RegionJson,
-    obstacle_keep_out: RegionJson,
-    clearance_safe_region: RegionJson,
-    opened_candidates: RegionJson,
-    removed_by_opening: RegionJson,
-    narrow_voids: RegionJson,
-    removed_by_gap_regularization: RegionJson,
-    removed_by_regularization: RegionJson,
-    safe_region: RegionJson,
-    undersized_final_components: RegionJson,
-    clearance_certificate: RegionJson,
-    safe_outside_clearance_region: RegionJson,
-    regularization_violations: RegionJson,
-    gap_violations: RegionJson,
-    certificate_outside_panel: RegionJson,
-    certificate_obstacle_overlap: RegionJson,
 }
 
 #[derive(Debug, Serialize)]
@@ -279,14 +262,6 @@ impl From<&ContourSet> for RegionJson {
             rings_mm: region.rings.clone(),
         }
     }
-}
-
-fn component_areas(region: &ContourSet) -> Vec<f64> {
-    region
-        .connected_components()
-        .into_iter()
-        .map(|component| component.area())
-        .collect()
 }
 
 fn main() -> Result<()> {
@@ -394,40 +369,47 @@ fn main() -> Result<()> {
         .opened_candidates
         .disk_gap_violations(args.gap_radius_mm)
         .unwrap();
+    // Overlays only this harness draws: the clearance sweep, and the two
+    // properties the construction guarantees by ending on an opening with no
+    // gap violation left.
+    let swept_safe_region = safe_region.disk_dilate(args.clearance_mm)?;
+    let regularization_violations =
+        safe_region.difference(&safe_region.disk_open(args.regularization_radius_mm)?)?;
+    let gap_violations = safe_region.disk_gap_violations(args.gap_radius_mm)?;
+    let nearest_approach_mm = certificate.nearest_approach.map(|distance| distance.mm);
     let regions = Regions {
-        panel_outer,
-        board_footprints,
-        material_removal,
-        support_features,
-        raw_obstacles: intermediates.raw_obstacles,
-        panel_keep_in: intermediates.panel_keep_in,
-        obstacle_keep_out: intermediates.obstacle_keep_out,
-        clearance_safe_region: intermediates.clearance_safe_region,
-        opened_candidates: intermediates.opened_candidates,
-        removed_by_opening: intermediates.removed_by_opening,
-        narrow_voids,
-        removed_by_gap_regularization: intermediates.removed_by_gap_regularization,
-        removed_by_regularization,
-        safe_region,
-        undersized_final_components,
-        clearance_certificate: certificate.swept_safe_region,
-        safe_outside_clearance_region: certificate.safe_outside_clearance_region,
-        regularization_violations: certificate.regularization_violations,
-        gap_violations: certificate.gap_violations,
-        certificate_outside_panel: certificate.outside_panel,
-        certificate_obstacle_overlap: certificate.obstacle_overlap,
+        panel_outer: Region(panel_outer),
+        board_footprints: Region(board_footprints),
+        material_removal: Region(material_removal),
+        support_features: Region(support_features),
+        raw_obstacles: Region(intermediates.raw_obstacles),
+        panel_keep_in: Region(intermediates.panel_keep_in),
+        obstacle_keep_out: Region(intermediates.obstacle_keep_out),
+        clearance_safe_region: Region(intermediates.clearance_safe_region),
+        opened_candidates: Region(intermediates.opened_candidates),
+        removed_by_opening: Region(intermediates.removed_by_opening),
+        narrow_voids: Region(narrow_voids),
+        removed_by_gap_regularization: Region(intermediates.removed_by_gap_regularization),
+        removed_by_regularization: Region(removed_by_regularization),
+        safe_region: Region(safe_region),
+        undersized_final_components: Region(undersized_final_components),
+        clearance_certificate: Region(swept_safe_region),
+        safe_outside_clearance_region: Region(certificate.safe_outside_clearance_region),
+        regularization_violations: Region(regularization_violations),
+        gap_violations: Region(gap_violations),
+        certificate_outside_panel: Region(certificate.outside_panel),
+        certificate_obstacle_overlap: Region(certificate.obstacle_overlap),
     };
 
     let checks = ChecksJson {
         passed: certificate_passed,
+        nearest_approach_mm,
         safe_outside_clearance_region_area_mm2: regions.safe_outside_clearance_region.area(),
         regularization_violation_area_mm2: regions.regularization_violations.area(),
         gap_violation_area_mm2: regions.gap_violations.area(),
         certificate_outside_panel_area_mm2: regions.certificate_outside_panel.area(),
         certificate_obstacle_overlap_area_mm2: regions.certificate_obstacle_overlap.area(),
     };
-    let clearance_safe_component_areas = component_areas(&regions.clearance_safe_region);
-    let opened_component_areas = component_areas(&regions.opened_candidates);
     let final_component_areas = final_components
         .iter()
         .map(ContourSet::area)
@@ -450,8 +432,8 @@ fn main() -> Result<()> {
         } else {
             1.0
         },
-        clearance_safe_component_count: clearance_safe_component_areas.len(),
-        opened_component_count: opened_component_areas.len(),
+        clearance_safe_component_count: regions.clearance_safe_region.connected_components().len(),
+        opened_component_count: regions.opened_candidates.connected_components().len(),
         final_component_count: final_component_areas.len(),
         smallest_final_component_area_mm2: final_component_areas.into_iter().reduce(f64::min),
         minimum_final_component_bbox_span_mm,
@@ -507,46 +489,12 @@ fn main() -> Result<()> {
         },
         regularization,
         checks,
-        support_layers: support_layers
-            .iter()
-            .map(|layer| SupportLayerJson {
-                name: layer.name.clone(),
-                function: layer.function.clone(),
-                source_feature_count: layer.source_feature_count,
-                feature_count: layer.feature_count,
-                source_path_count: layer.source_path_count,
-                path_count: layer.path_count,
-                excluded_documentation_path_count: layer.excluded_documentation_path_count,
-                unpainted_path_count: layer.unpainted_path_count,
-                region: RegionJson::from(&layer.region),
-            })
-            .collect(),
-        regions: RegionsJson {
-            panel_outer: RegionJson::from(&regions.panel_outer),
-            board_footprints: RegionJson::from(&regions.board_footprints),
-            material_removal: RegionJson::from(&regions.material_removal),
-            support_features: RegionJson::from(&regions.support_features),
-            raw_obstacles: RegionJson::from(&regions.raw_obstacles),
-            panel_keep_in: RegionJson::from(&regions.panel_keep_in),
-            obstacle_keep_out: RegionJson::from(&regions.obstacle_keep_out),
-            clearance_safe_region: RegionJson::from(&regions.clearance_safe_region),
-            opened_candidates: RegionJson::from(&regions.opened_candidates),
-            removed_by_opening: RegionJson::from(&regions.removed_by_opening),
-            narrow_voids: RegionJson::from(&regions.narrow_voids),
-            removed_by_gap_regularization: RegionJson::from(&regions.removed_by_gap_regularization),
-            removed_by_regularization: RegionJson::from(&regions.removed_by_regularization),
-            safe_region: RegionJson::from(&regions.safe_region),
-            undersized_final_components: RegionJson::from(&regions.undersized_final_components),
-            clearance_certificate: RegionJson::from(&regions.clearance_certificate),
-            safe_outside_clearance_region: RegionJson::from(&regions.safe_outside_clearance_region),
-            regularization_violations: RegionJson::from(&regions.regularization_violations),
-            gap_violations: RegionJson::from(&regions.gap_violations),
-            certificate_outside_panel: RegionJson::from(&regions.certificate_outside_panel),
-            certificate_obstacle_overlap: RegionJson::from(&regions.certificate_obstacle_overlap),
-        },
+        support_layers,
+        regions,
     };
+    let regions = &artifact.regions;
 
-    write_artifacts(&args.output, &input, &regions, &support_layers, &artifact)?;
+    write_artifacts(&args.output, &input, &artifact)?;
 
     println!("wrote {}", args.output.join("index.html").display());
     println!(
@@ -602,24 +550,20 @@ fn main() -> Result<()> {
 
 fn support_layer(
     source: ArraySupportLayerSource,
-    geometry: BoardArraySupportLayerGeometry<Symbol>,
+    geometry: BoardArraySupportLayerGeometry,
     copper_layer: Symbol,
 ) -> Result<SupportLayer> {
     Ok(SupportLayer {
         name: source.name,
-        function: layer_function_name(source.layer_function),
+        function: format!("{:?}", source.layer_function),
         source_feature_count: geometry.source_feature_count,
         feature_count: geometry.feature_count,
         source_path_count: geometry.source_path_count,
         path_count: geometry.path_count,
         excluded_documentation_path_count: geometry.excluded_documentation_path_count,
         unpainted_path_count: geometry.unpainted_path_count,
-        region: geometry.region_for_layer(copper_layer)?,
+        region: Region(geometry.region_for_layer(copper_layer)?),
     })
-}
-
-fn layer_function_name(function: LayerFunction) -> String {
-    format!("{function:?}")
 }
 
 fn generated_metadata_value(xml: &str, name: &str) -> Option<String> {
@@ -631,13 +575,8 @@ fn generated_metadata_value(xml: &str, name: &str) -> Option<String> {
     Some(value[..value.find('"')?].to_string())
 }
 
-fn write_artifacts(
-    output: &Path,
-    input: &Path,
-    regions: &Regions,
-    support_layers: &[SupportLayer],
-    artifact: &DebugArtifact,
-) -> Result<()> {
+fn write_artifacts(output: &Path, input: &Path, artifact: &DebugArtifact) -> Result<()> {
+    let regions = &artifact.regions;
     fs::create_dir_all(output)
         .with_context(|| format!("failed to create output directory {}", output.display()))?;
 
@@ -785,7 +724,8 @@ fn write_artifacts(
         )
     })?;
     let mut support_files = Vec::new();
-    for (index, layer) in support_layers
+    for (index, layer) in artifact
+        .support_layers
         .iter()
         .filter(|layer| !layer.region.is_empty() || layer.unpainted_path_count > 0)
         .enumerate()
@@ -1343,21 +1283,6 @@ fn slug(value: &str) -> String {
     } else {
         out
     }
-}
-
-fn num(value: f64) -> String {
-    let mut value = if value.abs() < 5e-9 { 0.0 } else { value };
-    if value == -0.0 {
-        value = 0.0;
-    }
-    let mut text = format!("{value:.6}");
-    while text.contains('.') && text.ends_with('0') {
-        text.pop();
-    }
-    if text.ends_with('.') {
-        text.pop();
-    }
-    text
 }
 
 fn escape_html(value: &str) -> String {

@@ -6,7 +6,7 @@
 
 use crate::dialects::ipc::Document;
 use crate::dialects::ipc::layout::{
-    LayoutInstance, LayoutMargins, LayoutRepeat, LayoutStep, LayoutStepKind, StepProfile,
+    LayoutMargins, LayoutRepeat, LayoutStep, LayoutStepKind, StepProfile,
 };
 use crate::geom::{Affine2, BBox};
 
@@ -56,13 +56,13 @@ pub enum ProfileSet {
     RootOnly,
 }
 
-pub fn board_bbox<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) -> Option<BBox> {
+pub fn board_bbox(doc: &Document) -> Option<BBox> {
     layout_steps_by_kind(doc, LayoutStepKind::Board)
         .map(|(_, step)| step.bbox)
         .find(|bbox| !bbox.is_empty())
 }
 
-pub fn panel_bbox<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) -> Option<BBox> {
+pub fn panel_bbox(doc: &Document) -> Option<BBox> {
     root_panel_step(doc)
         .map(|(_, step)| step.bbox)
         .filter(|bbox| !bbox.is_empty())
@@ -73,9 +73,7 @@ pub fn panel_bbox<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) 
         })
 }
 
-pub fn root_step<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Option<(u32, &LayoutStep<Symbol>)> {
+pub fn root_step(doc: &Document) -> Option<(u32, &LayoutStep)> {
     let index = doc.layout.root_step?;
     doc.layout
         .steps
@@ -83,16 +81,14 @@ pub fn root_step<Symbol, LayerFunction>(
         .map(|step| (index, step))
 }
 
-pub fn root_panel_step<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Option<(u32, &LayoutStep<Symbol>)> {
+pub fn root_panel_step(doc: &Document) -> Option<(u32, &LayoutStep)> {
     root_step(doc).filter(|(_, step)| step.kind == LayoutStepKind::Panel)
 }
 
-pub fn layout_steps_by_kind<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+pub fn layout_steps_by_kind(
+    doc: &Document,
     kind: LayoutStepKind,
-) -> impl Iterator<Item = (u32, &LayoutStep<Symbol>)> {
+) -> impl Iterator<Item = (u32, &LayoutStep)> {
     doc.layout
         .steps
         .iter()
@@ -100,56 +96,40 @@ pub fn layout_steps_by_kind<Symbol, LayerFunction>(
         .filter_map(move |(index, step)| (step.kind == kind).then_some((index as u32, step)))
 }
 
-pub fn layout_instances_by_kind<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    kind: LayoutStepKind,
-) -> impl Iterator<Item = (u32, &LayoutInstance<Symbol>)> {
-    doc.layout
-        .instances
-        .iter()
-        .enumerate()
-        .filter_map(move |(index, instance)| {
-            let step = doc.layout.steps.get(instance.child_step as usize)?;
-            (step.kind == kind).then_some((index as u32, instance))
-        })
-}
-
-pub fn layout_child_repeats<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+fn layout_child_repeats(
+    doc: &Document,
     parent_step: u32,
     parent_instance: Option<u32>,
-) -> impl Iterator<Item = (u32, &LayoutRepeat<Symbol>)> {
-    doc.layout
-        .repeats
-        .iter()
-        .enumerate()
-        .filter_map(move |(index, repeat)| {
-            (repeat.parent_step == parent_step && repeat.parent_instance == parent_instance)
-                .then_some((index as u32, repeat))
-        })
-}
-
-pub fn layout_repeat_instances<'a, Symbol, LayerFunction>(
-    doc: &'a Document<Symbol, LayerFunction>,
-    repeat: &LayoutRepeat<Symbol>,
-) -> impl Iterator<Item = (u32, &'a LayoutInstance<Symbol>)> {
-    repeat.instances.indices().filter_map(move |index| {
-        doc.layout
-            .instances
-            .get(index as usize)
-            .map(|instance| (index, instance))
+) -> impl Iterator<Item = &LayoutRepeat> {
+    doc.layout.repeats.iter().filter(move |repeat| {
+        repeat.parent_step == parent_step && repeat.parent_instance == parent_instance
     })
 }
 
-pub fn board_step_count<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) -> usize {
+/// Indices of the repeat's instances the layout graph holds.
+fn layout_repeat_instances(doc: &Document, repeat: &LayoutRepeat) -> impl Iterator<Item = u32> {
+    let count = doc.layout.instances.len();
+    repeat
+        .instances
+        .indices()
+        .filter(move |&index| (index as usize) < count)
+}
+
+pub fn board_step_count(doc: &Document) -> usize {
     layout_steps_by_kind(doc, LayoutStepKind::Board).count()
 }
 
-pub fn board_instance_count<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) -> usize {
-    layout_instances_by_kind(doc, LayoutStepKind::Board).count()
+pub fn board_instance_count(doc: &Document) -> usize {
+    let steps = &doc.layout.steps;
+    doc.layout
+        .instances
+        .iter()
+        .filter_map(|instance| steps.get(instance.child_step as usize))
+        .filter(|step| step.kind == LayoutStepKind::Board)
+        .count()
 }
 
-pub fn panel_step_count<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunction>) -> usize {
+pub fn panel_step_count(doc: &Document) -> usize {
     layout_steps_by_kind(doc, LayoutStepKind::Panel).count()
 }
 
@@ -160,16 +140,9 @@ pub fn panel_step_count<Symbol, LayerFunction>(doc: &Document<Symbol, LayerFunct
 /// `array -> board` shapes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SimpleBoardArrayLayout {
-    pub array_step: u32,
-    pub array_repeat: u32,
-    pub board_cell_step: Option<u32>,
-    pub board_cell_repeat: Option<u32>,
     pub board_step: u32,
     pub columns: u32,
     pub rows: u32,
-    pub array_bbox: BBox,
-    pub repeated_bbox: BBox,
-    pub board_bbox: BBox,
     pub board_width: f64,
     pub board_height: f64,
     pub pitch_x: Option<f64>,
@@ -182,9 +155,7 @@ pub struct SimpleBoardArrayLayout {
 
 const SIMPLE_BOARD_ARRAY_EPSILON: f64 = 1e-6;
 
-pub fn simple_board_array_layout<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Option<SimpleBoardArrayLayout> {
+pub fn simple_board_array_layout(doc: &Document) -> Option<SimpleBoardArrayLayout> {
     let (array_step_index, array_step) = root_panel_step(doc)?;
     let array_bbox = array_step.bbox;
     if array_bbox.is_empty() || array_bbox.width() <= 0.0 || array_bbox.height() <= 0.0 {
@@ -192,7 +163,7 @@ pub fn simple_board_array_layout<Symbol, LayerFunction>(
     }
 
     let mut root_repeats = layout_child_repeats(doc, array_step_index, None);
-    let (array_repeat_index, array_repeat) = root_repeats.next()?;
+    let array_repeat = root_repeats.next()?;
     if root_repeats.next().is_some()
         || array_repeat.nx == 0
         || array_repeat.ny == 0
@@ -204,23 +175,17 @@ pub fn simple_board_array_layout<Symbol, LayerFunction>(
 
     let child_step = doc.layout.steps.get(array_repeat.child_step as usize)?;
     match child_step.kind {
-        LayoutStepKind::Board => {
-            simple_direct_board_array(doc, array_step_index, array_repeat_index, array_repeat)
-        }
-        LayoutStepKind::Panel => {
-            simple_board_cell_array(doc, array_step_index, array_repeat_index, array_repeat)
-        }
+        LayoutStepKind::Board => simple_direct_board_array(doc, array_step, array_repeat),
+        LayoutStepKind::Panel => simple_board_cell_array(doc, array_step, array_repeat),
         _ => None,
     }
 }
 
-fn simple_direct_board_array<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    array_step_index: u32,
-    array_repeat_index: u32,
-    repeat: &LayoutRepeat<Symbol>,
+fn simple_direct_board_array(
+    doc: &Document,
+    array_step: &LayoutStep,
+    repeat: &LayoutRepeat,
 ) -> Option<SimpleBoardArrayLayout> {
-    let array_step = doc.layout.steps.get(array_step_index as usize)?;
     let board_step = doc.layout.steps.get(repeat.child_step as usize)?;
     if board_step.kind != LayoutStepKind::Board {
         return None;
@@ -250,16 +215,9 @@ fn simple_direct_board_array<Symbol, LayerFunction>(
     let edge_rail = edge_rail_width.map(simple_margins_all).unwrap_or(margins);
 
     Some(SimpleBoardArrayLayout {
-        array_step: array_step_index,
-        array_repeat: array_repeat_index,
-        board_cell_step: None,
-        board_cell_repeat: None,
         board_step: repeat.child_step,
         columns: repeat.nx,
         rows: repeat.ny,
-        array_bbox: array_step.bbox,
-        repeated_bbox: repeat.bbox,
-        board_bbox: board_step.bbox,
         board_width,
         board_height,
         pitch_x,
@@ -271,13 +229,11 @@ fn simple_direct_board_array<Symbol, LayerFunction>(
     })
 }
 
-fn simple_board_cell_array<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    array_step_index: u32,
-    array_repeat_index: u32,
-    repeat: &LayoutRepeat<Symbol>,
+fn simple_board_cell_array(
+    doc: &Document,
+    array_step: &LayoutStep,
+    repeat: &LayoutRepeat,
 ) -> Option<SimpleBoardArrayLayout> {
-    let array_step = doc.layout.steps.get(array_step_index as usize)?;
     let board_cell_step = doc.layout.steps.get(repeat.child_step as usize)?;
     let (cell_width, cell_height) = simple_step_dimensions(board_cell_step)?;
     let pitch_x = (repeat.nx > 1)
@@ -290,14 +246,13 @@ fn simple_board_cell_array<Symbol, LayerFunction>(
         return None;
     }
 
-    let (first_cell_instance, _) = layout_repeat_instances(doc, repeat).next()?;
+    let first_cell_instance = layout_repeat_instances(doc, repeat).next()?;
     let mut board_repeats = layout_child_repeats(doc, repeat.child_step, Some(first_cell_instance));
-    let (board_repeat_index, board_repeat) = board_repeats.next()?;
+    let board_repeat = board_repeats.next()?;
+    // A single placement has no pitch, whatever its `dx` and `dy` say.
     if board_repeats.next().is_some()
         || board_repeat.nx != 1
         || board_repeat.ny != 1
-        || !simple_array_nearly_zero(board_repeat.dx)
-        || !simple_array_nearly_zero(board_repeat.dy)
         || !simple_array_nearly_zero(board_repeat.angle)
         || board_repeat.mirror
     {
@@ -335,16 +290,9 @@ fn simple_board_cell_array<Symbol, LayerFunction>(
     ]);
 
     Some(SimpleBoardArrayLayout {
-        array_step: array_step_index,
-        array_repeat: array_repeat_index,
-        board_cell_step: Some(repeat.child_step),
-        board_cell_repeat: Some(board_repeat_index),
         board_step: board_repeat.child_step,
         columns: repeat.nx,
         rows: repeat.ny,
-        array_bbox: array_step.bbox,
-        repeated_bbox: repeat.bbox,
-        board_bbox: board_step.bbox,
         board_width,
         board_height,
         pitch_x,
@@ -352,7 +300,7 @@ fn simple_board_cell_array<Symbol, LayerFunction>(
         board_margin: Some(board_margin),
         edge_rail_width,
         edge_rail: edge_margins,
-        margins: simple_margins_between(repeat.bbox, array_step.bbox)?,
+        margins: edge_margins,
     })
 }
 
@@ -365,7 +313,7 @@ fn simple_margins_all(value: f64) -> LayoutMargins {
     }
 }
 
-fn simple_step_dimensions<Symbol>(step: &LayoutStep<Symbol>) -> Option<(f64, f64)> {
+fn simple_step_dimensions(step: &LayoutStep) -> Option<(f64, f64)> {
     (!step.bbox.is_empty() && step.bbox.width() > 0.0 && step.bbox.height() > 0.0)
         .then_some((step.bbox.width(), step.bbox.height()))
 }
@@ -382,44 +330,34 @@ fn simple_board_margin_from_cell(
     cell_width: f64,
     cell_height: f64,
 ) -> Option<LayoutMargins> {
-    let left = board_left;
-    let bottom = board_bottom;
-    let right = cell_width - board_left - board_width;
-    let top = cell_height - board_bottom - board_height;
-    if [left, right, bottom, top]
-        .iter()
-        .any(|value| !value.is_finite() || *value < -SIMPLE_BOARD_ARRAY_EPSILON)
-    {
-        return None;
-    }
-
-    Some(LayoutMargins {
-        top: simple_clamp_zero(top),
-        right: simple_clamp_zero(right),
-        bottom: simple_clamp_zero(bottom),
-        left: simple_clamp_zero(left),
-    })
+    simple_margins(
+        board_left,
+        cell_width - board_left - board_width,
+        board_bottom,
+        cell_height - board_bottom - board_height,
+    )
 }
 
 fn simple_margins_between(inner: BBox, outer: BBox) -> Option<LayoutMargins> {
-    let left = simple_clamp_zero(inner.min.x - outer.min.x);
-    let right = simple_clamp_zero(outer.max.x - inner.max.x);
-    let bottom = simple_clamp_zero(inner.min.y - outer.min.y);
-    let top = simple_clamp_zero(outer.max.y - inner.max.y);
+    simple_margins(
+        inner.min.x - outer.min.x,
+        outer.max.x - inner.max.x,
+        inner.min.y - outer.min.y,
+        outer.max.y - inner.max.y,
+    )
+}
 
-    if [left, right, bottom, top]
+/// Margins that are none of them negative past the epsilon, clamped to zero.
+fn simple_margins(left: f64, right: f64, bottom: f64, top: f64) -> Option<LayoutMargins> {
+    [left, right, bottom, top]
         .iter()
-        .all(|value| value.is_finite() && *value >= 0.0)
-    {
-        Some(LayoutMargins {
-            top,
-            right,
-            bottom,
-            left,
+        .all(|value| value.is_finite() && *value >= -SIMPLE_BOARD_ARRAY_EPSILON)
+        .then(|| LayoutMargins {
+            top: simple_clamp_zero(top),
+            right: simple_clamp_zero(right),
+            bottom: simple_clamp_zero(bottom),
+            left: simple_clamp_zero(left),
         })
-    } else {
-        None
-    }
 }
 
 fn simple_edge_rail_width(
@@ -442,23 +380,12 @@ fn simple_board_margin_from_margins(
     margins: LayoutMargins,
     edge_rail_width: f64,
 ) -> Option<LayoutMargins> {
-    let left = margins.left - edge_rail_width;
-    let right = margins.right - edge_rail_width;
-    let bottom = margins.bottom - edge_rail_width;
-    let top = margins.top - edge_rail_width;
-    if [left, right, bottom, top]
-        .iter()
-        .any(|value| !value.is_finite() || *value < -SIMPLE_BOARD_ARRAY_EPSILON)
-    {
-        return None;
-    }
-
-    Some(LayoutMargins {
-        top: simple_clamp_zero(top),
-        right: simple_clamp_zero(right),
-        bottom: simple_clamp_zero(bottom),
-        left: simple_clamp_zero(left),
-    })
+    simple_margins(
+        margins.left - edge_rail_width,
+        margins.right - edge_rail_width,
+        margins.bottom - edge_rail_width,
+        margins.top - edge_rail_width,
+    )
 }
 
 fn simple_average_if_consistent(candidates: Vec<f64>) -> Option<f64> {
@@ -507,7 +434,6 @@ pub enum ProfileOccurrenceRole {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProfileOccurrence<'a> {
-    pub profile_index: u32,
     pub profile: &'a StepProfile,
     pub step: Option<u32>,
     pub instance: Option<u32>,
@@ -516,8 +442,8 @@ pub struct ProfileOccurrence<'a> {
     pub depth: u32,
 }
 
-pub fn profile_occurrences_for<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
+pub fn profile_occurrences_for(
+    doc: &Document,
     profile_set: ProfileSet,
 ) -> Vec<ProfileOccurrence<'_>> {
     if profile_set == ProfileSet::BoardOutlines {
@@ -528,9 +454,7 @@ pub fn profile_occurrences_for<Symbol, LayerFunction>(
         return doc
             .profiles
             .iter()
-            .enumerate()
-            .map(|(profile_index, profile)| ProfileOccurrence {
-                profile_index: profile_index as u32,
+            .map(|profile| ProfileOccurrence {
                 profile,
                 step: None,
                 instance: None,
@@ -541,20 +465,15 @@ pub fn profile_occurrences_for<Symbol, LayerFunction>(
             .collect();
     };
 
-    let mut occurrences = Vec::new();
-    push_profile_occurrences(
-        &mut occurrences,
+    let mut occurrences = step_profile_occurrences(
         doc,
-        ProfileOccurrenceSpec {
-            profiles: root.profiles,
-            step: Some(root_index),
-            instance: None,
-            transform: Affine2::IDENTITY,
-            role: root_profile_role(root.kind),
-            depth: 0,
-        },
-    );
-
+        (root_index, root),
+        None,
+        Affine2::IDENTITY,
+        root_profile_role(root.kind),
+        0,
+    )
+    .collect::<Vec<_>>();
     if profile_set == ProfileSet::RootOnly {
         return occurrences;
     }
@@ -567,51 +486,38 @@ pub fn profile_occurrences_for<Symbol, LayerFunction>(
             continue;
         }
 
-        push_profile_occurrences(
-            &mut occurrences,
+        occurrences.extend(step_profile_occurrences(
             doc,
-            ProfileOccurrenceSpec {
-                profiles: step.profiles,
-                step: Some(instance.child_step),
-                instance: Some(instance_index as u32),
-                transform: instance.transform,
-                role: instance_profile_role(step.kind),
-                depth: instance_depth(doc, instance_index as u32),
-            },
-        );
+            (instance.child_step, step),
+            Some(instance_index as u32),
+            instance.transform,
+            instance_profile_role(step.kind),
+            instance_depth(doc, instance_index as u32),
+        ));
     }
     occurrences
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ProfileOccurrenceSpec {
-    profiles: crate::geom::Span,
-    step: Option<u32>,
+/// One placement of a step's profiles.
+fn step_profile_occurrences<'a>(
+    doc: &'a Document,
+    (step_index, step): (u32, &LayoutStep),
     instance: Option<u32>,
     transform: Affine2,
     role: ProfileOccurrenceRole,
     depth: u32,
-}
-
-fn push_profile_occurrences<'a, Symbol, LayerFunction>(
-    occurrences: &mut Vec<ProfileOccurrence<'a>>,
-    doc: &'a Document<Symbol, LayerFunction>,
-    spec: ProfileOccurrenceSpec,
-) {
-    for profile_index in spec.profiles.indices() {
-        let Some(profile) = doc.profiles.get(profile_index as usize) else {
-            continue;
-        };
-        occurrences.push(ProfileOccurrence {
-            profile_index,
+) -> impl Iterator<Item = ProfileOccurrence<'a>> {
+    step.profiles
+        .indices()
+        .filter_map(|index| doc.profiles.get(index as usize))
+        .map(move |profile| ProfileOccurrence {
             profile,
-            step: spec.step,
-            instance: spec.instance,
-            transform: spec.transform,
-            role: spec.role,
-            depth: spec.depth,
-        });
-    }
+            step: Some(step_index),
+            instance,
+            transform,
+            role,
+            depth,
+        })
 }
 
 fn include_instance_profiles(
@@ -628,31 +534,16 @@ fn include_instance_profiles(
     }
 }
 
-fn board_profile_occurrences<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-) -> Vec<ProfileOccurrence<'_>> {
-    let Some((step_index, step)) = layout_steps_by_kind(doc, LayoutStepKind::Board).next() else {
+fn board_profile_occurrences(doc: &Document) -> Vec<ProfileOccurrence<'_>> {
+    let Some(board) = layout_steps_by_kind(doc, LayoutStepKind::Board).next() else {
         return Vec::new();
     };
-    let role = if root_step(doc).is_some_and(|(root_index, _)| root_index == step_index) {
+    let role = if doc.layout.root_step == Some(board.0) {
         ProfileOccurrenceRole::RootBoard
     } else {
         ProfileOccurrenceRole::BoardDefinition
     };
-    let mut occurrences = Vec::new();
-    push_profile_occurrences(
-        &mut occurrences,
-        doc,
-        ProfileOccurrenceSpec {
-            profiles: step.profiles,
-            step: Some(step_index),
-            instance: None,
-            transform: Affine2::IDENTITY,
-            role,
-            depth: 0,
-        },
-    );
-    occurrences
+    step_profile_occurrences(doc, board, None, Affine2::IDENTITY, role, 0).collect()
 }
 
 fn root_profile_role(kind: LayoutStepKind) -> ProfileOccurrenceRole {
@@ -671,10 +562,7 @@ fn instance_profile_role(kind: LayoutStepKind) -> ProfileOccurrenceRole {
     }
 }
 
-pub(crate) fn instance_depth<Symbol, LayerFunction>(
-    doc: &Document<Symbol, LayerFunction>,
-    instance_index: u32,
-) -> u32 {
+fn instance_depth(doc: &Document, instance_index: u32) -> u32 {
     let mut depth = 1;
     let mut remaining = doc.layout.instances.len();
     let mut parent = doc

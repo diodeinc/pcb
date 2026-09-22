@@ -9,8 +9,8 @@ use std::ops::Range;
 
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
-use crate::geom::path::{ContourBuf, PathCmd, contour_bbox, validate_cmd_points};
-use crate::geom::style::{FillRule, Paint, StrokeStyle};
+use crate::geom::path::{ContourBuf, PathCmd, contour_bbox, transformed_cmds, validate_cmd_points};
+use crate::geom::style::{FillRule, LineCap, Paint, StrokeStyle};
 
 /// A half-open range of `u32` indices into one of a document's flat arenas.
 ///
@@ -65,17 +65,12 @@ impl Span {
         &items[self.range()]
     }
 
-    pub fn slice_mut<T>(self, items: &mut [T]) -> &mut [T] {
-        &mut items[self.range()]
-    }
-
     pub(crate) fn validate(self, name: &str, index: usize, len: usize) -> Result<(), String> {
         let end = self.start as usize + self.count as usize;
         if self.start as usize > len || end > len {
             Err(format!(
-                "{name} range for item {index} is out of bounds: {}..{} of {len}",
+                "{name} range for item {index} is out of bounds: {}..{end} of {len}",
                 self.start,
-                self.end(),
             ))
         } else {
             Ok(())
@@ -100,27 +95,11 @@ pub struct Path {
 }
 
 impl Path {
-    pub fn filled(rule: FillRule) -> Self {
-        Self {
-            contours: Span::EMPTY,
-            bbox: BBox::empty(),
-            paint: Paint::Fill { rule },
-        }
-    }
-
     pub fn stroked(stroke: StrokeStyle) -> Self {
         Self {
             contours: Span::EMPTY,
             bbox: BBox::empty(),
             paint: Paint::Stroke(stroke),
-        }
-    }
-
-    pub fn unpainted() -> Self {
-        Self {
-            contours: Span::EMPTY,
-            bbox: BBox::empty(),
-            paint: Paint::None,
         }
     }
 
@@ -256,9 +235,60 @@ impl PathArena {
     /// Copy a path (with its contours) from another arena, optionally
     /// transformed. Returns the new path index.
     pub fn append_path_from(&mut self, other: &PathArena, path: u32, transform: Affine2) -> u32 {
-        let source = other.paths[path as usize];
-        let contours = other.transformed_contour_bufs(source.contours, transform);
-        self.push_path(source.paint, contours)
+        self.append_paths_from(other, Span::single(path), transform)
+            .start
+    }
+
+    /// Copy a run of paths from another arena under an exact transform,
+    /// streaming commands arena to arena. Stroke widths follow the
+    /// transform's scale, like the centerlines they sweep; an identity copy
+    /// moves commands and cached bounds verbatim.
+    pub fn append_paths_from(
+        &mut self,
+        other: &PathArena,
+        paths: Span,
+        transform: Affine2,
+    ) -> Span {
+        let start = self.paths.len() as u32;
+        let identity = transform.is_identity();
+        let stroke_scale = transform.m00.hypot(transform.m10);
+        let uncertainty_scale = transform.max_scale();
+        for path in paths.slice(&other.paths) {
+            let contour_start = self.contours.len() as u32;
+            let mut bbox = BBox::empty();
+            for contour in other.contours(path.contours) {
+                let cmd_start = self.cmds.len();
+                let source = other.cmds(*contour);
+                let contour = if identity {
+                    self.cmds.extend_from_slice(source);
+                    Contour {
+                        cmds: Span::new(cmd_start as u32, source.len() as u32),
+                        ..*contour
+                    }
+                } else {
+                    self.cmds
+                        .extend(transformed_cmds(source.iter().copied(), transform));
+                    Contour {
+                        cmds: Span::new(cmd_start as u32, source.len() as u32),
+                        bbox: contour_bbox(&self.cmds[cmd_start..]),
+                        uncertainty_mm: contour.uncertainty_mm * uncertainty_scale,
+                    }
+                };
+                bbox = bbox.union(contour.bbox);
+                self.contours.push(contour);
+            }
+            let paint = if identity {
+                path.paint
+            } else {
+                path.paint.scaled(stroke_scale)
+            };
+            self.paths.push(Path {
+                contours: Span::new(contour_start, self.contours.len() as u32 - contour_start),
+                bbox: painted_bbox(bbox, paint),
+                paint,
+            });
+        }
+        Span::new(start, self.paths.len() as u32 - start)
     }
 
     /// Recompute contour and path bounds bottom-up from the command stream.
@@ -352,6 +382,10 @@ impl PathArena {
 
 fn painted_bbox(bbox: BBox, paint: Paint) -> BBox {
     match paint.stroke() {
+        // A square cap on a diagonal end reaches its corner, not its side.
+        Some(stroke) if stroke.cap == LineCap::Square => {
+            bbox.expand(stroke.width * std::f64::consts::FRAC_1_SQRT_2)
+        }
         Some(stroke) => bbox.expand(stroke.width / 2.0),
         None => bbox,
     }
@@ -372,56 +406,73 @@ mod tests {
     use crate::geom::style::LineCap;
 
     #[test]
-    fn push_path_records_contours_and_bounds() {
-        let mut arena = PathArena::default();
-
-        let path = arena.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 2.0, 1.0)],
-        );
-
-        let path = arena.path(path);
-        assert_eq!(path.contours.len(), 1);
-        assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
-        assert_eq!(path.bbox.max, Point::new(2.0, 1.0));
-        arena.validate("test").unwrap();
-    }
-
-    #[test]
-    fn stroked_path_bbox_expands_by_half_width() {
-        let mut arena = PathArena::default();
-
-        let path = arena.push_path(
-            Paint::Stroke(StrokeStyle::new(1.0, LineCap::Round)),
-            [ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(0.0, 0.0)),
-                PathCmd::line_to(Point::new(4.0, 0.0)),
-            ])],
-        );
-
-        assert_eq!(arena.path(path).bbox.min, Point::new(-0.5, -0.5));
-        assert_eq!(arena.path(path).bbox.max, Point::new(4.5, 0.5));
-    }
-
-    #[test]
-    fn append_path_from_copies_across_arenas_with_transform() {
+    fn append_paths_from_streams_a_run_and_scales_strokes() {
         let mut source = PathArena::default();
-        let path = source.push_path(
+        source.push_path(
             Paint::Fill {
                 rule: FillRule::NonZero,
             },
             [rect_contour(0.0, 0.0, 1.0, 1.0)],
         );
+        let run_start = source.push_path(
+            Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round)),
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::arc_to(Point::new(2.0, 0.0), Point::new(1.0, 0.0), true),
+            ])
+            .with_uncertainty(0.01)],
+        );
+        source.push_path(
+            Paint::Fill {
+                rule: FillRule::EvenOdd,
+            },
+            [
+                rect_contour(0.0, 0.0, 4.0, 4.0),
+                rect_contour(1.0, 1.0, 2.0, 2.0),
+            ],
+        );
+        let run = Span::new(run_start, 2);
 
-        let mut target = PathArena::default();
-        let copied =
-            target.append_path_from(&source, path, Affine2::translation(Point::new(10.0, 0.0)));
+        let mut copy = PathArena::default();
+        copy.push_path(Paint::None, [rect_contour(9.0, 9.0, 10.0, 10.0)]);
+        let copied = copy.append_paths_from(&source, run, Affine2::IDENTITY);
+        assert_eq!(copied, Span::new(1, 2));
+        for (copied, original) in copied
+            .slice(&copy.paths)
+            .iter()
+            .zip(run.slice(&source.paths))
+        {
+            assert_eq!(copied.paint, original.paint);
+            assert_eq!(copied.bbox, original.bbox);
+            assert_eq!(copy.path_contours(copied), source.path_contours(original));
+        }
 
-        assert_eq!(target.path(copied).bbox.min, Point::new(10.0, 0.0));
-        assert_eq!(target.path(copied).bbox.max, Point::new(11.0, 1.0));
-        target.validate("target").unwrap();
+        // Twice the size, mirrored: the arc flips direction, the stroke and
+        // the recorded uncertainty double.
+        let mut placement =
+            Affine2::placement(Point::new(10.0, 0.0), 0.0, crate::geom::Mirror::NONE, 2.0);
+        placement.m00 = -placement.m00;
+        let mut placed = PathArena::default();
+        let placed_run = placed.append_paths_from(&source, run, placement);
+        let expected = run
+            .slice(&source.paths)
+            .iter()
+            .map(|path| {
+                source
+                    .path_contours(path)
+                    .into_iter()
+                    .map(|contour| contour.transformed(placement))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for (path, expected) in placed_run.slice(&placed.paths).iter().zip(expected) {
+            assert_eq!(placed.path_contours(path), expected);
+        }
+        let stroked = placed.path(placed_run.start);
+        assert_eq!(stroked.stroke().unwrap().width, 0.4);
+        assert_eq!(stroked.bbox.min, Point::new(5.8, -0.2));
+        assert_eq!(stroked.bbox.max, Point::new(10.2, 2.2));
+        placed.validate("placed").unwrap();
     }
 
     #[test]

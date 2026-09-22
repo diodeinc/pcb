@@ -19,6 +19,32 @@ pub mod view;
 pub mod warp;
 pub mod warp_report;
 
+/// A generated panel's IPC-2581 with its optional per-layer copper-balance
+/// accounting.
+#[derive(Debug, Clone)]
+pub struct PanelCreation {
+    pub xml: String,
+    pub copper_balance: Option<crate::copper_balance::CopperBalanceReport>,
+}
+
+#[cfg(feature = "cli")]
+impl PanelCreation {
+    /// Report the balance, then write the panel to `output` or stdout.
+    fn write(&self, output: &std::path::Path, what: &str) -> Result<()> {
+        for line in self.copper_balance.iter().flat_map(|r| r.summary_lines()) {
+            eprintln!("  {line}");
+        }
+        if output.as_os_str() == "-" {
+            pcb_ui::write_stdout(|stdout| stdout.write_all(self.xml.as_bytes()))?;
+            eprintln!("✓ Created IPC-2581 {what} on stdout");
+        } else {
+            crate::utils::file::save_ipc_file(output, &self.xml)?;
+            eprintln!("✓ Created IPC-2581 {what} at {}", output.display());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EdgeInsetsMm {
     pub top: f64,
@@ -53,6 +79,16 @@ impl EdgeInsetsMm {
             [top, right, bottom, left] => Ok(Self::new(*top, *right, *bottom, *left)),
             _ => bail!("{name} expects 1 to 4 values"),
         }
+    }
+
+    /// Every side with its name, in CSS order.
+    pub(crate) fn sides(self) -> [(&'static str, f64); 4] {
+        [
+            ("top", self.top),
+            ("right", self.right),
+            ("bottom", self.bottom),
+            ("left", self.left),
+        ]
     }
 
     pub(crate) fn horizontal_sum(self) -> f64 {

@@ -8,10 +8,11 @@
 
 use crate::commands::dfm::design::{Design, Slot};
 use crate::commands::dfm::pdk::SlotPlating;
-use crate::commands::dfm::report::{Evidence, EvidenceDisplay, MeasurementKind};
+use crate::commands::dfm::report::{Evidence, MeasurementKind};
 use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::thin_features;
 
+use super::drilled_board_edge_clearance::slot_evidence;
 use super::{Evaluation, Measured, MeasuredSite, slot_subject, thin_regions, violates};
 
 pub(super) fn evaluate(
@@ -19,40 +20,30 @@ pub(super) fn evaluate(
     plating: SlotPlating,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
-    let slots = design
-        .slots
-        .iter()
-        .filter(|slot| super::slot_matches(slot.plating, plating))
+    let slots = super::slots_of_plating(design, plating)
+        .filter_map(|(_, slot)| Some((slot, slot.width.as_ref()?)))
         .collect::<Vec<_>>();
     let measured = slots
         .iter()
-        .map(|&slot: &&Slot| {
+        .map(|&(slot, width): &(&Slot, _)| {
             let subject = slot_subject(design, slot, "offender");
-            let sites = if !violates(&slot.width, limit_mm) {
+            let sites = if !violates(&width.width, limit_mm) {
                 Vec::new()
-            } else if let Some(nominal) = slot.nominal_width_mm {
-                let center = slot.width_disk.center;
-                let radial = slot.width_disk.width.first - center;
+            } else if let Some(nominal) = width.nominal_mm {
+                let center = width.disk.center;
+                let radial = width.disk.width.first - center;
                 let direction = radial / radial.length();
                 let first = center - direction * (nominal / 2.0);
                 let second = center + direction * (nominal / 2.0);
                 let mut site = MeasuredSite::new(
-                    slot.width,
-                    slot.bbox.union(BBox::from_point(slot.width_disk.center).expand(limit_mm / 2.0)),
+                    width.width,
+                    slot.bbox.union(BBox::from_point(center).expand(limit_mm / 2.0)),
                     vec![slot.layer.clone()],
                     vec![
-                        Evidence {
-                            display: Some(EvidenceDisplay::Path {
-                                paths: slot.native_outline.iter().map(|contour| {
-                                    pcb_ir::render::svg_path_data(std::slice::from_ref(contour))
-                                }).collect(),
-                                fill_rule: "evenodd",
-                            }),
-                            ..Evidence::region("routed_slot", &slot.outline)
-                        },
+                        slot_evidence(slot),
                         Evidence::circle("nominal_width_disk", center, nominal),
                         Evidence::segment("nominal_width_dimension", first, second),
-                        Evidence::circle("required_width_disk", slot.width_disk.center, limit_mm),
+                        Evidence::circle("required_width_disk", center, limit_mm),
                     ],
                     MeasurementKind::NominalWidth,
                 );
@@ -68,14 +59,13 @@ pub(super) fn evaluate(
                     .collect()
             };
             Ok::<_, anyhow::Error>(Measured {
-            distance: slot.width,
+            distance: width.width,
             bbox: slot.bbox,
             layers: vec![slot.layer.clone()],
             subjects: vec![subject],
             evidence: vec![Evidence::bounds("routed_slot", slot.bbox)],
             sites,
-        })}).collect::<anyhow::Result<Vec<_>>>()?.into_iter()
-        .collect();
+        })}).collect::<anyhow::Result<_>>()?;
     Ok(Evaluation {
         checked: slots.len(),
         measured,
@@ -85,16 +75,14 @@ pub(super) fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::dfm::{pdk::Pdk, rules};
-    use crate::ipc2581::Ipc2581;
-    use pcb_ir::dialects::ipc::ArtworkScope;
+    use crate::commands::dfm::fixtures;
+    use crate::commands::dfm::report::EvidenceDisplay;
     use pcb_ir::geom::Resolution;
 
     #[test]
     fn nominal_slot_display_retains_native_curves_and_the_checked_outline() {
-        let resolution = Resolution::default();
-
-        let ipc = Ipc2581::parse(r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+        let imported = fixtures::import(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
           <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/><LayerRef name="ROUT"/></Content>
           <Ecad><CadHeader units="MILLIMETER"/><CadData>
             <Layer name="ROUT" layerFunction="ROUT" side="ALL" polarity="POSITIVE"/>
@@ -104,26 +92,15 @@ mod tests {
               </SlotCavity>
             </Set></LayerFeature></Step>
           </CadData></Ecad>
-        </IPC-2581>"#).unwrap();
-        let pdk = Pdk::parse(
-            r#"schema_version = 2
-          default_profile = "test"
-          [pdk]
-          id = "test"
-          name = "Test"
-          revision = "1"
-          [profiles.test]
-          name = "Test"
-          [[rules.drilling.slot_width]]
-          id = "slot-width"
-          select = { plating = "plated" }
-          limit = { minimum = "0.8 mm" }
-        "#,
-        )
-        .unwrap();
-        let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
+        </IPC-2581>"#,
+        );
+        let rules = fixtures::rules(&fixtures::pdk(
+            r#"[[rules.drilling.slot_width]]
+id = "slot-width"
+select = { plating = "plated" }
+limit = { minimum = "0.8 mm" }"#,
+        ));
+        let design = Design::board(&imported, &rules, Resolution::default());
         let evaluation = evaluate(0.8, SlotPlating::Plated, &design).unwrap();
         assert_eq!(evaluation.measured.len(), 1);
         assert_eq!(
