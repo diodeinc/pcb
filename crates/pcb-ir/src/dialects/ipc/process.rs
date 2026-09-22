@@ -19,14 +19,6 @@ use crate::geom::{
     Affine2, BBox, ContourSet, FillRule, Paint, PaintKind, Path, PathArena, Point, Polarity, Span,
 };
 
-/// The structure-preserving cleanup every pipeline starts with: source vector
-/// geometry, strokes, feature polarity, and layer object ordering stay intact.
-fn normalize_preserving(doc: &mut Document) {
-    prune_unpainted_paths(doc);
-    compose_feature_paths(doc);
-    normalize_bounds(doc);
-}
-
 /// Resolve IPC-specific paint semantics while preserving native artwork shapes.
 ///
 /// A set void clears only the earlier features of its own set, which no
@@ -39,9 +31,7 @@ pub fn normalize_for_artwork(
     doc: &mut Document,
     resolution: Resolution,
 ) -> Result<(), AccuracyError> {
-    normalize_preserving(doc);
-    resolve_set_voids(doc, resolution)?;
-    finish_artwork_normalization(doc, resolution)
+    normalize(doc, resolution, false)
 }
 
 /// [`normalize_for_artwork`] that also resolves layer cutouts and negative
@@ -55,17 +45,24 @@ pub fn normalize_for_positive_artwork(
     doc: &mut Document,
     resolution: Resolution,
 ) -> Result<(), AccuracyError> {
-    normalize_preserving(doc);
-    resolve_set_voids(doc, resolution)?;
-    subtract_layer_cutouts(doc, resolution)?;
-    resolve_negative_polarity(doc, resolution)?;
-    finish_artwork_normalization(doc, resolution)
+    normalize(doc, resolution, true)
 }
 
-fn finish_artwork_normalization(
+fn normalize(
     doc: &mut Document,
     resolution: Resolution,
+    positive: bool,
 ) -> Result<(), AccuracyError> {
+    // Structure-preserving cleanup: source vector geometry, strokes, feature
+    // polarity, and layer object ordering stay intact.
+    prune_unpainted_paths(doc);
+    compose_feature_paths(doc);
+    normalize_bounds(doc);
+    resolve_set_voids(doc, resolution)?;
+    if positive {
+        subtract_layer_cutouts(doc, resolution)?;
+        resolve_negative_polarity(doc, resolution)?;
+    }
     compact(doc);
     normalize_bounds(doc);
     for contour in &doc.arena.contours {
@@ -708,61 +705,32 @@ pub fn split_primitive_feature_path_runs(
             doc.arena.paths.len()
         ));
     }
+    // A fragment of a dictionary entry is not the entry: only a run carrying
+    // the entry's entire geometry keeps its shape and primitive identity.
+    let mut start = feature.paths.start;
     let mut features = Vec::new();
-    let mut run_start = feature.paths.start;
-    let mut run_kind = None;
-
-    for path_index in feature.paths.indices() {
-        let kind = doc.arena.paths[path_index as usize].paint.kind();
-        if Some(kind) == run_kind {
-            continue;
-        }
-
-        if let Some(kind) = run_kind {
-            push_primitive_path_run(&mut features, doc, &feature, run_start, path_index, kind);
-        }
-        run_start = path_index;
-        run_kind = Some(kind);
+    for run in feature
+        .paths
+        .slice(&doc.arena.paths)
+        .chunk_by(|a, b| a.paint.kind() == b.paint.kind())
+    {
+        let paths = Span::new(start, run.len() as u32);
+        start = paths.end();
+        let bucket = match run[0].paint.kind() {
+            PaintKind::Fill => FeatureBucket::Fill,
+            PaintKind::Stroke => FeatureBucket::Trace,
+            PaintKind::None => continue,
+        };
+        features.push(Feature {
+            bucket,
+            bbox: doc.arena.paths_bbox(paths),
+            shape: feature.shape.filter(|_| paths == feature.paths),
+            primitive_ref: feature.primitive_ref.filter(|_| paths == feature.paths),
+            paths,
+            ..feature.clone()
+        });
     }
-
-    if let Some(kind) = run_kind {
-        push_primitive_path_run(
-            &mut features,
-            doc,
-            &feature,
-            run_start,
-            feature.paths.end(),
-            kind,
-        );
-    }
-
-    // A fragment of a dictionary entry is not the entry: only a feature
-    // carrying the entry's entire geometry keeps its primitive identity.
-    if features.len() != 1 || features[0].paths != feature.paths {
-        for fragment in &mut features {
-            fragment.primitive_ref = None;
-        }
-    }
-
     Ok(features)
-}
-
-fn push_primitive_path_run(
-    features: &mut Vec<Feature>,
-    doc: &Document,
-    feature: &Feature,
-    run_start: u32,
-    run_end: u32,
-    kind: PaintKind,
-) {
-    if run_start == run_end {
-        return;
-    }
-    let Some(bucket) = FeatureBucket::for_primitive_paint(kind) else {
-        return;
-    };
-    let span = Span::new(run_start, run_end - run_start);
-    features.push(feature.with_path_span(bucket, span, doc.arena.paths_bbox(span)));
 }
 
 fn copy_path(doc: &mut Document, path: Path) -> u32 {
@@ -888,6 +856,10 @@ mod tests {
     use crate::geom::path::PathCmd;
     use crate::geom::{LineCap, Point, StrokeStyle};
 
+    const FILL: Paint = Paint::Fill {
+        rule: FillRule::NonZero,
+    };
+
     #[test]
     fn preserves_independent_overlapping_fill_paths() {
         let resolution = Resolution::default();
@@ -903,7 +875,7 @@ mod tests {
 
             let image = feature_painted_region(&doc, &doc.features[0], resolution).unwrap();
             assert!((image.area() - 34.0).abs() < 1e-9);
-            normalize_preserving(&mut doc);
+            normalize_for_artwork(&mut doc, resolution).unwrap();
             let image = feature_painted_region(&doc, &doc.features[0], resolution).unwrap();
             assert!((image.area() - 34.0).abs() < 1e-9);
             assert!(image.contains_point(Point::new(3.0, 3.0)));
@@ -914,12 +886,7 @@ mod tests {
     fn process_prunes_unpainted_feature_paths_and_preserves_profile_paths() {
         let mut doc = Document::new();
 
-        let painted_feature_path = doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 1.0, 1.0)],
-        );
+        let painted_feature_path = doc.push_path(FILL, [rect_contour(0.0, 0.0, 1.0, 1.0)]);
         doc.push_path(Paint::None, [rect_contour(2.0, 2.0, 3.0, 3.0)]);
         doc.features.push(Feature {
             paths: Span::new(painted_feature_path, 2),
@@ -968,22 +935,12 @@ mod tests {
     #[test]
     fn artwork_normalization_keeps_clear_polarity_native() {
         let mut doc = Document::new();
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 4.0, 4.0)],
-        );
+        doc.push_path(FILL, [rect_contour(0.0, 0.0, 4.0, 4.0)]);
         doc.features.push(Feature {
             paths: Span::new(0, 1),
             ..Feature::new(FeatureKind::Polygon, Polarity::Dark)
         });
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(1.0, 1.0, 3.0, 3.0)],
-        );
+        doc.push_path(FILL, [rect_contour(1.0, 1.0, 3.0, 3.0)]);
         doc.features.push(Feature {
             paths: Span::new(1, 1),
             ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
@@ -1020,12 +977,9 @@ mod tests {
 
     #[test]
     fn positive_artwork_resolves_clears_into_earlier_features_only() {
-        let fill = Paint::Fill {
-            rule: FillRule::NonZero,
-        };
         let mut doc = Document::new();
         // A plane and a stroked trace, two commuting clears, then a repaint.
-        doc.push_path(fill, [rect_contour(0.0, 0.0, 4.0, 4.0)]);
+        doc.push_path(FILL, [rect_contour(0.0, 0.0, 4.0, 4.0)]);
         doc.push_path(
             Paint::Stroke(StrokeStyle::new(1.0, LineCap::Butt)),
             [ContourBuf::new(vec![
@@ -1033,9 +987,9 @@ mod tests {
                 PathCmd::line_to(Point::new(4.0, 6.0)),
             ])],
         );
-        doc.push_path(fill, [rect_contour(1.0, 1.0, 3.0, 3.0)]);
-        doc.push_path(fill, [rect_contour(1.0, 5.0, 3.0, 7.0)]);
-        doc.push_path(fill, [rect_contour(1.5, 1.5, 2.5, 2.5)]);
+        doc.push_path(FILL, [rect_contour(1.0, 1.0, 3.0, 3.0)]);
+        doc.push_path(FILL, [rect_contour(1.0, 5.0, 3.0, 7.0)]);
+        doc.push_path(FILL, [rect_contour(1.5, 1.5, 2.5, 2.5)]);
         for (path, polarity) in [
             (0, Polarity::Dark),
             (1, Polarity::Dark),
@@ -1073,15 +1027,12 @@ mod tests {
 
     #[test]
     fn lattice_voids_tile_as_dark_cell_rings_where_the_plane_is_solid() {
-        let fill = Paint::Fill {
-            rule: FillRule::NonZero,
-        };
         let lattice = crate::geom::copper_balance::DenseCopperLattice {
             origin: Point::new(5.0, 5.0),
             pitch_mm: 2.0,
         };
         let mut doc = Document::new();
-        doc.push_path(fill, [rect_contour(0.0, 0.0, 10.0, 10.0)]);
+        doc.push_path(FILL, [rect_contour(0.0, 0.0, 10.0, 10.0)]);
         doc.features.push(Feature {
             paths: Span::new(0, 1),
             ..Feature::new(FeatureKind::Polygon, Polarity::Dark)
@@ -1092,7 +1043,7 @@ mod tests {
         });
         for center in sites {
             let path = doc.push_path(
-                fill,
+                FILL,
                 [rect_contour(
                     center.x - 0.5,
                     center.y - 0.5,
@@ -1142,9 +1093,6 @@ mod tests {
 
     #[test]
     fn cutouts_cut_strokes_and_leave_untouched_neighbours_native() {
-        let fill = Paint::Fill {
-            rule: FillRule::NonZero,
-        };
         let mut doc = Document::new();
         // A trace the cutout crosses, and a pad whose bounds the L-shaped
         // cutout overlaps without touching it.
@@ -1155,9 +1103,9 @@ mod tests {
                 PathCmd::line_to(Point::new(6.0, 0.5)),
             ])],
         );
-        doc.push_path(fill, [rect_contour(4.0, 3.0, 5.0, 4.0)]);
+        doc.push_path(FILL, [rect_contour(4.0, 3.0, 5.0, 4.0)]);
         doc.push_path(
-            fill,
+            FILL,
             [ContourBuf::new(vec![
                 PathCmd::move_to(Point::new(2.0, 0.0)),
                 PathCmd::line_to(Point::new(3.0, 0.0)),
@@ -1198,17 +1146,14 @@ mod tests {
 
     #[test]
     fn cutouts_stay_native_for_artwork_and_are_the_image_of_a_cutout_only_layer() {
-        let fill = Paint::Fill {
-            rule: FillRule::NonZero,
-        };
         let mut cutout = Feature::new(FeatureKind::Slot, Polarity::Dark);
         cutout.bucket = FeatureBucket::Cutout;
 
         // Beside material, ordered artwork stages the cutout after it, so the
         // pad keeps its native shape and composition still removes the slot.
         let mut doc = Document::new();
-        doc.push_path(fill, [rect_contour(0.0, 0.0, 4.0, 4.0)]);
-        doc.push_path(fill, [rect_contour(1.0, 1.0, 2.0, 2.0)]);
+        doc.push_path(FILL, [rect_contour(0.0, 0.0, 4.0, 4.0)]);
+        doc.push_path(FILL, [rect_contour(1.0, 1.0, 2.0, 2.0)]);
         let mut pad = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         pad.primitive_ref = Some(PrimitiveRef::User(sym(7)));
         for (path, feature) in [pad, cutout.clone()].into_iter().enumerate() {
@@ -1236,7 +1181,7 @@ mod tests {
 
         // Alone on its layer, a cutout is what the layer images.
         let mut drill = Document::new();
-        drill.push_path(fill, [rect_contour(1.0, 1.0, 2.0, 2.0)]);
+        drill.push_path(FILL, [rect_contour(1.0, 1.0, 2.0, 2.0)]);
         drill.features.push(Feature {
             paths: Span::new(0, 1),
             ..cutout
@@ -1247,133 +1192,58 @@ mod tests {
     }
 
     #[test]
-    fn splits_primitive_path_runs_by_paint_kind() {
-        let mut doc = Document::new();
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 1.0, 1.0)],
-        );
-        doc.push_path(
-            Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round)),
-            [ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(2.0, 0.0)),
-                PathCmd::line_to(Point::new(3.0, 0.0)),
-            ])],
-        );
-        let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
-        feature.paths = Span::new(0, 2);
-
-        let features = split_primitive_feature_path_runs(&doc, feature).unwrap();
-
-        assert_eq!(features.len(), 2);
-        assert_eq!(features[0].bucket, FeatureBucket::Fill);
-        assert_eq!(features[0].paths, Span::new(0, 1));
-        assert_eq!(features[1].bucket, FeatureBucket::Trace);
-        assert_eq!(features[1].paths, Span::new(1, 1));
-    }
-
-    #[test]
-    fn artwork_ready_validation_rejects_mixed_feature_paint_kinds() {
-        let mut doc = Document::new();
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 1.0, 1.0)],
-        );
-        doc.push_path(
-            Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round)),
-            [ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(2.0, 0.0)),
-                PathCmd::line_to(Point::new(3.0, 0.0)),
-            ])],
-        );
-        doc.features.push(Feature {
-            paths: Span::new(0, 2),
-            ..Feature::new(FeatureKind::Primitive, Polarity::Dark)
-        });
-
-        let error = validate_artwork_ready(&doc).unwrap_err();
-
-        assert!(error.to_string().contains("mixes Fill and Stroke paths"));
-    }
-
-    #[test]
-    fn artwork_ready_validation_accepts_clear_polarity() {
-        let mut doc = Document::new();
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 1.0, 1.0)],
-        );
-        doc.features.push(Feature {
-            paths: Span::new(0, 1),
-            ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
-        });
-
-        validate_artwork_ready(&doc).unwrap();
-    }
-
-    #[test]
-    fn artwork_ready_validation_rejects_non_circular_arcs() {
-        let mut doc = Document::new();
-        doc.push_path(
-            Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round)),
-            [ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(1.0, 0.0)),
-                PathCmd::arc_to(Point::new(0.0, 2.0), Point::new(0.0, 0.0), false),
-            ])],
-        );
-        doc.features.push(Feature {
-            paths: Span::new(0, 1),
-            ..copper_trace_feature()
-        });
-
-        let error = validate_artwork_ready(&doc).unwrap_err();
-
-        assert!(error.to_string().contains("non-circular arc radii"));
-    }
-
-    #[test]
-    fn artwork_ready_validation_accepts_source_precision_arc_radius_noise() {
-        let mut doc = Document::new();
-        doc.push_path(
-            Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round)),
-            [ContourBuf::new(vec![
-                PathCmd::move_to(Point::new(0.250024, 0.0)),
-                PathCmd::arc_to(Point::new(0.0, 0.249977), Point::new(0.0, 0.0), false),
-            ])],
-        );
-        doc.features.push(Feature {
-            paths: Span::new(0, 1),
-            ..copper_trace_feature()
-        });
-
-        validate_artwork_ready(&doc).unwrap();
+    fn artwork_ready_validation_wants_homogeneous_paint_and_circular_arcs() {
+        let stroke = Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round));
+        let line = ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(2.0, 0.0)),
+            PathCmd::line_to(Point::new(3.0, 0.0)),
+        ]);
+        let arc = |start, end| {
+            ContourBuf::new(vec![
+                PathCmd::move_to(start),
+                PathCmd::arc_to(end, Point::ZERO, false),
+            ])
+        };
+        let square = rect_contour(0.0, 0.0, 1.0, 1.0);
+        // Clear polarity is native, and source-precision radius noise is
+        // still a circular arc.
+        let noisy = arc(Point::new(0.250024, 0.0), Point::new(0.0, 0.249977));
+        let bent = arc(Point::new(1.0, 0.0), Point::new(0.0, 2.0));
+        for (paths, error) in [
+            (vec![(FILL, square.clone())], None),
+            (vec![(stroke, noisy)], None),
+            (
+                vec![(FILL, square), (stroke, line)],
+                Some("mixes Fill and Stroke paths"),
+            ),
+            (vec![(stroke, bent)], Some("non-circular arc radii")),
+        ] {
+            let mut doc = Document::new();
+            let count = paths.len() as u32;
+            for (paint, contour) in paths {
+                doc.push_path(paint, [contour]);
+            }
+            doc.features.push(Feature {
+                paths: Span::new(0, count),
+                ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
+            });
+            let result = validate_artwork_ready(&doc);
+            match error {
+                None => result.unwrap(),
+                Some(text) => assert!(result.unwrap_err().to_string().contains(text)),
+            }
+        }
     }
 
     #[test]
     fn compact_reclaims_orphaned_paths() {
         let mut doc = Document::new();
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 4.0, 4.0)],
-        );
+        doc.push_path(FILL, [rect_contour(0.0, 0.0, 4.0, 4.0)]);
         doc.features.push(Feature {
             paths: Span::new(0, 1),
             ..Feature::new(FeatureKind::Polygon, Polarity::Dark)
         });
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(1.0, 1.0, 3.0, 3.0)],
-        );
+        doc.push_path(FILL, [rect_contour(1.0, 1.0, 3.0, 3.0)]);
         doc.features.push(Feature {
             paths: Span::new(1, 1),
             clears_previous_in_set: true,
@@ -1461,15 +1331,12 @@ mod tests {
     #[test]
     fn normalization_refines_curves_for_intersecting_cutouts() {
         let mut doc = Document::new();
-        let paint = Paint::Fill {
-            rule: FillRule::NonZero,
-        };
-        doc.push_path(paint, [crate::geom::shapes::circle(2.0).unwrap()]);
+        doc.push_path(FILL, [crate::geom::shapes::circle(2.0).unwrap()]);
         doc.features.push(Feature {
             paths: Span::new(0, 1),
             ..copper_trace_feature()
         });
-        doc.push_path(paint, [rect_contour(0.0, -3.0, 3.0, 3.0)]);
+        doc.push_path(FILL, [rect_contour(0.0, -3.0, 3.0, 3.0)]);
         doc.features.push(Feature {
             paths: Span::new(1, 1),
             ..Feature::new(FeatureKind::Slot, Polarity::Dark)
@@ -1490,9 +1357,7 @@ mod tests {
     fn normalization_accepts_inherited_error_within_the_total_budget() {
         let mut doc = Document::new();
         doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
+            FILL,
             [rect_contour(0.0, 0.0, 1.0, 1.0).with_uncertainty(0.008)],
         );
         doc.features.push(Feature {
@@ -1565,12 +1430,7 @@ mod tests {
     #[test]
     fn split_path_runs_keep_primitive_identity_only_for_whole_entries() {
         let mut doc = Document::new();
-        doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rect_contour(0.0, 0.0, 1.0, 1.0)],
-        );
+        doc.push_path(FILL, [rect_contour(0.0, 0.0, 1.0, 1.0)]);
         doc.push_path(
             Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round)),
             [ContourBuf::new(vec![
@@ -1584,7 +1444,16 @@ mod tests {
         feature.paths = Span::new(0, 2);
 
         let fragments = split_primitive_feature_path_runs(&doc, feature.clone()).unwrap();
-        assert_eq!(fragments.len(), 2);
+        assert_eq!(
+            fragments
+                .iter()
+                .map(|fragment| (fragment.bucket, fragment.paths))
+                .collect::<Vec<_>>(),
+            [
+                (FeatureBucket::Fill, Span::new(0, 1)),
+                (FeatureBucket::Trace, Span::new(1, 1))
+            ]
+        );
         assert!(
             fragments
                 .iter()
@@ -1603,9 +1472,7 @@ mod tests {
         // layer (copper balance, warp, DFM) must not fail on it.
         let mut doc = Document::new();
         doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
+            FILL,
             [ContourBuf::new(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
                 PathCmd::line_to(Point::new(1.0, 0.0)),

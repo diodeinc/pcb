@@ -1,6 +1,6 @@
 use crate::dialects::Side;
 use crate::dialects::ipc::layout::LayoutStepKind;
-use crate::geom::{Affine2, BBox, PaintKind, Point, Polarity, Span};
+use crate::geom::{Affine2, BBox, Point, Polarity, Span};
 use ipc2581::Symbol;
 
 /// One extracted layer feature.
@@ -137,15 +137,6 @@ impl Feature {
             FeatureOperation::Drill | FeatureOperation::Route
         ) || matches!(self.intent.role, FeatureRole::Hole | FeatureRole::Slot)
     }
-
-    pub fn with_path_span(&self, bucket: FeatureBucket, paths: Span, bbox: BBox) -> Self {
-        let mut feature = self.clone();
-        feature.bucket = bucket;
-        feature.bbox = bbox;
-        feature.shape = self.shape.filter(|_| paths == self.paths);
-        feature.paths = paths;
-        feature
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,15 +235,6 @@ impl FeatureBucket {
                     _ => Self::Fill,
                 },
             },
-        }
-    }
-
-    /// The bucket a lowered primitive path run belongs to, by paint kind.
-    pub fn for_primitive_paint(kind: PaintKind) -> Option<Self> {
-        match kind {
-            PaintKind::Fill => Some(Self::Fill),
-            PaintKind::Stroke => Some(Self::Trace),
-            PaintKind::None => None,
         }
     }
 }
