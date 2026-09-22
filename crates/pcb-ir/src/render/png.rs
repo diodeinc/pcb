@@ -673,6 +673,9 @@ mod tests {
 
         assert_eq!(size(wide, 400, 100), (200, 100), "the height binds");
         assert_eq!(size(wide, 100, 400), (100, 50), "the width binds");
+        // 120 * (1000 / 120) is a rounding error over 1000.
+        let square = BBox::new(Point::ZERO, Point::new(120.0, 120.0));
+        assert_eq!(size(square, 1000, 1000), (1000, 1000));
     }
 
     #[test]

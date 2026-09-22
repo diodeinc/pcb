@@ -156,10 +156,9 @@ pub(crate) fn pixel_size(bbox: BBox, width_px: u32, height_px: u32) -> (u32, u32
         return (width_px, height_px);
     }
     let scale = (f64::from(width_px) / bbox.width()).min(f64::from(height_px) / bbox.height());
-    (
-        (bbox.width() * scale).ceil().max(1.0) as u32,
-        (bbox.height() * scale).ceil().max(1.0) as u32,
-    )
+    // The edge that binds can land a rounding error past its limit.
+    let fit = |extent: f64, limit: u32| ((extent * scale).ceil() as u32).clamp(1, limit.max(1));
+    (fit(bbox.width(), width_px), fit(bbox.height(), height_px))
 }
 
 /// The budget shared geometry has in its own frame: what the largest scale

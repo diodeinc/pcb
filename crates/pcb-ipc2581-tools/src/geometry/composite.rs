@@ -243,25 +243,29 @@ fn surface_objects(
             layer_role(layer.layer_function) == role && ir_side(layer.side) == side.ir_side()
         }
     };
-    let outer_copper = imported
-        .layer_definitions
-        .iter()
-        .find(|layer| on_side(LayerRole::Copper)(layer))
-        .with_context(|| format!("IPC-2581 design has no {side} copper layer"))?
-        .name;
-    let [copper, slots] = lower(&|layer| layer.name == outer_copper)?
+    let outer_copper = |side: Side| {
+        let layers = imported.layer_definitions.iter();
+        let is_outer = |layer: &&ipc2581::types::Layer| {
+            layer_role(layer.layer_function) == LayerRole::Copper && ir_side(layer.side) == side
+        };
+        layers.filter(is_outer).map(|layer| layer.name).next()
+    };
+    let surface = outer_copper(side.ir_side())
+        .with_context(|| format!("IPC-2581 design has no {side} copper layer"))?;
+    let [copper, slots] = lower(&|layer| layer.name == surface)?
         .into_iter()
         .next()
         .context("the outer copper layer was just found")?;
     // Slots come with the copper their span reaches; holes image only on
-    // their own layer. One whose span ends at this side's copper, or names
-    // no end, opens onto this side.
+    // their own layer. One opens onto this side if its span ends at this
+    // side's copper; an end it does not name is the top's, then the
+    // bottom's, and one with no span goes through.
     let holes = lower(&|layer| {
         layer_role(layer.layer_function) == LayerRole::Drill
             && layer.span.is_none_or(|span| {
-                [span.from_layer, span.to_layer]
-                    .into_iter()
-                    .any(|end| end.is_none_or(|end| end == outer_copper))
+                let from = span.from_layer.or(outer_copper(Side::Top));
+                let to = span.to_layer.or(outer_copper(Side::Bottom));
+                [from, to].contains(&Some(surface))
             })
     })?;
     let painted = |layers: Vec<[Vec<CompositeObject>; 2]>| {
@@ -714,6 +718,18 @@ mod tests {
                 ("Score", 0.0),
             ],
         );
+    }
+
+    #[test]
+    fn a_hole_opens_only_onto_the_sides_its_span_reaches() {
+        // Naming one end leaves the other the bottom's: a hole from the
+        // bottom copper to the bottom never reaches the top.
+        let through = r#"<Span fromLayer="F.Cu" toLayer="B.Cu"/>"#;
+        let blind = BOARD.replace(through, r#"<Span fromLayer="B.Cu"/>"#);
+        let substrate = |side| layer_areas(&blind, side)[0].1;
+        let hole = std::f64::consts::PI * 0.25;
+        assert!((substrate(BoardSide::Top) - (MATERIAL_MM2 + hole)).abs() < 1e-2);
+        assert!((substrate(BoardSide::Bottom) - MATERIAL_MM2).abs() < 1e-2);
     }
 
     #[test]
