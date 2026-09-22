@@ -356,17 +356,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_embedded_font(&mut self, node: &Node, units: Units) -> Result<EmbeddedFont> {
-        let name = self.required_attr(node, "name", "FontDefEmbedded")?;
-        let line_desc =
-            self.parse_line_desc_group(node, units, "LineDescGroup in FontDefEmbedded")?;
-        let glyphs = self
-            .children_named(node, "Glyph")
-            .map(|glyph| self.parse_font_glyph(&glyph, units))
-            .collect::<Result<_>>()?;
         Ok(EmbeddedFont {
-            name,
-            line_desc,
-            glyphs,
+            name: self.required_attr(node, "name", "FontDefEmbedded")?,
+            line_desc: self.parse_line_desc_group(
+                node,
+                units,
+                "LineDescGroup in FontDefEmbedded",
+            )?,
+            glyphs: self
+                .children_named(node, "Glyph")
+                .map(|glyph| self.parse_font_glyph(&glyph, units))
+                .collect::<Result<_>>()?,
         })
     }
 
@@ -781,34 +781,30 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_logistic_header(&mut self, node: &Node) -> Result<LogisticHeader> {
-        let mut roles = Vec::new();
-        let mut enterprises = Vec::new();
-        let mut persons = Vec::new();
-
+        let mut header = LogisticHeader {
+            roles: Vec::new(),
+            enterprises: Vec::new(),
+            persons: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Role" => roles.push(Role {
+                "Role" => header.roles.push(Role {
                     id: self.required_attr(&child, "id", "Role")?,
                     role_function: self.required_attr(&child, "roleFunction", "Role")?,
                 }),
-                "Enterprise" => enterprises.push(Enterprise {
+                "Enterprise" => header.enterprises.push(Enterprise {
                     id: self.required_attr(&child, "id", "Enterprise")?,
                     code: self.required_attr(&child, "code", "Enterprise")?,
                     name: self.optional_attr(&child, "name"),
                 }),
-                "Person" => persons.push(Person {
+                "Person" => header.persons.push(Person {
                     name: self.required_attr(&child, "name", "Person")?,
                     email: self.optional_attr(&child, "email"),
                 }),
                 _ => {}
             }
         }
-
-        Ok(LogisticHeader {
-            roles,
-            enterprises,
-            persons,
-        })
+        Ok(header)
     }
 
     fn parse_history_record(&mut self, node: &Node) -> Result<HistoryRecord> {
@@ -876,6 +872,11 @@ impl<'a> Parser<'a> {
     ) -> Result<&'a str> {
         self.attr(node, attr)
             .ok_or(Ipc2581Error::MissingAttribute { element, attr })
+    }
+
+    /// The `id` of a `SpecRef`.
+    fn spec_ref(&mut self, node: &Node) -> Result<Symbol> {
+        self.required_attr(node, "id", "SpecRef")
     }
 
     fn optional_attr(&mut self, node: &Node, attr: &str) -> Option<Symbol> {
@@ -1184,24 +1185,20 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_cad_data(&mut self, node: &Node) -> Result<CadData> {
-        let mut steps = Vec::new();
-        let mut layers = Vec::new();
-        let mut stackups = Vec::new();
-
+        let mut cad_data = CadData {
+            steps: Vec::new(),
+            layers: Vec::new(),
+            stackups: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Step" => steps.push(self.parse_step(&child)?),
-                "Layer" => layers.push(self.parse_layer(&child)?),
-                "Stackup" => stackups.push(self.parse_stackup(&child)?),
+                "Step" => cad_data.steps.push(self.parse_step(&child)?),
+                "Layer" => cad_data.layers.push(self.parse_layer(&child)?),
+                "Stackup" => cad_data.stackups.push(self.parse_stackup(&child)?),
                 _ => {}
             }
         }
-
-        Ok(CadData {
-            steps,
-            layers,
-            stackups,
-        })
+        Ok(cad_data)
     }
 
     /// `tolPercent`, `tolPlus` and `tolMinus`. A percentage is not a length.
@@ -1294,49 +1291,36 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_step(&mut self, node: &Node) -> Result<Step> {
-        let name = self.required_attr(node, "name", "Step")?;
-        let step_type = self.opt_enum(node, "type", StepType::from_ipc)?;
-
-        let mut datum = None;
-        let mut profile = None;
-        let mut step_repeats = Vec::new();
-        let mut padstack_defs = Vec::new();
-        let mut packages = Vec::new();
-        let mut components = Vec::new();
-        let mut logical_nets = Vec::new();
-        let mut phy_net_groups = Vec::new();
-        let mut layer_features = Vec::new();
-
+        let mut step = Step {
+            name: self.required_attr(node, "name", "Step")?,
+            step_type: self.opt_enum(node, "type", StepType::from_ipc)?,
+            datum: None,
+            profile: None,
+            step_repeats: Vec::new(),
+            padstack_defs: Vec::new(),
+            packages: Vec::new(),
+            components: Vec::new(),
+            logical_nets: Vec::new(),
+            phy_net_groups: Vec::new(),
+            layer_features: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Datum" => datum = Some(self.parse_datum(&child)?),
-                "Profile" => profile = Some(self.parse_profile(&child)?),
-                "StepRepeat" => step_repeats.push(self.parse_step_repeat(&child)?),
-                "PadStackDef" => padstack_defs.push(self.parse_padstack_def(&child)?),
-                "Package" => packages.push(self.parse_package(&child)?),
-                "Component" => components.push(self.parse_component(&child)?),
-                "LogicalNet" => logical_nets.push(self.parse_logical_net(&child)?),
-                "PhyNetGroup" => phy_net_groups.push(PhyNetGroup {
+                "Datum" => step.datum = Some(self.parse_datum(&child)?),
+                "Profile" => step.profile = Some(self.parse_profile(&child)?),
+                "StepRepeat" => step.step_repeats.push(self.parse_step_repeat(&child)?),
+                "PadStackDef" => step.padstack_defs.push(self.parse_padstack_def(&child)?),
+                "Package" => step.packages.push(self.parse_package(&child)?),
+                "Component" => step.components.push(self.parse_component(&child)?),
+                "LogicalNet" => step.logical_nets.push(self.parse_logical_net(&child)?),
+                "PhyNetGroup" => step.phy_net_groups.push(PhyNetGroup {
                     name: self.required_attr(&child, "name", "PhyNetGroup")?,
                 }),
-                "LayerFeature" => layer_features.push(self.parse_layer_feature(&child)?),
+                "LayerFeature" => step.layer_features.push(self.parse_layer_feature(&child)?),
                 _ => {}
             }
         }
-
-        Ok(Step {
-            name,
-            step_type,
-            datum,
-            profile,
-            step_repeats,
-            padstack_defs,
-            packages,
-            components,
-            logical_nets,
-            phy_net_groups,
-            layer_features,
-        })
+        Ok(step)
     }
 
     fn parse_step_repeat(&mut self, node: &Node) -> Result<StepRepeat> {
@@ -1669,7 +1653,7 @@ impl<'a> Parser<'a> {
                 "Xform" => xform = Some(self.parse_xform(&child, units)?),
                 "Location" => location = Some(self.parse_location(&child, units)?),
                 "SlotCavityRef" => slot_cavity_ref = self.optional_attr(&child, "id"),
-                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
+                "SpecRef" => spec_refs.push(self.spec_ref(&child)?),
                 _ => {}
             }
         }
@@ -1713,39 +1697,33 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_layer(&mut self, node: &Node) -> Result<Layer> {
-        let name = self.required_attr(node, "name", "Layer")?;
-        let layer_function =
-            LayerFunction::from_ipc(self.required_str(node, "layerFunction", "Layer")?)?;
-
-        let side = self.opt_enum(node, "side", Side::from_ipc)?;
-        let polarity = self.opt_enum(node, "polarity", Polarity::from_ipc)?;
-
-        let mut span = None;
-        let mut profiles = Vec::new();
-        let mut spec_refs = Vec::new();
+        let mut layer = Layer {
+            name: self.required_attr(node, "name", "Layer")?,
+            layer_function: LayerFunction::from_ipc(self.required_str(
+                node,
+                "layerFunction",
+                "Layer",
+            )?)?,
+            side: self.opt_enum(node, "side", Side::from_ipc)?,
+            polarity: self.opt_enum(node, "polarity", Polarity::from_ipc)?,
+            span: None,
+            spec_refs: Vec::new(),
+            profiles: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
+                "SpecRef" => layer.spec_refs.push(self.spec_ref(&child)?),
                 "Span" => {
-                    span = Some(LayerSpan {
+                    layer.span = Some(LayerSpan {
                         from_layer: self.optional_attr(&child, "fromLayer"),
                         to_layer: self.optional_attr(&child, "toLayer"),
                     });
                 }
-                "Profile" => profiles.push(self.parse_profile(&child)?),
+                "Profile" => layer.profiles.push(self.parse_profile(&child)?),
                 _ => {}
             }
         }
-
-        Ok(Layer {
-            name,
-            layer_function,
-            side,
-            polarity,
-            span,
-            spec_refs,
-            profiles,
-        })
+        Ok(layer)
     }
 
     fn parse_layer_feature(&mut self, node: &Node) -> Result<LayerFeature> {
@@ -1788,7 +1766,7 @@ impl<'a> Parser<'a> {
 
         for child in self.element_children(node) {
             match self.name(&child) {
-                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
+                "SpecRef" => spec_refs.push(self.spec_ref(&child)?),
                 "Hole" => features.push(SetFeature::Hole(self.parse_hole(&child)?)),
                 "SlotCavity" => {
                     features.push(SetFeature::Slot(Box::new(self.parse_slot_cavity(&child)?)))
@@ -1986,34 +1964,28 @@ impl<'a> Parser<'a> {
 
     fn parse_hole(&mut self, node: &Node) -> Result<Hole> {
         let units = self.units();
-
-        let name = self.optional_attr(node, "name");
-        let shape = HoleShape::from_ipc(self.attr(node, "type").unwrap_or("CIRCLE"))?;
-        let diameter = self.mm(node, "diameter", "Hole", units)?;
-        let plating_status =
-            PlatingStatus::from_ipc(self.required_str(node, "platingStatus", "Hole")?)?;
-        let x = self.mm(node, "x", "Hole", units)?;
-        let y = self.mm(node, "y", "Hole", units)?;
-        let mut xform = None;
-        let mut spec_refs = Vec::new();
+        let mut hole = Hole {
+            name: self.optional_attr(node, "name"),
+            shape: HoleShape::from_ipc(self.attr(node, "type").unwrap_or("CIRCLE"))?,
+            diameter: self.mm(node, "diameter", "Hole", units)?,
+            plating_status: PlatingStatus::from_ipc(self.required_str(
+                node,
+                "platingStatus",
+                "Hole",
+            )?)?,
+            x: self.mm(node, "x", "Hole", units)?,
+            y: self.mm(node, "y", "Hole", units)?,
+            xform: None,
+            spec_refs: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
-                "Xform" => xform = Some(self.parse_xform(&child, units)?),
+                "SpecRef" => hole.spec_refs.push(self.spec_ref(&child)?),
+                "Xform" => hole.xform = Some(self.parse_xform(&child, units)?),
                 _ => {}
             }
         }
-
-        Ok(Hole {
-            name,
-            shape,
-            diameter,
-            plating_status,
-            xform,
-            spec_refs,
-            x,
-            y,
-        })
+        Ok(hole)
     }
 
     fn parse_slot_cavity(&mut self, node: &Node) -> Result<Slot> {
@@ -2071,37 +2043,30 @@ impl<'a> Parser<'a> {
 
     fn parse_pad(&mut self, node: &Node) -> Result<Pad> {
         let units = self.units();
-
-        let padstack_def_ref = self.optional_attr(node, "padstackDefRef");
-
-        // x and y attributes are a legacy form of the Location child.
-        let mut x = self.opt_mm(node, "x", units)?;
-        let mut y = self.opt_mm(node, "y", units)?;
-
-        let mut xform = None;
-        let mut feature = None;
-        let mut pin_ref = None;
+        let mut pad = Pad {
+            padstack_def_ref: self.optional_attr(node, "padstackDefRef"),
+            // x and y attributes are a legacy form of the Location child.
+            x: self.opt_mm(node, "x", units)?,
+            y: self.opt_mm(node, "y", units)?,
+            xform: None,
+            feature: None,
+            pin_ref: None,
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
                 "Location" => {
                     let location = self.parse_location(&child, units)?;
-                    (x, y) = (Some(location.x), Some(location.y));
+                    (pad.x, pad.y) = (Some(location.x), Some(location.y));
                 }
-                "Xform" => xform = Some(self.parse_xform(&child, units)?),
-                "PinRef" => pin_ref = Some(self.parse_pin_ref(&child)?),
-                _ if feature.is_none() => feature = self.parse_feature_shape(&child, units)?,
+                "Xform" => pad.xform = Some(self.parse_xform(&child, units)?),
+                "PinRef" => pad.pin_ref = Some(self.parse_pin_ref(&child)?),
+                _ if pad.feature.is_none() => {
+                    pad.feature = self.parse_feature_shape(&child, units)?
+                }
                 _ => {}
             }
         }
-
-        Ok(Pad {
-            padstack_def_ref,
-            x,
-            y,
-            xform,
-            feature,
-            pin_ref,
-        })
+        Ok(pad)
     }
 
     /// A `Polyline` directly inside a `Set`, which may name its `LineDescRef`
@@ -2120,24 +2085,21 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_padstack_def(&mut self, node: &Node) -> Result<PadStackDef> {
-        let name = self.required_attr(node, "name", "PadStackDef")?;
-
-        let mut hole_def = None;
-        let mut pad_defs = Vec::new();
-
+        let mut padstack = PadStackDef {
+            name: self.required_attr(node, "name", "PadStackDef")?,
+            hole_def: None,
+            pad_defs: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "PadstackHoleDef" => hole_def = Some(self.parse_padstack_hole_def(&child)?),
-                "PadstackPadDef" => pad_defs.push(self.parse_padstack_pad_def(&child)?),
+                "PadstackHoleDef" => {
+                    padstack.hole_def = Some(self.parse_padstack_hole_def(&child)?)
+                }
+                "PadstackPadDef" => padstack.pad_defs.push(self.parse_padstack_pad_def(&child)?),
                 _ => {}
             }
         }
-
-        Ok(PadStackDef {
-            name,
-            hole_def,
-            pad_defs,
-        })
+        Ok(padstack)
     }
 
     fn parse_padstack_hole_def(&mut self, node: &Node) -> Result<PadstackHoleDef> {
@@ -2159,51 +2121,45 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_padstack_pad_def(&mut self, node: &Node) -> Result<PadstackPadDef> {
-        let layer_ref = self.required_attr(node, "layerRef", "PadstackPadDef")?;
-        let pad_use = PadUse::from_ipc(self.required_str(node, "padUse", "PadstackPadDef")?)?;
-
         let units = self.units();
-        let (mut x, mut y) = (0.0, 0.0);
-        let mut xform = None;
-        let mut feature = None;
+        let mut pad_def = PadstackPadDef {
+            layer_ref: self.required_attr(node, "layerRef", "PadstackPadDef")?,
+            pad_use: PadUse::from_ipc(self.required_str(node, "padUse", "PadstackPadDef")?)?,
+            xform: None,
+            x: 0.0,
+            y: 0.0,
+            feature: None,
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Xform" => xform = Some(self.parse_xform(&child, units)?),
+                "Xform" => pad_def.xform = Some(self.parse_xform(&child, units)?),
                 "Location" => {
                     let location = self.parse_location(&child, units)?;
-                    (x, y) = (location.x, location.y);
+                    (pad_def.x, pad_def.y) = (location.x, location.y);
                 }
-                _ if feature.is_none() => feature = self.parse_feature_shape(&child, units)?,
+                _ if pad_def.feature.is_none() => {
+                    pad_def.feature = self.parse_feature_shape(&child, units)?
+                }
                 _ => {}
             }
         }
-
-        Ok(PadstackPadDef {
-            layer_ref,
-            pad_use,
-            xform,
-            x,
-            y,
-            feature,
-        })
+        Ok(pad_def)
     }
 
     fn parse_bom(&mut self, node: &Node) -> Result<Bom> {
-        let name = self.required_attr(node, "name", "Bom")?;
-        let mut header = None;
-        let mut items = Vec::new();
+        let mut bom = Bom {
+            name: self.required_attr(node, "name", "Bom")?,
+            header: None,
+            items: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "BomHeader" => header = Some(self.parse_bom_header(&child)?),
-                "BomItem" => items.push(self.parse_bom_item(&child)?),
+                "BomHeader" => bom.header = Some(self.parse_bom_header(&child)?),
+                "BomItem" => bom.items.push(self.parse_bom_item(&child)?),
                 _ => {}
             }
         }
-        Ok(Bom {
-            name,
-            header,
-            items,
-        })
+        Ok(bom)
     }
 
     fn parse_bom_header(&mut self, node: &Node) -> Result<BomHeader> {
@@ -2221,85 +2177,70 @@ impl<'a> Parser<'a> {
     fn parse_bom_item(&mut self, node: &Node) -> Result<BomItem> {
         let oem_design_number_ref = self.required_attr(node, "OEMDesignNumberRef", "BomItem")?;
         let quantity_raw = self.required_attr(node, "quantity", "BomItem")?;
-        let quantity = self.interner.resolve(quantity_raw).parse().ok();
         let pin_count_raw = self.optional_attr(node, "pinCount");
-        let pin_count = pin_count_raw
-            .map(|value| self.parse_ipc_integer(value, "pinCount", false))
-            .transpose()?;
-        let category = self.opt_enum(node, "category", BomCategory::from_ipc)?;
-        let internal_part_number = self.optional_attr(node, "internalPartNumber");
-        let description = self.optional_attr(node, "description");
-
-        let mut designators = Vec::new();
-        let mut characteristics = None;
-        let mut spec_refs = Vec::new();
-
+        let mut item = BomItem {
+            oem_design_number_ref,
+            quantity: self.interner.resolve(quantity_raw).parse().ok(),
+            quantity_raw,
+            pin_count: pin_count_raw
+                .map(|value| self.parse_ipc_integer(value, "pinCount", false))
+                .transpose()?,
+            pin_count_raw,
+            category: self.opt_enum(node, "category", BomCategory::from_ipc)?,
+            internal_part_number: self.optional_attr(node, "internalPartNumber"),
+            description: self.optional_attr(node, "description"),
+            designators: Vec::new(),
+            characteristics: None,
+            spec_refs: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "RefDes" => {
-                    designators.push(BomDesignator::Reference(self.parse_bom_ref_des(&child)?))
-                }
-                "MatDes" => designators.push(BomDesignator::Material(
+                "RefDes" => item
+                    .designators
+                    .push(BomDesignator::Reference(self.parse_bom_ref_des(&child)?)),
+                "MatDes" => item.designators.push(BomDesignator::Material(
                     self.parse_bom_named_designator(&child, "MatDes")?,
                 )),
-                "DocDes" => designators.push(BomDesignator::Document(
+                "DocDes" => item.designators.push(BomDesignator::Document(
                     self.parse_bom_named_designator(&child, "DocDes")?,
                 )),
-                "ToolDes" => designators.push(BomDesignator::Tool(
+                "ToolDes" => item.designators.push(BomDesignator::Tool(
                     self.parse_bom_named_designator(&child, "ToolDes")?,
                 )),
-                "FindDes" => {
-                    designators.push(BomDesignator::Find(self.parse_bom_find_designator(&child)?))
+                "FindDes" => item
+                    .designators
+                    .push(BomDesignator::Find(self.parse_bom_find_designator(&child)?)),
+                "Characteristics" => {
+                    item.characteristics = Some(self.parse_characteristics(&child)?)
                 }
-                "Characteristics" => characteristics = Some(self.parse_characteristics(&child)?),
-                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
+                "SpecRef" => item.spec_refs.push(self.spec_ref(&child)?),
                 _ => {}
             }
         }
-
-        Ok(BomItem {
-            oem_design_number_ref,
-            quantity,
-            quantity_raw,
-            pin_count,
-            pin_count_raw,
-            category,
-            internal_part_number,
-            description,
-            designators,
-            characteristics,
-            spec_refs,
-        })
+        Ok(item)
     }
 
     fn parse_bom_ref_des(&mut self, node: &Node) -> Result<BomRefDes> {
-        let name = self.required_attr(node, "name", "RefDes")?;
-        let package_ref = self.optional_attr(node, "packageRef");
-        let layer_ref = self.optional_attr(node, "layerRef");
-        let model_ref = self.optional_attr(node, "modelRef");
-        let populate = self.opt_bool(node, "populate")?;
-        let mut tunings = Vec::new();
-        let mut firmwares = Vec::new();
+        let mut ref_des = BomRefDes {
+            name: self.required_attr(node, "name", "RefDes")?,
+            package_ref: self.optional_attr(node, "packageRef"),
+            layer_ref: self.optional_attr(node, "layerRef"),
+            model_ref: self.optional_attr(node, "modelRef"),
+            populate: self.opt_bool(node, "populate")?,
+            tunings: Vec::new(),
+            firmwares: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Tuning" => tunings.push(BomTuning {
+                "Tuning" => ref_des.tunings.push(BomTuning {
                     value: self.required_attr(&child, "value", "Tuning")?,
                     comments: self.optional_attr(&child, "comments"),
                 }),
-                "Firmware" => firmwares.push(self.parse_bom_firmware(&child)?),
+                "Firmware" => ref_des.firmwares.push(self.parse_bom_firmware(&child)?),
                 _ => {}
             }
         }
-
-        Ok(BomRefDes {
-            name,
-            package_ref,
-            populate,
-            layer_ref,
-            model_ref,
-            tunings,
-            firmwares,
-        })
+        Ok(ref_des)
     }
 
     fn parse_bom_named_designator(
@@ -2363,84 +2304,62 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_characteristics(&mut self, node: &Node) -> Result<Characteristics> {
-        let category = self.opt_enum(node, "category", BomCategory::from_ipc)?;
-        let mut measured = Vec::new();
-        let mut ranged = Vec::new();
-        let mut enumerated = Vec::new();
-        let mut textuals = Vec::new();
+        let mut out = Characteristics {
+            category: self.opt_enum(node, "category", BomCategory::from_ipc)?,
+            measured: Vec::new(),
+            ranged: Vec::new(),
+            enumerated: Vec::new(),
+            textuals: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Measured" => measured.push(self.parse_measured_characteristic(&child)?),
-                "Ranged" => ranged.push(self.parse_ranged_characteristic(&child)?),
-                "Enumerated" => enumerated.push(self.parse_enumerated_characteristic(&child)),
-                "Textual" => textuals.push(self.parse_textual_characteristic(&child)),
+                "Measured" => out.measured.push(MeasuredCharacteristic {
+                    definition_source: self.optional_attr(&child, "definitionSource"),
+                    name: self.optional_attr(&child, "measuredCharacteristicName"),
+                    value: self.opt_num(&child, "measuredCharacteristicValue")?,
+                    engineering_unit: self.optional_attr(&child, "engineeringUnitOfMeasure"),
+                    negative_tolerance: self.opt_num(&child, "engineeringNegativeTolerance")?,
+                    positive_tolerance: self.opt_num(&child, "engineeringPositiveTolerance")?,
+                }),
+                "Ranged" => out.ranged.push(RangedCharacteristic {
+                    definition_source: self.optional_attr(&child, "definitionSource"),
+                    name: self.optional_attr(&child, "rangedCharacteristicName"),
+                    lower_value: self.opt_num(&child, "rangedCharacteristicLowerValue")?,
+                    upper_value: self.opt_num(&child, "rangedCharacteristicUpperValue")?,
+                    engineering_unit: self.optional_attr(&child, "engineeringUnitOfMeasure"),
+                    negative_tolerance: self.opt_num(&child, "engineeringNegativeTolerance")?,
+                    positive_tolerance: self.opt_num(&child, "engineeringPositiveTolerance")?,
+                }),
+                "Enumerated" => out.enumerated.push(EnumeratedCharacteristic {
+                    definition_source: self.optional_attr(&child, "definitionSource"),
+                    name: self.optional_attr(&child, "enumeratedCharacteristicName"),
+                    value: self.optional_attr(&child, "enumeratedCharacteristicValue"),
+                }),
+                "Textual" => out.textuals.push(TextualCharacteristic {
+                    definition_source: self.optional_attr(&child, "definitionSource"),
+                    name: self.optional_attr(&child, "textualCharacteristicName"),
+                    value: self.optional_attr(&child, "textualCharacteristicValue"),
+                }),
                 _ => {}
             }
         }
-        Ok(Characteristics {
-            category,
-            measured,
-            ranged,
-            enumerated,
-            textuals,
-        })
-    }
-
-    fn parse_measured_characteristic(&mut self, node: &Node) -> Result<MeasuredCharacteristic> {
-        Ok(MeasuredCharacteristic {
-            definition_source: self.optional_attr(node, "definitionSource"),
-            name: self.optional_attr(node, "measuredCharacteristicName"),
-            value: self.opt_num(node, "measuredCharacteristicValue")?,
-            engineering_unit: self.optional_attr(node, "engineeringUnitOfMeasure"),
-            negative_tolerance: self.opt_num(node, "engineeringNegativeTolerance")?,
-            positive_tolerance: self.opt_num(node, "engineeringPositiveTolerance")?,
-        })
-    }
-
-    fn parse_ranged_characteristic(&mut self, node: &Node) -> Result<RangedCharacteristic> {
-        Ok(RangedCharacteristic {
-            definition_source: self.optional_attr(node, "definitionSource"),
-            name: self.optional_attr(node, "rangedCharacteristicName"),
-            lower_value: self.opt_num(node, "rangedCharacteristicLowerValue")?,
-            upper_value: self.opt_num(node, "rangedCharacteristicUpperValue")?,
-            engineering_unit: self.optional_attr(node, "engineeringUnitOfMeasure"),
-            negative_tolerance: self.opt_num(node, "engineeringNegativeTolerance")?,
-            positive_tolerance: self.opt_num(node, "engineeringPositiveTolerance")?,
-        })
-    }
-
-    fn parse_enumerated_characteristic(&mut self, node: &Node) -> EnumeratedCharacteristic {
-        EnumeratedCharacteristic {
-            definition_source: self.optional_attr(node, "definitionSource"),
-            name: self.optional_attr(node, "enumeratedCharacteristicName"),
-            value: self.optional_attr(node, "enumeratedCharacteristicValue"),
-        }
-    }
-
-    fn parse_textual_characteristic(&mut self, node: &Node) -> TextualCharacteristic {
-        TextualCharacteristic {
-            definition_source: self.optional_attr(node, "definitionSource"),
-            name: self.optional_attr(node, "textualCharacteristicName"),
-            value: self.optional_attr(node, "textualCharacteristicValue"),
-        }
+        Ok(out)
     }
 
     fn parse_avl(&mut self, node: &Node) -> Result<Avl> {
-        let name = self.required_attr(node, "name", "Avl")?;
-        let mut header = None;
-        let mut items = Vec::new();
+        let mut avl = Avl {
+            name: self.required_attr(node, "name", "Avl")?,
+            header: None,
+            items: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "AvlHeader" => header = Some(self.parse_avl_header(&child)?),
-                "AvlItem" => items.push(self.parse_avl_item(&child)?),
+                "AvlHeader" => avl.header = Some(self.parse_avl_header(&child)?),
+                "AvlItem" => avl.items.push(self.parse_avl_item(&child)?),
                 _ => {}
             }
         }
-        Ok(Avl {
-            name,
-            header,
-            items,
-        })
+        Ok(avl)
     }
 
     fn parse_avl_header(&mut self, node: &Node) -> Result<AvlHeader> {
@@ -2458,48 +2377,40 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_avl_item(&mut self, node: &Node) -> Result<AvlItem> {
-        let oem_design_number = self.required_attr(node, "OEMDesignNumber", "AvlItem")?;
-        let mut vmpn_list = Vec::new();
-        let mut spec_refs = Vec::new();
+        let mut item = AvlItem {
+            oem_design_number: self.required_attr(node, "OEMDesignNumber", "AvlItem")?,
+            vmpn_list: Vec::new(),
+            spec_refs: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "AvlVmpn" => vmpn_list.push(self.parse_avl_vmpn(&child)?),
-                "SpecRef" => spec_refs.push(self.required_attr(&child, "id", "SpecRef")?),
+                "AvlVmpn" => item.vmpn_list.push(self.parse_avl_vmpn(&child)?),
+                "SpecRef" => item.spec_refs.push(self.spec_ref(&child)?),
                 _ => {}
             }
         }
-        Ok(AvlItem {
-            oem_design_number,
-            vmpn_list,
-            spec_refs,
-        })
+        Ok(item)
     }
 
     fn parse_avl_vmpn(&mut self, node: &Node) -> Result<AvlVmpn> {
-        let evpl_vendor = self.optional_attr(node, "evplVendor");
-        let evpl_mpn = self.optional_attr(node, "evplMpn");
-        let qualified = self.opt_bool(node, "qualified")?;
-        let chosen = self.opt_bool(node, "chosen")?;
-
-        let mut mpns = Vec::new();
-        let mut vendors = Vec::new();
+        let mut vmpn = AvlVmpn {
+            evpl_vendor: self.optional_attr(node, "evplVendor"),
+            evpl_mpn: self.optional_attr(node, "evplMpn"),
+            qualified: self.opt_bool(node, "qualified")?,
+            chosen: self.opt_bool(node, "chosen")?,
+            mpns: Vec::new(),
+            vendors: Vec::new(),
+        };
         for child in self.element_children(node) {
             match self.name(&child) {
-                "AvlMpn" => mpns.push(self.parse_avl_mpn(&child)?),
-                "AvlVendor" => vendors.push(AvlVendor {
+                "AvlMpn" => vmpn.mpns.push(self.parse_avl_mpn(&child)?),
+                "AvlVendor" => vmpn.vendors.push(AvlVendor {
                     enterprise_ref: self.required_attr(&child, "enterpriseRef", "AvlVendor")?,
                 }),
                 _ => {}
             }
         }
-        Ok(AvlVmpn {
-            evpl_vendor,
-            evpl_mpn,
-            qualified,
-            chosen,
-            mpns,
-            vendors,
-        })
+        Ok(vmpn)
     }
 
     fn parse_avl_mpn(&mut self, node: &Node) -> Result<AvlMpn> {
