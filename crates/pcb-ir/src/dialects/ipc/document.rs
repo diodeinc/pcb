@@ -141,15 +141,9 @@ impl Document {
     ) -> anyhow::Result<crate::geom::ContourSet> {
         super::process::normalize_for_artwork(&mut self, resolution)?;
         let artwork = super::lower_layer_to_artwork(&self, layer_index, role, side);
-        let (mut layers, _) =
-            crate::dialects::artwork::compose_owner_regions(&artwork, |_| Some(()), resolution)?;
-        Ok(layers
-            .pop()
-            .and_then(|mut owners| owners.pop())
-            .map_or_else(
-                || crate::geom::ContourSet::empty(resolution),
-                |(_, region)| region,
-            ))
+        Ok(crate::dialects::artwork::compose_layer_image(
+            &artwork, resolution,
+        )?)
     }
 }
 

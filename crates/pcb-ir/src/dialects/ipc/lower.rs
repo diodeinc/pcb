@@ -467,20 +467,15 @@ fn nc_object_from_feature(
     feature: &Feature,
     geometry: nc::Geometry,
 ) -> Result<nc::Object, String> {
-    let plating = match feature.intent.plating {
-        PlatingKind::Via | PlatingKind::ViaCapped | PlatingKind::Plated => nc::Plating::Plated,
-        PlatingKind::NonPlated | PlatingKind::None => nc::Plating::NonPlated,
+    let (plating, function) = match feature.intent.plating {
+        PlatingKind::Via | PlatingKind::ViaCapped => (nc::Plating::Plated, nc::Function::Via),
+        PlatingKind::Plated => (nc::Plating::Plated, nc::Function::Component),
+        PlatingKind::NonPlated | PlatingKind::None => {
+            (nc::Plating::NonPlated, nc::Function::Component)
+        }
         PlatingKind::Unknown => {
             return Err("cannot export drill/rout feature to NC with unknown plating".to_string());
         }
-    };
-    let function = if matches!(
-        feature.intent.plating,
-        PlatingKind::Via | PlatingKind::ViaCapped
-    ) {
-        nc::Function::Via
-    } else {
-        nc::Function::Component
     };
     let span = match feature.intent.span {
         FeatureSpan::ThroughBoard | FeatureSpan::Unknown => nc::DrillSpan::ThroughBoard,
@@ -866,10 +861,7 @@ mod tests {
 
         let image = |doc: &Document| {
             let artwork = lower_layer_to_artwork(doc, 0, LayerRole::Copper, Side::Top);
-            let (mut layers, _) =
-                artwork::compose_owner_regions(&artwork, |_| Some(()), Resolution::default())
-                    .unwrap();
-            layers.remove(0).remove(0).1
+            artwork::compose_layer_image(&artwork, Resolution::default()).unwrap()
         };
         let grouped = image(&doc);
         crate::dialects::ipc::process::expand_feature_placement_groups(&mut doc);

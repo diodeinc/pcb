@@ -77,13 +77,9 @@ pub fn compare_documents<A, B>(
     candidate: &Document<Vec<String>, B>,
     tolerance: CompareTolerance,
     resolution: Resolution,
-) -> Result<CompareReport, AccuracyError>
-where
-    A: Clone,
-    B: Clone,
-{
-    let reference_image = layer_image(reference, resolution)?;
-    let candidate_image = layer_image(candidate, resolution)?;
+) -> Result<CompareReport, AccuracyError> {
+    let reference_image = artwork::compose_layer_image(reference, resolution.strict())?;
+    let candidate_image = artwork::compose_layer_image(candidate, resolution.strict())?;
     let reference_summary = image_summary(reference, &reference_image);
     let candidate_summary = image_summary(candidate, &candidate_image);
     let mut mismatches = Vec::new();
@@ -127,11 +123,12 @@ where
     })
 }
 
-pub fn summarize<A: Clone>(
+pub fn summarize<A>(
     doc: &Document<Vec<String>, A>,
     resolution: Resolution,
 ) -> Result<Summary, AccuracyError> {
-    Ok(image_summary(doc, &layer_image(doc, resolution)?))
+    let image = artwork::compose_layer_image(doc, resolution.strict())?;
+    Ok(image_summary(doc, &image))
 }
 
 fn image_summary<A>(doc: &Document<Vec<String>, A>, image: &ContourSet) -> Summary {
@@ -146,22 +143,6 @@ fn image_summary<A>(doc: &Document<Vec<String>, A>, image: &ContourSet) -> Summa
         object_count: doc.objects.len(),
         path_count: doc.arena.paths.len(),
     }
-}
-
-/// The composed image of the document's first layer.
-fn layer_image<A: Clone>(
-    doc: &Document<Vec<String>, A>,
-    resolution: Resolution,
-) -> Result<ContourSet, AccuracyError> {
-    let (mut layers, _) = artwork::compose_owner_regions(doc, |_| Some(()), resolution.strict())?;
-    layers.truncate(1);
-    Ok(layers
-        .pop()
-        .and_then(|mut owners| owners.pop())
-        .map_or_else(
-            || ContourSet::empty(resolution.strict()),
-            |(_, image)| image,
-        ))
 }
 
 fn compare_bbox(

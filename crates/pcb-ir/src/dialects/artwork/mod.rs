@@ -791,6 +791,19 @@ pub fn compose_owner_regions<LayerMeta, ObjectMeta, Owner: Clone + Eq + Hash>(
     Ok((layers, diagnostics))
 }
 
+/// The composed image of the document's first layer, whatever owns it.
+pub fn compose_layer_image<LayerMeta, ObjectMeta>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    resolution: Resolution,
+) -> Result<region::ContourSet, AccuracyError> {
+    let (layers, _) = compose_owner_regions(doc, |_| Some(()), resolution)?;
+    let image = layers
+        .into_iter()
+        .next()
+        .and_then(|mut owners| owners.pop());
+    Ok(image.map_or_else(|| region::ContourSet::empty(resolution), |(_, image)| image))
+}
+
 /// Compose each layer's ordered dark/clear paint into its final positive
 /// image.
 pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta>(
@@ -1445,11 +1458,8 @@ mod tests {
         }
         normalize_bounds(&mut doc);
 
-        let image = |doc: &Document<(), ()>| {
-            let (mut layers, _) =
-                compose_owner_regions(doc, |_| Some(()), Resolution::default()).unwrap();
-            layers.remove(0).remove(0).1
-        };
+        let image =
+            |doc: &Document<(), ()>| compose_layer_image(doc, Resolution::default()).unwrap();
         let shared = image(&doc);
         let expanded = image(&expand_instances(&doc));
         assert!((shared.area() - expanded.area()).abs() < 1e-9);
