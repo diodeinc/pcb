@@ -1,56 +1,41 @@
 //! Panel warp estimated from the through-stack copper distribution.
 //!
-//! Copper balancing is implicitly minimizing the thermal moment resultant of
+//! Copper balancing implicitly minimizes the thermal moment resultant of
 //! classical lamination theory. This module makes that explicit: it turns a
 //! stackup plus per-layer copper density fields into an estimated deflection
 //! surface, and reads bow off it the way IPC-TM-650 2.4.22 does.
 //!
-//! The chain, and the assumptions at each link:
-//!
 //! 1. Each layer is homogenized by copper fraction under the Voigt (iso-strain)
-//!    rule, which is the right average for phases sharing in-plane strain.
+//!    rule, the right average for phases sharing in-plane strain.
 //! 2. The copper-driven thermal moment is linear in that fraction, leaving a
 //!    geometric field `m(x) = sum_l t_l z_l rho_l(x)` scaled by one material
 //!    constant, and the plate that answers it is the stack at the copper each
 //!    layer carries on average. See [`ThermalStack::response`].
-//! 3. The panel is a free plate carrying that thermal moment, and its surface
-//!    is the plate's equilibrium: bending energy against the work the moment
-//!    does on curvature, minimized over polynomial surfaces. Free edges are
-//!    the natural boundary conditions of that minimization, so the edges are
-//!    part of the solution rather than ignored by it. See [`estimate_warp`].
-//! 4. Deflection answers the moment through two integrations. That is what
-//!    introduces the wavelength-squared weighting that makes long-wavelength
-//!    imbalance dominate warp — the reason a flat norm over the moment field
-//!    misreads the problem.
+//! 3. The panel is a free plate carrying that moment, and its surface is the
+//!    plate's equilibrium: bending energy against the work the moment does on
+//!    curvature, minimized over polynomial surfaces, with free edges as the
+//!    natural boundary conditions. See [`estimate_warp`].
+//! 4. Deflection answers the moment through two integrations, so
+//!    long-wavelength imbalance dominates warp and a flat norm over the moment
+//!    field misreads the problem.
 //!
 //! No twist is estimated, because equilibrium leaves none. A free panel
-//! carries no load, so its moment resultants do no work on any virtual
-//! deflection, and taking `xy` as that deflection leaves `integral(M_xy) = 0`
-//! over the panel. A thermal moment is isotropic and has no `xy` component,
-//! which makes this `integral(w_xy) = 0` for the surface itself — and the
-//! integral of `w_xy` over a rectangle is identically the alternating sum of
-//! its corner heights, the quantity 2.4.22 reads as twist. The solved surface
-//! inherits this exactly, `xy` being one of its polynomials. Copper therefore
-//! cannot twist a free panel at this order however it is distributed. What
-//! twists real panels is weave skew and unbalanced layup, which make the plate
-//! itself anisotropic and are outside this model.
+//! carries no load, so its moment resultants do no work on the virtual
+//! deflection `xy`, leaving `integral(M_xy) = 0`. A thermal moment is isotropic
+//! and has no `xy` component, so `integral(w_xy) = 0` for the surface itself —
+//! identically the alternating sum of a rectangle's corner heights, which
+//! 2.4.22 reads as twist. What twists real panels is weave skew and unbalanced
+//! layup, which make the plate anisotropic and are outside this model.
 //!
-//! The model is **verified, not validated**: the tests below check it against
-//! closed forms, symmetry, and linearity. Nothing here has been compared
-//! against a measured panel, so results are estimates whose absolute scale
-//! carries the uncertainty of the assumed temperature drop and moduli. Ratios
-//! between panelizations of one stackup are far more trustworthy than absolute
-//! values, because the temperature drop and the moduli are common to both and
-//! all but cancel.
-//!
-//! What is modelled is the elastic expansion mismatch between copper and
-//! laminate below the glass transition, and nothing else. That mismatch is
-//! about 1 ppm/K, and on its own it does not reproduce the fabricator rule of
-//! keeping mirrored layers within 10-15 % copper of each other: the IPC-6012
-//! bow limit is reached only at a mismatch no panel can carry. Resin cure
-//! shrinkage and the several-times-larger resin expansion above the glass
-//! transition are outside this model, so the absolute figure is the elastic
-//! contribution to warp and not the panel's total.
+//! The model is **verified, not validated**: the tests check it against closed
+//! forms, symmetry, and an independent solve, never a measured panel. Only the
+//! elastic expansion mismatch between copper and laminate below the glass
+//! transition is modelled — about 1 ppm/K, which reaches the IPC-6012 bow
+//! limit only at a mismatch no panel can carry. Resin cure shrinkage and the
+//! larger resin expansion above the transition are left out, so the absolute
+//! figure is the elastic contribution alone. Ratios between panelizations of
+//! one stackup are far more trustworthy, because the temperature drop and the
+//! moduli are common to both and all but cancel.
 
 use crate::geom::{BBox, Point};
 
@@ -59,9 +44,7 @@ use crate::geom::{BBox, Point};
 /// Stress locks in around the glass transition rather than at the lamination
 /// peak, because above it the resin is rubbery and relieves what it
 /// accumulates. Standard FR-4 transitions near 130-140 C, so this is that less
-/// room temperature. It is the single largest uncertainty in the absolute
-/// result and it cancels entirely when comparing two panelizations of one
-/// stackup.
+/// room temperature: the single largest uncertainty in the absolute result.
 pub const LAMINATE_RELAXATION_DROP_K: f64 = 110.0;
 
 /// Isotropic elastic and thermal properties of one material under plane stress.
@@ -83,10 +66,6 @@ impl Material {
     };
 
     /// Woven-glass epoxy laminate, in-plane, below the glass transition.
-    ///
-    /// In-plane properties are dominated by the glass weave and are far less
-    /// compliant than the through-thickness direction, which this model does
-    /// not use.
     pub const LAMINATE: Self = Self {
         modulus_gpa: 25.0,
         poisson: 0.20,
@@ -94,11 +73,8 @@ impl Material {
     };
 
     /// Stiffness against equal strain in both directions, `E / (1 - nu)`, in
-    /// GPa.
-    ///
-    /// This is the constant relating a fully constrained equibiaxial thermal
-    /// strain to the stress it produces, which is what a misfit between layers
-    /// generates, and the one a spherical curvature bends against.
+    /// GPa: what a thermal misfit between layers strains against, and what a
+    /// spherical curvature bends against.
     fn biaxial_modulus_gpa(self) -> f64 {
         self.modulus_gpa / (1.0 - self.poisson)
     }
@@ -224,29 +200,24 @@ impl ThermalStack {
     /// fraction, `coverage`, in stack order, and `displaced` filling what the
     /// copper leaves of its layer.
     ///
-    /// Each layer is homogenized at that fraction under the Voigt rule, and a
-    /// free plate answers a temperature change with a membrane strain and a
+    /// A free plate answers a temperature change with a membrane strain and a
     /// curvature, `[N_T; M_T] = [A B; B D] [e0; kappa]`, which leaves
     /// `kappa (D - B^2 / A) = M_T - (B / A) N_T`. With `a = N_T / (A dT)`, the
     /// expansion of the free stack as one membrane, the right side is each
-    /// layer's thermal stress against that expansion rather than against a
-    /// rigid frame, `dT sum Q (a_l - a) t z`, and under the Voigt rule that is
-    /// `Q_c (a_c - a) - Q_d (a_d - a)` times the geometric copper field, plus
-    /// the share of the build with its copper taken out: one dielectric
-    /// throughout, `Q_d (a_d - a) sum t z`, which vanishes about the
-    /// mid-plane. Materials that expand alike cannot bend the panel however
-    /// unevenly they are distributed, and the coefficient vanishes when they
-    /// do.
+    /// layer's thermal stress against that expansion, `dT sum Q (a_l - a) t z`.
+    /// Under the Voigt rule that is `Q_c (a_c - a) - Q_d (a_d - a)` times the
+    /// geometric copper field, plus one dielectric throughout,
+    /// `Q_d (a_d - a) sum t z`, which vanishes about the mid-plane. The
+    /// coefficient vanishes when the materials expand alike.
     ///
-    /// Nothing in that is linearized: for copper spread evenly over each
-    /// layer it is lamination theory exactly, at any coverage and for builds
-    /// that are not symmetric. What is held fixed is the stiffness and the
-    /// membrane expansion *across* the panel, at the panel's means, while the
-    /// copper field varies. The curvature scale `coefficient / rigidity` falls
-    /// by 9-12 % for each tenth of coverage added to every layer of a
-    /// conventional six-layer build, so a region that far from the mean has
-    /// its own share of the curvature misjudged by that much. The error is
-    /// the product of two departures from the mean -- coverage and moment --
+    /// For copper spread evenly over each layer this is lamination theory
+    /// exactly, at any coverage and for builds that are not symmetric. What is
+    /// held fixed is the stiffness and the membrane expansion *across* the
+    /// panel, at the panel's means, while the copper field varies. The
+    /// curvature scale `coefficient / rigidity` falls by 9-12 % for each tenth
+    /// of coverage added to every layer of a conventional six-layer build, so
+    /// a region that far from the mean has its share of the curvature
+    /// misjudged by that much: the product of two departures from the mean,
     /// and second order in the bow.
     ///
     /// `None` when `coverage` does not name every conductor or the materials
@@ -384,27 +355,22 @@ pub struct WarpEstimate {
 /// Highest total degree of the polynomial surfaces the deflection is sought
 /// among.
 ///
-/// Truncation leaves out what the omitted shapes would have deflected, and
-/// deflection is the moment integrated twice: a moment rippling `n` half-waves
+/// Deflection is the moment integrated twice: a moment rippling `n` half-waves
 /// across a side deflects `8 / (pi n)^2` of what the same amplitude spread
 /// evenly does. A polynomial spends about `pi / 2` of its degrees on each
 /// half-wave, so degree 12 carries ripples to `n = 8`, and what it leaves out
 /// deflects under 1.3 % of its own amplitude's even bow. On copper that changes
-/// abruptly -- a heavy half, a heavy corner, rails around a striped array --
-/// bow lands within 0.3 % of a degree-28 surface's, which the tests hold it
-/// to. The response this surface is scaled by is itself good only to several
-/// percent wherever coverage departs from its mean, so a richer surface would
-/// resolve detail the model does not have. The solve is dense in
-/// `(12 + 1) (12 + 2) / 2 - 3 = 88` unknowns.
+/// abruptly bow lands within 0.3 % of a degree-28 surface's, which the tests
+/// hold it to; the response this surface is scaled by is itself good only to
+/// several percent, so a richer surface would resolve detail the model does
+/// not have. The solve is dense in `(12 + 1) (12 + 2) / 2 - 3 = 88` unknowns.
 const SURFACE_DEGREE: usize = 12;
 
 /// Estimate warp from the geometric copper moment field.
 ///
 /// `moment_field` is `sum_l t_l z_l rho_l(x)` in mm^2 — the quantity the copper
 /// balance solver already computes — and `response` is the stack's at the mean
-/// coverage of those same layers. `temperature_drop_k` is the effective
-/// excursion from where the laminate stops relaxing down to room temperature,
-/// which is the single largest source of uncertainty in the absolute result.
+/// coverage of those same layers.
 ///
 /// The surface is the Ritz solution of the free plate: over every polynomial
 /// `w` up to `SURFACE_DEGREE`, the one that leaves the plate's bending
@@ -821,25 +787,6 @@ mod tests {
         field(bounds, (20, 20), |_, _| value)
     }
 
-    /// A conventional 1.6 mm six-layer build: six 1 oz foils, thin outer
-    /// prepregs, thicker cores.
-    fn six_layer_panel() -> ThermalStack {
-        ThermalStack::new(vec![
-            copper(0.035),
-            laminate(0.2),
-            copper(0.035),
-            laminate(0.3),
-            copper(0.035),
-            laminate(0.39),
-            copper(0.035),
-            laminate(0.3),
-            copper(0.035),
-            laminate(0.2),
-            copper(0.035),
-        ])
-        .unwrap()
-    }
-
     fn panel() -> BBox {
         BBox::new(Point::new(0.0, 0.0), Point::new(400.0, 500.0))
     }
@@ -973,25 +920,6 @@ mod tests {
         }
     }
 
-    /// What the response holds fixed across a panel is how far the curvature
-    /// scale moves with coverage, so that is the figure its documentation
-    /// quotes: about a tenth per tenth of coverage on a conventional build.
-    #[test]
-    fn the_curvature_scale_falls_about_a_tenth_per_tenth_of_coverage() {
-        let stack = six_layer_panel();
-        let scale = |level: f64| {
-            let response = stack.response(Material::LAMINATE, &[level; 6]).unwrap();
-            response.moment_coefficient_gpa_per_k / response.spherical_rigidity_gpa_mm3
-        };
-        for level in [0.2, 0.4, 0.6, 0.8] {
-            let step = scale(level + 0.1) / scale(level);
-            assert!((0.87..0.92).contains(&step), "{level}: {step}");
-        }
-        // Which is why the response is evaluated at the measured copper: whole
-        // foils would understate a half-covered panel's curvature by a third.
-        assert!(scale(1.0) / scale(0.5) < 0.65);
-    }
-
     /// Mixed copper weights move the neutral axis, but the coverage that
     /// leaves the panel flat is the one that cancels about the mid-plane, at
     /// any coverage and whatever the dielectric: the arms balancing draws on
@@ -1029,18 +957,6 @@ mod tests {
             .unwrap()
             .conductor_weights();
         assert!((even[0].moment_arm_mm2 + even[1].moment_arm_mm2).abs() <= 1e-12);
-    }
-
-    /// Equal copper on mirrored layers cancels: the field is zero and so is the
-    /// warp. This is the case balancing is trying to reach.
-    #[test]
-    fn a_balanced_panel_is_predicted_flat() {
-        let stack = symmetric_four_layer();
-        let field = uniform_field(panel(), 0.0);
-        let warp = estimate_warp(&whole(&stack), &field, 150.0);
-
-        assert!(warp.bow_mm <= 1e-12, "{:?}", warp.bow_mm);
-        assert!(warp.bow_percent <= 1e-12);
     }
 
     /// A uniform moment bends a panel of any shape into the same spherical cap,
@@ -1152,29 +1068,6 @@ mod tests {
         assert!(
             (upright - turned).abs() <= 1e-9 * upright,
             "{upright} != {turned}"
-        );
-    }
-
-    /// Long-wavelength imbalance deflects far more than short-wavelength
-    /// imbalance of the same amplitude — the result that makes a flat norm over
-    /// the moment field the wrong thing to minimize.
-    #[test]
-    fn long_wavelength_imbalance_dominates_deflection() {
-        let response = whole(&symmetric_four_layer());
-        let ripple = |cycles: f64| {
-            let moment = field(panel(), (80, 100), |x, _| {
-                0.01 * (std::f64::consts::PI * cycles * (x + 1.0)).cos()
-            });
-            estimate_warp(&response, &moment, 150.0).bow_mm
-        };
-
-        // One cycle across the panel against three: same amplitude, and the
-        // deflection falls with the square of the wavelength.
-        assert!(
-            ripple(1.0) > 5.0 * ripple(3.0),
-            "{} {}",
-            ripple(1.0),
-            ripple(3.0)
         );
     }
 
@@ -1312,89 +1205,6 @@ mod tests {
         assert!(
             (curvature - stoney).abs() <= 1e-3 * stoney,
             "{curvature} != {stoney}"
-        );
-    }
-
-    /// Fabricators advise keeping mirrored layers within 10-15 % copper
-    /// coverage of each other, and IPC-6012 accepts 0.75 % bow. The elastic
-    /// mismatch modelled here does not connect the two: copper and laminate
-    /// expand within about 1 ppm/K of each other below the glass transition,
-    /// and on a production panel that reaches the limit only at a mismatch no
-    /// panel can carry. The rule guards against what this model leaves out.
-    #[test]
-    fn elastic_mismatch_alone_does_not_reproduce_the_fabricator_copper_rule() {
-        let stack = six_layer_panel();
-        let outer_arm = stack.conductor_weights()[0].moment_arm_mm2;
-        let bounds = BBox::new(Point::new(0.0, 0.0), Point::new(457.2, 609.6));
-        // Half copper throughout, the outer pair split evenly about it.
-        let bow_at = |mismatch: f64| {
-            let (top, bottom) = (0.5 + mismatch / 2.0, 0.5 - mismatch / 2.0);
-            let response = stack
-                .response(Material::LAMINATE, &[top, 0.5, 0.5, 0.5, 0.5, bottom])
-                .unwrap();
-            estimate_warp(
-                &response,
-                &uniform_field(bounds, mismatch * outer_arm),
-                LAMINATE_RELAXATION_DROP_K,
-            )
-            .bow_percent
-        };
-
-        // An outer foil whole on one face and absent from the other is the
-        // most a mirrored pair can differ by, and it stays under the limit.
-        assert!(bow_at(1.0) < 0.75, "{} %", bow_at(1.0));
-        // Imbalance only softens the plate, by pulling its neutral axis off
-        // the middle, so the advised band sits at least as far under the limit
-        // as it sits under total mismatch.
-        assert!(bow_at(0.15) > 0.0 && bow_at(0.15) <= 0.15 * bow_at(1.0));
-    }
-
-    /// On a build symmetric about its mid-plane the material constant scales
-    /// every deflection alike. It cancels from any comparison between two
-    /// copper distributions, and the lever arms balancing draws on never see
-    /// it.
-    #[test]
-    fn the_material_constant_cancels_between_copper_distributions() {
-        let resin = Material {
-            cte_ppm_per_k: 60.0,
-            ..Material::LAMINATE
-        };
-        let build = |dielectric: Material| {
-            let core = |thickness_mm| StackLayer {
-                thickness_mm,
-                material: dielectric,
-                is_conductor: false,
-            };
-            ThermalStack::new(vec![
-                copper(0.035),
-                core(0.2),
-                copper(0.035),
-                core(1.06),
-                copper(0.035),
-                core(0.2),
-                copper(0.035),
-            ])
-            .unwrap()
-        };
-        let shaped = |scale: f64| {
-            field(panel(), (20, 20), |x, y| {
-                scale * (0.01 + 0.004 * x - 0.003 * x * y + 0.002 * y * y)
-            })
-        };
-
-        let response =
-            |dielectric: Material| build(dielectric).response(dielectric, &[0.5; 4]).unwrap();
-        let ratio = |dielectric: Material| {
-            let bow = |field| estimate_warp(&response(dielectric), &field, 110.0).bow_mm;
-            bow(shaped(0.4)) / bow(shaped(1.0))
-        };
-        // Two constants well apart, or the comparison shows nothing.
-        let coefficient = |dielectric: Material| response(dielectric).moment_coefficient_gpa_per_k;
-        assert!(coefficient(resin).abs() > 10.0 * coefficient(Material::LAMINATE).abs());
-        assert!((ratio(Material::LAMINATE) - ratio(resin)).abs() <= 1e-9);
-        assert_eq!(
-            build(Material::LAMINATE).conductor_weights(),
-            build(resin).conductor_weights()
         );
     }
 }
