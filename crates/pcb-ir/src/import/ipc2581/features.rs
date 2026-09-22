@@ -78,34 +78,6 @@ impl<'a> ExtractContext<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct StrokedFeatureStyle {
-    pub(super) net: Option<Symbol>,
-    pub(super) polarity: GeometryPolarity,
-    pub(super) source: SourceRef,
-    pub(super) width: f64,
-    pub(super) line_cap: LineCap,
-    pub(super) line_pattern: LinePattern,
-}
-
-impl StrokedFeatureStyle {
-    fn new(
-        net: Option<Symbol>,
-        polarity: GeometryPolarity,
-        source: SourceRef,
-        line_desc: ipc2581::types::LineDesc,
-    ) -> Self {
-        Self {
-            net,
-            polarity,
-            source,
-            width: line_desc.line_width,
-            line_cap: map_line_cap(line_desc.line_end),
-            line_pattern: map_line_pattern(line_desc.line_property),
-        }
-    }
-}
-
 pub(super) fn push_feature_set_record(
     doc: &mut GeometryDocument,
     layer: u32,
@@ -971,11 +943,16 @@ pub(super) fn extract_stroke(
         None => (None, None),
     };
     let line_desc = require_line_desc(context, doc, what, reference, inline)?;
-    Some(push_stroked_contour(
-        doc,
-        StrokedFeatureStyle::new(net, polarity, source, line_desc),
-        cmds,
-    ))
+    let path = doc.push_path(
+        stroke_paint(line_desc, 1.0),
+        [ContourBuf::new(cmds).with_consistent_arcs()],
+    );
+    let mut feature = GeometryFeature::new(FeatureKind::Trace, polarity);
+    feature.net = net;
+    feature.source = source;
+    feature.bbox = doc.arena.paths[path as usize].bbox;
+    feature.paths = Span::single(path);
+    Some(feature)
 }
 
 pub(super) fn extract_polygon(
@@ -1000,30 +977,6 @@ pub(super) fn extract_polygon(
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
     feature
-}
-
-/// One open centerline stroked as a trace feature.
-pub(super) fn push_stroked_contour(
-    doc: &mut GeometryDocument,
-    style: StrokedFeatureStyle,
-    cmds: Vec<PathCmd>,
-) -> GeometryFeature {
-    let path = doc.push_path(
-        stroked_paint(style),
-        [ContourBuf::new(cmds).with_consistent_arcs()],
-    );
-    let mut feature = GeometryFeature::new(FeatureKind::Trace, style.polarity);
-    feature.net = style.net;
-    feature.source = style.source;
-    feature.bbox = doc.arena.paths[path as usize].bbox;
-    feature.paths = Span::single(path);
-    feature
-}
-
-pub(super) fn stroked_paint(style: StrokedFeatureStyle) -> Paint {
-    let mut stroke = StrokeStyle::new(style.width, style.line_cap);
-    stroke.pattern = style.line_pattern;
-    Paint::Stroke(stroke)
 }
 
 pub(super) fn extract_hole(

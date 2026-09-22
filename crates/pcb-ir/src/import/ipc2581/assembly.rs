@@ -5,7 +5,7 @@ use ipc2581::types;
 use super::ImportedDesign;
 use crate::dialects::assembly as ir;
 use crate::dialects::ipc::ArtworkScope;
-use crate::geom::{Affine2, Paint, Point, Polarity, StrokeStyle};
+use crate::geom::{Affine2, Paint, Point, Polarity};
 
 impl ImportedDesign {
     /// Lower source-faithful IPC-2581 assembly data into the canonical
@@ -337,14 +337,7 @@ fn map_package_outline(
         || outline.polygon_fill_desc_ref.is_some();
     let paint = line_desc
         .filter(|_| !unresolved_style)
-        .map_or(Paint::None, |line_desc| {
-            let mut stroke = StrokeStyle::new(
-                line_desc.line_width,
-                super::map_line_cap(line_desc.line_end),
-            );
-            stroke.pattern = super::map_line_pattern(line_desc.line_property);
-            Paint::Stroke(stroke)
-        });
+        .map_or(Paint::None, |line_desc| super::stroke_paint(line_desc, 1.0));
     ir::PackageOutline {
         transform: outline.polygon_xform.map(map_transform),
         shape: ir::PackageShape {
