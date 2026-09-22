@@ -19,14 +19,8 @@ fn prepare(contours: &[ContourBuf], mm: f64) -> ContourSet {
 }
 fn distance(region: &ContourSet, p: Point) -> f64 {
     region
-        .rings
-        .iter()
-        .flat_map(|ring| {
-            ring.iter()
-                .zip(ring.iter().cycle().skip(1))
-                .take(ring.len())
-        })
-        .map(|(&a, &b)| point_segment(p, Point::new(a[0], a[1]), Point::new(b[0], b[1])).0)
+        .edges()
+        .map(|(a, b)| point_segment(p, a, b).0)
         .fold(f64::INFINITY, f64::min)
 }
 fn radial_error(region: &ContourSet, rx: f64, ry: f64) -> f64 {

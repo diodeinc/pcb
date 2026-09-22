@@ -20,6 +20,22 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> ContourSet {
     )
 }
 
+/// One footprint checked against one obstacle.
+fn check<'a>(
+    footprint: &ContourSet,
+    obstacle: &'a ContourSet,
+    clearance_mm: f64,
+    tolerance: QueryTolerance,
+) -> FootprintCheck<'a> {
+    let obstacles = [Obstacle {
+        id: "obstacle",
+        region: obstacle,
+    }];
+    check_footprint(footprint, &obstacles, clearance_mm, tolerance)
+        .unwrap()
+        .remove(0)
+}
+
 fn close(a: f64, b: f64, tolerance: f64) {
     assert!((a - b).abs() < tolerance, "{a} != {b}");
 }
@@ -102,18 +118,9 @@ fn concavity_and_affine_reflection_keep_outward_normals_and_clearance() {
         assert!(moved.contains_point(site.point - site.outward_normal * 0.01));
     }
     let attachment = transform_region(&rect(3.0, 3.0, 1.0, 1.0), transform).unwrap();
-    let checks = check_footprint(
-        &attachment,
-        &[Obstacle {
-            id: "concave board",
-            region: &moved,
-        }],
-        1.5,
-        TOL,
-    )
-    .unwrap();
-    assert_eq!(checks[0].decision, Decision::Admissible);
-    close(checks[0].boundary_distance.unwrap().mm, 2.0, 1e-6);
+    let concave = check(&attachment, &moved, 1.5, TOL);
+    assert_eq!(concave.decision, Decision::Admissible);
+    close(concave.boundary_distance.unwrap().mm, 2.0, 1e-6);
 }
 
 #[test]
@@ -155,32 +162,13 @@ fn complete_footprints_detect_crossings_containment_and_holes() {
     assert_eq!(checks[1].decision, Decision::Admissible);
     let enclosing = rect(-10.0, -10.0, 20.0, 20.0);
     assert_eq!(
-        check_footprint(
-            &attachment,
-            &[Obstacle {
-                id: "enclosing",
-                region: &enclosing
-            }],
-            0.0,
-            TOL
-        )
-        .unwrap()[0]
-            .decision,
+        check(&attachment, &enclosing, 0.0, TOL).decision,
         Decision::Rejected(GeometricRejection::FootprintOverlap)
     );
+    // A hole in an obstacle is free space.
     let annulus = enclosing.difference(&rect(-5.0, -5.0, 10.0, 10.0)).unwrap();
     assert_eq!(
-        check_footprint(
-            &attachment,
-            &[Obstacle {
-                id: "free hole",
-                region: &annulus
-            }],
-            0.5,
-            TOL
-        )
-        .unwrap()[0]
-            .decision,
+        check(&attachment, &annulus, 0.5, TOL).decision,
         Decision::Admissible
     );
 }
@@ -193,38 +181,15 @@ fn tolerance_ambiguity_is_not_geometric_rejection() {
         boundary_mm: 0.01,
         ..TOL
     };
-    let check = |clearance| {
-        check_footprint(
-            &attachment,
-            &[Obstacle {
-                id: "near",
-                region: &obstacle,
-            }],
-            clearance,
-            tolerance,
-        )
-        .unwrap()[0]
-            .decision
-            .clone()
-    };
-    assert_eq!(check(0.07), Decision::Admissible);
-    assert!(matches!(check(0.1), Decision::Unresolved(_)));
+    let decision = |clearance| check(&attachment, &obstacle, clearance, tolerance).decision;
+    assert_eq!(decision(0.07), Decision::Admissible);
+    assert!(matches!(decision(0.1), Decision::Unresolved(_)));
     assert!(matches!(
-        check(0.13),
+        decision(0.13),
         Decision::Rejected(GeometricRejection::InsufficientClearance { .. })
     ));
     assert!(matches!(
-        check_footprint(
-            &attachment,
-            &[Obstacle {
-                id: "same",
-                region: &attachment
-            }],
-            0.0,
-            tolerance
-        )
-        .unwrap()[0]
-            .decision,
+        check(&attachment, &attachment, 0.0, tolerance).decision,
         Decision::Unresolved(_)
     ));
 }
@@ -305,18 +270,9 @@ fn preparation_uncertainty_and_budget_survive_queries_and_transforms() {
     assert!(transformed.uncertainty_mm >= 0.004);
     assert_eq!(transformed.resolution, RESOLUTION);
     let obstacle = rect(1.003, 0.0, 1.0, 1.0);
-    let checks = check_footprint(
-        &prepared,
-        &[Obstacle {
-            id: "near",
-            region: &obstacle,
-        }],
-        0.002,
-        TOL,
-    )
-    .unwrap();
-    assert!(matches!(checks[0].decision, Decision::Unresolved(_)));
-    assert!(checks[0].boundary_distance.unwrap().uncertainty_mm >= 0.002);
+    let near = check(&prepared, &obstacle, 0.002, TOL);
+    assert!(matches!(near.decision, Decision::Unresolved(_)));
+    assert!(near.boundary_distance.unwrap().uncertainty_mm >= 0.002);
     assert!(matches!(
         transform_region(
             &prepared,
@@ -403,23 +359,14 @@ fn numerical_overlap_requires_a_deep_interior_witness() {
     };
     for (depth, rejected) in [(0.0005, false), (0.001, false), (0.01, true)] {
         let obstacle = rect(1.0 - depth, 0.0, 1.0, 1.0);
-        let checks = check_footprint(
-            &footprint,
-            &[Obstacle {
-                id: "overlap",
-                region: &obstacle,
-            }],
-            0.0,
-            tolerance,
-        )
-        .unwrap();
+        let decision = check(&footprint, &obstacle, 0.0, tolerance).decision;
         if rejected {
             assert_eq!(
-                checks[0].decision,
+                decision,
                 Decision::Rejected(GeometricRejection::FootprintOverlap)
             );
         } else {
-            assert!(matches!(checks[0].decision, Decision::Unresolved(_)));
+            assert!(matches!(decision, Decision::Unresolved(_)));
         }
     }
 }
