@@ -1,33 +1,92 @@
 use super::*;
 
+const TOP: &str = r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#;
+
+/// An IPC-2581 file about Step `primary`: `content` holds its dictionaries
+/// and `cad` its layers and steps.
+fn ipc_xml(primary: &str, content: &str, cad: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="{primary}"/>{content}</Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>{cad}</CadData></Ecad>
+</IPC-2581>"#
+    )
+}
+
+fn parse(primary: &str, content: &str, cad: &str) -> Ipc2581 {
+    Ipc2581::parse(&ipc_xml(primary, content, cad)).unwrap()
+}
+
+/// One board with a TOP copper layer and `step` as the children of its Step.
+fn board(content: &str, step: &str) -> Ipc2581 {
+    let cad = format!(r#"{TOP}<Step name="board" type="BOARD">{step}</Step>"#);
+    parse("board", content, &cad)
+}
+
+/// [`board`] with `sets` on TOP.
+fn top_board(content: &str, sets: &str) -> Ipc2581 {
+    board(
+        content,
+        &format!(r#"<LayerFeature layerRef="TOP">{sets}</LayerFeature>"#),
+    )
+}
+
+fn top_layer(ipc: &Ipc2581) -> GeometryDocument {
+    extract_layer(ipc, "TOP", Resolution::default()).unwrap()
+}
+
+/// A standard dictionary holding `shape` as `id`.
+fn standard_entry(id: &str, shape: &str) -> String {
+    format!(
+        r#"<DictionaryStandard units="MILLIMETER"><EntryStandard id="{id}">{shape}</EntryStandard></DictionaryStandard>"#
+    )
+}
+
+/// A Step's rectangular Profile from its origin.
+fn profile(width: u32, height: u32) -> String {
+    format!(
+        r#"<Profile><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="{width}" y="0"/>
+           <PolyStepSegment x="{width}" y="{height}"/><PolyStepSegment x="0" y="{height}"/></Polygon></Profile>"#
+    )
+}
+
+/// The closed steps of an axis-aligned rectangle, for a Polygon or Cutout.
+fn rect_steps(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
+    format!(
+        r#"<PolyBegin x="{x0}" y="{y0}"/><PolyStepSegment x="{x1}" y="{y0}"/><PolyStepSegment x="{x1}" y="{y1}"/>
+           <PolyStepSegment x="{x0}" y="{y1}"/><PolyStepSegment x="{x0}" y="{y0}"/>"#
+    )
+}
+
+fn diagnostics(doc: &GeometryDocument) -> Vec<&str> {
+    doc.diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect()
+}
+
+fn painted_image(doc: &GeometryDocument) -> ContourSet {
+    ContourSet::from_painted_paths(&doc.arena, &doc.arena.paths, Resolution::default()).unwrap()
+}
+
 #[test]
 fn rotated_bottom_silkscreen_matches_kicad_board_coordinates() {
     // Warden J3: the line must stay left of the footprint origin after placement.
-    let ipc = Ipc2581::parse(
-        r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="Owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/></Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="B.Silkscreen" layerFunction="SILKSCREEN" side="BOTTOM"/>
-      <Step name="board" type="BOARD">
-        <LayerFeature layerRef="B.Silkscreen">
-          <Set geometryUsage="GRAPHIC">
-            <Features>
-              <Xform rotation="270" mirror="true"/>
-              <Location x="171.456527" y="-116.7"/>
-              <Line startX="-2.15" startY="2.8" endX="-3.25" endY="2.8">
-                <LineDesc lineWidth="0.25" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
+    let ipc = parse(
+        "board",
+        "",
+        r#"<Layer name="B.Silkscreen" layerFunction="SILKSCREEN" side="BOTTOM"/>
+      <Step name="board" type="BOARD"><LayerFeature layerRef="B.Silkscreen"><Set geometryUsage="GRAPHIC">
+        <Features>
+          <Xform rotation="270" mirror="true"/>
+          <Location x="171.456527" y="-116.7"/>
+          <Line startX="-2.15" startY="2.8" endX="-3.25" endY="2.8">
+            <LineDesc lineWidth="0.25" lineEnd="ROUND"/>
+          </Line>
+        </Features>
+      </Set></LayerFeature></Step>"#,
+    );
     let resolution = Resolution::default();
     let imported = import_design(&ipc, resolution).unwrap();
     let image = imported
@@ -104,85 +163,24 @@ fn void_verification_inherits_accuracy_but_keeps_its_significance() {
 }
 
 #[test]
-fn maps_all_ipc_line_properties_to_ir_patterns() {
-    assert_eq!(map_line_pattern(None), LinePattern::Solid);
-    assert_eq!(
-        map_line_pattern(Some(LineProperty::Solid)),
-        LinePattern::Solid
-    );
-    assert_eq!(
-        map_line_pattern(Some(LineProperty::Dotted)),
-        LinePattern::Dotted
-    );
-    assert_eq!(
-        map_line_pattern(Some(LineProperty::Dashed)),
-        LinePattern::Dashed
-    );
-    assert_eq!(
-        map_line_pattern(Some(LineProperty::Center)),
-        LinePattern::Center
-    );
-    assert_eq!(
-        map_line_pattern(Some(LineProperty::Phantom)),
-        LinePattern::Phantom
-    );
-    assert_eq!(
-        map_line_pattern(Some(LineProperty::Erase)),
-        LinePattern::Erase
-    );
-}
-
-#[test]
 fn preserves_inline_feature_line_property() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="Owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SILKSCREEN" side="TOP"/>
-      <Step name="board" type="BOARD">
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <Features>
-              <Line startX="0" startY="0" endX="10" endY="0">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="PHANTOM"/>
-              </Line>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
-
-    let layer =
-        extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board, Resolution::default()).unwrap();
+    let layer = top_layer(&top_board(
+        "",
+        r#"<Set><Features><Line startX="0" startY="0" endX="10" endY="0">
+             <LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="PHANTOM"/>
+           </Line></Features></Set>"#,
+    ));
     let path = &layer.arena.paths[layer.features[0].paths.start as usize];
-
     assert_eq!(path.stroke().unwrap().pattern, LinePattern::Phantom);
 }
 
 /// One board with `features` on its TOP copper and `drills` on its drill layer.
 fn shape_fixture(features: &str, drills: &str) -> Ipc2581 {
-    Ipc2581::parse(&format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="Owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+    parse(
+        "board",
+        "",
+        &format!(
+            r#"{TOP}
       <Layer name="BOTTOM" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
       <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE">
         <Span fromLayer="TOP" toLayer="BOTTOM"/>
@@ -190,12 +188,9 @@ fn shape_fixture(features: &str, drills: &str) -> Ipc2581 {
       <Step name="board" type="BOARD">
         <LayerFeature layerRef="TOP"><Set>{features}</Set></LayerFeature>
         <LayerFeature layerRef="DRILL"><Set>{drills}</Set></LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#
-    ))
-    .unwrap()
+      </Step>"#
+        ),
+    )
 }
 
 /// The area TOP images as artwork, and how many of its objects are flashes.
@@ -339,65 +334,35 @@ fn nc_plunges_an_oval_slot_as_wide_as_it_is_long() {
 
 #[test]
 fn carries_spec_refs_fiducials_and_vcut_intent() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="Owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="Panel"/>
-    <LayerRef name="TOP"/>
-    <LayerRef name="VCUT"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER">
-      <Spec name="VCut_1">
-        <V_Cut type="ANGLE">
-          <Property value="90" unit="DEGREES"/>
-        </V_Cut>
-      </Spec>
-    </CadHeader>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE">
-        <SpecRef id="VCut_1"/>
-      </Layer>
-      <Layer name="VCUT" layerFunction="V_CUT" side="ALL" polarity="POSITIVE">
-        <SpecRef id="VCut_1"/>
-      </Layer>
+    let xml = ipc_xml(
+        "Panel",
+        "",
+        r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"><SpecRef id="VCut_1"/></Layer>
+      <Layer name="VCUT" layerFunction="V_CUT" side="ALL" polarity="POSITIVE"><SpecRef id="VCut_1"/></Layer>
       <Step name="Panel" type="PALLET">
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <SpecRef id="VCut_1"/>
-            <GlobalFiducial>
-              <Location x="1" y="2"/>
-              <Circle diameter="1"/>
-              <PinRef componentRef="U1" pin="1"/>
-            </GlobalFiducial>
-          </Set>
-        </LayerFeature>
-        <LayerFeature layerRef="VCUT">
-          <Set>
-            <SpecRef id="VCut_1"/>
-            <Features>
-              <Line startX="0" startY="5" endX="10" endY="5">
-                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
+        <LayerFeature layerRef="TOP"><Set>
+          <SpecRef id="VCut_1"/>
+          <GlobalFiducial>
+            <Location x="1" y="2"/><Circle diameter="1"/><PinRef componentRef="U1" pin="1"/>
+          </GlobalFiducial>
+        </Set></LayerFeature>
+        <LayerFeature layerRef="VCUT"><Set>
+          <SpecRef id="VCut_1"/>
+          <Features><Line startX="0" startY="5" endX="10" endY="5">
+            <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+          </Line></Features>
+        </Set></LayerFeature>
+      </Step>"#,
     )
-    .unwrap();
+    .replace(
+        r#"<CadHeader units="MILLIMETER"/>"#,
+        r#"<CadHeader units="MILLIMETER"><Spec name="VCut_1"><V_Cut type="ANGLE">
+             <Property value="90" unit="DEGREES"/>
+           </V_Cut></Spec></CadHeader>"#,
+    );
+    let ipc = Ipc2581::parse(&xml).unwrap();
 
-    let top = extract_layer_for_view(
-        &ipc,
-        "TOP",
-        ArtworkScope::ArrayFlattened,
-        Resolution::default(),
-    )
-    .unwrap();
+    let top = top_layer(&ipc);
     assert_eq!(top.specs.len(), 1);
     assert_eq!(top.layers[0].spec_refs.count, 1);
     assert_eq!(top.feature_sets.len(), 1);
@@ -405,7 +370,6 @@ fn carries_spec_refs_fiducials_and_vcut_intent() {
     assert_eq!(top.features[0].bucket, FeatureBucket::Fiducial);
     assert_eq!(top.features[0].intent.role, FeatureRole::Fiducial);
     assert_eq!(top.features[0].fiducial_kind, FiducialKind::Global);
-    assert!(top.features[0].is_fiducial());
     assert_eq!(top.features[0].source_step_kind, LayoutStepKind::Panel);
     assert_eq!(
         top.features[0]
@@ -416,13 +380,7 @@ fn carries_spec_refs_fiducials_and_vcut_intent() {
     assert_eq!(top.features[0].pin_refs.count, 1);
     assert_eq!(ipc.resolve(top.pin_refs[0].pin), "1");
 
-    let vcut = extract_layer_for_view(
-        &ipc,
-        "VCUT",
-        ArtworkScope::ArrayFlattened,
-        Resolution::default(),
-    )
-    .unwrap();
+    let vcut = extract_layer(&ipc, "VCUT", Resolution::default()).unwrap();
     assert_eq!(vcut.layers[0].spec_refs.count, 1);
     assert_eq!(vcut.feature_sets[0].spec_refs.count, 1);
     assert_eq!(vcut.features[0].intent.domain, FeatureDomain::VCut);
@@ -433,7 +391,6 @@ fn carries_spec_refs_fiducials_and_vcut_intent() {
 #[test]
 fn lowers_moire_as_rings_and_crosshair() {
     let mut doc = GeometryDocument::new();
-
     push_moire_path(
         &mut doc,
         Affine2::identity(),
@@ -448,112 +405,49 @@ fn lowers_moire_as_rings_and_crosshair() {
         },
     );
 
-    assert_eq!(doc.arena.paths.len(), 5);
-    assert_eq!(doc.arena.paths[0].fill_rule(), Some(FillRule::EvenOdd));
-    assert_eq!(doc.arena.paths[0].contours.count, 2);
-    assert_eq!(doc.arena.paths[1].contours.count, 2);
-    assert_eq!(doc.arena.paths[2].contours.count, 2);
-    assert_eq!(doc.arena.paths[3].fill_rule(), Some(FillRule::NonZero));
-    assert_eq!(doc.arena.paths[4].fill_rule(), Some(FillRule::NonZero));
-    assert_eq!(doc.arena.paths[0].bbox.min, Point::new(-4.25, -4.25));
-    assert_eq!(doc.arena.paths[0].bbox.max, Point::new(4.25, 4.25));
-    assert_eq!(doc.arena.paths[1].bbox.min, Point::new(-3.25, -3.25));
-    assert_eq!(doc.arena.paths[1].bbox.max, Point::new(3.25, 3.25));
-}
-
-#[test]
-fn reads_standard_primitive_fill_properties() {
-    let ipc = Ipc2581::parse(
-        r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
-    )
-    .unwrap();
-    let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
-    let circle = ipc2581::types::StandardPrimitive::Circle(ipc2581::types::Styled {
-        shape: ipc2581::types::Circle { diameter: 1.0 },
-        fill_property: Some(FillProperty::Hollow),
-        line_desc: None,
-        line_desc_ref: None,
-        fill_desc: None,
-        fill_desc_ref: None,
-    });
-    let rect = ipc2581::types::StandardPrimitive::RectCenter(ipc2581::types::Styled {
-        shape: ipc2581::types::RectCenter {
-            size: ipc2581::types::Size {
-                width: 1.0,
-                height: 1.0,
-            },
-        },
-        fill_property: Some(FillProperty::Void),
-        line_desc: None,
-        line_desc_ref: None,
-        fill_desc: None,
-        fill_desc_ref: None,
-    });
-
-    assert_eq!(
-        primitive_fill_property(&context, &circle),
-        Some(FillProperty::Hollow)
+    let (rings, crosshair) = doc.arena.paths.split_at(3);
+    assert!(
+        rings.iter().all(|ring| {
+            ring.fill_rule() == Some(FillRule::EvenOdd) && ring.contours.count == 2
+        })
     );
-    assert_eq!(
-        primitive_fill_property(&context, &rect),
-        Some(FillProperty::Void)
+    assert_eq!(crosshair.len(), 2);
+    assert!(
+        crosshair
+            .iter()
+            .all(|line| line.fill_rule() == Some(FillRule::NonZero))
     );
+    assert_eq!(rings[0].bbox.min, Point::new(-4.25, -4.25));
+    assert_eq!(rings[0].bbox.max, Point::new(4.25, 4.25));
+    assert_eq!(rings[1].bbox.min, Point::new(-3.25, -3.25));
+    assert_eq!(rings[1].bbox.max, Point::new(3.25, 3.25));
 }
 
 #[test]
 fn patterned_fills_are_painted_solid_with_a_warning() {
-    let ipc = Ipc2581::parse(
-        r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
-    )
-    .unwrap();
-    let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
-    for fill_property in [FillProperty::Hatch, FillProperty::Mesh] {
-        let mut doc = GeometryDocument::new();
-        let primitive = StandardPrimitive::Circle(ipc2581::types::Styled {
-            shape: ipc2581::types::Circle { diameter: 1.0 },
-            fill_property: Some(fill_property),
-            line_desc: None,
-            line_desc_ref: None,
-            fill_desc: None,
-            fill_desc_ref: None,
-        });
-
-        lower_standard_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
-
+    for fill in ["HATCH", "MESH"] {
+        let doc = top_layer(&top_board(
+            "",
+            &format!(
+                r#"<Set><Pad><Location x="0" y="0"/>
+                     <Circle diameter="1"><FillDesc fillProperty="{fill}"/></Circle>
+                   </Pad></Set>"#
+            ),
+        ));
         assert!(doc.arena.paths[0].is_filled());
-        assert_eq!(doc.diagnostics.len(), 1, "{fill_property:?}");
+        assert_eq!(doc.diagnostics.len(), 1, "{fill}");
     }
 }
 
 #[test]
 fn zero_area_standard_primitive_emits_no_paths() {
-    let ipc = Ipc2581::parse(
-        r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
-    )
-    .unwrap();
-    let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
-    let mut doc = GeometryDocument::new();
-    let primitive = ipc2581::types::StandardPrimitive::RectCenter(ipc2581::types::Styled {
-        shape: ipc2581::types::RectCenter {
-            size: ipc2581::types::Size {
-                width: 0.0,
-                height: 1.0,
-            },
-        },
-        fill_property: None,
-        line_desc: None,
-        line_desc_ref: None,
-        fill_desc: None,
-        fill_desc_ref: None,
-    });
-
-    let void =
-        lower_standard_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
-
-    assert!(!void);
-    assert!(doc.arena.paths.is_empty());
-    assert!(doc.arena.contours.is_empty());
+    let doc = top_layer(&top_board(
+        "",
+        r#"<Set><Pad><Location x="0" y="0"/><RectCenter width="0" height="1"/></Pad></Set>"#,
+    ));
+    assert!(doc.features.is_empty());
     assert!(doc.arena.cmds.is_empty());
+    assert!(doc.diagnostics.is_empty());
 }
 
 #[test]
@@ -574,38 +468,16 @@ fn a_curve_step_onto_its_own_center_lowers_as_a_straight_step() {
 
 #[test]
 fn lowers_stroke_poly_step_curves_as_arcs() {
-    let mut doc = GeometryDocument::new();
-    let stroke = ipc2581::types::Stroke {
-        path: StrokePath::Polyline(ipc2581::types::Polyline::new(
-            ipc2581::types::Point { x: 1.0, y: 0.0 },
-            [PolyStep::Curve(ipc2581::types::PolyStepCurve {
-                point: ipc2581::types::Point { x: 0.0, y: 1.0 },
-                center: ipc2581::types::Point { x: 0.0, y: 0.0 },
-                clockwise: false,
-            })],
-        )),
-        line_desc: Some(LineDescGroup::Inline(ipc2581::types::LineDesc {
-            line_width: 0.2,
-            line_end: LineEnd::Round,
-            line_property: None,
-        })),
-    };
+    let doc = top_layer(&top_board(
+        "",
+        r#"<Set><Polyline>
+             <PolyBegin x="1" y="0"/>
+             <PolyStepCurve x="0" y="1" centerX="0" centerY="0" clockwise="false"/>
+             <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
+           </Polyline></Set>"#,
+    ));
 
-    let ipc = Ipc2581::parse(
-        r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
-    )
-    .unwrap();
-    let feature = extract_stroke(
-        &ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default()),
-        None,
-        GeometryPolarity::Dark,
-        SourceRef::default(),
-        &stroke,
-        &mut doc,
-    )
-    .unwrap();
-
-    assert_eq!(feature.paths.count, 1);
+    assert_eq!(doc.features[0].paths.count, 1);
     assert_eq!(doc.arena.paths[0].bbox.min, Point::new(-0.1, -0.1));
     assert_eq!(doc.arena.paths[0].bbox.max, Point::new(1.1, 1.1));
     assert!(doc.arena.cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
@@ -613,38 +485,14 @@ fn lowers_stroke_poly_step_curves_as_arcs() {
 
 #[test]
 fn lowers_hollow_user_circle_as_stroked_path() {
-    let mut doc = GeometryDocument::new();
-    let primitive = UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
-        shapes: vec![ipc2581::types::UserShape {
-            shape: UserShapeType::Circle(ipc2581::types::Circle { diameter: 1.4 }),
-            line_desc: Some(ipc2581::types::LineDesc {
-                line_width: 0.1,
-                line_end: LineEnd::Round,
-                line_property: None,
-            }),
-            line_desc_ref: None,
-            fill_desc: Some(Box::new(ipc2581::types::FillDesc {
-                fill_property: FillProperty::Hollow,
-                line_width: None,
-                pitch1: None,
-                pitch2: None,
-                angle1: None,
-                angle2: None,
-                color: None,
-            })),
-            fill_desc_ref: None,
-        }],
-    });
-
-    let ipc = Ipc2581::parse(
-        r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
-    )
-    .unwrap();
-    let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
-    lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
+    let doc = top_layer(&top_board(
+        "",
+        r#"<Set><Features><UserSpecial><Circle diameter="1.4">
+             <LineDesc lineWidth="0.1" lineEnd="ROUND"/><FillDesc fillProperty="HOLLOW"/>
+           </Circle></UserSpecial></Features></Set>"#,
+    ));
 
     assert_eq!(doc.arena.paths.len(), 1);
-    assert!(doc.arena.paths[0].is_stroked());
     assert!(!doc.arena.paths[0].is_filled());
     assert_eq!(doc.arena.paths[0].stroke().unwrap().width, 0.1);
     assert_eq!(doc.arena.paths[0].bbox.min, Point::new(-0.75, -0.75));
@@ -654,120 +502,42 @@ fn lowers_hollow_user_circle_as_stroked_path() {
 
 #[test]
 fn strokes_without_a_line_description_are_reported_not_invented() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <DictionaryUser units="MILLIMETER">
-      <EntryUser id="bare_line">
-        <UserSpecial>
-          <Line startX="0" startY="0" endX="4" endY="0"/>
-        </UserSpecial>
-      </EntryUser>
-    </DictionaryUser>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
-      <Step name="board" type="BOARD">
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <Features>
-              <Location x="0" y="0"/>
-              <UserPrimitiveRef id="bare_line"/>
-            </Features>
-          </Set>
-          <Set>
-            <Features>
-              <Location x="0" y="0"/>
-              <Line startX="0" startY="5" endX="4" endY="5">
-                <LineDescRef id="absent"/>
-              </Line>
-            </Features>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
-    let resolution = Resolution::default();
-    let imported = import_design(&ipc, resolution).unwrap();
+    let ipc = top_board(
+        r#"<DictionaryUser units="MILLIMETER"><EntryUser id="bare_line"><UserSpecial>
+             <Line startX="0" startY="0" endX="4" endY="0"/>
+           </UserSpecial></EntryUser></DictionaryUser>"#,
+        r#"<Set><Features><Location x="0" y="0"/><UserPrimitiveRef id="bare_line"/></Features></Set>
+           <Set><Features><Location x="0" y="0"/>
+             <Line startX="0" startY="5" endX="4" endY="5"><LineDescRef id="absent"/></Line>
+           </Features></Set>"#,
+    );
+    let imported = import_design(&ipc, Resolution::default()).unwrap();
 
     // Neither stroke becomes copper of a made-up width.
-    assert!(
-        imported
-            .geometry
-            .arena
-            .paths
-            .iter()
-            .all(|path| !path.is_stroked()),
-        "{:?}",
-        imported.geometry.arena.paths
-    );
-    let messages = imported
-        .geometry
-        .diagnostics
-        .iter()
-        .map(|diagnostic| diagnostic.message.as_str())
-        .collect::<Vec<_>>();
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.contains("it has no line description")),
-        "{messages:?}"
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.contains("LineDesc 'absent' is missing")),
-        "{messages:?}"
-    );
+    let paths = &imported.geometry.arena.paths;
+    assert!(paths.iter().all(|path| !path.is_stroked()), "{paths:?}");
+    let messages = diagnostics(&imported.geometry);
+    for expected in ["it has no line description", "LineDesc 'absent' is missing"] {
+        assert!(
+            messages.iter().any(|message| message.contains(expected)),
+            "{messages:?}"
+        );
+    }
 }
 
 #[test]
 fn hollow_outline_width_scales_with_its_placement() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="ring">
-        <Circle diameter="2">
-          <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
-          <FillDesc fillProperty="HOLLOW"/>
-        </Circle>
-      </EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
-      <Step name="board" type="BOARD">
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <Pad>
-              <Xform scale="2"/>
-              <Location x="0" y="0"/>
-              <StandardPrimitiveRef id="ring"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
-
-    let doc = extract_layer(&ipc, "TOP", Resolution::default()).unwrap();
+    let doc = top_layer(&top_board(
+        &standard_entry(
+            "ring",
+            r#"<Circle diameter="2">
+                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/><FillDesc fillProperty="HOLLOW"/>
+               </Circle>"#,
+        ),
+        r#"<Set><Pad>
+             <Xform scale="2"/><Location x="0" y="0"/><StandardPrimitiveRef id="ring"/>
+           </Pad></Set>"#,
+    ));
     let path = &doc.arena.paths[doc.features[0].paths.start as usize];
     assert!((path.stroke().unwrap().width - 0.2).abs() < 1e-12);
     assert!((path.bbox.width() - 4.2).abs() < 1e-9);
@@ -775,179 +545,72 @@ fn hollow_outline_width_scales_with_its_placement() {
 
 #[test]
 fn lowers_user_special_lines_polylines_and_line_desc_refs() {
-    let ipc = Ipc2581::parse(
-        r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="Owner">
-    <FunctionMode mode="FABRICATION"/>
-    <DictionaryLineDesc units="MILLIMETER">
-      <EntryLineDesc id="fine">
-        <LineDesc lineWidth="0.15" lineEnd="NONE"/>
-      </EntryLineDesc>
-    </DictionaryLineDesc>
-  </Content>
-</IPC-2581>"#,
-    )
-    .unwrap();
-    let entry = ipc.content().dictionary_line_desc.entries[0].clone();
-    let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
-    let mut doc = GeometryDocument::new();
-    let primitive = UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
-        shapes: vec![
-            ipc2581::types::UserShape {
-                shape: UserShapeType::Line(ipc2581::types::primitives::Line {
-                    start: ipc2581::types::Point { x: 0.0, y: 0.0 },
-                    end: ipc2581::types::Point { x: 1.0, y: 0.0 },
-                }),
-                line_desc: None,
-                line_desc_ref: Some(entry.id),
-                fill_desc: None,
-                fill_desc_ref: None,
-            },
-            ipc2581::types::UserShape {
-                shape: UserShapeType::Polyline(ipc2581::types::Polyline::new(
-                    ipc2581::types::Point { x: 1.0, y: 0.0 },
-                    [PolyStep::Curve(ipc2581::types::PolyStepCurve {
-                        point: ipc2581::types::Point { x: 0.0, y: 1.0 },
-                        center: ipc2581::types::Point { x: 0.0, y: 0.0 },
-                        clockwise: false,
-                    })],
-                )),
-                line_desc: None,
-                line_desc_ref: Some(entry.id),
-                fill_desc: None,
-                fill_desc_ref: None,
-            },
-        ],
-    });
-
-    lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
+    let doc = top_layer(&top_board(
+        r#"<DictionaryLineDesc units="MILLIMETER"><EntryLineDesc id="fine">
+             <LineDesc lineWidth="0.15" lineEnd="NONE"/>
+           </EntryLineDesc></DictionaryLineDesc>"#,
+        r#"<Set><Features><UserSpecial>
+             <Line startX="0" startY="0" endX="1" endY="0"><LineDescRef id="fine"/></Line>
+             <Polyline>
+               <PolyBegin x="1" y="0"/>
+               <PolyStepCurve x="0" y="1" centerX="0" centerY="0" clockwise="false"/>
+               <LineDescRef id="fine"/>
+             </Polyline>
+           </UserSpecial></Features></Set>"#,
+    ));
 
     assert_eq!(doc.arena.paths.len(), 2);
-    assert!(doc.arena.paths.iter().all(|path| path.is_stroked()));
     assert!(
         doc.arena
             .paths
             .iter()
-            .all(|path| path.stroke().unwrap().width == 0.15)
+            .all(|path| path.stroke().is_some_and(|stroke| stroke.width == 0.15))
     );
     assert!(doc.arena.cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
 }
 
 #[test]
-fn extracts_inline_stroked_user_primitive_as_trace_feature() {
-    let ipc = Ipc2581::parse(
-        r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
-    )
-    .unwrap();
-    let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
-    let primitive = ipc2581::types::ecad::FeatureUserPrimitive {
-        primitive: UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
-            shapes: vec![ipc2581::types::UserShape {
-                shape: UserShapeType::Line(ipc2581::types::primitives::Line {
-                    start: ipc2581::types::Point { x: 0.0, y: 0.0 },
-                    end: ipc2581::types::Point { x: 1.0, y: 0.0 },
-                }),
-                line_desc: Some(ipc2581::types::LineDesc {
-                    line_width: 0.2,
-                    line_end: LineEnd::Round,
-                    line_property: None,
-                }),
-                line_desc_ref: None,
-                fill_desc: None,
-                fill_desc_ref: None,
-            }],
-        }),
-        x: 10.0,
-        y: 20.0,
-    };
-    let mut doc = GeometryDocument::new();
-
-    let features = extract_inline_user_primitive(
-        &context,
-        None,
-        GeometryPolarity::Dark,
-        SourceRef::default(),
-        &primitive,
-        &mut doc,
-    )
-    .unwrap();
-
-    assert_eq!(features.len(), 1);
-    let feature = &features[0];
-    assert_eq!(feature.bucket, FeatureBucket::Trace);
-    assert_eq!(feature.paths.count, 1);
-    assert!(doc.arena.paths[feature.paths.start as usize].is_stroked());
-}
-
-#[test]
 fn contour_cutout_outside_its_outline_is_reported() {
-    let mut doc = GeometryDocument::new();
-    let mut contour = ipc2581::types::Contour {
-        polygon: rect_polygon(0.0, 0.0, 10.0, 10.0),
-        cutouts: vec![rect_polygon(2.0, 2.0, 4.0, 4.0)],
+    let point = |x, y| ipc2581::types::Point { x, y };
+    let rect = |x0, y0, x1, y1| {
+        ipc2581::types::Polygon::new(
+            point(x0, y0),
+            [(x1, y0), (x1, y1), (x0, y1), (x0, y0)].map(|(x, y)| {
+                PolyStep::Segment(ipc2581::types::PolyStepSegment { point: point(x, y) })
+            }),
+        )
     };
-    push_outline_path(
-        &mut doc,
-        &contour.polygon,
-        &contour.cutouts,
-        Affine2::identity(),
-    );
+    let outline = rect(0.0, 0.0, 10.0, 10.0);
+    let mut doc = GeometryDocument::new();
+    let mut cutouts = vec![rect(2.0, 2.0, 4.0, 4.0)];
+    push_outline_path(&mut doc, &outline, &cutouts, Affine2::identity());
     assert!(doc.diagnostics.is_empty());
 
-    contour.cutouts.push(rect_polygon(8.0, 8.0, 12.0, 9.0));
-    push_outline_path(
-        &mut doc,
-        &contour.polygon,
-        &contour.cutouts,
-        Affine2::identity(),
-    );
+    cutouts.push(rect(8.0, 8.0, 12.0, 9.0));
+    push_outline_path(&mut doc, &outline, &cutouts, Affine2::identity());
     assert_eq!(doc.diagnostics.len(), 1);
 }
 
 #[test]
 fn lowers_inline_user_contour_as_compound_path_at_feature_location() {
-    let ipc = Ipc2581::parse(
-        r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
-    )
-    .unwrap();
-    let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
-    let primitive = ipc2581::types::ecad::FeatureUserPrimitive {
-        primitive: UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
-            shapes: vec![ipc2581::types::UserShape {
-                shape: UserShapeType::Contour(ipc2581::types::Contour {
-                    polygon: rect_polygon(0.0, 0.0, 2.0, 2.0),
-                    cutouts: vec![rect_polygon(0.5, 0.5, 1.5, 1.5)],
-                }),
-                line_desc: None,
-                line_desc_ref: None,
-                fill_desc: None,
-                fill_desc_ref: None,
-            }],
-        }),
-        x: 10.0,
-        y: 20.0,
-    };
-    let mut doc = GeometryDocument::new();
+    let doc = top_layer(&top_board(
+        "",
+        &format!(
+            r#"<Set><Features><Location x="10" y="20"/><UserSpecial><Contour>
+                 <Polygon>{}</Polygon><Cutout>{}</Cutout>
+               </Contour></UserSpecial></Features></Set>"#,
+            rect_steps(0.0, 0.0, 2.0, 2.0),
+            rect_steps(0.5, 0.5, 1.5, 1.5),
+        ),
+    ));
 
-    let features = extract_inline_user_primitive(
-        &context,
-        None,
-        GeometryPolarity::Dark,
-        SourceRef::default(),
-        &primitive,
-        &mut doc,
-    )
-    .unwrap();
-
-    assert_eq!(features.len(), 1);
-    let feature = &features[0];
-    assert_eq!(feature.paths.count, 1);
+    assert_eq!(doc.features.len(), 1);
+    assert_eq!(doc.arena.paths.len(), 1);
     assert_eq!(doc.arena.paths[0].fill_rule(), Some(FillRule::EvenOdd));
     assert_eq!(doc.arena.paths[0].contours.count, 2);
     assert_eq!(doc.arena.paths[0].bbox.min, Point::new(10.0, 20.0));
     assert_eq!(doc.arena.paths[0].bbox.max, Point::new(12.0, 22.0));
-    let image = ContourSet::from_painted_paths(&doc.arena, &doc.arena.paths, Resolution::default())
-        .unwrap();
+    let image = painted_image(&doc);
     assert!((image.area() - 3.0).abs() < 1e-9);
     assert!(!image.contains_point(Point::new(11.0, 21.0)));
 }
@@ -956,10 +619,8 @@ fn lowers_inline_user_contour_as_compound_path_at_feature_location() {
 fn user_special_voids_clear_only_preceding_fills_in_their_own_scope() {
     let contour = |x0, y0, x1, y1, style: &str| {
         format!(
-            "<Contour><Polygon><PolyBegin x='{x0}' y='{y0}'/>
-             <PolyStepSegment x='{x1}' y='{y0}'/><PolyStepSegment x='{x1}' y='{y1}'/>
-             <PolyStepSegment x='{x0}' y='{y1}'/><PolyStepSegment x='{x0}' y='{y0}'/>
-             {style}</Polygon></Contour>"
+            "<Contour><Polygon>{}{style}</Polygon></Contour>",
+            rect_steps(x0, y0, x1, y1)
         )
     };
     let nested = format!(
@@ -973,25 +634,22 @@ fn user_special_voids_clear_only_preceding_fills_in_their_own_scope() {
     );
     // Both direct nesting and dictionary references must establish a scope.
     for child in [&nested, "<UserPrimitiveRef id='nested'/>"] {
-        let ipc = Ipc2581::parse(&format!(
-            "<IPC-2581 revision='C' xmlns='http://webstds.ipc.org/2581'>
-                 <Content roleRef='owner'><FunctionMode mode='FABRICATION'/>
-                   <StepRef name='board'/><LayerRef name='TOP'/>
-                   <DictionaryFillDesc units='MILLIMETER'>
-                     <EntryFillDesc id='void'><FillDesc fillProperty='VOID'/></EntryFillDesc>
-                   </DictionaryFillDesc>
-                   <DictionaryUser units='MILLIMETER'><EntryUser id='nested'>{nested}</EntryUser></DictionaryUser>
-                 </Content><Ecad><CadHeader units='MILLIMETER'/><CadData>
-                 <Layer name='TOP' layerFunction='SIGNAL' side='TOP' polarity='POSITIVE'/>
-                 <Step name='board' type='BOARD'><LayerFeature layerRef='TOP'><Set>
-                   <Features><UserSpecial>{}</UserSpecial></Features>
-                   <Features><UserSpecial>{}{child}</UserSpecial></Features>
-                 </Set></LayerFeature></Step></CadData></Ecad></IPC-2581>",
-            contour(1.1, 1.1, 1.4, 1.4, ""),
-            contour(1.5, 1.1, 1.8, 1.4, ""),
-        )).unwrap();
+        let ipc = top_board(
+            &format!(
+                "<DictionaryFillDesc units='MILLIMETER'>
+                   <EntryFillDesc id='void'><FillDesc fillProperty='VOID'/></EntryFillDesc>
+                 </DictionaryFillDesc>
+                 <DictionaryUser units='MILLIMETER'><EntryUser id='nested'>{nested}</EntryUser></DictionaryUser>"
+            ),
+            &format!(
+                "<Set><Features><UserSpecial>{}</UserSpecial></Features>
+                   <Features><UserSpecial>{}{child}</UserSpecial></Features></Set>",
+                contour(1.1, 1.1, 1.4, 1.4, ""),
+                contour(1.5, 1.1, 1.8, 1.4, ""),
+            ),
+        );
         let resolution = Resolution::default();
-        let mut doc = extract_layer(&ipc, "TOP", resolution).unwrap();
+        let mut doc = top_layer(&ipc);
         process::normalize_for_artwork(&mut doc, resolution).unwrap();
         let image = ContourSet::from_painted_paths(
             &doc.arena,
@@ -1028,106 +686,40 @@ fn user_special_voids_clear_only_preceding_fills_in_their_own_scope() {
 }
 
 #[test]
-fn splits_mixed_inline_user_primitive_into_trace_and_fill_features() {
-    let ipc = Ipc2581::parse(
-        r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
-    )
-    .unwrap();
-    let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
-    let primitive = ipc2581::types::ecad::FeatureUserPrimitive {
-        primitive: UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
-            shapes: vec![
-                ipc2581::types::UserShape {
-                    shape: UserShapeType::Line(ipc2581::types::primitives::Line {
-                        start: ipc2581::types::Point { x: 0.0, y: 0.0 },
-                        end: ipc2581::types::Point { x: 2.0, y: 0.0 },
-                    }),
-                    line_desc: Some(ipc2581::types::LineDesc {
-                        line_width: 0.2,
-                        line_end: LineEnd::Round,
-                        line_property: None,
-                    }),
-                    line_desc_ref: None,
-                    fill_desc: None,
-                    fill_desc_ref: None,
-                },
-                ipc2581::types::UserShape {
-                    shape: UserShapeType::Contour(ipc2581::types::Contour {
-                        polygon: rect_polygon(0.0, 1.0, 2.0, 3.0),
-                        cutouts: Vec::new(),
-                    }),
-                    line_desc: None,
-                    line_desc_ref: None,
-                    fill_desc: None,
-                    fill_desc_ref: None,
-                },
-            ],
-        }),
-        x: 10.0,
-        y: 20.0,
+fn splits_mixed_inline_user_primitive_into_stroke_and_fill_features() {
+    let doc = top_layer(&top_board(
+        "",
+        &format!(
+            r#"<Set><Features><Location x="10" y="20"/><UserSpecial>
+                 <Line startX="0" startY="0" endX="2" endY="0"><LineDesc lineWidth="0.2" lineEnd="ROUND"/></Line>
+                 <Contour><Polygon>{}</Polygon></Contour>
+               </UserSpecial></Features></Set>"#,
+            rect_steps(0.0, 1.0, 2.0, 3.0),
+        ),
+    ));
+
+    // Fills and strokes of one primitive export and render differently.
+    let [stroke, fill] = doc.features.as_slice() else {
+        panic!("{:?}", doc.features);
     };
-    let mut doc = GeometryDocument::new();
-
-    let features = extract_inline_user_primitive(
-        &context,
-        None,
-        GeometryPolarity::Dark,
-        SourceRef::default(),
-        &primitive,
-        &mut doc,
-    )
-    .unwrap();
-
-    assert_eq!(features.len(), 2);
-    assert_eq!(features[0].bucket, FeatureBucket::Trace);
-    assert_eq!(features[0].paths.count, 1);
-    assert_eq!(features[1].bucket, FeatureBucket::Fill);
-    assert_eq!(features[1].paths.count, 1);
-    assert!(doc.arena.paths[features[0].paths.start as usize].is_stroked());
-    assert!(doc.arena.paths[features[1].paths.start as usize].is_filled());
+    assert_eq!((stroke.paths.count, fill.paths.count), (1, 1));
+    assert!(doc.arena.paths[stroke.paths.start as usize].is_stroked());
+    assert!(doc.arena.paths[fill.paths.start as usize].is_filled());
 }
 
 #[test]
 fn lowers_butterfly_with_removed_quadrants() {
     let mut doc = GeometryDocument::new();
-
-    push_butterfly_path(
-        &mut doc,
-        Affine2::identity(),
+    for shape in [
         ipc2581::types::ButterflyShape::Square,
-        4.0,
-    );
-    push_butterfly_path(
-        &mut doc,
-        Affine2::identity(),
         ipc2581::types::ButterflyShape::Round,
-        4.0,
-    );
+    ] {
+        push_butterfly_path(&mut doc, Affine2::identity(), shape, 4.0);
+    }
 
     assert_eq!(doc.arena.paths.len(), 2);
-    assert_eq!(doc.arena.paths[0].contours.count, 2);
-    assert_eq!(doc.arena.paths[1].contours.count, 2);
+    assert!(doc.arena.paths.iter().all(|path| path.contours.count == 2));
     assert!(doc.arena.cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
-}
-
-fn rect_polygon(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ipc2581::types::Polygon {
-    ipc2581::types::Polygon::new(
-        ipc2581::types::Point { x: min_x, y: min_y },
-        [
-            PolyStep::Segment(ipc2581::types::PolyStepSegment {
-                point: ipc2581::types::Point { x: max_x, y: min_y },
-            }),
-            PolyStep::Segment(ipc2581::types::PolyStepSegment {
-                point: ipc2581::types::Point { x: max_x, y: max_y },
-            }),
-            PolyStep::Segment(ipc2581::types::PolyStepSegment {
-                point: ipc2581::types::Point { x: min_x, y: max_y },
-            }),
-            PolyStep::Segment(ipc2581::types::PolyStepSegment {
-                point: ipc2581::types::Point { x: min_x, y: min_y },
-            }),
-        ],
-    )
 }
 
 fn thermal(
@@ -1145,22 +737,20 @@ fn thermal(
     }
 }
 
-fn thermal_image(doc: &GeometryDocument) -> ContourSet {
-    ContourSet::from_painted_paths(&doc.arena, &doc.arena.paths, Resolution::default()).unwrap()
+fn lowered_thermal(thermal: ipc2581::types::Thermal) -> GeometryDocument {
+    let mut doc = GeometryDocument::new();
+    let identity = Affine2::identity();
+    push_thermal_path(&mut doc, identity, &thermal, Resolution::default()).unwrap();
+    doc
 }
 
 #[test]
 fn lowers_thermal_as_ring_interrupted_by_spoke_gaps() {
-    let mut doc = GeometryDocument::new();
-    push_thermal_path(
-        &mut doc,
-        Affine2::identity(),
-        &thermal(ConcentricShape::Round, 4, Some(2.0)),
-        Resolution::default(),
-    )
-    .unwrap();
-
-    let image = thermal_image(&doc);
+    let image = painted_image(&lowered_thermal(thermal(
+        ConcentricShape::Round,
+        4,
+        Some(2.0),
+    )));
     let diagonal = 4.0 * std::f64::consts::FRAC_1_SQRT_2;
     assert!(image.contains_point(Point::new(diagonal, diagonal)));
     assert!(image.contains_point(Point::new(-diagonal, diagonal)));
@@ -1172,14 +762,7 @@ fn lowers_thermal_as_ring_interrupted_by_spoke_gaps() {
 
 #[test]
 fn spokeless_thermal_is_exactly_its_donut() {
-    let mut thermal_doc = GeometryDocument::new();
-    push_thermal_path(
-        &mut thermal_doc,
-        Affine2::identity(),
-        &thermal(ConcentricShape::Round, 0, Some(2.0)),
-        Resolution::default(),
-    )
-    .unwrap();
+    let thermal_doc = lowered_thermal(thermal(ConcentricShape::Round, 0, Some(2.0)));
     let mut donut_doc = GeometryDocument::new();
     push_ring_path(
         &mut donut_doc,
@@ -1195,25 +778,17 @@ fn spokeless_thermal_is_exactly_its_donut() {
         thermal_doc.arena.paths[0].fill_rule(),
         Some(FillRule::EvenOdd)
     );
-    assert_eq!(thermal_doc.arena.paths[0].contours.count, 2);
 }
 
 #[test]
 fn thermal_spokes_default_to_the_ring_width_at_45_degrees() {
-    let mut doc = GeometryDocument::new();
-    push_thermal_path(
-        &mut doc,
-        Affine2::identity(),
-        &ipc2581::types::Thermal {
-            spoke_start_angle: None,
-            ..thermal(ConcentricShape::Round, 4, None)
-        },
-        Resolution::default(),
-    )
-    .unwrap();
+    let doc = lowered_thermal(ipc2581::types::Thermal {
+        spoke_start_angle: None,
+        ..thermal(ConcentricShape::Round, 4, None)
+    });
 
     // Cuts of outer - inner = 4 mm on the diagonals leave the axes.
-    let image = thermal_image(&doc);
+    let image = painted_image(&doc);
     let diagonal = 4.0 * std::f64::consts::FRAC_1_SQRT_2;
     assert!(image.contains_point(Point::new(4.0, 0.0)));
     assert!(image.contains_point(Point::new(0.0, 4.0)));
@@ -1232,7 +807,7 @@ fn donut_and_thermal_rings_follow_their_shape() {
     ] {
         let mut doc = GeometryDocument::new();
         push_ring_path(&mut doc, Affine2::identity(), shape, 10.0, 6.0);
-        let image = thermal_image(&doc);
+        let image = painted_image(&doc);
 
         assert_eq!(
             image.contains_point(Point::new(4.5, 4.5)),
@@ -1248,15 +823,11 @@ fn donut_and_thermal_rings_follow_their_shape() {
         assert!(!image.contains_point(Point::new(0.0, 0.0)), "{shape:?}");
     }
 
-    let mut doc = GeometryDocument::new();
-    push_thermal_path(
-        &mut doc,
-        Affine2::identity(),
-        &thermal(ConcentricShape::Square, 4, Some(2.0)),
-        Resolution::default(),
-    )
-    .unwrap();
-    let image = thermal_image(&doc);
+    let image = painted_image(&lowered_thermal(thermal(
+        ConcentricShape::Square,
+        4,
+        Some(2.0),
+    )));
     assert!(image.contains_point(Point::new(4.5, 4.5)));
     assert!(!image.contains_point(Point::new(4.5, 0.0)));
 }
@@ -1264,42 +835,23 @@ fn donut_and_thermal_rings_follow_their_shape() {
 #[test]
 fn a_board_cell_placed_once_is_a_simple_array_whatever_pitch_it_states() {
     let cell_array = |pitch: &str| {
-        let ipc = ipc2581::Ipc2581::parse(&format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="array"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile><Polygon>
-          <PolyBegin x="0" y="0"/><PolyStepSegment x="10" y="0"/>
-          <PolyStepSegment x="10" y="5"/><PolyStepSegment x="0" y="5"/>
-        </Polygon></Profile>
-      </Step>
-      <Step name="cell" type="PALLET">
-        <Profile><Polygon>
-          <PolyBegin x="0" y="0"/><PolyStepSegment x="12" y="0"/>
-          <PolyStepSegment x="12" y="7"/><PolyStepSegment x="0" y="7"/>
-        </Polygon></Profile>
+        let ipc = parse(
+            "array",
+            "",
+            &format!(
+                r#"{TOP}
+      <Step name="board" type="BOARD">{board}</Step>
+      <Step name="cell" type="PALLET">{cell}
         <StepRepeat stepRef="board" x="1" y="1" nx="1" ny="1" {pitch}/>
       </Step>
-      <Step name="array" type="PALLET">
-        <Profile><Polygon>
-          <PolyBegin x="0" y="0"/><PolyStepSegment x="34" y="0"/>
-          <PolyStepSegment x="34" y="17"/><PolyStepSegment x="0" y="17"/>
-        </Polygon></Profile>
+      <Step name="array" type="PALLET">{array}
         <StepRepeat stepRef="cell" x="5" y="5" nx="2" ny="1" dx="12" dy="0"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#
-        ))
-        .unwrap();
+      </Step>"#,
+                board = profile(10, 5),
+                cell = profile(12, 7),
+                array = profile(34, 17),
+            ),
+        );
         simple_board_array_layout(&extract_layout(&ipc).unwrap()).map(|array| array.columns)
     };
 
@@ -1307,61 +859,121 @@ fn a_board_cell_placed_once_is_a_simple_array_whatever_pitch_it_states() {
     assert_eq!(cell_array(r#"dx="10" dy="5""#), Some(2));
 }
 
+const PAD_PADSTACK: &str = r#"<PadStackDef name="padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><StandardPrimitiveRef id="pad"/></PadstackPadDef>
+        </PadStackDef>"#;
+
+/// The 10 x 5 board of the panel fixtures, with one pad at (2, 3) on TOP.
+fn board_step() -> String {
+    format!(
+        r#"<Step name="board" type="BOARD">{}{PAD_PADSTACK}
+        <LayerFeature layerRef="TOP"><Set>
+          <Pad padstackDefRef="padstack"><Location x="2" y="3"/></Pad>
+        </Set></LayerFeature>
+      </Step>"#,
+        profile(10, 5)
+    )
+}
+
+/// A 100 x 80 panel with a pad of its own at (40, 5) and two boards.
+fn panel_layer_fixture() -> String {
+    ipc_xml(
+        "panel",
+        &standard_entry("pad", r#"<Circle diameter="1"/>"#),
+        &format!(
+            r#"{TOP}{}
+      <Step name="panel" type="PALLET">{}{PAD_PADSTACK}
+        <LayerFeature layerRef="TOP"><Set>
+          <Pad padstackDefRef="padstack"><Location x="40" y="5"/></Pad>
+        </Set></LayerFeature>
+        <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="15" dy="0"/>
+      </Step>"#,
+            board_step(),
+            profile(100, 80)
+        ),
+    )
+}
+
+/// A 40 x 40 panel of two subpanels, each of two boards.
+fn nested_panel_fixture(subpanel_profile: bool) -> Ipc2581 {
+    parse(
+        "panel",
+        &standard_entry("pad", r#"<Circle diameter="1"/>"#),
+        &format!(
+            r#"{TOP}{}
+      <Step name="subpanel" type="PALLET">{}
+        <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="15" dy="0"/>
+      </Step>
+      <Step name="panel" type="PALLET">{}
+        <StepRepeat stepRef="subpanel" x="5" y="5" nx="1" ny="2" dx="0" dy="20"/>
+      </Step>"#,
+            board_step(),
+            if subpanel_profile {
+                profile(30, 10)
+            } else {
+                String::new()
+            },
+            profile(40, 40)
+        ),
+    )
+}
+
 #[test]
 fn extracts_panel_and_repeated_layer_instances() {
-    let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
-        .expect("synthetic panel fixture should parse");
-    let doc =
-        extract_layer(&ipc, "TOP", Resolution::default()).expect("panel layer should extract");
+    let doc = top_layer(&Ipc2581::parse(&panel_layer_fixture()).unwrap());
     let layer = &doc.layers[0];
     let features = layer.features.slice(&doc.features);
 
-    let (_, root_step) = root_step(&doc).unwrap();
-    assert_eq!(root_step.kind, LayoutStepKind::Panel);
-    assert_eq!(features.len(), 3);
-    assert_eq!(features[0].center, Point::new(40.0, 5.0));
-    assert_eq!(features[1].center, Point::new(12.0, 23.0));
-    assert_eq!(features[2].center, Point::new(27.0, 23.0));
-    assert_eq!(features[0].source.set_index, 0);
-    assert_eq!(features[1].source.set_index, 1);
-    assert_eq!(features[2].source.set_index, 2);
+    assert_eq!(
+        features
+            .iter()
+            .map(|feature| (feature.center, feature.source.set_index))
+            .collect::<Vec<_>>(),
+        [
+            (Point::new(40.0, 5.0), 0),
+            (Point::new(12.0, 23.0), 1),
+            (Point::new(27.0, 23.0), 2)
+        ]
+    );
     assert_eq!(layer.bbox.min, Point::new(11.5, 4.5));
     assert_eq!(layer.bbox.max, Point::new(40.5, 23.5));
-    assert_eq!(board_step_count(&doc), 1);
-    assert_eq!(panel_step_count(&doc), 1);
-    assert_eq!(board_instance_count(&doc), 2);
     let simple_array = simple_board_array_layout(&doc).unwrap();
-    assert_eq!(simple_array.columns, 2);
-    assert_eq!(simple_array.rows, 1);
+    assert_eq!((simple_array.columns, simple_array.rows), (2, 1));
     assert_eq!(simple_array.board_step, 1);
     assert_eq!(simple_array.board_width, 10.0);
     assert_eq!(simple_array.board_height, 5.0);
-    assert_eq!(board_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
     assert_eq!(board_bbox(&doc).unwrap().max, Point::new(10.0, 5.0));
-    assert_eq!(panel_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
     assert_eq!(panel_bbox(&doc).unwrap().max, Point::new(100.0, 80.0));
-    assert_eq!(doc.layout.instances[0].bbox.min, Point::new(10.0, 20.0));
-    assert_eq!(doc.layout.instances[0].bbox.max, Point::new(20.0, 25.0));
-    assert_eq!(doc.layout.instances[1].bbox.min, Point::new(25.0, 20.0));
-    assert_eq!(doc.layout.instances[1].bbox.max, Point::new(35.0, 25.0));
-    assert_eq!(doc.layout.steps.len(), 2);
-    assert_eq!(doc.layout.repeats.len(), 1);
-    assert_eq!(doc.layout.instances.len(), 2);
     assert_eq!(doc.layout.root_step, Some(0));
-    assert_eq!(doc.layout.steps[0].kind, LayoutStepKind::Panel);
-    assert_eq!(doc.layout.steps[1].kind, LayoutStepKind::Board);
-    assert_eq!(doc.layout.repeats[0].instances.start, 0);
-    assert_eq!(doc.layout.repeats[0].instances.count, 2);
-    assert_eq!(doc.layout.instances[0].repeat_index_x, 0);
-    assert_eq!(doc.layout.instances[1].repeat_index_x, 1);
-    assert_eq!(doc.layout.instances[1].transform.m02, 25.0);
+    assert_eq!(
+        doc.layout
+            .steps
+            .iter()
+            .map(|step| step.kind)
+            .collect::<Vec<_>>(),
+        [LayoutStepKind::Panel, LayoutStepKind::Board]
+    );
+    assert_eq!(doc.layout.repeats.len(), 1);
+    assert_eq!(doc.layout.repeats[0].instances, Span::new(0, 2));
+    let [first, second] = doc.layout.instances.as_slice() else {
+        panic!("{:?}", doc.layout.instances);
+    };
+    assert_eq!(first.bbox.min, Point::new(10.0, 20.0));
+    assert_eq!(first.bbox.max, Point::new(20.0, 25.0));
+    assert_eq!(second.bbox.min, Point::new(25.0, 20.0));
+    assert_eq!(second.bbox.max, Point::new(35.0, 25.0));
+    assert_eq!((first.repeat_index_x, second.repeat_index_x), (0, 1));
+    assert_eq!(second.transform.m02, 25.0);
+    assert_eq!(
+        profile_occurrences_for(&doc, ProfileSet::FabricationOutlines).len(),
+        3
+    );
 }
 
 #[test]
 fn imported_design_owns_strings_and_reuses_step_local_geometry() {
     let imported = {
-        let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
-            .expect("synthetic panel fixture should parse");
+        let ipc = Ipc2581::parse(&panel_layer_fixture()).unwrap();
         import_design(&ipc, Resolution::default()).expect("complete design should import")
     };
 
@@ -1600,21 +1212,14 @@ fn imported_design_carries_global_bom_and_package_associations() {
 fn components_bind_to_the_package_of_their_own_step() {
     let package = r#"<Package name="R_0402" type="OTHER" pinOneOrientation="OTHER"><Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDesc lineWidth="0.1" lineEnd="ROUND"/></Outline></Package>
         <Component refDes="R1" packageRef="R_0402" part="r" layerRef="TOP" mountType="SMT"><Location x="1" y="1"/></Component>"#;
-    let ipc = Ipc2581::parse(&format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner"><FunctionMode mode="ASSEMBLY"/><StepRef name="board-a"/><StepRef name="board-b"/></Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
-      <Step name="board-a" type="BOARD">{package}</Step>
-      <Step name="board-b" type="BOARD">{package}</Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#
-    ))
-    .unwrap();
+    let ipc = parse(
+        "board-a",
+        r#"<StepRef name="board-b"/>"#,
+        &format!(
+            r#"{TOP}<Step name="board-a" type="BOARD">{package}</Step>
+               <Step name="board-b" type="BOARD">{package}</Step>"#
+        ),
+    );
     let imported = import_design(&ipc, Resolution::default()).unwrap();
 
     assert_eq!(imported.components.len(), 2);
@@ -1628,21 +1233,13 @@ fn components_bind_to_the_package_of_their_own_step() {
 
 #[test]
 fn board_scope_rejects_an_unreachable_board_definition() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/></Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
-      <Step name="unrelated-board" type="BOARD"/>
-      <Step name="panel" type="PALLET"/>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
+    let ipc = parse(
+        "panel",
+        "",
+        &format!(
+            r#"{TOP}<Step name="unrelated-board" type="BOARD"/><Step name="panel" type="PALLET"/>"#
+        ),
+    );
     let imported = import_design(&ipc, Resolution::default()).unwrap();
     let top = imported.layer_id("TOP").unwrap();
 
@@ -1659,65 +1256,32 @@ fn board_scope_rejects_an_unreachable_board_definition() {
 
 #[test]
 fn import_reports_features_it_had_to_drop() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
-      <Step name="board" type="BOARD">
-        <LayerFeature layerRef="TOP">
-          <Set><Features><Location x="0" y="0"/><StandardPrimitiveRef id="absent"/></Features></Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
+    let ipc = top_board(
+        "",
+        r#"<Set><Features><Location x="0" y="0"/><StandardPrimitiveRef id="absent"/></Features></Set>"#,
+    );
     let imported = import_design(&ipc, Resolution::default()).unwrap();
 
     // The layer's only feature is gone, so nothing else can say why.
+    let messages = diagnostics(&imported.geometry);
     assert!(
-        imported
-            .geometry
-            .diagnostics
+        messages
             .iter()
-            .any(|diagnostic| diagnostic.message.contains("'absent' is missing")),
-        "diagnostics: {:?}",
-        imported.geometry.diagnostics
+            .any(|message| message.contains("'absent' is missing")),
+        "{messages:?}"
     );
 }
 
 #[test]
 fn non_finite_source_numbers_never_reach_the_arena() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/></Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
-      <Step name="board" type="BOARD">
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <Pad><Location x="1" y="1"/><Circle diameter="1"/></Pad>
-            <Pad><Location x="5" y="1"/><Circle diameter="1"/></Pad>
-            <Pad><Location x="9" y="1"/><Circle diameter="1"/></Pad>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
+    let ipc = top_board(
+        "",
+        r#"<Set>
+             <Pad><Location x="1" y="1"/><Circle diameter="1"/></Pad>
+             <Pad><Location x="5" y="1"/><Circle diameter="1"/></Pad>
+             <Pad><Location x="9" y="1"/><Circle diameter="1"/></Pad>
+           </Set>"#,
+    );
     // Other producers hand the importer a typed model no parser vetted.
     let cad = &ipc.ecad().unwrap().cad_data;
     let mut step = cad.steps[0].clone();
@@ -1758,39 +1322,24 @@ fn non_finite_source_numbers_never_reach_the_arena() {
 
 #[test]
 fn flattened_nested_panels_preserve_depth_first_paint_order() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="root"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="dot"><Circle diameter="2"/></EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+    let dot = r#"<Features><Location x="0" y="0"/><StandardPrimitiveRef id="dot"/></Features>"#;
+    let ipc = parse(
+        "root",
+        &standard_entry("dot", r#"<Circle diameter="2"/>"#),
+        &format!(
+            r#"{TOP}
       <Step name="board" type="BOARD">
-        <LayerFeature layerRef="TOP">
-          <Set polarity="NEGATIVE"><Features><Location x="0" y="0"/><StandardPrimitiveRef id="dot"/></Features></Set>
-        </LayerFeature>
+        <LayerFeature layerRef="TOP"><Set polarity="NEGATIVE">{dot}</Set></LayerFeature>
       </Step>
       <Step name="cell" type="PALLET">
         <StepRepeat stepRef="board" x="10" y="0" nx="1" ny="1" dx="0" dy="0"/>
-        <LayerFeature layerRef="TOP">
-          <Set><Features><Location x="0" y="0"/><StandardPrimitiveRef id="dot"/></Features></Set>
-        </LayerFeature>
+        <LayerFeature layerRef="TOP"><Set>{dot}</Set></LayerFeature>
       </Step>
       <Step name="root" type="PALLET">
         <StepRepeat stepRef="cell" x="0" y="0" nx="2" ny="1" dx="10" dy="0"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
+      </Step>"#
+        ),
+    );
     let imported = import_design(&ipc, Resolution::default()).unwrap();
     let top = imported.layer_id("TOP").unwrap();
     let document = imported
@@ -1818,14 +1367,10 @@ fn flattened_nested_panels_preserve_depth_first_paint_order() {
 
 #[test]
 fn component_occurrence_ids_survive_mirrored_board_repeats() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner"><FunctionMode mode="ASSEMBLY"/><StepRef name="panel"/></Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="COMPONENT_TOP" side="TOP"/>
+    let ipc = parse(
+        "panel",
+        "",
+        r#"<Layer name="TOP" layerFunction="COMPONENT_TOP" side="TOP"/>
       <Step name="board" type="BOARD">
         <Component refDes="U1" packageRef="pkg" part="part" layerRef="TOP" mountType="SMT">
           <Location x="1" y="2"/>
@@ -1833,12 +1378,8 @@ fn component_occurrence_ids_survive_mirrored_board_repeats() {
       </Step>
       <Step name="panel" type="PALLET">
         <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="20" dy="0" angle="90" mirror="true"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
+      </Step>"#,
+    );
     let imported = import_design(&ipc, Resolution::default()).unwrap();
 
     let occurrences = imported
@@ -1858,78 +1399,31 @@ fn component_occurrence_ids_survive_mirrored_board_repeats() {
 }
 
 #[test]
-fn extracts_layer_for_geometry_view_board_or_board_array() {
-    let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
-        .expect("synthetic panel fixture should parse");
-
-    let board = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board, Resolution::default())
-        .expect("board layer should extract");
-    let board_layer = &board.layers[0];
-    let board_features = board_layer.features.slice(&board.features);
-
-    assert_eq!(board_features.len(), 1);
-    assert_eq!(board_features[0].center, Point::new(2.0, 3.0));
-    assert_eq!(board.layout.steps.len(), 1);
-    assert_eq!(board.layout.root_step, Some(0));
-    assert_eq!(board.layout.steps[0].kind, LayoutStepKind::Board);
-    assert!(board.layout.instances.is_empty());
-    assert_eq!(
-        profile_occurrences_for(&board, ProfileSet::BoardOutlines).len(),
-        1
-    );
-
-    let panel = extract_layer_for_view(
-        &ipc,
-        "TOP",
-        ArtworkScope::ArrayFlattened,
-        Resolution::default(),
-    )
-    .expect("panel layer should extract");
-    let panel_layer = &panel.layers[0];
-    let panel_features = panel_layer.features.slice(&panel.features);
-
-    assert_eq!(panel_features.len(), 3);
-    assert_eq!(panel_features[0].center, Point::new(40.0, 5.0));
-    assert_eq!(panel_features[1].center, Point::new(12.0, 23.0));
-    assert_eq!(panel_features[2].center, Point::new(27.0, 23.0));
-    assert_eq!(panel.layout.steps.len(), 2);
-    assert_eq!(panel.layout.instances.len(), 2);
-    assert_eq!(
-        profile_occurrences_for(&panel, ProfileSet::FabricationOutlines).len(),
-        3
-    );
-}
-
-#[test]
-fn step_only_panel_extraction_omits_repeat_graph_expansion() {
-    let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
-        .expect("synthetic panel fixture should parse");
-    let doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayLocal, Resolution::default())
-        .expect("panel layer should extract");
-    let layer = &doc.layers[0];
-    let features = layer.features.slice(&doc.features);
-
-    assert_eq!(features.len(), 1);
-    assert_eq!(doc.layout.steps.len(), 1);
-    assert!(doc.layout.repeats.is_empty());
-    assert!(doc.layout.instances.is_empty());
-    assert_eq!(board_instance_count(&doc), 0);
-    assert_eq!(panel_step_count(&doc), 1);
-}
-
-#[test]
-fn extract_layout_builds_sidecar_without_layer_features() {
-    let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
-        .expect("synthetic panel fixture should parse");
-    let doc = extract_layout(&ipc).expect("layout should extract");
-
-    assert!(doc.layers.is_empty());
-    assert!(doc.features.is_empty());
-    assert_eq!(doc.layout.steps.len(), 2);
-    assert_eq!(doc.layout.repeats.len(), 1);
-    assert_eq!(doc.layout.instances.len(), 2);
-    assert_eq!(panel_step_count(&doc), 1);
-    assert_eq!(board_instance_count(&doc), 2);
+fn board_and_array_local_scopes_carry_one_step_alone() {
+    let ipc = Ipc2581::parse(&panel_layer_fixture()).unwrap();
+    for (scope, center, kind, outlines) in [
+        (
+            ArtworkScope::Board,
+            Point::new(2.0, 3.0),
+            LayoutStepKind::Board,
+            ProfileSet::BoardOutlines,
+        ),
+        (
+            ArtworkScope::ArrayLocal,
+            Point::new(40.0, 5.0),
+            LayoutStepKind::Panel,
+            ProfileSet::FabricationOutlines,
+        ),
+    ] {
+        let doc = extract_layer_for_view(&ipc, "TOP", scope, Resolution::default()).unwrap();
+        let centers = doc.features.iter().map(|feature| feature.center);
+        assert_eq!(centers.collect::<Vec<_>>(), [center], "{scope:?}");
+        assert_eq!(doc.layout.root_step, Some(0));
+        assert_eq!(doc.layout.steps.len(), 1);
+        assert_eq!(doc.layout.steps[0].kind, kind);
+        assert!(doc.layout.repeats.is_empty() && doc.layout.instances.is_empty());
+        assert_eq!(profile_occurrences_for(&doc, outlines).len(), 1);
+    }
 }
 
 #[test]
@@ -1958,30 +1452,19 @@ fn layout_expansion_bounds_large_repeats_and_skips_empty_repeats() {
 fn step_repeat_places_the_child_datum() {
     // The panel of IPC-2581C 8.2.3.5: a 200 x 100 board whose datum is
     // (10, 10), turned 90 degrees onto (110, 20) and stepped by (120, 207).
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/></Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
-      <Step name="board" type="BOARD">
-        <Datum x="10" y="10"/>
-        <Profile><Polygon>
-          <PolyBegin x="0" y="0"/><PolyStepSegment x="200" y="0"/>
-          <PolyStepSegment x="200" y="100"/><PolyStepSegment x="0" y="100"/>
-        </Polygon></Profile>
-      </Step>
+    let ipc = parse(
+        "panel",
+        "",
+        &format!(
+            r#"{TOP}
+      <Step name="board" type="BOARD"><Datum x="10" y="10"/>{}</Step>
       <Step name="panel" type="PALLET">
         <Datum x="0" y="0"/>
         <StepRepeat stepRef="board" x="110" y="20" nx="2" ny="2" dx="120" dy="207" angle="90" mirror="false"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
+      </Step>"#,
+            profile(200, 100)
+        ),
+    );
     let layout = extract_layout(&ipc).unwrap().layout;
 
     let placed = |instance: usize, point: Point| {
@@ -2001,95 +1484,46 @@ fn step_repeat_places_the_child_datum() {
 
 #[test]
 fn nested_panel_layout_keeps_symbolic_parent_instances() {
-    let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
-        .expect("synthetic nested panel fixture should parse");
-    let doc = extract_layout(&ipc).expect("layout should extract");
-    let fabrication_profiles = profile_occurrences_for(&doc, ProfileSet::FabricationOutlines);
-    let layout_boundaries = profile_occurrences_for(&doc, ProfileSet::LayoutBoundaries);
+    let doc = extract_layout(&nested_panel_fixture(true)).unwrap();
+    let count = |set, role| {
+        profile_occurrences_for(&doc, set)
+            .iter()
+            .filter(|profile| profile.role == role)
+            .count()
+    };
 
     assert_eq!(doc.profiles.len(), 3);
-    assert_eq!(fabrication_profiles.len(), 5);
-    assert_eq!(layout_boundaries.len(), 7);
-    assert_eq!(
-        fabrication_profiles
-            .iter()
-            .filter(|profile| profile.role == ProfileOccurrenceRole::RootPanel)
-            .count(),
-        1
-    );
-    assert_eq!(
-        fabrication_profiles
-            .iter()
-            .filter(|profile| profile.role == ProfileOccurrenceRole::BoardInstance)
-            .count(),
-        4
-    );
-    assert!(
-        fabrication_profiles
-            .iter()
-            .all(|profile| profile.role != ProfileOccurrenceRole::PanelInstance)
-    );
-    assert_eq!(
-        layout_boundaries
-            .iter()
-            .filter(|profile| profile.role == ProfileOccurrenceRole::PanelInstance)
-            .count(),
-        2
-    );
+    let fabrication = ProfileSet::FabricationOutlines;
+    assert_eq!(profile_occurrences_for(&doc, fabrication).len(), 5);
+    assert_eq!(count(fabrication, ProfileOccurrenceRole::RootPanel), 1);
+    assert_eq!(count(fabrication, ProfileOccurrenceRole::BoardInstance), 4);
+    let boundaries = ProfileSet::LayoutBoundaries;
+    assert_eq!(profile_occurrences_for(&doc, boundaries).len(), 7);
+    assert_eq!(count(boundaries, ProfileOccurrenceRole::PanelInstance), 2);
     assert_eq!(doc.layout.steps.len(), 3);
-    assert_eq!(doc.layout.repeats.len(), 3);
-    assert_eq!(doc.layout.instances.len(), 6);
     assert_eq!(board_instance_count(&doc), 4);
-    assert_eq!(doc.layout.repeats[0].instances.start, 0);
-    assert_eq!(doc.layout.repeats[0].instances.count, 2);
-    assert_eq!(doc.layout.repeats[1].instances.start, 2);
-    assert_eq!(doc.layout.repeats[1].instances.count, 2);
-    assert_eq!(doc.layout.repeats[2].instances.start, 4);
-    assert_eq!(doc.layout.repeats[2].instances.count, 2);
-    assert_eq!(doc.layout.instances[0].parent_instance, None);
-    assert_eq!(doc.layout.instances[1].parent_instance, None);
-    assert_eq!(doc.layout.instances[2].parent_instance, Some(0));
-    assert_eq!(doc.layout.instances[3].parent_instance, Some(0));
-    assert_eq!(doc.layout.instances[4].parent_instance, Some(1));
-    assert_eq!(doc.layout.instances[5].parent_instance, Some(1));
-}
-
-#[test]
-fn nested_panel_layer_extraction_materializes_descendant_board_features() {
-    let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
-        .expect("synthetic nested panel fixture should parse");
-    let doc = extract_layer_for_view(
-        &ipc,
-        "TOP",
-        ArtworkScope::ArrayFlattened,
-        Resolution::default(),
-    )
-    .expect("nested panel layer should extract");
-    let layer = &doc.layers[0];
-    let features = layer.features.slice(&doc.features);
-    let centers = features
-        .iter()
-        .map(|feature| feature.center)
-        .collect::<Vec<_>>();
-
     assert_eq!(
-        centers,
-        [
-            Point::new(7.0, 8.0),
-            Point::new(22.0, 8.0),
-            Point::new(7.0, 28.0),
-            Point::new(22.0, 28.0)
-        ]
+        doc.layout
+            .repeats
+            .iter()
+            .map(|repeat| repeat.instances)
+            .collect::<Vec<_>>(),
+        [Span::new(0, 2), Span::new(2, 2), Span::new(4, 2)]
     );
-    assert_eq!(board_instance_count(&doc), 4);
+    assert_eq!(
+        doc.layout
+            .instances
+            .iter()
+            .map(|instance| instance.parent_instance)
+            .collect::<Vec<_>>(),
+        [None, None, Some(0), Some(0), Some(1), Some(1)]
+    );
 }
 
 #[test]
 fn an_occurrence_layer_is_its_part_of_the_scope_in_its_own_frame() {
     use LayoutOccurrenceId::{Instance, Root};
-    let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
-        .expect("synthetic nested panel fixture should parse");
-    let design = import_design(&ipc, Resolution::default()).unwrap();
+    let design = import_design(&nested_panel_fixture(true), Resolution::default()).unwrap();
     let layer = design.layer_id("TOP").unwrap();
     let scope = ArtworkScope::ArrayFlattened;
     assert_eq!(
@@ -2131,6 +1565,16 @@ fn an_occurrence_layer_is_its_part_of_the_scope_in_its_own_frame() {
             .map(|feature| (feature.center, feature.source_instance))
             .collect::<Vec<_>>(),
         "the root places the whole scope"
+    );
+    assert_eq!(
+        placed(Root),
+        [
+            (Point::new(7.0, 8.0), Some(2)),
+            (Point::new(22.0, 8.0), Some(3)),
+            (Point::new(7.0, 28.0), Some(4)),
+            (Point::new(22.0, 28.0), Some(5))
+        ],
+        "every descendant board's features, where the panel has them"
     );
     assert_eq!(
         placed(Instance(1)),
@@ -2184,15 +1628,7 @@ fn an_occurrence_layer_is_its_part_of_the_scope_in_its_own_frame() {
 /// support geometry.
 #[test]
 fn nested_panel_render_draws_every_descendant_board_instance() {
-    let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
-        .expect("synthetic nested panel fixture should parse");
-    let mut doc = extract_layer_for_view(
-        &ipc,
-        "TOP",
-        ArtworkScope::ArrayFlattened,
-        Resolution::default(),
-    )
-    .expect("nested panel layer should extract");
+    let mut doc = top_layer(&nested_panel_fixture(true));
     crate::dialects::ipc::process::normalize_for_artwork(&mut doc, Resolution::default()).unwrap();
 
     let artwork = crate::dialects::ipc::lower_layer_to_artwork(
@@ -2211,9 +1647,7 @@ fn nested_panel_render_draws_every_descendant_board_instance() {
 
 #[test]
 fn nested_panel_instance_bbox_includes_child_repeats_without_profile() {
-    let ipc = ipc2581::Ipc2581::parse(nested_panel_without_subpanel_profile_fixture())
-        .expect("synthetic nested panel fixture should parse");
-    let doc = extract_layout(&ipc).expect("layout should extract");
+    let doc = extract_layout(&nested_panel_fixture(false)).unwrap();
 
     assert_eq!(doc.layout.instances[0].bbox.min, Point::new(5.0, 5.0));
     assert_eq!(doc.layout.instances[0].bbox.max, Point::new(30.0, 10.0));
@@ -2225,8 +1659,21 @@ fn nested_panel_instance_bbox_includes_child_repeats_without_profile() {
 
 #[test]
 fn repeated_panel_traces_keep_distinct_source_sets_after_processing() {
-    let ipc = ipc2581::Ipc2581::parse(panel_trace_fixture())
-        .expect("synthetic panel fixture should parse");
+    let ipc = parse(
+        "panel",
+        r#"<DictionaryLineDesc units="MILLIMETER"><EntryLineDesc id="trace">
+             <LineDesc lineWidth="1" lineEnd="ROUND"/>
+           </EntryLineDesc></DictionaryLineDesc>"#,
+        &format!(
+            r#"{TOP}
+      <Step name="board" type="BOARD"><LayerFeature layerRef="TOP"><Set net="N1">
+        <Polyline lineDescRef="trace"><PolyBegin x="0" y="0"/><PolyStepSegment x="10" y="0"/></Polyline>
+      </Set></LayerFeature></Step>
+      <Step name="panel" type="PALLET">
+        <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="20" dy="0"/>
+      </Step>"#
+        ),
+    );
     let imported = import_design(&ipc, Resolution::default()).expect("panel should import");
     let mut doc = imported
         .materialize_layer(
@@ -2263,90 +1710,73 @@ fn repeated_panel_traces_keep_distinct_source_sets_after_processing() {
 
 #[test]
 fn extracts_step_profile_and_cutouts_as_physical_board_profiles() {
-    let ipc =
-        ipc2581::Ipc2581::parse(profile_fixture()).expect("synthetic profile fixture should parse");
-    let doc =
-        extract_layer(&ipc, "TOP", Resolution::default()).expect("profile outline should extract");
+    let doc = top_layer(&board(
+        "",
+        r#"<Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/><PolyStepSegment x="20" y="0"/>
+            <PolyStepSegment x="20" y="10"/><PolyStepSegment x="0" y="10"/>
+          </Polygon>
+          <Cutout>
+            <PolyBegin x="6" y="5"/>
+            <PolyStepCurve x="4" y="5" centerX="5" centerY="5" clockwise="false"/>
+            <PolyStepCurve x="6" y="5" centerX="5" centerY="5" clockwise="false"/>
+          </Cutout>
+        </Profile>"#,
+    ));
 
     assert_eq!(doc.profiles.len(), 1);
     assert_eq!(doc.profile_cutouts.len(), 1);
     assert_eq!(board_step_count(&doc), 1);
     assert_eq!(panel_step_count(&doc), 0);
-    assert_eq!(board_instance_count(&doc), 0);
-    assert_eq!(doc.layout.steps[0].profiles.start, 0);
-    assert_eq!(doc.layout.steps[0].profiles.count, 1);
+    assert_eq!(doc.layout.steps[0].profiles, Span::new(0, 1));
     assert_eq!(board_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
     assert_eq!(board_bbox(&doc).unwrap().max, Point::new(20.0, 10.0));
-    assert_eq!(doc.profiles[0].bbox.min, Point::new(0.0, 0.0));
-    assert_eq!(doc.profiles[0].bbox.max, Point::new(20.0, 10.0));
+    assert_eq!(doc.profiles[0].bbox, board_bbox(&doc).unwrap());
     assert!(doc.layers[0].bbox.is_empty());
     assert!(doc.arena.paths.iter().all(|path| path.paint == Paint::None));
     assert!(doc.arena.cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
 }
 
-fn negative_plane_fixture(layer_features: &str, profile: bool) -> String {
+/// A board whose only layer is a NEGATIVE plane, with a 20 x 10 Profile
+/// holding one cutout when `profile` is set.
+fn negative_plane_fixture(layer_features: &str, profile: bool) -> Ipc2581 {
     let profile = if profile {
-        r#"<Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="20" y="0"/>
-            <PolyStepSegment x="20" y="10"/>
-            <PolyStepSegment x="0" y="10"/>
-          </Polygon>
-          <Cutout>
-            <PolyBegin x="16" y="4"/>
-            <PolyStepSegment x="18" y="4"/>
-            <PolyStepSegment x="18" y="6"/>
-            <PolyStepSegment x="16" y="6"/>
-          </Cutout>
-        </Profile>"#
+        format!(
+            "<Profile><Polygon>{}</Polygon><Cutout>{}</Cutout></Profile>",
+            rect_steps(0.0, 0.0, 20.0, 10.0),
+            rect_steps(16.0, 4.0, 18.0, 6.0)
+        )
     } else {
-        ""
+        String::new()
     };
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="GND" layerFunction="PLANE" side="INTERNAL" polarity="NEGATIVE"/>
-      <Step name="board" type="BOARD">
-        {profile}
-        {layer_features}
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#
+    parse(
+        "board",
+        "",
+        &format!(
+            r#"<Layer name="GND" layerFunction="PLANE" side="INTERNAL" polarity="NEGATIVE"/>
+               <Step name="board" type="BOARD">{profile}{layer_features}</Step>"#
+        ),
     )
 }
 
-fn negative_plane_image(xml: &str) -> ContourSet {
-    let ipc = Ipc2581::parse(xml).unwrap();
+fn negative_plane_image(layer_features: &str) -> ContourSet {
     let resolution = Resolution::default();
-    let imported = import_design(&ipc, resolution).unwrap();
+    let imported =
+        import_design(&negative_plane_fixture(layer_features, true), resolution).unwrap();
+    let layer = imported.layer_id("GND").unwrap();
     imported
-        .composed_layer_image(
-            imported.layer_id("GND").unwrap(),
-            ArtworkScope::Board,
-            resolution,
-        )
+        .composed_layer_image(layer, ArtworkScope::Board, resolution)
         .unwrap()
 }
 
 #[test]
 fn negative_layer_clears_its_features_from_the_step_profile() {
-    let image = negative_plane_image(&negative_plane_fixture(
-        r#"<LayerFeature layerRef="GND">
-          <Set>
-            <Pad><Location x="5" y="5"/><Circle diameter="2"/></Pad>
-          </Set>
-        </LayerFeature>"#,
-        true,
-    ));
+    let image = negative_plane_image(
+        r#"<LayerFeature layerRef="GND"><Set>
+             <Pad><Location x="5" y="5"/><Circle diameter="2"/></Pad>
+           </Set></LayerFeature>"#,
+    );
 
     // The plane fills the profile, minus its cutout and the antipad.
     assert!(image.contains_point(Point::new(10.0, 5.0)));
@@ -2355,12 +1785,9 @@ fn negative_layer_clears_its_features_from_the_step_profile() {
     assert!(!image.contains_point(Point::new(17.0, 5.0)));
     assert!(!image.contains_point(Point::new(21.0, 5.0)));
     assert!((image.area() - (200.0 - 4.0 - std::f64::consts::PI)).abs() < 0.01);
-}
 
-#[test]
-fn negative_layer_without_features_is_a_full_plane() {
-    let image = negative_plane_image(&negative_plane_fixture("", true));
-    assert!((image.area() - 196.0).abs() < 1e-9);
+    // Without features the layer is the full plane.
+    assert!((negative_plane_image("").area() - 196.0).abs() < 1e-9);
 }
 
 #[test]
@@ -2368,20 +1795,13 @@ fn set_polarity_is_absolute_on_a_negative_layer() {
     // Allegro writes anti-etch as NEGATIVE sets on NEGATIVE plane layers:
     // they remove copper like the antipads beside them. Only an explicit
     // POSITIVE set restores material inside a clearance.
-    let image = negative_plane_image(&negative_plane_fixture(
+    let image = negative_plane_image(
         r#"<LayerFeature layerRef="GND">
-          <Set>
-            <Pad><Location x="5" y="5"/><Circle diameter="4"/></Pad>
-          </Set>
-          <Set polarity="NEGATIVE">
-            <Pad><Location x="12" y="5"/><Circle diameter="2"/></Pad>
-          </Set>
-          <Set polarity="POSITIVE">
-            <Pad><Location x="5" y="5"/><Circle diameter="1"/></Pad>
-          </Set>
+          <Set><Pad><Location x="5" y="5"/><Circle diameter="4"/></Pad></Set>
+          <Set polarity="NEGATIVE"><Pad><Location x="12" y="5"/><Circle diameter="2"/></Pad></Set>
+          <Set polarity="POSITIVE"><Pad><Location x="5" y="5"/><Circle diameter="1"/></Pad></Set>
         </LayerFeature>"#,
-        true,
-    ));
+    );
 
     assert!(!image.contains_point(Point::new(12.0, 5.0)));
     assert!(image.contains_point(Point::new(5.0, 5.0)));
@@ -2390,349 +1810,178 @@ fn set_polarity_is_absolute_on_a_negative_layer() {
 
 #[test]
 fn negative_layer_without_a_profile_reports_its_empty_image() {
-    let ipc = Ipc2581::parse(&negative_plane_fixture(
-        r#"<LayerFeature layerRef="GND">
-          <Set>
-            <Pad><Location x="5" y="5"/><Circle diameter="2"/></Pad>
-          </Set>
-        </LayerFeature>"#,
+    let ipc = negative_plane_fixture(
+        r#"<LayerFeature layerRef="GND"><Set>
+             <Pad><Location x="5" y="5"/><Circle diameter="2"/></Pad>
+           </Set></LayerFeature>"#,
         false,
-    ))
-    .unwrap();
+    );
     let imported = import_design(&ipc, Resolution::default()).unwrap();
 
+    let messages = diagnostics(&imported.geometry);
     assert!(
-        imported
-            .geometry
-            .diagnostics
+        messages
             .iter()
-            .any(|diagnostic| diagnostic.message.contains("has no Profile to fill")),
-        "diagnostics: {:?}",
-        imported.geometry.diagnostics
+            .any(|message| message.contains("has no Profile to fill")),
+        "{messages:?}"
     );
 }
 
 #[test]
 fn chamfered_rect_respects_corner_flags() {
-    let mut doc = GeometryDocument::new();
-
-    push_filled_shape(
-        &mut doc,
-        Affine2::identity(),
-        shapes::chamfered_rect(10.0, 6.0, 1.0, [true, false, false, false]),
-    );
-
-    let path = &doc.arena.paths[0];
-    let contour = &doc.arena.contours[path.contours.start as usize];
-    let cmds = contour.cmds.slice(&doc.arena.cmds);
-
-    assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(4.0, -3.0)));
-    assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(5.0, -2.0)));
-    assert!(cmds.iter().any(|cmd| cmd.p0 == Point::new(5.0, 2.0)));
-    assert!(cmds.iter().any(|cmd| cmd.p0 == Point::new(4.0, 3.0)));
-    assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-4.0, 3.0)));
-    assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-5.0, 2.0)));
-    assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-5.0, -2.0)));
-    assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-4.0, -3.0)));
+    let doc = top_layer(&top_board(
+        "",
+        r#"<Set><Pad><Location x="0" y="0"/>
+             <RectCham width="10" height="6" chamfer="1"
+                       upperRight="true" upperLeft="false" lowerRight="false" lowerLeft="false"/>
+           </Pad></Set>"#,
+    ));
+    let image = painted_image(&doc);
+    assert!(!image.contains_point(Point::new(4.8, 2.8)));
+    for (x, y) in [(-4.8, 2.8), (4.8, -2.8), (-4.8, -2.8)] {
+        assert!(image.contains_point(Point::new(x, y)), "({x}, {y})");
+    }
 }
 
 #[test]
-fn rounded_rect_preserves_arcs_when_transform_preserves_circles() {
-    let mut doc = GeometryDocument::new();
-
-    push_filled_shape(
-        &mut doc,
-        Affine2::identity(),
-        shapes::rounded_rect(10.0, 6.0, 1.0, [true; 4]),
-    );
-
-    let path = &doc.arena.paths[0];
-    let contour = &doc.arena.contours[path.contours.start as usize];
-    let cmds = contour.cmds.slice(&doc.arena.cmds);
-
-    assert_eq!(cmds.iter().filter(|cmd| cmd.op == PathOp::ArcTo).count(), 4);
-}
-
-#[test]
-fn rounded_rect_uses_elliptical_arcs_when_transform_distorts_circles() {
-    let mut doc = GeometryDocument::new();
-
-    push_filled_shape(
-        &mut doc,
-        Affine2 {
-            m00: 2.0,
-            m01: 0.0,
-            m02: 0.0,
-            m10: 0.0,
-            m11: 1.0,
-            m12: 0.0,
-        },
-        shapes::rounded_rect(10.0, 6.0, 1.0, [true; 4]),
-    );
-
-    let path = &doc.arena.paths[0];
-    let contour = &doc.arena.contours[path.contours.start as usize];
-    let cmds = contour.cmds.slice(&doc.arena.cmds);
-
-    assert_eq!(
-        cmds.iter()
-            .filter(|cmd| cmd.op == PathOp::EllipseTo)
-            .count(),
-        4
-    );
-    assert!(!cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
-}
-
-#[test]
-fn slot_cavity_span_controls_target_layers() {
+fn a_slot_images_on_its_own_layer_and_the_copper_its_span_reaches() {
     let mut interner = ipc2581::Interner::new();
-    let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
-    let l2 = test_layer(&mut interner, "L2", LayerFunction::Signal, None);
-    let l3 = test_layer(&mut interner, "L3", LayerFunction::Signal, None);
-    let route = test_layer(
-        &mut interner,
-        "ROUT",
+    let mut layer = |name, layer_function, span| Layer {
+        name: interner.intern(name),
+        layer_function,
+        side: None,
+        polarity: None,
+        span,
+        spec_refs: Vec::new(),
+        profiles: Vec::new(),
+    };
+    let [l1, l2, l3] = ["L1", "L2", "L3"].map(|name| layer(name, LayerFunction::Signal, None));
+    let spanned = layer(
+        "SPANNED",
         LayerFunction::Rout,
         Some(ipc2581::types::ecad::LayerSpan {
             from_layer: Some(l1.name),
             to_layer: Some(l2.name),
         }),
     );
-    let layers = [l1.name, l2.name, l3.name, route.name];
-    let layer_order = Some(layers.as_slice());
-    let slot = test_slot(false);
+    let bare = layer("ROUT", LayerFunction::Rout, None);
+    let slot = |z_axis_dim| ipc2581::types::Slot {
+        name: None,
+        shape: SlotShape::Outline(ipc2581::types::Polygon::new(
+            ipc2581::types::Point { x: 0.0, y: 0.0 },
+            [],
+        )),
+        plating_status: PlatingStatus::NonPlated,
+        z_axis_dim,
+        xform: None,
+        x: 0.0,
+        y: 0.0,
+    };
+    let order = [l1.name, l2.name, l3.name, spanned.name];
 
-    assert!(slot_applies_to_layer(&route, &l1, layer_order, &slot));
-    assert!(slot_applies_to_layer(&route, &l2, layer_order, &slot));
-    assert!(!slot_applies_to_layer(&route, &l3, layer_order, &slot));
-    assert!(slot_applies_to_layer(&route, &route, layer_order, &slot));
-}
-
-#[test]
-fn partial_depth_slot_cavity_does_not_default_to_through_board() {
-    let mut interner = ipc2581::Interner::new();
-    let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
-    let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
-    let layer_order = None;
-    let slot = test_slot(true);
-
-    assert!(!slot_applies_to_layer(&route, &l1, layer_order, &slot));
-    assert!(slot_applies_to_layer(&route, &route, layer_order, &slot));
-}
-
-#[test]
-fn unspanned_route_slot_stays_on_route_layer() {
-    let mut interner = ipc2581::Interner::new();
-    let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
-    let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
-    let layer_order = None;
-    let slot = test_slot(false);
-
-    assert!(!slot_applies_to_layer(&route, &l1, layer_order, &slot));
-    assert!(slot_applies_to_layer(&route, &route, layer_order, &slot));
-}
-
-#[test]
-fn rotated_slot_cavity_xform_orients_route_slot() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="F.Cu_B.Cu_1"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="F.Cu_B.Cu_1" layerFunction="ROUT" side="ALL">
-        <Span fromLayer="F.Cu" toLayer="B.Cu"/>
-      </Layer>
-      <Step name="board" type="BOARD">
-        <LayerFeature layerRef="F.Cu_B.Cu_1">
-          <Set>
-            <SlotCavity name="SLOT1" platingStatus="PLATED" plusTol="0" minusTol="0">
-              <Location x="10" y="20"/>
-              <Xform rotation="90"/>
-              <Oval width="1.70" height="0.60"/>
-            </SlotCavity>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
-
-    let doc = extract_layer(&ipc, "F.Cu_B.Cu_1", Resolution::default()).unwrap();
-    assert_eq!(doc.features.len(), 1);
-
-    let slot = &doc.features[0];
-    assert_eq!(slot.kind, FeatureKind::Slot);
-    assert!(
-        slot.bbox.height() > slot.bbox.width(),
-        "expected rotated slot to be vertical, got bbox {:?}",
-        slot.bbox
-    );
-    assert!((slot.bbox.width() - 0.60).abs() < 1e-6);
-    assert!((slot.bbox.height() - 1.70).abs() < 1e-6);
-}
-
-#[test]
-fn padstack_shape_offsets_do_not_reposition_pad_locations() {
-    // KiCad exports a pad's final shape center in the Pad Location. The
-    // PadstackPadDef offset describes the padstack but must not be applied
-    // again when placing layer artwork.
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="square">
-        <RectCenter width="8" height="8"/>
-      </EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <PadStackDef name="offset_pad">
-          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
-            <Location x="-2.0" y="-2.0"/>
-            <StandardPrimitiveRef id="square"/>
-          </PadstackPadDef>
-        </PadStackDef>
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <Pad padstackDefRef="offset_pad">
-              <Location x="10" y="10"/>
-              <StandardPrimitiveRef id="square"/>
-            </Pad>
-            <Pad padstackDefRef="offset_pad">
-              <Xform rotation="270.0"/>
-              <Location x="40" y="10"/>
-              <StandardPrimitiveRef id="square"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
-
-    let doc = extract_layer(&ipc, "TOP", Resolution::default()).unwrap();
-    assert_eq!(doc.features.len(), 2);
-
-    let unrotated = doc.features[0].bbox;
-    assert!((unrotated.center().x - 10.0).abs() < 1e-9);
-    assert!((unrotated.center().y - 10.0).abs() < 1e-9);
-
-    let rotated = doc.features[1].bbox;
-    assert!((rotated.center().x - 40.0).abs() < 1e-9);
-    assert!((rotated.center().y - 10.0).abs() < 1e-9);
-}
-
-#[test]
-fn padstack_xform_offsets_do_not_reposition_pad_locations() {
-    // Allegro writes the shape offset as a PadstackPadDef Xform, but its
-    // Pad Location is already pin origin + rotated offset. Coordinates are
-    // L44 of the Allegro testcase5 fixture: pins at x = 2.94 and 6.064.
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="land">
-        <RectCenter width="1.45" height="4.4"/>
-      </EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <PadStackDef name="LS145X440_SP">
-          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
-            <Xform xOffset="0.0850"/>
-            <Location x="0.0" y="0.0"/>
-            <StandardPrimitiveRef id="land"/>
-          </PadstackPadDef>
-        </PadStackDef>
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <Pad padstackDefRef="LS145X440_SP">
-              <Location x="3.0250" y="45.7500"/>
-              <StandardPrimitiveRef id="land"/>
-            </Pad>
-            <Pad padstackDefRef="LS145X440_SP">
-              <Xform rotation="180.000"/>
-              <Location x="5.9790" y="45.7500"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
-
-    let doc = extract_layer(&ipc, "TOP", Resolution::default()).unwrap();
-    assert_eq!(doc.features.len(), 2);
-    for (feature, x) in doc.features.iter().zip([3.025, 5.979]) {
-        let center = feature.bbox.center();
-        assert!((center.x - x).abs() < 1e-9, "{center:?}");
-        assert!((center.y - 45.75).abs() < 1e-9, "{center:?}");
+    for (target, reached) in [(&l1, true), (&l2, true), (&l3, false), (&spanned, true)] {
+        let applies = slot_applies_to_layer(&spanned, target, Some(&order), &slot(false));
+        assert_eq!(applies, reached);
+    }
+    // Neither an unspanned nor a partial-depth slot defaults to through-board.
+    for partial_depth in [false, true] {
+        assert!(!slot_applies_to_layer(
+            &bare,
+            &l1,
+            None,
+            &slot(partial_depth)
+        ));
+        assert!(slot_applies_to_layer(
+            &bare,
+            &bare,
+            None,
+            &slot(partial_depth)
+        ));
     }
 }
 
 #[test]
+fn rotated_slot_cavity_xform_orients_route_slot() {
+    let ipc = shape_fixture(
+        "",
+        r#"<SlotCavity name="SLOT1" platingStatus="PLATED" plusTol="0" minusTol="0">
+             <Location x="10" y="20"/><Xform rotation="90"/><Oval width="1.70" height="0.60"/>
+           </SlotCavity>"#,
+    );
+    let doc = extract_layer(&ipc, "DRILL", Resolution::default()).unwrap();
+
+    let [slot] = doc.features.as_slice() else {
+        panic!("{:?}", doc.features);
+    };
+    assert_eq!(slot.kind, FeatureKind::Slot);
+    assert!((slot.bbox.width() - 0.60).abs() < 1e-6, "{:?}", slot.bbox);
+    assert!((slot.bbox.height() - 1.70).abs() < 1e-6, "{:?}", slot.bbox);
+}
+
+/// The feature bounds of pads placed from `padstack`, whose one TOP pad
+/// definition holds `pad_def`.
+fn padstack_pad_bounds(shape: &str, pad_def: &str, pads: &str) -> Vec<BBox> {
+    let doc = top_layer(&board(
+        &standard_entry("land", shape),
+        &format!(
+            r#"<PadStackDef name="padstack"><PadstackPadDef layerRef="TOP" padUse="REGULAR">
+                 {pad_def}<StandardPrimitiveRef id="land"/>
+               </PadstackPadDef></PadStackDef>
+               <LayerFeature layerRef="TOP"><Set>{pads}</Set></LayerFeature>"#
+        ),
+    ));
+    doc.features.iter().map(|feature| feature.bbox).collect()
+}
+
+#[test]
+fn padstack_offsets_do_not_reposition_pad_locations() {
+    let centered = |bounds: Vec<BBox>, expected: [(f64, f64); 2]| {
+        assert_eq!(bounds.len(), 2);
+        for (bbox, (x, y)) in bounds.iter().zip(expected) {
+            let center = bbox.center();
+            assert!((center.x - x).abs() < 1e-9, "{center:?}");
+            assert!((center.y - y).abs() < 1e-9, "{center:?}");
+        }
+    };
+    // KiCad exports a pad's final shape center in the Pad Location. The
+    // PadstackPadDef offset describes the padstack but must not be applied
+    // again when placing layer artwork.
+    centered(
+        padstack_pad_bounds(
+            r#"<RectCenter width="8" height="8"/>"#,
+            r#"<Location x="-2.0" y="-2.0"/>"#,
+            r#"<Pad padstackDefRef="padstack"><Location x="10" y="10"/><StandardPrimitiveRef id="land"/></Pad>
+               <Pad padstackDefRef="padstack">
+                 <Xform rotation="270.0"/><Location x="40" y="10"/><StandardPrimitiveRef id="land"/>
+               </Pad>"#,
+        ),
+        [(10.0, 10.0), (40.0, 10.0)],
+    );
+    // Allegro writes the shape offset as a PadstackPadDef Xform, but its
+    // Pad Location is already pin origin + rotated offset. Coordinates are
+    // L44 of the Allegro testcase5 fixture: pins at x = 2.94 and 6.064.
+    centered(
+        padstack_pad_bounds(
+            r#"<RectCenter width="1.45" height="4.4"/>"#,
+            r#"<Xform xOffset="0.0850"/><Location x="0.0" y="0.0"/>"#,
+            r#"<Pad padstackDefRef="padstack"><Location x="3.0250" y="45.7500"/><StandardPrimitiveRef id="land"/></Pad>
+               <Pad padstackDefRef="padstack"><Xform rotation="180.000"/><Location x="5.9790" y="45.7500"/></Pad>"#,
+        ),
+        [(3.025, 45.75), (5.979, 45.75)],
+    );
+}
+
+#[test]
 fn pad_draws_its_inline_shape_without_a_padstack() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <LayerFeature layerRef="TOP">
-          <Set net="GND">
-            <Pad>
-              <Location x="5" y="7"/>
-              <Circle diameter="2"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
-
-    let doc = extract_layer(&ipc, "TOP", Resolution::default()).unwrap();
+    let doc = top_layer(&top_board(
+        "",
+        r#"<Set net="GND"><Pad><Location x="5" y="7"/><Circle diameter="2"/></Pad></Set>"#,
+    ));
     assert!(doc.diagnostics.is_empty(), "{:?}", doc.diagnostics);
-    assert_eq!(doc.features.len(), 1);
 
-    let pad = &doc.features[0];
+    let [pad] = doc.features.as_slice() else {
+        panic!("{:?}", doc.features);
+    };
     assert_eq!(pad.kind, FeatureKind::Padstack);
     assert_eq!(pad.padstack_ref, None);
     assert_eq!(pad.primitive_ref, None);
@@ -2742,388 +1991,57 @@ fn pad_draws_its_inline_shape_without_a_padstack() {
 
 #[test]
 fn pad_inline_shape_overrides_its_padstack_shape() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="square">
-        <RectCenter width="8" height="8"/>
-      </EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <PadStackDef name="via">
+    let doc = top_layer(&board(
+        &standard_entry("square", r#"<RectCenter width="8" height="8"/>"#),
+        r#"<PadStackDef name="via">
           <PadstackHoleDef name="drill" diameter="0.3" platingStatus="VIA" plusTol="0" minusTol="0" x="0" y="0"/>
           <PadstackPadDef layerRef="TOP" padUse="REGULAR">
-            <Location x="0" y="0"/>
-            <StandardPrimitiveRef id="square"/>
+            <Location x="0" y="0"/><StandardPrimitiveRef id="square"/>
           </PadstackPadDef>
         </PadStackDef>
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <Pad padstackDefRef="via">
-              <Location x="10" y="10"/>
-              <Oval width="3" height="1"/>
-            </Pad>
-            <Pad padstackDefRef="via">
-              <Location x="30" y="10"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
-
-    let doc = extract_layer(&ipc, "TOP", Resolution::default()).unwrap();
-    assert_eq!(doc.features.len(), 2);
+        <LayerFeature layerRef="TOP"><Set>
+          <Pad padstackDefRef="via"><Location x="10" y="10"/><Oval width="3" height="1"/></Pad>
+          <Pad padstackDefRef="via"><Location x="30" y="10"/></Pad>
+        </Set></LayerFeature>"#,
+    ));
 
     // The padstack still refines what the pad is, not what it looks like.
-    let inline = &doc.features[0];
+    let [inline, from_padstack] = doc.features.as_slice() else {
+        panic!("{:?}", doc.features);
+    };
     assert_eq!(inline.intent.role, FeatureRole::Via);
     assert_eq!(inline.primitive_ref, None);
     assert!((inline.bbox.width() - 3.0).abs() < 1e-9);
     assert!((inline.bbox.height() - 1.0).abs() < 1e-9);
-
-    let from_padstack = &doc.features[1];
     assert!(from_padstack.primitive_ref.is_some());
     assert!((from_padstack.bbox.width() - 8.0).abs() < 1e-9);
 }
 
 #[test]
 fn extracts_nonplated_padstack_artwork_on_soldermask_layers() {
-    let ipc = Ipc2581::parse(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="F.Mask"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="mask_opening">
-        <Circle diameter="0.9906"/>
-      </EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+    let ipc = parse(
+        "board",
+        &standard_entry("mask_opening", r#"<Circle diameter="0.9906"/>"#),
+        r#"<Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
       <Step name="board" type="BOARD">
         <PadStackDef name="npth_mask">
           <PadstackHoleDef name="npth" diameter="0.9906" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="0" y="0"/>
-          <PadstackPadDef layerRef="F.Mask" padUse="REGULAR">
-            <StandardPrimitiveRef id="mask_opening"/>
-          </PadstackPadDef>
+          <PadstackPadDef layerRef="F.Mask" padUse="REGULAR"><StandardPrimitiveRef id="mask_opening"/></PadstackPadDef>
         </PadStackDef>
-        <LayerFeature layerRef="F.Mask">
-          <Set>
-            <Pad padstackDefRef="npth_mask">
-              <Location x="117.065" y="-133.14"/>
-              <PinRef componentRef="J3" pin="NPTH0"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#,
-    )
-    .unwrap();
-
+        <LayerFeature layerRef="F.Mask"><Set><Pad padstackDefRef="npth_mask">
+          <Location x="117.065" y="-133.14"/><PinRef componentRef="J3" pin="NPTH0"/>
+        </Pad></Set></LayerFeature>
+      </Step>"#,
+    );
     let doc = extract_layer(&ipc, "F.Mask", Resolution::default()).unwrap();
 
-    assert_eq!(doc.features.len(), 1);
-    let feature = &doc.features[0];
+    let [feature] = doc.features.as_slice() else {
+        panic!("{:?}", doc.features);
+    };
     assert_eq!(feature.bucket, FeatureBucket::Pth);
     assert_eq!(feature.intent.domain, FeatureDomain::Soldermask);
     assert_eq!(feature.intent.plating, PlatingKind::NonPlated);
     assert_eq!(feature.pin_refs.count, 1);
     assert!((feature.bbox.width() - 0.9906).abs() < 1e-6);
     assert!((feature.bbox.height() - 0.9906).abs() < 1e-6);
-}
-
-fn test_layer(
-    interner: &mut ipc2581::Interner,
-    name: &str,
-    layer_function: LayerFunction,
-    span: Option<ipc2581::types::ecad::LayerSpan>,
-) -> Layer {
-    Layer {
-        name: interner.intern(name),
-        layer_function,
-        side: None,
-        polarity: None,
-        span,
-        spec_refs: Vec::new(),
-        profiles: Vec::new(),
-    }
-}
-
-fn test_slot(z_axis_dim: bool) -> ipc2581::types::Slot {
-    ipc2581::types::Slot {
-        name: None,
-        shape: SlotShape::Primitive(StandardPrimitive::Circle(ipc2581::types::Styled {
-            shape: ipc2581::types::Circle { diameter: 1.0 },
-            fill_property: None,
-            line_desc: None,
-            line_desc_ref: None,
-            fill_desc: None,
-            fill_desc_ref: None,
-        })),
-        plating_status: PlatingStatus::NonPlated,
-        z_axis_dim,
-        xform: None,
-        x: 0.0,
-        y: 0.0,
-    }
-}
-
-fn panel_layer_fixture() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-    <LayerRef name="TOP"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="pad">
-        <Circle diameter="1"/>
-      </EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
-        <PadStackDef name="padstack">
-          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
-            <StandardPrimitiveRef id="pad"/>
-          </PadstackPadDef>
-        </PadStackDef>
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <Pad padstackDefRef="padstack">
-              <Location x="2" y="3"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="100" y="0"/>
-            <PolyStepSegment x="100" y="80"/>
-            <PolyStepSegment x="0" y="80"/>
-          </Polygon>
-        </Profile>
-        <PadStackDef name="panel_padstack">
-          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
-            <StandardPrimitiveRef id="pad"/>
-          </PadstackPadDef>
-        </PadStackDef>
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <Pad padstackDefRef="panel_padstack">
-              <Location x="40" y="5"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
-        <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="15" dy="0"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#
-}
-
-fn panel_trace_fixture() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-    <LayerRef name="TOP"/>
-    <DictionaryLineDesc units="MILLIMETER">
-      <EntryLineDesc id="trace">
-        <LineDesc lineWidth="1" lineEnd="ROUND"/>
-      </EntryLineDesc>
-    </DictionaryLineDesc>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <LayerFeature layerRef="TOP">
-          <Set net="N1">
-            <Polyline lineDescRef="trace">
-              <PolyBegin x="0" y="0"/>
-              <PolyStepSegment x="10" y="0"/>
-            </Polyline>
-          </Set>
-        </LayerFeature>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="20" dy="0"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#
-}
-
-fn nested_panel_fixture() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-    <LayerRef name="TOP"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="pad"><Circle diameter="1"/></EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
-        <PadStackDef name="padstack">
-          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
-            <StandardPrimitiveRef id="pad"/>
-          </PadstackPadDef>
-        </PadStackDef>
-        <LayerFeature layerRef="TOP">
-          <Set>
-            <Pad padstackDefRef="padstack">
-              <Location x="2" y="3"/>
-            </Pad>
-          </Set>
-        </LayerFeature>
-      </Step>
-      <Step name="subpanel" type="PALLET">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="30" y="0"/>
-            <PolyStepSegment x="30" y="10"/>
-            <PolyStepSegment x="0" y="10"/>
-          </Polygon>
-        </Profile>
-        <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="15" dy="0"/>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="40" y="0"/>
-            <PolyStepSegment x="40" y="40"/>
-            <PolyStepSegment x="0" y="40"/>
-          </Polygon>
-        </Profile>
-        <StepRepeat stepRef="subpanel" x="5" y="5" nx="1" ny="2" dx="0" dy="20"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#
-}
-
-fn nested_panel_without_subpanel_profile_fixture() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
-    <LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
-      </Step>
-      <Step name="subpanel" type="PALLET">
-        <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="15" dy="0"/>
-      </Step>
-      <Step name="panel" type="PALLET">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="40" y="0"/>
-            <PolyStepSegment x="40" y="40"/>
-            <PolyStepSegment x="0" y="40"/>
-          </Polygon>
-        </Profile>
-        <StepRepeat stepRef="subpanel" x="5" y="5" nx="1" ny="2" dx="0" dy="20"/>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#
-}
-
-fn profile_fixture() -> &'static str {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <LayerRef name="TOP"/>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="20" y="0"/>
-            <PolyStepSegment x="20" y="10"/>
-            <PolyStepSegment x="0" y="10"/>
-          </Polygon>
-          <Cutout>
-            <PolyBegin x="6" y="5"/>
-            <PolyStepCurve x="4" y="5" centerX="5" centerY="5" clockwise="false"/>
-            <PolyStepCurve x="6" y="5" centerX="5" centerY="5" clockwise="false"/>
-          </Cutout>
-        </Profile>
-      </Step>
-    </CadData>
-  </Ecad>
-</IPC-2581>"#
 }
