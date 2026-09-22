@@ -296,29 +296,14 @@ mod tests {
 
     #[test]
     fn contour_writes_polygon_and_cutout() {
+        let point = |x| crate::types::Point { x, y: 0.0 };
+        let closed = |from, to| {
+            let segment = |x| PolyStep::Segment(crate::types::PolyStepSegment { point: point(x) });
+            Polygon::new(point(from), [segment(to), segment(from)])
+        };
         let contour = Contour {
-            polygon: Polygon::new(
-                crate::types::Point { x: 0.0, y: 0.0 },
-                [
-                    PolyStep::Segment(crate::types::PolyStepSegment {
-                        point: crate::types::Point { x: 2.0, y: 0.0 },
-                    }),
-                    PolyStep::Segment(crate::types::PolyStepSegment {
-                        point: crate::types::Point { x: 0.0, y: 0.0 },
-                    }),
-                ],
-            ),
-            cutouts: vec![Polygon::new(
-                crate::types::Point { x: 0.5, y: 0.0 },
-                [
-                    PolyStep::Segment(crate::types::PolyStepSegment {
-                        point: crate::types::Point { x: 1.0, y: 0.0 },
-                    }),
-                    PolyStep::Segment(crate::types::PolyStepSegment {
-                        point: crate::types::Point { x: 0.5, y: 0.0 },
-                    }),
-                ],
-            )],
+            polygon: closed(0.0, 2.0),
+            cutouts: vec![closed(0.5, 1.0)],
         };
         let mut writer = XmlWriter::new();
 
