@@ -996,12 +996,7 @@ mod tests {
     fn collector_derives_panel_boards_material_removal_and_support() {
         let (layout, profile) = layout_and_profile();
         let mut support = Document::new();
-        let path = support.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rectangle_contour(1.0, 1.0, 2.0, 2.0)],
-        );
+        let path = filled_rectangle(&mut support, 1.0, 1.0, 2.0, 2.0);
         let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         feature.paths = Span::single(path);
         feature.intent.span = FeatureSpan::Layer(sym(100));
@@ -1053,20 +1048,15 @@ mod tests {
     #[test]
     fn support_geometry_applies_shared_feature_placements() {
         let mut support = Document::new();
-        let path = support.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rectangle_contour(0.0, 0.0, 1.0, 1.0)],
-        );
+        let path = filled_rectangle(&mut support, 0.0, 0.0, 1.0, 1.0);
         let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         feature.paths = Span::single(path);
         feature.intent.span = FeatureSpan::Layer(sym(100));
         feature.placement_group = Some(0);
         support.features.push(feature);
         support.feature_placements.extend([
-            Affine2::translation(crate::geom::Point::new(10.0, 0.0)),
-            Affine2::translation(crate::geom::Point::new(20.0, 0.0)),
+            Affine2::translation(Point::new(10.0, 0.0)),
+            Affine2::translation(Point::new(20.0, 0.0)),
         ]);
         support
             .feature_placement_groups
@@ -1091,30 +1081,15 @@ mod tests {
         assert!((region.area() - 2.0).abs() <= 1e-6);
         assert_eq!(region.bbox.min.x, 10.0);
         assert_eq!(region.bbox.max.x, 21.0);
-        assert!(!region.contains_point(crate::geom::Point::new(0.5, 0.5)));
+        assert!(!region.contains_point(Point::new(0.5, 0.5)));
     }
 
     #[test]
     fn support_geometry_follows_ir_feature_span_and_surface_side() {
         let mut support = Document::new();
-        let top_surface_path = support.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rectangle_contour(1.0, 1.0, 2.0, 2.0)],
-        );
-        let through_path = support.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rectangle_contour(4.0, 1.0, 5.0, 2.0)],
-        );
-        let bottom_copper_path = support.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            [rectangle_contour(7.0, 1.0, 8.0, 2.0)],
-        );
+        let top_surface_path = filled_rectangle(&mut support, 1.0, 1.0, 2.0, 2.0);
+        let through_path = filled_rectangle(&mut support, 4.0, 1.0, 5.0, 2.0);
+        let bottom_copper_path = filled_rectangle(&mut support, 7.0, 1.0, 8.0, 2.0);
 
         let mut top_surface = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         top_surface.paths = Span::single(top_surface_path);
@@ -1386,6 +1361,21 @@ mod tests {
             material_removal: vec![rectangle_contour(18.0, 4.0, 19.0, 5.0)],
         };
         (layout, profile)
+    }
+
+    fn filled_rectangle(
+        document: &mut Document,
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+    ) -> u32 {
+        document.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rectangle_contour(min_x, min_y, max_x, max_y)],
+        )
     }
 
     fn vcut_feature(path: u32, set: u32) -> Feature {
