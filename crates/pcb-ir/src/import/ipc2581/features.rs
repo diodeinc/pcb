@@ -113,14 +113,20 @@ pub(super) fn push_feature_set_record(
     set_id
 }
 
+/// Append a lowered feature to its set, stamped with the step and source
+/// layer it came from.
 pub(super) fn push_extracted_feature(
     doc: &mut GeometryDocument,
     set_id: u32,
-    source_layer_ref: Symbol,
+    step: &Step,
+    source_layer: &Layer,
     mut feature: GeometryFeature,
     layer_bbox: &mut BBox,
 ) {
-    feature.source_layer_ref = Some(source_layer_ref);
+    feature.source_step_ref = Some(step.name);
+    feature.source_step_kind = layout_step_kind(step);
+    feature.source_layer_ref = Some(source_layer.name);
+    complete_feature_intent(source_layer, &mut feature);
     *layer_bbox = layer_bbox.union(feature.bbox);
     doc.push_feature(set_id, feature);
 }
@@ -169,7 +175,6 @@ pub(super) fn append_step_layer(
 
     let mut layer_bbox = BBox::empty();
     let layer_polarity = map_polarity(layer.polarity.unwrap_or(Polarity::Positive));
-    let source_step_kind = layout_step_kind(step);
     if layer_polarity == GeometryPolarity::Clear {
         push_negative_layer_plane(doc, layer_index, step, layer, &mut layer_bbox);
     }
@@ -230,17 +235,8 @@ pub(super) fn append_step_layer(
                     context.resolution,
                 )?;
 
-                for mut feature in features {
-                    feature.source_step_ref = Some(step.name);
-                    feature.source_step_kind = source_step_kind;
-                    complete_feature_intent(layer, &mut feature);
-                    push_extracted_feature(
-                        doc,
-                        set_id,
-                        layer_feature.layer_ref,
-                        feature,
-                        &mut layer_bbox,
-                    );
+                for feature in features {
+                    push_extracted_feature(doc, set_id, step, layer, feature, &mut layer_bbox);
                 }
             }
         }
@@ -312,14 +308,12 @@ pub(super) fn append_step_layer(
                     polarity,
                     copper_balance,
                 );
-                for mut feature in emitted {
-                    feature.source_step_ref = Some(step.name);
-                    feature.source_step_kind = source_step_kind;
-                    complete_feature_intent(source_layer, &mut feature);
+                for feature in emitted {
                     push_extracted_feature(
                         doc,
                         set_id,
-                        layer_feature.layer_ref,
+                        step,
+                        source_layer,
                         feature,
                         &mut layer_bbox,
                     );
@@ -479,12 +473,9 @@ pub(super) fn push_negative_layer_plane(
     feature.source.set_index = source_set_index;
     feature.bbox = doc.arena.paths[path as usize].bbox;
     feature.paths = Span::single(path);
-    feature.source_step_ref = Some(step.name);
-    feature.source_step_kind = layout_step_kind(step);
-    complete_feature_intent(layer, &mut feature);
     let source = feature.source;
     for feature in keep_finite(doc, mark, vec![feature], source) {
-        push_extracted_feature(doc, set_id, layer.name, feature, layer_bbox);
+        push_extracted_feature(doc, set_id, step, layer, feature, layer_bbox);
     }
 }
 
