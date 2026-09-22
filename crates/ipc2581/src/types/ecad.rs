@@ -286,7 +286,7 @@ pub struct PackageMarking {
     pub feature: FeatureShape,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PackageSideView {
     pub outline: Option<PackageOutline>,
     pub land_pattern: Option<PackageLandPattern>,

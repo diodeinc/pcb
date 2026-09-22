@@ -11,7 +11,6 @@ pub use pcb_intern::{Interner, Symbol};
 pub use types::*;
 pub use uppsala::XmlWriter;
 
-use parse::Parser;
 #[cfg(not(target_family = "wasm"))]
 use std::path::Path;
 use std::sync::LazyLock;
@@ -125,20 +124,7 @@ impl Ipc2581 {
             )));
         }
 
-        // Parse into our structures
-        let mut parser = Parser::new();
-        let parsed = parser.parse_document(&doc)?;
-
-        Ok(Self {
-            interner: parser.interner,
-            revision: parsed.revision,
-            content: parsed.content,
-            logistic_header: parsed.logistic_header,
-            history_record: parsed.history_record,
-            ecad: parsed.ecad,
-            boms: parsed.boms,
-            avl: parsed.avl,
-        })
+        parse::parse(&doc)
     }
 
     /// Parse IPC-2581 that must first validate against the IPC-2581C schema.
