@@ -697,16 +697,12 @@ pub(super) fn extract_pad(
     else {
         return Ok(None);
     };
-    let path_count = doc.arena.paths.len() as u32 - path_start;
-    if path_count == 0 {
+    if doc.arena.paths.len() as u32 == path_start {
         return Ok(None);
     }
-    let paths = Span::new(path_start, path_count);
-    let bbox = doc.arena.paths_bbox(paths);
 
     let mut feature = lowered_feature(FeatureKind::Padstack, polarity, void, net, source);
-    feature.bbox = bbox;
-    feature.paths = paths;
+    take_pushed_paths(doc, &mut feature, path_start);
     feature.intent.role = role;
     apply_ipc_placement(&mut feature, placement);
     feature.padstack_ref = pad.padstack_def_ref;
@@ -741,6 +737,16 @@ pub(super) fn lowered_feature(
     feature.net = net;
     feature.source = source;
     feature
+}
+
+/// Give `feature` the paths pushed since `path_start`, and their bounds.
+pub(super) fn take_pushed_paths(
+    doc: &GeometryDocument,
+    feature: &mut GeometryFeature,
+    path_start: u32,
+) {
+    feature.paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
+    feature.bbox = doc.arena.paths_bbox(feature.paths);
 }
 
 pub(super) fn push_pin_ref(
@@ -862,17 +868,14 @@ pub(super) fn extract_fiducial(
     };
     let path_start = doc.arena.paths.len() as u32;
     let void = lower_standard_primitive(context, doc, primitive, placement.transform)?;
-    let path_count = doc.arena.paths.len() as u32 - path_start;
-    if path_count == 0 {
+    if doc.arena.paths.len() as u32 == path_start {
         return Ok(None);
     }
-    let paths = Span::new(path_start, path_count);
 
     let mut feature = lowered_feature(FeatureKind::Primitive, polarity, void, net, source);
     feature.intent.role = FeatureRole::Fiducial;
     feature.fiducial_kind = map_fiducial_kind(fiducial.kind);
-    feature.bbox = doc.arena.paths_bbox(paths);
-    feature.paths = paths;
+    take_pushed_paths(doc, &mut feature, path_start);
     feature.shape = match primitive {
         StandardPrimitive::Circle(circle) => Some(SimpleShape::Circle {
             diameter: circle.shape.diameter * placement.xform.scale,
@@ -953,13 +956,8 @@ pub(super) fn extract_polygon(
         },
         [polygon_contour(polygon)],
     );
-    let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
-
-    let mut feature = GeometryFeature::new(FeatureKind::Polygon, polarity);
-    feature.net = net;
-    feature.source = source;
-    feature.bbox = doc.arena.paths_bbox(paths);
-    feature.paths = paths;
+    let mut feature = lowered_feature(FeatureKind::Polygon, polarity, false, net, source);
+    take_pushed_paths(doc, &mut feature, path_start);
     feature
 }
 
@@ -971,31 +969,25 @@ pub(super) fn extract_hole(
 ) -> GeometryFeature {
     let placement = ipc_placement(Point::new(hole.x, hole.y), hole.xform);
     let path_start = doc.arena.paths.len() as u32;
-    match hole.shape {
-        IpcHoleShape::Circle => push_filled_shape(
-            doc,
-            placement.transform,
+    let size = hole.diameter * placement.xform.scale;
+    let (outline, shape) = match hole.shape {
+        IpcHoleShape::Circle => (
             shapes::ellipse(hole.diameter, hole.diameter),
+            SimpleShape::Circle { diameter: size },
         ),
-        IpcHoleShape::Square => push_filled_shape(
-            doc,
-            placement.transform,
+        IpcHoleShape::Square => (
             shapes::rect(hole.diameter, hole.diameter),
+            SimpleShape::Square { side: size },
         ),
-    }
-    let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
+    };
+    push_filled_shape(doc, placement.transform, outline);
 
     let mut feature = GeometryFeature::new(FeatureKind::Hole, GeometryPolarity::Dark);
     feature.source = source;
     feature.source_name = hole.name;
     feature.spec_refs = push_spec_refs(doc, &hole.spec_refs);
-    feature.bbox = doc.arena.paths_bbox(paths);
-    feature.paths = paths;
-    let size = hole.diameter * placement.xform.scale;
-    feature.shape = Some(match hole.shape {
-        IpcHoleShape::Circle => SimpleShape::Circle { diameter: size },
-        IpcHoleShape::Square => SimpleShape::Square { side: size },
-    });
+    take_pushed_paths(doc, &mut feature, path_start);
+    feature.shape = Some(shape);
     apply_ipc_placement(&mut feature, placement);
     feature.padstack_ref = padstack_ref;
     feature.intent.plating = plating_kind(hole.plating_status);
@@ -1028,12 +1020,10 @@ pub(super) fn extract_slot(
         }
     }
 
-    let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
     let mut feature = GeometryFeature::new(FeatureKind::Slot, GeometryPolarity::Dark);
     feature.source = source;
     feature.source_name = slot.name;
-    feature.bbox = doc.arena.paths_bbox(paths);
-    feature.paths = paths;
+    take_pushed_paths(doc, &mut feature, path_start);
     feature.shape = shape;
     apply_ipc_placement(&mut feature, placement);
     feature.padstack_ref = padstack_ref;
