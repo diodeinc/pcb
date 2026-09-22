@@ -391,10 +391,6 @@ impl ImportedDesign {
         self.packages.get(package.0 as usize)
     }
 
-    pub fn bom_reference(&self, reference: BomReferenceId) -> Option<&ipc2581::types::BomRefDes> {
-        bom_reference(&self.boms, reference)
-    }
-
     pub fn bom_item(&self, reference: BomReferenceId) -> Option<&ipc2581::types::BomItem> {
         self.boms
             .get(reference.bom as usize)?

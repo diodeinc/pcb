@@ -1137,8 +1137,7 @@ fn imported_design_carries_global_bom_and_package_associations() {
     let a_package = imported.package_definition(a.package.unwrap()).unwrap();
     assert_eq!(imported.resolve(a_package.source.name), "pkg-a");
     assert_eq!(
-        imported
-            .bom_reference(a.bom_references[0])
+        bom_reference(&imported.boms, a.bom_references[0])
             .unwrap()
             .populate,
         Some(false)
@@ -1161,8 +1160,7 @@ fn imported_design_carries_global_bom_and_package_associations() {
     assert_eq!(b.population, PopulationState::Unspecified);
     assert_eq!(b.bom_references.len(), 1);
     assert_eq!(
-        imported
-            .bom_reference(b.bom_references[0])
+        bom_reference(&imported.boms, b.bom_references[0])
             .unwrap()
             .populate,
         None
