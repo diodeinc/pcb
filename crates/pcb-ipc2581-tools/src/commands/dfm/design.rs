@@ -604,17 +604,14 @@ impl<'a> Design<'a> {
                 .to_owned(),
             placements: placements
                 .iter()
-                .map(|&index| match self.placements[index as usize] {
-                    LayoutOccurrenceId::Root => Placement {
-                        instance: None,
-                        transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-                    },
-                    LayoutOccurrenceId::Instance(instance) => {
-                        let t = layout.instances[instance as usize].transform;
-                        Placement {
-                            instance: Some(instance),
-                            transform: [t.m00, t.m10, t.m01, t.m11, t.m02, t.m12],
-                        }
+                .map(|&index| {
+                    let occurrence = self.placements[index as usize];
+                    Placement {
+                        instance: match occurrence {
+                            LayoutOccurrenceId::Root => None,
+                            LayoutOccurrenceId::Instance(instance) => Some(instance),
+                        },
+                        transform: matrix(self.placed(occurrence).0),
                     }
                 })
                 .collect(),
@@ -670,7 +667,6 @@ impl<'a> Design<'a> {
                     .enumerate()
                     .map(|(index, instance)| {
                         let step = &graph.steps[instance.child_step as usize];
-                        let t = instance.transform;
                         LayoutOccurrence {
                             index: index as u32,
                             parent_index: instance.parent_instance,
@@ -680,7 +676,7 @@ impl<'a> Design<'a> {
                                 LayoutPurpose::Product => "product",
                                 LayoutPurpose::FabricationPanel => "fabrication_panel",
                             },
-                            transform: [t.m00, t.m10, t.m01, t.m11, t.m02, t.m12],
+                            transform: matrix(instance.transform),
                             bounding_box: (!instance.bbox.is_empty()).then(|| instance.bbox.into()),
                             repeat_index_x: instance.repeat_index_x,
                             repeat_index_y: instance.repeat_index_y,
@@ -690,6 +686,11 @@ impl<'a> Design<'a> {
             },
         }
     }
+}
+
+/// An affine transform as the report states one: `[a, b, c, d, tx, ty]`.
+fn matrix(t: Affine2) -> [f64; 6] {
+    [t.m00, t.m10, t.m01, t.m11, t.m02, t.m12]
 }
 
 fn step_kind(kind: LayoutStepKind) -> &'static str {
@@ -747,26 +748,20 @@ impl PhysicalStackup {
         match span.interpretation {
             "declared_through_board" => self.total_thickness(),
             "declared_layer_span" => {
-                let first = self
-                    .layers
-                    .iter()
-                    .position(|layer| layer.copper_index == Some(span.first_copper_index))
-                    .ok_or_else(|| {
-                        format!(
-                            "physical stackup has no copper layer at drill-span index {}",
-                            span.first_copper_index
-                        )
-                    })?;
-                let last = self
-                    .layers
-                    .iter()
-                    .position(|layer| layer.copper_index == Some(span.last_copper_index))
-                    .ok_or_else(|| {
-                        format!(
-                            "physical stackup has no copper layer at drill-span index {}",
-                            span.last_copper_index
-                        )
-                    })?;
+                let position = |copper_index: u16| {
+                    self.layers
+                        .iter()
+                        .position(|layer| layer.copper_index == Some(copper_index))
+                        .ok_or_else(|| {
+                            format!(
+                                "physical stackup has no copper layer at drill-span index {copper_index}"
+                            )
+                        })
+                };
+                let (first, last) = (
+                    position(span.first_copper_index)?,
+                    position(span.last_copper_index)?,
+                );
                 let (first, last) = (first.min(last), first.max(last));
                 // Depth is what the drill removes. A blind hole enters at its
                 // outer layer and terminates on its target land, so IPC-T-50M
@@ -1762,33 +1757,15 @@ fn conductor_order(
     u32,
     Option<FeatureOccurrenceId>,
 ) {
-    match id {
-        ConductorId::Net {
-            step,
-            instance,
-            net,
-        } => (
-            0,
-            step.map(|step| imported.resolve(step)).unwrap_or(""),
-            instance,
-            imported.resolve(net),
-            0,
-            0,
-            None,
-        ),
-        ConductorId::Isolated {
-            step,
-            instance,
-            occurrence,
-        } => {
+    let (kind, net, set_index, feature_index, occurrence) = match id {
+        ConductorId::Net { net, .. } => (0, imported.resolve(net), 0, 0, None),
+        ConductorId::Isolated { occurrence, .. } => {
             let source = imported
                 .feature_definition(occurrence.feature)
                 .expect("isolated pad must reference its imported definition")
                 .source;
             (
                 1,
-                step.map(|step| imported.resolve(step)).unwrap_or(""),
-                instance,
                 "",
                 source.set_index,
                 source.feature_index,
@@ -1796,33 +1773,24 @@ fn conductor_order(
             )
         }
         ConductorId::Auxiliary {
-            step,
-            instance,
-            source_set_index,
-        } => (
-            2,
-            step.map(|step| imported.resolve(step)).unwrap_or(""),
-            instance,
-            "",
-            source_set_index,
-            0,
-            None,
-        ),
+            source_set_index, ..
+        } => (2, "", source_set_index, 0, None),
         ConductorId::Unattributed {
-            step,
-            instance,
             source_set_index,
             source_feature_index,
-        } => (
-            3,
-            step.map(|step| imported.resolve(step)).unwrap_or(""),
-            instance,
-            "",
-            source_set_index,
-            source_feature_index,
-            None,
-        ),
-    }
+            ..
+        } => (3, "", source_set_index, source_feature_index, None),
+    };
+    let step = id.step().map_or("", |step| imported.resolve(step));
+    (
+        kind,
+        step,
+        id.instance(),
+        net,
+        set_index,
+        feature_index,
+        occurrence,
+    )
 }
 
 fn collect_copper_layers(

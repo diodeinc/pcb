@@ -199,24 +199,20 @@ fn measure(
             let distance = nearest.also_uncertain(item.uncertainty_mm);
             let site_layers = layers(item.layer.iter().chain([&copper.layer]));
             let sites = if violates(&distance, limit_mm) {
-                linework_clearance_sites(
+                let geometry = linework_clearance_sites(
                     &segments[item.segments.clone()],
                     &copper.image,
                     &boundaries[copper_index],
                     limit_mm,
                     item.uncertainty_mm,
-                )
-                .into_iter()
-                .map(|site| report_site(site, site_layers.clone(), limit_mm, design.resolution))
-                .collect::<anyhow::Result<Vec<_>>>()?
-                .into_iter()
-                .collect()
+                );
+                report_sites(geometry, &site_layers, limit_mm, design.resolution)?
             } else {
                 Vec::new()
             };
             measured.push(Measured {
                 distance,
-                bbox: BBox::from_point(distance.first).union(BBox::from_point(distance.second)),
+                bbox: BBox::spanning(distance.first, distance.second),
                 layers: site_layers,
                 subjects: vec![item.subject.clone(), copper_subject(copper)],
                 evidence: vec![item.evidence.clone()],
@@ -234,9 +230,22 @@ fn measure(
     })
 }
 
+/// The report sites of a violating measurement's local clearance geometry.
+pub(super) fn report_sites(
+    geometry: Vec<ClearanceSite>,
+    layers: &[LayerRef],
+    limit_mm: f64,
+    resolution: Resolution,
+) -> anyhow::Result<Vec<MeasuredSite>> {
+    geometry
+        .into_iter()
+        .map(|site| report_site(site, layers.to_vec(), limit_mm, resolution))
+        .collect()
+}
+
 /// All clearance families share the same local path/constraint construction;
 /// the rule and inherited subjects give these boundaries their physical roles.
-pub(super) fn report_site(
+fn report_site(
     geometry: ClearanceSite,
     layers: Vec<LayerRef>,
     limit_mm: f64,

@@ -10,11 +10,11 @@
 
 use pcb_ir::geom::dfm::{Distance, circular_region};
 use pcb_ir::geom::region::ring_edges;
-use pcb_ir::geom::{BBox, Point};
+use pcb_ir::geom::{AccuracyError, BBox, ContourSet, Point};
 
 use crate::commands::dfm::design::{BoardOutline, Design, Hole, HoleClass, Slot};
 use crate::commands::dfm::pdk::SlotPlating;
-use crate::commands::dfm::report::{Evidence, EvidenceDisplay, MeasurementKind};
+use crate::commands::dfm::report::{Evidence, EvidenceDisplay, LayerRef, MeasurementKind, Subject};
 
 use super::{
     Evaluation, Measured, MeasuredSite, hole_subject, holes_of_class, linework_clearance,
@@ -29,21 +29,36 @@ pub(super) fn evaluate_holes(
     let holes = holes_of_class(design, class);
     let measured = holes
         .iter()
-        .map(|&(_, hole)| {
+        .filter_map(|&(_, hole)| {
             let outline = enclosing_outline(&design.board_outlines, hole.center);
-            let Some((distance, outside)) =
-                hole_clearance(hole, outline.map(|(_, outline)| outline), limit_mm)
-            else {
-                return Ok(None);
+            let (distance, outside) =
+                hole_clearance(hole, outline.map(|(_, outline)| outline), limit_mm)?;
+            let drilled = Evidence::circle("drilled_hole", hole.center, hole.diameter_mm);
+            let required = Evidence::circle(
+                "required_board_edge_clearance",
+                hole.center,
+                hole.diameter_mm + 2.0 * limit_mm,
+            );
+            let feature = Drilled {
+                subject: hole_subject(design, hole, "offender"),
+                bbox: hole.bbox,
+                layer: &hole.layer,
+                evidence: drilled.clone(),
+                site_evidence: vec![drilled, required],
             };
-            Ok::<_, anyhow::Error>(Some(measured_hole(
-                design, hole, outline, distance, outside, limit_mm,
-            )?))
+            Some(measured(
+                feature,
+                outline,
+                distance,
+                outside,
+                limit_mm,
+                |board| {
+                    circular_region(hole.center, hole.diameter_mm / 2.0, design.resolution)?
+                        .difference(board)
+                },
+            ))
         })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect();
+        .collect::<anyhow::Result<_>>()?;
     Ok(Evaluation {
         checked: holes.len(),
         measured,
@@ -65,14 +80,24 @@ pub(super) fn evaluate_slots(
             else {
                 return Ok(None);
             };
-            Ok::<_, anyhow::Error>(Some(measured_slot(
-                design, slot, outline, distance, outside, limit_mm,
-            )?))
+            let required = slot.outline.disk_dilate(limit_mm)?;
+            let feature = Drilled {
+                subject: slot_subject(design, slot, "offender"),
+                bbox: slot.bbox,
+                layer: &slot.layer,
+                evidence: Evidence::bounds("routed_slot", slot.bbox),
+                site_evidence: vec![
+                    slot_evidence(slot),
+                    Evidence::region("required_board_edge_clearance", &required),
+                ],
+            };
+            measured(feature, outline, distance, outside, limit_mm, |board| {
+                slot.outline.difference(board)
+            })
+            .map(Some)
         })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect();
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<_>>()?;
     Ok(Evaluation {
         checked: slots.len(),
         measured,
@@ -204,83 +229,27 @@ fn broad_search(feature: BBox, outline: BBox) -> f64 {
     bounds.width().hypot(bounds.height()).max(1.0)
 }
 
-fn measured_hole(
-    design: &Design,
-    hole: &Hole,
-    outline: Option<(u32, &BoardOutline)>,
-    distance: Distance,
-    outside: bool,
-    limit_mm: f64,
-) -> anyhow::Result<Measured> {
-    let feature = Evidence::circle("drilled_hole", hole.center, hole.diameter_mm);
-    let mut evidence = vec![feature.clone()];
-    let mut site_evidence = vec![
-        feature,
-        Evidence::circle(
-            "required_board_edge_clearance",
-            hole.center,
-            hole.diameter_mm + 2.0 * limit_mm,
-        ),
-    ];
-    let mut subjects = vec![hole_subject(design, hole, "offender")];
-    if let Some((outline_index, outline)) = outline {
-        subjects.push(linework_clearance::outline_subject(outline, "reference"));
-        evidence.push(Evidence::bounds("board_profile", outline.bbox));
-        site_evidence.push(Evidence::shared(
-            "board_profile",
-            outline_index,
-            outline.bbox,
-        ));
-        if outside {
-            let outside_region =
-                circular_region(hole.center, hole.diameter_mm / 2.0, design.resolution)?
-                    .difference(&outline.region)?;
-            if !outside_region.is_empty() {
-                site_evidence.push(Evidence::region("outside_board_material", &outside_region));
-            }
-        }
-    }
-    let mut site = MeasuredSite::new(
-        distance,
-        local_bounds(hole.bbox, distance, limit_mm),
-        vec![hole.layer.clone()],
-        site_evidence,
-        if outside {
-            MeasurementKind::OutsideBoard
-        } else {
-            MeasurementKind::Clearance
-        },
-    );
-    if outside {
-        site.note = Some(outside_note(outline.is_some()));
-    }
-    Ok(Measured {
-        distance,
-        bbox: hole.bbox,
-        layers: vec![hole.layer.clone()],
-        subjects,
-        evidence,
-        sites: vec![site],
-    })
+/// What a drilled feature brings to its measurement: its evidence in the
+/// finding, and in the site, where the clearance it requires follows it.
+struct Drilled<'a> {
+    subject: Subject,
+    bbox: BBox,
+    layer: &'a LayerRef,
+    evidence: Evidence,
+    site_evidence: Vec<Evidence>,
 }
 
-fn measured_slot(
-    design: &Design,
-    slot: &Slot,
+fn measured(
+    feature: Drilled,
     outline: Option<(u32, &BoardOutline)>,
     distance: Distance,
     outside: bool,
     limit_mm: f64,
+    outside_of: impl FnOnce(&ContourSet) -> Result<ContourSet, AccuracyError>,
 ) -> anyhow::Result<Measured> {
-    let feature = slot_evidence(slot);
-    let mut evidence = vec![Evidence::bounds("routed_slot", slot.bbox)];
-    let mut site_evidence = vec![feature];
-    let clearance_region = slot.outline.disk_dilate(limit_mm)?;
-    site_evidence.push(Evidence::region(
-        "required_board_edge_clearance",
-        &clearance_region,
-    ));
-    let mut subjects = vec![slot_subject(design, slot, "offender")];
+    let mut evidence = vec![feature.evidence];
+    let mut site_evidence = feature.site_evidence;
+    let mut subjects = vec![feature.subject];
     if let Some((outline_index, outline)) = outline {
         subjects.push(linework_clearance::outline_subject(outline, "reference"));
         evidence.push(Evidence::bounds("board_profile", outline.bbox));
@@ -290,7 +259,7 @@ fn measured_slot(
             outline.bbox,
         ));
         if outside {
-            let outside_region = slot.outline.difference(&outline.region)?;
+            let outside_region = outside_of(&outline.region)?;
             if !outside_region.is_empty() {
                 site_evidence.push(Evidence::region("outside_board_material", &outside_region));
             }
@@ -298,8 +267,8 @@ fn measured_slot(
     }
     let mut site = MeasuredSite::new(
         distance,
-        local_bounds(slot.bbox, distance, limit_mm),
-        vec![slot.layer.clone()],
+        local_bounds(feature.bbox, distance, limit_mm),
+        vec![feature.layer.clone()],
         site_evidence,
         if outside {
             MeasurementKind::OutsideBoard
@@ -312,8 +281,8 @@ fn measured_slot(
     }
     Ok(Measured {
         distance,
-        bbox: slot.bbox,
-        layers: vec![slot.layer.clone()],
+        bbox: feature.bbox,
+        layers: vec![feature.layer.clone()],
         subjects,
         evidence,
         sites: vec![site],
@@ -348,8 +317,7 @@ pub(super) fn profile_evidence(outline: &BoardOutline) -> Evidence {
 
 fn local_bounds(feature: BBox, distance: Distance, limit_mm: f64) -> BBox {
     feature
-        .union(BBox::from_point(distance.first))
-        .union(BBox::from_point(distance.second))
+        .union(BBox::spanning(distance.first, distance.second))
         .expand(limit_mm)
 }
 

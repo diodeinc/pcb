@@ -162,7 +162,7 @@ pub(super) fn export(
     findings: &[Finding],
 ) -> Result<Scene> {
     let design = &designs[0];
-    let sources = scene_passes(rules, designs)?;
+    let sources = scene_passes(rules, designs);
     let mut bounds = scene_bounds(layout.bounding_box, &sources);
     for finding in findings {
         let frame = &frames[finding.frame as usize];
@@ -328,7 +328,7 @@ fn placed_bounds<'a>(
         .fold(BBox::empty(), BBox::union)
 }
 
-fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> anyhow::Result<Vec<GeometryPass>> {
+fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> Vec<GeometryPass> {
     let design = &designs[0];
     let layout = &design.imported.geometry;
     let wanted = rules
@@ -426,11 +426,9 @@ fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> anyhow::Result<
                 contours
                     .extend(layout.transformed_path_contours(cutout.path, occurrence.transform));
             }
-            Ok::<_, anyhow::Error>(contours)
+            contours
         })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .collect::<Vec<_>>();
+        .collect();
     passes.push(GeometryPass::shapes(
         "Physical outlines".into(),
         "board_outlines",
@@ -446,25 +444,20 @@ fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> anyhow::Result<
             .iter()
             .map(|array| array.instance_index)
             .collect::<BTreeSet<_>>();
-        let outlines =
-            profile_occurrences_for(layout, ProfileSet::LayoutBoundaries)
-                .into_iter()
-                .filter(|occurrence| {
-                    occurrence
-                        .instance
-                        .is_none_or(|index| arrays.contains(&index))
-                })
-                .map(|occurrence| {
-                    // Retain native profile arcs instead of reconstructing the
-                    // check's tessellated array region for display.
-                    Ok::<_, anyhow::Error>(layout.transformed_path_contours(
-                        occurrence.profile.outer_path,
-                        occurrence.transform,
-                    ))
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?
-                .into_iter()
-                .collect();
+        // Retain native profile arcs instead of reconstructing the check's
+        // tessellated array region for display.
+        let outlines = profile_occurrences_for(layout, ProfileSet::LayoutBoundaries)
+            .into_iter()
+            .filter(|occurrence| {
+                occurrence
+                    .instance
+                    .is_none_or(|index| arrays.contains(&index))
+            })
+            .map(|occurrence| {
+                layout
+                    .transformed_path_contours(occurrence.profile.outer_path, occurrence.transform)
+            })
+            .collect();
         passes.push(GeometryPass::shapes(
             "Array / panel outlines".into(),
             "array_outlines",
@@ -475,7 +468,7 @@ fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> anyhow::Result<
             outlines,
         ));
     }
-    Ok(passes)
+    passes
 }
 
 #[cfg(test)]

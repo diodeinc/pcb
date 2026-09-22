@@ -83,29 +83,24 @@ pub(super) fn evaluate(
                 Evidence::bounds("offending_copper", offender.image.bbox),
             ];
             // Sites describe a violation; a clear candidate needs none.
-            let sites = if violates(&distance, limit_mm) {
-                region_clearance_sites_with_index(
-                    &slot.outline,
-                    &offender.image,
-                    copper_boundary,
-                    limit_mm,
-                )?
-                .into_iter()
-                .map(|geometry| {
-                    let mut site = linework_clearance::report_site(
-                        geometry,
-                        finding_layers.clone(),
+            let mut sites = Vec::new();
+            if violates(&distance, limit_mm) {
+                sites = linework_clearance::report_sites(
+                    region_clearance_sites_with_index(
+                        &slot.outline,
+                        &offender.image,
+                        copper_boundary,
                         limit_mm,
-                        design.resolution,
-                    )?;
+                    )?,
+                    &finding_layers,
+                    limit_mm,
+                    design.resolution,
+                )?;
+                for site in &mut sites {
                     site.subjects = subjects.clone();
                     site.evidence.extend(evidence.clone());
-                    Ok(site)
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?
-            } else {
-                Vec::new()
-            };
+                }
+            }
             measured.push(Measured {
                 distance,
                 bbox: slot

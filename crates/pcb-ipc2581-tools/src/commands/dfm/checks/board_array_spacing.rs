@@ -64,27 +64,18 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> anyhow::Result<Evaluat
                     Evidence::bounds("second_board_array", second.region.bbox),
                 ],
                 sites: if violates(&distance, limit_mm) {
-                    region_clearance_sites(&first.region, &second.region, limit_mm)?
-                        .into_iter()
-                        .map(|site| {
-                            linework_clearance::report_site(
-                                site,
-                                Vec::new(),
-                                limit_mm,
-                                design.resolution,
-                            )
-                        })
-                        .collect::<anyhow::Result<Vec<_>>>()?
-                        .into_iter()
-                        .collect()
+                    linework_clearance::report_sites(
+                        region_clearance_sites(&first.region, &second.region, limit_mm)?,
+                        &[],
+                        limit_mm,
+                        design.resolution,
+                    )?
                 } else {
                     Vec::new()
                 },
             })
         })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .collect();
+        .collect::<anyhow::Result<_>>()?;
     Ok(Evaluation {
         checked: pairs.count(),
         measured,

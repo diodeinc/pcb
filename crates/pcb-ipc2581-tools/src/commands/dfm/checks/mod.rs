@@ -46,7 +46,7 @@ use super::report::{
     DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportPoint,
     RuleResult, RuleStatus, Severity, Site, SourceLocator, Subject, Unresolved, Witness,
 };
-use super::rules::{Comparison, Linework, Pools, Rule, RuleKind};
+use super::rules::{Comparison, Linework, Pools, Rule, RuleKind, slot_label};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
 
 #[derive(Default)]
@@ -565,7 +565,8 @@ fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
         RuleKind::HoleDiameter(class)
         | RuleKind::HoleAspectRatio(class)
         | RuleKind::AnnularRing(class)
-        | RuleKind::HoleToCopperClearance(class) => design
+        | RuleKind::HoleToCopperClearance(class)
+        | RuleKind::HoleToBoardEdgeClearance(class) => design
             .holes
             .iter()
             .all(|hole| hole.class != class)
@@ -579,26 +580,18 @@ fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
                 )
             })
         }
-        RuleKind::HoleToBoardEdgeClearance(class) => design
-            .holes
-            .iter()
-            .all(|hole| hole.class != class)
-            .then(|| format!("{} holes", class.label())),
         RuleKind::PlatedSlotEnclosure => design
             .slots
             .iter()
             .all(|slot| !slot_matches(slot.plating, SlotPlating::Plated))
             .then(|| "plated routed slots".to_owned()),
-        RuleKind::SlotWidth(plating) | RuleKind::SlotToCopperClearance(plating) => design
+        RuleKind::SlotWidth(plating)
+        | RuleKind::SlotToCopperClearance(plating)
+        | RuleKind::SlotToBoardEdgeClearance(plating) => design
             .slots
             .iter()
             .all(|slot| !slot_matches(slot.plating, plating))
-            .then(|| format!("{} routed slots", slot_plating_label(plating))),
-        RuleKind::SlotToBoardEdgeClearance(plating) => design
-            .slots
-            .iter()
-            .all(|slot| !slot_matches(slot.plating, plating))
-            .then(|| format!("{} routed slots", slot_plating_label(plating))),
+            .then(|| format!("{} routed slots", slot_label(plating))),
         RuleKind::LineworkToCopperClearance(Linework::VScore) => (design.scores.is_empty()
             && design.inherited_scores.is_empty())
         .then(|| "V-score centerlines".to_owned()),
@@ -726,13 +719,6 @@ pub(super) fn slot_matches(
             SlotPlating::Nonplated
         )
     )
-}
-
-fn slot_plating_label(plating: SlotPlating) -> &'static str {
-    match plating {
-        SlotPlating::Plated => "plated",
-        SlotPlating::Nonplated => "non-plated",
-    }
 }
 
 fn has_hole_pair(design: &Design, first: HoleClass, second: HoleClass) -> bool {

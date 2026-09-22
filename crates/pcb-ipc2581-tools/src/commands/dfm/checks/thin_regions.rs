@@ -267,9 +267,7 @@ fn wall_owners(
         return None;
     }
     for &(start, end) in walls {
-        let bbox = BBox::from_point(start)
-            .union(BBox::from_point(end))
-            .expand(BOUNDARY_EPSILON_MM);
+        let bbox = BBox::spanning(start, end).expand(BOUNDARY_EPSILON_MM);
         let length = start.distance_to(end);
         let mut intervals = boundaries
             .iter()

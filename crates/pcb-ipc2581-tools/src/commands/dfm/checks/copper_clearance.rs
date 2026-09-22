@@ -122,11 +122,9 @@ pub(super) fn evaluate(
 
             let left_id = layer.conductors[left.conductor_index].id;
             let right_id = layer.conductors[right.conductor_index].id;
-            let mut bbox = BBox::from_point(distance.first);
-            bbox.include_point(distance.second);
             Ok::<_, anyhow::Error>(Some(Measured {
                 distance,
-                bbox,
+                bbox: BBox::spanning(distance.first, distance.second),
                 layers: vec![layer.layer.clone()],
                 subjects: vec![
                     conductor_subject(design, left_id, "first_conductor", &layer.layer.name),
@@ -137,22 +135,17 @@ pub(super) fn evaluate(
                     Evidence::bounds("second_conductor_component", right.region.bbox),
                 ],
                 sites: if violates(&distance, limit_mm) {
-                    region_clearance_sites_with_index(
-                        &left.region,
-                        &right.region,
-                        right_boundary,
-                        limit_mm,
-                    )?
-                    .into_iter()
-                    .map(|site| {
-                        linework_clearance::report_site(
-                            site,
-                            vec![layer.layer.clone()],
+                    linework_clearance::report_sites(
+                        region_clearance_sites_with_index(
+                            &left.region,
+                            &right.region,
+                            right_boundary,
                             limit_mm,
-                            design.resolution,
-                        )
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?
+                        )?,
+                        std::slice::from_ref(&layer.layer),
+                        limit_mm,
+                        design.resolution,
+                    )?
                 } else {
                     Vec::new()
                 },

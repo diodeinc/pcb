@@ -950,7 +950,7 @@ fn plated_hole_class(kind: PlatedHoleKind) -> HoleClass {
     }
 }
 
-fn slot_label(plating: SlotPlating) -> &'static str {
+pub(super) fn slot_label(plating: SlotPlating) -> &'static str {
     match plating {
         SlotPlating::Plated => "plated",
         SlotPlating::Nonplated => "non-plated",

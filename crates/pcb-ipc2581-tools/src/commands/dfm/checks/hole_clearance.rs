@@ -10,7 +10,7 @@
 use pcb_ir::geom::dfm::{Distance, circular_region, region_clearance_sites};
 use pcb_ir::geom::{BBox, Point};
 
-use crate::commands::dfm::design::{Design, Hole, HoleClass, spans};
+use crate::commands::dfm::design::{Design, HoleClass, spans};
 use crate::commands::dfm::report::{Evidence, MeasurementKind};
 use crate::commands::dfm::rules::Conditions;
 
@@ -80,50 +80,51 @@ pub(super) fn evaluate(
                 hole_subject(design, hole, "hole"),
                 conductor_subject(design, offender.id, "offender", &copper.layer.name),
             ];
+            let drilled = Evidence::circle("drilled_hole", hole.center, hole.diameter_mm);
+            let keepout = Evidence::circle(
+                "required_copper_keepout",
+                hole.center,
+                hole.diameter_mm + 2.0 * limit_mm,
+            );
             let evidence = vec![
-                Evidence::circle("drilled_hole", hole.center, hole.diameter_mm),
+                drilled.clone(),
                 Evidence::bounds("offending_copper", offender.image.bbox),
             ];
-            let sites = if violates(&distance, limit_mm) {
+            let mut sites = Vec::new();
+            if violates(&distance, limit_mm) {
                 let drill = circular_region(hole.center, radius_mm, design.resolution)?;
-                let mut sites = region_clearance_sites(&drill, &offender.image, limit_mm)?
-                    .into_iter()
-                    .map(|geometry| {
-                        let mut site = linework_clearance::report_site(
-                            geometry,
-                            finding_layers.clone(),
-                            limit_mm,
-                            design.resolution,
-                        )?;
-                        site.subjects = subjects.clone();
-                        site.evidence.push(Evidence::circle(
-                            "drilled_hole",
-                            hole.center,
-                            hole.diameter_mm,
-                        ));
-                        site.evidence.push(Evidence::circle(
-                            "required_copper_keepout",
-                            hole.center,
-                            hole.diameter_mm + 2.0 * limit_mm,
-                        ));
-                        Ok::<_, anyhow::Error>(site)
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                if !sites.iter().any(|site| violates(&site.distance, limit_mm)) {
-                    sites.push(fallback_site(
-                        distance,
-                        hole,
-                        limit_mm,
-                        finding_layers.clone(),
-                        subjects.clone(),
-                    ));
+                sites = linework_clearance::report_sites(
+                    region_clearance_sites(&drill, &offender.image, limit_mm)?,
+                    &finding_layers,
+                    limit_mm,
+                    design.resolution,
+                )?;
+                for site in &mut sites {
+                    site.evidence.extend([drilled.clone(), keepout.clone()]);
                 }
-                sites
-            } else {
-                Vec::new()
-            };
+                // The flattened drill can clear what the analytic disk does not.
+                if !sites.iter().any(|site| violates(&site.distance, limit_mm)) {
+                    let mut site = MeasuredSite::new(
+                        distance,
+                        BBox::spanning(distance.first, distance.second)
+                            .union(hole.bbox.expand(limit_mm)),
+                        finding_layers.clone(),
+                        vec![drilled, keepout],
+                        if distance.mm == 0.0 {
+                            MeasurementKind::Overlap
+                        } else {
+                            MeasurementKind::Clearance
+                        },
+                    );
+                    site.note = Some(
+                        "The analytic drill clearance is below the configured limit.".to_owned(),
+                    );
+                    sites.push(site);
+                }
+                for site in &mut sites {
+                    site.subjects = subjects.clone();
+                }
+            }
             let mut bbox = hole.bbox.expand(limit_mm);
             bbox.include_point(distance.second);
             measured.push(Measured {
@@ -178,39 +179,6 @@ fn disk_to_copper_clearance(
         nearest.second,
         nearest.uncertainty_mm,
     ))
-}
-
-fn fallback_site(
-    distance: Distance,
-    hole: &Hole,
-    limit_mm: f64,
-    layers: Vec<crate::commands::dfm::report::LayerRef>,
-    subjects: Vec<crate::commands::dfm::report::Subject>,
-) -> MeasuredSite {
-    let mut bbox = BBox::from_point(distance.first);
-    bbox.include_point(distance.second);
-    bbox = bbox.union(hole.bbox.expand(limit_mm));
-    let mut site = MeasuredSite::new(
-        distance,
-        bbox,
-        layers,
-        vec![
-            Evidence::circle("drilled_hole", hole.center, hole.diameter_mm),
-            Evidence::circle(
-                "required_copper_keepout",
-                hole.center,
-                hole.diameter_mm + 2.0 * limit_mm,
-            ),
-        ],
-        if distance.mm == 0.0 {
-            MeasurementKind::Overlap
-        } else {
-            MeasurementKind::Clearance
-        },
-    );
-    site.subjects = subjects;
-    site.note = Some("The analytic drill clearance is below the configured limit.".to_owned());
-    site
 }
 
 #[cfg(test)]

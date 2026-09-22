@@ -8,10 +8,11 @@
 
 use crate::commands::dfm::design::{Design, Slot};
 use crate::commands::dfm::pdk::SlotPlating;
-use crate::commands::dfm::report::{Evidence, EvidenceDisplay, MeasurementKind};
+use crate::commands::dfm::report::{Evidence, MeasurementKind};
 use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::thin_features;
 
+use super::drilled_board_edge_clearance::slot_evidence;
 use super::{Evaluation, Measured, MeasuredSite, slot_subject, thin_regions, violates};
 
 pub(super) fn evaluate(
@@ -39,15 +40,7 @@ pub(super) fn evaluate(
                     slot.bbox.union(BBox::from_point(center).expand(limit_mm / 2.0)),
                     vec![slot.layer.clone()],
                     vec![
-                        Evidence {
-                            display: Some(EvidenceDisplay::Path {
-                                paths: slot.native_outline.iter().map(|contour| {
-                                    pcb_ir::render::svg_path_data(std::slice::from_ref(contour))
-                                }).collect(),
-                                fill_rule: "evenodd",
-                            }),
-                            ..Evidence::region("routed_slot", &slot.outline)
-                        },
+                        slot_evidence(slot),
                         Evidence::circle("nominal_width_disk", center, nominal),
                         Evidence::segment("nominal_width_dimension", first, second),
                         Evidence::circle("required_width_disk", center, limit_mm),
@@ -72,8 +65,7 @@ pub(super) fn evaluate(
             subjects: vec![subject],
             evidence: vec![Evidence::bounds("routed_slot", slot.bbox)],
             sites,
-        })}).collect::<anyhow::Result<Vec<_>>>()?.into_iter()
-        .collect();
+        })}).collect::<anyhow::Result<_>>()?;
     Ok(Evaluation {
         checked: slots.len(),
         measured,
@@ -84,6 +76,7 @@ pub(super) fn evaluate(
 mod tests {
     use super::*;
     use crate::commands::dfm::fixtures;
+    use crate::commands::dfm::report::EvidenceDisplay;
     use pcb_ir::geom::Resolution;
 
     #[test]
