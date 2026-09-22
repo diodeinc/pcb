@@ -1185,30 +1185,18 @@ fn regions_within_distance(left: &ContourSet, right: &ContourSet, distance: f64)
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{rect, res};
+    use super::super::tests::{block, res};
     use super::*;
     #[test]
     fn ring_components_group_holes_with_the_smallest_outer_ring_around_them() {
-        let region = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), res(tol::REGION_MM))
-            .difference(&ContourSet::rectangle(
-                rect(2.0, 2.0, 8.0, 8.0),
-                res(tol::REGION_MM),
-            ))
+        let region = block(0.0, 0.0, 10.0, 10.0)
+            .difference(&block(2.0, 2.0, 8.0, 8.0))
             .unwrap()
-            .union(&ContourSet::rectangle(
-                rect(3.0, 3.0, 7.0, 7.0),
-                res(tol::REGION_MM),
-            ))
+            .union(&block(3.0, 3.0, 7.0, 7.0))
             .unwrap()
-            .difference(&ContourSet::rectangle(
-                rect(4.0, 4.0, 6.0, 6.0),
-                res(tol::REGION_MM),
-            ))
+            .difference(&block(4.0, 4.0, 6.0, 6.0))
             .unwrap()
-            .union(&ContourSet::rectangle(
-                rect(20.0, 0.0, 30.0, 10.0),
-                res(tol::REGION_MM),
-            ))
+            .union(&block(20.0, 0.0, 30.0, 10.0))
             .unwrap();
         assert_eq!(region.rings.len(), 5);
 
@@ -1307,9 +1295,9 @@ mod tests {
 
     #[test]
     fn facing_components_keep_only_walls_within_reach_of_each_other() {
-        let trace = ContourSet::rectangle(rect(0.0, 0.0, 5.0, 0.1), res(tol::REGION_MM));
-        let pad = ContourSet::rectangle(rect(10.0, 0.0, 12.0, 2.0), res(tol::REGION_MM));
-        let neighbour = ContourSet::rectangle(rect(12.15, 0.0, 14.0, 2.0), res(tol::REGION_MM));
+        let trace = block(0.0, 0.0, 5.0, 0.1);
+        let pad = block(10.0, 0.0, 12.0, 2.0);
+        let neighbour = block(12.15, 0.0, 14.0, 2.0);
         let region = trace.union(&pad).unwrap().union(&neighbour).unwrap();
         assert_eq!(region.rings.len(), 3);
 
@@ -1332,11 +1320,8 @@ mod tests {
         assert_eq!(with_context.rings.len(), 3);
 
         // A notch faces across void; a plane web between holes across material.
-        let notched = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), res(tol::REGION_MM))
-            .difference(&ContourSet::rectangle(
-                rect(1.9, 2.0, 2.1, 4.5),
-                res(tol::REGION_MM),
-            ))
+        let notched = block(0.0, 0.0, 4.0, 4.0)
+            .difference(&block(1.9, 2.0, 2.1, 4.5))
             .unwrap();
         assert_eq!(
             notched
@@ -1352,21 +1337,12 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let webbed = ContourSet::rectangle(rect(0.0, 0.0, 8.0, 4.0), res(tol::REGION_MM))
-            .difference(&ContourSet::rectangle(
-                rect(1.0, 1.0, 1.9, 3.0),
-                res(tol::REGION_MM),
-            ))
+        let webbed = block(0.0, 0.0, 8.0, 4.0)
+            .difference(&block(1.0, 1.0, 1.9, 3.0))
             .unwrap()
-            .difference(&ContourSet::rectangle(
-                rect(2.1, 1.0, 3.0, 3.0),
-                res(tol::REGION_MM),
-            ))
+            .difference(&block(2.1, 1.0, 3.0, 3.0))
             .unwrap()
-            .difference(&ContourSet::rectangle(
-                rect(6.0, 1.0, 7.0, 3.0),
-                res(tol::REGION_MM),
-            ))
+            .difference(&block(6.0, 1.0, 7.0, 3.0))
             .unwrap();
         let nearby_web = webbed.facing_components(0.3, 0.0, 1.0).unwrap();
         assert_eq!(nearby_web.rings.len(), 3);

@@ -319,28 +319,34 @@ mod tests {
             && (a.y.min(b.y)..=a.y.max(b.y)).contains(&p.y)
     }
 
+    /// Whether no two edges that are not neighbours touch or cross.
+    fn strictly_simple(ring: &[Vertex]) -> bool {
+        (0..ring.len()).all(|i| {
+            let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+            (i + 2..ring.len())
+                .filter(|&j| !(i == 0 && j == ring.len() - 1))
+                .all(|j| {
+                    let (c, d) = (ring[j], ring[(j + 1) % ring.len()]);
+                    !(on_segment(a, b, c)
+                        || on_segment(a, b, d)
+                        || on_segment(c, d, a)
+                        || on_segment(c, d, b)
+                        || (cross(a, b, c).signum() * cross(a, b, d).signum() == -1
+                            && cross(c, d, a).signum() * cross(c, d, b).signum() == -1))
+                })
+        })
+    }
+
     fn assert_simple(ring: &[Vertex]) {
         assert_eq!(ring.iter().collect::<HashSet<_>>().len(), ring.len());
-        for i in 0..ring.len() {
-            let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
-            assert_ne!(a, b);
-            for j in i + 1..ring.len() {
-                if j == i + 1 || (i == 0 && j == ring.len() - 1) {
-                    continue;
-                }
-                let (c, d) = (ring[j], ring[(j + 1) % ring.len()]);
-                assert!(
-                    !on_segment(a, b, c)
-                        && !on_segment(a, b, d)
-                        && !on_segment(c, d, a)
-                        && !on_segment(c, d, b)
-                );
-                assert!(
-                    !(cross(a, b, c).signum() * cross(a, b, d).signum() == -1
-                        && cross(c, d, a).signum() * cross(c, d, b).signum() == -1)
-                );
-            }
-        }
+        assert!(strictly_simple(ring), "{ring:?}");
+    }
+
+    /// The vertices of a ring on a grid of `1 / scale`.
+    fn integer(ring: &[[f64; 2]], scale: f64) -> Vec<Vertex> {
+        ring.iter()
+            .map(|p| vertex([(p[0] * scale).round() as i64, (p[1] * scale).round() as i64]))
+            .collect()
     }
 
     /// Random small-coordinate rings touch and cross constantly; every
@@ -354,22 +360,6 @@ mod tests {
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
             (state >> 33) % modulus
-        };
-        let strictly_simple = |ring: &[Vertex]| {
-            (0..ring.len()).all(|i| {
-                let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
-                (i + 2..ring.len())
-                    .filter(|&j| !(i == 0 && j == ring.len() - 1))
-                    .all(|j| {
-                        let (c, d) = (ring[j], ring[(j + 1) % ring.len()]);
-                        !(on_segment(a, b, c)
-                            || on_segment(a, b, d)
-                            || on_segment(c, d, a)
-                            || on_segment(c, d, b)
-                            || (cross(a, b, c).signum() * cross(a, b, d).signum() == -1
-                                && cross(c, d, a).signum() * cross(c, d, b).signum() == -1))
-                    })
-            })
         };
         let mut touching = 0;
         for case in 0..20_000 {
@@ -455,21 +445,12 @@ mod tests {
             );
             let mut coverage = Coverage::default();
             for ring in &input {
-                coverage.ring(
-                    &ring
-                        .iter()
-                        .map(|p| vertex([p[0] as i64, p[1] as i64]))
-                        .collect::<Vec<_>>(),
-                    1,
-                );
+                coverage.ring(&integer(ring, 1.), 1);
             }
             let mut area2 = 0;
             for ring in output {
                 assert!(ring.len() <= limit);
-                let ring: Vec<_> = ring
-                    .iter()
-                    .map(|p| vertex([p[0] as i64, p[1] as i64]))
-                    .collect();
+                let ring = integer(&ring, 1.);
                 assert_simple(&ring);
                 area2 += (1..ring.len() - 1)
                     .map(|i| cross(ring[0], ring[i], ring[i + 1]))
@@ -490,18 +471,11 @@ mod tests {
             assert!(output.iter().all(|r| r.len() <= limit));
             assert_eq!(output.len() == 1, limit == ring.len());
             let mut coverage = Coverage::default();
-            let integer: Vec<_> = ring
-                .iter()
-                .map(|p| vertex([p[0] as i64, p[1] as i64]))
-                .collect();
-            coverage.ring(&integer, 1);
+            coverage.ring(&integer(&ring, 1.), 1);
             for polygon in output {
-                let integer: Vec<_> = polygon
-                    .iter()
-                    .map(|p| vertex([p[0] as i64, p[1] as i64]))
-                    .collect();
-                assert_simple(&integer);
-                coverage.ring(&integer, -1);
+                let polygon = integer(&polygon, 1.);
+                assert_simple(&polygon);
+                coverage.ring(&polygon, -1);
             }
             assert!(coverage.0.is_empty());
         }
@@ -553,15 +527,7 @@ mod tests {
                     let mut area2 = 0_i128;
                     for ring in output {
                         assert!(ring.len() <= limit);
-                        let integer: Vec<_> = ring
-                            .iter()
-                            .map(|p| {
-                                vertex([
-                                    (p[0] * 1000.).round() as i64,
-                                    (p[1] * 1000.).round() as i64,
-                                ])
-                            })
-                            .collect();
+                        let integer = integer(&ring, 1000.);
                         assert_simple(&integer);
                         let signed: i128 = (1..integer.len() - 1)
                             .map(|i| cross(integer[0], integer[i], integer[i + 1]))
