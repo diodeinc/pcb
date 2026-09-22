@@ -58,38 +58,64 @@ pub fn step_graph_artwork<LayerMeta, ObjectMeta: Default>(
     layer: LayerId,
     root: &StepDefinition,
     header: Layer<LayerMeta>,
-    mut lower_step: impl FnMut(
+    lower_step: impl FnMut(
         &StepDefinition,
         GeometryDocument,
         &mut Document<LayerMeta, ObjectMeta>,
     ) -> Result<Vec<Object<ObjectMeta>>>,
 ) -> Result<Document<LayerMeta, ObjectMeta>> {
-    let mut graph = StepGraph {
+    let mut artwork = Document::new();
+    let artwork_layer = artwork.push_layer(header);
+    let staged = step_graph_objects(imported, layer, root, &mut artwork, lower_step)?;
+    for object in staged.into_iter().flatten() {
+        artwork.push_object(artwork_layer, object);
+    }
+    finish_step_graph_artwork(&mut artwork)?;
+    Ok(artwork)
+}
+
+/// Lower `layer` of the Step graph under `root` into `artwork`'s tables and
+/// return the root's objects by stage, on no layer yet: a drawing composed of
+/// several source layers places them on layers of its own.
+pub fn step_graph_objects<LayerMeta, ObjectMeta: Default>(
+    imported: &ImportedDesign,
+    layer: LayerId,
+    root: &StepDefinition,
+    artwork: &mut Document<LayerMeta, ObjectMeta>,
+    mut lower_step: impl FnMut(
+        &StepDefinition,
+        GeometryDocument,
+        &mut Document<LayerMeta, ObjectMeta>,
+    ) -> Result<Vec<Object<ObjectMeta>>>,
+) -> Result<Staged<Vec<Object<ObjectMeta>>>> {
+    StepGraph {
         imported,
         layer,
-        artwork: Document::new(),
+        artwork,
         blocks: HashMap::from([(root.name, None)]),
         lower_step: &mut lower_step,
-    };
-    let artwork_layer = graph.artwork.push_layer(header);
-    for object in graph.step_objects(root)?.into_iter().flatten() {
-        graph.artwork.push_object(artwork_layer, object);
     }
-    let mut artwork = graph.artwork;
+    .step_objects(root)
+}
+
+/// Settle artwork every layer of which is pushed: bounds, the design's import
+/// diagnostics once, and the document's invariants.
+pub fn finish_step_graph_artwork<LayerMeta, ObjectMeta>(
+    artwork: &mut Document<LayerMeta, ObjectMeta>,
+) -> Result<()> {
     // Every Step's document repeats the design's import diagnostics.
     let mut seen = HashSet::new();
     artwork
         .diagnostics
         .retain(|diagnostic| seen.insert(diagnostic.message.clone()));
-    normalize_bounds(&mut artwork);
+    normalize_bounds(artwork);
     artwork
         .validate()
-        .map_err(|error| anyhow::anyhow!("invalid Step graph artwork: {error}"))?;
-    Ok(artwork)
+        .map_err(|error| anyhow::anyhow!("invalid Step graph artwork: {error}"))
 }
 
 /// A Step's objects by stage: what it paints, then its final cutouts.
-type Staged<T> = [T; 2];
+pub type Staged<T> = [T; 2];
 
 type LowerStep<'a, LayerMeta, ObjectMeta> = dyn FnMut(
         &StepDefinition,
@@ -101,7 +127,7 @@ type LowerStep<'a, LayerMeta, ObjectMeta> = dyn FnMut(
 struct StepGraph<'a, LayerMeta, ObjectMeta> {
     imported: &'a ImportedDesign,
     layer: LayerId,
-    artwork: Document<LayerMeta, ObjectMeta>,
+    artwork: &'a mut Document<LayerMeta, ObjectMeta>,
     /// Each Step's blocks by stage, `None` for a stage it leaves empty. A
     /// Step still being built maps to `None`, which is how a cycle shows.
     blocks: HashMap<Symbol, Option<Staged<Option<u32>>>>,
@@ -156,10 +182,9 @@ impl<LayerMeta, ObjectMeta: Default> StepGraph<'_, LayerMeta, ObjectMeta> {
                     self.imported.resolve(step.name)
                 )
             })?;
-        let (cutouts, painted): (Vec<_>, Vec<_>) =
-            (self.lower_step)(step, local, &mut self.artwork)?
-                .into_iter()
-                .partition(|object| object.order.stage == PaintStage::FinalCutout);
+        let (cutouts, painted): (Vec<_>, Vec<_>) = (self.lower_step)(step, local, self.artwork)?
+            .into_iter()
+            .partition(|object| object.order.stage == PaintStage::FinalCutout);
         let mut staged = [painted, cutouts];
         for (blocks, child, repeat) in children {
             if repeat.nx == 0 || repeat.ny == 0 {

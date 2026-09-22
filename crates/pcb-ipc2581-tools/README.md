@@ -11,7 +11,7 @@ alias provides the same commands.
 | `cpl` | Export component placement data. |
 | `html` | Export an HTML board summary. |
 | `outline` | Export a KiCad-compatible DXF outline. |
-| `render` | Render one layer as terminal graphics, SVG, or PNG. |
+| `render` | Render one layer, or one side of the finished board, as terminal graphics, SVG, or PNG. |
 | `dfm check` | Check IPC-2581 geometry against a fabrication PDK and emit self-contained JSON. |
 | `gerber` | Export fabrication layers and drill files. |
 | `view` | Export a filtered IPC-2581 function-mode document. |

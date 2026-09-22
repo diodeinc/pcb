@@ -39,6 +39,33 @@ pub enum RenderFormat {
     Png,
 }
 
+/// The side of the finished board a composite render looks at.
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardSide {
+    Top,
+    /// Seen from below, so mirrored left to right against the top.
+    Bottom,
+}
+
+impl BoardSide {
+    pub fn ir_side(self) -> pcb_ir::dialects::Side {
+        match self {
+            Self::Top => pcb_ir::dialects::Side::Top,
+            Self::Bottom => pcb_ir::dialects::Side::Bottom,
+        }
+    }
+}
+
+impl std::fmt::Display for BoardSide {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+        })
+    }
+}
+
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[derive(Debug, Clone, Copy)]
 pub enum UnitFormat {

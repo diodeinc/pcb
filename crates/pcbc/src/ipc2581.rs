@@ -3,7 +3,8 @@ use pcb_ir::geom::Resolution;
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
-    LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, manufacturing, utils,
+    BoardSide, LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands,
+    manufacturing, utils,
 };
 
 #[derive(Args)]
@@ -145,14 +146,19 @@ enum Commands {
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
     },
-    /// Render processed geometry for a single IPC-2581 layer
+    /// Render processed geometry for one IPC-2581 layer, or one side of the finished board
+    #[command(group(clap::ArgGroup::new("subject").required(true).args(["layer", "side"])))]
     Render {
         /// IPC-2581 XML file to render from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layer name to render, for example TOP or BOTTOM
+        /// Layer name to render, for example F.Cu
         #[arg(short, long)]
-        layer: String,
+        layer: Option<String>,
+        /// Render the finished board from this side: copper under the mask, the finish in its
+        /// openings and the legend, with everything beneath the outer copper left out.
+        #[arg(long)]
+        side: Option<BoardSide>,
         /// Output file path. If omitted, auto renders to the terminal when possible.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
@@ -596,13 +602,19 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
         Commands::Render {
             file,
             layer,
+            side,
             output,
             format,
             layout_target,
         } => commands::render::execute(
             &file,
-            &commands::render::LayerRenderOptions {
-                layer,
+            &commands::render::RenderCommandOptions {
+                subject: match (side, layer) {
+                    (Some(side), _) => commands::render::RenderSubject::Side(side),
+                    (None, layer) => commands::render::RenderSubject::Layer(
+                        layer.ok_or_else(|| anyhow::anyhow!("pass --layer or --side"))?,
+                    ),
+                },
                 output,
                 format,
                 layout_target,

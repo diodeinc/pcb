@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added `pcb ipc render --side top|bottom` to render a realistic view of the finished board, array or fab panel.
+
 ## [0.4.58] - 2026-09-22
 
 ### Fixed

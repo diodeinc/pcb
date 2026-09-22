@@ -4,42 +4,74 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::geometry;
+use crate::geometry::composite::CompositeStyle;
 use crate::utils::file as file_utils;
-use crate::{LayoutTarget, RenderFormat, ipc2581};
+use crate::{BoardSide, LayoutTarget, RenderFormat, ipc2581};
 
-/// Options for rendering processed geometry from a single IPC-2581 layer.
+/// What a render draws.
 #[derive(Debug, Clone)]
-pub struct LayerRenderOptions {
-    pub layer: String,
+pub enum RenderSubject {
+    /// One source layer's processed geometry, by name.
+    Layer(String),
+    /// The board as it looks from one side: its outer copper under the mask,
+    /// the finish in the mask's openings, and the legend over both.
+    Side(BoardSide),
+}
+
+/// Options for rendering processed IPC-2581 geometry.
+#[derive(Debug, Clone)]
+pub struct RenderCommandOptions {
+    pub subject: RenderSubject,
     pub output: Option<PathBuf>,
     pub format: RenderFormat,
     pub layout_target: LayoutTarget,
 }
 
-/// Render processed geometry for one IPC-2581 layer.
+/// Render one IPC-2581 layer, or one side of the finished board.
 ///
-/// The layer runs through the same normalization Gerber export uses, so a
+/// Geometry runs through the same normalization Gerber export uses, so a
 /// render and a fabrication file describe the same image.
 pub fn execute(
     input_file: &Path,
-    options: &LayerRenderOptions,
+    options: &RenderCommandOptions,
     resolution: Resolution,
 ) -> Result<()> {
-    let subject = format!("IPC-2581 layer '{}'", options.layer);
+    let subject = match &options.subject {
+        RenderSubject::Layer(layer) => format!("IPC-2581 layer '{layer}'"),
+        RenderSubject::Side(side) => format!("IPC-2581 {side} view"),
+    };
     let target = RenderTarget::resolve(options.output.as_deref(), options.format, &subject)?;
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let view = options.layout_target.artwork_scope();
     let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
-    let artwork =
-        geometry::render::layer_artwork(&imported, &options.layer, view, true, resolution)?.artwork;
-    render_artwork(
-        &artwork,
-        target,
-        options.output.as_deref(),
-        &subject,
-        &pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy),
-    )
+    let render = pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy);
+    let output = options.output.as_deref();
+    match &options.subject {
+        RenderSubject::Layer(layer) => {
+            let artwork =
+                geometry::render::layer_artwork(&imported, layer, view, true, resolution)?.artwork;
+            render_artwork(&artwork, target, output, &subject, &render)
+        }
+        RenderSubject::Side(side) => {
+            let style = CompositeStyle::of_stackup(
+                crate::accessors::IpcAccessor::new(&ipc)
+                    .stackup_details()
+                    .as_ref(),
+            );
+            let composite = geometry::composite::composite_artwork(
+                &imported,
+                side.ir_side(),
+                view,
+                &style,
+                resolution,
+            )?;
+            let render = render
+                .with_styles(composite.styles)
+                .with_mirrored(composite.mirrored);
+            render_artwork(&composite.artwork, target, output, &subject, &render)
+        }
+    }
 }
 
 /// Where a render goes, settled before any geometry is loaded.

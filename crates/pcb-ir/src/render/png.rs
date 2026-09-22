@@ -16,7 +16,7 @@ use crate::geom::{
     AccuracyError, Affine2, BBox, EllipticalArc, FillRule, GeometryAccuracy, LineCap, Paint, Point,
     Polarity, StrokeStyle,
 };
-use crate::render::{Drawn, LayerStyle, RenderOptions, SizeConstraint};
+use crate::render::{Drawn, LayerStyle, RenderOptions};
 
 /// Width of the outline a composed profile layer draws as.
 const PROFILE_STROKE_MM: f64 = 0.1;
@@ -29,7 +29,7 @@ pub fn png<LayerMeta>(
 ) -> Result<Vec<u8>, String> {
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
     let bbox = options.viewport_over(layers.iter().map(|&index| doc.layers[index].bbox));
-    let mut canvas = Canvas::new(bbox, options.size)?;
+    let mut canvas = Canvas::new(bbox, options)?;
     for &index in &layers {
         let layer = &doc.layers[index];
         let style = options.style(index, layer.role);
@@ -73,7 +73,7 @@ pub fn artwork_png<LayerMeta, ObjectMeta>(
 ) -> Result<Vec<u8>, String> {
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
     let bbox = options.viewport_over(layers.iter().map(|&index| doc.layers[index].bbox));
-    let mut canvas = Canvas::new(bbox, options.size)?;
+    let mut canvas = Canvas::new(bbox, options)?;
     let placed = layers
         .iter()
         .map(|&index| artwork::placed_layer(doc, &doc.layers[index], &mut Vec::new()))
@@ -106,8 +106,8 @@ struct Canvas {
 }
 
 impl Canvas {
-    fn new(bbox: BBox, size: SizeConstraint) -> Result<Self, String> {
-        let (width, height) = size.pixels(bbox).unwrap_or_else(|| {
+    fn new(bbox: BBox, options: &RenderOptions) -> Result<Self, String> {
+        let (width, height) = options.size.pixels(bbox).unwrap_or_else(|| {
             crate::render::pixel_size(bbox, crate::render::DEFAULT_MAX_DIMENSION_PX)
         });
         let pixmap = || {
@@ -116,13 +116,20 @@ impl Canvas {
         };
         let (width, height) = (f64::from(width), f64::from(height));
         let scale = (width / bbox.width()).min(height / bbox.height());
+        let margin = (width - scale * bbox.width()) / 2.0;
+        // A mirrored view runs X right to left from the viewport's far edge.
+        let (x_scale, x_origin) = if options.mirrored {
+            (-scale, margin + scale * bbox.max.x)
+        } else {
+            (scale, margin - scale * bbox.min.x)
+        };
         Ok(Self {
             image: pixmap()?,
             layer: pixmap()?,
             view: Affine2 {
-                m00: scale,
+                m00: x_scale,
                 m01: 0.0,
-                m02: (width - scale * bbox.width()) / 2.0 - scale * bbox.min.x,
+                m02: x_origin,
                 m10: 0.0,
                 m11: -scale,
                 m12: (height - scale * bbox.height()) / 2.0 + scale * bbox.max.y,
@@ -131,7 +138,7 @@ impl Canvas {
     }
 
     fn px_per_mm(&self) -> f64 {
-        self.view.m00
+        self.view.m11.abs()
     }
 
     /// Paint one placement of a shape into the open layer: dark lays the
@@ -434,6 +441,7 @@ mod tests {
     use crate::dialects::Side;
     use crate::dialects::artwork::Geometry;
     use crate::geom::path::ContourBuf;
+    use crate::render::SizeConstraint;
     use crate::render::svg::tests::{assert_native_and_composed_samples, copper_artwork, square};
 
     fn fill(doc: &mut artwork::Document<(), ()>, contour: ContourBuf) -> Geometry {
@@ -650,6 +658,31 @@ mod tests {
             [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()],
             [0x20, 0x40, 0x60, 0xff]
         );
+    }
+
+    #[test]
+    fn a_mirrored_view_runs_x_right_to_left_in_both_backends() {
+        let mut doc = copper_artwork();
+        // A square over the left fifth of a 10 mm wide viewport.
+        let pour = fill(&mut doc, square(2.0));
+        doc.push_object(0, artwork::Object::new(Polarity::Dark, pour));
+        artwork::normalize_bounds(&mut doc);
+        let options = RenderOptions::default()
+            .with_viewport(BBox::new(Point::ZERO, Point::new(10.0, 2.0)))
+            .with_size(SizeConstraint::Fixed {
+                width_px: 100,
+                height_px: 20,
+            });
+        let painted = |options: &RenderOptions, x: u32| {
+            let image = Pixmap::decode_png(&artwork_png(&doc, options).unwrap()).unwrap();
+            image.pixel(x, 10).unwrap().alpha() > 0
+        };
+
+        assert!(painted(&options, 10) && !painted(&options, 90));
+        let mirrored = options.with_mirrored(true);
+        assert!(!painted(&mirrored, 10) && painted(&mirrored, 90));
+        let svg = crate::render::artwork_svg(&doc, &mirrored).unwrap();
+        assert!(svg.contains("viewBox='-10 -2 10 2'") && svg.contains("scale(-1 -1)"));
     }
 
     #[test]

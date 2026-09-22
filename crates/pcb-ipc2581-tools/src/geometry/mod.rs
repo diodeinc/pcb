@@ -1,3 +1,4 @@
+pub mod composite;
 pub mod dxf;
 pub mod render;
 pub mod step_artwork;

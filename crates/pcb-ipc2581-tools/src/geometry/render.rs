@@ -2,7 +2,9 @@ use anyhow::Context;
 use ipc2581::Symbol;
 use pcb_ir::geom::Resolution;
 
-use crate::geometry::step_artwork::{root_step, step_graph_artwork};
+use crate::geometry::step_artwork::{
+    Staged, finish_step_graph_artwork, root_step, step_graph_objects,
+};
 use crate::layers::layer_role;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::artwork::{Geometry, Object, PaintOrder, PaintStage};
@@ -12,9 +14,12 @@ use pcb_ir::dialects::ipc::{
 };
 use pcb_ir::dialects::{LayerRole, Side};
 use pcb_ir::geom::{BBox, Paint, Polarity, Span, StrokeStyle};
-use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign};
+use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign, LayerId, StepDefinition};
 
 pub type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerFunction, Option<Symbol>>;
+
+/// One source layer's objects by stage, each naming its net.
+pub(crate) type StagedObjects = Staged<Vec<Object<Option<Symbol>>>>;
 
 const DISPLAY_PROFILE_STROKE_WIDTH_MM: f64 = 0.1;
 
@@ -50,34 +55,22 @@ pub fn layer_artwork(
         .layer_definition(layer)
         .context("layer id is outside the imported design")?
         .layer_function;
-    let mut has_native_content = false;
-    let mut artwork = step_graph_artwork(
-        imported,
-        layer,
-        root_step(imported, board)?,
-        pcb_ir::dialects::artwork::Layer {
-            name: layer_name.to_string(),
-            role: layer_role(layer_function),
-            side: Side::None,
-            objects: Span::EMPTY,
-            bbox: BBox::empty(),
-            meta: layer_function,
-        },
-        |_, mut local, artwork| {
-            pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut local, resolution)?;
-            pcb_ir::dialects::ipc::validate_artwork_ready(&local)
-                .map_err(anyhow::Error::msg)
-                .with_context(|| format!("IPC-2581 layer '{layer_name}' is not artwork-ready"))?;
-            has_native_content |= layer_has_native_content(&local);
-            Ok(lower_layer_to_artwork_objects_with(
-                &local,
-                0,
-                artwork,
-                &ArtworkTarget::default(),
-                &|_, feature| feature.net,
-            ))
-        },
-    )?;
+    let mut artwork = ArtworkDocument::new();
+    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
+        name: layer_name.to_string(),
+        role: layer_role(layer_function),
+        side: Side::None,
+        objects: Span::EMPTY,
+        bbox: BBox::empty(),
+        meta: layer_function,
+    });
+    let root = root_step(imported, board)?;
+    let (staged, has_native_content) =
+        layer_objects(imported, layer, root, &mut artwork, resolution)?;
+    for object in staged.into_iter().flatten() {
+        artwork.push_object(artwork_layer, object);
+    }
+    finish_step_graph_artwork(&mut artwork)?;
     if include_profiles {
         append_display_profiles(
             &mut artwork,
@@ -90,6 +83,38 @@ pub fn layer_artwork(
         artwork,
         has_native_content,
     })
+}
+
+/// Lower one source layer of the Step graph under `root` into `artwork`'s
+/// tables under the normalization Gerber export uses. Returns the root's
+/// objects by stage, and whether any Step paints content of its own.
+pub(crate) fn layer_objects<LayerMeta>(
+    imported: &ImportedDesign,
+    layer: LayerId,
+    root: &StepDefinition,
+    artwork: &mut pcb_ir::dialects::artwork::Document<LayerMeta, Option<Symbol>>,
+    resolution: Resolution,
+) -> anyhow::Result<(StagedObjects, bool)> {
+    let layer_name = imported
+        .layer_definition(layer)
+        .map(|definition| imported.resolve(definition.name))
+        .context("layer id is outside the imported design")?;
+    let mut has_native_content = false;
+    let staged = step_graph_objects(imported, layer, root, artwork, |_, mut local, artwork| {
+        pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut local, resolution)?;
+        pcb_ir::dialects::ipc::validate_artwork_ready(&local)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("IPC-2581 layer '{layer_name}' is not artwork-ready"))?;
+        has_native_content |= layer_has_native_content(&local);
+        Ok(lower_layer_to_artwork_objects_with(
+            &local,
+            0,
+            artwork,
+            &ArtworkTarget::default(),
+            &|_, feature| feature.net,
+        ))
+    })?;
+    Ok((staged, has_native_content))
 }
 
 /// Whether a normalized single-layer document paints anything of its own.
