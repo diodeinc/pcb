@@ -92,13 +92,7 @@ impl ContourSet {
     }
 
     pub fn empty(resolution: Resolution) -> Self {
-        Self {
-            bbox: BBox::empty(),
-            rings: Vec::new(),
-            ring_bounds: Vec::new(),
-            resolution,
-            uncertainty_mm: 0.0,
-        }
+        Self::from_regularized(Vec::new(), resolution, 0.0)
     }
 
     /// Prepare source contours under one fill rule. Curves are flattened
