@@ -39,12 +39,12 @@ pub enum RenderFormat {
     Png,
 }
 
-/// The side of the finished board a composite render looks at.
+/// A side of the finished board a composite render looks at.
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoardSide {
     Top,
-    /// Seen from below, so mirrored left to right against the top.
+    /// As the board looks turned over, so mirrored left to right against the top.
     Bottom,
 }
 

@@ -146,16 +146,15 @@ enum Commands {
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
     },
-    /// Render processed geometry for one IPC-2581 layer, or one side of the finished board
-    #[command(group(clap::ArgGroup::new("subject").required(true).args(["layer", "side"])))]
+    /// Render the finished board, top and bottom side by side, or one side, or one IPC-2581 layer
     Render {
         /// IPC-2581 XML file to render from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layer name to render, for example F.Cu
-        #[arg(short, long)]
+        /// Render this layer's processed geometry instead, for example F.Cu
+        #[arg(short, long, conflicts_with = "side")]
         layer: Option<String>,
-        /// Render the finished board from this side: copper under the mask, the finish in its
+        /// Render only this side of the finished board: copper under the mask, the finish in its
         /// openings and the legend, with everything beneath the outer copper left out.
         #[arg(long)]
         side: Option<BoardSide>,
@@ -609,10 +608,13 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
         } => commands::render::execute(
             &file,
             &commands::render::RenderCommandOptions {
-                subject: side
-                    .map(commands::render::RenderSubject::Side)
-                    .or(layer.map(commands::render::RenderSubject::Layer))
-                    .expect("clap requires --layer or --side"),
+                subject: layer.map_or_else(
+                    || {
+                        let both = vec![BoardSide::Top, BoardSide::Bottom];
+                        commands::render::RenderSubject::Sides(side.map_or(both, |side| vec![side]))
+                    },
+                    commands::render::RenderSubject::Layer,
+                ),
                 output,
                 format,
                 layout_target,

@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::geometry;
-use crate::geometry::composite::CompositeStyle;
 use crate::utils::file as file_utils;
 use crate::{BoardSide, LayoutTarget, RenderFormat, ipc2581};
 
@@ -13,9 +12,10 @@ use crate::{BoardSide, LayoutTarget, RenderFormat, ipc2581};
 pub enum RenderSubject {
     /// One source layer's processed geometry, by name.
     Layer(String),
-    /// The board as it looks from one side: its outer copper under the mask,
-    /// the finish in the mask's openings, and the legend over both.
-    Side(BoardSide),
+    /// The finished board as it looks from these sides, left to right: its
+    /// outer copper under the mask, the finish in the mask's openings, and
+    /// the legend over both.
+    Sides(Vec<BoardSide>),
 }
 
 /// Options for rendering processed IPC-2581 geometry.
@@ -27,7 +27,7 @@ pub struct RenderCommandOptions {
     pub layout_target: LayoutTarget,
 }
 
-/// Render one IPC-2581 layer, or one side of the finished board.
+/// Render one IPC-2581 layer, or the finished board from its sides.
 ///
 /// Geometry runs through the same normalization Gerber export uses, so a
 /// render and a fabrication file describe the same image.
@@ -38,7 +38,10 @@ pub fn execute(
 ) -> Result<()> {
     let subject = match &options.subject {
         RenderSubject::Layer(layer) => format!("IPC-2581 layer '{layer}'"),
-        RenderSubject::Side(side) => format!("IPC-2581 {side} view"),
+        RenderSubject::Sides(sides) => {
+            let sides = sides.iter().map(BoardSide::to_string).collect::<Vec<_>>();
+            format!("IPC-2581 {} view", sides.join(" and "))
+        }
     };
     let target = RenderTarget::resolve(options.output.as_deref(), options.format, &subject)?;
     let content = file_utils::load_ipc_file(input_file)?;
@@ -53,19 +56,17 @@ pub fn execute(
                 geometry::render::layer_artwork(&imported, layer, view, true, resolution)?.artwork;
             render_artwork(&artwork, target, output, &subject, &render)
         }
-        RenderSubject::Side(side) => {
-            let accessor = crate::accessors::IpcAccessor::new(&ipc);
+        RenderSubject::Sides(sides) => {
             let composite = geometry::composite::composite_artwork(
                 &imported,
-                *side,
+                &crate::accessors::IpcAccessor::new(&ipc),
+                sides,
                 options.layout_target,
-                &CompositeStyle::of_design(&accessor, *side),
                 resolution,
             )?;
             let render = render
                 .with_styles(composite.styles)
-                .with_viewport(composite.viewport)
-                .with_mirrored(composite.mirrored);
+                .with_viewport(composite.viewport);
             render_artwork(&composite.artwork, target, output, &subject, &render)
         }
     }

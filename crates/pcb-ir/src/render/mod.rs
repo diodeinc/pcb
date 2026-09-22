@@ -42,9 +42,6 @@ pub struct RenderOptions {
     /// fabrication layer looks the same in every render; drawings whose
     /// layers are not fabrication layers bring their own.
     pub styles: Vec<LayerStyle>,
-    /// View the document from behind: X runs right to left, as a board looks
-    /// turned over about its vertical axis.
-    pub mirrored: bool,
 }
 
 impl RenderOptions {
@@ -77,11 +74,6 @@ impl RenderOptions {
 
     pub fn with_styles(mut self, styles: impl Into<Vec<LayerStyle>>) -> Self {
         self.styles = styles.into();
-        self
-    }
-
-    pub fn with_mirrored(mut self, mirrored: bool) -> Self {
-        self.mirrored = mirrored;
         self
     }
 

@@ -17,7 +17,7 @@ pub fn svg<LayerMeta>(doc: &mask::Document<LayerMeta>, options: &RenderOptions) 
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
     let bbox = options.viewport_over(layers.iter().map(|&index| doc.layers[index].bbox));
     let title = layers.first().map(|&index| doc.layers[index].name.as_str());
-    let mut svg = open_svg(&bbox, options, title);
+    let mut svg = open_svg(&bbox, options.size.pixels(bbox), title);
 
     for &layer_index in &layers {
         let layer = &doc.layers[layer_index];
@@ -103,7 +103,7 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
     }
 
     let title = layers.first().map(|&index| doc.layers[index].name.as_str());
-    let mut svg = open_svg(&bbox, options, title);
+    let mut svg = open_svg(&bbox, options.size.pixels(bbox), title);
     writeln!(svg, "  <defs>\n{defs}  </defs>").unwrap();
     svg.push_str(&body);
     Ok(close_svg(svg))
@@ -371,29 +371,23 @@ impl std::fmt::Display for SvgTransform {
     }
 }
 
-fn open_svg(bbox: &BBox, options: &RenderOptions, title: Option<&str>) -> String {
+fn open_svg(bbox: &BBox, pixel_size: Option<(u32, u32)>, title: Option<&str>) -> String {
     let title = title.unwrap_or("layer");
     let mut svg = String::new();
-    let size = (options.size.pixels(*bbox))
+    let size = pixel_size
         .map(|(width, height)| format!(" width='{width}' height='{height}'"))
         .unwrap_or_default();
-    // The screen flips Y; a mirrored view flips X with it.
-    let (left, x_scale) = if options.mirrored {
-        (-bbox.max.x, -1)
-    } else {
-        (bbox.min.x, 1)
-    };
     writeln!(
         svg,
         "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'{size} viewBox='{} {} {} {}'>",
-        num(left),
+        num(bbox.min.x),
         num(-bbox.max.y),
         num(bbox.width()),
         num(bbox.height())
     )
     .unwrap();
     writeln!(svg, "  <title>{}</title>", escape_xml(title)).unwrap();
-    writeln!(svg, "  <g transform='scale({x_scale} -1)'>").unwrap();
+    writeln!(svg, "  <g transform='scale(1 -1)'>").unwrap();
     svg
 }
 
