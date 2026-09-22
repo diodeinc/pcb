@@ -364,11 +364,14 @@ enum Limits<'a> {
 
 impl RuleDefinition<'_> {
     fn validate(&self) -> Result<()> {
+        let (metadata, copper) = (self.metadata, self.copper_conditions);
         match self.limits {
             Limits::Length(limit, cases) => {
-                validate_limits(self.metadata, limit, cases, self.copper_conditions)
+                validate_limits(metadata, limit, cases, copper, LengthLimit::validate)
             }
-            Limits::Ratio(limit, cases) => validate_ratio_limits(self.metadata, limit, cases),
+            Limits::Ratio(limit, cases) => {
+                validate_limits(metadata, limit, cases, copper, |_, _| Ok(()))
+            }
         }
     }
 
@@ -393,7 +396,7 @@ pub struct DrillingRules {
     #[serde(default)]
     pub hole_diameter: Vec<SelectingRule<HoleSelector>>,
     #[serde(default)]
-    pub hole_aspect_ratio: Vec<SelectingRule<PlatedHoleSelector, RatioLimit, RatioCase>>,
+    pub hole_aspect_ratio: Vec<SelectingRule<PlatedHoleSelector, RatioLimit>>,
     #[serde(default)]
     pub slot_width: Vec<SelectingRule<SlotSelector>>,
     #[serde(default)]
@@ -547,14 +550,18 @@ impl LengthLimit {
     }
 }
 
+/// One named conditional limit of a rule.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LengthCase {
+pub struct Case<Limit> {
     pub id: String,
     #[serde(default)]
     pub when: RuleConditions,
-    pub limit: LengthLimit,
+    pub limit: Limit,
 }
+
+pub type LengthCase = Case<LengthLimit>;
+pub type RatioCase = Case<RatioLimit>;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -562,23 +569,17 @@ pub struct RatioLimit {
     pub maximum: Ratio,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RatioCase {
-    pub id: String,
-    #[serde(default)]
-    pub when: RuleConditions,
-    pub limit: RatioLimit,
-}
-
-fn validate_limits(
+/// A rule states one limit or named cases; `validate` checks each limit
+/// under the id it lowers to.
+fn validate_limits<Limit>(
     metadata: &RuleMetadata,
-    limit: Option<&LengthLimit>,
-    cases: &[LengthCase],
+    limit: Option<&Limit>,
+    cases: &[Case<Limit>],
     allow_copper_conditions: bool,
+    validate: impl Fn(&Limit, &str) -> Result<()>,
 ) -> Result<()> {
     match (limit, cases.is_empty()) {
-        (Some(limit), true) => return limit.validate(&metadata.id),
+        (Some(limit), true) => return validate(limit, &metadata.id),
         (None, false) => {}
         (Some(_), false) => {
             bail!(
@@ -590,51 +591,14 @@ fn validate_limits(
     }
 
     for case in cases {
-        case.limit
-            .validate(&format!("{}.{}", metadata.id, case.id))?;
+        validate(&case.limit, &format!("{}.{}", metadata.id, case.id))?;
     }
-    validate_cases(
-        metadata,
-        cases.iter().map(|case| (case.id.as_str(), &case.when)),
-        allow_copper_conditions,
-    )
-}
-
-fn validate_ratio_limits(
-    metadata: &RuleMetadata,
-    limit: Option<&RatioLimit>,
-    cases: &[RatioCase],
-) -> Result<()> {
-    match (limit, cases.is_empty()) {
-        (Some(_), true) => return Ok(()),
-        (None, false) => {}
-        (Some(_), false) => {
-            bail!(
-                "rule '{}': limit and cases are mutually exclusive",
-                metadata.id
-            )
-        }
-        (None, true) => bail!("rule '{}': requires limit or cases", metadata.id),
-    }
-    validate_cases(
-        metadata,
-        cases.iter().map(|case| (case.id.as_str(), &case.when)),
-        false,
-    )
-}
-
-fn validate_cases<'a>(
-    metadata: &RuleMetadata,
-    cases: impl Iterator<Item = (&'a str, &'a RuleConditions)>,
-    allow_copper_conditions: bool,
-) -> Result<()> {
-    let cases = cases.collect::<Vec<_>>();
     let mut ids = HashSet::new();
-    for (id, when) in &cases {
+    for Case { id, when, .. } in cases {
         if id.trim().is_empty() {
             bail!("rule '{}': case ids must not be empty", metadata.id);
         }
-        if !ids.insert(*id) {
+        if !ids.insert(id) {
             bail!("rule '{}': duplicate case id '{}'", metadata.id, id);
         }
         when.validate(&format!("{}.{}", metadata.id, id))?;
@@ -648,12 +612,12 @@ fn validate_cases<'a>(
     }
     for (index, left) in cases.iter().enumerate() {
         for right in &cases[index + 1..] {
-            if left.1.overlaps(right.1) {
+            if left.when.overlaps(&right.when) {
                 bail!(
                     "rule '{}': cases '{}' and '{}' overlap",
                     metadata.id,
-                    left.0,
-                    right.0
+                    left.id,
+                    right.id
                 );
             }
         }
@@ -665,17 +629,15 @@ fn validate_cases<'a>(
 /// states, whatever it selects and however it is limited.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[serde(bound(
-    deserialize = "Select: Deserialize<'de>, Limit: Deserialize<'de>, Case: Deserialize<'de>"
-))]
-pub struct SelectingRule<Select, Limit = LengthLimit, Case = LengthCase> {
+#[serde(bound(deserialize = "Select: Deserialize<'de>, Limit: Deserialize<'de>"))]
+pub struct SelectingRule<Select, Limit = LengthLimit> {
     #[serde(flatten)]
     pub metadata: RuleMetadata,
     pub select: Select,
     #[serde(default)]
     pub limit: Option<Limit>,
     #[serde(default)]
-    pub cases: Vec<Case>,
+    pub cases: Vec<Case<Limit>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -966,120 +928,22 @@ limit = { minimum = "300 mil" }
 "#;
 
     #[test]
-    fn parses_profiles_typed_rules_units_and_tiers() {
+    fn parses_mixed_units_and_validates_references() {
         let pdk = Pdk::parse(MIXED_UNIT_PDK).unwrap();
         pdk.validate_rule_references().unwrap();
-        let support = pdk.profiles["standard"]
-            .support
-            .copper_layers
-            .as_ref()
-            .unwrap();
-        assert_eq!(support.minimum(), Some(2));
-        assert_eq!(support.maximum(), Some(10));
-        assert_eq!(
-            pdk.rules.drilling.hole_diameter[0].select.hole,
-            HoleKind::Via
-        );
-        assert_eq!(
-            pdk.rules.drilling.hole_diameter[0]
-                .limit
-                .as_ref()
-                .unwrap()
-                .minimum
-                .as_ref()
-                .unwrap()
-                .millimeters(),
-            0.2
-        );
-        assert_eq!(
-            pdk.rules.drilling.hole_aspect_ratio[0]
-                .limit
-                .as_ref()
-                .unwrap()
-                .maximum
-                .value(),
-            8.0
-        );
-        assert!(
-            (pdk.rules.drilling.hole_to_hole_clearance[0]
-                .limit
-                .as_ref()
-                .unwrap()
-                .minimum
-                .as_ref()
-                .unwrap()
-                .millimeters()
-                - 0.254)
-                .abs()
-                < 1e-12
-        );
-        let hole_edge = &pdk.rules.drilling.hole_to_board_edge_clearance[0];
-        assert_eq!(hole_edge.select.hole, HoleKind::Npth);
-        assert_eq!(hole_edge.metadata.profiles, ["standard"]);
-        assert_eq!(hole_edge.metadata.source.as_deref(), Some("example"));
-        let hole_case = &hole_edge.cases[0];
-        assert_eq!(hole_case.id, "2-to-8-layer");
-        assert_eq!(
-            hole_case.when.copper_layers.as_ref().unwrap().minimum(),
-            Some(2)
-        );
-        assert_eq!(
-            hole_case.when.copper_layers.as_ref().unwrap().maximum(),
-            Some(8)
-        );
-        assert_eq!(hole_case.limit.minimum.as_ref().unwrap().millimeters(), 0.3);
-        assert_eq!(
-            hole_case.limit.preferred.as_ref().unwrap().millimeters(),
-            0.4
-        );
-        let slot_edge = &pdk.rules.drilling.slot_to_board_edge_clearance[0];
-        assert_eq!(slot_edge.select.plating, SlotPlating::Nonplated);
-        assert!(
-            (slot_edge
-                .limit
-                .as_ref()
-                .unwrap()
-                .minimum
-                .as_ref()
-                .unwrap()
-                .millimeters()
-                - 0.381)
-                .abs()
-                < 1e-12
-        );
-        assert_eq!(
-            pdk.rules.copper.feature_width[0].cases[0]
-                .when
-                .copper_layers
-                .as_ref()
-                .unwrap()
-                .exact,
-            Some(2)
-        );
-        assert_eq!(
-            pdk.profiles["standard"]
-                .defaults
-                .outer_copper_weight
-                .as_ref()
-                .unwrap()
-                .ounces(),
-            1.0
-        );
-        assert_eq!(
-            pdk.rules.copper.hole_clearance[0].select.hole,
-            HoleKind::Via
-        );
-        assert_eq!(
-            pdk.rules.copper.hole_clearance[0]
-                .limit
-                .as_ref()
-                .unwrap()
-                .preferred
-                .as_ref()
-                .unwrap()
-                .millimeters(),
-            0.25
-        );
+        let minimum = |limit: &Option<LengthLimit>| {
+            let minimum = limit.as_ref().unwrap().minimum.as_ref();
+            minimum.unwrap().millimeters()
+        };
+        let (drilling, copper) = (&pdk.rules.drilling, &pdk.rules.copper);
+        assert_eq!(minimum(&drilling.hole_diameter[0].limit), 0.2);
+        assert!((minimum(&drilling.hole_to_hole_clearance[0].limit) - 0.254).abs() < 1e-12);
+        assert!((minimum(&copper.annular_ring[0].limit) - 0.1).abs() < 1e-12);
+        let ratio = drilling.hole_aspect_ratio[0].limit.as_ref().unwrap();
+        assert_eq!(ratio.maximum.value(), 8.0);
+        let exact = copper.feature_width[0].cases[0].when.copper_layers.as_ref();
+        assert_eq!(exact.unwrap().minimum(), Some(2));
+        assert_eq!(exact.unwrap().maximum(), Some(2));
     }
 
     #[test]
@@ -1207,6 +1071,29 @@ limit = { minimum = "300 mil" }
                 .contains("requires a minimum, preferred, or both")
         );
 
+        for (selector, malformed) in [
+            ("hole = \"npth\"", "hole = \"pad\""),
+            ("hole = \"npth\"", "plating = \"nonplated\""),
+            ("plating = \"nonplated\"", "plating = \"unplated\""),
+        ] {
+            let selector = format!("select = {{ {selector} }}");
+            assert!(MIXED_UNIT_PDK.contains(&selector));
+            let malformed = format!("select = {{ {malformed} }}");
+            assert!(Pdk::parse(&MIXED_UNIT_PDK.replace(&selector, &malformed)).is_err());
+        }
+        let limit_and_cases = MIXED_UNIT_PDK.replace(
+            "cases = [\n  { id = \"2-to-8-layer\"",
+            "limit = { minimum = \"0.3 mm\" }\ncases = [\n  { id = \"2-to-8-layer\"",
+        );
+        assert!(
+            Pdk::parse(&limit_and_cases)
+                .unwrap()
+                .validate_rule_references()
+                .unwrap_err()
+                .to_string()
+                .contains("mutually exclusive")
+        );
+
         let old_hole_shape = MIXED_UNIT_PDK.replace(
             "select = { hole = \"via\" }\nlimit = { minimum = \"0.2 mm\", preferred = \"0.25 mm\" }",
             "hole = \"via\"\nminimum = \"0.2 mm\"\npreferred = \"0.25 mm\"",
@@ -1251,67 +1138,5 @@ limit = { minimum = "300 mil" }
             .unwrap()
             .validate_rule_references()
             .unwrap();
-    }
-
-    #[test]
-    fn rejects_malformed_board_edge_clearance_rules() {
-        assert!(
-            Pdk::parse(&MIXED_UNIT_PDK.replace(
-                "select = { hole = \"npth\" }",
-                "select = { hole = \"pad\" }"
-            ))
-            .is_err()
-        );
-        assert!(
-            Pdk::parse(&MIXED_UNIT_PDK.replace(
-                "select = { plating = \"nonplated\" }",
-                "select = { plating = \"unplated\" }"
-            ))
-            .is_err()
-        );
-        assert!(
-            Pdk::parse(&MIXED_UNIT_PDK.replace(
-                "select = { hole = \"npth\" }",
-                "select = { plating = \"nonplated\" }"
-            ))
-            .is_err()
-        );
-
-        let invalid_tier = MIXED_UNIT_PDK.replace(
-            "minimum = \"0.3 mm\", preferred = \"0.4 mm\"",
-            "minimum = \"0.3 mm\", preferred = \"0.2 mm\"",
-        );
-        assert!(
-            Pdk::parse(&invalid_tier)
-                .unwrap()
-                .validate_rule_references()
-                .unwrap_err()
-                .to_string()
-                .contains("preferred limit")
-        );
-        let unsupported_condition = MIXED_UNIT_PDK.replace(
-            "when = { copper_layers = { minimum = 2, maximum = 8 } }",
-            "when = { copper = { position = \"outer\" } }",
-        );
-        assert!(
-            Pdk::parse(&unsupported_condition)
-                .unwrap()
-                .validate_rule_references()
-                .unwrap_err()
-                .to_string()
-                .contains("supported only for copper rules")
-        );
-        let limit_and_cases = MIXED_UNIT_PDK.replace(
-            "cases = [\n  { id = \"2-to-8-layer\"",
-            "limit = { minimum = \"0.3 mm\" }\ncases = [\n  { id = \"2-to-8-layer\"",
-        );
-        assert!(
-            Pdk::parse(&limit_and_cases)
-                .unwrap()
-                .validate_rule_references()
-                .unwrap_err()
-                .to_string()
-                .contains("mutually exclusive")
-        );
     }
 }

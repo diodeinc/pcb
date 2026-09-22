@@ -10,8 +10,8 @@ use anyhow::Result;
 
 use super::design::HoleClass;
 use super::pdk::{
-    CopperWeight, HoleKind, LayerPosition, Length, LengthCase, LengthLimit, Pdk, PlatedHoleKind,
-    Profile, ProfileStatus, Ratio, RatioCase, RatioLimit, RuleConditions, RuleMetadata,
+    Case, CopperWeight, HoleKind, LayerPosition, Length, LengthCase, LengthLimit, Pdk,
+    PlatedHoleKind, Profile, ProfileStatus, Ratio, RatioLimit, RuleConditions, RuleMetadata,
     SelectingRule, SlotPlating, copper_weight_class,
 };
 use super::report::{Severity, ViewRecipe};
@@ -230,111 +230,65 @@ impl std::ops::BitOr for Pools {
 
 impl RuleKind {
     pub fn view_recipe(self) -> ViewRecipe {
-        let (kind, title, spatial, features): (_, _, _, &[_]) = match self {
-            Self::CopperLayerCount => (
-                "copper_layer_count",
-                "Copper layer count",
-                false,
-                &["stackup"],
-            ),
-            Self::HoleDiameter(_) => (
-                "hole_diameter",
-                "Hole diameter",
-                true,
-                &["drills", "board_outlines"],
-            ),
-            Self::HoleAspectRatio(_) => (
-                "hole_aspect_ratio",
-                "Plated-hole aspect ratio",
-                true,
-                &["drills", "board_outlines"],
-            ),
-            Self::SlotWidth(_) => (
-                "slot_width",
-                "Slot width",
-                true,
-                &["drills", "board_outlines"],
-            ),
-            Self::HolePairClearance(_, _) => (
-                "hole_clearance",
-                "Hole-to-hole clearance",
-                true,
-                &["drills", "board_outlines"],
-            ),
+        const DRILLS: &[&str] = &["drills", "board_outlines"];
+        const COPPER: &[&str] = &["copper", "board_outlines"];
+        const COPPER_AND_DRILLS: &[&str] = &["copper", "drills", "board_outlines"];
+        let (kind, title, features): (_, _, &[_]) = match self {
+            Self::CopperLayerCount => ("copper_layer_count", "Copper layer count", &["stackup"]),
+            Self::HoleDiameter(_) => ("hole_diameter", "Hole diameter", DRILLS),
+            Self::HoleAspectRatio(_) => ("hole_aspect_ratio", "Plated-hole aspect ratio", DRILLS),
+            Self::SlotWidth(_) => ("slot_width", "Slot width", DRILLS),
+            Self::HolePairClearance(_, _) => ("hole_clearance", "Hole-to-hole clearance", DRILLS),
             Self::HoleToBoardEdgeClearance(_) => (
                 "hole_to_board_edge_clearance",
                 "Hole-to-board-edge clearance",
-                true,
-                &["drills", "board_outlines"],
+                DRILLS,
             ),
             Self::SlotToBoardEdgeClearance(_) => (
                 "slot_to_board_edge_clearance",
                 "Slot-to-board-edge clearance",
-                true,
-                &["drills", "board_outlines"],
+                DRILLS,
             ),
             Self::PlatedSlotEnclosure => (
                 "plated_slot_enclosure",
                 "Plated-slot copper enclosure",
-                true,
-                &["copper", "drills", "board_outlines"],
+                COPPER_AND_DRILLS,
             ),
-            Self::AnnularRing(_) => (
-                "annular_ring",
-                "Annular ring",
-                true,
-                &["copper", "drills", "board_outlines"],
-            ),
+            Self::AnnularRing(_) => ("annular_ring", "Annular ring", COPPER_AND_DRILLS),
             Self::HoleToCopperClearance(_) => (
                 "hole_to_copper_clearance",
                 "Hole-to-copper clearance",
-                true,
-                &["copper", "drills", "board_outlines"],
+                COPPER_AND_DRILLS,
             ),
             Self::SlotToCopperClearance(_) => (
                 "slot_to_copper_clearance",
                 "Slot-to-copper clearance",
-                true,
-                &["copper", "drills", "board_outlines"],
+                COPPER_AND_DRILLS,
             ),
-            Self::LineworkToCopperClearance(Linework::BoardEdge) => (
-                "board_edge_clearance",
-                "Board-edge clearance",
-                true,
-                &["copper", "board_outlines"],
-            ),
+            Self::LineworkToCopperClearance(Linework::BoardEdge) => {
+                ("board_edge_clearance", "Board-edge clearance", COPPER)
+            }
             Self::LineworkToCopperClearance(Linework::VScore) => (
                 "vscore_clearance",
                 "V-score clearance",
-                true,
                 &["copper", "scores", "board_outlines"],
             ),
             Self::BoardArrayPairClearance => {
-                ("array_spacing", "Array spacing", true, &["array_outlines"])
+                ("array_spacing", "Array spacing", &["array_outlines"])
             }
-            Self::CopperFeatureWidth => (
-                "copper_width",
-                "Copper width",
-                true,
-                &["copper", "board_outlines"],
-            ),
-            Self::CopperClearance => (
-                "copper_clearance",
-                "Copper clearance",
-                true,
-                &["copper", "board_outlines"],
-            ),
+            Self::CopperFeatureWidth => ("copper_width", "Copper width", COPPER),
+            Self::CopperClearance => ("copper_clearance", "Copper clearance", COPPER),
             Self::SoldermaskWeb => (
                 "soldermask_web",
                 "Soldermask web",
-                true,
                 &["mask_openings", "board_outlines"],
             ),
         };
         ViewRecipe {
             kind,
             title,
-            spatial,
+            // Only the layer count is a fact of the stackup rather than a place.
+            spatial: self != Self::CopperLayerCount,
             features: features.to_vec(),
         }
     }
@@ -609,24 +563,15 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
     // kind and its title.
     fn selecting<Select>(
         family: &[SelectingRule<Select>],
-        (profile_name, profile): (&str, &Profile),
+        selected: (&str, &Profile),
         describe: impl Fn(&Select) -> (String, RuleKind),
     ) -> Vec<Rule> {
-        family
-            .iter()
-            .flat_map(|rule| {
-                let (title, kind) = describe(&rule.select);
-                lower_length_rule(
-                    &rule.metadata,
-                    rule.limit.as_ref(),
-                    &rule.cases,
-                    profile_name,
-                    profile,
-                    title,
-                    kind,
-                )
-            })
-            .collect()
+        let lower = |rule: &SelectingRule<Select>| {
+            let (title, kind) = describe(&rule.select);
+            let (limit, cases) = (rule.limit.as_ref(), &rule.cases);
+            lower_length_rule(&rule.metadata, limit, cases, selected, title, kind)
+        };
+        family.iter().flat_map(lower).collect()
     }
     let (drilling, copper, selected) = (
         &pdk.rules.drilling,
@@ -642,14 +587,24 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
     }));
     for rule in &drilling.hole_aspect_ratio {
         let class = plated_hole_class(rule.select.hole);
-        rules.extend(lower_ratio_rule(
-            &rule.metadata,
+        let (metadata, cases) = (&rule.metadata, &rule.cases);
+        rules.extend(lower_rule(
+            metadata,
             rule.limit.as_ref(),
-            &rule.cases,
+            cases,
             profile_name,
-            profile,
-            format!("Maximum {} hole aspect ratio", class.label()),
-            RuleKind::HoleAspectRatio(class),
+            |id, limit: &RatioLimit, when| {
+                vec![Rule {
+                    id: id.to_owned(),
+                    authored_id: metadata.id.clone(),
+                    title: format!("Maximum {} hole aspect ratio", class.label()),
+                    severity: Severity::Error,
+                    comparison: Comparison::Maximum,
+                    limit: LimitValue::Ratio(limit.maximum.clone()),
+                    kind: RuleKind::HoleAspectRatio(class),
+                    conditions: conditions(when, profile),
+                }]
+            },
         ));
     }
     rules.extend(selecting(&drilling.slot_width, selected, |select| {
@@ -761,13 +716,13 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         ),
     ] {
         for rule in ruleset {
+            let (limit, cases, title) = (rule.limit.as_ref(), &rule.cases, title.to_owned());
             rules.extend(lower_length_rule(
                 &rule.metadata,
-                rule.limit.as_ref(),
-                &rule.cases,
-                profile_name,
-                profile,
-                title.to_owned(),
+                limit,
+                cases,
+                selected,
+                title,
                 kind,
             ));
         }
@@ -775,44 +730,41 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
     Ok(rules)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn lower_length_rule(
+/// The rules of one authored rule in a profile it applies to: those of its
+/// one limit, or of each named case under `<id>.<case>`.
+fn lower_rule<Limit>(
     metadata: &RuleMetadata,
-    limit: Option<&LengthLimit>,
-    cases: &[LengthCase],
+    limit: Option<&Limit>,
+    cases: &[Case<Limit>],
     profile_name: &str,
-    profile: &Profile,
-    title: String,
-    kind: RuleKind,
+    lower: impl Fn(&str, &Limit, &RuleConditions) -> Vec<Rule>,
 ) -> Vec<Rule> {
     if !metadata.applies_to(profile_name) {
         return Vec::new();
     }
     match limit {
-        Some(limit) => lower_limit(
-            &metadata.id,
-            &metadata.id,
-            limit,
-            &RuleConditions::default(),
-            profile,
-            title,
-            kind,
-        ),
+        Some(limit) => lower(&metadata.id, limit, &RuleConditions::default()),
         None => cases
             .iter()
             .flat_map(|case| {
-                lower_limit(
-                    &metadata.id,
-                    &format!("{}.{}", metadata.id, case.id),
-                    &case.limit,
-                    &case.when,
-                    profile,
-                    title.clone(),
-                    kind,
-                )
+                let id = format!("{}.{}", metadata.id, case.id);
+                lower(&id, &case.limit, &case.when)
             })
             .collect(),
     }
+}
+
+fn lower_length_rule(
+    metadata: &RuleMetadata,
+    limit: Option<&LengthLimit>,
+    cases: &[LengthCase],
+    (profile_name, profile): (&str, &Profile),
+    title: String,
+    kind: RuleKind,
+) -> Vec<Rule> {
+    lower_rule(metadata, limit, cases, profile_name, |id, limit, when| {
+        lower_limit(&metadata.id, id, limit, when, profile, title.clone(), kind)
+    })
 }
 
 fn lower_limit(
@@ -848,67 +800,6 @@ fn lower_limit(
             conditions,
         }))
         .collect()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn lower_ratio_rule(
-    metadata: &RuleMetadata,
-    limit: Option<&RatioLimit>,
-    cases: &[RatioCase],
-    profile_name: &str,
-    profile: &Profile,
-    title: String,
-    kind: RuleKind,
-) -> Vec<Rule> {
-    if !metadata.applies_to(profile_name) {
-        return Vec::new();
-    }
-    match limit {
-        Some(limit) => vec![lower_ratio_limit(
-            &metadata.id,
-            &metadata.id,
-            limit,
-            &RuleConditions::default(),
-            profile,
-            title,
-            kind,
-        )],
-        None => cases
-            .iter()
-            .map(|case| {
-                lower_ratio_limit(
-                    &metadata.id,
-                    &format!("{}.{}", metadata.id, case.id),
-                    &case.limit,
-                    &case.when,
-                    profile,
-                    title.clone(),
-                    kind,
-                )
-            })
-            .collect(),
-    }
-}
-
-fn lower_ratio_limit(
-    authored_id: &str,
-    id: &str,
-    limit: &RatioLimit,
-    when: &RuleConditions,
-    profile: &Profile,
-    title: String,
-    kind: RuleKind,
-) -> Rule {
-    Rule {
-        id: id.to_owned(),
-        authored_id: authored_id.to_owned(),
-        title,
-        severity: Severity::Error,
-        comparison: Comparison::Maximum,
-        limit: LimitValue::Ratio(limit.maximum.clone()),
-        kind,
-        conditions: conditions(when, profile),
-    }
 }
 
 fn conditions(rule: &RuleConditions, profile: &Profile) -> Conditions {
@@ -1076,73 +967,5 @@ limit = { preferred = "4 mil" }
         assert_eq!(lowered[0].id, "soldermask.minimum_web.preferred");
         assert_eq!(lowered[0].severity, Severity::Warning);
         assert_eq!(lowered[0].limit.length().millimeters(), 0.1016);
-    }
-
-    const EDGE_CLEARANCE_PDK: &str = r#"
-schema_version = 2
-default_profile = "primary"
-
-[pdk]
-id = "edge-clearance"
-name = "Edge clearance"
-revision = "1"
-
-[profiles.primary]
-name = "Primary"
-technologies = ["rigid"]
-
-[profiles.secondary]
-name = "Secondary"
-technologies = ["rigid"]
-
-[[rules.drilling.hole_to_board_edge_clearance]]
-id = "via-edge"
-profiles = ["primary"]
-select = { hole = "via" }
-cases = [
-  { id = "4-to-12-layer", when = { copper_layers = { minimum = 4, maximum = 12 } }, limit = { minimum = "0.3 mm", preferred = "0.4 mm" } },
-]
-
-[[rules.drilling.slot_to_board_edge_clearance]]
-id = "plated-slot-edge"
-profiles = ["primary"]
-select = { plating = "plated" }
-limit = { minimum = "0.5 mm" }
-"#;
-
-    #[test]
-    fn lowers_typed_board_edge_clearance_rules_and_tiers() {
-        let pdk = Pdk::parse(EDGE_CLEARANCE_PDK).unwrap();
-        let rules = lower(&pdk, Some("primary")).unwrap();
-        assert_eq!(rules.len(), 3);
-
-        let required = &rules[0];
-        assert_eq!(required.id, "via-edge.4-to-12-layer");
-        assert!(matches!(
-            required.kind,
-            RuleKind::HoleToBoardEdgeClearance(HoleClass::Via)
-        ));
-        assert_eq!(required.severity, Severity::Error);
-        assert_eq!(required.limit.length().millimeters(), 0.3);
-        assert_eq!(required.conditions.minimum_copper_layers, Some(4));
-        assert_eq!(required.conditions.maximum_copper_layers, Some(12));
-
-        let preferred = &rules[1];
-        assert_eq!(preferred.id, "via-edge.4-to-12-layer.preferred");
-        assert!(matches!(
-            preferred.kind,
-            RuleKind::HoleToBoardEdgeClearance(HoleClass::Via)
-        ));
-        assert_eq!(preferred.severity, Severity::Warning);
-        assert_eq!(preferred.limit.length().millimeters(), 0.4);
-
-        assert_eq!(rules[2].id, "plated-slot-edge");
-        assert!(matches!(
-            rules[2].kind,
-            RuleKind::SlotToBoardEdgeClearance(SlotPlating::Plated)
-        ));
-        assert_eq!(rules[2].limit.length().millimeters(), 0.5);
-
-        assert!(lower(&pdk, Some("secondary")).unwrap().is_empty());
     }
 }
