@@ -34,14 +34,7 @@ pub fn stroke_to_fill(
     style: StrokeStyle,
     accuracy: GeometryAccuracy,
 ) -> Result<Option<Vec<ContourBuf>>, AccuracyError> {
-    if !style.width.is_finite()
-        || contours.iter().any(|c| {
-            !c.bbox.is_valid()
-                || !c.uncertainty_mm.is_finite()
-                || c.uncertainty_mm < 0.0
-                || !c.cmds.iter().all(|cmd| cmd.is_finite())
-        })
-    {
+    if !style.width.is_finite() || contours.iter().any(|contour| !contour.is_valid()) {
         return Err(AccuracyError::InvalidGeometry("invalid stroke geometry"));
     }
     if style.width <= 0.0 {

@@ -18,12 +18,7 @@ pub fn flatten_within(
     contours: &[ContourBuf],
     accuracy: GeometryAccuracy,
 ) -> Result<(Vec<Ring>, f64), AccuracyError> {
-    if contours.iter().any(|c| {
-        !c.bbox.is_valid()
-            || !c.uncertainty_mm.is_finite()
-            || c.uncertainty_mm < 0.0
-            || !c.cmds.iter().all(|cmd| cmd.is_finite())
-    }) {
+    if contours.iter().any(|contour| !contour.is_valid()) {
         return Err(AccuracyError::InvalidGeometry(
             "invalid coordinates or significance tolerance",
         ));

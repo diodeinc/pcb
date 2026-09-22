@@ -9,8 +9,7 @@ use std::ops::Range;
 
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
-use crate::geom::path::{ContourBuf, PathCmd, PathOp, contour_bbox, validate_cmd_points};
-use crate::geom::point::Point;
+use crate::geom::path::{ContourBuf, PathCmd, contour_bbox, transformed_cmds, validate_cmd_points};
 use crate::geom::style::{FillRule, LineCap, Paint, StrokeStyle};
 
 /// A half-open range of `u32` indices into one of a document's flat arenas.
@@ -267,16 +266,8 @@ impl PathArena {
                         ..*contour
                     }
                 } else {
-                    let mut current = Point::default();
-                    let mut subpath_start = current;
-                    self.cmds.extend(source.iter().map(|cmd| {
-                        let transformed = cmd.transformed(transform, current);
-                        if cmd.op == PathOp::MoveTo {
-                            subpath_start = cmd.p0;
-                        }
-                        current = cmd.end_point().unwrap_or(subpath_start);
-                        transformed
-                    }));
+                    self.cmds
+                        .extend(transformed_cmds(source.iter().copied(), transform));
                     Contour {
                         cmds: Span::new(cmd_start as u32, source.len() as u32),
                         bbox: contour_bbox(&self.cmds[cmd_start..]),

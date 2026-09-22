@@ -200,13 +200,9 @@ impl ContourBuf {
     /// chord's bisector, which keeps it on its side of the chord and so keeps
     /// the sweep. What the radii disagreed by is charged to the uncertainty.
     pub fn with_consistent_arcs(self) -> Self {
-        let mut current = Point::default();
-        let mut start = current;
         let mut disagreement: f64 = 0.0;
-        let cmds = self
-            .cmds
-            .into_iter()
-            .map(|mut cmd| {
+        let cmds = with_current_point(self.cmds)
+            .map(|(current, mut cmd)| {
                 if cmd.op == PathOp::ArcTo {
                     let chord = cmd.p0 - current;
                     let radii = current.distance_to(cmd.p1) - cmd.p0.distance_to(cmd.p1);
@@ -217,10 +213,6 @@ impl ContourBuf {
                         disagreement = disagreement.max(radii.abs());
                     }
                 }
-                if cmd.op == PathOp::MoveTo {
-                    start = cmd.p0;
-                }
-                current = cmd.end_point().unwrap_or(start);
                 cmd
             })
             .collect();
@@ -231,30 +223,24 @@ impl ContourBuf {
     /// under similarities and become elliptical arcs otherwise; nothing is
     /// approximated. Prior uncertainty scales with the transform.
     pub fn transformed(self, transform: Affine2) -> Self {
-        let scale = transform.max_scale();
-        let mut current = Point::default();
-        let mut start = current;
-        let cmds = self
-            .cmds
-            .into_iter()
-            .map(|cmd| {
-                let transformed = cmd.transformed(transform, current);
-                if cmd.op == PathOp::MoveTo {
-                    start = cmd.p0;
-                }
-                current = cmd.end_point().unwrap_or(start);
-                transformed
-            })
-            .collect::<Vec<_>>();
+        let cmds = transformed_cmds(self.cmds, transform).collect::<Vec<_>>();
         Self {
             bbox: contour_bbox(&cmds),
             cmds,
-            uncertainty_mm: self.uncertainty_mm * scale,
+            uncertainty_mm: self.uncertainty_mm * transform.max_scale(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.cmds.is_empty()
+    }
+
+    /// Whether the bounds, the recorded uncertainty and every point are usable.
+    pub(crate) fn is_valid(&self) -> bool {
+        self.bbox.is_valid()
+            && self.uncertainty_mm.is_finite()
+            && self.uncertainty_mm >= 0.0
+            && self.cmds.iter().all(|cmd| cmd.is_finite())
     }
 
     pub fn segments(&self) -> Segments<'_> {
@@ -273,10 +259,8 @@ impl ContourBuf {
     pub fn flattened_curves(&self, accuracy: GeometryAccuracy) -> Result<Self, AccuracyError> {
         let allowance = accuracy.allowance(self.uncertainty_mm)?;
         let mut cmds = Vec::with_capacity(self.cmds.len());
-        let mut current = Point::default();
-        let mut start = current;
         let mut added: f64 = 0.0;
-        for cmd in &self.cmds {
+        for (current, cmd) in with_current_point(self.cmds.iter().copied()) {
             match cmd.op {
                 PathOp::EllipseTo => {
                     let segment = Segment::Ellipse(cmd.elliptical_arc(current));
@@ -284,12 +268,8 @@ impl ContourBuf {
                     added = added.max(error);
                     cmds.extend(points.into_iter().map(PathCmd::line_to));
                 }
-                _ => cmds.push(*cmd),
+                _ => cmds.push(cmd),
             }
-            if cmd.op == PathOp::MoveTo {
-                start = cmd.p0;
-            }
-            current = cmd.end_point().unwrap_or(start);
         }
         Ok(Self::new(cmds).with_uncertainty(self.uncertainty_mm + added))
     }
@@ -491,43 +471,51 @@ impl Iterator for Segments<'_> {
 
 pub use crate::geom::stroke::stroke_to_fill;
 
-pub fn contour_bbox(cmds: &[PathCmd]) -> BBox {
-    let mut bbox = BBox::empty();
+/// Every command with the current point it draws from.
+fn with_current_point(
+    cmds: impl IntoIterator<Item = PathCmd>,
+) -> impl Iterator<Item = (Point, PathCmd)> {
     let mut current = Point::default();
     let mut start = current;
-    for cmd in cmds {
+    cmds.into_iter().map(move |cmd| {
+        let from = current;
         if cmd.op == PathOp::MoveTo {
             start = cmd.p0;
         }
+        current = cmd.end_point().unwrap_or(start);
+        (from, cmd)
+    })
+}
+
+/// Exact images of a command stream under an affine transform.
+pub(crate) fn transformed_cmds(
+    cmds: impl IntoIterator<Item = PathCmd>,
+    transform: Affine2,
+) -> impl Iterator<Item = PathCmd> {
+    with_current_point(cmds).map(move |(current, cmd)| cmd.transformed(transform, current))
+}
+
+pub fn contour_bbox(cmds: &[PathCmd]) -> BBox {
+    with_current_point(cmds.iter().copied()).fold(BBox::empty(), |mut bbox, (current, cmd)| {
         match cmd.op {
-            PathOp::MoveTo | PathOp::LineTo => {
-                current = cmd.p0;
-                bbox.include_point(cmd.p0);
-            }
+            PathOp::MoveTo | PathOp::LineTo => bbox.include_point(cmd.p0),
             PathOp::ArcTo => {
-                bbox = bbox.union(Arc::new(current, cmd.p0, cmd.p1, cmd.clockwise).bbox());
-                current = cmd.p0;
+                bbox = bbox.union(Arc::new(current, cmd.p0, cmd.p1, cmd.clockwise).bbox())
             }
-            PathOp::EllipseTo => {
-                bbox = bbox.union(cmd.elliptical_arc(current).bbox());
-                current = cmd.p0;
-            }
-            PathOp::Close => current = start,
+            PathOp::EllipseTo => bbox = bbox.union(cmd.elliptical_arc(current).bbox()),
+            PathOp::Close => {}
         }
-    }
-    bbox
+        bbox
+    })
 }
 
 pub(crate) fn validate_cmd_points(name: &str, cmds: &[PathCmd]) -> Result<(), String> {
-    for (index, cmd) in cmds.iter().enumerate() {
-        if !cmd.p0.is_finite() || !cmd.p1.is_finite() || !cmd.p2.is_finite() || !cmd.p3.is_finite()
-        {
-            return Err(format!(
-                "{name} path command {index} contains non-finite point"
-            ));
-        }
+    match cmds.iter().position(|cmd| !cmd.is_finite()) {
+        Some(index) => Err(format!(
+            "{name} path command {index} contains non-finite point"
+        )),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 #[cfg(test)]
