@@ -2,15 +2,13 @@
 
 use super::*;
 
-pub(super) fn populate_ipc_specs(doc: &mut GeometryDocument, ipc: &Ipc2581) {
-    let Some(ecad) = ipc.ecad() else {
-        return;
-    };
-
-    doc.specs.clear();
-    doc.spec_items.clear();
-
-    let mut specs = ecad.cad_header.specs.values().collect::<Vec<_>>();
+/// Fill the spec tables of a document that has none, in name order.
+pub(super) fn populate_ipc_specs(
+    doc: &mut GeometryDocument,
+    ipc: &Ipc2581,
+    specs: &HashMap<Symbol, ipc2581::types::Spec>,
+) {
+    let mut specs = specs.values().collect::<Vec<_>>();
     specs.sort_by(|left, right| ipc.resolve(left.name).cmp(ipc.resolve(right.name)));
 
     for spec in specs {

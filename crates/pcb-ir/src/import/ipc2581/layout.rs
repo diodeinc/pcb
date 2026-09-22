@@ -56,7 +56,7 @@ pub fn extract_layout(ipc: &Ipc2581) -> Result<GeometryDocument> {
     {
         doc.layout.steps[root_step as usize].purpose = LayoutPurpose::FabricationPanel;
     }
-    populate_ipc_specs(&mut doc, ipc);
+    populate_ipc_specs(&mut doc, ipc, &ecad.cad_header.specs);
     crate::dialects::ipc::process::normalize_bounds(&mut doc);
     Ok(doc)
 }
