@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.58] - 2026-09-22
+
 ### Fixed
 
 - Stop exporting slots and routed cutouts as copper in Gerber copper layers.
@@ -2019,7 +2021,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.57...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.58...HEAD
+[0.4.58]: https://github.com/diodeinc/pcb/compare/v0.4.57...v0.4.58
 [0.4.57]: https://github.com/diodeinc/pcb/compare/v0.4.56...v0.4.57
 [0.4.56]: https://github.com/diodeinc/pcb/compare/v0.4.55...v0.4.56
 [0.4.55]: https://github.com/diodeinc/pcb/compare/v0.4.54...v0.4.55
