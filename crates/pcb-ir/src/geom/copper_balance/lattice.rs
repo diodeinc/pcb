@@ -198,15 +198,13 @@ fn minimum_partial_candidates(
 
     let min_radius = profile.min_void_radius_mm;
     let max_radius = profile.max_void_radius_mm;
-    let min_trials = uniform_candidates(centers, min_radius);
-    let max_trials = uniform_candidates(centers, max_radius);
-    let accepted_at_min =
-        accepted_candidate_mask(disk_center_region, &min_trials, depths_mm, profile)?;
-    let accepted_at_max =
-        accepted_candidate_mask(disk_center_region, &max_trials, depths_mm, profile)?;
-    let mut bounds = accepted_at_min
+    let accepted_at = |radius: f64| {
+        let trials = uniform_candidates(centers, radius);
+        accepted_candidate_mask(disk_center_region, &trials, depths_mm, profile)
+    };
+    let mut bounds = accepted_at(min_radius)?
         .into_iter()
-        .zip(accepted_at_max)
+        .zip(accepted_at(max_radius)?)
         .map(|(at_min, at_max)| match (at_min, at_max) {
             (true, _) => Some((min_radius, min_radius)),
             (false, true) => Some((min_radius, max_radius)),
