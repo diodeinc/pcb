@@ -1096,9 +1096,13 @@ impl LspContext for LspEvalContext {
 
     fn warm_workspace(&self, workspace_roots: &[PathBuf]) {
         // Workspace discovery and resolution dominate the first evaluation. A
-        // folder without a manifest is not a workspace; do not walk it.
+        // folder without a manifest is not a workspace; do not walk it. A
+        // manifest that does not parse makes `workspace_root_for` panic; skip
+        // it so the warm-up cannot take the server down at start-up.
         for root in workspace_roots {
-            if self.file_provider.exists(&root.join("pcb.toml")) {
+            if self.file_provider.exists(&root.join("pcb.toml"))
+                && find_workspace_root(self.file_provider.as_ref(), root).is_ok()
+            {
                 self.resolution_for(root);
             }
         }
@@ -2140,20 +2144,23 @@ pcb-version = "0.4"
     }
 
     #[test]
-    fn warm_workspace_resolves_only_manifest_roots() -> anyhow::Result<()> {
+    fn warm_workspace_resolves_only_valid_manifest_roots() -> anyhow::Result<()> {
         let workspace = tempfile::tempdir()?;
         let plain_folder = tempfile::tempdir()?;
+        let malformed = tempfile::tempdir()?;
         let main_path = workspace.path().join("main.zen");
         fs::write(
             workspace.path().join("pcb.toml"),
             "[workspace]\npcb-version = \"0.4\"\n",
         )?;
         fs::write(&main_path, "x = 1\n")?;
+        fs::write(malformed.path().join("pcb.toml"), "[workspace\n")?;
 
         let ctx = LspEvalContext::default();
         ctx.warm_workspace(&[
             workspace.path().to_path_buf(),
             plain_folder.path().to_path_buf(),
+            malformed.path().to_path_buf(),
         ]);
 
         assert_eq!(
@@ -2163,7 +2170,7 @@ pcb-version = "0.4"
                 .keys()
                 .collect::<Vec<_>>(),
             vec![&ctx.workspace_root_for(&main_path)],
-            "only the manifest root is resolved, under the key evaluation looks up"
+            "only the valid manifest root is resolved, under the key evaluation looks up"
         );
 
         Ok(())
