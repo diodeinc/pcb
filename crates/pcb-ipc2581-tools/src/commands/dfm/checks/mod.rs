@@ -942,6 +942,7 @@ impl Ownership {
                 step,
                 instance,
                 net,
+                ..
             } => step == self.step && instance == self.instance && self.nets.contains(&net),
             ConductorId::Isolated { occurrence, .. } => {
                 self.lands.iter().any(|land| land.0 == occurrence)

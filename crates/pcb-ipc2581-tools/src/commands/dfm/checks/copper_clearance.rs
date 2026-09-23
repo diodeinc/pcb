@@ -10,14 +10,13 @@
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
-use pcb_ir::geom::dfm::{
-    region_clearance_sites_except_contacts, region_clearance_sites_with_index,
-    region_clearance_within,
-};
-use pcb_ir::geom::{BBox, ContourSet, tol};
+use pcb_ir::dialects::ipc::FeatureKind;
+use pcb_ir::geom::BBox;
+use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
+use std::collections::HashSet;
 
 use crate::commands::dfm::design::{
-    ConductorId, CopperConductor, CopperLayer, Design, NET_SHORT_LOCATION_TOLERANCE_MM, spans,
+    ConductorId, CopperLayer, Design, NET_SHORT_LOCATION_TOLERANCE_MM, component_copper, spans,
 };
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
@@ -29,63 +28,89 @@ struct Piece {
     region: pcb_ir::geom::ContourSet,
 }
 
-/// Bound where approximation could change this pair's contact. Guaranteed
-/// material is a lower bound; the image plus all approximation bounds is an
-/// upper bound. Equal intersections certify the contact even when an uncertain
-/// operand is redundant inside an exact pad. Use entire owners, not pieces:
-/// another island or clear operand may also affect this neighborhood.
-fn contact_approximation_bounds(
-    first: &CopperConductor,
-    second: &CopperConductor,
-    neighborhood: BBox,
-) -> Result<Vec<BBox>, pcb_ir::geom::AccuracyError> {
-    if !first
-        .approximation_bounds
-        .iter()
-        .chain(&second.approximation_bounds)
-        .any(|bounds| bounds.intersects(neighborhood))
-    {
-        return Ok(Vec::new());
-    }
-    let resolution = first.image.resolution.strict();
-    let window = ContourSet::rectangle(neighborhood, resolution);
-    let possible = |owner: &CopperConductor| {
-        let mut image = owner.image.intersection(&window)?;
-        for &bbox in &owner.approximation_bounds {
-            if bbox.intersects(neighborhood) {
-                image.union_assign(
-                    &ContourSet::rectangle(bbox, resolution).intersection(&window)?,
-                )?;
-            }
-        }
-        Ok::<_, pcb_ir::geom::AccuracyError>(image)
-    };
-    let upper = possible(first)?.intersection(&possible(second)?)?;
-    let lower = first
-        .guaranteed_image
-        .intersection(&window)?
-        .intersection(&second.guaranteed_image)?;
-    // Separate paint folds round shared vertices independently. Forgive only
-    // numerical coincidence at the lower bound's boundary, never an area
-    // cutoff or the much larger source-approximation budget.
-    Ok(upper
-        .difference(&lower.disk_dilate(tol::EPSILON_MM)?)?
-        .connected_components()
-        .into_iter()
-        .map(|region| region.bbox)
-        .collect())
-}
-
 pub(super) fn evaluate(
     limit_mm: f64,
     conditions: &Conditions,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
     let measure = |layer: &CopperLayer| {
-        let conductors = layer
-            .contact_conductors
-            .as_ref()
-            .unwrap_or(&layer.conductors);
+        let conductors = &layer.conductors;
+        // Like KiCad, permit a tied graphic to meet the group's nets, but
+        // never merge those nets. Pad-only ties permit just the pad pair.
+        let mut permissions = HashSet::new();
+        let mut pad_pairs = HashSet::new();
+        for short in &layer.net_shorts {
+            let objects = short.nets.map(|net| {
+                conductors
+                    .iter()
+                    .filter_map(|conductor| {
+                        let ConductorId::Net {
+                            object: Some(object),
+                            ..
+                        } = conductor.id
+                        else {
+                            return None;
+                        };
+                        if conductor.id.electrical() != net {
+                            return None;
+                        }
+                        let distance = conductor
+                            .image
+                            .prepare_query()
+                            .signed_distance(short.location)?;
+                        if distance.mm
+                            > conductor.image.uncertainty_mm + NET_SHORT_LOCATION_TOLERANCE_MM
+                        {
+                            return None;
+                        }
+                        let feature = design.imported.feature_definition(object.feature)?;
+                        Some((
+                            conductor.id,
+                            component_copper(&design.imported.geometry, feature)?,
+                            feature.kind,
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let mut matched = false;
+            for &(first, component, first_kind) in &objects[0] {
+                for &(second, other_component, second_kind) in &objects[1] {
+                    if component != other_component {
+                        continue;
+                    }
+                    match (
+                        first_kind == FeatureKind::Padstack,
+                        second_kind == FeatureKind::Padstack,
+                    ) {
+                        (false, true) => {
+                            permissions.insert((first, second.electrical()));
+                        }
+                        (true, false) => {
+                            permissions.insert((second, first.electrical()));
+                        }
+                        (true, true) => {
+                            pad_pairs.insert((first, second));
+                        }
+                        (false, false) => continue,
+                    }
+                    matched = true;
+                }
+            }
+            anyhow::ensure!(
+                matched,
+                "NetShort at ({}, {}) on '{}' has no matching component graphic/pad or pad/pad contact",
+                short.location.x,
+                short.location.y,
+                layer.layer.name
+            );
+        }
+        let permitted = |first: ConductorId, second: ConductorId| {
+            first.electrical() == second.electrical()
+                || permissions.contains(&(first, second.electrical()))
+                || permissions.contains(&(second, first.electrical()))
+                || pad_pairs.contains(&(first, second))
+                || pad_pairs.contains(&(second, first))
+        };
         // A conductor whose bounds come within the limit of no other's is
         // proven clear whole; only the rest are taken apart into pieces.
         let mut by_x = (0..conductors.len()).collect::<Vec<_>>();
@@ -139,44 +164,6 @@ pub(super) fn evaluate(
             .iter()
             .map(|piece| piece.region.prepare_query())
             .collect::<Vec<_>>();
-        let mut authorized = std::collections::HashMap::<_, Vec<_>>::new();
-        for short in &layer.net_shorts {
-            let mut contacts = Vec::new();
-            for (first, _) in pieces
-                .iter()
-                .enumerate()
-                .filter(|(_, piece)| conductors[piece.conductor_index].id == short.nets[0])
-            {
-                for (second, _) in pieces
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, piece)| conductors[piece.conductor_index].id == short.nets[1])
-                {
-                    let contains = |index: usize| {
-                        boundaries[index]
-                            .signed_distance(short.location)
-                            .is_some_and(|distance| distance.mm <= NET_SHORT_LOCATION_TOLERANCE_MM)
-                    };
-                    if !contains(first) || !contains(second) {
-                        continue;
-                    }
-                    contacts.push((first.min(second), first.max(second)));
-                }
-            }
-            if contacts.len() != 1 {
-                anyhow::bail!(
-                    "NetShort at ({}, {}) on '{}' must identify exactly one actual contact between its NetRefs (found {})",
-                    short.location.x,
-                    short.location.y,
-                    layer.layer.name,
-                    contacts.len()
-                );
-            }
-            authorized
-                .entry(contacts[0])
-                .or_default()
-                .push(short.location);
-        }
         // The pairs the bounds cannot separate, in sweep order along x.
         let pairs = pieces
             .iter()
@@ -189,12 +176,13 @@ pub(super) fn evaluate(
                         right.region.bbox.min.x - left.region.bbox.max.x < limit_mm
                     })
                     .filter(move |(_, right)| {
-                        left.conductor_index != right.conductor_index
-                            && spans(
-                                conductors[left.conductor_index].branch,
-                                conductors[right.conductor_index].branch,
-                            )
-                            && left.region.bbox.distance_to(right.region.bbox) < limit_mm
+                        !permitted(
+                            conductors[left.conductor_index].id,
+                            conductors[right.conductor_index].id,
+                        ) && spans(
+                            conductors[left.conductor_index].branch,
+                            conductors[right.conductor_index].branch,
+                        ) && left.region.bbox.distance_to(right.region.bbox) < limit_mm
                     })
                     .map(move |(offset, _)| (left_index, left_index + 1 + offset))
             })
@@ -203,55 +191,50 @@ pub(super) fn evaluate(
         let measure_pair = |(left_index, right_index): (usize, usize)| {
             let (left, right) = (&pieces[left_index], &pieces[right_index]);
             let right_boundary = &boundaries[right_index];
-            let contact_sites = authorized
-                .get(&(left_index, right_index))
-                .map(|locations| {
-                    let neighborhood = left
-                        .region
-                        .intersection(&right.region)?
-                        .bbox
-                        .expand(tol::EPSILON_MM);
-                    let approximation_bounds = contact_approximation_bounds(
-                        &conductors[left.conductor_index],
-                        &conductors[right.conductor_index],
-                        neighborhood,
-                    )?;
-                    region_clearance_sites_except_contacts(
-                        &left.region,
-                        &right.region,
-                        locations,
-                        NET_SHORT_LOCATION_TOLERANCE_MM,
-                        &approximation_bounds,
-                        limit_mm,
-                    )
-                    .map_err(|error| {
-                        anyhow::anyhow!(
-                            "NetShort on '{}': {error}; copper clearance cannot be certified",
-                            layer.layer.name
-                        )
-                    })
-                })
-                .transpose()?;
-            let distance = if let Some(sites) = &contact_sites {
-                sites
-                    .iter()
-                    .map(|site| site.distance)
-                    .min_by(|a, b| a.mm.total_cmp(&b.mm))
-            } else {
-                region_clearance_within(
-                    &left.region,
-                    &boundaries[left_index],
-                    &right.region,
-                    right_boundary,
-                    limit_mm,
-                )
-            };
-            let Some(distance) = distance else {
+            let Some(distance) = region_clearance_within(
+                &left.region,
+                &boundaries[left_index],
+                &right.region,
+                right_boundary,
+                limit_mm,
+            ) else {
                 return Ok(None);
             };
 
             let left_id = conductors[left.conductor_index].id;
             let right_id = conductors[right.conductor_index].id;
+            // A route may enter a tied pad where that pad meets its partner.
+            // This is a pad-position exception, not permission for the route's net.
+            let enters_pad = |target, incoming: ConductorId, point| {
+                pad_pairs.iter().any(|&(first, second)| {
+                    let entry = if first == target {
+                        second
+                    } else if second == target {
+                        first
+                    } else {
+                        return false;
+                    };
+                    entry.electrical() == incoming.electrical()
+                        && conductors
+                            .iter()
+                            .find(|conductor| conductor.id == entry)
+                            .and_then(|conductor| {
+                                conductor.image.prepare_query().signed_distance(point).map(
+                                    |distance| {
+                                        distance.mm
+                                            <= conductor.image.uncertainty_mm
+                                                + NET_SHORT_LOCATION_TOLERANCE_MM
+                                    },
+                                )
+                            })
+                            .unwrap_or(false)
+                })
+            };
+            if enters_pad(left_id, right_id, distance.first)
+                || enters_pad(right_id, left_id, distance.second)
+            {
+                return Ok(None);
+            }
             Ok::<_, anyhow::Error>(Some(Measured {
                 distance,
                 bbox: BBox::spanning(distance.first, distance.second),
@@ -265,28 +248,18 @@ pub(super) fn evaluate(
                     Evidence::bounds("second_conductor_component", right.region.bbox),
                 ],
                 sites: if violates(&distance, limit_mm) {
-                    let local_contacts = contact_sites.is_some();
-                    let sites = match contact_sites {
-                        Some(sites) => sites,
-                        None => region_clearance_sites_with_index(
-                            &left.region,
-                            &right.region,
-                            right_boundary,
-                            limit_mm,
-                        )?,
-                    };
-                    let mut reported = linework_clearance::report_sites(
+                    let sites = region_clearance_sites_with_index(
+                        &left.region,
+                        &right.region,
+                        right_boundary,
+                        limit_mm,
+                    )?;
+                    linework_clearance::report_sites(
                         sites,
                         std::slice::from_ref(&layer.layer),
                         limit_mm,
                         design.resolution,
-                    )?;
-                    if local_contacts {
-                        for site in &mut reported {
-                            site.note = Some("A separate contact or edge-pair gap remains outside the declared NetShort contact.".to_owned());
-                        }
-                    }
-                    reported
+                    )?
                 } else {
                     Vec::new()
                 },
@@ -405,6 +378,7 @@ mod tests {
     <LayerRef name="TOP"/>
     <DictionaryStandard units="MILLIMETER">
       <EntryStandard id="pad"><Circle diameter="0.1"/></EntryStandard>
+      <EntryStandard id="tie-pad"><RectCenter width="1" height="1"/></EntryStandard>
     </DictionaryStandard>
   </Content>
   <Ecad>
@@ -437,16 +411,19 @@ mod tests {
             <PolyStepSegment x="6.05" y="1"/><PolyStepSegment x="5.05" y="1"/>
             <PolyStepSegment x="5.05" y="0"/>
           </Polygon></Contour></UserSpecial></Features></Set>
-          <Set net="N4"><Features><UserSpecial><Contour><Polygon>
+          <Set net="N4" componentRef="NT1"><Features><UserSpecial><Contour><Polygon>
             <PolyBegin x="8" y="0"/><PolyStepSegment x="9" y="0"/>
             <PolyStepSegment x="9" y="1"/><PolyStepSegment x="8" y="1"/>
             <PolyStepSegment x="8" y="0"/>
           </Polygon></Contour></UserSpecial></Features></Set>
-          <Set net="N5"><Features><UserSpecial><Contour><Polygon>
-            <PolyBegin x="8.5" y="0"/><PolyStepSegment x="9.5" y="0"/>
-            <PolyStepSegment x="9.5" y="1"/><PolyStepSegment x="8.5" y="1"/>
-            <PolyStepSegment x="8.5" y="0"/>
-          </Polygon></Contour></UserSpecial></Features></Set>
+          <Set net="N4"><Pad padstackDefRef="padstack">
+            <Location x="7.75" y="0.5"/><StandardPrimitiveRef id="tie-pad"/>
+            <PinRef componentRef="NT1" pin="1"/>
+          </Pad></Set>
+          <Set net="N5"><Pad padstackDefRef="padstack">
+            <Location x="9" y="0.5"/><StandardPrimitiveRef id="tie-pad"/>
+            <PinRef componentRef="NT1" pin="2"/>
+          </Pad></Set>
         </LayerFeature>
       </Step>
     </CadData>
@@ -456,6 +433,94 @@ mod tests {
     fn run(xml: &str) -> checks::Results {
         let rule = "[[rules.copper.clearance]]\nid = \"copper-clearance\"\nlimit = { minimum = \"0.15 mm\" }";
         fixtures::run_board(xml, &fixtures::pdk(rule))
+    }
+
+    #[test]
+    fn graphic_permission_does_not_spread_to_other_objects_in_the_same_set() {
+        let declared = BOARD.replace(
+            "</Step>",
+            r#"
+          <LayerFeature layerRef="TOP"><Set><NetShort>
+            <NetRef name="N4"/><NetRef name="N5"/>
+            <Location x="8.75" y="0.5"/><LayerRef name="TOP"/>
+          </NetShort></Set></LayerFeature></Step>"#,
+        );
+        // This graphic touches the first graphic but is 0.05 mm from the pad.
+        // Neither shared Set/component/net nor copper continuity grants permission.
+        let extra = r#"<Features><UserSpecial><Contour><Polygon>
+          <PolyBegin x="8.2" y="0.75"/><PolyStepSegment x="8.45" y="0.75"/>
+          <PolyStepSegment x="8.45" y="1.5"/><PolyStepSegment x="8.2" y="1.5"/>
+          <PolyStepSegment x="8.2" y="0.75"/>
+        </Polygon></Contour></UserSpecial></Features>"#;
+        let xml = declared.replace(
+            r#"<Set net="N4" componentRef="NT1">"#,
+            &format!(r#"<Set net="N4" componentRef="NT1">{extra}"#),
+        );
+        let plain = run(&declared);
+        assert_eq!(plain.findings.len(), 1, "only the N2/N3 gap remains");
+        let results = run(&xml);
+        assert_eq!(results.findings.len(), 2);
+        assert!(results.findings.iter().any(|finding| {
+            finding
+                .subjects
+                .iter()
+                .any(|s| s.net.as_deref() == Some("N4"))
+                && (finding.measurement.actual_mm().unwrap() - 0.05).abs() < 1e-6
+        }));
+    }
+
+    #[test]
+    fn pad_tie_allows_pad_entry_but_not_remote_shorts_on_the_same_nets() {
+        let pad = r#"<Set net="A"><Pad padstackDefRef="padstack">
+          <Location x="12" y="0.5"/><StandardPrimitiveRef id="tie-pad"/>
+          <PinRef componentRef="NT2" pin="1"/></Pad></Set>"#;
+        let other = pad
+            .replace("net=\"A\"", "net=\"B\"")
+            .replace("pin=\"1\"", "pin=\"2\"")
+            .replace("x=\"12\"", "x=\"12.4\"");
+        let tie = r#"<Set><NetShort><NetRef name="A"/><NetRef name="B"/>
+          <Location x="12.2" y="0.5"/><LayerRef name="TOP"/></NetShort></Set>"#;
+        let board = BOARD.replace(
+            "</Step>",
+            &format!(
+                r#"
+          <LayerFeature layerRef="TOP">{pad}{other}{tie}</LayerFeature></Step>"#
+            ),
+        );
+        assert_eq!(
+            run(&board).findings.len(),
+            2,
+            "only the original violations remain"
+        );
+        // Entry through the tied pad is allowed, as in KiCad.
+        let track = r#"<Set net="A"><Features><UserSpecial>
+          <Line startX="12" startY="0.5" endX="11" endY="0.5"><LineDesc lineWidth="0.2" lineEnd="ROUND"/></Line>
+        </UserSpecial></Features></Set>"#;
+        let board = board.replace(
+            "</Step>",
+            &format!(
+                r#"
+          <LayerFeature layerRef="TOP">{track}</LayerFeature></Step>"#
+            ),
+        );
+        assert_eq!(run(&board).findings.len(), 2);
+        let remote = other.replace("x=\"12.4\"", "x=\"10.75\"");
+        let board = board.replace(
+            "</Step>",
+            &format!(
+                r#"
+          <LayerFeature layerRef="TOP">{remote}</LayerFeature></Step>"#
+            ),
+        );
+        let results = run(&board);
+        assert_eq!(results.findings.len(), 3);
+        assert!(
+            results.findings.iter().any(|f| f
+                .subjects
+                .iter()
+                .any(|s| s.net.as_deref() == Some("B"))
+                && f.measurement.actual_mm() == Some(0.0))
+        );
     }
 
     const ANTENNA: &str = include_str!("../fixtures/antenna.xml");
@@ -477,11 +542,7 @@ mod tests {
         let report = dfm::check(
             &imported,
             CheckRequest {
-                input: FileIdentity {
-                    path: "antenna.xml".to_owned(),
-                    sha256: dfm::sha256(xml.as_bytes()),
-                    size_bytes: xml.len() as u64,
-                },
+                input: FileIdentity::new("antenna.xml", xml.as_bytes()),
                 pdk: PdkSource::Builtin(pdk_name),
                 waivers: None,
                 layout_target: crate::LayoutTarget::Board,
@@ -494,10 +555,7 @@ mod tests {
             .iter()
             .find(|rule| rule.status == RuleStatus::Incomplete)
         {
-            anyhow::bail!(
-                "{}",
-                rule.skip_reason.as_deref().unwrap_or("incomplete DFM rule")
-            );
+            anyhow::bail!("{}", rule.skip_reason.as_deref().unwrap());
         }
         Ok(report)
     }
@@ -596,19 +654,23 @@ mod tests {
             ),
             annotated.replace("net=\"GND\"", "net=\"WIFI.RF_ANT\""),
             annotated.replace("net=\"GND\"", ""),
+            annotated.replace(r#" componentRef="E1""#, ""),
+            annotated.replace(
+                r#"<PinRef componentRef="E1" pin="1""#,
+                r#"<PinRef componentRef="OTHER" pin="1""#,
+            ),
         ] {
             let error = antenna_check(&xml, "standard").err().unwrap().to_string();
             assert!(error.contains("NetShort"), "{error}");
         }
         for xml in [
             annotated.replace(TIE, &format!("{TIE}{TIE}")),
-            annotated.replace(r#" componentRef="E1""#, ""),
             annotated.replace(TIE, "").replace(
                 "</Step>",
                 &format!(r#"<LayerFeature layerRef="F.Cu"><Set>{TIE}</Set></LayerFeature></Step>"#),
             ),
         ] {
-            // Metadata need not live on the graphic or name a component.
+            // NetShort need not live on the graphic's Set.
             antenna_check(&xml, "standard").unwrap();
         }
         // Source-local Set indices repeat across LayerFeature blocks. A NetShort
@@ -632,6 +694,129 @@ mod tests {
         );
         let error = antenna_check(&xml, "standard").err().unwrap().to_string();
         assert!(error.contains("component 'E2'"), "{error}");
+    }
+
+    #[test]
+    fn net_tie_import_warnings_are_scoped_to_the_checked_step_and_layer() {
+        let board = BOARD.replace(
+            "</Step>",
+            r#"
+          <LayerFeature layerRef="TOP"><Set><NetShort>
+            <NetRef name="N4"/><NetRef name="N5"/>
+            <Location x="8.75" y="0.5"/><LayerRef name="TOP"/>
+          </NetShort></Set></LayerFeature></Step>"#,
+        );
+        let pdk = fixtures::pdk(
+            r#"
+[[rules.copper.clearance]]
+id = "clearance"
+limit = { minimum = "0.15 mm" }
+[[rules.copper.feature_width]]
+id = "width"
+limit = { minimum = "0.15 mm" }
+"#,
+        );
+        let missing = r#"<Set><Features><StandardPrimitiveRef id="absent"/></Features></Set>"#;
+        let legend = board
+            .replace(
+                "<CadData>",
+                r#"<CadData><Layer name="LEGEND" layerFunction="SILKSCREEN" side="TOP"/>"#,
+            )
+            .replace(
+                "</Step>",
+                &format!(r#"<LayerFeature layerRef="LEGEND">{missing}</LayerFeature></Step>"#,),
+            );
+        let other_step = board.replace("</CadData>", &format!(
+            r#"<Step name="unused"><LayerFeature layerRef="TOP">{missing}</LayerFeature></Step></CadData>"#,
+        ));
+        let missing_copper = board.replace(
+            "</Step>",
+            &format!(r#"<LayerFeature layerRef="TOP">{missing}</LayerFeature></Step>"#,),
+        );
+        for (xml, status) in [
+            (legend, RuleStatus::Fail),
+            (other_step, RuleStatus::Fail),
+            (missing_copper, RuleStatus::Incomplete),
+        ] {
+            assert!(!fixtures::import(&xml).geometry.diagnostics.is_empty());
+            let report = fixtures::report(&xml, &pdk, crate::LayoutTarget::Board);
+            let clearance = report
+                .rules
+                .iter()
+                .find(|rule| rule.id == "clearance")
+                .unwrap();
+            assert_eq!(clearance.status, status, "{clearance:?}");
+            let width = report.rules.iter().find(|rule| rule.id == "width").unwrap();
+            assert_eq!(width.status, RuleStatus::Pass);
+            if status == RuleStatus::Fail {
+                assert_eq!(
+                    report.findings.len(),
+                    1,
+                    "only the unrelated N2/N3 gap remains"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parent_net_tie_respects_placed_clear_copper() {
+        let pdk = fixtures::pdk(
+            "[[rules.copper.clearance]]\nid = \"clearance\"\nlimit = { minimum = \"0.15 mm\" }",
+        );
+        let xml = BOARD
+            .replace(r#"<StepRef name="board"/>"#, r#"<StepRef name="panel"/>"#)
+            .replace(
+                r#"<Step name="board" type="BOARD">"#,
+                r#"<Step name="panel" type="PALLET">
+                <StepRepeat stepRef="clear-child" x="0" y="0" nx="1" ny="1" dx="0" dy="0"/>"#,
+            )
+            .replace(
+                "</Step>",
+                r#"
+              <LayerFeature layerRef="TOP"><Set><NetShort>
+                <NetRef name="N4"/><NetRef name="N5"/>
+                <Location x="8.75" y="0.5"/><LayerRef name="TOP"/>
+              </NetShort></Set></LayerFeature></Step>"#,
+            )
+            .replace(
+                "</CadData>",
+                r#"
+              <Step name="clear-child" type="BOARD"><LayerFeature layerRef="TOP">
+                <Set polarity="NEGATIVE"><Features><UserSpecial><Contour><Polygon>
+                  <PolyBegin x="8.65" y="0"/><PolyStepSegment x="8.85" y="0"/>
+                  <PolyStepSegment x="8.85" y="1"/><PolyStepSegment x="8.65" y="1"/>
+                  <PolyStepSegment x="8.65" y="0"/>
+                </Polygon></Contour></UserSpecial></Features></Set>
+              </LayerFeature></Step></CadData>"#,
+            );
+        for (xml, expected) in [
+            (xml.clone(), RuleStatus::Incomplete),
+            (
+                xml.replace(
+                    r#"stepRef="clear-child" x="0""#,
+                    r#"stepRef="clear-child" x="0.9""#,
+                ),
+                RuleStatus::Fail,
+            ),
+        ] {
+            let report = fixtures::report(&xml, &pdk, crate::LayoutTarget::BoardArray);
+            assert_eq!(report.rules[0].status, expected, "{:?}", report.rules[0]);
+            if expected == RuleStatus::Incomplete {
+                assert!(
+                    report.rules[0]
+                        .skip_reason
+                        .as_deref()
+                        .unwrap()
+                        .contains("contact")
+                );
+            } else {
+                assert_eq!(
+                    report.findings.len(),
+                    1,
+                    "only the unrelated N2/N3 gap remains"
+                );
+            }
+        }
     }
 
     #[test]
@@ -808,7 +993,7 @@ limit = { minimum = "0.15 mm" }
     }
 
     #[test]
-    fn each_contact_needs_a_declaration_and_nearby_gaps_are_not_exempt() {
+    fn declared_graphic_permits_group_nets_at_other_contacts_and_gaps() {
         let xml = annotated_antenna().replace("</Step>", r#"
           <LayerFeature layerRef="F.Cu"><Set net="WIFI.RF_ANT">
             <Pad padstackDefRef="PADSTACK_1"><Location x="173.8" y="-100.439392"/><StandardPrimitiveRef id="RECT_1"/></Pad>
@@ -816,38 +1001,28 @@ limit = { minimum = "0.15 mm" }
         for pdk in ["standard", "jlcpcb-1oz"] {
             let report = antenna_check(&xml, pdk).unwrap();
             assert!(
-                report.findings.iter().any(|f| f
-                    .subjects
-                    .iter()
-                    .any(|s| s.role == "first_conductor")
-                    && f.measurement.actual_mm() == Some(0.0))
-            );
-
-            let both = xml.replace(TIE, &format!("{TIE}{}", TIE.replace("168.9", "173.8")));
-            let report = antenna_check(&both, pdk).unwrap();
-            assert!(
                 report
                     .findings
                     .iter()
                     .all(|f| !f.subjects.iter().any(|s| s.role == "first_conductor"))
             );
 
-            let gap = both.replace("</Step>", r#"
+            let gap = xml.replace("</Step>", r#"
               <LayerFeature layerRef="F.Cu"><Set net="WIFI.RF_ANT">
                 <Pad padstackDefRef="PADSTACK_1"><Location x="169.31" y="-112.039392"/><StandardPrimitiveRef id="RECT_1"/></Pad>
               </Set></LayerFeature></Step>"#);
             let report = antenna_check(&gap, pdk).unwrap();
-            assert!(report.findings.iter().any(|f| {
-                f.subjects.iter().any(|s| s.role == "first_conductor")
-                    && f.measurement
-                        .actual_mm()
-                        .is_some_and(|mm| (mm - 0.05).abs() < 1e-6)
-            }));
+            assert!(
+                report
+                    .findings
+                    .iter()
+                    .all(|f| !f.subjects.iter().any(|s| s.role == "first_conductor"))
+            );
         }
     }
 
     #[test]
-    fn net_short_accepts_partial_overlap_but_not_uncertain_contact() {
+    fn net_short_accepts_partial_and_curved_pad_contacts() {
         for width in ["0.50001", "0.60"] {
             let xml = annotated_antenna().replacen(
                 r#"<RectCenter width="0.50" height="0.50"/>"#,
@@ -867,16 +1042,8 @@ limit = { minimum = "0.15 mm" }
             r#"<Circle diameter="0.50"/>"#,
             1,
         );
-        assert!(
-            antenna_check(&xml, "standard")
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("uncertain contact topology")
-        );
-        // Curved subtractive paint can change contact topology too. The
-        // declaration remains in copper; the small hole is elsewhere in
-        // the same contact, so rejecting only its Location is insufficient.
+        antenna_check(&xml, "standard").unwrap();
+        // A clear away from the declared point does not change object permission.
         let xml = annotated_antenna().replace(
             "</Step>",
             r#"
@@ -885,12 +1052,7 @@ limit = { minimum = "0.15 mm" }
             <UserSpecial><Circle diameter="0.05"/></UserSpecial>
           </Features></Set></LayerFeature></Step>"#,
         );
-        assert!(
-            antenna_check(&xml, "standard")
-                .unwrap_err()
-                .to_string()
-                .contains("uncertain contact topology")
-        );
+        antenna_check(&xml, "standard").unwrap();
         let xml = annotated_antenna().replace(TIE, "");
         let report = antenna_check(&xml, "standard").unwrap();
         assert!(
@@ -921,158 +1083,68 @@ limit = { minimum = "0.15 mm" }
                             .all(|f| !f.subjects.iter().any(|s| s.role == "first_conductor"))
                     );
                 } else {
-                    assert!(result.unwrap_err().to_string().contains("actual contact"));
+                    assert!(result.unwrap_err().to_string().contains("contact"));
                 }
             }
         }
     }
 
-    fn add_feed_rectangle(xml: &str, [x0, y0, x1, y1]: [f64; 4]) -> String {
-        xml.replace("</Step>", &format!(r#"
-          <LayerFeature layerRef="F.Cu"><Set net="WIFI.RF_ANT"><Features><UserSpecial><Contour><Polygon>
-            <PolyBegin x="{x0}" y="{y0}"/><PolyStepSegment x="{x1}" y="{y0}"/>
-            <PolyStepSegment x="{x1}" y="{y1}"/><PolyStepSegment x="{x0}" y="{y1}"/>
-            <PolyStepSegment x="{x0}" y="{y0}"/>
-          </Polygon></Contour></UserSpecial></Features></Set></LayerFeature></Step>"#))
-    }
-
     #[test]
-    fn contact_preparation_does_not_change_shared_copper_images() {
-        let rules = fixtures::rules(&fixtures::pdk(
+    fn net_ties_do_not_change_the_netless_copper_significance_threshold() {
+        let pdk = fixtures::pdk(
             "[[rules.copper.clearance]]\nid = \"clearance\"\nlimit = { minimum = \"0.15 mm\" }",
-        ));
-        let xml = add_feed_rectangle(&annotated_antenna(), [166.0, -104.0, 166.0005, -103.9995]);
-        let ipc = Ipc2581::parse(&xml).unwrap();
-        let without = Ipc2581::parse(&xml.replace(TIE, "")).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
-        let without =
-            pcb_ir::import::ipc2581::import_design(&without, Resolution::default()).unwrap();
-        let tied = Design::board(&imported, &rules, Resolution::default());
-        let plain = Design::board(&without, &rules, Resolution::default());
-        for (tied, plain) in tied.copper_layers.iter().zip(&plain.copper_layers) {
-            assert_eq!(tied.image.rings, plain.image.rings);
-            for (tied, plain) in tied.conductors.iter().zip(&plain.conductors) {
-                assert_eq!(tied.image.rings, plain.image.rings);
-            }
-        }
-        let top = tied
-            .copper_layers
-            .iter()
-            .find(|layer| layer.layer.name == "F.Cu")
-            .unwrap();
-        let rings = |owners: &[crate::commands::dfm::design::CopperConductor]| {
-            owners
-                .iter()
-                .map(|owner| owner.image.rings.len())
-                .sum::<usize>()
-        };
-        // The tiny source island survives only in copper-clearance's
-        // unfiltered preparation, not in other checks' shared images.
-        assert_eq!(
-            rings(top.contact_conductors.as_ref().unwrap()),
-            rings(&top.conductors) + 1
         );
-    }
-
-    #[test]
-    fn routed_antenna_keeps_second_short_and_gap_on_the_same_connected_feed() {
-        // Retain the source antenna and the actual round-ended feed entering
-        // its square pad. Extend it for a return branch approaching the
-        // bottom radiator arm on the same feed net.
-        let routed = annotated_antenna().replace(
-            "</Step>",
-            r#"
-          <LayerFeature layerRef="F.Cu">
-            <Set net="WIFI.RF_ANT"><Features><UserSpecial>
-              <Line startX="168.850" startY="-100.439392" endX="168.498427" endY="-100.439392">
-                <LineDesc lineWidth="0.20" lineEnd="ROUND"/>
-              </Line>
-              <Line startX="165" startY="-100.439392" endX="168.3" endY="-100.439392">
-                <LineDesc lineWidth="0.25" lineEnd="ROUND"/>
-              </Line>
-            </UserSpecial></Features></Set>
-            <Set net="GND"><Features><Location x="173.8" y="-100.439392"/>
-              <UserSpecial><Circle diameter="0.5"/></UserSpecial>
-            </Features></Set>
-          </LayerFeature></Step>"#,
-        );
-        let branch = add_feed_rectangle(&routed, [165.0, -113.0, 165.25, -100.4]);
-        let branch = add_feed_rectangle(&branch, [165.0, -113.0, 169.9, -112.75]);
-        for pdk in ["standard", "jlcpcb-1oz"] {
-            // Moving the rounded cap past the exact pad into the radiator
-            // changes the contact itself. It must remain uncertifiable.
-            let protruding = routed.replace(r#"startX="168.850""#, r#"startX="169.20""#);
-            assert!(
-                antenna_check(&protruding, pdk)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("uncertain contact topology")
-            );
-            // A distant same-owner island changes the paint fold's rounding
-            // frame, but cannot make the exact local contact ambiguous.
-            let distant = add_feed_rectangle(&routed, [999.0, -0.1, 999.2, 0.1]);
-            let report = antenna_check(&distant, pdk).unwrap();
-            assert!(
-                report
-                    .findings
-                    .iter()
-                    .all(|f| !f.subjects.iter().any(|s| s.role == "first_conductor"))
-            );
-            let clean = antenna_check(&routed, pdk).unwrap();
-            assert!(
-                clean
-                    .findings
-                    .iter()
-                    .all(|f| !f.subjects.iter().any(|s| s.role == "first_conductor")),
-                "{pdk}: {:?}",
-                clean.findings
-            );
-            assert!(clean.findings.iter().any(|f| {
-                f.rule_id.contains("pth_annular_ring")
-                    && f.measurement
-                        .actual_mm()
-                        .is_some_and(|mm| (mm - 0.1).abs() < 1e-6)
-            }));
-
-            for (end_y, expected) in [(-112.1, 0.0), (-112.339392, 0.05)] {
-                let center_y = end_y - 0.1;
-                let xml = branch.replace(
-                    "</Step>",
-                    &format!(
-                        r#"
-                  <LayerFeature layerRef="F.Cu"><Set net="WIFI.RF_ANT"><Features><UserSpecial>
-                    <Line startX="169.8" startY="-112.8" endX="169.8" endY="{center_y}">
-                      <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
-                    </Line>
-                  </UserSpecial></Features></Set></LayerFeature></Step>"#
-                    ),
+        let tie = r#"<Set><NetShort><NetRef name="N4"/><NetRef name="N5"/>
+          <Location x="8.75" y="0.5"/><LayerRef name="TOP"/></NetShort></Set>"#;
+        // Both rectangles are 10 µm wide. Their areas straddle the normal
+        // 1 µm² significance threshold, despite both having a long edge.
+        for (height, status) in [
+            (0.00005, RuleStatus::Fail),
+            (0.0002, RuleStatus::Incomplete),
+        ] {
+            for declaration in ["", tie] {
+                let xml = BOARD.replace("</Step>", &format!(r#"
+                  <LayerFeature layerRef="TOP">
+                    <Set geometryUsage="GRAPHIC"><Features><Location x="20" y="0"/>
+                      <UserSpecial><Contour><Polygon>
+                        <PolyBegin x="0" y="0"/><PolyStepSegment x="0.01" y="0"/>
+                        <PolyStepSegment x="0.01" y="{height}"/><PolyStepSegment x="0" y="{height}"/>
+                        <PolyStepSegment x="0" y="0"/>
+                      </Polygon></Contour></UserSpecial>
+                    </Features></Set>{declaration}
+                  </LayerFeature></Step>"#));
+                let report = fixtures::report(&xml, &pdk, crate::LayoutTarget::Board);
+                assert_eq!(
+                    report.rules[0].status,
+                    status,
+                    "height {height}, tie {}: {:?}",
+                    !declaration.is_empty(),
+                    report.rules[0]
                 );
-                let report = antenna_check(&xml, pdk).unwrap();
-                assert!(
-                    report.findings.iter().any(|f| f
-                        .subjects
-                        .iter()
-                        .any(|s| s.net.as_deref() == Some("GND"))
-                        && f.subjects
-                            .iter()
-                            .any(|s| s.net.as_deref() == Some("WIFI.RF_ANT"))
-                        && f.sites.iter().any(|site| site.uncertainty_mm > 1e-6
-                            && site
-                                .measurement
-                                .actual_mm()
-                                .is_some_and(|mm| (mm - expected).abs() <= site.uncertainty_mm))),
-                    "{pdk} expected {expected}: {:?}",
-                    report.findings
-                );
+                if status == RuleStatus::Incomplete {
+                    assert!(
+                        report.rules[0]
+                            .skip_reason
+                            .as_deref()
+                            .unwrap()
+                            .contains("without net attribution")
+                    );
+                } else {
+                    // The N2/N3 gap remains; the N4/N5 short is exempt only
+                    // when declared. The remote sliver contributes neither.
+                    assert_eq!(
+                        report.findings.len(),
+                        if declaration.is_empty() { 2 } else { 1 }
+                    );
+                }
             }
         }
     }
 
     #[test]
-    fn antenna_feed_arc_keeps_the_gap_next_to_its_narrower_trace() {
+    fn antenna_feed_arc_has_the_same_permission_as_its_narrower_trace() {
         // The saved board's 0.26 mm arc ends in a 0.20 mm trace entering the
-        // tied pad. Its exposed cap must not be merged with the trace/pad
-        // interior when deciding which boundary intervals remain exposed.
+        // tied pad. Both can approach the entire declared graphic.
         let xml = annotated_antenna().replace("</Step>", r#"
           <LayerFeature layerRef="F.Cu"><Set net="WIFI.RF_ANT"><Features><UserSpecial>
             <Line startX="168.850" startY="-100.439392" endX="168.498427" endY="-100.439392">
@@ -1082,31 +1154,14 @@ limit = { minimum = "0.15 mm" }
               <LineDesc lineWidth="0.260" lineEnd="ROUND"/>
             </Arc>
           </UserSpecial></Features></Set></LayerFeature></Step>"#);
-        // At the trace edge, the circular cap extends sqrt(r² - half_width²)
-        // beyond its center. The radiator's facing edge is at x = 168.65.
-        // Bound the cap radius by its preparation error before projecting
-        // onto this chord, where horizontal error is larger than radial error.
-        let gap = |radius: f64| 168.65 - 168.498427 - (radius.powi(2) - 0.10_f64.powi(2)).sqrt();
         for pdk in ["standard", "jlcpcb-1oz"] {
             let report = antenna_check(&xml, pdk).unwrap();
             assert!(
-                report.findings.iter().any(|finding| {
-                    finding
-                        .subjects
-                        .iter()
-                        .any(|s| s.net.as_deref() == Some("GND"))
-                        && finding
-                            .subjects
-                            .iter()
-                            .any(|s| s.net.as_deref() == Some("WIFI.RF_ANT"))
-                        && finding.sites.iter().any(|site| {
-                            site.measurement.actual_mm().is_some_and(|mm| {
-                                mm >= gap(0.13 + site.uncertainty_mm)
-                                    && mm <= gap(0.13 - site.uncertainty_mm)
-                            })
-                        })
-                }),
-                "{pdk}: missing feed cap gap: {:?}",
+                report
+                    .findings
+                    .iter()
+                    .all(|f| !f.subjects.iter().any(|s| s.role == "first_conductor")),
+                "{pdk}: unexpected electrical clearance: {:?}",
                 report.findings
             );
         }

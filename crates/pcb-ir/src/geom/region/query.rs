@@ -191,50 +191,6 @@ impl PreparedRegion {
             .map(|id| self.segments[id])
     }
 
-    /// Strict interior intervals, retaining every boundary crossing. Unlike
-    /// `segment_inside_intervals`, do not merge boundary runs with interior
-    /// runs: contact clearance needs to distinguish exposed and buried edges.
-    pub(crate) fn interior_intervals(&self, start: Point, end: Point) -> Vec<(f64, f64)> {
-        let delta = end - start;
-        let length_squared = delta.x * delta.x + delta.y * delta.y;
-        if length_squared <= tol::EPSILON_MM * tol::EPSILON_MM {
-            return Vec::new();
-        }
-        let cross = |a: Point, b: Point| a.x * b.y - a.y * b.x;
-        let mut stations = vec![0.0, 1.0];
-        for id in self.segment_ids_near(start, end, tol::EPSILON_MM) {
-            let (a, b) = self.segments[id];
-            let edge = b - a;
-            let denominator = cross(delta, edge);
-            if denominator.abs() > tol::EPSILON_MM * delta.length().max(edge.length()) {
-                let t = cross(a - start, edge) / denominator;
-                let u = cross(a - start, delta) / denominator;
-                if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
-                    stations.push(t);
-                }
-            } else if cross(a - start, delta).abs() <= tol::EPSILON_MM * delta.length() {
-                for point in [a, b] {
-                    let relative = point - start;
-                    let t = (relative.x * delta.x + relative.y * delta.y) / length_squared;
-                    if (0.0..=1.0).contains(&t) {
-                        stations.push(t);
-                    }
-                }
-            }
-        }
-        stations.sort_by(f64::total_cmp);
-        stations.dedup_by(|left, right| (*left - *right).abs() <= f64::EPSILON);
-        stations
-            .windows(2)
-            .filter_map(|pair| {
-                let midpoint = start + delta * ((pair[0] + pair[1]) / 2.0);
-                self.signed_distance(midpoint)
-                    .is_some_and(|distance| distance.mm < 0.0)
-                    .then_some((pair[0], pair[1]))
-            })
-            .collect()
-    }
-
     pub(crate) fn segment_ids_near(&self, start: Point, end: Point, reach: f64) -> Vec<usize> {
         let query = BBox::spanning(start, end);
         let delta = end - start;

@@ -15,12 +15,6 @@
       <EntryLineDesc id="LINE_1">
         <LineDesc lineWidth="0.050" lineEnd="ROUND"/>
       </EntryLineDesc>
-      <EntryLineDesc id="LINE_2">
-        <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-      </EntryLineDesc>
-      <EntryLineDesc id="LINE_3">
-        <LineDesc lineWidth="0.0" lineEnd="ROUND"/>
-      </EntryLineDesc>
     </DictionaryLineDesc>
     <DictionaryFillDesc units="MILLIMETER"/>
     <DictionaryStandard units="MILLIMETER">
@@ -179,12 +173,7 @@
     </BomHeader>
     <BomItem OEMDesignNumberRef="WIFI.E_ANT.E" quantity="1" pinCount="2" category="DOCUMENT" description="2.4 GHz meandered inverted-F PCB antenna, right-hand copper variant, 15.2 x 5.7 mm keepout">
       <RefDes name="E1" packageRef="SWRA117D_2.4GHz_IFA_Right" populate="false" layerRef="F.Cu"/>
-      <Characteristics category="DOCUMENT">
-        <Textual definitionSource="KICAD" textualCharacteristicName="Path" textualCharacteristicValue="WIFI.E_ANT.E"/>
-        <Textual definitionSource="KICAD" textualCharacteristicName="Prefix" textualCharacteristicValue="E"/>
-        <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="?"/>
-        <Textual definitionSource="KICAD" textualCharacteristicName="Variant" textualCharacteristicValue="RIGHT"/>
-      </Characteristics>
+      <Characteristics category="DOCUMENT"/>
     </BomItem>
   </Bom>
   <Ecad name="Design">
@@ -241,12 +230,7 @@
       <Layer name="F.Cu" layerFunction="CONDUCTOR" polarity="POSITIVE" side="TOP"/>
       <Layer name="DIELECTRIC_1" layerFunction="DIELCORE" polarity="POSITIVE" side="INTERNAL"/>
       <Layer name="B.Cu" layerFunction="CONDUCTOR" polarity="POSITIVE" side="BOTTOM"/>
-      <Layer name="user.drawings" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
       <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" polarity="POSITIVE" side="ALL"/>
-      <Layer name="Margin" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
-      <Layer name="B.Courtyard" layerFunction="COURTYARD" polarity="POSITIVE" side="BOTTOM"/>
-      <Layer name="f.courtyard" layerFunction="COURTYARD" polarity="POSITIVE" side="TOP"/>
-      <Layer name="F.Fab" layerFunction="ASSEMBLY" polarity="POSITIVE" side="TOP"/>
       <Layer name="F.Cu_B.Cu" layerFunction="DRILL" polarity="POSITIVE" side="ALL">
         <Span fromLayer="F.Cu" toLayer="B.Cu"/>
       </Layer>
@@ -270,7 +254,6 @@
         </StackupGroup>
       </Stackup>
       <Step name="antenna" type="BOARD">
-        <NonstandardAttribute name="FOOTPRINT_COUNT" type="INTEGER" value="1"/>
         <PadStackDef name="PADSTACK_2">
           <PadstackHoleDef name="PTH300000_300000" diameter="0.30" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="0.0" y="0.0"/>
           <PadstackPadDef layerRef="F.Cu" padUse="REGULAR">
@@ -310,58 +293,6 @@
             <LineDescRef id="LINE_1"/>
           </Outline>
           <PickupPoint x="0.0" y="0.0"/>
-          <AssemblyDrawing>
-            <Outline>
-              <Polygon>
-                <PolyBegin x="-3.2750" y="7.248250"/>
-                <PolyStepSegment x="-3.2750" y="-0.4250"/>
-                <PolyStepSegment x="12.3750" y="-0.4250"/>
-                <PolyStepSegment x="12.3750" y="7.248250"/>
-                <PolyStepSegment x="-3.2750" y="7.248250"/>
-                <FillDesc fillProperty="HOLLOW"/>
-              </Polygon>
-              <LineDescRef id="LINE_3"/>
-            </Outline>
-            <Marking markingUsage="NONE">
-              <UserSpecial>
-                <Line startX="-3.20" startY="-0.350" endX="-3.20" endY="5.60">
-                  <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-                </Line>
-                <Line startX="12.30" startY="-0.350" endX="-3.20" endY="-0.350">
-                  <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-                </Line>
-                <Line startX="-3.20" startY="5.60" endX="12.30" endY="5.60">
-                  <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-                </Line>
-                <Line startX="12.30" startY="5.60" endX="12.30" endY="-0.350">
-                  <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-                </Line>
-                <UserSpecial>
-                  <Line startX="3.859524" startY="6.468990" endX="4.192857" endY="6.468990">
-                    <LineDescRef id="LINE_2"/>
-                  </Line>
-                  <Polyline>
-                    <PolyBegin x="4.335714" y="5.945180"/>
-                    <PolyStepSegment x="3.859524" y="5.945180"/>
-                    <PolyStepSegment x="3.859524" y="6.945180"/>
-                    <PolyStepSegment x="4.335714" y="6.945180"/>
-                    <LineDescRef id="LINE_2"/>
-                  </Polyline>
-                  <Line startX="5.288095" startY="5.945180" endX="4.716667" endY="5.945180">
-                    <LineDescRef id="LINE_2"/>
-                  </Line>
-                  <Polyline>
-                    <PolyBegin x="5.002381" y="5.945180"/>
-                    <PolyStepSegment x="5.002381" y="6.945180"/>
-                    <PolyStepSegment x="4.907143" y="6.802323"/>
-                    <PolyStepSegment x="4.811905" y="6.707085"/>
-                    <PolyStepSegment x="4.716667" y="6.659466"/>
-                    <LineDescRef id="LINE_2"/>
-                  </Polyline>
-                </UserSpecial>
-              </UserSpecial>
-            </Marking>
-          </AssemblyDrawing>
           <Pin number="1" electricalType="ELECTRICAL" type="SURFACE">
             <Location x="0.0" y="0.0"/>
             <StandardPrimitiveRef id="RECT_1"/>
@@ -410,172 +341,11 @@
             </Pad>
           </Set>
         </LayerFeature>
-        <LayerFeature layerRef="user.drawings">
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="-3.050" startY="0.250" endX="12.150" endY="0.250">
-                <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="-3.050" startY="0.250" endX="-3.050" endY="5.450">
-                <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="-3.050" startY="0.250" endX="12.150" endY="5.450">
-                <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="12.150" startY="0.250" endX="12.150" endY="5.450">
-                <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="-3.050" startY="5.450" endX="12.150" endY="0.250">
-                <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="-3.050" startY="5.450" endX="12.150" endY="5.450">
-                <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-        </LayerFeature>
         <LayerFeature layerRef="Edge.Cuts">
           <Set>
             <Features>
               <Location x="170.0" y="-105.0"/>
               <UserPrimitiveRef id="URECT_2"/>
-            </Features>
-          </Set>
-        </LayerFeature>
-        <LayerFeature layerRef="f.courtyard">
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="-3.20" startY="-0.350" endX="-3.20" endY="5.60">
-                <LineDesc lineWidth="0.050" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="12.30" startY="-0.350" endX="-3.20" endY="-0.350">
-                <LineDesc lineWidth="0.050" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="-3.20" startY="5.60" endX="12.30" endY="5.60">
-                <LineDesc lineWidth="0.050" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="12.30" startY="5.60" endX="12.30" endY="-0.350">
-                <LineDesc lineWidth="0.050" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-        </LayerFeature>
-        <LayerFeature layerRef="F.Fab">
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="-3.20" startY="-0.350" endX="-3.20" endY="5.60">
-                <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="12.30" startY="-0.350" endX="-3.20" endY="-0.350">
-                <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="-3.20" startY="5.60" endX="12.30" endY="5.60">
-                <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="GRAPHIC" componentRef="E1">
-            <Features>
-              <Xform rotation="270.0"/>
-              <Location x="168.90" y="-100.439392"/>
-              <Line startX="12.30" startY="5.60" endX="12.30" endY="-0.350">
-                <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
-              </Line>
-            </Features>
-          </Set>
-          <Set geometryUsage="TEXT" componentRef="E1">
-            <NonstandardAttribute name="TEXT" value="E1" type="STRING"/>
-            <Features>
-              <Location x="0.0" y="0.0"/>
-              <UserSpecial>
-                <Line startX="175.231009" startY="-105.679867" endX="175.231009" endY="-105.346534">
-                  <LineDescRef id="LINE_2"/>
-                </Line>
-                <Polyline>
-                  <PolyBegin x="175.754819" y="-105.203677"/>
-                  <PolyStepSegment x="175.754819" y="-105.679867"/>
-                  <PolyStepSegment x="174.754819" y="-105.679867"/>
-                  <PolyStepSegment x="174.754819" y="-105.203677"/>
-                  <LineDescRef id="LINE_2"/>
-                </Polyline>
-                <Line startX="175.754819" startY="-104.251296" endX="175.754819" endY="-104.822724">
-                  <LineDescRef id="LINE_2"/>
-                </Line>
-                <Polyline>
-                  <PolyBegin x="175.754819" y="-104.537010"/>
-                  <PolyStepSegment x="174.754819" y="-104.537010"/>
-                  <PolyStepSegment x="174.897676" y="-104.632248"/>
-                  <PolyStepSegment x="174.992914" y="-104.727486"/>
-                  <PolyStepSegment x="175.040533" y="-104.822724"/>
-                  <LineDescRef id="LINE_2"/>
-                </Polyline>
-              </UserSpecial>
             </Features>
           </Set>
         </LayerFeature>

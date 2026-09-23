@@ -27,6 +27,10 @@ pub struct ImportedDesign {
     pub step_layers: Vec<StepLayer>,
     pub packages: Vec<PackageDefinition>,
     pub components: Vec<ComponentDefinition>,
+    /// Into `geometry.diagnostics`; retain warnings even when a layer's
+    /// entire geometry was dropped. Layout/stackup warnings apply everywhere.
+    layer_diagnostics: HashMap<(u32, LayerId), Span>,
+    global_diagnostics: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -163,20 +167,30 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
         .collect::<Vec<_>>();
 
     let mut context = ExtractContext::for_layers(ipc, resolution, &mut geometry);
+    let global_diagnostics = Span::new(0, geometry.diagnostics.len() as u32);
+    let mut layer_diagnostics = HashMap::new();
     let mut step_layers = Vec::new();
     for (step, &step_id) in ecad.cad_data.steps.iter().zip(&step_ids) {
         context.enter_step(step);
         for (layer_index, source_layer) in ecad.cad_data.layers.iter().enumerate() {
             let feature_start = geometry.features.len() as u32;
-            let Some(document_layer) = append_step_layer(
+            let diagnostic_start = geometry.diagnostics.len() as u32;
+            let document_layer = append_step_layer(
                 &context,
                 &mut geometry,
                 step,
                 &ecad.cad_data.layers,
                 source_layer,
                 ipc.resolve(source_layer.name),
-            )?
-            else {
+            )?;
+            let diagnostics = Span::new(
+                diagnostic_start,
+                geometry.diagnostics.len() as u32 - diagnostic_start,
+            );
+            if !diagnostics.is_empty() {
+                layer_diagnostics.insert((step_id, LayerId(layer_index as u32)), diagnostics);
+            }
+            let Some(document_layer) = document_layer else {
                 continue;
             };
             for definition in feature_start..geometry.features.len() as u32 {
@@ -284,6 +298,8 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
         step_layers,
         packages,
         components,
+        layer_diagnostics,
+        global_diagnostics,
     })
 }
 
@@ -686,7 +702,21 @@ impl ImportedDesign {
             Some(step) => self.copy_step_layout_sidecar(&mut target, step),
             None => self.copy_layout_sidecar(&mut target),
         }
-        target.diagnostics = self.geometry.diagnostics.clone();
+        target.diagnostics = self
+            .global_diagnostics
+            .slice(&self.geometry.diagnostics)
+            .to_vec();
+        for step in occurrences
+            .iter()
+            .map(|occurrence| occurrence.step)
+            .collect::<BTreeSet<_>>()
+        {
+            if let Some(diagnostics) = self.layer_diagnostics.get(&(step, layer)) {
+                target
+                    .diagnostics
+                    .extend_from_slice(diagnostics.slice(&self.geometry.diagnostics));
+            }
+        }
         target.specs = self.geometry.specs.clone();
         target.spec_items = self.geometry.spec_items.clone();
 

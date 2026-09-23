@@ -67,15 +67,7 @@
 //! the distance to the exact composition, so clearance and width findings
 //! derived from them remain conservative. Consumers that need the exact
 //! composed topology, rather than distances to source boundaries, must
-//! prepare their inputs exactly (zero uncertainty), or establish that no
-//! approximated paint operand can affect the contact being certified.
-//! Artwork composition retains bounds enclosing both the source and prepared
-//! operands: union and subtraction agree wherever every operand agrees. It
-//! also composes guaranteed material from exact darks and conservative clears.
-//! A pair's contact is exact where the guaranteed and possible intersections
-//! agree, even if uncertain paint is redundant inside exact material. This
-//! local proof requires unfiltered inputs; the positional budget alone does
-//! not certify topology inside the approximation bounds.
+//! prepare their inputs exactly (zero uncertainty).
 
 use std::fmt;
 

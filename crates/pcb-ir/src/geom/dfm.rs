@@ -22,9 +22,6 @@ pub use crate::geom::dist::Distance;
 /// its limit.
 pub const COMPARISON_EPSILON_MM: f64 = 1e-6;
 
-mod contacts;
-pub use contacts::region_clearance_sites_except_contacts;
-
 /// Candidate index over ring or shape bounds, on a grid of about sixty-four
 /// cells across. Every bounds is registered in each cell it covers, so a
 /// large enclosing ring stays queryable in a small region of interest.
@@ -441,7 +438,7 @@ pub fn region_clearance_sites_with_index(
             second_paths: Vec::new(),
             overlap,
         };
-        let mut overlap_boundary = joined.overlap.prepare_query();
+        let overlap_boundary = joined.overlap.prepare_query();
         let mut position = 0;
         while position < sites.len() {
             let touches = sites[position].first_paths.iter().any(|path| {
@@ -467,10 +464,7 @@ pub fn region_clearance_sites_with_index(
             joined.bbox = joined.bbox.union(site.bbox);
             joined.first_paths.extend(site.first_paths);
             joined.second_paths.extend(site.second_paths);
-            if !site.overlap.is_empty() {
-                joined.overlap = joined.overlap.union(&site.overlap)?;
-                overlap_boundary = joined.overlap.prepare_query();
-            }
+            joined.overlap = joined.overlap.union(&site.overlap)?;
         }
         sites.push(joined);
     }

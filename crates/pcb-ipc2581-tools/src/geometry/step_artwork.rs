@@ -103,7 +103,7 @@ pub fn step_graph_objects<LayerMeta, ObjectMeta: Default>(
 pub fn finish_step_graph_artwork<LayerMeta, ObjectMeta>(
     artwork: &mut Document<LayerMeta, ObjectMeta>,
 ) -> Result<()> {
-    // Every Step's document repeats the design's import diagnostics.
+    // Every Step's document repeats the global import diagnostics.
     let mut seen = HashSet::new();
     artwork
         .diagnostics
