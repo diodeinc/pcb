@@ -1162,12 +1162,11 @@ pub(super) struct CopperConductor {
     pub image: ContourSet,
 }
 
-pub(super) const NET_SHORT_LOCATION_TOLERANCE_MM: f64 = 0.000002;
-
 #[derive(Debug, Clone)]
 pub(super) struct NetShort {
     pub nets: [ConductorId; 2],
     pub location: Point,
+    pub description: String,
 }
 
 #[derive(Debug)]
@@ -1599,7 +1598,7 @@ fn copper_conductor(
                             .bbox
                             .expand(
                                 source.resolution.accuracy.max_error_mm()
-                                    + NET_SHORT_LOCATION_TOLERANCE_MM,
+                                    + source.resolution.tolerance_mm,
                             )
                             .contains_point(Point::new(short.location.x, short.location.y))
                 });
@@ -1958,13 +1957,28 @@ fn collect_net_shorts(source: Source<'_>, step: u32) -> Result<HashMap<Symbol, V
         .context("missing NetShort Step definition")?;
     let mut shorts = HashMap::<_, Vec<_>>::new();
     for (containing_layer, short) in &definition.net_shorts {
+        let description = format!(
+            "NetShort{} for nets [{}] at ({}, {}) in Step '{}' on layer '{}'",
+            short.id.map_or_else(String::new, |id| format!(
+                " '{}'",
+                source.imported.resolve(id)
+            )),
+            short
+                .nets
+                .iter()
+                .map(|net| source.imported.resolve(*net))
+                .collect::<Vec<_>>()
+                .join(", "),
+            short.location.x,
+            short.location.y,
+            source.imported.resolve(name),
+            source.imported.resolve(*containing_layer),
+        );
         let [first, second] = short.nets.as_slice() else {
-            bail!("unsupported NetShort: expected two NetRefs");
+            bail!("{description}: expected two NetRefs");
         };
         if first == second || short.layers.as_slice() != [*containing_layer] {
-            bail!(
-                "invalid or unsupported NetShort: expected distinct nets and the containing copper layer only"
-            );
+            bail!("{description}: expected distinct nets and the containing copper layer only");
         }
         source
             .imported
@@ -1973,7 +1987,7 @@ fn collect_net_shorts(source: Source<'_>, step: u32) -> Result<HashMap<Symbol, V
             .find(|layer| {
                 layer.name == *containing_layer && layers::is_copper(layer.layer_function)
             })
-            .context("NetShort references a missing or non-copper layer")?;
+            .with_context(|| format!("{description}: missing or non-copper layer"))?;
         shorts.entry(*containing_layer).or_default().push(NetShort {
             nets: [first, second].map(|net| ConductorId::Net {
                 step: Some(name),
@@ -1982,6 +1996,7 @@ fn collect_net_shorts(source: Source<'_>, step: u32) -> Result<HashMap<Symbol, V
                 object: None,
             }),
             location: Point::new(short.location.x, short.location.y),
+            description,
         });
     }
     Ok(shorts)

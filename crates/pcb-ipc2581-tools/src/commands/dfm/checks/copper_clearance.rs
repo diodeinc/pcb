@@ -15,13 +15,13 @@ use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
 use std::collections::HashSet;
 
-use crate::commands::dfm::design::{
-    ConductorId, CopperLayer, Design, NET_SHORT_LOCATION_TOLERANCE_MM, component_copper, spans,
-};
+use crate::commands::dfm::design::{ConductorId, CopperLayer, Design, component_copper, spans};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
 
 use super::{Evaluation, Measured, linework_clearance, violates};
+
+const PAD_ENTRY_TOLERANCE_MM: f64 = 0.000002;
 
 struct Piece {
     conductor_index: usize,
@@ -59,7 +59,7 @@ pub(super) fn evaluate(
                             .prepare_query()
                             .signed_distance(short.location)?;
                         if distance.mm
-                            > conductor.image.uncertainty_mm + NET_SHORT_LOCATION_TOLERANCE_MM
+                            > conductor.image.uncertainty_mm + design.resolution.tolerance_mm
                         {
                             return None;
                         }
@@ -98,10 +98,8 @@ pub(super) fn evaluate(
             }
             anyhow::ensure!(
                 matched,
-                "NetShort at ({}, {}) on '{}' has no matching component graphic/pad or pad/pad contact",
-                short.location.x,
-                short.location.y,
-                layer.layer.name
+                "{} has no matching component graphic/pad or pad/pad contact",
+                short.description
             );
         }
         let permitted = |first: ConductorId, second: ConductorId| {
@@ -223,7 +221,7 @@ pub(super) fn evaluate(
                                     |distance| {
                                         distance.mm
                                             <= conductor.image.uncertainty_mm
-                                                + NET_SHORT_LOCATION_TOLERANCE_MM
+                                                + PAD_ENTRY_TOLERANCE_MM
                                     },
                                 )
                             })
@@ -305,6 +303,22 @@ pub(super) fn conductor_subject(
     layer: &str,
 ) -> Subject {
     let (kind, name, set_index, feature_index) = match id {
+        ConductorId::Net {
+            object: Some(object),
+            ..
+        } => {
+            let source = design
+                .imported
+                .feature_definition(object.feature)
+                .expect("net-tie object must reference its imported definition")
+                .source;
+            (
+                "electrical_net",
+                None,
+                Some(source.set_index),
+                Some(source.feature_index),
+            )
+        }
         ConductorId::Net { .. } => ("electrical_net", None, None, None),
         ConductorId::Isolated { occurrence, .. } => {
             let source = design
@@ -353,8 +367,8 @@ pub(super) fn conductor_subject(
         provenance: matches!(id, ConductorId::Net { .. }).then(|| SourceLocator {
             step: design.resolve(id.step()),
             layer: Some(layer.to_owned()),
-            set_index: None,
-            feature_index: None,
+            set_index,
+            feature_index,
             instance_index: id.instance(),
         }),
         ..Subject::default()
@@ -624,18 +638,33 @@ mod tests {
                     && finding.measurement.actual_mm() == Some(0.0)),
                 "{pdk}: missing remote short"
             );
-            assert!(
-                results.findings.iter().any(|finding| finding
-                    .subjects
-                    .iter()
-                    .any(|s| s.net.as_deref() == Some("GND"))
-                    && finding
+            let third_net_short = results
+                .findings
+                .iter()
+                .find(|finding| {
+                    finding
                         .subjects
                         .iter()
-                        .any(|s| s.net.as_deref() == Some("UNRELATED"))
-                    && finding.measurement.actual_mm() == Some(0.0)),
-                "{pdk}: missing third-net short"
-            );
+                        .any(|s| s.net.as_deref() == Some("GND"))
+                        && finding
+                            .subjects
+                            .iter()
+                            .any(|s| s.net.as_deref() == Some("UNRELATED"))
+                        && finding.measurement.actual_mm() == Some(0.0)
+                })
+                .expect("missing third-net short");
+            let graphic = third_net_short
+                .subjects
+                .iter()
+                .find(|s| s.net.as_deref() == Some("GND"))
+                .unwrap();
+            for locator in [graphic.source.as_ref(), graphic.provenance.as_ref()] {
+                let locator = locator.unwrap();
+                assert_eq!(locator.step.as_deref(), Some("antenna"));
+                assert_eq!(locator.layer.as_deref(), Some("F.Cu"));
+                assert_eq!(locator.set_index, Some(0));
+                assert_eq!(locator.feature_index, Some(0));
+            }
         }
     }
 
@@ -662,6 +691,23 @@ mod tests {
         ] {
             let error = antenna_check(&xml, "standard").err().unwrap().to_string();
             assert!(error.contains("NetShort"), "{error}");
+        }
+        for xml in [
+            annotated.replace("</NetShort>", r#"<NetRef name="THIRD"/></NetShort>"#),
+            annotated.replace(TIE, &TIE.replace("168.9", "150")),
+        ] {
+            let xml = xml.replace("<NetShort>", r#"<NetShort id="tie-1">"#);
+            let error = antenna_check(&xml, "standard").unwrap_err().to_string();
+            for detail in [
+                "tie-1",
+                "GND",
+                "WIFI.RF_ANT",
+                "-100.439392",
+                "antenna",
+                "F.Cu",
+            ] {
+                assert!(error.contains(detail), "missing {detail}: {error}");
+            }
         }
         for xml in [
             annotated.replace(TIE, &format!("{TIE}{TIE}")),
@@ -733,10 +779,15 @@ limit = { minimum = "0.15 mm" }
             "</Step>",
             &format!(r#"<LayerFeature layerRef="TOP">{missing}</LayerFeature></Step>"#,),
         );
+        let patterned_copper = board.replace(
+            r#"<RectCenter width="1" height="1"/>"#,
+            r#"<RectCenter width="1" height="1"><FillDesc fillProperty="HATCH"/></RectCenter>"#,
+        );
         for (xml, status) in [
             (legend, RuleStatus::Fail),
             (other_step, RuleStatus::Fail),
             (missing_copper, RuleStatus::Incomplete),
+            (patterned_copper, RuleStatus::Incomplete),
         ] {
             assert!(!fixtures::import(&xml).geometry.diagnostics.is_empty());
             let report = fixtures::report(&xml, &pdk, crate::LayoutTarget::Board);
@@ -1066,12 +1117,18 @@ limit = { minimum = "0.15 mm" }
 
     #[test]
     fn net_short_matches_rounded_boundary_locations() {
-        for (x, accepted) in [
-            ("168.650000", true),
-            ("168.6499995", true),
-            ("168.649997", false),
+        for (x, y, accepted) in [
+            ("168.650000", "-100.439392", true),
+            ("168.6499995", "-100.439392", true),
+            ("168.6495", "-100.439392", true),
+            ("168.6485", "-100.439392", false),
+            // The fork's exporter chooses this pad/graphic corner.
+            ("169.150", "-100.689392", true),
+            ("169.1505", "-100.689892", true),
+            ("169.1515", "-100.690892", false),
         ] {
-            let xml = annotated_antenna().replace(TIE, &TIE.replace("168.9", x));
+            let xml = annotated_antenna()
+                .replace(TIE, &TIE.replace("168.9", x).replace("-100.439392", y));
             for pdk in ["standard", "jlcpcb-1oz"] {
                 let result = antenna_check(&xml, pdk);
                 if accepted {
