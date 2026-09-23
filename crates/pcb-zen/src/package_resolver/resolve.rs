@@ -11,7 +11,7 @@ use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::file_extensions;
 use pcb_zen_core::resolution::{
     FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
-    ResolutionResult, selected_remote_from_hydrated_manifest,
+    ResolutionResult, build_package_roots, selected_remote_from_hydrated_manifest,
 };
 use pcb_zen_core::{STDLIB_MODULE_PATH, is_stdlib_module_path};
 use semver::Version;
@@ -66,9 +66,9 @@ pub fn build_frozen_resolution_maps(
     workspace: &WorkspaceInfo,
     package_urls: impl IntoIterator<Item = String>,
     offline: bool,
-) -> Result<BTreeMap<String, FrozenResolutionMap>> {
+) -> Result<FrozenResolutionSet> {
     let mut builder = FrozenResolutionBuilder::new(workspace.clone(), offline)?;
-    let mut resolutions = BTreeMap::new();
+    let mut resolutions = FrozenResolutionSet::new();
     for package_url in package_urls {
         // The stdlib has no manifest to hydrate; its resolution is the
         // stdlib package alone.
@@ -126,17 +126,23 @@ fn resolve_frozen(
         crate::cache_index::ensure_stdlib_materialized(&workspace_info.root)?;
     }
 
-    let mut resolution_set = FrozenResolutionSet::default();
-    let mut symbol_parts = HashMap::new();
+    let resolution_set = build_frozen_resolution_maps(&workspace_info, package_urls, offline)?;
+    // The root table lists every workspace package. Build it once: a table per
+    // map makes resolving a whole workspace quadratic.
+    let package_roots = build_package_roots(
+        &workspace_info,
+        resolution_set
+            .values()
+            .flat_map(|resolution| resolution.packages.values())
+            .map(|package| &package.deps),
+    );
 
-    for (package_url, resolution) in
-        build_frozen_resolution_maps(&workspace_info, package_urls, offline)?
-    {
+    let mut symbol_parts = HashMap::new();
+    for resolution in resolution_set.values() {
         symbol_parts.extend(crate::resolve::build_frozen_symbol_parts(
-            &workspace_info,
-            &resolution,
+            &package_roots,
+            resolution,
         )?);
-        resolution_set.insert(package_url, resolution);
     }
 
     Ok(ResolutionResult::frozen(
