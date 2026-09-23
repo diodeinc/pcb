@@ -1094,6 +1094,16 @@ impl LspContext for LspEvalContext {
         }
     }
 
+    fn warm_workspace(&self, workspace_roots: &[PathBuf]) {
+        // Workspace discovery and resolution dominate the first evaluation. A
+        // folder without a manifest is not a workspace; do not walk it.
+        for root in workspace_roots {
+            if self.file_provider.exists(&root.join("pcb.toml")) {
+                self.resolution_for(root);
+            }
+        }
+    }
+
     fn is_eager(&self) -> bool {
         self.eager
     }
@@ -2124,6 +2134,36 @@ pcb-version = "0.4"
                 .unwrap()
                 .contains_key(&workspace_root),
             "successful dependency resolution should be cached"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn warm_workspace_resolves_only_manifest_roots() -> anyhow::Result<()> {
+        let workspace = tempfile::tempdir()?;
+        let plain_folder = tempfile::tempdir()?;
+        let main_path = workspace.path().join("main.zen");
+        fs::write(
+            workspace.path().join("pcb.toml"),
+            "[workspace]\npcb-version = \"0.4\"\n",
+        )?;
+        fs::write(&main_path, "x = 1\n")?;
+
+        let ctx = LspEvalContext::default();
+        ctx.warm_workspace(&[
+            workspace.path().to_path_buf(),
+            plain_folder.path().to_path_buf(),
+        ]);
+
+        assert_eq!(
+            ctx.resolution_cache
+                .read()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            vec![&ctx.workspace_root_for(&main_path)],
+            "only the manifest root is resolved, under the key evaluation looks up"
         );
 
         Ok(())

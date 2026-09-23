@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Speed up dependency resolution from a large workspace root, such as `pcb info`.
+- `pcb lsp` resolves the workspace at start-up instead of inside the first request.
 
 ## [0.4.58] - 2026-09-22
 
