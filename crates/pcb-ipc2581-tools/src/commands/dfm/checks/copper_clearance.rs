@@ -15,13 +15,13 @@ use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
 use std::collections::HashSet;
 
-use crate::commands::dfm::design::{ConductorId, CopperLayer, Design, component_copper, spans};
+use crate::commands::dfm::design::{
+    ConductorId, CopperLayer, Design, NET_SHORT_LOCATION_TOLERANCE_MM, component_copper, spans,
+};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
 
 use super::{Evaluation, Measured, linework_clearance, violates};
-
-const PAD_ENTRY_TOLERANCE_MM: f64 = 0.000002;
 
 struct Piece {
     conductor_index: usize,
@@ -59,7 +59,7 @@ pub(super) fn evaluate(
                             .prepare_query()
                             .signed_distance(short.location)?;
                         if distance.mm
-                            > conductor.image.uncertainty_mm + design.resolution.tolerance_mm
+                            > conductor.image.uncertainty_mm + NET_SHORT_LOCATION_TOLERANCE_MM
                         {
                             return None;
                         }
@@ -221,7 +221,7 @@ pub(super) fn evaluate(
                                     |distance| {
                                         distance.mm
                                             <= conductor.image.uncertainty_mm
-                                                + PAD_ENTRY_TOLERANCE_MM
+                                                + NET_SHORT_LOCATION_TOLERANCE_MM
                                     },
                                 )
                             })
@@ -1116,15 +1116,65 @@ limit = { minimum = "0.15 mm" }
     }
 
     #[test]
+    fn net_short_in_a_gap_does_not_authorize_nearby_copper() {
+        let pdk = fixtures::pdk(
+            "[[rules.copper.clearance]]\nid = \"clearance\"\nlimit = { minimum = \"0.15 mm\" }",
+        );
+        // The graphic ends at x=9. The pad starts at its centre minus 0.5.
+        for (pad_x, short_x, status) in [
+            ("9.5", "9", RuleStatus::Fail),
+            ("9.5015", "9.00075", RuleStatus::Incomplete),
+        ] {
+            let board = BOARD.replace(
+                r#"<Location x="9" y="0.5"/>"#,
+                &format!(r#"<Location x="{pad_x}" y="0.5"/>"#),
+            );
+            let xml = board.replace(
+                "</Step>",
+                &format!(
+                    r#"
+              <LayerFeature layerRef="TOP"><Set><NetShort>
+                <NetRef name="N4"/><NetRef name="N5"/>
+                <Location x="{short_x}" y="0.5"/><LayerRef name="TOP"/>
+              </NetShort></Set></LayerFeature></Step>"#
+                ),
+            );
+            let report = fixtures::report(&xml, &pdk, crate::LayoutTarget::Board);
+            assert_eq!(report.rules[0].status, status);
+            if status == RuleStatus::Incomplete {
+                assert!(
+                    report.rules[0]
+                        .skip_reason
+                        .as_deref()
+                        .unwrap()
+                        .contains("contact")
+                );
+                assert!(run(&board).findings.iter().any(|finding| {
+                    finding
+                        .subjects
+                        .iter()
+                        .any(|s| s.net.as_deref() == Some("N5"))
+                        && (finding.measurement.actual_mm().unwrap() - 0.0015).abs() < 1e-8
+                }));
+            } else {
+                assert_eq!(report.findings.len(), 1, "only the N2/N3 gap remains");
+            }
+        }
+    }
+
+    #[test]
     fn net_short_matches_rounded_boundary_locations() {
         for (x, y, accepted) in [
             ("168.650000", "-100.439392", true),
             ("168.6499995", "-100.439392", true),
-            ("168.6495", "-100.439392", true),
+            ("168.649997", "-100.439392", false),
+            ("168.6495", "-100.439392", false),
             ("168.6485", "-100.439392", false),
             // The fork's exporter chooses this pad/graphic corner.
             ("169.150", "-100.689392", true),
-            ("169.1505", "-100.689892", true),
+            ("169.1500005", "-100.6893925", true),
+            ("169.150003", "-100.689395", false),
+            ("169.1505", "-100.689892", false),
             ("169.1515", "-100.690892", false),
         ] {
             let xml = annotated_antenna()

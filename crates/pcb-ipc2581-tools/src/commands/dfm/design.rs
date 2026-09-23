@@ -1162,6 +1162,9 @@ pub(super) struct CopperConductor {
     pub image: ContourSet,
 }
 
+/// Coordinate-rounding slack, independent of copper feature significance.
+pub(super) const NET_SHORT_LOCATION_TOLERANCE_MM: f64 = 0.000002;
+
 #[derive(Debug, Clone)]
 pub(super) struct NetShort {
     pub nets: [ConductorId; 2],
@@ -1598,7 +1601,7 @@ fn copper_conductor(
                             .bbox
                             .expand(
                                 source.resolution.accuracy.max_error_mm()
-                                    + source.resolution.tolerance_mm,
+                                    + NET_SHORT_LOCATION_TOLERANCE_MM,
                             )
                             .contains_point(Point::new(short.location.x, short.location.y))
                 });
