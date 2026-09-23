@@ -462,6 +462,8 @@ pub struct LayerFeature {
     pub sets: Vec<FeatureSet>,
     pub features: Vec<SetFeature>,
     pub spec_refs: Vec<Symbol>,
+    /// Electrical intent collected from Sets, independent of their paint.
+    pub net_shorts: Vec<NetShort>,
     pub nonstandard_attributes: Vec<NonstandardAttribute>,
 }
 
@@ -479,6 +481,15 @@ pub struct FeatureSet {
     pub features: Span,
     /// Into [`LayerFeature::nonstandard_attributes`].
     pub nonstandard_attributes: Span,
+}
+
+/// Revision-C intentional short at a location on the referenced layers.
+#[derive(Debug, Clone)]
+pub struct NetShort {
+    pub id: Option<Symbol>,
+    pub nets: Vec<Symbol>,
+    pub location: super::Location,
+    pub layers: Vec<Symbol>,
 }
 
 ipc_enum! {

@@ -1732,6 +1732,7 @@ impl<'a> Parser<'a> {
             sets: Vec::new(),
             features: Vec::new(),
             spec_refs: Vec::new(),
+            net_shorts: Vec::new(),
             nonstandard_attributes: Vec::new(),
         };
         for set in self.children_named(node, "Set") {
@@ -1740,6 +1741,7 @@ impl<'a> Parser<'a> {
         layer.sets.shrink_to_fit();
         layer.features.shrink_to_fit();
         layer.spec_refs.shrink_to_fit();
+        layer.net_shorts.shrink_to_fit();
         layer.nonstandard_attributes.shrink_to_fit();
         Ok(layer)
     }
@@ -1755,6 +1757,7 @@ impl<'a> Parser<'a> {
         let LayerFeature {
             features,
             spec_refs,
+            net_shorts,
             nonstandard_attributes,
             ..
         } = layer;
@@ -1767,6 +1770,7 @@ impl<'a> Parser<'a> {
         for child in self.element_children(node) {
             match self.name(&child) {
                 "SpecRef" => spec_refs.push(self.spec_ref(&child)?),
+                "NetShort" => net_shorts.push(self.parse_net_short(&child)?),
                 "Hole" => features.push(SetFeature::Hole(self.parse_hole(&child)?)),
                 "SlotCavity" => {
                     features.push(SetFeature::Slot(Box::new(self.parse_slot_cavity(&child)?)))
@@ -1795,6 +1799,39 @@ impl<'a> Parser<'a> {
             nonstandard_attributes: span(starts.2, layer.nonstandard_attributes.len()),
         });
         Ok(())
+    }
+
+    fn parse_net_short(&mut self, node: &Node) -> Result<NetShort> {
+        let id = self.optional_attr(node, "id");
+        let mut nets = Vec::new();
+        let mut layers = Vec::new();
+        let mut location = None;
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "NetRef" => nets.push(self.required_attr(&child, "name", "NetRef")?),
+                "LayerRef" => layers.push(self.required_attr(&child, "name", "LayerRef")?),
+                "Location" => {
+                    if location.is_some() {
+                        return Err(Ipc2581Error::InvalidStructure(
+                            "NetShort has multiple Locations".into(),
+                        ));
+                    }
+                    location = Some(self.parse_location(&child, self.units())?);
+                }
+                _ => {}
+            }
+        }
+        if nets.len() < 2 || layers.is_empty() {
+            return Err(Ipc2581Error::InvalidStructure(
+                "NetShort requires at least two NetRefs and one LayerRef".into(),
+            ));
+        }
+        Ok(NetShort {
+            id,
+            nets,
+            location: location.ok_or(Ipc2581Error::MissingElement("NetShort/Location"))?,
+            layers,
+        })
     }
 
     fn parse_nonstandard_attribute(&mut self, node: &Node) -> Result<NonstandardAttribute> {

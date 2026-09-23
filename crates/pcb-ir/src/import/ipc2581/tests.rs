@@ -1268,6 +1268,11 @@ fn import_reports_features_it_had_to_drop() {
             .any(|message| message.contains("'absent' is missing")),
         "{messages:?}"
     );
+    let layer = imported
+        .materialize_layer(imported.layer_id("TOP").unwrap(), ArtworkScope::Board)
+        .unwrap();
+    assert!(layer.features.is_empty());
+    assert_eq!(diagnostics(&layer), messages);
 }
 
 #[test]
