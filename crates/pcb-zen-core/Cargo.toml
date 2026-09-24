@@ -16,6 +16,7 @@ path = "tests/integration.rs"
 default = ["native"]
 native = [
     "dirs",
+    "filetime",
     "walkdir",
     "rayon",
 ]
@@ -39,6 +40,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 semver = { workspace = true }
 thiserror = { workspace = true }
+filetime = { workspace = true, optional = true }
 walkdir = { workspace = true, optional = true }
 log = { workspace = true }
 regex = { workspace = true }

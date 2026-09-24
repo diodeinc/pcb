@@ -16,15 +16,13 @@ pub(crate) struct ManifestRequirements {
 }
 
 pub(crate) struct ManifestLoader {
-    workspace: crate::WorkspaceInfo,
     offline: bool,
     cache: BTreeMap<(String, String), ManifestRequirements>,
 }
 
 impl ManifestLoader {
-    pub(crate) fn new(workspace: crate::WorkspaceInfo, offline: bool) -> Self {
+    pub(crate) fn new(offline: bool) -> Self {
         Self {
-            workspace,
             offline,
             cache: BTreeMap::new(),
         }
@@ -32,6 +30,7 @@ impl ManifestLoader {
 
     pub(crate) fn load(
         &mut self,
+        workspace: &crate::WorkspaceInfo,
         index: &CacheIndex,
         module_path: &str,
         version: &Version,
@@ -41,19 +40,14 @@ impl ManifestLoader {
             return Ok(loaded.clone());
         }
 
-        let loaded = load_manifest_for_module_version(
-            &self.workspace,
-            index,
-            module_path,
-            version,
-            self.offline,
-        )?;
+        let loaded =
+            load_manifest_for_module_version(workspace, index, module_path, version, self.offline)?;
         self.cache.insert(key, loaded.clone());
         Ok(loaded)
     }
 }
 
-pub(crate) fn load_manifest_for_module_version(
+fn load_manifest_for_module_version(
     workspace: &crate::WorkspaceInfo,
     index: &CacheIndex,
     module_path: &str,

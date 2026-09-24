@@ -373,6 +373,33 @@ fn is_builtin_excluded_dir(path: &Path) -> bool {
         .is_some_and(|name| WORKSPACE_DISCOVERY_EXCLUDE_DIRS.contains(&name))
 }
 
+/// Run `f` with its parallel iterators on a few reader threads. Work that
+/// waits on the filesystem is rewarded for a handful of concurrent readers;
+/// one per core only has them contend in the kernel.
+pub fn with_readers<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+    #[cfg(feature = "native")]
+    {
+        const READERS: usize = 4;
+        match rayon::ThreadPoolBuilder::new().num_threads(READERS).build() {
+            Ok(readers) => readers.install(f),
+            Err(_) => f(),
+        }
+    }
+    #[cfg(not(feature = "native"))]
+    f()
+}
+
+/// Map `f` over `items`, across threads where the platform has them.
+fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync + Send) -> Vec<R> {
+    #[cfg(feature = "native")]
+    {
+        use rayon::prelude::*;
+        items.par_iter().map(f).collect()
+    }
+    #[cfg(not(feature = "native"))]
+    items.iter().map(f).collect()
+}
+
 /// Walk workspace directories and collect package roots.
 ///
 /// Discovery is implicit: every descendant directory containing `pcb.toml` is a
@@ -384,54 +411,55 @@ fn discover_package_dirs<F: FileProvider>(
     errors: &mut Vec<DiscoveryError>,
 ) -> Vec<(PathBuf, PathBuf)> {
     let mut result = Vec::new();
-    // (directory, depth relative to root)
-    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    // Directories at the current depth below `root`, listed together.
+    let mut level = vec![root.to_path_buf()];
 
-    while let Some((dir, depth)) = stack.pop() {
-        let entries = match file_provider.list_directory_entries(&dir) {
-            Ok(e) => e,
-            Err(e) => {
-                if dir != root {
-                    errors.push(DiscoveryError {
-                        path: dir,
-                        error: e.to_string(),
-                    });
+    for depth in 0..=WORKSPACE_DISCOVERY_MAX_DEPTH {
+        let listings = par_map(&level, |dir| file_provider.list_directory_entries(dir));
+        let mut next_level = Vec::new();
+
+        for (dir, listing) in level.into_iter().zip(listings) {
+            let entries = match listing {
+                Ok(entries) => entries,
+                Err(e) => {
+                    if dir != root {
+                        errors.push(DiscoveryError {
+                            path: dir,
+                            error: e.to_string(),
+                        });
+                    }
+                    continue;
                 }
-                continue;
-            }
-        };
-
-        // The listing tells us both whether this directory is a package and
-        // which subdirectories to visit, without any per-entry stat calls.
-        if depth > 0
-            && entries
-                .iter()
-                .any(|e| !e.is_dir && e.path.file_name().is_some_and(|n| n == "pcb.toml"))
-            && let Ok(rel_path) = dir.strip_prefix(root)
-        {
-            result.push((dir.clone(), rel_path.to_path_buf()));
-        }
-
-        if depth == WORKSPACE_DISCOVERY_MAX_DEPTH {
-            continue;
-        }
-
-        for entry in entries {
-            // Never descend into symlinks (e.g., .pcb/cache contains symlinked packages)
-            if !entry.is_dir || entry.is_symlink || is_builtin_excluded_dir(&entry.path) {
-                continue;
-            }
-
-            let Ok(rel_path) = entry.path.strip_prefix(root) else {
-                continue;
             };
 
-            if exclude_set.is_match(rel_path_string(rel_path)) {
-                continue;
+            // The listing tells us both whether this directory is a package and
+            // which subdirectories to visit, without any per-entry stat calls.
+            if depth > 0
+                && entries
+                    .iter()
+                    .any(|e| !e.is_dir && e.path.file_name().is_some_and(|n| n == "pcb.toml"))
+                && let Ok(rel_path) = dir.strip_prefix(root)
+            {
+                result.push((dir.clone(), rel_path.to_path_buf()));
             }
 
-            stack.push((entry.path, depth + 1));
+            // Never descend into symlinks (e.g., .pcb/cache contains symlinked packages)
+            next_level.extend(
+                entries
+                    .into_iter()
+                    .filter(|entry| {
+                        entry.is_dir
+                            && !entry.is_symlink
+                            && !is_builtin_excluded_dir(&entry.path)
+                            && entry.path.strip_prefix(root).is_ok_and(|rel_path| {
+                                !exclude_set.is_match(rel_path_string(rel_path))
+                            })
+                    })
+                    .map(|entry| entry.path),
+            );
         }
+
+        level = next_level;
     }
 
     result
@@ -505,11 +533,18 @@ pub fn get_workspace_info<F: FileProvider>(
     if discover_descendants {
         let exclude_set = build_glob_set(&workspace_config.exclude)?;
 
-        let dirs = discover_package_dirs(file_provider, &workspace_root, &exclude_set, &mut errors);
+        let (dirs, manifests) = with_readers(|| {
+            let dirs =
+                discover_package_dirs(file_provider, &workspace_root, &exclude_set, &mut errors);
+            let manifests = par_map(&dirs, |(dir, _)| {
+                PcbToml::from_file(file_provider, &dir.join("pcb.toml"))
+            });
+            (dirs, manifests)
+        });
 
-        for (dir, rel_path) in dirs {
+        for ((dir, rel_path), manifest) in dirs.into_iter().zip(manifests) {
             let pkg_toml_path = dir.join("pcb.toml");
-            let pkg_config = match PcbToml::from_file(file_provider, &pkg_toml_path) {
+            let pkg_config = match manifest {
                 Ok(cfg) => cfg,
                 Err(e) => {
                     errors.push(DiscoveryError {

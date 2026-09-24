@@ -89,44 +89,29 @@ struct OverlayFileProvider {
 }
 
 impl OverlayFileProvider {
-    fn lookup(&self, path: &Path) -> Option<String> {
-        if let Some(contents) = self.open_files.read().unwrap().get(path) {
-            return Some(contents.clone());
+    /// Apply `f` to the open-file contents shadowing `path`, if any.
+    fn overlay<T>(&self, path: &Path, f: impl FnOnce(&String) -> T) -> Option<T> {
+        let open_files = self.open_files.read().unwrap();
+        // Workspace discovery reads every manifest before anything is open;
+        // an empty overlay must not cost a canonicalize per path.
+        if open_files.is_empty() {
+            return None;
         }
-
-        if let Ok(canon) = self.base.canonicalize(path)
-            && let Some(contents) = self.open_files.read().unwrap().get(&canon)
-        {
-            return Some(contents.clone());
-        }
-
-        None
-    }
-
-    fn has_overlay(&self, path: &Path) -> bool {
-        if self.open_files.read().unwrap().contains_key(path) {
-            return true;
-        }
-
-        self.base
-            .canonicalize(path)
-            .ok()
-            .map(|canon| self.open_files.read().unwrap().contains_key(&canon))
-            .unwrap_or(false)
+        open_files
+            .get(path)
+            .or_else(|| open_files.get(&self.base.canonicalize(path).ok()?))
+            .map(f)
     }
 }
 
 impl FileProvider for OverlayFileProvider {
     fn read_file(&self, path: &Path) -> Result<String, FileProviderError> {
-        if let Some(contents) = self.lookup(path) {
-            return Ok(contents);
-        }
-
-        self.base.read_file(path)
+        self.overlay(path, String::clone)
+            .map_or_else(|| self.base.read_file(path), Ok)
     }
 
     fn exists(&self, path: &Path) -> bool {
-        self.has_overlay(path) || self.base.exists(path)
+        self.overlay(path, |_| ()).is_some() || self.base.exists(path)
     }
 
     fn is_directory(&self, path: &Path) -> bool {
@@ -139,6 +124,13 @@ impl FileProvider for OverlayFileProvider {
 
     fn list_directory(&self, path: &Path) -> Result<Vec<PathBuf>, FileProviderError> {
         self.base.list_directory(path)
+    }
+
+    fn list_directory_entries(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<pcb_zen_core::DirEntry>, FileProviderError> {
+        self.base.list_directory_entries(path)
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, FileProviderError> {
@@ -459,17 +451,17 @@ impl LspEvalContext {
         workspace_root
     }
 
-    /// Return the cached, canonicalized resolution for the workspace that owns `file_path`.
+    /// Return the cached resolution for the workspace that owns `file_path`.
     fn resolution_for(&self, file_path: &Path) -> Arc<ResolutionResult> {
         let workspace_root = self.workspace_root_for(file_path);
         if let Some(cached) = self.resolution_cache.read().unwrap().get(&workspace_root) {
             return cached.clone();
         }
 
-        let mut resolution = match crate::get_workspace_info(&self.file_provider, &workspace_root)
+        let resolution = match crate::get_workspace_info(&self.file_provider, &workspace_root)
             .and_then(|ws| crate::resolve_workspace_dependencies(ws, &workspace_root, self.offline))
         {
-            Ok(resolution) => resolution,
+            Ok(resolution) => Arc::new(resolution),
             Err(err) => {
                 log::debug!(
                     "Failed to resolve dependencies for {}: {err:#}",
@@ -478,8 +470,6 @@ impl LspEvalContext {
                 return Arc::new(ResolutionResult::empty());
             }
         };
-        resolution.canonicalize_keys(&*self.file_provider);
-        let resolution = Arc::new(resolution);
         self.resolution_cache
             .write()
             .unwrap()

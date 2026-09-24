@@ -35,12 +35,10 @@ pub(crate) struct BuildResult {
 }
 
 impl BuildEvalState {
-    pub(crate) fn new(mut resolution: ResolutionResult) -> Self {
-        let file_provider = Arc::new(DefaultFileProvider::new());
-        resolution.canonicalize_keys(file_provider.as_ref());
+    pub(crate) fn new(resolution: ResolutionResult) -> Self {
         Self {
             caches: Arc::default(),
-            file_provider,
+            file_provider: Arc::new(DefaultFileProvider::new()),
             resolution: Arc::new(resolution),
             bom_match_mode: None,
         }
