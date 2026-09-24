@@ -32,6 +32,15 @@ pub struct TagMetadata {
     pub timestamp: String,
 }
 
+/// A tag, the object it names and the commit that object peels to. The two
+/// are the same for a lightweight tag.
+#[derive(Debug, Clone)]
+pub struct Tag {
+    pub name: String,
+    pub object: String,
+    pub commit: String,
+}
+
 fn git(repo_root: &Path) -> Command {
     let mut cmd = git_global();
     cmd.arg("-C").arg(repo_root);
@@ -423,10 +432,38 @@ pub fn list_all_tags_vec(repo_root: &Path) -> Vec<String> {
     })
 }
 
-pub fn list_tags_merged_into(repo_root: &Path, commit: &str) -> Vec<String> {
+/// Every tag with the commit it peels to. Packed refs record the peeled
+/// commits, so listing them reads no tag objects, however many tags there are.
+pub fn list_peeled_tags(repo_root: &Path) -> Vec<Tag> {
+    let lines = run_lines({
+        let mut cmd = git(repo_root);
+        cmd.args(["show-ref", "--tags", "--dereference"]);
+        cmd
+    });
+
+    let mut tags: Vec<Tag> = Vec::new();
+    for line in &lines {
+        let Some((object, name)) = line.split_once(" refs/tags/") else {
+            continue;
+        };
+        match tags.last_mut() {
+            // An annotated tag is followed by a `^{}` line naming its commit.
+            Some(tag) if name.ends_with("^{}") => tag.commit = object.into(),
+            _ => tags.push(Tag {
+                name: name.into(),
+                object: object.into(),
+                commit: object.into(),
+            }),
+        }
+    }
+    tags
+}
+
+/// Commits reachable from `commit`, newest first.
+pub fn rev_list(repo_root: &Path, commit: &str) -> Vec<String> {
     run_lines({
         let mut cmd = git(repo_root);
-        cmd.args(["tag", "--merged", commit]);
+        cmd.args(["rev-list", commit]);
         cmd
     })
 }
@@ -441,19 +478,6 @@ pub fn log_subjects(repo_root: &Path, range: Option<&str>, pathspec: Option<&Pat
         if let Some(pathspec) = pathspec.filter(|path| !path.as_os_str().is_empty()) {
             cmd.arg("--").arg(pathspec);
         }
-        cmd
-    })
-}
-
-pub fn decorated_commits(repo_root: &Path) -> Vec<String> {
-    run_lines({
-        let mut cmd = git(repo_root);
-        cmd.args([
-            "log",
-            "--simplify-by-decoration",
-            "--format=%H%x00%D",
-            "HEAD",
-        ]);
         cmd
     })
 }
@@ -514,26 +538,13 @@ pub fn delete_tags(repo_root: &Path, tag_names: &[&str]) -> anyhow::Result<()> {
     run_in(repo_root, &args)
 }
 
-pub fn describe_tags(repo_root: &Path, commit: &str, tag_prefix: Option<&str>) -> Option<String> {
-    let mut args = vec!["describe", "--tags", "--abbrev=0"];
-    let match_pattern;
-    if let Some(prefix) = tag_prefix {
-        match_pattern = format!("{}/*", prefix);
-        args.push("--match");
-        args.push(&match_pattern);
-    }
-    args.push(commit);
-    run_output_opt(repo_root, &args)
-}
-
-pub fn get_tag_metadata(repo_root: &Path, tags: &[String]) -> HashMap<String, TagMetadata> {
+pub fn get_tag_metadata(repo_root: &Path, tags: &[Tag]) -> HashMap<String, TagMetadata> {
     if tags.is_empty() {
         return HashMap::new();
     }
 
     let mut cmd = git(repo_root);
-    cmd.arg("cat-file")
-        .arg("--batch")
+    cmd.args(["cat-file", "--batch", "--buffer"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped());
 
@@ -541,22 +552,28 @@ pub fn get_tag_metadata(repo_root: &Path, tags: &[String]) -> HashMap<String, Ta
         return HashMap::new();
     };
 
-    if let Some(mut stdin) = child.stdin.take() {
-        for tag in tags {
-            if writeln!(stdin, "refs/tags/{tag}").is_err() {
-                return HashMap::new();
-            }
-        }
-    }
+    // Feed the objects while reading the replies: git stops reading once its
+    // output pipe fills, and a full input pipe would then block this side too.
+    let stdin = child.stdin.take();
+    let output = std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let mut stdin = stdin?;
+            tags.iter()
+                .try_for_each(|tag| writeln!(stdin, "{}", tag.object))
+                .ok()
+        });
+        child.wait_with_output()
+    });
 
-    let Ok(output) = child.wait_with_output() else {
+    let Ok(output) = output else {
         return HashMap::new();
     };
     if !output.status.success() {
         return HashMap::new();
     }
 
-    parse_cat_file_tag_metadata(&output.stdout, tags)
+    let names: Vec<String> = tags.iter().map(|tag| tag.name.clone()).collect();
+    parse_cat_file_tag_metadata(&output.stdout, &names)
 }
 
 fn parse_cat_file_tag_metadata(mut bytes: &[u8], tags: &[String]) -> HashMap<String, TagMetadata> {
