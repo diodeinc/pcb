@@ -304,6 +304,53 @@ fn test_pcb_info_json_includes_published_at() {
 }
 
 #[test]
+fn test_pcb_info_json_versions_ignore_unmerged_tags_and_flag_changes() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
+        .write("boards/clean/pcb.toml", TEST_BOARD_PCB_TOML)
+        .write("boards/clean/test_board.zen", TEST_BOARD_ZEN)
+        .write("boards/changed/pcb.toml", TEST_BOARD_PCB_TOML)
+        .write("boards/changed/test_board.zen", TEST_BOARD_ZEN)
+        .init_git()
+        .commit("initial boards")
+        .tag("boards/clean/v0.1.0");
+    let git = |sandbox: &Sandbox, args: &[&str]| {
+        sandbox.cmd("git", args).run().expect("run git");
+    };
+    git(
+        &sandbox,
+        &["tag", "-a", "boards/changed/v0.1.0", "-m", "Release 0.1.0"],
+    );
+
+    // A newer version published from a branch that never merged.
+    git(&sandbox, &["checkout", "-b", "side"]);
+    sandbox
+        .write("boards/clean/notes.txt", "side")
+        .commit("side work")
+        .tag("boards/clean/v0.2.0");
+    git(&sandbox, &["checkout", "main"]);
+
+    sandbox
+        .write("boards/changed/notes.txt", "after publish")
+        .commit("change a published board");
+
+    let output = sandbox.snapshot_run("pcbc", ["info", "-f", "json"]);
+    let json = output
+        .split("--- STDOUT ---\n")
+        .nth(1)
+        .and_then(|stdout| stdout.split("\n--- STDERR ---").next())
+        .expect("extract JSON output");
+    let parsed: serde_json::Value = serde_json::from_str(json).expect("parse JSON output");
+    let packages = &parsed["packages"];
+
+    assert_eq!(packages["boards/clean"]["version"], "0.1.0");
+    assert!(packages["boards/clean"].get("dirty").is_none());
+    assert_eq!(packages["boards/changed"]["version"], "0.1.0");
+    assert_eq!(packages["boards/changed"]["dirty"], true);
+}
+
+#[test]
 fn test_pcb_info_with_path() {
     let output = Sandbox::new()
         .write("subdir/pcb.toml", WORKSPACE_PCB_TOML)

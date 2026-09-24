@@ -151,7 +151,7 @@ impl PackageResolver {
         let package_index = WorkspacePackageIndex::new(&workspace);
         Ok(Self {
             cache_index: CacheIndex::open()?,
-            manifest_loader: ManifestLoader::new(workspace.clone(), false),
+            manifest_loader: ManifestLoader::new(false),
             workspace,
             spec_resolver: SpecVersionResolver::default(),
             package_index,
@@ -324,7 +324,7 @@ impl PackageResolver {
         };
         let loaded = self
             .manifest_loader
-            .load(&self.cache_index, &dep_id.path, version)
+            .load(&self.workspace, &self.cache_index, &dep_id.path, version)
             .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
 
         for (child_path, child_spec) in loaded.direct {
@@ -450,7 +450,7 @@ impl PackageResolver {
             };
             let loaded = self
                 .manifest_loader
-                .load(&self.cache_index, &dep_id.path, &version)
+                .load(&self.workspace, &self.cache_index, &dep_id.path, &version)
                 .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
             for (dep_path, dep_spec) in loaded.direct {
                 if is_stdlib_module_path(&dep_path) {

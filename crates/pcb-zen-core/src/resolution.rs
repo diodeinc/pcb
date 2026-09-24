@@ -579,7 +579,8 @@ fn is_remote_manifest_dependency(
         && !matches!(spec, DependencySpec::Detailed(detail) if detail.path.is_some())
 }
 
-fn exact_manifest_version(dep_url: &str, spec: &DependencySpec) -> Result<Version> {
+/// The exact version a hydrated manifest pins `dep_url` to.
+pub fn exact_manifest_version(dep_url: &str, spec: &DependencySpec) -> Result<Version> {
     let raw = match spec {
         DependencySpec::Version(version) => version,
         DependencySpec::Detailed(detail) if detail.version.is_some() => {
@@ -790,51 +791,6 @@ impl ResolutionResult {
         resolution
             .package_for_file(file)
             .map(|(root, package)| ResolvedPackageScope::frozen(root, package))
-    }
-
-    pub fn package_url_for_package_root(
-        &self,
-        root: &Path,
-        file_provider: &dyn FileProvider,
-    ) -> Option<String> {
-        let canonical_root = file_provider
-            .canonicalize(root)
-            .unwrap_or_else(|_| root.to_path_buf());
-
-        let stdlib_root = self.workspace_info.workspace_stdlib_dir();
-        let canonical_stdlib = file_provider
-            .canonicalize(&stdlib_root)
-            .unwrap_or(stdlib_root);
-        if canonical_root == canonical_stdlib {
-            return Some(STDLIB_MODULE_PATH.to_string());
-        }
-
-        for (url, package) in &self.workspace_info.packages {
-            let package_root = package.dir(&self.workspace_info.root);
-            let canonical_package = file_provider
-                .canonicalize(&package_root)
-                .unwrap_or(package_root);
-            if canonical_root == canonical_package {
-                return Some(url.clone());
-            }
-        }
-
-        let has_root_package = self
-            .workspace_info
-            .packages
-            .values()
-            .any(|pkg| pkg.rel_path.as_os_str().is_empty());
-        if !has_root_package {
-            let workspace_root = self.workspace_info.root.clone();
-            let canonical_workspace = file_provider
-                .canonicalize(&workspace_root)
-                .unwrap_or(workspace_root);
-            if canonical_root == canonical_workspace {
-                return Some(LOCAL_WORKSPACE_ROOT_URL.to_string());
-            }
-        }
-
-        None
     }
 
     pub(crate) fn package_url_for_file(

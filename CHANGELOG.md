@@ -13,6 +13,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb ipc render` draws a realistic view of the finished board, array or fab panel: top and bottom side by side, or one with `--side`.
 - Add initial DFM support for IPC-2581C net-tie declarations.
 
+### Changed
+
+- Speed up workspace discovery, dependency resolution and `pcb info` in large workspaces.
+- `pcb lsp` resolves the workspace at start-up instead of inside the first request.
+
 ## [0.4.58] - 2026-09-22
 
 ### Fixed

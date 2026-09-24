@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use pcb_zen_core::config::ManifestPart;
-use pcb_zen_core::resolution::{FrozenResolutionMap, ResolutionResult, build_package_roots};
+use pcb_zen_core::resolution::{FrozenResolutionMap, ResolutionResult};
 use semver::Version;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -399,18 +399,14 @@ fn add_parts_to_symbol_map(
 /// parts-bearing manifest, resolving each `ManifestPart.symbol` into a
 /// `package://` URI.
 pub fn build_frozen_symbol_parts(
-    workspace_info: &pcb_zen_core::workspace::WorkspaceInfo,
+    package_roots: &BTreeMap<String, PathBuf>,
     resolution: &FrozenResolutionMap,
 ) -> Result<HashMap<String, Vec<ManifestPart>>> {
     let mut result: HashMap<String, Vec<ManifestPart>> = HashMap::new();
-    let package_roots = build_package_roots(
-        workspace_info,
-        resolution.packages.values().map(|package| &package.deps),
-    );
 
     for (pkg_root, package) in &resolution.packages {
         if !package.parts.is_empty() {
-            add_parts_to_symbol_map(&mut result, &package_roots, &package.parts, pkg_root)
+            add_parts_to_symbol_map(&mut result, package_roots, &package.parts, pkg_root)
                 .with_context(|| {
                     format!("Failed to build symbol parts from {}", pkg_root.display())
                 })?;
@@ -609,6 +605,7 @@ mod tests {
     use super::*;
     use crate::workspace::WorkspacePackage;
     use pcb_zen_core::config::PcbToml;
+    use pcb_zen_core::resolution::build_package_roots;
     use tempfile::TempDir;
 
     fn workspace_with_root_config(config: PcbToml) -> WorkspaceInfo {
@@ -678,7 +675,8 @@ mod tests {
                 },
             )]),
         };
-        let symbol_parts = build_frozen_symbol_parts(&workspace, &resolution)
+        let package_roots = build_package_roots(&workspace, []);
+        let symbol_parts = build_frozen_symbol_parts(&package_roots, &resolution)
             .expect("workspace manifest parts should not require symbol_name");
         let parts = symbol_parts
             .get("package://workspace/Device.kicad_sym")

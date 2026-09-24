@@ -293,7 +293,8 @@ pub fn ensure_stdlib_materialized(workspace_root: &std::path::Path) -> Result<Pa
     let _lock = git::lock_dir(&target)?;
 
     let source = discover_source()?;
-    if target.exists() && source_matches_target(&source, &target).unwrap_or(false) {
+    // A missing or unreadable target does not match.
+    if source_matches_target(&source, &target).unwrap_or(false) {
         return Ok(target);
     }
 

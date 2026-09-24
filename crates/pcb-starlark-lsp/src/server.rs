@@ -492,6 +492,11 @@ pub trait LspContext {
     ) {
     }
 
+    /// Called once at start-up with the client's workspace roots, before the first
+    /// message is handled. Implementations can do one-time workspace work here, while
+    /// the client is still idle, instead of inside the first request.
+    fn warm_workspace(&self, _workspace_roots: &[std::path::PathBuf]) {}
+
     /// Should the server eagerly preload all files in the workspace. When this returns
     /// `true` the server will call [`workspace_files`] once at start-up and parse the
     /// returned set of files so that cross-file features (e.g. workspace symbol, future
@@ -1426,14 +1431,11 @@ impl<T: LspContext> Backend<T> {
         }
     }
 
-    /// Preload all workspace files if [`LspContext::is_eager`] is `true`.
+    /// Warm the context, then preload all workspace files if
+    /// [`LspContext::is_eager`] is `true`.
     #[allow(deprecated)] // Keep the LSP rootUri fallback for older clients.
     fn preload_workspace(&self, initialize_params: &InitializeParams) {
         use std::path::PathBuf;
-
-        if !self.context.is_eager() {
-            return;
-        }
 
         // Determine workspace roots from the client-supplied params.
         let workspace_roots: Vec<PathBuf> =
@@ -1447,6 +1449,11 @@ impl<T: LspContext> Backend<T> {
             } else {
                 Vec::new()
             };
+
+        self.context.warm_workspace(&workspace_roots);
+        if !self.context.is_eager() {
+            return;
+        }
 
         match self.context.workspace_files(&workspace_roots) {
             Ok(paths) => {

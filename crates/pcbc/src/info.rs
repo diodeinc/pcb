@@ -6,6 +6,7 @@ use pcb_ui::{Style, StyledText};
 use pcb_zen::workspace::{SymbolFileInfo, WorkspaceInfo, WorkspacePackage};
 use pcb_zen_core::config::PcbToml;
 use pcb_zen_core::resolution::ResolutionResult;
+use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::env;
@@ -254,14 +255,13 @@ fn is_path_patch(ws: &WorkspaceInfo, module_path: &str, root: &Path) -> bool {
 }
 
 fn populate_package_file_discovery(ws: &mut WorkspaceInfo) -> Result<()> {
-    for pkg in ws.packages.values_mut() {
-        let package_dir = pkg.dir(&ws.root);
-        let (entrypoints, symbol_files) = discover_package_files(&package_dir)?;
-        pkg.entrypoints = entrypoints;
-        pkg.symbol_files = symbol_files;
-    }
-
-    Ok(())
+    let root = &ws.root;
+    pcb_zen_core::workspace::with_readers(|| {
+        ws.packages.par_iter_mut().try_for_each(|(_, pkg)| {
+            (pkg.entrypoints, pkg.symbol_files) = discover_package_files(&pkg.dir(root))?;
+            Ok(())
+        })
+    })
 }
 
 fn discover_package_files(package_dir: &Path) -> Result<(Vec<PathBuf>, Vec<SymbolFileInfo>)> {

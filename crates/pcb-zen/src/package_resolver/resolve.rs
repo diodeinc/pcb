@@ -1,17 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
-use crate::WorkspaceInfo;
 use crate::cache_index::{CacheIndex, ensure_workspace_cache_symlink};
 use crate::resolve::ensure_package_manifest_in_cache;
 use crate::workspace::WorkspaceInfoExt;
+use crate::{WorkspaceInfo, WorkspacePackage};
 use anyhow::{Context, Result, bail};
 use ignore::WalkBuilder;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::file_extensions;
 use pcb_zen_core::resolution::{
     FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
-    ResolutionResult, selected_remote_from_hydrated_manifest,
+    ResolutionResult, build_package_roots, exact_manifest_version,
+    selected_remote_from_hydrated_manifest,
 };
 use pcb_zen_core::{STDLIB_MODULE_PATH, is_stdlib_module_path};
 use semver::Version;
@@ -66,9 +67,9 @@ pub fn build_frozen_resolution_maps(
     workspace: &WorkspaceInfo,
     package_urls: impl IntoIterator<Item = String>,
     offline: bool,
-) -> Result<BTreeMap<String, FrozenResolutionMap>> {
-    let mut builder = FrozenResolutionBuilder::new(workspace.clone(), offline)?;
-    let mut resolutions = BTreeMap::new();
+) -> Result<FrozenResolutionSet> {
+    let mut builder = FrozenResolutionBuilder::new(workspace, offline)?;
+    let mut resolutions = FrozenResolutionSet::new();
     for package_url in package_urls {
         // The stdlib has no manifest to hydrate; its resolution is the
         // stdlib package alone.
@@ -118,7 +119,7 @@ pub fn resolve_workspace_dependencies(
 }
 
 fn resolve_frozen(
-    workspace_info: WorkspaceInfo,
+    mut workspace_info: WorkspaceInfo,
     package_urls: Vec<String>,
     offline: bool,
 ) -> Result<ResolutionResult> {
@@ -126,17 +127,26 @@ fn resolve_frozen(
         crate::cache_index::ensure_stdlib_materialized(&workspace_info.root)?;
     }
 
-    let mut resolution_set = FrozenResolutionSet::default();
-    let mut symbol_parts = HashMap::new();
+    let resolution_set = build_frozen_resolution_maps(&workspace_info, package_urls, offline)?;
+    // Package roots are canonical, so the cache prefix that maps them back
+    // into the workspace must be too. The cache exists by now.
+    workspace_info.cache_dir = canonicalize(&workspace_info.cache_dir);
+    // The root table lists every workspace package. Build it once: a table per
+    // map makes resolving a whole workspace quadratic.
+    let package_roots = build_package_roots(
+        &workspace_info,
+        resolution_set
+            .values()
+            .flat_map(|resolution| resolution.packages.values())
+            .map(|package| &package.deps),
+    );
 
-    for (package_url, resolution) in
-        build_frozen_resolution_maps(&workspace_info, package_urls, offline)?
-    {
+    let mut symbol_parts = HashMap::new();
+    for resolution in resolution_set.values() {
         symbol_parts.extend(crate::resolve::build_frozen_symbol_parts(
-            &workspace_info,
-            &resolution,
+            &package_roots,
+            resolution,
         )?);
-        resolution_set.insert(package_url, resolution);
     }
 
     Ok(ResolutionResult::frozen(
@@ -181,23 +191,27 @@ fn collect_workspace_zen_files(
     Ok(zen_files)
 }
 
-struct FrozenResolutionBuilder {
-    workspace: WorkspaceInfo,
+/// Builds resolution maps keyed by canonical package roots, the form evaluation
+/// looks files up by.
+struct FrozenResolutionBuilder<'a> {
+    workspace: &'a WorkspaceInfo,
     offline: bool,
     cache_index: CacheIndex,
     manifest_loader: ManifestLoader,
+    stdlib_root: PathBuf,
     selected_remote: BTreeMap<ResolvedDepId, Version>,
     materialized_remote: BTreeSet<(ResolvedDepId, Version)>,
     remote_roots: BTreeMap<(String, Version), PathBuf>,
     packages: BTreeMap<PathBuf, FrozenPackage>,
 }
 
-impl FrozenResolutionBuilder {
-    fn new(workspace: WorkspaceInfo, offline: bool) -> Result<Self> {
+impl<'a> FrozenResolutionBuilder<'a> {
+    fn new(workspace: &'a WorkspaceInfo, offline: bool) -> Result<Self> {
         ensure_workspace_cache_symlink(&workspace.root)?;
         Ok(Self {
             cache_index: CacheIndex::open()?,
-            manifest_loader: ManifestLoader::new(workspace.clone(), offline),
+            manifest_loader: ManifestLoader::new(offline),
+            stdlib_root: canonicalize(&workspace.workspace_stdlib_dir()),
             workspace,
             offline,
             selected_remote: BTreeMap::new(),
@@ -208,7 +222,7 @@ impl FrozenResolutionBuilder {
     }
 
     fn build(&mut self, package_url: &str) -> Result<FrozenResolutionMap> {
-        self.selected_remote = selected_remote_from_hydrated_manifest(&self.workspace, package_url)
+        self.selected_remote = selected_remote_from_hydrated_manifest(self.workspace, package_url)
             .with_context(|| format!("while reading resolved closure for {}", package_url))?;
 
         self.materialize_selected_remote()?;
@@ -222,7 +236,8 @@ impl FrozenResolutionBuilder {
             }
             self.resolve_package_node(node, &mut queue)?;
         }
-        self.add_stdlib_package()?;
+        self.packages
+            .insert(self.stdlib_root.clone(), stdlib_frozen_package());
 
         Ok(FrozenResolutionMap {
             selected_remote: self.selected_remote.clone().into_iter().collect(),
@@ -247,7 +262,7 @@ impl FrozenResolutionBuilder {
         }
 
         materialize_selected(
-            &self.workspace,
+            self.workspace,
             pending.iter(),
             self.offline,
             &self.cache_index,
@@ -275,7 +290,7 @@ impl FrozenResolutionBuilder {
                 let package_root = self.remote_package_root(&dep_id.path, &version)?;
                 let manifest = self
                     .manifest_loader
-                    .load(&self.cache_index, &dep_id.path, &version)
+                    .load(self.workspace, &self.cache_index, &dep_id.path, &version)
                     .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
                 (
                     FrozenPackageIdentity::Remote { dep_id, version },
@@ -288,7 +303,7 @@ impl FrozenResolutionBuilder {
 
         let deps = self.resolve_direct_deps(&package_root, &direct_deps, queue)?;
         self.packages.insert(
-            canonicalize(&package_root),
+            package_root,
             FrozenPackage {
                 identity,
                 deps,
@@ -317,12 +332,12 @@ impl FrozenResolutionBuilder {
             }
 
             if let Some(workspace_root) = self.workspace_dep_root(dep_url) {
-                resolved.insert(dep_url.clone(), canonicalize(&workspace_root));
+                resolved.insert(dep_url.clone(), workspace_root);
                 queue.push_back(PackageNode::Workspace(dep_url.clone()));
                 continue;
             }
 
-            let requested_version = exact_spec_version(dep_url, spec)?;
+            let requested_version = exact_manifest_version(dep_url, spec)?;
             let dep_id = ResolvedDepId::for_version(dep_url.clone(), &requested_version);
             let selected_version = self.selected_remote.get(&dep_id).cloned().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -333,7 +348,7 @@ impl FrozenResolutionBuilder {
                 )
             })?;
             let dep_root = self.remote_package_root(&dep_id.path, &selected_version)?;
-            resolved.insert(dep_url.clone(), canonicalize(&dep_root));
+            resolved.insert(dep_url.clone(), dep_root);
             queue.push_back(PackageNode::Remote {
                 dep_id,
                 version: selected_version,
@@ -343,14 +358,6 @@ impl FrozenResolutionBuilder {
         Ok(resolved)
     }
 
-    fn add_stdlib_package(&mut self) -> Result<()> {
-        self.packages.insert(
-            canonicalize(&self.workspace.workspace_stdlib_dir()),
-            stdlib_frozen_package(),
-        );
-        Ok(())
-    }
-
     fn workspace_manifest(&self, package_url: &str) -> Result<(PathBuf, PcbToml)> {
         if self.workspace.packages.is_empty() && package_url == STANDALONE_PACKAGE_URL {
             let config = self.workspace.config.clone().unwrap_or_default();
@@ -358,7 +365,10 @@ impl FrozenResolutionBuilder {
         }
 
         if let Some(pkg) = self.workspace.packages.get(package_url) {
-            return Ok((pkg.dir(&self.workspace.root), pkg.config.clone()));
+            return Ok((
+                workspace_package_dir(self.workspace, package_url, pkg),
+                pkg.config.clone(),
+            ));
         }
 
         if self.workspace.workspace_base_url().as_deref() == Some(package_url)
@@ -372,7 +382,7 @@ impl FrozenResolutionBuilder {
 
     fn workspace_dep_root(&self, dep_url: &str) -> Option<PathBuf> {
         if let Some(pkg) = self.workspace.packages.get(dep_url) {
-            return Some(pkg.dir(&self.workspace.root));
+            return Some(workspace_package_dir(self.workspace, dep_url, pkg));
         }
         (self.workspace.workspace_base_url().as_deref() == Some(dep_url))
             .then(|| self.workspace.root.clone())
@@ -384,32 +394,29 @@ impl FrozenResolutionBuilder {
             return Ok(root.clone());
         }
 
-        let version_str = version.to_string();
         let vendor_root =
             package_version_root(self.workspace.root.join("vendor"), module_path, version);
-        if vendor_root.exists() {
-            self.remote_roots.insert(key, vendor_root.clone());
-            return Ok(vendor_root);
-        }
-
-        let cache_root =
-            package_version_root(self.workspace.workspace_cache_dir(), module_path, version);
-        if cache_root.join("pcb.toml").exists() {
-            self.remote_roots.insert(key, cache_root.clone());
-            return Ok(cache_root);
-        }
-
-        if self.offline {
-            bail!(
-                "{}@{} is not cached. Run `pcb build` once online to fetch it.",
-                module_path,
-                version_str
-            );
-        }
-
-        ensure_package_manifest_in_cache(module_path, version, &self.cache_index)?;
-        self.remote_roots.insert(key, cache_root.clone());
-        Ok(cache_root)
+        let root = if vendor_root.exists() {
+            vendor_root
+        } else {
+            let cache_root =
+                package_version_root(self.workspace.workspace_cache_dir(), module_path, version);
+            if !cache_root.join("pcb.toml").exists() {
+                if self.offline {
+                    bail!(
+                        "{}@{} is not cached. Run `pcb build` once online to fetch it.",
+                        module_path,
+                        version
+                    );
+                }
+                ensure_package_manifest_in_cache(module_path, version, &self.cache_index)?;
+            }
+            cache_root
+        };
+        // The workspace cache is a symlink into the global one.
+        let root = canonicalize(&root);
+        self.remote_roots.insert(key, root.clone());
+        Ok(root)
     }
 }
 
@@ -423,33 +430,26 @@ fn package_url_for_zen(workspace: &WorkspaceInfo, path: &Path) -> Result<String>
         .ok_or_else(|| anyhow::anyhow!("No workspace package contains {}", path.display()))
 }
 
+/// Canonical directory of a workspace package. Discovery walks real directories
+/// down from the canonical workspace root, so only a fork patched in by path
+/// can sit behind `..` or a symlink.
+fn workspace_package_dir(workspace: &WorkspaceInfo, url: &str, pkg: &WorkspacePackage) -> PathBuf {
+    let dir = pkg.dir(&workspace.root);
+    let patched_in = workspace
+        .config
+        .as_ref()
+        .and_then(|config| config.patch.get(url))
+        .is_some_and(|patch| patch.path.is_some());
+    if patched_in { canonicalize(&dir) } else { dir }
+}
+
+/// The package whose directory is the canonical `path`.
 fn package_url_for_package_dir(workspace: &WorkspaceInfo, path: &Path) -> Option<String> {
     workspace
         .packages
         .iter()
-        .find(|(_, pkg)| {
-            pkg.dir(&workspace.root)
-                .canonicalize()
-                .is_ok_and(|dir| dir == path)
-        })
+        .find(|(url, pkg)| workspace_package_dir(workspace, url, pkg) == path)
         .map(|(url, _)| url.clone())
-}
-
-fn exact_spec_version(dep_url: &str, spec: &DependencySpec) -> Result<Version> {
-    let raw = match spec {
-        DependencySpec::Version(version) => version,
-        DependencySpec::Detailed(detail) if detail.version.is_some() => {
-            detail.version.as_ref().expect("checked above")
-        }
-        DependencySpec::Detailed(_) => {
-            bail!(
-                "Dependency {} must specify an exact version; run `pcb sync` to update dependency versions",
-                dep_url
-            );
-        }
-    };
-    pcb_zen_core::parse_relaxed_version(raw)
-        .ok_or_else(|| anyhow::anyhow!("Dependency {} has invalid version '{}'", dep_url, raw))
 }
 
 fn local_path_dependency_root(package_root: &Path, spec: &DependencySpec) -> Option<PathBuf> {
@@ -462,7 +462,6 @@ fn local_path_dependency_root(package_root: &Path, spec: &DependencySpec) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::WorkspacePackage;
 
     fn workspace_with_package(root: &Path) -> WorkspaceInfo {
         WorkspaceInfo {
@@ -518,6 +517,45 @@ mod tests {
             .frozen_root_for_file(&pin_header)
             .expect("stdlib files should select the stdlib root package");
         assert_eq!(root_package, STDLIB_MODULE_PATH);
+    }
+
+    #[test]
+    fn path_patched_fork_roots_are_canonical() {
+        let temp = tempfile::tempdir().unwrap();
+        let temp = temp.path().canonicalize().unwrap();
+        let write = |path: &str, contents: &str| {
+            let path = temp.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        };
+        write(
+            "workspace/pcb.toml",
+            "[workspace]\npcb-version = \"0.4\"\n\n[patch]\n\"github.com/acme/dep\" = { path = \"board/../fork\" }\n",
+        );
+        write(
+            "workspace/board/pcb.toml",
+            "[dependencies]\n\"github.com/acme/dep\" = \"1.0.0\"\n",
+        );
+        write("workspace/fork/pcb.toml", "");
+
+        let workspace = crate::get_workspace_info(
+            &pcb_zen_core::DefaultFileProvider::new(),
+            &temp.join("workspace"),
+        )
+        .unwrap();
+        let frozen = build_frozen_resolution_maps(&workspace, ["board".to_string()], true).unwrap();
+
+        let packages = &frozen["board"].packages;
+        let fork = temp.join("workspace/fork");
+        assert!(packages.contains_key(&fork));
+        assert_eq!(
+            target_package_urls_for_path(&workspace, &fork).unwrap(),
+            ["github.com/acme/dep"]
+        );
+        assert_eq!(
+            packages[&temp.join("workspace/board")].deps["github.com/acme/dep"],
+            fork
+        );
     }
 
     #[test]

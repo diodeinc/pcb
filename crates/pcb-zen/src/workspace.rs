@@ -23,14 +23,8 @@ use crate::git;
 use crate::tags;
 
 struct PackageTagInfo {
-    tag: String,
+    tag: git::Tag,
     version: Version,
-}
-
-enum DirtyBase {
-    Found(String),
-    NoPackageTags,
-    Unknown,
 }
 
 /// Extension methods for WorkspaceInfo that require native features (git, filesystem)
@@ -77,43 +71,30 @@ impl WorkspaceInfoExt for WorkspaceInfo {
     }
 }
 
+/// Packages with no published tag, or with a path changed since the last
+/// publish, committed (`changed_paths`) or not (`status_paths`).
 fn discover_dirty_packages(
     workspace: &WorkspaceInfo,
     latest_tags: &HashMap<String, PackageTagInfo>,
+    changed_paths: Vec<PathBuf>,
     status_paths: Vec<PathBuf>,
     workspace_subpath: Option<&Path>,
 ) -> HashSet<String> {
-    let mut dirty = HashSet::new();
-    for url in workspace.packages.keys() {
-        if !latest_tags.contains_key(url) {
-            dirty.insert(url.clone());
-        }
-    }
-
-    match dirty_base_ref(&workspace.root, latest_tags) {
-        DirtyBase::Found(base) => {
-            for path in git::changed_paths_since_in_repo(&workspace.root, &base) {
-                if let Some(url) = package_url_for_path(workspace, &path, workspace_subpath) {
-                    dirty.insert(url);
-                }
-            }
-        }
-        DirtyBase::NoPackageTags => {}
-        DirtyBase::Unknown => dirty.extend(latest_tags.keys().cloned()),
-    }
-
-    for path in status_paths {
-        if let Some(url) = package_url_for_path(workspace, &path, workspace_subpath) {
-            dirty.insert(url);
-        }
-    }
-
-    dirty
+    let unpublished = workspace
+        .packages
+        .keys()
+        .filter(|url| !latest_tags.contains_key(*url))
+        .cloned();
+    let changed = changed_paths
+        .iter()
+        .chain(&status_paths)
+        .filter_map(|path| package_url_for_path(workspace, path, workspace_subpath));
+    unpublished.chain(changed).collect()
 }
 
 fn latest_package_tags(
     workspace: &WorkspaceInfo,
-    all_tags: &[String],
+    all_tags: &[git::Tag],
 ) -> HashMap<String, PackageTagInfo> {
     let workspace_path = workspace.path();
     let package_urls_by_tag_path: HashMap<_, _> = workspace
@@ -131,7 +112,7 @@ fn latest_package_tags(
 
     let mut latest = HashMap::new();
     for tag in all_tags {
-        let Some((tag_path, version)) = parse_package_tag(tag) else {
+        let Some((tag_path, version)) = parse_package_tag(&tag.name) else {
             continue;
         };
         let Some(url) = package_urls_by_tag_path.get(&tag_path) else {
@@ -154,35 +135,6 @@ fn latest_package_tags(
 fn parse_package_tag(tag: &str) -> Option<(String, Version)> {
     tags::parse_tag(tag)
         .or_else(|| tags::parse_root_tag(tag).map(|version| (String::new(), version)))
-}
-
-fn dirty_base_ref(repo_root: &Path, latest_tags: &HashMap<String, PackageTagInfo>) -> DirtyBase {
-    if latest_tags.is_empty() {
-        return DirtyBase::NoPackageTags;
-    }
-
-    let package_tags: HashSet<_> = latest_tags.values().map(|info| info.tag.as_str()).collect();
-    if let Some(tag) = git::describe_tags(repo_root, "HEAD", None)
-        && package_tags.contains(tag.as_str())
-    {
-        return DirtyBase::Found(tag);
-    }
-
-    for line in git::decorated_commits(repo_root) {
-        let Some((commit, decorations)) = line.split_once('\0') else {
-            continue;
-        };
-        if decorations.split(',').any(|decoration| {
-            decoration
-                .trim()
-                .strip_prefix("tag: ")
-                .is_some_and(|tag| package_tags.contains(tag))
-        }) {
-            return DirtyBase::Found(commit.to_string());
-        }
-    }
-
-    DirtyBase::Unknown
 }
 
 fn package_url_for_path(
@@ -246,17 +198,24 @@ pub fn enrich_tag_versions(info: &mut WorkspaceInfo) {
     apply_tag_versions(info);
 }
 
+/// Set each package's version from its newest tag merged into HEAD. Returns
+/// those tags and HEAD's history, newest commit first.
+///
 /// For forked packages, version is already set from the fork path, so only
 /// update if we find a tag (don't overwrite with None).
-fn apply_tag_versions(info: &mut WorkspaceInfo) -> HashMap<String, PackageTagInfo> {
-    let all_tags = git::list_tags_merged_into(&info.root, "HEAD");
-    let latest_tags = latest_package_tags(info, &all_tags);
+fn apply_tag_versions(info: &mut WorkspaceInfo) -> (HashMap<String, PackageTagInfo>, Vec<String>) {
+    let history = git::rev_list(&info.root, "HEAD");
+    let merged: HashSet<&str> = history.iter().map(String::as_str).collect();
+    let mut tags = git::list_peeled_tags(&info.root);
+    tags.retain(|tag| merged.contains(tag.commit.as_str()));
+
+    let latest_tags = latest_package_tags(info, &tags);
     for (url, pkg) in info.packages.iter_mut() {
         if let Some(tag_info) = latest_tags.get(url) {
             pkg.version = Some(tag_info.version.to_string());
         }
     }
-    latest_tags
+    (latest_tags, history)
 }
 
 /// Populate package `version`, `published_at`, and `dirty` from git tags and
@@ -264,32 +223,41 @@ fn apply_tag_versions(info: &mut WorkspaceInfo) -> HashMap<String, PackageTagInf
 /// commands that actually display this metadata.
 #[instrument(name = "enrich_git_metadata", skip_all)]
 pub fn enrich_git_metadata(info: &mut WorkspaceInfo) {
-    let latest_tags = apply_tag_versions(info);
-    let workspace_subpath = git::get_repo_subpath(&info.root).ok().flatten();
+    let root = info.root.clone();
+    let (latest_tags, tag_metadata, dirty) = thread::scope(|scope| {
+        // The working-tree scan takes as long as everything else together.
+        let status_paths = scope.spawn(|| git::status_paths_in_repo(&root));
 
-    let latest_tag_names: Vec<_> = latest_tags.values().map(|info| info.tag.clone()).collect();
-    let (tag_metadata, status_paths) = thread::scope(|scope| {
-        let tag_metadata = scope.spawn(|| git::get_tag_metadata(&info.root, &latest_tag_names));
-        let status_paths = scope.spawn(|| git::status_paths_in_repo(&info.root));
-        (
-            tag_metadata.join().unwrap_or_default(),
+        let (latest_tags, history) = apply_tag_versions(info);
+        let tags: Vec<_> = latest_tags.values().map(|info| info.tag.clone()).collect();
+        let tag_metadata = git::get_tag_metadata(&root, &tags);
+
+        // Changes are measured from the last publish: the newest commit in
+        // HEAD's history that one of the latest package tags names.
+        let published: HashSet<&str> = tags.iter().map(|tag| tag.commit.as_str()).collect();
+        let changed_paths = history
+            .iter()
+            .find(|commit| published.contains(commit.as_str()))
+            .map(|base| git::changed_paths_since_in_repo(&root, base))
+            .unwrap_or_default();
+
+        let dirty = discover_dirty_packages(
+            info,
+            &latest_tags,
+            changed_paths,
             status_paths.join().unwrap_or_default(),
-        )
+            git::get_repo_subpath(&root).ok().flatten().as_deref(),
+        );
+        (latest_tags, tag_metadata, dirty)
     });
-    let dirty_map = discover_dirty_packages(
-        info,
-        &latest_tags,
-        status_paths,
-        workspace_subpath.as_deref(),
-    );
 
     for (url, pkg) in info.packages.iter_mut() {
         if let Some(tag_info) = latest_tags.get(url) {
             pkg.published_at = tag_metadata
-                .get(&tag_info.tag)
+                .get(&tag_info.tag.name)
                 .map(|metadata| metadata.timestamp.clone());
         }
-        pkg.dirty = dirty_map.contains(url);
+        pkg.dirty = dirty.contains(url);
     }
 }
 
