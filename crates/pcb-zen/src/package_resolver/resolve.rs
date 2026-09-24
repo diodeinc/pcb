@@ -532,13 +532,13 @@ mod tests {
         };
         write(
             "workspace/pcb.toml",
-            "[workspace]\npcb-version = \"0.4\"\n\n[patch]\n\"github.com/acme/dep\" = { path = \"../fork\" }\n",
+            "[workspace]\npcb-version = \"0.4\"\n\n[patch]\n\"github.com/acme/dep\" = { path = \"board/../fork\" }\n",
         );
         write(
             "workspace/board/pcb.toml",
             "[dependencies]\n\"github.com/acme/dep\" = \"1.0.0\"\n",
         );
-        write("fork/pcb.toml", "");
+        write("workspace/fork/pcb.toml", "");
 
         let workspace = crate::get_workspace_info(
             &pcb_zen_core::DefaultFileProvider::new(),
@@ -548,7 +548,7 @@ mod tests {
         let frozen = build_frozen_resolution_maps(&workspace, ["board".to_string()], true).unwrap();
 
         let packages = &frozen["board"].packages;
-        let fork = temp.join("fork");
+        let fork = temp.join("workspace/fork");
         assert!(packages.contains_key(&fork));
         assert_eq!(
             packages[&temp.join("workspace/board")].deps["github.com/acme/dep"],
