@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep mouse-bite tabs off castellated edges.
+
+### Changed
+
+- Mouse-bite tabs may sit beside corners and closer together, so more small boards panelize.
+
 ## [0.4.59] - 2026-09-24
 
 ### Added

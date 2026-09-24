@@ -5,7 +5,9 @@ use ipc2581::{
     types::{LayerFunction, UserPrimitive, UserShapeType, ecad::SetFeature},
 };
 use pcb_ir::{
-    dialects::ipc::{ArtworkScope, LayoutStepKind, ProfileSet, profile_occurrences_for},
+    dialects::ipc::{
+        ArtworkScope, LayoutStepKind, PlatingKind, ProfileSet, profile_occurrences_for,
+    },
     geom::{
         BBox, ContourBuf, ContourSet, FillRule, PathCmd, PathOp, Resolution, Segment,
         attachment::{
@@ -21,7 +23,7 @@ use sha2::{Digest, Sha256};
 
 pub(super) struct Evidence {
     pub id: String,
-    pub region: Option<ContourSet>,
+    pub region: ContourSet,
 }
 
 pub(super) struct Prepared {
@@ -32,7 +34,6 @@ pub(super) struct Prepared {
     pub intervals: Vec<pcb_ir::geom::attachment::outline::OutlineInterval>,
     /// What the analysis report states beside the geometry.
     footprint: OutlineFootprint,
-    clearance_mm: f64,
     resolution: Resolution,
     ignored_footprints: Vec<String>,
     diagnostics: Vec<(String, String)>,
@@ -45,19 +46,13 @@ struct CourtyardGroup {
     positive: bool,
 }
 
-/// Analyze one canonical board, including profile cutouts. Explicit exclusions
-/// are already in canonical board coordinates, in mm. No coverage is inferred
-/// for unexported keep-outs, and no manufacturing allowances are selected here.
-/// Multiple board definitions and unresolved courtyard references are unsupported.
-pub fn analyze(
-    xml: &str,
-    footprint: OutlineFootprint,
-    clearance_mm: f64,
-    exclusions: &[OutlineObstacle<'_>],
-    resolution: Resolution,
-) -> Result<Value> {
+/// Analyze one canonical board, including profile cutouts. No coverage is
+/// inferred for unexported keep-outs, and no manufacturing allowances are
+/// selected here. Multiple board definitions and unresolved courtyard
+/// references are unsupported.
+pub fn analyze(xml: &str, footprint: OutlineFootprint, resolution: Resolution) -> Result<Value> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let mut report = prepare(&ipc, footprint, clearance_mm, exclusions, resolution)?.report();
+    let mut report = prepare(&ipc, footprint, resolution)?.report();
     report["source_xml_sha256"] = json!(hex::encode(Sha256::digest(xml.as_bytes())));
     Ok(report)
 }
@@ -65,13 +60,8 @@ pub fn analyze(
 pub(super) fn prepare(
     ipc: &Ipc2581,
     footprint: OutlineFootprint,
-    clearance_mm: f64,
-    exclusions: &[OutlineObstacle<'_>],
     resolution: Resolution,
 ) -> Result<Prepared> {
-    if !clearance_mm.is_finite() || clearance_mm < 0.0 {
-        bail!("clearance must be finite and nonnegative");
-    }
     validate_courtyard_references(ipc)?;
     let thickness_mm = crate::accessors::IpcAccessor::new(ipc)
         .stackup_details()
@@ -120,20 +110,12 @@ pub(super) fn prepare(
         substrate = substrate.union(&region)?;
     }
     let (mut evidence, ignored_footprints) = courtyard_evidence(&imported, resolution)?;
-    evidence.extend(exclusions.iter().map(|exclusion| Evidence {
-        id: format!("explicit:{}", exclusion.id),
-        region: exclusion.region.cloned(),
-    }));
-    for obstacle in &mut evidence {
-        if let Some(region) = &mut obstacle.region {
-            *region = region.disk_dilate(clearance_mm)?;
-        }
-    }
+    evidence.extend(edge_plating_evidence(&imported, &substrate, resolution)?);
     let obstacles = evidence
         .iter()
         .map(|e| OutlineObstacle {
             id: &e.id,
-            region: e.region.as_ref(),
+            region: Some(&e.region),
         })
         .collect::<Vec<_>>();
     // Only an outer ring faces the frame a tab has to reach; a hole's ring
@@ -148,7 +130,6 @@ pub(super) fn prepare(
         evidence,
         intervals,
         footprint,
-        clearance_mm,
         resolution,
         ignored_footprints,
         diagnostics: doc
@@ -169,7 +150,6 @@ impl Prepared {
     pub(super) fn report(&self) -> Value {
         let Self {
             footprint,
-            clearance_mm,
             resolution,
             evidence,
             intervals,
@@ -184,20 +164,20 @@ impl Prepared {
             "policy": {
                 "missing_courtyard": "ignore-footprint",
                 "width_mm": footprint.width_mm, "inward_mm": footprint.inward_mm,
-                "outward_mm": footprint.outward_mm, "clearance_mm": clearance_mm,
+                "outward_mm": footprint.outward_mm,
                 "accuracy_mm": resolution.accuracy.max_error_mm(),
                 "significance_mm": resolution.tolerance_mm,
                 "boundary_mm": TOLERANCE.boundary_mm, "numerical_mm": TOLERANCE.numerical_mm,
             },
             "limitations": [
-                "Eligible means clear only of supplied courtyard/exclusion evidence on the prepared polygon model; interval endpoints carry no guarantee.",
+                "Eligible means clear only of courtyards and of plating the outline cuts through, on the prepared polygon model; interval endpoints carry no guarantee.",
                 "Closed courtyard contours are filled conservatively, regardless of outline ink styling. Both board sides are included without additional mirroring.",
                 "Footprints without courtyard evidence contribute no obstruction and are listed in ignored_footprints. Clearance is conditional on supplied courtyards being complete; ignored physical components may overhang. Present but unusable courtyards are errors.",
-                "General keep-out export coverage is not established. No copper, pad, drill, stackup or 3D collision checks are performed.",
+                "General keep-out export coverage is not established. Copper inside the outline, stackup and 3D collisions are not checked.",
                 "No tabs, perforations, frame connections, router access, mechanics or panel export are generated."
             ],
             "diagnostics": self.diagnostics.iter().map(|(severity, message)| json!({"severity": severity, "message": message})).collect::<Vec<_>>(),
-            "evidence": evidence.iter().map(|e| json!({"id": e.id, "available": e.region.as_ref().is_some_and(|r| !r.is_empty())})).collect::<Vec<_>>(),
+            "evidence": evidence.iter().map(|e| &e.id).collect::<Vec<_>>(),
             "intervals": intervals.iter().map(|i| json!({
                 "ring": i.boundary.ring, "edge": i.edge,
                 "start_mm": i.start_mm, "end_mm": i.end_mm,
@@ -269,7 +249,7 @@ fn courtyard_evidence(
             } else {
                 None
             };
-            if !region.as_ref().is_some_and(|r| !r.is_empty()) {
+            let Some(region) = region.filter(|r| !r.is_empty()) else {
                 bail!(
                     "unusable courtyard on {} for {} ({})",
                     imported.resolve(layer.name),
@@ -279,7 +259,7 @@ fn courtyard_evidence(
                         .unwrap_or("unassociated"),
                     group.sources.join(",")
                 );
-            }
+            };
             covered.push(group.component);
             evidence.push(Evidence {
                 id: format!(
@@ -313,6 +293,57 @@ fn courtyard_evidence(
         }
     }
     Ok((evidence, ignored))
+}
+
+/// Plating the outline cuts through: castellations and other plated
+/// half-holes. A tab there would tear the copper and drill its break holes
+/// through it. Every plated feature that is part board and part not counts,
+/// barrel and pads alike on whatever layer carries them, so nothing has to
+/// know what a castellation is.
+fn edge_plating_evidence(
+    imported: &ImportedDesign,
+    substrate: &ContourSet,
+    resolution: Resolution,
+) -> Result<Vec<Evidence>> {
+    let mut evidence = Vec::new();
+    for (index, layer) in imported.layer_definitions.iter().enumerate() {
+        for occurrence in
+            imported.feature_occurrences(LayerId(index as u32), ArtworkScope::Board)?
+        {
+            let feature = imported.feature_definition(occurrence.id.feature).unwrap();
+            if !matches!(
+                feature.intent.plating,
+                PlatingKind::Plated | PlatingKind::Via | PlatingKind::ViaCapped
+            ) {
+                continue;
+            }
+            let contours = feature
+                .paths
+                .indices()
+                .flat_map(|path| {
+                    imported
+                        .geometry
+                        .transformed_path_contours(path, occurrence.root_from_local)
+                })
+                .collect::<Vec<_>>();
+            let region = ContourSet::from_filled_contours(&contours, resolution)?;
+            if region.difference(substrate)?.is_empty()
+                || region.intersection(substrate)?.is_empty()
+            {
+                continue;
+            }
+            evidence.push(Evidence {
+                id: format!(
+                    "plating:{}:feature-{}:placement-{:?}",
+                    imported.resolve(layer.name),
+                    occurrence.id.feature.0,
+                    occurrence.id.placement
+                ),
+                region,
+            });
+        }
+    }
+    Ok(evidence)
 }
 
 // Import is intentionally permissive and may discard unresolved references,
@@ -590,7 +621,7 @@ mod tests {
             let xml = fixture()
                 .replace("</Content>", &format!("{dictionary}</Content>"))
                 .replacen("</LayerFeature>", &format!("<Set componentRef=\"U1\"><Features><Location x=\"19\" y=\"1\"/>{feature}</Features></Set></LayerFeature>"), 1);
-            let error = analyze(&xml, footprint(), 0.0, &[], Resolution::default()).unwrap_err();
+            let error = analyze(&xml, footprint(), Resolution::default()).unwrap_err();
             assert!(error.to_string().contains("missing"), "{error:#}");
         }
     }
@@ -603,19 +634,13 @@ mod tests {
           </DictionaryUser>"#;
         let xml = fixture().replace("</Content>", &format!("{dictionary}</Content>"))
             .replacen("</LayerFeature>", r#"<Set componentRef="U1"><Features><Location x="8" y="3"/><UserPrimitiveRef id="outer"/></Features></Set></LayerFeature>"#, 1);
-        let report = analyze(&xml, footprint(), 0.0, &[], Resolution::default()).unwrap();
-        assert!(
-            report["evidence"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|e| e["available"] == true)
-        );
+        let report = analyze(&xml, footprint(), Resolution::default()).unwrap();
+        assert_eq!(report["evidence"].as_array().unwrap().len(), 2);
         let cyclic = xml.replace(
             "<Circle diameter=\"1\"/>",
             "<UserPrimitiveRef id=\"outer\"/>",
         );
-        let error = analyze(&cyclic, footprint(), 0.0, &[], Resolution::default()).unwrap_err();
+        let error = analyze(&cyclic, footprint(), Resolution::default()).unwrap_err();
         assert!(error.to_string().contains("cyclic"), "{error:#}");
     }
 
@@ -625,7 +650,7 @@ mod tests {
             .replace("<Step name=\"board\"", r#"<Step name="panel" type="PALLET"><StepRepeat stepRef="unused" nx="0" ny="1"/><StepRepeat stepRef="board" nx="1" ny="1"/></Step>
               <Step name="unused" type="BOARD"><Profile><Polygon><PolyBegin x="100" y="100"/><PolyStepSegment x="120" y="100"/><PolyStepSegment x="120" y="110"/><PolyStepSegment x="100" y="110"/><PolyStepSegment x="100" y="100"/></Polygon></Profile></Step>
               <Step name="board""#);
-        let error = analyze(&xml, footprint(), 0.0, &[], Resolution::default()).unwrap_err();
+        let error = analyze(&xml, footprint(), Resolution::default()).unwrap_err();
         assert!(
             error.to_string().contains("one board definition"),
             "{error:#}"
@@ -665,8 +690,6 @@ mod tests {
             let top = &evidence[0];
             assert!(
                 top.region
-                    .as_ref()
-                    .unwrap()
                     .prepare_query()
                     .signed_distance(Point::new(7.0, 3.0))
                     .unwrap()
@@ -798,8 +821,8 @@ mod tests {
             2,
             "both components have applicable evidence"
         );
-        let top = evidence[0].region.as_ref().unwrap();
-        let bottom = evidence[1].region.as_ref().unwrap();
+        let top = &evidence[0].region;
+        let bottom = &evidence[1].region;
         assert!(
             top.prepare_query()
                 .signed_distance(Point::new(7.0, 3.0))
@@ -822,7 +845,7 @@ mod tests {
                 .mm
                 > 0.0
         );
-        let report = analyze(&fixture(), footprint(), 0.0, &[], Resolution::default()).unwrap();
+        let report = analyze(&fixture(), footprint(), Resolution::default()).unwrap();
         assert_eq!(report["manufacturing_ready"], false);
         assert!(
             report["intervals"]
@@ -848,38 +871,6 @@ mod tests {
                     .iter()
                     .any(|id| id.as_str().unwrap().contains("B.Courtyard:U2"))
         }));
-        // At y=5.25 on the right edge, width alone cannot reach the bottom
-        // courtyard beginning at y=6; an explicit 0.5 mm expansion can.
-        for (clearance, expected) in [(0.0, "Eligible"), (0.5, "Blocked")] {
-            let report = analyze(
-                &fixture(),
-                footprint(),
-                clearance,
-                &[],
-                Resolution::default(),
-            )
-            .unwrap();
-            let interval = report["intervals"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|i| {
-                    i["start"][0] == 20.0
-                        && i["end"][0] == 20.0
-                        && i["start"][1]
-                            .as_f64()
-                            .unwrap()
-                            .min(i["end"][1].as_f64().unwrap())
-                            < 5.25
-                        && i["start"][1]
-                            .as_f64()
-                            .unwrap()
-                            .max(i["end"][1].as_f64().unwrap())
-                            > 5.25
-                })
-                .unwrap();
-            assert_eq!(interval["state"], expected);
-        }
     }
 
     #[test]
@@ -888,8 +879,8 @@ mod tests {
             "<Component refDes=\"U2\"",
             "<Component refDes=\"NO_COURTYARD\"",
         );
-        let report = analyze(&xml, footprint(), 0.0, &[], Resolution::default()).unwrap();
-        let original = analyze(&fixture(), footprint(), 0.0, &[], Resolution::default()).unwrap();
+        let report = analyze(&xml, footprint(), Resolution::default()).unwrap();
+        let original = analyze(&fixture(), footprint(), Resolution::default()).unwrap();
         assert_eq!(report["intervals"], original["intervals"]);
         assert_eq!(
             report["ignored_footprints"],
@@ -913,31 +904,73 @@ mod tests {
     }
 
     #[test]
-    fn explicit_missing_exclusion_and_invalid_policy_are_not_clearance() {
-        let xml = fixture();
-        let report = analyze(
-            &xml,
-            footprint(),
-            0.0,
-            &[OutlineObstacle {
-                id: "connector-overhang",
-                region: None,
-            }],
-            Resolution::default(),
-        )
-        .unwrap();
-        assert!(
-            !report["intervals"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|i| i["state"] == "Eligible")
-        );
-        assert!(analyze(&xml, footprint(), -0.1, &[], Resolution::default()).is_err());
+    fn an_invalid_footprint_is_an_error() {
         let invalid = OutlineFootprint {
             width_mm: 0.0,
             ..footprint()
         };
-        assert!(analyze(&xml, invalid, 0.0, &[], Resolution::default()).is_err());
+        assert!(analyze(&fixture(), invalid, Resolution::default()).is_err());
+    }
+
+    #[test]
+    fn plating_the_outline_cuts_through_blocks_the_edge_it_sits_on() {
+        // A castellation on the bottom edge and the same padstack well inside
+        // the board: barrel and pad of the first are evidence, the second is
+        // ordinary copper.
+        let xml = fixture()
+            .replace(
+                "<Step name=\"board\"",
+                r#"<Layer name="Drill" layerFunction="DRILL" side="ALL"/><Step name="board""#,
+            )
+            .replace(
+                "<Datum x=\"0\" y=\"0\"/>",
+                r#"<PadStackDef name="edge"><PadstackHoleDef name="h" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="0" y="0"/>
+                   <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><RectCenter width="1" height="1"/></PadstackPadDef></PadStackDef>
+                   <Datum x="0" y="0"/>"#,
+            )
+            .replace(
+                "<LayerFeature layerRef=\"F.Courtyard\">",
+                r#"<LayerFeature layerRef="TOP"><Set><Pad padstackDefRef="edge"><Location x="16" y="0"/></Pad></Set>
+                   <Set><Pad padstackDefRef="edge"><Location x="16" y="5"/></Pad></Set></LayerFeature>
+                   <LayerFeature layerRef="Drill"><Set><Hole name="H1" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="16" y="0"/></Set>
+                   <Set><Hole name="H2" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="16" y="5"/></Set></LayerFeature>
+                   <LayerFeature layerRef="F.Courtyard">"#,
+            );
+        let report = analyze(&xml, footprint(), Resolution::default()).unwrap();
+        let plating = report["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|id| id.starts_with("plating:"))
+            .collect::<Vec<_>>();
+        assert_eq!(plating.len(), 2, "{plating:?}");
+        assert!(plating.iter().any(|id| id.starts_with("plating:TOP:")));
+        assert!(plating.iter().any(|id| id.starts_with("plating:Drill:")));
+        // The 1 mm footprint is blocked wherever it would touch the 1 mm pad,
+        // and nowhere else because of it.
+        let touched = report["intervals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| {
+                i["obstacles"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|id| id.as_str().unwrap().starts_with("plating:"))
+            })
+            .collect::<Vec<_>>();
+        assert!(touched.iter().any(|i| i["state"] == "Blocked"));
+        for interval in touched {
+            assert_ne!(interval["state"], "Eligible");
+            assert_eq!(interval["start"][1], 0.0);
+            assert_eq!(interval["end"][1], 0.0);
+            let (lo, hi) = (
+                interval["start"][0].as_f64().unwrap(),
+                interval["end"][0].as_f64().unwrap(),
+            );
+            assert!(lo.min(hi) > 14.9 && lo.max(hi) < 17.1, "{lo} {hi}");
+        }
     }
 }

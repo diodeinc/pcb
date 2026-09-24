@@ -173,7 +173,7 @@ impl Selection {
 /// Exhaustive search stops after this many tabs.
 const EXHAUSTIVE_TABS: usize = 4;
 /// Subsets the exhaustive phase may enumerate per tab count.
-const EXHAUSTIVE_BUDGET: f64 = 3.0e6;
+const EXHAUSTIVE_BUDGET: f64 = 3.0e7;
 
 /// Fewest tabs whose worst deflection is within the limit. A greedy pass
 /// with pruning and swapping gives a feasible set; the exhaustive search
