@@ -3,11 +3,8 @@ use clap::Args;
 use colored::Colorize as ColoredExt;
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use pcb_ui::{Style, StyledText};
-use pcb_zen::workspace::{
-    GitReads, SymbolFileInfo, WorkspaceInfo, WorkspacePackage, enrich_git_metadata_from,
-};
-use pcb_zen_core::DefaultFileProvider;
-use pcb_zen_core::config::{PcbToml, find_workspace_root};
+use pcb_zen::workspace::{SymbolFileInfo, WorkspaceInfo, WorkspacePackage};
+use pcb_zen_core::config::PcbToml;
 use pcb_zen_core::resolution::ResolutionResult;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -92,38 +89,19 @@ pub fn execute(args: InfoArgs) -> Result<()> {
         None => env::current_dir()?,
     };
 
-    // Reading the repository needs only the workspace root, so it overlaps
-    // discovering and resolving the workspace.
-    let workspace_root = find_workspace_root(&DefaultFileProvider::new(), &start_path)?;
-    let git_reads = GitReads::start(&workspace_root);
     let resolution = crate::resolve::resolve(Some(&start_path), false)?;
     let mut workspace_info = resolution.workspace_info.clone();
+    pcb_zen::workspace::enrich_git_metadata(&mut workspace_info);
 
     match args.format {
         OutputFormat::Human => {
-            enrich_git_metadata_from(&mut workspace_info, git_reads);
             let external_dependencies = external_dependencies(&workspace_info, &resolution)?;
             pcb_ui::write_stdout(|stdout| {
                 print_human_readable(stdout, &workspace_info, &external_dependencies)
             })?;
         }
         OutputFormat::Json => {
-            // The rest of the git metadata waits on git, file discovery on the disk.
-            let package_dirs: Vec<_> = workspace_info
-                .packages
-                .values()
-                .map(|pkg| pkg.dir(&workspace_info.root))
-                .collect();
-            let (package_files, ()) = rayon::join(
-                || discover_workspace_files(&package_dirs),
-                || enrich_git_metadata_from(&mut workspace_info, git_reads),
-            );
-            for (pkg, (entrypoints, symbol_files)) in
-                workspace_info.packages.values_mut().zip(package_files?)
-            {
-                pkg.entrypoints = entrypoints;
-                pkg.symbol_files = symbol_files;
-            }
+            populate_package_file_discovery(&mut workspace_info)?;
             let json = serde_json::to_string_pretty(&info_json(&workspace_info, &resolution)?)?;
             pcb_ui::write_stdout(|stdout| writeln!(stdout, "{json}"))?;
         }
@@ -276,19 +254,17 @@ fn is_path_patch(ws: &WorkspaceInfo, module_path: &str, root: &Path) -> bool {
         .is_some_and(|path| ws.root.join(path) == root)
 }
 
-fn discover_workspace_files(package_dirs: &[PathBuf]) -> Result<Vec<PackageFiles>> {
+fn populate_package_file_discovery(ws: &mut WorkspaceInfo) -> Result<()> {
+    let root = &ws.root;
     pcb_zen_core::workspace::with_readers(|| {
-        package_dirs
-            .par_iter()
-            .map(|dir| discover_package_files(dir))
-            .collect()
+        ws.packages.par_iter_mut().try_for_each(|(_, pkg)| {
+            (pkg.entrypoints, pkg.symbol_files) = discover_package_files(&pkg.dir(root))?;
+            Ok(())
+        })
     })
 }
 
-/// A package's top-level entrypoints and symbol libraries.
-type PackageFiles = (Vec<PathBuf>, Vec<SymbolFileInfo>);
-
-fn discover_package_files(package_dir: &Path) -> Result<PackageFiles> {
+fn discover_package_files(package_dir: &Path) -> Result<(Vec<PathBuf>, Vec<SymbolFileInfo>)> {
     let mut entries = std::fs::read_dir(package_dir)
         .with_context(|| format!("Failed to read package directory {}", package_dir.display()))?
         .collect::<std::result::Result<Vec<_>, _>>()

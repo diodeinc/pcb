@@ -7,7 +7,7 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use tracing::{info_span, instrument};
 
 use pcb_zen_core::config::PcbToml;
@@ -190,63 +190,23 @@ pub fn get_workspace_info<F: FileProvider>(
     Ok(info)
 }
 
-/// Git reads that need only the workspace root. Each starts on its own thread,
-/// so they overlap one another and whatever the caller does before applying
-/// them, such as discovering the workspace.
-pub struct GitReads {
-    root: PathBuf,
-    tags: JoinHandle<Vec<git::Tag>>,
-    history: JoinHandle<Vec<String>>,
-    status_paths: JoinHandle<Vec<PathBuf>>,
-    workspace_subpath: JoinHandle<Option<PathBuf>>,
-}
-
-impl GitReads {
-    pub fn start(workspace_root: &Path) -> Self {
-        fn start<T: Send + 'static>(
-            root: &Path,
-            read: impl FnOnce(&Path) -> T + Send + 'static,
-        ) -> JoinHandle<T> {
-            let root = root.to_path_buf();
-            thread::spawn(move || read(&root))
-        }
-
-        Self {
-            root: workspace_root.to_path_buf(),
-            tags: start(workspace_root, git::list_peeled_tags),
-            history: start(workspace_root, |root| git::rev_list(root, "HEAD")),
-            status_paths: start(workspace_root, git::status_paths_in_repo),
-            workspace_subpath: start(workspace_root, |root| {
-                git::get_repo_subpath(root).ok().flatten()
-            }),
-        }
-    }
-}
-
 /// Populate package `version` from the newest package tags merged into HEAD.
 /// Cheap subset of [`enrich_git_metadata`] for commands that only need
 /// versions (e.g. the workspace pins `pcb sync` writes back).
 #[instrument(name = "enrich_tag_versions", skip_all)]
 pub fn enrich_tag_versions(info: &mut WorkspaceInfo) {
-    let (tags, history) = thread::scope(|scope| {
-        let tags = scope.spawn(|| git::list_peeled_tags(&info.root));
-        let history = git::rev_list(&info.root, "HEAD");
-        (tags.join().unwrap_or_default(), history)
-    });
-    apply_tag_versions(info, tags, &history);
+    apply_tag_versions(info);
 }
 
-/// Set each package's version from its newest tag merged into HEAD, given
-/// every tag and HEAD's history. Returns those newest tags.
+/// Set each package's version from its newest tag merged into HEAD. Returns
+/// those tags and HEAD's history, newest commit first.
 ///
 /// For forked packages, version is already set from the fork path, so only
 /// update if we find a tag (don't overwrite with None).
-fn apply_tag_versions(
-    info: &mut WorkspaceInfo,
-    mut tags: Vec<git::Tag>,
-    history: &[String],
-) -> HashMap<String, PackageTagInfo> {
+fn apply_tag_versions(info: &mut WorkspaceInfo) -> (HashMap<String, PackageTagInfo>, Vec<String>) {
+    let history = git::rev_list(&info.root, "HEAD");
     let merged: HashSet<&str> = history.iter().map(String::as_str).collect();
+    let mut tags = git::list_peeled_tags(&info.root);
     tags.retain(|tag| merged.contains(tag.commit.as_str()));
 
     let latest_tags = latest_package_tags(info, &tags);
@@ -255,54 +215,41 @@ fn apply_tag_versions(
             pkg.version = Some(tag_info.version.to_string());
         }
     }
-    latest_tags
+    (latest_tags, history)
 }
 
 /// Populate package `version`, `published_at`, and `dirty` from git tags and
 /// working-tree status. Runs several git commands, so it is opt-in for the
 /// commands that actually display this metadata.
-pub fn enrich_git_metadata(info: &mut WorkspaceInfo) {
-    enrich_git_metadata_from(info, GitReads::start(&info.root));
-}
-
-/// [`enrich_git_metadata`] from reads the caller started earlier.
 #[instrument(name = "enrich_git_metadata", skip_all)]
-pub fn enrich_git_metadata_from(info: &mut WorkspaceInfo, reads: GitReads) {
-    let root = reads.root.as_path();
-    // HEAD's history, newest commit first.
-    let history = reads.history.join().unwrap_or_default();
-    let latest_tags = apply_tag_versions(info, reads.tags.join().unwrap_or_default(), &history);
+pub fn enrich_git_metadata(info: &mut WorkspaceInfo) {
+    let root = info.root.clone();
+    let (latest_tags, tag_metadata, dirty) = thread::scope(|scope| {
+        // The working-tree scan takes as long as everything else together.
+        let status_paths = scope.spawn(|| git::status_paths_in_repo(&root));
 
-    // Changes are measured from the last publish: the newest commit in HEAD's
-    // history that one of the latest package tags names.
-    let published: HashSet<&str> = latest_tags
-        .values()
-        .map(|info| info.tag.commit.as_str())
-        .collect();
-    let base = history
-        .iter()
-        .find(|commit| published.contains(commit.as_str()));
+        let (latest_tags, history) = apply_tag_versions(info);
+        let tags: Vec<_> = latest_tags.values().map(|info| info.tag.clone()).collect();
+        let tag_metadata = git::get_tag_metadata(&root, &tags);
 
-    let tags: Vec<_> = latest_tags.values().map(|info| info.tag.clone()).collect();
-    let (tag_metadata, changed_paths) = thread::scope(|scope| {
-        let tag_metadata = scope.spawn(|| git::get_tag_metadata(root, &tags));
-        let changed_paths = base
-            .map(|base| git::changed_paths_since_in_repo(root, base))
+        // Changes are measured from the last publish: the newest commit in
+        // HEAD's history that one of the latest package tags names.
+        let published: HashSet<&str> = tags.iter().map(|tag| tag.commit.as_str()).collect();
+        let changed_paths = history
+            .iter()
+            .find(|commit| published.contains(commit.as_str()))
+            .map(|base| git::changed_paths_since_in_repo(&root, base))
             .unwrap_or_default();
-        (tag_metadata.join().unwrap_or_default(), changed_paths)
-    });
 
-    let dirty = discover_dirty_packages(
-        info,
-        &latest_tags,
-        changed_paths,
-        reads.status_paths.join().unwrap_or_default(),
-        reads
-            .workspace_subpath
-            .join()
-            .unwrap_or_default()
-            .as_deref(),
-    );
+        let dirty = discover_dirty_packages(
+            info,
+            &latest_tags,
+            changed_paths,
+            status_paths.join().unwrap_or_default(),
+            git::get_repo_subpath(&root).ok().flatten().as_deref(),
+        );
+        (latest_tags, tag_metadata, dirty)
+    });
 
     for (url, pkg) in info.packages.iter_mut() {
         if let Some(tag_info) = latest_tags.get(url) {

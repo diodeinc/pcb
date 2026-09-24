@@ -366,7 +366,7 @@ impl<'a> FrozenResolutionBuilder<'a> {
 
         if let Some(pkg) = self.workspace.packages.get(package_url) {
             return Ok((
-                self.workspace_package_dir(package_url, pkg),
+                workspace_package_dir(self.workspace, package_url, pkg),
                 pkg.config.clone(),
             ));
         }
@@ -382,24 +382,10 @@ impl<'a> FrozenResolutionBuilder<'a> {
 
     fn workspace_dep_root(&self, dep_url: &str) -> Option<PathBuf> {
         if let Some(pkg) = self.workspace.packages.get(dep_url) {
-            return Some(self.workspace_package_dir(dep_url, pkg));
+            return Some(workspace_package_dir(self.workspace, dep_url, pkg));
         }
         (self.workspace.workspace_base_url().as_deref() == Some(dep_url))
             .then(|| self.workspace.root.clone())
-    }
-
-    /// Canonical directory of a workspace package. Discovery walks real
-    /// directories down from the canonical workspace root, so only a fork
-    /// patched in by path can sit behind `..` or a symlink.
-    fn workspace_package_dir(&self, url: &str, pkg: &WorkspacePackage) -> PathBuf {
-        let dir = pkg.dir(&self.workspace.root);
-        let patched_in = self
-            .workspace
-            .config
-            .as_ref()
-            .and_then(|config| config.patch.get(url))
-            .is_some_and(|patch| patch.path.is_some());
-        if patched_in { canonicalize(&dir) } else { dir }
     }
 
     fn remote_package_root(&mut self, module_path: &str, version: &Version) -> Result<PathBuf> {
@@ -444,13 +430,25 @@ fn package_url_for_zen(workspace: &WorkspaceInfo, path: &Path) -> Result<String>
         .ok_or_else(|| anyhow::anyhow!("No workspace package contains {}", path.display()))
 }
 
+/// Canonical directory of a workspace package. Discovery walks real directories
+/// down from the canonical workspace root, so only a fork patched in by path
+/// can sit behind `..` or a symlink.
+fn workspace_package_dir(workspace: &WorkspaceInfo, url: &str, pkg: &WorkspacePackage) -> PathBuf {
+    let dir = pkg.dir(&workspace.root);
+    let patched_in = workspace
+        .config
+        .as_ref()
+        .and_then(|config| config.patch.get(url))
+        .is_some_and(|patch| patch.path.is_some());
+    if patched_in { canonicalize(&dir) } else { dir }
+}
+
 /// The package whose directory is the canonical `path`.
 fn package_url_for_package_dir(workspace: &WorkspaceInfo, path: &Path) -> Option<String> {
-    let rel_path = path.strip_prefix(&workspace.root).ok()?;
     workspace
         .packages
         .iter()
-        .find(|(_, pkg)| pkg.rel_path == rel_path)
+        .find(|(url, pkg)| workspace_package_dir(workspace, url, pkg) == path)
         .map(|(url, _)| url.clone())
 }
 
@@ -550,6 +548,10 @@ mod tests {
         let packages = &frozen["board"].packages;
         let fork = temp.join("workspace/fork");
         assert!(packages.contains_key(&fork));
+        assert_eq!(
+            target_package_urls_for_path(&workspace, &fork).unwrap(),
+            ["github.com/acme/dep"]
+        );
         assert_eq!(
             packages[&temp.join("workspace/board")].deps["github.com/acme/dep"],
             fork
