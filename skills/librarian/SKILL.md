@@ -71,8 +71,7 @@ authoring path below and report the gap.
 
 Use the selected provider's verified `datasheet_url`, falling back to
 `digikey.datasheet_url` from the same search row. Keep the source URL in
-metadata and inspect it with `datasheet-reader`; do not check downloaded PDFs
-into the package.
+metadata; do not check downloaded PDFs into the package.
 
 ## Curate symbols, footprints, and models
 
