@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.60] - 2026-09-25
+
 ### Added
 
 - Include ordered copper and dielectric stackup layers in `pcb ipc2581 info --format json`.
@@ -2047,7 +2049,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.59...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.60...HEAD
+[0.4.60]: https://github.com/diodeinc/pcb/compare/v0.4.59...v0.4.60
 [0.4.59]: https://github.com/diodeinc/pcb/compare/v0.4.58...v0.4.59
 [0.4.58]: https://github.com/diodeinc/pcb/compare/v0.4.57...v0.4.58
 [0.4.57]: https://github.com/diodeinc/pcb/compare/v0.4.56...v0.4.57
