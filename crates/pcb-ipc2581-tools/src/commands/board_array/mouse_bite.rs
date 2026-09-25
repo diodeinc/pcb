@@ -33,13 +33,16 @@ pub struct Tabs {
     /// Break perforations in panel coordinates.
     pub holes: Vec<Npth>,
     pub per_board: usize,
+    /// How the tabs fall short of holding the board, when they do.
+    pub warning: Option<String>,
 }
 
 /// Tab and slot geometry for `placement`'s board, which sits in `cell` in its
 /// own coordinates and is repeated at `offsets` inside `stock`. Sites the
-/// builder rejects are dropped and the placement is re-solved without them,
-/// so the result always holds the board or fails with the placement's own
-/// reason.
+/// builder rejects are dropped and the placement is re-solved without them.
+/// The tabs are the best the outline allows: a board they cannot hold within
+/// the limit is still panelized, with a warning; only a board with no site
+/// at all fails.
 pub(super) fn generate(
     placement: &Placement,
     cell: BBox,
@@ -57,23 +60,12 @@ pub(super) fn generate(
     let mut dropped = Vec::new();
     let mut selection = placement.selection.clone();
     let chosen = loop {
-        if !selection.satisfied() {
-            bail!(
-                "tabs cannot hold the board: {}{}",
-                selection
-                    .violations
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("; "),
-                if dropped.is_empty() {
-                    String::new()
-                } else {
-                    format!("; sites dropped: {}", dropped.join("; "))
-                }
-            );
-        }
         let chosen: Vec<usize> = selection.chosen.iter().map(|&k| kept[k]).collect();
+        ensure!(
+            !chosen.is_empty(),
+            "no tab site on the board outline{}",
+            dropped_note(&dropped)
+        );
         for &c in &chosen {
             tabs[c].get_or_insert_with(|| cell.tab(candidates[c].site, preset, resolution));
         }
@@ -92,6 +84,18 @@ pub(super) fn generate(
         let sites: Vec<_> = kept.iter().map(|&i| candidates[i].site).collect();
         selection = select::select(&sites, &placement.loads, &placement.model);
     };
+    let warning = (!selection.satisfied()).then(|| {
+        format!(
+            "mouse-bite tabs may not hold the board: {}{}",
+            selection
+                .violations
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; "),
+            dropped_note(&dropped)
+        )
+    });
     let tabs: Vec<&TabGeometry> = chosen
         .iter()
         .filter_map(|&c| tabs[c].as_ref()?.as_ref().ok())
@@ -149,7 +153,16 @@ pub(super) fn generate(
             })
             .collect(),
         per_board: chosen.len(),
+        warning,
     })
+}
+
+fn dropped_note(dropped: &[String]) -> String {
+    if dropped.is_empty() {
+        String::new()
+    } else {
+        format!("; sites dropped: {}", dropped.join("; "))
+    }
 }
 
 /// Boards and stock are the polygon model itself, with no external

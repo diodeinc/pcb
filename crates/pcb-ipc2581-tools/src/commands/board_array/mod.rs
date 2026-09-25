@@ -127,6 +127,8 @@ struct BoardArraySpec {
     profile_cutouts: Vec<Polygon>,
     separation: Separation,
     tabs_per_board: usize,
+    /// What the panel falls short of, reported beside it.
+    warnings: Vec<String>,
     board_outline_layer_names: Vec<String>,
     content_step_refs: Vec<String>,
     content_layer_refs: Vec<String>,
@@ -479,6 +481,7 @@ fn write_board_array_creation(
     Ok(PanelCreation {
         xml: finished_board_array_xml(&doc, &spec)?,
         copper_balance,
+        warnings: spec.warnings,
     })
 }
 
@@ -600,8 +603,8 @@ fn build_board_array_spec(
     }
     let tooling_hole_layer =
         add_tooling_hole_layer(&mut generated_geometry, &mut used_layer_names, ipc, ecad);
-    let (profile_cutouts, tabs_per_board) = match separation {
-        Separation::VScore => (Vec::new(), 0),
+    let (profile_cutouts, tabs_per_board, warnings) = match separation {
+        Separation::VScore => (Vec::new(), 0, Vec::new()),
         Separation::MouseBite => {
             let preset = &placement::PRESET;
             let placement = placement::place(
@@ -641,6 +644,7 @@ fn build_board_array_spec(
                     .map(mouse_bite::cutout_polygon)
                     .collect::<Result<Vec<_>>>()?,
                 tabs.per_board,
+                tabs.warning.into_iter().collect(),
             )
         }
     };
@@ -672,6 +676,7 @@ fn build_board_array_spec(
         profile_cutouts,
         separation,
         tabs_per_board,
+        warnings,
         board_outline_layer_names,
         content_step_refs,
         content_layer_refs,

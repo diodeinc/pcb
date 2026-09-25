@@ -281,15 +281,17 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    /// Best separated pair, then add whichever site helps most while adding
-    /// still helps, then drop and swap tabs while that keeps the limit and
-    /// lowers the deflection. Moves only ever offer sites clear of the tabs
-    /// kept, so a separation violation never has to be repaired.
+    /// Best separated pair, or the best single site when no two are clear of
+    /// each other, then add whichever site helps most while adding still
+    /// helps, then drop and swap tabs while that keeps the limit and lowers
+    /// the deflection. Moves only ever offer sites clear of the tabs kept, so
+    /// a separation violation never has to be repaired.
     fn greedy(&self) -> Selection {
         let n = self.sites.len();
         let mut incumbent = (0..n)
-            .flat_map(|a| (a + 1..n).map(move |b| vec![a, b]))
-            .filter(|pair| self.clear(pair[0], &pair[1..]))
+            .map(|a| vec![a])
+            .chain((0..n).flat_map(|a| (a + 1..n).map(move |b| vec![a, b])))
+            .filter(|set| self.clear(set[0], &set[1..]))
             .map(|pair| self.evaluate(&pair))
             .reduce(|a, b| if b.better_than(&a) { b } else { a })
             .unwrap_or_else(|| self.evaluate(&[]));
@@ -627,6 +629,13 @@ mod tests {
         let one = Evaluator::new(&sites, &outline, &m).evaluate(&[0]);
         assert!(one.deflection_mm.is_finite());
         assert!(one.deflection_mm > m.deflection_limit_mm);
+        // A lone site is still chosen, and reported as not holding the board.
+        let lone = select(&sites[..1], &outline, &m);
+        assert_eq!(lone.chosen, vec![0]);
+        assert!(matches!(
+            lone.violations[..],
+            [Violation::Deflection { .. }]
+        ));
     }
 
     #[test]

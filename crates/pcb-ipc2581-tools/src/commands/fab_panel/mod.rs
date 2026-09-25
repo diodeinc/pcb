@@ -358,6 +358,7 @@ pub fn create_fab_panel(
     Ok(PanelCreation {
         xml,
         copper_balance,
+        warnings: Vec::new(),
     })
 }
 

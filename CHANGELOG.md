@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `board-array create --mouse-bite` panelizes a board its tabs cannot hold within the deflection limit, with a warning, instead of failing.
+
 ### Fixed
 
 - Keep mouse-bite tabs off castellated edges.

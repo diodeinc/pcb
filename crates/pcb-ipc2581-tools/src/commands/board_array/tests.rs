@@ -1869,6 +1869,79 @@ fn mouse_bite_array_routes_slots_bridged_by_perforated_tabs() {
     );
 }
 
+/// A `width` x `height` board whose courtyard leaves only the bottom edge
+/// clear for tabs.
+fn board_fixture_with_only_the_bottom_edge_clear_mm(width: f64, height: f64) -> String {
+    let layers = format!(
+        r#"{SURFACE_LAYERS}
+  <Layer name="F.Courtyard" layerFunction="COURTYARD" side="TOP" polarity="POSITIVE"/>"#
+    );
+    let courtyard = format!(
+        r#"<LayerFeature layerRef="F.Courtyard">
+      <Set polarity="POSITIVE">
+        <Features>
+          <Polygon>
+        {}
+          </Polygon>
+        </Features>
+      </Set>
+    </LayerFeature>"#,
+        rectangle(0.0, 0.5, width, height)
+    );
+    board_fixture(
+        &layers,
+        r#"<LayerRef name="F.Courtyard"/>"#,
+        &rectangle(0.0, 0.0, width, height),
+        &courtyard,
+    )
+}
+
+#[test]
+fn a_board_its_tabs_cannot_hold_is_still_panelized_with_a_warning() {
+    // Tabs may only sit on the bottom edge, 60 mm from the top: the best
+    // tabs sag past the limit, and the panel says so instead of failing.
+    let creation = create_board_array(
+        &board_fixture_with_only_the_bottom_edge_clear_mm(13.0, 60.0),
+        &options(2, 1, BoardMarginMm::all(5.0), BoardMarginMm::all(20.0)),
+        false,
+        Separation::MouseBite,
+        Resolution::default(),
+    )
+    .unwrap();
+    assert_eq!(creation.warnings.len(), 1, "{:?}", creation.warnings);
+    assert!(
+        creation.warnings[0].contains("may not hold the board")
+            && creation.warnings[0].contains("deflects"),
+        "{}",
+        creation.warnings[0]
+    );
+    assert!(creation.xml.contains("<Cutout>"));
+    // A tall board held from its bottom edge is fine on a short one.
+    let creation = create_board_array(
+        &board_fixture_with_only_the_bottom_edge_clear_mm(13.0, 20.0),
+        &options(2, 1, BoardMarginMm::all(5.0), BoardMarginMm::all(20.0)),
+        false,
+        Separation::MouseBite,
+        Resolution::default(),
+    )
+    .unwrap();
+    assert!(creation.warnings.is_empty(), "{:?}", creation.warnings);
+}
+
+#[test]
+fn a_board_with_no_tab_site_cannot_be_panelized() {
+    let error = create_board_array(
+        &board_fixture_with_courtyard_mm(0.0, 0.0, 13.0, 10.0),
+        &options(2, 2, BoardMarginMm::all(5.0), BoardMarginMm::all(20.0)),
+        false,
+        Separation::MouseBite,
+        Resolution::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("no tab site"), "{error}");
+}
+
 #[test]
 fn mouse_bite_margins_must_hold_the_routed_slot_and_tab_landing() {
     let create = |board_margin_mm| {
