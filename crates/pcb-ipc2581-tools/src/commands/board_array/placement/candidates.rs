@@ -1,5 +1,5 @@
-//! Where a tab could sit: eligible outline runs sampled at a pitch. A site is
-//! kept where the outline is straight enough for the tab and its keep-out,
+//! Where a tab could sit: eligible outline runs sampled at a pitch and at
+//! their ends. A site is kept where the outline is straight enough for the tab,
 //! the strip across the slot stays out of the board, and frame material lies
 //! beyond the slot. Holes cannot reach the frame and are skipped.
 
@@ -40,14 +40,6 @@ const TOLERANCE: QueryTolerance = QueryTolerance {
     numerical_mm: pcb_ir::geom::tol::EPSILON_MM,
 };
 
-/// Small boards cannot keep a full keep-out from every corner.
-fn corner_keepout_mm(substrate: &ContourSet, preset: &Preset) -> f64 {
-    let bbox = substrate.bbox();
-    preset
-        .corner_keepout_mm
-        .min(bbox.width().min(bbox.height()) / 4.0)
-}
-
 pub fn find(
     substrate: &ContourSet,
     intervals: &[OutlineInterval],
@@ -58,12 +50,10 @@ pub fn find(
     let reach = preset.routing_gap_mm + preset.frame_landing_mm;
     let frame = ContourSet::rectangle(substrate.bbox().expand(reach + 1.0), resolution)
         .difference(&substrate.disk_dilate(preset.routing_gap_mm)?)?;
-    let keepout_mm = corner_keepout_mm(substrate, preset);
     let checker = Checker {
         substrate,
         frame: &frame,
         preset,
-        keepout_mm,
         resolution,
     };
     let mut sites = Sites {
@@ -78,9 +68,17 @@ pub fn find(
         let perimeter = boundary.perimeter(id)?;
         let turns = turning_angles(&substrate.rings[id.ring]);
         for (lo, hi) in eligible_runs(intervals, id, perimeter) {
+            // A site every pitch, and one at each end of the run: on a short
+            // run the ends are the sites that matter. A run is open, so an end
+            // site sits one geometry error inside it. A run around the whole
+            // ring has no ends.
             let bins = ((hi - lo) / preset.candidate_pitch_mm).ceil().max(1.0) as usize;
-            for k in 0..bins {
-                let station_mm = (lo + (hi - lo) * (k as f64 + 0.5) / bins as f64) % perimeter;
+            let centers = (0..bins).map(|k| lo + (hi - lo) * (k as f64 + 0.5) / bins as f64);
+            let inset = resolution.accuracy.max_error_mm();
+            let ends = (!touching(hi - lo, perimeter) && hi - lo > 2.0 * inset)
+                .then_some([lo + inset, hi - inset]);
+            for station_mm in centers.chain(ends.into_iter().flatten()) {
+                let station_mm = station_mm % perimeter;
                 let site = boundary.site(id, station_mm)?;
                 match checker.rejection(&site, &turns, perimeter)? {
                     Some(reason) => sites.rejected.push(Rejection {
@@ -109,7 +107,6 @@ struct Checker<'a> {
     substrate: &'a ContourSet,
     frame: &'a ContourSet,
     preset: &'a Preset,
-    keepout_mm: f64,
     /// Strips share edges with the board and the slot, so what a boolean
     /// leaves of one is judged at this significance: residue along a shared
     /// edge is neither the board crossing back nor missing frame.
@@ -125,7 +122,7 @@ impl Checker<'_> {
         perimeter: f64,
     ) -> Result<Option<String>> {
         let p = self.preset;
-        if let Some(reason) = too_tight(turns, perimeter, site.station_mm, p, self.keepout_mm) {
+        if let Some(reason) = too_tight(turns, perimeter, site.station_mm, p) {
             return Ok(Some(reason));
         }
         let across = self.strip(site, 0.0, p.routing_gap_mm)?;
@@ -162,85 +159,27 @@ impl Checker<'_> {
     }
 }
 
-/// Why the outline at `station` is too curved for a tab, if it is: it may
-/// turn no more within the tab width, or within the tab plus the keep-out
-/// on either side, than an arc of the minimum radius would over that length.
+/// Why the outline at `station` is too curved for a tab, if it is: within the
+/// tab it may turn no more than an arc of the minimum radius would.
 fn too_tight(
     turns: &[(f64, f64)],
     perimeter: f64,
     station: f64,
     preset: &Preset,
-    keepout_mm: f64,
 ) -> Option<String> {
-    let limit = |window: f64| (window / preset.min_tab_radius_mm).to_degrees();
-    let half = preset.tab_width_mm / 2.0;
-    let tab_bend = bend_within(turns, perimeter, station, half);
-    if tab_bend > limit(preset.tab_width_mm) {
-        return Some(format!("outline turns {tab_bend:.0}° within the tab"));
-    }
-    let corner_bend = bend_within(turns, perimeter, station, half + keepout_mm);
-    if corner_bend > limit(preset.tab_width_mm + 2.0 * keepout_mm) {
-        return Some(format!(
-            "outline turns {corner_bend:.0}° within the corner keep-out"
-        ));
-    }
-    None
+    let limit = (preset.tab_width_mm / preset.min_tab_radius_mm).to_degrees();
+    let bend = bend_within(turns, perimeter, station, preset.tab_width_mm / 2.0);
+    (bend > limit).then(|| format!("outline turns {bend:.0}° within the tab"))
 }
 
-/// Outline stretches too tightly curved or too close to a corner for a tab,
-/// as polylines, whatever the obstacle evidence says there. For inspection
-/// only: placing tabs never asks.
-pub fn tight(substrate: &ContourSet, preset: &Preset) -> Result<Vec<Vec<Point>>> {
-    let boundary = BoundaryQuery::new(substrate, TOLERANCE)?;
-    let keepout_mm = corner_keepout_mm(substrate, preset);
-    let mut runs = Vec::new();
-    for id in boundary
-        .boundaries()
-        .filter(|id| ring_signed_area(&substrate.rings[id.ring]) > 0.0)
-    {
-        runs.extend(tight_runs(
-            &boundary,
-            id,
-            &turning_angles(&substrate.rings[id.ring]),
-            boundary.perimeter(id)?,
-            preset,
-            keepout_mm,
-        )?);
-    }
-    Ok(runs)
-}
-
-/// Stretches of one ring that are too tight for a tab, sampled finely.
-fn tight_runs(
-    boundary: &BoundaryQuery<'_>,
-    id: BoundaryId,
-    turns: &[(f64, f64)],
-    perimeter: f64,
-    preset: &Preset,
-    keepout_mm: f64,
-) -> Result<Vec<Vec<Point>>> {
-    let step = preset.candidate_pitch_mm / 5.0;
-    let mut runs: Vec<Vec<Point>> = Vec::new();
-    let mut open = false;
-    for k in 0..(perimeter / step).ceil() as usize {
-        let station = k as f64 * step;
-        let tight = too_tight(turns, perimeter, station, preset, keepout_mm).is_some();
-        if tight {
-            let point = boundary.site(id, station)?.point;
-            match runs.last_mut() {
-                Some(run) if open => run.push(point),
-                _ => runs.push(vec![point]),
-            }
-        }
-        open = tight;
-    }
-    Ok(runs)
+/// Whether two stations along a ring are the same one.
+fn touching(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-9
 }
 
 /// Contiguous Eligible arclength runs on one ring, joined across the seam.
 /// A run through the seam is returned with `hi` beyond the perimeter.
 fn eligible_runs(intervals: &[OutlineInterval], id: BoundaryId, perimeter: f64) -> Vec<(f64, f64)> {
-    let touching = |a: f64, b: f64| (a - b).abs() < 1e-9;
     let mut runs: Vec<(f64, f64)> = Vec::new();
     for interval in intervals
         .iter()
@@ -332,21 +271,23 @@ mod tests {
         ring.extend([[36.0, 10.0], [0.0, 10.0]]);
         let turns = turning_angles(&ring);
         let perimeter: f64 = ring_edges(&ring).map(|(a, b)| a.distance_to(b)).sum();
+        let preset = &crate::commands::board_array::placement::PRESET;
         // Mid bottom edge: the collinear vertex adds no turning.
-        assert!(bend_within(&turns, perimeter, 20.0, 6.5) < 1e-9);
-        // Sharp bottom-right corner at station 40: 90° inside any window.
+        assert!(bend_within(&turns, perimeter, 20.0, 1.5) < 1e-9);
+        // Sharp bottom-right corner at station 40: a tab may sit beside it,
+        // never over it.
         assert!((bend_within(&turns, perimeter, 39.0, 1.5) - 90.0).abs() < 1e-9);
-        assert!((bend_within(&turns, perimeter, 34.0, 6.5) - 90.0).abs() < 1e-9);
-        // A 4 mm radius turns about 43° within a 3 mm tab and most of the
-        // quarter turn within the keep-out window: too tight for a tab.
+        assert!(too_tight(&turns, perimeter, 39.0, preset).is_some());
+        assert!(too_tight(&turns, perimeter, 38.5, preset).is_none());
+        // A 4 mm radius turns about 43° within a 3 mm tab: too tight for one.
         let mid_arc = 40.0 + 6.0 + std::f64::consts::FRAC_PI_2 * 4.0 / 2.0;
         let within_tab = bend_within(&turns, perimeter, mid_arc, 1.5);
         assert!(within_tab > 15.0 && within_tab < 90.0, "{within_tab}");
-        assert!(bend_within(&turns, perimeter, mid_arc, 6.5) > 60.0);
+        assert!(too_tight(&turns, perimeter, mid_arc, preset).is_some());
         // Across the seam: the top-left corner sits at station 0.
         assert!((bend_within(&turns, perimeter, perimeter - 1.0, 2.0) - 90.0).abs() < 1e-9);
         // A 40 mm radius flattened at the same angle per vertex turns about
-        // 4° within a tab and 19° within the keep-out window: usable.
+        // 4° within a tab: usable.
         let big: Vec<[f64; 2]> = (0..48)
             .map(|k| {
                 let a = std::f64::consts::TAU * k as f64 / 48.0;
@@ -356,7 +297,7 @@ mod tests {
         let turns = turning_angles(&big);
         let perimeter: f64 = ring_edges(&big).map(|(a, b)| a.distance_to(b)).sum();
         assert!(bend_within(&turns, perimeter, 10.0, 1.5) < 15.0);
-        assert!(bend_within(&turns, perimeter, 10.0, 6.5) < 60.0);
+        assert!(too_tight(&turns, perimeter, 10.0, preset).is_none());
     }
 
     #[test]
@@ -397,7 +338,6 @@ mod tests {
         };
         let preset = Preset {
             candidate_pitch_mm: 0.01,
-            corner_keepout_mm: 0.0,
             min_tab_radius_mm: 1.0,
             ..crate::commands::board_array::placement::PRESET
         };
@@ -408,7 +348,53 @@ mod tests {
             .map(|r| format!("{:.3}: {}", r.station_mm - chamfer, r.reason))
             .collect::<Vec<_>>();
         assert!(reasons.is_empty(), "{reasons:?}");
-        assert_eq!(sites.candidates.len(), 620);
+        assert_eq!(sites.candidates.len(), 622);
+    }
+
+    #[test]
+    fn a_short_run_beside_a_corner_offers_its_ends() {
+        // The clear edge between a corner and a castellated row: 4 mm of
+        // sites starting a tab's half width from the corner. The ends are
+        // taken just inside the open run.
+        let resolution = Resolution::default();
+        let board = ContourSet::rectangle(
+            pcb_ir::geom::BBox::new(Point::ZERO, Point::new(20.0, 10.0)),
+            resolution,
+        );
+        let run = OutlineInterval {
+            boundary: BoundaryId {
+                component: 0,
+                ring: 0,
+            },
+            edge: 0,
+            start_mm: 1.6,
+            end_mm: 5.6,
+            start: Point::ZERO,
+            end: Point::ZERO,
+            state: OutlineState::Eligible,
+            landing: OutlineState::Eligible,
+            obstacles: Vec::new(),
+            uncertainty_mm: 0.0,
+        };
+        let preset = crate::commands::board_array::placement::PRESET;
+        let sites = find(&board, &[run], &preset, resolution).unwrap();
+        assert!(sites.rejected.is_empty());
+        let mut stations = sites
+            .candidates
+            .iter()
+            .map(|c| c.station_mm)
+            .collect::<Vec<_>>();
+        stations.sort_by(f64::total_cmp);
+        let inset = resolution.accuracy.max_error_mm();
+        let expected = [1.6 + inset, 2.6, 4.6, 5.6 - inset];
+        assert!(
+            stations.len() == 4
+                && stations
+                    .iter()
+                    .zip(expected)
+                    .all(|(s, e)| (s - e).abs() < 1e-9),
+            "{stations:?}"
+        );
     }
 
     #[test]

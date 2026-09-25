@@ -27,8 +27,6 @@ pub struct Preset {
     pub tab_width_mm: f64,
     /// How far the perforations reach into the board.
     pub inward_mm: f64,
-    /// Growth applied to courtyards before they count as obstacles.
-    pub courtyard_clearance_mm: f64,
     /// Routed slot between the board outline and the frame; the neck spans
     /// it. It is cut from the board's margin, so the array fits exactly as a
     /// scored one does.
@@ -38,14 +36,12 @@ pub struct Preset {
     /// Candidate spacing along eligible outline runs.
     pub candidate_pitch_mm: f64,
     /// Tightest curve a tab may sit on; the coupon-validated radius. The
-    /// outline may turn no more within the tab, or within the tab plus the
-    /// keep-out on either side, than an arc of this radius would, which keeps
-    /// tabs off corners without excluding round boards.
+    /// outline may turn no more within the tab than an arc of this radius
+    /// would, which keeps tabs off corners without excluding round boards.
     pub min_tab_radius_mm: f64,
-    /// Distance kept from corners, or a quarter of the board's shorter side
-    /// on boards too small for that.
-    pub corner_keepout_mm: f64,
-    /// Closest two tabs may sit.
+    /// Closest two tabs may sit, in a straight line: side by side with a slot
+    /// one cutter wide between them. The slot between two tabs follows the
+    /// outline, so it is never shorter than that line.
     pub min_separation_mm: f64,
     /// Spacing of the outline points a load may act at.
     pub load_point_spacing_mm: f64,
@@ -57,13 +53,11 @@ pub struct Preset {
 pub const PRESET: Preset = Preset {
     tab_width_mm: SparkFunShallow::NECK_WIDTH_MM + 2.0 * SparkFunShallow::CUTTER_RADIUS_MM,
     inward_mm: 0.2,
-    courtyard_clearance_mm: 0.0,
     routing_gap_mm: 1.4,
     frame_landing_mm: 1.0,
     candidate_pitch_mm: 2.5,
     min_tab_radius_mm: 10.0,
-    corner_keepout_mm: 5.0,
-    min_separation_mm: 10.0,
+    min_separation_mm: SparkFunShallow::NECK_WIDTH_MM + 4.0 * SparkFunShallow::CUTTER_RADIUS_MM,
     load_point_spacing_mm: 2.0,
     default_thickness_mm: 1.6,
     physics: Physics {
@@ -110,13 +104,7 @@ pub(super) fn place(
     rail_width_mm: f64,
     resolution: Resolution,
 ) -> Result<Placement> {
-    let prepared = eligibility::prepare(
-        ipc,
-        preset.footprint(),
-        preset.courtyard_clearance_mm,
-        &[],
-        resolution,
-    )?;
+    let prepared = eligibility::prepare(ipc, preset.footprint(), resolution)?;
     let substrate = &prepared.substrate;
     let islands = substrate.connected_components().len();
     ensure!(
@@ -188,9 +176,7 @@ pub fn analyze(xml: &str, preset: &Preset, resolution: Resolution) -> Result<Val
         "board": {"bbox": [bbox.min.x, bbox.min.y, bbox.max.x, bbox.max.y]},
         "substrate": rings(substrate),
         "frame": rings(&sites.frame),
-        "obstacles": prepared.evidence.iter().filter_map(|e| {
-            e.region.as_ref().map(|r| json!({"id": e.id, "rings": rings(r)}))
-        }).collect::<Vec<_>>(),
+        "obstacles": prepared.evidence.iter().map(|e| json!({"id": e.id, "rings": rings(&e.region)})).collect::<Vec<_>>(),
         "candidates": sites.candidates.iter().enumerate().map(|(i, c)| json!({
             "id": i, "ring": c.ring, "station_mm": c.station_mm,
             "point": [c.site.point.x, c.site.point.y],
@@ -199,7 +185,6 @@ pub fn analyze(xml: &str, preset: &Preset, resolution: Resolution) -> Result<Val
         "rejected": sites.rejected.iter().map(|r| json!({
             "ring": r.ring, "station_mm": r.station_mm, "point": [r.point.x, r.point.y], "reason": r.reason,
         })).collect::<Vec<_>>(),
-        "tight": candidates::tight(substrate, preset)?.iter().map(|run| run.iter().map(|p| json!([p.x, p.y])).collect::<Vec<_>>()).collect::<Vec<_>>(),
         "selected": selection.chosen,
         "tab_count": selection.chosen.len(),
         "proven_minimal": selection.proven,
