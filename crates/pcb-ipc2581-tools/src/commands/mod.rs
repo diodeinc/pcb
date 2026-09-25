@@ -20,19 +20,24 @@ pub mod warp;
 pub mod warp_report;
 
 /// A generated panel's IPC-2581 with its optional per-layer copper-balance
-/// accounting.
+/// accounting and anything the panel falls short of.
 #[derive(Debug, Clone)]
 pub struct PanelCreation {
     pub xml: String,
     pub copper_balance: Option<crate::copper_balance::CopperBalanceReport>,
+    pub warnings: Vec<String>,
 }
 
 #[cfg(feature = "cli")]
 impl PanelCreation {
-    /// Report the balance, then write the panel to `output` or stdout.
+    /// Report the balance and the warnings, then write the panel to `output`
+    /// or stdout.
     fn write(&self, output: &std::path::Path, what: &str) -> Result<()> {
         for line in self.copper_balance.iter().flat_map(|r| r.summary_lines()) {
             eprintln!("  {line}");
+        }
+        for warning in &self.warnings {
+            eprintln!("⚠ {warning}");
         }
         if output.as_os_str() == "-" {
             pcb_ui::write_stdout(|stdout| stdout.write_all(self.xml.as_bytes()))?;
