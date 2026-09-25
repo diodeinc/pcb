@@ -11,6 +11,11 @@
 //! strip whose effective width grows with the distance. Nothing here counts
 //! tabs or sides; the count follows from thickness and size. Units are N
 //! and mm.
+//!
+//! Local bending bounds what any tab set can do: a point farther than
+//! `reach_mm` from every site bends past the limit whatever the tabs. Such a
+//! point is not something tabs can hold, so it is reported with that bound
+//! rather than counted against the tabs; the limit applies to the rest.
 
 use pcb_ir::geom::Point;
 
@@ -127,8 +132,21 @@ pub struct Site {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Violation {
     NoTabs,
-    Deflection { deflection_mm: f64, limit_mm: f64 },
-    Separation { distance_mm: f64, minimum_mm: f64 },
+    Deflection {
+        deflection_mm: f64,
+        limit_mm: f64,
+    },
+    Separation {
+        distance_mm: f64,
+        minimum_mm: f64,
+    },
+    /// Load points beyond the reach of every site, and the least any tab set
+    /// could bend the worst of them.
+    Unreachable {
+        points: usize,
+        deflection_mm: f64,
+        limit_mm: f64,
+    },
 }
 
 impl std::fmt::Display for Violation {
@@ -143,6 +161,15 @@ impl std::fmt::Display for Violation {
                 distance_mm,
                 minimum_mm,
             } => write!(f, "tabs {distance_mm:.1} mm apart, minimum {minimum_mm:.1}"),
+            Self::Unreachable {
+                points,
+                deflection_mm,
+                limit_mm,
+            } => write!(
+                f,
+                "{points} outline points are out of reach of every tab site and bend at least \
+                 {deflection_mm:.2} mm, limit {limit_mm:.2}"
+            ),
         }
     }
 }
@@ -150,9 +177,9 @@ impl std::fmt::Display for Violation {
 #[derive(Debug, Clone)]
 pub struct Selection {
     pub chosen: Vec<usize>,
-    /// Worst deflection over the load points under the process load.
+    /// Worst deflection over the load points some site can reach.
     pub deflection_mm: f64,
-    /// Index of the load point that deflects most.
+    /// Index of that load point.
     pub worst_point: Option<usize>,
     pub violations: Vec<Violation>,
     /// Whether every smaller set was exhaustively ruled out.
@@ -175,30 +202,20 @@ const EXHAUSTIVE_TABS: usize = 4;
 /// Subsets the exhaustive phase may enumerate per tab count.
 const EXHAUSTIVE_BUDGET: f64 = 3.0e7;
 
-/// Fewest tabs whose worst deflection is within the limit. A greedy pass
-/// with pruning and swapping gives a feasible set; the exhaustive search
-/// then finds the best set no larger than it, smallest count first, up to
-/// `EXHAUSTIVE_TABS` and while the enumeration stays within budget, which
-/// is what `proven` records. Always returns a set; check `violations`.
+/// Fewest tabs whose worst deflection is within the limit wherever a site
+/// can reach. A greedy pass with pruning and swapping gives a feasible set;
+/// the exhaustive search then finds the best set no larger than it, smallest
+/// count first, up to `EXHAUSTIVE_TABS` and while the enumeration stays
+/// within budget, which is what `proven` records. Always returns a set; check
+/// `violations`, which also name the outline no site can reach.
 pub fn select(sites: &[Site], loads: &[Point], model: &Model) -> Selection {
     let evaluator = Evaluator::new(sites, loads, model);
-    let mut greedy = evaluator.greedy();
-    let largest = if greedy.satisfied() {
-        greedy.chosen.len()
-    } else {
-        EXHAUSTIVE_TABS
-    };
-    for k in 1..=largest.min(EXHAUSTIVE_TABS).min(sites.len()) {
-        if combinations(sites.len(), k) > EXHAUSTIVE_BUDGET {
-            return greedy;
-        }
-        if let Some(mut best) = evaluator.exhaustive(k) {
-            best.proven = true;
-            return best;
-        }
+    let mut selection = evaluator.fewest();
+    if let Some(unreachable) = evaluator.unreachable() {
+        selection.violations.push(unreachable);
+        selection.proven = false;
     }
-    greedy.proven = greedy.satisfied() && greedy.chosen.len() <= EXHAUSTIVE_TABS + 1;
-    greedy
+    selection
 }
 
 fn combinations(n: usize, k: usize) -> f64 {
@@ -225,7 +242,8 @@ struct Evaluator<'a> {
     distance2: Vec<Vec<f64>>,
     /// Per site, the load points within reach, as bit words.
     within_reach: Vec<Vec<u64>>,
-    all_points: Vec<u64>,
+    /// The load points some site reaches: the ones tabs can hold.
+    reachable: Vec<u64>,
 }
 
 impl<'a> Evaluator<'a> {
@@ -256,13 +274,10 @@ impl<'a> Evaluator<'a> {
                 }
                 bits
             })
+            .collect::<Vec<Vec<u64>>>();
+        let reachable = (0..words)
+            .map(|w| within_reach.iter().fold(0, |acc, bits| acc | bits[w]))
             .collect();
-        let mut all_points = vec![u64::MAX; words];
-        if let Some(last) = all_points.last_mut()
-            && !loads.len().is_multiple_of(64)
-        {
-            *last = (1u64 << (loads.len() % 64)) - 1;
-        }
         Self {
             sites,
             model,
@@ -277,8 +292,58 @@ impl<'a> Evaluator<'a> {
                 .collect(),
             distance2,
             within_reach,
-            all_points,
+            reachable,
         }
+    }
+
+    /// The fewest tabs, as `select` describes.
+    fn fewest(&self) -> Selection {
+        let n = self.sites.len();
+        let mut greedy = self.greedy();
+        let largest = if greedy.satisfied() {
+            greedy.chosen.len()
+        } else {
+            EXHAUSTIVE_TABS
+        };
+        for k in 1..=largest.min(EXHAUSTIVE_TABS).min(n) {
+            if combinations(n, k) > EXHAUSTIVE_BUDGET {
+                return greedy;
+            }
+            if let Some(mut best) = self.exhaustive(k) {
+                best.proven = true;
+                return best;
+            }
+        }
+        greedy.proven = greedy.satisfied() && greedy.chosen.len() <= EXHAUSTIVE_TABS + 1;
+        greedy
+    }
+
+    /// Whether some site reaches load point `j`.
+    fn reachable(&self, j: usize) -> bool {
+        self.reachable[j / 64] & (1 << (j % 64)) != 0
+    }
+
+    /// The load points no site reaches, with the least any tab set could bend
+    /// the worst of them: its local bending from the nearest site.
+    fn unreachable(&self) -> Option<Violation> {
+        let model = self.model;
+        let (points, deflection_mm) = (0..self.rows.len())
+            .filter(|&j| !self.reachable(j))
+            .map(|j| {
+                let nearest2 = self
+                    .distance2
+                    .iter()
+                    .map(|row| row[j])
+                    .fold(f64::INFINITY, f64::min);
+                model.load_n * nearest2 / (BENDING_SPREAD * model.rigidity_n_mm)
+            })
+            .fold((0, 0.0f64), |(n, worst), d| (n + 1, worst.max(d)));
+        // Without sites nothing is in reach; that is `NoTabs`, not this.
+        (points > 0 && deflection_mm.is_finite()).then_some(Violation::Unreachable {
+            points,
+            deflection_mm,
+            limit_mm: model.deflection_limit_mm,
+        })
     }
 
     /// Best separated pair, or the best single site when no two are clear of
@@ -392,7 +457,7 @@ impl<'a> Evaluator<'a> {
     }
 
     fn all_within_reach(&self, chosen: &[usize]) -> bool {
-        self.all_points.iter().enumerate().all(|(w, &all)| {
+        self.reachable.iter().enumerate().all(|(w, &all)| {
             chosen
                 .iter()
                 .fold(0u64, |acc, &i| acc | self.within_reach[i][w])
@@ -436,7 +501,10 @@ impl<'a> Evaluator<'a> {
         }
         selection.deflection_mm = 0.0;
         let count = self.rows.len();
-        for j in (start..count).chain(0..start) {
+        for j in (start..count)
+            .chain(0..start)
+            .filter(|&j| self.reachable(j))
+        {
             let rigid = quadratic_form(&compliance, &self.rows[j]);
             let nearest2 = chosen
                 .iter()
@@ -679,6 +747,32 @@ mod tests {
         let triangle = evaluator.evaluate(&[at(32.5, 0.0), at(2.5, 30.0), at(57.5, 30.0)]);
         assert!(opposed.deflection_mm > 3.0 * triangle.deflection_mm);
         assert!(same_edge.deflection_mm > 3.0 * triangle.deflection_mm);
+    }
+
+    #[test]
+    fn outline_no_site_reaches_is_reported_not_chased() {
+        // A 120 x 60 board with its top edge closed to tabs, as a row of
+        // right-angle headers closes it: the middle of that edge is beyond
+        // the reach of every site, and no number of tabs changes its bending.
+        let (outline, sites) = rectangle(120.0, 60.0, 2.5);
+        let open: Vec<_> = sites.iter().copied().filter(|s| s.point.y < 60.0).collect();
+        let m = model(1.2);
+        let selection = select(&open, &outline, &m);
+        let [
+            Violation::Unreachable {
+                points,
+                deflection_mm,
+                limit_mm,
+            },
+        ] = selection.violations[..]
+        else {
+            panic!("{:?}", selection.violations);
+        };
+        assert!(points > 0 && deflection_mm > limit_mm);
+        // Everywhere a tab can reach is held, by an ordinary handful of tabs
+        // rather than by every site on three edges.
+        assert!(selection.deflection_mm <= m.deflection_limit_mm);
+        assert!(selection.chosen.len() <= 6, "{:?}", selection.chosen);
     }
 
     #[test]
