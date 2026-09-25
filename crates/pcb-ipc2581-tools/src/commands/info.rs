@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 #[cfg(feature = "cli")]
-use crate::accessors::{BoardArrayInfo, StackupLayerType, SurfaceFinishInfo};
+use crate::accessors::{BoardArrayInfo, SurfaceFinishInfo};
 #[cfg(feature = "cli")]
 use anyhow::Result;
 #[cfg(feature = "cli")]
@@ -19,7 +19,9 @@ use pcb_ir::import::ipc2581::ImportedDesign;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::accessors::{ColorInfo, DrillHoleType, DrillStats, IpcAccessor, drill_stats};
+use crate::accessors::{
+    ColorInfo, DrillHoleType, DrillStats, IpcAccessor, StackupLayerType, drill_stats,
+};
 #[cfg(feature = "cli")]
 use crate::utils::{file as file_utils, units};
 #[cfg(feature = "cli")]
@@ -846,6 +848,27 @@ pub fn info_json(
 
     let stackup_details = accessor.stackup_details();
     if let Some(stackup_details) = &stackup_details {
+        let layers: Vec<_> = stackup_details
+            .layers
+            .iter()
+            .filter_map(|layer| {
+                let kind = match layer.layer_type {
+                    StackupLayerType::Conductor => "copper",
+                    StackupLayerType::DielectricCore => "core",
+                    StackupLayerType::DielectricPrepreg => "prepreg",
+                    StackupLayerType::DielectricOther => "dielectric",
+                    StackupLayerType::Soldermask | StackupLayerType::Other => return None,
+                };
+                Some(json!({
+                    "name": layer.name,
+                    "kind": kind,
+                    "thickness_mm": layer.thickness_mm,
+                    "material": layer.material,
+                    "dk": layer.dielectric_constant,
+                    "df": layer.loss_tangent,
+                }))
+            })
+            .collect();
         info["stackup_details"] = json!({
             "surface_finish_name": stackup_details.surface_finish.as_ref().map(|f| f.name.clone()),
             "surface_finish_category": stackup_details.surface_finish.as_ref().map(|f| f.category),
@@ -856,6 +879,7 @@ pub fn info_json(
             "soldermask_kind": canonical_soldermask_kind(stackup_details.soldermask_color.as_ref()),
             "outer_copper_oz": stackup_details.outer_copper_oz,
             "inner_copper_oz": stackup_details.inner_copper_oz,
+            "layers": layers,
         });
     }
 
@@ -983,6 +1007,45 @@ mod tests {
     use crate::accessors::IpcAccessor;
     use pcb_ir::geom::Resolution;
     use pcb_ir::import::ipc2581::import_design;
+    use serde_json::json;
+
+    #[test]
+    fn stackup_details_include_ordered_copper_and_dielectric_layers() {
+        let ipc = ipc2581::Ipc2581::parse(include_str!("dfm/fixtures/antenna.xml")).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+
+        let info = info_json(&IpcAccessor::new(&ipc), &imported).unwrap();
+
+        assert_eq!(
+            info["stackup_details"]["layers"],
+            json!([
+                {
+                    "name": "F.Cu",
+                    "kind": "copper",
+                    "thickness_mm": 0.035,
+                    "material": "COPPER",
+                    "dk": null,
+                    "df": null,
+                },
+                {
+                    "name": "DIELECTRIC_1",
+                    "kind": "core",
+                    "thickness_mm": 1.52,
+                    "material": "FR4",
+                    "dk": 4.5,
+                    "df": 0.02,
+                },
+                {
+                    "name": "B.Cu",
+                    "kind": "copper",
+                    "thickness_mm": 0.035,
+                    "material": "COPPER",
+                    "dk": null,
+                    "df": null,
+                },
+            ])
+        );
+    }
 
     #[test]
     fn component_placements_deduplicate_bom_refdes() {
