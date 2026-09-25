@@ -110,7 +110,12 @@ pub(super) fn prepare(
         substrate = substrate.union(&region)?;
     }
     let (mut evidence, ignored_footprints) = courtyard_evidence(&imported, resolution)?;
-    evidence.extend(edge_plating_evidence(&imported, &substrate, resolution)?);
+    evidence.extend(edge_plating_evidence(
+        &imported,
+        &substrate,
+        footprint.inward_mm,
+        resolution,
+    )?);
     let obstacles = evidence
         .iter()
         .map(|e| OutlineObstacle {
@@ -295,16 +300,18 @@ fn courtyard_evidence(
     Ok((evidence, ignored))
 }
 
-/// Plating the outline cuts through: castellations and other plated
-/// half-holes. A tab there would tear the copper and drill its break holes
-/// through it. Every plated feature that is part board and part not counts,
-/// barrel and pads alike on whatever layer carries them, so nothing has to
-/// know what a castellation is.
+/// Plating a tab's perforations could reach: castellations, and any plated
+/// hole or pad on the board within `inward_mm` of its outline. A tab there
+/// would tear the copper and drill its break holes through it. Barrel and
+/// pads alike count, on whatever layer carries them, so nothing has to know
+/// what a castellation is.
 fn edge_plating_evidence(
     imported: &ImportedDesign,
     substrate: &ContourSet,
+    inward_mm: f64,
     resolution: Resolution,
 ) -> Result<Vec<Evidence>> {
+    let interior = substrate.disk_erode(inward_mm)?;
     let mut evidence = Vec::new();
     for (index, layer) in imported.layer_definitions.iter().enumerate() {
         for occurrence in
@@ -327,7 +334,7 @@ fn edge_plating_evidence(
                 })
                 .collect::<Vec<_>>();
             let region = ContourSet::from_filled_contours(&contours, resolution)?;
-            if region.difference(substrate)?.is_empty()
+            if region.difference(&interior)?.is_empty()
                 || region.intersection(substrate)?.is_empty()
             {
                 continue;
@@ -914,9 +921,10 @@ mod tests {
 
     #[test]
     fn plating_the_outline_cuts_through_blocks_the_edge_it_sits_on() {
-        // A castellation on the bottom edge and the same padstack well inside
-        // the board: barrel and pad of the first are evidence, the second is
-        // ordinary copper.
+        // A castellation on the bottom edge, a plated hole just inside it
+        // within the perforations' reach, and the castellation's padstack well
+        // inside the board: the first two are evidence, the last is ordinary
+        // copper.
         let xml = fixture()
             .replace(
                 "<Step name=\"board\"",
@@ -933,7 +941,8 @@ mod tests {
                 r#"<LayerFeature layerRef="TOP"><Set><Pad padstackDefRef="edge"><Location x="16" y="0"/></Pad></Set>
                    <Set><Pad padstackDefRef="edge"><Location x="16" y="5"/></Pad></Set></LayerFeature>
                    <LayerFeature layerRef="Drill"><Set><Hole name="H1" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="16" y="0"/></Set>
-                   <Set><Hole name="H2" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="16" y="5"/></Set></LayerFeature>
+                   <Set><Hole name="H2" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="16" y="5"/></Set>
+                   <Set><Hole name="H3" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="4" y="0.35"/></Set></LayerFeature>
                    <LayerFeature layerRef="F.Courtyard">"#,
             );
         let report = analyze(&xml, footprint(), Resolution::default()).unwrap();
@@ -944,11 +953,11 @@ mod tests {
             .filter_map(Value::as_str)
             .filter(|id| id.starts_with("plating:"))
             .collect::<Vec<_>>();
-        assert_eq!(plating.len(), 2, "{plating:?}");
+        assert_eq!(plating.len(), 3, "{plating:?}");
         assert!(plating.iter().any(|id| id.starts_with("plating:TOP:")));
         assert!(plating.iter().any(|id| id.starts_with("plating:Drill:")));
-        // The 1 mm footprint is blocked wherever it would touch the 1 mm pad,
-        // and nowhere else because of it.
+        // The 1 mm footprint is blocked wherever it would touch either, and
+        // nowhere else because of them.
         let touched = report["intervals"]
             .as_array()
             .unwrap()
@@ -970,7 +979,8 @@ mod tests {
                 interval["start"][0].as_f64().unwrap(),
                 interval["end"][0].as_f64().unwrap(),
             );
-            assert!(lo.min(hi) > 14.9 && lo.max(hi) < 17.1, "{lo} {hi}");
+            let near = |x: f64| lo.min(hi) > x - 1.1 && lo.max(hi) < x + 1.1;
+            assert!(near(16.0) || near(4.0), "{lo} {hi}");
         }
     }
 }

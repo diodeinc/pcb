@@ -69,11 +69,14 @@ pub fn find(
         let turns = turning_angles(&substrate.rings[id.ring]);
         for (lo, hi) in eligible_runs(intervals, id, perimeter) {
             // A site every pitch, and one at each end of the run: on a short
-            // run the ends are the sites that matter. A run around the whole
-            // ring has none.
+            // run the ends are the sites that matter. A run is open, so an end
+            // site sits one geometry error inside it. A run around the whole
+            // ring has no ends.
             let bins = ((hi - lo) / preset.candidate_pitch_mm).ceil().max(1.0) as usize;
             let centers = (0..bins).map(|k| lo + (hi - lo) * (k as f64 + 0.5) / bins as f64);
-            let ends = (!touching(hi - lo, perimeter)).then_some([lo, hi]);
+            let inset = resolution.accuracy.max_error_mm();
+            let ends = (!touching(hi - lo, perimeter) && hi - lo > 2.0 * inset)
+                .then_some([lo + inset, hi - inset]);
             for station_mm in centers.chain(ends.into_iter().flatten()) {
                 let station_mm = station_mm % perimeter;
                 let site = boundary.site(id, station_mm)?;
@@ -351,7 +354,8 @@ mod tests {
     #[test]
     fn a_short_run_beside_a_corner_offers_its_ends() {
         // The clear edge between a corner and a castellated row: 4 mm of
-        // sites starting a tab's half width from the corner.
+        // sites starting a tab's half width from the corner. The ends are
+        // taken just inside the open run.
         let resolution = Resolution::default();
         let board = ContourSet::rectangle(
             pcb_ir::geom::BBox::new(Point::ZERO, Point::new(20.0, 10.0)),
@@ -381,7 +385,16 @@ mod tests {
             .map(|c| c.station_mm)
             .collect::<Vec<_>>();
         stations.sort_by(f64::total_cmp);
-        assert_eq!(stations, vec![1.6, 2.6, 4.6, 5.6]);
+        let inset = resolution.accuracy.max_error_mm();
+        let expected = [1.6 + inset, 2.6, 4.6, 5.6 - inset];
+        assert!(
+            stations.len() == 4
+                && stations
+                    .iter()
+                    .zip(expected)
+                    .all(|(s, e)| (s - e).abs() < 1e-9),
+            "{stations:?}"
+        );
     }
 
     #[test]
