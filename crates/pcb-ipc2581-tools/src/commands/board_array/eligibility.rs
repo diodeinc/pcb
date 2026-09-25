@@ -304,14 +304,16 @@ fn courtyard_evidence(
 /// hole or pad on the board within `inward_mm` of its outline. A tab there
 /// would tear the copper and drill its break holes through it. Barrel and
 /// pads alike count, on whatever layer carries them, so nothing has to know
-/// what a castellation is.
+/// what a castellation is. The reach is widened by the geometry error so
+/// plating that only touches it still counts: the outline check treats
+/// touching as contact, and this filter must not decide otherwise.
 fn edge_plating_evidence(
     imported: &ImportedDesign,
     substrate: &ContourSet,
     inward_mm: f64,
     resolution: Resolution,
 ) -> Result<Vec<Evidence>> {
-    let interior = substrate.disk_erode(inward_mm)?;
+    let interior = substrate.disk_erode(inward_mm + resolution.accuracy.max_error_mm())?;
     let mut evidence = Vec::new();
     for (index, layer) in imported.layer_definitions.iter().enumerate() {
         for occurrence in
@@ -922,9 +924,9 @@ mod tests {
     #[test]
     fn plating_the_outline_cuts_through_blocks_the_edge_it_sits_on() {
         // A castellation on the bottom edge, a plated hole just inside it
-        // within the perforations' reach, and the castellation's padstack well
-        // inside the board: the first two are evidence, the last is ordinary
-        // copper.
+        // within the perforations' reach, one touching the end of that reach,
+        // and the castellation's padstack well inside the board: the first
+        // three are evidence, the last is ordinary copper.
         let xml = fixture()
             .replace(
                 "<Step name=\"board\"",
@@ -942,7 +944,8 @@ mod tests {
                    <Set><Pad padstackDefRef="edge"><Location x="16" y="5"/></Pad></Set></LayerFeature>
                    <LayerFeature layerRef="Drill"><Set><Hole name="H1" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="16" y="0"/></Set>
                    <Set><Hole name="H2" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="16" y="5"/></Set>
-                   <Set><Hole name="H3" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="4" y="0.35"/></Set></LayerFeature>
+                   <Set><Hole name="H3" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="4" y="0.35"/></Set>
+                   <Set><Hole name="H4" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="10" y="0.5"/></Set></LayerFeature>
                    <LayerFeature layerRef="F.Courtyard">"#,
             );
         let report = analyze(&xml, footprint(), Resolution::default()).unwrap();
@@ -953,7 +956,7 @@ mod tests {
             .filter_map(Value::as_str)
             .filter(|id| id.starts_with("plating:"))
             .collect::<Vec<_>>();
-        assert_eq!(plating.len(), 3, "{plating:?}");
+        assert_eq!(plating.len(), 4, "{plating:?}");
         assert!(plating.iter().any(|id| id.starts_with("plating:TOP:")));
         assert!(plating.iter().any(|id| id.starts_with("plating:Drill:")));
         // The 1 mm footprint is blocked wherever it would touch either, and
@@ -980,7 +983,7 @@ mod tests {
                 interval["end"][0].as_f64().unwrap(),
             );
             let near = |x: f64| lo.min(hi) > x - 1.1 && lo.max(hi) < x + 1.1;
-            assert!(near(16.0) || near(4.0), "{lo} {hi}");
+            assert!(near(16.0) || near(4.0) || near(10.0), "{lo} {hi}");
         }
     }
 }
