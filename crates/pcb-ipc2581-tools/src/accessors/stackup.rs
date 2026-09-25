@@ -248,7 +248,18 @@ impl<'a> IpcAccessor<'a> {
         let mut layers = Vec::new();
         let mut conductors = Vec::new();
 
-        for (idx, stackup_layer) in stackup.layers.iter().enumerate() {
+        let mut stackup_layers = stackup.layers.iter().collect::<Vec<_>>();
+        let unique_layer_numbers = stackup_layers
+            .iter()
+            .filter_map(|layer| layer.layer_number)
+            .collect::<std::collections::HashSet<_>>();
+        // Sequence defines physical order only when every layer has a unique
+        // number. Otherwise retain declaration order rather than invent one.
+        if unique_layer_numbers.len() == stackup_layers.len() {
+            stackup_layers.sort_by_key(|layer| layer.layer_number);
+        }
+
+        for (idx, stackup_layer) in stackup_layers.into_iter().enumerate() {
             let layer_name = self.ipc.resolve(stackup_layer.layer_ref).to_string();
             let layer = layer_map.get(&stackup_layer.layer_ref).copied();
             let layer_function = layer.map(|layer| layer.layer_function);
@@ -582,7 +593,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn copper_weights_follow_layer_sides_not_names() {
+    fn stackup_details_follow_sequence_and_copper_sides() {
         let ipc = ipc2581::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -599,11 +610,11 @@ mod tests {
       <Layer name="In_SECONDARY" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
       <Stackup name="Primary" overallThickness="1.6">
         <StackupGroup name="Group">
-          <StackupLayer layerOrGroupRef="PRIMARY" thickness="0.0696" sequence="1"/>
+          <StackupLayer layerOrGroupRef="In_SECONDARY" thickness="0.0696" sequence="5"/>
           <StackupLayer layerOrGroupRef="GND" thickness="0.0174" sequence="2"/>
           <StackupLayer layerOrGroupRef="CORE" thickness="1.4" sequence="3"/>
           <StackupLayer layerOrGroupRef="PWR" thickness="0.0174" sequence="4"/>
-          <StackupLayer layerOrGroupRef="In_SECONDARY" thickness="0.0696" sequence="5"/>
+          <StackupLayer layerOrGroupRef="PRIMARY" thickness="0.0696" sequence="1"/>
         </StackupGroup>
       </Stackup>
     </CadData>
@@ -614,6 +625,14 @@ mod tests {
 
         let stackup = IpcAccessor::new(&ipc).stackup_details().unwrap();
 
+        assert_eq!(
+            stackup
+                .layers
+                .iter()
+                .map(|layer| layer.name.as_str())
+                .collect::<Vec<_>>(),
+            ["PRIMARY", "GND", "CORE", "PWR", "In_SECONDARY"]
+        );
         assert!((stackup.outer_copper_oz.unwrap() - 2.0).abs() < 1e-9);
         assert!((stackup.inner_copper_oz.unwrap() - 0.5).abs() < 1e-9);
         assert_eq!(stackup.outer_copper_weight().unwrap(), "2.00 oz (~2 oz)");
