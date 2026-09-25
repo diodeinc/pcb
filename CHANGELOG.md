@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Include ordered copper and dielectric stackup layers in `pcb ipc2581 info --format json`.
+
 ### Changed
 
 - `board-array create --mouse-bite` panelizes a board its tabs cannot hold within the deflection limit, with a warning, instead of failing.
