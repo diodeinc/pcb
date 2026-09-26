@@ -51,6 +51,11 @@ pub(super) fn extract_ir(
             &validation.summary.selected,
             &mut netlist.components,
         )?;
+        // KiCad 9+ can collapse two unconnected stacked pads (e.g. `[5,6]`) onto a single
+        // `unconnected-(...)` net in the schematic netlist, while the PCB layout keeps them
+        // disambiguated as `<base>` and `<base>_1`. Restore that per-pad disambiguation so the
+        // importer never shorts two otherwise-isolated unconnected endpoints into one net.
+        restore_unconnected_net_suffixes_from_layout(&mut netlist.nets, &netlist.components)?;
     } else {
         resolve_standalone_footprints(selection, staged_root, &mut netlist.components)?;
     }
@@ -591,6 +596,105 @@ fn extract_kicad_layout_data(
     }
 
     Ok(())
+}
+
+/// Restore KiCad's per-pad disambiguation that the schematic netlist collapsed away.
+///
+/// KiCad 9+ stacks pins such as `[5,6]` and emits one `unconnected-(REF-Pad5)` net in the
+/// netlist with two `(node (pin "5"))` / `(node (pin "6"))` entries. The PCB layout, however,
+/// keeps the two pads on distinct net names — typically `<base>` and `<base>_1` — which
+/// `extract_kicad_layout_data` already collected on `ImportLayoutPad.net_names`. This splits
+/// any multi-port `unconnected-(...)` net back into one net per distinct layout name so the
+/// importer never shorts two unconnected endpoints onto a single generated net.
+fn restore_unconnected_net_suffixes_from_layout(
+    nets: &mut BTreeMap<KiCadNetName, ImportNetData>,
+    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+) -> Result<()> {
+    // Snapshot the collapsed net names before mutating `nets` so the borrow over `nets` for
+    // removal is separated from the immutable borrow used to find them.
+    let collapsed_names = nets
+        .iter()
+        .filter(|(name, net)| name.as_str().starts_with("unconnected-(") && net.ports.len() > 1)
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+
+    for collapsed_name in collapsed_names {
+        let Some(collapsed_net) = nets.remove(&collapsed_name) else {
+            continue;
+        };
+        let mut ports_by_layout_name: BTreeMap<KiCadNetName, BTreeSet<ImportNetPort>> =
+            BTreeMap::new();
+
+        for port in collapsed_net.ports {
+            // A single pad can carry multiple layout net names (e.g. when the same pad is
+            // referenced by stacked notation); keep only the names that disambiguate this
+            // particular collapsed net. A plain match (`<base>`) is legal; a numeric-suffix
+            // match (`<base>_1`) is legal; anything else is ignored as unrelated.
+            let matching_layout_names = components
+                .get(&port.component)
+                .and_then(|component| component.layout.as_ref())
+                .and_then(|layout| layout.pads.get(&port.pin))
+                .into_iter()
+                .flat_map(|pad| pad.net_names.iter())
+                .filter(|name| {
+                    is_disambiguated_unconnected_name(collapsed_name.as_str(), name.as_str())
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+
+            if matching_layout_names.len() > 1 {
+                anyhow::bail!(
+                    "KiCad layout pad {}:{} has multiple names matching collapsed net {}: {}",
+                    port.component.pcb_path(),
+                    port.pin,
+                    collapsed_name,
+                    matching_layout_names
+                        .iter()
+                        .map(KiCadNetName::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            // Fall back to the collapsed name when the layout has no recorded name for this
+            // pad (e.g. an unconnected pad with no PCB net assignment yet): preserving the
+            // original net keeps the endpoint visible to downstream validation rather than
+            // silently dropping it.
+            let layout_name = matching_layout_names
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| collapsed_name.clone());
+            ports_by_layout_name
+                .entry(layout_name)
+                .or_default()
+                .insert(port);
+        }
+
+        for (name, ports) in ports_by_layout_name {
+            nets.entry(name)
+                .or_insert_with(|| ImportNetData {
+                    ports: BTreeSet::new(),
+                })
+                .ports
+                .extend(ports);
+        }
+    }
+
+    Ok(())
+}
+
+/// Whether `candidate` is the disambiguated form of the collapsed `unconnected-(...)` net.
+///
+/// Accepts the exact base name (e.g. `unconnected-(U1-Pad5)`) and any `<base>_N` form where `N`
+/// is one or more ASCII digits (e.g. `unconnected-(U1-Pad5)_1`), which is how KiCad's board side
+/// disambiguates otherwise-colliding unconnected net names.
+fn is_disambiguated_unconnected_name(collapsed: &str, candidate: &str) -> bool {
+    if candidate == collapsed {
+        return true;
+    }
+    candidate
+        .strip_prefix(collapsed)
+        .and_then(|suffix| suffix.strip_prefix('_'))
+        .is_some_and(|suffix| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
 }
 
 fn resolve_standalone_footprints(
@@ -1142,6 +1246,377 @@ fn key_from_schematic_instance_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restores_layout_suffixes_for_collapsed_unconnected_nets() {
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "u33".to_string(),
+        };
+        let pad = |name: &str| ImportLayoutPad {
+            net_names: BTreeSet::from([KiCadNetName::from(name.to_string())]),
+            uuids: BTreeSet::new(),
+        };
+        let components = BTreeMap::from([(
+            anchor.clone(),
+            ImportComponentData {
+                netlist: ImportNetlistComponent {
+                    refdes: KiCadRefDes::from("U33".to_string()),
+                    value: None,
+                    footprint: None,
+                    sheetpath_names: None,
+                    unit_pcb_paths: Vec::new(),
+                },
+                schematic: None,
+                layout: Some(ImportLayoutComponent {
+                    fpid: None,
+                    unresolved_footprint: None,
+                    uuid: None,
+                    layer: None,
+                    at: None,
+                    sheetname: None,
+                    sheetfile: None,
+                    attrs: Vec::new(),
+                    properties: BTreeMap::new(),
+                    pads: BTreeMap::from([
+                        (
+                            KiCadPinNumber::from("5".to_string()),
+                            pad("unconnected-(U33-Pad5)_1"),
+                        ),
+                        (
+                            KiCadPinNumber::from("6".to_string()),
+                            pad("unconnected-(U33-Pad5)"),
+                        ),
+                    ]),
+                    footprint_geometry: ImportFootprintGeometry::BoardInstance(String::new()),
+                }),
+            },
+        )]);
+        let port = |pin: &str| ImportNetPort {
+            component: anchor.clone(),
+            pin: KiCadPinNumber::from(pin.to_string()),
+        };
+        let mut nets = BTreeMap::from([(
+            KiCadNetName::from("unconnected-(U33-Pad5)".to_string()),
+            ImportNetData {
+                ports: BTreeSet::from([port("5"), port("6")]),
+            },
+        )]);
+
+        restore_unconnected_net_suffixes_from_layout(&mut nets, &components).unwrap();
+
+        // The two ports no longer share a net: each is isolated on its own generated net.
+        assert_eq!(nets.len(), 2);
+        assert_eq!(
+            nets[&KiCadNetName::from("unconnected-(U33-Pad5)_1".to_string())].ports,
+            BTreeSet::from([port("5")])
+        );
+        assert_eq!(
+            nets[&KiCadNetName::from("unconnected-(U33-Pad5)".to_string())].ports,
+            BTreeSet::from([port("6")])
+        );
+    }
+
+    #[test]
+    fn keeps_single_port_unconnected_nets_unchanged() {
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "r1".to_string(),
+        };
+        let components = BTreeMap::from([(
+            anchor.clone(),
+            ImportComponentData {
+                netlist: ImportNetlistComponent {
+                    refdes: KiCadRefDes::from("R1".to_string()),
+                    value: None,
+                    footprint: None,
+                    sheetpath_names: None,
+                    unit_pcb_paths: Vec::new(),
+                },
+                schematic: None,
+                layout: Some(ImportLayoutComponent {
+                    fpid: None,
+                    unresolved_footprint: None,
+                    uuid: None,
+                    layer: None,
+                    at: None,
+                    sheetname: None,
+                    sheetfile: None,
+                    attrs: Vec::new(),
+                    properties: BTreeMap::new(),
+                    pads: BTreeMap::from([(
+                        KiCadPinNumber::from("1".to_string()),
+                        ImportLayoutPad {
+                            net_names: BTreeSet::from([KiCadNetName::from(
+                                "unconnected-(R1-Pad1)".to_string(),
+                            )]),
+                            uuids: BTreeSet::new(),
+                        },
+                    )]),
+                    footprint_geometry: ImportFootprintGeometry::BoardInstance(String::new()),
+                }),
+            },
+        )]);
+        let port = |pin: &str| ImportNetPort {
+            component: anchor.clone(),
+            pin: KiCadPinNumber::from(pin.to_string()),
+        };
+        let mut nets = BTreeMap::from([(
+            KiCadNetName::from("unconnected-(R1-Pad1)".to_string()),
+            ImportNetData {
+                ports: BTreeSet::from([port("1")]),
+            },
+        )]);
+
+        // A single-port unconnected net is already disambiguated and must pass through untouched.
+        restore_unconnected_net_suffixes_from_layout(&mut nets, &components).unwrap();
+
+        assert_eq!(nets.len(), 1);
+        assert_eq!(
+            nets[&KiCadNetName::from("unconnected-(R1-Pad1)".to_string())].ports,
+            BTreeSet::from([port("1")])
+        );
+    }
+
+    #[test]
+    fn restore_does_not_touch_named_real_nets() {
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "u1".to_string(),
+        };
+        let components = BTreeMap::from([(
+            anchor.clone(),
+            ImportComponentData {
+                netlist: ImportNetlistComponent {
+                    refdes: KiCadRefDes::from("U1".to_string()),
+                    value: None,
+                    footprint: None,
+                    sheetpath_names: None,
+                    unit_pcb_paths: Vec::new(),
+                },
+                schematic: None,
+                layout: Some(ImportLayoutComponent {
+                    fpid: None,
+                    unresolved_footprint: None,
+                    uuid: None,
+                    layer: None,
+                    at: None,
+                    sheetname: None,
+                    sheetfile: None,
+                    attrs: Vec::new(),
+                    properties: BTreeMap::new(),
+                    pads: BTreeMap::from([
+                        (
+                            KiCadPinNumber::from("1".to_string()),
+                            ImportLayoutPad {
+                                net_names: BTreeSet::from([KiCadNetName::from("VCC".to_string())]),
+                                uuids: BTreeSet::new(),
+                            },
+                        ),
+                        (
+                            KiCadPinNumber::from("2".to_string()),
+                            ImportLayoutPad {
+                                net_names: BTreeSet::from([KiCadNetName::from("VCC".to_string())]),
+                                uuids: BTreeSet::new(),
+                            },
+                        ),
+                    ]),
+                    footprint_geometry: ImportFootprintGeometry::BoardInstance(String::new()),
+                }),
+            },
+        )]);
+        let port = |pin: &str| ImportNetPort {
+            component: anchor.clone(),
+            pin: KiCadPinNumber::from(pin.to_string()),
+        };
+        let mut nets = BTreeMap::from([(
+            KiCadNetName::from("VCC".to_string()),
+            ImportNetData {
+                ports: BTreeSet::from([port("1"), port("2")]),
+            },
+        )]);
+
+        // A real multi-port net that is not an `unconnected-(` net must be left intact: the
+        // restore step only splits collapsed unconnected stacks, never real user nets.
+        restore_unconnected_net_suffixes_from_layout(&mut nets, &components).unwrap();
+
+        assert_eq!(nets.len(), 1);
+        assert_eq!(
+            nets[&KiCadNetName::from("VCC".to_string())].ports,
+            BTreeSet::from([port("1"), port("2")])
+        );
+    }
+
+    #[test]
+    fn restore_splits_across_components() {
+        let a = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "u1".to_string(),
+        };
+        let b = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "u2".to_string(),
+        };
+        let layout = |pad_name: Option<&str>| ImportLayoutComponent {
+            fpid: None,
+            unresolved_footprint: None,
+            uuid: None,
+            layer: None,
+            at: None,
+            sheetname: None,
+            sheetfile: None,
+            attrs: Vec::new(),
+            properties: BTreeMap::new(),
+            pads: BTreeMap::from([(
+                KiCadPinNumber::from("5".to_string()),
+                ImportLayoutPad {
+                    net_names: pad_name
+                        .map(|n| BTreeSet::from([KiCadNetName::from(n.to_string())]))
+                        .unwrap_or_default(),
+                    uuids: BTreeSet::new(),
+                },
+            )]),
+            footprint_geometry: ImportFootprintGeometry::BoardInstance(String::new()),
+        };
+        let component = |refdes: &str, layout: Option<ImportLayoutComponent>| ImportComponentData {
+            netlist: ImportNetlistComponent {
+                refdes: KiCadRefDes::from(refdes.to_string()),
+                value: None,
+                footprint: None,
+                sheetpath_names: None,
+                unit_pcb_paths: Vec::new(),
+            },
+            schematic: None,
+            layout,
+        };
+        let components = BTreeMap::from([
+            (
+                a.clone(),
+                component("U1", Some(layout(Some("unconnected-(U1-Pad5)_1")))),
+            ),
+            (b.clone(), component("U2", Some(layout(None)))),
+        ]);
+        let port = |comp: KiCadUuidPathKey, pin: &str| ImportNetPort {
+            component: comp,
+            pin: KiCadPinNumber::from(pin.to_string()),
+        };
+        let mut nets = BTreeMap::from([(
+            KiCadNetName::from("unconnected-(U1-Pad5)".to_string()),
+            ImportNetData {
+                ports: BTreeSet::from([port(a.clone(), "5"), port(b.clone(), "5")]),
+            },
+        )]);
+
+        restore_unconnected_net_suffixes_from_layout(&mut nets, &components).unwrap();
+
+        // The pad with a recorded `_1` suffix moves to that net; the pad with no recorded layout
+        // name falls back to the collapsed base name. The two no longer share a generated net.
+        assert_eq!(nets.len(), 2);
+        assert_eq!(
+            nets[&KiCadNetName::from("unconnected-(U1-Pad5)_1".to_string())].ports,
+            BTreeSet::from([port(a.clone(), "5")])
+        );
+        assert_eq!(
+            nets[&KiCadNetName::from("unconnected-(U1-Pad5)".to_string())].ports,
+            BTreeSet::from([port(b, "5")])
+        );
+    }
+
+    #[test]
+    fn restore_errors_when_a_pad_has_multiple_matching_names() {
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "u1".to_string(),
+        };
+        let components = BTreeMap::from([(
+            anchor.clone(),
+            ImportComponentData {
+                netlist: ImportNetlistComponent {
+                    refdes: KiCadRefDes::from("U1".to_string()),
+                    value: None,
+                    footprint: None,
+                    sheetpath_names: None,
+                    unit_pcb_paths: Vec::new(),
+                },
+                schematic: None,
+                layout: Some(ImportLayoutComponent {
+                    fpid: None,
+                    unresolved_footprint: None,
+                    uuid: None,
+                    layer: None,
+                    at: None,
+                    sheetname: None,
+                    sheetfile: None,
+                    attrs: Vec::new(),
+                    properties: BTreeMap::new(),
+                    pads: BTreeMap::from([(
+                        KiCadPinNumber::from("5".to_string()),
+                        ImportLayoutPad {
+                            net_names: BTreeSet::from([
+                                KiCadNetName::from("unconnected-(U1-Pad5)".to_string()),
+                                KiCadNetName::from("unconnected-(U1-Pad5)_1".to_string()),
+                            ]),
+                            uuids: BTreeSet::new(),
+                        },
+                    )]),
+                    footprint_geometry: ImportFootprintGeometry::BoardInstance(String::new()),
+                }),
+            },
+        )]);
+        let port = |pin: &str| ImportNetPort {
+            component: anchor.clone(),
+            pin: KiCadPinNumber::from(pin.to_string()),
+        };
+        let mut nets = BTreeMap::from([(
+            KiCadNetName::from("unconnected-(U1-Pad5)".to_string()),
+            ImportNetData {
+                ports: BTreeSet::from([port("5"), port("6")]),
+            },
+        )]);
+
+        let err = restore_unconnected_net_suffixes_from_layout(&mut nets, &components)
+            .expect_err("ambiguous layout names should be rejected");
+        assert!(
+            err.to_string()
+                .contains("multiple names matching collapsed net")
+        );
+        assert!(err.to_string().contains("unconnected-(U1-Pad5)"));
+    }
+
+    #[test]
+    fn disambiguated_unconnected_name_matches_base_and_numeric_suffixes_only() {
+        let base = "unconnected-(U1-Pad5)";
+        assert!(is_disambiguated_unconnected_name(base, base));
+        assert!(is_disambiguated_unconnected_name(
+            base,
+            "unconnected-(U1-Pad5)_1"
+        ));
+        assert!(is_disambiguated_unconnected_name(
+            base,
+            "unconnected-(U1-Pad5)_42"
+        ));
+        // Non-digit suffixes, empty suffixes, and unrelated names are NOT matches.
+        assert!(!is_disambiguated_unconnected_name(
+            base,
+            "unconnected-(U1-Pad5)_"
+        ));
+        assert!(!is_disambiguated_unconnected_name(
+            base,
+            "unconnected-(U1-Pad5)_1a"
+        ));
+        assert!(!is_disambiguated_unconnected_name(
+            base,
+            "unconnected-(U1-Pad6)"
+        ));
+        assert!(!is_disambiguated_unconnected_name(base, "VCC"));
+        // A net that merely prefixes the collapsed name is rejected to avoid stealing unrelated
+        // nets (e.g. `unconnected-(U1-Pad5)_extra` would share the `<base>` prefix but is not a
+        // valid numeric disambiguation).
+        assert!(!is_disambiguated_unconnected_name(
+            base,
+            "unconnected-(U1-Pad5)_extra"
+        ));
+    }
 
     #[test]
     fn parses_kicad_sexpr_netlist_and_builds_uuid_path_keys() -> Result<()> {
