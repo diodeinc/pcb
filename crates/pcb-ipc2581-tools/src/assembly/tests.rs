@@ -5,7 +5,7 @@ use ipc2581::Ipc2581;
 use pcb_ir::import::ipc2581::import_design;
 use sha2::{Digest, Sha256};
 
-use super::{build_report, component_diagnostics_only, report};
+use super::{build_report, report};
 use crate::LayoutTarget;
 
 const FIXTURE: &str = include_str!("testdata/report.xml");
@@ -21,64 +21,6 @@ fn report_xml(xml: &str, target: LayoutTarget) -> report::AssemblyReport {
     let ipc = Ipc2581::parse(xml).unwrap();
     let imported = import_design(&ipc, resolution).unwrap();
     build_report(&imported, target, resolution).unwrap()
-}
-
-#[test]
-fn fast_component_diagnostics_match_the_full_assembly_report() {
-    let without_u1_termination = FIXTURE
-        .replace(
-            r#"<RefDes name="U2" packageRef="pkg-smt" layerRef="TOP"/>"#,
-            r#"<RefDes name="U2" packageRef="pkg-smt" populate="true" layerRef="TOP"/>"#,
-        )
-        .replace(
-            r#"          <Set><Pad padstackDefRef="smt-padstack"><Location x="2" y="2"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
-"#,
-            "",
-        );
-    for (xml, expected_code) in [
-        (FIXTURE, report::DiagnosticCode::MissingPopulation),
-        (
-            without_u1_termination.as_str(),
-            report::DiagnosticCode::MissingPhysicalTerminations,
-        ),
-    ] {
-        let resolution = Resolution::default();
-        let imported = import_design(&Ipc2581::parse(xml).unwrap(), resolution).unwrap();
-        let full = build_report(&imported, LayoutTarget::BoardArray, resolution).unwrap();
-        let fast =
-            component_diagnostics_only(&imported, LayoutTarget::BoardArray, resolution).unwrap();
-        let full_errors = full
-            .diagnostics
-            .into_iter()
-            .filter(|diagnostic| diagnostic.severity == report::DiagnosticSeverity::Error)
-            .map(|diagnostic| {
-                (
-                    diagnostic.code,
-                    diagnostic.subject.reference_designator,
-                    diagnostic.message,
-                )
-            })
-            .collect::<Vec<_>>();
-        let fast_errors = fast
-            .diagnostics
-            .into_iter()
-            .map(|diagnostic| {
-                (
-                    diagnostic.code,
-                    diagnostic.subject.reference_designator,
-                    diagnostic.message,
-                )
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(fast.included, full.summary.components.included as usize);
-        assert_eq!(fast_errors, full_errors);
-        assert!(
-            fast_errors
-                .iter()
-                .any(|diagnostic| diagnostic.0 == expected_code)
-        );
-    }
 }
 
 #[test]

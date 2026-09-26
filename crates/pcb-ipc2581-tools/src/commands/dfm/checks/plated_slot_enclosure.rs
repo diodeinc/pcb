@@ -333,7 +333,6 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }"#;
             let results = crate::commands::dfm::checks::run(
                 &rules,
                 std::slice::from_ref(&design),
-                crate::commands::dfm::checks::AdditionalResults::default(),
                 None,
                 chrono::NaiveDate::default(),
             )

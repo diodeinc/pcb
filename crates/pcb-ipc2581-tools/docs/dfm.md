@@ -41,6 +41,10 @@ outer_copper_weight = "1 oz"
 inner_copper_weight = "0.5 oz"
 soldermask_color = "green"
 
+[[rules.assembly.diagnostic]]
+id = "assembly.missing_population"
+select = { diagnostic = "missing_population" }
+
 [[rules.drilling.hole_diameter]]
 id = "drilling.via_hole"
 select = { hole = "via" }
@@ -111,6 +115,11 @@ numeric rules establish compliance.
 
 The schema gives each kind of constraint one place:
 
+- `rules.assembly.diagnostic` enables a required component-data predicate.
+  Supported diagnostics are `missing_population`, `conflicting_population`,
+  `missing_reference_designator`, `missing_package`, and
+  `missing_physical_terminations`. These categorical rules always require zero
+  diagnostics and therefore take no numeric limit.
 - `profile.support` is the hard eligibility envelope for the whole profile.
   A design outside its copper-layer range fails profile qualification. The
   engine emits these checks as reserved `profile.support.*` report rules;

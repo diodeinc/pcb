@@ -15,6 +15,7 @@
 //! design and tells each finding which one it came from.
 
 mod annular_ring;
+mod assembly;
 mod board_array_spacing;
 mod copper_clearance;
 mod drilled_board_edge_clearance;
@@ -59,12 +60,6 @@ pub(super) struct Results {
     pub(super) findings: Vec<Finding>,
     pub(super) shared_evidence: Vec<Evidence>,
     pub(super) waivers: Option<WaiverOutcome>,
-}
-
-#[derive(Default)]
-pub(super) struct AdditionalResults {
-    pub(super) rules: Vec<RuleResult>,
-    pub(super) findings: Vec<Finding>,
 }
 
 /// One subject measured by a check: the distance and what it is about.
@@ -145,6 +140,7 @@ struct RatioEvaluation {
 }
 
 enum RuleEvaluation {
+    Assembly(assembly::Evaluation),
     /// Each evaluation with the placements of the design's Step it holds at,
     /// by index; `None` is all of them.
     Distance(Vec<(Option<Vec<u32>>, Evaluation)>),
@@ -161,7 +157,6 @@ impl From<Evaluation> for RuleEvaluation {
 pub(super) fn run(
     rules: &[Rule],
     designs: &[Design],
-    additional: AdditionalResults,
     waiver_file: Option<&WaiverFile>,
     today: NaiveDate,
 ) -> anyhow::Result<Results> {
@@ -220,8 +215,6 @@ pub(super) fn run(
         results.rules.push(result);
     }
     results.rules = report_uncovered(rules, std::mem::take(&mut results.rules), designs);
-    results.rules.extend(additional.rules);
-    results.findings.extend(additional.findings);
     // Every exercised fixture also checks the reporting contract. A spatial
     // failure without a local site must never masquerade as a stackup check.
     #[cfg(test)]
@@ -282,6 +275,16 @@ fn judge_in(
         frames, findings, ..
     } = results;
     match evaluate(rule, design)? {
+        RuleEvaluation::Assembly(evaluation) => {
+            for issue in evaluation.issues {
+                let frame = frame_at(frames, index, issue.placements.clone());
+                findings.push(Finding {
+                    frame,
+                    ..assembly_finding(rule, issue)
+                });
+            }
+            result.checked += evaluation.checked;
+        }
         RuleEvaluation::Distance(evaluations) => {
             debug_assert_eq!(rule.comparison, Comparison::Minimum);
             let limit = rule.limit.length().millimeters();
@@ -562,6 +565,10 @@ fn uncovered(cases: &[Rule], design: &Design) -> Option<String> {
 /// conditions select among its layers.
 fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
     let what = match kind {
+        RuleKind::AssemblyDiagnostic(_) => design
+            .components
+            .is_empty()
+            .then(|| "assembly components".to_owned()),
         // The stackup is the layout's: its root Step's design measures it.
         RuleKind::CopperLayerCount => {
             (design.placements[0] != LayoutOccurrenceId::Root).then(|| "stackup".to_owned())
@@ -673,6 +680,9 @@ fn unresolved_span(rule: &Rule, design: &Design) -> Option<String> {
 fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
     let limit = || rule.limit.length().millimeters();
     Ok(match rule.kind {
+        RuleKind::AssemblyDiagnostic(diagnostic) => {
+            RuleEvaluation::Assembly(assembly::evaluate(diagnostic, design))
+        }
         RuleKind::CopperLayerCount => RuleEvaluation::Count(layer_count::evaluate(design)),
         RuleKind::HoleDiameter(class) => hole_diameter::evaluate(limit(), class, design).into(),
         RuleKind::HoleAspectRatio(class) => {
@@ -814,6 +824,25 @@ fn finding(rule: &Rule, measured: Measured) -> Finding {
         subjects: measured.subjects,
         evidence: measured.evidence,
         sites,
+        frame: 0,
+    }
+}
+
+fn assembly_finding(rule: &Rule, issue: assembly::Issue) -> Finding {
+    Finding {
+        id: String::new(),
+        rule_id: rule.id.clone(),
+        severity: rule.severity,
+        waived: false,
+        waiver_reason: None,
+        title: rule.kind.semantics().finding_title,
+        message: issue.message,
+        measurement: Measurement::maximum_count(1, 0),
+        location: Location::default(),
+        layers: Vec::new(),
+        subjects: vec![issue.subject],
+        evidence: Vec::new(),
+        sites: Vec::new(),
         frame: 0,
     }
 }

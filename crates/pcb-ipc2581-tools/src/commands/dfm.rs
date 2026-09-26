@@ -21,7 +21,6 @@ use crate::ipc2581::Ipc2581;
 #[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
 
-mod assembly_readiness;
 mod builtin_pdks;
 mod checks;
 mod design;
@@ -82,7 +81,7 @@ pub fn check(
     request: CheckRequest<'_>,
     resolution: Resolution,
 ) -> Result<DfmReport> {
-    let (pdk_path, pdk_source, selected_profile, check_assembly_readiness) = match request.pdk {
+    let (pdk_path, pdk_source, selected_profile) = match request.pdk {
         PdkSource::Builtin(name) => {
             let pdk = builtin_pdks::find(name)
                 .with_context(|| format!("unknown built-in PDK '{name}'"))?;
@@ -90,10 +89,9 @@ pub fn check(
                 format!("builtin:{}", pdk.name),
                 pdk.source,
                 Some(pdk.profile),
-                pdk.name == "standard",
             )
         }
-        PdkSource::Toml(source) => (source.path.to_owned(), source.source, None, false),
+        PdkSource::Toml(source) => (source.path.to_owned(), source.source, None),
     };
     ensure!(
         pdk_source.len() <= MAX_PDK_BYTES,
@@ -120,15 +118,9 @@ pub fn check(
         &rules,
         resolution,
     )?;
-    let additional = if check_assembly_readiness {
-        assembly_readiness::check(imported, request.layout_target, resolution)?
-    } else {
-        checks::AdditionalResults::default()
-    };
     let checked = checks::run(
         &rules,
         &designs,
-        additional,
         waivers.as_ref(),
         request.generated_at.date_naive(),
     )?;
@@ -564,7 +556,6 @@ mod fixtures {
         checks::run(
             &rules,
             std::slice::from_ref(&design),
-            checks::AdditionalResults::default(),
             None,
             chrono::NaiveDate::default(),
         )
@@ -575,6 +566,8 @@ mod fixtures {
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
+    use pcb_ir::geom::path::{ContourBuf, PathCmd};
+    use pcb_ir::geom::{FillRule, LineCap, Paint, Point, Span, StrokeStyle};
 
     use super::*;
     use crate::commands::EdgeInsetsMm;
@@ -862,13 +855,13 @@ limit = { minimum = "300 mil" }
     #[test]
     fn standard_reports_incomplete_assembly_data_by_diagnostic_kind() {
         const ASSEMBLY: &str = include_str!("../assembly/testdata/report.xml");
-        let run = |xml: &str| {
+        let run = |xml: &str, pdk| {
             let imported = fixtures::import(xml);
             super::check(
                 &imported,
                 CheckRequest {
                     input: report::FileIdentity::new("assembly.xml", xml.as_bytes()),
-                    pdk: PdkSource::Builtin("standard"),
+                    pdk,
                     waivers: None,
                     layout_target: LayoutTarget::BoardArray,
                     generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
@@ -878,26 +871,46 @@ limit = { minimum = "300 mil" }
             .unwrap()
         };
 
-        let incomplete = run(ASSEMBLY);
+        let incomplete = run(ASSEMBLY, PdkSource::Builtin("standard"));
         let missing_population = rule(&incomplete, "assembly.missing_population");
         assert!(matches!(
             missing_population.status,
             report::RuleStatus::Fail
         ));
-        assert_eq!(missing_population.finding_count, 2);
+        assert_eq!(missing_population.finding_count, 1);
         assert!(matches!(incomplete.verdict, report::Verdict::Fail));
-        assert!(
-            incomplete
-                .findings
-                .iter()
-                .filter(|finding| finding.rule_id == missing_population.id)
-                .all(|finding| finding.subjects[0].reference_designator.as_deref() == Some("U2"))
+        let finding = incomplete
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == missing_population.id)
+            .unwrap();
+        assert_eq!(
+            finding.subjects[0].reference_designator.as_deref(),
+            Some("U2")
+        );
+        assert_eq!(
+            incomplete.frames[finding.frame as usize].placements.len(),
+            2
         );
 
-        let complete = run(&ASSEMBLY.replace(
+        let standard = builtin_pdks::find("standard").unwrap();
+        let from_file = run(
+            ASSEMBLY,
+            PdkSource::Toml(TextSource {
+                path: "standard.toml",
+                source: standard.source,
+            }),
+        );
+        assert_eq!(
+            rule(&from_file, "assembly.missing_population").finding_count,
+            1
+        );
+
+        let complete_xml = ASSEMBLY.replace(
             r#"<RefDes name="U2" packageRef="pkg-smt" layerRef="TOP"/>"#,
             r#"<RefDes name="U2" packageRef="pkg-smt" populate="true" layerRef="TOP"/>"#,
-        ));
+        );
+        let complete = run(&complete_xml, PdkSource::Builtin("standard"));
         assert!(
             complete
                 .rules
@@ -911,6 +924,91 @@ limit = { minimum = "300 mil" }
                 .iter()
                 .all(|finding| !finding.rule_id.starts_with("assembly."))
         );
+
+        const U1_COPPER_LAND: &str = r#"<Set><Pad padstackDefRef="smt-padstack"><Location x="2" y="2"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="1"/></Pad></Set>"#;
+        assert!(complete_xml.contains(U1_COPPER_LAND));
+        let missing_termination_xml = complete_xml.replacen(U1_COPPER_LAND, "", 1);
+        let missing_termination = run(&missing_termination_xml, PdkSource::Builtin("standard"));
+        let rule = rule(
+            &missing_termination,
+            "assembly.missing_physical_terminations",
+        );
+        assert!(matches!(rule.status, report::RuleStatus::Fail));
+        assert_eq!(rule.finding_count, 1);
+        assert_eq!(
+            missing_termination
+                .findings
+                .iter()
+                .find(|finding| finding.rule_id == rule.id)
+                .unwrap()
+                .subjects[0]
+                .reference_designator
+                .as_deref(),
+            Some("U1")
+        );
+    }
+
+    #[test]
+    fn assembly_termination_extraction_failure_blocks_only_its_rule() {
+        const ASSEMBLY: &str = include_str!("../assembly/testdata/report.xml");
+        let mut imported = fixtures::import(ASSEMBLY);
+        let top = imported.layer_id("TOP").unwrap();
+        let document_layer = imported
+            .step_layers
+            .iter()
+            .find(|layer| layer.layer == top)
+            .unwrap()
+            .document_layer as usize;
+        let feature = imported.geometry.layers[document_layer].features.start as usize;
+        let start = imported.geometry.arena.paths.len() as u32;
+        imported.geometry.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 1.0)),
+                PathCmd::close(),
+            ])],
+        );
+        imported.geometry.push_path(
+            Paint::Stroke(StrokeStyle::new(0.1, LineCap::Round)),
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 1.0)),
+            ])],
+        );
+        imported.geometry.features[feature].paths = Span::new(start, 2);
+
+        let standard = builtin_pdks::find("standard").unwrap();
+        let pdk = pdk::Pdk::parse(standard.source).unwrap();
+        let rules = rules::lower(&pdk, Some(standard.profile)).unwrap();
+        let designs = design::Design::frames(
+            &imported,
+            LayoutTarget::BoardArray.artwork_scope(),
+            &rules,
+            Resolution::default(),
+        )
+        .unwrap();
+        let checked = checks::run(&rules, &designs, None, NaiveDate::default()).unwrap();
+        let status = |id| {
+            &checked
+                .rules
+                .iter()
+                .find(|rule| rule.id == id)
+                .unwrap()
+                .status
+        };
+
+        assert!(matches!(
+            status("assembly.missing_physical_terminations"),
+            &report::RuleStatus::Incomplete
+        ));
+        assert!(matches!(
+            status("assembly.missing_population"),
+            &report::RuleStatus::Fail
+        ));
     }
 
     #[test]
