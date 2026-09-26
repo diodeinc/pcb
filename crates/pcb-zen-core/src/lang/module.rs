@@ -800,6 +800,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         local_name: String,
         assignment_inferable: bool,
         kind: String,
+        prior_was_bound: bool,
     ) -> anyhow::Result<String> {
         let base_name = local_name;
 
@@ -810,6 +811,15 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             }
 
             self.record_net_name(id, &base_name, assignment_inferable, &existing.kind)?;
+
+            // A bound base still exposes its old name; only release unbound names.
+            if !prior_was_bound
+                && let Some(old_name) = existing.name.named()
+                && old_name != base_name
+            {
+                self.net_name_to_id.shift_remove(old_name);
+            }
+
             let name = Self::registration_name(&base_name, assignment_inferable);
 
             self.introduced_nets.insert(
@@ -908,40 +918,68 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// `interface(...)`) and should not count as an introduced net for the
     /// enclosing module.
     pub fn unregister_net(&mut self, id: NetId) {
-        // Find the name associated with this id (if any)
-        let mut name_to_remove: Option<String> = None;
-        let mut found = false;
-        for (nid, info) in self.introduced_nets.iter() {
-            if *nid == id {
-                found = true;
-                name_to_remove = info.name.named().map(str::to_string);
-                break;
-            }
-        }
-
-        if !found {
+        if self.introduced_nets.shift_remove(&id).is_none() {
             return;
         }
 
-        // Rebuild introduced_nets without the given id
-        let mut rebuilt_nets = starlark::collections::SmallMap::new();
-        for (nid, info) in self.introduced_nets.iter() {
-            if *nid != id {
-                rebuilt_nets.insert(*nid, info.clone());
+        // Casts can reserve multiple names for the same id.
+        let mut rebuilt_lookup = starlark::collections::SmallMap::new();
+        for (k, v) in self.net_name_to_id.iter() {
+            if *v != id {
+                rebuilt_lookup.insert(k.clone(), *v);
             }
         }
-        self.introduced_nets = rebuilt_nets;
+        self.net_name_to_id = rebuilt_lookup;
+    }
+}
 
-        if let Some(name) = name_to_remove {
-            // Rebuild net_name_to_id without the given name
-            let mut rebuilt_lookup = starlark::collections::SmallMap::new();
-            for (k, v) in self.net_name_to_id.iter() {
-                if k != &name {
-                    rebuilt_lookup.insert(k.clone(), *v);
-                }
-            }
-            self.net_name_to_id = rebuilt_lookup;
+#[cfg(test)]
+mod register_net_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_rename_preserves_registration() {
+        let mut module = ModuleValueGen::<FrozenValue>::new(
+            ModulePath::root(),
+            std::path::Path::new(""),
+            SmallMap::new(),
+        );
+        for (id, name) in [(1, "SIG"), (2, "PWR")] {
+            module
+                .register_net(id, name.into(), false, "Net".into(), false)
+                .unwrap();
         }
+        assert_eq!(
+            module
+                .register_net(1, "PWR".into(), false, "Power".into(), false)
+                .unwrap_err()
+                .to_string(),
+            "Duplicate net name: PWR"
+        );
+        let net = module.introduced_nets.get(&1).unwrap();
+        assert_eq!(net.name.named(), Some("SIG"));
+        assert_eq!(net.kind, "Net");
+        assert_eq!(module.net_name_to_id.get("SIG"), Some(&1));
+        assert_eq!(module.net_name_to_id.get("PWR"), Some(&2));
+    }
+
+    #[test]
+    fn unregister_removes_all_cast_names() {
+        let mut module = ModuleValueGen::<FrozenValue>::new(
+            ModulePath::root(),
+            std::path::Path::new(""),
+            SmallMap::new(),
+        );
+        for (id, name) in [(1, "SIG"), (1, "PWR"), (2, "OTHER")] {
+            module
+                .register_net(id, name.into(), false, "Net".into(), true)
+                .unwrap();
+        }
+        module.unregister_net(1);
+        assert!(module.introduced_nets.get(&1).is_none());
+        assert_eq!(module.net_name_to_id.get("SIG"), None);
+        assert_eq!(module.net_name_to_id.get("PWR"), None);
+        assert_eq!(module.net_name_to_id.get("OTHER"), Some(&2));
     }
 }
 

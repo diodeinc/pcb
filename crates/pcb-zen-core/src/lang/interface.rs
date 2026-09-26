@@ -160,6 +160,7 @@ fn clone_net_template<'v>(
                     &net_name,
                     prefix.assignment_inferable,
                     cloned_net.net_kind_name(),
+                    false,
                 )
             })
             .transpose()?
