@@ -303,11 +303,12 @@ pub fn refresh_tokens() -> Result<AuthTokens> {
 }
 
 pub fn get_valid_token_with_context(ctx: &WorkspaceContext) -> Result<String> {
-    get_valid_token_with_sources(ctx, refresh_tokens_with_context)
+    get_valid_token_with_sources(ctx, None, refresh_tokens_with_context)
 }
 
 fn get_valid_token_with_sources(
     ctx: &WorkspaceContext,
+    refresh_fallback_lifetime: Option<Duration>,
     refresh_tokens: impl Fn(&WorkspaceContext) -> Result<AuthTokens>,
 ) -> Result<String> {
     let not_authenticated = || anyhow::anyhow!(NOT_AUTHENTICATED_MESSAGE);
@@ -330,7 +331,16 @@ fn get_valid_token_with_sources(
 
     match refresh_tokens(ctx) {
         Ok(new_tokens) => Ok(new_tokens.access_token),
-        Err(_) => Err(not_authenticated()),
+        Err(_) => {
+            // Check after refreshing: a slow failure may consume the remaining lifetime.
+            if let Some(lifetime) = refresh_fallback_lifetime {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+                if tokens.expires_at - now > lifetime.as_secs() as i64 {
+                    return Ok(tokens.access_token);
+                }
+            }
+            Err(not_authenticated())
+        }
     }
 }
 
@@ -349,6 +359,17 @@ pub fn get_api_token_with_context(ctx: &WorkspaceContext) -> Result<Option<Strin
         Ok(None)
     } else {
         get_valid_token_with_context(ctx).map(Some)
+    }
+}
+
+pub(crate) fn get_api_token_with_refresh_fallback(
+    ctx: &WorkspaceContext,
+    lifetime: Duration,
+) -> Result<Option<String>> {
+    if api_auth_disabled() {
+        Ok(None)
+    } else {
+        get_valid_token_with_sources(ctx, Some(lifetime), refresh_tokens_with_context).map(Some)
     }
 }
 
@@ -816,7 +837,7 @@ mod tests {
         let (_tempdir, _guard, ctx) = isolated_context();
         let refresh_calls = Cell::new(0);
 
-        let err = get_valid_token_with_sources(&ctx, |_| {
+        let err = get_valid_token_with_sources(&ctx, None, |_| {
             refresh_calls.set(refresh_calls.get() + 1);
             anyhow::bail!("refresh should not be called")
         })
@@ -850,13 +871,13 @@ mod tests {
 
     #[test]
     #[serial]
-    fn expired_auth_file_refresh_failure_returns_not_authenticated() {
+    fn near_expiry_auth_file_refresh_failure_without_fallback_returns_not_authenticated() {
         let (_tempdir, _guard, ctx) = isolated_context();
         save_tokens(
             &ctx,
-            "expired-token",
+            "still-valid-token",
             "refresh-token",
-            unix_now() - 3600,
+            unix_now() + 200,
             Some("user@example.com"),
             None,
             None,
@@ -864,7 +885,7 @@ mod tests {
         .unwrap();
         let refresh_calls = Cell::new(0);
 
-        let err = get_valid_token_with_sources(&ctx, |_| {
+        let err = get_valid_token_with_sources(&ctx, None, |_| {
             refresh_calls.set(refresh_calls.get() + 1);
             anyhow::bail!("refresh failed")
         })
@@ -890,7 +911,7 @@ mod tests {
         .unwrap();
         let refresh_calls = Cell::new(0);
 
-        let token = get_valid_token_with_sources(&ctx, |_| {
+        let token = get_valid_token_with_sources(&ctx, None, |_| {
             refresh_calls.set(refresh_calls.get() + 1);
             Ok(AuthTokens {
                 access_token: "refreshed-token".to_string(),
@@ -923,7 +944,7 @@ mod tests {
         .unwrap();
         let refresh_calls = Cell::new(0);
 
-        let token = get_valid_token_with_sources(&ctx, |_| {
+        let token = get_valid_token_with_sources(&ctx, None, |_| {
             refresh_calls.set(refresh_calls.get() + 1);
             anyhow::bail!("refresh should not be called")
         })

@@ -167,17 +167,19 @@ fn exchange_credential(
     path: &str,
 ) -> Result<MintedGitCredential> {
     let url = format!("{}/api/git/credentials", ctx.api_base_url());
+    let timeout = Duration::from_secs(30);
     let client = Client::builder()
         .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
-        .timeout(Duration::from_secs(30))
+        .timeout(timeout)
         .build()
         .context("Failed to create Git credential HTTP client")?;
 
+    // Only this short exchange may reuse a token after refresh failure.
+    let token = crate::auth::get_api_token_with_refresh_fallback(ctx, timeout)?;
     let request = client
         .post(url)
         .json(&GitCredentialExchangeRequest { host, path });
-
-    let response = crate::auth::apply_api_auth_with_context(ctx, request)?
+    let response = crate::auth::apply_bearer_auth(request, token.as_deref())
         .send()
         .context("Failed to exchange Diode authentication for a Git credential")?;
 
