@@ -24,6 +24,7 @@ pub(crate) struct BuildEvalState {
     file_provider: Arc<DefaultFileProvider>,
     resolution: Arc<ResolutionResult>,
     bom_match_mode: Option<pcb_diode_api::BomMatchMode>,
+    retain_schematic_on_error: bool,
 }
 
 pub(crate) struct BuildResult {
@@ -41,6 +42,7 @@ impl BuildEvalState {
             file_provider: Arc::new(DefaultFileProvider::new()),
             resolution: Arc::new(resolution),
             bom_match_mode: None,
+            retain_schematic_on_error: false,
         }
     }
 
@@ -156,11 +158,9 @@ impl BuildEvalState {
                 pcb_ui::icons::error(),
                 file_name.with_style(Style::Red).bold()
             );
-            return BuildResult {
-                schematic: None,
-                diagnostics,
-                eval_output: output,
-            };
+            if !self.retain_schematic_on_error {
+                schematic = None;
+            }
         }
 
         BuildResult {
@@ -230,7 +230,9 @@ pub struct BuildArgs {
     #[arg(long = "config", value_name = "KEY=VALUE", help = CONFIG_ARG_HELP)]
     pub config: Vec<String>,
 
-    /// Print JSON netlist to stdout (undocumented)
+    /// Print JSON netlist to stdout, even if checks fail. Evaluation or conversion
+    /// failures that produce no schematic emit nothing; diagnostics and exit status
+    /// still reflect build failures.
     #[arg(long = "netlist", hide = true)]
     pub netlist: bool,
 
@@ -432,8 +434,11 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let zen_files = build_input.collect_zen_files(&resolution.workspace_info)?;
 
     // Keep builds cache-only until backend TTL support makes refreshes cheap.
-    let eval_state =
+    let mut eval_state =
         BuildEvalState::new(resolution).with_bom_hydration(pcb_diode_api::BomMatchMode::Offline);
+    // Netlist consumers can render a completed schematic alongside failed checks.
+    // Other build consumers must continue to reject schematics with errors.
+    eval_state.retain_schematic_on_error = args.netlist;
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());
