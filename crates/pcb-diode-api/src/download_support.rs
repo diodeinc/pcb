@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use reqwest::blocking::Client;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -146,11 +147,30 @@ pub(crate) fn ensure_parent_dir(dest_path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
+struct HashingReader<R> {
+    inner: R,
+    hasher: Sha256,
+}
+
+impl<R: io::Read> io::Read for HashingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
+}
+
 pub(crate) fn write_decoded_index<R: io::Read>(
     dest_path: &Path,
     reader: R,
     label: &str,
+    expected_sha256: &str,
 ) -> Result<()> {
+    // API checksums cover the compressed zstd bytes, not the decoded SQLite file.
+    let reader = HashingReader {
+        inner: reader,
+        hasher: Sha256::new(),
+    };
     let mut decoder =
         zstd::stream::Decoder::new(reader).context("Failed to create zstd decoder")?;
     AtomicFile::new(dest_path, OverwriteBehavior::AllowOverwrite)
@@ -161,7 +181,43 @@ pub(crate) fn write_decoded_index<R: io::Read>(
                     format!("Failed to decompress and write {label}: {err}"),
                 )
             })?;
+            let actual = hex::encode(decoder.finish().into_inner().hasher.finalize());
+            if !actual.eq_ignore_ascii_case(expected_sha256.trim()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{label} hash mismatch: expected {expected_sha256}, got {actual}"),
+                ));
+            }
             file.flush()
         })
         .with_context(|| format!("Failed to move downloaded {label} into place"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verifies_compressed_hash_before_replacing_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("index.db");
+        let payload = b"SQLite index bytes";
+        let compressed = zstd::encode_all(payload.as_slice(), 0).unwrap();
+        let compressed_hash = hex::encode(Sha256::digest(&compressed));
+        let decoded_hash = hex::encode(Sha256::digest(payload));
+
+        // A decoded-content checksum must fail, both on first download and update.
+        for prior in [None, Some(b"cached index".as_slice())] {
+            if let Some(prior) = prior {
+                fs::write(&dest, prior).unwrap();
+            }
+            let err = write_decoded_index(&dest, compressed.as_slice(), "index", &decoded_hash)
+                .unwrap_err();
+            assert!(format!("{err:#}").contains("hash mismatch"));
+            assert_eq!(fs::read(&dest).ok().as_deref(), prior);
+        }
+
+        write_decoded_index(&dest, compressed.as_slice(), "index", &compressed_hash).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), payload);
+    }
 }

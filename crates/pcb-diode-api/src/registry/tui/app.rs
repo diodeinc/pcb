@@ -762,6 +762,11 @@ impl App {
     fn poll_results(&mut self) {
         while let Ok(results) = self.result_rx.try_recv() {
             if results.query_id() == self.query_counter {
+                if let SearchResults::KicadSymbols(result) = &results
+                    && let Some(error) = &result.error
+                {
+                    self.toast = Some(Toast::error(error.clone(), Duration::from_secs(5)));
+                }
                 let is_new_query = self.results.query_id() != results.query_id();
                 self.results = results;
 
@@ -1580,4 +1585,70 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::search::KicadSearchResults;
+    use super::*;
+
+    #[test]
+    fn kicad_query_error_is_visible_without_blocking_registry_queries() {
+        let mut app = App::new(Preflight {
+            start_mode: SearchMode::KicadSymbols,
+            available_modes: Vec::new(),
+            registry_scope: None,
+            kicad_symbols_metadata: None,
+            warning: None,
+        });
+        let (result_tx, result_rx) = mpsc::channel();
+        let (query_tx, query_rx) = mpsc::channel();
+        app.result_rx = result_rx;
+        app.query_tx = query_tx;
+        app.download_state = DownloadState::Done;
+        let message = "Failed to open KiCad index: corrupt cache";
+        result_tx
+            .send(SearchResults::KicadSymbols(KicadSearchResults {
+                query_id: app.query_counter,
+                error: Some(message.into()),
+                ..Default::default()
+            }))
+            .unwrap();
+        app.poll_results();
+        assert_eq!(app.toast.as_ref().unwrap().message, message);
+        assert!(matches!(app.download_state, DownloadState::Done));
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| ui::render(frame, &mut app)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(rendered.contains(message));
+
+        app.mode = SearchMode::RegistryModules;
+        app.search_input.text = "resistor".into();
+        app.maybe_send_local_query();
+        assert_eq!(
+            query_rx.try_recv().unwrap().mode,
+            SearchMode::RegistryModules
+        );
+        app.toast = None;
+        result_tx
+            .send(SearchResults::KicadSymbols(KicadSearchResults {
+                query_id: app.query_counter - 1,
+                error: Some(message.into()),
+                ..Default::default()
+            }))
+            .unwrap();
+        app.poll_results();
+        assert!(
+            app.toast.is_none(),
+            "stale KiCad errors must not appear in registry mode"
+        );
+    }
 }

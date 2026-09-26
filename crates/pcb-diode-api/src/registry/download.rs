@@ -730,6 +730,7 @@ pub fn download_registry_index_with_progress(
 
     send_progress(None, false, None);
 
+    let version_token = index_metadata.version_token()?;
     let client = http_client()?;
 
     ensure_parent_dir(dest_path, "registry")?;
@@ -747,9 +748,8 @@ pub fn download_registry_index_with_progress(
 
     // Wrap response in a progress-tracking reader, then decompress with zstd
     let progress_reader = ProgressReader::new(response, total_size, &send_progress);
-    write_decoded_index(dest_path, progress_reader, "registry index")?;
+    write_decoded_index(dest_path, progress_reader, "registry index", &version_token)?;
 
-    let version_token = index_metadata.version_token()?;
     let _ = save_local_version(dest_path, &version_token);
 
     send_progress(Some(100), true, None);

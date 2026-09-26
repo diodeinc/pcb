@@ -108,6 +108,7 @@ pub fn check_kicad_symbols_access() -> Result<KicadSymbolsAccessResult> {
 
 /// Download KiCad symbols index with progress reporting via channel.
 ///
+/// Sends start and byte progress only; the caller owns terminal reporting from the result.
 /// If `prefetched_metadata` is provided, it will be used instead of fetching from the API.
 pub fn download_kicad_symbols_index_with_progress(
     dest_path: &Path,
@@ -115,12 +116,12 @@ pub fn download_kicad_symbols_index_with_progress(
     is_update: bool,
     prefetched_metadata: Option<&KicadSymbolsIndexMetadata>,
 ) -> Result<()> {
-    let send_progress = |pct: Option<u8>, done: bool, error: Option<String>| {
+    let send_progress = |pct: Option<u8>, _, _| {
         let _ = progress_tx.send(DownloadProgress {
             source: DownloadSource::KicadSymbols,
             pct,
-            done,
-            error,
+            done: false,
+            error: None,
             is_update,
         });
     };
@@ -132,32 +133,25 @@ pub fn download_kicad_symbols_index_with_progress(
     let index_metadata = if let Some(meta) = prefetched_metadata {
         meta.clone()
     } else {
-        fetch_kicad_symbols_index_metadata().map_err(|e| {
-            let msg = format!("Failed to fetch KiCad symbols index URL: {e}");
-            send_progress(None, true, Some(msg.clone()));
-            anyhow::anyhow!(msg)
-        })?
+        fetch_kicad_symbols_index_metadata().context("Failed to fetch KiCad symbols index URL")?
     };
 
+    let version_token = index_metadata.version_token()?;
     ensure_parent_dir(dest_path, "KiCad symbols")?;
 
-    let response = match download_index_response(&client, &index_metadata.url) {
-        Ok(r) => r,
-        Err(e) => {
-            let msg = format!("Failed to download KiCad symbols index: {e}");
-            send_progress(None, true, Some(msg.clone()));
-            anyhow::bail!(msg);
-        }
-    };
+    let response = download_index_response(&client, &index_metadata.url)?;
 
     let total_size = response.content_length();
     let progress_reader = ProgressReader::new(response, total_size, &send_progress);
-    write_decoded_index(dest_path, progress_reader, "KiCad symbols index")?;
+    write_decoded_index(
+        dest_path,
+        progress_reader,
+        "KiCad symbols index",
+        &version_token,
+    )?;
 
-    let version_token = index_metadata.version_token()?;
     let _ = save_local_version(dest_path, &version_token);
 
-    send_progress(Some(100), true, None);
     Ok(())
 }
 
@@ -179,6 +173,7 @@ pub fn download_kicad_symbols_index(dest_path: &Path) -> Result<()> {
             .json()
             .context("Failed to parse KiCad symbols index response")?;
 
+    let version_token = index_metadata.version_token()?;
     ensure_parent_dir(dest_path, "KiCad symbols")?;
 
     eprintln!("Downloading symbols.db.zst...");
@@ -186,10 +181,14 @@ pub fn download_kicad_symbols_index(dest_path: &Path) -> Result<()> {
 
     let total_size = response.content_length();
     let progress_reader = StderrProgressReader::new(response, total_size, "symbols.db.zst");
-    write_decoded_index(dest_path, progress_reader, "KiCad symbols index")?;
+    write_decoded_index(
+        dest_path,
+        progress_reader,
+        "KiCad symbols index",
+        &version_token,
+    )?;
     eprintln!();
 
-    let version_token = index_metadata.version_token()?;
     save_local_version(dest_path, &version_token)?;
 
     eprintln!("KiCad symbols index downloaded successfully.");
