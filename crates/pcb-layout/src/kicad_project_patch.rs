@@ -378,10 +378,23 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
         .filter(|nc| nc.name == "Default")
         .chain(ordered);
 
+    // Reserve requested priorities before assigning automatic ones, regardless of
+    // name order. Explicit ties are valid in KiCad and must remain unchanged.
     let mut next_non_default_priority = classes
         .iter()
         .filter(|class| class.get("name").and_then(Value::as_str) != Some("Default"))
         .filter_map(|class| class.get("priority").and_then(value_as_i64))
+        .chain(
+            netclasses
+                .iter()
+                .filter(|nc| nc.name != "Default")
+                .filter(|nc| {
+                    class_index
+                        .get(&nc.name)
+                        .is_none_or(|&idx| classes[idx].get("priority").is_none())
+                })
+                .filter_map(|nc| nc.priority.map(i64::from)),
+        )
         .max()
         .map(|max| max + 1)
         .unwrap_or(0);
@@ -1062,5 +1075,54 @@ mod tests {
         });
 
         assert!(extract_design_rules_from_project_value(&project).is_none());
+    }
+
+    #[test]
+    fn automatic_priorities_follow_requested_values_without_rewriting_ties() {
+        let mut project = json!({
+            "net_settings": { "classes": [
+                { "name": "Existing1", "priority": -1 },
+                { "name": "Existing2", "priority": -1 }
+            ] }
+        });
+        let config: BoardConfig = serde_json::from_value(json!({
+            "design_rules": { "netclasses": [
+                { "name": "Default" },
+                { "name": "AutoBefore" },
+                { "name": "Explicit1", "priority": 0 },
+                { "name": "Explicit2", "priority": 0 },
+                { "name": "ExplicitExisting", "priority": -1 },
+                { "name": "Existing1", "priority": 100 },
+                { "name": "Existing2" },
+                { "name": "ZAutoAfter" }
+            ] }
+        }))
+        .unwrap();
+
+        patch_project_value(&mut project, &config, &HashMap::new());
+
+        let priorities: HashMap<_, _> = project["net_settings"]["classes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|class| {
+                (
+                    class["name"].as_str().unwrap(),
+                    class["priority"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(priorities["Default"], i64::from(i32::MAX));
+        assert_eq!(priorities["Existing1"], -1);
+        assert_eq!(priorities["Existing2"], -1);
+        assert_eq!(priorities["ExplicitExisting"], -1);
+        assert_eq!(priorities["Explicit1"], 0);
+        assert_eq!(priorities["Explicit2"], 0);
+        assert_eq!(priorities["AutoBefore"], 1);
+        assert_eq!(priorities["ZAutoAfter"], 2);
+
+        let patched = project.clone();
+        patch_project_value(&mut project, &config, &HashMap::new());
+        assert_eq!(project, patched);
     }
 }
