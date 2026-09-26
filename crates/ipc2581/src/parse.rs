@@ -1915,8 +1915,10 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // KiCad before 10.0.6 wrote a bare Location for text with no glyphs.
+        // It places nothing, so it contributes nothing.
         if out.len() == start {
-            return Err(Ipc2581Error::MissingElement("Feature in Features"));
+            return Ok(());
         }
 
         if locations.len() > 1 || xform.is_some() {

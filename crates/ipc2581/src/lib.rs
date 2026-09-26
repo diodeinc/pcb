@@ -583,6 +583,36 @@ mod tests {
     }
 
     #[test]
+    fn features_with_only_a_location_contribute_nothing() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="B.SilkS" layerFunction="LEGEND"/>
+      <Step name="Board">
+        <LayerFeature layerRef="B.SilkS">
+          <Set geometryUsage="TEXT">
+            <NonstandardAttribute name="TEXT" value=" " type="STRING"/>
+            <Features>
+              <Location x="0.0" y="0.0"/>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+        let doc = Ipc2581::parse(xml).expect("parse glyphless text Features");
+        let layer_feature = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0];
+        assert!(layer_feature.features.is_empty());
+    }
+
+    #[test]
     fn preserves_feature_polyline_curves() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

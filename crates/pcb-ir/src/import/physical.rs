@@ -1334,7 +1334,8 @@ fn span_range_in_stackup(span: [Symbol; 2], stackup: &[Symbol]) -> Option<(usize
 }
 
 /// Resolve physical order, distinguishing absent, invalid, and ambiguous stacks.
-/// Unnumbered stacks retain their source order, as in the canonical IPC view.
+/// Unnumbered stacks and tied sequence numbers retain their source order, as in
+/// the canonical IPC view.
 pub fn physical_stackup_layers(
     stackups: &[ipc2581::types::Stackup],
     declarations: &[ipc2581::types::Layer],
@@ -1350,12 +1351,6 @@ pub fn physical_stackup_layers(
     ensure!(!layers.is_empty(), "physical stackup contains no layers");
     if layers.iter().all(|layer| layer.layer_number.is_some()) {
         layers.sort_by_key(|layer| layer.layer_number);
-        ensure!(
-            !layers
-                .windows(2)
-                .any(|pair| pair[0].layer_number == pair[1].layer_number),
-            "physical stackup has duplicate layer sequence numbers"
-        );
     } else {
         ensure!(
             layers.iter().all(|layer| layer.layer_number.is_none()),
@@ -1763,14 +1758,20 @@ mod tests {
     }
 
     #[test]
+    fn tied_stackup_sequences_keep_source_order() {
+        // KiCad 9 numbers every ply of a multi-ply dielectric the same.
+        let xml = spanned_slot_fixture(["L0", "L1", "L2"], false)
+            .replace("sequence=\"1\"", "sequence=\"0\"");
+        let imported = import(&xml);
+        let holes = board_holes(&imported, Resolution::default()).unwrap();
+        assert_eq!(holes.len(), 1);
+        assert_eq!(holes[0].lands.len(), 3);
+    }
+
+    #[test]
     fn invalid_or_ambiguous_physical_stacks_do_not_fall_back_to_declarations() {
         let xml = spanned_slot_fixture(["L0", "L1", "L2"], false);
         for (from, to, message) in [
-            (
-                "sequence=\"1\"",
-                "sequence=\"0\"",
-                "duplicate layer sequence",
-            ),
             ("sequence=\"1\"", "", "mixes numbered and unnumbered"),
             (
                 "layerOrGroupRef=\"L1\"",
@@ -1809,7 +1810,7 @@ mod tests {
     #[test]
     fn slot_extraction_degrades_under_a_malformed_stackup() {
         let xml = spanned_slot_fixture(["L0", "L1", "L2"], false)
-            .replace("sequence=\"1\"", "sequence=\"0\"")
+            .replace(" sequence=\"1\"", "")
             .replace(
                 "<Stackup name=",
                 "<Layer name=\"DRILL\" layerFunction=\"DRILL\" side=\"ALL\"/><Stackup name=",
