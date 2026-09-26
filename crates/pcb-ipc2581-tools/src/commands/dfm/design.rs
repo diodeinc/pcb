@@ -870,15 +870,6 @@ fn collect_physical_stackup(imported: &ImportedDesign) -> Result<PhysicalStackup
         .all(|layer| layer.layer_number.is_some())
     {
         stackup_layers.sort_by_key(|layer| layer.layer_number);
-        if stackup_layers
-            .windows(2)
-            .any(|pair| pair[0].layer_number == pair[1].layer_number)
-        {
-            bail!(
-                "physical stackup '{}' has duplicate layer sequence numbers",
-                imported.resolve(stackup.name)
-            );
-        }
     }
     for stackup_layer in stackup_layers {
         let copper_index =
