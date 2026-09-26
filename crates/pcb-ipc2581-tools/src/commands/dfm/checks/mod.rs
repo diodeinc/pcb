@@ -61,6 +61,12 @@ pub(super) struct Results {
     pub(super) waivers: Option<WaiverOutcome>,
 }
 
+#[derive(Default)]
+pub(super) struct AdditionalResults {
+    pub(super) rules: Vec<RuleResult>,
+    pub(super) findings: Vec<Finding>,
+}
+
 /// One subject measured by a check: the distance and what it is about.
 struct Measured {
     distance: Distance,
@@ -155,6 +161,7 @@ impl From<Evaluation> for RuleEvaluation {
 pub(super) fn run(
     rules: &[Rule],
     designs: &[Design],
+    additional: AdditionalResults,
     waiver_file: Option<&WaiverFile>,
     today: NaiveDate,
 ) -> anyhow::Result<Results> {
@@ -213,6 +220,8 @@ pub(super) fn run(
         results.rules.push(result);
     }
     results.rules = report_uncovered(rules, std::mem::take(&mut results.rules), designs);
+    results.rules.extend(additional.rules);
+    results.findings.extend(additional.findings);
     // Every exercised fixture also checks the reporting contract. A spatial
     // failure without a local site must never masquerade as a stackup check.
     #[cfg(test)]

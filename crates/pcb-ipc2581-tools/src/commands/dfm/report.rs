@@ -363,6 +363,42 @@ impl RuleResult {
         }
     }
 
+    pub(super) fn assembly_diagnostic(
+        id: String,
+        title: &'static str,
+        subject: &'static str,
+        checked: usize,
+    ) -> Self {
+        Self {
+            id,
+            title: title.to_owned(),
+            severity: Severity::Error,
+            status: RuleStatus::Pass,
+            limit: RuleLimit {
+                pdk_value: "0".to_owned(),
+                normalized_value: 0.0,
+                normalized_unit: "diagnostics",
+            },
+            comparison: "maximum",
+            subject,
+            quantity: "assembly_diagnostic_count",
+            method: "assembly_report_diagnostics",
+            checked,
+            finding_count: 0,
+            waived_count: 0,
+            unresolved: Vec::new(),
+            skip_reason: None,
+            assumptions: Vec::new(),
+            view: ViewRecipe {
+                kind: "assembly_readiness",
+                title: "Assembly readiness",
+                spatial: false,
+                features: Vec::new(),
+            },
+            tier: "required",
+        }
+    }
+
     /// Settle the rule's status from its finding counts: unwaived findings
     /// carry the rule's severity, a fully waived or clean rule passes. A rule
     /// one Step's design could not certify stays incomplete, and still

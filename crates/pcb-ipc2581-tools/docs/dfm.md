@@ -472,7 +472,8 @@ The `standard` PDK prefers 0.40 mm plated and nonplated slot-to-copper
 clearance. Shortfalls produce warnings, not a failed manufacturing verdict.
 This is conservative Diode routing guidance, not a manufacturer capability
 or an IPC requirement. Slot clearance is not enabled in `jlcpcb-1oz` without
-a manufacturer source.
+a manufacturer source. It also fails on the same component-data errors that
+make the assembly report incomplete, with one finding per affected component.
 
 The `jlcpcb-1oz` PDK, also available as `jlc`, executes the public rigid FR-4
 capability table for 2-32 copper layers and 1 oz outer copper. It deliberately

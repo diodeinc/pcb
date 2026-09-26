@@ -21,6 +21,7 @@ use crate::ipc2581::Ipc2581;
 #[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
 
+mod assembly_readiness;
 mod builtin_pdks;
 mod checks;
 mod design;
@@ -81,7 +82,7 @@ pub fn check(
     request: CheckRequest<'_>,
     resolution: Resolution,
 ) -> Result<DfmReport> {
-    let (pdk_path, pdk_source, selected_profile) = match request.pdk {
+    let (pdk_path, pdk_source, selected_profile, check_assembly_readiness) = match request.pdk {
         PdkSource::Builtin(name) => {
             let pdk = builtin_pdks::find(name)
                 .with_context(|| format!("unknown built-in PDK '{name}'"))?;
@@ -89,9 +90,10 @@ pub fn check(
                 format!("builtin:{}", pdk.name),
                 pdk.source,
                 Some(pdk.profile),
+                pdk.name == "standard",
             )
         }
-        PdkSource::Toml(source) => (source.path.to_owned(), source.source, None),
+        PdkSource::Toml(source) => (source.path.to_owned(), source.source, None, false),
     };
     ensure!(
         pdk_source.len() <= MAX_PDK_BYTES,
@@ -118,9 +120,15 @@ pub fn check(
         &rules,
         resolution,
     )?;
+    let additional = if check_assembly_readiness {
+        assembly_readiness::check(imported, request.layout_target, resolution)?
+    } else {
+        checks::AdditionalResults::default()
+    };
     let checked = checks::run(
         &rules,
         &designs,
+        additional,
         waivers.as_ref(),
         request.generated_at.date_naive(),
     )?;
@@ -556,6 +564,7 @@ mod fixtures {
         checks::run(
             &rules,
             std::slice::from_ref(&design),
+            checks::AdditionalResults::default(),
             None,
             chrono::NaiveDate::default(),
         )
@@ -848,6 +857,60 @@ limit = { minimum = "300 mil" }
         assert_eq!(mask_rule.severity, report::Severity::Warning);
         assert!(matches!(mask_rule.status, report::RuleStatus::Warning));
         assert_eq!(mask_rule.finding_count, 1);
+    }
+
+    #[test]
+    fn standard_reports_incomplete_assembly_data_by_diagnostic_kind() {
+        const ASSEMBLY: &str = include_str!("../assembly/testdata/report.xml");
+        let run = |xml: &str| {
+            let imported = fixtures::import(xml);
+            super::check(
+                &imported,
+                CheckRequest {
+                    input: report::FileIdentity::new("assembly.xml", xml.as_bytes()),
+                    pdk: PdkSource::Builtin("standard"),
+                    waivers: None,
+                    layout_target: LayoutTarget::BoardArray,
+                    generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                },
+                Resolution::default(),
+            )
+            .unwrap()
+        };
+
+        let incomplete = run(ASSEMBLY);
+        let missing_population = rule(&incomplete, "assembly.missing_population");
+        assert!(matches!(
+            missing_population.status,
+            report::RuleStatus::Fail
+        ));
+        assert_eq!(missing_population.finding_count, 2);
+        assert!(matches!(incomplete.verdict, report::Verdict::Fail));
+        assert!(
+            incomplete
+                .findings
+                .iter()
+                .filter(|finding| finding.rule_id == missing_population.id)
+                .all(|finding| finding.subjects[0].reference_designator.as_deref() == Some("U2"))
+        );
+
+        let complete = run(&ASSEMBLY.replace(
+            r#"<RefDes name="U2" packageRef="pkg-smt" layerRef="TOP"/>"#,
+            r#"<RefDes name="U2" packageRef="pkg-smt" populate="true" layerRef="TOP"/>"#,
+        ));
+        assert!(
+            complete
+                .rules
+                .iter()
+                .filter(|rule| rule.id.starts_with("assembly."))
+                .all(|rule| matches!(rule.status, report::RuleStatus::Pass))
+        );
+        assert!(
+            complete
+                .findings
+                .iter()
+                .all(|finding| !finding.rule_id.starts_with("assembly."))
+        );
     }
 
     #[test]

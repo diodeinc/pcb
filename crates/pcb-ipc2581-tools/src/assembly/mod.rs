@@ -26,6 +26,101 @@ pub mod report;
 
 pub use report::AssemblyReport;
 
+pub(crate) struct ComponentDiagnostics {
+    pub(crate) included: usize,
+    pub(crate) diagnostics: Vec<report::Diagnostic>,
+}
+
+struct ComponentFacts {
+    id: String,
+    reference_designator: Option<String>,
+    population: report::Population,
+    included: bool,
+    has_package: bool,
+    solder_mounted: bool,
+    has_terminations: bool,
+}
+
+/// Evaluate incomplete component data without building the full assembly report.
+pub(crate) fn component_diagnostics_only(
+    imported: &ImportedDesign,
+    target: LayoutTarget,
+    resolution: Resolution,
+) -> Result<ComponentDiagnostics> {
+    let scope = target.artwork_scope();
+    let terminated = imported
+        .physical_terminations(scope, resolution)?
+        .into_iter()
+        .map(|termination| termination.component)
+        .collect::<BTreeSet<_>>();
+    let primary_bom = imported
+        .content
+        .bom_refs
+        .iter()
+        .find_map(|reference| imported.boms.iter().position(|bom| bom.name == *reference));
+    let mut ids = IdAllocator::default();
+    let mut components = imported
+        .component_occurrences(scope)?
+        .into_iter()
+        .map(|occurrence| {
+            let definition = imported
+                .component_definition(occurrence.id.component)
+                .expect("component occurrence references its imported definition");
+            let source_step = imported.resolve(imported.steps[definition.step as usize].name);
+            let path = layout_path(imported, target, occurrence.id.layout, definition.step);
+            let transform = affine(occurrence.root_from_component);
+            let id = ids.allocate(
+                "component",
+                &(
+                    source_step,
+                    &path,
+                    definition
+                        .source
+                        .ref_des
+                        .map(|value| imported.resolve(value)),
+                    transform,
+                ),
+            );
+            let bom_reference = primary_bom
+                .and_then(|primary| {
+                    definition
+                        .bom_references
+                        .iter()
+                        .find(|reference| reference.bom as usize == primary)
+                })
+                .or_else(|| definition.bom_references.first());
+            let excluded = bom_reference
+                .and_then(|reference| imported.bom_item(*reference))
+                .is_some_and(|item| item.category == Some(ipc2581::types::BomCategory::Document));
+            ComponentFacts {
+                id,
+                reference_designator: definition
+                    .source
+                    .ref_des
+                    .map(|value| imported.resolve(value).to_owned()),
+                population: population(occurrence.population),
+                included: !excluded,
+                has_package: definition.package.is_some(),
+                solder_mounted: matches!(
+                    definition.source.mount_type,
+                    ipc2581::types::MountType::Smt | ipc2581::types::MountType::Thmt
+                ),
+                has_terminations: terminated.contains(&occurrence.id),
+            }
+        })
+        .collect::<Vec<_>>();
+    components.sort_by(|left, right| left.id.cmp(&right.id));
+    let included = components
+        .iter()
+        .filter(|component| component.included)
+        .count();
+    let diagnostics = component_diagnostics(&components, &mut ids);
+    Ok(ComponentDiagnostics {
+        included,
+        diagnostics,
+    })
+}
+
 /// Build the stable report consumed by native, CLI, and WebAssembly surfaces.
 ///
 /// The report uses source-backed assembly IR and conservative physical
@@ -251,7 +346,11 @@ pub fn build_report(
     }
     components.sort_by(|left, right| left.id.cmp(&right.id));
 
-    let mut diagnostics = component_diagnostics(&components, &mut ids);
+    let component_facts = components
+        .iter()
+        .map(ComponentFacts::from)
+        .collect::<Vec<_>>();
+    let mut diagnostics = component_diagnostics(&component_facts, &mut ids);
     diagnostics.extend(hole_diagnostics(&holes, &mut ids));
     diagnostics.sort_by(|left, right| {
         left.code
@@ -998,15 +1097,29 @@ fn hole_span(imported: &ImportedDesign, value: FeatureSpan) -> report::HoleSpan 
     }
 }
 
+impl From<&report::Component> for ComponentFacts {
+    fn from(component: &report::Component) -> Self {
+        Self {
+            id: component.id.clone(),
+            reference_designator: component.reference_designator.clone(),
+            population: component.population,
+            included: component.assembly_status == report::AssemblyStatus::Included,
+            has_package: component.package_id.is_some(),
+            solder_mounted: matches!(
+                component.mount,
+                report::ComponentMount::Smt | report::ComponentMount::ThroughHole
+            ),
+            has_terminations: !component.termination_ids.is_empty(),
+        }
+    }
+}
+
 fn component_diagnostics(
-    components: &[report::Component],
+    components: &[ComponentFacts],
     ids: &mut IdAllocator,
 ) -> Vec<report::Diagnostic> {
     let mut diagnostics = Vec::new();
-    for component in components
-        .iter()
-        .filter(|component| component.assembly_status == report::AssemblyStatus::Included)
-    {
+    for component in components.iter().filter(|component| component.included) {
         let label = component
             .reference_designator
             .as_deref()
@@ -1034,7 +1147,7 @@ fn component_diagnostics(
                 "assembly component has no reference designator".to_owned(),
             ));
         }
-        if component.population == report::Population::Populate && component.package_id.is_none() {
+        if component.population == report::Population::Populate && !component.has_package {
             diagnostics.push(diagnostic(
                 ids,
                 component,
@@ -1043,11 +1156,8 @@ fn component_diagnostics(
             ));
         }
         if component.population == report::Population::Populate
-            && matches!(
-                component.mount,
-                report::ComponentMount::Smt | report::ComponentMount::ThroughHole
-            )
-            && component.termination_ids.is_empty()
+            && component.solder_mounted
+            && !component.has_terminations
         {
             diagnostics.push(diagnostic(
                 ids,
@@ -1130,7 +1240,7 @@ fn hole_diagnostic(
 
 fn diagnostic(
     ids: &mut IdAllocator,
-    component: &report::Component,
+    component: &ComponentFacts,
     code: report::DiagnosticCode,
     message: String,
 ) -> report::Diagnostic {
