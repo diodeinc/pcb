@@ -376,9 +376,11 @@ impl Bom {
                 RegionDisplayData::from_region_avail(avail.and_then(|a| a.global.as_ref()), qty);
 
             // Sum the displayed one-board row prices, including their rounding.
-            // Preserve the existing inclusion of DNP rows in estimated totals.
-            total_us += ceil_cents(us_data.price_single.unwrap_or_default());
-            total_global += ceil_cents(global_data.price_single.unwrap_or_default());
+            // DNP rows show their offers but are never bought.
+            if !is_dnp {
+                total_us += ceil_cents(us_data.price_single.unwrap_or_default());
+                total_global += ceil_cents(global_data.price_single.unwrap_or_default());
+            }
 
             let line_sourceability =
                 line_sourceability(us_data.sourceability, global_data.sourceability);
@@ -678,7 +680,7 @@ mod tests {
         assert!(table.contains("C1,C2"), "{table}");
         assert!(table.contains("$0.50 ($2.50)"), "{table}");
         assert!(table.contains("$0.20 ($1.00)"), "{table}");
-        assert!(table.contains("Total: US $0.51 | Global $0.21"), "{table}");
+        assert!(table.contains("Total: US $0.50 | Global $0.20"), "{table}");
         println!("{table}");
 
         let original = bom.availability["C2"].clone();
