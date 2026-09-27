@@ -804,6 +804,7 @@ impl ResolutionResult {
         std::iter::once(STDLIB_MODULE_PATH)
             .chain(self.workspace_info.packages.keys().map(String::as_str))
             .chain(std::iter::once(LOCAL_WORKSPACE_ROOT_URL))
+            .chain(self.indexes.package_roots.keys().map(String::as_str))
             .find_map(|url| {
                 let path = self.indexes.package_roots.get(url)?;
                 let canonical_package = file_provider
@@ -1019,6 +1020,50 @@ mod tests {
         );
 
         assert_eq!(result.package_roots().get(dep_coord), Some(&dep_root));
+    }
+
+    #[test]
+    fn package_url_for_package_root_resolves_indexed_dependency_root() {
+        let dep_root = PathBuf::from("/cache/github.com/acme/dep/1.2.3");
+        let dep_coord = "github.com/acme/dep@1.2.3";
+        let provider = InMemoryFileProvider::new(HashMap::new());
+        let result = ResolutionResult::frozen(
+            WorkspaceInfo {
+                root: PathBuf::from("/workspace"),
+                cache_dir: PathBuf::new(),
+                config: None,
+                packages: BTreeMap::new(),
+                errors: vec![],
+            },
+            BTreeMap::from([(
+                "github.com/acme/root".into(),
+                FrozenResolutionMap {
+                    selected_remote: BTreeMap::new(),
+                    packages: BTreeMap::from([(
+                        PathBuf::from("/workspace"),
+                        FrozenPackage {
+                            identity: FrozenPackageIdentity::Workspace(
+                                "github.com/acme/root".into(),
+                            ),
+                            deps: BTreeMap::from([(
+                                "github.com/acme/dep".into(),
+                                dep_root.clone(),
+                            )]),
+                            parts: Vec::new(),
+                        },
+                    )]),
+                },
+            )]),
+            HashMap::new(),
+        );
+
+        assert_eq!(result.package_roots().get(dep_coord), Some(&dep_root));
+        assert_eq!(
+            result
+                .package_url_for_package_root(&dep_root, &provider)
+                .as_deref(),
+            Some(dep_coord)
+        );
     }
 
     #[test]
