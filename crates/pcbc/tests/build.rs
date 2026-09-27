@@ -959,6 +959,72 @@ fn test_build_netlist_omits_output_on_evaluation_or_conversion_failure() {
 }
 
 #[test]
+fn test_build_netlist_requires_complete_module_tree() {
+    for child_path in ["child.zen", "wrapper.zen"] {
+        for complete in [false, true] {
+            let mut sandbox = Sandbox::new().with_workspace();
+            sandbox
+                .write(
+                    "board.zen",
+                    format!(
+                        "{PIN_NO_CONNECT_REPORTS_AT_NET_ZEN}\nChild = Module(\"{child_path}\")\nChild(name = \"child\", fail_child = True)"
+                    ),
+                )
+                .write(
+                    "wrapper.zen",
+                    "fail_child = config(bool, default = False)\nChild = Module(\"child.zen\")\nChild(name = \"grandchild\", fail_child = fail_child)",
+                )
+                .write(
+                    "child.zen",
+                    format!(
+                        "{PIN_NO_CONNECT_REPORTS_AT_NET_ZEN}\nfail_child = config(bool, default = False)\nif fail_child:\n    error(\"Child error\", suppress = {})",
+                        if complete { "True" } else { "False" },
+                    ),
+                )
+                .write("test.kicad_mod", TEST_KICAD_MOD)
+                .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL);
+
+            // Suppressing diagnostics must not turn an incomplete tree into a
+            // usable netlist. A nonfatal error in a complete child is different.
+            for suppress in [false, true] {
+                let mut args = vec!["build", "board.zen", "--netlist"];
+                if suppress {
+                    args.extend(["-S", "errors"]);
+                }
+                let output = sandbox
+                    .run("pcbc", args)
+                    .stdout_capture()
+                    .stderr_capture()
+                    .unchecked()
+                    .run()
+                    .expect("build command should run");
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert_eq!(output.status.success(), suppress, "{stderr}");
+                if !suppress {
+                    assert!(stderr.contains("Child error"), "{stderr}");
+                }
+                if complete {
+                    let schematic: pcb_sch::Schematic = serde_json::from_slice(&output.stdout)
+                        .unwrap_or_else(|e| {
+                            panic!("complete tree for {child_path}: {e}\n{stderr}")
+                        });
+                    assert_eq!(
+                        schematic
+                            .instances
+                            .values()
+                            .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
+                            .count(),
+                        2,
+                    );
+                } else {
+                    assert!(output.stdout.is_empty(), "incomplete tree for {child_path}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn test_suppress_by_hierarchical_kind() {
     // -S electrical should suppress all electrical.* warnings
     let output = Sandbox::new()

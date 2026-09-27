@@ -319,6 +319,20 @@ impl EvalOutput {
             .collect()
     }
 
+    /// Whether every requested module instance produced output, including descendants.
+    /// Evaluation retains parents and successful siblings when a child fails;
+    /// diagnostic severity alone cannot distinguish those partial trees from
+    /// complete circuits with nonfatal diagnostics.
+    pub fn is_complete(&self) -> bool {
+        self.modules.iter().all(|(path, module)| {
+            frozen_context(module).pending_children.iter().all(|child| {
+                let mut child_path = path.clone();
+                child_path.push(&child.final_name);
+                self.modules.contains_key(&child_path)
+            })
+        })
+    }
+
     /// Validate the KiCad footprints referenced by components in the module
     /// tree. Decompresses and hashes embedded payloads, so this is expensive —
     /// callers that actually consume footprints (e.g. layout) opt in.

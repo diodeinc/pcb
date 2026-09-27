@@ -20,7 +20,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- Keep usable `pcb build --netlist` output when validation checks fail, while preserving diagnostics and the failing exit status.
+- Keep complete `pcb build --netlist` output when validation checks fail, preserving diagnostics and exit status without emitting partial designs after child-module failures.
 - Read IPC-2581 files from older KiCad versions that repeat stackup sequence numbers or write empty text features.
 
 ## [0.4.60] - 2026-09-25

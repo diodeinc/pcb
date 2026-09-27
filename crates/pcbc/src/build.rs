@@ -163,6 +163,14 @@ impl BuildEvalState {
             }
         }
 
+        // A parent can survive failed child evaluation. Never expose that partial
+        // design as a netlist, even if the evaluation diagnostics were suppressed.
+        if self.retain_schematic_on_error
+            && output.as_ref().is_some_and(|output| !output.is_complete())
+        {
+            schematic = None;
+        }
+
         BuildResult {
             schematic,
             diagnostics,
@@ -230,9 +238,9 @@ pub struct BuildArgs {
     #[arg(long = "config", value_name = "KEY=VALUE", help = CONFIG_ARG_HELP)]
     pub config: Vec<String>,
 
-    /// Print JSON netlist to stdout, even if checks fail. Evaluation or conversion
-    /// failures that produce no schematic emit nothing; diagnostics and exit status
-    /// still reflect build failures.
+    /// Print complete JSON netlist to stdout, even if checks fail. Failed conversion
+    /// or missing module output emits nothing; diagnostics and exit status still
+    /// reflect build failures.
     #[arg(long = "netlist", hide = true)]
     pub netlist: bool,
 
