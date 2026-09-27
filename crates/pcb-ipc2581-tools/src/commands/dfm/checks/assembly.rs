@@ -41,7 +41,12 @@ pub(super) fn evaluate(diagnostic: AssemblyDiagnostic, design: &Design) -> Evalu
         checked += design.placements.len();
         let placements = if diagnostic == AssemblyDiagnostic::MissingPhysicalTerminations {
             let missing = (0..design.placements.len() as u32)
-                .filter(|placement| !component.terminated_placements.contains(placement))
+                .filter(|placement| {
+                    component
+                        .terminated_placements
+                        .binary_search(placement)
+                        .is_err()
+                })
                 .collect::<Vec<_>>();
             if missing.is_empty() {
                 continue;

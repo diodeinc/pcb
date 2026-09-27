@@ -22,7 +22,7 @@
 //! rules that would have measured it, and every other rule still runs.
 
 use pcb_ir::geom::Resolution;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use ipc2581::Symbol;
@@ -289,27 +289,35 @@ impl<'a> Design<'a> {
             .filter(|rule| rule.kind == rules::RuleKind::SoldermaskWeb)
             .map(|rule| thin_gaps_reach_mm(rule.limit.length().millimeters(), resolution))
             .fold(0.0, f64::max);
-        let primary_bom = primary_bom(imported);
-        let needs_terminations = imported.components.iter().any(|component| {
-            component_is_included(imported, &component.bom_references, primary_bom)
-                && component.population == pcb_ir::dialects::assembly::Population::Populate
-                && matches!(
-                    component.source.mount_type,
-                    ipc2581::types::MountType::Smt | ipc2581::types::MountType::Thmt
-                )
-        });
-        let terminations = (wanted.intersects(Pools::COMPONENT_TERMINATIONS) && needs_terminations)
-            .then(|| {
+        let primary_bom = if wanted.intersects(Pools::COMPONENTS) {
+            primary_bom(imported)
+        } else {
+            None
+        };
+        let needs_terminations = wanted.intersects(Pools::COMPONENT_TERMINATIONS)
+            && imported.components.iter().any(|component| {
+                component_is_included(imported, &component.bom_references, primary_bom)
+                    && component.population == pcb_ir::dialects::assembly::Population::Populate
+                    && matches!(
+                        component.source.mount_type,
+                        ipc2581::types::MountType::Smt | ipc2581::types::MountType::Thmt
+                    )
+            });
+        let terminations = if needs_terminations {
+            Some(
                 imported
                     .physical_terminations(scope, resolution)
                     .map(|terminations| {
                         terminations
                             .into_iter()
                             .map(|termination| termination.component)
-                            .collect::<BTreeSet<_>>()
+                            .collect::<HashSet<_>>()
                     })
-                    .map_err(|error| format!("{error:#}"))
-            });
+                    .map_err(|error| format!("{error:#}")),
+            )
+        } else {
+            None
+        };
         let mut designs = steps
             .into_iter()
             .map(|(step, placements)| {
@@ -321,7 +329,14 @@ impl<'a> Design<'a> {
                     conductor_limit_mm,
                     web_context_mm,
                 };
-                Self::extract(source, step, placements, wanted, terminations.as_ref())
+                Self::extract(
+                    source,
+                    step,
+                    placements,
+                    wanted,
+                    primary_bom,
+                    terminations.as_ref(),
+                )
             })
             .collect::<Vec<_>>();
         // Only copper within a rule's limit of a line is ever measured to it.
@@ -440,7 +455,8 @@ impl<'a> Design<'a> {
         step: u32,
         placements: Vec<LayoutOccurrenceId>,
         wanted: Pools,
-        terminations: Option<&Result<BTreeSet<ComponentOccurrenceId>, String>>,
+        assembly_bom: Option<usize>,
+        terminations: Option<&Result<HashSet<ComponentOccurrenceId>, String>>,
     ) -> Self {
         let Source {
             imported,
@@ -561,6 +577,7 @@ impl<'a> Design<'a> {
                     imported,
                     step,
                     &placements,
+                    assembly_bom,
                     terminations.and_then(|result| result.as_ref().ok()),
                 ))
             },
@@ -754,9 +771,9 @@ fn collect_assembly_components(
     imported: &ImportedDesign,
     step: u32,
     placements: &[LayoutOccurrenceId],
-    terminations: Option<&BTreeSet<ComponentOccurrenceId>>,
+    primary_bom: Option<usize>,
+    terminations: Option<&HashSet<ComponentOccurrenceId>>,
 ) -> Vec<AssemblyComponent> {
-    let primary_bom = primary_bom(imported);
     imported
         .components
         .iter()
