@@ -25,6 +25,7 @@ pub(crate) struct BuildEvalState {
     resolution: Arc<ResolutionResult>,
     bom_match_mode: Option<pcb_diode_api::BomMatchMode>,
     retain_schematic_on_error: bool,
+    quiet: bool,
 }
 
 pub(crate) struct BuildResult {
@@ -35,6 +36,13 @@ pub(crate) struct BuildResult {
     pub(crate) eval_output: Option<pcb_zen_core::EvalOutput>,
 }
 
+#[derive(serde::Serialize)]
+struct BuildJson {
+    schematic: Option<Schematic>,
+    diagnostics: Vec<pcb_zen_core::DiagnosticReport>,
+    success: bool,
+}
+
 impl BuildEvalState {
     pub(crate) fn new(resolution: ResolutionResult) -> Self {
         Self {
@@ -43,6 +51,7 @@ impl BuildEvalState {
             resolution: Arc::new(resolution),
             bom_match_mode: None,
             retain_schematic_on_error: false,
+            quiet: false,
         }
     }
 
@@ -84,7 +93,9 @@ impl BuildEvalState {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
         debug!("Compiling Zener file: {}", zen_path.display());
-        let spinner = Spinner::builder(format!("{file_name}: Building")).start();
+        let spinner = Spinner::builder(format!("{file_name}: Building"))
+            .hidden(self.quiet)
+            .start();
 
         let eval_result = self.eval(zen_path, inputs);
         let mut diagnostics = eval_result.diagnostics;
@@ -153,11 +164,13 @@ impl BuildEvalState {
 
         if should_fail {
             *has_errors = true;
-            eprintln!(
-                "{} {}: Build failed",
-                pcb_ui::icons::error(),
-                file_name.with_style(Style::Red).bold()
-            );
+            if !self.quiet {
+                eprintln!(
+                    "{} {}: Build failed",
+                    pcb_ui::icons::error(),
+                    file_name.with_style(Style::Red).bold()
+                );
+            }
             if !self.retain_schematic_on_error {
                 schematic = None;
             }
@@ -243,6 +256,12 @@ pub struct BuildArgs {
     /// reflect build failures.
     #[arg(long = "netlist", hide = true)]
     pub netlist: bool,
+
+    /// Print {schematic, diagnostics, success} as JSON for one explicit .zen file.
+    /// Incomplete evaluation or failed conversion yields a null schematic.
+    /// Diagnostics are not rendered on stderr; build failures still exit nonzero.
+    #[arg(long, conflicts_with_all = ["netlist", "diagnostics"])]
+    pub json: bool,
 
     /// Write build diagnostics as JSON to PATH, or '-' for stdout
     #[arg(long = "diagnostics", value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
@@ -426,6 +445,13 @@ fn write_diagnostics_report(
 pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
+    if args.json {
+        let [path] = args.paths.as_slice() else {
+            anyhow::bail!("--json requires a single .zen file target");
+        };
+        file_walker::require_zen_file(path).context("--json requires a single .zen file target")?;
+    }
+
     if args.netlist && args.diagnostics.as_deref() == Some(Path::new("-")) {
         anyhow::bail!(
             "--diagnostics - cannot be used with --netlist because both write JSON to stdout"
@@ -446,7 +472,8 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         BuildEvalState::new(resolution).with_bom_hydration(pcb_diode_api::BomMatchMode::Offline);
     // Netlist consumers can render a completed schematic alongside failed checks.
     // Other build consumers must continue to reject schematics with errors.
-    eval_state.retain_schematic_on_error = args.netlist;
+    eval_state.retain_schematic_on_error = args.netlist || args.json;
+    eval_state.quiet = args.json;
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());
@@ -454,10 +481,15 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let mut diagnostics_report = BTreeMap::new();
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
+        let passes = if args.json {
+            create_diagnostics_processing_passes(&args.suppress, &args.warn)
+        } else {
+            create_diagnostics_passes(&args.suppress, &args.warn)
+        };
         let build_result = eval_state.build(
             zen_path,
             config_inputs.clone(),
-            create_diagnostics_passes(&args.suppress, &args.warn),
+            passes,
             deny_warnings,
             &mut has_errors,
             &mut has_warnings,
@@ -469,6 +501,22 @@ pub fn execute(args: BuildArgs) -> Result<()> {
                 source_file.clone(),
                 diagnostics_report_for_file(source_file, &build_result.diagnostics),
             );
+        }
+
+        if args.json {
+            let response = BuildJson {
+                schematic: build_result.schematic,
+                diagnostics: build_result
+                    .diagnostics
+                    .iter()
+                    .map(pcb_zen_core::DiagnosticReport::from_diagnostic)
+                    .collect(),
+                success: !has_errors,
+            };
+            let json =
+                serde_json::to_string(&response).context("Failed to serialize build JSON")?;
+            pcb_ui::write_stdout(|stdout| writeln!(stdout, "{json}"))?;
+            continue;
         }
 
         let Some(schematic) = build_result.schematic else {
