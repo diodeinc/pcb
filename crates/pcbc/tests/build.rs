@@ -857,6 +857,323 @@ fn test_build_writes_diagnostics_json_on_failure() {
 }
 
 #[test]
+fn test_build_netlist_preserves_output_on_failed_checks() {
+    let electrical_check = r#"
+def check_critical(module):
+    error("Critical check failed")
+
+builtin.add_electrical_check(name = "critical", check_fn = check_critical)
+"#;
+
+    for (extra_source, extra_args, severity, message) in [
+        (electrical_check, vec![], "error", "Critical check failed"),
+        ("", vec!["-D", "warnings"], "warning", "marked no_connect"),
+    ] {
+        let mut sandbox = Sandbox::new().with_workspace();
+        sandbox
+            .write(
+                "board.zen",
+                format!("{PIN_NO_CONNECT_REPORTS_AT_NET_ZEN}\n{extra_source}"),
+            )
+            .write("test.kicad_mod", TEST_KICAD_MOD)
+            .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL);
+
+        for mode in ["human", "netlist", "json"] {
+            let mut args = vec!["build", "board.zen"];
+            args.extend(&extra_args);
+            if mode == "json" {
+                args.push("--json");
+            } else {
+                args.extend(["--diagnostics", "diagnostics.json"]);
+            }
+            if mode == "netlist" {
+                args.push("--netlist");
+            }
+            let output = sandbox
+                .run("pcbc", args)
+                .stdout_capture()
+                .stderr_capture()
+                .unchecked()
+                .run()
+                .expect("build command should run");
+            assert!(!output.status.success());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(stderr.contains(message), mode != "json", "{stderr}");
+            assert!(!stderr.contains("(1 components)"), "{stderr}");
+
+            let stdout_json: serde_json::Value = if mode == "human" {
+                serde_json::Value::Null
+            } else {
+                serde_json::from_slice(&output.stdout).expect("stdout should be one JSON value")
+            };
+            let diagnostics = if mode == "json" {
+                assert_eq!(stdout_json["success"], false);
+                assert_eq!(stdout_json.as_object().unwrap().len(), 3);
+                stdout_json["diagnostics"].clone()
+            } else {
+                let report: serde_json::Value = serde_json::from_str(
+                    &std::fs::read_to_string(sandbox.root_path().join("diagnostics.json"))
+                        .expect("diagnostics report should be written"),
+                )
+                .expect("diagnostics report should be valid JSON");
+                report["board.zen"].clone()
+            };
+            assert!(diagnostics.as_array().unwrap().iter().any(|d| {
+                d["severity"] == severity
+                    && d["suppressed"] == false
+                    && d["body"].as_str().unwrap().contains(message)
+            }));
+
+            if mode != "human" {
+                let schematic: pcb_sch::Schematic = serde_json::from_value(if mode == "json" {
+                    stdout_json["schematic"].clone()
+                } else {
+                    stdout_json
+                })
+                .expect("failed checks should still produce a usable netlist");
+                let components: Vec<_> = schematic
+                    .instances
+                    .values()
+                    .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
+                    .collect();
+                assert_eq!(components.len(), 1);
+                assert_eq!(components[0].reference_designator.as_deref(), Some("U1"));
+                let nets: Vec<_> = schematic.nets.values().collect();
+                assert_eq!(nets.len(), 1);
+                assert_eq!(nets[0].name, "SIG");
+                assert_eq!(nets[0].ports.len(), 1);
+            } else {
+                assert!(output.stdout.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn test_build_netlist_omits_output_on_evaluation_or_conversion_failure() {
+    for (source, message) in [
+        (
+            format!("{PIN_NO_CONNECT_REPORTS_AT_NET_ZEN}\nerror(\"Evaluation failed\")"),
+            "Evaluation failed",
+        ),
+        (
+            PIN_NO_CONNECT_REPORTS_AT_NET_ZEN.replace("\"NC\": sig", "\"NC\": Net()"),
+            "Net is unnamed",
+        ),
+    ] {
+        let mut sandbox = Sandbox::new().with_workspace();
+        sandbox
+            .write("board.zen", source)
+            .write("test.kicad_mod", TEST_KICAD_MOD)
+            .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL);
+        for mode in ["--netlist", "--json"] {
+            let output = sandbox
+                .run("pcbc", ["build", "board.zen", mode])
+                .stdout_capture()
+                .stderr_capture()
+                .unchecked()
+                .run()
+                .expect("build command should run");
+            assert!(!output.status.success());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if mode == "--json" {
+                let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert!(response["schematic"].is_null());
+                assert_eq!(response["success"], false);
+                assert!(response["diagnostics"].as_array().unwrap().iter().any(|d| {
+                    d["severity"] == "error" && d["body"].as_str().unwrap().contains(message)
+                }));
+                assert!(!stderr.contains(message), "{stderr}");
+            } else {
+                assert!(output.stdout.is_empty());
+                assert!(stderr.contains(message), "{stderr}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_build_netlist_requires_complete_module_tree() {
+    for child_path in ["child.zen", "wrapper.zen"] {
+        for complete in [false, true] {
+            let mut sandbox = Sandbox::new().with_workspace();
+            sandbox
+                .write(
+                    "board.zen",
+                    format!(
+                        "{PIN_NO_CONNECT_REPORTS_AT_NET_ZEN}\nChild = Module(\"{child_path}\")\nChild(name = \"child\", fail_child = True)"
+                    ),
+                )
+                .write(
+                    "wrapper.zen",
+                    "fail_child = config(bool, default = False)\nChild = Module(\"child.zen\")\nChild(name = \"grandchild\", fail_child = fail_child)",
+                )
+                .write(
+                    "child.zen",
+                    format!(
+                        "{PIN_NO_CONNECT_REPORTS_AT_NET_ZEN}\nfail_child = config(bool, default = False)\nif fail_child:\n    error(\"Child error\", suppress = {})",
+                        if complete { "True" } else { "False" },
+                    ),
+                )
+                .write("test.kicad_mod", TEST_KICAD_MOD)
+                .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL);
+
+            // Suppressing diagnostics must not turn an incomplete tree into a
+            // usable netlist. A nonfatal error in a complete child is different.
+            for (suppress, mode) in [
+                (false, "--netlist"),
+                (true, "--netlist"),
+                (false, "--json"),
+                (true, "--json"),
+            ] {
+                let mut args = vec!["build", "board.zen", mode];
+                if suppress {
+                    args.extend(["-S", "errors"]);
+                }
+                let output = sandbox
+                    .run("pcbc", args)
+                    .stdout_capture()
+                    .stderr_capture()
+                    .unchecked()
+                    .run()
+                    .expect("build command should run");
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert_eq!(output.status.success(), suppress, "{stderr}");
+                if !suppress && mode == "--netlist" {
+                    assert!(stderr.contains("Child error"), "{stderr}");
+                }
+                let schematic = if mode == "--json" {
+                    let response: serde_json::Value =
+                        serde_json::from_slice(&output.stdout).unwrap();
+                    assert_eq!(response["success"], suppress);
+                    let diagnostic = response["diagnostics"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|d| d["body"] == "Child error")
+                        .expect("nested errors should be flattened");
+                    assert_eq!(diagnostic["suppressed"], suppress);
+                    assert!(
+                        diagnostic["location"]
+                            .as_str()
+                            .unwrap()
+                            .contains("child.zen:")
+                    );
+                    assert!(!diagnostic["stack"].as_array().unwrap().is_empty());
+                    assert!(!stderr.contains("Child error"), "{stderr}");
+                    response["schematic"].clone()
+                } else if complete {
+                    serde_json::from_slice(&output.stdout).unwrap()
+                } else {
+                    assert!(output.stdout.is_empty(), "incomplete tree for {child_path}");
+                    serde_json::Value::Null
+                };
+                if complete {
+                    let schematic: pcb_sch::Schematic = serde_json::from_value(schematic)
+                        .unwrap_or_else(|e| {
+                            panic!("complete tree for {child_path}: {e}\n{stderr}")
+                        });
+                    assert_eq!(
+                        schematic
+                            .instances
+                            .values()
+                            .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
+                            .count(),
+                        2,
+                    );
+                } else {
+                    assert!(schematic.is_null(), "incomplete tree for {child_path}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_build_json_success_and_suppression() {
+    let mut sandbox = Sandbox::new().with_workspace();
+    sandbox
+        .write("board.zen", PIN_NO_CONNECT_REPORTS_AT_NET_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL);
+    let netlist = sandbox
+        .run("pcbc", ["build", "board.zen", "--netlist"])
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .unwrap();
+    let expected_schematic = String::from_utf8(netlist.stdout).unwrap();
+
+    for suppress in [false, true] {
+        let mut args = vec!["build", "board.zen", "--json"];
+        if suppress {
+            args.extend(["-S", "warnings", "-D", "warnings"]);
+        }
+        let output = sandbox
+            .run("pcbc", args)
+            .stdout_capture()
+            .stderr_capture()
+            .run()
+            .expect("warning-only or suppressed build should succeed");
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["success"], true);
+        // Compare canonical schematic data, not JSON number spelling (1 vs 1.0).
+        let schematic: pcb_sch::Schematic =
+            serde_json::from_value(response["schematic"].clone()).unwrap();
+        assert_eq!(schematic.to_json().unwrap(), expected_schematic.trim());
+        let diagnostics = response["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0]["kind"], "pin.no_connect");
+        assert_eq!(diagnostics[0]["severity"], "warning");
+        assert_eq!(diagnostics[0]["suppressed"], suppress);
+        assert_eq!(diagnostics[0]["occurrences"], 1);
+        assert!(
+            diagnostics[0]["location"]
+                .as_str()
+                .unwrap()
+                .contains("board.zen:2:")
+        );
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+}
+
+#[test]
+fn test_build_json_rejects_incompatible_outputs_and_targets() {
+    let mut sandbox = Sandbox::new().with_workspace();
+    sandbox.write("board.zen", "").write("other.zen", "");
+    for extra_args in [
+        vec![],
+        vec!["."],
+        vec!["board.zen", "other.zen"],
+        vec!["board.zen", "--netlist"],
+        vec!["board.zen", "--diagnostics", "-"],
+        vec!["board.zen", "--diagnostics", "diagnostics.json"],
+    ] {
+        let mut args = vec!["build", "--json"];
+        args.extend(extra_args);
+        let output = sandbox
+            .run("pcbc", args)
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            output.stdout.is_empty(),
+            "must reject rather than drop target outputs"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("--json"), "{stderr}");
+        assert!(
+            stderr.contains("single .zen file") || stderr.contains("cannot be used with"),
+            "{stderr}"
+        );
+    }
+    assert!(!sandbox.root_path().join("diagnostics.json").exists());
+}
+
+#[test]
 fn test_suppress_by_hierarchical_kind() {
     // -S electrical should suppress all electrical.* warnings
     let output = Sandbox::new()
