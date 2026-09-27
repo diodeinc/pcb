@@ -106,7 +106,6 @@ pub(super) struct Blocker {
 
 pub(super) struct AssemblyComponent {
     pub facts: ComponentFacts,
-    pub source_index: u32,
     pub anchor: Point,
     pub terminated_placements: Vec<u32>,
 }
@@ -816,7 +815,6 @@ fn collect_assembly_components(
                     ),
                     has_terminations: false,
                 },
-                source_index: component.source_index,
                 anchor: component
                     .local_from_component
                     .transform_point(Point::new(0.0, 0.0)),

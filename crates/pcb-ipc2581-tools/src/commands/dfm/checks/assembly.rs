@@ -79,7 +79,7 @@ pub(super) fn evaluate(diagnostic: AssemblyDiagnostic, design: &Design) -> Evalu
                             .to_owned(),
                     ),
                     layer: None,
-                    set_index: Some(component.source_index),
+                    set_index: None,
                     feature_index: None,
                     instance_index: None,
                 }),
