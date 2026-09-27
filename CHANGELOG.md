@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Report incomplete assembly data in the standard DFM check.
+
 ### Fixed
 
 - Read IPC-2581 files from older KiCad versions that repeat stackup sequence numbers or write empty text features.

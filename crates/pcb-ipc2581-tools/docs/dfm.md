@@ -41,6 +41,10 @@ outer_copper_weight = "1 oz"
 inner_copper_weight = "0.5 oz"
 soldermask_color = "green"
 
+[[rules.assembly.diagnostic]]
+id = "assembly.missing_population"
+select = { diagnostic = "missing_population" }
+
 [[rules.drilling.hole_diameter]]
 id = "drilling.via_hole"
 select = { hole = "via" }
@@ -111,6 +115,11 @@ numeric rules establish compliance.
 
 The schema gives each kind of constraint one place:
 
+- `rules.assembly.diagnostic` enables a required component-data predicate.
+  Supported diagnostics are `missing_population`, `conflicting_population`,
+  `missing_reference_designator`, `missing_package`, and
+  `missing_physical_terminations`. These categorical rules always require zero
+  diagnostics and therefore take no numeric limit.
 - `profile.support` is the hard eligibility envelope for the whole profile.
   A design outside its copper-layer range fails profile qualification. The
   engine emits these checks as reserved `profile.support.*` report rules;
@@ -472,7 +481,8 @@ The `standard` PDK prefers 0.40 mm plated and nonplated slot-to-copper
 clearance. Shortfalls produce warnings, not a failed manufacturing verdict.
 This is conservative Diode routing guidance, not a manufacturer capability
 or an IPC requirement. Slot clearance is not enabled in `jlcpcb-1oz` without
-a manufacturer source.
+a manufacturer source. It also fails on the same component-data errors that
+make the assembly report incomplete, with one finding per affected component.
 
 The `jlcpcb-1oz` PDK, also available as `jlc`, executes the public rigid FR-4
 capability table for 2-32 copper layers and 1 oz outer copper. It deliberately

@@ -10,9 +10,9 @@ use anyhow::Result;
 
 use super::design::HoleClass;
 use super::pdk::{
-    Case, CopperWeight, HoleKind, LayerPosition, Length, LengthCase, LengthLimit, Pdk,
-    PlatedHoleKind, Profile, ProfileStatus, Ratio, RatioLimit, RuleConditions, RuleMetadata,
-    SelectingRule, SlotPlating, copper_weight_class,
+    AssemblyDiagnostic, Case, CopperWeight, HoleKind, LayerPosition, Length, LengthCase,
+    LengthLimit, Pdk, PlatedHoleKind, Profile, ProfileStatus, Ratio, RatioLimit, RuleConditions,
+    RuleMetadata, SelectingRule, SlotPlating, copper_weight_class,
 };
 use super::report::{Severity, ViewRecipe};
 
@@ -138,6 +138,8 @@ impl LimitValue {
 /// or a morphological residue over one of the design's entity pools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RuleKind {
+    /// Predicate: an included assembly component has complete source data.
+    AssemblyDiagnostic(AssemblyDiagnostic),
     /// Count: conductive layers in the one physical stackup.
     CopperLayerCount,
     /// Size: each hole's drilled diameter meets the limit.
@@ -214,6 +216,8 @@ impl Pools {
     pub const SCORES: Self = Self(1 << 10);
     pub const BOARD_OUTLINES: Self = Self(1 << 11);
     pub const BOARD_ARRAYS: Self = Self(1 << 12);
+    pub const COMPONENTS: Self = Self(1 << 14);
+    pub const COMPONENT_TERMINATIONS: Self = Self(1 << 15);
 
     pub fn intersects(self, other: Self) -> bool {
         self.0 & other.0 != 0
@@ -234,6 +238,7 @@ impl RuleKind {
         const COPPER: &[&str] = &["copper", "board_outlines"];
         const COPPER_AND_DRILLS: &[&str] = &["copper", "drills", "board_outlines"];
         let (kind, title, features): (_, _, &[_]) = match self {
+            Self::AssemblyDiagnostic(_) => ("assembly_readiness", "Assembly readiness", &[]),
             Self::CopperLayerCount => ("copper_layer_count", "Copper layer count", &["stackup"]),
             Self::HoleDiameter(_) => ("hole_diameter", "Hole diameter", DRILLS),
             Self::HoleAspectRatio(_) => ("hole_aspect_ratio", "Plated-hole aspect ratio", DRILLS),
@@ -287,14 +292,27 @@ impl RuleKind {
         ViewRecipe {
             kind,
             title,
-            // Only the layer count is a fact of the stackup rather than a place.
-            spatial: self != Self::CopperLayerCount,
+            spatial: !matches!(self, Self::CopperLayerCount | Self::AssemblyDiagnostic(_)),
             features: features.to_vec(),
         }
     }
 
     pub fn semantics(self) -> Semantics {
         match self {
+            Self::AssemblyDiagnostic(diagnostic) => Semantics {
+                subject: "component",
+                quantity: "assembly_diagnostic_count",
+                method: "assembly_component_diagnostics",
+                finding_title: assembly_title(diagnostic).to_owned(),
+                quantity_label: "assembly diagnostic count".to_owned(),
+                witness_roles: None,
+                pools: Pools::COMPONENTS
+                    | if diagnostic == AssemblyDiagnostic::MissingPhysicalTerminations {
+                        Pools::COMPONENT_TERMINATIONS
+                    } else {
+                        Pools::NONE
+                    },
+            },
             Self::CopperLayerCount => Semantics {
                 subject: "stackup",
                 quantity: "copper_layer_count",
@@ -519,6 +537,18 @@ pub(super) fn pools(rules: &[Rule], has_stackup: bool) -> Pools {
         .fold(Pools::NONE, |union, pools| union | pools)
 }
 
+fn assembly_title(diagnostic: AssemblyDiagnostic) -> &'static str {
+    match diagnostic {
+        AssemblyDiagnostic::MissingPopulation => "Components have explicit population states",
+        AssemblyDiagnostic::ConflictingPopulation => "Components have consistent population states",
+        AssemblyDiagnostic::MissingReferenceDesignator => "Components have reference designators",
+        AssemblyDiagnostic::MissingPackage => "Populated components have resolved packages",
+        AssemblyDiagnostic::MissingPhysicalTerminations => {
+            "Populated solder-mounted components have physical terminations"
+        }
+    }
+}
+
 /// Lower the selected profile's support envelope and typed rules. Rules with
 /// no `profiles` selector apply to every executable profile in the kit.
 /// Required limits are errors; preferred limits become warning rules.
@@ -532,6 +562,23 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
     }
 
     let mut rules = Vec::new();
+    rules.extend(
+        pdk.rules
+            .assembly
+            .diagnostic
+            .iter()
+            .filter(|rule| rule.metadata.applies_to(profile_name))
+            .map(|rule| Rule {
+                id: rule.metadata.id.clone(),
+                authored_id: rule.metadata.id.clone(),
+                title: assembly_title(rule.select.diagnostic).to_owned(),
+                severity: Severity::Error,
+                comparison: Comparison::Maximum,
+                limit: LimitValue::Count(0),
+                kind: RuleKind::AssemblyDiagnostic(rule.select.diagnostic),
+                conditions: Conditions::default(),
+            }),
+    );
     if let Some(range) = &profile.support.copper_layers {
         if let Some(limit) = range.minimum() {
             rules.push(Rule {

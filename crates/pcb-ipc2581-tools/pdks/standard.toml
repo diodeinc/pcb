@@ -17,9 +17,30 @@ note = "Diode prefers 0.40 mm clearance for plated and nonplated slots and 0.25 
 name = "Diode standard"
 description = "General-purpose defaults retained from the original Diode DFM PDK."
 technologies = ["rigid"]
+coverage = ["Assembly readiness diagnostics"]
 
 [profiles.standard.support]
 copper_layers = { minimum = 2, maximum = 10 }
+
+[[rules.assembly.diagnostic]]
+id = "assembly.missing_population"
+select = { diagnostic = "missing_population" }
+
+[[rules.assembly.diagnostic]]
+id = "assembly.conflicting_population"
+select = { diagnostic = "conflicting_population" }
+
+[[rules.assembly.diagnostic]]
+id = "assembly.missing_reference_designator"
+select = { diagnostic = "missing_reference_designator" }
+
+[[rules.assembly.diagnostic]]
+id = "assembly.missing_package"
+select = { diagnostic = "missing_package" }
+
+[[rules.assembly.diagnostic]]
+id = "assembly.missing_physical_terminations"
+select = { diagnostic = "missing_physical_terminations" }
 
 [[rules.drilling.hole_diameter]]
 id = "drilling.minimum_via_hole_diameter"

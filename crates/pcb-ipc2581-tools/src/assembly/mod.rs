@@ -26,6 +26,17 @@ pub mod report;
 
 pub use report::AssemblyReport;
 
+#[derive(Clone)]
+pub(crate) struct ComponentFacts {
+    pub(crate) id: String,
+    pub(crate) reference_designator: Option<String>,
+    pub(crate) population: report::Population,
+    pub(crate) included: bool,
+    pub(crate) has_package: bool,
+    pub(crate) solder_mounted: bool,
+    pub(crate) has_terminations: bool,
+}
+
 /// Build the stable report consumed by native, CLI, and WebAssembly surfaces.
 ///
 /// The report uses source-backed assembly IR and conservative physical
@@ -251,7 +262,11 @@ pub fn build_report(
     }
     components.sort_by(|left, right| left.id.cmp(&right.id));
 
-    let mut diagnostics = component_diagnostics(&components, &mut ids);
+    let component_facts = components
+        .iter()
+        .map(ComponentFacts::from)
+        .collect::<Vec<_>>();
+    let mut diagnostics = component_diagnostics(&component_facts, &mut ids);
     diagnostics.extend(hole_diagnostics(&holes, &mut ids));
     diagnostics.sort_by(|left, right| {
         left.code
@@ -998,68 +1013,94 @@ fn hole_span(imported: &ImportedDesign, value: FeatureSpan) -> report::HoleSpan 
     }
 }
 
-fn component_diagnostics(
-    components: &[report::Component],
-    ids: &mut IdAllocator,
-) -> Vec<report::Diagnostic> {
-    let mut diagnostics = Vec::new();
-    for component in components
-        .iter()
-        .filter(|component| component.assembly_status == report::AssemblyStatus::Included)
-    {
-        let label = component
-            .reference_designator
-            .as_deref()
-            .unwrap_or(component.id.as_str());
-        match component.population {
-            report::Population::Unspecified => diagnostics.push(diagnostic(
-                ids,
-                component,
-                report::DiagnosticCode::MissingPopulation,
-                format!("component '{label}' has no explicit population state"),
-            )),
-            report::Population::Conflicting => diagnostics.push(diagnostic(
-                ids,
-                component,
-                report::DiagnosticCode::ConflictingPopulation,
-                format!("component '{label}' has conflicting population states"),
-            )),
-            report::Population::Populate | report::Population::DoNotPopulate => {}
-        }
-        if component.reference_designator.is_none() {
-            diagnostics.push(diagnostic(
-                ids,
-                component,
-                report::DiagnosticCode::MissingReferenceDesignator,
-                "assembly component has no reference designator".to_owned(),
-            ));
-        }
-        if component.population == report::Population::Populate && component.package_id.is_none() {
-            diagnostics.push(diagnostic(
-                ids,
-                component,
-                report::DiagnosticCode::MissingPackage,
-                format!("populated component '{label}' has no resolved package"),
-            ));
-        }
-        if component.population == report::Population::Populate
-            && matches!(
+impl From<&report::Component> for ComponentFacts {
+    fn from(component: &report::Component) -> Self {
+        Self {
+            id: component.id.clone(),
+            reference_designator: component.reference_designator.clone(),
+            population: component.population,
+            included: component.assembly_status == report::AssemblyStatus::Included,
+            has_package: component.package_id.is_some(),
+            solder_mounted: matches!(
                 component.mount,
                 report::ComponentMount::Smt | report::ComponentMount::ThroughHole
-            )
-            && component.termination_ids.is_empty()
-        {
-            diagnostics.push(diagnostic(
-                ids,
-                component,
-                report::DiagnosticCode::MissingPhysicalTerminations,
-                format!(
-                    "populated solder-mounted component '{label}' has no exact physical terminations"
-                ),
-            ));
+            ),
+            has_terminations: !component.termination_ids.is_empty(),
+        }
+    }
+}
+
+fn component_diagnostics(
+    components: &[ComponentFacts],
+    ids: &mut IdAllocator,
+) -> Vec<report::Diagnostic> {
+    const CODES: [report::DiagnosticCode; 5] = [
+        report::DiagnosticCode::MissingPopulation,
+        report::DiagnosticCode::ConflictingPopulation,
+        report::DiagnosticCode::MissingReferenceDesignator,
+        report::DiagnosticCode::MissingPackage,
+        report::DiagnosticCode::MissingPhysicalTerminations,
+    ];
+    let mut diagnostics = Vec::new();
+    for component in components {
+        for code in CODES {
+            if let Some(message) = component_diagnostic_message(component, code) {
+                diagnostics.push(diagnostic(ids, component, code, message));
+            }
         }
     }
     diagnostics
+}
+
+pub(crate) fn component_diagnostic_message(
+    component: &ComponentFacts,
+    code: report::DiagnosticCode,
+) -> Option<String> {
+    if !component.included {
+        return None;
+    }
+    let label = component
+        .reference_designator
+        .as_deref()
+        .unwrap_or(component.id.as_str());
+    match code {
+        report::DiagnosticCode::MissingPopulation
+            if component.population == report::Population::Unspecified =>
+        {
+            Some(format!(
+                "component '{label}' has no explicit population state"
+            ))
+        }
+        report::DiagnosticCode::ConflictingPopulation
+            if component.population == report::Population::Conflicting =>
+        {
+            Some(format!(
+                "component '{label}' has conflicting population states"
+            ))
+        }
+        report::DiagnosticCode::MissingReferenceDesignator
+            if component.reference_designator.is_none() =>
+        {
+            Some("assembly component has no reference designator".to_owned())
+        }
+        report::DiagnosticCode::MissingPackage
+            if component.population == report::Population::Populate && !component.has_package =>
+        {
+            Some(format!(
+                "populated component '{label}' has no resolved package"
+            ))
+        }
+        report::DiagnosticCode::MissingPhysicalTerminations
+            if component.population == report::Population::Populate
+                && component.solder_mounted
+                && !component.has_terminations =>
+        {
+            Some(format!(
+                "populated solder-mounted component '{label}' has no exact physical terminations"
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn hole_diagnostics(holes: &[report::Hole], ids: &mut IdAllocator) -> Vec<report::Diagnostic> {
@@ -1130,7 +1171,7 @@ fn hole_diagnostic(
 
 fn diagnostic(
     ids: &mut IdAllocator,
-    component: &report::Component,
+    component: &ComponentFacts,
     code: report::DiagnosticCode,
     message: String,
 ) -> report::Diagnostic {
@@ -1451,7 +1492,7 @@ fn physical_pin_mount(value: ipc2581::types::PackagePinMountType) -> report::Pin
     }
 }
 
-fn population(value: ir::Population) -> report::Population {
+pub(crate) fn population(value: ir::Population) -> report::Population {
     match value {
         ir::Population::Unspecified => report::Population::Unspecified,
         ir::Population::Populate => report::Population::Populate,

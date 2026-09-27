@@ -241,6 +241,18 @@ impl ImportedDesign {
         self.derive_physical_lands(scope, &components, false, &|_| true, resolution)
     }
 
+    /// Derive exact electrical terminations without materializing paste, mask,
+    /// hole, or source-land evidence.
+    pub fn physical_terminations(
+        &self,
+        scope: ArtworkScope,
+        resolution: Resolution,
+    ) -> Result<Vec<PhysicalTermination>> {
+        let components = self.component_index(scope)?;
+        let lands = self.derive_physical_lands(scope, &components, false, &|_| true, resolution)?;
+        Ok(self.derive_physical_terminations(&lands))
+    }
+
     /// The drilled openings that one Step occurrence of `scope` holds itself
     /// and their source-land relationships, without the assembly evidence of
     /// [`Self::physical_view`]: no final copper is composed and no assembly,

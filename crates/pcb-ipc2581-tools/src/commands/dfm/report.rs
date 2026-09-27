@@ -3,7 +3,7 @@ use pcb_ir::geom::{BBox, Point};
 use serde::Serialize;
 
 use super::pdk::Pdk;
-use super::rules::{LimitValue, Rule};
+use super::rules::{LimitValue, Rule, RuleKind};
 
 pub const REPORT_SCHEMA_VERSION: u32 = 2;
 
@@ -343,7 +343,7 @@ impl RuleResult {
             title: rule.title.clone(),
             severity: rule.severity,
             status: RuleStatus::Pass,
-            limit: RuleLimit::from_value(&rule.limit),
+            limit: RuleLimit::from_rule(rule),
             comparison: rule.comparison.label(),
             subject: semantics.subject,
             quantity: semantics.quantity,
@@ -432,8 +432,8 @@ pub struct RuleLimit {
 }
 
 impl RuleLimit {
-    fn from_value(value: &LimitValue) -> Self {
-        match value {
+    fn from_rule(rule: &Rule) -> Self {
+        match &rule.limit {
             LimitValue::Length(length) => Self {
                 pdk_value: length.original().to_owned(),
                 normalized_value: length.millimeters(),
@@ -442,7 +442,11 @@ impl RuleLimit {
             LimitValue::Count(count) => Self {
                 pdk_value: count.to_string(),
                 normalized_value: f64::from(*count),
-                normalized_unit: "layers",
+                normalized_unit: if matches!(rule.kind, RuleKind::AssemblyDiagnostic(_)) {
+                    "diagnostics"
+                } else {
+                    "layers"
+                },
             },
             LimitValue::Ratio(ratio) => Self {
                 pdk_value: ratio.value().to_string(),

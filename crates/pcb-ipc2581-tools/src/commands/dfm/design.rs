@@ -43,7 +43,8 @@ use rayon::prelude::*;
 use crate::geometry::GeometryDocument;
 use crate::layers;
 use pcb_ir::import::ipc2581::{
-    FeatureOccurrenceId, ImportedDesign, LayerId, LayoutOccurrenceId, feature_occurrence_id,
+    BomReferenceId, ComponentDefinitionId, ComponentOccurrenceId, FeatureOccurrenceId,
+    ImportedDesign, LayerId, LayoutOccurrenceId, feature_occurrence_id,
 };
 use pcb_ir::import::physical::{Association, LandId, PhysicalHole};
 
@@ -51,6 +52,7 @@ use super::report::{
     DrillSpan, Frame, LayerRef, LayoutContext, LayoutOccurrence, Placement, SourceLocator,
 };
 use super::rules::{self, Pools, Rule};
+use crate::assembly::{self, ComponentFacts};
 
 pub(super) struct Design<'a> {
     pub imported: &'a ImportedDesign,
@@ -88,6 +90,7 @@ pub(super) struct Design<'a> {
     pub inherited_scores: Vec<(Score, Vec<u32>)>,
     pub board_outlines: Vec<BoardOutline>,
     pub board_arrays: Vec<BoardArray>,
+    pub components: Vec<AssemblyComponent>,
     /// What extraction could not build. Every pool above is usable for a
     /// rule that no blocker names.
     pub blockers: Vec<Blocker>,
@@ -99,6 +102,12 @@ pub(super) struct Design<'a> {
 pub(super) struct Blocker {
     pub pools: Pools,
     pub reason: String,
+}
+
+pub(super) struct AssemblyComponent {
+    pub facts: ComponentFacts,
+    pub anchor: Point,
+    pub terminated_placements: Vec<u32>,
 }
 
 /// Build a pool only when a rule reads it. A pool that cannot be built stays
@@ -279,6 +288,35 @@ impl<'a> Design<'a> {
             .filter(|rule| rule.kind == rules::RuleKind::SoldermaskWeb)
             .map(|rule| thin_gaps_reach_mm(rule.limit.length().millimeters(), resolution))
             .fold(0.0, f64::max);
+        let primary_bom = if wanted.intersects(Pools::COMPONENTS) {
+            primary_bom(imported)
+        } else {
+            None
+        };
+        let needs_terminations = wanted.intersects(Pools::COMPONENT_TERMINATIONS)
+            && imported.components.iter().any(|component| {
+                component_is_included(imported, &component.bom_references, primary_bom)
+                    && component.population == pcb_ir::dialects::assembly::Population::Populate
+                    && matches!(
+                        component.source.mount_type,
+                        ipc2581::types::MountType::Smt | ipc2581::types::MountType::Thmt
+                    )
+            });
+        let terminations = if needs_terminations {
+            Some(
+                imported
+                    .physical_terminations(scope, resolution)
+                    .map(|terminations| {
+                        terminations
+                            .into_iter()
+                            .map(|termination| termination.component)
+                            .collect::<HashSet<_>>()
+                    })
+                    .map_err(|error| format!("{error:#}")),
+            )
+        } else {
+            None
+        };
         let mut designs = steps
             .into_iter()
             .map(|(step, placements)| {
@@ -290,7 +328,14 @@ impl<'a> Design<'a> {
                     conductor_limit_mm,
                     web_context_mm,
                 };
-                Self::extract(source, step, placements, wanted)
+                Self::extract(
+                    source,
+                    step,
+                    placements,
+                    wanted,
+                    primary_bom,
+                    terminations.as_ref(),
+                )
             })
             .collect::<Vec<_>>();
         // Only copper within a rule's limit of a line is ever measured to it.
@@ -409,6 +454,8 @@ impl<'a> Design<'a> {
         step: u32,
         placements: Vec<LayoutOccurrenceId>,
         wanted: Pools,
+        assembly_bom: Option<usize>,
+        terminations: Option<&Result<HashSet<ComponentOccurrenceId>, String>>,
     ) -> Self {
         let Source {
             imported,
@@ -417,6 +464,12 @@ impl<'a> Design<'a> {
             ..
         } = source;
         let mut blockers = Vec::new();
+        if let Some(Err(reason)) = terminations {
+            blockers.push(Blocker {
+                pools: Pools::COMPONENT_TERMINATIONS,
+                reason: reason.clone(),
+            });
+        }
         let stackup = pool(wanted, Pools::STACKUP, Pools::NONE, &mut blockers, || {
             collect_physical_stackup(imported).map(Some)
         });
@@ -513,6 +566,21 @@ impl<'a> Design<'a> {
                     .unzip())
             },
         );
+        let components = pool(
+            wanted,
+            Pools::COMPONENTS,
+            Pools::NONE,
+            &mut blockers,
+            || {
+                Ok(collect_assembly_components(
+                    imported,
+                    step,
+                    &placements,
+                    assembly_bom,
+                    terminations.and_then(|result| result.as_ref().ok()),
+                ))
+            },
+        );
         Self {
             imported,
             scope,
@@ -583,6 +651,7 @@ impl<'a> Design<'a> {
                 &mut blockers,
                 || collect_board_arrays(source),
             ),
+            components,
             stackup,
             holes,
             slots,
@@ -695,6 +764,88 @@ impl<'a> Design<'a> {
             },
         }
     }
+}
+
+fn collect_assembly_components(
+    imported: &ImportedDesign,
+    step: u32,
+    placements: &[LayoutOccurrenceId],
+    primary_bom: Option<usize>,
+    terminations: Option<&HashSet<ComponentOccurrenceId>>,
+) -> Vec<AssemblyComponent> {
+    imported
+        .components
+        .iter()
+        .enumerate()
+        .filter(|(_, component)| component.step == step)
+        .map(|(index, component)| {
+            let included = component_is_included(imported, &component.bom_references, primary_bom);
+            let component_id = ComponentDefinitionId(index as u32);
+            let terminated_placements = terminations
+                .into_iter()
+                .flat_map(|terminations| {
+                    placements
+                        .iter()
+                        .enumerate()
+                        .filter(move |&(_, &layout)| {
+                            terminations.contains(&ComponentOccurrenceId {
+                                component: component_id,
+                                layout,
+                            })
+                        })
+                        .map(|(index, _)| index as u32)
+                })
+                .collect();
+            let reference_designator = component
+                .source
+                .ref_des
+                .map(|value| imported.resolve(value).to_owned());
+            AssemblyComponent {
+                facts: ComponentFacts {
+                    id: reference_designator
+                        .clone()
+                        .unwrap_or_else(|| format!("component:{step}:{}", component.source_index)),
+                    reference_designator,
+                    population: assembly::population(component.population),
+                    included,
+                    has_package: component.package.is_some(),
+                    solder_mounted: matches!(
+                        component.source.mount_type,
+                        ipc2581::types::MountType::Smt | ipc2581::types::MountType::Thmt
+                    ),
+                    has_terminations: false,
+                },
+                anchor: component
+                    .local_from_component
+                    .transform_point(Point::new(0.0, 0.0)),
+                terminated_placements,
+            }
+        })
+        .collect()
+}
+
+fn primary_bom(imported: &ImportedDesign) -> Option<usize> {
+    imported
+        .content
+        .bom_refs
+        .iter()
+        .find_map(|reference| imported.boms.iter().position(|bom| bom.name == *reference))
+}
+
+fn component_is_included(
+    imported: &ImportedDesign,
+    references: &[BomReferenceId],
+    primary_bom: Option<usize>,
+) -> bool {
+    !primary_bom
+        .and_then(|primary| {
+            references
+                .iter()
+                .find(|reference| reference.bom as usize == primary)
+        })
+        .or_else(|| references.first())
+        .and_then(|reference| imported.bom_item(*reference))
+        .is_some_and(|item| item.category == Some(ipc2581::types::BomCategory::Document))
 }
 
 /// An affine transform as the report states one: `[a, b, c, d, tx, ty]`.

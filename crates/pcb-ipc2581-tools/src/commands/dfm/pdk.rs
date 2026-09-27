@@ -289,6 +289,8 @@ pub struct SourceReference {
 #[serde(deny_unknown_fields)]
 pub struct Rules {
     #[serde(default)]
+    pub assembly: AssemblyRules,
+    #[serde(default)]
     pub drilling: DrillingRules,
     #[serde(default)]
     pub copper: CopperRules,
@@ -321,7 +323,15 @@ impl Rules {
             })
         }
         let (drilling, copper) = (&self.drilling, &self.copper);
-        selecting(&drilling.hole_diameter, false)
+        self.assembly
+            .diagnostic
+            .iter()
+            .map(|rule| RuleDefinition {
+                metadata: &rule.metadata,
+                limits: Limits::Categorical,
+                copper_conditions: false,
+            })
+            .chain(selecting(&drilling.hole_diameter, false))
             .chain(
                 drilling
                     .hole_aspect_ratio
@@ -358,6 +368,7 @@ struct RuleDefinition<'a> {
 }
 
 enum Limits<'a> {
+    Categorical,
     Length(Option<&'a LengthLimit>, &'a [LengthCase]),
     Ratio(Option<&'a RatioLimit>, &'a [RatioCase]),
 }
@@ -366,6 +377,7 @@ impl RuleDefinition<'_> {
     fn validate(&self) -> Result<()> {
         let (metadata, copper) = (self.metadata, self.copper_conditions);
         match self.limits {
+            Limits::Categorical => Ok(()),
             Limits::Length(limit, cases) => {
                 validate_limits(metadata, limit, cases, copper, LengthLimit::validate)
             }
@@ -379,6 +391,7 @@ impl RuleDefinition<'_> {
         let id = &self.metadata.id;
         let case_id = |case: &str| format!("{id}.{case}");
         match self.limits {
+            Limits::Categorical => vec![id.clone()],
             Limits::Length(Some(limit), _) => limit.ids(id),
             Limits::Length(None, cases) => cases
                 .iter()
@@ -388,6 +401,37 @@ impl RuleDefinition<'_> {
             Limits::Ratio(None, cases) => cases.iter().map(|case| case_id(&case.id)).collect(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyRules {
+    #[serde(default)]
+    pub diagnostic: Vec<AssemblyDiagnosticRule>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyDiagnosticRule {
+    #[serde(flatten)]
+    pub metadata: RuleMetadata,
+    pub select: AssemblyDiagnosticSelector,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyDiagnosticSelector {
+    pub diagnostic: AssemblyDiagnostic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssemblyDiagnostic {
+    MissingPopulation,
+    ConflictingPopulation,
+    MissingReferenceDesignator,
+    MissingPackage,
+    MissingPhysicalTerminations,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
