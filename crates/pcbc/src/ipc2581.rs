@@ -411,17 +411,10 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                     .context("output path has no file name")?
                     .to_string_lossy()
                     .to_string();
-                let route_args = crate::route::RouteArgs {
-                    file: input,
-                    engine: crate::route::RouteEngine::Freerouting,
-                    no_open: true,
-                    timeout: 20,
-                };
                 // Stitch whatever board state routing left behind — a
                 // partial result published before a routing error still
                 // gets a coherent GND — then surface the routing error.
-                let routed =
-                    crate::freerouting::execute(&route_args, &output, &pro_path, &board_name);
+                let routed = crate::freerouting::execute(&output, &pro_path, &board_name, 20);
                 let vias = pcb_interposer::stitch::stitch(&output)?;
                 println!("✓ Stitched {vias} GND vias");
                 routed?;
