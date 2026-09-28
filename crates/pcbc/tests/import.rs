@@ -433,6 +433,53 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     );
 }
 
+#[test]
+fn project_import_joins_stale_pcb_reference_by_native_path() {
+    let mut sandbox = sandbox();
+    let schematic = STANDALONE_FIXTURE
+        .replace("(in_bom yes)", "(in_bom no)")
+        .replace("Resistor_SMD:R_0402_1005Metric", "Local:CustomR");
+    let pcb = PCB_FIXTURE
+        .replace("Resistor_SMD:R_0402_1005Metric", "Local:CustomR")
+        .replace(
+            "(property \"Reference\" \"R1\"",
+            "(property \"Reference\" \"R_OLD\"",
+        );
+    sandbox.write("source/layout.kicad_sch", &schematic);
+    sandbox.write("source/layout.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write("source/layout.kicad_pcb", &pcb);
+    let import = sandbox
+        .run("pcbc", ["import", "source/layout.kicad_pro", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&import.stderr);
+    assert!(import.status.success(), "{stderr}");
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(extraction_report(&stderr)).unwrap()).unwrap();
+    let r1 = report["extraction"]["netlist_components"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|component| component["netlist"]["refdes"] == "R1")
+        .unwrap();
+    assert_eq!(r1["layout"]["properties"]["Reference"], "R_OLD");
+    assert!(r1["layout"]["unresolved_footprint"].is_null());
+    assert!(
+        sandbox
+            .root_path()
+            .join("out/components/ERJ-2RKF1003X/CustomR.kicad_mod")
+            .is_file()
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.root_path().join("source/layout.kicad_pcb")).unwrap(),
+        pcb
+    );
+    assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
+}
+
 fn assert_preserved_schematic(path: &std::path::Path, original: &str, applied: bool) {
     use pcb_kicad_sch::{SchDocument, SchItem, SymbolSlotKey};
     let mut imported = SchDocument::from_kicad_sch(&fs::read_to_string(path).unwrap()).unwrap();

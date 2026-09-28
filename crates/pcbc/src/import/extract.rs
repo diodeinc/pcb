@@ -58,7 +58,9 @@ pub(super) fn extract_ir(
             retained.is_file().then_some(retained)
         });
     if let Some(pcb) = layout_pcb {
-        extract_kicad_layout_data(&pcb, &mut netlist.components)?;
+        let native_unit_anchors = (selection.portable.source_kind == ImportSourceKind::Project)
+            .then_some(&netlist.unit_to_anchor);
+        extract_kicad_layout_data(&pcb, native_unit_anchors, &mut netlist.components)?;
     }
     // Missing PCB footprints are source parity findings, not missing schematic components.
     // Reuse standalone resolution without replacing any board-embedded geometry.
@@ -512,6 +514,7 @@ fn build_schematic_sheet_tree(
 
 fn extract_kicad_layout_data(
     pcb_path: &Path,
+    native_unit_anchors: Option<&BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>>,
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
 ) -> Result<()> {
     let pcb_text = fs::read_to_string(pcb_path)
@@ -524,6 +527,8 @@ fn extract_kicad_layout_data(
     // Netlist extraction already rejects duplicate references. A retained PCB's
     // UUID paths are Zener sync hooks, not source schematic anchors; references
     // let us reuse its geometry without replacing schematic-derived identity.
+    // Source project PCBs can additionally join by native unit path when their
+    // reference is stale. Never interpret retained sync hooks as native paths.
     let anchors_by_refdes = netlist_components
         .iter()
         .map(|(key, component)| (component.netlist.refdes.as_str().to_owned(), key.clone()))
@@ -534,6 +539,7 @@ fn extract_kicad_layout_data(
             .properties
             .get("Reference")
             .and_then(|refdes| anchors_by_refdes.get(refdes))
+            .or_else(|| native_unit_anchors?.get(&KiCadUuidPathKey::from_pcb_path(&fp.path).ok()?))
         else {
             // Ignore footprints we can't join against netlist-derived component identities.
             continue;
