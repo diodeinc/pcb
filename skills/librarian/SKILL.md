@@ -87,10 +87,8 @@ metadata; do not check downloaded PDFs into the package.
   source and `Description` to its package and evidence basis. Include a real
   `.kicad_mod`; record whether it is vendor-derived, stock-derived, generated,
   or intentionally adjusted.
-- For generated footprints, retain the final generator YAML beside the
-  footprint with the same stem (`Foo.kicad_mod` and `Foo.yaml`). Preserve the
-  provenance and generator version required by `kicad-footprint`. Downloaded
-  and stock footprints do not need invented generator inputs.
+- Keep generator YAML only for generated footprints, per `kicad-footprint`;
+  downloaded and stock footprints need none.
 - Embed a verified STEP for the exact package, or make its absence and impact
   explicit. A known-wrong model is not an acceptable substitute. Scratch 3D
   geometry requires explicit user confirmation; after approval, label it as
