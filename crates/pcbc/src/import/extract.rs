@@ -44,13 +44,21 @@ pub(super) fn extract_ir(
         &schematic.sheet_symbols_by_uuid,
     );
 
-    if selection.portable.source_kind == ImportSourceKind::Project {
-        extract_kicad_layout_data(
-            staged_root,
-            &paths.kicad_project_root,
-            &validation.summary.selected,
-            &mut netlist.components,
-        )?;
+    let layout_pcb = validation
+        .summary
+        .selected
+        .kicad_pcb
+        .as_ref()
+        .map(|relative| staged_root.join(relative))
+        .or_else(|| {
+            let retained = paths
+                .workspace_root
+                .join("layout")
+                .join(selection.selected.kicad_sch.with_extension("kicad_pcb"));
+            retained.is_file().then_some(retained)
+        });
+    if let Some(pcb) = layout_pcb {
+        extract_kicad_layout_data(&pcb, &mut netlist.components)?;
     }
     // Missing PCB footprints are source parity findings, not missing schematic components.
     // Reuse standalone resolution without replacing any board-embedded geometry.
@@ -503,36 +511,34 @@ fn build_schematic_sheet_tree(
 }
 
 fn extract_kicad_layout_data(
-    staged_root: &Path,
-    source_root: &Path,
-    selected: &SelectedKicadFiles,
+    pcb_path: &Path,
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
 ) -> Result<()> {
-    let kicad_pcb = selected
-        .kicad_pcb
-        .as_ref()
-        .context("Project import is missing a selected .kicad_pcb file")?;
-    let staged_pcb = staged_root.join(kicad_pcb);
-    let source_pcb = source_root.join(kicad_pcb);
-    if !staged_pcb.exists() {
-        anyhow::bail!("PCB file not found: {}", source_pcb.display());
-    }
-
-    let pcb_text = fs::read_to_string(&staged_pcb)
-        .with_context(|| format!("Failed to read {}", source_pcb.display()))?;
+    let pcb_text = fs::read_to_string(pcb_path)
+        .with_context(|| format!("Failed to read {}", pcb_path.display()))?;
 
     let root = pcb_sexpr::parse(&pcb_text).context("Failed to parse KiCad PCB as S-expression")?;
 
     let footprints =
         sexpr_board::extract_keyed_footprints(&root).map_err(|e| anyhow::anyhow!(e))?;
+    // Netlist extraction already rejects duplicate references. A retained PCB's
+    // UUID paths are Zener sync hooks, not source schematic anchors; references
+    // let us reuse its geometry without replacing schematic-derived identity.
+    let anchors_by_refdes = netlist_components
+        .iter()
+        .map(|(key, component)| (component.netlist.refdes.as_str().to_owned(), key.clone()))
+        .collect::<BTreeMap<_, _>>();
 
     for fp in footprints {
-        let key = KiCadUuidPathKey::from_pcb_path(&fp.path)?;
-
-        let Some(component) = netlist_components.get_mut(&key) else {
+        let Some(key) = fp
+            .properties
+            .get("Reference")
+            .and_then(|refdes| anchors_by_refdes.get(refdes))
+        else {
             // Ignore footprints we can't join against netlist-derived component identities.
             continue;
         };
+        let component = netlist_components.get_mut(key).expect("indexed component");
 
         let sexpr = pcb_text
             .get(fp.span.start..fp.span.end)
@@ -541,7 +547,7 @@ fn extract_kicad_layout_data(
                     "Failed to slice footprint S-expression span {}..{} from {}",
                     fp.span.start,
                     fp.span.end,
-                    source_pcb.display()
+                    pcb_path.display()
                 )
             })?
             .to_string();
@@ -583,12 +589,11 @@ fn extract_kicad_layout_data(
             footprint_geometry: ImportFootprintGeometry::BoardInstance(sexpr),
         };
 
-        if component.layout.replace(layout).is_some() {
-            debug!(
-                "Duplicate layout footprint entry for {}; overwriting",
-                key.pcb_path()
-            );
-        }
+        anyhow::ensure!(
+            component.layout.replace(layout).is_none(),
+            "PCB contains multiple footprints for {}",
+            component.netlist.refdes.as_str()
+        );
     }
 
     Ok(())

@@ -272,9 +272,13 @@ fn standalone_import_links_schematic_without_creating_a_pcb_or_archive() {
 fn project_import_preserves_sources_and_existing_archive_behavior() {
     let mut sandbox = sandbox();
     // Keep this electrical/layout check independent of the fixture's incomplete sourcing.
-    let schematic = STANDALONE_FIXTURE.replace("(in_bom yes)", "(in_bom no)");
+    // Geometry exists only in the PCB, never an installed footprint library.
+    let schematic = STANDALONE_FIXTURE
+        .replace("(in_bom yes)", "(in_bom no)")
+        .replace("Resistor_SMD:R_0402_1005Metric", "Local:CustomR");
     // Source parity is advisory: preserve stale PCB metadata/nets rather than correcting them.
     let pcb = PCB_FIXTURE
+        .replace("Resistor_SMD:R_0402_1005Metric", "Local:CustomR")
         .replace("(attr smd)", "(attr smd exclude_from_bom)")
         .replace("(attr smd dnp)", "(attr smd dnp exclude_from_bom)")
         .replace(
@@ -373,10 +377,27 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
         fs::read(output.join("layout/layout.kicad_pcb")).unwrap()
     );
 
-    // A standalone force reimport must adopt the retained two-layer PCB. Restore
-    // its native identity hooks to prove reimport runs the prepatcher, not merely
-    // preserves a previously synchronized file. Its physical contents stay the same.
-    fs::write(output.join("layout/layout.kicad_pcb"), &pcb).unwrap();
+    // Retained PCB paths are generated UUIDs, not native schematic UUIDs. Damage
+    // only the Path properties to prove reimport both reads the embedded geometry
+    // and repairs identity hooks, while retaining placement, routing and stackup.
+    let footprint_path = output.join("components/ERJ-2RKF1003X/CustomR.kicad_mod");
+    let embedded_geometry = fs::read(&footprint_path).unwrap();
+    let retained_pcb = std::str::from_utf8(&pcb_before_apply).unwrap();
+    let parsed = pcb_sexpr::parse(retained_pcb).unwrap();
+    let mut patches = pcb_sexpr::PatchSet::new();
+    for footprint in parsed.find_all_lists("footprint") {
+        for property in footprint.iter().filter_map(pcb_sexpr::Sexpr::as_list) {
+            if property.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("property")
+                && property.get(1).and_then(pcb_sexpr::Sexpr::as_str) == Some("Path")
+            {
+                patches.replace_string(property[2].span, "stale.component");
+            }
+        }
+    }
+    let mut stale = Vec::new();
+    patches.write_to(retained_pcb, &mut stale).unwrap();
+    assert_ne!(stale, pcb_before_apply);
+    fs::write(output.join("layout/layout.kicad_pcb"), stale).unwrap();
     let retained_project = fs::read(output.join("layout/layout.kicad_pro")).unwrap();
     let reimport = sandbox
         .run(
@@ -395,6 +416,7 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     );
     let regenerated = fs::read_to_string(output.join("layout.zen")).unwrap();
     assert!(regenerated.contains("layers=2,"), "{regenerated}");
+    assert_eq!(embedded_geometry, fs::read(footprint_path).unwrap());
     assert_eq!(
         retained_project,
         fs::read(output.join("layout/layout.kicad_pro")).unwrap()

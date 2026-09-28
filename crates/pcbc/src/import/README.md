@@ -57,8 +57,9 @@ For a board named `<board>`, a standalone schematic import produces:
 A standalone import creates a minimal KiCad project for its persistent schematic,
 but no PCB or source archive. It keeps an existing layout and project configuration
 on forced reimport. A retained matching PCB supplies the layer count and stackup,
-and receives the same identity/net binding updates as a project import without
-reconstructing its placement or routing.
+supplies embedded footprint geometry before external library fallback, and receives
+the same identity/net binding updates as a project import without reconstructing
+its placement or routing.
 A differently named retained project is rejected before cleanup;
 import its matching schematic or choose a new output directory instead.
 The board enables `schematic = True` at the standard `layout`
@@ -132,7 +133,11 @@ It must not share that net with another endpoint.
 
 Import joins schematic, netlist, and layout records by `KiCadUuidPathKey`:
 the instance sheet UUID path (`sheetpath.tstamps`) and symbol UUID.
-Reference designators are unsuitable because they can change or collide across sheets.
+Schematic/netlist identities stay on these source anchors. Footprint geometry is
+matched to them by unique reference designator: a retained PCB already uses Zener
+sync UUIDs, not native schematic paths. Ambiguous references are rejected rather
+than choosing one footprint's geometry. Reference designators do not define the
+generated hierarchy or symbol identities.
 
 ## Footprint de-instancing
 
