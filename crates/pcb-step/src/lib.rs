@@ -787,23 +787,28 @@ fn export_components(
                 }
             }
         }
-        let context = root.context;
         let emitted = parallel_map(threads, &jobs, |job| -> Result<_, Error> {
             if job.base == 0 {
                 return Ok(None);
             }
             let mut local = Writer::new(job.base);
-            let shape = job
+            let key = &uses[job.index].key;
+            let stem = std::path::Path::new(key)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(key);
+            let part = job
                 .analysis
-                .emit(&job.donor, &mut local, &context, job.scale)?;
-            Ok(Some((local.buf, shape)))
+                .emit(&job.donor, &mut local, root, stem, job.scale)?;
+            debug_assert_eq!(local.next_id, job.base + job.analysis.id_budget());
+            Ok(Some((local.buf, part)))
         });
 
         sink.write_all(&w.buf)?;
         w.buf.clear();
         for (job, result) in jobs.iter().zip(emitted) {
             let use_ = &mut uses[job.index];
-            let Some((buf, shape)) = result? else {
+            let Some((buf, part)) = result? else {
                 use_.part = parts_by_content
                     .iter()
                     .find(|(h, s, _)| *h == job.hash && *s == use_.scale)
@@ -811,11 +816,6 @@ fn export_components(
                 continue;
             };
             sink.write_all(&buf)?;
-            let stem = std::path::Path::new(&use_.key)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or(&use_.key);
-            let part = w.part(root, stem, shape.representation, shape.origin);
             parts_by_content.push((job.hash, use_.scale, part));
             use_.part = Some(part);
         }
