@@ -847,11 +847,14 @@ impl Writer {
                 }
                 Edge::Arc { c, ccw, .. } => (self.cylinder(c, z0, edge.radius()), ccw),
             };
+            // The caps use top-forward and bottom-reverse. Walk the wall
+            // the other way so every shared edge has opposite uses, without
+            // changing the outward surface normal.
             let bound = [
-                (ring.top[i], true),
-                (ring.vertical[next], true),
-                (ring.bottom[i], false),
-                (ring.vertical[i], false),
+                (ring.top[i], false),
+                (ring.vertical[i], true),
+                (ring.bottom[i], true),
+                (ring.vertical[next], false),
             ];
             faces.push(self.face(&[&bound], surface, same_sense));
         }
@@ -924,7 +927,9 @@ impl Writer {
                 let semi_angle = ((r0 - r1).abs() / (z0 - z1)).atan();
                 self.cone(c, origin_z, radius, axis, semi_angle)
             };
-            let bound = [(top, true), (seam, true), (bottom, false), (seam, false)];
+            // Oppose the adjacent cap, shoulder or floor at each rim.
+            // The periodic seam still has one use in each direction.
+            let bound = [(top, false), (seam, true), (bottom, true), (seam, false)];
             faces.push(self.face(&[&bound], surface, false));
         }
         RoundHoleBounds {
