@@ -770,6 +770,7 @@ fn orphaned_junctions(
                 id: junction.id.clone(),
             };
             if removals.contains(&junction_ref)
+                || crate::connectivity::kicad::is_bus_junction(page, junction.at)
                 || !removed_segments
                     .iter()
                     .any(|(a, b)| point_on_segment(junction.at, *a, *b))

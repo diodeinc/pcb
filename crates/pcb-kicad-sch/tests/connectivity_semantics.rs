@@ -417,6 +417,9 @@ fn placed_pin_alternate_controls_effective_power_type_and_name() {
         )
         .component("Test:Alternate", Some("U1"), (0.0, 0.0))
         .pin_alternate("1", "VCC")
+        // A virtual bus member is not a physical connection that suppresses
+        // a legacy hidden power pin's global driver.
+        .local_label("{VCC DATA}", (20.0, 20.0))
         .add_root_page("other", "other.kicad_sch")
         .global_label("VCC", (10.0, 0.0));
 
@@ -585,7 +588,7 @@ fn invalid_power_scope_is_an_error() {
 }
 
 #[test]
-fn bus_items_fail_connectivity_reduction_explicitly() {
+fn malformed_bus_geometry_fails_connectivity_reduction_explicitly() {
     let mut document = KicadBuilder::new().build();
     document.pages[0]
         .items
@@ -593,11 +596,7 @@ fn bus_items_fail_connectivity_reduction_explicitly() {
 
     let error = ConnectivityGraph::from_kicad(&document).unwrap_err();
 
-    assert!(
-        error
-            .to_string()
-            .contains("bus connectivity is not supported")
-    );
+    assert!(error.to_string().contains("bus missing pts"));
 }
 
 #[test]
