@@ -359,6 +359,82 @@ fn count(text: &str, entity: &str) -> usize {
     text.matches(&format!(" = {entity}(")).count()
 }
 
+/// Inspect the emitted topology before a CAD kernel can heal it. Each
+/// closed-shell edge must have two opposite uses, including periodic seams.
+fn assert_closed_shell_topology(text: &str) {
+    use std::collections::BTreeMap;
+
+    let entities: BTreeMap<u32, &str> = text
+        .lines()
+        .filter_map(|line| {
+            let (id, body) = line.strip_prefix('#')?.split_once(" = ")?;
+            Some((id.parse().unwrap(), body.trim_end_matches(';')))
+        })
+        .collect();
+    let refs = |body: &str| -> Vec<u32> {
+        body.split('#')
+            .skip(1)
+            .map(|s| {
+                let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+                s[..end].parse().unwrap()
+            })
+            .collect()
+    };
+    let forward = |body: &str| {
+        assert!(body.ends_with(",.T.)") || body.ends_with(",.F.)"), "{body}");
+        body.ends_with(",.T.)")
+    };
+    let mut shells = 0;
+    for (&shell, body) in &entities {
+        if !body.starts_with("CLOSED_SHELL(") {
+            continue;
+        }
+        shells += 1;
+        let mut uses: BTreeMap<u32, Vec<(u32, bool)>> = BTreeMap::new();
+        for face in refs(body) {
+            assert!(entities[&face].starts_with("ADVANCED_FACE("));
+            let face_refs = refs(entities[&face]);
+            for bound in &face_refs[..face_refs.len() - 1] {
+                let bound_body = entities[bound];
+                let loop_id = refs(bound_body)[0];
+                let mut vertices = Vec::new();
+                for oriented in refs(entities[&loop_id]) {
+                    let edge = refs(entities[&oriented])[0];
+                    let same = forward(entities[&oriented]);
+                    let ends = refs(entities[&edge]);
+                    vertices.push(if same {
+                        (ends[0], ends[1])
+                    } else {
+                        (ends[1], ends[0])
+                    });
+                    // FACE_BOUND reverses topology; ADVANCED_FACE.same_sense
+                    // only selects the surface normal and must not enter this.
+                    uses.entry(edge)
+                        .or_default()
+                        .push((face, same == forward(bound_body)));
+                }
+                assert!(!vertices.is_empty());
+                for i in 0..vertices.len() {
+                    assert_eq!(
+                        vertices[i].1,
+                        vertices[(i + 1) % vertices.len()].0,
+                        "disconnected EDGE_LOOP #{loop_id}"
+                    );
+                }
+            }
+        }
+        assert!(!uses.is_empty());
+        for (edge, pair) in uses {
+            assert_eq!(pair.len(), 2, "shell #{shell}, edge #{edge}: {pair:?}");
+            assert_ne!(
+                pair[0].1, pair[1].1,
+                "shell #{shell}, edge #{edge} has same-direction uses: {pair:?}"
+            );
+        }
+    }
+    assert!(shells > 0);
+}
+
 #[test]
 fn board_body_is_one_closed_solid() {
     let edges = format!(
@@ -372,6 +448,7 @@ fn board_body_is_one_closed_solid() {
     );
     let (text, report) = export_text(&parse(&edges), &bare());
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert_closed_shell_topology(&text);
     assert_eq!(count(&text, "MANIFOLD_SOLID_BREP"), 1);
     assert_eq!(count(&text, "CLOSED_SHELL"), 1);
     // Two caps, four outline walls, one cylinder for the round drill, and
@@ -390,6 +467,7 @@ fn board_body_is_one_closed_solid() {
         },
     );
     assert_eq!(count(&text, "CYLINDRICAL_SURFACE"), 4);
+    assert_closed_shell_topology(&text);
 }
 
 /// Encode bytes the way KiCad embeds files: zstd, then base64 wrapped
@@ -964,6 +1042,7 @@ fn machined_holes_are_emitted_as_analytic_faces() {
         },
     );
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert_closed_shell_topology(&text);
     assert_eq!(count(&text, "MANIFOLD_SOLID_BREP"), 1);
     // Caps and four walls; counterbore: cylinder, shoulder, cylinder;
     // countersink: cylinder, cone; blind via: cylinder, floor disc.
@@ -973,6 +1052,30 @@ fn machined_holes_are_emitted_as_analytic_faces() {
     // Three holes on the top cap, two on the bottom, the counterbore's
     // shoulder ring.
     assert_eq!(count(&text, "FACE_BOUND"), 3 + 2 + 1);
+}
+
+#[test]
+fn hole_profiles_have_opposite_edge_uses_at_caps_shoulders_and_floors() {
+    let profiles: &[&[(f64, f64)]] = &[
+        &[(3., 1.), (0., 1.)],                     // through cylinder
+        &[(3., 2.), (2., 1.), (0., 1.)],           // front countersink
+        &[(3., 1.), (1., 1.), (0., 2.)],           // back countersink
+        &[(3., 2.), (2., 2.), (2., 1.), (0., 1.)], // front counterbore
+        &[(3., 1.), (1., 1.), (1., 2.), (0., 2.)], // back counterbore
+        &[(3., 1.), (1., 1.), (1., 0.)],           // front blind pocket
+        &[(2., 0.), (2., 1.), (0., 1.)],           // back blind pocket
+    ];
+    for profile in profiles {
+        let mut solid = solids_for(&rect_outline(0., 0., 10., 10.)).remove(0);
+        solid.round.push(RoundHole {
+            center: Vec2::new(5., -5.),
+            profile: profile.to_vec(),
+            fallback: None,
+        });
+        let mut w = crate::step::Writer::new(1);
+        w.solid("profile", &solid, 0., 3.);
+        assert_closed_shell_topology(std::str::from_utf8(&w.buf).unwrap());
+    }
 }
 
 #[test]
@@ -1058,6 +1161,7 @@ fn copper_is_unioned_per_layer_and_extruded() {
         },
     );
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert_closed_shell_topology(&text);
     assert!(text.contains("PRODUCT('board_copper'"));
     assert!(text.contains("PRODUCT('board_pad'"));
     assert!(text.contains("PRODUCT('board_via'"));
