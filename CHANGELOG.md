@@ -15,7 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Import KiCad designs as Quiche-compatible persistent schematics, preserving original wiring, hierarchy, and multi-unit symbols instead of reconstructing placement from comments.
-- Report schematic/PCB parity mismatches during import without blocking conversion, retaining the existing PCB layout.
+- Report schematic/PCB parity mismatches during import without blocking conversion, retaining the existing PCB layout and its stackup even on standalone reimport.
 
 ### Fixed
 

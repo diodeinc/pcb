@@ -372,6 +372,43 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
         pcb_before_apply,
         fs::read(output.join("layout/layout.kicad_pcb")).unwrap()
     );
+
+    // A standalone force reimport must adopt the retained two-layer PCB. Restore
+    // its native identity hooks to prove reimport runs the prepatcher, not merely
+    // preserves a previously synchronized file. Its physical contents stay the same.
+    fs::write(output.join("layout/layout.kicad_pcb"), &pcb).unwrap();
+    let retained_project = fs::read(output.join("layout/layout.kicad_pro")).unwrap();
+    let reimport = sandbox
+        .run(
+            "pcbc",
+            ["import", "source/layout.kicad_sch", "out", "--force"],
+        )
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        reimport.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reimport.stderr)
+    );
+    let regenerated = fs::read_to_string(output.join("layout.zen")).unwrap();
+    assert!(regenerated.contains("layers=2,"), "{regenerated}");
+    assert_eq!(
+        retained_project,
+        fs::read(output.join("layout/layout.kicad_pro")).unwrap()
+    );
+    assert_eq!(
+        pcb_before_apply,
+        fs::read(output.join("layout/layout.kicad_pcb")).unwrap()
+    );
+    assert!(!output.join("layout.kicad.archive.zip").exists());
+    assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
+    assert_eq!(
+        pcb_before_apply,
+        fs::read(output.join("layout/layout.kicad_pcb")).unwrap()
+    );
 }
 
 fn assert_preserved_schematic(path: &std::path::Path, original: &str, applied: bool) {

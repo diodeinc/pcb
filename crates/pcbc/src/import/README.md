@@ -56,7 +56,10 @@ For a board named `<board>`, a standalone schematic import produces:
 
 A standalone import creates a minimal KiCad project for its persistent schematic,
 but no PCB or source archive. It keeps an existing layout and project configuration
-on forced reimport. A differently named retained project is rejected before cleanup;
+on forced reimport. A retained matching PCB supplies the layer count and stackup,
+and receives the same identity/net binding updates as a project import without
+reconstructing its placement or routing.
+A differently named retained project is rejected before cleanup;
 import its matching schematic or choose a new output directory instead.
 The board enables `schematic = True` at the standard `layout`
 path so Quiche and `pcb apply schematic` use the copied document.

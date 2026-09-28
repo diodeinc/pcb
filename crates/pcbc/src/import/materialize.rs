@@ -50,6 +50,12 @@ pub(super) fn materialize_board(
             path
         }
     };
+    // Standalone forced imports retain layout/. Its matching board still needs
+    // stackup extraction and the same identity/net prepatching as a project import.
+    let layout_kicad_pcb = layout_kicad_pcb.or_else(|| {
+        let path = layout_kicad_pro.with_extension("kicad_pcb");
+        path.is_file().then_some(path)
+    });
 
     if let Some(output_zip) = &portable_kicad_project_zip {
         portable::write_portable_zip(&selection.portable, staged_root, output_zip)
