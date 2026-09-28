@@ -17,7 +17,6 @@ mod git_auth;
 pub mod kicad_symbols;
 pub mod registry;
 pub mod release;
-pub mod routing;
 pub mod sandbox;
 pub mod scan;
 

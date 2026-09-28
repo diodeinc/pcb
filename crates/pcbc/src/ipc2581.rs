@@ -416,7 +416,6 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                     engine: crate::route::RouteEngine::Freerouting,
                     no_open: true,
                     timeout: 20,
-                    project_id: None,
                 };
                 // Stitch whatever board state routing left behind — a
                 // partial result published before a routing error still
