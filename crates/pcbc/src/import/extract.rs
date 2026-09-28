@@ -426,13 +426,13 @@ fn resolve_sheet_file(
         let rel = candidate
             .strip_prefix(kicad_project_root)
             .unwrap_or(&candidate);
-        return Some(rel.to_path_buf());
+        return Some(pcb_kicad_sch::normalize_schematic_path(rel));
     }
 
     let base = declared_in_rel.parent().unwrap_or(Path::new(""));
     let abs = kicad_project_root.join(base).join(candidate);
     let rel = abs.strip_prefix(kicad_project_root).unwrap_or(&abs);
-    Some(rel.to_path_buf())
+    Some(pcb_kicad_sch::normalize_schematic_path(rel))
 }
 
 fn build_schematic_sheet_tree(

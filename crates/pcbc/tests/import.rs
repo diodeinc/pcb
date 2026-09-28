@@ -1156,8 +1156,11 @@ fn unwired_hidden_power_net_preserves_native_name_with_logical_binding() {
 #[test]
 fn hierarchy_and_no_connect_markers_survive_import_and_apply() {
     let mut sandbox = sandbox();
+    // Native Sheetfile spelling survives import, while page identities normalize
+    // parent-relative paths consistently across extraction, NC analysis and binding.
     let root =
-        include_str!("../../pcb-kicad-sch/test-data/kicad-10/issue24201/issue24201.kicad_sch");
+        include_str!("../../pcb-kicad-sch/test-data/kicad-10/issue24201/issue24201.kicad_sch")
+            .replace("aSheet.kicad_sch", "child/../child/aSheet.kicad_sch");
     // Sourcing is intentionally absent in this upstream electrical test, not part of this check.
     // Native saves may keep only a cached alias, distinct from the library identity.
     let child = include_str!("../../pcb-kicad-sch/test-data/kicad-10/issue24201/aSheet.kicad_sch")
@@ -1168,8 +1171,8 @@ fn hierarchy_and_no_connect_markers_survive_import_and_apply() {
             "(lib_id \"Device:R\")",
             "(lib_id \"Device:R\") (lib_name \"R_cached\")",
         );
-    sandbox.write("source/issue24201.kicad_sch", root);
-    sandbox.write("source/aSheet.kicad_sch", &child);
+    sandbox.write("source/issue24201.kicad_sch", &root);
+    sandbox.write("source/child/aSheet.kicad_sch", &child);
     let import = sandbox
         .run("pcbc", ["import", "source/issue24201.kicad_sch", "out"])
         .stdout_capture()
@@ -1183,8 +1186,8 @@ fn hierarchy_and_no_connect_markers_survive_import_and_apply() {
         String::from_utf8_lossy(&import.stderr)
     );
     let output = sandbox.root_path().join("out/layout");
-    assert_preserved_schematic(&output.join("issue24201.kicad_sch"), root, false);
-    assert_preserved_schematic(&output.join("aSheet.kicad_sch"), &child, false);
+    assert_preserved_schematic(&output.join("issue24201.kicad_sch"), &root, false);
+    assert_preserved_schematic(&output.join("child/aSheet.kicad_sch"), &child, false);
     let project = pcbc::kicad_schematic::KicadProject::load(&output).unwrap();
     let paths = project
         .document
@@ -1198,8 +1201,8 @@ fn hierarchy_and_no_connect_markers_survive_import_and_apply() {
         .collect::<BTreeSet<_>>();
     assert_eq!(paths, BTreeSet::from(["A.R1.R", "A.R3.R"]));
     assert_repeated_schematic_apply(&mut sandbox, "out/issue24201.zen", &[]);
-    assert_preserved_schematic(&output.join("issue24201.kicad_sch"), root, true);
-    assert_preserved_schematic(&output.join("aSheet.kicad_sch"), &child, true);
+    assert_preserved_schematic(&output.join("issue24201.kicad_sch"), &root, true);
+    assert_preserved_schematic(&output.join("child/aSheet.kicad_sch"), &child, true);
 }
 
 #[test]
