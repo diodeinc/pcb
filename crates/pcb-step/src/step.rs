@@ -382,20 +382,6 @@ impl Writer {
         self.end();
     }
 
-    pub(crate) fn representation_map_at(&mut self, id: u32, origin: u32, representation: u32) {
-        self.begin(id, "REPRESENTATION_MAP");
-        self.refs(&[origin, representation]);
-        self.end();
-    }
-
-    pub(crate) fn mapped_item(&mut self, map: u32, target: u32) -> u32 {
-        let id = self.open("MAPPED_ITEM");
-        self.text("'',");
-        self.refs(&[map, target]);
-        self.end();
-        id
-    }
-
     /// Colour one solid the way OCCT's XCAF writer does, returning the
     /// `STYLED_ITEM` for the presentation representation.
     pub(crate) fn styled_solid(&mut self, solid: u32, rgb: [f64; 3]) -> u32 {
@@ -667,7 +653,7 @@ impl Root {
 #[derive(Clone, Copy)]
 pub(crate) struct Part {
     product_def: u32,
-    representation: u32,
+    pub(crate) representation: u32,
     origin: u32,
 }
 
@@ -721,6 +707,29 @@ impl Writer {
         name: &str,
         transform: &Transform,
     ) -> u32 {
+        self.suboccurrence(
+            Part {
+                product_def: root.product_def,
+                representation: root.shape_rep,
+                origin: root.ids[13],
+            },
+            part,
+            index,
+            name,
+            transform,
+        )
+    }
+
+    /// Place a child in a reusable subassembly, using the same product and
+    /// representation relationships as a board occurrence.
+    pub(crate) fn suboccurrence(
+        &mut self,
+        parent: Part,
+        part: Part,
+        index: usize,
+        name: &str,
+        transform: &Transform,
+    ) -> u32 {
         let placement = Placement::reserve(self);
         let ids: [u32; 5] = std::array::from_fn(|_| self.id());
         let [
@@ -752,8 +761,8 @@ impl Writer {
         self.end();
 
         let name = name.replace('\'', "''");
-        let root_shape_rep = root.shape_rep;
-        let root_product_def = root.product_def;
+        let root_shape_rep = parent.representation;
+        let root_product_def = parent.product_def;
         let part_product_def = part.product_def;
         let part_origin = part.origin;
         let part_representation = part.representation;

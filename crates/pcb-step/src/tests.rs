@@ -455,7 +455,8 @@ fn components_are_copied_once_and_placed_per_footprint() {
     assert_eq!(report.failed_models, 0);
     // One copy of the donor solid at scale 1, one at scale 2, the board.
     assert_eq!(count(&text, "MANIFOLD_SOLID_BREP"), 3);
-    assert_eq!(count(&text, "NEXT_ASSEMBLY_USAGE_OCCURRENCE"), 4);
+    // Four board occurrences and one child inside each scaled donor.
+    assert_eq!(count(&text, "NEXT_ASSEMBLY_USAGE_OCCURRENCE"), 6);
     assert!(text.contains("NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','U1'"));
     assert!(text.contains("NEXT_ASSEMBLY_USAGE_OCCURRENCE('4','PCB'"));
     // The scaled copy has its coordinates doubled.
@@ -494,7 +495,7 @@ fn components_are_copied_once_and_placed_per_footprint() {
             ..bare()
         },
     );
-    assert_eq!(count(&text, "NEXT_ASSEMBLY_USAGE_OCCURRENCE"), 1);
+    assert_eq!(count(&text, "NEXT_ASSEMBLY_USAGE_OCCURRENCE"), 2);
     assert_eq!(count(&text, "MANIFOLD_SOLID_BREP"), 1);
 }
 
@@ -592,7 +593,8 @@ END-ISO-10303-21;
     assert!(!analysis.is_empty());
     let mut w = crate::step::Writer::new(100);
     let root = crate::step::Root::reserve(&mut crate::step::Writer::new(1));
-    analysis.emit(&donor, &mut w, &root.context, 1.0).unwrap();
+    analysis.emit(&donor, &mut w, &root, "model", 1.0).unwrap();
+    assert_eq!(w.next_id, 100 + analysis.id_budget());
     let text = String::from_utf8(w.buf).unwrap();
     // Metres become millimetres, degrees become radians.
     assert!(text.contains("CARTESIAN_POINT('a #99 quote''s',(1000.,2000.,3000.))"));
@@ -682,13 +684,15 @@ END-ISO-10303-21;
     let analysis = donor.analyze().unwrap();
     let mut w = crate::step::Writer::new(100);
     let root = crate::step::Root::reserve(&mut crate::step::Writer::new(1));
-    let shape = analysis.emit(&donor, &mut w, &root.context, 1.0).unwrap();
+    let shape = analysis.emit(&donor, &mut w, &root, "model", 1.0).unwrap();
+    assert_eq!(w.next_id, 100 + analysis.id_budget());
     let text = String::from_utf8(w.buf).unwrap();
     // The child geometry is copied once and instanced twice, at the two
     // occurrence placements, under the root representation.
     assert_eq!(count(&text, "GEOMETRIC_CURVE_SET"), 1);
-    assert_eq!(count(&text, "MAPPED_ITEM"), 2);
-    assert_eq!(count(&text, "REPRESENTATION_MAP"), 2);
+    assert_eq!(count(&text, "MAPPED_ITEM"), 0);
+    assert_eq!(count(&text, "NEXT_ASSEMBLY_USAGE_OCCURRENCE"), 2);
+    assert_eq!(count(&text, "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION"), 2);
     assert!(text.contains("CARTESIAN_POINT('',(10.0,0.0,0.0))"));
     assert!(text.contains("CARTESIAN_POINT('',(0.0,20.0,0.0))"));
     // The donor's 100 µm accuracy is carried into its own context.
@@ -697,7 +701,7 @@ END-ISO-10303-21;
         .lines()
         .find(|l| l.starts_with(&format!("#{} = SHAPE_REPRESENTATION", shape.representation)))
         .unwrap();
-    assert_eq!(representation.matches('#').count(), 1 + 1 + 4 + 1);
+    assert_eq!(representation.matches('#').count(), 1 + 1 + 2 + 1);
 }
 
 #[test]
@@ -755,7 +759,8 @@ END-ISO-10303-21;
     let analysis = donor.analyze().unwrap();
     let mut w = crate::step::Writer::new(100);
     let root = crate::step::Root::reserve(&mut crate::step::Writer::new(1));
-    analysis.emit(&donor, &mut w, &root.context, 1.0).unwrap();
+    analysis.emit(&donor, &mut w, &root, "model", 1.0).unwrap();
+    assert_eq!(w.next_id, 100 + analysis.id_budget());
     let text = String::from_utf8(w.buf).unwrap();
     assert!(
         text.contains("CARTESIAN_POINT('',(25.4,50.8,76.2))"),

@@ -4,7 +4,8 @@
 //! into statements, the product structure is read to find the displayed
 //! representations, and the transitive closure of the geometry they hold
 //! is renumbered and copied through verbatim. Assembly nesting is rebuilt
-//! with `MAPPED_ITEM`s so a donor with sub-parts keeps its transforms.
+//! with explicit product occurrences so readers preserve sub-part placements
+//! when the donor is itself instanced on the board.
 //!
 //! Every statement is classified once into a [`Kind`] byte; all later
 //! passes work on those bytes and on id-indexed tables rather than re-reading
@@ -16,7 +17,7 @@ use memchr::{memchr, memchr2, memchr3};
 
 use crate::Error;
 use crate::geom::{Transform, Vec3};
-use crate::step::{Context, Placement, Writer};
+use crate::step::{Part, Placement, Root, Writer};
 
 const NONE: u32 = u32::MAX;
 /// KiCad's `USER_PREC`: the precision its OCCT reader applies to models.
@@ -129,11 +130,6 @@ struct Rep {
     /// Factor from this representation's length unit to millimetres. A
     /// file can mix contexts, inch parts in a millimetre assembly.
     scale: f64,
-}
-
-pub(crate) struct Shape {
-    pub(crate) representation: u32,
-    pub(crate) origin: u32,
 }
 
 impl Donor {
@@ -770,11 +766,24 @@ impl Analysis {
 
     /// Exactly how many ids `emit` consumes.
     pub(crate) fn id_budget(&self) -> u32 {
-        let reps: usize = self.reps.iter().map(|r| 6 + 5 * r.children.len()).sum();
+        // Placement + representation + product, then nine ids per occurrence.
+        // Mixed representations need an identity-placed geometry-only part.
+        let reps: usize = self
+            .reps
+            .iter()
+            .map(|r| {
+                13 + 9 * r.children.len()
+                    + if !r.geometry.is_empty() && !r.children.is_empty() {
+                        22
+                    } else {
+                        0
+                    }
+            })
+            .sum();
         let wrapper = if self.roots.len() == 1 {
             0
         } else {
-            5 + 5 * self.roots.len()
+            13 + 9 * self.roots.len()
         };
         (self.closure.len() + reps + wrapper + 2) as u32
     }
@@ -790,10 +799,11 @@ impl Analysis {
         &self,
         donor: &Donor,
         w: &mut Writer,
-        context: &Context,
+        root: &Root,
+        name: &str,
         scale: f64,
-    ) -> Result<Shape, Error> {
-        let geom_context = w.geometry_context(context, MODEL_ACCURACY);
+    ) -> Result<Part, Error> {
+        let geom_context = w.geometry_context(&root.context, MODEL_ACCURACY);
         let base = w.next_id;
         w.next_id += self.closure.len() as u32;
         let mut map = vec![0u32; donor.by_id.len()];
@@ -855,15 +865,26 @@ impl Analysis {
         struct Ids {
             placement: Placement,
             representation: u32,
-            map: u32,
+            part: Part,
         }
         let ids: Vec<Ids> = self
             .reps
             .iter()
-            .map(|_| Ids {
-                placement: Placement::reserve(w),
-                representation: w.id(),
-                map: w.id(),
+            .enumerate()
+            .map(|(index, rep)| {
+                let placement = Placement::reserve(w);
+                let representation = w.id();
+                let part_name = if self.roots.as_slice() == [index as u32] {
+                    name.to_owned()
+                } else {
+                    format!("{name}/{}", rep.id)
+                };
+                let part = w.part(root, &part_name, representation, placement.axis);
+                Ids {
+                    placement,
+                    representation,
+                    part,
+                }
             })
             .collect();
         let mut items: Vec<u32> = Vec::new();
@@ -872,42 +893,56 @@ impl Analysis {
             w.axis_placement_at(own.placement, &Transform::IDENTITY);
             items.clear();
             items.push(own.placement.axis);
-            items.extend(rep.geometry.iter().filter_map(|g| new_id(*g)));
-            for (child, transform) in &rep.children {
-                let placement = Placement::reserve(w);
-                w.axis_placement_at(placement, &transform.scale_translation(rep.scale * scale));
-                let mapped = w.mapped_item(ids[*child as usize].map, placement.axis);
-                items.push(placement.axis);
-                items.push(mapped);
+            if rep.children.is_empty() {
+                items.extend(rep.geometry.iter().filter_map(|g| new_id(*g)));
+            } else if !rep.geometry.is_empty() {
+                // Do not mix assembly children and direct geometry: some
+                // readers treat the latter as an alternative assembly shape.
+                let origin = w.axis_placement(&Transform::IDENTITY);
+                let representation = w.id();
+                let mut geometry = vec![origin];
+                geometry.extend(rep.geometry.iter().filter_map(|g| new_id(*g)));
+                w.shape_representation(representation, &geometry, geom_context);
+                let part = w.part(
+                    root,
+                    &format!("{name}/{}/geometry", rep.id),
+                    representation,
+                    origin,
+                );
+                items.push(w.suboccurrence(own.part, part, 0, "geometry", &Transform::IDENTITY));
+            }
+            for (index, (child, transform)) in rep.children.iter().enumerate() {
+                items.push(w.suboccurrence(
+                    own.part,
+                    ids[*child as usize].part,
+                    index + 1,
+                    "",
+                    &transform.scale_translation(rep.scale * scale),
+                ));
             }
             w.shape_representation(own.representation, &items, geom_context);
-            w.representation_map_at(own.map, own.placement.axis, own.representation);
         }
 
         if let [root] = self.roots.as_slice() {
-            let root = &ids[*root as usize];
-            return Ok(Shape {
-                representation: root.representation,
-                origin: root.placement.axis,
-            });
+            return Ok(ids[*root as usize].part);
         }
         let placement = Placement::reserve(w);
         w.axis_placement_at(placement, &Transform::IDENTITY);
+        let representation = w.id();
+        let part = w.part(root, name, representation, placement.axis);
         items.clear();
         items.push(placement.axis);
-        for root in &self.roots {
-            let child = Placement::reserve(w);
-            w.axis_placement_at(child, &Transform::IDENTITY);
-            let mapped = w.mapped_item(ids[*root as usize].map, child.axis);
-            items.push(child.axis);
-            items.push(mapped);
+        for (index, root) in self.roots.iter().enumerate() {
+            items.push(w.suboccurrence(
+                part,
+                ids[*root as usize].part,
+                index + 1,
+                "",
+                &Transform::IDENTITY,
+            ));
         }
-        let representation = w.id();
         w.shape_representation(representation, &items, geom_context);
-        Ok(Shape {
-            representation,
-            origin: placement.axis,
-        })
+        Ok(part)
     }
 }
 
@@ -1286,4 +1321,144 @@ fn convert_body<'b>(
         text.splice(range, formatted);
     }
     Ok(Cow::Owned(text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64::consts::{FRAC_PI_2, PI};
+
+    #[test]
+    fn nested_products_keep_scaled_geometry_under_each_board_occurrence() {
+        let donor = Donor::parse(
+            br#"DATA;
+#1 = CARTESIAN_POINT('',(1.,2.,3.));
+#2 = CARTESIAN_POINT('',(4.,5.,6.));
+#4 = GEOMETRIC_SET('',(#1));
+#5 = GEOMETRIC_SET('',(#2));
+ENDSEC;"#
+                .to_vec(),
+        )
+        .unwrap();
+        let (closure, aliases) = donor.closure(&[4, 5]);
+        let mut analysis = Analysis {
+            scales: vec![1.0; closure.len()],
+            closure,
+            aliases,
+            reps: vec![
+                // Direct geometry alongside children must become a leaf,
+                // not an alternative shape that assembly readers may drop.
+                Rep {
+                    id: 10,
+                    geometry: vec![4],
+                    scale: 1.0,
+                    children: vec![(
+                        1,
+                        Transform::translation(Vec3::new(7., 11., 13.))
+                            .then(&Transform::rotation_z(FRAC_PI_2)),
+                    )],
+                },
+                Rep {
+                    id: 20,
+                    geometry: vec![],
+                    scale: 1.0,
+                    children: vec![(
+                        2,
+                        Transform::translation(Vec3::new(17., 19., 23.))
+                            .then(&Transform::rotation_x(FRAC_PI_2)),
+                    )],
+                },
+                Rep {
+                    id: 30,
+                    geometry: vec![5],
+                    scale: 1.0,
+                    children: vec![],
+                },
+            ],
+            roots: vec![0],
+        };
+        // Exercise both the single-root and multi-root wrapper budgets.
+        for multiple_roots in [false, true] {
+            if multiple_roots {
+                analysis.roots.push(2);
+            }
+            let mut w = Writer::new(1);
+            let root = Root::reserve(&mut w);
+            w.text("DATA;\n");
+            let base = w.next_id;
+            let part = analysis
+                .emit(&donor, &mut w, &root, "connector", 2.0)
+                .unwrap();
+            assert_eq!(w.next_id - base, analysis.id_budget());
+            let a = w.occurrence(
+                &root,
+                part,
+                1,
+                "J9",
+                &Transform::translation(Vec3::new(100., 200., 300.))
+                    .then(&Transform::rotation_z(FRAC_PI_2)),
+            );
+            let b = w.occurrence(
+                &root,
+                part,
+                2,
+                "J10",
+                &Transform::translation(Vec3::new(-40., 50., 60.)).then(&Transform::rotation_x(PI)),
+            );
+            root.emit(&mut w, "board", &[a, b]);
+            w.text("ENDSEC;\n");
+            let output = Donor::parse(w.buf).unwrap();
+            assert_eq!(output.of_kind(Kind::MappedItem).count(), 0);
+            assert_eq!(output.of_kind(Kind::Geometry).count(), 2);
+            let tree = output.analyze().unwrap();
+
+            fn points(
+                donor: &Donor,
+                tree: &Analysis,
+                index: u32,
+                t: Transform,
+                out: &mut Vec<Vec3>,
+            ) {
+                let rep = &tree.reps[index as usize];
+                assert!(rep.children.is_empty() || rep.geometry.is_empty());
+                for geometry in &rep.geometry {
+                    let p = donor
+                        .vec3(donor.refs(*geometry)[0], Kind::CartesianPoint)
+                        .unwrap();
+                    out.push(t.point(p));
+                }
+                for (child, local) in &rep.children {
+                    points(donor, tree, *child, t.then(local), out);
+                }
+            }
+            let mut actual = Vec::new();
+            assert_eq!(tree.roots.len(), 1);
+            points(
+                &output,
+                &tree,
+                tree.roots[0],
+                Transform::IDENTITY,
+                &mut actual,
+            );
+            // Independently calculated: scale the points and local offsets
+            // by two, rotate X then Z, then apply each board placement.
+            let mut expected = vec![
+                Vec3::new(96., 202., 306.),
+                Vec3::new(36., 188., 382.),
+                Vec3::new(-38., 46., 54.),
+                Vec3::new(-52., -14., -22.),
+            ];
+            if multiple_roots {
+                expected.extend([Vec3::new(90., 208., 312.), Vec3::new(-32., 40., 48.)]);
+            }
+            assert_eq!(actual.len(), expected.len());
+            for p in expected {
+                let index = actual
+                    .iter()
+                    .position(|a| a.distance(p) < 1e-9)
+                    .unwrap_or_else(|| panic!("missing {p:?} in {actual:?}"));
+                actual.swap_remove(index);
+            }
+        }
+    }
 }

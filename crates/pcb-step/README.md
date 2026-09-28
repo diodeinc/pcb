@@ -54,8 +54,9 @@ The defaults follow KiCad's exporter (`pcbnew/exporters/step/`):
 - **Donor STEP files** are copied without interpretation: the displayed
   representations are found through the product structure, the assembly
   tree is walked through `NEXT_ASSEMBLY_USAGE_OCCURRENCE` the way OCCT
-  does and rebuilt with `MAPPED_ITEM`, surface styles are kept, curve
-  styles and parametric curves are dropped (as OCCT does on write), and
+  does and rebuilt with explicit product occurrences and transformed
+  representation relationships, as KiCad writes them. Surface styles are
+  kept, curve styles and parametric curves are dropped (as OCCT does on write), and
   lengths and angles are converted from the donor's units. Reals are
   rewritten with 12 significant digits, OCCT's precision, and each model's
   representations declare the 1e-4 mm accuracy KiCad reads models at.
