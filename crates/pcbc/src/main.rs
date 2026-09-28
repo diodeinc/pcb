@@ -179,7 +179,7 @@ enum Commands {
     /// Search for electronic components
     Search(pcb_diode_api::SearchArgs),
 
-    /// Auto-route a PCB (DeepPCB cloud or local FreeRouting)
+    /// Auto-route a PCB using local FreeRouting
     #[command(hide = true)]
     Route(route::RouteArgs),
 
