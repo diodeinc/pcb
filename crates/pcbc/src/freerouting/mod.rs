@@ -1,5 +1,5 @@
-//! Local auto-routing engine backed by FreeRouting (`pcb route --engine
-//! freerouting`). KiCad board -> Specctra DSN -> FreeRouting -> SES -> board,
+//! Local auto-routing engine used by `pcb ipc interposer --route`.
+//! KiCad board -> Specctra DSN -> FreeRouting -> SES -> board,
 //! driven through FreeRouting's REST API server mode (`self::api`).
 
 use std::io::{Read, Write};
@@ -15,8 +15,6 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use pcb_kicad::PythonScriptBuilder;
 use pcb_ui::prelude::*;
-
-use crate::route::{RouteArgs, format_duration, import_ses};
 
 mod api;
 use api::{FreeroutingApiClient, GET_OUTPUT_TIMEOUT, JobOutput, JobState};
@@ -49,10 +47,10 @@ static FORCE_KILL: AtomicBool = AtomicBool::new(false);
 static CHILD: Mutex<Option<Arc<Mutex<Child>>>> = Mutex::new(None);
 
 pub fn execute(
-    args: &RouteArgs,
     board_path: &Path,
     project_path: &Path,
     board_name: &str,
+    timeout_minutes: u32,
 ) -> Result<()> {
     let expected_hash = hex_decode32(FREEROUTING_JAR_SHA256);
     let explicit_jar = resolve_explicit_freerouting_jar(&expected_hash)?;
@@ -121,7 +119,7 @@ pub fn execute(
         &fr_jar,
         &dsn_path,
         &ses_path,
-        args.timeout as u64 * 60,
+        timeout_minutes as u64 * 60,
     )?;
     let outcome = run_result.outcome;
 
@@ -166,13 +164,46 @@ pub fn execute(
         ),
     }
 
-    if !args.no_open {
-        let _ = pcb_kicad::open_pcbnew(board_path);
-    }
-
     bail_if_terminated(outcome)?;
 
     Ok(())
+}
+
+/// Import a Specctra SES session file into the board via `pcbnew`, filling
+/// zones and saving the result.
+fn import_ses(board_path: &Path, ses_path: &Path) -> Result<()> {
+    let script = r#"
+import pcbnew
+import sys
+
+brd_filename = sys.argv[1]
+ses_filename = sys.argv[2]
+brd = pcbnew.LoadBoard(brd_filename)
+if not pcbnew.ImportSpecctraSES(brd, ses_filename):
+    sys.exit("Failed to import SES file into board")
+
+filler = pcbnew.ZONE_FILLER(brd)
+if not filler.Fill(brd.Zones()):
+    sys.exit("Failed to fill zones after SES import")
+
+if not pcbnew.SaveBoard(brd_filename, brd):
+    sys.exit("Failed to save board after SES import")
+"#;
+
+    PythonScriptBuilder::new(script)
+        .arg(board_path.to_string_lossy())
+        .arg(ses_path.to_string_lossy())
+        .run()
+        .context("Failed to import SES file")?;
+
+    Ok(())
+}
+
+fn format_duration(duration: Duration) -> String {
+    let total_secs = duration.as_secs();
+    let mins = total_secs / 60;
+    let secs = total_secs % 60;
+    format!("{}:{:02}", mins, secs)
 }
 
 fn bail_if_terminated(outcome: RunOutcome) -> Result<()> {
