@@ -143,6 +143,42 @@ fn repeated_bus_sheets_are_isolated_and_ports_match_original_text() {
 }
 
 #[test]
+fn scalar_parent_label_joins_otherwise_isolated_sheet_bus_members() {
+    // Live KiCad 10.0.6 exports give two single-pin nets without the parent
+    // scalar label, and one three-pin net with it. No parent bus is drawn.
+    for parent_label in [false, true] {
+        let mut builder = KicadBuilder::new();
+        builder
+            .define_symbol("Test:Pin", &[TestPin::passive("1", (0.0, 0.0))])
+            .sheet("child.kicad_sch", &[("DATA[0..1]", (0.0, 0.0))])
+            .sheet("child.kicad_sch", &[("DATA[0..1]", (10.0, 0.0))]);
+        if parent_label {
+            builder
+                .local_label("DATA0", (20.0, 0.0))
+                .component("Test:Pin", None, (20.0, 0.0));
+        }
+        builder
+            .add_page("child", "child.kicad_sch")
+            .hierarchical_label("DATA[0..1]", (0.0, 0.0))
+            .local_label("DATA0", (10.0, 0.0))
+            .component("Test:Pin", None, (10.0, 0.0));
+        let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
+        // Repeated unmanaged symbols share a file-level terminal identity;
+        // count their nets rather than deduplicated terminals within one net.
+        let net_count = graph
+            .groups
+            .iter()
+            .filter(|group| !group.terminals.is_empty())
+            .count();
+        assert_eq!(
+            net_count,
+            if parent_label { 1 } else { 2 },
+            "parent_label={parent_label}"
+        );
+    }
+}
+
+#[test]
 fn root_hierarchical_buses_expose_individual_interface_ports() {
     let mut builder = KicadBuilder::new();
     builder
@@ -249,6 +285,19 @@ fn entries_do_not_assign_unlabelled_wires_or_connect_diagonal_interiors() {
         names(&[&["LEFT", "RIGHT"]]),
         "both entry ports can connect to the same wire"
     );
+
+    // KiCad also conducts between both off-bus endpoints of an orphan entry.
+    // Only its diagonal interior is nonconductive, not its endpoint pair.
+    let mut builder = KicadBuilder::new();
+    builder
+        .local_label("LEFT", (-2.0, 0.0))
+        .wire((-2.0, 0.0), (0.0, 0.0))
+        .local_label("RIGHT", (4.0, 2.0))
+        .wire((2.0, 2.0), (4.0, 2.0));
+    let mut document = builder.build();
+    assert_eq!(named_groups(&document), names(&[&["LEFT"], &["RIGHT"]]));
+    raw(&mut document, 0, "(bus_entry (at 0 0) (size 2 2))");
+    assert_eq!(named_groups(&document), names(&[&["LEFT", "RIGHT"]]));
 }
 
 #[test]

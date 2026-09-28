@@ -53,9 +53,9 @@ impl PageBuses {
             });
             connectables.push(item);
         }
-        // Named scalar drivers join member slots, even without a drawn entry.
-        // In particular, do not publish sheet-pin member names as parent-sheet
-        // labels: two separate instances can legitimately use the same bus name.
+        // Named scalar drivers join member slots, including sheet-pin-only
+        // bundles, even without a drawn entry. Without an actual scalar driver,
+        // separate sheet pins sharing member names must remain isolated.
         for item in connectables.iter_mut() {
             if let Some(driver) = &item.driver
                 && driver.merge_by_name
@@ -73,8 +73,9 @@ impl PageBuses {
             item.internal_links.insert(link.clone());
             connectables.push(item);
         }
-        // An entry has ports, not a conductive diagonal body. Neither its bus
-        // end nor another entry touching that end can short member wires.
+        // KiCad conducts between an entry's off-bus endpoints, even when both
+        // ends are off-bus. Its diagonal interior and entry-to-entry contacts
+        // do not join wires; the endpoint touching a bus is excluded too.
         for entry in &self.entries {
             let contacts = [entry.a, entry.b].map(|at| (!self.on_bus(at)).then_some(at));
             connectables.push(empty(Geometry::Contacts(contacts)));
