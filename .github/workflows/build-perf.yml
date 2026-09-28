@@ -36,6 +36,10 @@ jobs:
           export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityFile=$key -o IdentityAgent=none -o StrictHostKeyChecking=accept-new"
           git clone --depth 1 git@code.diode.computer:demo/b/Demeter workspaces/Demeter
           git clone --depth 1 git@code.diode.computer:demo/b/DM0001 workspaces/DM0001
+          # Keep the benchmark workload before the AM32 redesign, which needs
+          # an INA199 symbol not present in the compiler's bundled library.
+          git -C workspaces/DM0001 fetch --depth 1 origin a02803dbc47eb6a31ef6a511c77ec921ecf85a16
+          git -C workspaces/DM0001 checkout --detach FETCH_HEAD
           git clone --depth 1 git@code.diode.computer:demo/b/DM0002 workspaces/DM0002
           git clone --depth 1 git@code.diode.computer:demo/b/DM0003 workspaces/DM0003
           git clone --depth 1 git@code.diode.computer:demo/b/Feign workspaces/Feign
