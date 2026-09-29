@@ -8,23 +8,26 @@ use std::collections::HashSet;
 use anyhow::{Result, bail};
 use ipc2581::edit::{Doc, Edit, Node};
 
-/// `xml` with every non-document BOM designator populated except those in
-/// `dnp`, or `None` when it already has exactly that population.
+/// `xml` with every assembled BOM designator populated except those in `dnp`,
+/// or `None` when it already has exactly that population. Document items
+/// (test points, mounting holes, artwork) are never assembled: naming them in
+/// `dnp` is accepted and their population stays as authored.
 pub fn set_population(xml: &str, dnp: &[String]) -> Result<Option<String>> {
     let doc = Doc::parse(xml)?;
     let references = bom_references(&doc);
     let dnp: HashSet<&str> = dnp.iter().map(String::as_str).collect();
 
-    let known: HashSet<&str> = references.iter().map(|&(_, name)| name).collect();
+    let known: HashSet<&str> = references.iter().map(|r| r.name).collect();
     let mut unknown: Vec<&str> = dnp.difference(&known).copied().collect();
     if !unknown.is_empty() {
         unknown.sort_unstable_by(|a, b| natord::compare(a, b));
         bail!("DNP designators not in the BOM: {}", unknown.join(", "));
     }
 
-    let edits = references
+    let assembled: Vec<&BomReference<'_>> = references.iter().filter(|r| !r.document).collect();
+    let edits = assembled
         .iter()
-        .map(|&(reference, name)| populate_edit(&doc, reference, !dnp.contains(name)))
+        .map(|r| populate_edit(&doc, r.node, !dnp.contains(r.name)))
         .filter_map(Result::transpose)
         .collect::<Result<Vec<_>>>()?;
     if edits.is_empty() {
@@ -33,29 +36,41 @@ pub fn set_population(xml: &str, dnp: &[String]) -> Result<Option<String>> {
 
     let comment = format!(
         "Population set ({} of {} designators DNP)",
-        dnp.len(),
-        known.len()
+        assembled.iter().filter(|r| dnp.contains(r.name)).count(),
+        assembled.len()
     );
     let history = crate::utils::history::file_revision_edits(&doc, &comment)?;
     let xml = doc.apply(history.into_iter().chain(edits).collect())?;
     Ok(Some(crate::utils::format::reformat_xml(&xml)?))
 }
 
-/// Every named designator of every non-document BOM item. Population is read
-/// from all BOMs, so all of them are rewritten.
-fn bom_references<'a>(doc: &'a Doc<'_>) -> Vec<(Node, &'a str)> {
+struct BomReference<'a> {
+    node: Node,
+    name: &'a str,
+    /// A `DOCUMENT` BOM item: listed, never assembled.
+    document: bool,
+}
+
+/// Every named designator of every BOM item. Population is read from all
+/// BOMs, so all of them are rewritten.
+fn bom_references<'a>(doc: &'a Doc<'_>) -> Vec<BomReference<'a>> {
     doc.find_all("Bom")
         .into_iter()
         .flat_map(|bom| doc.children(bom))
-        .filter(|&item| {
-            doc.name(item) == "BomItem"
-                && doc.attr(item, "category").map(str::trim) != Some("DOCUMENT")
-        })
-        .flat_map(|item| doc.children(item))
-        .filter(|&child| doc.name(child) == "RefDes")
-        .filter_map(|reference| {
-            let name = doc.attr(reference, "name")?;
-            (!name.is_empty()).then_some((reference, name))
+        .filter(|&item| doc.name(item) == "BomItem")
+        .flat_map(|item| {
+            let document = doc.attr(item, "category").map(str::trim) == Some("DOCUMENT");
+            doc.children(item)
+                .into_iter()
+                .filter(move |&child| doc.name(child) == "RefDes")
+                .filter_map(move |node| {
+                    let name = doc.attr(node, "name")?;
+                    (!name.is_empty()).then_some(BomReference {
+                        node,
+                        name,
+                        document,
+                    })
+                })
         })
         .collect()
 }
@@ -211,12 +226,22 @@ mod tests {
     }
 
     #[test]
+    fn document_designators_are_accepted_and_left_as_authored() {
+        let with_document = set_population(XML, &dnp(&["R1", "U1", "LOGO"]))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            population(&with_document),
+            population(&set_population(XML, &dnp(&["R1", "U1"])).unwrap().unwrap())
+        );
+        assert!(with_document.contains(r#"change="Population set (2 of 4 designators DNP)""#));
+    }
+
+    #[test]
     fn rejects_designators_outside_the_bom() {
         let error = set_population(XML, &dnp(&["R10", "LOGO", "R1", "C2"])).unwrap_err();
 
-        assert_eq!(
-            error.to_string(),
-            "DNP designators not in the BOM: C2, LOGO, R10"
-        );
+        assert_eq!(error.to_string(), "DNP designators not in the BOM: C2, R10");
     }
 }

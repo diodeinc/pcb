@@ -28,10 +28,12 @@ one canonical board. See the [assembly report contract](docs/assembly-report.md)
 `edit bom` modifies the input file when `--output` is omitted. Specify an output
 path when the source document must remain unchanged.
 
-`edit population` rewrites `RefDes@populate` on every non-document BOM
-designator: `false` for each `--dnp` designator, `true` for the rest. The
-assembly report, `cpl --exclude-dnp`, and board arrays of the edited file follow
-that population. An unchanged population leaves the file byte-for-byte intact.
+`edit population` rewrites `RefDes@populate` on every assembled BOM designator:
+`false` for each `--dnp` designator, `true` for the rest. Document items (test
+points, mounting holes, artwork) may be named in `--dnp` and keep the population
+they were authored with. The assembly report, `cpl --exclude-dnp`, and board
+arrays of the edited file follow that population. An unchanged population
+leaves the file byte-for-byte intact.
 
 Use `view --mode fabrication` to create an IPC-2581C fabrication projection.
 The projection removes BOM/AVL, package, placement, assembly, solder-paste,

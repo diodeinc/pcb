@@ -31,6 +31,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- `pcb ipc2581 edit population` accepts document-category designators (test points, mounting holes, artwork) in `--dnp` and leaves their population as authored instead of rejecting the list.
+
 - Shrink copper-balanced array and fab-panel Gerbers by sharing lattice-cell apertures, including clipped boundary cells.
 - Export STEP connector subassemblies with explicit product occurrences for better CAD reader placement compatibility.
 - Correct STEP wall boundary orientation so shared edges traverse oppositely across board, drill, and machined-hole faces.
