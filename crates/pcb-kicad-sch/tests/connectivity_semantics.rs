@@ -111,6 +111,40 @@ fn same_name_label_kinds_connect_on_one_page() {
 }
 
 #[test]
+fn imported_net_bindings_do_not_change_native_connectivity() {
+    // Same native name must still connect despite conflicting logical bindings (a short).
+    // Different native names must remain disconnected despite identical logical bindings.
+    for (native, bound, expected) in [
+        (
+            ["SIGNAL", "SIGNAL"],
+            ["/left", "/right"],
+            vec![names(&["/left", "/right"])],
+        ),
+        (
+            ["LEFT", "RIGHT"],
+            ["/signal", "/signal"],
+            vec![names(&["/signal"]), names(&["/signal"])],
+        ),
+    ] {
+        let mut builder = KicadBuilder::new();
+        builder
+            .local_label(native[0], (0.0, 0.0))
+            .local_label(native[1], (10.0, 0.0));
+        let mut document = builder.build();
+        for (item, name) in document.pages[0].items.iter_mut().zip(bound) {
+            let SchItem::Label(label) = item else {
+                unreachable!()
+            };
+            label.fields.insert(
+                "pcb:net".into(),
+                pcb_kicad_sch::SymbolField::new("pcb:net", name, label.at),
+            );
+        }
+        assert_eq!(named_groups(document), expected);
+    }
+}
+
+#[test]
 fn sheet_pin_connects_only_to_its_child_hierarchical_label() {
     let mut builder = KicadBuilder::new();
     builder
@@ -277,8 +311,27 @@ fn hidden_power_input_pin_is_a_global_connection() {
         .add_root_page("other", "other.kicad_sch")
         .global_label("VCC", (10.0, 10.0));
 
-    let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
-    let vcc = graph
+    let physical = pcb_kicad_sch::connectivity::PhysicalConnectivity::from_kicad(
+        &builder.build(),
+        pcb_kicad_sch::connectivity::PinVisibility::IncludeHidden,
+    )
+    .unwrap();
+    let hidden = physical
+        .islands
+        .values()
+        .find(|island| !island.terminals.is_empty())
+        .unwrap();
+    assert_eq!(hidden.implicit_power_drivers["VCC"].len(), 1);
+    assert!(
+        hidden.items.is_empty(),
+        "a hidden pin must not make its component removable"
+    );
+    assert!(
+        hidden.named_drivers.is_empty(),
+        "repair treats named driver items as removable"
+    );
+    let vcc = physical
+        .graph
         .groups
         .iter()
         .filter(|group| group.names.contains("VCC"))
@@ -329,8 +382,20 @@ fn wired_hidden_power_input_does_not_create_a_global_connection() {
         .add_root_page("other", "other.kicad_sch")
         .global_label("VCC", (10.0, 0.0));
 
+    let document = builder.build();
+    let physical = pcb_kicad_sch::connectivity::PhysicalConnectivity::from_kicad(
+        &document,
+        pcb_kicad_sch::connectivity::PinVisibility::IncludeHidden,
+    )
+    .unwrap();
+    assert!(
+        physical
+            .islands
+            .values()
+            .all(|island| island.implicit_power_drivers.is_empty())
+    );
     assert_eq!(
-        named_groups(builder.build()),
+        named_groups(document),
         vec![names(&["LOCAL"]), names(&["VCC"])]
     );
 }
