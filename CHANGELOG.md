@@ -14,14 +14,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Import KiCad designs as Quiche-compatible persistent schematics, preserving original wiring, hierarchy, and multi-unit symbols instead of reconstructing placement from comments.
-- Report schematic/PCB parity mismatches during import without blocking conversion, retaining the existing PCB layout, stackup, and embedded footprints even on standalone reimport.
+- Import KiCad designs as persistent schematics, preserving native drawings and PCB layouts while treating source parity mismatches as advisory.
 
 ### Fixed
 
 - Export STEP connector subassemblies with explicit product occurrences for better CAD reader placement compatibility.
 - Correct STEP wall boundary orientation so shared edges traverse oppositely across board, drill, and machined-hole faces.
-- Preserve off-board pinless documentation symbols during schematic apply without hiding unbound electrical components.
 
 ## [0.4.61] - 2026-09-27
 
