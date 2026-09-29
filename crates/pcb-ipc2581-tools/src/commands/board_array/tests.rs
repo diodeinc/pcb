@@ -970,15 +970,14 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
 
     let package = manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
     let top_gerber = gerber(&package, "F_Cu.gtl").unwrap();
-    assert!(top_gerber.contains("G36*"));
-    assert!(top_gerber.contains("G37*"));
+    assert!(!top_gerber.contains("G36*"));
+    assert!(!top_gerber.contains("G37*"));
     assert!(top_gerber.contains("%SRX"));
     assert!(top_gerber.contains("%TA.AperFunction,CopperBalancing*%"));
     // Manufacturing Gerbers expand array hierarchy for broad CAM compatibility.
     assert!(!top_gerber.contains("%ABD"));
     // CAM importers composite every clear object, so the lattice ships
-    // dark-only: shared cell-ring flashes where the plane is solid, regions
-    // along its boundary.
+    // dark-only: shared cell flashes for the interior and boundary alike.
     assert!(top_gerber.contains("%AMOUTLINE"));
     assert!(!top_gerber.contains("%LPC*%"));
 

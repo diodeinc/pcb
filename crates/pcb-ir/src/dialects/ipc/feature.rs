@@ -54,19 +54,23 @@ pub struct Feature {
     pub clears_previous_in_set: bool,
 }
 
-/// A reference into one of the source document's two shape dictionaries.
-/// The dictionary matters: standard entries are exact catalogue primitives
-/// (circles, rectangles, ovals), user entries are arbitrary contour shapes.
+/// Shared shape identity: a source dictionary entry or a normalized shape.
+/// Standard entries are exact catalogue primitives (circles, rectangles,
+/// ovals); user and generated entries are arbitrary contour shapes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrimitiveRef {
     Standard(Symbol),
     User(Symbol),
+    /// A shape interned by normalization, independent of source dictionaries.
+    Generated(u32),
 }
 
 impl PrimitiveRef {
-    pub fn id(self) -> Symbol {
+    /// Source dictionary name, absent for generated geometry.
+    pub fn id(self) -> Option<Symbol> {
         match self {
-            Self::Standard(id) | Self::User(id) => id,
+            Self::Standard(id) | Self::User(id) => Some(id),
+            Self::Generated(_) => None,
         }
     }
 }

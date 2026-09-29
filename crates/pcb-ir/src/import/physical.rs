@@ -383,7 +383,7 @@ impl ImportedDesign {
                     component_refs: evidence.component_refs.clone(),
                     pin: evidence.pin,
                     padstack: feature.padstack_ref,
-                    primitive: feature.primitive_ref.map(|primitive| primitive.id()),
+                    primitive: feature.primitive_ref.and_then(|primitive| primitive.id()),
                     net: feature.net,
                 });
             }

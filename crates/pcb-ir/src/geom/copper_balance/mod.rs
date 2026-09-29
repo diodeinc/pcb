@@ -303,7 +303,7 @@ impl DenseCopperLattice {
     /// Hexagon vertices are at 0°, 60°, ...; nearest-neighbor center vectors
     /// are at 30°, 90°, ... so parallel flats face each other, and odd columns
     /// sit half a pitch up.
-    fn sites_covering(self, bbox: BBox) -> Vec<DenseCopperLatticeSite> {
+    pub(crate) fn sites_covering(self, bbox: BBox) -> Vec<DenseCopperLatticeSite> {
         let first_column = ((bbox.min.x - self.origin.x) / self.column_pitch_mm()).floor() as i64;
         let last_column = ((bbox.max.x - self.origin.x) / self.column_pitch_mm()).ceil() as i64;
         (first_column..=last_column)

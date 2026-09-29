@@ -9,14 +9,14 @@
 //!   and negative polarity, for targets that image only dark objects.
 
 use crate::geom::{AccuracyError, Resolution};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap;
 
 use crate::dialects::ipc::Document;
 use crate::dialects::ipc::feature::{Feature, FeatureBucket};
 use crate::geom::dfm::BBoxIndex;
 use crate::geom::path::ContourBuf;
 use crate::geom::{
-    Affine2, BBox, ContourSet, FillRule, Paint, PaintKind, Path, PathArena, Point, Polarity, Span,
+    Affine2, BBox, ContourSet, FillRule, Paint, PaintKind, Path, PathArena, Polarity, Span,
 };
 
 /// Resolve IPC-specific paint semantics while preserving native artwork shapes.
@@ -62,6 +62,7 @@ fn normalize(
     if positive {
         subtract_layer_cutouts(doc, resolution)?;
         resolve_negative_polarity(doc, resolution)?;
+        tile_copper_balance(doc, resolution)?;
     }
     compact(doc);
     normalize_bounds(doc);
@@ -532,11 +533,6 @@ fn materialize_for_cutters(doc: &mut Document, is_cutter: impl Fn(&Feature) -> b
 /// Paint `order` sequentially: each run of clear features subtracts its image
 /// from every feature before it, then disappears. Features after a run
 /// repaint it untouched, and consecutive clears commute and cut as one region.
-///
-/// A balance void on a lattice cuts as its whole lattice cell wherever that
-/// cell is solid copper, and turns into the dark `cell - void` ring that
-/// restores it. The image is the same, but every ring of one void size is one
-/// shared instance rather than explicit boundary in the plane it perforates.
 fn resolve_clears(
     doc: &mut Document,
     order: &[usize],
@@ -556,139 +552,139 @@ fn resolve_clears(
             continue;
         }
 
-        let tiles = lattice_tiles(doc, run.clone());
-        let tile_features = tiles
-            .iter()
-            .map(|tile| tile.feature)
-            .collect::<HashSet<_>>();
-        let blockers = painted_union(
-            doc,
-            run.clone().filter(|index| !tile_features.contains(index)),
-            resolution,
-        )?;
-        // A tile's whole ring cell must be solid copper of one feature once
-        // everything that cannot tile has cut.
-        let tiles_bbox = tiles
-            .iter()
-            .map(|tile| tile.ring_cell.bbox)
-            .fold(BBox::empty(), BBox::union);
-        let solid = painted
-            .iter()
-            .map(|&index| &doc.features[index])
-            .filter(|subject| doc.arena.paths_bbox(subject.paths).intersects(tiles_bbox))
-            .map(|subject| {
-                let image = feature_painted_region(doc, subject, resolution.strict())?;
-                Ok(image.difference(&blockers)?.prepare_query())
-            })
-            .collect::<Result<Vec<_>, AccuracyError>>()?;
-        let (tiled, untiled): (Vec<_>, Vec<_>) = tiles.into_iter().partition(|tile| {
-            solid.iter().any(|solid| {
-                solid.signed_distance(tile.center).is_some_and(|distance| {
-                    distance.mm + distance.uncertainty_mm <= -tile.ring_cell_radius
-                })
-            })
-        });
-
-        let cutters = ContourSet::union_all(
-            resolution.strict(),
-            [
-                blockers,
-                painted_union(doc, untiled.iter().map(|tile| tile.feature), resolution)?,
-                ContourSet::from_filled_contours(
-                    &tiled
-                        .iter()
-                        .map(|tile| tile.cut_cell.clone())
-                        .collect::<Vec<_>>(),
-                    resolution.strict(),
-                )?,
-            ],
-        )?;
+        let cutters = painted_union(doc, run.clone(), resolution)?;
         cut_features(doc, painted.iter().copied(), &cutters)?;
-
-        run.filter(|index| !tile_features.contains(index))
-            .chain(untiled.iter().map(|tile| tile.feature))
-            .for_each(|index| clear_feature_paths(doc, index));
-        for tile in tiled {
-            // The ring keeps the void's dictionary identity, so every ring
-            // of one void size lowers through one shared aperture.
-            let feature = &doc.features[tile.feature];
-            let void = feature.paths.slice(&doc.arena.paths);
-            let ring = std::iter::once(tile.ring_cell)
-                .chain(void.iter().flat_map(|path| doc.arena.path_contours(path)))
-                .collect::<Vec<_>>();
-            let ring = doc.arena.push_path(
-                Paint::Fill {
-                    rule: FillRule::EvenOdd,
-                },
-                ring,
-            );
-            let feature = &mut doc.features[tile.feature];
-            feature.paths = Span::single(ring);
-            feature.polarity = Polarity::Dark;
-            feature.clears_previous_in_set = false;
-            painted.push(tile.feature);
-        }
+        run.for_each(|index| clear_feature_paths(doc, index));
     }
     Ok(())
 }
 
-/// How far a ring cell reaches past its exact lattice cell. Ring instances
-/// are placed and rounded independently, so they overlap their neighbours,
-/// and the copper they were cut from, instead of abutting them.
+/// Neighbouring flashes overlap so independent output rounding cannot open
+/// seams. The overlap is clipped to copper, never added outside its image.
 const LATTICE_TILE_OVERLAP_MM: f64 = 0.002;
 
-/// A balance void that may image as its lattice cell.
-struct LatticeTile {
-    feature: usize,
-    center: Point,
-    /// The cell the dark ring fills.
-    ring_cell: ContourBuf,
-    ring_cell_radius: f64,
-    /// The cell cut from earlier copper: past the exact cell so neighbouring
-    /// cuts merge, inside the ring cell so the ring covers the cut edge.
-    cut_cell: ContourBuf,
-}
+/// Tile the resolved balance image, including boundary web and clipped voids.
+/// Source geometry is cut in its step-local frame; dictionary identity is
+/// assigned to exact local rings, independent of placement and ring ordering.
+fn tile_copper_balance(doc: &mut Document, resolution: Resolution) -> Result<(), AccuracyError> {
+    use crate::dialects::ipc::feature::PrimitiveRef;
 
-/// The run's balance voids that may tile: alone on their site of one common
-/// lattice, and inside their cell by the overlap, so no ring cell reaches
-/// another tile's void.
-fn lattice_tiles(doc: &Document, run: impl Iterator<Item = usize>) -> Vec<LatticeTile> {
-    let voids = run
-        .filter_map(|index| {
-            let feature = &doc.features[index];
+    let lattices = doc
+        .features
+        .iter()
+        .filter_map(|feature| {
             let void = doc.feature_set(feature)?.copper_balance_void?;
-            let center = Point::new(feature.transform.m02, feature.transform.m12);
-            Some((index, void, center, void.lattice.nearest_site(center).0))
+            Some((
+                (feature.source_step_ref, feature.source_layer_ref),
+                void.lattice,
+            ))
         })
-        .collect::<Vec<_>>();
-    let lattice = voids.first().map(|(_, void, ..)| void.lattice);
-    let mut occupancy = HashMap::new();
-    for (.., site) in &voids {
-        *occupancy.entry(*site).or_insert(0_usize) += 1;
+        .collect::<FxHashMap<_, _>>();
+    if lattices.is_empty() {
+        return Ok(());
     }
-    voids
-        .into_iter()
-        .filter(|(_, void, _, site)| Some(void.lattice) == lattice && occupancy[site] == 1)
-        .filter_map(|(feature, void, center, _)| {
-            // Flat-top hexagons, like the voids they hold.
-            let cell = |apothem: f64| {
-                let radius = apothem / (std::f64::consts::PI / 6.0).cos();
-                crate::geom::shapes::regular_polygon(2.0 * radius, 6, 0.0)
-                    .map(|cell| (cell.transformed(Affine2::translation(center)), radius))
-            };
-            let apothem = void.lattice.pitch_mm / 2.0;
-            let (_, void_limit) = cell(apothem - LATTICE_TILE_OVERLAP_MM)?;
-            let (cut_cell, _) = cell(apothem + LATTICE_TILE_OVERLAP_MM / 2.0)?;
-            let (ring_cell, ring_cell_radius) = cell(apothem + LATTICE_TILE_OVERLAP_MM)?;
-            (void.radius_mm <= void_limit).then_some(LatticeTile {
-                feature,
-                center,
-                ring_cell,
-                ring_cell_radius,
-                cut_cell,
-            })
-        })
-        .collect()
+    expand_feature_placement_groups(doc);
+    let mut shapes = FxHashMap::default();
+    let mut expanded = Vec::new();
+    let mut mapping = Vec::new();
+    for feature in std::mem::take(&mut doc.features) {
+        let start = expanded.len() as u32;
+        let lattice = lattices.get(&(feature.source_step_ref, feature.source_layer_ref));
+        if let Some(lattice) = lattice.filter(|_| {
+            !feature.paths.is_empty()
+                && doc
+                    .feature_set(&feature)
+                    .is_some_and(|set| set.copper_balance)
+                && !matches!(feature.primitive_ref, Some(PrimitiveRef::Generated(_)))
+        }) {
+            let inverse = feature
+                .transform
+                .inverse()
+                .ok_or(AccuracyError::InvalidGeometry("singular balance placement"))?;
+            let image = ContourSet::from_placed_painted_paths(
+                &doc.arena,
+                feature
+                    .paths
+                    .slice(&doc.arena.paths)
+                    .iter()
+                    .map(|path| (path, inverse)),
+                resolution.strict(),
+            )?;
+            let radius = (lattice.pitch_mm / 2.0 + LATTICE_TILE_OVERLAP_MM)
+                / (std::f64::consts::PI / 6.0).cos();
+            let contour = crate::geom::shapes::regular_polygon(2.0 * radius, 6, 0.0)
+                .ok_or(AccuracyError::InvalidGeometry("invalid balance lattice"))?;
+            let cell = ContourSet::from_filled_contours(&[contour], image.resolution)?;
+            let index = BBoxIndex::new(image.ring_bounds.clone());
+            for site in lattice.sites_covering(image.bbox.expand(radius)) {
+                let center = lattice.center(site);
+                let cell = cell.translated(center)?;
+                // Include enclosing rings as well as nearby holes, without
+                // scanning every void on the panel for every lattice cell.
+                let nearby = ContourSet::from_regularized(
+                    index
+                        .query(cell.bbox)
+                        .into_iter()
+                        .map(|i| image.rings[i].clone())
+                        .collect(),
+                    image.resolution,
+                    image.uncertainty_mm,
+                );
+                let tile = cell.intersection(&nearby)?.translated(-center)?;
+                if tile.is_empty() {
+                    continue;
+                }
+                let mut key = tile
+                    .rings
+                    .iter()
+                    .map(|ring| {
+                        let mut ring = ring
+                            .iter()
+                            .map(|point| point.map(|v| if v == 0.0 { 0 } else { v.to_bits() }))
+                            .collect::<Vec<_>>();
+                        let first = ring
+                            .iter()
+                            .enumerate()
+                            .min_by_key(|(_, point)| **point)
+                            .unwrap()
+                            .0;
+                        ring.rotate_left(first);
+                        ring
+                    })
+                    .collect::<Vec<_>>();
+                key.sort_unstable();
+                let next = shapes.len() as u32;
+                let id = *shapes.entry(key).or_insert(next);
+                let placement = feature.transform.concat(Affine2::translation(center));
+                let path = doc.arena.push_path(
+                    Paint::Fill {
+                        rule: FillRule::NonZero,
+                    },
+                    tile.to_contours()
+                        .into_iter()
+                        .map(|contour| contour.transformed(placement)),
+                );
+                expanded.push(Feature {
+                    paths: Span::single(path),
+                    transform: placement,
+                    primitive_ref: Some(PrimitiveRef::Generated(id)),
+                    shape: None,
+                    ..feature.clone()
+                });
+            }
+        } else {
+            expanded.push(feature);
+        }
+        mapping.push(Span::new(start, expanded.len() as u32 - start));
+    }
+    for layer in &mut doc.layers {
+        layer.features = expanded_span(layer.features, &mapping);
+    }
+    for set in &mut doc.feature_sets {
+        set.features = expanded_span(set.features, &mapping);
+    }
+    doc.features = expanded;
+    Ok(())
 }
 
 /// Split a lowered-primitive feature into per-paint-kind runs so each run can
@@ -1026,7 +1022,7 @@ mod tests {
     }
 
     #[test]
-    fn lattice_voids_tile_as_dark_cell_rings_where_the_plane_is_solid() {
+    fn lattice_tiles_preserve_interior_and_clipped_boundary_voids() {
         let lattice = crate::geom::copper_balance::DenseCopperLattice {
             origin: Point::new(5.0, 5.0),
             pitch_mm: 2.0,
@@ -1035,10 +1031,11 @@ mod tests {
         doc.push_path(FILL, [rect_contour(0.0, 0.0, 10.0, 10.0)]);
         doc.features.push(Feature {
             paths: Span::new(0, 1),
+            set: Some(1),
             ..Feature::new(FeatureKind::Polygon, Polarity::Dark)
         });
         // One void deep in the plane, one whose cell crosses the plane edge.
-        let sites = [(0, 0), (0, 2)].map(|(column, row)| {
+        let sites = [(0, 0), (0, 3)].map(|(column, row)| {
             lattice.center(crate::geom::copper_balance::DenseCopperLatticeSite { column, row })
         });
         for center in sites {
@@ -1066,29 +1063,143 @@ mod tests {
             }),
             ..test_set(0, Span::new(1, 2))
         });
-        doc.layers.push(test_layer(Span::new(0, 3)));
+        doc.feature_sets.push(FeatureSet {
+            copper_balance: true,
+            ..test_set(0, Span::single(0))
+        });
+        // An off-lattice clipped edge void, with no template identity.
+        let clipped = doc.push_path(FILL, [rect_contour(0.0, 3.1, 0.7, 4.3)]);
+        doc.features.push(Feature {
+            paths: Span::single(clipped),
+            ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
+        });
+        doc.layers.push(test_layer(Span::new(0, 4)));
 
+        let mut rotated = doc.clone();
+        let placement = Affine2 {
+            m00: 0.0,
+            m01: -1.0,
+            m02: 23.0,
+            m10: 1.0,
+            m11: 0.0,
+            m12: -7.0,
+        };
+        for feature in &mut rotated.features {
+            materialize_feature_placement(&mut rotated.arena, feature, placement);
+        }
         normalize_for_positive_artwork(&mut doc, Resolution::default()).unwrap();
 
-        let [plane, tiled, cut] = &doc.features[..] else {
-            panic!("features are rewritten in place");
-        };
-        // The tiled void is its dark cell ring and keeps its shared identity;
-        // the edge void cut the plane and disappeared.
-        assert_eq!(tiled.polarity, Polarity::Dark);
-        assert_eq!(tiled.primitive_ref, Some(PrimitiveRef::User(sym(7))));
-        assert!(cut.paths.is_empty());
+        let tiles = doc
+            .features
+            .iter()
+            .filter(|feature| !feature.paths.is_empty())
+            .collect::<Vec<_>>();
+        assert!(tiles.len() > 20);
+        assert!(
+            tiles
+                .iter()
+                .all(|feature| feature.polarity == Polarity::Dark
+                    && matches!(feature.primitive_ref, Some(PrimitiveRef::Generated(_))))
+        );
         let image = ContourSet::union_all(
             Resolution::default(),
-            [plane, tiled].map(|feature| {
+            tiles.iter().map(|feature| {
                 feature_painted_region(&doc, feature, Resolution::default()).unwrap()
             }),
         )
         .unwrap();
-        assert!((image.area() - 98.0).abs() < 1e-6, "{}", image.area());
-        let ring = feature_painted_region(&doc, tiled, Resolution::default()).unwrap();
-        let cell = 2.0 * 3.0_f64.sqrt() * (1.0 + LATTICE_TILE_OVERLAP_MM).powi(2);
-        assert!((ring.area() - (cell - 1.0)).abs() < 1e-6, "{}", ring.area());
+        assert!((image.area() - 98.16).abs() < 1e-6, "{}", image.area());
+        assert!(!image.contains_point(Point::new(5.0, 5.0)));
+        assert!(!image.contains_point(Point::new(0.3, 3.7)));
+        assert!(image.contains_point(Point::new(0.3, 4.5)));
+        assert!(doc.layers[0].features.len() == doc.features.len());
+        assert_eq!(doc.feature_sets[1].features.len(), tiles.len());
+
+        // Exercise dictionary lowering as well as the tiled paths: a reused
+        // identity must not substitute a different boundary shape, and a
+        // rotated placement must rotate the lattice with its source step.
+        normalize_for_positive_artwork(&mut rotated, Resolution::default()).unwrap();
+        let artwork = crate::dialects::ipc::lower_layer_to_artwork(
+            &rotated,
+            0,
+            crate::dialects::LayerRole::Copper,
+            crate::dialects::Side::Top,
+        );
+        assert!(artwork.apertures.len() < tiles.len());
+        let mask =
+            crate::dialects::artwork::compose_to_mask(&artwork, Resolution::default()).unwrap();
+        let actual =
+            ContourSet::from_painted_paths(&mask.arena, &mask.arena.paths, Resolution::default())
+                .unwrap();
+        let expected = ContourSet::from_contours(
+            &image
+                .to_contours()
+                .into_iter()
+                .map(|contour| contour.transformed(placement))
+                .collect::<Vec<_>>(),
+            FillRule::NonZero,
+            Resolution::default(),
+        )
+        .unwrap();
+        assert!(actual.difference(&expected).unwrap().area() < 1e-6);
+        assert!(expected.difference(&actual).unwrap().area() < 1e-6);
+
+        let count = doc.features.len();
+        normalize_for_positive_artwork(&mut doc, Resolution::default()).unwrap();
+        assert_eq!(doc.features.len(), count);
+    }
+
+    #[test]
+    fn tiling_preserves_curved_copper_and_partial_voids_before_output_rounding() {
+        let resolution = Resolution::default().strict();
+        let mut doc = Document::new();
+        let plane = crate::geom::shapes::circle(12.7).unwrap();
+        let void = crate::geom::shapes::circle(1.1)
+            .unwrap()
+            .transformed(Affine2::translation(Point::new(0.23, 1.17)));
+        let edge = crate::geom::shapes::circle(3.9)
+            .unwrap()
+            .transformed(Affine2::translation(Point::new(5.7, -0.43)));
+        let region = |contour: &ContourBuf| {
+            ContourSet::from_filled_contours(std::slice::from_ref(contour), resolution).unwrap()
+        };
+        let expected = region(&plane)
+            .difference(&region(&void).union(&region(&edge)).unwrap())
+            .unwrap();
+        for (index, contour) in [plane, void, edge].into_iter().enumerate() {
+            let path = doc.push_path(FILL, [contour]);
+            doc.features.push(Feature {
+                set: Some(index as u32),
+                paths: Span::single(path),
+                ..Feature::new(
+                    FeatureKind::Polygon,
+                    if index == 0 {
+                        Polarity::Dark
+                    } else {
+                        Polarity::Clear
+                    },
+                )
+            });
+            doc.feature_sets.push(FeatureSet {
+                copper_balance: true,
+                copper_balance_void: (index == 1).then_some(
+                    crate::dialects::ipc::CopperBalanceVoid {
+                        lattice: crate::geom::copper_balance::DenseCopperLattice {
+                            origin: Point::new(0.23, 1.17),
+                            pitch_mm: 1.35,
+                        },
+                        radius_mm: 0.55,
+                    },
+                ),
+                ..test_set(0, Span::single(index as u32))
+            });
+        }
+        doc.layers.push(test_layer(Span::new(0, 3)));
+        normalize_for_positive_artwork(&mut doc, resolution).unwrap();
+        let actual = painted_union(&doc, 0..doc.features.len(), resolution).unwrap();
+        let residual = actual.difference(&expected).unwrap().area()
+            + expected.difference(&actual).unwrap().area();
+        assert!(residual < 1e-8, "tiling changed {residual} mm²");
     }
 
     #[test]
