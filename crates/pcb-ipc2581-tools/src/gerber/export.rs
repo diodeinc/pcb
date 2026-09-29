@@ -509,7 +509,7 @@ fn gerber_target<'a>(
         flashes: if role == GerberLayerRole::Copper {
             &|doc, feature| {
                 doc.feature_set(feature)
-                    .is_some_and(|set| set.copper_balance_void.is_some())
+                    .is_some_and(|set| set.copper_balance)
                     || matches!(
                         feature.bucket,
                         FeatureBucket::Smd

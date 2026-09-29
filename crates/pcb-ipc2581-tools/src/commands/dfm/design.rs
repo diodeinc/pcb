@@ -2012,7 +2012,7 @@ fn collect_copper_layers(
                     bbox: feature.bbox,
                     step: feature.source_step_ref,
                     padstack,
-                    primitive_ref: feature.primitive_ref.map(|primitive| primitive.id()),
+                    primitive_ref: feature.primitive_ref.and_then(|primitive| primitive.id()),
                     net: feature.net,
                     reference_designator: pin_ref.and_then(|pin| pin.component_ref),
                     pin: pin_ref.map(|pin| pin.pin),

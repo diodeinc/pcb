@@ -344,9 +344,12 @@ fn dictionary_aperture(
         Some(aperture) => aperture,
         None => artwork::Aperture::solid(contour_flash_aperture(doc, feature)?),
     };
-    let aperture = out.push_aperture(aperture);
-    apertures.insert(primitive, aperture);
-    Some(aperture)
+    // The dictionary key already interns this shape. Searching the entire
+    // aperture vector again makes a tiled panel quadratic in unique tiles.
+    let index = out.apertures.len() as u32;
+    out.apertures.push(aperture);
+    apertures.insert(primitive, index);
+    Some(index)
 }
 
 /// The feature's whole image as an origin-local contour aperture: its single
