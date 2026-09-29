@@ -10,11 +10,13 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Add `pcb ipc2581 edit population --dnp <REFDES,...>` to override which BOM designators are populated.
 - Interpret KiCad schematic bus connectivity, including vectors, groups, aliases, and hierarchical buses, while preserving buses during `pcb apply`.
 
 ### Changed
 
 - Lower the JLCPCB DFM soldermask-web limit to 0.10 mm and report shortfalls as warnings rather than errors.
+- `pcb ipc2581 cpl` reports bottom-side rotations in KiCad's position-file convention, matching release CPLs.
 - Import KiCad designs as persistent schematics, preserving native drawings and PCB layouts while treating source parity mismatches as advisory.
 
 ### Fixed

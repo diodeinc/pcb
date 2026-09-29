@@ -213,6 +213,18 @@ enum EditCommands {
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
     },
+    /// Populate every BOM designator except the listed do-not-populate ones
+    Population {
+        /// IPC-2581 XML file to edit
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Designators not to populate; omit to populate every BOM designator
+        #[arg(long, value_delimiter = ',', value_name = "REFDES")]
+        dnp: Vec<String>,
+        /// Output IPC-2581 XML file
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -464,6 +476,9 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 selections,
                 output,
             } => commands::bom_edit::execute_selections(&file, &selections, &output),
+            EditCommands::Population { file, dnp, output } => {
+                commands::population_edit::execute(&file, &dnp, &output)
+            }
         },
         Commands::BoardArray { command } => match command {
             BoardArrayCommands::Create {

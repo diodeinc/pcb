@@ -18,6 +18,7 @@ alias provides the same commands.
 | `board-array create` | Create a rectangular board array. |
 | `fab-panel create` | Tile assembly panels into a supported fabrication panel size. |
 | `edit bom` | Add approved alternatives to BOM entries. |
+| `edit population` | Populate every BOM designator except a do-not-populate list. |
 
 Run `pcb ipc2581 <command> --help` for arguments and output options.
 
@@ -26,6 +27,11 @@ one canonical board. See the [assembly report contract](docs/assembly-report.md)
 
 `edit bom` modifies the input file when `--output` is omitted. Specify an output
 path when the source document must remain unchanged.
+
+`edit population` rewrites `RefDes@populate` on every non-document BOM
+designator: `false` for each `--dnp` designator, `true` for the rest. The
+assembly report, `cpl --exclude-dnp`, and board arrays of the edited file follow
+that population. An unchanged population leaves the file byte-for-byte intact.
 
 Use `view --mode fabrication` to create an IPC-2581C fabrication projection.
 The projection removes BOM/AVL, package, placement, assembly, solder-paste,

@@ -71,13 +71,24 @@ pub fn emit_cpl_csv(document: &PlacementDocument, options: &CplOptions) -> Strin
                 component.package.as_deref().unwrap_or_default(),
                 &format_number(component.at.x),
                 &format_number(component.at.y),
-                &format_number(normalize_rotation(component.rotation_degrees)),
+                &format_number(normalize_rotation(cpl_rotation(component))),
                 cpl_layer(component.side),
             ],
         );
     }
 
     output
+}
+
+/// Rotation in KiCad's position-file convention, the one assembly houses
+/// consume: a mirrored part reports `180° - r` for its IPC-2581 rotation `r`,
+/// matching the orientation KiCad reports for a flipped footprint.
+fn cpl_rotation(component: &Placement) -> f64 {
+    if component.mirror {
+        180.0 - component.rotation_degrees
+    } else {
+        component.rotation_degrees
+    }
 }
 
 fn cpl_layer(side: PlacementSide) -> &'static str {
@@ -219,17 +230,29 @@ mod tests {
             side: CplSideFilter::Both,
             exclude_dnp: false,
         };
-        for (rotation, csv_rotation, local_x, local_y) in [
-            (0, "0.000000", 2.0, 1.0),
-            (30, "30.000000", 1.2320508075688772, 1.8660254037844386),
-            (90, "90.000000", -1.0, 2.0),
-            (180, "180.000000", -2.0, -1.0),
-            (270, "-90.000000", 1.0, -2.0),
+        // Mirrored parts report KiCad's flipped-footprint orientation, 180° - r.
+        for (rotation, top_rotation, bottom_rotation, local_x, local_y) in [
+            (0, "0.000000", "180.000000", 2.0, 1.0),
+            (
+                30,
+                "30.000000",
+                "150.000000",
+                1.2320508075688772,
+                1.8660254037844386,
+            ),
+            (90, "90.000000", "90.000000", -1.0, 2.0),
+            (180, "180.000000", "0.000000", -2.0, -1.0),
+            (270, "-90.000000", "-90.000000", 1.0, -2.0),
         ] {
             for mirror in [false, true] {
                 for panel in [false, true] {
                     let side = if mirror { "BOTTOM" } else { "TOP" };
                     let layer = if mirror { "bottom" } else { "top" };
+                    let csv_rotation = if mirror {
+                        bottom_rotation
+                    } else {
+                        top_rotation
+                    };
                     let root = if panel { "panel" } else { "board" };
                     let ipc = Ipc2581::parse(&format!(
                         r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -315,7 +338,7 @@ U1,,QFN,10.000000,20.000000,{csv_rotation},{layer}\n"
                     side: PlacementSide::Bottom,
                     mount: PlacementMount::Smt,
                     at: Point::new(3.0, 4.0),
-                    rotation_degrees: 90.0,
+                    rotation_degrees: 0.0,
                     mirror: true,
                     face_up: false,
                     scale: 1.0,
@@ -357,7 +380,7 @@ U1,,QFN,10.000000,20.000000,{csv_rotation},{layer}\n"
             csv,
             "Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n\
 R10,10k,R_0603,1.000000,-2.500000,-90.000000,top\n\
-R2,1k,R_0603,3.000000,4.000000,90.000000,bottom\n"
+R2,1k,R_0603,3.000000,4.000000,180.000000,bottom\n"
         );
     }
 }

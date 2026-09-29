@@ -13,6 +13,7 @@ pub mod html_export;
 pub mod ict;
 pub mod info;
 pub mod outline;
+pub mod population_edit;
 #[cfg(feature = "cli")]
 pub mod render;
 pub mod view;
