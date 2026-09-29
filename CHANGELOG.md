@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Add `pcb list -m -json [<package>[@<version>]]` to print the local source directory of the stdlib, dependencies, or any registry package.
+- Add `pcb list -m -json [<package>[@<version>]]` to print the local source directory of the stdlib, workspace packages, dependencies, or any registry package.
 
 ### Removed
 

@@ -296,7 +296,7 @@ Lists read-only package dependency information.
 ```bash
 pcb list -m -u                              # Show compatible updates for direct dependencies
 pcb list -m -versions github.com/acme/foo   # Show published versions for a dependency
-pcb list -m -json                           # Show local source dirs for stdlib and dependencies
+pcb list -m -json                           # Show source dirs for stdlib, packages, and dependencies
 pcb list -m -json github.com/acme/foo@1.2.0 # Show (fetching if needed) one package's source dir
 ```
 
@@ -305,9 +305,11 @@ dependencies only, showing the latest stable version in the same compatibility
 lane and the latest newer breaking lane when available. It does not update manifests.
 
 `pcb list -m -json` prints one `{"path", "version", "dir"}` object per line for
-`@stdlib` and every resolved dependency. With a package argument it prints that
-package: a bare path selects the resolved dependency, otherwise the requested
-version (`@latest` by default) is fetched into the cache.
+`@stdlib`, every workspace package (without a version), and every resolved
+dependency across the workspace. With a package argument it prints that package:
+a bare path selects the workspace's package or dependency, and anything else
+(`<url>@<version>`, or a bare path outside a workspace) is fetched from the
+registry into the cache.
 
 ### `pcb update`
 

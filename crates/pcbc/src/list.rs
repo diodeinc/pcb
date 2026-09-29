@@ -7,8 +7,8 @@ use pcb_zen::cache_index::CacheIndex;
 use pcb_zen::package_resolver::{PackageResolver, compatibility_lane};
 use pcb_zen::resolve::ensure_package_manifest_in_cache;
 use pcb_zen::workspace::get_workspace_info;
-use pcb_zen_core::resolution::ResolutionResult;
-use pcb_zen_core::{DefaultFileProvider, STDLIB_MODULE_PATH, TOOLCHAIN_VERSION};
+use pcb_zen_core::config::find_workspace_root;
+use pcb_zen_core::{DefaultFileProvider, TOOLCHAIN_VERSION};
 use semver::Version;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -112,21 +112,23 @@ fn list_versions(dep: &str) -> Result<()> {
 }
 
 /// A package's local source directory, as printed by `pcb list -m -json`.
+/// Workspace packages have no version.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 struct Module {
     path: String,
-    version: Version,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<Version>,
     dir: PathBuf,
 }
 
-/// Print the stdlib and resolved dependencies, or the one package matching
-/// `package`. A package outside the dependency closure is fetched from its
-/// registry, like `go mod download -json`.
+/// Print the stdlib, workspace packages, and resolved dependencies, or the one
+/// package matching `package`. A versioned package, or a bare one the workspace
+/// does not resolve, is fetched from its registry, like `go mod download -json`.
 fn list_json(package: Option<&str>) -> Result<()> {
-    let modules = build_list(&crate::resolve::resolve(None, false)?);
     let modules = match package {
-        None => modules,
-        Some(package) => vec![find_module(&modules, package)?],
+        None => build_list()?,
+        Some(package) if has_version(package) => vec![fetch_module(package)?],
+        Some(package) => vec![find_module(package)?],
     };
 
     pcb_ui::write_stdout(|out| {
@@ -138,39 +140,73 @@ fn list_json(package: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn build_list(resolution: &ResolutionResult) -> Vec<Module> {
-    let mut modules: Vec<_> = resolution
+/// Resolve the whole workspace containing the current directory, so the
+/// listing is the same from any directory in it.
+fn build_list() -> Result<Vec<Module>> {
+    let root = find_workspace_root(&DefaultFileProvider::new(), &std::env::current_dir()?)?;
+    let resolution = crate::resolve::resolve(Some(&root), false)?;
+    let workspace = &resolution.workspace_info;
+    let stdlib = Module {
+        path: "@stdlib".to_string(),
+        version: Some(Version::parse(TOOLCHAIN_VERSION)?),
+        dir: workspace.workspace_stdlib_dir(),
+    };
+    let packages = workspace.packages.iter().map(|(url, package)| Module {
+        path: url.clone(),
+        version: None,
+        dir: package.dir(&workspace.root),
+    });
+    // Dependency roots are keyed `<url>@<version>`; other keys are workspace packages.
+    let dependencies = resolution
         .package_roots()
         .into_iter()
         .filter_map(|(coord, dir)| {
-            // Workspace packages are keyed by bare URL, dependencies by `<url>@<version>`.
-            let (path, version) = if coord == STDLIB_MODULE_PATH {
-                ("@stdlib", TOOLCHAIN_VERSION)
-            } else {
-                coord.rsplit_once('@')?
-            };
+            let (path, version) = coord.rsplit_once('@')?;
             Some(Module {
                 path: path.to_string(),
-                version: Version::parse(version).ok()?,
+                version: Some(Version::parse(version).ok()?),
                 dir,
             })
-        })
+        });
+
+    let mut modules: Vec<_> = std::iter::once(stdlib)
+        .chain(packages)
+        .chain(dependencies)
         .collect();
     modules.sort();
-    modules
+    Ok(modules)
 }
 
-fn find_module(modules: &[Module], package: &str) -> Result<Module> {
-    // A bare path names the resolved package (highest version if several lanes).
-    if let Some(module) = modules.iter().rev().find(|module| module.path == package) {
-        return Ok(module.clone());
-    }
+/// `<url>@<version>`, as opposed to a bare URL or `@stdlib`.
+fn has_version(package: &str) -> bool {
+    package
+        .rsplit_once('@')
+        .is_some_and(|(path, _)| !path.is_empty())
+}
 
+/// A bare path names the workspace's package (highest version if several
+/// lanes), falling back to the latest release wherever the workspace does not
+/// resolve it, including outside a workspace or when resolution fails.
+fn find_module(package: &str) -> Result<Module> {
+    let resolved = build_list().ok().and_then(|modules| {
+        modules
+            .into_iter()
+            .rev()
+            .find(|module| module.path == package)
+    });
+    resolved.map_or_else(|| fetch_module(package), Ok)
+}
+
+fn fetch_module(package: &str) -> Result<Module> {
     let (path, version) = resolve_module_request(package)?;
     let mut dir = ensure_package_manifest_in_cache(&path, &version, &CacheIndex::open()?)
         .with_context(|| format!("Failed to fetch {path}@{version}"))?;
     dir.pop();
-    Ok(Module { path, version, dir })
+    Ok(Module {
+        path,
+        version: Some(version),
+        dir,
+    })
 }
 
 fn print_update_line(dep: &str, current: &Version, updates: &AvailableUpdates) {
@@ -247,6 +283,14 @@ mod tests {
             parse_args(&args).unwrap(),
             ListCommand::Json(Some("@stdlib".to_string()))
         );
+    }
+
+    #[test]
+    fn has_version_excludes_stdlib_and_bare_urls() {
+        assert!(has_version("github.com/acme/foo@1.0.0"));
+        assert!(has_version("github.com/acme/foo@latest"));
+        assert!(!has_version("github.com/acme/foo"));
+        assert!(!has_version("@stdlib"));
     }
 
     #[test]
