@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.62] - 2026-09-29
+
 ### Added
 
 - Add `pcb ipc2581 edit population --dnp <REFDES,...>` to override which BOM designators are populated.
@@ -2081,7 +2083,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.61...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.62...HEAD
+[0.4.62]: https://github.com/diodeinc/pcb/compare/v0.4.61...v0.4.62
 [0.4.61]: https://github.com/diodeinc/pcb/compare/v0.4.60...v0.4.61
 [0.4.60]: https://github.com/diodeinc/pcb/compare/v0.4.59...v0.4.60
 [0.4.59]: https://github.com/diodeinc/pcb/compare/v0.4.58...v0.4.59
