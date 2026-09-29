@@ -25,6 +25,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Shrink DFM reports by about a quarter without changing their format.
 - Fix `pcb ipc dfm check` reporting corners and small steps on copper edges as sub-minimum widths.
 - Stop `pcb ipc dfm check` from reporting false narrow copper where abutting pour fills meet along a diagonal.
+- Shrink the shared package source clone of the Diode registry from about 2 GB to about 20 MB.
 
 ## [0.4.62] - 2026-09-29
 

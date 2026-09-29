@@ -664,7 +664,7 @@ fn parse_git_timezone_offset(offset: &str) -> Option<i32> {
 fn clone(remote_url: &str, dest_dir: &Path, prompt: bool) -> anyhow::Result<()> {
     let mut cmd = git_global_network_with_prompt(prompt)?;
     cmd.arg("clone");
-    cmd.args(["--quiet", "--no-checkout", remote_url])
+    cmd.args(["--quiet", "--no-checkout", "--filter=blob:none", remote_url])
         .arg(dest_dir);
     run_silent(cmd)
 }
@@ -694,7 +694,8 @@ pub fn ensure_rev_in_source_repo(source_repo: &Path, rev: &str) -> anyhow::Resul
 }
 
 pub fn archive_to_dir(repo_root: &Path, treeish: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    let mut cmd = git(repo_root);
+    // Source repos are blobless clones, so archive may fetch file contents.
+    let mut cmd = git_network(repo_root)?;
     cmd.args(["archive", "--format=tar", treeish])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1283,5 +1284,41 @@ mod tests {
         assert!(args.iter().any(|arg| {
             arg == "credential.https://code.diode.computer.helper=!pcb auth git --host='code.diode.computer'"
         }));
+    }
+
+    #[test]
+    fn source_clone_is_blobless_and_archive_fetches_contents() {
+        let temp = tempfile::tempdir().unwrap();
+        let upstream = temp.path().join("upstream");
+        std::fs::create_dir_all(upstream.join("pkg")).unwrap();
+        std::fs::write(upstream.join("pkg/pcb.toml"), "[package]\n").unwrap();
+        for args in [
+            &["init", "--quiet"][..],
+            &["config", "uploadpack.allowFilter", "true"],
+            &["config", "user.name", "t"],
+            &["config", "user.email", "t@t"],
+            &["add", "."],
+            &["commit", "--quiet", "-m", "init"],
+            &["tag", "pkg/v1.0.0"],
+        ] {
+            run_in(&upstream, args).unwrap();
+        }
+
+        let source = temp.path().join("source");
+        clone(&format!("file://{}", upstream.display()), &source, false).unwrap();
+        let objects = run_output(
+            &source,
+            &["rev-list", "--objects", "--missing=print", "--all"],
+        )
+        .unwrap();
+        assert!(objects.lines().any(|line| line.starts_with('?')));
+
+        let dest = temp.path().join("dest");
+        std::fs::create_dir_all(&dest).unwrap();
+        archive_to_dir(&source, "pkg/v1.0.0:pkg", &dest).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("pcb.toml")).unwrap(),
+            "[package]\n"
+        );
     }
 }
