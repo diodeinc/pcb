@@ -1,17 +1,22 @@
 use crate::pcb_mod;
-use crate::pcb_mod::request::available_versions_for_module;
+use crate::pcb_mod::request::{available_versions_for_module, resolve_module_request};
 use crate::pcb_mod::target::discover_package_target;
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use pcb_zen::cache_index::CacheIndex;
 use pcb_zen::package_resolver::{PackageResolver, compatibility_lane};
+use pcb_zen::resolve::ensure_package_manifest_in_cache;
 use pcb_zen::workspace::get_workspace_info;
-use pcb_zen_core::DefaultFileProvider;
+use pcb_zen_core::config::find_workspace_root;
+use pcb_zen_core::{DefaultFileProvider, TOOLCHAIN_VERSION};
 use semver::Version;
+use serde::Serialize;
+use std::path::PathBuf;
 
 #[derive(Args, Debug)]
 #[command(about = "List package dependency information")]
 pub struct ListArgs {
-    /// Go-style list arguments. Supported: -m -u, -m -versions DEP
+    /// Go-style list arguments. Supported: -m -u, -m -versions DEP, -m -json [PKG[@VERSION]]
     #[arg(
         value_name = "ARGS",
         allow_hyphen_values = true,
@@ -24,6 +29,7 @@ pub struct ListArgs {
 enum ListCommand {
     Updates,
     Versions(String),
+    Json(Option<String>),
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -36,6 +42,7 @@ pub fn execute(args: ListArgs) -> Result<()> {
     match parse_args(&args.args)? {
         ListCommand::Updates => list_updates(),
         ListCommand::Versions(dep) => list_versions(&dep),
+        ListCommand::Json(package) => list_json(package.as_deref()),
     }
 }
 
@@ -45,12 +52,15 @@ fn parse_args(args: &[String]) -> Result<ListCommand> {
         [module, versions, dep] if module == "-m" && versions == "-versions" => {
             Ok(ListCommand::Versions(dep.clone()))
         }
+        [module, json, package @ ..] if module == "-m" && json == "-json" && package.len() <= 1 => {
+            Ok(ListCommand::Json(package.first().cloned()))
+        }
         _ => bail!("unsupported `pcb list` arguments\n\n{}", usage()),
     }
 }
 
 fn usage() -> &'static str {
-    "Usage:\n  pcb list -m -u\n  pcb list -m -versions <dependency>"
+    "Usage:\n  pcb list -m -u\n  pcb list -m -versions <dependency>\n  pcb list -m -json [<package>[@<version>]]"
 }
 
 fn list_updates() -> Result<()> {
@@ -99,6 +109,104 @@ fn list_versions(dep: &str) -> Result<()> {
         .join(" ");
     println!("{dep} {rendered}");
     Ok(())
+}
+
+/// A package's local source directory, as printed by `pcb list -m -json`.
+/// Workspace packages have no version.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+struct Module {
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<Version>,
+    dir: PathBuf,
+}
+
+/// Print the stdlib, workspace packages, and resolved dependencies, or the one
+/// package matching `package`. A versioned package, or a bare one the workspace
+/// does not resolve, is fetched from its registry, like `go mod download -json`.
+fn list_json(package: Option<&str>) -> Result<()> {
+    let modules = match package {
+        None => build_list()?,
+        Some(package) if has_version(package) => vec![fetch_module(package)?],
+        Some(package) => vec![find_module(package)?],
+    };
+
+    pcb_ui::write_stdout(|out| {
+        modules.iter().try_for_each(|module| {
+            serde_json::to_writer(&mut *out, module)?;
+            writeln!(out)
+        })
+    })?;
+    Ok(())
+}
+
+/// Resolve the whole workspace containing the current directory, so the
+/// listing is the same from any directory in it.
+fn build_list() -> Result<Vec<Module>> {
+    let root = find_workspace_root(&DefaultFileProvider::new(), &std::env::current_dir()?)?;
+    let resolution = crate::resolve::resolve(Some(&root), false)?;
+    let workspace = &resolution.workspace_info;
+    let stdlib = Module {
+        path: "@stdlib".to_string(),
+        version: Some(Version::parse(TOOLCHAIN_VERSION)?),
+        dir: workspace.workspace_stdlib_dir(),
+    };
+    let packages = workspace.packages.iter().map(|(url, package)| Module {
+        path: url.clone(),
+        version: None,
+        dir: package.dir(&workspace.root),
+    });
+    // Dependency roots are keyed `<url>@<version>`; other keys are workspace packages.
+    let dependencies = resolution
+        .package_roots()
+        .into_iter()
+        .filter_map(|(coord, dir)| {
+            let (path, version) = coord.rsplit_once('@')?;
+            Some(Module {
+                path: path.to_string(),
+                version: Some(Version::parse(version).ok()?),
+                dir,
+            })
+        });
+
+    let mut modules: Vec<_> = std::iter::once(stdlib)
+        .chain(packages)
+        .chain(dependencies)
+        .collect();
+    modules.sort();
+    Ok(modules)
+}
+
+/// `<url>@<version>`, as opposed to a bare URL or `@stdlib`.
+fn has_version(package: &str) -> bool {
+    package
+        .rsplit_once('@')
+        .is_some_and(|(path, _)| !path.is_empty())
+}
+
+/// A bare path names the workspace's package (highest version if several
+/// lanes), falling back to the latest release wherever the workspace does not
+/// resolve it, including outside a workspace or when resolution fails.
+fn find_module(package: &str) -> Result<Module> {
+    let resolved = build_list().ok().and_then(|modules| {
+        modules
+            .into_iter()
+            .rev()
+            .find(|module| module.path == package)
+    });
+    resolved.map_or_else(|| fetch_module(package), Ok)
+}
+
+fn fetch_module(package: &str) -> Result<Module> {
+    let (path, version) = resolve_module_request(package)?;
+    let mut dir = ensure_package_manifest_in_cache(&path, &version, &CacheIndex::open()?)
+        .with_context(|| format!("Failed to fetch {path}@{version}"))?;
+    dir.pop();
+    Ok(Module {
+        path,
+        version: Some(version),
+        dir,
+    })
 }
 
 fn print_update_line(dep: &str, current: &Version, updates: &AvailableUpdates) {
@@ -163,6 +271,26 @@ mod tests {
             parse_args(&args).unwrap(),
             ListCommand::Versions("github.com/acme/foo".to_string())
         );
+    }
+
+    #[test]
+    fn parse_json_args() {
+        let args = vec!["-m".to_string(), "-json".to_string()];
+        assert_eq!(parse_args(&args).unwrap(), ListCommand::Json(None));
+
+        let args = vec!["-m".to_string(), "-json".to_string(), "@stdlib".to_string()];
+        assert_eq!(
+            parse_args(&args).unwrap(),
+            ListCommand::Json(Some("@stdlib".to_string()))
+        );
+    }
+
+    #[test]
+    fn has_version_excludes_stdlib_and_bare_urls() {
+        assert!(has_version("github.com/acme/foo@1.0.0"));
+        assert!(has_version("github.com/acme/foo@latest"));
+        assert!(!has_version("github.com/acme/foo"));
+        assert!(!has_version("@stdlib"));
     }
 
     #[test]

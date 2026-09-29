@@ -48,7 +48,6 @@ pcb-diode-api = { path = "crates/pcb-diode-api" }
 pcb-diode-uri = { path = "crates/pcb-diode-uri" }
 pcb-native-dialog = { path = "crates/pcb-native-dialog" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools", default-features = false }
-pcb-docgen = { path = "crates/pcb-docgen" }
 pcb-step = { path = "crates/pcb-step" }
 
 anyhow = "1.0"
