@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Export STEP connector subassemblies with explicit product occurrences for better CAD reader placement compatibility.
 - Correct STEP wall boundary orientation so shared edges traverse oppositely across board, drill, and machined-hole faces.
+- Stop adding mouse-bite tabs for parts of a board outline that no set of tabs can hold.
 
 ## [0.4.61] - 2026-09-27
 
