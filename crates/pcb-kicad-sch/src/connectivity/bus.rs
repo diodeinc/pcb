@@ -47,6 +47,7 @@ impl PageBuses {
             // sheets with no bus. Local labels on those sheets remain local.
             item.driver = Some(NameDriver {
                 name: name.clone(),
+                net_name: None,
                 kind: *kind,
                 role: DriverNameRole::HierarchyAlias,
                 merge_by_name: true,

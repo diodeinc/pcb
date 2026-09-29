@@ -120,11 +120,6 @@ jobs:
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           find kicad-test-fixtures -name '*.kicad_pro' | while IFS= read -r pro; do
-            # TODO: Restore this fixture when persistent schematic import supports buses.
-            if [ "$pro" = "kicad-test-fixtures/ai-camera-rev3.2/ai-camera-rev3.2.kicad_pro" ]; then
-              echo "Skipping $pro: bus connectivity is not supported yet"
-              continue
-            fi
             echo "=== Importing $pro ==="
             out="./test-import/$(basename "${pro%.kicad_pro}")"
             pcb +local import "$pro" "$out"

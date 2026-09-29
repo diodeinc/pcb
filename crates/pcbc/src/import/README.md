@@ -175,10 +175,10 @@ converts back-side geometry and layers, and makes embedded zones and pad angles 
   source sheet, while `lib_id` remains its library identity. Distinct cached
   definitions generate distinct parts even when their library IDs match.
 
-The shared engine must be able to inspect the imported connectivity. Unsupported
-constructs (including buses and managed components on reused sheet files) fail
-explicitly rather than silently reconstructing a different circuit. KiCad 9 and
-10 documents use the same parser/normalization as the persistent editor.
+The shared engine interprets native bus connectivity without reconstructing the
+buses. Unsupported constructs, such as managed components on reused sheet files,
+fail explicitly rather than silently reconstructing a different circuit. KiCad 9
+and 10 documents use the same parser/normalization as the persistent editor.
 
 ## Verification
 
