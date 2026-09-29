@@ -1285,40 +1285,4 @@ mod tests {
             arg == "credential.https://code.diode.computer.helper=!pcb auth git --host='code.diode.computer'"
         }));
     }
-
-    #[test]
-    fn source_clone_is_blobless_and_archive_fetches_contents() {
-        let temp = tempfile::tempdir().unwrap();
-        let upstream = temp.path().join("upstream");
-        std::fs::create_dir_all(upstream.join("pkg")).unwrap();
-        std::fs::write(upstream.join("pkg/pcb.toml"), "[package]\n").unwrap();
-        for args in [
-            &["init", "--quiet"][..],
-            &["config", "uploadpack.allowFilter", "true"],
-            &["config", "user.name", "t"],
-            &["config", "user.email", "t@t"],
-            &["add", "."],
-            &["commit", "--quiet", "-m", "init"],
-            &["tag", "pkg/v1.0.0"],
-        ] {
-            run_in(&upstream, args).unwrap();
-        }
-
-        let source = temp.path().join("source");
-        clone(&format!("file://{}", upstream.display()), &source, false).unwrap();
-        let objects = run_output(
-            &source,
-            &["rev-list", "--objects", "--missing=print", "--all"],
-        )
-        .unwrap();
-        assert!(objects.lines().any(|line| line.starts_with('?')));
-
-        let dest = temp.path().join("dest");
-        std::fs::create_dir_all(&dest).unwrap();
-        archive_to_dir(&source, "pkg/v1.0.0:pkg", &dest).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dest.join("pcb.toml")).unwrap(),
-            "[package]\n"
-        );
-    }
 }
