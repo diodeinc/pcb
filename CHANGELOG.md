@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add `pcb list -m -json [<package>[@<version>]]` to print the local source directory of the stdlib, workspace packages, dependencies, or any registry package.
+- Add `pcb ipc edit remove-unused-via-lands` to explicitly remove isolated interior through-via lands from board, board-array, and fab-panel IPC-2581 files while preserving drills and endpoint lands.
 
 ### Changed
 
