@@ -28,7 +28,7 @@ fn generate_and_report(materialized: Materialized) -> Result<()> {
         board,
     } = materialized;
 
-    let generation = generate::generate(&board, &selection.board_name, &ir)?;
+    let generation = generate::generate(&board, &selection, &ir)?;
     generated_validate::validate_generated_zen(
         &board,
         &ir,

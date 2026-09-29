@@ -51,7 +51,7 @@ pub(super) fn materialize_board(
         }
     };
     // Standalone forced imports retain layout/. Its matching board still needs
-    // stackup extraction and the same identity/net prepatching as a project import.
+    // stackup extraction and identity prepatching, but retains its existing net names.
     let layout_kicad_pcb = layout_kicad_pcb.or_else(|| {
         let path = layout_kicad_pro.with_extension("kicad_pcb");
         path.is_file().then_some(path)

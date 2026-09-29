@@ -64,9 +64,10 @@ fn write_zen(path: &Path, content: &str) -> Result<()> {
 
 pub(super) fn generate(
     materialized: &MaterializedBoard,
-    board_name: &str,
+    selection: &ImportSelection,
     ir: &ImportIr,
 ) -> Result<GenerationResult> {
+    let board_name = &selection.board_name;
     // Use the same KiCad 9 -> 10 symbol normalization as the persistent editor.
     let project = pcbc::kicad_schematic::KicadProject::load(
         materialized
@@ -113,6 +114,7 @@ pub(super) fn generate(
     write_imported_board_zen(ImportedBoardZenArgs {
         board_zen: &materialized.board_zen,
         board_name,
+        source_kind: selection.portable.source_kind,
         layout_kicad_pro: materialized.layout_kicad_pro.as_deref(),
         layout_kicad_pcb: materialized.layout_kicad_pcb.as_deref(),
         port_to_net: &port_to_net,
@@ -136,6 +138,7 @@ pub(super) fn generate(
 struct ImportedBoardZenArgs<'a> {
     board_zen: &'a Path,
     board_name: &'a str,
+    source_kind: ImportSourceKind,
     layout_kicad_pro: Option<&'a Path>,
     layout_kicad_pcb: Option<&'a Path>,
     port_to_net: &'a BTreeMap<ImportNetPort, KiCadNetName>,
@@ -165,12 +168,20 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
                     .flatten()
             });
 
+            let no_net_renames = BTreeMap::new();
             prepatch_imported_layout_kicad_pcb(LayoutPrepatchArgs {
                 layout_kicad_pcb,
                 pcb_text: &pcb_text,
                 components: args.components,
                 refdes_instance_names: args.refdes_instance_names,
-                net_ident_by_kicad_name: &args.net_decls.zener_name_by_kicad_name,
+                // Only fresh source PCBs use native net names. Retained boards
+                // may already use generated names, which can also be keys in
+                // this map. Applying it again could merge distinct nets.
+                net_ident_by_kicad_name: if args.source_kind == ImportSourceKind::Project {
+                    &args.net_decls.zener_name_by_kicad_name
+                } else {
+                    &no_net_renames
+                },
                 generated_components: args.component_modules,
                 sheet_modules: args.sheet_modules,
             })
@@ -340,9 +351,9 @@ fn compute_import_footprint_path_property_patches(
 ) -> Result<PatchSet> {
     let mut desired_by_refdes: BTreeMap<KiCadRefDes, String> = BTreeMap::new();
     for (anchor, component) in components {
-        if component.layout.is_none() {
+        let Some(layout) = &component.layout else {
             continue;
-        }
+        };
         let Some(component_name) = generated_components.anchor_to_component_name.get(anchor) else {
             continue;
         };
@@ -356,11 +367,19 @@ fn compute_import_footprint_path_property_patches(
             .get(anchor)
             .cloned()
             .unwrap_or_default();
+        // Extraction has already joined source footprints by reference/native
+        // path and rejected conflicting identities. Use its PCB reference for
+        // the patch target, even when it differs from the schematic reference.
+        let pcb_refdes = layout
+            .properties
+            .get("Reference")
+            .map(|value| KiCadRefDes::from(value.clone()))
+            .unwrap_or_else(|| refdes.clone());
         if prefix.is_empty() {
-            desired_by_refdes.insert(refdes.clone(), format!("{instance_name}.{component_name}"));
+            desired_by_refdes.insert(pcb_refdes, format!("{instance_name}.{component_name}"));
         } else {
             desired_by_refdes.insert(
-                refdes.clone(),
+                pcb_refdes,
                 format!("{prefix}.{instance_name}.{component_name}"),
             );
         }

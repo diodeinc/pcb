@@ -273,9 +273,20 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     let mut sandbox = sandbox();
     // Keep this electrical/layout check independent of the fixture's incomplete sourcing.
     // Geometry exists only in the PCB, never an installed footprint library.
-    let schematic = STANDALONE_FIXTURE
+    let mut schematic = STANDALONE_FIXTURE
         .replace("(in_bom yes)", "(in_bom no)")
         .replace("Resistor_SMD:R_0402_1005Metric", "Local:CustomR");
+    // These two distinct R2 nets collide under name sanitization. Reimport must
+    // not rename the already-generated Signal_Name to Signal_Name_2 again.
+    schematic.insert_str(
+        schematic.rfind(')').unwrap(),
+        r#"
+        (global_label "Signal.Name" (shape input) (at 101.6 114.3 0)
+            (effects (font (size 1.27 1.27))) (uuid "0148d5e0-b736-47f2-87b0-731cda33eaf1"))
+        (global_label "Signal_Name" (shape input) (at 101.6 121.92 0)
+            (effects (font (size 1.27 1.27))) (uuid "0ea57347-1408-4683-bb29-4b36d8b313c4"))
+        "#,
+    );
     // Source parity is advisory: preserve stale PCB metadata/nets rather than correcting them.
     let pcb = PCB_FIXTURE
         .replace("Resistor_SMD:R_0402_1005Metric", "Local:CustomR")
@@ -285,7 +296,9 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
             "(property \"Datasheet\" \"~\"",
             "(property \"Datasheet\" \"stale datasheet\"",
         )
-        .replace("unconnected-(R1-Pad1)", "STALE_PCB_NET");
+        .replace("unconnected-(R1-Pad1)", "STALE_PCB_NET")
+        .replace("unconnected-(R2-Pad1)", "Signal.Name")
+        .replace("unconnected-(R2-Pad2)", "Signal_Name");
     sandbox.write("source/layout.kicad_sch", &schematic);
     sandbox.write("source/layout.kicad_pro", PROJECT_FIXTURE);
     sandbox.write("source/layout.kicad_pcb", &pcb);
@@ -347,7 +360,11 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     assert!(output.join("layout/layout.kicad_pcb").is_file());
     assert_preserved_schematic(&output.join("layout/layout.kicad_sch"), &schematic, false);
     let pcb_before_apply = fs::read(output.join("layout/layout.kicad_pcb")).unwrap();
-    let mut source_pcb = pcb_sexpr::parse(&pcb).unwrap();
+    let mut source_pcb = pcb_sexpr::parse(
+        &pcb.replace("Signal_Name", "Signal_Name_2")
+            .replace("Signal.Name", "Signal_Name"),
+    )
+    .unwrap();
     let mut imported_pcb =
         pcb_sexpr::parse(std::str::from_utf8(&pcb_before_apply).unwrap()).unwrap();
     for board in [&mut source_pcb, &mut imported_pcb] {
@@ -369,7 +386,7 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     }
     assert_eq!(
         imported_pcb, source_pcb,
-        "Only footprint identity bindings may change"
+        "Only footprint identity bindings and allocated net names may change"
     );
     assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
     assert_eq!(
@@ -477,6 +494,32 @@ fn project_import_joins_stale_pcb_reference_by_native_path() {
         fs::read_to_string(sandbox.root_path().join("source/layout.kicad_pcb")).unwrap(),
         pcb
     );
+    let build = sandbox
+        .run(
+            "pcbc",
+            ["build", "out/layout.zen", "--offline", "--netlist"],
+        )
+        .stdout_capture()
+        .run()
+        .unwrap();
+    let schematic: pcb_sch::Schematic = serde_json::from_slice(&build.stdout).unwrap();
+    let mut diagnostics = pcb_zen_core::Diagnostics::default();
+    assert!(
+        pcb_layout::check_layout_sync(&schematic, &mut diagnostics)
+            .unwrap()
+            .is_some()
+    );
+    // Metadata parity may differ, but the recovered footprint must be managed
+    // by layout sync, not reported as missing because its reference is stale.
+    for diagnostic in &diagnostics.diagnostics {
+        assert!(
+            !matches!(
+                pcb_zen_core::diagnostics::diagnostic_kind(diagnostic).as_deref(),
+                Some("layout.sync.missing_footprint" | "layout.sync.unmanaged_footprint")
+            ),
+            "{diagnostic:?}"
+        );
+    }
     assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
 }
 

@@ -58,8 +58,9 @@ A standalone import creates a minimal KiCad project for its persistent schematic
 but no PCB or source archive. It keeps an existing layout and project configuration
 on forced reimport. A retained matching PCB supplies the layer count and stackup,
 supplies embedded footprint geometry before external library fallback, and receives
-the same identity/net binding updates as a project import without reconstructing
-its placement or routing.
+identity binding updates without reconstructing its placement or routing. Its net
+names are retained, not passed through the source-name allocator again; otherwise
+already-generated names can collide with other source names and merge PCB nets.
 A differently named retained project is rejected before cleanup;
 import its matching schematic or choose a new output directory instead.
 The board enables `schematic = True` at the standard `layout`
@@ -137,8 +138,10 @@ Schematic/netlist identities stay on these source anchors. Footprint geometry is
 matched to them by unique reference designator: a retained PCB already uses Zener
 sync UUIDs, not native schematic paths. For source project PCBs only, a native
 unit path also identifies geometry when its PCB reference is stale. Ambiguous
-matches are rejected rather than choosing one footprint's geometry. Reference
-designators do not define the generated hierarchy or symbol identities.
+matches are rejected rather than choosing one footprint's geometry. The matched
+PCB reference also targets its generated sync hooks, so stale references do not
+leave recovered footprints unmanaged. Reference designators do not define the
+generated hierarchy or symbol identities.
 
 ## Footprint de-instancing
 
