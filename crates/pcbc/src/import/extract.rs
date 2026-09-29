@@ -535,12 +535,21 @@ fn extract_kicad_layout_data(
         .collect::<BTreeMap<_, _>>();
 
     for fp in footprints {
-        let Some(key) = fp
+        let by_reference = fp
             .properties
             .get("Reference")
-            .and_then(|refdes| anchors_by_refdes.get(refdes))
-            .or_else(|| native_unit_anchors?.get(&KiCadUuidPathKey::from_pcb_path(&fp.path).ok()?))
-        else {
+            .and_then(|refdes| anchors_by_refdes.get(refdes));
+        let by_native_path = native_unit_anchors
+            .and_then(|anchors| anchors.get(&KiCadUuidPathKey::from_pcb_path(&fp.path).ok()?));
+        if let (Some(reference), Some(native_path)) = (by_reference, by_native_path) {
+            anyhow::ensure!(
+                reference == native_path,
+                "PCB footprint reference {} conflicts with native schematic path {}",
+                fp.properties["Reference"],
+                fp.path
+            );
+        }
+        let Some(key) = by_reference.or(by_native_path) else {
             // Ignore footprints we can't join against netlist-derived component identities.
             continue;
         };
@@ -1157,6 +1166,51 @@ fn key_from_schematic_instance_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_import_rejects_conflicting_native_identity_but_ignores_retained_sync_paths()
+    -> Result<()> {
+        let board = r#"(kicad_pcb
+            (footprint "Small" (path "/a") (property "Reference" "R2")
+                (pad "1" smd rect (size 1 1)))
+            (footprint "Large" (path "/b") (property "Reference" "R1")
+                (pad "1" smd rect (size 4 4))))"#;
+        let netlist = r#"(export
+            (components
+                (comp (ref "R1") (sheetpath (tstamps "/")) (tstamps "a"))
+                (comp (ref "R2") (sheetpath (tstamps "/")) (tstamps "b")))
+            (nets))"#;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("board.kicad_pcb");
+        fs::write(&path, board)?;
+        let pcb_anchors = parse_kicad_pcb_refdes_to_anchor_key(board)?;
+        let mut source = parse_kicad_sexpr_netlist(netlist, &pcb_anchors)?;
+        let error =
+            extract_kicad_layout_data(&path, Some(&source.unit_to_anchor), &mut source.components)
+                .expect_err("source paths and swapped references must not exchange geometry");
+        assert!(
+            error
+                .to_string()
+                .contains("conflicts with native schematic path")
+        );
+
+        // Retained board paths are sync hooks, not native identities. Even a
+        // coincidental source-path match must not override the reference join.
+        let mut retained = parse_kicad_sexpr_netlist(netlist, &BTreeMap::new())?;
+        extract_kicad_layout_data(&path, None, &mut retained.components)?;
+        for (native_path, expected) in [("/a", "Large"), ("/b", "Small")] {
+            assert_eq!(
+                retained.components[&KiCadUuidPathKey::from_pcb_path(native_path)?]
+                    .layout
+                    .as_ref()
+                    .unwrap()
+                    .fpid
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn parses_kicad_sexpr_netlist_and_builds_uuid_path_keys() -> Result<()> {
