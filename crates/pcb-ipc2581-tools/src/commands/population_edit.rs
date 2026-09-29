@@ -6,7 +6,6 @@
 use std::collections::HashSet;
 
 use anyhow::{Result, bail};
-use ipc2581::XmlWriter;
 use ipc2581::edit::{Doc, Edit, Node};
 
 /// `xml` with every non-document BOM designator populated except those in
@@ -77,36 +76,30 @@ fn populate_edit(doc: &Doc<'_>, reference: Node, populate: bool) -> Result<Optio
     }
 
     let value = if populate { "true" } else { "false" };
-    let mut attrs = doc
-        .attrs(reference)
-        .map(|(name, old)| (name.to_string(), old.to_string()))
-        .collect::<Vec<_>>();
-    match attrs.iter_mut().find(|(name, _)| name == "populate") {
-        Some((_, old)) => *old = value.to_string(),
-        None => attrs.push(("populate".to_string(), value.to_string())),
-    }
-
-    let mut writer = XmlWriter::new();
-    if doc.source(reference).ends_with("/>") {
-        writer.empty_element_with("RefDes", attrs);
-    } else {
-        writer.start_element_with("RefDes", attrs);
-    }
-    Ok(Some(doc.replace_start_tag(reference, writer.into_string())))
+    Ok(Some(doc.set_attr(reference, "populate", value)))
 }
 
 #[cfg(feature = "cli")]
 pub fn execute(file: &std::path::Path, dnp: &[String], output: &std::path::Path) -> Result<()> {
     use crate::utils::file as file_utils;
+    use anyhow::Context as _;
 
-    let content = file_utils::load_ipc_file(file)?;
+    let bytes = std::fs::read(file).with_context(|| format!("Failed to read file: {file:?}"))?;
+    let content = file_utils::ipc_text(file, &bytes)?;
     match set_population(&content, dnp)? {
         Some(updated) => {
             file_utils::save_ipc_file(output, &updated)?;
             eprintln!("Set population ({} DNP) in {:?}", dnp.len(), output);
         }
         None => {
-            file_utils::save_ipc_file(output, &content)?;
+            // Keep the input's exact bytes whenever the output is encoded the same way.
+            let compressed = matches!(content, std::borrow::Cow::Owned(_));
+            if compressed == (output.extension().is_some_and(|ext| ext == "zst")) {
+                std::fs::write(output, &bytes)
+                    .with_context(|| format!("Failed to write file: {output:?}"))?;
+            } else {
+                file_utils::save_ipc_file(output, &content)?;
+            }
             eprintln!("Population unchanged in {:?}", output);
         }
     }
@@ -198,6 +191,23 @@ mod tests {
         let edited = set_population(XML, &dnp(&["R1"])).unwrap().unwrap();
 
         assert_eq!(set_population(&edited, &dnp(&["R1", "R1"])).unwrap(), None);
+    }
+
+    #[test]
+    fn prefixed_designators_keep_their_prefix() {
+        let xml = XML
+            .replace(
+                r#"<RefDes name="U1""#,
+                r#"<ipc:RefDes xmlns:ipc="http://webstds.ipc.org/2581" name="U1""#,
+            )
+            .replace("</RefDes>", "</ipc:RefDes>");
+        let edited = set_population(&xml, &dnp(&["R2", "U1"])).unwrap().unwrap();
+
+        assert!(edited.contains(
+            r#"<ipc:RefDes xmlns:ipc="http://webstds.ipc.org/2581" name="U1" packageRef="QFN" populate="false" layerRef="TOP">"#
+        ));
+        assert!(edited.contains("</ipc:RefDes>"));
+        assert!(population(&edited).contains(&("U1".to_string(), Some(false))));
     }
 
     #[test]

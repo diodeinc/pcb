@@ -143,7 +143,25 @@ impl<'a> Doc<'a> {
         Edit::splice(self.span(node).start, start_tag, xml.into())
     }
 
-    /// All elements with the given local name, anywhere in the document,
+    /// Set one attribute in place, matched by local name like [`Doc::attr`].
+    /// An existing value is replaced within its quotes; a missing attribute is
+    /// appended to the start tag. The rest of the tag (its prefix, namespace
+    /// declarations, quoting, and other attributes) is left as written.
+    pub fn set_attr(&self, node: Node, name: &str, value: &str) -> Edit {
+        let start = self.span(node).start;
+        let element = self.source(node);
+        let tag = &element[..start_tag_len(element)];
+        let value = escape_attr(value);
+        match attr_value_range(tag, name) {
+            Some(range) => Edit::splice(start + range.start, range.len(), value),
+            None => {
+                let open = tag.strip_suffix('>').unwrap_or(tag);
+                let open = open.strip_suffix('/').unwrap_or(open).trim_end();
+                Edit::splice(start + open.len(), 0, format!(" {name}=\"{value}\""))
+            }
+        }
+    }
+
     /// in document order.
     pub fn find_all(&self, name: &str) -> Vec<Node> {
         self.dom
@@ -220,6 +238,64 @@ pub fn start_tag_len(element_source: &str) -> usize {
         }
     }
     element_source.len()
+}
+
+/// Byte range of the value (inside its quotes) of the attribute with local
+/// name `name` in a start tag. Namespace declarations never match.
+fn attr_value_range(tag: &str, name: &str) -> Option<Range<usize>> {
+    let bytes = tag.as_bytes();
+    let is_space = |at: usize| bytes.get(at).is_some_and(u8::is_ascii_whitespace);
+    let mut at = 1 + tag
+        .get(1..)?
+        .find(|c: char| c.is_whitespace() || c == '/' || c == '>')?;
+    loop {
+        while is_space(at) {
+            at += 1;
+        }
+        let qname_start = at;
+        while bytes
+            .get(at)
+            .is_some_and(|&b| !b.is_ascii_whitespace() && !matches!(b, b'=' | b'/' | b'>'))
+        {
+            at += 1;
+        }
+        if at == qname_start {
+            return None;
+        }
+        let qname = &tag[qname_start..at];
+        while is_space(at) {
+            at += 1;
+        }
+        if bytes.get(at) != Some(&b'=') {
+            return None;
+        }
+        at += 1;
+        while is_space(at) {
+            at += 1;
+        }
+        let quote = *bytes.get(at)? as char;
+        let value_start = at + 1;
+        let value_end = value_start + tag[value_start..].find(quote)?;
+        let is_declaration = qname == "xmlns" || qname.starts_with("xmlns:");
+        if !is_declaration && qname.rsplit(':').next() == Some(name) {
+            return Some(value_start..value_end);
+        }
+        at = value_end + 1;
+    }
+}
+
+fn escape_attr(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            c => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 #[cfg(test)]
@@ -325,6 +401,40 @@ mod tests {
         assert_eq!(ids, ["1", "2", "3", "4"]);
         assert_eq!(doc.find_all("R").len(), 1);
         assert!(doc.find_all("Missing").is_empty());
+    }
+
+    #[test]
+    fn set_attr_edits_only_the_attribute() {
+        let xml = concat!(
+            r#"<R xmlns:p="urn:p">"#,
+            r#"<p:A xmlns:populate="urn:x" name='a>b' p:populate = 'false'><B/></p:A>"#,
+            r#"<A name="c" />"#,
+            r#"<A name="d"/>"#,
+            "</R>"
+        );
+        let doc = Doc::parse(xml).unwrap();
+        let [a, c, d] = doc.find_all("A").try_into().unwrap();
+
+        let edits = vec![
+            doc.set_attr(a, "populate", "true"),
+            doc.set_attr(c, "populate", "true"),
+            doc.set_attr(d, "note", "<\"&'>"),
+        ];
+        let out = doc.apply(edits).unwrap();
+
+        assert_eq!(
+            out,
+            concat!(
+                r#"<R xmlns:p="urn:p">"#,
+                r#"<p:A xmlns:populate="urn:x" name='a>b' p:populate = 'true'><B/></p:A>"#,
+                r#"<A name="c" populate="true" />"#,
+                r#"<A name="d" note="&lt;&quot;&amp;&apos;>"/>"#,
+                "</R>"
+            )
+        );
+        let doc = Doc::parse(&out).unwrap();
+        let [_, _, d] = doc.find_all("A").try_into().unwrap();
+        assert_eq!(doc.attr(d, "note"), Some("<\"&'>"));
     }
 
     #[test]
