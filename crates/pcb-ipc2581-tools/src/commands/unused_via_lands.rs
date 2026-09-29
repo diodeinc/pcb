@@ -45,8 +45,18 @@ pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(Str
                     if is_copper(layer.layer_function) || layer.layer_function.is_fabrication() {
                         check_geometry(&doc, child)?;
                     }
+                    if is_copper(layer.layer_function) {
+                        ensure!(
+                            doc.children(child).into_iter().all(|set| {
+                                doc.children(set).into_iter().all(|feature| {
+                                    !matches!(doc.name(feature), "Hole" | "SlotCavity")
+                                })
+                            }),
+                            "Cannot prove via isolation: Hole or SlotCavity on copper layer"
+                        );
+                    }
                 }
-                "PadStackDef" => check_geometry(&doc, child)?,
+                "PadStackDef" | "Profile" => check_geometry(&doc, child)?,
                 "StepRepeat" => {
                     ensure!(
                         doc.children(child).is_empty(),
@@ -54,7 +64,6 @@ pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(Str
                     );
                 }
                 "Datum"
-                | "Profile"
                 | "Package"
                 | "Component"
                 | "LogicalNet"
@@ -224,9 +233,12 @@ fn check_geometry(doc: &Doc<'_>, node: Node) -> Result<()> {
         ],
         "Circle" | "Oval" | "RectCenter" | "RectRound" | "RectCham" | "RectCorner" | "Line"
         | "Arc" => &["FillDesc", "FillDescRef", "LineDesc", "LineDescRef"],
-        "Contour" => &["Polygon", "Cutout"],
+        "Contour" | "Profile" => &["Polygon", "Cutout"],
         "Cutout" => &["Polygon", "PolyBegin", "PolyStepSegment", "PolyStepCurve"],
-        "Polygon" | "Polyline" => &[
+        // Polygon styles are discarded by the importer; a stroke can extend
+        // beyond the filled image used by the isolation proof.
+        "Polygon" => &["PolyBegin", "PolyStepSegment", "PolyStepCurve"],
+        "Polyline" => &[
             "PolyBegin",
             "PolyStepSegment",
             "PolyStepCurve",
@@ -288,14 +300,15 @@ fn check_geometry(doc: &Doc<'_>, node: Node) -> Result<()> {
             doc.name(node)
         );
     }
-    if doc.name(node) == "Contour" {
+    if matches!(doc.name(node), "Contour" | "Profile") {
         ensure!(
             children
                 .iter()
                 .filter(|&&c| doc.name(c) == "Polygon")
                 .count()
                 == 1,
-            "Contour must contain exactly one Polygon"
+            "{} must contain exactly one Polygon",
+            doc.name(node)
         );
     }
     Ok(())
@@ -486,6 +499,69 @@ mod tests {
     }
 
     #[test]
+    fn nested_rotation_and_mirroring_preserve_contacts() {
+        // The board is rotated 90 degrees: (7,3) -> (7,7), then the
+        // whole array (including its trace) is mirrored and rotated again.
+        for touching in [false, true] {
+            let xml = panel(&board(""), true, touching)
+                .replace(
+                    r#"stepRef="board" x="10""#,
+                    r#"stepRef="board" angle="90" x="10""#,
+                )
+                .replace(
+                    r#"stepRef="array" x="0""#,
+                    r#"stepRef="array" angle="90" mirror="true" x="0""#,
+                )
+                .replace(r#"dy="20""#, r#"dy="100""#)
+                .replace(&trace(17.0, 3.0, 0.2), &trace(7.0, 7.0, 0.2));
+            assert_eq!(run(&xml).1, if touching { 3 } else { 4 });
+        }
+    }
+
+    #[test]
+    fn cleanup_is_opt_in_for_copper_balanced_arrays_and_fab_panels() {
+        use crate::commands::EdgeInsetsMm;
+        use crate::commands::board_array::{
+            BoardArrayCreateOptions, Separation, create_board_array,
+        };
+        use crate::commands::fab_panel::{FabPanelSpec, create_fab_panel};
+
+        let profile = r#"<Profile><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="10" y="0"/><PolyStepSegment x="10" y="10"/><PolyStepSegment x="0" y="10"/><PolyStepSegment x="0" y="0"/></Polygon></Profile>"#;
+        let xml = board(&trace(7.0, 3.0, 0.2)).replace("</Step>", &format!("{profile}</Step>"));
+        let array = create_board_array(
+            &xml,
+            &BoardArrayCreateOptions {
+                columns: 6,
+                rows: 6,
+                board_margin_mm: EdgeInsetsMm::all(0.0),
+                edge_rail_mm: EdgeInsetsMm::all(5.0),
+            },
+            true,
+            Separation::VScore,
+            Resolution::default(),
+        )
+        .unwrap();
+        assert!(array.copper_balance.is_some());
+        let mut spec = FabPanelSpec::INCHES_12_X_18;
+        // Keep the balancing domain small while exercising the production writer.
+        spec.edge_margin_mm = EdgeInsetsMm::new(170.0, 110.0, 170.0, 110.0);
+        let fab = create_fab_panel(
+            std::slice::from_ref(&array.xml),
+            &[0],
+            spec,
+            true,
+            Resolution::default(),
+        )
+        .unwrap();
+        assert!(fab.copper_balance.is_some());
+        for xml in [&array.xml, &fab.xml] {
+            let (updated, count) = run(xml);
+            assert_eq!(count, 3); // Creation itself has not removed any lands.
+            assert_eq!(run(&updated), (updated, 0));
+        }
+    }
+
+    #[test]
     fn keeps_ambiguous_component_and_blind_hole_lands() {
         let xml = board("");
         assert_eq!(
@@ -517,6 +593,76 @@ mod tests {
             .replace(top, "")
             .replace("<Stackup name=", &format!("{top}<Stackup name="));
         assert_eq!(run(&permuted).1, 4);
+    }
+
+    #[test]
+    fn rejects_incomplete_layout_coverage() {
+        let array = panel(&board(""), false, true);
+        assert_eq!(run(&array).1, 3);
+        for xml in [
+            array.replace(
+                r#"<StepRef name="array"/>"#,
+                r#"<StepRef name="board"/><StepRef name="array"/>"#,
+            ),
+            array.replace(r#"<StepRef name="array"/>"#, r#"<StepRef name="board"/>"#),
+            array.replace(r#"type="PALLET""#, r#"type="BOARD""#),
+            panel(&board(""), true, true).replace(
+                r#"name="array" type="PALLET""#,
+                r#"name="array" type="BOARD""#,
+            ),
+        ] {
+            let error = remove_unused_via_lands(&xml, Resolution::default()).unwrap_err();
+            assert!(error.to_string().contains("layout has"), "{error:#}");
+        }
+    }
+
+    #[test]
+    fn rejects_copper_layer_holes() {
+        let xml = board(
+            r#"<Set><Hole name="other" diameter="0.3" platingStatus="PLATED" plusTol="0" minusTol="0" x="7.5" y="3"/></Set>"#,
+        );
+        let error = remove_unused_via_lands(&xml, Resolution::default()).unwrap_err();
+        assert!(error.to_string().contains("Hole or SlotCavity on copper"));
+    }
+
+    #[test]
+    fn rejects_discarded_polygon_styles_and_profile_transforms() {
+        let polygon = r#"<Polygon><PolyBegin x="7.5" y="2"/><PolyStepSegment x="9" y="2"/><PolyStepSegment x="9" y="4"/><PolyStepSegment x="7.5" y="4"/><PolyStepSegment x="7.5" y="2"/></Polygon>"#;
+        let styled = polygon.replace(
+            "</Polygon>",
+            r#"<FillDesc fillProperty="HOLLOW"/><LineDesc lineWidth="0.4" lineEnd="ROUND"/></Polygon>"#,
+        );
+        let xml = board(&format!(
+            "<Set><Pad><Location x=\"0\" y=\"0\"/><Contour>{styled}</Contour></Pad></Set>"
+        ));
+        let error = remove_unused_via_lands(&xml, Resolution::default()).unwrap_err();
+        assert!(error.to_string().contains("inside Polygon"), "{error:#}");
+
+        let profile = plane(true);
+        let start = profile.find("<Contour>").unwrap();
+        let end = profile.find("</Contour>").unwrap() + "</Contour>".len();
+        let profile = profile[start..end].replace("Contour", "Profile");
+        let xml = board("")
+            .replace("</Step>", &format!("{profile}</Step>"))
+            .replace(
+                r#"name="I1" layerFunction="SIGNAL" polarity="POSITIVE""#,
+                r#"name="I1" layerFunction="PLANE" polarity="NEGATIVE""#,
+            )
+            .replace(
+                r#"<LayerFeature layerRef="I1"><Set net="GND">"#,
+                r#"<LayerFeature layerRef="I1"><Set net="GND" polarity="POSITIVE">"#,
+            );
+        // The untransformed cutout is supported; shifting it cannot be ignored.
+        assert_eq!(run(&xml).1, 4);
+        let xml = xml.replace(
+            "<Cutout><Polygon>",
+            r#"<Cutout><Polygon><Xform xOffset="2"/>"#,
+        );
+        let error = remove_unused_via_lands(&xml, Resolution::default()).unwrap_err();
+        assert!(
+            error.to_string().contains("Xform inside Polygon"),
+            "{error:#}"
+        );
     }
 
     #[test]

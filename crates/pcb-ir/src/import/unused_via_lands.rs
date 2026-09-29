@@ -4,7 +4,7 @@
 //! Callers must establish that source geometry was completely understood: an
 //! importer diagnostic or silently ignored source extension is not empty copper.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::{Context, Result, ensure};
 use ipc2581::types::StandardPrimitive;
@@ -26,6 +26,28 @@ pub fn isolated_via_lands(
     ensure!(
         design.geometry.diagnostics.is_empty(),
         "Cannot prove via isolation: import has geometry diagnostics"
+    );
+    let layout = &design.geometry.layout;
+    let root =
+        layout.steps[layout.root_step.context("Missing layout root")? as usize].source_step_ref;
+    let placed = layout
+        .instances
+        .iter()
+        .map(|instance| instance.source_step_ref)
+        .chain(std::iter::once(root))
+        .collect::<HashSet<_>>();
+    // Writers may list descendants in Content too. Their standalone layouts
+    // add no copper beyond the occurrences already checked under the root.
+    ensure!(
+        design
+            .content
+            .step_refs
+            .iter()
+            .all(|name| placed.contains(name))
+            && design.steps.iter().all(|step| {
+                placed.contains(&step.name) && (step.step_repeats.is_empty() || step.is_panel())
+            }),
+        "Cannot prove via isolation: layout has additional roots, unplaced Steps, or unexpanded repeats"
     );
     let order = physical_stackup_layers(&design.stackups, &design.layer_definitions)?
         .context("Via cleanup requires an explicit physical stackup")?;
