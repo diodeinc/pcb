@@ -15,6 +15,10 @@ use crate::{
     symbol::{self, PowerScope},
 };
 
+#[path = "bus.rs"]
+mod bus;
+pub(crate) use bus::is_bus_junction;
+
 const SCH_IU_PER_MM: f64 = 10_000.0;
 
 /// Controls whether invisible KiCad symbol pins participate in reduction.
@@ -130,6 +134,7 @@ pub(crate) fn reduce_with_provenance(
     let mut groups = Vec::new();
     let mut islands = BTreeMap::new();
     let instances = page_instances(document)?;
+    let buses = bus::collect(&instances)?;
     let instance_counts = instances
         .iter()
         .fold(BTreeMap::new(), |mut counts, instance| {
@@ -138,15 +143,16 @@ pub(crate) fn reduce_with_provenance(
         });
     let mut parsed_definitions =
         BTreeMap::<String, BTreeMap<String, symbol::ParsedSymbolDefinition>>::new();
-    for instance in instances {
+    for (instance, buses) in instances.iter().zip(&buses) {
         let definitions = parsed_definitions
             .entry(instance.page.id.clone())
             .or_default();
         let reduced = reduce_page(
-            &instance,
+            instance,
             instance_counts[instance.page.id.as_str()] > 1,
             definitions,
             pin_visibility,
+            buses,
         )?;
         components.extend(reduced.components);
         for group in &reduced.groups {
@@ -301,9 +307,15 @@ fn reduce_page(
     repeated_page: bool,
     symbol_definitions: &mut BTreeMap<String, symbol::ParsedSymbolDefinition>,
     pin_visibility: PinVisibility,
+    buses: &bus::PageBuses,
 ) -> Result<ReducedPage> {
-    let (components, mut connectables) =
-        collect_page_connectables(instance, repeated_page, symbol_definitions, pin_visibility)?;
+    let (components, mut connectables) = collect_page_connectables(
+        instance,
+        repeated_page,
+        symbol_definitions,
+        pin_visibility,
+        buses,
+    )?;
     let mut union_find = UnionFind::new(connectables.len());
     union_internal_connections(&connectables, &mut union_find);
     union_touching(&connectables, &mut union_find);
@@ -321,6 +333,7 @@ fn collect_page_connectables(
     repeated_page: bool,
     symbol_definitions: &mut BTreeMap<String, symbol::ParsedSymbolDefinition>,
     pin_visibility: PinVisibility,
+    buses: &bus::PageBuses,
 ) -> Result<(Vec<ComponentNode>, Vec<Connectable>)> {
     let page = instance.page;
     let mut components = Vec::new();
@@ -367,23 +380,30 @@ fn collect_page_connectables(
                 }),
             }),
             SchItem::Label(label) => {
-                collect_label(&page.id, label, instance.id == page.id, &mut connectables)?
+                if !buses.is_label(&label.id)
+                    && !(matches!(label.kind, LabelKind::Directive { .. })
+                        && buses.contains(label.at))
+                {
+                    collect_label(&page.id, label, instance.id == page.id, &mut connectables)?;
+                }
             }
-            SchItem::Junction(junction) => connectables.push(Connectable {
-                geometry: Geometry::Point {
-                    at: junction.at.into(),
-                    segment_interior_tolerance: Some(0),
-                },
-                driver: None,
-                terminal: None,
-                pin: None,
-                hierarchy: None,
-                internal_links: BTreeSet::new(),
-                source: Some(ConnectivityItemRef::Junction {
-                    page_id: page.id.clone(),
-                    id: junction.id.clone(),
-                }),
-            }),
+            SchItem::Junction(junction) if !buses.contains(junction.at) => {
+                connectables.push(Connectable {
+                    geometry: Geometry::Point {
+                        at: junction.at.into(),
+                        segment_interior_tolerance: Some(0),
+                    },
+                    driver: None,
+                    terminal: None,
+                    pin: None,
+                    hierarchy: None,
+                    internal_links: BTreeSet::new(),
+                    source: Some(ConnectivityItemRef::Junction {
+                        page_id: page.id.clone(),
+                        id: junction.id.clone(),
+                    }),
+                })
+            }
             SchItem::NoConnect(no_connect) => connectables.push(Connectable {
                 geometry: Geometry::Point {
                     at: no_connect.at.into(),
@@ -410,6 +430,9 @@ fn collect_page_connectables(
                     )
                 })?;
                 for pin in &sheet.pins {
+                    if buses.is_pin(&sheet.id, &pin.id) {
+                        continue;
+                    }
                     let name = static_net_text("sheet pin", &pin.name)?;
                     connectables.push(Connectable {
                         geometry: Geometry::Point {
@@ -437,18 +460,19 @@ fn collect_page_connectables(
                     });
                 }
             }
-            SchItem::Graphic(_) => {}
-            SchItem::Unsupported(sexpr) => {
-                let tag = sexpr
-                    .as_list()
-                    .and_then(|items| items.first())
-                    .and_then(pcb_sexpr::Sexpr::as_sym);
-                if matches!(tag, Some("bus" | "bus_entry" | "bus_alias")) {
-                    bail!("KiCad bus connectivity is not supported");
-                }
-            }
+            SchItem::Graphic(_) | SchItem::Unsupported(_) | SchItem::Junction(_) => {}
         }
     }
+    // Symbol-internal links are instance-local; bus-member links are shared
+    // across the hierarchy. Both reducers and repair cuts use these same keys.
+    for item in &mut connectables {
+        item.internal_links = item
+            .internal_links
+            .iter()
+            .map(|link| format!("symbol:{}:{link}", instance.id))
+            .collect();
+    }
+    buses.connect(&mut connectables);
     Ok((components, connectables))
 }
 
@@ -475,6 +499,7 @@ pub(crate) struct CutNode {
 
 pub(crate) fn cut_graph(document: &SchDocument, pin_visibility: PinVisibility) -> Result<CutGraph> {
     let instances = page_instances(document)?;
+    let buses = bus::collect(&instances)?;
     let instance_counts = instances
         .iter()
         .fold(BTreeMap::new(), |mut counts, instance| {
@@ -488,7 +513,7 @@ pub(crate) fn cut_graph(document: &SchDocument, pin_visibility: PinVisibility) -
         edges: Vec::new(),
     };
     let mut shared_nodes = BTreeMap::<String, usize>::new();
-    for instance in &instances {
+    for (instance, buses) in instances.iter().zip(&buses) {
         let definitions = parsed_definitions
             .entry(instance.page.id.clone())
             .or_default();
@@ -497,6 +522,7 @@ pub(crate) fn cut_graph(document: &SchDocument, pin_visibility: PinVisibility) -
             instance_counts[instance.page.id.as_str()] > 1,
             definitions,
             pin_visibility,
+            buses,
         )?;
         let base = graph.nodes.len();
         for item in &connectables {
@@ -522,6 +548,7 @@ pub(crate) fn cut_graph(document: &SchDocument, pin_visibility: PinVisibility) -
         let mut segments = Vec::new();
         for (index, item) in connectables.iter().enumerate() {
             match item.geometry {
+                Geometry::Contacts(_) => {}
                 Geometry::Point { at, .. } => {
                     let point = point_node(&mut graph, at);
                     graph.edges.push((base + index, point));
@@ -536,6 +563,13 @@ pub(crate) fn cut_graph(document: &SchDocument, pin_visibility: PinVisibility) -
             }
         }
         for (index, item) in connectables.iter().enumerate() {
+            if let Geometry::Contacts(contacts) = item.geometry {
+                for at in contacts.into_iter().flatten() {
+                    if let Some(&point) = point_nodes.get(&at) {
+                        graph.edges.push((base + index, point));
+                    }
+                }
+            }
             let Geometry::Point {
                 at,
                 segment_interior_tolerance: Some(tolerance),
@@ -561,7 +595,7 @@ pub(crate) fn cut_graph(document: &SchDocument, pin_visibility: PinVisibility) -
         };
         for (index, item) in connectables.iter().enumerate() {
             for link in &item.internal_links {
-                let shared = shared_node(&mut graph, format!("link:{}:{link}", instance.id));
+                let shared = shared_node(&mut graph, format!("link:{link}"));
                 graph.edges.push((base + index, shared));
             }
             if let Some(driver) = &item.driver {
@@ -850,6 +884,9 @@ fn static_net_text(field: &str, value: &str) -> Result<String> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Geometry {
+    /// Bus entry endpoints that do not touch a bus; no conductive body.
+    /// An empty set also represents a virtual root bus-member port.
+    Contacts([Option<GridPoint>; 2]),
     Point {
         at: GridPoint,
         segment_interior_tolerance: Option<i64>,
@@ -998,6 +1035,11 @@ fn union_touching(connectables: &[Connectable], union_find: &mut UnionFind) {
     let mut segments = Vec::new();
     for (index, item) in connectables.iter().enumerate() {
         match item.geometry {
+            Geometry::Contacts(contacts) => {
+                for at in contacts.into_iter().flatten() {
+                    at_point.entry(at).or_default().push(index);
+                }
+            }
             Geometry::Point { at, .. } => at_point.entry(at).or_default().push(index),
             Geometry::Segment(segment) => {
                 at_point.entry(segment.a).or_default().push(index);
@@ -1007,8 +1049,13 @@ fn union_touching(connectables: &[Connectable], union_find: &mut UnionFind) {
         }
     }
     for indices in at_point.values() {
-        if let Some((first, rest)) = indices.split_first() {
-            for index in rest {
+        // Entry-to-entry contact alone does not conduct. A wire/pin/label at
+        // the same point can connect both, matching KiCad's propagation rules.
+        if let Some(first) = indices
+            .iter()
+            .find(|&&index| !matches!(connectables[index].geometry, Geometry::Contacts(_)))
+        {
+            for index in indices {
                 union_find.union(*first, *index);
             }
         }
@@ -1077,8 +1124,10 @@ fn connection_groups(
             let mut terminals = BTreeSet::new();
             let mut hierarchical_ports = BTreeSet::new();
             let mut child_pins = BTreeSet::new();
+            let mut internal_links = BTreeSet::new();
             let mut provenance = PhysicalIsland::default();
             for item in items {
+                internal_links.extend(item.internal_links);
                 if let Some(source) = &item.source {
                     provenance.items.insert(source.clone());
                 }
@@ -1118,6 +1167,7 @@ fn connection_groups(
                 && terminals.is_empty()
                 && hierarchical_ports.is_empty()
                 && child_pins.is_empty()
+                && internal_links.is_empty()
             {
                 return None;
             }
@@ -1133,6 +1183,7 @@ fn connection_groups(
                 global_names,
                 hierarchical_ports,
                 child_pins,
+                internal_links,
                 group: ConnectionGroup {
                     names,
                     terminals,
@@ -1150,6 +1201,7 @@ struct ScopedConnectionGroup {
     global_names: BTreeSet<String>,
     hierarchical_ports: BTreeSet<String>,
     child_pins: BTreeSet<SheetPinLink>,
+    internal_links: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1160,6 +1212,14 @@ struct SheetPinLink {
 
 fn merge_scoped_groups(groups: Vec<ScopedConnectionGroup>) -> Vec<ConnectionGroup> {
     let mut union_find = UnionFind::new(groups.len());
+    let mut first_by_link = BTreeMap::new();
+    for (index, group) in groups.iter().enumerate() {
+        for link in &group.internal_links {
+            if let Some(previous) = first_by_link.insert(link, index) {
+                union_find.union(previous, index);
+            }
+        }
+    }
     let mut first_by_name = BTreeMap::<&str, usize>::new();
     for (index, group) in groups.iter().enumerate() {
         for name in &group.global_names {

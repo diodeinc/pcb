@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Interpret KiCad schematic bus connectivity, including vectors, groups, aliases, and hierarchical buses, while preserving buses during `pcb apply`.
+
 ### Fixed
 
 - Export STEP connector subassemblies with explicit product occurrences for better CAD reader placement compatibility.
