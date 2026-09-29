@@ -44,8 +44,9 @@ pcb ipc dfm check fabrication-panel.xml --pdk standard --output dfm-report.json
 
 `standard` currently supports 2 through 10 copper layers.
 `jlcpcb-1oz` checks JLCPCB's rigid FR-4 service with 1 oz outer copper; `jlc`
-is an alias for the same PDK. It uses the conservative 0.13 mm soldermask-web
-limit published for black and white mask across every color. The `ipc` alias
+is an alias for the same PDK. It prefers a 0.10 mm soldermask web as Diode
+guidance; shortfalls warn rather than fail. This advisory check does not certify
+JLCPCB's color-specific minimum, including 0.13 mm for black or white. The `ipc` alias
 selects the opinionated Class 2 / Producibility Level B default. It and the
 explicit `ipc-1a` through `ipc-3c` profiles run Diode's opinionated partial
 baseline for plated-hole aspect ratio, via, PTH, and NPTH hole-to-copper

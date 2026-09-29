@@ -489,8 +489,9 @@ capability table for 2-32 copper layers and 1 oz outer copper. It deliberately
 omits the one-layer NPTH-only service, 2 oz rules, local 3 mil BGA exceptions,
 and panel spacing, which depends on the chosen routing, mouse-bite, or V-cut
 process. JLCPCB publishes a 0.10 mm soldermask web for standard colors and 0.13
-mm for black or white; this combined PDK conservatively uses 0.13 mm for every
-color.
+mm for black or white. This PDK uses Diode's advisory 0.10 mm preferred web:
+shortfalls produce warnings, not a failed manufacturing verdict. Passing this
+advisory check does not certify the manufacturer's color-specific minimum.
 
 The nine `ipc-1a` through `ipc-3c` built-ins preserve performance Classes 1-3
 crossed with Producibility Levels A-C, but they are executable **partial Diode

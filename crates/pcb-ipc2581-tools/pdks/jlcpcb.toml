@@ -4,7 +4,7 @@ default_profile = "one-ounce"
 [pdk]
 id = "jlcpcb-rigid-fr4"
 name = "JLCPCB rigid FR-4"
-revision = "conservative-2026-09-03"
+revision = "advisory-mask-2026-09-29"
 manufacturer = "JLCPCB"
 process = "Rigid FR-4, 1 oz outer copper"
 
@@ -12,13 +12,18 @@ process = "Rigid FR-4, 1 oz outer copper"
 title = "JLCPCB PCB Capabilities"
 url = "https://jlcpcb.com/capabilities/pcb-capabilities"
 accessed = "2026-09-01"
-note = "Public capability table. Rules use standard service values, apply the largest published color-specific soldermask web, and exclude special local BGA exceptions."
+note = "Public capability table. Rules use standard service values and exclude special local BGA exceptions."
+
+[sources.diode-mask-guidance]
+title = "Diode soldermask web guidance"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
+note = "Diode prefers a 0.10 mm soldermask web as advisory guidance. Shortfalls warn, not fail; this does not certify the manufacturer's color-specific minimum, including 0.13 mm for black or white mask."
 
 [profiles.one-ounce]
 name = "1 oz rigid FR-4"
-description = "Standard rigid FR-4 service using the conservative 0.13 mm soldermask-web requirement for every mask color."
+description = "Standard rigid FR-4 service with advisory 0.10 mm soldermask-web guidance."
 technologies = ["rigid"]
-coverage = ["2-32 copper layers", "1 oz outer copper", "all soldermask colors at 0.13 mm minimum web"]
+coverage = ["2-32 copper layers", "1 oz outer copper", "preferred soldermask web at 0.10 mm, warning only"]
 source = "jlc-capabilities"
 
 [profiles.one-ounce.defaults]
@@ -142,5 +147,5 @@ source = "jlc-capabilities"
 
 [[rules.soldermask.web]]
 id = "jlc.soldermask.minimum_web"
-limit = { minimum = "0.13 mm" }
-source = "jlc-capabilities"
+limit = { preferred = "0.10 mm" }
+source = "diode-mask-guidance"

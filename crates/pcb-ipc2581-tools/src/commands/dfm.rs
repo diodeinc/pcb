@@ -759,9 +759,9 @@ limit = { minimum = "300 mil" }
         let rules = rules::lower(&parsed, Some(jlc.profile)).unwrap();
         let mask = rules
             .iter()
-            .find(|rule| rule.id == "jlc.soldermask.minimum_web")
+            .find(|rule| rule.id == "jlc.soldermask.minimum_web.preferred")
             .unwrap();
-        assert_eq!(mask.limit.length().millimeters(), 0.13);
+        assert_eq!(mask.limit.length().millimeters(), 0.10);
         let two_layer = rules
             .iter()
             .find(|rule| rule.id == "jlc.copper.minimum_feature_width.2-layer")
