@@ -4211,19 +4211,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pcb-docgen"
-version = "0.1.0"
-dependencies = [
- "anstream",
- "anyhow",
- "pcb-zen",
- "pcb-zen-core",
- "starlark",
- "starlark_syntax",
- "walkdir",
-]
-
-[[package]]
 name = "pcb-eda"
 version = "0.4.62"
 dependencies = [
@@ -4673,7 +4660,6 @@ dependencies = [
  "pcb-command-runner",
  "pcb-component-gen",
  "pcb-diode-api",
- "pcb-docgen",
  "pcb-eda",
  "pcb-fmt",
  "pcb-interposer",

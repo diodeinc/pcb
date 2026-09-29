@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add `pcb list -m -json [<package>[@<version>]]` to print the local source directory of the stdlib, dependencies, or any registry package.
+
+### Removed
+
+- Remove `pcb doc`; use `pcb list -m -json <package>` and read the source directly.
+
 ## [0.4.62] - 2026-09-29
 
 ### Added

@@ -33,6 +33,14 @@ pub(crate) fn resolve_direct_dependency_request(
     ))
 }
 
+/// Resolve `<url>[@latest|@<version>|@<ref>]` to a published version.
+pub(crate) fn resolve_module_request(raw: &str) -> Result<(String, Version)> {
+    let (module_path, requested_version) = parse_dependency_request(raw)?;
+    let version = resolve_requested_version(module_path, requested_version, None)
+        .with_context(|| format!("Failed to resolve {}", module_path))?;
+    Ok((module_path.to_string(), version))
+}
+
 fn parse_dependency_request(raw: &str) -> Result<(&str, RequestedVersion)> {
     let raw = raw.trim();
     let Some((module_path, selector)) = raw.rsplit_once('@') else {
