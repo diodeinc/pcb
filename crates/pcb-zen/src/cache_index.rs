@@ -3,13 +3,13 @@
 use anyhow::{Context, Result};
 use pcb_ui::Spinner;
 use pcb_zen_core::FileProvider;
-use pcb_zen_core::stdlib::native::{copy_source, discover_source, source_matches_target};
+use pcb_zen_core::stdlib::native::discover_source;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{OptionalExtension, params};
 use semver::Version;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 use crate::git;
@@ -285,40 +285,22 @@ pub fn cache_base() -> PathBuf {
     pcb_zen_core::DefaultFileProvider::new().cache_dir()
 }
 
-/// Ensure the toolchain stdlib is materialized into the workspace stdlib location.
+/// Point `<workspace>/.pcb/stdlib` at the running toolchain's stdlib.
 ///
-/// Materializes to the workspace-local, toolchain-versioned stdlib root.
-pub fn ensure_stdlib_materialized(workspace_root: &std::path::Path) -> Result<PathBuf> {
-    let target = pcb_zen_core::workspace_stdlib_root(workspace_root);
-    let _lock = git::lock_dir(&target)?;
-
-    let source = discover_source()?;
-    // A missing or unreadable target does not match.
-    if source_matches_target(&source, &target).unwrap_or(false) {
-        return Ok(target);
-    }
-
-    if target.exists() {
-        std::fs::remove_dir_all(&target)
-            .or_else(|err| {
-                if err.kind() == std::io::ErrorKind::NotADirectory {
-                    std::fs::remove_file(&target)
-                } else {
-                    Err(err)
-                }
-            })
-            .with_context(|| format!("Failed to replace stdlib at {}", target.display()))?;
-    }
-    copy_source(&source, &target)?;
-
-    Ok(target)
+/// Generated KiCad files reference stdlib footprints through this link, so
+/// their paths stay the same on every machine and toolchain.
+pub fn ensure_workspace_stdlib_symlink(workspace_root: &Path) -> Result<()> {
+    ensure_symlink(
+        &discover_source()?,
+        &pcb_zen_core::workspace_stdlib_root(workspace_root),
+    )
 }
 
 /// Ensure the workspace cache symlink exists.
 ///
 /// Creates <workspace_root>/.pcb/cache as a symlink to ~/.pcb/cache.
 /// This provides stable workspace-relative paths in generated files.
-pub fn ensure_workspace_cache_symlink(workspace_root: &std::path::Path) -> Result<()> {
+pub fn ensure_workspace_cache_symlink(workspace_root: &Path) -> Result<()> {
     let home_dir = dirs::home_dir().expect("Cannot determine home directory");
 
     // Skip if workspace_root is home directory - would create self-symlink
@@ -326,31 +308,38 @@ pub fn ensure_workspace_cache_symlink(workspace_root: &std::path::Path) -> Resul
         return Ok(());
     }
 
-    let workspace_cache = workspace_root.join(".pcb/cache");
     let home_cache = cache_base();
-
-    // Ensure directories exist
-    std::fs::create_dir_all(workspace_root.join(".pcb"))?;
     std::fs::create_dir_all(&home_cache)?;
+    ensure_symlink(&home_cache, &workspace_root.join(".pcb/cache"))
+}
 
-    // Check if already a correct symlink
-    if let Ok(target) = std::fs::read_link(&workspace_cache)
-        && target == home_cache
-    {
+/// Make `link` a symlink to `target`, replacing whatever is there.
+fn ensure_symlink(target: &Path, link: &Path) -> Result<()> {
+    if std::fs::read_link(link).is_ok_and(|current| current == target) {
         return Ok(());
     }
 
-    // Remove whatever exists at the path
-    let _ = std::fs::remove_file(&workspace_cache);
-    let _ = std::fs::remove_dir_all(&workspace_cache);
+    if let Some(parent) = link.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _ = std::fs::remove_file(link);
+    let _ = std::fs::remove_dir_all(link);
 
-    // Create symlink
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&home_cache, &workspace_cache)?;
+    let created = std::os::unix::fs::symlink(target, link);
     #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(&home_cache, &workspace_cache)?;
-
-    Ok(())
+    let created = std::os::windows::fs::symlink_dir(target, link);
+    match created {
+        // A concurrent command may have created the same link first.
+        Err(err)
+            if err.kind() == std::io::ErrorKind::AlreadyExists
+                && std::fs::read_link(link).is_ok_and(|current| current == target) =>
+        {
+            Ok(())
+        }
+        result => result
+            .with_context(|| format!("Failed to link {} to {}", link.display(), target.display())),
+    }
 }
 
 pub fn ensure_source_repo(repo_url: &str) -> Result<PathBuf> {
