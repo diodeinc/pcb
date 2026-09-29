@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Lower the JLCPCB DFM soldermask-web limit to 0.10 mm and report shortfalls as warnings rather than errors.
 - Import KiCad designs as persistent schematics, preserving native drawings and PCB layouts while treating source parity mismatches as advisory.
 
 ### Fixed
