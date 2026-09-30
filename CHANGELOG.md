@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Speed up IPC-2581 Gerber export of copper-balanced panels by clipping nearby lattice tiles in batches.
+
 ### Fixed
 
 - Speed up DFM copper-width checks on large boards by constraining finite contacts before checking nearby walls.
