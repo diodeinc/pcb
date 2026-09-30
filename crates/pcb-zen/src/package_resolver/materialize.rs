@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use crate::cache_index::CacheIndex;
-use anyhow::{Context, Result};
+use anyhow::{Result, bail};
 use semver::Version;
 
 use super::ResolvedDepId;
@@ -12,44 +13,42 @@ pub(crate) fn materialize_selected<'a>(
     offline: bool,
     cache_index: &CacheIndex,
 ) -> Result<BTreeSet<(String, String)>> {
-    let mut package_roots = BTreeSet::new();
-
-    for (dep_id, version) in selected_remote {
-        package_roots.insert((dep_id.path.clone(), version.to_string()));
-        ensure_remote_package_materialized(workspace, &dep_id.path, version, offline, cache_index)?;
-    }
-
-    Ok(package_roots)
-}
-
-fn ensure_remote_package_materialized(
-    workspace: &crate::WorkspaceInfo,
-    module_path: &str,
-    version: &Version,
-    offline: bool,
-    cache_index: &CacheIndex,
-) -> Result<()> {
-    let version_str = version.to_string();
-    let manifest_rel = std::path::Path::new(module_path)
-        .join(&version_str)
-        .join("pcb.toml");
-    if workspace.root.join("vendor").join(&manifest_rel).exists()
-        || workspace.cache_dir.join(&manifest_rel).exists()
-    {
-        return Ok(());
-    }
+    let selected: Vec<_> = selected_remote
+        .into_iter()
+        .map(|(dep_id, version)| (dep_id.path.as_str(), version))
+        .collect();
+    let unvendored: Vec<_> = selected
+        .iter()
+        .copied()
+        .filter(|(module_path, version)| {
+            !package_manifest(&workspace.root.join("vendor"), module_path, version).exists()
+        })
+        .collect();
 
     if offline {
-        anyhow::bail!(
-            "{}@{} is not cached. Run `pcb build` once online to fetch it.",
-            module_path,
-            version_str
-        );
+        if let Some((module_path, version)) = unvendored.iter().find(|(module_path, version)| {
+            !package_manifest(&workspace.cache_dir, module_path, version).exists()
+        }) {
+            bail!(
+                "{}@{} is not cached. Run `pcb build` once online to fetch it.",
+                module_path,
+                version
+            );
+        }
+    } else {
+        crate::resolve::ensure_packages_in_cache(unvendored, cache_index)?;
     }
 
-    crate::resolve::ensure_package_manifest_in_cache(module_path, version, cache_index)
-        .with_context(|| format!("Failed to materialize {}@{}", module_path, version))?;
-    Ok(())
+    Ok(selected
+        .into_iter()
+        .map(|(module_path, version)| (module_path.to_string(), version.to_string()))
+        .collect())
+}
+
+fn package_manifest(root: &Path, module_path: &str, version: &Version) -> PathBuf {
+    root.join(module_path)
+        .join(version.to_string())
+        .join("pcb.toml")
 }
 
 pub fn plan_vendor_selected(

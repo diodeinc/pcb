@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 
 use anyhow::{Context, bail};
@@ -24,8 +24,7 @@ const PCB_GIT_CONFIG_FILE: &str = "gitconfig";
 const PCB_GIT_CONFIG_INCLUDE: &str = "include.path";
 const GIT_CONFIG_NOT_FOUND: i32 = 5;
 
-static RESOLVED_REPOS: LazyLock<Mutex<HashMap<String, (String, String)>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static KNOWN_REPOS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
 #[derive(Debug, Clone)]
 pub struct TagMetadata {
@@ -181,6 +180,28 @@ fn run_lines(cmd: Command) -> Vec<String> {
     run_stdout_opt(cmd)
         .map(|s| s.lines().map(str::to_string).collect())
         .unwrap_or_default()
+}
+
+fn run_with_input(mut cmd: Command, input: &str) -> anyhow::Result<String> {
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+
+    // Feed the input while reading the output, so neither pipe can fill up and
+    // block the other side.
+    let stdin = child.stdin.take();
+    let output = std::thread::scope(|scope| {
+        scope.spawn(move || stdin.map(|mut stdin| stdin.write_all(input.as_bytes())));
+        child.wait_with_output()
+    })?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git command failed: {}", stderr.trim())
+    }
 }
 
 fn run_check_output(mut cmd: Command, expected: &str) -> bool {
@@ -664,7 +685,7 @@ fn parse_git_timezone_offset(offset: &str) -> Option<i32> {
 fn clone(remote_url: &str, dest_dir: &Path, prompt: bool) -> anyhow::Result<()> {
     let mut cmd = git_global_network_with_prompt(prompt)?;
     cmd.arg("clone");
-    cmd.args(["--quiet", "--no-checkout", remote_url])
+    cmd.args(["--quiet", "--no-checkout", "--filter=blob:none", remote_url])
         .arg(dest_dir);
     run_silent(cmd)
 }
@@ -694,7 +715,8 @@ pub fn ensure_rev_in_source_repo(source_repo: &Path, rev: &str) -> anyhow::Resul
 }
 
 pub fn archive_to_dir(repo_root: &Path, treeish: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    let mut cmd = git(repo_root);
+    // Source repos are blobless clones, so archive may fetch file contents.
+    let mut cmd = git_network(repo_root)?;
     cmd.args(["archive", "--format=tar", treeish])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -705,7 +727,12 @@ pub fn archive_to_dir(repo_root: &Path, treeish: &str, dest_dir: &Path) -> anyho
         .take()
         .ok_or_else(|| anyhow::anyhow!("Failed to capture git archive stdout"))?;
 
-    let unpack_result = Archive::new(stdout).unpack(dest_dir);
+    let mut archive = Archive::new(stdout);
+    let unpack_result = archive.unpack(dest_dir);
+    // Unpacking stops at the end-of-archive marker, but git may still be
+    // writing the padding after it. Read the rest so git does not die of
+    // SIGPIPE.
+    std::io::copy(&mut archive.into_inner(), &mut std::io::sink())?;
     let output = child.wait_with_output()?;
 
     if !output.status.success() {
@@ -715,6 +742,47 @@ pub fn archive_to_dir(repo_root: &Path, treeish: &str, dest_dir: &Path) -> anyho
 
     unpack_result?;
     Ok(())
+}
+
+/// Download the missing file contents under `treeishes` in one fetch.
+///
+/// Without this, archiving each tree from a blobless clone fetches that tree's
+/// contents in its own round trip.
+pub fn fetch_missing_blobs(repo_root: &Path, treeishes: &[String]) -> anyhow::Result<()> {
+    let mut cmd = git(repo_root);
+    cmd.args([
+        "rev-list",
+        "--objects",
+        "--missing=print",
+        "--ignore-missing",
+        "--stdin",
+    ]);
+    let listing = run_with_input(cmd, &format!("{}\n", treeishes.join("\n")))?;
+    let missing: String = listing
+        .lines()
+        .filter_map(|line| line.strip_prefix('?'))
+        .map(|oid| format!("{oid}\n"))
+        .collect();
+    // With nothing on stdin, the fetch below would fetch the default refspecs.
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    // The fetch git runs for a single missing object, for all of them at once.
+    let mut cmd = git_network(repo_root)?;
+    cmd.args([
+        "-c",
+        "fetch.negotiationAlgorithm=noop",
+        "fetch",
+        "origin",
+        "--quiet",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        "--filter=blob:none",
+        "--stdin",
+    ]);
+    run_with_input(cmd, &missing).map(drop)
 }
 
 pub fn fetch_branch(repo_root: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
@@ -908,25 +976,35 @@ pub fn format_ssh_url(module_path: &str) -> String {
 
 /// Split a module path into `(repo_url, subpath)`.
 pub fn split_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
-    if let Some(resolved) = RESOLVED_REPOS
-        .lock()
-        .expect("repo resolution cache mutex poisoned")
-        .get(module_path)
-        .cloned()
+    // Repos do not nest, so a prefix already known to be a repo needs no probe.
+    if let Some(split) = repo_prefixes(module_path)
+        .into_iter()
+        .find(|(repo_url, _)| is_known_repo(repo_url))
     {
-        return Ok(resolved);
+        return Ok(split);
     }
 
-    let resolved = resolve_repo_and_subpath(module_path)?;
-    RESOLVED_REPOS
-        .lock()
-        .expect("repo resolution cache mutex poisoned")
-        .insert(module_path.to_string(), resolved.clone());
-    Ok(resolved)
+    resolve_repo_and_subpath_with(module_path, |repo_url| {
+        let accessible = repo_is_accessible(repo_url);
+        if accessible {
+            KNOWN_REPOS
+                .lock()
+                .expect("known repo set mutex poisoned")
+                .insert(repo_url.to_string());
+        }
+        Ok(accessible)
+    })
 }
 
-fn resolve_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
-    resolve_repo_and_subpath_with(module_path, repo_is_accessible)
+/// A repo is known once it is cloned or a probe has reached it. Failed probes
+/// are not remembered, so a transient failure is retried on the next lookup.
+fn is_known_repo(repo_url: &str) -> bool {
+    KNOWN_REPOS
+        .lock()
+        .expect("known repo set mutex poisoned")
+        .contains(repo_url)
+        || crate::cache_index::source_repo_dir(repo_url)
+            .is_ok_and(|source_dir| source_dir.join(".git").exists())
 }
 
 fn resolve_repo_and_subpath_with(
@@ -952,17 +1030,10 @@ pub(crate) fn repo_prefixes(module_path: &str) -> Vec<(String, String)> {
     prefixes
 }
 
-fn repo_is_accessible(repo_url: &str) -> anyhow::Result<bool> {
-    if crate::cache_index::source_repo_dir(repo_url)?
-        .join(".git")
-        .exists()
-    {
-        return Ok(true);
-    }
-
-    Ok(remote_is_accessible(repo_url, |url, interactive| {
+fn repo_is_accessible(repo_url: &str) -> bool {
+    remote_is_accessible(repo_url, |url, interactive| {
         ls_remote(url, "HEAD", interactive).map(drop)
-    }))
+    })
 }
 
 fn remote_is_accessible(

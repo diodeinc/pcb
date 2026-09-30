@@ -61,8 +61,7 @@ fn load_manifest_for_module_version(
     } else if offline {
         package_version_root(workspace.workspace_cache_dir(), module_path, version).join("pcb.toml")
     } else {
-        crate::resolve::ensure_package_manifest_in_cache(module_path, version, index)
-            .with_context(|| format!("Failed to materialize {}@{}", module_path, version))?
+        crate::resolve::ensure_package_manifest_in_cache(module_path, version, index)?
     };
     let content = std::fs::read_to_string(&pcb_toml_path)
         .with_context(|| format!("Failed to read {}", pcb_toml_path.display()))?;

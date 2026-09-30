@@ -444,33 +444,47 @@ impl PackageResolver {
             enqueue_floor_version(&mut selected, dep_id.clone(), version.clone(), &mut queue);
         }
 
-        while let Some(dep_id) = queue.pop_front() {
-            let Some(version) = selected.get(&dep_id).cloned() else {
-                continue;
-            };
-            let loaded = self
-                .manifest_loader
-                .load(&self.workspace, &self.cache_index, &dep_id.path, &version)
-                .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
-            for (dep_path, dep_spec) in loaded.direct {
-                if is_stdlib_module_path(&dep_path) {
+        // Walk the graph one level at a time, materializing each level's
+        // packages together so their contents arrive in one fetch per repo.
+        while !queue.is_empty() {
+            let level: Vec<_> = queue.drain(..).collect();
+            materialize_selected(
+                &self.workspace,
+                level
+                    .iter()
+                    .filter_map(|dep_id| Some((dep_id, selected.get(dep_id)?))),
+                false,
+                &self.cache_index,
+            )?;
+
+            for dep_id in level {
+                let Some(version) = selected.get(&dep_id).cloned() else {
                     continue;
+                };
+                let loaded = self
+                    .manifest_loader
+                    .load(&self.workspace, &self.cache_index, &dep_id.path, &version)
+                    .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
+                for (dep_path, dep_spec) in loaded.direct {
+                    if is_stdlib_module_path(&dep_path) {
+                        continue;
+                    }
+                    let dep_version = self
+                        .spec_resolver
+                        .resolve_spec(&dep_path, &dep_spec)
+                        .with_context(|| {
+                            format!("Failed to resolve transitive dependency {}", dep_path)
+                        })?;
+                    enqueue_floor_version(
+                        &mut selected,
+                        ResolvedDepId::for_version(dep_path, &dep_version),
+                        dep_version,
+                        &mut queue,
+                    );
                 }
-                let dep_version = self
-                    .spec_resolver
-                    .resolve_spec(&dep_path, &dep_spec)
-                    .with_context(|| {
-                        format!("Failed to resolve transitive dependency {}", dep_path)
-                    })?;
-                enqueue_floor_version(
-                    &mut selected,
-                    ResolvedDepId::for_version(dep_path, &dep_version),
-                    dep_version,
-                    &mut queue,
-                );
-            }
-            for (transitive_id, dep_version) in loaded.indirect {
-                enqueue_floor_version(&mut selected, transitive_id, dep_version, &mut queue);
+                for (transitive_id, dep_version) in loaded.indirect {
+                    enqueue_floor_version(&mut selected, transitive_id, dep_version, &mut queue);
+                }
             }
         }
 
