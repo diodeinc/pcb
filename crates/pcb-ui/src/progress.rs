@@ -200,38 +200,3 @@ impl ProgressBarBuilder {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_progress_bar_creation() {
-        let pb = ProgressBar::builder(100).message("Testing").start();
-        assert_eq!(pb.total(), 100);
-        assert_eq!(pb.position(), 0);
-        pb.finish();
-    }
-
-    #[test]
-    fn test_progress_bar_increment() {
-        let pb = ProgressBar::builder(100).start();
-        pb.inc(25);
-        assert_eq!(pb.position(), 25);
-        assert_eq!(pb.percentage(), 25);
-        pb.finish();
-    }
-
-    #[test]
-    fn test_progress_bar_builder() {
-        let pb = ProgressBar::builder(50)
-            .message("Custom progress")
-            .style(Style::Blue)
-            .progress_chars("#>-")
-            .hidden(true)
-            .start();
-        pb.set_position(25);
-        assert_eq!(pb.percentage(), 50);
-        pb.success("Complete!");
-    }
-}

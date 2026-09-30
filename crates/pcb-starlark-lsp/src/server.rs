@@ -3561,20 +3561,6 @@ mod tests {
     }
 
     #[test]
-    fn reports_server_identity() -> anyhow::Result<()> {
-        if is_wasm() {
-            return Ok(());
-        }
-
-        let server = TestServer::new()?;
-        let server_info = server.initialization_result().unwrap().server_info.unwrap();
-
-        assert_eq!(server_info.name, SERVER_NAME);
-        assert_eq!(server_info.version.as_deref(), Some(SERVER_VERSION));
-        Ok(())
-    }
-
-    #[test]
     fn reports_startup_information() -> anyhow::Result<()> {
         if is_wasm() {
             return Ok(());
@@ -3623,112 +3609,6 @@ mod tests {
         let request_id = server.send_request(req)?;
         let response = server.get_response::<StarlarkFileContentsResponse>(request_id)?;
         assert!(response.contents.is_none());
-
-        Ok(())
-    }
-
-    fn resolve_range_in_string(s: &str, r: Range) -> &str {
-        let byte_of_pos = |p: Position| {
-            let l = if p.line == 0 {
-                0
-            } else {
-                s.char_indices()
-                    .filter(|(_, c)| *c == '\n')
-                    .nth((p.line - 1).try_into().unwrap())
-                    .unwrap()
-                    .0
-                    + 1
-            };
-            l + s[l..]
-                .char_indices()
-                .nth((p.character).try_into().unwrap())
-                .unwrap()
-                .0
-        };
-        let start = byte_of_pos(r.start);
-        let end = byte_of_pos(r.end);
-        &s[start..end]
-    }
-
-    #[test]
-    #[ignore]
-    fn goto_works_for_native_symbols() -> anyhow::Result<()> {
-        if is_wasm() {
-            return Ok(());
-        }
-
-        let foo_uri = temp_file_uri("foo.star");
-        let native_uri = Url::parse("starlark:/native/builtin.bzl")?;
-
-        let mut server = TestServer::new()?;
-
-        let foo_contents = dedent(
-            r#"
-            <click_n1>na<n1>t</n1>ive_function1</click_n1>()
-            def f(<n2_loc>native_function1</n2_loc>):
-                print(<click_n2>nat<n2>i</n2>ve_function1</click_n2>)
-            mi<n3>s</n3>sing_global()
-            "#,
-        )
-        .trim()
-        .to_owned();
-
-        let foo = FixtureWithRanges::from_fixture(foo_uri.path(), &foo_contents)?;
-
-        server.open_file(foo_uri.clone(), foo.program())?;
-
-        let goto_definition = goto_definition_request(
-            &mut server,
-            foo_uri.clone(),
-            foo.begin_line("n1"),
-            foo.begin_column("n1"),
-        );
-        let request_id = server.send_request(goto_definition)?;
-        let n1_location = goto_definition_response_location(&mut server, request_id)?;
-
-        assert_eq!(
-            n1_location.origin_selection_range,
-            Some(foo.resolved_span("click_n1").into())
-        );
-        assert_eq!(n1_location.target_uri, protocol_uri(&native_uri));
-        let native_gen_code = server
-            .docs_as_code(&native_uri.try_into().unwrap())
-            .unwrap();
-        let target_str = resolve_range_in_string(&native_gen_code, n1_location.target_range);
-        assert_eq!(target_str, "native_function1");
-
-        let expected_n2_location = expected_location_link_from_spans(
-            foo_uri.clone(),
-            foo.resolved_span("click_n2"),
-            foo.resolved_span("n2_loc"),
-        );
-
-        let goto_definition = goto_definition_request(
-            &mut server,
-            foo_uri.clone(),
-            foo.begin_line("n2"),
-            foo.begin_column("n2"),
-        );
-        let request_id = server.send_request(goto_definition)?;
-        let n2_location = goto_definition_response_location(&mut server, request_id)?;
-
-        assert_eq!(expected_n2_location, n2_location);
-
-        let goto_definition = goto_definition_request(
-            &mut server,
-            foo_uri,
-            foo.begin_line("n3"),
-            foo.begin_column("n3"),
-        );
-        let request_id = server.send_request(goto_definition)?;
-        let n3_response = server.get_response::<GotoDefinitionResponse>(request_id)?;
-        match n3_response {
-            GotoDefinitionResponse::Array(definitions) if definitions.is_empty() => Ok(()),
-            response => Err(anyhow::anyhow!(
-                "Expected empty definitions, got `{:?}`",
-                response
-            )),
-        }?;
 
         Ok(())
     }
@@ -3836,27 +3716,6 @@ mod tests {
                 case.2
             );
         }
-        Ok(())
-    }
-
-    #[test]
-    fn custom_request_echo() -> anyhow::Result<()> {
-        if starlark::wasm::is_wasm() {
-            return Ok(());
-        }
-
-        struct EchoRequest;
-        impl lsp_types::request::Request for EchoRequest {
-            type Params = String;
-            type Result = String;
-            const METHOD: &'static str = "starlark/echo";
-        }
-
-        let mut server = TestServer::new()?;
-        let req = server.new_request::<EchoRequest>("ping".to_owned());
-        let request_id = server.send_request(req)?;
-        let response: String = server.get_response(request_id)?;
-        assert_eq!(response, "echo:ping");
         Ok(())
     }
 

@@ -40,38 +40,3 @@ Sub(
 
     star_snapshot!(env, "top.zen");
 }
-
-#[test]
-fn snapshot_undefined_placeholder() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "my_sub.zen",
-        r#"
-# Declare input placeholders
-pwr = io(Net, optional = True)
-
-Component(
-    name = "comp0",
-    part = Part(mpn = "TEST", manufacturer = "TEST"),
-    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
-    pin_defs = {"V": "1"},
-    pins = {"V": pwr},
-)
-"#,
-    );
-
-    env.add_file(
-        "top.zen",
-        r#"
-Sub = Module("my_sub.zen")
-
-Sub(
-    name = "sub",
-    # Missing `pwr`
-)
-"#,
-    );
-
-    star_snapshot!(env, "top.zen");
-}

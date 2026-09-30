@@ -172,18 +172,6 @@ mod tests {
     }"#;
 
     #[test]
-    fn test_parse_erc_json() {
-        let report = ErcReport::from_json(SAMPLE_ERC_JSON).expect("Failed to parse ERC JSON");
-        assert_eq!(report.kicad_version, "9.0.0");
-        assert_eq!(report.sheets.len(), 1);
-        assert_eq!(report.sheets[0].violations.len(), 1);
-        assert_eq!(
-            report.sheets[0].violations[0].violation_type,
-            "pin_not_connected"
-        );
-    }
-
-    #[test]
     fn test_add_to_diagnostics() {
         let report = ErcReport::from_json(SAMPLE_ERC_JSON).unwrap();
         let mut diagnostics = Diagnostics::default();

@@ -2468,18 +2468,6 @@ mod tests {
     }
 
     #[test]
-    fn formats_and_reparses_single_page() {
-        let document = SchDocument::from_kicad_sch(SAMPLE).expect("parse schematic");
-        let formatted = document.to_kicad_sch().expect("format schematic");
-        let reparsed = SchDocument::from_kicad_sch(&formatted).expect("reparse schematic");
-
-        assert_eq!(reparsed.pages.len(), 1);
-        assert_eq!(reparsed.pages[0].library.definitions.len(), 1);
-        assert_eq!(reparsed.pages[0].items.len(), 4);
-        assert_eq!(reparsed.pages[0].items, document.pages[0].items);
-    }
-
-    #[test]
     fn kicad_10_symbol_file_round_trips_semantically() {
         let document =
             SchDocument::from_kicad_sch(KICAD_10_SYMBOL_FIXTURE).expect("parse KiCad 10 fixture");

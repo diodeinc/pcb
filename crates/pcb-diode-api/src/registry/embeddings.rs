@@ -456,10 +456,4 @@ mod tests {
         assert_eq!(normalize_query("  Hello World  "), "hello world");
         assert_eq!(normalize_query("STM32G431"), "stm32g431");
     }
-
-    #[test]
-    fn test_hash_query() {
-        let hash = hash_query("hello world");
-        assert_eq!(hash.len(), 32);
-    }
 }

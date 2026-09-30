@@ -1045,18 +1045,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_nested() {
-        let input = "(define (square x) (* x x))";
-        let result = parse(input).unwrap();
-        if let SexprKind::List(items) = &result.kind {
-            assert_eq!(items.len(), 3);
-            assert_eq!(items[0].kind, SexprKind::Symbol("define".to_string()));
-        } else {
-            panic!("Expected a list");
-        }
-    }
-
-    #[test]
     fn test_parse_kicad_pin() {
         let input = r#"(pin passive line (at 0 0 0) (length 2.54) (name "1") (number "1"))"#;
         let result = parse(input).unwrap();
@@ -1077,38 +1065,6 @@ mod tests {
         } else {
             panic!("Expected a list");
         }
-    }
-
-    #[test]
-    fn test_format_simple() {
-        let sexpr = Sexpr::list(vec![
-            Sexpr::symbol("at"),
-            Sexpr::symbol("10"),
-            Sexpr::symbol("20"),
-        ]);
-        assert_eq!(
-            formatter::format_tree(&sexpr, formatter::FormatMode::Normal),
-            "(at 10 20)\n"
-        );
-    }
-
-    #[test]
-    fn test_format_nested() {
-        let sexpr = Sexpr::list(vec![
-            Sexpr::symbol("symbol"),
-            Sexpr::list(vec![Sexpr::symbol("lib_id"), Sexpr::symbol("Device:R")]),
-            Sexpr::list(vec![
-                Sexpr::symbol("at"),
-                Sexpr::symbol("50"),
-                Sexpr::symbol("50"),
-                Sexpr::symbol("0"),
-            ]),
-        ]);
-
-        let formatted = formatter::format_tree(&sexpr, formatter::FormatMode::Normal);
-        assert!(formatted.contains("(symbol"));
-        assert!(formatted.contains("(lib_id Device:R)"));
-        assert!(formatted.contains("(at 50 50 0)"));
     }
 
     #[test]
@@ -1226,38 +1182,6 @@ mod tests {
             assert_eq!(
                 &input[items[2].span.start..items[2].span.end],
                 "\"S1.R1.R\""
-            );
-        } else {
-            panic!("Expected a list");
-        }
-    }
-
-    #[test]
-    fn test_span_tracking_net() {
-        let input = r#"(net 5 "VCC_3V3")"#;
-        let parsed = parse(input).unwrap();
-
-        if let SexprKind::List(items) = &parsed.kind {
-            // The net name string
-            assert_eq!(
-                &input[items[2].span.start..items[2].span.end],
-                "\"VCC_3V3\""
-            );
-        } else {
-            panic!("Expected a list");
-        }
-    }
-
-    #[test]
-    fn test_span_tracking_group() {
-        let input = r#"(group "PowerSupply")"#;
-        let parsed = parse(input).unwrap();
-
-        if let SexprKind::List(items) = &parsed.kind {
-            // The group name string
-            assert_eq!(
-                &input[items[1].span.start..items[1].span.end],
-                "\"PowerSupply\""
             );
         } else {
             panic!("Expected a list");

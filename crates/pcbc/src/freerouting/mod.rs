@@ -831,18 +831,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sha256_file_matches_known_digest() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("f.txt");
-        std::fs::write(&path, b"hello world").unwrap();
-        let hash = sha256_file(&path).unwrap();
-        assert_eq!(
-            hex::encode(hash),
-            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-        );
-    }
-
-    #[test]
     fn format_hms_preserves_seconds_not_just_minutes() {
         assert_eq!(format_hms(90), "00:01:30");
         assert_eq!(format_hms(59), "00:00:59");

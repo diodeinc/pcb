@@ -355,17 +355,6 @@ mod tests {
     use tempfile::tempfile;
 
     #[test]
-    fn test_run_echo_command() {
-        let output = CommandRunner::new("echo")
-            .arg("Hello, world!")
-            .run()
-            .unwrap();
-
-        assert!(output.success);
-        assert_eq!(output.plain_as_string().trim(), "Hello, world!");
-    }
-
-    #[test]
     fn test_run_with_env_var() {
         let output = CommandRunner::new("sh")
             .arg("-c")

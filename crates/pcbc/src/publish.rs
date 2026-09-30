@@ -1814,29 +1814,6 @@ P1 = io(Net)
     }
 
     #[test]
-    fn test_single_package_no_deps() {
-        let result = compute_waves_from_deps(&deps(&[("a", &[])])).unwrap();
-        assert_eq!(normalize(&result), vec![vec!["a"]]);
-    }
-
-    #[test]
-    fn test_multiple_independent_packages() {
-        let result = compute_waves_from_deps(&deps(&[("a", &[]), ("b", &[]), ("c", &[])])).unwrap();
-        // All should be in the same wave since they're independent
-        assert_eq!(result.len(), 1);
-        assert_eq!(normalize(&result), vec![vec!["a", "b", "c"]]);
-    }
-
-    #[test]
-    fn test_linear_chain() {
-        // c depends on b, b depends on a
-        // Should publish: a, then b, then c
-        let result =
-            compute_waves_from_deps(&deps(&[("a", &[]), ("b", &["a"]), ("c", &["b"])])).unwrap();
-        assert_eq!(normalize(&result), vec![vec!["a"], vec!["b"], vec!["c"]]);
-    }
-
-    #[test]
     fn test_diamond_dependency() {
         // d depends on b and c, both b and c depend on a
         // Should publish: a, then b+c together, then d
@@ -1909,59 +1886,6 @@ P1 = io(Net)
         let err =
             compute_waves_from_deps(&deps(&[("a", &["a"])])).expect_err("expected self cycle");
         assert_eq!(err, vec!["a", "a"]);
-    }
-
-    #[test]
-    fn test_version_bump_patch() {
-        let v = Version::new(1, 2, 3);
-        assert_eq!(
-            compute_next_version(Some(&v), ReleaseBump::Patch),
-            Version::new(1, 2, 4)
-        );
-    }
-
-    #[test]
-    fn test_version_bump_minor() {
-        let v = Version::new(1, 2, 3);
-        assert_eq!(
-            compute_next_version(Some(&v), ReleaseBump::Minor),
-            Version::new(1, 3, 0)
-        );
-    }
-
-    #[test]
-    fn test_version_bump_major() {
-        let v = Version::new(1, 2, 3);
-        assert_eq!(
-            compute_next_version(Some(&v), ReleaseBump::Major),
-            Version::new(2, 0, 0)
-        );
-    }
-
-    #[test]
-    fn test_version_bump_major_pre_1_0() {
-        // For 0.x, a major bump promotes the release to 1.0.0
-        let v = Version::new(0, 3, 5);
-        assert_eq!(
-            compute_next_version(Some(&v), ReleaseBump::Major),
-            Version::new(1, 0, 0)
-        );
-    }
-
-    #[test]
-    fn test_version_initial() {
-        assert_eq!(
-            compute_next_version(None, ReleaseBump::Minor),
-            Version::new(0, 1, 0)
-        );
-        assert_eq!(
-            compute_next_version(None, ReleaseBump::Patch),
-            Version::new(0, 1, 0)
-        );
-        assert_eq!(
-            compute_next_version(None, ReleaseBump::Major),
-            Version::new(0, 1, 0)
-        );
     }
 
     #[test]

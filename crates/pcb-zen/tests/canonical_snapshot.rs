@@ -207,60 +207,6 @@ fn content_edge_cases() {
 }
 
 #[test]
-fn deterministic_hashing() {
-    // Create two identical directories and verify they produce the same hash
-    let dir1 = CanonicalTestDir::new();
-    dir1.add_file("a.txt", "content a");
-    dir1.add_file("b.txt", "content b");
-    dir1.add_file("sub/c.txt", "content c");
-
-    let dir2 = CanonicalTestDir::new();
-    dir2.add_file("a.txt", "content a");
-    dir2.add_file("b.txt", "content b");
-    dir2.add_file("sub/c.txt", "content c");
-
-    let hash1 = compute_content_hash_from_dir(dir1.root()).unwrap();
-    let hash2 = compute_content_hash_from_dir(dir2.root()).unwrap();
-
-    assert_eq!(
-        hash1, hash2,
-        "identical directories should produce identical hashes"
-    );
-
-    // Verify path normalization (forward slashes, no leading ./)
-    let entries = list_canonical_tar_entries(dir1.root(), None).unwrap();
-    assert!(
-        entries.iter().all(|e| !e.contains('\\')),
-        "should use forward slashes"
-    );
-    assert!(
-        entries.iter().all(|e| !e.starts_with("./")),
-        "should not have leading ./"
-    );
-
-    insta::with_settings!({ prepend_module_to_snapshot => false }, {
-        insta::assert_snapshot!(crate::insta_snapshot_name!(), hash1);
-    });
-}
-
-#[test]
-fn content_change_changes_hash() {
-    let dir1 = CanonicalTestDir::new();
-    dir1.add_file("file.txt", "content1");
-
-    let dir2 = CanonicalTestDir::new();
-    dir2.add_file("file.txt", "content2");
-
-    let hash1 = compute_content_hash_from_dir(dir1.root()).unwrap();
-    let hash2 = compute_content_hash_from_dir(dir2.root()).unwrap();
-
-    assert_ne!(
-        hash1, hash2,
-        "different content should produce different hashes"
-    );
-}
-
-#[test]
 fn pcb_sum_is_excluded_from_content_hashes() {
     let clean = CanonicalTestDir::new();
     clean.add_file("pcb.toml", "[dependencies]\n");

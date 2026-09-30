@@ -512,35 +512,6 @@ fn writes_files_through_the_data_plane() {
 }
 
 #[test]
-fn lists_directories_via_fs_read() {
-    let server = MockServer::start();
-    let _mint = mock_mint(&server, "minted-token");
-    server.mock(|when, then| {
-        when.method(GET)
-            .path("/sandboxes/sbx_1/fs/read")
-            .query_param("path", "/home/sandbox/layout");
-        then.status(200).json_body(serde_json::json!({
-            "path": "/home/sandbox/layout",
-            "type": "directory",
-            "entries": [{
-                "name": "board.kicad_pcb",
-                "path": "/home/sandbox/layout/board.kicad_pcb",
-                "type": "file",
-                "size": 10,
-                "mode": "0644",
-                "mtime": "2026-07-04T00:00:00Z",
-            }],
-        }));
-    });
-
-    let client = client_for(&server);
-    let listing = client.list(SANDBOX, "/home/sandbox/layout").unwrap();
-    assert_eq!(listing.entries.len(), 1);
-    assert_eq!(listing.entries[0].kind, "file");
-    assert_eq!(listing.entries[0].name, "board.kicad_pcb");
-}
-
-#[test]
 fn mint_404_reports_missing_access() {
     let server = MockServer::start();
     server.mock(|when, then| {

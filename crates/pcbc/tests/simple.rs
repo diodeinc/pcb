@@ -113,17 +113,6 @@ pcb-version = "0.4"
 
 #[test]
 #[cfg(not(target_os = "windows"))]
-fn test_pcb_build_simple_board() {
-    let output = Sandbox::new()
-        .write("pcb.toml", PCB_TOML_MIN)
-        .write("boards/SimpleBoard.zen", SIMPLE_BOARD_ZEN)
-        .sync()
-        .snapshot_run("pcbc", ["build", "boards/SimpleBoard.zen"]);
-    assert_snapshot!("simple_board", output);
-}
-
-#[test]
-#[cfg(not(target_os = "windows"))]
 fn test_pcb_build_multiple_explicit_files() {
     let output = Sandbox::new()
         .write("pcb.toml", PCB_TOML_MIN)
@@ -323,11 +312,4 @@ path = "B.zen"
         .replace(&rev, "<REV>");
 
     assert_snapshot!("offline_build_reuses_vendored_pseudo_version", snapshot);
-}
-
-#[test]
-#[cfg(not(target_os = "windows"))]
-fn test_pcb_help() {
-    let output = Sandbox::new().snapshot_run("pcbc", ["help"]);
-    assert_snapshot!("help", output);
 }

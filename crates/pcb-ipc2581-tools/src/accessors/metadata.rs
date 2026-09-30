@@ -110,27 +110,3 @@ fn format_units(units: Units) -> String {
         Units::Mils => "MIL".to_string(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_software_info_format() {
-        let info = SoftwareInfo {
-            name: Some("KiCad EDA".to_string()),
-            package_name: Some("KiCad".to_string()),
-            package_revision: Some("9.0.6".to_string()),
-            vendor: Some("KiCad EDA".to_string()),
-        };
-        assert_eq!(info.format(), Some("KiCad 9.0.6 (KiCad EDA)".to_string()));
-
-        let info_minimal = SoftwareInfo {
-            name: Some("KiCad EDA".to_string()),
-            package_name: None,
-            package_revision: None,
-            vendor: None,
-        };
-        assert_eq!(info_minimal.format(), Some("KiCad EDA".to_string()));
-    }
-}

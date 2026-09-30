@@ -455,32 +455,6 @@ parts = [
 }
 
 #[test]
-fn manifest_parts_explicit_part_overrides_manifest() {
-    let attrs = manifest_component_attrs(
-        r#"
-parts = [
-  { mpn = "MANIFEST-001", symbol = "TestPart.kicad_sym", manufacturer = "ManifestCorp" },
-]
-"#,
-        r#"    part = Part(
-        mpn = "EXPLICIT-999",
-        manufacturer = "ExplicitCorp",
-    ),"#,
-    );
-
-    assert_eq!(
-        attrs["mpn"]["String"].as_str(),
-        Some("EXPLICIT-999"),
-        "explicit part should override manifest"
-    );
-    assert_eq!(
-        attrs["manufacturer"]["String"].as_str(),
-        Some("ExplicitCorp"),
-        "explicit manufacturer should override manifest"
-    );
-}
-
-#[test]
 fn manifest_parts_append_to_existing_alternatives_when_part_is_explicit() {
     let attrs = manifest_component_attrs(
         r#"

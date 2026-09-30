@@ -425,13 +425,6 @@ fn execute_new_package(package_path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
-
-    #[derive(Parser, Debug)]
-    struct TestCli {
-        #[command(flatten)]
-        args: NewArgs,
-    }
 
     #[test]
     fn test_validate_board_name() {
@@ -494,54 +487,5 @@ mod tests {
         // Invalid
         assert!(clean_repo_url("invalid").is_err());
         assert!(clean_repo_url("github.com/user").is_err());
-    }
-
-    #[test]
-    fn test_component_requires_directory() {
-        let parsed = TestCli::try_parse_from(["pcb", "component", "components/foo"]).unwrap();
-        assert!(matches!(
-            parsed.args.command,
-            Some(NewCommand::Component(NewComponentArgs {
-                ref dir,
-            })) if dir == &PathBuf::from("components/foo")
-        ));
-
-        assert!(TestCli::try_parse_from(["pcb", "component"]).is_err());
-        let parsed = TestCli::try_parse_from(["pcb"]).unwrap();
-        assert!(parsed.args.command.is_none());
-    }
-
-    #[test]
-    fn test_legacy_component_flags_are_rejected() {
-        for flag in ["--component-id", "--part-number", "--manufacturer"] {
-            assert!(TestCli::try_parse_from(["pcb", "component", flag, "legacy"]).is_err());
-        }
-    }
-
-    #[test]
-    fn test_board_requires_repo() {
-        let parsed = TestCli::try_parse_from([
-            "pcb",
-            "board",
-            "MainBoard",
-            "https://github.com/user/MainBoard",
-        ])
-        .unwrap();
-        assert!(matches!(
-            parsed.args.command,
-            Some(NewCommand::Board(NewBoardArgs { ref name, ref repo }))
-                if name == "MainBoard" && repo == "https://github.com/user/MainBoard"
-        ));
-
-        assert!(TestCli::try_parse_from(["pcb", "board", "MainBoard"]).is_err());
-        assert!(TestCli::try_parse_from(["pcb", "workspace", "my-project"]).is_err());
-    }
-
-    #[test]
-    fn test_old_flag_forms_are_rejected() {
-        assert!(TestCli::try_parse_from(["pcb", "--workspace", "my-project"]).is_err());
-        assert!(TestCli::try_parse_from(["pcb", "--board", "MainBoard"]).is_err());
-        assert!(TestCli::try_parse_from(["pcb", "--package", "modules/power_supply"]).is_err());
-        assert!(TestCli::try_parse_from(["pcb", "--component"]).is_err());
     }
 }

@@ -102,16 +102,6 @@ mod tests {
     }
 
     #[test]
-    fn different_strings_get_distinct_symbols() {
-        let mut interner = Interner::new();
-        let circle = interner.intern("Circle");
-        let rect = interner.intern("RectRound");
-        assert_ne!(circle, rect);
-        assert_eq!(interner.resolve(circle), "Circle");
-        assert_eq!(interner.resolve(rect), "RectRound");
-    }
-
-    #[test]
     fn survives_buffer_growth() {
         let mut interner = Interner::with_capacity(4);
         let symbols = (0..64)

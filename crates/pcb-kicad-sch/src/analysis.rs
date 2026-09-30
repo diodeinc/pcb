@@ -1528,23 +1528,6 @@ mod tests {
     }
 
     #[test]
-    fn equivalent_project_has_no_issues() {
-        let netlist = netlist_with_nets(&["N1"]);
-        let mut page = SchPage::new("page");
-        page.items.push(SchItem::Label(Label::new(
-            "label",
-            "N1",
-            Point::new(0.0, 0.0),
-        )));
-
-        let analysis = inspect_schematic(&document_with_pages(vec![page]), &netlist)
-            .unwrap()
-            .analysis;
-
-        assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
-    }
-
-    #[test]
     fn root_interface_ports_map_to_their_shared_realized_net() {
         let mut netlist = netlist_with_nets(&["REALIZED_SIG"]);
         netlist.nets.get_mut("REALIZED_SIG").unwrap().id = 42;

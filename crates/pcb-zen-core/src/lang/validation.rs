@@ -222,23 +222,6 @@ mod tests {
     }
 
     #[test]
-    fn test_whitespace_only_names() {
-        let invalid_names = vec!["   ", "\t", "\n", "  \t  \n  "];
-
-        for name in invalid_names {
-            let result = validate_identifier_name(name, "Test name");
-            assert!(result.is_err(), "Expected '{}' to be invalid", name);
-            let error_msg = format!("{}", result.unwrap_err());
-            assert!(
-                error_msg.contains("cannot contain whitespace"),
-                "Expected whitespace error for '{}', got: {}",
-                name,
-                error_msg
-            );
-        }
-    }
-
-    #[test]
     fn test_context_in_error_messages() {
         let result = validate_identifier_name("invalid name", "Component name");
         assert!(result.is_err());

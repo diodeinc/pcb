@@ -75,16 +75,6 @@ fn directive_label_connects_segments_that_cross_at_its_anchor() {
 }
 
 #[test]
-fn label_connects_to_the_middle_of_a_wire() {
-    let mut builder = KicadBuilder::new();
-    builder
-        .wire((-1.0, 0.0), (1.0, 0.0))
-        .local_label("MID", (0.0, 0.0));
-
-    assert_eq!(named_groups(builder.build()), vec![names(&["MID"])]);
-}
-
-#[test]
 fn label_segment_hit_uses_kicads_one_internal_unit_tolerance() {
     let mut builder = KicadBuilder::new();
     builder

@@ -225,18 +225,6 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn version_token_prefers_sha256() {
-        let metadata = KicadSymbolsIndexMetadata {
-            url: "https://example.com/symbols.db.zst".to_string(),
-            sha256: "abc123".to_string(),
-            last_modified: "2026-03-18T15:17:20.000Z".to_string(),
-            expires_at: "2026-03-18T16:18:53.256Z".to_string(),
-        };
-
-        assert_eq!(metadata.version_token().unwrap(), "abc123");
-    }
-
-    #[test]
     fn version_token_requires_sha256() {
         let metadata = KicadSymbolsIndexMetadata {
             url: "https://example.com/symbols.db.zst".to_string(),

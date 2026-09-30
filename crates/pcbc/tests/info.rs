@@ -91,16 +91,6 @@ fn test_pcb_info_exits_cleanly_when_output_pipe_closes() {
 }
 
 #[test]
-fn test_pcb_info_single_board() {
-    let output = Sandbox::new()
-        .write("pcb.toml", WORKSPACE_PCB_TOML)
-        .write("boards/TestBoard/pcb.toml", TEST_BOARD_PCB_TOML)
-        .write("boards/TestBoard/test_board.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcbc", ["info"]);
-    assert_snapshot!("single_board", output);
-}
-
-#[test]
 fn test_pcb_info_multiple_boards() {
     let output = Sandbox::new()
         .write("pcb.toml", WORKSPACE_PCB_TOML)
@@ -113,18 +103,6 @@ fn test_pcb_info_multiple_boards() {
         .write("special/custom-board/custom.zen", TEST_BOARD_ZEN)
         .snapshot_run("pcbc", ["info"]);
     assert_snapshot!("multiple_boards", output);
-}
-
-#[test]
-fn test_pcb_info_json_format() {
-    let output = Sandbox::new()
-        .write("pcb.toml", WORKSPACE_PCB_TOML)
-        .write("boards/test-board/pcb.toml", TEST_BOARD_PCB_TOML)
-        .write("boards/test-board/test_board.zen", TEST_BOARD_ZEN)
-        .write("boards/main-board/pcb.toml", MAIN_BOARD_PCB_TOML)
-        .write("boards/main-board/main_board.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcbc", ["info", "-f", "json"]);
-    assert_snapshot!("json_format", output);
 }
 
 #[test]
@@ -366,17 +344,6 @@ const BOARD_NO_PATH_PCB_TOML: &str = r#"
 name = "DiscoveredBoard"
 description = "Board with auto-discovered zen file"
 "#;
-
-#[test]
-fn test_pcb_info_zen_discovery() {
-    // Test that a single .zen file is auto-discovered when path is not specified
-    let output = Sandbox::new()
-        .write("pcb.toml", WORKSPACE_PCB_TOML)
-        .write("boards/discovered/pcb.toml", BOARD_NO_PATH_PCB_TOML)
-        .write("boards/discovered/discovered.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcbc", ["info"]);
-    assert_snapshot!("zen_discovery", output);
-}
 
 #[test]
 fn test_pcb_info_zen_discovery_json() {

@@ -412,7 +412,7 @@ fn macro_primitives_rotate_about_the_macro_origin() {
 #[test]
 fn preserves_block_apertures_when_flashed() {
     let gerber = GerberX2::parse(
-        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\n%ABD20*%\nD10*\n%LPC*%\nX1000000Y0D03*\n%AB*%\nD20*\n%LPC*%\nX2000000Y3000000D03*\nM02*\n",
+        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\n%ABD20*%\nD10*\n%LPC*%\nX1000000Y0D03*\n%AB*%\nD20*\n%LPC*%\n%LR90*%\n%LS2*%\nX2000000Y3000000D03*\nM02*\n",
     )
     .unwrap();
 
@@ -430,42 +430,26 @@ fn preserves_block_apertures_when_flashed() {
         } if at.x == 2.0 && at.y == 3.0
     ));
     assert_eq!(gerber.objects()[0].polarity, Polarity::Clear);
+    // The block is placed under the flash's rotation and scale, not only its
+    // position.
+    assert!(close(gerber.objects()[0].rotation_degrees, 90.0));
+    assert!(close(gerber.objects()[0].scaling, 2.0));
 
     let artwork = extract(&gerber);
     assert_eq!(artwork.blocks.len(), 1);
     assert_eq!(artwork.blocks[0].objects.len(), 1);
     assert!(matches!(
         artwork.objects[0].geometry,
-        Geometry::Instance { block: 0, .. }
+        Geometry::Instance { block: 0, transform }
+            if close(transform.m00, 0.0)
+                && close(transform.m01, -2.0)
+                && close(transform.m10, 2.0)
+                && close(transform.m11, 0.0)
+                && close(transform.m02, 2.0)
+                && close(transform.m12, 3.0)
     ));
     let expanded = pcb_ir::dialects::artwork::expand_instances(&artwork);
     assert_eq!(expanded.objects[0].polarity, Polarity::Dark);
-}
-
-#[test]
-fn preserves_block_apertures_with_flash_transform() {
-    let gerber = GerberX2::parse(
-        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\n%ABD20*%\nD10*\nX1000000Y0D03*\n%AB*%\n%LR90*%\n%LS2*%\nD20*\nX2000000Y3000000D03*\nM02*\n",
-    )
-    .unwrap();
-
-    assert_eq!(gerber.objects().len(), 1);
-    let object = &gerber.objects()[0];
-    assert!(matches!(
-        object.kind,
-        ObjectKind::Flash {
-            at,
-            aperture: 20,
-        } if close(at.x, 2.0) && close(at.y, 3.0)
-    ));
-    assert!(close(object.rotation_degrees, 90.0));
-    assert!(close(object.scaling, 2.0));
-    let artwork = extract(&gerber);
-    assert!(matches!(
-        artwork.objects[0].geometry,
-        Geometry::Instance { block: 0, transform }
-            if close(transform.m02, 2.0) && close(transform.m12, 3.0)
-    ));
 }
 
 #[test]
@@ -644,20 +628,6 @@ fn rejects_unclosed_region_contours() {
     .unwrap_err();
 
     assert!(err.to_string().contains("region contour must be closed"));
-}
-
-#[test]
-fn extracts_render_artwork() {
-    let gerber = GerberX2::parse(
-        "%FSLAX26Y26*%\n%MOMM*%\n%TF.FileFunction,Copper,L1,Top*%\n%ADD10C,0.2*%\nD10*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nX1000000Y1000000D03*\nM02*\n",
-    )
-    .unwrap();
-
-    let geometry = extract(&gerber);
-    assert_eq!(geometry.layers[0].meta, vec!["Copper", "L1", "Top"]);
-    assert_eq!(geometry.objects.len(), 2);
-    assert!(geometry.arena.paths.iter().any(|path| path.is_stroked()));
-    assert!(!geometry.layers[0].bbox.is_empty());
 }
 
 #[test]

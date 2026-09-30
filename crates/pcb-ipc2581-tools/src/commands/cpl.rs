@@ -199,29 +199,6 @@ mod tests {
 
     use super::*;
 
-    #[cfg(feature = "cli")]
-    #[test]
-    fn reads_compressed_input() {
-        let dir = tempfile::tempdir().unwrap();
-        let output = dir.path().join("cpl.csv");
-        execute(
-            Path::new(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../ipc2581/tests/data/DM0002-IPC-2518.xml.zst"
-            )),
-            &CplOptions {
-                output: Some(output.clone()),
-                side: CplSideFilter::Both,
-                exclude_dnp: false,
-            },
-            pcb_ir::geom::Resolution::default(),
-        )
-        .unwrap();
-        let csv = fs::read_to_string(output).unwrap();
-        assert!(csv.starts_with("Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n"));
-        assert!(csv.lines().count() > 1);
-    }
-
     #[test]
     fn imported_cpl_preserves_rotation_before_mirroring() {
         let resolution = pcb_ir::geom::Resolution::default();

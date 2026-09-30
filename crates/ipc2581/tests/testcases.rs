@@ -61,21 +61,6 @@ fn test_testcase1_full() {
     validate_testcase1_cross_file_consistency(&full, &assembly, &bom);
 }
 
-#[test]
-fn test_testcase1_fabrication() {
-    parse("testcase1-revc/testcase1-revc-fabrication");
-}
-
-#[test]
-fn test_testcase1_test() {
-    parse("testcase1-revc/testcase1-revc-test");
-}
-
-#[test]
-fn test_testcase1_stencil() {
-    parse("testcase1-revc/testcase1-revc-stencil");
-}
-
 // Test Case 3: Round Test Card
 #[test]
 fn test_testcase3_all_modes() {

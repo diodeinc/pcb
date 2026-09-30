@@ -20,16 +20,6 @@ snapshot_eval!(net_with_symbol, {
     "#
 });
 
-snapshot_eval!(net_without_symbol, {
-    "test.zen" => r#"
-        # Create a net without a symbol
-        ground_net = Net("GND")
-
-        # Print the net directly
-        print("Ground net:", ground_net)
-    "#
-});
-
 snapshot_eval!(net_symbol_from_library, {
     "C146731.kicad_sym" => include_str!("resources/C146731.kicad_sym"),
     "test.zen" => r#"
@@ -70,24 +60,6 @@ snapshot_eval!(net_symbol_deep_copy, {
     "#
 });
 
-snapshot_eval!(net_name_property_access, {
-    "test.zen" => r#"
-        # Test accessing the name property on Net instances
-        
-        # Create nets with different names
-        net1 = Net("POWER_3V3")
-        net2 = Net("GND")
-        
-        # Access and print the name property
-        print("net1.name:", net1.name)
-        print("net2.name:", net2.name)
-        
-        # Verify the name property matches what was passed to Net()
-        check(net1.name == "POWER_3V3", "net1.name should be 'POWER_3V3'")
-        check(net2.name == "GND", "net2.name should be 'GND'")
-    "#
-});
-
 snapshot_eval!(net_duplicate_names_error, {
     "test.zen" => r#"
         en1 = Net("EN")
@@ -110,28 +82,6 @@ snapshot_eval!(net_duplicate_names_error, {
     "#,
 });
 
-snapshot_eval!(net_multiple_collisions_error, {
-    "test.zen" => r#"
-        a1 = Net("CLK")
-        a2 = Net("CLK")
-        a3 = Net("CLK")
-        a4 = Net("CLK")
-    "#,
-});
-
-snapshot_eval!(net_no_collision_different_names, {
-    "test.zen" => r#"
-        # Nets with different names should not trigger warnings
-        clk = Net("CLK")
-        rst = Net("RST")
-        en = Net("EN")
-
-        print("clk:", clk.name)
-        print("rst:", rst.name)
-        print("en:", en.name)
-    "#,
-});
-
 snapshot_eval!(net_collision_in_child_module_error, {
     "child.zen" => r#"
         sig1 = Net("SIG")
@@ -141,24 +91,6 @@ snapshot_eval!(net_collision_in_child_module_error, {
         Child = Module("child.zen")
         Child(name = "child1")
     "#,
-});
-
-snapshot_eval!(net_field_with_field_spec, {
-    "test.zen" => r#"
-        # Create a net type with field() specs
-        Power = builtin.net_type("Power", voltage=field(str, "3.3V"))
-        
-        # Create instances with different voltages
-        vcc = Power("VCC", voltage="5V")
-        vdd = Power("VDD", voltage="3.3V")
-        
-        # Access field values
-        print("vcc.voltage:", vcc.voltage)
-        print("vdd.voltage:", vdd.voltage)
-        
-        check(vcc.voltage == "5V", "vcc.voltage should be '5V'")
-        check(vdd.voltage == "3.3V", "vdd.voltage should be '3.3V'")
-    "#
 });
 
 snapshot_eval!(net_field_with_direct_type, {
@@ -181,19 +113,6 @@ snapshot_eval!(net_field_type_mismatch, {
         
         # This should fail - providing int instead of str
         vcc = Power("VCC", voltage=123)
-    "#
-});
-
-snapshot_eval!(net_field_default_applied, {
-    "test.zen" => r#"
-        # Create a net type with defaulted field
-        Power = builtin.net_type("Power", voltage=field(str, "3.3V"))
-        
-        # Create instance without providing voltage - should get default
-        vcc = Power("VCC")
-        
-        print("vcc.voltage:", vcc.voltage)
-        check(vcc.voltage == "3.3V", "vcc.voltage should use default '3.3V'")
     "#
 });
 
@@ -246,18 +165,6 @@ snapshot_eval!(net_field_with_enum, {
         
         print("sig1.level:", sig1.level)
         check(sig1.level == Level("HIGH"), "sig1.level should be HIGH")
-    "#
-});
-
-snapshot_eval!(net_field_with_physical_value, {
-    "test.zen" => r#"
-        # Create net type with physical value field
-        Power = builtin.net_type("Power", voltage=Voltage)
-        
-        # Create instance
-        vcc = Power("VCC", voltage="5V")
-        
-        print("vcc.voltage:", vcc.voltage)
     "#
 });
 

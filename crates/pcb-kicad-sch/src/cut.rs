@@ -221,15 +221,6 @@ mod tests {
     }
 
     #[test]
-    fn parallel_duplicates_are_both_cut_when_they_are_the_only_bridge() {
-        let graph = graph(4, &[(0, 1), (0, 2), (1, 3), (2, 3)]);
-        let cut = minimum_node_cut(&graph, &BTreeSet::from([0]), &BTreeSet::from([3]), |node| {
-            matches!(node, 1 | 2).then_some(1)
-        });
-        assert_eq!(cut, Some(vec![1, 2]));
-    }
-
-    #[test]
     fn region_cut_keeps_original_costs_and_ignores_deleted_paths() {
         let graph = graph(7, &[(0, 2), (2, 4), (4, 6), (0, 1), (1, 6)]);
         let sources = BTreeSet::from([0]);

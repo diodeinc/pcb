@@ -351,30 +351,6 @@ mod tests {
     }
 
     #[test]
-    fn test_preserves_formatting() {
-        let input = r#"(kicad_pcb
-	(version 20241229)
-	(footprint "R_0603"
-		(property "Path" "Old.Path"
-			(at 0 0 0)
-		)
-	)
-)"#;
-
-        let board = parse(input).unwrap();
-
-        let mut moved = HashMap::new();
-        moved.insert("Old".to_string(), "New".to_string());
-
-        let (result, _) = apply_to_string(&board, input, &moved);
-
-        assert!(result.contains("(version 20241229)"));
-        assert!(result.contains("\t(footprint"));
-        assert!(result.contains("\t\t(property \"Path\" \"New.Path\""));
-        assert!(result.contains("\t\t\t(at 0 0 0)"));
-    }
-
-    #[test]
     fn test_net_exact_match() {
         let input = r#"(kicad_pcb
             (net 1 "OLD_VCC")

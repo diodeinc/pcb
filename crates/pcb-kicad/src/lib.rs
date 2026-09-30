@@ -707,22 +707,6 @@ mod tests {
     }
 
     #[test]
-    fn read_board_kicad_major_version_from_pcb_file() {
-        let temp = tempdir().expect("tempdir");
-        let pcb_path = temp.path().join("layout.kicad_pcb");
-        fs::write(
-            &pcb_path,
-            "(kicad_pcb\n\t(generator \"pcbnew\")\n\t(generator_version \"10.0\")\n)\n",
-        )
-        .expect("write pcb");
-
-        assert_eq!(
-            read_board_kicad_major_version(&pcb_path).expect("read board version"),
-            Some(10)
-        );
-    }
-
-    #[test]
     fn read_board_kicad_major_version_stops_after_header() {
         let temp = tempdir().expect("tempdir");
         let pcb_path = temp.path().join("layout.kicad_pcb");

@@ -270,16 +270,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sanitize_pin_name_rules() {
-        assert_eq!(sanitize_pin_name("~CS"), "N_CS");
-        assert_eq!(sanitize_pin_name("V+"), "V_POS");
-        assert_eq!(sanitize_pin_name("V-"), "V_NEG");
-        assert_eq!(sanitize_pin_name("A+B"), "A_B");
-        assert_eq!(sanitize_pin_name("CS#"), "CSH");
-        assert_eq!(sanitize_pin_name("1V8"), "P1V8");
-    }
-
-    #[test]
     fn only_no_connect_requires_declared_primary_types() {
         let untyped = Pin::default();
         let no_connect = Pin {

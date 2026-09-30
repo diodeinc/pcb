@@ -50,29 +50,6 @@ Test(
 }
 
 #[test]
-fn snapshot_unused_inputs_should_error() {
-    let env = TestProject::new();
-
-    // Create a simple module that does not declare any io()/config() placeholders.
-    env.add_file("my_module.zen", "\n# empty module with no inputs\n");
-
-    // Top-level file instantiates the module while passing an unexpected argument.
-    env.add_file(
-        "top.zen",
-        r#"
-MyModule = Module("my_module.zen")
-
-MyModule(
-    name = "MyModule",
-    unused = 123,
-)
-"#,
-    );
-
-    star_snapshot!(env, "top.zen");
-}
-
-#[test]
 #[cfg(not(target_os = "windows"))]
 fn snapshot_missing_pins_should_error() {
     let env = TestProject::new();

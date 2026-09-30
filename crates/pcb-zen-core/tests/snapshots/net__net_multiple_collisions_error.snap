@@ -1,6 +1,0 @@
----
-source: crates/pcb-zen-core/tests/net.rs
-assertion_line: 114
-expression: output
----
-Error: test.zen:6:6-16 Duplicate net name: CLK

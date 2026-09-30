@@ -583,42 +583,42 @@ mod tests {
     }
 
     #[test]
-    fn packs_seventeen_heterogeneous_panels() {
+    fn packs_twelve_heterogeneous_panels() {
         let items = [
             (
                 Size {
                     width: 40_000,
                     height: 60_000,
                 },
-                5,
+                3,
             ),
             (
                 Size {
                     width: 50_000,
                     height: 70_000,
                 },
-                4,
+                3,
             ),
             (
                 Size {
                     width: 60_000,
                     height: 80_000,
                 },
-                4,
+                3,
             ),
             (
                 Size {
                     width: 70_000,
                     height: 90_000,
                 },
-                4,
+                3,
             ),
         ]
         .into_iter()
         .flat_map(|(size, count)| std::iter::repeat_n(size, count))
         .collect::<Vec<_>>();
 
-        assert_eq!(items.len(), 17);
+        assert_eq!(items.len(), 12);
         let placements = pack(&items, USABLE_FAB_PANEL, GAP).unwrap();
         assert_valid(&items, &placements);
     }

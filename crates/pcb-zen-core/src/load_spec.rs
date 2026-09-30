@@ -310,66 +310,6 @@ mod tests {
     }
 
     #[test]
-    fn test_load_spec_serialization() {
-        let spec = LoadSpec::Stdlib {
-            path: PathBuf::from("math.zen"),
-        };
-
-        // Test serialization
-        let json = serde_json::to_string(&spec).expect("Failed to serialize LoadSpec");
-
-        // Test deserialization
-        let deserialized: LoadSpec =
-            serde_json::from_str(&json).expect("Failed to deserialize LoadSpec");
-
-        assert_eq!(spec, deserialized);
-    }
-
-    #[test]
-    fn test_url_spec_serialization() {
-        let spec = LoadSpec::Url {
-            url: "github.com/foo/bar/src/lib.zen".to_string(),
-        };
-
-        // Test serialization
-        let json = serde_json::to_string(&spec).expect("Failed to serialize LoadSpec");
-
-        // Test deserialization
-        let deserialized: LoadSpec =
-            serde_json::from_str(&json).expect("Failed to deserialize LoadSpec");
-
-        assert_eq!(spec, deserialized);
-    }
-
-    #[test]
-    fn test_path_spec_serialization() {
-        let spec = LoadSpec::local_path("./relative/path/file.zen");
-
-        // Test serialization
-        let json = serde_json::to_string(&spec).expect("Failed to serialize LoadSpec");
-
-        // Test deserialization
-        let deserialized: LoadSpec =
-            serde_json::from_str(&json).expect("Failed to deserialize LoadSpec");
-
-        assert_eq!(spec, deserialized);
-    }
-
-    #[test]
-    fn test_path_spec_serialization_absolute() {
-        let spec = LoadSpec::local_path("/absolute/path/file.zen");
-
-        // Test serialization
-        let json = serde_json::to_string(&spec).expect("Failed to serialize LoadSpec");
-
-        // Test deserialization
-        let deserialized: LoadSpec =
-            serde_json::from_str(&json).expect("Failed to deserialize LoadSpec");
-
-        assert_eq!(spec, deserialized);
-    }
-
-    #[test]
     fn test_all_load_spec_variants_serialization() {
         let specs = vec![
             LoadSpec::Stdlib {

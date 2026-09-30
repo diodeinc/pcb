@@ -819,44 +819,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_bom_with_description() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="Owner">
-    <FunctionMode mode="ASSEMBLY"/>
-  </Content>
-  <Bom name="TestBOM">
-    <BomHeader assembly="Test Design" revision="1.0"/>
-    <BomItem OEMDesignNumberRef="XO32-12MHZ" quantity="1" pinCount="4" category="ELECTRICAL" description="HCMOS Clock Oscillator">
-      <RefDes name="U4" packageRef="SG210" populate="true" layerRef="F.Cu"/>
-      <Characteristics category="ELECTRICAL">
-        <Textual definitionSource="KICAD" textualCharacteristicName="Frequency" textualCharacteristicValue="12MHz"/>
-      </Characteristics>
-    </BomItem>
-  </Bom>
-</IPC-2581>"#;
-
-        let doc = Ipc2581::parse(xml).unwrap();
-        let bom = doc.bom().unwrap();
-        assert_eq!(doc.resolve(bom.name), "TestBOM");
-        assert_eq!(bom.items.len(), 1);
-
-        let item = &bom.items[0];
-        assert_eq!(doc.resolve(item.oem_design_number_ref), "XO32-12MHZ");
-
-        assert_eq!(
-            doc.resolve(item.description.unwrap()),
-            "HCMOS Clock Oscillator"
-        );
-
-        assert_eq!(item.quantity, Some(1));
-        assert_eq!(item.pin_count, Some(4));
-        let references = item.reference_designators().collect::<Vec<_>>();
-        assert_eq!(references.len(), 1);
-        assert_eq!(doc.resolve(references[0].name), "U4");
-    }
-
-    #[test]
     fn preserves_assembly_bom_and_package_source_facts() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

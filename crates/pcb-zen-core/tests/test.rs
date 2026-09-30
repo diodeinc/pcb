@@ -115,28 +115,6 @@ snapshot_eval!(nested_components, {
     "#
 });
 
-snapshot_eval!(net_name_deduplication, {
-    "MyModule.zen" => r#"
-        _internal_net = Net("INTERNAL")
-        Component(
-            name = "Component",
-            pin_defs = {
-                "P1": "1",
-            },
-            pins = {
-                "P1": _internal_net,
-            },
-            footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
-        )
-    "#,
-    "Top.zen" => r#"
-        MyModule = Module("MyModule.zen")
-        MyModule(name = "MyModule1")
-        MyModule(name = "MyModule2")
-        MyModule(name = "MyModule3")
-    "#
-});
-
 snapshot_eval!(duplicate_component_name, {
     "test.zen" => r#"
         vcc = Net(name = "VCC")

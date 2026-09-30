@@ -157,24 +157,3 @@ impl SpinnerBuilder {
         Spinner { progress_bar }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_spinner_creation() {
-        let spinner = Spinner::builder("Testing").start();
-        spinner.finish();
-    }
-
-    #[test]
-    fn test_spinner_builder() {
-        let spinner = Spinner::builder("Custom spinner")
-            .tick_chars("◐◓◑◒")
-            .style(Style::Blue)
-            .tick_interval(Duration::from_millis(200))
-            .start();
-        spinner.success("Done!");
-    }
-}

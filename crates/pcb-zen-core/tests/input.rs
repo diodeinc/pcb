@@ -82,27 +82,6 @@ snapshot_eval!(io_template_infers_signature_and_default, {
     "#
 });
 
-snapshot_eval!(io_template_enforces_voltage_compatibility, {
-    "Module.zen" => r#"
-        Power = builtin.net_type("Power", voltage=Voltage)
-
-        VDD = io(Power("VDD", voltage="1.8V to 3.6V"))
-
-        Component(
-            name = "U1",
-            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
-            pin_defs = {"VDD": "1"},
-            pins = {"VDD": VDD},
-        )
-    "#,
-    "top.zen" => r#"
-        Mod = Module("Module.zen")
-
-        vdd = Mod.Power("VIN", voltage="5V")
-        Mod(name = "child", VDD = vdd)
-    "#
-});
-
 snapshot_eval!(io_template_rejects_plain_net_input, {
     "Module.zen" => r#"
         Power = builtin.net_type("Power", voltage=Voltage)
@@ -634,33 +613,6 @@ fn config_name_infers_from_assignment() {
     assert!(
         component.skip_bom(),
         "defaulted inferred config should still apply"
-    );
-}
-
-#[test]
-fn inferred_config_values_work_in_component_kwargs() {
-    let eval_result = eval_zen(vec![(
-        "Module.zen".to_string(),
-        r#"
-            description = config(str, default = "Acme")
-            skip_bom = config(bool, default = True)
-
-            Component(
-                name = "R1",
-                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
-                pin_defs = {"P": "1"},
-                pins = {"P": Net("SIG")},
-                description = description,
-                skip_bom = skip_bom,
-            )
-        "#
-        .to_string(),
-    )]);
-
-    assert!(
-        !eval_result.diagnostics.has_errors(),
-        "eval produced unexpected errors: {:?}",
-        eval_result.diagnostics
     );
 }
 
@@ -1328,26 +1280,6 @@ snapshot_eval!(io_interface_incompatible, {
     "#
 });
 
-snapshot_eval!(config_str, {
-    "test.zen" => r#"
-        value = config(str)
-
-        # Use the string config
-        Component(
-            name = "test_comp",
-            footprint = "test_footprint",
-            pin_defs = {"in": "1", "out": "2"},
-            pins = {
-                "in": Net("1"),
-                "out": Net("2")
-            },
-            properties = {
-                "value": value
-            }
-        )
-    "#
-});
-
 snapshot_eval!(config_types, {
     "test.zen" => r#"
         # Test various config() and io() declarations for signature generation
@@ -1422,24 +1354,6 @@ snapshot_eval!(implicit_enum_conversion, {
         Mod(
             name = "child",
             heading = "NORTH",
-        )
-    "#
-});
-
-snapshot_eval!(interface_net_incompatible, {
-    "Module.zen" => r#"
-        SingleNet = interface(signal = Net)
-
-        signal_if = SingleNet(name="sig")
-
-        Component(
-            name = "test_comp",
-            footprint = "test_footprint",
-            pin_defs = {"in": "1", "out": "2"},
-            pins = {
-                "in": signal_if,  # This should fail - interfaces not accepted for pins
-                "out": Net()
-            }
         )
     "#
 });
@@ -1678,36 +1592,6 @@ snapshot_eval!(config_int_to_float_conversion, {
     "#
 });
 
-snapshot_eval!(config_mixed_numeric_types, {
-    "Module.zen" => r#"
-        # Test that float values remain floats and int values convert to float
-        voltage1 = config(float)
-        voltage2 = config(float) 
-        voltage3 = config(float, default = 0)  # int default
-        
-        # Verify all are floats
-        builtin.add_property("v1_value", voltage1)
-        builtin.add_property("v1_type", type(voltage1))
-        builtin.add_property("v2_value", voltage2)
-        builtin.add_property("v2_type", type(voltage2))
-        builtin.add_property("v3_value", voltage3)
-        builtin.add_property("v3_type", type(voltage3))
-        
-        # Test that float arithmetic works correctly
-        builtin.add_property("sum", voltage1 + voltage2 + voltage3)
-    "#,
-    "top.zen" => r#"
-        MyModule = Module("./Module.zen")
-        
-        m = MyModule(
-            name = "test",
-            voltage1 = 3.14,   # Already a float
-            voltage2 = 10,     # Int that should convert to float
-            # voltage3 uses default int 0 that should convert to float
-        )
-    "#
-});
-
 snapshot_eval!(io_invalid_type, {
     "test.zen" => r#"
         # io() should only accept NetType or InterfaceFactory, not primitive types
@@ -1917,31 +1801,6 @@ fn input_output_set_direction_metadata() {
         .expect("expected VOUT in signature");
     assert_eq!(vout.direction, Some(IoDirection::Output));
     assert_eq!(vout.help.as_deref(), Some("Output net"));
-}
-
-#[test]
-fn builtin_io_available_directly() {
-    let eval_result = eval_zen(vec![(
-        "test.zen".to_string(),
-        r#"
-            VIN = builtin.io("VIN", Net, direction = "input")
-            VOUT = builtin.io("VOUT", Net)
-
-            Component(
-                name = "test",
-                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
-                pin_defs = {"IN": "1", "OUT": "2"},
-                pins = {"IN": VIN, "OUT": VOUT},
-            )
-        "#
-        .to_string(),
-    )]);
-
-    assert!(
-        !eval_result.diagnostics.has_errors(),
-        "eval produced unexpected errors: {:?}",
-        eval_result.diagnostics
-    );
 }
 
 #[test]

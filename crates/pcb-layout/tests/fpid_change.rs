@@ -76,6 +76,7 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
             .contains("R_0402_1005Metric"),
         "Initial footprint should be R_0402"
     );
+    let initial_position = &initial_r1["position"];
 
     // Get initial pad positions
     let initial_pads = initial_r1["pads"].as_array().unwrap();
@@ -159,85 +160,16 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
         "Footprint should be unlocked after FPID change"
     );
 
-    Ok(())
-}
-
-/// Test that FPID change preserves the footprint position.
-#[cfg(not(target_os = "windows"))]
-#[test]
-fn test_fpid_change_preserves_position() -> Result<()> {
-    // Create a temp directory and copy the test resources
-    let temp = TempDir::new()?.into_persistent();
-    let resource_path = get_resource_path("fpid_change");
-    temp.copy_from(&resource_path, &["**/*", "!.pcb/cache/**/*"])?;
-
-    // --- Step 1: Initial layout with 0402 package ---
-    let zen_file = temp.path().join("Board.zen");
-
-    let workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
-    let res = pcb_zen::resolve_workspace_dependencies(workspace_info, temp.path(), false)?;
-
-    let (output, _) = pcb_zen::run(&zen_file, res.clone(), Default::default()).unpack();
-    let schematic = output.expect("Zen evaluation should produce a schematic");
-    let mut layout_diagnostics = Diagnostics::default();
-    let result = process_layout(
-        &schematic,
-        LayoutOptions::default(),
-        &mut layout_diagnostics,
-    )?
-    .unwrap();
-
-    let initial_snapshot: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&result.snapshot_file)?)?;
-
-    let initial_footprints = initial_snapshot["footprints"].as_array().unwrap();
-    let initial_r1 = initial_footprints
-        .iter()
-        .find(|fp| fp["reference"].as_str() == Some("R1"))
-        .unwrap();
-
-    let initial_position = &initial_r1["position"];
-    let initial_x = initial_position["x"].as_i64().unwrap();
-    let initial_y = initial_position["y"].as_i64().unwrap();
-
-    println!("Initial position: ({}, {})", initial_x, initial_y);
-
-    // --- Step 2: Change to 0603 package ---
-    let board_0603_content = std::fs::read_to_string(temp.path().join("Board_0603.zen"))?;
-    std::fs::write(&zen_file, board_0603_content)?;
-
-    let (output2, _) = pcb_zen::run(&zen_file, res, Default::default()).unpack();
-    let schematic2 = output2.expect("Second Zen evaluation should produce a schematic");
-    let mut layout_diagnostics2 = Diagnostics::default();
-    let result2 = process_layout(
-        &schematic2,
-        LayoutOptions::default(),
-        &mut layout_diagnostics2,
-    )?
-    .unwrap();
-
-    let updated_snapshot: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&result2.snapshot_file)?)?;
-
-    let updated_footprints = updated_snapshot["footprints"].as_array().unwrap();
-    let updated_r1 = updated_footprints
-        .iter()
-        .find(|fp| fp["reference"].as_str() == Some("R1"))
-        .unwrap();
-
-    let updated_position = &updated_r1["position"];
-    let updated_x = updated_position["x"].as_i64().unwrap();
-    let updated_y = updated_position["y"].as_i64().unwrap();
-
-    println!("Updated position: ({}, {})", updated_x, updated_y);
-
     // Position should be preserved after FPID change
+    let updated_position = &updated_r1["position"];
     assert_eq!(
-        initial_x, updated_x,
+        initial_position["x"].as_i64().unwrap(),
+        updated_position["x"].as_i64().unwrap(),
         "X position should be preserved after FPID change"
     );
     assert_eq!(
-        initial_y, updated_y,
+        initial_position["y"].as_i64().unwrap(),
+        updated_position["y"].as_i64().unwrap(),
         "Y position should be preserved after FPID change"
     );
 
