@@ -244,7 +244,9 @@ Morphological opening and closing are deliberately candidate stages for width
 and soldermask-web checks. Each candidate residue is measured on the medial
 axis of the unsnapped prepared boundary, as an inscribed disk diameter. The
 checker constructs the analytic point/point, point/line, and line/line
-bisectors of nearby nonincident segments. Quadratic roots delimit valid
+bisectors of nearby facing segments: on distinct rings, or on one ring
+neither adjacent nor turned within a quarter turn of each other, the same
+judgement that selects the candidates. Quadratic roots delimit valid
 contact domains, nearest-boundary intervals, residue crossings, and radius
 limits. Vertices and spans share this construction; no snap-grid repair,
 sample-dependent disk pruning, or angular tuning margin decides eligibility.
