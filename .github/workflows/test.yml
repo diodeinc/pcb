@@ -91,7 +91,9 @@ jobs:
 
       - name: Remove unused Homebrew taps (macOS)
         if: runner.os == 'macOS'
+        shell: bash
         run: |
+          brew update
           brew list --formula --full-name | while IFS= read -r formula; do
             case "$formula" in
               aws/tap/*|azure/bicep/*) brew uninstall --formula --force "$formula" ;;
@@ -114,7 +116,6 @@ jobs:
       - name: Install KiCad (macOS)
         if: contains(matrix.config.name, 'macOS') && steps.cache-kicad-mac.outputs.cache-hit != 'true'
         run: |
-          brew update
           brew uninstall --cask kicad 2>/dev/null || true
           rm -rf /Applications/KiCad 2>/dev/null || true
           brew install --cask kicad
