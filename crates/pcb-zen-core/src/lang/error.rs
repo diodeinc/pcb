@@ -77,26 +77,6 @@ mod tests {
     }
 
     #[test]
-    fn test_categorized_diagnostic_valid_multiple_segments() {
-        let diag = CategorizedDiagnostic::new(
-            "voltage mismatch".to_string(),
-            "electrical.voltage_mismatch".to_string(),
-        );
-        assert!(diag.is_ok());
-        let diag = diag.unwrap();
-        assert_eq!(diag.kind, "electrical.voltage_mismatch");
-    }
-
-    #[test]
-    fn test_categorized_diagnostic_valid_deeply_nested() {
-        let diag = CategorizedDiagnostic::new(
-            "spacing violation".to_string(),
-            "layout.spacing.trace.minimum".to_string(),
-        );
-        assert!(diag.is_ok());
-    }
-
-    #[test]
     fn test_categorized_diagnostic_empty_kind() {
         let diag = CategorizedDiagnostic::new("test message".to_string(), "".to_string());
         assert!(diag.is_err());

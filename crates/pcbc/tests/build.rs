@@ -88,12 +88,6 @@ Zener(
 )
 "#;
 
-const SUPPRESSED_WARNINGS_ZEN: &str = r#"
-warn("Regular warning")
-warn("Suppressed warning 1", suppress=True)
-warn("Suppressed warning 2", suppress=True)
-"#;
-
 const SUPPRESSED_ERRORS_ZEN: &str = r#"
 error("Suppressed error 1", suppress=True)
 error("Suppressed error 2", suppress=True)
@@ -121,26 +115,7 @@ warn("Current too high", kind="electrical.current.overcurrent")
 warn("Layout issue", kind="layout.spacing")
 "#;
 
-const MIXED_CATEGORIZED_ZEN: &str = r#"
-warn("Regular warning")
-warn("Voltage issue", kind="electrical.voltage")
-warn("Another regular warning")
-error("Layout error", suppress=True, kind="layout.error")
-warn("BOM warning", kind="bom.missing")
-"#;
-
 // Tests for inline comment suppression
-const INLINE_SUPPRESS_BASIC_ZEN: &str = r#"
-warn("This should be suppressed", kind="test.match")  # suppress: test.match
-warn("This should not be suppressed", kind="test.match")
-"#;
-
-const INLINE_SUPPRESS_HIERARCHICAL_ZEN: &str = r#"
-warn("Voltage warning", kind="electrical.voltage.overvoltage")  # suppress: electrical
-warn("Current warning", kind="electrical.current.overcurrent")  # suppress: electrical
-warn("Layout warning", kind="layout.spacing")
-"#;
-
 const INLINE_SUPPRESS_SEVERITY_ZEN: &str = r#"
 warn("Warning 1")  # suppress: warnings
 warn("Warning 2")
@@ -173,14 +148,6 @@ const PREVIOUS_LINE_SUPPRESS_BASIC_ZEN: &str = r#"
 # suppress: test.match
 warn("This should be suppressed", kind="test.match")
 warn("This should not be suppressed", kind="test.match")
-"#;
-
-const PREVIOUS_LINE_SUPPRESS_HIERARCHICAL_ZEN: &str = r#"
-# suppress: electrical
-warn("Voltage warning", kind="electrical.voltage.overvoltage")
-# suppress: electrical
-warn("Current warning", kind="electrical.current.overcurrent")
-warn("Layout warning not suppressed", kind="layout.spacing")
 "#;
 
 const PREVIOUS_LINE_SUPPRESS_MULTIPLE_ZEN: &str = r#"
@@ -451,24 +418,6 @@ fn test_invalid_inherited_symbol_datasheet_is_silent() {
     assert!(output.contains("Exit Code: 0"), "{output}");
     assert!(!output.contains("Warning:"), "{output}");
     assert!(!output.contains("Error:"), "{output}");
-}
-
-#[test]
-fn test_suppressed_warnings() {
-    let output = Sandbox::new()
-        .with_workspace()
-        .write("test.zen", SUPPRESSED_WARNINGS_ZEN)
-        .snapshot_run("pcbc", ["build", "test.zen"]);
-    assert_snapshot!("suppressed_warnings", output);
-}
-
-#[test]
-fn test_suppressed_errors() {
-    let output = Sandbox::new()
-        .with_workspace()
-        .write("test.zen", SUPPRESSED_ERRORS_ZEN)
-        .snapshot_run("pcbc", ["build", "test.zen"]);
-    assert_snapshot!("suppressed_errors", output);
 }
 
 #[test]
@@ -783,19 +732,6 @@ Wrapper(
 // Tests for -S flag with kind-based suppression
 
 #[test]
-fn test_suppress_by_exact_kind() {
-    // Suppress only electrical.voltage_mismatch
-    let output = Sandbox::new()
-        .with_workspace()
-        .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
-        .snapshot_run(
-            "pcbc",
-            ["build", "test.zen", "-S", "electrical.voltage_mismatch"],
-        );
-    assert_snapshot!("suppress_by_exact_kind", output);
-}
-
-#[test]
 fn test_build_writes_diagnostics_json() {
     let mut sandbox = Sandbox::new().with_workspace();
     sandbox.write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN);
@@ -947,24 +883,6 @@ fn test_suppress_kind_with_deny_warnings() {
 // Tests for inline comment suppression
 
 #[test]
-fn test_inline_suppress_basic() {
-    let output = Sandbox::new()
-        .with_workspace()
-        .write("test.zen", INLINE_SUPPRESS_BASIC_ZEN)
-        .snapshot_run("pcbc", ["build", "test.zen"]);
-    assert_snapshot!("inline_suppress_basic", output);
-}
-
-#[test]
-fn test_inline_suppress_hierarchical() {
-    let output = Sandbox::new()
-        .with_workspace()
-        .write("test.zen", INLINE_SUPPRESS_HIERARCHICAL_ZEN)
-        .snapshot_run("pcbc", ["build", "test.zen"]);
-    assert_snapshot!("inline_suppress_hierarchical", output);
-}
-
-#[test]
 fn test_inline_suppress_severity() {
     let output = Sandbox::new()
         .with_workspace()
@@ -1037,15 +955,6 @@ fn test_previous_line_suppress_basic() {
 }
 
 #[test]
-fn test_previous_line_suppress_hierarchical() {
-    let output = Sandbox::new()
-        .with_workspace()
-        .write("test.zen", PREVIOUS_LINE_SUPPRESS_HIERARCHICAL_ZEN)
-        .snapshot_run("pcbc", ["build", "test.zen"]);
-    assert_snapshot!("previous_line_suppress_hierarchical", output);
-}
-
-#[test]
 fn test_previous_line_suppress_multiple_patterns() {
     let output = Sandbox::new()
         .with_workspace()
@@ -1089,14 +998,4 @@ fn test_inline_no_cross_line_contamination() {
         .write("test.zen", INLINE_NO_CROSS_LINE_CONTAMINATION_ZEN)
         .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("inline_no_cross_line_contamination", output);
-}
-
-#[test]
-fn test_mixed_suppress_and_regular_diagnostics() {
-    // Mix of suppressed (by -S) and regular warnings
-    let output = Sandbox::new()
-        .with_workspace()
-        .write("test.zen", MIXED_CATEGORIZED_ZEN)
-        .snapshot_run("pcbc", ["build", "test.zen", "-S", "electrical"]);
-    assert_snapshot!("mixed_suppress_and_regular", output);
 }

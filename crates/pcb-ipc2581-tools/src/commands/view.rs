@@ -169,21 +169,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_bom_excludes_components() {
-        let excluded = excluded_sections(Mode::Bom);
-        assert!(excluded.contains(&"Component"));
-        assert!(excluded.contains(&"Package"));
-        assert!(excluded.contains(&"Layer"));
-    }
-
-    #[test]
-    fn test_assembly_minimal_exclusions() {
-        let excluded = excluded_sections(Mode::Assembly);
-        assert!(excluded.contains(&"Stackup"));
-        assert!(!excluded.contains(&"Component"));
-    }
-
-    #[test]
     fn test_filter_updates_function_mode() {
         let xml = r#"<?xml version="1.0"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

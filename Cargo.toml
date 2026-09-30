@@ -198,6 +198,8 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.ipc2581]
 opt-level = 2
+[profile.dev.package.uppsala]
+opt-level = 2
 
 # Dense elastic validation/solves must stay practical on refinement fixtures.
 # Keep debug assertions and full checks; optimize only this numerical crate.

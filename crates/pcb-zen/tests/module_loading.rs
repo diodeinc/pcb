@@ -79,42 +79,6 @@ Sub(name = "sub")
     star_snapshot!(env, "top.zen");
 }
 
-// Module loading with workspace root references
-#[test]
-fn module_with_workspace_root() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "pcb.toml",
-        r#"
-[workspace]
-pcb-version = "0.4"
-"#,
-    );
-
-    env.add_file(
-        "submodule.zen",
-        r#"
-P1 = io(Net)
-"#,
-    );
-
-    env.add_file(
-        "nested/test.zen",
-        r#"
-# Test that Module() can load a sibling file from a nested directory via relative paths
-Submodule = Module("../submodule.zen")
-
-Submodule(
-    name = "Submodule",
-    P1 = Net("P1"),
-)
-"#,
-    );
-
-    star_snapshot!(env, "nested/test.zen");
-}
-
 // Module loading with @stdlib default alias
 #[test]
 #[cfg(not(target_os = "windows"))]

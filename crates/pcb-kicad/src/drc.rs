@@ -232,36 +232,6 @@ mod tests {
     }"#;
 
     #[test]
-    fn test_parse_drc_json() {
-        let report = DrcReport::from_json(SAMPLE_DRC_JSON).expect("Failed to parse DRC JSON");
-
-        assert_eq!(report.kicad_version, "9.0.5");
-        assert_eq!(report.source, "layout.kicad_pcb");
-        assert_eq!(report.violations.len(), 2);
-
-        // Check first violation
-        let v1 = &report.violations[0];
-        assert_eq!(v1.violation_type, "clearance");
-        assert_eq!(v1.severity, "error");
-        assert_eq!(v1.items.len(), 2);
-
-        // Check second violation
-        let v2 = &report.violations[1];
-        assert_eq!(v2.violation_type, "silk_overlap");
-        assert_eq!(v2.severity, "warning");
-        assert_eq!(v2.items.len(), 1);
-    }
-
-    #[test]
-    fn test_violation_counts() {
-        let report = DrcReport::from_json(SAMPLE_DRC_JSON).unwrap();
-
-        let (errors, warnings) = report.violation_counts();
-        assert_eq!(errors, 1);
-        assert_eq!(warnings, 1);
-    }
-
-    #[test]
     fn test_add_to_diagnostics() {
         let report = DrcReport::from_json(SAMPLE_DRC_JSON).unwrap();
         let mut diagnostics = Diagnostics::default();

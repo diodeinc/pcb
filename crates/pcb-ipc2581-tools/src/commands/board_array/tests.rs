@@ -1945,7 +1945,7 @@ fn a_board_with_no_tab_site_cannot_be_panelized() {
 fn mouse_bite_margins_must_hold_the_routed_slot_and_tab_landing() {
     let create = |board_margin_mm| {
         create_board_array(
-            &board_fixture_with_mask_bbox_mm(60.0, 60.0),
+            &board_fixture_with_mask_bbox_mm(20.0, 26.0),
             &BoardArrayCreateOptions {
                 columns: 2,
                 rows: 1,
@@ -2036,7 +2036,7 @@ fn tabs_land_on_the_narrowest_rail_the_array_leaves() {
 
 #[test]
 fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
-    let ipc = Ipc2581::parse(&board_fixture_with_mask_bbox_mm(60.0, 60.0)).unwrap();
+    let ipc = Ipc2581::parse(&board_fixture_with_mask_bbox_mm(25.0, 25.0)).unwrap();
     let options = options(3, 2, BoardMarginMm::all(5.0), BoardMarginMm::all(10.0));
     let spec = manual_spec(&ipc, &options, Separation::MouseBite);
     let points = |polygon: &Polygon| {
@@ -2049,6 +2049,7 @@ fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
     // One void per tab per board, board by board along each row: every
     // board's are the first board's moved by whole pitches.
     let per_board = spec.tabs_per_board;
+    assert!(per_board >= 2, "{per_board}");
     assert_eq!(spec.profile_cutouts.len(), 6 * per_board);
     for (index, cutout) in spec.profile_cutouts.iter().enumerate() {
         let (board, void) = (index / per_board, index % per_board);

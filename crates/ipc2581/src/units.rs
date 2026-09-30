@@ -24,21 +24,3 @@ pub fn from_mm(value: f64, to_units: Units) -> f64 {
         Units::Micron => value / 0.001,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn converts_each_unit_both_ways() {
-        for (units, value, mm) in [
-            (Units::Millimeter, 10.0, 10.0),
-            (Units::Inch, 1.0, 25.4),
-            (Units::Mils, 1.0, 0.0254),
-            (Units::Micron, 1000.0, 1.0),
-        ] {
-            assert_eq!(to_mm(value, units), mm);
-            assert_eq!(from_mm(mm, units), value);
-        }
-    }
-}

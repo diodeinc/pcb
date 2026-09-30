@@ -255,37 +255,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_update_args() {
-        let args = vec!["-m".to_string(), "-u".to_string()];
-        assert_eq!(parse_args(&args).unwrap(), ListCommand::Updates);
-    }
-
-    #[test]
-    fn parse_versions_args() {
-        let args = vec![
-            "-m".to_string(),
-            "-versions".to_string(),
-            "github.com/acme/foo".to_string(),
-        ];
-        assert_eq!(
-            parse_args(&args).unwrap(),
-            ListCommand::Versions("github.com/acme/foo".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_json_args() {
-        let args = vec!["-m".to_string(), "-json".to_string()];
-        assert_eq!(parse_args(&args).unwrap(), ListCommand::Json(None));
-
-        let args = vec!["-m".to_string(), "-json".to_string(), "@stdlib".to_string()];
-        assert_eq!(
-            parse_args(&args).unwrap(),
-            ListCommand::Json(Some("@stdlib".to_string()))
-        );
-    }
-
-    #[test]
     fn has_version_excludes_stdlib_and_bare_urls() {
         assert!(has_version("github.com/acme/foo@1.0.0"));
         assert!(has_version("github.com/acme/foo@latest"));

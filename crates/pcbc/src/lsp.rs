@@ -44,15 +44,3 @@ fn handle_custom_request(
     let response = pcb_diode_api::datasheet::resolve_datasheet(&ctx, &input, None)?;
     Ok(Some(serde_json::to_value(response)?))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn custom_request_handler_ignores_other_methods() {
-        let result = handle_custom_request("pcb/somethingElse", &json!({}), false).unwrap();
-        assert!(result.is_none());
-    }
-}

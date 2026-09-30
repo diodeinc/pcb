@@ -45,7 +45,7 @@ jobs:
         run: cargo check --locked --target wasm32-unknown-unknown -p ipc2581 -p pcb-ir -p gerberx2 -p pcb-ipc2581-tools --no-default-features
 
       - name: Build IPC WASM package
-        run: ./bin/build-wasm-bundle.sh ipc
+        run: ./bin/build-wasm-bundle.sh ipc --no-opt
 
       - name: Exercise IPC and DFM in JavaScript
         run: node crates/pcb-ipc-wasm/scripts/smoke.mjs
@@ -90,8 +90,10 @@ jobs:
       - name: Prepare stdlib artifact
         run: tar -C lib/std -cf - . | zstd -q -3 -c > "$RUNNER_TEMP/stdlib.tar.zst"
 
+      # wasm-opt dominates the bundle build and only matters for published
+      # packages; the size gate below still bounds the unoptimized bundle.
       - name: Build WASM bundle
-        run: ./bin/build-wasm-bundle.sh
+        run: ./bin/build-wasm-bundle.sh zen --no-opt
 
       - name: Check WASM artifact size
         run: |

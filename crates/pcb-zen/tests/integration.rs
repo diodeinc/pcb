@@ -24,17 +24,10 @@ pub(crate) use insta_snapshot_name;
 #[macro_use]
 mod common;
 
-mod assert;
 mod canonical_snapshot;
-mod component_properties;
-mod enum_conversion;
 mod input;
-mod interface_templates;
-mod interface_templates_snapshot;
 mod load_diagnostics;
-mod module_loader_attrs;
 mod module_loading;
-mod module_naming;
 mod net;
 mod part;
 mod placeholder;

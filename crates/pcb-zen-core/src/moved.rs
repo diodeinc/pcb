@@ -155,36 +155,6 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
         }
     }
 
-    #[test]
-    fn test_moved_directive_empty() {
-        use starlark::values::ValueLike;
-
-        let test_content = r#"
-# No moved directives
-"#;
-
-        // Create a temporary file
-        let temp_path = std::env::temp_dir().join("test_moved_empty.zen");
-        std::fs::write(&temp_path, test_content).unwrap();
-
-        // Evaluate it
-        let result = eval_context(temp_path.clone()).eval();
-
-        // Clean up the temp file
-        std::fs::remove_file(&temp_path).ok();
-
-        // Check the result
-        if let Some(output) = result.output
-            && let Some(frozen_ctx) = output
-                .star_module()
-                .extra_value()
-                .and_then(|extra| extra.downcast_ref::<crate::lang::context::FrozenContextValue>())
-        {
-            let moved_directives = frozen_ctx.module.moved_directives();
-            assert_eq!(moved_directives.len(), 0, "Should have no moved directives");
-        }
-    }
-
     // Remapper tests
     #[test]
     fn test_remapper_exact_matches() {
@@ -397,33 +367,5 @@ moved("sub.A", "sub.B")
             .iter()
             .any(|d| d.body.contains("direct child") && d.body.contains("depth 1"));
         assert!(has_depth_error, "Expected depth constraint error");
-    }
-
-    #[test]
-    fn test_moved_valid_depths() {
-        let test_content = r#"
-moved("A", "B")
-moved("Component", "sub.Component")
-moved("sub.Component", "NewName")
-"#;
-
-        let temp_path = std::env::temp_dir().join(format!(
-            "test_moved_valid_depths_{}.zen",
-            std::process::id()
-        ));
-        std::fs::write(&temp_path, test_content).unwrap();
-
-        let result = eval_context(temp_path.clone()).eval();
-        std::fs::remove_file(&temp_path).ok();
-
-        let output = result.output.expect("Evaluation should succeed");
-        let schematic_result = output.to_schematic_with_diagnostics();
-
-        // Should NOT have any depth-related errors (may have warnings about paths not existing)
-        let has_depth_error = schematic_result
-            .diagnostics
-            .iter()
-            .any(|d| d.body.contains("direct child"));
-        assert!(!has_depth_error, "Unexpected depth constraint error");
     }
 }

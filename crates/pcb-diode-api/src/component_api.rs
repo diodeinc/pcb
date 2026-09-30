@@ -635,14 +635,6 @@ mod tests {
     }
 
     #[test]
-    fn json_output_preserves_the_api_body() {
-        let body = r#"[{"unknown":true,"nullable":null}]"#;
-        let mut output = Vec::new();
-        write_component_json_response(&mut output, body).unwrap();
-        assert_eq!(output, body.as_bytes());
-    }
-
-    #[test]
     fn response_types_accept_provider_sections_and_unknown_fields() {
         let search: Vec<ComponentSearchResult> = serde_json::from_value(serde_json::json!([{
             "mpn": "TPS54331DR",

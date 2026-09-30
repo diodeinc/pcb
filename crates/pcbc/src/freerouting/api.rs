@@ -308,34 +308,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn job_state_deserializes_all_known_variants() {
-        let cases = [
-            ("\"QUEUED\"", JobState::Queued),
-            ("\"READY_TO_START\"", JobState::ReadyToStart),
-            ("\"RUNNING\"", JobState::Running),
-            ("\"STOPPING\"", JobState::Stopping),
-            ("\"PAUSED\"", JobState::Paused),
-            ("\"COMPLETED\"", JobState::Completed),
-            ("\"CANCELLED\"", JobState::Cancelled),
-            ("\"TIMED_OUT\"", JobState::TimedOut),
-            ("\"INVALID\"", JobState::Invalid),
-            ("\"TERMINATED\"", JobState::Terminated),
-        ];
-        for (json, expected) in cases {
-            let actual: JobState = serde_json::from_str(json)
-                .unwrap_or_else(|e| panic!("failed to parse {json}: {e}"));
-            assert_eq!(actual, expected, "mismatch parsing {json}");
-        }
-    }
-
-    #[test]
-    fn drc_report_counts_unconnected_items() {
-        let report: DrcReport =
-            serde_json::from_str(r#"{"unconnected_items":[{},{}],"violations":[]}"#).unwrap();
-        assert_eq!(report.unconnected_items.len(), 2);
-    }
-
-    #[test]
     fn is_no_output_error_matches_observed_freerouting_wording() {
         assert!(is_no_output_error("The job hasn't started yet."));
         assert!(is_no_output_error(

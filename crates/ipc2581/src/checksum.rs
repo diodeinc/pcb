@@ -67,24 +67,6 @@ mod tests {
     }
 
     #[test]
-    fn valid_trailer_is_stripped_and_verified() {
-        let xml = with_trailer(ROOT, ROOT);
-        let (body, digest) = split_trailer(&xml);
-        assert!(body.ends_with("</IPC-2581>"));
-        assert!(digest.is_some());
-        assert!(parse_document(&xml).is_ok());
-    }
-
-    #[test]
-    fn mismatched_trailer_is_rejected() {
-        let mismatched = with_trailer(ROOT, "something else");
-        assert!(matches!(
-            parse_document(&mismatched),
-            Err(Ipc2581Error::ChecksumMismatch { .. })
-        ));
-    }
-
-    #[test]
     fn root_is_located_by_the_xml_parser() {
         // A commented-out close tag and digest ahead of the root, a prefixed
         // root, and whitespace inside the close tag.

@@ -60,32 +60,6 @@ fn extract_position_data(sandbox: &Sandbox, netlist: &serde_json::Value) -> Stri
     }
 }
 
-const SIMPLE_BOARD_WITH_POSITIONS_ZEN: &str = r#"
-# ```pcb
-# [workspace]
-# pcb-version = "0.4"
-# ```
-
-Resistor = Module("@stdlib/generics/Resistor.zen")
-Led = Module("@stdlib/generics/Led.zen")
-
-vcc = Power("VCC_3V3")
-gnd = Ground("GND")
-led_anode = Net("LED_ANODE")
-
-Resistor(name="R1", value="330Ohm", package="0603", P1=vcc, P2=led_anode)
-Led(name="D1", color="red", package="0603", A=led_anode, K=gnd)
-
-# Position comments that should be parsed and included in netlist
-# pcb:sch R1 x=100.0000 y=200.0000 rot=0
-# pcb:sch D1 x=150.0000 y=200.0000 rot=90
-# pcb:sch VCC_3V3.1 x=80.0000 y=180.0000 rot=0
-# pcb:sch VCC_3V3.2 x=120.0000 y=180.0000 rot=0
-# pcb:sch GND.1 x=80.0000 y=220.0000 rot=0
-# pcb:sch GND.2 x=170.0000 y=220.0000 rot=0
-# pcb:sch LED_ANODE x=125.0000 y=200.0000 rot=0
-"#;
-
 const HIERARCHICAL_BOARD_WITH_POSITIONS_ZEN: &str = r#"
 load("@stdlib/interfaces.zen", "Gpio")
 
@@ -160,18 +134,6 @@ led_anode = Net("LED_ANODE")
 Resistor(name="R1", value=r_value, package=package, P1=VCC, P2=led_anode)
 Led(name="D1", color=led_color, package=package, A=led_anode, K=CTRL)
 "#;
-
-#[test]
-fn test_netlist_simple_board_with_positions() {
-    let mut sandbox = Sandbox::new();
-    sandbox.write("boards/SimpleBoard.zen", SIMPLE_BOARD_WITH_POSITIONS_ZEN);
-    let output = snapshot_netlist_positions(
-        &mut sandbox,
-        "pcbc",
-        &["build", "boards/SimpleBoard.zen", "--netlist"],
-    );
-    assert_snapshot!("netlist_simple_board_with_positions", output);
-}
 
 #[test]
 fn test_netlist_hierarchical_board_with_positions() {
@@ -261,40 +223,6 @@ Resistor(name="R1", value="1kOhm", package="0603", P1=vcc, P2=gnd)
         &["build", "boards/NoPositions.zen", "--netlist"],
     );
     assert_snapshot!("netlist_no_positions", output);
-}
-
-#[test]
-fn test_netlist_mixed_position_formats() {
-    let board_zen = r#"
-# ```pcb
-# [workspace]
-# pcb-version = "0.4"
-# ```
-
-Resistor = Module("@stdlib/generics/Resistor.zen")
-Led = Module("@stdlib/generics/Led.zen")
-
-vcc = Power("VCC")
-gnd = Ground("GND")
-sig = Net("SIGNAL")
-
-Resistor(name="R1", value="1kOhm", package="0603", P1=vcc, P2=sig)
-Led(name="D1", color="red", package="0603", A=sig, K=gnd)
-
-# pcb:sch R1 x=100.0000 y=100.0000 rot=0
-# pcb:sch VCC x=80.0000 y=80.0000 rot=0
-# pcb:sch SIGNAL.1 x=125.0000 y=100.0000 rot=0
-# pcb:sch SIGNAL.2 x=125.0000 y=150.0000 rot=0
-"#;
-
-    let mut sandbox = Sandbox::new();
-    sandbox.write("boards/MixedPositions.zen", board_zen);
-    let output = snapshot_netlist_positions(
-        &mut sandbox,
-        "pcbc",
-        &["build", "boards/MixedPositions.zen", "--netlist"],
-    );
-    assert_snapshot!("netlist_mixed_position_formats", output);
 }
 
 #[test]

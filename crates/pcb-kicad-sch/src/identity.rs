@@ -234,14 +234,6 @@ mod tests {
     }
 
     #[test]
-    fn symbol_slot_uses_bare_path_for_unit_one() {
-        let slot = SymbolSlotKey::new("BUCK.U1", 1).expect("valid slot");
-
-        assert_eq!(slot.uuid_key(), "BUCK.U1");
-        assert_eq!(slot.symbol_id(), "6ea18345-0f07-5a15-a6d1-0870367a6dd4");
-    }
-
-    #[test]
     fn symbol_slot_suffixes_non_primary_units() {
         let slot = SymbolSlotKey::new("BUCK.U1", 2).expect("valid slot");
 

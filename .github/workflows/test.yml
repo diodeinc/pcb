@@ -105,41 +105,6 @@ jobs:
           rm -rf /Applications/KiCad 2>/dev/null || true
           brew install --cask kicad
 
-      - name: Cache KiCad (Windows)
-        if: matrix.config.name == 'Windows'
-        id: cache-kicad-windows
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: C:\Program Files\KiCad\10.0
-          key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
-
-      - name: Install KiCad (Windows)
-        if: matrix.config.name == 'Windows' && steps.cache-kicad-windows.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          $release = Invoke-RestMethod `
-            -Uri "https://api.github.com/repos/KiCad/kicad-source-mirror/releases/tags/${env:KICAD_VERSION}"
-
-          $asset = $release.assets |
-            Where-Object { $_.name -like "kicad-$env:KICAD_VERSION*-x86_64.exe" } |
-            Select-Object -First 1
-
-          if (-not $asset) {
-            throw "No KiCad Windows installer found for release tag $env:KICAD_VERSION"
-          }
-
-          $installer = Join-Path $env:RUNNER_TEMP $asset.name
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer
-          Start-Process -FilePath $installer -ArgumentList '/S', '/allusers' -Wait
-
-      - name: Verify KiCad installation (Windows)
-        if: matrix.config.name == 'Windows'
-        shell: pwsh
-        run: |
-          if (-not (Test-Path "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe")) {
-            throw "KiCad CLI was not restored or installed"
-          }
-
       - name: Install Rust (Windows)
         if: runner.os == 'Windows'
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0

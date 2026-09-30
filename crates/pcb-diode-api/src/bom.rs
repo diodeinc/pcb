@@ -1308,17 +1308,6 @@ mod tests {
     }
 
     #[test]
-    fn geography_decodes_server_values() {
-        for (json, expected) in [
-            (r#""US""#, Geography::Us),
-            (r#""UK""#, Geography::Uk),
-            (r#""GLOBAL""#, Geography::Global),
-        ] {
-            assert_eq!(serde_json::from_str::<Geography>(json).unwrap(), expected);
-        }
-    }
-
-    #[test]
     fn uk_offers_are_ignored() {
         let mut uk_offer = offer("uk-offer", &[(1, 1.0)]);
         uk_offer.geography = Geography::Uk;

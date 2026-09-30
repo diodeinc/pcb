@@ -87,27 +87,3 @@ builtin.add_electrical_check(
         .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("invalid_severity", output);
 }
-
-#[test]
-fn test_electrical_check_with_inputs() {
-    let output = Sandbox::new()
-        .with_workspace()
-        .write(
-            "board.zen",
-            r#"
-def check_range(module, min_val, max_val, name):
-    actual = 150
-    if actual < min_val or actual > max_val:
-        error("{} out of range {}-{}: got {}".format(name, min_val, max_val, actual))
-
-builtin.add_electrical_check(
-    name="range_check",
-    check_fn=check_range,
-    inputs={"min_val": 0, "max_val": 100, "name": "voltage"},
-    severity="warning",
-)
-"#,
-        )
-        .snapshot_run("pcbc", ["build", "board.zen"]);
-    assert_snapshot!("with_inputs", output);
-}

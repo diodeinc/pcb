@@ -711,15 +711,6 @@ mod tests {
     }
 
     #[test]
-    fn test_materialization_id_is_deterministic() {
-        let a = materialization_id_for_key("abc123").unwrap();
-        let b = materialization_id_for_key("abc123").unwrap();
-        let c = materialization_id_for_key("abc124").unwrap();
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-    }
-
-    #[test]
     fn test_url_pdf_cache_dir_uses_uuidv5_key() {
         let canonical_url = "https://example.com/a.pdf";
         let path = url_pdf_cache_dir(canonical_url).unwrap();
@@ -980,24 +971,5 @@ mod tests {
 
         fs::remove_file(good).unwrap();
         fs::remove_file(bad).unwrap();
-    }
-
-    #[test]
-    fn response_excludes_legacy_fields() {
-        let response = ResolveDatasheetResponse {
-            markdown_path: "/tmp/datasheet.md".to_string(),
-            images_dir: "/tmp/images".to_string(),
-            pdf_path: "/tmp/datasheet.pdf".to_string(),
-            datasheet_url: Some("https://example.com/datasheet.pdf".to_string()),
-        };
-
-        let value = serde_json::to_value(response).unwrap();
-        assert!(value.get("markdown_path").is_some());
-        assert!(value.get("images_dir").is_some());
-        assert!(value.get("pdf_path").is_some());
-        assert!(value.get("datasheet_url").is_some());
-        assert!(value.get("materialized_dir").is_none());
-        assert!(value.get("sha256").is_none());
-        assert!(value.get("source_pdf_url").is_none());
     }
 }

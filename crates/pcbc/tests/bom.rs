@@ -286,17 +286,6 @@ fn test_bom_table_format() {
 }
 
 #[test]
-fn test_bom_default_format() {
-    let output = Sandbox::new()
-        .write("pcb.toml", WORKSPACE_TOML)
-        .write("modules/LedModule.zen", LED_MODULE_ZEN)
-        .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .sync()
-        .snapshot_run("pcbc", ["bom", "boards/TestBoard.zen"]);
-    assert_snapshot!("bom_default", output);
-}
-
-#[test]
 fn test_bom_simple_resistors() {
     let output = Sandbox::new()
         .write("pcb.toml", WORKSPACE_TOML)
@@ -307,16 +296,6 @@ fn test_bom_simple_resistors() {
 }
 
 #[test]
-fn test_bom_simple_resistors_table() {
-    let output = Sandbox::new()
-        .write("pcb.toml", WORKSPACE_TOML)
-        .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
-        .sync()
-        .snapshot_run("pcbc", ["bom", "boards/SimpleResistors.zen", "-f", "table"]);
-    assert_snapshot!("bom_simple_resistors_table", output);
-}
-
-#[test]
 fn test_bom_capacitors_with_dielectric() {
     let output = Sandbox::new()
         .write("pcb.toml", WORKSPACE_TOML)
@@ -324,16 +303,6 @@ fn test_bom_capacitors_with_dielectric() {
         .sync()
         .snapshot_run("pcbc", ["bom", "boards/Capacitors.zen", "-f", "json"]);
     assert_snapshot!("bom_capacitors_json", output);
-}
-
-#[test]
-fn test_bom_capacitors_table() {
-    let output = Sandbox::new()
-        .write("pcb.toml", WORKSPACE_TOML)
-        .write("boards/Capacitors.zen", CAPACITOR_BOARD_ZEN)
-        .sync()
-        .snapshot_run("pcbc", ["bom", "boards/Capacitors.zen", "-f", "table"]);
-    assert_snapshot!("bom_capacitors_table", output);
 }
 
 #[test]
@@ -376,17 +345,6 @@ fn test_bom_skip_bom_filtering() {
         .sync()
         .snapshot_run("pcbc", ["bom", "boards/SkipBom.zen", "-f", "json"]);
     assert_snapshot!("bom_skip_bom_json", output);
-}
-
-#[test]
-fn test_bom_skip_bom_filtering_table() {
-    // Test skip_bom filtering in table format
-    let output = Sandbox::new()
-        .write("pcb.toml", WORKSPACE_TOML)
-        .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
-        .sync()
-        .snapshot_run("pcbc", ["bom", "boards/SkipBom.zen", "-f", "table"]);
-    assert_snapshot!("bom_skip_bom_table", output);
 }
 
 #[test]

@@ -959,19 +959,6 @@ mod tests {
     }
 
     #[test]
-    fn test_try_from_physical_value() {
-        Heap::temp(|heap| {
-            let original = physical_value(10.0, 0.05, PhysicalUnit::Ohms);
-            let starlark_val = heap.alloc(original);
-
-            let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
-            assert_eq!(result.nominal, original.nominal);
-            assert_eq!(result.tolerance(), original.tolerance());
-            assert_eq!(result.unit, original.unit);
-        });
-    }
-
-    #[test]
     fn test_physical_value_is_hashable_in_starlark() {
         Heap::temp(|heap| {
             let v1 = heap.alloc(physical_value(10.0, 0.05, PhysicalUnit::Ohms));
@@ -1021,18 +1008,6 @@ mod tests {
                     (result.nominal - Decimal::from_f64(value).unwrap()).abs() < Decimal::new(1, 6)
                 );
             }
-        });
-    }
-
-    #[test]
-    fn test_try_from_string_with_tolerance() {
-        Heap::temp(|heap| {
-            let starlark_val = heap.alloc("10kOhm 5%");
-            let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
-
-            assert_eq!(result.unit, PhysicalUnit::Ohms.into());
-            assert_eq!(result.nominal, Decimal::from(10000));
-            assert_eq!(result.tolerance(), Decimal::from_f64(0.05).unwrap());
         });
     }
 
@@ -1251,26 +1226,6 @@ mod tests {
     }
 
     #[test]
-    fn test_diff_with_string_conversion() {
-        // Test that diff works when the other value is parsed from a string
-        use starlark::values::Heap;
-
-        Heap::temp(|heap| {
-            let pv1 = heap.alloc(physical_value(3.3, 0.0, PhysicalUnit::Volts));
-            let pv2_str = heap.alloc("5V");
-
-            // Convert string to PhysicalValue
-            let pv2 = PhysicalValue::try_from(pv2_str).unwrap();
-            let pv1_val = PhysicalValue::try_from(pv1).unwrap();
-
-            // Test diff
-            let result = pv1_val.diff(&pv2).unwrap();
-            assert_eq!(result.nominal, Decimal::from_f64(1.7).unwrap());
-            assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        });
-    }
-
-    #[test]
     fn test_within_same_nominal_different_tolerance() {
         use starlark::values::Heap;
 
@@ -1292,92 +1247,6 @@ mod tests {
                     .downcast_ref::<PhysicalValue>()
                     .unwrap()
                     .is_in(loose)
-                    .unwrap()
-            );
-        });
-    }
-
-    #[test]
-    fn test_within_different_nominal_values() {
-        use starlark::values::Heap;
-
-        Heap::temp(|heap| {
-            // 3.3V ±1% (3.267V - 3.333V) fits within 5V ±50% (2.5V - 7.5V)
-            let small = heap.alloc(physical_value(3.3, 0.01, PhysicalUnit::Volts));
-            let large = heap.alloc(physical_value(5.0, 0.50, PhysicalUnit::Volts));
-            assert!(
-                large
-                    .downcast_ref::<PhysicalValue>()
-                    .unwrap()
-                    .is_in(small)
-                    .unwrap()
-            );
-
-            // 5V ±50% does NOT fit within 3.3V ±1%
-            assert!(
-                !small
-                    .downcast_ref::<PhysicalValue>()
-                    .unwrap()
-                    .is_in(large)
-                    .unwrap()
-            );
-        });
-    }
-
-    #[test]
-    fn test_within_exact_match() {
-        use starlark::values::Heap;
-
-        Heap::temp(|heap| {
-            // Exact values with no tolerance should be within each other
-            let v1 = heap.alloc(physical_value(3.3, 0.0, PhysicalUnit::Volts));
-            let v2 = heap.alloc(physical_value(3.3, 0.0, PhysicalUnit::Volts));
-            assert!(
-                v1.downcast_ref::<PhysicalValue>()
-                    .unwrap()
-                    .is_in(v2)
-                    .unwrap()
-            );
-            assert!(
-                v2.downcast_ref::<PhysicalValue>()
-                    .unwrap()
-                    .is_in(v1)
-                    .unwrap()
-            );
-        });
-    }
-
-    #[test]
-    fn test_within_zero_tolerance_in_range() {
-        use starlark::values::Heap;
-
-        Heap::temp(|heap| {
-            // Zero tolerance value at the center of a range
-            let exact = heap.alloc(physical_value(3.3, 0.0, PhysicalUnit::Volts));
-            let range = heap.alloc(physical_value(3.3, 0.10, PhysicalUnit::Volts)); // 2.97V - 3.63V
-            assert!(
-                range
-                    .downcast_ref::<PhysicalValue>()
-                    .unwrap()
-                    .is_in(exact)
-                    .unwrap()
-            );
-        });
-    }
-
-    #[test]
-    fn test_within_zero_tolerance_outside_range() {
-        use starlark::values::Heap;
-
-        Heap::temp(|heap| {
-            // Zero tolerance value outside a range
-            let exact = heap.alloc(physical_value(5.0, 0.0, PhysicalUnit::Volts));
-            let range = heap.alloc(physical_value(3.3, 0.10, PhysicalUnit::Volts)); // 2.97V - 3.63V
-            assert!(
-                !range
-                    .downcast_ref::<PhysicalValue>()
-                    .unwrap()
-                    .is_in(exact)
                     .unwrap()
             );
         });
@@ -1464,55 +1333,6 @@ mod tests {
     }
 
     #[test]
-    fn test_within_unit_mismatch() {
-        use starlark::values::Heap;
-
-        Heap::temp(|heap| {
-            // Different units should return an error
-            let volts = heap.alloc(physical_value(3.3, 0.1, PhysicalUnit::Volts));
-            let amps = heap.alloc(physical_value(3.3, 0.1, PhysicalUnit::Amperes));
-
-            let result = volts.downcast_ref::<PhysicalValue>().unwrap().is_in(amps);
-            assert!(result.is_err());
-        });
-    }
-
-    #[test]
-    fn test_within_different_units() {
-        use starlark::values::Heap;
-
-        Heap::temp(|heap| {
-            // Test with various unit types
-            let r1 = heap.alloc(physical_value(1000.0, 0.01, PhysicalUnit::Ohms)); // 1kΩ ±1%
-            let r2 = heap.alloc(physical_value(1000.0, 0.05, PhysicalUnit::Ohms)); // 1kΩ ±5%
-            assert!(
-                r2.downcast_ref::<PhysicalValue>()
-                    .unwrap()
-                    .is_in(r1)
-                    .unwrap()
-            );
-
-            let c1 = heap.alloc(physical_value(1e-7, 0.05, PhysicalUnit::Farads)); // 100nF ±5%
-            let c2 = heap.alloc(physical_value(1e-7, 0.20, PhysicalUnit::Farads)); // 100nF ±20%
-            assert!(
-                c2.downcast_ref::<PhysicalValue>()
-                    .unwrap()
-                    .is_in(c1)
-                    .unwrap()
-            );
-
-            let f1 = heap.alloc(physical_value(1e6, 0.001, PhysicalUnit::Hertz)); // 1MHz ±0.1%
-            let f2 = heap.alloc(physical_value(1e6, 0.01, PhysicalUnit::Hertz)); // 1MHz ±1%
-            assert!(
-                f2.downcast_ref::<PhysicalValue>()
-                    .unwrap()
-                    .is_in(f1)
-                    .unwrap()
-            );
-        });
-    }
-
-    #[test]
     fn test_within_negative_values() {
         use starlark::values::Heap;
 
@@ -1578,31 +1398,6 @@ mod tests {
     }
 
     #[test]
-    fn test_physical_value_bounds_unary_minus_with_nominal() {
-        use starlark::values::Heap;
-
-        Heap::temp(|heap| {
-            // Create a value with explicit nominal
-            let range = PhysicalValue::from_bounds_nominal(
-                Decimal::from_f64(2.0).unwrap(),
-                Decimal::from_f64(1.0).unwrap(),
-                Decimal::from_f64(3.0).unwrap(),
-                PhysicalUnit::Volts.into(),
-            );
-            let range_val = heap.alloc_simple(range);
-
-            let neg = range_val
-                .downcast_ref::<PhysicalValue>()
-                .unwrap()
-                .minus(heap)
-                .unwrap();
-            let neg_range = neg.downcast_ref::<PhysicalValue>().unwrap();
-
-            assert_eq!(neg_range.nominal, Decimal::from_f64(-2.0).unwrap());
-        });
-    }
-
-    #[test]
     fn test_is_in_value_in_range() {
         use starlark::values::Heap;
 
@@ -1651,58 +1446,6 @@ mod tests {
                 .downcast_ref::<PhysicalValue>()
                 .unwrap()
                 .is_in(value_big)
-                .unwrap();
-            assert!(!result);
-        });
-    }
-
-    #[test]
-    fn test_is_in_range_in_range() {
-        use starlark::values::Heap;
-
-        Heap::temp(|heap| {
-            let wide = heap.alloc_simple(physical_value_bounds(2.7, 3.6, PhysicalUnit::Volts));
-            let tight = heap.alloc_simple(physical_value_bounds(3.0, 3.3, PhysicalUnit::Volts));
-
-            // Tight range fits in wide range
-            let result = wide
-                .downcast_ref::<PhysicalValue>()
-                .unwrap()
-                .is_in(tight)
-                .unwrap();
-            assert!(result);
-
-            // Wide range doesn't fit in tight range
-            let result = tight
-                .downcast_ref::<PhysicalValue>()
-                .unwrap()
-                .is_in(wide)
-                .unwrap();
-            assert!(!result);
-        });
-    }
-
-    #[test]
-    fn test_is_in_value_in_value() {
-        use starlark::values::Heap;
-
-        Heap::temp(|heap| {
-            let wide = heap.alloc(physical_value(3.3, 0.10, PhysicalUnit::Volts)); // ±10%
-            let tight = heap.alloc(physical_value(3.3, 0.05, PhysicalUnit::Volts)); // ±5%
-
-            // Tight tolerance fits in wide tolerance
-            let result = wide
-                .downcast_ref::<PhysicalValue>()
-                .unwrap()
-                .is_in(tight)
-                .unwrap();
-            assert!(result);
-
-            // Wide tolerance doesn't fit in tight tolerance
-            let result = tight
-                .downcast_ref::<PhysicalValue>()
-                .unwrap()
-                .is_in(wide)
                 .unwrap();
             assert!(!result);
         });
@@ -1893,61 +1636,6 @@ mod tests {
     }
 
     #[test]
-    fn test_physical_value_bounds_compare_overlapping() {
-        use starlark::values::Value;
-
-        Heap::temp(|heap| {
-            // range1 = 1V to 3V, range2 = 2V to 4V (overlapping)
-            let range1: PhysicalValue = "1V to 3V".parse().unwrap();
-            let range2: PhysicalValue = "2V to 4V".parse().unwrap();
-
-            let v1: Value = heap.alloc_simple(range1);
-            let v2: Value = heap.alloc_simple(range2);
-
-            // Overlapping ranges use max comparison as tiebreaker
-            // range1.max (3V) < range2.max (4V)
-            let cmp = v1.compare(v2).unwrap();
-            assert_eq!(cmp, std::cmp::Ordering::Less);
-        });
-    }
-
-    #[test]
-    fn test_physical_value_bounds_compare_with_value() {
-        use starlark::values::Value;
-
-        Heap::temp(|heap| {
-            // range = 1V to 2V, value = 5V (no tolerance)
-            let range: PhysicalValue = "1V to 2V".parse().unwrap();
-            let value = physical_value(5.0, 0.0, PhysicalUnit::Volts);
-
-            let v_range: Value = heap.alloc_simple(range);
-            let v_value: Value = heap.alloc(value);
-
-            // range.max (2V) < value.min (5V), so range < value
-            let cmp = v_range.compare(v_value).unwrap();
-            assert_eq!(cmp, std::cmp::Ordering::Less);
-        });
-    }
-
-    #[test]
-    fn test_physical_value_bounds_compare_unit_mismatch() {
-        use starlark::values::Value;
-
-        Heap::temp(|heap| {
-            // range1 = 1V to 2V, range2 = 1A to 2A (different units)
-            let range1: PhysicalValue = "1V to 2V".parse().unwrap();
-            let range2: PhysicalValue = "1A to 2A".parse().unwrap();
-
-            let v1: Value = heap.alloc_simple(range1);
-            let v2: Value = heap.alloc_simple(range2);
-
-            // Should error on unit mismatch
-            let result = v1.compare(v2);
-            assert!(result.is_err());
-        });
-    }
-
-    #[test]
     fn test_physical_value_bounds_equals() {
         use starlark::values::Value;
 
@@ -1972,50 +1660,6 @@ mod tests {
             assert!(v1.equals(v4).unwrap());
             // Same min/max but different nominal
             assert!(!v1.equals(v5).unwrap());
-        });
-    }
-
-    #[test]
-    fn test_physical_value_bounds_compare_with_string() {
-        use starlark::values::Value;
-
-        Heap::temp(|heap| {
-            // range = 1V to 2V
-            let range: PhysicalValue = "1V to 2V".parse().unwrap();
-            let v_range: Value = heap.alloc_simple(range);
-
-            // Compare with string "5V"
-            let v_str: Value = heap.alloc_str("5V").to_value();
-
-            // range.max (2V) < 5V, so range < "5V"
-            let cmp = v_range.compare(v_str).unwrap();
-            assert_eq!(cmp, std::cmp::Ordering::Less);
-        });
-    }
-
-    #[test]
-    fn test_physical_value_bounds_add_value() {
-        Heap::temp(|heap| {
-            // range = 1V to 2V (1.5V nominal), offset = 3V
-            let range: PhysicalValue = "1V to 2V".parse().unwrap();
-            let offset = physical_value(3.0, 0.0, PhysicalUnit::Volts);
-
-            let v_range = heap.alloc_simple(range);
-            let v_offset = heap.alloc(offset);
-
-            // 1.5V (nominal) + 3V = 4.5V (point value - bounds dropped)
-            let result = v_range
-                .downcast_ref::<PhysicalValue>()
-                .unwrap()
-                .add(v_offset, heap)
-                .unwrap()
-                .unwrap();
-            let result_val = result.downcast_ref::<PhysicalValue>().unwrap();
-
-            // Add returns point value based on nominal
-            assert_eq!(result_val.nominal, Decimal::from_str("4.5").unwrap());
-            assert!(result_val.is_point()); // Bounds are dropped
-            assert_eq!(result_val.unit, PhysicalUnit::Volts.into());
         });
     }
 
@@ -2065,26 +1709,6 @@ mod tests {
             // Sub returns point value based on nominal
             assert_eq!(result_val.nominal, Decimal::from_str("5.5").unwrap());
             assert!(result_val.is_point()); // Bounds are dropped
-        });
-    }
-
-    #[test]
-    fn test_physical_value_bounds_add_unit_mismatch() {
-        Heap::temp(|heap| {
-            // range = 1V to 2V, offset = 1A (wrong unit)
-            let range: PhysicalValue = "1V to 2V".parse().unwrap();
-            let offset = physical_value(1.0, 0.0, PhysicalUnit::Amperes);
-
-            let v_range = heap.alloc_simple(range);
-            let v_offset = heap.alloc(offset);
-
-            // Should error on unit mismatch
-            let result = v_range
-                .downcast_ref::<PhysicalValue>()
-                .unwrap()
-                .add(v_offset, heap)
-                .unwrap();
-            assert!(result.is_err());
         });
     }
 

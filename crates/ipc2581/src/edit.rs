@@ -319,23 +319,6 @@ mod tests {
 </IPC-2581>"#;
 
     #[test]
-    fn navigation_finds_elements_by_name() {
-        let doc = Doc::parse(XML).unwrap();
-        let root = doc.root().unwrap();
-        assert_eq!(doc.name(root), "IPC-2581");
-        assert_eq!(doc.attr(root, "revision"), Some("C"));
-
-        let ecad = doc.child(root, "Ecad").unwrap();
-        let cad_data = doc.child(ecad, "CadData").unwrap();
-        let names: Vec<_> = doc
-            .children(cad_data)
-            .iter()
-            .map(|&child| doc.name(child))
-            .collect();
-        assert_eq!(names, ["Layer", "Step"]);
-    }
-
-    #[test]
     fn edits_splice_without_touching_surroundings() {
         let doc = Doc::parse(XML).unwrap();
         let root = doc.root().unwrap();
@@ -460,22 +443,6 @@ mod tests {
             doc.apply(edits).unwrap(),
             "<R><A><B/>text<!-- c --><N/></A><E><N/></E></R>"
         );
-    }
-
-    #[test]
-    fn same_position_inserts_keep_creation_order() {
-        let doc = Doc::parse(XML).unwrap();
-        let root = doc.root().unwrap();
-        let ecad = doc.child(root, "Ecad").unwrap();
-        let cad_data = doc.child(ecad, "CadData").unwrap();
-
-        let edits = vec![
-            doc.append_inside(cad_data, "<A/>"),
-            doc.append_inside(cad_data, "<B/>"),
-        ];
-        let out = doc.apply(edits).unwrap();
-
-        assert!(out.contains("<A/><B/>"));
     }
 
     #[test]

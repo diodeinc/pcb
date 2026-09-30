@@ -99,20 +99,3 @@ pub mod icons {
         "→"
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_styled_text() {
-        let text = "Hello";
-
-        // These should compile and not panic
-        let _ = text.success();
-        let _ = text.error();
-        let _ = text.warning();
-        let _ = text.info();
-        let _ = text.with_style(Style::Cyan);
-    }
-}

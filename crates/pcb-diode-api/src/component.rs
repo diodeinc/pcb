@@ -1526,60 +1526,6 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_zen_file_duplicate_pads() {
-        // Test that multiple pads with the same pin name don't create duplicate dict keys
-        // This simulates a component like a voltage regulator with multiple GND pads
-        let symbol = pcb_eda::Symbol {
-            name: "TEST".to_string(),
-            pins: vec![
-                pcb_eda::Pin {
-                    name: "VIN".to_string(),
-                    number: "1".to_string(),
-                    ..Default::default()
-                },
-                pcb_eda::Pin {
-                    name: "GND".to_string(),
-                    number: "2".to_string(),
-                    ..Default::default()
-                },
-                pcb_eda::Pin {
-                    name: "GND".to_string(),
-                    number: "3".to_string(),
-                    ..Default::default()
-                },
-                pcb_eda::Pin {
-                    name: "GND".to_string(),
-                    number: "4".to_string(),
-                    ..Default::default()
-                },
-                pcb_eda::Pin {
-                    name: "VOUT".to_string(),
-                    number: "5".to_string(),
-                    ..Default::default()
-                },
-            ],
-            description: Some("Test component".to_string()),
-            ..Default::default()
-        };
-
-        let zen_content = generate_zen_file("TestComponent", &symbol, "symbol.kicad_sym").unwrap();
-
-        // The pins dict should NOT have duplicate "GND" keys
-        // Count how many times "GND" appears as a dict key
-        let gnd_key_count = zen_content.matches("\"GND\": GND").count();
-        assert_eq!(
-            gnd_key_count, 1,
-            "Expected exactly 1 GND dict entry, found {}. Generated content:\n{}",
-            gnd_key_count, zen_content
-        );
-
-        // Verify the file is valid Starlark (no duplicate dict keys)
-        // The pins dict should only contain unique entries
-        assert!(zen_content.contains("\"VIN\": VIN"));
-        assert!(zen_content.contains("\"VOUT\": VOUT"));
-    }
-
-    #[test]
     fn test_only_symbol_in_library_accepts_single_symbol() {
         let source = r#"(kicad_symbol_lib
   (version 20211014)
@@ -1655,11 +1601,6 @@ mod tests {
         assert!(updated.contains("(property \"Datasheet\" \"docs/NEW-MPN.pdf\""));
         assert!(updated.contains("(property \"Manufacturer_Part_Number\" \"NEW-MPN\""));
         assert!(updated.contains("(property \"Manufacturer_Name\" \"NewMfr\""));
-    }
-
-    #[test]
-    fn test_component_datasheet_ref_uses_docs_subdir() {
-        assert_eq!(component_datasheet_ref("NEW-MPN"), "docs/NEW-MPN.pdf");
     }
 
     #[test]

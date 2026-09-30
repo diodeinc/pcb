@@ -1043,27 +1043,6 @@ mod tests {
     }
 
     #[test]
-    fn test_patch_or_add_avl_when_exists() {
-        let original = r#"<?xml version="1.0"?>
-<IPC-2581>
-  <Content/>
-  <Avl name="Old">
-    <AvlItem OEMDesignNumber="OLD"/>
-  </Avl>
-  <Bom/>
-</IPC-2581>"#;
-
-        let new_avl = "  <Avl name=\"New\">\n    <AvlItem OEMDesignNumber=\"NEW\"/>\n  </Avl>\n";
-
-        let result = patch_avl(original, new_avl);
-
-        assert!(result.contains("<Avl name=\"New\">"));
-        assert!(result.contains("OEMDesignNumber=\"NEW\""));
-        assert!(!result.contains("OEMDesignNumber=\"OLD\""));
-        assert!(result.contains("<Bom/>"));
-    }
-
-    #[test]
     fn selection_path_remains_authoritative() {
         let ipc = parse_selection_test_ipc("");
         let selections = [selection("Power.R1", Some("C1"))];

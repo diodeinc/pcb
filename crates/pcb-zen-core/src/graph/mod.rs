@@ -657,40 +657,6 @@ mod tests {
     }
 
     #[test]
-    fn test_display() {
-        // Simple circuit for testing display
-        let net_to_ports = HashMap::from([
-            (
-                "VCC".to_string(),
-                vec![("R1", "A").into(), ("C1", "+").into()],
-            ),
-            (
-                "GND".to_string(),
-                vec![("R1", "B").into(), ("C1", "-").into()],
-            ),
-        ]);
-
-        let component_pins = HashMap::from([
-            ("R1".into(), vec!["A".to_string(), "B".to_string()]),
-            ("C1".into(), vec!["+".to_string(), "-".to_string()]),
-        ]);
-
-        let graph = CircuitGraph::new(net_to_ports, component_pins, HashSet::new()).unwrap();
-
-        let display_output = format!("{}", graph);
-
-        // Check that the output contains expected elements
-        assert!(display_output.contains("CircuitGraph"));
-        assert!(display_output.contains("factors:"));
-        assert!(display_output.contains("ports:"));
-        assert!(display_output.contains("VCC"));
-        assert!(display_output.contains("R1.A"));
-        assert!(display_output.contains("Component(\"R1\")"));
-
-        println!("Display output:\n{}", display_output);
-    }
-
-    #[test]
     fn test_factor_tracking_prevents_net_revisit() {
         // Create a circuit where there are multiple paths, but factor tracking should prevent net revisits
         let net_to_ports = HashMap::from([

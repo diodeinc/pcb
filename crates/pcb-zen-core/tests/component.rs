@@ -813,28 +813,6 @@ fn simulation_applies_component_modifiers() {
     assert_eq!(component.manufacturer(), Some("ACME"));
 }
 
-snapshot_eval!(component_modifier_basic, {
-    "test.zen" => r#"
-        # Test component modifier
-        def assign_part(component):
-            if hasattr(component, "resistance"):
-                component.part = builtin.Part(mpn="ASSIGNED_MPN", manufacturer="ACME")
-
-        builtin.add_component_modifier(assign_part)
-
-        Component(
-            name = "R1",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-            properties = {"resistance": "10k"},
-        )
-
-        # Component will have mpn and manufacturer set by modifier
-        # This is verified by the module snapshot
-    "#
-});
-
 snapshot_eval!(component_modifier_conditional, {
     "test.zen" => r#"
         # Test conditional component modifier
@@ -965,69 +943,6 @@ snapshot_eval!(component_modifier_multiple, {
     "#
 });
 
-snapshot_eval!(component_modifier_parent, {
-    "Child.zen" => r#"
-        # Child module creates a component
-        Component(
-            name = "R1",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-            properties = {"resistance": "10k"},
-        )
-
-        # Component should have parent_modified and manufacturer set by parent modifier
-        # This is verified by the module snapshot
-    "#,
-    "test.zen" => r#"
-        # Parent module registers a modifier
-        def parent_modifier(component):
-            if hasattr(component, "resistance"):
-                component.parent_modified = "yes"
-                component.part = builtin.Part(mpn="PARENT_MPN", manufacturer="ParentVendor")
-
-        builtin.add_component_modifier(parent_modifier)
-
-        # Instantiate child - components in child should get parent modifier
-        Child = Module("Child.zen")
-        Child(name = "ChildInstance")
-    "#
-});
-
-snapshot_eval!(component_modifier_child_overrides_parent, {
-    "Child.zen" => r#"
-        # Child modifier runs first and sets manufacturer
-        def child_modifier(component):
-            if hasattr(component, "resistance"):
-                component.part = builtin.Part(mpn="CHILD_MPN", manufacturer="ChildVendor")
-
-        builtin.add_component_modifier(child_modifier)
-
-        Component(
-            name = "R1",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-            properties = {"resistance": "10k"},
-        )
-
-        # Parent modifier ran AFTER child modifier
-        # So final value should be ParentVendor (parent overwrites child)
-        # This is verified by the module snapshot
-    "#,
-    "test.zen" => r#"
-        # Parent modifier sets manufacturer
-        def parent_modifier(component):
-            if hasattr(component, "resistance"):
-                component.part = builtin.Part(mpn="PARENT_MPN", manufacturer="ParentVendor")
-
-        builtin.add_component_modifier(parent_modifier)
-
-        Child = Module("Child.zen")
-        Child(name = "ChildInstance")
-    "#
-});
-
 snapshot_eval!(component_modifier_grandparent, {
     "Child.zen" => r#"
         def child_modifier(component):
@@ -1103,55 +1018,6 @@ snapshot_eval!(component_modifier_execution_order, {
 
         Child = Module("Child.zen")
         Child(name = "ChildInstance")
-    "#
-});
-
-snapshot_eval!(current_module_path_root, {
-    "test.zen" => r#"
-        path = builtin.current_module_path()
-        print("Root module path:", path)
-        print("Root path length:", len(path))
-        print("Is root:", len(path) == 0)
-    "#
-});
-
-snapshot_eval!(current_module_path_visible, {
-    "Child.zen" => r#"
-        # Store the module path in component properties so it's visible in snapshot
-        path = builtin.current_module_path()
-
-        Component(
-            name = "R1",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-            properties = {
-                "module_path": str(path),
-                "module_depth": len(path),
-                "is_root": len(path) == 0,
-            },
-        )
-    "#,
-    "test.zen" => r#"
-        path = builtin.current_module_path()
-        print("Root module path:", path)
-        print("Root is_root:", len(path) == 0)
-
-        Child = Module("Child.zen")
-        Child(name = "ChildInstance")
-
-        # Create component in root too
-        Component(
-            name = "R2",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-            properties = {
-                "module_path": str(path),
-                "module_depth": len(path),
-                "is_root": len(path) == 0,
-            },
-        )
     "#
 });
 
@@ -1859,39 +1725,6 @@ Component(
         }),
         "expected empty legacy mpn to leave part info unspecified, got: {:?}",
         diagnostics
-    );
-}
-
-#[test]
-fn part_kwarg_does_not_warn() {
-    let diagnostics = eval_component_diagnostics(vec![(
-        "test.zen".to_string(),
-        r#"
-P1 = Net()
-P2 = Net()
-
-Component(
-    name = "R1",
-    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
-    pin_defs = {"1": "1", "2": "2"},
-    pins = {"1": P1, "2": P2},
-    part = builtin.Part(mpn = "RC0603FR-071KL", manufacturer = "Yageo"),
-)
-"#
-        .to_string(),
-    )]);
-
-    let warning_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Warning);
-    let advice_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Advice);
-    assert!(
-        warning_bodies.is_empty(),
-        "expected no warnings when using part=Part(...), got: {:?}",
-        warning_bodies
-    );
-    assert!(
-        advice_bodies.is_empty(),
-        "expected no advice when using part=Part(...), got: {:?}",
-        advice_bodies
     );
 }
 

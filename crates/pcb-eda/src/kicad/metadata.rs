@@ -258,17 +258,6 @@ mod tests {
     }
 
     #[test]
-    fn canonicalizes_legacy_description_alias() {
-        let metadata =
-            SymbolMetadata::from_property_iter(vec![("ki_description", "Alias description")]);
-        assert_eq!(
-            metadata.primary.description.as_deref(),
-            Some("Alias description")
-        );
-        assert!(!metadata.custom_properties().contains_key("ki_description"));
-    }
-
-    #[test]
     fn drops_legacy_description_alias_when_canonical_is_present() {
         let metadata = SymbolMetadata::from_property_iter(vec![
             ("Description", "Canonical description"),

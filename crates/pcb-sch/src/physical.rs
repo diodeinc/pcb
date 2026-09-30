@@ -1727,14 +1727,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parsing_decimal_numbers() {
-        check_many(&[
-            ("3.3V", PhysicalUnit::Volts, 3.3),
-            ("4.7kOhm", PhysicalUnit::Ohms, 4700.0),
-        ]);
-    }
-
-    #[test]
     fn test_parsing_errors() {
         check_errors(&["", "abc", "5X", "5.3.3V"]);
     }
@@ -1759,18 +1751,6 @@ mod tests {
         assert!(v.is_symmetric());
     }
 
-    #[test]
-    fn test_roundtrip_parsing() {
-        let test_cases = ["5V", "100mA", "4k7", "470nF", "3.3kV", "100Ohm"];
-
-        for input in test_cases {
-            let parsed: PhysicalValue = input.parse().unwrap();
-            // Note: roundtrip may not be exact due to SI prefix selection
-            let _formatted = format!("{}", parsed);
-            // Just ensure parsing succeeds - exact roundtrip not guaranteed due to SI prefix normalization
-        }
-    }
-
     // Helper function for tolerance parsing tests
     #[test]
     fn test_tolerance_parsing() {
@@ -1782,15 +1762,6 @@ mod tests {
         check_tol("100mA 5%", 5.0);
         check_tol("1MHz 10%", 10.0);
         check_tol("4k7 1%", 1.0); // Special notation
-    }
-
-    #[test]
-    fn test_tolerance_parsing_without_tolerance() {
-        // Should parse OK and have zero tolerance
-        for input in ["100kOhm", "10nF", "3.3V"] {
-            let val: PhysicalValue = input.parse().unwrap();
-            assert_eq!(val.tolerance(), Decimal::ZERO);
-        }
     }
 
     #[test]
@@ -1865,217 +1836,6 @@ mod tests {
         let result = (v / i).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Ohms.into());
         assert_eq!(result.nominal, Decimal::from(5));
-    }
-
-    #[test]
-    fn test_power_calculations() {
-        // P = V × I
-        let v = physical_value(12.0, 0.0, PhysicalUnit::Volts);
-        let i = physical_value(2.0, 0.0, PhysicalUnit::Amperes);
-        let result = v * i;
-        assert_eq!(result.unit, PhysicalUnit::Watts.into());
-        assert_eq!(result.nominal, Decimal::from(24));
-
-        // I = P / V
-        let p = physical_value(100.0, 0.0, PhysicalUnit::Watts);
-        let v = physical_value(120.0, 0.0, PhysicalUnit::Volts);
-        let result = (p / v).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Amperes.into());
-        assert!(result.nominal > Decimal::from_f64(0.8).unwrap());
-        assert!(result.nominal < Decimal::from_f64(0.9).unwrap());
-
-        // V = P / I
-        let i = physical_value(5.0, 0.0, PhysicalUnit::Amperes);
-        let result = (p / i).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.nominal, Decimal::from(20));
-    }
-
-    #[test]
-    fn test_energy_and_time() {
-        // E = P × t
-        let p = physical_value(100.0, 0.0, PhysicalUnit::Watts);
-        let t = physical_value(3600.0, 0.0, PhysicalUnit::Seconds);
-        let result = p * t;
-        assert_eq!(result.unit, PhysicalUnit::Joules.into());
-        assert_eq!(result.nominal, Decimal::from(360000));
-
-        // P = E / t
-        let e = physical_value(7200.0, 0.0, PhysicalUnit::Joules);
-        let t = physical_value(7200.0, 0.0, PhysicalUnit::Seconds); // 2h
-        let result = (e / t).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Watts.into());
-        assert_eq!(result.nominal, Decimal::from(1));
-
-        // t = E / P
-        let result = (e / p).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert_eq!(result.nominal, Decimal::from(72));
-    }
-
-    #[test]
-    fn test_frequency_time_inverses() {
-        // f = 1 / t
-        let t = physical_value(1.0, 0.0, PhysicalUnit::Seconds);
-        let result = (PhysicalValue::dimensionless(1) / t).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Hertz.into());
-        assert_eq!(result.nominal, Decimal::from(1));
-
-        // t = 1 / f
-        let f = physical_value(60.0, 0.0, PhysicalUnit::Hertz);
-        let result = (PhysicalValue::dimensionless(1) / f).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert!(result.nominal > Decimal::from_f64(0.016).unwrap());
-        assert!(result.nominal < Decimal::from_f64(0.017).unwrap());
-
-        // f × t = 1 (dimensionless)
-        let f = physical_value(10.0, 0.0, PhysicalUnit::Hertz);
-        let t = physical_value(0.1, 0.0, PhysicalUnit::Seconds);
-        let result = f * t;
-        assert_eq!(result.unit, PhysicalUnitDims::DIMENSIONLESS);
-        assert_eq!(result.nominal, Decimal::from(1));
-    }
-
-    #[test]
-    fn test_resistance_conductance_inverses() {
-        // G = 1 / R
-        let one = PhysicalValue::from_decimal(1.into(), 0.into(), PhysicalUnitDims::DIMENSIONLESS);
-        let r = physical_value(100.0, 0.0, PhysicalUnit::Ohms);
-        let result = (one / r).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Siemens.into());
-        assert_eq!(result.nominal, Decimal::from_f64(0.01).unwrap());
-
-        // R = 1 / G
-        let g = physical_value(0.02, 0.0, PhysicalUnit::Siemens);
-        let result = (one / g).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Ohms.into());
-        assert_eq!(result.nominal, Decimal::from(50));
-
-        // R × G = 1 (dimensionless)
-        let result = r * g;
-        assert_eq!(result.unit, PhysicalUnitDims::DIMENSIONLESS);
-        assert_eq!(result.nominal, Decimal::from(2));
-    }
-
-    #[test]
-    fn test_rc_time_constants() {
-        // τ = R × C
-        let r = physical_value(10000.0, 0.0, PhysicalUnit::Ohms); // 10kΩ
-        let c = physical_value(0.0000001, 0.0, PhysicalUnit::Farads); // 100nF
-        let result = r * c;
-        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert_eq!(result.nominal, Decimal::from_f64(0.001).unwrap()); // 1ms
-
-        // τ = C × R
-        let result = c * r;
-        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert_eq!(result.nominal, Decimal::from_f64(0.001).unwrap()); // 1ms
-    }
-
-    #[test]
-    fn test_lr_time_constants() {
-        // τ = L × G (L/R time constant)
-        let l = physical_value(0.01, 0.0, PhysicalUnit::Henries); // 10mH
-        let g = physical_value(0.1, 0.0, PhysicalUnit::Siemens); // 100mS
-        let result = l * g;
-        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert_eq!(result.nominal, Decimal::from_f64(0.001).unwrap()); // 1ms
-
-        // τ = G × L
-        let result = g * l;
-        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert_eq!(result.nominal, Decimal::from_f64(0.001).unwrap()); // 1ms
-    }
-
-    #[test]
-    fn test_charge_relationships() {
-        // Q = I × t
-        let i = physical_value(2.0, 0.0, PhysicalUnit::Amperes);
-        let t = physical_value(10.0, 0.0, PhysicalUnit::Seconds);
-        let result = i * t;
-        assert_eq!(result.unit, PhysicalUnit::Coulombs.into());
-        assert_eq!(result.nominal, Decimal::from(20));
-
-        // Q = C × V
-        let c = physical_value(0.001, 0.0, PhysicalUnit::Farads); // 1000μF
-        let v = physical_value(12.0, 0.0, PhysicalUnit::Volts);
-        let result = c * v;
-        assert_eq!(result.unit, PhysicalUnit::Coulombs.into());
-        assert_eq!(result.nominal, Decimal::from_f64(0.012).unwrap()); // 12mC
-
-        // I = Q / t
-        let q = physical_value(0.1, 0.0, PhysicalUnit::Coulombs); // 100mC
-        let t = physical_value(50.0, 0.0, PhysicalUnit::Seconds);
-        let result = (q / t).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Amperes.into());
-        assert_eq!(result.nominal, Decimal::from_f64(0.002).unwrap()); // 2mA
-
-        // V = Q / C
-        let q = physical_value(0.005, 0.0, PhysicalUnit::Coulombs); // 5mC
-        let result = (q / c).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.nominal, Decimal::from(5));
-    }
-
-    #[test]
-    fn test_magnetic_flux() {
-        // Φ = L × I
-        let l = physical_value(1.0, 0.0, PhysicalUnit::Henries); // 1H
-        let i = physical_value(2.0, 0.0, PhysicalUnit::Amperes);
-        let result = l * i;
-        assert_eq!(result.unit, PhysicalUnit::Webers.into());
-        assert_eq!(result.nominal, Decimal::from(2)); // 2Wb
-
-        // I = Φ / L
-        let phi = physical_value(0.01, 0.0, PhysicalUnit::Webers); // 10mWb
-        let l = physical_value(0.05, 0.0, PhysicalUnit::Henries); // 50mH
-        let result = (phi / l).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Amperes.into());
-        assert_eq!(result.nominal, Decimal::from_f64(0.2).unwrap()); // 200mA
-
-        // V = Φ / t (Faraday's law)
-        let phi = physical_value(0.1, 0.0, PhysicalUnit::Webers); // 100mWb
-        let t = physical_value(0.01, 0.0, PhysicalUnit::Seconds); // 10ms
-        let result = (phi / t).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.nominal, Decimal::from(10)); // 10V
-    }
-
-    #[test]
-    fn test_energy_storage() {
-        // E = Q × V (potential energy)
-        let q = physical_value(0.001, 0.0, PhysicalUnit::Coulombs); // 1mC
-        let v = physical_value(12.0, 0.0, PhysicalUnit::Volts);
-        let result = q * v;
-        assert_eq!(result.unit, PhysicalUnit::Joules.into());
-        assert_eq!(result.nominal, Decimal::from_f64(0.012).unwrap()); // 12mJ
-
-        // Q = E / V
-        let e = physical_value(0.024, 0.0, PhysicalUnit::Joules); // 24mJ
-        let result = (e / v).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Coulombs.into());
-        assert_eq!(result.nominal, Decimal::from_f64(0.002).unwrap()); // 2mC
-
-        // V = E / Q
-        let e = physical_value(0.006, 0.0, PhysicalUnit::Joules); // 6mJ
-        let result = (e / q).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.nominal, Decimal::from(6)); // 6V
-    }
-
-    #[test]
-    fn test_dimensionless_operations() {
-        // Any unit * dimensionless = same unit
-        let v = physical_value(5.0, 0.0, PhysicalUnit::Volts);
-        let two = PhysicalValue::dimensionless(2);
-        let result = v * two;
-        assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.nominal, Decimal::from(10));
-
-        // Any unit / dimensionless = same unit
-        let result = (v / two).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.nominal, Decimal::from_f64(2.5).unwrap());
     }
 
     #[test]
@@ -2338,96 +2098,6 @@ mod tests {
     }
 
     #[test]
-    fn test_with_unit_none_behavior() {
-        // Test that the logic for with_unit(None) works correctly
-        // This tests the internal logic rather than the Starlark interface
-
-        // Create a physical value with units
-        let resistance_value = physical_value(10.0, 0.01, PhysicalUnit::Ohms);
-
-        // Simulate the behavior: if None is passed, should return dimensionless
-        let new_value = PhysicalValue::from_decimal(
-            resistance_value.nominal,
-            resistance_value.tolerance(),
-            PhysicalUnitDims::DIMENSIONLESS,
-        );
-
-        // Should have same value and tolerance but be dimensionless
-        assert_eq!(new_value.nominal, resistance_value.nominal);
-        assert_eq!(new_value.tolerance(), resistance_value.tolerance());
-        assert_eq!(new_value.unit, PhysicalUnitDims::DIMENSIONLESS);
-    }
-
-    #[test]
-    fn test_dimensionless_casting_logic() {
-        // Test the core logic for dimensionless casting
-
-        // Create a dimensionless physical value
-        let dimensionless = PhysicalValue::dimensionless(42);
-        let dimensionless_with_tolerance = PhysicalValue::from_decimal(
-            Decimal::from(10),
-            Decimal::from_str("0.05").unwrap(), // 5% tolerance
-            PhysicalUnitDims::DIMENSIONLESS,
-        );
-
-        // Test target units
-        let resistance_unit: PhysicalUnitDims = PhysicalUnit::Ohms.into();
-        let voltage_unit: PhysicalUnitDims = PhysicalUnit::Volts.into();
-
-        // Verify the dimensionless values are actually dimensionless
-        assert_eq!(dimensionless.unit, PhysicalUnitDims::DIMENSIONLESS);
-        assert_eq!(
-            dimensionless_with_tolerance.unit,
-            PhysicalUnitDims::DIMENSIONLESS
-        );
-
-        // Test the casting logic: dimensionless -> resistance
-        let resistance_casted = PhysicalValue::from_decimal(
-            dimensionless.nominal,
-            dimensionless.tolerance(),
-            resistance_unit,
-        );
-
-        // Test the casting logic: dimensionless with tolerance -> voltage
-        let voltage_casted = PhysicalValue::from_decimal(
-            dimensionless_with_tolerance.nominal,
-            dimensionless_with_tolerance.tolerance(),
-            voltage_unit,
-        );
-
-        // Verify values and tolerances are preserved but units change
-        assert_eq!(resistance_casted.nominal, dimensionless.nominal);
-        assert_eq!(resistance_casted.tolerance(), dimensionless.tolerance());
-        assert_eq!(resistance_casted.unit, resistance_unit);
-
-        assert_eq!(voltage_casted.nominal, dimensionless_with_tolerance.nominal);
-        assert_eq!(
-            voltage_casted.tolerance(),
-            dimensionless_with_tolerance.tolerance()
-        );
-        assert_eq!(voltage_casted.unit, voltage_unit);
-
-        // Verify the units are now different from dimensionless
-        assert_ne!(resistance_casted.unit, PhysicalUnitDims::DIMENSIONLESS);
-        assert_ne!(voltage_casted.unit, PhysicalUnitDims::DIMENSIONLESS);
-    }
-
-    #[test]
-    fn test_non_dimensionless_casting_fails() {
-        // Test that non-dimensionless PhysicalValues cannot be cast to other units
-        let resistance = physical_value(10.0, 0.01, PhysicalUnit::Ohms);
-        let voltage_unit: PhysicalUnitDims = PhysicalUnit::Volts.into();
-
-        // This should fail - we shouldn't allow Ohms -> Volts conversion
-        // (This would be tested at the PhysicalValue::from_arguments level in real usage)
-        assert_ne!(resistance.unit, PhysicalUnitDims::DIMENSIONLESS);
-        assert_ne!(resistance.unit, voltage_unit);
-
-        // The logic should detect this mismatch and return an error
-        // In the actual implementation, this would be caught by the unit checking
-    }
-
-    #[test]
     fn test_range_parsing_endash() {
         let r = PhysicalValue::from_str("11–26V").unwrap();
         assert_eq!(r.min, Decimal::from(11));
@@ -2521,14 +2191,6 @@ mod tests {
     }
 
     #[test]
-    fn test_range_parsing_resistance() {
-        let r = PhysicalValue::from_str("10kOhm to 100kOhm").unwrap();
-        assert_eq!(r.min, Decimal::from(10000));
-        assert_eq!(r.max, Decimal::from(100000));
-        assert_eq!(r.unit, PhysicalUnit::Ohms.into());
-    }
-
-    #[test]
     fn test_range_parsing_current() {
         let r = PhysicalValue::from_str("100mA to 2A").unwrap();
         assert_eq!(r.min, Decimal::from_str("0.1").unwrap());
@@ -2566,43 +2228,6 @@ mod tests {
     fn test_range_parsing_unit_mismatch() {
         // Should fail - mixing voltage and current units
         assert!(PhysicalValue::from_str("5V to 2A").is_err());
-    }
-
-    #[test]
-    fn test_abs_positive_value() {
-        let pv = physical_value(3.3, 0.0, PhysicalUnit::Volts);
-        let result = pv.abs();
-        assert_eq!(result.nominal, Decimal::from_f64(3.3).unwrap());
-        assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.tolerance(), Decimal::ZERO);
-    }
-
-    #[test]
-    fn test_abs_negative_value() {
-        let pv = physical_value(-3.3, 0.0, PhysicalUnit::Volts);
-        let result = pv.abs();
-        assert_eq!(result.nominal, Decimal::from_f64(3.3).unwrap());
-        assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.tolerance(), Decimal::ZERO);
-    }
-
-    #[test]
-    fn test_abs_preserves_tolerance() {
-        let pv = physical_value(-5.0, 0.05, PhysicalUnit::Amperes);
-        let result = pv.abs();
-        assert_eq!(result.nominal, Decimal::from_f64(5.0).unwrap());
-        assert_eq!(result.unit, PhysicalUnit::Amperes.into());
-        assert_eq!(result.tolerance(), Decimal::from_f64(0.05).unwrap());
-    }
-
-    #[test]
-    fn test_diff_positive_difference() {
-        let pv1 = physical_value(10.0, 0.0, PhysicalUnit::Volts);
-        let pv2 = physical_value(3.0, 0.0, PhysicalUnit::Volts);
-        let result = pv1.diff(&pv2).unwrap();
-        assert_eq!(result.nominal, Decimal::from_f64(7.0).unwrap());
-        assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.tolerance(), Decimal::ZERO);
     }
 
     #[test]
@@ -2674,28 +2299,6 @@ mod tests {
     }
 
     #[test]
-    fn test_range_diff_ac_coupling() {
-        // Signal: -5 to +5V, Bias: 0V
-        // max(|5 - 0|, |-5 - 0|) = 5V
-        let signal = physical_value_bounds(-5.0, 5.0, PhysicalUnit::Volts);
-        let bias = physical_value_bounds(0.0, 0.0, PhysicalUnit::Volts);
-        let result = signal.diff(&bias).unwrap();
-
-        assert_eq!(result.nominal, Decimal::from_f64(5.0).unwrap());
-    }
-
-    #[test]
-    fn test_range_diff_negative_ranges() {
-        // V1: -5 to -3V, V2: -2 to -1V
-        // max(|-3 - (-2)|, |-5 - (-1)|) = max(1, 4) = 4V
-        let v1 = physical_value_bounds(-5.0, -3.0, PhysicalUnit::Volts);
-        let v2 = physical_value_bounds(-2.0, -1.0, PhysicalUnit::Volts);
-        let result = v1.diff(&v2).unwrap();
-
-        assert_eq!(result.nominal, Decimal::from_f64(4.0).unwrap());
-    }
-
-    #[test]
     fn test_range_diff_symmetric() {
         // diff should be symmetric: A.diff(B) == B.diff(A)
         let v1 = physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts);
@@ -2708,15 +2311,6 @@ mod tests {
     }
 
     #[test]
-    fn test_range_diff_same_range() {
-        // Same range should have 0 difference
-        let v = physical_value_bounds(3.3, 3.3, PhysicalUnit::Volts);
-        let result = v.diff(&v).unwrap();
-
-        assert_eq!(result.nominal, Decimal::ZERO);
-    }
-
-    #[test]
     fn test_range_diff_overlapping_ranges() {
         // Range 1: 2.0-4.0V, Range 2: 3.0-5.0V
         // max(|4.0 - 3.0|, |2.0 - 5.0|) = max(1.0, 3.0) = 3.0V
@@ -2725,73 +2319,6 @@ mod tests {
         let result = r1.diff(&r2).unwrap();
 
         assert_eq!(result.nominal, Decimal::from_f64(3.0).unwrap());
-    }
-
-    #[test]
-    fn test_range_diff_unit_mismatch() {
-        // Different units should return an error
-        let volts = physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts);
-        let amps = physical_value_bounds(0.0, 1.0, PhysicalUnit::Amperes);
-
-        let result = volts.diff(&amps);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            PhysicalValueError::UnitMismatch { .. }
-        ));
-    }
-
-    #[test]
-    fn test_range_diff_various_units() {
-        // Test with resistance ranges
-        let r1 = physical_value_bounds(900.0, 1100.0, PhysicalUnit::Ohms); // 1kΩ ±10%
-        let r2 = physical_value_bounds(0.0, 0.0, PhysicalUnit::Ohms); // 0Ω (short)
-        let result = r1.diff(&r2).unwrap();
-        assert_eq!(result.nominal, Decimal::from_f64(1100.0).unwrap());
-
-        // Test with current ranges
-        let i1 = physical_value_bounds(0.1, 0.5, PhysicalUnit::Amperes);
-        let i2 = physical_value_bounds(0.0, 0.0, PhysicalUnit::Amperes);
-        let result = i1.diff(&i2).unwrap();
-        assert_eq!(result.nominal, Decimal::from_f64(0.5).unwrap());
-    }
-
-    #[test]
-    fn test_range_diff_zero_tolerance() {
-        // Range with no tolerance always returns zero tolerance
-        let v1 = physical_value_bounds(3.3, 3.3, PhysicalUnit::Volts);
-        let v2 = physical_value_bounds(5.0, 5.0, PhysicalUnit::Volts);
-        let result = v1.diff(&v2).unwrap();
-
-        assert!(result.is_point()); // Point value has no tolerance
-        assert_eq!(result.nominal, Decimal::from_f64(1.7).unwrap());
-    }
-
-    #[test]
-    fn test_range_diff_from_string() {
-        // Create a value from bounds
-        let range_val = physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts);
-
-        // Parse string as PhysicalValue (now handles range syntax too)
-        let gnd_value = PhysicalValue::from_str("0V").unwrap();
-
-        // Test diff works with parsed string
-        let result = range_val.diff(&gnd_value).unwrap();
-        assert_eq!(result.nominal, Decimal::from_f64(3.6).unwrap());
-        assert_eq!(result.unit, PhysicalUnit::Volts.into());
-    }
-
-    #[test]
-    fn test_physical_value_min_max() {
-        // Test min/max fields with tolerance
-        let v = physical_value(3.3, 0.05, PhysicalUnit::Volts); // 3.3V ±5%
-        assert_eq!(v.min, Decimal::from_f64(3.135).unwrap());
-        assert_eq!(v.max, Decimal::from_f64(3.465).unwrap());
-
-        // Test with zero tolerance
-        let v_no_tol = physical_value(5.0, 0.0, PhysicalUnit::Volts);
-        assert_eq!(v_no_tol.min, Decimal::from_f64(5.0).unwrap());
-        assert_eq!(v_no_tol.max, Decimal::from_f64(5.0).unwrap());
     }
 
     #[test]

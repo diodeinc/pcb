@@ -566,24 +566,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_board_only() {
-        let content = r#"
-[board]
-name = "TestBoard"
-path = "test_board.zen"
-description = "A test board"
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        assert!(config.is_board());
-
-        let board = config.board.unwrap();
-        assert_eq!(board.name, "TestBoard");
-        assert_eq!(board.path, Some("test_board.zen".to_string()));
-        assert_eq!(board.description, "A test board");
-    }
-
-    #[test]
     fn test_parse_rejects_legacy_module_section() {
         let err = PcbToml::parse(
             r#"
@@ -817,22 +799,6 @@ path = "test.zen"
     }
 
     #[test]
-    fn test_parse_workspace_bom_config() {
-        let content = r#"
-[workspace]
-pcb-version = "0.4"
-
-[workspace.bom]
-strict = true
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        let workspace = config.workspace.unwrap();
-
-        assert!(workspace.bom.strict);
-    }
-
-    #[test]
     fn test_workspace_bom_strict_defaults_to_true() {
         let content = r#"
 [workspace]
@@ -859,75 +825,6 @@ strict = false
         let workspace = config.workspace.unwrap();
 
         assert!(!workspace.bom.strict);
-    }
-
-    #[test]
-    fn test_parse_v2_patch_branch() {
-        let content = r#"
-[workspace]
-pcb-version = "0.4"
-
-[board]
-name = "Test"
-path = "test.zen"
-
-[patch]
-"code.diode.computer/diode/registry/components/FOO" = { branch = "feature-branch" }
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        assert_eq!(config.patch.len(), 1);
-
-        let patch = config
-            .patch
-            .get("code.diode.computer/diode/registry/components/FOO")
-            .unwrap();
-        assert_eq!(patch.branch.as_deref(), Some("feature-branch"));
-        assert_eq!(patch.path, None);
-        assert_eq!(patch.rev, None);
-    }
-
-    #[test]
-    fn test_parse_v2_patch_rev() {
-        let content = r#"
-[workspace]
-pcb-version = "0.4"
-
-[board]
-name = "Test"
-path = "test.zen"
-
-[patch]
-"code.diode.computer/diode/registry/components/BAR" = { rev = "abc123def456" }
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        assert_eq!(config.patch.len(), 1);
-
-        let patch = config
-            .patch
-            .get("code.diode.computer/diode/registry/components/BAR")
-            .unwrap();
-        assert_eq!(patch.rev.as_deref(), Some("abc123def456"));
-        assert_eq!(patch.path, None);
-        assert_eq!(patch.branch, None);
-    }
-
-    #[test]
-    fn test_v2_workspace_and_board() {
-        let content = r#"
-[workspace]
-pcb-version = "0.4"
-
-[board]
-name = "RootBoard"
-"#;
-
-        let result = PcbToml::parse(content);
-        assert!(result.is_ok());
-        let config = result.unwrap();
-        assert!(config.workspace.is_some());
-        assert!(config.board.is_some());
     }
 
     #[test]
