@@ -633,16 +633,12 @@ fn tile_copper_balance(doc: &mut Document, resolution: Resolution) -> Result<(),
                     // Batching spends an extra rounding allowance. If it
                     // exhausts the budget, clip directly from the source
                     // rather than reject a tile the original path can emit.
+                    let clip = |source: &ContourSet| cell.intersection(source)?.translated(-center);
                     let tile = nearby
                         .as_ref()
                         .map_err(Clone::clone)
-                        .and_then(|nearby| cell.intersection(nearby)?.translated(-center))
-                        .or_else(|error| match error {
-                            AccuracyError::BudgetExceeded { .. } => cell
-                                .intersection(&image.reaching(cell.bbox))?
-                                .translated(-center),
-                            error => Err(error),
-                        })?;
+                        .and_then(clip)
+                        .or_else(|_| clip(&image.reaching(cell.bbox)))?;
                     if tile.is_empty() {
                         continue;
                     }
