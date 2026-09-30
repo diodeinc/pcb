@@ -232,6 +232,15 @@ impl WidthAxis {
         bounds
     }
 
+    /// Bounds of all disks along the axis. The constructed radius functions
+    /// are convex, so their maximum lies at an endpoint.
+    fn disk_bounds(self, error: f64) -> BBox {
+        let radius = self
+            .radius_at(self.range.0)
+            .max(self.radius_at(self.range.1));
+        self.bounds().expand(radius + error)
+    }
+
     /// Partition by every predicate root, keeping valid singleton intersections
     /// as well as intervals. Identically zero polynomials need no subdivision.
     fn clip(self, mut cuts: Vec<f64>, valid: impl Fn(f64, bool) -> bool) -> Vec<Self> {
@@ -322,10 +331,7 @@ impl WidthAxis {
         // so a spatial box around the axis cannot decide them. Resolve every
         // segment sharing a contact endpoint through the index, keeping those
         // the original query box would have returned.
-        let maximum_radius = self
-            .radius_at(self.range.0)
-            .max(self.radius_at(self.range.1));
-        let original_box = bounds.expand(maximum_radius + error);
+        let original_box = self.disk_bounds(error);
         let mut cone_ids = Vec::new();
         for (a, b) in self.contacts {
             for point in [a, b] {
@@ -357,19 +363,63 @@ impl WidthAxis {
                 return Vec::new();
             }
         }
-        let bounds = narrowed.bounds();
-        let maximum_radius = narrowed
-            .radius_at(narrowed.range.0)
-            .max(narrowed.radius_at(narrowed.range.1));
-        let nearby = boundary
-            .segments_meeting(bounds.expand(maximum_radius + error))
-            .collect::<Vec<_>>();
-        narrowed.in_region_narrowed(region, error, nearby, cones)
+        let cut_bounds = narrowed.disk_bounds(error);
+        let constraints = self.contact_constraints(&cones);
+        // Supporting lines can extend across an entire component even when
+        // their finite contact edges are tiny. Reject impossible contacts
+        // before querying walls, then confine clearance work to their hull.
+        // Keep twice the final singleton slack so a new hull endpoint cannot
+        // itself establish a tolerated contact.
+        for &constraint in &constraints {
+            let mut guarded = constraint;
+            guarded[0] += 2.0 * error;
+            let Some(range) = Self::sublevel_hull(guarded, false, narrowed.range) else {
+                return Vec::new();
+            };
+            narrowed.range = range;
+        }
+        let clearance_bounds = narrowed.disk_bounds(error);
+        // Even a remote wall's supporting line can supply an isolated cut
+        // that validates within tolerance. Preserve those events from the
+        // original radius-only query, not just the walls that can obstruct
+        // a disk in the contact hull.
+        let cut_sources = boundary.segments_meeting(cut_bounds).collect();
+        narrowed.in_region_narrowed(region, error, cut_sources, constraints, clearance_bounds)
+    }
+
+    fn contact_constraints(self, cones: &[(Point, Point)]) -> Vec<Polynomial> {
+        let mut constraints = Vec::new();
+        for (a, b) in self.contacts {
+            if a != b {
+                let length = a.distance_to(b);
+                let projection = self.projection(a, (b - a) / length);
+                constraints.push(projection);
+                constraints.push([length - projection[0], -projection[1], -projection[2]]);
+            } else {
+                // Endpoint normal cones must include incident edges outside
+                // the narrowed query: their half-planes constrain the contact
+                // even where their finite segments cannot obstruct its disk.
+                for &(start, end) in cones {
+                    let direction = if a == start {
+                        end - start
+                    } else if a == end {
+                        start - end
+                    } else {
+                        continue;
+                    };
+                    if direction.length() > 0.0 {
+                        constraints.push(self.projection(a, -direction / direction.length()));
+                    }
+                }
+            }
+        }
+        constraints
     }
 
     /// Hull of the `{t ∈ range}` sublevel set of a polynomial predicate.
     /// The hull is a superset, used only to drop provably useless spans.
     fn sublevel_hull(poly: Polynomial, le_zero: bool, range: (f64, f64)) -> Option<(f64, f64)> {
+        let poly = if le_zero { poly } else { poly.map(|p| -p) };
         let crossings = roots(poly);
         let mut points = vec![range.0, range.1];
         points.extend(
@@ -379,17 +429,22 @@ impl WidthAxis {
                 .filter(|&t| t > range.0 && t < range.1),
         );
         points.sort_by(f64::total_cmp);
+        points.dedup();
         let mut low = f64::INFINITY;
         let mut high = f64::NEG_INFINITY;
+        let satisfies = |t| value(poly, t) <= 0.0;
+        // A tangent root or range endpoint can be the entire closed set.
+        // Retain computed roots conservatively even if evaluation at the
+        // rounded root lands just outside the predicate.
+        for &point in &points {
+            if satisfies(point) || crossings.contains(&point) {
+                low = low.min(point);
+                high = high.max(point);
+            }
+        }
         for pair in points.windows(2) {
             let (a, b) = (pair[0], pair[1]);
-            let mid = a.midpoint(b);
-            let satisfies = if le_zero {
-                value(poly, mid) <= 0.0
-            } else {
-                value(poly, mid) >= 0.0
-            };
-            if satisfies {
+            if satisfies(a.midpoint(b)) {
                 low = low.min(a);
                 high = high.max(b);
             }
@@ -419,37 +474,10 @@ impl WidthAxis {
         self,
         region: &PreparedRegion,
         error: f64,
-        nearby: Vec<(Point, Point)>,
-        cones: Vec<(Point, Point)>,
+        cut_sources: Vec<(Point, Point)>,
+        constraints: Vec<Polynomial>,
+        clearance_bounds: BBox,
     ) -> Vec<Self> {
-        let mut constraints = Vec::new();
-        for (a, b) in self.contacts {
-            if a != b {
-                let length = a.distance_to(b);
-                let projection = self.projection(a, (b - a) / length);
-                constraints.push(projection);
-                constraints.push([length - projection[0], -projection[1], -projection[2]]);
-            } else {
-                // Endpoint normal cone, including adjacent source edges. A
-                // shadowed endpoint is not a nearest contact even when the
-                // distance difference rounds to zero at a corner transition.
-                // These resolve through the contact index (see above), not the
-                // narrowed nearby set, whose box cannot decide half-planes
-                // through far contact vertices.
-                for &(start, end) in &cones {
-                    let direction = if a == start {
-                        end - start
-                    } else if a == end {
-                        start - end
-                    } else {
-                        continue;
-                    };
-                    if direction.length() > 0.0 {
-                        constraints.push(self.projection(a, -direction / direction.length()));
-                    }
-                }
-            }
-        }
         let mut cuts = constraints
             .iter()
             .flat_map(|&polynomial| roots(polynomial))
@@ -462,7 +490,12 @@ impl WidthAxis {
             cuts.extend(roots(self.projection(a, perpendicular(b - a))));
         }
         let mut clearance = Vec::new();
-        for &(a, b) in &nearby {
+        let mut nearby = Vec::new();
+        for &(a, b) in &cut_sources {
+            let local = BBox::spanning(a, b).intersects(clearance_bounds);
+            if local {
+                nearby.push((a, b));
+            }
             // These equalities hold by construction, including endpoint
             // contacts after their incident normal-cone constraints above.
             if self.contacts.iter().any(|&(p, q)| {
@@ -499,12 +532,14 @@ impl WidthAxis {
                     .to_vec()
             };
             cuts.extend(line.iter().copied().flat_map(roots));
-            clearance.push(SegmentClearance {
-                projection,
-                length,
-                endpoints,
-                line,
-            });
+            if local {
+                clearance.push(SegmentClearance {
+                    projection,
+                    length,
+                    endpoints,
+                    line,
+                });
+            }
         }
         self.clip(cuts, |t, isolated| {
             let center = self.at(t);
@@ -615,6 +650,73 @@ mod tests {
     fn validate(axis: WidthAxis, region: &ContourSet, boundary: &PreparedRegion) -> Vec<WidthAxis> {
         let index = ContactIndex::for_segments(&boundary.segments);
         axis.in_region_with_contact_index(&region.prepare_query(), boundary, f64::INFINITY, &index)
+    }
+
+    #[test]
+    fn predicate_hull_keeps_singletons_and_endpoints() {
+        assert_eq!(
+            WidthAxis::sublevel_hull([1.0, -2.0, 1.0], true, (-3.0, 4.0)),
+            Some((1.0, 1.0))
+        );
+        assert_eq!(
+            WidthAxis::sublevel_hull([0.0, 1.0, 0.0], true, (0.0, 2.0)),
+            Some((0.0, 0.0))
+        );
+        assert_eq!(
+            WidthAxis::sublevel_hull([0.0, 1.0, 0.0], false, (-2.0, 0.0)),
+            Some((0.0, 0.0))
+        );
+        assert_eq!(
+            WidthAxis::sublevel_hull([1.0, 0.0, 1.0], true, (-3.0, 4.0)),
+            None
+        );
+        for (poly, expected) in [([0.0, 1.0, 0.0], Some((0.0, 0.0))), ([1.0, 0.0, 0.0], None)] {
+            assert_eq!(WidthAxis::sublevel_hull(poly, true, (0.0, 0.0)), expected);
+        }
+    }
+
+    #[test]
+    fn remote_wall_cuts_preserve_tolerated_singletons() {
+        let point = (Point::new(0.0, 1.0), Point::new(0.0, 1.0));
+        let wall = (Point::new(-0.0045, 0.0), Point::new(0.0045, 0.0));
+        let occluder = (Point::new(-3.0, 1.0 - 1e-14), Point::new(3.0, 1.0 - 1e-14));
+        let remote = (Point::new(0.0, 1.5), Point::new(1.0, 1.5));
+        let region = region();
+        let boundary = PreparedRegion::from_segments(vec![point, wall, occluder, remote], 0.0);
+        let axes = WidthAxis::between(point, wall, region.bbox)
+            .into_iter()
+            .flat_map(|a| validate(a, &region, &boundary))
+            .collect::<Vec<_>>();
+        assert_eq!(axes.len(), 1);
+        assert_eq!(axes[0].range, (0.0, 0.0));
+        assert_eq!(axes[0].minimum().0, Point::new(0.0, 0.5));
+        assert_eq!(axes[0].minimum().1, 0.5);
+
+        // A cut just outside a finite contact still qualifies within the
+        // existing singleton tolerance. Exact contact pruning would lose it.
+        let wall = (Point::new(1e-14, 0.0), Point::new(0.0045, 0.0));
+        let boundary = PreparedRegion::from_segments(vec![point, wall, occluder, remote], 0.0);
+        let axis = WidthAxis::between(point, wall, region.bbox)
+            .into_iter()
+            .find(|a| a.contacts == [point, wall])
+            .unwrap();
+        let index = ContactIndex::for_segments(&boundary.segments);
+        // At cap=.75 the radius-only query still reaches the remote wall at
+        // y=1.5; the contact-narrowed clearance box does not. Its projection
+        // gives t=0, and the finite contact starts at t=1e-14. Neither root
+        // may disappear, and no guarded hull endpoint may be added.
+        for cap in [f64::INFINITY, 0.75] {
+            let axes =
+                axis.in_region_with_contact_index(&region.prepare_query(), &boundary, cap, &index);
+            assert_eq!(
+                axes.iter().map(|a| a.range).collect::<Vec<_>>(),
+                [(0.0, 0.0), (1e-14, 1e-14)],
+                "radius cap {cap}"
+            );
+            for axis in axes {
+                assert_eq!(axis.minimum().1, 0.5);
+            }
+        }
     }
 
     #[test]
