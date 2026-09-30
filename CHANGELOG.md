@@ -16,9 +16,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Change `pcb ipc2581 edit population` to take `--dnp` and `--populate` deltas that leave every other designator as is.
 - Workspaces link to the toolchain stdlib instead of copying it into `.pcb/stdlib`.
-
-### Removed
-
 - Remove `pcb doc`; use `pcb list -m -json <package>` and read the source directly.
 
 ### Fixed
@@ -180,6 +177,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Prefer `Board(path=...)`, retaining `layout_path` as a compatibility alias and rejecting empty paths. New board templates enable persistent schematics while keeping `layout_path` for older compilers.
 - Speed up schematic connectivity analysis and repair planning with indexed terminal matching and verified batches of local wire cuts.
 - Speed up region construction and unions on layers made of many small, locally overlapping features such as silkscreen and solder mask.
+- Remove the unused `pcb-elastic` and `pcb-mechanics` crates and `pcb-ir` analysis meshing left over from the mouse-bite exploration.
 
 ### Fixed
 
@@ -193,9 +191,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Fix false missing-output errors after applying schematics.
 - Accept one KiCad no-connect marker for stacked intentional-open pins, including hidden pins, while preserving physical pad identities and rejecting connected or cross-page collisions.
 
-### Removed
-
-- Remove the unused `pcb-elastic` and `pcb-mechanics` crates and `pcb-ir` analysis meshing left over from the mouse-bite exploration.
 
 ## [0.4.52] - 2026-09-09
 
