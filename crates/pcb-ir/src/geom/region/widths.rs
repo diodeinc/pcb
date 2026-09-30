@@ -232,6 +232,15 @@ impl WidthAxis {
         bounds
     }
 
+    /// Bounds of all disks along the axis. The constructed radius functions
+    /// are convex, so their maximum lies at an endpoint.
+    fn disk_bounds(self, error: f64) -> BBox {
+        let radius = self
+            .radius_at(self.range.0)
+            .max(self.radius_at(self.range.1));
+        self.bounds().expand(radius + error)
+    }
+
     /// Partition by every predicate root, keeping valid singleton intersections
     /// as well as intervals. Identically zero polynomials need no subdivision.
     fn clip(self, mut cuts: Vec<f64>, valid: impl Fn(f64, bool) -> bool) -> Vec<Self> {
@@ -322,10 +331,7 @@ impl WidthAxis {
         // so a spatial box around the axis cannot decide them. Resolve every
         // segment sharing a contact endpoint through the index, keeping those
         // the original query box would have returned.
-        let maximum_radius = self
-            .radius_at(self.range.0)
-            .max(self.radius_at(self.range.1));
-        let original_box = bounds.expand(maximum_radius + error);
+        let original_box = self.disk_bounds(error);
         let mut cone_ids = Vec::new();
         for (a, b) in self.contacts {
             for point in [a, b] {
@@ -357,11 +363,7 @@ impl WidthAxis {
                 return Vec::new();
             }
         }
-        let bounds = narrowed.bounds();
-        let maximum_radius = narrowed
-            .radius_at(narrowed.range.0)
-            .max(narrowed.radius_at(narrowed.range.1));
-        let cut_bounds = bounds.expand(maximum_radius + error);
+        let cut_bounds = narrowed.disk_bounds(error);
         let constraints = self.contact_constraints(&cones);
         // Supporting lines can extend across an entire component even when
         // their finite contact edges are tiny. Reject impossible contacts
@@ -376,10 +378,7 @@ impl WidthAxis {
             };
             narrowed.range = range;
         }
-        let maximum_radius = narrowed
-            .radius_at(narrowed.range.0)
-            .max(narrowed.radius_at(narrowed.range.1));
-        let clearance_bounds = narrowed.bounds().expand(maximum_radius + error);
+        let clearance_bounds = narrowed.disk_bounds(error);
         // Even a remote wall's supporting line can supply an isolated cut
         // that validates within tolerance. Preserve those events from the
         // original radius-only query, not just the walls that can obstruct
@@ -420,6 +419,7 @@ impl WidthAxis {
     /// Hull of the `{t ∈ range}` sublevel set of a polynomial predicate.
     /// The hull is a superset, used only to drop provably useless spans.
     fn sublevel_hull(poly: Polynomial, le_zero: bool, range: (f64, f64)) -> Option<(f64, f64)> {
+        let poly = if le_zero { poly } else { poly.map(|p| -p) };
         let crossings = roots(poly);
         let mut points = vec![range.0, range.1];
         points.extend(
@@ -432,13 +432,7 @@ impl WidthAxis {
         points.dedup();
         let mut low = f64::INFINITY;
         let mut high = f64::NEG_INFINITY;
-        let satisfies = |t| {
-            if le_zero {
-                value(poly, t) <= 0.0
-            } else {
-                value(poly, t) >= 0.0
-            }
-        };
+        let satisfies = |t| value(poly, t) <= 0.0;
         // A tangent root or range endpoint can be the entire closed set.
         // Retain computed roots conservatively even if evaluation at the
         // rounded root lands just outside the predicate.
@@ -496,7 +490,12 @@ impl WidthAxis {
             cuts.extend(roots(self.projection(a, perpendicular(b - a))));
         }
         let mut clearance = Vec::new();
+        let mut nearby = Vec::new();
         for &(a, b) in &cut_sources {
+            let local = BBox::spanning(a, b).intersects(clearance_bounds);
+            if local {
+                nearby.push((a, b));
+            }
             // These equalities hold by construction, including endpoint
             // contacts after their incident normal-cone constraints above.
             if self.contacts.iter().any(|&(p, q)| {
@@ -533,7 +532,7 @@ impl WidthAxis {
                     .to_vec()
             };
             cuts.extend(line.iter().copied().flat_map(roots));
-            if BBox::spanning(a, b).intersects(clearance_bounds) {
+            if local {
                 clearance.push(SegmentClearance {
                     projection,
                     length,
@@ -542,10 +541,6 @@ impl WidthAxis {
                 });
             }
         }
-        let nearby = cut_sources
-            .into_iter()
-            .filter(|&(a, b)| BBox::spanning(a, b).intersects(clearance_bounds))
-            .collect::<Vec<_>>();
         self.clip(cuts, |t, isolated| {
             let center = self.at(t);
             let radius = self.radius_at(t);
@@ -675,6 +670,9 @@ mod tests {
             WidthAxis::sublevel_hull([1.0, 0.0, 1.0], true, (-3.0, 4.0)),
             None
         );
+        for (poly, expected) in [([0.0, 1.0, 0.0], Some((0.0, 0.0))), ([1.0, 0.0, 0.0], None)] {
+            assert_eq!(WidthAxis::sublevel_hull(poly, true, (0.0, 0.0)), expected);
+        }
     }
 
     #[test]
@@ -702,11 +700,23 @@ mod tests {
             .into_iter()
             .find(|a| a.contacts == [point, wall])
             .unwrap();
-        assert!(
-            validate(axis, &region, &boundary)
-                .iter()
-                .any(|a| a.range == (0.0, 0.0))
-        );
+        let index = ContactIndex::for_segments(&boundary.segments);
+        // At cap=.75 the radius-only query still reaches the remote wall at
+        // y=1.5; the contact-narrowed clearance box does not. Its projection
+        // gives t=0, and the finite contact starts at t=1e-14. Neither root
+        // may disappear, and no guarded hull endpoint may be added.
+        for cap in [f64::INFINITY, 0.75] {
+            let axes =
+                axis.in_region_with_contact_index(&region.prepare_query(), &boundary, cap, &index);
+            assert_eq!(
+                axes.iter().map(|a| a.range).collect::<Vec<_>>(),
+                [(0.0, 0.0), (1e-14, 1e-14)],
+                "radius cap {cap}"
+            );
+            for axis in axes {
+                assert_eq!(axis.minimum().1, 0.5);
+            }
+        }
     }
 
     #[test]
