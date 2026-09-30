@@ -933,18 +933,13 @@ fn dm0002_excludes_document_objects_from_assembly_work() {
 #[test]
 fn population_override_reports_like_an_authored_population() {
     let dnp = ["J1".to_string()];
-    let edited = crate::commands::population_edit::set_population(FIXTURE, &dnp)
+    let edited = crate::commands::population_edit::set_population(FIXTURE, &dnp, &[])
         .unwrap()
         .unwrap();
-    let authored = FIXTURE
-        .replace(
-            r#"<RefDes name="J1" packageRef="pkg-tht" populate="true""#,
-            r#"<RefDes name="J1" packageRef="pkg-tht" populate="false""#,
-        )
-        .replace(
-            r#"<RefDes name="U2" packageRef="pkg-smt""#,
-            r#"<RefDes name="U2" packageRef="pkg-smt" populate="true""#,
-        );
+    let authored = FIXTURE.replace(
+        r#"<RefDes name="J1" packageRef="pkg-tht" populate="true""#,
+        r#"<RefDes name="J1" packageRef="pkg-tht" populate="false""#,
+    );
 
     // The edit is recorded as pcb's, so only the creating software differs.
     for target in [LayoutTarget::Board, LayoutTarget::BoardArray] {
@@ -959,5 +954,6 @@ fn population_override_reports_like_an_authored_population() {
         .summary
         .terminations;
     assert_eq!(terminations.through_on_included_populated_components, 0);
-    assert_eq!(terminations.surface_on_included_populated_components, 2);
+    // U2 stays unspecified, so only the explicitly populated part counts.
+    assert_eq!(terminations.surface_on_included_populated_components, 1);
 }

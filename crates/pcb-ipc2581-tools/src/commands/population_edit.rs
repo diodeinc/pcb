@@ -1,30 +1,45 @@
-//! Override a document's population: every BOM designator is populated except
-//! a given do-not-populate set. Population lives only in `RefDes@populate`, so
-//! the assembly report, CPL, and board arrays of the edited document all
-//! follow it.
+//! Change a document's population: the named designators are populated or
+//! not, and every other designator keeps the population it was authored with.
+//! Population lives only in `RefDes@populate`, so the assembly report, CPL,
+//! and board arrays of the edited document all follow it.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, bail};
 use ipc2581::edit::{Doc, Edit, Node};
 
-/// `xml` with every non-document BOM designator populated except those in
-/// `dnp`, or `None` when it already has exactly that population.
-pub fn set_population(xml: &str, dnp: &[String]) -> Result<Option<String>> {
+/// `xml` with `dnp` unpopulated and `populate` populated, or `None` when it
+/// already is. Every other designator is left alone.
+pub fn set_population(xml: &str, dnp: &[String], populate: &[String]) -> Result<Option<String>> {
     let doc = Doc::parse(xml)?;
     let references = bom_references(&doc);
-    let dnp: HashSet<&str> = dnp.iter().map(String::as_str).collect();
 
+    let mut wanted: HashMap<&str, bool> = HashMap::new();
+    for (names, value) in [(dnp, false), (populate, true)] {
+        for name in names {
+            if wanted.insert(name.as_str(), value) == Some(!value) {
+                bail!("Designator {name} is listed as both DNP and populated");
+            }
+        }
+    }
     let known: HashSet<&str> = references.iter().map(|&(_, name)| name).collect();
-    let mut unknown: Vec<&str> = dnp.difference(&known).copied().collect();
+    let mut unknown: Vec<&str> = wanted
+        .keys()
+        .copied()
+        .filter(|n| !known.contains(n))
+        .collect();
     if !unknown.is_empty() {
         unknown.sort_unstable_by(|a, b| natord::compare(a, b));
-        bail!("DNP designators not in the BOM: {}", unknown.join(", "));
+        bail!("Designators not in the BOM: {}", unknown.join(", "));
     }
 
     let edits = references
         .iter()
-        .map(|&(reference, name)| populate_edit(&doc, reference, !dnp.contains(name)))
+        .filter_map(|&(node, name)| {
+            wanted
+                .get(name)
+                .map(|&value| populate_edit(&doc, node, value))
+        })
         .filter_map(Result::transpose)
         .collect::<Result<Vec<_>>>()?;
     if edits.is_empty() {
@@ -32,25 +47,22 @@ pub fn set_population(xml: &str, dnp: &[String]) -> Result<Option<String>> {
     }
 
     let comment = format!(
-        "Population set ({} of {} designators DNP)",
+        "Population changed ({} DNP, {} populated)",
         dnp.len(),
-        known.len()
+        populate.len()
     );
     let history = crate::utils::history::file_revision_edits(&doc, &comment)?;
     let xml = doc.apply(history.into_iter().chain(edits).collect())?;
     Ok(Some(crate::utils::format::reformat_xml(&xml)?))
 }
 
-/// Every named designator of every non-document BOM item. Population is read
-/// from all BOMs, so all of them are rewritten.
+/// Every named designator of every BOM item. Population is read from all
+/// BOMs, so all of them are rewritten.
 fn bom_references<'a>(doc: &'a Doc<'_>) -> Vec<(Node, &'a str)> {
     doc.find_all("Bom")
         .into_iter()
         .flat_map(|bom| doc.children(bom))
-        .filter(|&item| {
-            doc.name(item) == "BomItem"
-                && doc.attr(item, "category").map(str::trim) != Some("DOCUMENT")
-        })
+        .filter(|&item| doc.name(item) == "BomItem")
         .flat_map(|item| doc.children(item))
         .filter(|&child| doc.name(child) == "RefDes")
         .filter_map(|reference| {
@@ -80,16 +92,26 @@ fn populate_edit(doc: &Doc<'_>, reference: Node, populate: bool) -> Result<Optio
 }
 
 #[cfg(feature = "cli")]
-pub fn execute(file: &std::path::Path, dnp: &[String], output: &std::path::Path) -> Result<()> {
+pub fn execute(
+    file: &std::path::Path,
+    dnp: &[String],
+    populate: &[String],
+    output: &std::path::Path,
+) -> Result<()> {
     use crate::utils::file as file_utils;
     use anyhow::Context as _;
 
     let bytes = std::fs::read(file).with_context(|| format!("Failed to read file: {file:?}"))?;
     let content = file_utils::ipc_text(file, &bytes)?;
-    match set_population(&content, dnp)? {
+    match set_population(&content, dnp, populate)? {
         Some(updated) => {
             file_utils::save_ipc_file(output, &updated)?;
-            eprintln!("Set population ({} DNP) in {:?}", dnp.len(), output);
+            eprintln!(
+                "Population changed ({} DNP, {} populated) in {:?}",
+                dnp.len(),
+                populate.len(),
+                output
+            );
         }
         None => {
             // Keep the input's exact bytes whenever the output is encoded the same way.
@@ -162,35 +184,32 @@ mod tests {
     }
 
     #[test]
-    fn sets_listed_dnp_and_populates_the_rest() {
-        let edited = set_population(XML, &dnp(&["R1", "U1"])).unwrap().unwrap();
+    fn changes_named_designators_and_leaves_the_rest() {
+        let edited = set_population(XML, &dnp(&["R1"]), &dnp(&["R2"]))
+            .unwrap()
+            .unwrap();
 
         assert_eq!(
             population(&edited),
             [
                 ("R1".to_string(), Some(false)),
                 ("R2".to_string(), Some(true)),
-                ("R3".to_string(), Some(true)),
-                ("U1".to_string(), Some(false)),
+                ("R3".to_string(), None),
+                ("U1".to_string(), Some(true)),
                 ("LOGO".to_string(), Some(false)),
             ]
         );
-        assert!(
-            edited.contains(
-                r#"<RefDes name="R3" packageRef="R0402" layerRef="TOP" populate="true"/>"#
-            )
-        );
-        assert!(edited.contains(
-            "<RefDes name=\"U1\" packageRef=\"QFN\" populate=\"false\" layerRef=\"TOP\">\n        <Tuning value=\"trim\"/>"
-        ));
-        assert!(edited.contains(r#"change="Population set (2 of 4 designators DNP)""#));
+        assert!(edited.contains(r#"<RefDes name="R3" packageRef="R0402" layerRef="TOP"/>"#));
+        assert!(edited.contains(r#"change="Population changed (1 DNP, 1 populated)""#));
     }
 
     #[test]
     fn unchanged_population_is_left_alone() {
-        let edited = set_population(XML, &dnp(&["R1"])).unwrap().unwrap();
-
-        assert_eq!(set_population(&edited, &dnp(&["R1", "R1"])).unwrap(), None);
+        assert_eq!(
+            set_population(XML, &dnp(&["R2", "LOGO"]), &dnp(&["R1", "U1"])).unwrap(),
+            None
+        );
+        assert_eq!(set_population(XML, &[], &[]).unwrap(), None);
     }
 
     #[test]
@@ -201,22 +220,23 @@ mod tests {
                 r#"<ipc:RefDes xmlns:ipc="http://webstds.ipc.org/2581" name="U1""#,
             )
             .replace("</RefDes>", "</ipc:RefDes>");
-        let edited = set_population(&xml, &dnp(&["R2", "U1"])).unwrap().unwrap();
+        let edited = set_population(&xml, &dnp(&["U1"]), &[]).unwrap().unwrap();
 
         assert!(edited.contains(
             r#"<ipc:RefDes xmlns:ipc="http://webstds.ipc.org/2581" name="U1" packageRef="QFN" populate="false" layerRef="TOP">"#
         ));
         assert!(edited.contains("</ipc:RefDes>"));
-        assert!(population(&edited).contains(&("U1".to_string(), Some(false))));
     }
 
     #[test]
-    fn rejects_designators_outside_the_bom() {
-        let error = set_population(XML, &dnp(&["R10", "LOGO", "R1", "C2"])).unwrap_err();
+    fn rejects_unknown_and_conflicting_designators() {
+        let error = set_population(XML, &dnp(&["R10", "R1", "C2"]), &[]).unwrap_err();
+        assert_eq!(error.to_string(), "Designators not in the BOM: C2, R10");
 
+        let error = set_population(XML, &dnp(&["R1"]), &dnp(&["R1"])).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "DNP designators not in the BOM: C2, LOGO, R10"
+            "Designator R1 is listed as both DNP and populated"
         );
     }
 }
