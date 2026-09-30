@@ -315,31 +315,36 @@ pub fn ensure_workspace_cache_symlink(workspace_root: &Path) -> Result<()> {
 
 /// Make `link` a symlink to `target`, replacing whatever is there.
 fn ensure_symlink(target: &Path, link: &Path) -> Result<()> {
-    if std::fs::read_link(link).is_ok_and(|current| current == target) {
-        return Ok(());
-    }
-
-    if let Some(parent) = link.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let _ = std::fs::remove_file(link);
-    let _ = std::fs::remove_dir_all(link);
-
-    #[cfg(unix)]
-    let created = std::os::unix::fs::symlink(target, link);
-    #[cfg(windows)]
-    let created = std::os::windows::fs::symlink_dir(target, link);
-    match created {
-        // A concurrent command may have created the same link first.
-        Err(err)
-            if err.kind() == std::io::ErrorKind::AlreadyExists
-                && std::fs::read_link(link).is_ok_and(|current| current == target) =>
-        {
-            Ok(())
+    // A concurrent command may relink between our removal and creation: take
+    // its link if it points at `target`, otherwise replace it again.
+    for _ in 0..3 {
+        if std::fs::read_link(link).is_ok_and(|current| current == target) {
+            return Ok(());
         }
-        result => result
-            .with_context(|| format!("Failed to link {} to {}", link.display(), target.display())),
+        if let Some(parent) = link.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let _ = std::fs::remove_file(link);
+        let _ = std::fs::remove_dir_all(link);
+
+        #[cfg(unix)]
+        let created = std::os::unix::fs::symlink(target, link);
+        #[cfg(windows)]
+        let created = std::os::windows::fs::symlink_dir(target, link);
+        match created {
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            result => {
+                return result.with_context(|| {
+                    format!("Failed to link {} to {}", link.display(), target.display())
+                });
+            }
+        }
     }
+    anyhow::bail!(
+        "{} kept changing while linking it to {}",
+        link.display(),
+        target.display()
+    )
 }
 
 pub fn ensure_source_repo(repo_url: &str) -> Result<PathBuf> {
@@ -380,6 +385,19 @@ pub fn source_repo_dir(repo_url: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ensure_symlink_replaces_copies_and_other_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let (a, b) = (temp.path().join("a"), temp.path().join("b"));
+        let link = temp.path().join(".pcb/stdlib");
+        std::fs::create_dir_all(link.join("generics")).unwrap();
+
+        for target in [&a, &b, &b] {
+            ensure_symlink(target, &link).unwrap();
+            assert_eq!(std::fs::read_link(&link).unwrap(), *target);
+        }
+    }
 
     fn test_index(db_path: &std::path::Path, schema: &str) -> CacheIndex {
         let manager = SqliteConnectionManager::file(db_path).with_init(|c| {
