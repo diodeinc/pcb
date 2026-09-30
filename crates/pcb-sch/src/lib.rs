@@ -14,7 +14,6 @@
 pub mod bom;
 #[cfg(feature = "table")]
 mod bom_table;
-pub mod hierarchical_layout;
 pub mod kicad_identity;
 pub mod kicad_netlist;
 pub mod natural_string;

@@ -9,7 +9,7 @@ use pcb_zen_core::{DefaultFileProvider, Diagnostics};
 use crate::helpers::*;
 
 fn prepare_simple_workspace() -> Result<(TempDir, pcb_zen_core::resolution::ResolutionResult)> {
-    let temp = TempDir::new()?.into_persistent();
+    let temp = TempDir::new()?;
     temp.copy_from(get_resource_path("simple"), &["**/*", "!.pcb/cache/**/*"])?;
     let workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
     let resolution = pcb_zen::resolve_workspace_dependencies(workspace_info, temp.path(), false)?;

@@ -129,7 +129,9 @@ jobs:
           RUST_BACKTRACE: full
         run: cargo nextest run --workspace --profile ci --locked
 
+      # Doctests are platform-independent; one OS is enough.
       - name: Run doctests
+        if: matrix.config.name == 'Ubuntu'
         env:
           RUST_LOG: debug
           RUST_BACKTRACE: full

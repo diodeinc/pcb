@@ -45,7 +45,7 @@ macro_rules! layout_test {
             #[test]
             fn [<test_layout_generation_with_ $name:snake>]() -> Result<()> {
                 // Create a temp directory and copy the test resources
-                let temp = TempDir::new()?.into_persistent();
+                let temp = TempDir::new()?;
                 let resource_path = get_resource_path($name);
                 temp.copy_from(&resource_path, &["**/*", "!.pcb/cache/**/*"])?;
 

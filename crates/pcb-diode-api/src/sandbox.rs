@@ -196,6 +196,9 @@ pub struct SandboxLockOptions {
     pub kind: String,
     pub ttl: Duration,
     pub heartbeat_interval: Duration,
+    /// Budget for lock writes, lease-scoped connection renewal attempts,
+    /// release cleanup, and exec cancellation.
+    pub request_timeout: Duration,
     pub force_reclaim_stale: bool,
 }
 
@@ -208,6 +211,7 @@ impl SandboxLockOptions {
             kind: "local-edit".to_string(),
             ttl: Duration::from_secs(90),
             heartbeat_interval: Duration::from_secs(5),
+            request_timeout: LOCK_REQUEST_TIMEOUT,
             force_reclaim_stale: true,
         }
     }
@@ -240,6 +244,7 @@ struct SandboxLockState {
     template: SandboxLockFile,
     /// Etag and conservative monotonic expiry of our last successful write.
     lease: Mutex<(String, Instant)>,
+    request_timeout: Duration,
     running: AtomicBool,
 }
 
@@ -386,6 +391,7 @@ impl SandboxClient {
         sandbox_id: &str,
         template: &SandboxLockFile,
         precondition: &WritePrecondition,
+        timeout: Duration,
     ) -> Result<ConditionalWrite> {
         let mut expires_at = Instant::now();
         let response = self.data_plane_request(sandbox_id, |http, base| {
@@ -401,7 +407,7 @@ impl SandboxClient {
                 .put(sandbox_fs_url(base, "/fs/write", SANDBOX_LOCK_FILE_PATH))
                 .header(CONTENT_TYPE, "application/octet-stream")
                 .json(&lock)
-                .timeout(LOCK_REQUEST_TIMEOUT);
+                .timeout(timeout);
             match precondition {
                 WritePrecondition::CreateOnly => request.header(IF_NONE_MATCH, "*"),
                 WritePrecondition::Match(etag) => request.header(IF_MATCH, etag.clone()),
@@ -432,10 +438,9 @@ impl SandboxClient {
         options: SandboxLockOptions,
     ) -> Result<SandboxLockGuard> {
         let ttl_seconds = duration_secs_i64(options.ttl, "lock ttl")?;
-        let heartbeat_seconds =
-            duration_secs_i64(options.heartbeat_interval, "lock heartbeat interval")?;
-        if heartbeat_seconds >= ttl_seconds {
-            bail!("lock heartbeat interval must be shorter than the ttl");
+        let heartbeat = options.heartbeat_interval;
+        if heartbeat.is_zero() || heartbeat >= Duration::from_secs(ttl_seconds as u64) {
+            bail!("lock heartbeat interval must be non-zero and shorter than the ttl");
         }
 
         let now = Utc::now();
@@ -450,18 +455,25 @@ impl SandboxClient {
             expires_at: now + chrono::Duration::seconds(ttl_seconds),
             ttl_seconds,
         };
-        let lease = acquire_lock_file(self, sandbox_id, &lock, options.force_reclaim_stale)?;
+        let lease = acquire_lock_file(
+            self,
+            sandbox_id,
+            &lock,
+            options.force_reclaim_stale,
+            options.request_timeout,
+        )?;
 
         let state = Arc::new(SandboxLockState {
             client: self.clone(),
             sandbox_id: sandbox_id.to_string(),
             template: lock,
             lease: Mutex::new(lease),
+            request_timeout: options.request_timeout,
             running: AtomicBool::new(true),
         });
         let thread_state = Arc::clone(&state);
         let heartbeat_thread = thread::spawn(move || {
-            heartbeat_loop(thread_state, options.heartbeat_interval);
+            heartbeat_loop(thread_state, heartbeat);
         });
 
         Ok(SandboxLockGuard {
@@ -570,7 +582,11 @@ impl SandboxClient {
     fn cancel_exec(&self, sandbox_id: &str, exec_id: &str) -> Result<()> {
         // Cancelling an existing job is cleanup, even after sync stops or its
         // lease expires. Do not extend an existing cleanup deadline.
-        let deadline = Instant::now() + LOCK_REQUEST_TIMEOUT;
+        let deadline = Instant::now()
+            + match &self.scope {
+                RequestScope::Editing(state) => state.request_timeout,
+                _ => LOCK_REQUEST_TIMEOUT,
+            };
         let client = Self {
             scope: RequestScope::Cleanup(match self.scope {
                 RequestScope::Cleanup(existing) => existing.min(deadline),
@@ -672,10 +688,9 @@ impl SandboxClient {
                 self.request_timeout(deadline.saturating_duration_since(Instant::now()))?;
             // Blocking HTTP cannot be cancelled mid-request. Keep lease renewal
             // attempts short so shutdown can join the heartbeat promptly.
-            let timeout = if matches!(self.scope, RequestScope::Editing(_)) {
-                LOCK_REQUEST_TIMEOUT
-            } else {
-                DEFAULT_REQUEST_TIMEOUT
+            let timeout = match &self.scope {
+                RequestScope::Editing(state) => state.request_timeout,
+                _ => DEFAULT_REQUEST_TIMEOUT,
             };
             let response = match self
                 .authenticated(self.http.post(&url))?
@@ -933,6 +948,7 @@ fn heartbeat_loop(state: Arc<SandboxLockState>, interval: Duration) {
             &state.sandbox_id,
             &state.template,
             &WritePrecondition::Match(etag),
+            state.request_timeout,
         ) {
             Ok(ConditionalWrite::Written(etag, expires_at)) => {
                 *state.lease.lock().unwrap() = (etag, expires_at);
@@ -958,7 +974,7 @@ fn release_once(state: &SandboxLockState) -> Result<()> {
     // Shutdown must not start another twenty-minute maintenance wait. If cleanup
     // cannot finish, the remote lease expires naturally.
     let client = SandboxClient {
-        scope: RequestScope::Cleanup(expires_at.min(Instant::now() + LOCK_REQUEST_TIMEOUT)),
+        scope: RequestScope::Cleanup(expires_at.min(Instant::now() + state.request_timeout)),
         ..state.client.clone()
     };
     if let Some((current, _)) =
@@ -979,6 +995,7 @@ fn acquire_lock_file(
     sandbox_id: &str,
     lock: &SandboxLockFile,
     force_reclaim_stale: bool,
+    timeout: Duration,
 ) -> Result<(String, Instant)> {
     let precondition = match read_lock_file(client, sandbox_id)? {
         None => WritePrecondition::CreateOnly,
@@ -992,7 +1009,7 @@ fn acquire_lock_file(
             WritePrecondition::Match(etag)
         }
     };
-    match client.write_lock_file(sandbox_id, lock, &precondition)? {
+    match client.write_lock_file(sandbox_id, lock, &precondition, timeout)? {
         ConditionalWrite::Written(etag, expires_at) => Ok((etag, expires_at)),
         ConditionalWrite::PreconditionFailed => {
             bail!("Sandbox is already locked: another client just acquired it")
