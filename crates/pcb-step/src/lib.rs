@@ -199,7 +199,7 @@ FILE_NAME('",
     w.text(&options.name.replace('\'', "''"));
     w.text(
         ".step','',('pcb-step'),(''),'pcb-step','pcb-step','');\n\
-FILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 }'));\n\
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\n\
 ENDSEC;\nDATA;\n",
     );
     let mut placements: Vec<u32> = Vec::new();

@@ -616,7 +616,7 @@ impl Root {
         let name = name.replace('\'', "''");
         write!(
             w.buf,
-            "#{app_protocol} = APPLICATION_PROTOCOL_DEFINITION('international standard','ap242_managed_model_based_3d_engineering',2014,#{app_context});\n\
+            "#{app_protocol} = APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,#{app_context});\n\
 #{app_context} = APPLICATION_CONTEXT('core data for automotive mechanical design processes');\n\
 #{shape_def_rep} = SHAPE_DEFINITION_REPRESENTATION(#{product_def_shape},#{shape_rep});\n\
 #{product_def_shape} = PRODUCT_DEFINITION_SHAPE('','',#{product_def});\n\
