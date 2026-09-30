@@ -16,6 +16,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Remove `pcb doc`; use `pcb list -m -json <package>` and read the source directly.
 
+### Fixed
+
+- Write compact DFM report JSON so formatting does not consume the 128 MiB report budget.
+
 ## [0.4.62] - 2026-09-29
 
 ### Added

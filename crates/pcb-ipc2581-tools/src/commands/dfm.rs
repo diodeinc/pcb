@@ -433,7 +433,7 @@ fn summarize(checked: &checks::Results) -> report::Summary {
     }
 }
 
-/// The report as newline-terminated JSON of at most `limit` bytes.
+/// The report as compact, newline-terminated JSON of at most `limit` bytes.
 /// Serialization stops at the limit: a panel's report can be many times over
 /// it, and building all of that in memory only to refuse it cost gigabytes.
 #[cfg(feature = "cli")]
@@ -462,7 +462,7 @@ fn serialize_within(report: &impl Serialize, limit: usize) -> Result<Vec<u8>> {
         limit,
         exceeded: false,
     };
-    let written = serde_json::to_writer_pretty(&mut capped, report)
+    let written = serde_json::to_writer(&mut capped, report)
         .map_err(anyhow::Error::from)
         .and_then(|()| Ok(capped.write_all(b"\n")?));
     ensure!(
@@ -1220,7 +1220,7 @@ reason = "old finding"
         assert_eq!(whole.last(), Some(&b'\n'));
         assert_eq!(
             whole[..whole.len() - 1],
-            serde_json::to_vec_pretty(&report).unwrap()
+            serde_json::to_vec(&report).unwrap()
         );
         // The limit is inclusive of the trailing newline.
         assert_eq!(serialize_within(&report, whole.len()).unwrap(), whole);
