@@ -615,62 +615,64 @@ fn tile_copper_balance(doc: &mut Document, resolution: Resolution) -> Result<(),
             let contour = crate::geom::shapes::regular_polygon(2.0 * radius, 6, 0.0)
                 .ok_or(AccuracyError::InvalidGeometry("invalid balance lattice"))?;
             let cell = ContourSet::from_filled_contours(&[contour], image.resolution)?;
-            let index = BBoxIndex::new(image.ring_bounds.clone());
-            for site in lattice.sites_covering(image.bbox.expand(radius)) {
-                let center = lattice.center(site);
-                let cell = cell.translated(center)?;
-                // Include enclosing rings as well as nearby holes, without
-                // scanning every void on the panel for every lattice cell.
-                let nearby = ContourSet::from_regularized(
-                    index
-                        .query(cell.bbox)
-                        .into_iter()
-                        .map(|i| image.rings[i].clone())
-                        .collect(),
-                    image.resolution,
-                    image.uncertainty_mm,
-                );
-                let tile = cell.intersection(&nearby)?.translated(-center)?;
-                if tile.is_empty() {
-                    continue;
-                }
-                let mut key = tile
-                    .rings
+            let sites = lattice.sites_covering(image.bbox.expand(radius));
+            // A ring's bounds can cover the entire panel even when a cell
+            // touches only a few of its edges. Clip small batches first so
+            // each cell intersects local geometry, not that entire ring.
+            for batch in sites.chunks(64) {
+                let bounds = batch
                     .iter()
-                    .map(|ring| {
-                        let mut ring = ring
-                            .iter()
-                            .map(|point| point.map(|v| if v == 0.0 { 0 } else { v.to_bits() }))
-                            .collect::<Vec<_>>();
-                        let first = ring
-                            .iter()
-                            .enumerate()
-                            .min_by_key(|(_, point)| **point)
-                            .unwrap()
-                            .0;
-                        ring.rotate_left(first);
-                        ring
+                    .fold(BBox::empty(), |bounds, &site| {
+                        bounds.union(BBox::from_point(lattice.center(site)))
                     })
-                    .collect::<Vec<_>>();
-                key.sort_unstable();
-                let next = shapes.len() as u32;
-                let id = *shapes.entry(key).or_insert(next);
-                let placement = feature.transform.concat(Affine2::translation(center));
-                let path = doc.arena.push_path(
-                    Paint::Fill {
-                        rule: FillRule::NonZero,
-                    },
-                    tile.to_contours()
-                        .into_iter()
-                        .map(|contour| contour.transformed(placement)),
-                );
-                expanded.push(Feature {
-                    paths: Span::single(path),
-                    transform: placement,
-                    primitive_ref: Some(PrimitiveRef::Generated(id)),
-                    shape: None,
-                    ..feature.clone()
-                });
+                    .expand(radius + LATTICE_TILE_OVERLAP_MM);
+                let nearby =
+                    image.intersection(&ContourSet::rectangle(bounds, image.resolution))?;
+                for &site in batch {
+                    let center = lattice.center(site);
+                    let cell = cell.translated(center)?;
+                    let tile = cell.intersection(&nearby)?.translated(-center)?;
+                    if tile.is_empty() {
+                        continue;
+                    }
+                    let mut key = tile
+                        .rings
+                        .iter()
+                        .map(|ring| {
+                            let mut ring = ring
+                                .iter()
+                                .map(|point| point.map(|v| if v == 0.0 { 0 } else { v.to_bits() }))
+                                .collect::<Vec<_>>();
+                            let first = ring
+                                .iter()
+                                .enumerate()
+                                .min_by_key(|(_, point)| **point)
+                                .unwrap()
+                                .0;
+                            ring.rotate_left(first);
+                            ring
+                        })
+                        .collect::<Vec<_>>();
+                    key.sort_unstable();
+                    let next = shapes.len() as u32;
+                    let id = *shapes.entry(key).or_insert(next);
+                    let placement = feature.transform.concat(Affine2::translation(center));
+                    let path = doc.arena.push_path(
+                        Paint::Fill {
+                            rule: FillRule::NonZero,
+                        },
+                        tile.to_contours()
+                            .into_iter()
+                            .map(|contour| contour.transformed(placement)),
+                    );
+                    expanded.push(Feature {
+                        paths: Span::single(path),
+                        transform: placement,
+                        primitive_ref: Some(PrimitiveRef::Generated(id)),
+                        shape: None,
+                        ..feature.clone()
+                    });
+                }
             }
         } else {
             expanded.push(feature);
