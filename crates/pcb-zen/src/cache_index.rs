@@ -315,10 +315,11 @@ pub fn ensure_workspace_cache_symlink(workspace_root: &Path) -> Result<()> {
 
 /// Make `link` a symlink to `target`, replacing whatever is there.
 fn ensure_symlink(target: &Path, link: &Path) -> Result<()> {
+    let linked = || std::fs::read_link(link).is_ok_and(|current| current == target);
     // A concurrent command may relink between our removal and creation: take
     // its link if it points at `target`, otherwise replace it again.
     for _ in 0..3 {
-        if std::fs::read_link(link).is_ok_and(|current| current == target) {
+        if linked() {
             return Ok(());
         }
         if let Some(parent) = link.parent() {
@@ -340,11 +341,13 @@ fn ensure_symlink(target: &Path, link: &Path) -> Result<()> {
             }
         }
     }
-    anyhow::bail!(
+    anyhow::ensure!(
+        linked(),
         "{} kept changing while linking it to {}",
         link.display(),
         target.display()
-    )
+    );
+    Ok(())
 }
 
 pub fn ensure_source_repo(repo_url: &str) -> Result<PathBuf> {
