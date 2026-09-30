@@ -4191,7 +4191,6 @@ dependencies = [
  "sha2 0.11.0",
  "sqlite-vec",
  "tempfile",
- "thiserror 2.0.20",
  "toml",
  "url",
  "urlencoding",
@@ -4214,7 +4213,6 @@ dependencies = [
 name = "pcb-eda"
 version = "0.4.63"
 dependencies = [
- "anstream",
  "anyhow",
  "pcb-sexpr",
  "regex",
@@ -4356,7 +4354,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "uuid",
 ]
 
 [[package]]
@@ -4518,7 +4515,6 @@ dependencies = [
 name = "pcb-ui"
 version = "0.4.63"
 dependencies = [
- "anstream",
  "anyhow",
  "colored",
  "indicatif",
@@ -4642,7 +4638,6 @@ dependencies = [
  "dirs",
  "env_logger",
  "gerberx2",
- "glam 0.33.6",
  "hex",
  "httpmock",
  "ignore",
@@ -4696,7 +4691,6 @@ dependencies = [
  "tracing-chrome",
  "tracing-subscriber",
  "uuid",
- "walkdir",
  "zip",
  "zstd",
 ]

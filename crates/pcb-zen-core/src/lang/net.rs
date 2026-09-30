@@ -109,13 +109,6 @@ fn is_unset_builtin_optional_net_field<'v>(
     value.is_none() && is_builtin_optional_net_field(type_name, field_name)
 }
 
-/// Reset the net ID counter to 1. This is only intended for use in tests
-/// to ensure reproducible net IDs across test runs.
-#[cfg(test)]
-pub fn reset_net_id_counter() {
-    NEXT_NET_ID.store(1, Ordering::Relaxed);
-}
-
 #[derive(
     Clone,
     Copy,

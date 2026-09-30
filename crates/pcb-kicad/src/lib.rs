@@ -5,7 +5,6 @@ pub mod footprint;
 use anyhow::{Context, Result, anyhow};
 use pcb_command_runner::CommandRunner;
 use pcb_sexpr::Sexpr;
-use pcb_zen_core::Diagnostics;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Write};
@@ -533,14 +532,6 @@ pub fn run_drc(
     builder.run().context("Failed to run KiCad DRC")?;
 
     drc::DrcReport::from_file(output_path).context("Failed to parse DRC report")
-}
-
-/// Run KiCad ERC checks and add violations to diagnostics
-pub fn run_erc(schematic_path: impl AsRef<Path>, diagnostics: &mut Diagnostics) -> Result<()> {
-    let schematic_path = schematic_path.as_ref();
-    let report = run_erc_report(schematic_path, None).context("Failed to run KiCad ERC")?;
-    report.add_to_diagnostics(diagnostics, &schematic_path.to_string_lossy());
-    Ok(())
 }
 
 /// Run KiCad ERC checks and return the parsed JSON report.

@@ -20,8 +20,8 @@ use pcb_kicad_sch::{
 
 mod project;
 
-pub use project::{KicadProject, schematic_project_path};
-use project::{files_with_extension, project_schematic_path};
+pub use project::KicadProject;
+use project::{files_with_extension, project_schematic_path, schematic_project_path};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

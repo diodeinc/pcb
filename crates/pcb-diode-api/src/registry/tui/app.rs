@@ -1441,26 +1441,6 @@ fn compute_preflight(
     })
 }
 
-fn current_workspace_root() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    let file_provider = pcb_zen_core::DefaultFileProvider::new();
-    pcb_zen_core::config::find_workspace_root(&file_provider, &cwd).ok()
-}
-
-/// Run the TUI application
-pub fn run() -> Result<()> {
-    let workspace_root = current_workspace_root();
-    let preflight = compute_preflight(None, &[], workspace_root.as_deref())?;
-    run_with_preflight(preflight)
-}
-
-/// Run the TUI with an explicit starting mode
-/// - If mode is Some, use that mode (but available modes still depend on registry access)
-/// - If mode is None, use the first available local search index.
-pub fn run_with_mode(mode: Option<SearchMode>) -> Result<()> {
-    run_with_mode_and_registry_index(mode, None, Vec::new(), current_workspace_root())
-}
-
 pub fn run_with_mode_and_registry_index(
     mode: Option<SearchMode>,
     registry_db_path_override: Option<PathBuf>,

@@ -18,26 +18,11 @@ impl TerminalSize {
             height: h.0,
         })
     }
-
-    /// Get the terminal width, with a fallback default
-    pub fn width_or_default(default: u16) -> u16 {
-        Self::current().map(|s| s.width).unwrap_or(default)
-    }
-
-    /// Get the terminal height, with a fallback default
-    pub fn height_or_default(default: u16) -> u16 {
-        Self::current().map(|s| s.height).unwrap_or(default)
-    }
 }
 
 /// Get the current terminal size
 pub fn get_terminal_size() -> Option<TerminalSize> {
     TerminalSize::current()
-}
-
-/// Clear the current line
-pub fn clear_line() {
-    anstream::print!("\r\x1b[K");
 }
 
 /// Write primary command output to stdout.

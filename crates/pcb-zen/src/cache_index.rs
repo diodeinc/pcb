@@ -213,68 +213,6 @@ impl CacheIndex {
     }
 }
 
-impl CacheIndex {
-    // Commit metadata (for pseudo-version generation)
-
-    pub fn get_commit_metadata(
-        &self,
-        repo_url: &str,
-        commit_hash: &str,
-    ) -> Option<(i64, Option<String>)> {
-        self.conn()
-            .query_row(
-                "SELECT timestamp, base_version FROM commit_metadata WHERE repo_url = ?1 AND commit_hash = ?2",
-                params![repo_url, commit_hash],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .ok()
-            .flatten()
-    }
-
-    pub fn set_commit_metadata(
-        &self,
-        repo_url: &str,
-        commit_hash: &str,
-        timestamp: i64,
-        base_version: Option<&str>,
-    ) -> Result<()> {
-        self.conn().execute(
-            "INSERT OR REPLACE INTO commit_metadata (repo_url, commit_hash, timestamp, base_version)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![repo_url, commit_hash, timestamp, base_version],
-        )?;
-        Ok(())
-    }
-
-    // Branch commits (cached branch -> commit mappings)
-
-    pub fn get_branch_commit(&self, repo_url: &str, branch: &str) -> Option<String> {
-        self.conn()
-            .query_row(
-                "SELECT commit_hash FROM branch_commits WHERE repo_url = ?1 AND branch = ?2",
-                params![repo_url, branch],
-                |row| row.get(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
-    }
-
-    pub fn set_branch_commit(&self, repo_url: &str, branch: &str, commit_hash: &str) -> Result<()> {
-        self.conn().execute(
-            "INSERT OR REPLACE INTO branch_commits (repo_url, branch, commit_hash) VALUES (?1, ?2, ?3)",
-            params![repo_url, branch, commit_hash],
-        )?;
-        Ok(())
-    }
-
-    pub fn clear_branch_commits(&self) -> Result<()> {
-        self.conn().execute("DELETE FROM branch_commits", [])?;
-        Ok(())
-    }
-}
-
 fn index_path() -> PathBuf {
     dirs::home_dir()
         .expect("Cannot determine home directory")

@@ -414,10 +414,6 @@ pub fn rev_parse_short_head(repo_root: &Path) -> Option<String> {
     run_output_opt(repo_root, &["rev-parse", "--short", "HEAD"])
 }
 
-pub fn get_repo_root(path: &Path) -> anyhow::Result<PathBuf> {
-    run_output(path, &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
-}
-
 pub fn symbolic_ref_short_head(repo_root: &Path) -> Option<String> {
     run_output_opt(repo_root, &["symbolic-ref", "-q", "--short", "HEAD"])
 }
@@ -534,20 +530,8 @@ pub fn status_paths_in_repo(repo_root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-pub fn tags_pointing_at_head(repo_root: &Path) -> Vec<String> {
-    run_lines({
-        let mut cmd = git(repo_root);
-        cmd.args(["tag", "--points-at", "HEAD"]);
-        cmd
-    })
-}
-
 pub fn create_tag(repo_root: &Path, tag_name: &str, message: &str) -> anyhow::Result<()> {
     run_in(repo_root, &["tag", "-a", tag_name, "-m", message])
-}
-
-pub fn delete_tag(repo_root: &Path, tag_name: &str) -> anyhow::Result<()> {
-    run_in(repo_root, &["tag", "-d", tag_name])
 }
 
 pub fn delete_tags(repo_root: &Path, tag_names: &[&str]) -> anyhow::Result<()> {
@@ -826,44 +810,15 @@ pub fn push_branch(repo_root: &Path, branch: &str, remote: &str) -> anyhow::Resu
     run_network_in(repo_root, &["push", remote, branch])
 }
 
-pub fn push_branch_force(repo_root: &Path, branch: &str, remote: &str) -> anyhow::Result<()> {
-    run_network_in(repo_root, &["push", "--force", remote, branch])
-}
-
 /// Clone a repository with HTTPS, falling back to SSH
 pub fn clone_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
     with_remote_fallback(repo_url, |url, prompt| clone(url, dest, prompt)).map(|_| ())
 }
 
-/// Create or reset a branch to point at a specific ref
-pub fn checkout_branch_reset(
-    repo_root: &Path,
-    branch: &str,
-    start_point: &str,
-) -> anyhow::Result<()> {
-    run_in(repo_root, &["checkout", "-B", branch, start_point])
-}
-
 /// Fetch from remote
 pub fn fetch(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
     run_network_in(repo_root, &["fetch", remote, "--quiet"])
-}
-
-pub fn prune_worktrees(bare_repo: &Path) -> anyhow::Result<()> {
-    run_in(bare_repo, &["worktree", "prune"])
-}
-
-pub fn create_worktree(bare_repo: &Path, worktree_dir: &Path, rev: &str) -> anyhow::Result<()> {
-    let mut cmd = git(bare_repo);
-    cmd.args(["worktree", "add", "--detach", "--quiet"])
-        .arg(worktree_dir)
-        .arg(rev);
-    run_silent(cmd)
-}
-
-pub fn get_remote_url(repo_root: &Path) -> anyhow::Result<String> {
-    run_output(repo_root, &["remote", "get-url", "origin"])
 }
 
 pub fn get_remote_url_for(repo_root: &Path, remote: &str) -> anyhow::Result<String> {
@@ -875,17 +830,6 @@ pub fn get_branch_remote(repo_root: &Path, branch: &str) -> Option<String> {
         repo_root,
         &["config", "--get", &format!("branch.{}.remote", branch)],
     )
-}
-
-pub fn detect_repository_url(repo_root: &Path) -> anyhow::Result<String> {
-    let remote = run_output_opt(
-        repo_root,
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-    )
-    .and_then(|s| s.split('/').next().map(str::to_string))
-    .unwrap_or_else(|| "origin".to_string());
-    let url = get_remote_url_for(repo_root, &remote)?;
-    parse_remote_url(&url)
 }
 
 pub fn get_repo_subpath(workspace_root: &Path) -> anyhow::Result<Option<PathBuf>> {
@@ -904,24 +848,6 @@ pub fn has_uncommitted_changes(repo_root: &Path) -> anyhow::Result<bool> {
         anyhow::bail!("Failed to check git status");
     }
     Ok(!out.stdout.is_empty())
-}
-
-pub fn has_uncommitted_changes_in_path(repo_root: &Path, path: &Path) -> bool {
-    let path_arg = if path == Path::new("") || path == Path::new(".") {
-        "."
-    } else {
-        return git(repo_root)
-            .args(["status", "--porcelain", "--"])
-            .arg(path)
-            .output()
-            .map(|o| o.status.success() && !o.stdout.is_empty())
-            .unwrap_or(true);
-    };
-    git(repo_root)
-        .args(["status", "--porcelain", "--", path_arg])
-        .output()
-        .map(|o| o.status.success() && !o.stdout.is_empty())
-        .unwrap_or(true)
 }
 
 pub fn commit(repo_root: &Path, message: &str) -> anyhow::Result<String> {
@@ -947,16 +873,6 @@ pub fn commit_with_trailers(repo_root: &Path, message: &str) -> anyhow::Result<S
 
 pub fn reset_hard(repo_root: &Path, commit: &str) -> anyhow::Result<()> {
     run_in(repo_root, &["reset", "--hard", commit])
-}
-
-pub fn is_available() -> bool {
-    git_global()
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
 }
 
 pub fn cat_file(repo_root: &Path, object: &str) -> Option<String> {
@@ -1104,28 +1020,6 @@ pub fn resolve_branch_head(module_path: &str, branch: &str) -> anyhow::Result<St
     Ok(commit)
 }
 
-pub fn lock_manifest(manifest_path: &Path) -> anyhow::Result<fslock::LockFile> {
-    let lock_path = manifest_lock_path(manifest_path);
-    let lock_dir = lock_path.parent().expect("lock path must have parent");
-    std::fs::create_dir_all(lock_dir)?;
-    let mut lock = fslock::LockFile::open(&lock_path)?;
-    lock.lock()?;
-    Ok(lock)
-}
-
-fn manifest_lock_path(manifest_path: &Path) -> PathBuf {
-    let parent = manifest_path
-        .parent()
-        .expect("manifest path must have parent");
-    let file_name = manifest_path
-        .file_name()
-        .expect("manifest path must have file name");
-    parent
-        .join(".pcb")
-        .join("locks")
-        .join(format!("{}.lock", file_name.to_string_lossy()))
-}
-
 /// Acquire a file lock for a directory to prevent concurrent access.
 /// Returns a guard that releases the lock when dropped.
 pub fn lock_dir(dir: &Path) -> anyhow::Result<fslock::LockFile> {
@@ -1145,15 +1039,6 @@ pub fn lock_dir(dir: &Path) -> anyhow::Result<fslock::LockFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_manifest_lock_path() {
-        let manifest = Path::new("/repo/boards/IP0003/pcb.toml");
-        let lock_path = manifest_lock_path(manifest);
-        let parent = manifest.parent().unwrap();
-        let expected = parent.join(".pcb").join("locks").join("pcb.toml.lock");
-        assert_eq!(lock_path, expected);
-    }
 
     #[test]
     fn test_parse_remote_url_https() {

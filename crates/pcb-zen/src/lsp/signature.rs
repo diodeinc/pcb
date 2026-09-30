@@ -1,7 +1,6 @@
 use anyhow::Result;
 use lsp_types::{ParameterInformation, ParameterLabel, SignatureHelp, SignatureInformation};
-// MarkupContent etc not used currently but left for future expansion. Removed to suppress warnings.
-use starlark::codemap::{CodeMap, ResolvedPos, ResolvedSpan};
+use starlark::codemap::{CodeMap, ResolvedPos};
 use starlark::syntax::AstModule;
 use starlark::syntax::ast::*;
 use starlark_syntax::syntax::module::AstModuleFields;
@@ -10,16 +9,9 @@ use pcb_starlark_lsp::server::{LspContext, LspUri};
 
 use std::collections::HashMap;
 
-/// Helper function to render a signature from a function name and parameters
-pub fn render_signature(name: &str, params: &[String]) -> String {
-    format!("{}({})", name, params.join(", "))
-}
-
 // Represents an invocation of a function call at the cursor position.
 #[derive(Debug)]
 pub(crate) struct Call {
-    #[allow(dead_code)]
-    pub(crate) function_span: ResolvedSpan,
     pub(crate) function_name: String,
     pub(crate) current_argument: CallArgument,
 }
@@ -89,7 +81,6 @@ fn visit_expr_recursive<P: AstPayload>(
                     });
 
                 out.push(Call {
-                    function_span: codemap.resolve_span(ident.span),
                     function_name: ident.node.ident.clone(),
                     current_argument: current_arg,
                 });

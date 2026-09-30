@@ -459,9 +459,6 @@ impl Bom {
 /// Errors that can occur during KiCad BOM generation
 #[derive(Debug, thiserror::Error)]
 pub enum KiCadBomError {
-    #[error("Failed to execute kicad-cli: {0}")]
-    KiCadCliError(String),
-
     #[error("Failed to parse CSV: {0}")]
     CsvError(#[from] csv::Error),
 

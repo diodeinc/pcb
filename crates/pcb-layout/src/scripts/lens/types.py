@@ -145,9 +145,6 @@ class NetView:
     # (e.g. when it's valid to mark pads as no_connect).
     logical_ports: tuple[tuple[str, str], ...] = ()
 
-    def has_connection_to(self, entity_id: EntityId) -> bool:
-        return any(fp_id == entity_id for fp_id, _ in self.connections)
-
 
 @dataclass(frozen=True)
 class BoardView:
@@ -164,9 +161,6 @@ class Position:
 
     x: int
     y: int
-
-    def offset_by(self, dx: int, dy: int) -> Position:
-        return Position(x=self.x + dx, y=self.y + dy)
 
     def __add__(self, other: Position) -> Position:
         return Position(x=self.x + other.x, y=self.y + other.y)
@@ -187,30 +181,6 @@ class FootprintComplement:
     reference_visible: bool = True
     value_position: Position | None = None
     value_visible: bool = False
-
-    def with_position(self, position: Position) -> FootprintComplement:
-        return FootprintComplement(
-            position=position,
-            orientation=self.orientation,
-            layer=self.layer,
-            locked=self.locked,
-            reference_position=self.reference_position,
-            reference_visible=self.reference_visible,
-            value_position=self.value_position,
-            value_visible=self.value_visible,
-        )
-
-    def with_locked(self, locked: bool) -> FootprintComplement:
-        return FootprintComplement(
-            position=self.position,
-            orientation=self.orientation,
-            layer=self.layer,
-            locked=locked,
-            reference_position=self.reference_position,
-            reference_visible=self.reference_visible,
-            value_position=self.value_position,
-            value_visible=self.value_visible,
-        )
 
 
 @dataclass(frozen=True)
@@ -285,14 +255,6 @@ class BoardComplement:
 
     footprints: dict[EntityId, FootprintComplement] = field(default_factory=dict)
     groups: dict[EntityId, GroupComplement] = field(default_factory=dict)
-
-    def get_footprint_complement(
-        self, entity_id: EntityId
-    ) -> FootprintComplement | None:
-        return self.footprints.get(entity_id)
-
-    def get_group_complement(self, entity_id: EntityId) -> GroupComplement | None:
-        return self.groups.get(entity_id)
 
 
 def default_footprint_complement() -> FootprintComplement:

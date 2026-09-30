@@ -350,11 +350,7 @@ impl Sandbox {
             &bare_url,
         ]);
 
-        FixtureRepo {
-            work,
-            bare,
-            default_branch: "main".into(),
-        }
+        FixtureRepo { work, bare }
     }
 
     /// Build a `duct::Expression` pre-wired with the sandbox env and default cwd.
@@ -700,7 +696,6 @@ impl Sandbox {
 pub struct FixtureRepo {
     work: PathBuf,
     bare: PathBuf,
-    default_branch: String,
 }
 
 impl FixtureRepo {
@@ -718,14 +713,6 @@ impl FixtureRepo {
     pub fn commit<S: AsRef<str>>(&mut self, msg: S) -> &mut Self {
         run_git(&["-C", self.work_str(), "add", "-A"]);
         run_git(&["-C", self.work_str(), "commit", "-m", msg.as_ref()]);
-        self
-    }
-
-    /// Set/rename the default branch.
-    pub fn set_default_branch<S: AsRef<str>>(&mut self, name: S) -> &mut Self {
-        let name = name.as_ref();
-        run_git(&["-C", self.work_str(), "branch", "-M", name]);
-        self.default_branch = name.to_string();
         self
     }
 

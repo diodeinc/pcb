@@ -242,15 +242,7 @@ mod tests {
             }
         }
         let raster = PoseRaster {
-            top_z: bottom_z.mapv(|z| {
-                if z.is_finite() {
-                    0.0
-                } else {
-                    f64::NEG_INFINITY
-                }
-            }),
             bottom_z,
-            body_mask: Array2::<bool>::from_elem((20, 20), false),
             bounds: [-1.0, -1.0, 1.0, 1.0],
             resolution_mm,
             z_min: -1.0,

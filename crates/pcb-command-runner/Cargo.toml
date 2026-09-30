@@ -11,4 +11,6 @@ description = "A utility for running commands with output capture"
 anyhow = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 os_pipe = { workspace = true }
+
+[dev-dependencies]
 tempfile = { workspace = true }

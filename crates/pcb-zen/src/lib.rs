@@ -28,7 +28,7 @@ pub use git::split_repo_and_subpath;
 pub use package_resolver::resolve_workspace_dependencies;
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
-pub use resolve::{VendorResult, copy_dir_all, ensure_sparse_checkout, vendor_deps};
+pub use resolve::{VendorResult, copy_dir_all, vendor_deps};
 pub use starlark::errors::EvalSeverity;
 pub use workspace::{WorkspaceInfo, WorkspacePackage, get_workspace_info};
 
@@ -60,13 +60,6 @@ pub fn run(
 
 pub fn lsp() -> anyhow::Result<()> {
     let ctx = lsp::LspEvalContext::default();
-    pcb_starlark_lsp::server::stdio_server(ctx).map_err(Into::into)
-}
-
-/// Start the LSP server with `eager` determining whether all workspace files are pre-loaded.
-/// When `eager` is `false` the server behaves like before (only open files are parsed).
-pub fn lsp_with_eager(eager: bool) -> anyhow::Result<()> {
-    let ctx = lsp::LspEvalContext::default().set_eager(eager);
     pcb_starlark_lsp::server::stdio_server(ctx).map_err(Into::into)
 }
 

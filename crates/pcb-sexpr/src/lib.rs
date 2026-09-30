@@ -249,11 +249,6 @@ impl Sexpr {
         }
     }
 
-    /// Check if this is a list
-    pub fn is_list(&self) -> bool {
-        matches!(self.kind, SexprKind::List(_))
-    }
-
     /// Get the atom value if this is an atom (symbol or string) - for compatibility
     pub fn as_atom(&self) -> Option<&str> {
         match &self.kind {
@@ -433,14 +428,6 @@ impl ListBuilder {
     /// Push a value to the list
     pub fn push<V: Into<Sexpr>>(&mut self, v: V) -> &mut Self {
         self.items.push(v.into());
-        self
-    }
-
-    /// Conditionally push a value to the list
-    pub fn push_if<V: Into<Sexpr>>(&mut self, cond: bool, v: V) -> &mut Self {
-        if cond {
-            self.items.push(v.into());
-        }
         self
     }
 

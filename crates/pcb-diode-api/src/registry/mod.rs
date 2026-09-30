@@ -106,12 +106,6 @@ pub struct RegistrySymbol {
     pub rank: Option<f64>,
 }
 
-impl RegistrySymbol {
-    pub fn availability_lookup_key(&self) -> Option<ComponentKey> {
-        component_lookup_key(Some(&self.mpn), Some(&self.manufacturer))
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistryModuleDependency {
     pub id: i64,

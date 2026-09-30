@@ -176,11 +176,6 @@ impl PhysicalValue {
         }
     }
 
-    /// Backwards compatibility: create from value and tolerance (legacy API)
-    pub fn from_decimal(value: Decimal, tolerance: Decimal, unit: PhysicalUnitDims) -> Self {
-        Self::from_nominal_tolerance(value, tolerance, unit)
-    }
-
     pub fn check_unit(self, expected: PhysicalUnitDims) -> Result<Self, PhysicalValueError> {
         if self.unit != expected {
             return Err(PhysicalValueError::UnitMismatch {
@@ -759,8 +754,6 @@ pub enum PhysicalValueError {
     DivisionByZero,
     #[error("Unit mismatch: expected {expected}, got {actual}")]
     UnitMismatch { expected: String, actual: String },
-    #[error("Unit has no alias")]
-    InvalidPhysicalUnit,
     #[error("Cannot mix positional argument with keyword arguments")]
     MixedArguments,
     #[error("{unit}() expects a string, number, or {unit} value")]
@@ -771,18 +764,12 @@ pub enum PhysicalValueError {
         input: String,
         source: ParseError,
     },
-    #[error("Unexpected keyword '{keyword}'")]
-    UnexpectedKeyword { keyword: String },
     #[error("{unit}() missing required keyword 'value'")]
     MissingValueKeyword { unit: String },
-    #[error("{unit}() accepts at most one positional argument")]
-    TooManyArguments { unit: String },
     #[error("Invalid number {number}")]
     InvalidNumber { number: String },
     #[error("Expected int, float or numeric string")]
     InvalidNumberType,
-    #[error("Invalid percentage value: '{value}'")]
-    InvalidPercentage { value: String },
     #[error("Invalid tolerance value: '{value}'")]
     InvalidTolerance { value: String },
     #[error("with_unit() expects a PhysicalUnit string or None")]
@@ -1122,7 +1109,9 @@ fn parse_physical_value(
 
     let (value, unit) = parse_value_with_unit(&value_unit_str, expected_unit)?;
 
-    Ok(PhysicalValue::from_decimal(value, tolerance, unit))
+    Ok(PhysicalValue::from_nominal_tolerance(
+        value, tolerance, unit,
+    ))
 }
 
 fn convert_temperature_to_kelvin(value: Decimal, unit: &str) -> Decimal {
@@ -1663,7 +1652,7 @@ mod tests {
 
         // Test new numeric argument support (simulated)
         // In practice: Voltage(50) would create 50V, Resistance(100) would create 100Ohms
-        let numeric_as_voltage = PhysicalValue::from_decimal(
+        let numeric_as_voltage = PhysicalValue::from_nominal_tolerance(
             Decimal::from(50),
             Decimal::ZERO,
             PhysicalUnit::Volts.into(),
@@ -1693,7 +1682,7 @@ mod tests {
         ];
 
         for (value, unit, tolerance, expected) in test_cases {
-            let val = PhysicalValue::from_decimal(value, tolerance, unit.into());
+            let val = PhysicalValue::from_nominal_tolerance(value, tolerance, unit.into());
             assert_eq!(format!("{}", val), expected);
         }
     }
@@ -1797,7 +1786,7 @@ mod tests {
         ];
 
         for (value, unit, tolerance, expected) in test_cases {
-            let val = PhysicalValue::from_decimal(value, tolerance, unit.into());
+            let val = PhysicalValue::from_nominal_tolerance(value, tolerance, unit.into());
             assert_eq!(format!("{}", val), expected);
         }
     }

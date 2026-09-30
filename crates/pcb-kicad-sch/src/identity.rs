@@ -101,15 +101,6 @@ impl SymbolSlotKey {
         })
     }
 
-    pub fn from_path_segments<I, S>(segments: I, unit: u32) -> Option<Self>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        canonical_component_path(segments)
-            .and_then(|component_path| Self::new(component_path, unit))
-    }
-
     pub fn component_path(&self) -> &str {
         &self.component_path
     }

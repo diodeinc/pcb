@@ -37,14 +37,6 @@ pub struct MaskGrid {
 }
 
 impl MaskGrid {
-    #[allow(dead_code)] // Useful public API.
-    pub fn width(&self) -> usize {
-        self.mask.ncols()
-    }
-    #[allow(dead_code)] // Useful public API.
-    pub fn height(&self) -> usize {
-        self.mask.nrows()
-    }
     pub fn pixel_count(&self) -> usize {
         self.mask.iter().filter(|&&b| b).count()
     }
@@ -55,12 +47,6 @@ pub struct PoseRaster {
     /// Per-pixel bottom-Z in mm (in the rotated audit frame). `f64::INFINITY`
     /// where no triangle was rasterized.
     pub bottom_z: Array2<f64>,
-    /// Per-pixel top-Z in mm. Together with `bottom_z`, this gives the solver a
-    /// cheap solid-interval approximation for z-slice cross sections.
-    #[allow(dead_code)] // Retained for z-slice diagnostics and future support scoring.
-    pub top_z: Array2<f64>,
-    #[allow(dead_code)] // Retained: used by the rasterizer, useful for debug viz.
-    pub body_mask: Array2<bool>,
     pub bounds: [f64; 4],
     pub resolution_mm: f64,
     pub z_min: f64,
@@ -126,7 +112,7 @@ pub fn rasterize_hole_labels(holes: &[PadShape], resolution_mm: f64) -> Option<H
             let y = bounds[1] + ((r as f64) + 0.5) * resolution_mm;
             for c in col0..col1 {
                 let x = bounds[0] + ((c as f64) + 0.5) * resolution_mm;
-                if point_inside_polygon(poly, x, y, eps) && labels[(r, c)] == 0 {
+                if point_inside_polygon(poly, x, y) && labels[(r, c)] == 0 {
                     labels[(r, c)] = hole_id;
                 }
             }
@@ -415,8 +401,6 @@ pub fn build_pose_raster_from_triangles(
     let bounds = [min_x, min_y, max_x, max_y];
     let (width, height) = bounds_to_grid_size(bounds, resolution_mm);
     let mut bottom_z = Array2::from_elem((height, width), f64::INFINITY);
-    let mut top_z = Array2::from_elem((height, width), f64::NEG_INFINITY);
-    let mut body_mask = Array2::from_elem((height, width), false);
 
     // Cull up-facing triangles that sit far above the contact zone. Mirrors
     // the `faces_up & far_from_bottom` cull in the Python rasterizer.
@@ -424,8 +408,6 @@ pub fn build_pose_raster_from_triangles(
 
     let mut target = RasterTarget {
         bottom_z: &mut bottom_z,
-        top_z: &mut top_z,
-        body_mask: &mut body_mask,
         bounds,
         resolution_mm,
     };
@@ -456,8 +438,6 @@ pub fn build_pose_raster_from_triangles(
     }
     Some(PoseRaster {
         bottom_z,
-        top_z,
-        body_mask,
         bounds: [
             min_x,
             min_y,
@@ -842,17 +822,17 @@ fn rasterize_polygon_into(
                 continue;
             }
             let x = grid_min_x + ((c as f64) + 0.5) * resolution_mm;
-            if point_inside_polygon(poly, x, y, eps) {
+            if point_inside_polygon(poly, x, y) {
                 mask[(r, c)] = true;
             }
         }
     }
 }
 
-/// Inclusive point-in-polygon test with an `eps` tolerance. Even-odd rule
+/// Point-in-polygon test. Even-odd rule
 /// across all rings (disjoint-ring sums approximate `unary_union`'s behaviour
 /// for the convex pad shapes we emit).
-pub fn point_inside_polygon(poly: &Polygon, x: f64, y: f64, _eps: f64) -> bool {
+pub fn point_inside_polygon(poly: &Polygon, x: f64, y: f64) -> bool {
     for ring in &poly.rings {
         if ring_contains(ring, x, y) {
             return true;
@@ -909,8 +889,6 @@ fn rotate_triangles(mesh: &MeshData, m: &Mat3) -> Vec<[[f64; 3]; 3]> {
 
 struct RasterTarget<'a> {
     bottom_z: &'a mut Array2<f64>,
-    top_z: &'a mut Array2<f64>,
-    body_mask: &'a mut Array2<bool>,
     bounds: [f64; 4],
     resolution_mm: f64,
 }
@@ -961,11 +939,7 @@ fn rasterize_triangle(
             if a < -1e-6 || b < -1e-6 || c < -1e-6 {
                 continue;
             }
-            target.body_mask[(iy, ix)] = true;
             let z = a * v0[2] + b * v1[2] + c * v2[2];
-            if z > target.top_z[(iy, ix)] {
-                target.top_z[(iy, ix)] = z;
-            }
             if z_contributing && z < target.bottom_z[(iy, ix)] {
                 target.bottom_z[(iy, ix)] = z;
             }
@@ -974,34 +948,8 @@ fn rasterize_triangle(
 }
 
 // ---------------------------------------------------------------------------
-// Simple centroid / overlap helpers used by the Phase A scorer
+// Overlap helpers used by the Phase A scorer
 // ---------------------------------------------------------------------------
-
-/// Pixel-count-weighted centroid of a boolean mask, returned in world
-/// coordinates.
-#[allow(dead_code)] // Useful public API.
-pub fn mask_centroid(grid: &MaskGrid) -> Option<(f64, f64)> {
-    let (h, w) = grid.mask.dim();
-    let mut sx = 0.0;
-    let mut sy = 0.0;
-    let mut n = 0.0;
-    for r in 0..h {
-        for c in 0..w {
-            if grid.mask[(r, c)] {
-                sx += (c as f64) + 0.5;
-                sy += (r as f64) + 0.5;
-                n += 1.0;
-            }
-        }
-    }
-    if n <= 0.0 {
-        return None;
-    }
-    Some((
-        grid.bounds[0] + (sx / n) * grid.resolution_mm,
-        grid.bounds[1] + (sy / n) * grid.resolution_mm,
-    ))
-}
 
 /// Count overlap between a target grid and a source grid shifted by
 /// `(dx_px, dy_px)` (target coord = source coord + shift). Returns the
@@ -1195,8 +1143,6 @@ pub fn translation_from_pixel_shift(
 #[derive(Debug, Clone)]
 pub struct FftTranslation {
     pub translation: (f64, f64),
-    #[allow(dead_code)] // Useful diagnostic field.
-    pub shift: (i32, i32),
     pub mask_overlap: f64,
 }
 
@@ -1222,7 +1168,6 @@ pub fn fft_translation_best(target: &MaskGrid, source: &MaskGrid) -> FftTranslat
     let dy_px = best_r as i32 - (s_h as i32 - 1);
     FftTranslation {
         translation: translation_from_pixel_shift(target, source, dx_px, dy_px),
-        shift: (dx_px, dy_px),
         mask_overlap: best_val.max(0.0) * px_area,
     }
 }
@@ -1259,7 +1204,6 @@ pub fn fft_translation_candidates(target: &MaskGrid, source: &MaskGrid) -> Vec<F
         let mask_overlap = corr[(iy as usize, ix as usize)] * px_area;
         out.push(FftTranslation {
             translation: t,
-            shift: (dx_px, dy_px),
             mask_overlap,
         });
     };
@@ -1459,7 +1403,7 @@ mod tests {
             let y = bounds[1] + ((r as f64) + 0.5) * resolution_mm;
             for c in col0..col1 {
                 let x = bounds[0] + ((c as f64) + 0.5) * resolution_mm;
-                if point_inside_polygon(poly, x, y, eps) {
+                if point_inside_polygon(poly, x, y) {
                     labels[(r, c)] = 1;
                 }
             }
