@@ -706,6 +706,8 @@ consumer's machine to render or validate the report.
   measurement carries the same index.
 
 Check-owned sites, measurements, witnesses, and evidence paths are authoritative.
+Coordinates are written to the nanometre. Evidence paths, rings, and stroke
+centerlines omit vertices within 0.1 µm of the path without them.
 The optional `evidence.display` construction uses the same world millimeters:
 
 | `kind` | Fields and rendering |
