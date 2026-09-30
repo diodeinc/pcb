@@ -41,7 +41,6 @@ macro_rules! layout_test {
     };
     ($name:expr, $board_name:expr, $snapshot_kicad_pro:expr) => {
         paste::paste! {
-            #[cfg(not(target_os = "windows"))]
             #[test]
             fn [<test_layout_generation_with_ $name:snake>]() -> Result<()> {
                 // Create a temp directory and copy the test resources

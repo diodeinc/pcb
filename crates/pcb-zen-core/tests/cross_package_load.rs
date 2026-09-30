@@ -4,6 +4,8 @@
 //! it should be resolved via URL arithmetic and the package dependency system rather
 //! than being rejected outright.
 
+#![cfg(not(target_os = "windows"))]
+
 use crate::common;
 
 use common::InMemoryFileProvider;
@@ -174,7 +176,6 @@ check(LedValue == "hello from Led", "should load from Led")
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn cross_package_relative_load_with_repository() {
     let deps = BTreeMap::from([(
         "github.com/myorg/project/modules/Led".to_string(),
@@ -200,7 +201,6 @@ fn cross_package_relative_load_with_repository() {
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn cross_package_relative_load_without_repository() {
     let deps = BTreeMap::from([(
         "modules/Led".to_string(),
@@ -225,7 +225,6 @@ fn cross_package_relative_load_without_repository() {
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn cross_package_relative_load_undeclared_dependency() {
     // No dependencies declared — should fail with "No declared dependency matches"
     let deps = BTreeMap::new();
@@ -254,7 +253,6 @@ fn cross_package_relative_load_undeclared_dependency() {
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn cross_package_relative_load_undeclared_dependency_missing_from_frozen_resolution() {
     let deps = BTreeMap::new();
 

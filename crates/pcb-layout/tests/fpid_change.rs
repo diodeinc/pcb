@@ -19,7 +19,6 @@ use crate::helpers::*;
 /// - Loads the new footprint geometry from the library
 /// - Unlocks the footprint (for potential adjustment)
 /// - Resets field positions (new geometry may be different size)
-#[cfg(not(target_os = "windows"))]
 #[test]
 fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     // Create a temp directory and copy the test resources

@@ -1,4 +1,3 @@
-use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::{DiagnosticsPass, SortPass};
 
 use crate::common;
@@ -8,18 +7,6 @@ fn eval_ok(source: &str) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::ev
     SortPass.apply(&mut result.diagnostics);
     assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
     result
-}
-
-fn redundancy_advice_count(diagnostics: &pcb_zen_core::Diagnostics, body_substring: &str) -> usize {
-    diagnostics
-        .iter()
-        .filter(|diag| {
-            diag.body.contains(body_substring)
-                && diag
-                    .downcast_error_ref::<CategorizedDiagnostic>()
-                    .is_some_and(|c| c.kind == "style.redundant_name")
-        })
-        .count()
 }
 
 #[test]
@@ -225,6 +212,23 @@ check(MAIN.power.gnd.name == "MAIN_power_GND", "explicit template leaf should st
 #[test]
 #[cfg(not(target_os = "windows"))]
 fn redundant_net_and_interface_names_emit_advice() {
+    use pcb_zen_core::lang::error::CategorizedDiagnostic;
+
+    fn redundancy_advice_count(
+        diagnostics: &pcb_zen_core::Diagnostics,
+        body_substring: &str,
+    ) -> usize {
+        diagnostics
+            .iter()
+            .filter(|diag| {
+                diag.body.contains(body_substring)
+                    && diag
+                        .downcast_error_ref::<CategorizedDiagnostic>()
+                        .is_some_and(|c| c.kind == "style.redundant_name")
+            })
+            .count()
+    }
+
     let result = eval_ok(
         r#"
 load("@stdlib/interfaces.zen", "Analog", "I2c")

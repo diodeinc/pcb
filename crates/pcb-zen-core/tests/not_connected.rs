@@ -1,3 +1,5 @@
+#![cfg(not(target_os = "windows"))]
+
 use pcb_zen_core::{DiagnosticsPass, SortPass};
 
 use crate::common;
@@ -15,7 +17,6 @@ fn eval_to_schematic(
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn not_connected_warns_on_multiple_ports() {
     let mut files = std::collections::HashMap::new();
     files.insert(
@@ -75,7 +76,6 @@ Component(
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn not_connected_does_not_warn_on_single_port_multiple_pads() {
     let mut files = std::collections::HashMap::new();
     files.insert(
@@ -112,7 +112,6 @@ Component(
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn omitted_no_connect_pin_converts_to_not_connected_net() {
     let mut files = std::collections::HashMap::new();
     files.insert(
@@ -169,7 +168,6 @@ Component(
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn not_connected_callable_is_not_a_net_type() {
     let result = common::eval_zen(vec![(
         "test.zen".to_string(),
@@ -195,7 +193,6 @@ NC = io(NotConnected)
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn not_connected_cannot_be_defined_as_net_type() {
     let result = common::eval_zen(vec![(
         "test.zen".to_string(),
@@ -219,7 +216,6 @@ NotConnected = builtin.net_type("NotConnected")
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn open_not_connected_satisfies_typed_io_without_changing_kind() {
     let mut files = std::collections::HashMap::new();
     files.insert(
@@ -285,7 +281,6 @@ Child(name = "U1", GPIO = NotConnected(), expected_gpio_type = "Net")
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn default_not_connected_io_remains_open() {
     let mut files = std::collections::HashMap::new();
     files.insert(
@@ -332,7 +327,6 @@ Component(
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn net_wrapped_not_connected_io_is_regular_net() {
     for _ in 0..64 {
         let mut files = std::collections::HashMap::new();
@@ -397,7 +391,6 @@ Component(
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn not_connected_auto_names_are_stable_by_port() {
     // Two programs that only differ in where unrelated nets are created.
     // The NotConnected net connected to R1.P2 should get a stable, port-derived name.

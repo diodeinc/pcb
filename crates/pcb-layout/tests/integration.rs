@@ -1,3 +1,5 @@
+#![cfg(not(target_os = "windows"))]
+
 mod helpers;
 
 mod fpid_change;

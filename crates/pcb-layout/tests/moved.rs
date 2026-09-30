@@ -13,7 +13,6 @@ use crate::helpers::*;
 /// 2. Renames to "NewModule" with moved("OldModule", "NewModule")
 /// 3. Verifies the path is renamed in the PCB file
 /// 4. Verifies position is preserved
-#[cfg(not(target_os = "windows"))]
 #[test]
 fn test_moved_renames_path_and_preserves_position() -> Result<()> {
     let temp = TempDir::new()?;

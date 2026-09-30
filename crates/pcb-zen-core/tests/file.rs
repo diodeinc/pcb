@@ -1,5 +1,3 @@
-use crate::common;
-
 // Test basic file resolution
 snapshot_eval!(file_resolves_relative_path, {
     "subdir/data.txt" => "test data",
@@ -70,6 +68,8 @@ snapshot_eval!(file_consistent_with_load, {
 #[test]
 #[cfg(not(target_os = "windows"))]
 fn file_and_symbol_resolve_kicad_aliases_to_stdlib_subdirs() {
+    use crate::common;
+
     let result = common::eval_zen(vec![
         (
             ".pcb/stdlib/kicad-symbols/Test.kicad_symdir/A.kicad_sym".to_string(),

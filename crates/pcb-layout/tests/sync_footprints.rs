@@ -101,7 +101,6 @@ fn add_test_track(pcb_file: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
 #[test]
 fn colon_paths_preserve_existing_board_and_repeat_sync() -> Result<()> {
     use pcb_sch::kicad_identity::footprint_kiid_path;
@@ -165,7 +164,6 @@ fn colon_paths_preserve_existing_board_and_repeat_sync() -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
 #[test]
 fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Result<()> {
     let (temp, resolution) = prepare_simple_workspace()?;
