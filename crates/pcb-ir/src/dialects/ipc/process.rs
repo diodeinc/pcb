@@ -638,9 +638,9 @@ fn tile_copper_balance(doc: &mut Document, resolution: Resolution) -> Result<(),
                         .map_err(Clone::clone)
                         .and_then(|nearby| cell.intersection(nearby)?.translated(-center))
                         .or_else(|error| match error {
-                            AccuracyError::BudgetExceeded { .. } => {
-                                cell.intersection(&image)?.translated(-center)
-                            }
+                            AccuracyError::BudgetExceeded { .. } => cell
+                                .intersection(&image.reaching(cell.bbox))?
+                                .translated(-center),
                             error => Err(error),
                         })?;
                     if tile.is_empty() {
@@ -1166,9 +1166,17 @@ mod tests {
     fn tiling_near_accuracy_limit_uses_direct_clipping() {
         let resolution = Resolution::default();
         let mut doc = Document::new();
-        let mut contour = rect_contour(0.0, 0.0, 4.0, 4.0);
-        contour.uncertainty_mm = resolution.accuracy.max_error_mm() - 5e-13;
-        let path = doc.push_path(FILL, [contour]);
+        // Distant islands must not charge their combined bounds to a tile
+        // that reaches only one island, or to an empty cell between them.
+        let contours = [
+            rect_contour(-20.0, -2.0, -16.0, 2.0),
+            rect_contour(16.0, -2.0, 20.0, 2.0),
+        ]
+        .map(|mut contour| {
+            contour.uncertainty_mm = resolution.accuracy.max_error_mm() - 1.45e-12;
+            contour
+        });
+        let path = doc.push_path(FILL, contours);
         doc.features.push(Feature {
             paths: Span::single(path),
             set: Some(0),
