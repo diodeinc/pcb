@@ -273,16 +273,27 @@ pub(crate) fn allocate_error(budget_mm: f64, allocation: ErrorAllocation) -> f64
     }
 }
 
-/// Floating arithmetic allowance. Overlay uses an automatic integer grid;
-/// the i64 adapter retains the floating point coordinate precision.
+/// Floating arithmetic allowance, including rounding to the overlay lattice.
 pub(crate) fn numerical_error(bbox: super::BBox) -> f64 {
     if bbox.is_empty() {
         return 0.0;
     }
     let extent = (bbox.max.x - bbox.min.x).max(bbox.max.y - bbox.min.y);
-    let magnitude = [bbox.min.x, bbox.min.y, bbox.max.x, bbox.max.y]
+    16.0 * extent / (1_u64 << 52) as f64
+        + 64.0 * f64::EPSILON * magnitude(bbox)
+        + std::f64::consts::FRAC_1_SQRT_2 / lattice_per_mm(bbox)
+}
+
+/// Points per millimetre of the decimal lattice region booleans within
+/// `bbox` run on, just coarser than float rounding there, so edges shared in
+/// decimal source data stay exactly shared.
+pub(crate) fn lattice_per_mm(bbox: super::BBox) -> f64 {
+    10f64.powi((-(16.0 * f64::EPSILON * magnitude(bbox)).log10()).floor() as i32)
+}
+
+fn magnitude(bbox: super::BBox) -> f64 {
+    [bbox.min.x, bbox.min.y, bbox.max.x, bbox.max.y]
         .into_iter()
         .map(f64::abs)
-        .fold(1.0, f64::max);
-    16.0 * extent / (1_u64 << 52) as f64 + 64.0 * f64::EPSILON * magnitude
+        .fold(1.0, f64::max)
 }

@@ -998,3 +998,31 @@ fn preparation_scales_to_panel_sized_curve_sets() {
 
     assert_eq!(region.rings.len(), circles.len());
 }
+
+#[test]
+fn union_merges_polygons_abutting_along_a_rounded_diagonal() {
+    // The decimal vertex lies on the lower fill's edge; its float does not.
+    let lower = vec![
+        [157.2, -121.3],
+        [157.625, -121.3],
+        [157.625, -121.15],
+        [157.2, -120.725],
+    ];
+    let upper = vec![
+        [157.2, -120.725],
+        [157.542953, -121.067953],
+        [157.575, -120.7],
+        [157.2, -120.5],
+    ];
+    let resolution = Resolution::default();
+    let [lower, upper] = [lower, upper]
+        .map(|ring| ContourSet::from_rings(vec![ring], FillRule::NonZero, resolution).unwrap());
+    let area = lower.area() + upper.area();
+    for union in [
+        lower.union(&upper).unwrap(),
+        ContourSet::union_all(resolution, [lower.clone(), upper.clone()]).unwrap(),
+    ] {
+        assert_eq!(union.rings.len(), 1, "{:?}", union.rings);
+        assert!((union.area() - area).abs() < 1e-12);
+    }
+}
