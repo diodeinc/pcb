@@ -137,14 +137,6 @@ class TestPosition:
         assert pos.x == 1000
         assert pos.y == 2000
 
-    def test_offset_by(self):
-        pos = Position(x=1000, y=2000)
-        new_pos = pos.offset_by(100, -50)
-        assert new_pos.x == 1100
-        assert new_pos.y == 1950
-        # Original unchanged (immutable)
-        assert pos.x == 1000
-
     def test_add(self):
         p1 = Position(x=100, y=200)
         p2 = Position(x=50, y=30)
@@ -207,19 +199,6 @@ class TestFootprintComplement:
         assert comp.orientation == 45.0
         assert comp.layer == "F.Cu"
         assert comp.locked
-
-    def test_with_position(self):
-        comp = FootprintComplement(
-            position=Position(x=1000, y=2000),
-            orientation=45.0,
-            layer="F.Cu",
-        )
-
-        new_comp = comp.with_position(Position(x=5000, y=6000))
-
-        assert new_comp.position.x == 5000
-        assert new_comp.orientation == 45.0  # Preserved
-        assert comp.position.x == 1000  # Original unchanged
 
 
 class TestDefaults:

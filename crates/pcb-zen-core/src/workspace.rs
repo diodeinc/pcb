@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::FileProvider;
 use crate::config::{
-    PcbToml, WorkspaceConfig, find_workspace_root, parse_pcb_version, pcb_version_from_cargo,
-    pcb_version_is_older,
+    PcbToml, WorkspaceConfig, find_workspace_root, pcb_version_from_cargo, pcb_version_is_older,
 };
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
@@ -212,13 +211,6 @@ impl WorkspaceInfo {
         build_workspace_base_url(self.repository(), self.path())
     }
 
-    /// Whether `url` belongs to this workspace's declared package namespace.
-    pub fn is_workspace_namespace_url(&self, url: &str) -> bool {
-        self.workspace_base_url()
-            .as_deref()
-            .is_some_and(|base| package_url_covers(base, url))
-    }
-
     /// Return the most specific workspace package URL that contains `url`.
     pub fn package_url_for_url(&self, url: &str) -> Option<&str> {
         self.packages
@@ -267,23 +259,9 @@ impl WorkspaceInfo {
             .and_then(|w| w.pcb_version.as_deref())
     }
 
-    pub fn requires_mvs_v2(&self) -> bool {
-        self.pcb_version()
-            .and_then(parse_pcb_version)
-            .is_some_and(|version| version >= (0, 4))
-    }
-
     /// Get all packages as a vector
     pub fn all_packages(&self) -> Vec<&WorkspacePackage> {
         self.packages.values().collect()
-    }
-
-    /// Get publishable packages (excludes packages with board sections)
-    pub fn publishable_packages(&self) -> Vec<&WorkspacePackage> {
-        self.packages
-            .values()
-            .filter(|p| p.config.board.is_none())
-            .collect()
     }
 
     /// Get total package count
@@ -310,19 +288,6 @@ impl WorkspaceInfo {
                 ))
             })
             .collect()
-    }
-
-    /// Find a board by name, returning an error with available boards if not found
-    pub fn find_board_by_name(&self, board_name: &str) -> anyhow::Result<BoardInfo> {
-        let boards = self.boards();
-        boards.get(board_name).cloned().ok_or_else(|| {
-            let available: Vec<_> = boards.keys().map(|k| k.as_str()).collect();
-            anyhow::anyhow!(
-                "Board '{}' not found. Available: [{}]",
-                board_name,
-                available.join(", ")
-            )
-        })
     }
 }
 

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -228,38 +228,6 @@ impl PcbToml {
     /// Check if this configuration represents a board
     pub fn is_board(&self) -> bool {
         self.board.is_some()
-    }
-
-    /// Auto-generate aliases from dependencies (V2 only)
-    ///
-    /// Takes the last path segment as the alias key. Only creates alias if unique (no collisions).
-    /// Examples:
-    /// - "code.diode.computer/diode/registry/reference/XAL7070-562MEx" → "@XAL7070-562MEx"
-    pub fn auto_generated_aliases(&self) -> HashMap<String, String> {
-        let mut aliases = HashMap::new();
-        let mut seen_names: HashMap<String, usize> = HashMap::new();
-
-        // Collect all URLs from dependencies
-        let all_urls: Vec<String> = self.dependencies.direct.keys().cloned().collect();
-
-        // First pass: count occurrences of each last segment
-        for url in &all_urls {
-            if let Some(last_segment) = url.split('/').next_back() {
-                *seen_names.entry(last_segment.to_string()).or_insert(0) += 1;
-            }
-        }
-
-        // Second pass: only add non-duplicate aliases
-        for url in &all_urls {
-            if let Some(last_segment) = url.split('/').next_back() {
-                let segment_string = last_segment.to_string();
-                if seen_names.get(&segment_string) == Some(&1) {
-                    aliases.insert(segment_string, url.clone());
-                }
-            }
-        }
-
-        aliases
     }
 }
 

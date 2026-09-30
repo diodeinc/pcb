@@ -566,40 +566,6 @@ def build_fragment_net_remap(
     return net_remap, warnings
 
 
-def _remap_routing_nets(
-    items: tuple,
-    net_remap: dict[str, str],
-    valid_nets: set,
-    context: str,
-) -> tuple:
-    """Remap fragment net names to board nets. Unmapped nets become no-net."""
-    from dataclasses import replace
-
-    result = []
-    orphan_nets: list[str] = []
-
-    for item in items:
-        net = item.net_name
-        mapped = net_remap.get(net, net)
-
-        if mapped == "" or mapped in valid_nets:
-            if mapped != net:
-                result.append(replace(item, net_name=mapped))
-            else:
-                result.append(item)
-        else:
-            orphan_nets.append(net)
-            result.append(replace(item, net_name=""))
-
-    if orphan_nets:
-        logger.warning(
-            f"{context}: {len(orphan_nets)} items converted to no-net "
-            f"(unmapped nets: {sorted(set(orphan_nets))[:5]})"
-        )
-
-    return tuple(result)
-
-
 def adapt_complement(
     new_view: BoardView,
     old_complement: BoardComplement,

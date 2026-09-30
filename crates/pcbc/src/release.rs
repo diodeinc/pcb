@@ -99,7 +99,7 @@ impl ReleaseInfo {
     }
 }
 
-type TaskFn = fn(&ReleaseInfo, &Spinner) -> Result<()>;
+type TaskFn = fn(&ReleaseInfo) -> Result<()>;
 
 /// Manufacturing work that runs only after the release preflight is accepted.
 const MANUFACTURING_TASKS: &[(ArtifactType, &str, TaskFn)] = &[
@@ -223,7 +223,7 @@ fn execute_task<T>(
 /// Execute a list of tasks with proper error handling and UI feedback
 fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Instant) -> Result<()> {
     for (name, task) in tasks {
-        execute_task(info, name, start_time, task)?;
+        execute_task(info, name, start_time, |info, _| task(info))?;
     }
     Ok(())
 }
@@ -573,7 +573,7 @@ pub(crate) fn discover_layout_from_output(output: &EvalOutput) -> Result<Option<
 }
 
 /// Copy source files and vendor dependencies
-fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn copy_sources(info: &ReleaseInfo) -> Result<()> {
     bundle::stage_source_bundle(&SourceBundlePlan {
         resolution: &info.resolution,
         root_package_url: info.root_package_url.as_deref(),
@@ -709,7 +709,7 @@ fn update_kicad_pcb_release_variables(
 }
 
 /// Substitute release version and git hash placeholders in staged KiCad files.
-fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn substitute_variables(info: &ReleaseInfo) -> Result<()> {
     let Some(kicad_files) = info.staged_kicad_files() else {
         debug!("No layout directory, skipping variable substitution");
         return Ok(());
@@ -734,7 +734,7 @@ fn run_release_preflight(
         info,
         "Copying source files and dependencies",
         start_time,
-        copy_sources,
+        |info, _| copy_sources(info),
     )?;
     execute_task(
         info,
@@ -749,7 +749,7 @@ fn run_release_preflight(
         info,
         "Substituting version variables",
         start_time,
-        substitute_variables,
+        |info, _| substitute_variables(info),
     )?;
 
     if info.has_layout() && !excluded.contains(&ArtifactType::Drc) {
@@ -1039,7 +1039,7 @@ fn generate_design_bom(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnost
 }
 
 /// Write release metadata to JSON file
-fn write_metadata(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn write_metadata(info: &ReleaseInfo) -> Result<()> {
     let board_description = info
         .workspace_info()
         .board_info_for_zen(&info.zen_path)
@@ -1065,7 +1065,7 @@ fn archive_zip_path(info: &ReleaseInfo) -> PathBuf {
 }
 
 /// Create zip archive of release staging directory
-fn zip_release(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn zip_release(info: &ReleaseInfo) -> Result<()> {
     let zip_path = archive_zip_path(info);
 
     // Ensure output directory exists
@@ -1109,7 +1109,7 @@ fn add_directory_to_zip<W: std::io::Write + std::io::Seek>(
 }
 
 /// Generate gerber files
-fn generate_gerbers(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn generate_gerbers(info: &ReleaseInfo) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1287,7 +1287,7 @@ fn find_gerber_job_file(directory: &Path) -> Result<Option<PathBuf>> {
 }
 
 /// Generate pick-and-place file
-fn generate_cpl(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn generate_cpl(info: &ReleaseInfo) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1317,7 +1317,7 @@ fn generate_cpl(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 }
 
 /// Generate assembly drawings (front and back PDFs)
-fn generate_assembly_drawings(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn generate_assembly_drawings(info: &ReleaseInfo) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1403,7 +1403,7 @@ fn fix_cpl_header(cpl_path: &Path) -> Result<()> {
 }
 
 /// Generate ODB++ files
-fn generate_odb(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn generate_odb(info: &ReleaseInfo) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1432,7 +1432,7 @@ fn generate_odb(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 }
 
 /// Generate IPC-2581 file
-fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn generate_ipc2581(info: &ReleaseInfo) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1485,7 +1485,7 @@ pub(crate) fn export_ipc2581(kicad_pcb_path: &Path, ipc2581_path: &Path) -> Resu
 }
 
 /// Generate STEP model
-fn generate_step_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn generate_step_model(info: &ReleaseInfo) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
@@ -1527,7 +1527,7 @@ fn generate_step_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 }
 
 /// Generate VRML model
-fn generate_vrml_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn generate_vrml_model(info: &ReleaseInfo) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 

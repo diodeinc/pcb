@@ -311,23 +311,8 @@ impl SymbolField {
         }
     }
 
-    pub fn with_rotation_deg(mut self, rotation_deg: f64) -> Self {
-        self.rotation_deg = rotation_deg;
-        self
-    }
-
     pub fn with_hidden(mut self, hidden: bool) -> Self {
         self.hidden = hidden;
-        self
-    }
-
-    pub fn with_justify(mut self, justify: Option<FieldJustify>) -> Self {
-        self.justify = justify;
-        self
-    }
-
-    pub fn with_do_not_autoplace(mut self, do_not_autoplace: bool) -> Self {
-        self.do_not_autoplace = do_not_autoplace;
         self
     }
 }

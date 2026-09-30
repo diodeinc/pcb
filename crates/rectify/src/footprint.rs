@@ -39,18 +39,11 @@ pub struct FootprintData {
     /// model blocks reference unusable formats (e.g. `.wrl` only) or the
     /// footprint has no `(model ...)` block at all.
     pub model: Option<ModelSpec>,
-    #[allow(dead_code)] // Retained for future use (e.g. SMD-vs-THT heuristics).
     pub smd_pad_count: usize,
-    #[allow(dead_code)] // Retained for future use (e.g. SMD-vs-THT heuristics).
     pub thru_hole_pad_count: usize,
 }
 
 impl FootprintData {
-    #[allow(dead_code)] // Useful public API.
-    pub fn is_smd_only(&self) -> bool {
-        self.smd_pad_count > 0 && self.thru_hole_pad_count == 0
-    }
-
     pub fn has_holes(&self) -> bool {
         !self.holes.is_empty()
     }

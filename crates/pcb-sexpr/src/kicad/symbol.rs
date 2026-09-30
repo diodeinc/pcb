@@ -56,16 +56,6 @@ pub fn find_symbol_index(kicad_symbol_lib: &[Sexpr], name: &str) -> Option<usize
     })
 }
 
-/// Check whether a symbol directly declares `(extends "...")`.
-pub fn symbol_declares_extends(symbol: &[Sexpr]) -> bool {
-    symbol.iter().skip(2).any(|child| {
-        child
-            .as_list()
-            .and_then(|items| items.first().and_then(Sexpr::as_sym))
-            == Some("extends")
-    })
-}
-
 /// Extract direct `(property "<name>" "<value>" ...)` pairs from a symbol.
 pub fn symbol_properties(symbol: &[Sexpr]) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();

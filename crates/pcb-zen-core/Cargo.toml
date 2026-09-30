@@ -18,7 +18,6 @@ native = [
     "dirs",
     "rayon",
 ]
-wasm = []
 table = ["pcb-sch/table"]
 
 [dependencies]

@@ -27,8 +27,6 @@ pub mod workspace;
 
 /// Canonical virtual module path for stdlib.
 pub const STDLIB_MODULE_PATH: &str = "stdlib";
-/// Initial version assigned to unpublished packages.
-pub const INITIAL_PACKAGE_VERSION: &str = "0.1.0";
 /// Version of this PCB toolchain release.
 ///
 /// Used in diagnostics/metadata for toolchain-managed assets.
@@ -106,8 +104,6 @@ pub mod attrs {
     pub const MODEL_NETS: &str = "__model_nets";
     pub const MODEL_ARGS: &str = "__model_args";
     pub const SIGNATURE: &str = "__signature";
-    pub const LAYOUT_PATH: &str = "layout_path";
-    pub const SCHEMATIC_PATH: &str = "schematic_path";
     pub const FOOTPRINT: &str = "footprint";
     pub const PREFIX: &str = "prefix";
     pub const MPN: &str = "mpn";
@@ -437,16 +433,6 @@ impl FileProvider for DefaultFileProvider {
             .expect("Cannot determine home directory")
             .join(".pcb/cache")
     }
-}
-
-/// Information about a package alias including its target and source
-#[derive(Debug, Clone)]
-pub struct AliasInfo {
-    /// The target of the alias (e.g., "@github/mycompany/components:main")
-    pub target: String,
-    /// The canonical path to the pcb.toml file that defined this alias.
-    /// None for built-in default aliases.
-    pub source_path: Option<PathBuf>,
 }
 
 /// Context struct for load resolution operations

@@ -22,9 +22,8 @@ pub mod scan;
 
 pub use auth::{AuthArgs, AuthCommand, AuthTokens, execute as execute_auth};
 pub use bom::{
-    BomMatchMode, BomMatchOptions, fetch_and_populate_availability,
-    fetch_and_populate_availability_with_context, hydrate_schematic_from_bom,
-    match_bom_with_context,
+    BomMatchMode, BomMatchOptions, fetch_and_populate_availability_with_context,
+    hydrate_schematic_from_bom, match_bom_with_context,
 };
 pub use component::{SearchArgs, execute as execute_search, execute_component_from_local_dir};
 pub use component_api::{ComponentArgs, execute_component};
@@ -48,13 +47,6 @@ pub fn get_api_base_url() -> String {
     WorkspaceContext::from_cwd()
         .unwrap_or_default()
         .api_base_url()
-        .to_string()
-}
-
-pub fn get_web_base_url() -> String {
-    WorkspaceContext::from_cwd()
-        .unwrap_or_default()
-        .web_base_url()
         .to_string()
 }
 

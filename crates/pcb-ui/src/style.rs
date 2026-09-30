@@ -83,19 +83,4 @@ pub mod icons {
     pub fn warning() -> String {
         "!".yellow().to_string()
     }
-
-    /// Info icon (blue)
-    pub fn info() -> String {
-        "ℹ".blue().to_string()
-    }
-
-    /// Bullet point
-    pub fn bullet() -> &'static str {
-        "•"
-    }
-
-    /// Arrow right
-    pub fn arrow() -> &'static str {
-        "→"
-    }
 }

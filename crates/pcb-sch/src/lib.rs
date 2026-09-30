@@ -52,11 +52,6 @@ pub const ATTR_SYMBOL_FORMAT_VERSION: &str = "__symbol_format_version";
 /// Default basename used when creating a shared KiCad project.
 pub const KICAD_PROJECT_BASENAME: &str = "layout";
 
-/// Attribute key that stores a list of layout hint expressions (e.g. placement
-/// constraints). Used with `AttributeValue::Array` where each element is an
-/// `AttributeValue::String`.
-pub const ATTR_LAYOUT_HINTS: &str = "layout_hints";
-
 /// URI prefix for stable, machine-independent package references.
 pub const PACKAGE_URI_PREFIX: &str = "package://";
 
@@ -635,12 +630,6 @@ impl Instance {
         self
     }
 
-    /// Set the reference designator, returning a mutable reference for chaining.
-    pub fn set_reference_designator(&mut self, designator: impl Into<String>) -> &mut Self {
-        self.reference_designator = Some(designator.into());
-        self
-    }
-
     /// Builder-style reference designator insertion that consumes `self`.
     pub fn with_reference_designator(mut self, designator: impl Into<String>) -> Self {
         self.reference_designator = Some(designator.into());
@@ -663,22 +652,6 @@ impl Instance {
                 _ => None,
             })
         })
-    }
-
-    pub fn string_list_attr(&self, keys: &[&str]) -> Vec<String> {
-        keys.iter()
-            .find_map(|&key| match self.attributes.get(key)? {
-                AttributeValue::Array(arr) => Some(
-                    arr.iter()
-                        .filter_map(|av| match av {
-                            AttributeValue::String(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<String>>(),
-                ),
-                _ => None,
-            })
-            .unwrap_or_default()
     }
 
     pub fn part(&self) -> Option<crate::bom::Part> {
@@ -1059,12 +1032,6 @@ impl Net {
     /// Add a port (instance reference) to the net and return a mutable
     /// reference for chaining.
     pub fn add_port(&mut self, port: InstanceRef) -> &mut Self {
-        self.ports.push(port);
-        self
-    }
-
-    /// Builder-style port insertion that consumes `self`.
-    pub fn with_port(mut self, port: InstanceRef) -> Self {
         self.ports.push(port);
         self
     }

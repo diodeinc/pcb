@@ -597,7 +597,7 @@ where
 /// the pinned commit.
 ///
 /// Returns the package root path (where pcb.toml lives)
-pub fn ensure_sparse_checkout(
+fn ensure_sparse_checkout(
     checkout_dir: &Path,
     module_path: &str,
     version_str: &str,

@@ -1,5 +1,5 @@
 use std::{
-    cell::{Ref, RefMut},
+    cell::Ref,
     collections::{BTreeMap, HashMap},
 };
 
@@ -62,12 +62,7 @@ pub(crate) trait EvaluatorExt<'v> {
     fn source_path(&self) -> Option<String>;
 
     /// Borrow the underlying [`ModuleValue`] immutably.
-    #[allow(dead_code)]
     fn module_value(&self) -> Option<Ref<'_, ModuleValue<'v>>>;
-
-    /// Borrow the underlying [`ModuleValue`] mutably.
-    #[allow(dead_code)]
-    fn module_value_mut(&self) -> Option<RefMut<'_, ModuleValue<'v>>>;
 
     /// Add a diagnostic to the module value.
     fn add_diagnostic<D: Into<Diagnostic>>(&self, diagnostic: D);
@@ -119,10 +114,6 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
 
     fn module_value(&self) -> Option<Ref<'_, ModuleValue<'v>>> {
         self.context_value().map(|ctx| ctx.module())
-    }
-
-    fn module_value_mut(&self) -> Option<RefMut<'_, ModuleValue<'v>>> {
-        self.context_value().map(|ctx| ctx.module_mut())
     }
 
     fn eval_context(&self) -> Option<&EvalContext> {

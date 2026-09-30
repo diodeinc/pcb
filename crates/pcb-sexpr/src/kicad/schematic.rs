@@ -35,15 +35,6 @@ pub fn schematic_instance_paths(symbol: &[Sexpr]) -> Vec<String> {
     out
 }
 
-/// Extract the first `(instances (project ... (path "/...") ...))` path for a placed schematic
-/// symbol.
-///
-/// Note: schematic symbols can contain *multiple* project instances. Prefer using
-/// [`schematic_instance_paths`] and selecting the correct one at the callsite when possible.
-pub fn schematic_instance_path(symbol: &[Sexpr]) -> Option<String> {
-    schematic_instance_paths(symbol).into_iter().next()
-}
-
 /// Extract all `(property "NAME" "VALUE" ...)` pairs from a placed schematic symbol.
 pub fn schematic_properties(symbol: &[Sexpr]) -> BTreeMap<String, String> {
     let mut out: BTreeMap<String, String> = BTreeMap::new();

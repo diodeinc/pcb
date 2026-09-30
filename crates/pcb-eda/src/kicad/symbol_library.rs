@@ -11,67 +11,6 @@ use tracing::{instrument, warn};
 
 use super::symbol::{KicadSymbol, description_from_properties, parse_symbol};
 
-pub const KICAD_SYMBOL_LIB_VERSION: &str = "20211014";
-
-fn kicad_generator_atom(generator: &str) -> String {
-    let trimmed = generator.trim();
-    if trimmed.is_empty() {
-        return "pcb".to_string();
-    }
-
-    // KiCad typically serializes generator as a symbol atom (e.g. pcbnew, eeschema).
-    // Use a conservative sanitizer so the output stays valid for free-form inputs.
-    let mut out = String::with_capacity(trimmed.len());
-    let mut prev_underscore = false;
-
-    for c in trimmed.chars() {
-        let mapped = match c {
-            c if c.is_ascii_alphanumeric() => c.to_ascii_lowercase(),
-            '_' | '-' | '.' => c,
-            _ => '_',
-        };
-
-        if mapped == '_' {
-            if prev_underscore {
-                continue;
-            }
-            prev_underscore = true;
-        } else {
-            prev_underscore = false;
-        }
-
-        out.push(mapped);
-    }
-
-    let out = out.trim_matches('_');
-    if out.is_empty() {
-        return "pcb".to_string();
-    }
-
-    if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        format!("_{out}")
-    } else {
-        out.to_string()
-    }
-}
-
-pub fn wrap_symbol_as_library(symbol_sexpr: &str, generator: &str) -> String {
-    let symbol_sexpr = match parse(symbol_sexpr) {
-        Ok(sexpr) => sexpr.to_string(),
-        Err(_) => symbol_sexpr.to_string(),
-    };
-
-    let mut out = String::new();
-    out.push_str("(kicad_symbol_lib (version ");
-    out.push_str(KICAD_SYMBOL_LIB_VERSION);
-    out.push_str(") (generator ");
-    out.push_str(&kicad_generator_atom(generator));
-    out.push_str(")\n");
-    out.push_str(symbol_sexpr.trim_end());
-    out.push_str("\n)\n");
-    out
-}
-
 /// Location of a symbol in the source file
 #[derive(Debug, Clone)]
 struct SymbolLocation {
@@ -464,40 +403,6 @@ fn push_child_item(items: &mut Vec<(String, Sexpr)>, key: String, item: Sexpr) {
         Some(entry) => entry.1 = item,
         None => items.push((key, item)),
     }
-}
-
-/// Parse a KiCad symbol library from a string, keeping raw S-expressions
-pub fn parse_with_raw_sexprs(content: &str) -> Result<Vec<(KicadSymbol, Sexpr)>> {
-    let sexp = parse(content)?;
-    let mut symbol_pairs = Vec::new();
-
-    match &sexp.kind {
-        SexprKind::List(kicad_symbol_lib) => {
-            // Iterate through all items in the library
-            for item in kicad_symbol_lib {
-                if let SexprKind::List(symbol_list) = &item.kind
-                    && let Some(SexprKind::Symbol(sym)) = symbol_list.first().map(|s| &s.kind)
-                    && sym == "symbol"
-                {
-                    // Parse this symbol
-                    match parse_symbol(symbol_list) {
-                        Ok(mut symbol) => {
-                            // Store the raw s-expression with the symbol
-                            symbol.raw_sexp = Some(item.clone());
-                            symbol_pairs.push((symbol, item.clone()));
-                        }
-                        Err(e) => {
-                            // Log error but continue parsing other symbols
-                            eprintln!("Warning: Failed to parse symbol: {e}");
-                        }
-                    }
-                }
-            }
-        }
-        _ => return Err(anyhow::anyhow!("Invalid KiCad symbol library format")),
-    }
-
-    Ok(symbol_pairs)
 }
 
 /// Regex to find `(symbol` followed by whitespace (handles newlines after keyword)

@@ -12,7 +12,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pcb-zen-core = { workspace = true, features = ["wasm"] }
+pcb-zen-core = { workspace = true }
 pcb-sch = { workspace = true }
 wasm-bindgen = { workspace = true }
 js-sys = { workspace = true }

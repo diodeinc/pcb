@@ -128,11 +128,6 @@ fn load_tokens_with_context(ctx: &WorkspaceContext) -> Result<Option<AuthTokens>
     }
 }
 
-pub fn load_tokens() -> Result<Option<AuthTokens>> {
-    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    load_tokens_with_context(&ctx)
-}
-
 fn save_tokens(
     ctx: &WorkspaceContext,
     access_token: &str,
@@ -332,11 +327,6 @@ fn get_valid_token_with_sources(
         Ok(new_tokens) => Ok(new_tokens.access_token),
         Err(_) => Err(not_authenticated()),
     }
-}
-
-pub fn get_valid_token() -> Result<String> {
-    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    get_valid_token_with_context(&ctx)
 }
 
 pub(crate) fn api_auth_disabled() -> bool {

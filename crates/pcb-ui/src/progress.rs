@@ -13,7 +13,6 @@ const DEFAULT_TICK_CHARS: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓";
 /// A progress bar for showing determinate progress
 pub struct ProgressBar {
     bar: IndicatifBar,
-    total: u64,
 }
 
 impl ProgressBar {
@@ -35,21 +34,6 @@ impl ProgressBar {
     /// Set the message displayed with the progress bar
     pub fn set_message(&self, message: impl Into<String>) {
         self.bar.set_message(message.into());
-    }
-
-    /// Get the current position
-    pub fn position(&self) -> u64 {
-        self.bar.position()
-    }
-
-    /// Get the total number of steps
-    pub fn total(&self) -> u64 {
-        self.total
-    }
-
-    /// Calculate and return the percentage complete (0-100)
-    pub fn percentage(&self) -> u8 {
-        ((self.position() as f64 / self.total as f64) * 100.0) as u8
     }
 
     /// Finish the progress bar with a success message
@@ -194,9 +178,6 @@ impl ProgressBarBuilder {
             bar.set_draw_target(ProgressDrawTarget::hidden());
         }
 
-        ProgressBar {
-            bar,
-            total: self.total,
-        }
+        ProgressBar { bar }
     }
 }

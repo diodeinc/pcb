@@ -263,7 +263,7 @@ fn legacy_project_root(project_file: &Path) -> Result<Vec<ProjectRoot>> {
 }
 
 /// Resolve the root module's `schematic_path` property, if present.
-pub fn schematic_project_path(netlist: &Schematic) -> Result<Option<PathBuf>> {
+pub(crate) fn schematic_project_path(netlist: &Schematic) -> Result<Option<PathBuf>> {
     let Some(root) = netlist
         .root_ref
         .as_ref()

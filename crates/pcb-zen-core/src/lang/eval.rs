@@ -534,12 +534,6 @@ impl EvalContextConfig {
         self
     }
 
-    /// Enable or disable strict IO/config placeholder checking.
-    pub fn set_strict_io_config(mut self, enabled: bool) -> Self {
-        self.strict_io_config = enabled;
-        self
-    }
-
     /// Enable or disable stdlib prelude injection.
     pub fn set_inject_prelude(mut self, inject: bool) -> Self {
         self.inject_prelude = inject;
@@ -571,11 +565,6 @@ impl EvalContextConfig {
             inject_prelude: self.inject_prelude,
         }
         .set_source_path(target_path)
-    }
-
-    /// Check if loading the given path would create a cycle.
-    pub fn would_create_cycle(&self, path: &Path) -> bool {
-        self.load_chain.contains(path)
     }
 
     /// Create a child config for a pending child module instantiation.
@@ -939,28 +928,12 @@ impl EvalContext {
         self.config.strict_io_config
     }
 
-    /// Create a child config for loading a module.
-    /// This can be passed across thread boundaries safely.
-    pub fn child_config_for_load(
-        &self,
-        child_module_path: ModulePath,
-        target_path: PathBuf,
-    ) -> EvalContextConfig {
-        self.config.child_for_load(child_module_path, target_path)
-    }
-
     pub fn file_provider(&self) -> &dyn FileProvider {
         self.config.file_provider()
     }
 
     pub fn resolution(&self) -> &ResolutionResult {
         &self.config.resolution
-    }
-
-    /// Enable or disable strict IO/config placeholder checking for subsequent evaluations.
-    pub fn set_strict_io_config(mut self, enabled: bool) -> Self {
-        self.config.strict_io_config = enabled;
-        self
     }
 
     fn frozen_heap_name(&self) -> FrozenHeapName {
@@ -1035,7 +1008,6 @@ impl EvalContext {
 
     /// Provide the raw contents of the Starlark module. When omitted, the contents
     /// will be read from `source_path` during [`Context::eval`].
-    #[allow(dead_code)]
     pub fn set_source_contents<S: Into<String>>(mut self, contents: S) -> Self {
         self.config.contents = Some(contents.into());
         self

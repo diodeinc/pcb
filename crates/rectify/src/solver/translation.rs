@@ -15,12 +15,8 @@ const SPARSE_ANCHOR_MARGIN_MIN: f64 = 0.08;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SparseAnchor {
-    #[allow(dead_code)]
-    index: usize,
     cx: f64,
     cy: f64,
-    #[allow(dead_code)]
-    area: f64,
     area_ratio: f64,
     norm_x: f64,
     norm_y: f64,
@@ -62,11 +58,9 @@ fn build_sparse_anchors(items: &[(usize, f64, f64, f64)], bounds: [f64; 4]) -> V
     items
         .iter()
         .enumerate()
-        .map(|(i, &(index, cx, cy, area))| SparseAnchor {
-            index,
+        .map(|(i, &(_, cx, cy, _))| SparseAnchor {
             cx,
             cy,
-            area,
             area_ratio: areas[i] / total_area,
             norm_x: (cx - bounds[0]) / width,
             norm_y: (cy - bounds[1]) / height,

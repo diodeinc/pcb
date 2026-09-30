@@ -179,24 +179,6 @@ impl PhysicalValue {
             ),
         ])
     }
-
-    pub fn unit_type(type_id: TypeInstanceId, unit: PhysicalUnit) -> Ty {
-        Ty::custom(
-            TyUser::new(
-                unit.quantity().to_string(),
-                TyStarlarkValue::new::<PhysicalValue>(),
-                type_id,
-                TyUserParams {
-                    fields: TyUserFields {
-                        known: Self::fields(),
-                        unknown: false,
-                    },
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-        )
-    }
 }
 
 impl TryFrom<Value<'_>> for PhysicalValue {
@@ -212,7 +194,7 @@ impl TryFrom<Value<'_>> for PhysicalValue {
         } else {
             // Otherwise convert scalar to dimensionless physical value
             let decimal = starlark_value_to_decimal(&value)?;
-            Ok(PhysicalValue::from_decimal(
+            Ok(PhysicalValue::from_nominal_tolerance(
                 decimal,
                 Decimal::ZERO,
                 PhysicalUnitDims::DIMENSIONLESS,

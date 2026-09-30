@@ -401,18 +401,6 @@ impl Diagnostic {
         self.source_error.as_ref()?.downcast_ref::<E>()
     }
 
-    /// Check if the source error is of a specific type without consuming or borrowing.
-    /// Returns `true` if the diagnostic has a source error of type E, `false` otherwise.
-    pub fn is_error_type<E>(&self) -> bool
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        self.source_error
-            .as_ref()
-            .map(|err| err.is::<E>())
-            .unwrap_or(false)
-    }
-
     /// Get the count of suppressed diagnostics if this diagnostic represents aggregated warnings
     pub fn suppressed_count(&self) -> Option<usize> {
         self.downcast_error_ref::<crate::lang::error::SuppressedDiagnostics>()
@@ -670,27 +658,6 @@ impl<T> WithDiagnostics<T> {
         }
     }
 
-    pub fn try_map<U, D: Into<Diagnostic>>(
-        mut self,
-        f: impl FnOnce(T) -> Result<U, D>,
-    ) -> WithDiagnostics<U> {
-        if let Some(output) = self.output.take() {
-            match f(output) {
-                Ok(output) => {
-                    return WithDiagnostics {
-                        diagnostics: self.diagnostics,
-                        output: Some(output),
-                    };
-                }
-                Err(diag) => self.diagnostics.push(diag.into()),
-            }
-        }
-        WithDiagnostics {
-            diagnostics: self.diagnostics,
-            output: None,
-        }
-    }
-
     /// Continue with `f` when this result produced an output, merging diagnostics.
     pub fn and_then<U>(mut self, f: impl FnOnce(T) -> WithDiagnostics<U>) -> WithDiagnostics<U> {
         match self.output.take() {
@@ -807,11 +774,6 @@ impl Diagnostics {
                 .or_insert(0) += 1;
         }
         counts
-    }
-
-    /// Apply a single diagnostics pass to this collection
-    pub fn apply_pass(&mut self, pass: &dyn DiagnosticsPass) {
-        pass.apply(self);
     }
 
     /// Apply multiple diagnostics passes in sequence

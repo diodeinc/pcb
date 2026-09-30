@@ -132,7 +132,6 @@ where
 }
 
 impl FrozenContextValue {
-    #[allow(dead_code)]
     pub(crate) fn diagnostics(&self) -> &Vec<crate::Diagnostic> {
         &self.diagnostics
     }
@@ -285,18 +284,12 @@ impl<'v> ContextValue<'v> {
         self.pending_children.borrow_mut()
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn diagnostics(&self) -> std::cell::Ref<'_, Vec<crate::Diagnostic>> {
-        self.diagnostics.borrow()
-    }
-
     /// Return the absolute source path of the Starlark file currently being evaluated.
     pub fn source_path(&self) -> String {
         self.module.borrow().source_path().to_owned()
     }
 
     /// Borrow the underlying `ModuleValue` immutably.
-    #[allow(dead_code)]
     pub(crate) fn module(&self) -> std::cell::Ref<'_, ModuleValue<'v>> {
         self.module.borrow()
     }

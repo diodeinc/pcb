@@ -647,15 +647,6 @@ fn serialize_completed_bom_match(response: &MatchBomResponse, paths: &[String]) 
     serde_json::to_vec(&MatchBomResponse { results, offers }).map_err(Into::into)
 }
 
-/// Fetch BOM matching results from the API and populate availability data
-pub fn fetch_and_populate_availability(
-    auth_token: Option<&str>,
-    bom: &mut pcb_sch::bom::Bom,
-) -> Result<()> {
-    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    fetch_and_populate_availability_with_context(&ctx, auth_token, bom, false)
-}
-
 pub fn fetch_and_populate_availability_with_context(
     ctx: &WorkspaceContext,
     auth_token: Option<&str>,
@@ -956,58 +947,6 @@ pub fn fetch_pricing_grouped_batch(
             bom_line.selected_offer_id.as_deref(),
             bom_line.match_status,
             bom_line_no_match(bom_line),
-        );
-    }
-
-    Ok(results)
-}
-
-/// Fetch pricing for multiple components in a single batch request
-pub fn fetch_pricing_batch(
-    auth_token: Option<&str>,
-    components: &[ComponentKey],
-) -> Result<Vec<Availability>> {
-    if components.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Create BOM entries for all components
-    let bom_entries: Vec<_> = components
-        .iter()
-        .enumerate()
-        .map(|(index, component)| component_bom_entry(index, component))
-        .collect();
-
-    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    let match_response = call_bom_match_api(&ctx, auth_token, &bom_entries, 30, false)?;
-
-    let mut results = vec![Availability::default(); components.len()];
-
-    for bom_line in match_response.results {
-        let Some(path) = bom_line.design_entry.path.as_deref() else {
-            continue;
-        };
-        let Some(idx) = path
-            .strip_prefix("component_")
-            .and_then(|s| s.parse::<usize>().ok())
-        else {
-            continue;
-        };
-        let Some(slot) = results.get_mut(idx) else {
-            continue;
-        };
-
-        let offers: Vec<_> = bom_line
-            .offer_ids
-            .iter()
-            .filter_map(|id| match_response.offers.get(id))
-            .collect();
-
-        *slot = build_search_availability(
-            &offers,
-            bom_line.selected_offer_id.as_deref(),
-            bom_line.match_status,
-            bom_line_no_match(&bom_line),
         );
     }
 

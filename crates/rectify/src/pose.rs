@@ -22,11 +22,6 @@ impl EulerPose {
             z: normalize_deg(z),
         }
     }
-
-    #[allow(dead_code)] // Useful public API.
-    pub fn as_tuple(self) -> (i32, i32, i32) {
-        (self.x, self.y, self.z)
-    }
 }
 
 fn normalize_deg(a: i32) -> i32 {

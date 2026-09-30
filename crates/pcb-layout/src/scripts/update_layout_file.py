@@ -359,30 +359,6 @@ class JsonNetlistParser:
 
         return parser
 
-    def get_component_module(
-        self, component_path: str
-    ) -> JsonNetlistParser.Module | None:
-        """Find which module a component belongs to based on its hierarchical path.
-
-        For example, if component_path is "Power.Regulator.C1", this will check:
-        - "Power.Regulator" (if it exists as a module)
-        - "Power" (if it exists as a module)
-
-        Returns the deepest (most specific) module that contains this component.
-        """
-        if not component_path:
-            return None
-
-        path_parts = component_path.split(".")
-
-        # Try from most specific to least specific
-        for i in range(len(path_parts) - 1, 0, -1):
-            module_path = ".".join(path_parts[:i])
-            if module_path in self.modules:
-                return self.modules[module_path]
-
-        return None
-
 
 ####################################################################################################
 # Data Structures + Utility Functions

@@ -13,7 +13,6 @@ pcb-sch = { path = "../pcb-sch", default-features = false }
 pcb-sexpr = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
