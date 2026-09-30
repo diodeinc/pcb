@@ -60,9 +60,12 @@ jobs:
       - name: Remove unused Homebrew taps (macOS)
         if: runner.os == 'macOS'
         run: |
+          if brew list --formula | grep -qx bicep; then
+            brew uninstall --formula --force azure/bicep/bicep
+          fi
           for tap in aws/tap azure/bicep; do
             if brew tap | grep -qx "$tap"; then
-              brew untap --force "$tap"
+              brew untap "$tap"
             fi
           done
 
