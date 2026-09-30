@@ -684,9 +684,17 @@ impl PackageIndexes {
             .collect();
         // On duplicate root paths the later coordinate wins, matching the
         // last-maximum tie-break of the longest-prefix scan this replaces.
+        // The workspace stdlib is a link, so evaluation also sees stdlib files
+        // under its canonical target; both paths name the stdlib.
+        let canonical_stdlib_roots = resolution
+            .values()
+            .flat_map(|map| &map.packages)
+            .filter(|(_, package)| matches!(package.identity, FrozenPackageIdentity::Stdlib))
+            .map(|(root, _)| (root.clone(), STDLIB_MODULE_PATH.to_string()));
         let root_coords = workspace_package_roots
             .iter()
             .map(|(coord, root)| (root.clone(), coord.clone()))
+            .chain(canonical_stdlib_roots)
             .collect();
 
         let mut inferred_roots: HashMap<PathBuf, Option<(String, PackageScopeKey)>> =

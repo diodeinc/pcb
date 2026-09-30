@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Change `pcb ipc2581 edit population` to take `--dnp` and `--populate` deltas that leave every other designator as is.
+- Workspaces link to the toolchain stdlib instead of copying it into `.pcb/stdlib`.
 
 ### Removed
 

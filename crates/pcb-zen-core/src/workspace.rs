@@ -174,7 +174,7 @@ impl WorkspaceInfo {
             .map(|path| self.root.join(path))
     }
 
-    /// Workspace-local toolchain stdlib materialization path.
+    /// Workspace-local link to the toolchain stdlib, unless patched.
     pub fn workspace_stdlib_dir(&self) -> PathBuf {
         self.stdlib_patch_path()
             .unwrap_or_else(|| crate::workspace_stdlib_root(&self.root))

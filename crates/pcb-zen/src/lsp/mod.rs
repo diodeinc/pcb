@@ -1778,8 +1778,8 @@ mod tests {
             .resolution_for(&board)
             .workspace_info
             .workspace_stdlib_dir();
-        let stdlib_file = stdlib.join("navigation_probe.zen");
-        fs::write(&stdlib_file, source)?;
+        // The stdlib is the toolchain's, so parse one of its files in memory.
+        let stdlib_file = stdlib.join("interfaces.zen");
 
         for (path, has_prelude) in [(board, true), (stdlib_file, false)] {
             let uri = LspUri::File(path.clone());

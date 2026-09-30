@@ -34,7 +34,7 @@ enum PackageNode {
 
 pub fn target_package_urls_for_path(workspace: &WorkspaceInfo, path: &Path) -> Result<Vec<String>> {
     let path = path.canonicalize()?;
-    // The materialized stdlib lives inside the workspace tree but is never a
+    // The stdlib is linked into the workspace tree but is never a
     // workspace package; resolve it as the stdlib root.
     if path.starts_with(canonicalize(&workspace.workspace_stdlib_dir())) {
         return Ok(vec![STDLIB_MODULE_PATH.to_string()]);
@@ -124,7 +124,7 @@ fn resolve_frozen(
     offline: bool,
 ) -> Result<ResolutionResult> {
     if workspace_info.stdlib_patch_path().is_none() {
-        crate::cache_index::ensure_stdlib_materialized(&workspace_info.root)?;
+        crate::cache_index::ensure_workspace_stdlib_symlink(&workspace_info.root)?;
     }
 
     let resolution_set = build_frozen_resolution_maps(&workspace_info, package_urls, offline)?;
