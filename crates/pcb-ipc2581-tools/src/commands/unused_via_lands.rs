@@ -1,5 +1,7 @@
 //! Explicit, source-preserving removal of provably isolated interior via lands.
 
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Context, Result, bail, ensure};
 use ipc2581::edit::{Doc, Node};
 use ipc2581::types::SetFeature;
@@ -13,22 +15,14 @@ use pcb_ir::import::unused_via_lands::isolated_via_lands;
 pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(String, usize)> {
     let doc = Doc::parse(xml)?;
     let ipc = ipc2581::Ipc2581::parse(xml)?;
-    let design = import_design(&ipc, resolution)?;
+    let layers = &ipc.ecad().context("Missing Ecad")?.cad_data.layers;
 
     // The permissive general importer is not a completeness certificate. Check
-    // a deliberately limited grammar before interpreting absent contacts.
-    for name in [
-        "DictionaryStandard",
-        "DictionaryUser",
-        "DictionaryLineDesc",
-        "DictionaryFillDesc",
-    ] {
-        for node in doc.find_all(name) {
-            check_geometry(&doc, node)?;
-        }
-    }
+    // a deliberately limited grammar before interpreting absent contacts. Only
+    // follow dictionaries reached by relevant geometry, not silkscreen/artwork.
+    let mut pending = Vec::new();
     let steps = doc.find_all("Step");
-    let mut names = std::collections::HashSet::new();
+    let mut names = HashSet::new();
     for &step in &steps {
         ensure!(
             names.insert(doc.attr(step, "name")),
@@ -40,10 +34,12 @@ pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(Str
                     let name = doc
                         .attr(child, "layerRef")
                         .context("LayerFeature without layerRef")?;
-                    let layer = design.layer_id(name).context("Undeclared feature layer")?;
-                    let layer = &design.layer_definitions[layer.0 as usize];
+                    let layer = layers
+                        .iter()
+                        .find(|layer| ipc.resolve(layer.name) == name)
+                        .context("Undeclared feature layer")?;
                     if is_copper(layer.layer_function) || layer.layer_function.is_fabrication() {
-                        check_geometry(&doc, child)?;
+                        pending.push((child, false));
                     }
                     if is_copper(layer.layer_function) {
                         ensure!(
@@ -56,7 +52,7 @@ pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(Str
                         );
                     }
                 }
-                "PadStackDef" | "Profile" => check_geometry(&doc, child)?,
+                "PadStackDef" | "Profile" => pending.push((child, false)),
                 "StepRepeat" => {
                     ensure!(
                         doc.children(child).is_empty(),
@@ -73,6 +69,58 @@ pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(Str
             }
         }
     }
+    let references = [
+        (
+            "StandardPrimitiveRef",
+            "EntryStandard",
+            "standardPrimitiveRef",
+        ),
+        ("UserPrimitiveRef", "EntryUser", "userPrimitiveRef"),
+        ("LineDescRef", "EntryLineDesc", "lineDescRef"),
+        ("FillDescRef", "EntryFillDesc", "fillDescRef"),
+    ];
+    let mut entries = HashMap::<_, Vec<Node>>::new();
+    for (_, kind, _) in references {
+        for entry in doc.find_all(kind) {
+            if let Some(id) = doc.attr(entry, "id") {
+                entries.entry((kind, id)).or_default().push(entry);
+            }
+        }
+    }
+    let mut checked = HashSet::new();
+    while let Some((node, polygon_style)) = pending.pop() {
+        let children = check_geometry(&doc, node, polygon_style)?;
+        // user_shape() preserves a Contour's outer Polygon style; standard
+        // pads, profiles and cutouts parse only its points, discarding styles.
+        let user_shape = matches!(doc.name(node), "EntryUser" | "UserSpecial" | "Features")
+            || (doc.name(node) == "Contour" && polygon_style);
+        pending.extend(children.into_iter().map(|child| {
+            (
+                child,
+                user_shape && matches!(doc.name(child), "Contour" | "Polygon"),
+            )
+        }));
+        for (reference, kind, attribute) in references {
+            let id = if doc.name(node) == reference {
+                doc.attr(node, "id")
+            } else {
+                doc.attr(node, attribute)
+            };
+            if let Some(id) = id
+                && checked.insert((kind, id))
+            {
+                let entries = entries
+                    .get(&(kind, id))
+                    .context("Missing geometry dictionary entry")?;
+                ensure!(
+                    entries.len() == 1,
+                    "Ambiguous geometry dictionary entry {id}"
+                );
+                pending.extend(entries.iter().map(|&entry| (entry, false)));
+            }
+        }
+    }
+    let design = import_design(&ipc, resolution)?;
     let candidates = isolated_via_lands(&design, resolution)?;
     let mut edits = Vec::new();
     for id in candidates {
@@ -157,13 +205,9 @@ pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(Str
 /// Closed grammar for the geometry paths we use. Unknown children must not be
 /// silently ignored. In particular Xform on a Polygon is not supported by the
 /// polygon importer, even though transforms elsewhere are supported.
-fn check_geometry(doc: &Doc<'_>, node: Node) -> Result<()> {
+fn check_geometry(doc: &Doc<'_>, node: Node, polygon_style: bool) -> Result<Vec<Node>> {
     let children = doc.children(node);
     let allowed: &[&str] = match doc.name(node) {
-        "DictionaryStandard" => &["EntryStandard"],
-        "DictionaryUser" => &["EntryUser"],
-        "DictionaryLineDesc" => &["EntryLineDesc"],
-        "DictionaryFillDesc" => &["EntryFillDesc"],
         "EntryLineDesc" => &["LineDesc"],
         "EntryFillDesc" => &["FillDesc"],
         "LayerFeature" => &["Set"],
@@ -235,10 +279,8 @@ fn check_geometry(doc: &Doc<'_>, node: Node) -> Result<()> {
         | "Arc" => &["FillDesc", "FillDescRef", "LineDesc", "LineDescRef"],
         "Contour" | "Profile" => &["Polygon", "Cutout"],
         "Cutout" => &["Polygon", "PolyBegin", "PolyStepSegment", "PolyStepCurve"],
-        // Polygon styles are discarded by the importer; a stroke can extend
-        // beyond the filled image used by the isolation proof.
-        "Polygon" => &["PolyBegin", "PolyStepSegment", "PolyStepCurve"],
-        "Polyline" => &[
+        "Polygon" if !polygon_style => &["PolyBegin", "PolyStepSegment", "PolyStepCurve"],
+        "Polygon" | "Polyline" => &[
             "PolyBegin",
             "PolyStepSegment",
             "PolyStepCurve",
@@ -277,7 +319,6 @@ fn check_geometry(doc: &Doc<'_>, node: Node) -> Result<()> {
             doc.name(child),
             doc.name(node)
         );
-        check_geometry(doc, child)?;
     }
     // These are single-shape containers. The general parser may accept only
     // the first of several children, which is not safe for an isolation proof.
@@ -311,7 +352,7 @@ fn check_geometry(doc: &Doc<'_>, node: Node) -> Result<()> {
             doc.name(node)
         );
     }
-    Ok(())
+    Ok(children)
 }
 
 #[cfg(feature = "cli")]
@@ -623,6 +664,60 @@ mod tests {
         );
         let error = remove_unused_via_lands(&xml, Resolution::default()).unwrap_err();
         assert!(error.to_string().contains("Hole or SlotCavity on copper"));
+    }
+
+    #[test]
+    fn ignores_silkscreen_dictionary_geometry_but_checks_copper_references() {
+        let dictionary = r#"<DictionaryUser units="MILLIMETER"><EntryUser id="drawing"><UserSpecial><Contour><Polygon><PolyBegin x="7.5" y="2"/><PolyStepSegment x="9" y="2"/><PolyStepSegment x="9" y="4"/><PolyStepSegment x="7.5" y="4"/><PolyStepSegment x="7.5" y="2"/><LineDesc lineWidth="0.4" lineEnd="ROUND"/><FillDesc fillProperty="HOLLOW"/></Polygon></Contour></UserSpecial></EntryUser></DictionaryUser>"#;
+        let drawing = r#"<Set><Features><Location x="0" y="0"/><UserPrimitiveRef id="drawing"/></Features></Set>"#;
+        let silk = format!(r#"<LayerFeature layerRef="SILK">{drawing}</LayerFeature>"#);
+        let xml = board("")
+            .replace("</Content>", &format!("{dictionary}</Content>"))
+            .replace(
+                "<CadData>",
+                r#"<CadData><Layer name="SILK" layerFunction="SILKSCREEN"/>"#,
+            )
+            .replace("</Step>", &format!("{silk}</Step>"));
+        let (updated, count) = run(&xml);
+        assert_eq!(count, 4);
+        assert!(updated.contains(dictionary));
+        assert!(updated.contains(&silk));
+        // The stroke, not the polygon's interior, touches the x=7 via on I1.
+        let copper = xml.replace(
+            r#"<LayerFeature layerRef="I1">"#,
+            &format!(r#"<LayerFeature layerRef="I1">{drawing}"#),
+        );
+        assert_eq!(run(&copper).1, 3);
+        let unsupported = copper.replace("<Polygon>", r#"<Polygon><Xform xOffset="2"/>"#);
+        let error = remove_unused_via_lands(&unsupported, Resolution::default()).unwrap_err();
+        assert!(
+            error.to_string().contains("Xform inside Polygon"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn audits_transitive_and_attribute_style_references() {
+        let dictionaries = r#"<DictionaryLineDesc units="MILLIMETER"><EntryLineDesc id="stroke"><LineDesc lineWidth="0.4" lineEnd="ROUND"/></EntryLineDesc></DictionaryLineDesc><DictionaryUser units="MILLIMETER"><EntryUser id="trace"><UserSpecial><Line startX="7" startY="3.5" endX="8" endY="3.5"><LineDescRef id="stroke"/></Line></UserSpecial></EntryUser></DictionaryUser>"#;
+        for feature in [
+            r#"<Features><Location x="0" y="0"/><UserPrimitiveRef id="trace"/></Features>"#,
+            r#"<Polyline lineDescRef="stroke"><PolyBegin x="7" y="3.5"/><PolyStepSegment x="8" y="3.5"/></Polyline>"#,
+        ] {
+            let xml = board(&format!("<Set>{feature}</Set>"))
+                .replace("</Content>", &format!("{dictionaries}</Content>"));
+            assert_eq!(run(&xml).1, 3);
+            let unsupported = xml.replace(
+                r#"lineEnd="ROUND"/>"#,
+                r#"lineEnd="ROUND"><FutureStrokeGeometry/></LineDesc>"#,
+            );
+            let error = remove_unused_via_lands(&unsupported, Resolution::default()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("FutureStrokeGeometry inside LineDesc"),
+                "{error:#}"
+            );
+        }
     }
 
     #[test]
