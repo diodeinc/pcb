@@ -1,20 +1,20 @@
 //! Set operations and ordered dark/clear paint composition.
 
-use super::simplification::{resolve_groups, untagged};
+use super::simplification::{overlay, resolve_groups, untagged};
 use super::{ContourSet, Ring, Shape, flatten_shapes, rings_bbox, simplify_shapes};
 use crate::geom::accuracy::numerical_error;
 use crate::geom::{AccuracyError, BBox, FillRule, Polarity, Resolution};
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
-use i_overlay::float::simplify::SimplifyShape;
-use i_overlay::float::single::SingleFloatOverlay;
 
 /// Difference keeping the connected-shape structure of the result.
 pub(crate) fn difference_shapes(subject: Vec<Ring>, cutters: Vec<Ring>) -> Vec<Shape> {
-    if subject.is_empty() || cutters.is_empty() {
-        return subject.simplify_shape_as::<i64>(OverlayFillRule::NonZero);
-    }
-    subject.overlay_as::<i64>(&cutters, OverlayRule::Difference, OverlayFillRule::NonZero)
+    overlay(
+        &subject,
+        &cutters,
+        OverlayRule::Difference,
+        OverlayFillRule::NonZero,
+    )
 }
 
 /// Rings tagged with the regularized source they belong to.
@@ -35,7 +35,12 @@ fn union_rings(rings: Vec<(Ring, u32)>) -> Vec<Ring> {
         if regular {
             rings
         } else {
-            flatten_shapes(rings.simplify_shape_as::<i64>(OverlayFillRule::NonZero))
+            flatten_shapes(overlay(
+                &rings,
+                &[],
+                OverlayRule::Subject,
+                OverlayFillRule::NonZero,
+            ))
         }
     })
 }
@@ -57,7 +62,7 @@ fn overlay_rings(subject: Vec<Ring>, clip: Vec<Ring>, rule: OverlayRule) -> Vec<
                 _ => Vec::new(),
             }
         } else {
-            flatten_shapes(subject.overlay_as::<i64>(&clip, rule, OverlayFillRule::NonZero))
+            flatten_shapes(overlay(&subject, &clip, rule, OverlayFillRule::NonZero))
         }
     })
 }

@@ -1,13 +1,13 @@
 //! Polygon regularization, fixed-grid simplification, and inward decimation.
 
 use super::{ContourSet, Ring, Shape, flatten_shapes, overlay_fill_rule, rings_bbox};
-use crate::geom::accuracy::numerical_error;
+use crate::geom::accuracy::{lattice_per_mm, numerical_error};
 use crate::geom::dist;
 use crate::geom::{AccuracyError, BBox, FillRule, Point};
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
-use i_overlay::core::overlay::IntOverlayOptions;
+use i_overlay::core::overlay::{IntOverlayOptions, Overlay};
+use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::core::simplify::Simplify;
-use i_overlay::float::simplify::SimplifyShape;
 use i_overlay::i_float::int::point::IntPoint;
 use i_overlay::i_shape::int::shape::IntShapes;
 
@@ -31,7 +31,42 @@ pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
 fn regularize(rings: Vec<Ring>, rule: OverlayFillRule) -> Vec<Shape> {
     bounds_connected_groups(rings.into_iter().map(|ring| (ring, ())).collect())
         .into_iter()
-        .flat_map(|group| untagged(group).simplify_shape_as::<i64>(rule))
+        .flat_map(|group| overlay(&untagged(group), &[], OverlayRule::Subject, rule))
+        .collect()
+}
+
+pub(super) fn overlay(
+    subject: &[Ring],
+    clip: &[Ring],
+    rule: OverlayRule,
+    fill_rule: OverlayFillRule,
+) -> Vec<Shape> {
+    let scale = lattice_per_mm(rings_bbox(subject).union(rings_bbox(clip)));
+    let lattice = |rings: &[Ring]| {
+        rings
+            .iter()
+            .map(|ring| {
+                ring.iter()
+                    .map(|&[x, y]| {
+                        IntPoint::new((x * scale).round() as i64, (y * scale).round() as i64)
+                    })
+                    .collect()
+            })
+            .collect::<Vec<_>>()
+    };
+    Overlay::with_contours(&lattice(subject), &lattice(clip))
+        .overlay(rule, fill_rule)
+        .into_iter()
+        .map(|shape| {
+            shape
+                .into_iter()
+                .map(|ring| {
+                    ring.into_iter()
+                        .map(|point| [point.x as f64 / scale, point.y as f64 / scale])
+                        .collect()
+                })
+                .collect()
+        })
         .collect()
 }
 
