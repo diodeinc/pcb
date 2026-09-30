@@ -415,7 +415,7 @@ fn fetch_package_contents(packages: &BTreeSet<(&str, &Version)>) -> Result<()> {
         treeishes_by_repo
             .entry(repo_url)
             .or_default()
-            .push(package_treeish(&ref_spec, &subpath));
+            .push(package_tree(&ref_spec, &subpath));
     }
 
     treeishes_by_repo
@@ -629,12 +629,10 @@ fn package_ref(subpath: &str, version_str: &str) -> String {
     }
 }
 
-fn package_treeish(ref_spec: &str, subpath: &str) -> String {
-    if subpath.is_empty() {
-        ref_spec.to_string()
-    } else {
-        format!("{ref_spec}:{subpath}")
-    }
+/// The package's tree. For a root package this is `<ref>:`, the root tree,
+/// so listing its objects covers one snapshot rather than the whole history.
+fn package_tree(ref_spec: &str, subpath: &str) -> String {
+    format!("{ref_spec}:{subpath}")
 }
 
 /// Materialize a repo ref into a package directory.
@@ -648,7 +646,7 @@ fn fetch_via_git(dest: &Path, repo_url: &str, ref_spec: &str, subpath: &str) -> 
     // Tags are local once the source repo is fetched; a pseudo-version's
     // commit may not be.
     git::ensure_rev_in_source_repo(&source_dir, ref_spec)?;
-    git::archive_to_dir(&source_dir, &package_treeish(ref_spec, subpath), dest)?;
+    git::archive_to_dir(&source_dir, &package_tree(ref_spec, subpath), dest)?;
 
     Ok(())
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 
 use anyhow::{Context, bail};
@@ -24,8 +24,7 @@ const PCB_GIT_CONFIG_FILE: &str = "gitconfig";
 const PCB_GIT_CONFIG_INCLUDE: &str = "include.path";
 const GIT_CONFIG_NOT_FOUND: i32 = 5;
 
-static ACCESSIBLE_REPOS: LazyLock<Mutex<HashMap<String, bool>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static KNOWN_REPOS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
 #[derive(Debug, Clone)]
 pub struct TagMetadata {
@@ -977,27 +976,35 @@ pub fn format_ssh_url(module_path: &str) -> String {
 
 /// Split a module path into `(repo_url, subpath)`.
 pub fn split_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
-    resolve_repo_and_subpath_with(module_path, repo_is_accessible_cached)
-}
-
-/// Every package in a repo shares its prefixes, so probe each prefix once per
-/// process.
-fn repo_is_accessible_cached(repo_url: &str) -> anyhow::Result<bool> {
-    let cached = ACCESSIBLE_REPOS
-        .lock()
-        .expect("repo accessibility cache mutex poisoned")
-        .get(repo_url)
-        .copied();
-    if let Some(accessible) = cached {
-        return Ok(accessible);
+    // Repos do not nest, so a prefix already known to be a repo needs no probe.
+    if let Some(split) = repo_prefixes(module_path)
+        .into_iter()
+        .find(|(repo_url, _)| is_known_repo(repo_url))
+    {
+        return Ok(split);
     }
 
-    let accessible = repo_is_accessible(repo_url)?;
-    ACCESSIBLE_REPOS
+    resolve_repo_and_subpath_with(module_path, |repo_url| {
+        let accessible = repo_is_accessible(repo_url);
+        if accessible {
+            KNOWN_REPOS
+                .lock()
+                .expect("known repo set mutex poisoned")
+                .insert(repo_url.to_string());
+        }
+        Ok(accessible)
+    })
+}
+
+/// A repo is known once it is cloned or a probe has reached it. Failed probes
+/// are not remembered, so a transient failure is retried on the next lookup.
+fn is_known_repo(repo_url: &str) -> bool {
+    KNOWN_REPOS
         .lock()
-        .expect("repo accessibility cache mutex poisoned")
-        .insert(repo_url.to_string(), accessible);
-    Ok(accessible)
+        .expect("known repo set mutex poisoned")
+        .contains(repo_url)
+        || crate::cache_index::source_repo_dir(repo_url)
+            .is_ok_and(|source_dir| source_dir.join(".git").exists())
 }
 
 fn resolve_repo_and_subpath_with(
@@ -1023,17 +1030,10 @@ pub(crate) fn repo_prefixes(module_path: &str) -> Vec<(String, String)> {
     prefixes
 }
 
-fn repo_is_accessible(repo_url: &str) -> anyhow::Result<bool> {
-    if crate::cache_index::source_repo_dir(repo_url)?
-        .join(".git")
-        .exists()
-    {
-        return Ok(true);
-    }
-
-    Ok(remote_is_accessible(repo_url, |url, interactive| {
+fn repo_is_accessible(repo_url: &str) -> bool {
+    remote_is_accessible(repo_url, |url, interactive| {
         ls_remote(url, "HEAD", interactive).map(drop)
-    }))
+    })
 }
 
 fn remote_is_accessible(
