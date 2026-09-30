@@ -526,9 +526,21 @@ pub fn extract_inline_manifest(zen_content: &str) -> Option<String> {
 /// 2. If no explicit workspace found, first pcb.toml encountered
 /// 3. If no pcb.toml found, the start directory (or parent if start is a file)
 ///
+/// A path through a link in `<dir>/.pcb` (the stdlib and cache links) starts
+/// the walk at `<dir>`: the link belongs to that workspace, not to wherever it
+/// points.
+///
 /// Returns an error if a pcb.toml file exists but fails to parse.
 /// Always returns a canonicalized absolute path on success.
 pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Result<PathBuf> {
+    let start = start
+        .ancestors()
+        .find(|path| {
+            path.parent().and_then(Path::file_name) == Some(".pcb".as_ref())
+                && file_provider.is_symlink(path)
+        })
+        .and_then(|link| link.parent()?.parent())
+        .unwrap_or(start);
     let abs_start = file_provider
         .canonicalize(start)
         .unwrap_or_else(|_| start.to_path_buf());
@@ -979,5 +991,42 @@ load("@stdlib/foo.zen", "Bar")
             .unwrap()
             .expect_err("legacy [packages] should not parse");
         assert!(err.to_string().contains("unknown field `packages`"));
+    }
+
+    #[test]
+    #[cfg(all(unix, feature = "native"))]
+    fn find_workspace_root_keeps_pcb_links_in_their_workspace() -> Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let workspace = root.join("board");
+        let toolchain = root.join("toolchain");
+        let home_cache = root.join("home/.pcb/cache/pkg");
+        let staged = workspace.join(".pcb/releases/v1");
+        for (package, manifest) in [
+            (&workspace, "[workspace]\n"),
+            (&toolchain, "[workspace]\n"),
+            (&toolchain.join("std"), ""),
+            (&home_cache, ""),
+            (&staged, "[workspace]\n"),
+        ] {
+            std::fs::create_dir_all(package)?;
+            std::fs::write(package.join("pcb.toml"), manifest)?;
+        }
+        std::fs::write(toolchain.join("std/interfaces.zen"), "")?;
+        std::fs::write(home_cache.join("part.zen"), "")?;
+        symlink(toolchain.join("std"), workspace.join(".pcb/stdlib"))?;
+        symlink(root.join("home/.pcb/cache"), workspace.join(".pcb/cache"))?;
+
+        let provider = crate::DefaultFileProvider::new();
+        let find = |path: &str| find_workspace_root(&provider, &root.join(path));
+        assert_eq!(find("board/.pcb/stdlib/interfaces.zen")?, workspace);
+        assert_eq!(find("board/.pcb/cache/pkg/part.zen")?, workspace);
+        // Only links in `.pcb` belong to the workspace around it.
+        assert_eq!(find("home/.pcb/cache/pkg/part.zen")?, home_cache);
+        assert_eq!(find("toolchain/std/interfaces.zen")?, toolchain);
+        assert_eq!(find("board/.pcb/releases/v1/board.zen")?, staged);
+        Ok(())
     }
 }
