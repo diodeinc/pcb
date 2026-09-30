@@ -10,7 +10,7 @@ use anyhow::{Context, Result, ensure};
 use ipc2581::types::StandardPrimitive;
 
 use crate::dialects::ipc::{ArtworkScope, FeatureRole, FeatureSpan, PlatingKind, PrimitiveRef};
-use crate::geom::dfm::{BBoxIndex, region_clearance};
+use crate::geom::dfm::{BBoxIndex, region_clearance_within};
 use crate::geom::{Polarity, Resolution};
 use crate::import::ipc2581::{FeatureDefinitionId, ImportedDesign, LayerId, is_copper};
 use crate::import::physical::{Association, PhysicalHoleKind, physical_stackup_layers};
@@ -24,7 +24,14 @@ pub fn isolated_via_lands(
     resolution: Resolution,
 ) -> Result<BTreeSet<FeatureDefinitionId>> {
     ensure!(
-        design.geometry.diagnostics.is_empty(),
+        design
+            .layer_definitions
+            .iter()
+            .enumerate()
+            .all(|(i, layer)| {
+                !(is_copper(layer.layer_function) || layer.layer_function.is_fabrication())
+                    || !design.has_layer_diagnostics(LayerId(i as u32))
+            }),
         "Cannot prove via isolation: import has geometry diagnostics"
     );
     let layout = &design.geometry.layout;
@@ -149,6 +156,11 @@ pub fn isolated_via_lands(
             .map(|hole| hole.image.bbox())
             .collect(),
     );
+    let hole_boundaries = physical
+        .holes
+        .iter()
+        .map(|hole| hole.image.prepare_query())
+        .collect::<Vec<_>>();
     let hole_error = physical
         .holes
         .iter()
@@ -170,6 +182,12 @@ pub fn isolated_via_lands(
             design.resolve(layer.name)
         );
         let bounds = BBoxIndex::new(images.iter().map(|image| image.bbox()).collect());
+        // Reuse each boundary index across vias. Only search within the
+        // uncertainty margin: the exact distance to faraway copper is irrelevant.
+        let boundaries = images
+            .iter()
+            .map(|image| image.prepare_query())
+            .collect::<Vec<_>>();
         let max_error = images
             .iter()
             .map(|image| image.uncertainty_mm)
@@ -182,14 +200,14 @@ pub fn isolated_via_lands(
             let image = &images[i];
             let margin = image.uncertainty_mm + max_error + 1e-6;
             let isolated = claims.get(&crate::import::physical::LandId(occurrence.id)) == Some(&1)
-                && !image.is_empty()
                 // A neighboring barrel can contact this land without having
                 // its own land here. Conservatively block on all other holes,
                 // even holes whose span or plating cannot establish contact.
                 && holes_near.query(image.bbox().expand(margin)).into_iter().all(|j| {
                     let hole = &physical.holes[j];
-                    hole.id == *own_hole || region_clearance(image, &hole.image)
-                        .is_some_and(|gap| gap.mm > gap.uncertainty_mm + 1e-6)
+                    hole.id == *own_hole || (!hole.image.is_empty()
+                        && region_clearance_within(image, &boundaries[i], &hole.image, &hole_boundaries[j], margin)
+                            .is_none_or(|gap| gap.mm > gap.uncertainty_mm + 1e-6))
                 })
                 && bounds
                     .query(image.bbox().expand(margin))
@@ -200,8 +218,8 @@ pub fn isolated_via_lands(
                         }
                         // Treat clear artwork as an obstacle too: we do not remove
                         // partially cleared pads or reason about paint ordering.
-                        region_clearance(image, &images[j])
-                            .is_some_and(|gap| gap.mm > gap.uncertainty_mm + 1e-6)
+                        region_clearance_within(image, &boundaries[i], &images[j], &boundaries[j], margin)
+                            .is_none_or(|gap| gap.mm > gap.uncertainty_mm + 1e-6)
                     });
             all_isolated
                 .entry(occurrence.id.feature)

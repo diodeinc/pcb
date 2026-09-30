@@ -23,6 +23,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Speed up isolated via-land cleanup by reusing spatial indexes and limiting clearance searches to possible contacts.
 - Write compact DFM report JSON so formatting does not consume the 128 MiB report budget.
 - Shrink DFM reports by about a quarter without changing their format.
 - Fix `pcb ipc dfm check` reporting corners and small steps on copper edges as sub-minimum widths.

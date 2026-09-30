@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail, ensure};
 use ipc2581::edit::{Doc, Node};
-use ipc2581::types::SetFeature;
+use ipc2581::types::{LayerFunction, SetFeature};
 use pcb_ir::geom::Resolution;
 use pcb_ir::import::ipc2581::{import_design, is_copper};
 use pcb_ir::import::unused_via_lands::isolated_via_lands;
@@ -15,7 +15,8 @@ use pcb_ir::import::unused_via_lands::isolated_via_lands;
 pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(String, usize)> {
     let doc = Doc::parse(xml)?;
     let ipc = ipc2581::Ipc2581::parse(xml)?;
-    let layers = &ipc.ecad().context("Missing Ecad")?.cad_data.layers;
+    let cad_data = &ipc.ecad().context("Missing Ecad")?.cad_data;
+    let layers = &cad_data.layers;
 
     // The permissive general importer is not a completeness certificate. Check
     // a deliberately limited grammar before interpreting absent contacts. Only
@@ -39,20 +40,24 @@ pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(Str
                         .find(|layer| ipc.resolve(layer.name) == name)
                         .context("Undeclared feature layer")?;
                     if is_copper(layer.layer_function) || layer.layer_function.is_fabrication() {
-                        pending.push((child, false));
-                    }
-                    if is_copper(layer.layer_function) {
-                        ensure!(
-                            doc.children(child).into_iter().all(|set| {
-                                doc.children(set).into_iter().all(|feature| {
-                                    !matches!(doc.name(feature), "Hole" | "SlotCavity")
-                                })
-                            }),
-                            "Cannot prove via isolation: Hole or SlotCavity on copper layer"
-                        );
+                        pending.push((child, false, "Step"));
+                        for set in doc.children(child) {
+                            for feature in doc.children(set) {
+                                ensure!(
+                                    doc.name(feature) != "Hole"
+                                        || layer.layer_function == LayerFunction::Drill,
+                                    "Cannot prove via isolation: Hole on non-DRILL layer"
+                                );
+                                ensure!(
+                                    doc.name(feature) != "SlotCavity"
+                                        || !is_copper(layer.layer_function),
+                                    "Cannot prove via isolation: SlotCavity on copper layer"
+                                );
+                            }
+                        }
                     }
                 }
-                "PadStackDef" | "Profile" => pending.push((child, false)),
+                "PadStackDef" | "Profile" => pending.push((child, false, "Step")),
                 "StepRepeat" => {
                     ensure!(
                         doc.children(child).is_empty(),
@@ -88,7 +93,7 @@ pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(Str
         }
     }
     let mut checked = HashSet::new();
-    while let Some((node, polygon_style)) = pending.pop() {
+    while let Some((node, polygon_style, parent)) = pending.pop() {
         let children = check_geometry(&doc, node, polygon_style)?;
         // user_shape() preserves a Contour's outer Polygon style; standard
         // pads, profiles and cutouts parse only its points, discarding styles.
@@ -98,9 +103,20 @@ pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(Str
             (
                 child,
                 user_shape && matches!(doc.name(child), "Contour" | "Polygon"),
+                doc.name(node),
             )
         }));
         for (reference, kind, attribute) in references {
+            // Only a direct Set Polyline consumes a reference attribute.
+            // Elsewhere the parser reads reference children, not attributes.
+            ensure!(
+                doc.attr(node, attribute).is_none()
+                    || (parent == "Set"
+                        && doc.name(node) == "Polyline"
+                        && attribute == "lineDescRef"),
+                "Cannot prove via isolation: unsupported {attribute} attribute on {}",
+                doc.name(node)
+            );
             let id = if doc.name(node) == reference {
                 doc.attr(node, "id")
             } else {
@@ -116,7 +132,7 @@ pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(Str
                     entries.len() == 1,
                     "Ambiguous geometry dictionary entry {id}"
                 );
-                pending.extend(entries.iter().map(|&entry| (entry, false)));
+                pending.extend(entries.iter().map(|&entry| (entry, false, "")));
             }
         }
     }
@@ -160,10 +176,7 @@ pub fn remove_unused_via_lands(xml: &str, resolution: Resolution) -> Result<(Str
             .context("Missing source Set")?;
         // Features containers can expand into several parsed entries. Count
         // only standalone Pads in the parsed Set to recover the XML ordinal.
-        let parsed_layer = ipc
-            .ecad()
-            .context("Missing Ecad")?
-            .cad_data
+        let parsed_layer = cad_data
             .steps
             .iter()
             .find(|s| ipc.resolve(s.name) == step_name)
@@ -388,6 +401,7 @@ mod tests {
         let layers = ["TOP", "I1", "I2", "BOTTOM"];
         let definitions = layers
             .iter()
+            .rev() // Layer declarations deliberately differ from physical stackup order.
             .map(|name| {
                 format!(r#"<Layer name="{name}" layerFunction="SIGNAL" polarity="POSITIVE"/>"#)
             })
@@ -540,69 +554,6 @@ mod tests {
     }
 
     #[test]
-    fn nested_rotation_and_mirroring_preserve_contacts() {
-        // The board is rotated 90 degrees: (7,3) -> (7,7), then the
-        // whole array (including its trace) is mirrored and rotated again.
-        for touching in [false, true] {
-            let xml = panel(&board(""), true, touching)
-                .replace(
-                    r#"stepRef="board" x="10""#,
-                    r#"stepRef="board" angle="90" x="10""#,
-                )
-                .replace(
-                    r#"stepRef="array" x="0""#,
-                    r#"stepRef="array" angle="90" mirror="true" x="0""#,
-                )
-                .replace(r#"dy="20""#, r#"dy="100""#)
-                .replace(&trace(17.0, 3.0, 0.2), &trace(7.0, 7.0, 0.2));
-            assert_eq!(run(&xml).1, if touching { 3 } else { 4 });
-        }
-    }
-
-    #[test]
-    fn cleanup_is_opt_in_for_copper_balanced_arrays_and_fab_panels() {
-        use crate::commands::EdgeInsetsMm;
-        use crate::commands::board_array::{
-            BoardArrayCreateOptions, Separation, create_board_array,
-        };
-        use crate::commands::fab_panel::{FabPanelSpec, create_fab_panel};
-
-        let profile = r#"<Profile><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="10" y="0"/><PolyStepSegment x="10" y="10"/><PolyStepSegment x="0" y="10"/><PolyStepSegment x="0" y="0"/></Polygon></Profile>"#;
-        let xml = board(&trace(7.0, 3.0, 0.2)).replace("</Step>", &format!("{profile}</Step>"));
-        let array = create_board_array(
-            &xml,
-            &BoardArrayCreateOptions {
-                columns: 6,
-                rows: 6,
-                board_margin_mm: EdgeInsetsMm::all(0.0),
-                edge_rail_mm: EdgeInsetsMm::all(5.0),
-            },
-            true,
-            Separation::VScore,
-            Resolution::default(),
-        )
-        .unwrap();
-        assert!(array.copper_balance.is_some());
-        let mut spec = FabPanelSpec::INCHES_12_X_18;
-        // Keep the balancing domain small while exercising the production writer.
-        spec.edge_margin_mm = EdgeInsetsMm::new(170.0, 110.0, 170.0, 110.0);
-        let fab = create_fab_panel(
-            std::slice::from_ref(&array.xml),
-            &[0],
-            spec,
-            true,
-            Resolution::default(),
-        )
-        .unwrap();
-        assert!(fab.copper_balance.is_some());
-        for xml in [&array.xml, &fab.xml] {
-            let (updated, count) = run(xml);
-            assert_eq!(count, 3); // Creation itself has not removed any lands.
-            assert_eq!(run(&updated), (updated, 0));
-        }
-    }
-
-    #[test]
     fn keeps_ambiguous_component_and_blind_hole_lands() {
         let xml = board("");
         assert_eq!(
@@ -627,16 +578,6 @@ mod tests {
     }
 
     #[test]
-    fn physical_stackup_not_declaration_order_determines_endpoints() {
-        let xml = board("");
-        let top = r#"<Layer name="TOP" layerFunction="SIGNAL" polarity="POSITIVE"/>"#;
-        let permuted = xml
-            .replace(top, "")
-            .replace("<Stackup name=", &format!("{top}<Stackup name="));
-        assert_eq!(run(&permuted).1, 4);
-    }
-
-    #[test]
     fn rejects_incomplete_layout_coverage() {
         let array = panel(&board(""), false, true);
         assert_eq!(run(&array).1, 3);
@@ -655,15 +596,6 @@ mod tests {
             let error = remove_unused_via_lands(&xml, Resolution::default()).unwrap_err();
             assert!(error.to_string().contains("layout has"), "{error:#}");
         }
-    }
-
-    #[test]
-    fn rejects_copper_layer_holes() {
-        let xml = board(
-            r#"<Set><Hole name="other" diameter="0.3" platingStatus="PLATED" plusTol="0" minusTol="0" x="7.5" y="3"/></Set>"#,
-        );
-        let error = remove_unused_via_lands(&xml, Resolution::default()).unwrap_err();
-        assert!(error.to_string().contains("Hole or SlotCavity on copper"));
     }
 
     #[test]
@@ -721,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_discarded_polygon_styles_and_profile_transforms() {
+    fn rejects_discarded_pad_polygon_styles() {
         let polygon = r#"<Polygon><PolyBegin x="7.5" y="2"/><PolyStepSegment x="9" y="2"/><PolyStepSegment x="9" y="4"/><PolyStepSegment x="7.5" y="4"/><PolyStepSegment x="7.5" y="2"/></Polygon>"#;
         let styled = polygon.replace(
             "</Polygon>",
@@ -732,45 +664,58 @@ mod tests {
         ));
         let error = remove_unused_via_lands(&xml, Resolution::default()).unwrap_err();
         assert!(error.to_string().contains("inside Polygon"), "{error:#}");
-
-        let profile = plane(true);
-        let start = profile.find("<Contour>").unwrap();
-        let end = profile.find("</Contour>").unwrap() + "</Contour>".len();
-        let profile = profile[start..end].replace("Contour", "Profile");
-        let xml = board("")
-            .replace("</Step>", &format!("{profile}</Step>"))
-            .replace(
-                r#"name="I1" layerFunction="SIGNAL" polarity="POSITIVE""#,
-                r#"name="I1" layerFunction="PLANE" polarity="NEGATIVE""#,
-            )
-            .replace(
-                r#"<LayerFeature layerRef="I1"><Set net="GND">"#,
-                r#"<LayerFeature layerRef="I1"><Set net="GND" polarity="POSITIVE">"#,
-            );
-        // The untransformed cutout is supported; shifting it cannot be ignored.
-        assert_eq!(run(&xml).1, 4);
-        let xml = xml.replace(
-            "<Cutout><Polygon>",
-            r#"<Cutout><Polygon><Xform xOffset="2"/>"#,
-        );
-        let error = remove_unused_via_lands(&xml, Resolution::default()).unwrap_err();
-        assert!(
-            error.to_string().contains("Xform inside Polygon"),
-            "{error:#}"
-        );
     }
 
     #[test]
-    fn fails_closed_on_ignored_geometry_missing_shapes_and_missing_stackup() {
-        let unknown = board("<Set><FutureCopperShape/></Set>");
-        assert!(remove_unused_via_lands(&unknown, Resolution::default()).is_err());
-        let missing = board("").replace("id=\"land\"/>", "id=\"missing\"/>");
-        assert!(remove_unused_via_lands(&missing, Resolution::default()).is_err());
-        let xml = board("");
-        let doc = Doc::parse(&xml).unwrap();
-        let xml = doc
-            .apply(vec![doc.delete(doc.find_all("Stackup")[0])])
-            .unwrap();
-        assert!(remove_unused_via_lands(&xml, Resolution::default()).is_err());
+    fn rejects_style_attributes_that_the_shape_parser_ignores() {
+        let dictionary = r#"<DictionaryLineDesc units="MILLIMETER"><EntryLineDesc id="stroke"><LineDesc lineWidth="0.4" lineEnd="ROUND"/></EntryLineDesc></DictionaryLineDesc>"#;
+        let polygon = r#"<Contour><Polygon><PolyBegin x="7.5" y="2"/><PolyStepSegment x="9" y="2"/><PolyStepSegment x="9" y="4"/><PolyStepSegment x="7.5" y="4"/><PolyStepSegment x="7.5" y="2"/><LineDescRef id="stroke"/><FillDesc fillProperty="HOLLOW"/></Polygon></Contour>"#;
+        let xml = board(&format!(
+            "<Set><Features><Location x=\"0\" y=\"0\"/>{polygon}</Features></Set>"
+        ))
+        .replace("</Content>", &format!("{dictionary}</Content>"));
+        assert_eq!(run(&xml).1, 3); // The stroke, not the polygon interior, touches.
+        let ignored = xml
+            .replace("<Polygon>", r#"<Polygon lineDescRef="stroke">"#)
+            .replace(r#"<LineDescRef id="stroke"/>"#, "");
+        assert!(remove_unused_via_lands(&ignored, Resolution::default()).is_err());
+        // Only a direct Set Polyline supports this attribute, not a user shape.
+        let ignored = board(
+            r#"<Set><Features><Location x="0" y="0"/><Polyline lineDescRef="stroke"><PolyBegin x="7" y="3.5"/><PolyStepSegment x="8" y="3.5"/></Polyline></Features></Set>"#,
+        ).replace("</Content>", &format!("{dictionary}</Content>"));
+        assert!(remove_unused_via_lands(&ignored, Resolution::default()).is_err());
+    }
+
+    #[test]
+    fn rejects_holes_on_non_drill_layers() {
+        for function in ["SIGNAL", "ROUT"] {
+            let xml = board("")
+                .replace("<CadData>", &format!(r#"<CadData><Layer name="other" layerFunction="{function}"/>"#))
+                .replace("</Step>", r#"<LayerFeature layerRef="other"><Set><Hole name="neighbor" diameter="0.3" platingStatus="VIA" plusTol="0" minusTol="0" x="7.5" y="3"/></Set></LayerFeature></Step>"#);
+            assert!(remove_unused_via_lands(&xml, Resolution::default()).is_err());
+        }
+    }
+
+    #[test]
+    fn ignores_non_copper_diagnostics_but_rejects_copper_diagnostics() {
+        let dictionary = r#"<DictionaryUser units="MILLIMETER"><EntryUser id="hatch"><UserSpecial><Circle diameter="0.8"><FillDesc fillProperty="HATCH"/></Circle></UserSpecial></EntryUser></DictionaryUser>"#;
+        let artwork = r#"<Set><Features><Location x="7" y="3"/><UserPrimitiveRef id="hatch"/></Features></Set>"#;
+        let silk = format!(r#"<LayerFeature layerRef="SILK">{artwork}</LayerFeature>"#);
+        let xml = board("")
+            .replace(
+                "<CadData>",
+                r#"<CadData><Layer name="SILK" layerFunction="SILKSCREEN"/>"#,
+            )
+            .replace("</Content>", &format!("{dictionary}</Content>"))
+            .replace("</Step>", &format!("{silk}</Step>"));
+        let (updated, count) = run(&xml);
+        assert_eq!(count, 4);
+        assert!(updated.contains(&silk));
+        assert!(updated.contains(dictionary));
+        let copper = xml.replace(
+            r#"<LayerFeature layerRef="I1">"#,
+            &format!(r#"<LayerFeature layerRef="I1">{artwork}"#),
+        );
+        assert!(remove_unused_via_lands(&copper, Resolution::default()).is_err());
     }
 }

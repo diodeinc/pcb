@@ -406,6 +406,12 @@ impl ImportedDesign {
         self.layer_definitions.get(layer.0 as usize)
     }
 
+    /// Global diagnostics and diagnostics from any Step on this layer.
+    pub(crate) fn has_layer_diagnostics(&self, layer: LayerId) -> bool {
+        !self.global_diagnostics.is_empty()
+            || self.layer_diagnostics.keys().any(|&(_, id)| id == layer)
+    }
+
     pub fn feature_definition(&self, feature: FeatureDefinitionId) -> Option<&GeometryFeature> {
         self.geometry.features.get(feature.0 as usize)
     }
