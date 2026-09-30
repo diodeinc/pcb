@@ -8,7 +8,6 @@ use url::Url;
 
 use crate::WorkspaceContext;
 
-const AUTHTYPE_CAPABILITY: &str = "authtype";
 const DEFAULT_DIODEHUB_HOST: &str = "code.diode.computer";
 const MAX_CREDENTIAL_LINE_BYTES: usize = 65_535;
 
@@ -31,7 +30,6 @@ struct CredentialRequest {
     protocol: Option<Vec<u8>>,
     host: Option<Vec<u8>>,
     path: Option<Vec<u8>>,
-    capabilities: Vec<Vec<u8>>,
 }
 
 #[derive(Serialize)]
@@ -59,6 +57,7 @@ enum GitProvider {
 struct GitCredential {
     #[serde(rename = "scheme")]
     _scheme: GitCredentialScheme,
+    username: String,
     token: String,
 }
 
@@ -68,6 +67,7 @@ enum GitCredentialScheme {
 }
 
 struct MintedGitCredential {
+    username: String,
     token: String,
     expires_at: u64,
 }
@@ -83,12 +83,6 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
             pcb_zen::git::configure_diodehub_credentials_globally(repository_url)?;
         }
         "unconfigure" => pcb_zen::git::unconfigure_diodehub_credentials_globally()?,
-        "capability" => {
-            pcb_ui::write_stdout(|stdout| {
-                writeln!(stdout, "version 0")?;
-                writeln!(stdout, "capability {AUTHTYPE_CAPABILITY}")
-            })?;
-        }
         "get" => {
             let host = args.host.as_deref().unwrap_or(DEFAULT_DIODEHUB_HOST);
             let result = read_credential_request(stdin.lock())
@@ -129,21 +123,12 @@ fn provide_credential(
         return Ok(());
     };
 
-    if !request
-        .capabilities
-        .iter()
-        .any(|capability| capability == AUTHTYPE_CAPABILITY.as_bytes())
-    {
-        bail!("Git did not advertise the `authtype` credential capability");
-    }
-
     let path = std::str::from_utf8(path).context("Git credential path is not UTF-8")?;
     let credential = exchange_credential(ctx, configured_host, path)?;
 
     pcb_ui::write_stdout(|output| {
-        writeln!(output, "capability[]={AUTHTYPE_CAPABILITY}")?;
-        writeln!(output, "authtype=Bearer")?;
-        writeln!(output, "credential={}", credential.token)?;
+        writeln!(output, "username={}", credential.username)?;
+        writeln!(output, "password={}", credential.token)?;
         writeln!(output, "password_expiry_utc={}", credential.expires_at)?;
         writeln!(output)
     })?;
@@ -193,7 +178,11 @@ fn exchange_credential(
         credential,
         expires_at,
     } = response;
-    let GitCredential { _scheme: _, token } = credential;
+    let GitCredential {
+        _scheme: _,
+        username,
+        token,
+    } = credential;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("System clock is before the Unix epoch")?
@@ -202,11 +191,18 @@ fn exchange_credential(
     if expires_at <= now {
         bail!("Git credential exchange returned an expired credential");
     }
-    if token.is_empty() || token.contains(['\r', '\n', '\0']) {
+    if [&username, &token]
+        .iter()
+        .any(|value| value.is_empty() || value.contains(['\r', '\n', '\0']))
+    {
         bail!("Git credential exchange returned an invalid credential");
     }
 
-    Ok(MintedGitCredential { token, expires_at })
+    Ok(MintedGitCredential {
+        username,
+        token,
+        expires_at,
+    })
 }
 
 fn read_credential_request(mut input: impl BufRead) -> Result<CredentialRequest> {
@@ -243,8 +239,6 @@ fn read_credential_request(mut input: impl BufRead) -> Result<CredentialRequest>
             b"protocol" => request.protocol = Some(value.to_vec()),
             b"host" => request.host = Some(value.to_vec()),
             b"path" => request.path = Some(value.to_vec()),
-            b"capability[]" if value.is_empty() => request.capabilities.clear(),
-            b"capability[]" => request.capabilities.push(value.to_vec()),
             _ => {}
         }
     }
@@ -270,17 +264,6 @@ mod tests {
             Some(b"code.diode.computer".as_slice())
         );
         assert_eq!(request.path.as_deref(), Some(b"acme/widget.git".as_slice()));
-        assert_eq!(request.capabilities, [b"authtype".to_vec()]);
-    }
-
-    #[test]
-    fn empty_capability_resets_the_capability_list() {
-        let request = read_credential_request(Cursor::new(
-            b"capability[]=authtype\ncapability[]=\ncapability[]=state\n\n",
-        ))
-        .unwrap();
-
-        assert_eq!(request.capabilities, [b"state".to_vec()]);
     }
 
     #[test]
