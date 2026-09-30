@@ -24,8 +24,6 @@ const PCB_GIT_CONFIG_FILE: &str = "gitconfig";
 const PCB_GIT_CONFIG_INCLUDE: &str = "include.path";
 const GIT_CONFIG_NOT_FOUND: i32 = 5;
 
-static RESOLVED_REPOS: LazyLock<Mutex<HashMap<String, (String, String)>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 static ACCESSIBLE_REPOS: LazyLock<Mutex<HashMap<String, bool>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -766,6 +764,7 @@ pub fn fetch_missing_blobs(repo_root: &Path, treeishes: &[String]) -> anyhow::Re
         .filter_map(|line| line.strip_prefix('?'))
         .map(|oid| format!("{oid}\n"))
         .collect();
+    // With nothing on stdin, the fetch below would fetch the default refspecs.
     if missing.is_empty() {
         return Ok(());
     }
@@ -978,28 +977,11 @@ pub fn format_ssh_url(module_path: &str) -> String {
 
 /// Split a module path into `(repo_url, subpath)`.
 pub fn split_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
-    if let Some(resolved) = RESOLVED_REPOS
-        .lock()
-        .expect("repo resolution cache mutex poisoned")
-        .get(module_path)
-        .cloned()
-    {
-        return Ok(resolved);
-    }
-
-    let resolved = resolve_repo_and_subpath(module_path)?;
-    RESOLVED_REPOS
-        .lock()
-        .expect("repo resolution cache mutex poisoned")
-        .insert(module_path.to_string(), resolved.clone());
-    Ok(resolved)
-}
-
-fn resolve_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
     resolve_repo_and_subpath_with(module_path, repo_is_accessible_cached)
 }
 
-/// Packages in one repo share its prefixes, so probe each prefix once.
+/// Every package in a repo shares its prefixes, so probe each prefix once per
+/// process.
 fn repo_is_accessible_cached(repo_url: &str) -> anyhow::Result<bool> {
     let cached = ACCESSIBLE_REPOS
         .lock()

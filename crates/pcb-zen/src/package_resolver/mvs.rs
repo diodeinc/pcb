@@ -9,7 +9,7 @@ use semver::Version;
 
 use super::ResolvedDepId;
 use super::manifest::ManifestLoader;
-use super::materialize::{materialize_selected, prefetch_unmaterialized};
+use super::materialize::materialize_selected;
 use super::scan::{ScannedDirectDeps, WorkspacePackageIndex, scan_package_direct_deps};
 use super::versions::SpecVersionResolver;
 
@@ -444,49 +444,47 @@ impl PackageResolver {
             enqueue_floor_version(&mut selected, dep_id.clone(), version.clone(), &mut queue);
         }
 
-        let mut prefetched = BTreeSet::new();
-        while let Some(dep_id) = queue.pop_front() {
-            let Some(version) = selected.get(&dep_id).cloned() else {
-                continue;
-            };
-            // The first package not yet prefetched starts the next level of the
-            // graph, all of which is queued by now: fetch its contents together.
-            if !prefetched.contains(&(dep_id.clone(), version.clone())) {
-                let level: Vec<_> = std::iter::once(&dep_id)
-                    .chain(&queue)
-                    .filter_map(|id| Some((id.clone(), selected.get(id)?.clone())))
-                    .collect();
-                prefetch_unmaterialized(
-                    &self.workspace,
-                    level
-                        .iter()
-                        .map(|(id, version)| (id.path.as_str(), version)),
-                );
-                prefetched.extend(level);
-            }
-            let loaded = self
-                .manifest_loader
-                .load(&self.workspace, &self.cache_index, &dep_id.path, &version)
-                .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
-            for (dep_path, dep_spec) in loaded.direct {
-                if is_stdlib_module_path(&dep_path) {
+        // Walk the graph one level at a time, materializing each level's
+        // packages together so their contents arrive in one fetch per repo.
+        while !queue.is_empty() {
+            let level: Vec<_> = queue.drain(..).collect();
+            materialize_selected(
+                &self.workspace,
+                level
+                    .iter()
+                    .filter_map(|dep_id| Some((dep_id, selected.get(dep_id)?))),
+                false,
+                &self.cache_index,
+            )?;
+
+            for dep_id in level {
+                let Some(version) = selected.get(&dep_id).cloned() else {
                     continue;
+                };
+                let loaded = self
+                    .manifest_loader
+                    .load(&self.workspace, &self.cache_index, &dep_id.path, &version)
+                    .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
+                for (dep_path, dep_spec) in loaded.direct {
+                    if is_stdlib_module_path(&dep_path) {
+                        continue;
+                    }
+                    let dep_version = self
+                        .spec_resolver
+                        .resolve_spec(&dep_path, &dep_spec)
+                        .with_context(|| {
+                            format!("Failed to resolve transitive dependency {}", dep_path)
+                        })?;
+                    enqueue_floor_version(
+                        &mut selected,
+                        ResolvedDepId::for_version(dep_path, &dep_version),
+                        dep_version,
+                        &mut queue,
+                    );
                 }
-                let dep_version = self
-                    .spec_resolver
-                    .resolve_spec(&dep_path, &dep_spec)
-                    .with_context(|| {
-                        format!("Failed to resolve transitive dependency {}", dep_path)
-                    })?;
-                enqueue_floor_version(
-                    &mut selected,
-                    ResolvedDepId::for_version(dep_path, &dep_version),
-                    dep_version,
-                    &mut queue,
-                );
-            }
-            for (transitive_id, dep_version) in loaded.indirect {
-                enqueue_floor_version(&mut selected, transitive_id, dep_version, &mut queue);
+                for (transitive_id, dep_version) in loaded.indirect {
+                    enqueue_floor_version(&mut selected, transitive_id, dep_version, &mut queue);
+                }
             }
         }
 

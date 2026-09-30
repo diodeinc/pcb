@@ -351,24 +351,80 @@ pub fn ensure_package_manifest_in_cache(
     version: &Version,
     index: &CacheIndex,
 ) -> Result<PathBuf> {
-    let checkout_dir = cache_base().join(module_path).join(version.to_string());
+    ensure_packages_in_cache([(module_path, version)], index)?;
+    Ok(package_cache_dir(module_path, version).join("pcb.toml"))
+}
+
+/// Materialize package versions into the shared cache.
+///
+/// Source repos are blobless clones: the contents of all uncached packages are
+/// fetched together, one fetch per repo, and then each package is archived
+/// from local objects.
+pub fn ensure_packages_in_cache<'a>(
+    packages: impl IntoIterator<Item = (&'a str, &'a Version)>,
+    index: &CacheIndex,
+) -> Result<()> {
+    let uncached: BTreeSet<_> = packages
+        .into_iter()
+        .filter(|(module_path, version)| !is_cached(index, module_path, version))
+        .collect();
+    fetch_package_contents(&uncached)?;
+
+    uncached.into_iter().try_for_each(|(module_path, version)| {
+        cache_package(module_path, version, index)
+            .with_context(|| format!("Failed to materialize {}@{}", module_path, version))
+    })
+}
+
+fn package_cache_dir(module_path: &str, version: &Version) -> PathBuf {
+    cache_base().join(module_path).join(version.to_string())
+}
+
+fn is_cached(index: &CacheIndex, module_path: &str, version: &Version) -> bool {
+    index
+        .get_package(module_path, &version.to_string())
+        .is_some()
+        && package_cache_dir(module_path, version)
+            .join("pcb.toml")
+            .exists()
+}
+
+fn cache_package(module_path: &str, version: &Version, index: &CacheIndex) -> Result<()> {
+    let checkout_dir = package_cache_dir(module_path, version);
     let version_str = version.to_string();
-    let pcb_toml_path = checkout_dir.join("pcb.toml");
-
-    if index.get_package(module_path, &version_str).is_some() && pcb_toml_path.exists() {
-        return Ok(pcb_toml_path);
-    }
-
     ensure_sparse_checkout(&checkout_dir, module_path, &version_str)?;
 
     let content_hash = compute_content_hash_from_dir(&checkout_dir)?;
-    let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
+    let manifest_content = std::fs::read_to_string(checkout_dir.join("pcb.toml"))?;
     let manifest_hash = compute_manifest_hash(&manifest_content);
 
     verify_tag_hashes(module_path, version, &content_hash, &manifest_hash)?;
     index.set_package(module_path, &version_str, &content_hash, &manifest_hash)?;
+    Ok(())
+}
 
-    Ok(pcb_toml_path)
+/// Fetch the contents of these package versions, one fetch per source repo.
+///
+/// A pseudo-version whose commit is not local yet is skipped here; archiving
+/// it fetches the commit and its contents.
+fn fetch_package_contents(packages: &BTreeSet<(&str, &Version)>) -> Result<()> {
+    let mut treeishes_by_repo = BTreeMap::<String, Vec<String>>::new();
+    for (module_path, version) in packages {
+        let (repo_url, subpath) = git::split_repo_and_subpath(module_path)?;
+        let ref_spec = package_ref(&subpath, &version.to_string());
+        treeishes_by_repo
+            .entry(repo_url)
+            .or_default()
+            .push(package_treeish(&ref_spec, &subpath));
+    }
+
+    treeishes_by_repo
+        .iter()
+        .try_for_each(|(repo_url, treeishes)| {
+            let source_dir = ensure_source_repo(repo_url)?;
+            git::fetch_missing_blobs(&source_dir, treeishes)
+                .with_context(|| format!("Failed to fetch package contents from {}", repo_url))
+        })
 }
 
 fn add_parts_to_symbol_map(
@@ -550,26 +606,26 @@ pub fn ensure_sparse_checkout(
     let (repo_url, subpath) = git::split_repo_and_subpath(module_path)?;
 
     populate_cache(checkout_dir, marker, |dest| {
-        let (ref_spec, is_pseudo_version) = package_ref(&subpath, version_str);
-        fetch_via_git(dest, &repo_url, &ref_spec, &subpath, is_pseudo_version)
+        let ref_spec = package_ref(&subpath, version_str);
+        fetch_via_git(dest, &repo_url, &ref_spec, &subpath)
             .with_context(|| format!("Failed to fetch {} via git sparse checkout", module_path))?;
         Ok(())
     })
 }
 
-/// The ref a package version is archived from, and whether it is a pseudo-version.
+/// The ref a package version is archived from.
 ///
 /// Tagged versions use the tag, with the subpath prefix for nested packages.
 /// Pseudo-versions use the pinned commit hash.
-fn package_ref(subpath: &str, version_str: &str) -> (String, bool) {
+fn package_ref(subpath: &str, version_str: &str) -> String {
     if version_str.contains("-0.") {
-        return (version_str.rsplit('-').next().unwrap().to_string(), true);
+        return version_str.rsplit('-').next().unwrap().to_string();
     }
     let version_part = format!("v{}", version_str);
     if subpath.is_empty() {
-        (version_part, false)
+        version_part
     } else {
-        (format!("{}/{}", subpath, version_part), false)
+        format!("{}/{}", subpath, version_part)
     }
 }
 
@@ -581,56 +637,17 @@ fn package_treeish(ref_spec: &str, subpath: &str) -> String {
     }
 }
 
-/// Download the contents of these package versions with one fetch per source repo.
-///
-/// Source repos are blobless clones, so materializing packages one at a time
-/// would otherwise fetch each package's contents in its own round trip. This is
-/// best effort: after a failed batch, each package fetches its own contents as
-/// it is archived. Pseudo-versions are left to `fetch_via_git`, which fetches
-/// their commit first.
-pub(crate) fn prefetch_package_contents<'a>(
-    packages: impl IntoIterator<Item = (&'a str, &'a Version)>,
-) {
-    let mut treeishes_by_repo = BTreeMap::<String, Vec<String>>::new();
-    for (module_path, version) in packages {
-        let Ok((repo_url, subpath)) = git::split_repo_and_subpath(module_path) else {
-            continue;
-        };
-        let (ref_spec, is_pseudo) = package_ref(&subpath, &version.to_string());
-        if !is_pseudo {
-            treeishes_by_repo
-                .entry(repo_url)
-                .or_default()
-                .push(package_treeish(&ref_spec, &subpath));
-        }
-    }
-
-    for (repo_url, treeishes) in treeishes_by_repo {
-        let fetched = ensure_source_repo(&repo_url)
-            .and_then(|source_dir| git::fetch_missing_blobs(&source_dir, &treeishes));
-        if let Err(err) = fetched {
-            log::debug!("Batched fetch of package contents from {repo_url} failed: {err:#}");
-        }
-    }
-}
-
 /// Materialize a repo ref into a package directory.
-fn fetch_via_git(
-    dest: &Path,
-    repo_url: &str,
-    ref_spec: &str,
-    subpath: &str,
-    is_pseudo: bool,
-) -> Result<()> {
+fn fetch_via_git(dest: &Path, repo_url: &str, ref_spec: &str, subpath: &str) -> Result<()> {
     // Materialize packages directly from the shared source checkout instead of
     // creating a temporary repo just to fetch, sparse-checkout, and flatten a
     // subdirectory.
     std::fs::create_dir_all(dest)?;
     let source_dir = ensure_source_repo(repo_url)?;
 
-    if is_pseudo {
-        git::ensure_rev_in_source_repo(&source_dir, ref_spec)?;
-    }
+    // Tags are local once the source repo is fetched; a pseudo-version's
+    // commit may not be.
+    git::ensure_rev_in_source_repo(&source_dir, ref_spec)?;
     git::archive_to_dir(&source_dir, &package_treeish(ref_spec, subpath), dest)?;
 
     Ok(())
