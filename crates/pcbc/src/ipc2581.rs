@@ -201,6 +201,15 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum EditCommands {
+    /// Remove provably isolated interior through-via lands; preserve drills and endpoint lands
+    RemoveUnusedViaLands {
+        /// Board, board-array, or fab-panel IPC-2581 XML file
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Output IPC-2581 XML file (or - for stdout)
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: PathBuf,
+    },
     /// Apply manufacturer, MPN, and supplier selections to BOM entries
     Bom {
         /// IPC-2581 XML file to hydrate
@@ -474,6 +483,9 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             resolution,
         ),
         Commands::Edit { command } => match command {
+            EditCommands::RemoveUnusedViaLands { file, output } => {
+                commands::unused_via_lands::execute(&file, &output, resolution)
+            }
             EditCommands::Bom {
                 file,
                 selections,

@@ -16,6 +16,7 @@ pub mod outline;
 pub mod population_edit;
 #[cfg(feature = "cli")]
 pub mod render;
+pub mod unused_via_lands;
 pub mod view;
 pub mod warp;
 pub mod warp_report;
