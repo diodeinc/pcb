@@ -25,13 +25,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- `pcb ipc2581 edit population` takes `--dnp` and `--populate` and changes only the named designators; every other designator keeps its population, and a designator outside the BOM is an error.
+
 - Lower the JLCPCB DFM soldermask-web limit to 0.10 mm and report shortfalls as warnings rather than errors.
 - `pcb ipc2581 cpl` reports bottom-side rotations in KiCad's position-file convention, matching release CPLs.
 - Import KiCad designs as persistent schematics, preserving native drawings and PCB layouts while treating source parity mismatches as advisory.
 
 ### Fixed
 
-- `pcb ipc2581 edit population` accepts document-category designators (test points, mounting holes, artwork) in `--dnp` and leaves their population as authored instead of rejecting the list.
 
 - Shrink copper-balanced array and fab-panel Gerbers by sharing lattice-cell apertures, including clipped boundary cells.
 - Export STEP connector subassemblies with explicit product occurrences for better CAD reader placement compatibility.

@@ -18,7 +18,7 @@ alias provides the same commands.
 | `board-array create` | Create a rectangular board array. |
 | `fab-panel create` | Tile assembly panels into a supported fabrication panel size. |
 | `edit bom` | Add approved alternatives to BOM entries. |
-| `edit population` | Populate every BOM designator except a do-not-populate list. |
+| `edit population` | Change which BOM designators are populated. |
 
 Run `pcb ipc2581 <command> --help` for arguments and output options.
 
@@ -28,12 +28,11 @@ one canonical board. See the [assembly report contract](docs/assembly-report.md)
 `edit bom` modifies the input file when `--output` is omitted. Specify an output
 path when the source document must remain unchanged.
 
-`edit population` rewrites `RefDes@populate` on every assembled BOM designator:
-`false` for each `--dnp` designator, `true` for the rest. Document items (test
-points, mounting holes, artwork) may be named in `--dnp` and keep the population
-they were authored with. The assembly report, `cpl --exclude-dnp`, and board
-arrays of the edited file follow that population. An unchanged population
-leaves the file byte-for-byte intact.
+`edit population` sets `RefDes@populate` on the named designators only:
+`false` for `--dnp`, `true` for `--populate`. Every other designator keeps the
+population it was authored with; a designator outside the BOM is an error. The
+assembly report, `cpl --exclude-dnp`, and board arrays of the edited file follow
+the population. An unchanged population leaves the file byte-for-byte intact.
 
 Use `view --mode fabrication` to create an IPC-2581C fabrication projection.
 The projection removes BOM/AVL, package, placement, assembly, solder-paste,
