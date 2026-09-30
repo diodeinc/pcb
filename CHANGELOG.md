@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Speed up DFM copper-width checks on large boards by constraining finite contacts before checking nearby walls.
 - Fix DiodeHub pushes larger than 1 MiB failing with HTTP 401 on Git 2.46–2.53.
 - Captured `Path()` values now resolve inside component modifiers; `..` cannot escape `@stdlib` or package paths.
+- Fix opening a stdlib file in the editor writing a `.pcb` directory into the toolchain.
 
 ## [0.4.63] - 2026-09-30
 

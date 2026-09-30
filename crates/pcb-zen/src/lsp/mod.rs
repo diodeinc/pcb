@@ -422,26 +422,18 @@ impl LspEvalContext {
     }
 
     fn workspace_root_for(&self, file_path: &Path) -> PathBuf {
-        let abs_path = self
-            .file_provider
-            .canonicalize(file_path)
-            .unwrap_or_else(|_| file_path.to_path_buf());
-        let start_dir = if self.file_provider.is_directory(&abs_path) {
-            abs_path.clone()
+        let start_dir = if self.file_provider.is_directory(file_path) {
+            file_path.to_path_buf()
         } else {
-            abs_path.parent().unwrap_or(&abs_path).to_path_buf()
+            file_path.parent().unwrap_or(file_path).to_path_buf()
         };
 
         if let Some(root) = self.workspace_root_cache.read().unwrap().get(&start_dir) {
             return root.clone();
         }
 
-        let workspace_root = find_workspace_root(self.file_provider.as_ref(), &abs_path)
+        let workspace_root = find_workspace_root(self.file_provider.as_ref(), file_path)
             .expect("failed to find workspace root");
-        let workspace_root = self
-            .file_provider
-            .canonicalize(&workspace_root)
-            .unwrap_or(workspace_root);
 
         self.workspace_root_cache
             .write()

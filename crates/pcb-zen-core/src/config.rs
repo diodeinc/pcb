@@ -526,12 +526,13 @@ pub fn extract_inline_manifest(zen_content: &str) -> Option<String> {
 /// 2. If no explicit workspace found, first pcb.toml encountered
 /// 3. If no pcb.toml found, the start directory (or parent if start is a file)
 ///
+/// The walk follows `start` as given rather than its symlink target: a file
+/// reached through `<workspace>/.pcb/stdlib` belongs to `<workspace>`.
+///
 /// Returns an error if a pcb.toml file exists but fails to parse.
 /// Always returns a canonicalized absolute path on success.
 pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Result<PathBuf> {
-    let abs_start = file_provider
-        .canonicalize(start)
-        .unwrap_or_else(|_| start.to_path_buf());
+    let abs_start = crate::normalize_path(&std::path::absolute(start)?);
 
     let start_dir = if file_provider.is_directory(&abs_start) {
         abs_start
@@ -553,12 +554,13 @@ pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Re
     }
 
     // Prefer explicit [workspace], otherwise first pcb.toml
-    Ok(candidates
+    let root = candidates
         .iter()
         .find(|(_, is_explicit)| *is_explicit)
         .or_else(|| candidates.first())
         .map(|(path, _)| path.clone())
-        .unwrap_or(start_dir))
+        .unwrap_or(start_dir);
+    Ok(file_provider.canonicalize(&root).unwrap_or(root))
 }
 
 #[cfg(test)]
