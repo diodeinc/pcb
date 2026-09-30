@@ -88,6 +88,7 @@ pub(super) fn evaluate(
                 sites = linework_clearance::report_sites(
                     region_clearance_sites_with_index(
                         &slot.outline,
+                        &boundary,
                         &offender.image,
                         copper_boundary,
                         limit_mm,
