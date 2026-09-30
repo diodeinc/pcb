@@ -22,6 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Write compact DFM report JSON so formatting does not consume the 128 MiB report budget.
+- Shrink DFM reports by about a quarter without changing their format.
 
 ## [0.4.62] - 2026-09-29
 

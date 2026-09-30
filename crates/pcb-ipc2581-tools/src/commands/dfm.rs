@@ -118,7 +118,7 @@ pub fn check(
         &rules,
         resolution,
     )?;
-    let checked = checks::run(
+    let mut checked = checks::run(
         &rules,
         &designs,
         waivers.as_ref(),
@@ -138,6 +138,18 @@ pub fn check(
         &frames,
         &checked.findings,
     )?;
+    for finding in &mut checked.findings {
+        let sites = finding.sites.iter_mut().flat_map(|site| &mut site.evidence);
+        finding
+            .evidence
+            .iter_mut()
+            .chain(sites)
+            .for_each(report::Evidence::simplify);
+    }
+    checked
+        .shared_evidence
+        .iter_mut()
+        .for_each(report::Evidence::simplify);
     Ok(DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: request.generated_at.to_rfc3339(),
