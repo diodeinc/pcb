@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.64] - 2026-09-30
+
 ### Changed
 
 - Speed up IPC-2581 Gerber export of copper-balanced panels by clipping nearby lattice tiles in batches.
@@ -2117,7 +2119,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.63...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.64...HEAD
+[0.4.64]: https://github.com/diodeinc/pcb/compare/v0.4.63...v0.4.64
 [0.4.63]: https://github.com/diodeinc/pcb/compare/v0.4.62...v0.4.63
 [0.4.62]: https://github.com/diodeinc/pcb/compare/v0.4.61...v0.4.62
 [0.4.61]: https://github.com/diodeinc/pcb/compare/v0.4.60...v0.4.61
