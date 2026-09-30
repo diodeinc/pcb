@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Add `pcb list -m -json [<package>[@<version>]]` to print the local source directory of the stdlib, workspace packages, dependencies, or any registry package.
 
+### Changed
+
+- Change `pcb ipc2581 edit population` to take `--dnp` and `--populate` deltas that leave every other designator as is.
+
 ### Removed
 
 - Remove `pcb doc`; use `pcb list -m -json <package>` and read the source directly.
@@ -25,14 +29,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- `pcb ipc2581 edit population` takes `--dnp` and `--populate` and changes only the named designators; every other designator keeps its population, and a designator outside the BOM is an error.
-
 - Lower the JLCPCB DFM soldermask-web limit to 0.10 mm and report shortfalls as warnings rather than errors.
-- `pcb ipc2581 cpl` reports bottom-side rotations in KiCad's position-file convention, matching release CPLs.
+- Report bottom-side rotations from `pcb ipc2581 cpl` in KiCad's position-file convention, matching release CPLs.
 - Import KiCad designs as persistent schematics, preserving native drawings and PCB layouts while treating source parity mismatches as advisory.
 
 ### Fixed
-
 
 - Shrink copper-balanced array and fab-panel Gerbers by sharing lattice-cell apertures, including clipped boundary cells.
 - Export STEP connector subassemblies with explicit product occurrences for better CAD reader placement compatibility.
