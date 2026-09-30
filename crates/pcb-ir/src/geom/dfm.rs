@@ -11,9 +11,7 @@ use std::collections::BTreeMap;
 use crate::geom::bbox::BBox;
 use crate::geom::grid::CellGrid;
 use crate::geom::point::Point;
-use crate::geom::region::{
-    ContourSet, PreparedRegion, TwoSidedResidualComponent, gap_reach_mm, ring_edges,
-};
+use crate::geom::region::{ContourSet, PreparedRegion, TwoSidedResidualComponent, gap_reach_mm};
 use crate::geom::tol;
 
 pub use crate::geom::dist::Distance;
@@ -398,18 +396,27 @@ pub fn region_clearance_sites(
     second: &ContourSet,
     minimum_mm: f64,
 ) -> Result<Vec<ClearanceSite>, AccuracyError> {
-    let index = second.prepare_query();
-    region_clearance_sites_with_index(first, second, &index, minimum_mm)
+    region_clearance_sites_with_index(
+        first,
+        &first.prepare_query(),
+        second,
+        &second.prepare_query(),
+        minimum_mm,
+    )
 }
 
-/// Local sites between two filled regions, reusing an index of `second`.
+/// Local sites between two filled regions, reusing indexes of both.
 pub fn region_clearance_sites_with_index(
     first: &ContourSet,
+    first_boundary: &PreparedRegion,
     second: &ContourSet,
     second_boundary: &PreparedRegion,
     minimum_mm: f64,
 ) -> Result<Vec<ClearanceSite>, AccuracyError> {
-    let lines = first.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
+    // Edges beyond the limit of the second region's bounds cannot fail.
+    let lines = first_boundary
+        .segments_meeting(second.bbox.expand(minimum_mm + tol::EPSILON_MM))
+        .collect::<Vec<_>>();
     let mut sites = linework_clearance_sites(
         &lines,
         second,
@@ -417,7 +424,21 @@ pub fn region_clearance_sites_with_index(
         minimum_mm,
         first.uncertainty_mm,
     );
-    for overlap in first.intersection(second)?.connected_components() {
+    // Only regions that meet can overlap; skip the boolean for the rest.
+    let overlaps = if region_clearance_within(
+        first,
+        first_boundary,
+        second,
+        second_boundary,
+        first.uncertainty_mm + second.uncertainty_mm,
+    )
+    .is_some()
+    {
+        first.intersection(second)?.connected_components()
+    } else {
+        Vec::new()
+    };
+    for overlap in overlaps {
         let Some(point) = overlap
             .rings
             .first()

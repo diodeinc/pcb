@@ -34,7 +34,7 @@
 
 use pcb_ir::geom::dfm::{BBoxIndex, Distance, circular_region};
 use pcb_ir::geom::region::Ring;
-use pcb_ir::geom::{BBox, ContourSet, Point};
+use pcb_ir::geom::{BBox, ContourSet, Point, tol};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
@@ -179,25 +179,59 @@ pub(super) fn evaluate(
     })
 }
 
-/// A ring whose bounds miss the required disk cannot change material inside
-/// it. Retaining complete intersecting rings (including enclosing planes and
-/// their holes) preserves polarity while avoiding a full-panel boolean for
-/// each individual annular finding.
+/// Only copper inside a window around the required disk can change material
+/// inside it, so each ring is clipped to that window before the boolean.
 fn missing_copper(
     required: &ContourSet,
     copper: &ContourSet,
     index: &BBoxIndex,
 ) -> anyhow::Result<ContourSet> {
-    let rings: Vec<Ring> = index
+    // The margin keeps edges the clip adds along the window off the disk.
+    let window = required.bbox.expand(tol::REGION_MM);
+    let rings = index
         .query(required.bbox)
         .into_iter()
-        .map(|id| copper.rings[id].clone())
+        .map(|id| clipped_ring(&copper.rings[id], window))
         .collect();
-    // The retained rings are verbatim regular source rings, so they need no
-    // re-simplification before the boolean below: composing them directly
-    // keeps their exact coordinates instead of snapping them twice.
     let nearby = ContourSet::from_regularized(rings, required.resolution, 0.0);
     Ok(required.difference(&nearby)?)
+}
+
+/// Sutherland–Hodgman: a ring that leaves and re-enters the window gains
+/// coincident edges along it, whose windings cancel under the nonzero rule.
+fn clipped_ring(ring: &[[f64; 2]], window: BBox) -> Ring {
+    let edges = [
+        (0, window.min.x, 1.0),
+        (0, window.max.x, -1.0),
+        (1, window.min.y, 1.0),
+        (1, window.max.y, -1.0),
+    ];
+    edges
+        .into_iter()
+        .fold(ring.to_vec(), |ring, (axis, bound, side)| {
+            let inside = |vertex: [f64; 2]| (vertex[axis] - bound) * side >= 0.0;
+            let crossing = |from: [f64; 2], to: [f64; 2]| {
+                let t = (bound - from[axis]) / (to[axis] - from[axis]);
+                let mut point = [
+                    from[0] + t * (to[0] - from[0]),
+                    from[1] + t * (to[1] - from[1]),
+                ];
+                point[axis] = bound;
+                point
+            };
+            ring.last()
+                .into_iter()
+                .chain(&ring)
+                .zip(&ring)
+                .flat_map(|(&from, &to)| match (inside(from), inside(to)) {
+                    (true, true) => [None, Some(to)],
+                    (true, false) => [Some(crossing(from, to)), None],
+                    (false, true) => [Some(crossing(from, to)), Some(to)],
+                    (false, false) => [None, None],
+                })
+                .flatten()
+                .collect()
+        })
 }
 
 fn measured(

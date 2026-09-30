@@ -248,6 +248,7 @@ pub(super) fn evaluate(
                 sites: if violates(&distance, limit_mm) {
                     let sites = region_clearance_sites_with_index(
                         &left.region,
+                        &boundaries[left_index],
                         &right.region,
                         right_boundary,
                         limit_mm,
