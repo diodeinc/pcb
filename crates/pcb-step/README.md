@@ -1,6 +1,6 @@
 # pcb-step
 
-`pcb-step` writes the STEP assembly for a `.kicad_pcb` file without OCCT:
+`pcb-step` writes the STEP AP214 assembly for a `.kicad_pcb` file without OCCT:
 the board body is emitted directly as a BRep, and every footprint's STEP
 model is copied through with its ids renumbered. Its output matches what
 `kicad-cli pcb export step --include-silkscreen --include-soldermask`
@@ -60,6 +60,8 @@ The defaults follow KiCad's exporter (`pcbnew/exporters/step/`):
   lengths and angles are converted from the donor's units. Reals are
   rewritten with 12 significant digits, OCCT's precision, and each model's
   representations declare the 1e-4 mm accuracy KiCad reads models at.
+  Copied geometry and styles must be AP214-compatible; this is not a
+  general converter for entities specific to newer STEP protocols.
 
 - **Copper** (`--include-pads`, `--include-tracks`, `--include-zones`,
   `--include-inner-copper`), following KiCad's exporter: pads are one

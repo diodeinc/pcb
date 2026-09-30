@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Export STEP assemblies as AP214 instead of AP242 for broader CAD importer compatibility.
+
 ## [0.4.64] - 2026-09-30
 
 ### Changed

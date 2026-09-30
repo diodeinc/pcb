@@ -531,6 +531,12 @@ fn components_are_copied_once_and_placed_per_footprint() {
     let (text, report) = export_text(&board, &bare());
     assert_eq!(report.warnings, ["could not find 3D model: missing.step"]);
     assert_eq!(report.failed_models, 0);
+    // The file schema and rebuilt assembly protocol must both declare AP214.
+    assert!(text.contains("FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'))"));
+    assert_eq!(count(&text, "APPLICATION_PROTOCOL_DEFINITION"), 1);
+    assert!(text.contains(
+        "APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,"
+    ));
     // One copy of the donor solid at scale 1, one at scale 2, the board.
     assert_eq!(count(&text, "MANIFOLD_SOLID_BREP"), 3);
     // Four board occurrences and one child inside each scaled donor.
