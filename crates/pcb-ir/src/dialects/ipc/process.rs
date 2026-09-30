@@ -626,12 +626,23 @@ fn tile_copper_balance(doc: &mut Document, resolution: Resolution) -> Result<(),
                         bounds.union(BBox::from_point(lattice.center(site)))
                     })
                     .expand(radius + LATTICE_TILE_OVERLAP_MM);
-                let nearby =
-                    image.intersection(&ContourSet::rectangle(bounds, image.resolution))?;
+                let nearby = image.intersection(&ContourSet::rectangle(bounds, image.resolution));
                 for &site in batch {
                     let center = lattice.center(site);
                     let cell = cell.translated(center)?;
-                    let tile = cell.intersection(&nearby)?.translated(-center)?;
+                    // Batching spends an extra rounding allowance. If it
+                    // exhausts the budget, clip directly from the source
+                    // rather than reject a tile the original path can emit.
+                    let tile = nearby
+                        .as_ref()
+                        .map_err(Clone::clone)
+                        .and_then(|nearby| cell.intersection(nearby)?.translated(-center))
+                        .or_else(|error| match error {
+                            AccuracyError::BudgetExceeded { .. } => {
+                                cell.intersection(&image)?.translated(-center)
+                            }
+                            error => Err(error),
+                        })?;
                     if tile.is_empty() {
                         continue;
                     }
@@ -1149,6 +1160,37 @@ mod tests {
         let count = doc.features.len();
         normalize_for_positive_artwork(&mut doc, Resolution::default()).unwrap();
         assert_eq!(doc.features.len(), count);
+    }
+
+    #[test]
+    fn tiling_near_accuracy_limit_uses_direct_clipping() {
+        let resolution = Resolution::default();
+        let mut doc = Document::new();
+        let mut contour = rect_contour(0.0, 0.0, 4.0, 4.0);
+        contour.uncertainty_mm = resolution.accuracy.max_error_mm() - 5e-13;
+        let path = doc.push_path(FILL, [contour]);
+        doc.features.push(Feature {
+            paths: Span::single(path),
+            set: Some(0),
+            ..Feature::new(FeatureKind::Polygon, Polarity::Dark)
+        });
+        doc.layers.push(test_layer(Span::single(0)));
+        doc.feature_sets.push(FeatureSet {
+            copper_balance: true,
+            copper_balance_void: Some(crate::dialects::ipc::CopperBalanceVoid {
+                lattice: crate::geom::copper_balance::DenseCopperLattice {
+                    origin: Point::new(0.0, 0.0),
+                    pitch_mm: 2.0,
+                },
+                radius_mm: 0.5,
+            }),
+            ..test_set(0, Span::single(0))
+        });
+        tile_copper_balance(&mut doc, resolution).unwrap();
+        assert!(doc.features.len() > 1);
+        for contour in &doc.arena.contours {
+            resolution.accuracy.check(contour.uncertainty_mm).unwrap();
+        }
     }
 
     #[test]
