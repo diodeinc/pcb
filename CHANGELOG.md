@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.63] - 2026-09-30
+
 ### Added
 
 - Add `pcb list -m -json [<package>[@<version>]]` to print the local source directory of the stdlib, workspace packages, dependencies, or any registry package.
@@ -2104,7 +2106,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.62...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.63...HEAD
+[0.4.63]: https://github.com/diodeinc/pcb/compare/v0.4.62...v0.4.63
 [0.4.62]: https://github.com/diodeinc/pcb/compare/v0.4.61...v0.4.62
 [0.4.61]: https://github.com/diodeinc/pcb/compare/v0.4.60...v0.4.61
 [0.4.60]: https://github.com/diodeinc/pcb/compare/v0.4.59...v0.4.60
