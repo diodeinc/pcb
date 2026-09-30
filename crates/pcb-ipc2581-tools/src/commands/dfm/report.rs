@@ -1,6 +1,7 @@
 use pcb_ir::geom::region::ContourSet;
-use pcb_ir::geom::{BBox, Point};
-use serde::Serialize;
+use pcb_ir::geom::{BBox, Point, dist};
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
 
 use super::pdk::Pdk;
 use super::rules::{LimitValue, Rule, RuleKind};
@@ -614,10 +615,21 @@ impl Witness {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReportPoint {
     pub x: f64,
     pub y: f64,
+}
+
+/// Written to the nanometre; finer digits are floating-point noise.
+impl Serialize for ReportPoint {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let nanometres = |millimetres: f64| (millimetres * 1e6).round() / 1e6 + 0.0;
+        let mut point = serializer.serialize_struct("ReportPoint", 2)?;
+        point.serialize_field("x", &nanometres(self.x))?;
+        point.serialize_field("y", &nanometres(self.y))?;
+        point.end()
+    }
 }
 
 impl From<Point> for ReportPoint {
@@ -821,6 +833,19 @@ impl Evidence {
         }
     }
 
+    /// Drop vertices within `SIMPLIFY_MM` of the simplified path.
+    pub(super) fn simplify(&mut self) {
+        let closed = self.kind == "region";
+        for path in &mut self.paths {
+            *path = simplified(path, closed);
+        }
+        if let Some(EvidenceDisplay::RoundStroke { paths, .. }) = &mut self.display {
+            for path in paths {
+                *path = simplified(path, false);
+            }
+        }
+    }
+
     pub fn region(role: &'static str, region: &ContourSet) -> Self {
         Self {
             role,
@@ -833,5 +858,71 @@ impl Evidence {
                 .collect(),
             ..Self::default()
         }
+    }
+}
+
+const SIMPLIFY_MM: f64 = 1e-4;
+
+/// Douglas–Peucker. A ring is the path back to its first vertex; one that
+/// would collapse keeps every vertex.
+fn simplified(path: &[ReportPoint], closed: bool) -> Vec<ReportPoint> {
+    if path.len() < 3 {
+        return path.to_vec();
+    }
+    let points = path
+        .iter()
+        .chain(path.first().filter(|_| closed))
+        .map(|point| Point::new(point.x, point.y))
+        .collect::<Vec<_>>();
+    let mut keep = vec![false; points.len()];
+    let mut spans = vec![(0, points.len() - 1)];
+    while let Some((start, end)) = spans.pop() {
+        keep[start] = true;
+        keep[end] = true;
+        let deviation =
+            |index: usize| dist::point_segment(points[index], points[start], points[end]).0;
+        if let Some(index) =
+            (start + 1..end).max_by(|&left, &right| deviation(left).total_cmp(&deviation(right)))
+            && deviation(index) > SIMPLIFY_MM
+        {
+            spans.extend([(start, index), (index, end)]);
+        }
+    }
+    let kept = path
+        .iter()
+        .zip(keep)
+        .filter_map(|(point, keep)| keep.then_some(*point))
+        .collect::<Vec<_>>();
+    if kept.len() < 3 && closed {
+        path.to_vec()
+    } else {
+        kept
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simplification_drops_only_insignificant_vertices() {
+        let path = |coordinates: &[(f64, f64)]| {
+            coordinates
+                .iter()
+                .map(|&(x, y)| ReportPoint { x, y })
+                .collect::<Vec<_>>()
+        };
+        let open = path(&[(0.0, 0.0), (1.0, 4e-5), (2.0, 0.0), (2.0, 1.0)]);
+        assert_eq!(
+            simplified(&open, false),
+            path(&[(0.0, 0.0), (2.0, 0.0), (2.0, 1.0)])
+        );
+        let square = path(&[(0.0, 0.0), (0.5, 1e-7), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]);
+        assert_eq!(
+            simplified(&square, true),
+            path(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])
+        );
+        let sliver = path(&[(0.0, 0.0), (1.0, 0.0), (1.0, 5e-5), (0.0, 5e-5)]);
+        assert_eq!(simplified(&sliver, true), sliver);
     }
 }

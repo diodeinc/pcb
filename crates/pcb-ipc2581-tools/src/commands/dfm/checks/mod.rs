@@ -1297,7 +1297,10 @@ fn released_fingerprints(finding: &Finding, annular_rules: &HashSet<&str>) -> Ve
             .map(LegacySubject::from)
             .collect::<Vec<_>>(),
         &finding.layers,
-        &finding.location.point,
+        finding.location.point.map(|point| RawPoint {
+            x: point.x,
+            y: point.y,
+        }),
     ));
     let annular = annular_rules
         .contains(finding.rule_id.as_str())
@@ -1320,7 +1323,10 @@ fn released_fingerprints(finding: &Finding, annular_rules: &HashSet<&str>) -> Ve
                     })
                     .collect::<Vec<_>>(),
                 &finding.layers,
-                &hole.center,
+                hole.center.map(|point| RawPoint {
+                    x: point.x,
+                    y: point.y,
+                }),
                 &hole.diameter,
             ))
         });
@@ -1328,6 +1334,13 @@ fn released_fingerprints(finding: &Finding, annular_rules: &HashSet<&str>) -> Ve
         .chain(annular)
         .map(|fingerprint| fingerprint.expect("released finding identity serializes"))
         .collect()
+}
+
+/// A point as released ids hashed it, before the report rounded points.
+#[derive(serde::Serialize)]
+struct RawPoint {
+    x: f64,
+    y: f64,
 }
 
 fn compare_locations(left: &Location, right: &Location) -> Ordering {
@@ -1444,6 +1457,20 @@ mod tests {
         assign_ids(&mut three);
         assert_eq!(id_at(&two, 1.0), id_at(&three, 1.0));
         assert_eq!(id_at(&two, 2.0), id_at(&three, 2.0));
+    }
+
+    #[test]
+    fn released_fingerprints_keep_every_digit_the_report_rounds_away() {
+        let finding = finding_at(0.1 + 0.2);
+        let fingerprint = &released_fingerprints(&finding, &HashSet::new())[0];
+        assert!(
+            fingerprint.contains(r#"{"x":0.30000000000000004,"y":0.0}"#),
+            "{fingerprint}"
+        );
+        assert_eq!(
+            serde_json::to_string(&finding.location.point).unwrap(),
+            r#"{"x":0.3,"y":0.0}"#
+        );
     }
 
     #[test]
