@@ -9,7 +9,7 @@ Zener is Starlark plus PCB-specific modules, typed electrical connections, physi
 
 ## Discover Before Authoring
 
-Use `pcb doc --package @stdlib` or `pcb doc --package <package>` to inspect public APIs and their source roots. Read the installed implementation when exact behavior matters.
+Use `pcb list -m -json @stdlib` or `pcb list -m -json <package>[@<version>]` to find a package's local source directory, then read its `.zen` files for the public API and exact behavior.
 
 For CLI behavior, use the installed command's `--help`; do not invent or infer subcommands or flags. When version history matters, inspect the installed version and nearby entries in the [`pcb` changelog](https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md) instead of relying on old examples.
 

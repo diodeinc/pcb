@@ -18,11 +18,11 @@ configured.
 | --- | --- |
 | Reusable circuit or entrypoint | `pcb search -m registry:modules <query> -f json` |
 | Concrete MPN, footprint, availability, or package behind a symbol | `pcb search -m registry:components <query> -f json` |
-| Candidate public API and source root | `pcb doc --package <module-url>@<version>` |
+| Candidate source directory | `pcb list -m -json <module-url>@<version>` |
 
 Use functional queries for functional needs and MPN/manufacturer queries for
-named parts. If docs are incomplete, inspect the reported source path or tree;
-do not infer IO/config names from a search snippet.
+named parts. Read the candidate's source in the reported `dir` for its public
+API; do not infer IO/config names from a search snippet.
 
 Prefer a reusable module or reference circuit that matches the actual need,
 then a component with the required support circuitry, or a primitive when only
