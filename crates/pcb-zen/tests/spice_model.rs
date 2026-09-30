@@ -536,3 +536,34 @@ Resistor(name="R2", value=r2_value, package="0603", P1=vout, P2=gnd)
 
     sim_snapshot!(env, "divider.zen");
 }
+
+#[test]
+fn captured_path_binds_model_across_packages() {
+    let env = TestProject::new();
+    env.add_file(
+        "models/r.lib",
+        ".SUBCKT my_resistor p n PARAMS: RVAL=1k\nR1 p n {RVAL}\n.ENDS\n",
+    );
+    env.add_file(
+        "bench.zen",
+        r#"
+Resistor = Module("@stdlib/generics/Resistor.zen")
+MODELS = Path("models/r.lib")
+
+def bind(c):
+    if hasattr(c, "resistance"):
+        c.spice_model = SpiceModel(MODELS, "my_resistor", nets=list(c.pins.values()), args={"RVAL": "1k"})
+
+builtin.add_component_modifier(bind)
+Resistor(name="R1", value="1kohm", package="0402", P1=Net("A"), P2=Net("B"))
+"#,
+    );
+
+    let result = env.eval("bench.zen");
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == starlark::errors::EvalSeverity::Error)
+        .collect();
+    assert!(errors.is_empty(), "{errors:#?}");
+}

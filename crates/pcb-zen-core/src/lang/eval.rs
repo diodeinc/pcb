@@ -624,11 +624,6 @@ impl EvalContextConfig {
         load_spec: &LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
-        if let LoadSpec::PackageUri { uri, .. } = load_spec {
-            let abs = self.resolution.resolve_package_uri(uri)?;
-            return self.resolve_spec(&LoadSpec::local_path(abs), current_file);
-        }
-
         let current_file = self.file_provider.canonicalize(current_file)?;
         let mut context =
             ResolveContext::new(self.file_provider(), current_file, load_spec.clone());
@@ -855,7 +850,8 @@ impl EvalContextConfig {
         Ok(resolved_path)
     }
 
-    /// Resolve a load path. Supports aliases, URLs, and relative paths.
+    /// Resolve a load path: package URIs and absolute paths name one file from
+    /// anywhere; everything else is relative to the current file.
     pub(crate) fn resolve(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
         // Expand aliases
         if let LoadSpec::Package { package, path, .. } = context.latest_spec() {
@@ -869,7 +865,11 @@ impl EvalContextConfig {
             }
         }
 
-        let resolved_path = match context.latest_spec() {
+        let resolved_path = match context.latest_spec().clone() {
+            LoadSpec::PackageUri { uri } => self.resolution.resolve_package_uri(&uri)?,
+            LoadSpec::Path { path, .. } if path.is_absolute() => {
+                context.file_provider.canonicalize(&path)?
+            }
             LoadSpec::Path { .. } => self.resolve_relative(context)?,
             _ => self.resolve_url(context)?,
         };

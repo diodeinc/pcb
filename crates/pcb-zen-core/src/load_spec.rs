@@ -119,7 +119,7 @@ impl LoadSpec {
             let rel_path = parts.next().unwrap_or("");
 
             // Validate that we have a non-empty package name
-            if package.is_empty() {
+            if package.is_empty() || escapes_package(rel_path) {
                 return None;
             }
 
@@ -147,7 +147,7 @@ impl LoadSpec {
                 path: PathBuf::from(rel_path),
             })
         } else if is_package_url(s) {
-            Some(LoadSpec::Url { url: s.to_string() })
+            (!escapes_package(s)).then(|| LoadSpec::Url { url: s.to_string() })
         } else {
             // Raw file path (relative or absolute)
             Some(LoadSpec::local_path(s))
@@ -172,6 +172,11 @@ fn kicad_stdlib_alias(package: &str) -> Option<&'static str> {
     LEGACY_KICAD_STDLIB_ALIASES
         .iter()
         .find_map(|(alias, stdlib_dir)| (*alias == package).then_some(*stdlib_dir))
+}
+
+/// `..` cannot leave the package a spec is anchored in.
+fn escapes_package(path: &str) -> bool {
+    path.split('/').any(|segment| segment == "..")
 }
 
 fn is_package_url(s: &str) -> bool {
@@ -269,6 +274,13 @@ mod tests {
     fn test_parse_load_spec_relative_path() {
         let spec = LoadSpec::parse("./math.zen");
         assert_eq!(spec, Some(LoadSpec::local_path("./math.zen")));
+    }
+
+    #[test]
+    fn test_parse_load_spec_rejects_escaping_package() {
+        assert_eq!(LoadSpec::parse("@stdlib/../../models/x.lib"), None);
+        assert_eq!(LoadSpec::parse("@pkg/a/../../x.zen"), None);
+        assert_eq!(LoadSpec::parse("github.com/foo/bar/../x.zen"), None);
     }
 
     #[test]
