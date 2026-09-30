@@ -46,16 +46,6 @@ impl KicadBuilder {
         self
     }
 
-    pub fn select_page(&mut self, file_name: &str) -> &mut Self {
-        self.page = self
-            .document
-            .pages
-            .iter()
-            .position(|page| page.file_name.as_deref() == Some(file_name))
-            .unwrap_or_else(|| panic!("unknown test page {file_name}"));
-        self
-    }
-
     pub fn wire(&mut self, a: (f64, f64), b: (f64, f64)) -> &mut Self {
         let id = self.id("wire");
         self.push(SchItem::Wire(Wire {

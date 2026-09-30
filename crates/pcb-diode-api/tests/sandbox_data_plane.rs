@@ -632,12 +632,12 @@ fn lock_lifecycle_heartbeats_with_cas_and_releases() {
 
     let client = client_for(&server);
     let mut options = SandboxLockOptions::local_edit("pcb open");
-    options.ttl = Duration::from_secs(2);
-    options.heartbeat_interval = Duration::from_secs(1);
+    options.ttl = Duration::from_secs(1);
+    options.heartbeat_interval = Duration::from_millis(250);
     let guard = client.acquire_lock(SANDBOX, options).unwrap();
     acquire.assert_calls(1);
 
-    std::thread::sleep(Duration::from_millis(1400));
+    std::thread::sleep(Duration::from_millis(600));
     assert!(guard.is_active());
     guard.release().unwrap();
 
@@ -645,9 +645,18 @@ fn lock_lifecycle_heartbeats_with_cas_and_releases() {
     rm_create.assert_calls(1);
 }
 
+/// Short-lived lease options: whole-second TTL, sub-second heartbeat.
+fn editor_options(ttl: u64) -> SandboxLockOptions {
+    SandboxLockOptions {
+        ttl: Duration::from_secs(ttl),
+        heartbeat_interval: Duration::from_millis(250),
+        ..SandboxLockOptions::local_edit("pcb open")
+    }
+}
+
 /// Use expiring credentials so the first heartbeat must renew, without waiting
 /// fifteen minutes. Acquisition itself may mint twice, before a lease exists.
-fn expiring_editor_lease(server: &MockServer, ttl: u64) -> SandboxLockGuard {
+fn expiring_editor_lease(server: &MockServer, options: SandboxLockOptions) -> SandboxLockGuard {
     let mut mint = server.mock(|when, then| {
         when.method(POST).path("/api/sandboxes/sbx_1/access-token");
         then.status(200).json_body(serde_json::json!({
@@ -668,9 +677,6 @@ fn expiring_editor_lease(server: &MockServer, ttl: u64) -> SandboxLockGuard {
             .header("if-none-match", "*");
         then.status(200).header("etag", "lock-1");
     });
-    let mut options = SandboxLockOptions::local_edit("pcb open");
-    options.ttl = Duration::from_secs(ttl);
-    options.heartbeat_interval = Duration::from_secs(1);
     let guard = client_for(server).acquire_lock(SANDBOX, options).unwrap();
     mint.delete();
     guard
@@ -680,7 +686,7 @@ fn expiring_editor_lease(server: &MockServer, ttl: u64) -> SandboxLockGuard {
 fn stopped_or_expired_editor_cancels_exec_before_releasing_lock() {
     for stopped in [true, false] {
         let server = MockServer::start();
-        let guard = expiring_editor_lease(&server, if stopped { 30 } else { 2 });
+        let guard = expiring_editor_lease(&server, editor_options(if stopped { 30 } else { 1 }));
         let mint = mock_mint(&server, "renewed");
         let create = server.mock(|when, then| {
             when.method(POST)
@@ -729,7 +735,12 @@ fn stopped_or_expired_editor_cancels_exec_before_releasing_lock() {
 fn lease_expiry_and_cancellation_stop_shared_renewal_waiters() {
     for cancel in [false, true] {
         let server = MockServer::start();
-        let guard = expiring_editor_lease(&server, if cancel { 30 } else { 2 });
+        let options = SandboxLockOptions {
+            request_timeout: Duration::from_secs(1),
+            ..editor_options(if cancel { 30 } else { 1 })
+        };
+        let request_timeout = options.request_timeout;
+        let guard = expiring_editor_lease(&server, options);
         let mut busy = server.mock(|when, then| {
             when.method(POST).path("/api/sandboxes/sbx_1/access-token");
             then.status(503)
@@ -744,9 +755,10 @@ fn lease_expiry_and_cancellation_stop_shared_renewal_waiters() {
         // waiting for its mutex, without ever submitting a stale write.
         wait_for_call(&busy);
         if cancel {
-            // Reach a multi-second backoff so an uninterruptible sleep fails.
+            // Reach a two-second backoff, longer than the receive window
+            // below, so an uninterruptible sleep fails.
             let deadline = Instant::now() + Duration::from_secs(5);
-            while busy.calls() < 4 {
+            while busy.calls() < 3 {
                 assert!(Instant::now() < deadline, "renewal stopped retrying");
                 thread::sleep(Duration::from_millis(10));
             }
@@ -784,7 +796,7 @@ fn lease_expiry_and_cancellation_stop_shared_renewal_waiters() {
         } else {
             guard.release().unwrap();
         }
-        assert!(started.elapsed() < Duration::from_secs(6));
+        assert!(started.elapsed() < request_timeout + Duration::from_secs(1));
         busy.delete();
         let mint = mock_mint(&server, "maintenance-finished");
         assert!(
@@ -801,7 +813,13 @@ fn lease_expiry_and_cancellation_stop_shared_renewal_waiters() {
 #[test]
 fn heartbeat_after_maintenance_uses_fresh_timestamps_and_extends_lease() {
     let server = MockServer::start();
-    let guard = expiring_editor_lease(&server, 4);
+    let guard = expiring_editor_lease(
+        &server,
+        SandboxLockOptions {
+            heartbeat_interval: Duration::from_millis(100),
+            ..editor_options(2)
+        },
+    );
     let started = Instant::now();
     let mut busy = server.mock(|when, then| {
         when.method(POST).path("/api/sandboxes/sbx_1/access-token");
@@ -831,7 +849,7 @@ fn heartbeat_after_maintenance_uses_fresh_timestamps_and_extends_lease() {
     let mint = mock_mint(&server, "renewed");
     wait_for_call(&heartbeat);
     // A session can outlive both its original credentials and original lease.
-    thread::sleep(Duration::from_millis(4300).saturating_sub(started.elapsed()));
+    thread::sleep(Duration::from_millis(2300).saturating_sub(started.elapsed()));
     assert!(guard.is_active());
     guard.release().unwrap();
     for (received_at, body) in observed.lock().unwrap().iter() {
@@ -843,7 +861,7 @@ fn heartbeat_after_maintenance_uses_fresh_timestamps_and_extends_lease() {
             (*received_at - updated.with_timezone(&chrono::Utc)).num_milliseconds() < 500,
             "stale heartbeat: {body}"
         );
-        assert_eq!(expires - updated, chrono::Duration::seconds(4));
+        assert_eq!(expires - updated, chrono::Duration::seconds(2));
     }
     mint.assert_calls(1);
     cleanup.assert_calls(1);
@@ -852,7 +870,7 @@ fn heartbeat_after_maintenance_uses_fresh_timestamps_and_extends_lease() {
 #[test]
 fn reclaimed_lease_stops_writes_and_does_not_delete_successors_lock() {
     let server = MockServer::start();
-    let guard = expiring_editor_lease(&server, 30);
+    let guard = expiring_editor_lease(&server, editor_options(30));
     let _mint = mock_mint(&server, "renewed");
     let heartbeat = server.mock(|when, then| {
         when.method(PUT)
@@ -889,7 +907,13 @@ fn reclaimed_lease_stops_writes_and_does_not_delete_successors_lock() {
 fn mint_timeout_retries_only_while_editor_lease_is_valid() {
     for ttl in [20, 2] {
         let server = MockServer::start();
-        let guard = expiring_editor_lease(&server, ttl);
+        // With a lease longer than the mint timeout, the timed-out attempt is
+        // retried; with a shorter one, the lease bounds the attempt instead.
+        let options = SandboxLockOptions {
+            request_timeout: Duration::from_secs(if ttl == 20 { 1 } else { 5 }),
+            ..editor_options(ttl)
+        };
+        let guard = expiring_editor_lease(&server, options);
         let mut slow_mint = server.mock(|when, then| {
             when.method(POST).path("/api/sandboxes/sbx_1/access-token");
             then.status(200)
@@ -942,7 +966,7 @@ fn mint_timeout_retries_only_while_editor_lease_is_valid() {
 #[test]
 fn transfer_can_outlast_initial_lease_while_heartbeats_renew_it() {
     let server = MockServer::start();
-    let guard = expiring_editor_lease(&server, 2);
+    let guard = expiring_editor_lease(&server, editor_options(1));
     let mint = mock_mint(&server, "renewed");
     let heartbeat = server.mock(|when, then| {
         when.method(PUT)
@@ -957,7 +981,7 @@ fn transfer_can_outlast_initial_lease_while_heartbeats_renew_it() {
             .query_param("path", "/board.kicad_pcb")
             .body("slow upload");
         then.status(200)
-            .delay(Duration::from_secs(4))
+            .delay(Duration::from_secs(2))
             .json_body(serde_json::json!({}));
     });
     let (cleanup, _) = mock_exec(&server, &["rm -f --"], (0, ""), (0, ""));

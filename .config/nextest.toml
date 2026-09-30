@@ -10,7 +10,7 @@ status-level = "skip"
 [[profile.default.overrides]]
 filter = '''
 test(test_publish_board_full) |
-test(test_testcase1_full) |
-test(automatic_balancing_regions_scope_panel_fiducials)
+(binary_id(pcbc::integration) & test(/^(import|dfm)::/)) |
+test(test_testcase1_full)
 '''
 priority = 100

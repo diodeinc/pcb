@@ -201,6 +201,16 @@ fn complete_reconciliation_recovers_from_invalid_initial_analysis() {
         plan.initial_inspection(),
         InitialInspection::Invalid { .. }
     ));
+
+    let repaired = plan.apply(Some(&document)).unwrap();
+    let replan = plan_reconciliation(Some(&repaired), &netlist, "simple.kicad_sch").unwrap();
+    let InitialInspection::Available(inspection) = replan.initial_inspection() else {
+        panic!(
+            "repaired document should analyze cleanly: {:?}",
+            replan.initial_inspection()
+        );
+    };
+    assert!(inspection.issues.is_empty(), "{:#?}", inspection.issues);
 }
 
 #[test]

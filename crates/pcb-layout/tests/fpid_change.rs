@@ -23,7 +23,7 @@ use crate::helpers::*;
 #[test]
 fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     // Create a temp directory and copy the test resources
-    let temp = TempDir::new()?.into_persistent();
+    let temp = TempDir::new()?;
     let resource_path = get_resource_path("fpid_change");
     temp.copy_from(&resource_path, &["**/*", "!.pcb/cache/**/*"])?;
 

@@ -16,7 +16,7 @@ use crate::helpers::*;
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn test_moved_renames_path_and_preserves_position() -> Result<()> {
-    let temp = TempDir::new()?.into_persistent();
+    let temp = TempDir::new()?;
     let resource_path = get_resource_path("moved");
     temp.copy_from(&resource_path, &["**/*", "!.pcb/cache/**/*"])?;
 
