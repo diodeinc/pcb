@@ -57,6 +57,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Remove unused Homebrew taps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for tap in aws/tap azure/bicep; do
+            if brew tap | grep -qx "$tap"; then
+              brew untap --force "$tap"
+            fi
+          done
+
       - name: Cache KiCad (macOS)
         if: matrix.config.name == 'macOS'
         id: cache-kicad-mac
@@ -68,12 +77,6 @@ jobs:
       - name: Install KiCad (macOS)
         if: matrix.config.name == 'macOS' && steps.cache-kicad-mac.outputs.cache-hit != 'true'
         run: |
-          # Remove unused runner taps and their tools instead of granting tap trust.
-          for tap in aws/tap azure/bicep; do
-            if brew tap | grep -qx "$tap"; then
-              brew untap --force "$tap"
-            fi
-          done
           brew update
           brew uninstall --cask kicad 2>/dev/null || true
           rm -rf /Applications/KiCad 2>/dev/null || true
