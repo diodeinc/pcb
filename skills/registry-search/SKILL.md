@@ -9,7 +9,7 @@ Find suitable prepared content before authoring a new reusable package.
 
 Only discover or clone other boards when the user explicitly asks to find or
 inspect them; do not search other boards proactively as part of registry
-package search. For requested board discovery, use `diode_list_boards` with
+package search. For requested board discovery, use `mcp__diode__list_boards` with
 the workspace name. If inspection is requested, `git clone` the returned HTTPS
 URL outside the current checkout; sandbox DiodeHub authentication is already
 configured.
