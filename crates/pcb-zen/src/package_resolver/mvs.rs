@@ -9,7 +9,7 @@ use semver::Version;
 
 use super::ResolvedDepId;
 use super::manifest::ManifestLoader;
-use super::materialize::materialize_selected;
+use super::materialize::{materialize_selected, prefetch_unmaterialized};
 use super::scan::{ScannedDirectDeps, WorkspacePackageIndex, scan_package_direct_deps};
 use super::versions::SpecVersionResolver;
 
@@ -444,10 +444,26 @@ impl PackageResolver {
             enqueue_floor_version(&mut selected, dep_id.clone(), version.clone(), &mut queue);
         }
 
+        let mut prefetched = BTreeSet::new();
         while let Some(dep_id) = queue.pop_front() {
             let Some(version) = selected.get(&dep_id).cloned() else {
                 continue;
             };
+            // The first package not yet prefetched starts the next level of the
+            // graph, all of which is queued by now: fetch its contents together.
+            if !prefetched.contains(&(dep_id.clone(), version.clone())) {
+                let level: Vec<_> = std::iter::once(&dep_id)
+                    .chain(&queue)
+                    .filter_map(|id| Some((id.clone(), selected.get(id)?.clone())))
+                    .collect();
+                prefetch_unmaterialized(
+                    &self.workspace,
+                    level
+                        .iter()
+                        .map(|(id, version)| (id.path.as_str(), version)),
+                );
+                prefetched.extend(level);
+            }
             let loaded = self
                 .manifest_loader
                 .load(&self.workspace, &self.cache_index, &dep_id.path, &version)

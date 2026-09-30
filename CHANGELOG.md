@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Change `pcb ipc2581 edit population` to take `--dnp` and `--populate` deltas that leave every other designator as is.
 - Workspaces link to the toolchain stdlib instead of copying it into `.pcb/stdlib`.
 - Speed up `pcb ipc2581 dfm check` on boards with many copper clearance or annular ring findings.
+- Speed up fetching packages that are not cached yet.
 - Remove `pcb doc`; use `pcb list -m -json <package>` and read the source directly.
 
 ### Fixed
@@ -26,6 +27,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Fix `pcb ipc dfm check` reporting corners and small steps on copper edges as sub-minimum widths.
 - Stop `pcb ipc dfm check` from reporting false narrow copper where abutting pour fills meet along a diagonal.
 - Shrink the shared package source clone of the Diode registry from about 2 GB to about 20 MB.
+- Fix intermittent empty `git command failed` errors while fetching packages.
 
 ## [0.4.62] - 2026-09-29
 

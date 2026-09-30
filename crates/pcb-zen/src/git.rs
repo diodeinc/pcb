@@ -26,6 +26,8 @@ const GIT_CONFIG_NOT_FOUND: i32 = 5;
 
 static RESOLVED_REPOS: LazyLock<Mutex<HashMap<String, (String, String)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static ACCESSIBLE_REPOS: LazyLock<Mutex<HashMap<String, bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone)]
 pub struct TagMetadata {
@@ -181,6 +183,28 @@ fn run_lines(cmd: Command) -> Vec<String> {
     run_stdout_opt(cmd)
         .map(|s| s.lines().map(str::to_string).collect())
         .unwrap_or_default()
+}
+
+fn run_with_input(mut cmd: Command, input: &str) -> anyhow::Result<String> {
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+
+    // Feed the input while reading the output, so neither pipe can fill up and
+    // block the other side.
+    let stdin = child.stdin.take();
+    let output = std::thread::scope(|scope| {
+        scope.spawn(move || stdin.map(|mut stdin| stdin.write_all(input.as_bytes())));
+        child.wait_with_output()
+    })?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git command failed: {}", stderr.trim())
+    }
 }
 
 fn run_check_output(mut cmd: Command, expected: &str) -> bool {
@@ -706,7 +730,12 @@ pub fn archive_to_dir(repo_root: &Path, treeish: &str, dest_dir: &Path) -> anyho
         .take()
         .ok_or_else(|| anyhow::anyhow!("Failed to capture git archive stdout"))?;
 
-    let unpack_result = Archive::new(stdout).unpack(dest_dir);
+    let mut archive = Archive::new(stdout);
+    let unpack_result = archive.unpack(dest_dir);
+    // Unpacking stops at the end-of-archive marker, but git may still be
+    // writing the padding after it. Read the rest so git does not die of
+    // SIGPIPE.
+    std::io::copy(&mut archive.into_inner(), &mut std::io::sink())?;
     let output = child.wait_with_output()?;
 
     if !output.status.success() {
@@ -716,6 +745,46 @@ pub fn archive_to_dir(repo_root: &Path, treeish: &str, dest_dir: &Path) -> anyho
 
     unpack_result?;
     Ok(())
+}
+
+/// Download the missing file contents under `treeishes` in one fetch.
+///
+/// Without this, archiving each tree from a blobless clone fetches that tree's
+/// contents in its own round trip.
+pub fn fetch_missing_blobs(repo_root: &Path, treeishes: &[String]) -> anyhow::Result<()> {
+    let mut cmd = git(repo_root);
+    cmd.args([
+        "rev-list",
+        "--objects",
+        "--missing=print",
+        "--ignore-missing",
+        "--stdin",
+    ]);
+    let listing = run_with_input(cmd, &format!("{}\n", treeishes.join("\n")))?;
+    let missing: String = listing
+        .lines()
+        .filter_map(|line| line.strip_prefix('?'))
+        .map(|oid| format!("{oid}\n"))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    // The fetch git runs for a single missing object, for all of them at once.
+    let mut cmd = git_network(repo_root)?;
+    cmd.args([
+        "-c",
+        "fetch.negotiationAlgorithm=noop",
+        "fetch",
+        "origin",
+        "--quiet",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        "--filter=blob:none",
+        "--stdin",
+    ]);
+    run_with_input(cmd, &missing).map(drop)
 }
 
 pub fn fetch_branch(repo_root: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
@@ -927,7 +996,26 @@ pub fn split_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, Stri
 }
 
 fn resolve_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
-    resolve_repo_and_subpath_with(module_path, repo_is_accessible)
+    resolve_repo_and_subpath_with(module_path, repo_is_accessible_cached)
+}
+
+/// Packages in one repo share its prefixes, so probe each prefix once.
+fn repo_is_accessible_cached(repo_url: &str) -> anyhow::Result<bool> {
+    let cached = ACCESSIBLE_REPOS
+        .lock()
+        .expect("repo accessibility cache mutex poisoned")
+        .get(repo_url)
+        .copied();
+    if let Some(accessible) = cached {
+        return Ok(accessible);
+    }
+
+    let accessible = repo_is_accessible(repo_url)?;
+    ACCESSIBLE_REPOS
+        .lock()
+        .expect("repo accessibility cache mutex poisoned")
+        .insert(repo_url.to_string(), accessible);
+    Ok(accessible)
 }
 
 fn resolve_repo_and_subpath_with(

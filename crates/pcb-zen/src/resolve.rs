@@ -550,26 +550,68 @@ pub fn ensure_sparse_checkout(
     let (repo_url, subpath) = git::split_repo_and_subpath(module_path)?;
 
     populate_cache(checkout_dir, marker, |dest| {
-        let is_pseudo_version = version_str.contains("-0.");
-
-        // Construct ref_spec (tag name or commit hash)
-        // For pseudo-versions, use commit hash directly (no subpath prefix)
-        // For regular versions, include subpath prefix in tag name
-        let ref_spec = if is_pseudo_version {
-            version_str.rsplit('-').next().unwrap().to_string()
-        } else {
-            let version_part = format!("v{}", version_str);
-            if subpath.is_empty() {
-                version_part
-            } else {
-                format!("{}/{}", subpath, version_part)
-            }
-        };
-
+        let (ref_spec, is_pseudo_version) = package_ref(&subpath, version_str);
         fetch_via_git(dest, &repo_url, &ref_spec, &subpath, is_pseudo_version)
             .with_context(|| format!("Failed to fetch {} via git sparse checkout", module_path))?;
         Ok(())
     })
+}
+
+/// The ref a package version is archived from, and whether it is a pseudo-version.
+///
+/// Tagged versions use the tag, with the subpath prefix for nested packages.
+/// Pseudo-versions use the pinned commit hash.
+fn package_ref(subpath: &str, version_str: &str) -> (String, bool) {
+    if version_str.contains("-0.") {
+        return (version_str.rsplit('-').next().unwrap().to_string(), true);
+    }
+    let version_part = format!("v{}", version_str);
+    if subpath.is_empty() {
+        (version_part, false)
+    } else {
+        (format!("{}/{}", subpath, version_part), false)
+    }
+}
+
+fn package_treeish(ref_spec: &str, subpath: &str) -> String {
+    if subpath.is_empty() {
+        ref_spec.to_string()
+    } else {
+        format!("{ref_spec}:{subpath}")
+    }
+}
+
+/// Download the contents of these package versions with one fetch per source repo.
+///
+/// Source repos are blobless clones, so materializing packages one at a time
+/// would otherwise fetch each package's contents in its own round trip. This is
+/// best effort: after a failed batch, each package fetches its own contents as
+/// it is archived. Pseudo-versions are left to `fetch_via_git`, which fetches
+/// their commit first.
+pub(crate) fn prefetch_package_contents<'a>(
+    packages: impl IntoIterator<Item = (&'a str, &'a Version)>,
+) {
+    let mut treeishes_by_repo = BTreeMap::<String, Vec<String>>::new();
+    for (module_path, version) in packages {
+        let Ok((repo_url, subpath)) = git::split_repo_and_subpath(module_path) else {
+            continue;
+        };
+        let (ref_spec, is_pseudo) = package_ref(&subpath, &version.to_string());
+        if !is_pseudo {
+            treeishes_by_repo
+                .entry(repo_url)
+                .or_default()
+                .push(package_treeish(&ref_spec, &subpath));
+        }
+    }
+
+    for (repo_url, treeishes) in treeishes_by_repo {
+        let fetched = ensure_source_repo(&repo_url)
+            .and_then(|source_dir| git::fetch_missing_blobs(&source_dir, &treeishes));
+        if let Err(err) = fetched {
+            log::debug!("Batched fetch of package contents from {repo_url} failed: {err:#}");
+        }
+    }
 }
 
 /// Materialize a repo ref into a package directory.
@@ -589,13 +631,7 @@ fn fetch_via_git(
     if is_pseudo {
         git::ensure_rev_in_source_repo(&source_dir, ref_spec)?;
     }
-    let ref_name = ref_spec.to_string();
-    let treeish = if subpath.is_empty() {
-        ref_name
-    } else {
-        format!("{ref_name}:{subpath}")
-    };
-    git::archive_to_dir(&source_dir, &treeish, dest)?;
+    git::archive_to_dir(&source_dir, &package_treeish(ref_spec, subpath), dest)?;
 
     Ok(())
 }
