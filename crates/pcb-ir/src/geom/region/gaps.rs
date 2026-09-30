@@ -107,14 +107,12 @@ impl ContourSet {
     /// of themselves, so a reach of three radii keeps the residue at the
     /// facing walls exact.
     ///
-    /// Walls face when they are not incident: on one ring, neither adjacent
-    /// nor turned the same way, exactly as the width construction judges a
-    /// wall pair. Material lies to the left of travel, so two walls of one
-    /// component face across material when each has the other's nearest
-    /// point on its left and across void when each has it on its right; a
-    /// nearest point along a wall's own line, as at the corners of a notch
-    /// or of aligned holes, leaves the side open and both reaches apply.
-    /// Distinct components always face across void.
+    /// Walls face when they are not [`same_wall`]. Material lies to the left
+    /// of travel, so two walls of one component face across material when
+    /// each has the other's nearest point on its left and across void when
+    /// each has it on its right; a nearest point along a wall's own line, as
+    /// at the corners of a notch or of aligned holes, leaves the side open
+    /// and both reaches apply. Distinct components always face across void.
     fn facing_components(
         &self,
         material_mm: f64,
@@ -131,10 +129,7 @@ impl ContourSet {
             (turn.abs() > scale).then_some(turn > 0.0)
         };
         let faces = |left: &OrientedBoundarySegment, right: &OrientedBoundarySegment| {
-            if left.topology.ring == right.topology.ring
-                && (boundary_segments_are_incident(left.topology, right.topology)
-                    || left.tangent.x * right.tangent.x + left.tangent.y * right.tangent.y >= 0.0)
-            {
+            if same_wall(left, right) {
                 return false;
             }
             let same_component = components[left.topology.ring] == components[right.topology.ring];
@@ -566,9 +561,10 @@ impl<'a> RingArcLength<'a> {
 /// `reach` of the component are every segment its inscribed disks can
 /// touch. Their pairwise analytic bisectors restricted to the component
 /// form the medial axis there. The narrowest maximal inscribed disk on that
-/// axis is the component's width. Disks tangent only to incident segments are
-/// corner spokes, not widths: discarding those leaves one-sided residue —
-/// the bite an isolated corner sheds — with no width at all.
+/// axis is the component's width. Disks tangent only to one wall — incident
+/// segments, or segments of one ring turned the same way — are corner disks,
+/// not widths: discarding those leaves one-sided residue — the bite a corner
+/// sheds — with no width at all.
 fn two_sided_residual_components(
     source: &ContourSet,
     residual: &ContourSet,
@@ -623,7 +619,7 @@ fn two_sided_residual_components(
     components.filter_map(measure).collect()
 }
 
-/// Enumerate exact bisectors of every reachable pair of nonincident walls,
+/// Enumerate exact bisectors of every reachable pair of facing walls,
 /// then let the analytic axis clip and validate itself against the residue
 /// and the complete source boundary. `sites` are the ids, ascending, of the
 /// `segments` near the component, and `boundary` indexes all of `segments`.
@@ -642,15 +638,6 @@ fn component_axis(
         return Vec::new();
     }
     let error = numerical_error(component.bounds());
-    let incident = |a: &OrientedBoundarySegment, b: &OrientedBoundarySegment| {
-        if a.topology.ring == b.topology.ring {
-            boundary_segments_are_incident(a.topology, b.topology)
-        } else {
-            [a.start, a.end]
-                .iter()
-                .any(|point| [b.start, b.end].contains(point))
-        }
-    };
     // A component disk is no larger than its clearance to its nearest
     // source site. The farthest component vertex from that site is an exact
     // upper bound, so walls farther from the component cannot participate.
@@ -690,7 +677,7 @@ fn component_axis(
                 .filter(move |&second| second > first && reachable[second])
                 .map(|second| &segments[sites[second]])
                 .filter(move |partner| {
-                    !incident(wall, partner)
+                    !same_wall(wall, partner)
                         && dist::segments(wall.start, wall.end, partner.start, partner.end).0
                             <= candidate_diameter
                 })
@@ -758,10 +745,7 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
                     // must additionally oppose so the rounded bite of one
                     // smooth concavity is not mistaken for a gap; walls at
                     // exactly 90° remain ambiguous there by construction.
-                    !boundary_segments_are_incident(left.topology, right.topology)
-                        && separation > contact_tolerance
-                        && (left.topology.ring != right.topology.ring
-                            || boundary_tangents_oppose(left, right))
+                    !same_wall(left, right) && separation > contact_tolerance
                 })
             })
         })
@@ -774,11 +758,23 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
     )
 }
 
-fn boundary_tangents_oppose(
-    left: &OrientedBoundarySegment,
-    right: &OrientedBoundarySegment,
-) -> bool {
-    left.tangent.x * right.tangent.x + left.tangent.y * right.tangent.y < 0.0
+/// Whether two source-boundary segments are one wall, which nothing between
+/// them can be a width or gap of. The candidate filter and the width
+/// construction share this judgement, so no limit's filter drops a residue
+/// the construction measures. A ring traverses the two sides of a channel in
+/// opposite directions, so segments of one ring are one wall when adjacent
+/// or turned no more than a quarter turn apart: a disk touching a wall and
+/// the end of a short step beside it is the step corner's. Resolution-scale
+/// tangents keep a microscopic reversal from making an opposing branch.
+/// Segments of distinct rings are one wall only where they touch.
+fn same_wall(left: &OrientedBoundarySegment, right: &OrientedBoundarySegment) -> bool {
+    if left.topology.ring != right.topology.ring {
+        return [left.start, left.end]
+            .iter()
+            .any(|point| [right.start, right.end].contains(point));
+    }
+    boundary_segments_are_incident(left.topology, right.topology)
+        || left.tangent.x * right.tangent.x + left.tangent.y * right.tangent.y >= 0.0
 }
 
 /// Keep-out whose removal widens every narrow void: a radius-`radius` tube

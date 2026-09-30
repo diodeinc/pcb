@@ -22,6 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Write compact DFM report JSON so formatting does not consume the 128 MiB report budget.
+- Fix `pcb ipc dfm check` reporting corners and small steps on copper edges as sub-minimum widths.
 
 ## [0.4.62] - 2026-09-29
 

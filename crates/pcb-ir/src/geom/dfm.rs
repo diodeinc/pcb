@@ -1233,10 +1233,10 @@ mod tests {
     }
 
     #[test]
-    fn exact_backtracking_does_not_inherit_unrecorded_grid_uncertainty() {
-        // This polygon states an approximately 2.1 µm narrowing. Its exact
-        // contacts qualify: only recorded boundary error, never a snap grid,
-        // can make it unresolved.
+    fn sub_resolution_backtracking_does_not_create_opposing_walls() {
+        // A real zone boundary can contain a tiny reversal inside an otherwise
+        // smooth clearance wall. The opening sheds the resulting nib, but the
+        // walls beside it run the same way: one wall, not a copper width.
         let hole_points = [
             (139.5, -98.5),
             (140.5, -98.5),
@@ -1275,7 +1275,7 @@ mod tests {
             .chain(std::iter::once(PathCmd::close()))
             .collect(),
         );
-        let mut region = ContourSet::from_contours(
+        let region = ContourSet::from_contours(
             &[rect_at(139.0, -101.0, 141.0, -98.0), hole],
             FillRule::NonZero,
             res(tol::REGION_MM),
@@ -1291,11 +1291,43 @@ mod tests {
                 .is_empty(),
             "the opening must still localize the nib"
         );
-        let pieces = thin_features(&region, 0.127).unwrap();
-        assert_eq!(pieces.len(), 1);
-        assert!((0.002..0.003).contains(&pieces[0].width.mm));
-        region.uncertainty_mm = 0.002;
         assert!(thin_features(&region, 0.127).unwrap().is_empty());
+    }
+
+    #[test]
+    fn step_beside_a_wall_has_no_width_at_any_limit() {
+        // Reduced from a KiCad F.Cu fill edge: a 4 µm step at the foot of a
+        // 40 µm wall, copper beyond it to the east. The disk touching the
+        // wall and the step's end is the step corner's, and a width must not
+        // depend on the limit it is compared against. The uncertainty is the
+        // imported layer's recorded value.
+        let ring = [
+            [164.9005, -98.207438],
+            [164.9005, -98.286562],
+            [164.894596, -98.308595],
+            [164.894596, -98.308596],
+            [164.882192, -98.354887],
+            [164.879363, -98.37014],
+            [164.887584, -98.408864],
+            [164.883736, -98.409996],
+            [164.883741, -98.410013],
+            [164.890652, -98.423315],
+            [164.89207, -98.429991],
+            [164.892965, -98.431542],
+            [164.894474, -98.43067],
+            [164.901265, -98.44374],
+            [164.952301, -98.477489],
+            [164.973568, -98.476551],
+            [165.273568, -98.476551],
+            [165.273568, -98.207438],
+        ]
+        .to_vec();
+        let mut region =
+            ContourSet::from_rings(vec![ring], FillRule::NonZero, Resolution::default()).unwrap();
+        region.uncertainty_mm = 0.002469878712;
+        for limit in [0.09, 0.10, 0.11, 0.127, 0.15] {
+            assert!(thin_features(&region, limit).unwrap().is_empty(), "{limit}");
+        }
     }
 
     #[test]
