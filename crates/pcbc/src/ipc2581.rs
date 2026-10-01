@@ -33,7 +33,8 @@ enum Commands {
         /// IPC-2581 XML file to inspect
         #[arg(value_hint = clap::ValueHint::FilePath, group = "source")]
         file: Option<PathBuf>,
-        /// Start from an earlier assembly report instead (`-` reads stdin)
+        /// Start from an earlier assembly report instead (`-` reads stdin);
+        /// only reports of the current schema version are accepted
         #[arg(
             long,
             value_name = "FILE|-",
@@ -45,12 +46,8 @@ enum Commands {
         /// Counting scope: one canonical board or the complete board array
         #[arg(long, default_value = "board-array")]
         scope: LayoutTarget,
-        /// Report these designators as unpopulated
-        #[arg(long, value_delimiter = ',', value_name = "REFDES")]
-        dnp: Vec<String>,
-        /// Report these designators as populated
-        #[arg(long, value_delimiter = ',', value_name = "REFDES")]
-        populate: Vec<String>,
+        #[command(flatten)]
+        population: PopulationArgs,
     },
     /// Generate Bill of Materials (BOM)
     Bom {
@@ -252,12 +249,8 @@ enum EditCommands {
         /// IPC-2581 XML file to edit
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Designators to leave unpopulated
-        #[arg(long, value_delimiter = ',', value_name = "REFDES")]
-        dnp: Vec<String>,
-        /// Designators to populate
-        #[arg(long, value_delimiter = ',', value_name = "REFDES")]
-        populate: Vec<String>,
+        #[command(flatten)]
+        population: PopulationArgs,
         /// Output IPC-2581 XML file
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
@@ -402,31 +395,15 @@ impl FabPanelSize {
     }
 }
 
-/// An assembly report from `path`, or from stdin for `-`.
-fn read_assembly_report(
-    path: &std::path::Path,
-) -> anyhow::Result<pcb_ipc2581_tools::assembly::AssemblyReport> {
-    let input = if path.as_os_str() == "-" {
-        let mut input = Vec::new();
-        std::io::stdin()
-            .read_to_end(&mut input)
-            .context("Failed to read the assembly report from stdin")?;
-        input
-    } else {
-        std::fs::read(path).with_context(|| format!("Failed to read {}", path.display()))?
-    };
-    serde_json::from_slice(&input).context("Failed to parse the assembly report")
-}
-
-fn write_assembly_report(
-    report: &pcb_ipc2581_tools::assembly::AssemblyReport,
-) -> anyhow::Result<()> {
-    let output = serde_json::to_vec_pretty(report)?;
-    pcb_ui::write_stdout(|stdout| {
-        stdout.write_all(&output)?;
-        stdout.write_all(b"\n")
-    })?;
-    Ok(())
+/// Designators whose population differs from the document's.
+#[derive(Args)]
+struct PopulationArgs {
+    /// Designators to leave unpopulated
+    #[arg(long, value_delimiter = ',', value_name = "REFDES")]
+    dnp: Vec<String>,
+    /// Designators to populate
+    #[arg(long, value_delimiter = ',', value_name = "REFDES")]
+    populate: Vec<String>,
 }
 
 pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> {
@@ -442,8 +419,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             file,
             report,
             scope,
-            dnp,
-            populate,
+            population,
         } => {
             let mut report = match (file, report) {
                 (Some(file), _) => {
@@ -453,11 +429,32 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                     let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
                     pcb_ipc2581_tools::assembly::build_report(&imported, scope, resolution)?
                 }
-                (None, Some(path)) => read_assembly_report(&path)?,
+                (None, Some(path)) => {
+                    let json = if path.as_os_str() == "-" {
+                        let mut json = Vec::new();
+                        std::io::stdin()
+                            .read_to_end(&mut json)
+                            .context("Failed to read the assembly report from stdin")?;
+                        json
+                    } else {
+                        std::fs::read(&path)
+                            .with_context(|| format!("Failed to read {}", path.display()))?
+                    };
+                    pcb_ipc2581_tools::assembly::parse_report(&json)?
+                }
                 (None, None) => unreachable!("clap requires a report source"),
             };
-            pcb_ipc2581_tools::assembly::set_population(&mut report, &dnp, &populate)?;
-            write_assembly_report(&report)
+            pcb_ipc2581_tools::assembly::set_population(
+                &mut report,
+                &population.dnp,
+                &population.populate,
+            )?;
+            let output = serde_json::to_vec_pretty(&report)?;
+            pcb_ui::write_stdout(|stdout| {
+                stdout.write_all(&output)?;
+                stdout.write_all(b"\n")
+            })?;
+            Ok(())
         }
         Commands::Bom {
             file,
@@ -554,10 +551,14 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             } => commands::bom_edit::execute_selections(&file, &selections, &output),
             EditCommands::Population {
                 file,
-                dnp,
-                populate,
+                population,
                 output,
-            } => commands::population_edit::execute(&file, &dnp, &populate, &output),
+            } => commands::population_edit::execute(
+                &file,
+                &population.dnp,
+                &population.populate,
+                &output,
+            ),
         },
         Commands::BoardArray { command } => match command {
             BoardArrayCommands::Create {

@@ -9,10 +9,11 @@ use ipc2581::edit::start_tag_len;
 ///
 /// Two streaming passes over the source: the first classifies each element's
 /// content, the second writes it. Memory beyond the output is one byte per
-/// element, so reformatting stays cheap on documents of any size.
+/// element, so reformatting stays cheap on documents of any size. A leading
+/// byte-order mark is dropped.
 pub fn reformat_xml(xml: &str) -> Result<String> {
-    let contents = element_contents(xml)?;
-    let mut contents = contents.into_iter();
+    let xml = xml.strip_prefix('\u{feff}').unwrap_or(xml);
+    let mut contents = element_contents(xml)?.into_iter();
     let mut out = String::with_capacity(xml.len());
     // Content kinds of the open elements; a mixed element is copied
     // verbatim, so nothing inside it is pushed.
@@ -92,18 +93,17 @@ fn element_contents(xml: &str) -> Result<Vec<Content>> {
     for token in Tokens::new(xml) {
         let token = token?;
         let source = &xml[token.range.clone()];
+        let is_text = token.kind == TokenKind::Text && !source.trim().is_empty();
         let is_markup = matches!(
             token.kind,
             TokenKind::Node | TokenKind::EmptyElement | TokenKind::Start
         );
         match open.last_mut() {
             Some((_, _, text, markup)) => {
-                *text |= token.kind == TokenKind::Text && !source.trim().is_empty();
+                *text |= is_text;
                 *markup |= is_markup;
             }
-            None if token.kind == TokenKind::Text && !source.trim().is_empty() => {
-                bail!("XML parse error: text outside the root element");
-            }
+            None if is_text => bail!("XML parse error: text outside the root element"),
             None => {
                 roots += usize::from(matches!(
                     token.kind,
@@ -164,22 +164,17 @@ fn write_declaration(source: &str, out: &mut String) {
 
 /// The value of the pseudo-attribute `name` in an XML declaration.
 fn pseudo_attribute<'a>(declaration: &'a str, name: &str) -> Option<&'a str> {
-    let mut rest = declaration;
-    while let Some(at) = rest.find(name) {
-        let preceded = rest[..at].ends_with(|c: char| c.is_ascii_whitespace());
-        rest = &rest[at + name.len()..];
-        let Some(value) = rest.trim_start().strip_prefix('=') else {
-            continue;
-        };
-        let value = value.trim_start();
-        let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) else {
-            continue;
-        };
-        if preceded {
-            return value[1..].split(quote).next();
+    declaration.match_indices(name).find_map(|(at, _)| {
+        if !declaration[..at].ends_with(|c: char| c.is_ascii_whitespace()) {
+            return None;
         }
-    }
-    None
+        let value = declaration[at + name.len()..]
+            .trim_start()
+            .strip_prefix('=')?
+            .trim_start();
+        let quote = value.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+        value[1..].split(quote).next()
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,9 +217,7 @@ impl<'a> Tokens<'a> {
         }
         if rest.starts_with("<?") {
             let len = through("?>", "processing instruction")?;
-            let declaration = self.xml[..self.at]
-                .trim_start_matches('\u{feff}')
-                .is_empty()
+            let declaration = self.at == 0
                 && rest.strip_prefix("<?xml").is_some_and(|rest| {
                     rest.starts_with(|c: char| c.is_ascii_whitespace() || c == '?')
                 });
@@ -337,6 +330,13 @@ mod tests {
 
         let expected = "<r>\n  <m>x<b><c/></b>y</m>\n  <t>text</t>\n  <e>\n    <f/>\n  </e>\n</r>";
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn drops_a_byte_order_mark() {
+        let out = reformat_xml("\u{feff}<?xml version = '1.0'?>\r\n<r>\r\n<a/></r>").unwrap();
+
+        assert_eq!(out, "<?xml version=\"1.0\"?>\n<r>\n  <a/>\n</r>");
     }
 
     #[test]

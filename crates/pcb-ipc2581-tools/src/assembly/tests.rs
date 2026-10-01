@@ -974,8 +974,8 @@ fn assert_population_matches_edit(xml: &str, dnp: &[&str], populate: &[&str]) {
         .unwrap()
         .unwrap_or_else(|| xml.to_owned());
     for target in [LayoutTarget::Board, LayoutTarget::BoardArray] {
-        let json = serde_json::to_string(&unvalidated_report_xml(xml, target)).unwrap();
-        let mut applied: report::AssemblyReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_vec(&unvalidated_report_xml(xml, target)).unwrap();
+        let mut applied = super::parse_report(&json).unwrap();
         super::set_population(&mut applied, &dnp, &populate).unwrap();
         // The edit records pcb as the document's software; the report's
         // source still describes the released document.
@@ -1027,9 +1027,21 @@ fn applied_population_rejects_what_an_edit_rejects() {
         error.to_string(),
         "Designator J1 is listed as both DNP and populated"
     );
+}
 
-    report.schema_version -= 1;
-    let error = super::set_population(&mut report, &[], &[]).unwrap_err();
+#[test]
+fn parses_only_current_schema_reports() {
+    let report = report(LayoutTarget::Board);
+    let json = serde_json::to_vec(&report).unwrap();
+    assert_eq!(super::parse_report(&json).unwrap(), report);
+
+    // A v4 report has no per-component paste counts to rebuild its summary.
+    let mut old = serde_json::to_value(&report).unwrap();
+    old["schema_version"] = 4.into();
+    for component in old["components"].as_array_mut().unwrap() {
+        component.as_object_mut().unwrap().remove("paste_islands");
+    }
+    let error = super::parse_report(&serde_json::to_vec(&old).unwrap()).unwrap_err();
     assert_eq!(
         error.to_string(),
         "Assembly report schema 4 is not the supported schema 5"

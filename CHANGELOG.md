@@ -12,7 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Add `pcb ipc2581 cpl --format jlc` for JLCPCB placement files.
 - Warn in DFM and `pcb ipc2581 cpl` when bottom-side rotations from KiCad 9.0.8–9.0.9 or 10.0.0–10.0.4 IPC-2581 files were corrected.
-- Add `--dnp` and `--populate` to `pcb ipc2581 assembly`, and `--report` to start from an earlier assembly report instead of the IPC-2581.
+- Add `--dnp` and `--populate` to `pcb ipc2581 assembly`, and `--report` to start from an earlier assembly report of the current schema version instead of the IPC-2581.
 
 ### Changed
 

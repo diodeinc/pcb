@@ -3,7 +3,7 @@
 use pcb_ir::geom::Resolution;
 use std::collections::{BTreeSet, HashMap};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::assembly as ir;
 use pcb_ir::dialects::ipc::{FeatureSpan, LayoutStepKind, PlatingKind};
@@ -326,6 +326,23 @@ pub fn build_report(
     Ok(report)
 }
 
+/// An assembly report from its JSON. Only the current schema is accepted:
+/// an older report lacks facts the current one derives from.
+pub fn parse_report(json: &[u8]) -> Result<AssemblyReport> {
+    #[derive(serde::Deserialize)]
+    struct Version {
+        schema_version: u32,
+    }
+    let Version { schema_version } =
+        serde_json::from_slice(json).context("Failed to parse the assembly report")?;
+    ensure!(
+        schema_version == report::REPORT_SCHEMA_VERSION,
+        "Assembly report schema {schema_version} is not the supported schema {}",
+        report::REPORT_SCHEMA_VERSION
+    );
+    serde_json::from_slice(json).context("Failed to parse the assembly report")
+}
+
 /// `report` with the named designators unpopulated (`dnp`) or populated
 /// (`populate`), exactly as building it from the IPC-2581 that
 /// `pcb ipc2581 edit population` writes for the same lists.
@@ -334,13 +351,6 @@ pub fn set_population(
     dnp: &[String],
     populate: &[String],
 ) -> Result<()> {
-    if report.schema_version != report::REPORT_SCHEMA_VERSION {
-        bail!(
-            "Assembly report schema {} is not the supported schema {}",
-            report.schema_version,
-            report::REPORT_SCHEMA_VERSION
-        );
-    }
     // Population lives on BOM references, so only components with BOM
     // evidence have one an edit can change.
     fn in_bom(component: &report::Component) -> Option<&str> {
@@ -352,7 +362,6 @@ pub fn set_population(
     let known = report.components.iter().filter_map(in_bom).collect();
     let wanted = crate::commands::population_edit::requested_population(dnp, populate, &known)?;
 
-    let mut populations = HashMap::new();
     for component in &mut report.components {
         if let Some(&populate) = in_bom(component).and_then(|name| wanted.get(name)) {
             component.population = if populate {
@@ -361,10 +370,14 @@ pub fn set_population(
                 report::Population::DoNotPopulate
             };
         }
-        populations.insert(component.id.clone(), component.population);
     }
+    let populations = report
+        .components
+        .iter()
+        .map(|component| (component.id.as_str(), component.population))
+        .collect::<HashMap<_, _>>();
     for termination in &mut report.terminations {
-        termination.population = populations[&termination.component_id];
+        termination.population = populations[termination.component_id.as_str()];
     }
     derive_from_population(report);
     Ok(())
