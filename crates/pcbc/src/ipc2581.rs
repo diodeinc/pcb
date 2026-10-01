@@ -79,6 +79,10 @@ enum Commands {
         side: commands::cpl::CplSideFilter,
     },
     /// Generate component placement data (CPL)
+    ///
+    /// Coordinates are in the IPC-2581 board frame, matching
+    /// `gerber --layout-target board` from the same file; KiCad's drill/place
+    /// origin is not recorded in IPC-2581.
     Cpl {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
