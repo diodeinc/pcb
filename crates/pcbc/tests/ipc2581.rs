@@ -1,4 +1,8 @@
-use std::{path::PathBuf, process::Command};
+use std::{
+    io::Write,
+    path::PathBuf,
+    process::{Command, Output, Stdio},
+};
 
 use serde_json::Value;
 
@@ -33,7 +37,7 @@ fn assembly_command_matches_the_shared_board_array_report() {
     let (second_json, _) = assembly_report("board-array");
 
     assert_eq!(first_json, second_json);
-    assert_eq!(report["schema_version"], 4);
+    assert_eq!(report["schema_version"], 5);
     assert_eq!(report["scope"]["kind"], "board_array");
     assert_eq!(report["scope"]["area_mm2"], 1_400.0);
     assert_eq!(report["profiles"].as_array().unwrap().len(), 2);
@@ -45,6 +49,77 @@ fn assembly_command_matches_the_shared_board_array_report() {
         .unwrap();
     assert_eq!(package["pickup_point_mm"]["x"], 0.1);
     assert!(package["views"][0]["silkscreen"].is_object());
+}
+
+fn assembly_from_report(report: &[u8], args: &[&str]) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbc"))
+        .args(["ipc", "assembly", "--report", "-"])
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(report).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn assembly_command_changes_the_population_of_a_piped_report() {
+    let (json, _) = assembly_report("board");
+
+    let output = assembly_from_report(&json, &["--dnp", "J1", "--populate", "U2"]);
+
+    assert!(
+        output.status.success(),
+        "pcbc failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let population = |designator: &str| {
+        report["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|component| component["reference_designator"] == designator)
+            .unwrap()["population"]
+            .clone()
+    };
+    assert_eq!(population("J1"), "do_not_populate");
+    assert_eq!(population("U2"), "populate");
+    assert_eq!(
+        report["summary"]["terminations"]["through_on_included_populated_components"],
+        0
+    );
+
+    // Reporting the file for that population gives the same report.
+    let output = Command::new(env!("CARGO_BIN_EXE_pcbc"))
+        .args([
+            "ipc",
+            "assembly",
+            "--scope",
+            "board",
+            "--dnp",
+            "J1",
+            "--populate",
+            "U2",
+        ])
+        .arg(fixture())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        report
+    );
+
+    let output = assembly_from_report(&json, &["--dnp", "R9"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Designators not in the BOM: R9"));
+
+    let output = assembly_from_report(&json, &["--scope", "board"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
 }
 
 #[test]

@@ -15,9 +15,13 @@ fn report(target: LayoutTarget) -> report::AssemblyReport {
 }
 
 fn report_xml(xml: &str, target: LayoutTarget) -> report::AssemblyReport {
+    ipc2581::validate(xml).expect("assembly report fixture conforms to IPC-2581C");
+    unvalidated_report_xml(xml, target)
+}
+
+fn unvalidated_report_xml(xml: &str, target: LayoutTarget) -> report::AssemblyReport {
     let resolution = Resolution::default();
 
-    ipc2581::validate(xml).expect("assembly report fixture conforms to IPC-2581C");
     let ipc = Ipc2581::parse(xml).unwrap();
     let imported = import_design(&ipc, resolution).unwrap();
     build_report(&imported, target, resolution).unwrap()
@@ -27,7 +31,7 @@ fn report_xml(xml: &str, target: LayoutTarget) -> report::AssemblyReport {
 fn reports_scoped_components_and_exact_physical_evidence() {
     let report = report(LayoutTarget::BoardArray);
 
-    assert_eq!(report.schema_version, 4);
+    assert_eq!(report.schema_version, 5);
     assert_eq!(report.scope.kind, report::ScopeKind::BoardArray);
     assert_eq!(report.scope.root_step.as_deref(), Some("panel"));
     assert_eq!(report.scope.profile_ids.len(), 1);
@@ -857,8 +861,8 @@ fn serialization_is_deterministic() {
     assert_eq!(first, second);
     assert_eq!(
         hex::encode(Sha256::digest(first.as_bytes())),
-        "346c46f0b59e7e8a8fc649a7d3497c6df193c8e0e7dd9bf8f2517882c6c8f843",
-        "schema v4 changed without an explicit version change"
+        "e1de1e9ab0ab712b73064107d029291b4769bd48fe864dc9b15f8bc3b8aac884",
+        "schema v5 changed without an explicit version change"
     );
 }
 
@@ -956,4 +960,90 @@ fn population_override_reports_like_an_authored_population() {
     assert_eq!(terminations.through_on_included_populated_components, 0);
     // U2 stays unspecified, so only the explicitly populated part counts.
     assert_eq!(terminations.surface_on_included_populated_components, 1);
+}
+
+/// Applying a population to a report, after a JSON round trip, gives the
+/// report of the document `edit population` writes for the same lists.
+fn assert_population_matches_edit(xml: &str, dnp: &[&str], populate: &[&str]) {
+    let dnp = dnp.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+    let populate = populate
+        .iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+    let edited = crate::commands::population_edit::set_population(xml, &dnp, &populate)
+        .unwrap()
+        .unwrap_or_else(|| xml.to_owned());
+    for target in [LayoutTarget::Board, LayoutTarget::BoardArray] {
+        let json = serde_json::to_vec(&unvalidated_report_xml(xml, target)).unwrap();
+        let mut applied = super::parse_report(&json).unwrap();
+        super::set_population(&mut applied, &dnp, &populate).unwrap();
+        // The edit records pcb as the document's software; the report's
+        // source still describes the released document.
+        let mut expected = unvalidated_report_xml(&edited, target);
+        expected.source = applied.source.clone();
+        assert_eq!(applied, expected, "{dnp:?} / {populate:?} at {target:?}");
+    }
+}
+
+#[test]
+fn applied_population_reports_like_an_edited_document() {
+    for (dnp, populate) in [
+        (&[][..], &[][..]),
+        (&["J1"][..], &[][..]),
+        (&["U1", "J1"][..], &["U2"][..]),
+        (&[][..], &["U2", "LOGO"][..]),
+        (&["U2"][..], &["J1"][..]),
+    ] {
+        assert_population_matches_edit(FIXTURE, dnp, populate);
+    }
+
+    let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
+    let xml = String::from_utf8(zstd::decode_all(Cursor::new(compressed)).unwrap()).unwrap();
+    let designators = unvalidated_report_xml(&xml, LayoutTarget::Board)
+        .components
+        .into_iter()
+        .filter(|component| component.bom.is_some())
+        .filter_map(|component| component.reference_designator)
+        .collect::<Vec<_>>();
+    let names = designators.iter().map(String::as_str).collect::<Vec<_>>();
+    assert!(names.len() > 40);
+    assert_population_matches_edit(&xml, &names[..names.len() / 2], &names[names.len() / 2..]);
+}
+
+#[test]
+fn applied_population_rejects_what_an_edit_rejects() {
+    let mut report = report(LayoutTarget::Board);
+    let names = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    let error = super::set_population(&mut report, &names(&["R9", "J1"]), &[]).unwrap_err();
+    assert_eq!(error.to_string(), "Designators not in the BOM: R9");
+    let error = super::set_population(&mut report, &names(&["J1"]), &names(&["J1"])).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Designator J1 is listed as both DNP and populated"
+    );
+}
+
+#[test]
+fn parses_only_current_schema_reports() {
+    let report = report(LayoutTarget::Board);
+    let json = serde_json::to_vec(&report).unwrap();
+    assert_eq!(super::parse_report(&json).unwrap(), report);
+
+    // A v4 report has no per-component paste counts to rebuild its summary.
+    let mut old = serde_json::to_value(&report).unwrap();
+    old["schema_version"] = 4.into();
+    for component in old["components"].as_array_mut().unwrap() {
+        component.as_object_mut().unwrap().remove("paste_islands");
+    }
+    let error = super::parse_report(&serde_json::to_vec(&old).unwrap()).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Assembly report schema 4 is not the supported schema 5"
+    );
 }

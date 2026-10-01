@@ -3,7 +3,7 @@
 use pcb_ir::geom::Resolution;
 use std::collections::{BTreeSet, HashMap};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::assembly as ir;
 use pcb_ir::dialects::ipc::{FeatureSpan, LayoutStepKind, PlatingKind};
@@ -144,6 +144,7 @@ pub fn build_report(
                 exclusion_reason: excluded.then_some(report::ExclusionReason::DocumentBomCategory),
                 transform,
                 termination_ids: Vec::new(),
+                paste_islands: 0,
             }
         })
         .collect::<Vec<_>>();
@@ -254,79 +255,33 @@ pub fn build_report(
         termination.hole_ids.sort();
     }
 
+    let mut component_paste_islands = HashMap::<&str, u64>::new();
+    for island in &physical.paste_islands {
+        if let Some(id) = island
+            .component
+            .resolved()
+            .and_then(|component| component_ids.get(component))
+        {
+            *component_paste_islands.entry(id.as_str()).or_default() += 1;
+        }
+    }
     for component in &mut components {
         component.termination_ids = component_terminations
             .remove(&component.id)
             .unwrap_or_default();
         component.termination_ids.sort();
+        component.paste_islands = component_paste_islands
+            .get(component.id.as_str())
+            .copied()
+            .unwrap_or_default();
     }
     components.sort_by(|left, right| left.id.cmp(&right.id));
 
-    let component_facts = components
-        .iter()
-        .map(ComponentFacts::from)
-        .collect::<Vec<_>>();
-    let mut diagnostics = component_diagnostics(&component_facts, &mut ids);
-    diagnostics.extend(hole_diagnostics(&holes, &mut ids));
-    diagnostics.sort_by(|left, right| {
-        left.code
-            .cmp(&right.code)
-            .then_with(|| left.subject.id.cmp(&right.subject.id))
-    });
-    let readiness = if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity == report::DiagnosticSeverity::Error)
-    {
-        report::Readiness::Incomplete
-    } else if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity == report::DiagnosticSeverity::Warning)
-    {
-        report::Readiness::ReviewRequired
-    } else {
-        report::Readiness::Ready
-    };
-    let included_populated_component_ids = components
-        .iter()
-        .filter(|component| {
-            component.assembly_status == report::AssemblyStatus::Included
-                && component.population == report::Population::Populate
-        })
-        .map(|component| component.id.as_str())
-        .collect::<BTreeSet<_>>();
-    let paste_on_included_populated = |island: &&pcb_ir::import::physical::PasteIsland| {
-        island
-            .component
-            .resolved()
-            .and_then(|component| component_ids.get(component))
-            .is_some_and(|component| included_populated_component_ids.contains(component.as_str()))
-    };
-    let paste = report::PasteSummary {
-        islands: physical.paste_islands.len() as u64,
-        exactly_linked_to_termination: physical
-            .paste_islands
-            .iter()
-            .filter(|island| island.termination.is_some())
-            .count() as u64,
-        on_included_populated_components: physical
-            .paste_islands
-            .iter()
-            .filter(paste_on_included_populated)
-            .count() as u64,
-        exactly_linked_on_included_populated_components: physical
-            .paste_islands
-            .iter()
-            .filter(paste_on_included_populated)
-            .filter(|island| island.termination.is_some())
-            .count() as u64,
-    };
-    let summary = summarize(&boards, &packages, &components, &terminations, paste);
-
-    let report = report::AssemblyReport {
+    let mut report = report::AssemblyReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         units: report::Units {
-            length: "mm",
-            angle: "degree",
+            length: "mm".to_owned(),
+            angle: "degree".to_owned(),
         },
         source: source(imported),
         scope: report::Scope {
@@ -337,7 +292,7 @@ pub fn build_report(
             root_step: assembly
                 .root_step
                 .map(|step| assembly.steps[step as usize].name.clone()),
-            coordinate_frame: "ipc_2581_design_x_right_y_up",
+            coordinate_frame: "ipc_2581_design_x_right_y_up".to_owned(),
             profile_ids: assembly
                 .root_step
                 .and_then(|step| profile_ids.get(&step).cloned())
@@ -345,18 +300,126 @@ pub fn build_report(
             bounds_mm: scope_bounds,
             area_mm2: scope_area,
         },
-        readiness,
-        summary,
+        readiness: report::Readiness::Ready,
+        summary: report::Summary {
+            paste: report::PasteSummary {
+                islands: physical.paste_islands.len() as u64,
+                exactly_linked_to_termination: physical
+                    .paste_islands
+                    .iter()
+                    .filter(|island| island.termination.is_some())
+                    .count() as u64,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        diagnostics: hole_diagnostics(&holes, &mut ids),
         profiles,
         boards,
         packages,
         components,
         terminations,
         holes,
-        diagnostics,
     };
+    derive_from_population(&mut report);
     validate_finite_numbers(&serde_value::to_value(&report)?)?;
     Ok(report)
+}
+
+/// An assembly report from its JSON. Only the current schema is accepted:
+/// an older report lacks facts the current one derives from.
+pub fn parse_report(json: &[u8]) -> Result<AssemblyReport> {
+    #[derive(serde::Deserialize)]
+    struct Version {
+        schema_version: u32,
+    }
+    let Version { schema_version } =
+        serde_json::from_slice(json).context("Failed to parse the assembly report")?;
+    ensure!(
+        schema_version == report::REPORT_SCHEMA_VERSION,
+        "Assembly report schema {schema_version} is not the supported schema {}",
+        report::REPORT_SCHEMA_VERSION
+    );
+    serde_json::from_slice(json).context("Failed to parse the assembly report")
+}
+
+/// `report` with the named designators unpopulated (`dnp`) or populated
+/// (`populate`), exactly as building it from the IPC-2581 that
+/// `pcb ipc2581 edit population` writes for the same lists.
+pub fn set_population(
+    report: &mut AssemblyReport,
+    dnp: &[String],
+    populate: &[String],
+) -> Result<()> {
+    // Population lives on BOM references, so only components with BOM
+    // evidence have one an edit can change.
+    fn in_bom(component: &report::Component) -> Option<&str> {
+        component
+            .reference_designator
+            .as_deref()
+            .filter(|_| component.bom.is_some())
+    }
+    let known = report.components.iter().filter_map(in_bom).collect();
+    let wanted = crate::commands::population_edit::requested_population(dnp, populate, &known)?;
+
+    for component in &mut report.components {
+        if let Some(&populate) = in_bom(component).and_then(|name| wanted.get(name)) {
+            component.population = if populate {
+                report::Population::Populate
+            } else {
+                report::Population::DoNotPopulate
+            };
+        }
+    }
+    let populations = report
+        .components
+        .iter()
+        .map(|component| (component.id.as_str(), component.population))
+        .collect::<HashMap<_, _>>();
+    for termination in &mut report.terminations {
+        termination.population = populations[termination.component_id.as_str()];
+    }
+    derive_from_population(report);
+    Ok(())
+}
+
+/// Recompute everything in `report` that follows from population: the
+/// summary counts, component diagnostics, and readiness. Building a report
+/// and changing its population both end here, so they cannot disagree.
+fn derive_from_population(report: &mut AssemblyReport) {
+    let component_facts = report
+        .components
+        .iter()
+        .map(ComponentFacts::from)
+        .collect::<Vec<_>>();
+    report
+        .diagnostics
+        .retain(|diagnostic| diagnostic.subject.kind != report::DiagnosticSubjectKind::Component);
+    report.diagnostics.extend(component_diagnostics(
+        &component_facts,
+        &mut IdAllocator::default(),
+    ));
+    report.diagnostics.sort_by(|left, right| {
+        left.code
+            .cmp(&right.code)
+            .then_with(|| left.subject.id.cmp(&right.subject.id))
+    });
+    report.readiness = if report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == report::DiagnosticSeverity::Error)
+    {
+        report::Readiness::Incomplete
+    } else if report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == report::DiagnosticSeverity::Warning)
+    {
+        report::Readiness::ReviewRequired
+    } else {
+        report::Readiness::Ready
+    };
+    report.summary = summarize(report);
 }
 
 fn validate_finite_numbers(value: &serde_value::Value) -> Result<()> {
@@ -393,7 +456,7 @@ fn source(imported: &ImportedDesign) -> report::Source {
                 .map(|vendor| imported.resolve(vendor).to_owned()),
         });
     report::Source {
-        format: "ipc_2581",
+        format: "ipc_2581".to_owned(),
         revision: imported.revision.clone(),
         creation_software: history
             .and_then(|history| history.software)
@@ -1188,13 +1251,16 @@ fn diagnostic(
     }
 }
 
-fn summarize(
-    boards: &[report::BoardOccurrence],
-    packages: &[report::Package],
-    components: &[report::Component],
-    terminations: &[report::Termination],
-    paste: report::PasteSummary,
-) -> report::Summary {
+/// The summary of `report`'s body. Paste islands without a component are
+/// not in the body, so their totals carry over from the current summary.
+fn summarize(report: &AssemblyReport) -> report::Summary {
+    let AssemblyReport {
+        boards,
+        packages,
+        components,
+        terminations,
+        ..
+    } = report;
     let included = components
         .iter()
         .filter(|component| component.assembly_status == report::AssemblyStatus::Included)
@@ -1204,6 +1270,11 @@ fn summarize(
         .filter(|component| component.population == report::Population::Populate)
         .map(|component| component.id.as_str())
         .collect::<BTreeSet<_>>();
+    let on_populated = || {
+        terminations.iter().filter(|termination| {
+            populated_component_ids.contains(termination.component_id.as_str())
+        })
+    };
     report::Summary {
         board_occurrences: boards.len() as u64,
         packages: packages.len() as u64,
@@ -1231,35 +1302,28 @@ fn summarize(
         },
         terminations: report::TerminationSummary {
             total: terminations.len() as u64,
-            on_included_populated_components: terminations
-                .iter()
-                .filter(|termination| {
-                    populated_component_ids.contains(termination.component_id.as_str())
-                })
+            on_included_populated_components: on_populated().count() as u64,
+            surface_on_included_populated_components: on_populated()
+                .filter(|termination| termination.pin_type == report::PinType::Surface)
                 .count() as u64,
-            surface_on_included_populated_components: terminations
-                .iter()
-                .filter(|termination| {
-                    populated_component_ids.contains(termination.component_id.as_str())
-                        && termination.pin_type == report::PinType::Surface
-                })
+            through_on_included_populated_components: on_populated()
+                .filter(|termination| termination.pin_type == report::PinType::Through)
                 .count() as u64,
-            through_on_included_populated_components: terminations
-                .iter()
-                .filter(|termination| {
-                    populated_component_ids.contains(termination.component_id.as_str())
-                        && termination.pin_type == report::PinType::Through
-                })
-                .count() as u64,
-            blind_on_included_populated_components: terminations
-                .iter()
-                .filter(|termination| {
-                    populated_component_ids.contains(termination.component_id.as_str())
-                        && termination.pin_type == report::PinType::Blind
-                })
+            blind_on_included_populated_components: on_populated()
+                .filter(|termination| termination.pin_type == report::PinType::Blind)
                 .count() as u64,
         },
-        paste,
+        paste: report::PasteSummary {
+            on_included_populated_components: included
+                .iter()
+                .filter(|component| populated_component_ids.contains(component.id.as_str()))
+                .map(|component| component.paste_islands)
+                .sum(),
+            exactly_linked_on_included_populated_components: on_populated()
+                .map(|termination| termination.paste_islands.len() as u64)
+                .sum(),
+            ..report.summary.paste.clone()
+        },
     }
 }
 
