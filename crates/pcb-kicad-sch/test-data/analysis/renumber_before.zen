@@ -1,0 +1,11 @@
+"""A composed design before inserting a component between existing paths."""
+
+Project(name="Renumber", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+VCC = Power("VCC")
+GROUND = Ground("GROUND")
+
+Resistor(name="A", value="1kohms", package="0402", P1=VCC, P2=GROUND)
+Resistor(name="C", value="3kohms", package="0402", P1=VCC, P2=GROUND)

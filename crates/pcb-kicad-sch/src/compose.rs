@@ -305,6 +305,10 @@ pub(crate) fn reconcile_document(
         )?;
     }
 
+    // Native saves persist per-sheet annotations separately from Reference.
+    // Refresh even when only the instance annotation (not the field) is stale.
+    component_slots::sync_symbol_instance_references(&mut document, &project_slots)?;
+
     // Library cleanup is a whole-document concern; a scoped repair must not
     // touch pages outside its selection.
     if complete {

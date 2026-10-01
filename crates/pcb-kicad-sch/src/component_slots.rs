@@ -4,8 +4,12 @@ use anyhow::{Context, Result, bail};
 use pcb_sch::{
     ATTR_SYMBOL_FORMAT_VERSION, AttributeValue, Instance, InstanceKind, InstanceRef, Schematic,
 };
+use pcb_sexpr::Sexpr;
 
-use crate::{Symbol, SymbolDefinition, SymbolSlotKey, canonical_component_path, symbol};
+use crate::{
+    SchDocument, SchItem, Symbol, SymbolDefinition, SymbolSlotKey, canonical_component_path,
+    connectivity::kicad::page_instances, symbol,
+};
 
 pub(crate) const SYMBOL_VALUE_ATTR: &str = "__symbol_value";
 pub(crate) const SYMBOL_PATH_ATTR: &str = "symbol_path";
@@ -90,6 +94,83 @@ pub(crate) fn component_instances(netlist: &Schematic) -> Result<BTreeMap<String
         }
     }
     Ok(result)
+}
+
+/// Keep native annotations consistent with the refreshed Reference fields.
+/// KiCad looks up instances by sheet UUID path, even after a project rename;
+/// annotations outside this document's hierarchy belong to other instances.
+pub(crate) fn sync_symbol_instance_references(
+    document: &mut SchDocument,
+    slots: &BTreeSet<SymbolSlotKey>,
+) -> Result<()> {
+    let mut paths_by_page = BTreeMap::<String, BTreeSet<String>>::new();
+    for instance in page_instances(document)? {
+        paths_by_page
+            .entry(instance.page.id.clone())
+            .or_default()
+            .insert(format!("/{}", instance.id));
+    }
+    for page in &mut document.pages {
+        let Some(paths) = paths_by_page.get(&page.id) else {
+            continue;
+        };
+        for item in &mut page.items {
+            let SchItem::Symbol(symbol) = item else {
+                continue;
+            };
+            let Some(slot) = symbol
+                .field_value("Path")
+                .and_then(|path| SymbolSlotKey::new(path, symbol.unit))
+                .filter(|slot| slots.contains(slot))
+            else {
+                continue;
+            };
+            let reference = symbol
+                .reference()
+                .with_context(|| format!("managed symbol '{slot}' has no Reference field"))?
+                .to_string();
+            for instances in &mut symbol.unsupported {
+                let Some(projects) = instances
+                    .as_list_mut()
+                    .filter(|items| items.first().and_then(Sexpr::as_sym) == Some("instances"))
+                else {
+                    continue;
+                };
+                for project in projects {
+                    let Some(annotations) = project
+                        .as_list_mut()
+                        .filter(|items| items.first().and_then(Sexpr::as_sym) == Some("project"))
+                    else {
+                        continue;
+                    };
+                    for annotation in annotations {
+                        let Some(fields) = annotation.as_list_mut().filter(|items| {
+                            items.first().and_then(Sexpr::as_sym) == Some("path")
+                                && items
+                                    .get(1)
+                                    .and_then(Sexpr::as_str)
+                                    .is_some_and(|path| paths.contains(path))
+                        }) else {
+                            continue;
+                        };
+                        for field in fields {
+                            if let Some(value) = field
+                                .as_list_mut()
+                                .filter(|items| {
+                                    items.first().and_then(Sexpr::as_sym) == Some("reference")
+                                })
+                                .and_then(|items| items.get_mut(1))
+                                && value.as_str() != Some(&reference)
+                            {
+                                *value = Sexpr::string(&reference);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
