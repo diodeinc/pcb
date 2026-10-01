@@ -546,6 +546,9 @@ fn assembly_title(diagnostic: AssemblyDiagnostic) -> &'static str {
         AssemblyDiagnostic::MissingPhysicalTerminations => {
             "Populated solder-mounted components have physical terminations"
         }
+        AssemblyDiagnostic::NonstandardBottomRotation => {
+            "Bottom-side component rotations are in standard form"
+        }
     }
 }
 
@@ -572,7 +575,13 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
                 id: rule.metadata.id.clone(),
                 authored_id: rule.metadata.id.clone(),
                 title: assembly_title(rule.select.diagnostic).to_owned(),
-                severity: Severity::Error,
+                // A corrected rotation is known; the rest is missing data.
+                severity: if rule.select.diagnostic == AssemblyDiagnostic::NonstandardBottomRotation
+                {
+                    Severity::Warning
+                } else {
+                    Severity::Error
+                },
                 comparison: Comparison::Maximum,
                 limit: LimitValue::Count(0),
                 kind: RuleKind::AssemblyDiagnostic(rule.select.diagnostic),

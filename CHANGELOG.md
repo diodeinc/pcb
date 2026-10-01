@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add `pcb ipc2581 cpl --format jlc` for JLCPCB placement files.
+- Warn in DFM and `pcb ipc2581 cpl` when bottom-side rotations from KiCad 9.0.8–9.0.9 or 10.0.0–10.0.4 IPC-2581 files were corrected.
+
 ### Changed
 
 - Export STEP assemblies as AP214 instead of AP242 for broader CAD importer compatibility.
@@ -15,6 +20,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Keep KiCad symbol instance references consistent during schematic apply, including repairing stale annotations after component renumbering.
+- Fix bottom-side component rotations in IPC-2581 files written by KiCad 9.0.8–9.0.9 and 10.0.0–10.0.4.
+- Keep populated `DOCUMENT` BOM parts in `pcb ipc2581 cpl`, and report their population in `pcb ipc2581 info`.
 
 ## [0.4.64] - 2026-09-30
 

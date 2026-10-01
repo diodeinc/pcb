@@ -5,8 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-#[cfg(feature = "cli")]
-use anyhow::Result;
+use anyhow::{Result, bail};
 #[cfg(feature = "cli")]
 use ipc2581::Ipc2581;
 use pcb_ir::dialects::assembly::BomCategory;
@@ -31,18 +30,42 @@ pub enum CplSideFilter {
     Bottom,
 }
 
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CplFormat {
+    /// The release `cpl.csv` columns.
+    #[default]
+    Release,
+    /// JLCPCB's placement columns.
+    Jlc,
+}
+
 #[derive(Debug, Clone)]
 pub struct CplOptions {
     pub output: Option<PathBuf>,
     pub side: CplSideFilter,
     pub exclude_dnp: bool,
+    pub format: CplFormat,
 }
 
 #[cfg(feature = "cli")]
 pub fn execute(file: &Path, options: &CplOptions, resolution: Resolution) -> Result<()> {
     let ipc = Ipc2581::parse(&crate::utils::file::load_ipc_file(file)?)?;
-    let placements = extract_single_board_placements(&import_design(&ipc, resolution)?)?;
-    let cpl = emit_cpl_csv(&placements, options);
+    let imported = import_design(&ipc, resolution)?;
+    if let Some(defect) = &imported.flipped_rotation_defect
+        && imported
+            .components
+            .iter()
+            .any(|component| component.corrected_source_rotation.is_some())
+    {
+        anstream::eprintln!(
+            "warning: {} wrote bottom-side rotations in a non-standard form; corrected them. Re-export with KiCad 10.0.5 or later to clear this warning.",
+            defect.exporter
+        );
+    }
+    let placements = extract_single_board_placements(&imported)?;
+    let cpl = emit_cpl_csv(&placements, options)?;
 
     if let Some(output) = &options.output {
         fs::write(output, cpl)?;
@@ -53,7 +76,7 @@ pub fn execute(file: &Path, options: &CplOptions, resolution: Resolution) -> Res
     Ok(())
 }
 
-pub fn emit_cpl_csv(document: &PlacementDocument, options: &CplOptions) -> String {
+pub fn emit_cpl_csv(document: &PlacementDocument, options: &CplOptions) -> Result<String> {
     let mut rows = document
         .components
         .iter()
@@ -61,23 +84,55 @@ pub fn emit_cpl_csv(document: &PlacementDocument, options: &CplOptions) -> Strin
         .collect::<Vec<_>>();
     rows.sort_by(compare_components);
 
-    let mut output = String::from("Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n");
+    let mut output = String::from(match options.format {
+        CplFormat::Release => "Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n",
+        CplFormat::Jlc => "Designator,Mid X,Mid Y,Layer,Rotation\n",
+    });
     for component in rows {
-        write_csv_row(
-            &mut output,
-            &[
-                component.designator.as_str(),
-                component.value.as_deref().unwrap_or_default(),
-                component.package.as_deref().unwrap_or_default(),
-                &format_number(component.at.x),
-                &format_number(component.at.y),
-                &format_number(normalize_rotation(cpl_rotation(component))),
-                cpl_layer(component.side),
-            ],
-        );
+        match options.format {
+            CplFormat::Release => write_csv_row(
+                &mut output,
+                &[
+                    component.designator.as_str(),
+                    component.value.as_deref().unwrap_or_default(),
+                    component.package.as_deref().unwrap_or_default(),
+                    &format_number(component.at.x),
+                    &format_number(component.at.y),
+                    &format_number(normalize_rotation(cpl_rotation(component))),
+                    cpl_layer(component.side),
+                ],
+            ),
+            CplFormat::Jlc => write_csv_row(
+                &mut output,
+                &[
+                    component.designator.as_str(),
+                    &format!("{:.4}mm", clean_zero(component.at.x)),
+                    &format!("{:.4}mm", clean_zero(component.at.y)),
+                    jlc_layer(component)?,
+                    &jlc_rotation(cpl_rotation(component)).to_string(),
+                ],
+            ),
+        }
     }
 
-    output
+    Ok(output)
+}
+
+/// JLCPCB takes whole degrees in `0..360`.
+fn jlc_rotation(degrees: f64) -> u32 {
+    (degrees.round() as i64).rem_euclid(360) as u32
+}
+
+/// JLCPCB places on the top or bottom only.
+fn jlc_layer(component: &Placement) -> Result<&'static str> {
+    match component.side {
+        PlacementSide::Top => Ok("Top"),
+        PlacementSide::Bottom => Ok("Bottom"),
+        side => bail!(
+            "component '{}' is on side {side:?}; JLCPCB places only top and bottom parts",
+            component.designator
+        ),
+    }
 }
 
 /// Rotation in KiCad's position-file convention, the one assembly houses
@@ -104,7 +159,11 @@ fn cpl_layer(side: PlacementSide) -> &'static str {
 }
 
 fn include_component(component: &Placement, options: &CplOptions) -> bool {
-    if component.bom_category == Some(BomCategory::Document) {
+    // KiCad files parts without pads under DOCUMENT; those it populates are
+    // still placed.
+    if component.bom_category == Some(BomCategory::Document)
+        && component.population != Population::Populate
+    {
         return false;
     }
     if options.exclude_dnp && component.population == Population::DoNotPopulate {
@@ -206,6 +265,7 @@ mod tests {
             output: None,
             side: CplSideFilter::Both,
             exclude_dnp: false,
+            format: CplFormat::Release,
         };
         // Mirrored parts report KiCad's flipped-footprint orientation, 180° - r.
         for (rotation, top_rotation, bottom_rotation, local_x, local_y) in [
@@ -263,7 +323,7 @@ mod tests {
                     assert_eq!(placements.components.len(), 1);
                     assert_eq!(placements.components[0].mirror, mirror);
                     assert_eq!(
-                        emit_cpl_csv(&placements, &options),
+                        emit_cpl_csv(&placements, &options).unwrap(),
                         format!(
                             "Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n\
 U1,,QFN,10.000000,20.000000,{csv_rotation},{layer}\n"
@@ -276,8 +336,8 @@ U1,,QFN,10.000000,20.000000,{csv_rotation},{layer}\n"
     }
 
     #[test]
-    fn emits_release_cpl_header_and_rows() {
-        let document = PlacementDocument {
+    fn emits_release_and_jlc_rows() {
+        let mut document = PlacementDocument {
             scope: Scope::Board,
             step: Some("board".to_string()),
             components: vec![
@@ -350,14 +410,36 @@ U1,,QFN,10.000000,20.000000,{csv_rotation},{layer}\n"
                 output: None,
                 side: CplSideFilter::Both,
                 exclude_dnp: false,
+                format: CplFormat::Release,
             },
-        );
+        )
+        .unwrap();
 
+        // A populated DOCUMENT part (KiCad's padless parts) is still placed.
         assert_eq!(
             csv,
             "Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n\
 R10,10k,R_0603,1.000000,-2.500000,-90.000000,top\n\
-R2,1k,R_0603,3.000000,4.000000,180.000000,bottom\n"
+R2,1k,R_0603,3.000000,4.000000,180.000000,bottom\n\
+TP1,,TestPoint_ICT,5.000000,6.000000,180.000000,bottom\n"
+        );
+
+        document.components[0].rotation_degrees = 359.6;
+        document.components[2].population = Population::DoNotPopulate;
+        let jlc = emit_cpl_csv(
+            &document,
+            &CplOptions {
+                output: None,
+                side: CplSideFilter::Both,
+                exclude_dnp: true,
+                format: CplFormat::Jlc,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            jlc,
+            "Designator,Mid X,Mid Y,Layer,Rotation\n\
+R10,1.0000mm,-2.5000mm,Top,0\n"
         );
     }
 }

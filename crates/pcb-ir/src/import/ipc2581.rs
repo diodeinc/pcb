@@ -28,6 +28,7 @@ mod append;
 mod assembly;
 mod copper_balance;
 mod design;
+mod exporter;
 mod features;
 mod intent;
 mod layout;
@@ -37,4 +38,4 @@ mod specs;
 mod tests;
 
 use self::{append::*, primitives::*, specs::*};
-pub use self::{copper_balance::*, design::*, features::*, intent::*, layout::*};
+pub use self::{copper_balance::*, design::*, exporter::*, features::*, intent::*, layout::*};

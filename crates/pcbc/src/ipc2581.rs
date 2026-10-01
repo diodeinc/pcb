@@ -92,6 +92,9 @@ enum Commands {
         /// Exclude BOM RefDes entries marked populate=false
         #[arg(long)]
         exclude_dnp: bool,
+        /// CSV columns to write
+        #[arg(long, default_value = "release")]
+        format: commands::cpl::CplFormat,
     },
     /// Edit IPC-2581 data
     Edit {
@@ -473,12 +476,14 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             output,
             side,
             exclude_dnp,
+            format,
         } => commands::cpl::execute(
             &file,
             &commands::cpl::CplOptions {
                 output,
                 side,
                 exclude_dnp,
+                format,
             },
             resolution,
         ),

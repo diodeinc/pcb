@@ -42,6 +42,10 @@ select = { diagnostic = "missing_package" }
 id = "assembly.missing_physical_terminations"
 select = { diagnostic = "missing_physical_terminations" }
 
+[[rules.assembly.diagnostic]]
+id = "assembly.nonstandard_bottom_rotation"
+select = { diagnostic = "nonstandard_bottom_rotation" }
+
 [[rules.drilling.hole_diameter]]
 id = "drilling.minimum_via_hole_diameter"
 select = { hole = "via" }

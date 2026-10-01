@@ -922,19 +922,20 @@ pub fn info_json(
 
     if let Some(bom_section) = ipc.bom() {
         for item in &bom_section.items {
-            if matches!(item.category, Some(ipc2581::types::BomCategory::Document)) {
-                continue;
-            }
-
+            // DOCUMENT items describe placed parts only through their RefDes.
+            let document = matches!(item.category, Some(ipc2581::types::BomCategory::Document));
             let avl_lookup = accessor.lookup_avl(item.oem_design_number_ref);
 
             for ref_des in item.reference_designators() {
                 let designator = ipc.resolve(ref_des.name).to_string();
-                if designator.is_empty() || !seen_designators.insert(designator.clone()) {
+                let fallback = component_map.get(&designator);
+                if designator.is_empty()
+                    || (document && fallback.is_none())
+                    || !seen_designators.insert(designator.clone())
+                {
                     continue;
                 }
 
-                let fallback = component_map.get(&designator);
                 let bom_package = ref_des
                     .package_ref
                     .map(|package| ipc.resolve(package).to_string())

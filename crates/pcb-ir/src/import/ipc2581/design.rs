@@ -27,6 +27,9 @@ pub struct ImportedDesign {
     pub step_layers: Vec<StepLayer>,
     pub packages: Vec<PackageDefinition>,
     pub components: Vec<ComponentDefinition>,
+    /// The writing exporter's flipped-rotation defect, already undone in
+    /// every component's `local_from_component`.
+    pub flipped_rotation_defect: Option<FlippedRotationDefect>,
     /// Into `geometry.diagnostics`; retain warnings even when a layer's
     /// entire geometry was dropped. Layout/stackup warnings apply everywhere.
     layer_diagnostics: HashMap<(u32, LayerId), Span>,
@@ -102,6 +105,9 @@ pub struct ComponentDefinition {
     pub package: Option<PackageDefinitionId>,
     pub bom_references: Vec<BomReferenceId>,
     pub local_from_component: Affine2,
+    /// The source `Xform` rotation, when `local_from_component` instead uses
+    /// the standard form of a [`FlippedRotationDefect`].
+    pub corrected_source_rotation: Option<f64>,
     pub population: PopulationState,
 }
 
@@ -227,12 +233,22 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
         }
     }
 
+    let flipped_rotation_defect = FlippedRotationDefect::of(ipc);
     let mut components = Vec::new();
     for (step, &step_id) in ecad.cad_data.steps.iter().zip(&step_ids) {
         for (source_index, component) in step.components.iter().enumerate() {
+            let mut xform = component.xform;
+            let corrected_source_rotation = flipped_rotation_defect
+                .as_ref()
+                .zip(xform.as_mut().filter(|xform| xform.mirror))
+                .map(|(defect, xform)| {
+                    let source = xform.rotation;
+                    xform.rotation = defect.standard_rotation(source);
+                    source
+                });
             let placement = ipc_placement(
                 Point::new(component.location.x, component.location.y),
-                component.xform,
+                xform,
             );
             // A packageRef names its own Step's Package; only a name the Step
             // lacks resolves across Steps.
@@ -256,6 +272,7 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
                 package,
                 bom_references,
                 local_from_component: placement.transform,
+                corrected_source_rotation,
                 population,
             });
         }
@@ -298,6 +315,7 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
         step_layers,
         packages,
         components,
+        flipped_rotation_defect,
         layer_diagnostics,
         global_diagnostics,
     })
