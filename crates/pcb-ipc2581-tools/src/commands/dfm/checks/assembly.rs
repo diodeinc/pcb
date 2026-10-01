@@ -76,12 +76,13 @@ pub(super) fn evaluate(diagnostic: AssemblyDiagnostic, design: &Design) -> Evalu
 /// exporter defect: the outputs are right, but the source file is not.
 fn nonstandard_bottom_rotation(design: &Design) -> Evaluation {
     let defect = design.imported.flipped_rotation_defect.as_ref();
-    let included = design
+    // Every populated part is placed, DOCUMENT ones included (see `cpl`).
+    let populated = design
         .components
         .iter()
-        .filter(|component| component.facts.included)
+        .filter(|component| component.facts.population == assembly_report::Population::Populate)
         .collect::<Vec<_>>();
-    let issues = included
+    let issues = populated
         .iter()
         .filter_map(|component| {
             let (defect, source) = defect.zip(component.corrected_source_rotation)?;
@@ -101,7 +102,7 @@ fn nonstandard_bottom_rotation(design: &Design) -> Evaluation {
         })
         .collect();
     Evaluation {
-        checked: included.len() * design.placements.len(),
+        checked: populated.len() * design.placements.len(),
         issues,
     }
 }
