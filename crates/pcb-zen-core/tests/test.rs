@@ -1,5 +1,3 @@
-use crate::common;
-
 snapshot_eval!(net_passing, {
     "MyComponent.zen" => r#"
         ComponentInterface = interface(p1 = Net, p2 = Net)
@@ -195,6 +193,7 @@ snapshot_eval!(duplicate_module_component_collision, {
 #[test]
 #[cfg(not(target_os = "windows"))]
 fn duplicate_child_name_has_diagnostic_kind() {
+    use crate::common;
     use pcb_zen_core::lang::error::CategorizedDiagnostic;
     use starlark::errors::EvalSeverity;
 
