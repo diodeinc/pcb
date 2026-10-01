@@ -65,6 +65,227 @@ fn linked_hierarchy_fixture(path: &std::path::Path) -> pcb_sch::Schematic {
     netlist
 }
 
+fn instance_reference<'a>(symbol: &'a pcb_kicad_sch::Symbol, path: &str) -> &'a str {
+    symbol
+        .unsupported
+        .iter()
+        .filter_map(|node| node.as_list())
+        .filter(|items| items.first().and_then(Sexpr::as_sym) == Some("instances"))
+        .flat_map(|items| pcb_sexpr::find_all_child_lists(items, "project"))
+        .flat_map(|items| pcb_sexpr::find_all_child_lists(items, "path"))
+        .find(|items| items.get(1).and_then(Sexpr::as_str) == Some(path))
+        .and_then(|items| pcb_sexpr::find_child_list(items, "reference"))
+        .and_then(|items| items.get(1))
+        .and_then(Sexpr::as_str)
+        .expect("instance reference")
+}
+
+#[test]
+fn apply_renumbers_instance_references_after_component_insertion_and_removal() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let before = linked_fixture_from(&project_dir, "renumber_before.zen");
+    let after = linked_fixture_from(&project_dir, "renumber_after.zen");
+    apply_linked_schematic(&before).unwrap().unwrap();
+    let baseline = KicadProject::load(&project_dir).unwrap().document;
+    let retained_wires = baseline.pages[0]
+        .items
+        .iter()
+        .filter(|item| matches!(item, SchItem::Wire(_)))
+        .collect::<Vec<_>>();
+    assert!(!retained_wires.is_empty());
+
+    for (netlist, expected_c, expected_count) in [(&after, "R3", 3), (&before, "R2", 2)] {
+        // Emulate a native KiCad save, which adds persistent annotations even
+        // when pcb originally generated only the Reference property.
+        let mut project = KicadProject::load(&project_dir).unwrap();
+        let page = &mut project.document.pages[0];
+        let path = format!("/{}", page.id);
+        for symbol in page.items.iter_mut().filter_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => Some(symbol),
+            _ => None,
+        }) {
+            symbol.unsupported.retain(|node| {
+                node.as_list()
+                    .and_then(|items| items.first())
+                    .and_then(Sexpr::as_sym)
+                    != Some("instances")
+            });
+            symbol.unsupported.push(pcb_sexpr::parse(&format!(
+                r#"(instances (project "Renumber" (path "{path}" (reference "{}") (unit {}))))"#,
+                symbol.reference().unwrap(), symbol.unit
+            )).unwrap());
+            // Non-default field presentation must survive reference changes.
+            symbol.fields.get_mut("Reference").unwrap().at.y += 2.54;
+            symbol.fields.get_mut("Reference").unwrap().hidden = true;
+        }
+        let source = project.document.to_kicad_sch().unwrap();
+        fs::write(&project.schematic_files[0], &source).unwrap();
+        let original = KicadProject::load(&project_dir).unwrap().document;
+
+        assert!(apply_linked_schematic(netlist).unwrap().unwrap().changed);
+        let repaired = KicadProject::load(&project_dir).unwrap();
+        let page = &repaired.document.pages[0];
+        let symbols = page
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => Some(symbol),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(symbols.len(), expected_count);
+        let mut refs = BTreeSet::new();
+        for symbol in &symbols {
+            let reference = match symbol.field_value("Path").unwrap() {
+                "A.R" => "R1",
+                "B.R" => "R2",
+                "C.R" => expected_c,
+                other => panic!("unexpected component {other}"),
+            };
+            assert_eq!(symbol.reference(), Some(reference));
+            if let Some(previous) = original.pages[0].items.iter().find_map(|item| match item {
+                SchItem::Symbol(previous) if previous.id == symbol.id => Some(previous),
+                _ => None,
+            }) {
+                assert_eq!(instance_reference(symbol, &path), reference);
+                let mut expected = previous.clone();
+                expected.fields.get_mut("Reference").unwrap().value = reference.to_string();
+                expected.unsupported = symbol.unsupported.clone();
+                assert_eq!(**symbol, expected, "only annotation may change");
+            }
+            // New symbols without an instances section use their property.
+            let actual = if symbol
+                .unsupported
+                .iter()
+                .any(|node| node.find_list("project").is_some())
+            {
+                instance_reference(symbol, &path)
+            } else {
+                symbol.reference().unwrap()
+            };
+            assert!(
+                refs.insert(actual),
+                "duplicate effective reference {actual}"
+            );
+        }
+        for wire in &retained_wires {
+            assert!(
+                page.items.contains(wire),
+                "retained components' wiring must survive insertion/removal"
+            );
+        }
+        assert!(
+            inspect_schematic(&repaired.document, netlist)
+                .unwrap()
+                .analysis
+                .is_equivalent()
+        );
+        let saved = fs::read(&repaired.schematic_files[0]).unwrap();
+        assert!(!apply_linked_schematic(netlist).unwrap().unwrap().changed);
+        assert_eq!(fs::read(&repaired.schematic_files[0]).unwrap(), saved);
+    }
+}
+
+#[test]
+fn apply_repairs_stale_child_instance_reference_without_touching_other_paths() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let netlist = linked_hierarchy_fixture(&project_dir);
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+    let mut project = KicadProject::load(&project_dir).unwrap();
+    let root = &project.document.pages[0];
+    let sheet_id = root
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Sheet(sheet) if sheet.file_name() == "FILTER_B.kicad_sch" => Some(&sheet.id),
+            _ => None,
+        })
+        .unwrap();
+    let path = format!("/{}/{}", root.id, sheet_id);
+    let page = project
+        .document
+        .pages
+        .iter_mut()
+        .find(|page| page.file_name.as_deref() == Some("FILTER_B.kicad_sch"))
+        .unwrap();
+    let symbol = page
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => Some(symbol),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(symbol.reference(), Some("R2"));
+    symbol.unsupported.push(
+        pcb_sexpr::parse(&format!(
+            r#"(instances
+        (project "renamed-project"
+            (path "{path}" (reference "R1") (unit 1) (custom "preserve"))
+            (path "{path}/other-sheet" (reference "R80") (unit 2)))
+        (project "foreign-project"
+            (path "/foreign-root/{sheet_id}" (reference "R90") (unit 3))))"#,
+            sheet_id = path.rsplit('/').next().unwrap()
+        ))
+        .unwrap(),
+    );
+    for file in project.document.to_kicad_sch_files() {
+        fs::write(project_dir.join(file.file_name.unwrap()), file.content).unwrap();
+    }
+    let original = KicadProject::load(&project_dir).unwrap();
+    let sources = original
+        .schematic_files
+        .iter()
+        .map(|file| (file, fs::read(file).unwrap()))
+        .collect::<Vec<_>>();
+
+    assert!(apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    let repaired = KicadProject::load(&project_dir).unwrap();
+    let mut expected = original.document.clone();
+    let expected_symbol = expected
+        .pages
+        .iter_mut()
+        .flat_map(|page| &mut page.items)
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol)
+                if symbol
+                    .field_value("Path")
+                    .is_some_and(|path| path.starts_with("FILTER_B.")) =>
+            {
+                Some(symbol)
+            }
+            _ => None,
+        })
+        .unwrap();
+    // Derive the expected edit independently: change just the stale leaf.
+    expected_symbol.unsupported[0] = pcb_sexpr::parse(
+        &expected_symbol.unsupported[0]
+            .to_string()
+            .replace("(reference \"R1\")", "(reference \"R2\")"),
+    )
+    .unwrap();
+    assert_eq!(
+        repaired.document, expected,
+        "placement, wiring, hierarchy and foreign annotations must be preserved"
+    );
+    for (file, source) in sources {
+        if file.file_name().unwrap() != "FILTER_B.kicad_sch" {
+            assert_eq!(fs::read(file).unwrap(), source);
+        }
+    }
+    let saved = repaired
+        .schematic_files
+        .iter()
+        .map(|file| (file, fs::read(file).unwrap()))
+        .collect::<Vec<_>>();
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    for (file, source) in saved {
+        assert_eq!(fs::read(file).unwrap(), source);
+    }
+}
+
 #[test]
 fn apply_restores_deleted_sheet_instance_without_recreating_child_files() {
     let workspace = tempfile::tempdir().unwrap();

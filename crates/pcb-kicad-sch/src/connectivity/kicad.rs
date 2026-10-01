@@ -173,13 +173,13 @@ pub(crate) fn reduce_with_provenance(
     })
 }
 
-struct PageInstance<'a> {
-    page: &'a SchPage,
-    id: String,
+pub(crate) struct PageInstance<'a> {
+    pub(crate) page: &'a SchPage,
+    pub(crate) id: String,
     child_ids: BTreeMap<String, String>,
 }
 
-fn page_instances(document: &SchDocument) -> Result<Vec<PageInstance<'_>>> {
+pub(crate) fn page_instances(document: &SchDocument) -> Result<Vec<PageInstance<'_>>> {
     if document.root_page_ids.is_empty() {
         bail!("schematic document has no explicit root pages");
     }
