@@ -22,7 +22,11 @@ pub fn reformat_xml(xml: &str) -> Result<String> {
         let token = token?;
         if let Some((from, depth)) = &mut verbatim {
             match token.kind {
-                TokenKind::Start => *depth += 1,
+                TokenKind::Start => {
+                    // Copied verbatim, but still classified by the first pass.
+                    contents.next();
+                    *depth += 1;
+                }
                 TokenKind::End if *depth == 0 => {
                     out.push_str(&xml[*from..token.range.end]);
                     verbatim = None;
@@ -322,6 +326,16 @@ mod tests {
         let out = reformat_xml(xml).unwrap();
 
         let expected = "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\n<!DOCTYPE r [<!ENTITY e \"x>y\">]>\n<!-- top -->\n<r a=\"1>2\">\n  <!-- c -->\n  <a>t &amp; u</a>\n  <m>x<b/> y</m>\n  <?pi d?>\n  <![CDATA[<z>]]>\n  <g></g>\n</r>\n<!-- tail -->";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn elements_after_mixed_content_keep_their_text() {
+        let xml = "<r><m>x<b><c/></b>y</m><t> text </t><e><f/></e></r>";
+
+        let out = reformat_xml(xml).unwrap();
+
+        let expected = "<r>\n  <m>x<b><c/></b>y</m>\n  <t>text</t>\n  <e>\n    <f/>\n  </e>\n</r>";
         assert_eq!(out, expected);
     }
 
