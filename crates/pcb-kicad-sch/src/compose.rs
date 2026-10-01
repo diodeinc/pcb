@@ -3550,6 +3550,8 @@ impl PinTargetIndex {
                     ) {
                         let mut instance = instance.symbol.clone();
                         instance.unit = unit;
+                        // An absent unit has no per-instance alternate choices.
+                        instance.pins.clear();
                         missing.extend(parsed.placed_pins(&instance)?);
                     }
                 }
@@ -4726,6 +4728,41 @@ mod tests {
             index
                 .resolve("MQ-7.MQ-7", "invalid", &BTreeSet::from(["99".into()]))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_units_do_not_inherit_placed_pin_alternates() {
+        let mut placed = multi_pad_symbol();
+        let instance = placed.values_mut().next().unwrap();
+        instance.definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Test:Units"
+              (symbol "Units_1_1"
+                (pin input line (at 0 0 0) (length 2.54)
+                  (name "A") (number "1") (alternate "ALT" output line)))
+              (symbol "Units_2_1"
+                (pin input line (at 0 0 0) (length 2.54) (name "B") (number "2"))))"#,
+        )
+        .unwrap();
+        instance.symbol.pins = vec![crate::PinInstance {
+            number: "1".into(),
+            id: "pin-1".into(),
+            alternate: Some("ALT".into()),
+            unsupported: Vec::new(),
+        }];
+        let index = PinTargetIndex::new(&placed).unwrap();
+        assert_eq!(
+            index
+                .resolve("MQ-7.MQ-7", "ALT", &BTreeSet::new())
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            index
+                .resolve("MQ-7.MQ-7", "B", &BTreeSet::from(["2".into()]))
+                .unwrap()
+                .is_empty()
         );
     }
 
