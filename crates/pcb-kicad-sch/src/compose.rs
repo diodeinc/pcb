@@ -428,15 +428,16 @@ fn project_component_slot(
             )
         })?;
 
+    let symbol_id = slot.symbol_id();
     if document.pages.iter().any(|page| {
         page.items.iter().any(|item| {
-            item.id() == Some(slot.symbol_id().as_str())
+            item.id() == Some(symbol_id.as_str())
                 && !matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(slot.component_path()) && symbol.unit == slot.unit())
         })
     }) {
         bail!(
             "managed symbol UUID '{}' is already used by another schematic item",
-            slot.symbol_id()
+            symbol_id
         );
     }
 
@@ -3283,6 +3284,7 @@ fn connectivity_targets(
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
     target_nets: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Vec<PinTarget>>> {
+    let pins = placed_symbol_pins(placed)?;
     let mut anchors_by_net = BTreeMap::<String, Vec<PinTarget>>::new();
     let mut nets = named_connected_nets(netlist).collect::<Vec<_>>();
     nets.sort_by(|a, b| a.name.cmp(&b.name));
@@ -3298,7 +3300,8 @@ fn connectivity_targets(
             let component_path = crate::canonical_component_path(&component_ref.instance_path)
                 .context("net terminal component has no canonical path")?;
             let pin_numbers = component_slots::port_pad_numbers(netlist, port);
-            let targets = resolve_pin_targets(placed, &component_path, &pin_name, &pin_numbers)?;
+            let targets =
+                resolve_pin_targets(placed, &pins, &component_path, &pin_name, &pin_numbers)?;
             anchors_by_net
                 .entry(net.name.clone())
                 .or_default()
@@ -3506,8 +3509,21 @@ fn prune_unused_symbol_definitions(document: &mut SchDocument) {
     }
 }
 
+fn placed_symbol_pins(
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+) -> Result<BTreeMap<SymbolSlotKey, Vec<symbol::PlacedPin>>> {
+    placed
+        .iter()
+        .map(|(slot, placed)| {
+            let parsed = symbol::ParsedSymbolDefinition::parse(&placed.definition)?;
+            Ok((slot.clone(), parsed.placed_pins(&placed.symbol)?))
+        })
+        .collect()
+}
+
 fn resolve_pin_targets(
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    pins: &BTreeMap<SymbolSlotKey, Vec<symbol::PlacedPin>>,
     component_path: &str,
     pin_name: &str,
     pin_numbers: &BTreeSet<String>,
@@ -3520,8 +3536,7 @@ fn resolve_pin_targets(
         .filter(|(slot, _)| slot.component_path() == component_path)
     {
         component_placed = true;
-        let parsed = symbol::ParsedSymbolDefinition::parse(&placed.definition)?;
-        for pin in parsed.placed_pins(&placed.symbol)? {
+        for pin in &pins[slot] {
             let matches_name = !pin_name.is_empty() && !pin.name.is_empty() && pin.name == pin_name;
             let matches_number = !pin.numbers.is_disjoint(pin_numbers);
             if matches_name || matches_number {
@@ -3529,7 +3544,7 @@ fn resolve_pin_targets(
                     page_index: placed.page_index,
                     slot: slot.clone(),
                     symbol_id: placed.symbol.id.clone(),
-                    number: pin.number,
+                    number: pin.number.clone(),
                     point: pin.point,
                     spin: pin.outward_spin,
                     hidden: pin.hidden,
@@ -4099,8 +4114,10 @@ mod tests {
 
     #[test]
     fn logical_terminal_resolves_all_of_its_physical_pins() {
+        let placed = multi_pad_symbol();
         let targets = resolve_pin_targets(
-            &multi_pad_symbol(),
+            &placed,
+            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "A",
             &BTreeSet::from(["1".to_string(), "3".to_string()]),
@@ -4118,8 +4135,10 @@ mod tests {
 
     #[test]
     fn pin_numbers_take_precedence_over_a_repeated_pin_name() {
+        let placed = multi_pad_symbol();
         let targets = resolve_pin_targets(
-            &multi_pad_symbol(),
+            &placed,
+            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "A",
             &BTreeSet::from(["1".to_string()]),
@@ -4131,10 +4150,38 @@ mod tests {
     }
 
     #[test]
+    fn cached_pins_preserve_terminal_match_errors() {
+        let placed = multi_pad_symbol();
+        let pins = placed_symbol_pins(&placed).unwrap();
+        let unmatched = resolve_pin_targets(
+            &placed,
+            &pins,
+            "MQ-7.MQ-7",
+            "MISSING",
+            &BTreeSet::from(["99".to_string()]),
+        )
+        .err()
+        .expect("unmatched terminal must fail");
+        assert_eq!(
+            unmatched.to_string(),
+            "netlist terminal 'MQ-7.MQ-7.MISSING' does not match a KiCad symbol pin"
+        );
+
+        let ambiguous = resolve_pin_targets(&placed, &pins, "MQ-7.MQ-7", "A", &BTreeSet::new())
+            .err()
+            .expect("ambiguous terminal must fail");
+        assert_eq!(
+            ambiguous.to_string(),
+            "netlist terminal 'MQ-7.MQ-7.A' matches more than one KiCad symbol pin"
+        );
+    }
+
+    #[test]
     fn right_side_net_symbols_stair_outward_and_below() {
         let placed = multi_pad_symbol();
         let target = resolve_pin_targets(
             &placed,
+            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4166,8 +4213,10 @@ mod tests {
     fn component_envelope_reserves_net_symbol_stairs_and_wires() {
         let placed = multi_pad_symbol();
         let item = placed.values().next().unwrap();
+        let pins = placed_symbol_pins(&placed).unwrap();
         let first = resolve_pin_targets(
             &placed,
+            &pins,
             "MQ-7.MQ-7",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4176,6 +4225,7 @@ mod tests {
         .remove(0);
         let second = resolve_pin_targets(
             &placed,
+            &pins,
             "MQ-7.MQ-7",
             "C",
             &BTreeSet::from(["5".to_string()]),
@@ -4230,9 +4280,11 @@ mod tests {
     fn net_symbols_share_only_consecutive_visible_pins() {
         let placed = multi_pad_symbol();
         let item = placed.values().next().unwrap();
+        let pins = placed_symbol_pins(&placed).unwrap();
         let target = |name: &str, number: &str| {
             resolve_pin_targets(
                 &placed,
+                &pins,
                 "MQ-7.MQ-7",
                 name,
                 &BTreeSet::from([number.to_string()]),
@@ -4262,9 +4314,11 @@ mod tests {
         let placed = multi_pad_symbol();
         let slot = placed.keys().next().unwrap().clone();
         let item = placed.values().next().unwrap();
+        let pins = placed_symbol_pins(&placed).unwrap();
         let target = |name: &str, number: &str| {
             resolve_pin_targets(
                 &placed,
+                &pins,
                 "MQ-7.MQ-7",
                 name,
                 &BTreeSet::from([number.to_string()]),
@@ -4315,9 +4369,11 @@ mod tests {
         let placed = multi_pad_symbol();
         let slot = placed.keys().next().unwrap().clone();
         let item = placed.values().next().unwrap();
+        let pins = placed_symbol_pins(&placed).unwrap();
         let target = |name: &str, number: &str| {
             resolve_pin_targets(
                 &placed,
+                &pins,
                 "MQ-7.MQ-7",
                 name,
                 &BTreeSet::from([number.to_string()]),
@@ -4365,6 +4421,7 @@ mod tests {
         let definition = placed[&first_slot].definition.clone();
         let target = resolve_pin_targets(
             &placed,
+            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4392,6 +4449,7 @@ mod tests {
         );
         let other = resolve_pin_targets(
             &placed,
+            &placed_symbol_pins(&placed).unwrap(),
             "MQ-8.MQ-8",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4460,6 +4518,7 @@ mod tests {
         let item = placed.values().next().unwrap();
         let target = resolve_pin_targets(
             &placed,
+            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4527,9 +4586,11 @@ mod tests {
     fn opposite_net_symbols_share_stair_indices_on_one_pin_bank() {
         let placed = multi_pad_symbol();
         let slot = placed.keys().next().unwrap().clone();
+        let pins = placed_symbol_pins(&placed).unwrap();
         let target = |name: &str, number: &str| {
             resolve_pin_targets(
                 &placed,
+                &pins,
                 "MQ-7.MQ-7",
                 name,
                 &BTreeSet::from([number.to_string()]),
@@ -4577,6 +4638,7 @@ mod tests {
         let mut placed = multi_pad_symbol();
         let first = resolve_pin_targets(
             &placed,
+            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4611,9 +4673,14 @@ mod tests {
         // Partial repairs must stay plannable while other components remain
         // unplaced; their absence is reported as a missing-symbol issue.
         let placed = BTreeMap::new();
-        let targets =
-            resolve_pin_targets(&placed, "R_EN.R", "2", &BTreeSet::from(["2".to_string()]))
-                .expect("unplaced component contributes no anchors");
+        let targets = resolve_pin_targets(
+            &placed,
+            &placed_symbol_pins(&placed).unwrap(),
+            "R_EN.R",
+            "2",
+            &BTreeSet::from(["2".to_string()]),
+        )
+        .expect("unplaced component contributes no anchors");
         assert!(targets.is_empty());
     }
 }
