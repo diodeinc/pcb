@@ -54,6 +54,14 @@ pub(super) fn reduce(netlist: &Schematic) -> Result<ConnectivityGraph> {
     Ok(ConnectivityGraph { components, groups })
 }
 
+/// Component pins on named nets, without parsing symbols or module ports.
+pub(crate) fn connected_component_terminals(netlist: &Schematic) -> BTreeSet<Terminal> {
+    named_connected_nets(netlist)
+        .flat_map(|net| &net.ports)
+        .filter_map(|port| component_terminal(netlist, port))
+        .collect()
+}
+
 pub(crate) fn not_connected_terminals(netlist: &Schematic) -> BTreeSet<Terminal> {
     netlist
         .nets

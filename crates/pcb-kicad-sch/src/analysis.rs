@@ -10,8 +10,8 @@ use crate::{
     connectivity::{
         ComponentIdentity, ComponentOrigin, ConnectionGroup, ConnectionOrigin, ConnectivityGraph,
         ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland, PinVisibility,
-        SymbolLocation, Terminal, TerminalIndex, not_connected_terminals, points_connect,
-        reduce_with_provenance,
+        SymbolLocation, Terminal, TerminalIndex, connected_component_terminals,
+        not_connected_terminals, points_connect, reduce_with_provenance,
     },
     symbol,
 };
@@ -402,17 +402,18 @@ pub(crate) fn inspect_no_connects(
         .flat_map(|island| island.pin_terminals.iter())
         .collect::<BTreeMap<_, _>>();
     let expected_not_connected = not_connected_terminals(netlist);
-    let expected_connected = ConnectivityGraph::from_zener(netlist)?
-        .groups
-        .into_iter()
-        .flat_map(|group| group.terminals)
-        .collect::<BTreeSet<_>>();
+    let expected_connected = connected_component_terminals(netlist);
     let targets_for = |terminals: &BTreeSet<Terminal>| {
+        let terminals = terminals.iter().collect::<Vec<_>>();
+        let mut index = TerminalIndex::new();
+        for (id, terminal) in terminals.iter().enumerate() {
+            index.insert(terminal, id);
+        }
         pins.iter()
             .filter(|(_, pin_terminal)| {
-                terminals
-                    .iter()
-                    .any(|terminal| matches_physical_terminal(pin_terminal, terminal))
+                index
+                    .matching(pin_terminal)
+                    .any(|id| matches_physical_terminal(pin_terminal, terminals[id]))
             })
             .map(|(pin, _)| pin.no_connect_target())
             .collect::<Vec<_>>()
@@ -766,12 +767,20 @@ pub(crate) fn expected_reconcilable_connectivity(
     netlist: &Schematic,
 ) -> anyhow::Result<ConnectivityGraph> {
     let (visible, hidden) = managed_terminals_by_visibility(document)?;
+    let mut visible_index = TerminalIndex::new();
+    let mut hidden_index = TerminalIndex::new();
+    for terminal in &visible {
+        visible_index.insert(terminal, 0);
+    }
+    for terminal in &hidden {
+        hidden_index.insert(terminal, 0);
+    }
     let mut graph = ConnectivityGraph::from_zener(netlist)?;
     graph.groups.retain_mut(|group| {
         let original_len = group.terminals.len();
         group.terminals.retain(|terminal| {
-            visible.iter().any(|candidate| terminal.matches(candidate))
-                || !hidden.iter().any(|ignored| terminal.matches(ignored))
+            visible_index.matching(terminal).next().is_some()
+                || hidden_index.matching(terminal).next().is_none()
         });
         original_len == 0 || !group.terminals.is_empty()
     });

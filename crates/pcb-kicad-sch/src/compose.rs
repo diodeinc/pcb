@@ -3284,7 +3284,7 @@ fn connectivity_targets(
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
     target_nets: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Vec<PinTarget>>> {
-    let pins = placed_symbol_pins(placed)?;
+    let index = PinTargetIndex::new(placed)?;
     let mut anchors_by_net = BTreeMap::<String, Vec<PinTarget>>::new();
     let mut nets = named_connected_nets(netlist).collect::<Vec<_>>();
     nets.sort_by(|a, b| a.name.cmp(&b.name));
@@ -3300,8 +3300,7 @@ fn connectivity_targets(
             let component_path = crate::canonical_component_path(&component_ref.instance_path)
                 .context("net terminal component has no canonical path")?;
             let pin_numbers = component_slots::port_pad_numbers(netlist, port);
-            let targets =
-                resolve_pin_targets(placed, &pins, &component_path, &pin_name, &pin_numbers)?;
+            let targets = index.resolve(&component_path, &pin_name, &pin_numbers)?;
             anchors_by_net
                 .entry(net.name.clone())
                 .or_default()
@@ -3509,90 +3508,135 @@ fn prune_unused_symbol_definitions(document: &mut SchDocument) {
     }
 }
 
-fn placed_symbol_pins(
-    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
-) -> Result<BTreeMap<SymbolSlotKey, Vec<symbol::PlacedPin>>> {
-    placed
-        .iter()
-        .map(|(slot, placed)| {
-            let parsed = symbol::ParsedSymbolDefinition::parse(&placed.definition)?;
-            Ok((slot.clone(), parsed.placed_pins(&placed.symbol)?))
-        })
-        .collect()
+/// Parse each placed definition once for all terminals in a repair plan.
+struct PinTargetIndex {
+    placed: BTreeMap<String, Vec<(symbol::PlacedPin, PinTarget)>>,
+    unplaced: BTreeMap<String, Vec<symbol::PlacedPin>>,
 }
 
-fn resolve_pin_targets(
-    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
-    pins: &BTreeMap<SymbolSlotKey, Vec<symbol::PlacedPin>>,
-    component_path: &str,
-    pin_name: &str,
-    pin_numbers: &BTreeSet<String>,
-) -> Result<Vec<PinTarget>> {
-    let mut component_placed = false;
-    let mut number_matches = Vec::new();
-    let mut name_matches = Vec::new();
-    for (slot, placed) in placed
-        .iter()
-        .filter(|(slot, _)| slot.component_path() == component_path)
-    {
-        component_placed = true;
-        for pin in &pins[slot] {
-            let matches_name = !pin_name.is_empty() && !pin.name.is_empty() && pin.name == pin_name;
-            let matches_number = !pin.numbers.is_disjoint(pin_numbers);
-            if matches_name || matches_number {
+impl PinTargetIndex {
+    fn new(placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>) -> Result<Self> {
+        let mut index = Self {
+            placed: BTreeMap::new(),
+            unplaced: BTreeMap::new(),
+        };
+        for (slot, instance) in placed {
+            let parsed = symbol::ParsedSymbolDefinition::parse(&instance.definition)?;
+            let pins = index
+                .placed
+                .entry(slot.component_path().to_string())
+                .or_default();
+            for pin in parsed.placed_pins(&instance.symbol)? {
                 let target = PinTarget {
-                    page_index: placed.page_index,
+                    page_index: instance.page_index,
                     slot: slot.clone(),
-                    symbol_id: placed.symbol.id.clone(),
+                    symbol_id: instance.symbol.id.clone(),
                     number: pin.number.clone(),
                     point: pin.point,
                     spin: pin.outward_spin,
                     hidden: pin.hidden,
                 };
-                if matches_number {
-                    number_matches.push(target);
-                } else {
-                    name_matches.push(target);
+                pins.push((pin, target));
+            }
+            // Missing units contribute no anchors, but their pins are valid
+            // netlist terminals. Keep their identities to distinguish them
+            // from invalid names or pad numbers on a placed component.
+            if !index.unplaced.contains_key(slot.component_path()) {
+                let mut missing = Vec::new();
+                for &unit in parsed.unit_indices() {
+                    if !placed.contains_key(
+                        &SymbolSlotKey::new(slot.component_path(), unit)
+                            .context("invalid symbol unit")?,
+                    ) {
+                        let mut instance = instance.symbol.clone();
+                        instance.unit = unit;
+                        // An absent unit has no per-instance alternate choices.
+                        instance.pins.clear();
+                        missing.extend(parsed.placed_pins(&instance)?);
+                    }
                 }
+                index
+                    .unplaced
+                    .insert(slot.component_path().to_string(), missing);
             }
         }
+        Ok(index)
     }
-    // One Zener terminal can represent multiple physical pads. Prefer the
-    // exact pad numbers and retain every matching KiCad pin in that case;
-    // names are a fallback for symbols whose number metadata is unavailable.
-    let (matches, exact_numbers) = if number_matches.is_empty() {
-        (name_matches, false)
-    } else {
-        (number_matches, true)
-    };
-    if matches.is_empty() {
-        // A component that is not placed at all contributes no anchors; its
-        // absence is already reported as a missing-symbol issue, and partial
-        // repairs must stay plannable while other components remain unplaced.
-        if !component_placed {
+
+    fn resolve(
+        &self,
+        component_path: &str,
+        pin_name: &str,
+        pin_numbers: &BTreeSet<String>,
+    ) -> Result<Vec<PinTarget>> {
+        let Some(pins) = self.placed.get(component_path) else {
+            return Ok(Vec::new());
+        };
+        let mut number_matches = Vec::new();
+        let mut name_matches = Vec::new();
+        for (pin, target) in pins {
+            if !pin.numbers.is_disjoint(pin_numbers) {
+                number_matches.push(target.clone());
+            } else if !pin_name.is_empty() && pin.name == pin_name {
+                name_matches.push(target.clone());
+            }
+        }
+        let missing = &self.unplaced[component_path];
+        if number_matches.is_empty()
+            && missing
+                .iter()
+                .any(|pin| !pin.numbers.is_disjoint(pin_numbers))
+        {
             return Ok(Vec::new());
         }
-        bail!(
-            "netlist terminal '{}.{}' does not match a KiCad symbol pin",
-            component_path,
-            pin_name
-        );
+        // One Zener terminal can represent multiple physical pads. Prefer the
+        // exact pad numbers and retain every matching KiCad pin in that case;
+        // names are a fallback for symbols whose number metadata is unavailable.
+        let (matches, exact_numbers) = if number_matches.is_empty() {
+            (name_matches, false)
+        } else {
+            (number_matches, true)
+        };
+        if matches.is_empty() {
+            // A valid pin on a missing unit contributes no physical anchor.
+            if missing
+                .iter()
+                .any(|pin| !pin_name.is_empty() && pin.name == pin_name)
+            {
+                return Ok(Vec::new());
+            }
+            bail!(
+                "netlist terminal '{}.{}' does not match a KiCad symbol pin",
+                component_path,
+                pin_name
+            );
+        }
+        let visible = matches
+            .iter()
+            .filter(|target| !target.hidden)
+            .cloned()
+            .collect::<Vec<_>>();
+        match visible.as_slice() {
+            [target] => Ok(vec![target.clone()]),
+            [] => Ok(matches),
+            _ if exact_numbers => Ok(visible),
+            _ => bail!(
+                "netlist terminal '{}.{}' matches more than one KiCad symbol pin",
+                component_path,
+                pin_name
+            ),
+        }
     }
-    let visible = matches
-        .iter()
-        .filter(|target| !target.hidden)
-        .cloned()
-        .collect::<Vec<_>>();
-    match visible.as_slice() {
-        [target] => Ok(vec![target.clone()]),
-        [] => Ok(matches),
-        _ if exact_numbers => Ok(visible),
-        _ => bail!(
-            "netlist terminal '{}.{}' matches more than one KiCad symbol pin",
-            component_path,
-            pin_name
-        ),
-    }
+}
+
+#[cfg(test)]
+fn resolve_pin_targets(
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    component_path: &str,
+    pin_name: &str,
+    pin_numbers: &BTreeSet<String>,
+) -> Result<Vec<PinTarget>> {
+    PinTargetIndex::new(placed)?.resolve(component_path, pin_name, pin_numbers)
 }
 
 #[cfg(test)]
@@ -4117,7 +4161,6 @@ mod tests {
         let placed = multi_pad_symbol();
         let targets = resolve_pin_targets(
             &placed,
-            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "A",
             &BTreeSet::from(["1".to_string(), "3".to_string()]),
@@ -4138,7 +4181,6 @@ mod tests {
         let placed = multi_pad_symbol();
         let targets = resolve_pin_targets(
             &placed,
-            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "A",
             &BTreeSet::from(["1".to_string()]),
@@ -4152,22 +4194,19 @@ mod tests {
     #[test]
     fn cached_pins_preserve_terminal_match_errors() {
         let placed = multi_pad_symbol();
-        let pins = placed_symbol_pins(&placed).unwrap();
-        let unmatched = resolve_pin_targets(
-            &placed,
-            &pins,
-            "MQ-7.MQ-7",
-            "MISSING",
-            &BTreeSet::from(["99".to_string()]),
-        )
-        .err()
-        .expect("unmatched terminal must fail");
+        let index = PinTargetIndex::new(&placed).unwrap();
+
+        let unmatched = index
+            .resolve("MQ-7.MQ-7", "MISSING", &BTreeSet::from(["99".to_string()]))
+            .err()
+            .expect("unmatched terminal must fail");
         assert_eq!(
             unmatched.to_string(),
             "netlist terminal 'MQ-7.MQ-7.MISSING' does not match a KiCad symbol pin"
         );
 
-        let ambiguous = resolve_pin_targets(&placed, &pins, "MQ-7.MQ-7", "A", &BTreeSet::new())
+        let ambiguous = index
+            .resolve("MQ-7.MQ-7", "A", &BTreeSet::new())
             .err()
             .expect("ambiguous terminal must fail");
         assert_eq!(
@@ -4181,7 +4220,6 @@ mod tests {
         let placed = multi_pad_symbol();
         let target = resolve_pin_targets(
             &placed,
-            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4213,10 +4251,9 @@ mod tests {
     fn component_envelope_reserves_net_symbol_stairs_and_wires() {
         let placed = multi_pad_symbol();
         let item = placed.values().next().unwrap();
-        let pins = placed_symbol_pins(&placed).unwrap();
+
         let first = resolve_pin_targets(
             &placed,
-            &pins,
             "MQ-7.MQ-7",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4225,7 +4262,6 @@ mod tests {
         .remove(0);
         let second = resolve_pin_targets(
             &placed,
-            &pins,
             "MQ-7.MQ-7",
             "C",
             &BTreeSet::from(["5".to_string()]),
@@ -4280,11 +4316,10 @@ mod tests {
     fn net_symbols_share_only_consecutive_visible_pins() {
         let placed = multi_pad_symbol();
         let item = placed.values().next().unwrap();
-        let pins = placed_symbol_pins(&placed).unwrap();
+
         let target = |name: &str, number: &str| {
             resolve_pin_targets(
                 &placed,
-                &pins,
                 "MQ-7.MQ-7",
                 name,
                 &BTreeSet::from([number.to_string()]),
@@ -4314,11 +4349,10 @@ mod tests {
         let placed = multi_pad_symbol();
         let slot = placed.keys().next().unwrap().clone();
         let item = placed.values().next().unwrap();
-        let pins = placed_symbol_pins(&placed).unwrap();
+
         let target = |name: &str, number: &str| {
             resolve_pin_targets(
                 &placed,
-                &pins,
                 "MQ-7.MQ-7",
                 name,
                 &BTreeSet::from([number.to_string()]),
@@ -4369,11 +4403,10 @@ mod tests {
         let placed = multi_pad_symbol();
         let slot = placed.keys().next().unwrap().clone();
         let item = placed.values().next().unwrap();
-        let pins = placed_symbol_pins(&placed).unwrap();
+
         let target = |name: &str, number: &str| {
             resolve_pin_targets(
                 &placed,
-                &pins,
                 "MQ-7.MQ-7",
                 name,
                 &BTreeSet::from([number.to_string()]),
@@ -4421,7 +4454,6 @@ mod tests {
         let definition = placed[&first_slot].definition.clone();
         let target = resolve_pin_targets(
             &placed,
-            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4449,7 +4481,6 @@ mod tests {
         );
         let other = resolve_pin_targets(
             &placed,
-            &placed_symbol_pins(&placed).unwrap(),
             "MQ-8.MQ-8",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4518,7 +4549,6 @@ mod tests {
         let item = placed.values().next().unwrap();
         let target = resolve_pin_targets(
             &placed,
-            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4586,11 +4616,10 @@ mod tests {
     fn opposite_net_symbols_share_stair_indices_on_one_pin_bank() {
         let placed = multi_pad_symbol();
         let slot = placed.keys().next().unwrap().clone();
-        let pins = placed_symbol_pins(&placed).unwrap();
+
         let target = |name: &str, number: &str| {
             resolve_pin_targets(
                 &placed,
-                &pins,
                 "MQ-7.MQ-7",
                 name,
                 &BTreeSet::from([number.to_string()]),
@@ -4638,7 +4667,6 @@ mod tests {
         let mut placed = multi_pad_symbol();
         let first = resolve_pin_targets(
             &placed,
-            &placed_symbol_pins(&placed).unwrap(),
             "MQ-7.MQ-7",
             "B",
             &BTreeSet::from(["4".to_string()]),
@@ -4669,18 +4697,83 @@ mod tests {
     }
 
     #[test]
+    fn partially_placed_components_skip_missing_units_but_reject_unknown_pins() {
+        let mut placed = multi_pad_symbol();
+        let instance = placed.values_mut().next().unwrap();
+        instance.definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Test:Units"
+              (symbol "Units_1_1"
+                (pin input line (at 0 0 0) (length 2.54) (name "A") (number "1")))
+              (symbol "Units_2_1"
+                (pin input line (at 0 0 0) (length 2.54) (name "A") (number "2"))))"#,
+        )
+        .unwrap();
+        let index = PinTargetIndex::new(&placed).unwrap();
+        assert_eq!(
+            index
+                .resolve("MQ-7.MQ-7", "A", &BTreeSet::from(["1".into()]))
+                .unwrap()
+                .len(),
+            1
+        );
+        // Exact pads on the missing unit must not fall back to a repeated
+        // display name on the placed unit.
+        assert!(
+            index
+                .resolve("MQ-7.MQ-7", "A", &BTreeSet::from(["2".into()]))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            index
+                .resolve("MQ-7.MQ-7", "invalid", &BTreeSet::from(["99".into()]))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_units_do_not_inherit_placed_pin_alternates() {
+        let mut placed = multi_pad_symbol();
+        let instance = placed.values_mut().next().unwrap();
+        instance.definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Test:Units"
+              (symbol "Units_1_1"
+                (pin input line (at 0 0 0) (length 2.54)
+                  (name "A") (number "1") (alternate "ALT" output line)))
+              (symbol "Units_2_1"
+                (pin input line (at 0 0 0) (length 2.54) (name "B") (number "2"))))"#,
+        )
+        .unwrap();
+        instance.symbol.pins = vec![crate::PinInstance {
+            number: "1".into(),
+            id: "pin-1".into(),
+            alternate: Some("ALT".into()),
+            unsupported: Vec::new(),
+        }];
+        let index = PinTargetIndex::new(&placed).unwrap();
+        assert_eq!(
+            index
+                .resolve("MQ-7.MQ-7", "ALT", &BTreeSet::new())
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            index
+                .resolve("MQ-7.MQ-7", "B", &BTreeSet::from(["2".into()]))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn unplaced_component_terminals_are_skipped_not_errors() {
         // Partial repairs must stay plannable while other components remain
         // unplaced; their absence is reported as a missing-symbol issue.
         let placed = BTreeMap::new();
-        let targets = resolve_pin_targets(
-            &placed,
-            &placed_symbol_pins(&placed).unwrap(),
-            "R_EN.R",
-            "2",
-            &BTreeSet::from(["2".to_string()]),
-        )
-        .expect("unplaced component contributes no anchors");
+        let targets =
+            resolve_pin_targets(&placed, "R_EN.R", "2", &BTreeSet::from(["2".to_string()]))
+                .expect("unplaced component contributes no anchors");
         assert!(targets.is_empty());
     }
 }
