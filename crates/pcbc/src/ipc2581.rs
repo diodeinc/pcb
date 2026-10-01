@@ -79,6 +79,10 @@ enum Commands {
         side: commands::cpl::CplSideFilter,
     },
     /// Generate component placement data (CPL)
+    ///
+    /// Coordinates are in the IPC-2581 board frame, matching
+    /// `gerber --layout-target board` from the same file; KiCad's drill/place
+    /// origin is not recorded in IPC-2581.
     Cpl {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -92,6 +96,9 @@ enum Commands {
         /// Exclude BOM RefDes entries marked populate=false
         #[arg(long)]
         exclude_dnp: bool,
+        /// CSV columns to write
+        #[arg(long, default_value = "release")]
+        format: commands::cpl::CplFormat,
     },
     /// Edit IPC-2581 data
     Edit {
@@ -473,12 +480,14 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             output,
             side,
             exclude_dnp,
+            format,
         } => commands::cpl::execute(
             &file,
             &commands::cpl::CplOptions {
                 output,
                 side,
                 exclude_dnp,
+                format,
             },
             resolution,
         ),

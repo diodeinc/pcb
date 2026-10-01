@@ -108,6 +108,8 @@ pub(super) struct AssemblyComponent {
     pub facts: ComponentFacts,
     pub anchor: Point,
     pub terminated_placements: Vec<u32>,
+    /// The source `Xform` rotation the import corrected, if any.
+    pub corrected_source_rotation: Option<f64>,
 }
 
 /// Build a pool only when a rule reads it. A pool that cannot be built stays
@@ -819,6 +821,7 @@ fn collect_assembly_components(
                     .local_from_component
                     .transform_point(Point::new(0.0, 0.0)),
                 terminated_placements,
+                corrected_source_rotation: component.corrected_source_rotation,
             }
         })
         .collect()

@@ -275,8 +275,9 @@ impl IpcDocument {
                             output: None,
                             side,
                             exclude_dnp,
+                            format: commands::cpl::CplFormat::Release,
                         },
-                    ),
+                    )?,
                 )
             }
             ExportOptions::Ict { side } => ExportFile::new(

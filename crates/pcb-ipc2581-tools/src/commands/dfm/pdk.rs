@@ -432,6 +432,7 @@ pub enum AssemblyDiagnostic {
     MissingReferenceDesignator,
     MissingPackage,
     MissingPhysicalTerminations,
+    NonstandardBottomRotation,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

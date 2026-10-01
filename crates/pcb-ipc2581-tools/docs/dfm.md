@@ -117,9 +117,12 @@ The schema gives each kind of constraint one place:
 
 - `rules.assembly.diagnostic` enables a required component-data predicate.
   Supported diagnostics are `missing_population`, `conflicting_population`,
-  `missing_reference_designator`, `missing_package`, and
-  `missing_physical_terminations`. These categorical rules always require zero
-  diagnostics and therefore take no numeric limit.
+  `missing_reference_designator`, `missing_package`,
+  `missing_physical_terminations`, and `nonstandard_bottom_rotation`. These
+  categorical rules always require zero diagnostics and therefore take no
+  numeric limit. `nonstandard_bottom_rotation` is a warning: it flags
+  bottom-side parts whose rotation pcb corrected for a known KiCad 9.0.8–9.0.9
+  or 10.0.0–10.0.4 exporter defect.
 - `profile.support` is the hard eligibility envelope for the whole profile.
   A design outside its copper-layer range fails profile qualification. The
   engine emits these checks as reserved `profile.support.*` report rules;
