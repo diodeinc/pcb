@@ -14,7 +14,9 @@ pub use kicad::{
 };
 pub(crate) use kicad::{CutGraph, CutNode, PhysicalPinRef, cut_graph, reduce_with_provenance};
 pub(crate) use raw::TerminalIndex;
-pub(crate) use zener::{named_connected_nets, not_connected_terminals};
+pub(crate) use zener::{
+    connected_component_terminals, named_connected_nets, not_connected_terminals,
+};
 
 pub use raw::{
     ComponentIdentity, ComponentNode, ComponentOrigin, ConnectionGroup, ConnectionOrigin,

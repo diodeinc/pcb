@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Speed up KiCad schematic reconciliation by reusing placed symbol pins and managed symbol UUIDs.
 
+### Fixed
+
+- Keep connectivity repairs available for partially placed multi-unit symbols, and parse their pin definitions once per repair plan.
+
 ## [0.4.65] - 2026-10-01
 
 ### Added
