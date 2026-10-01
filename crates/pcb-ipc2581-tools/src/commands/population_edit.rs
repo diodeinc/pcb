@@ -14,24 +14,8 @@ pub fn set_population(xml: &str, dnp: &[String], populate: &[String]) -> Result<
     let doc = Doc::parse(xml)?;
     let references = bom_references(&doc);
 
-    let mut wanted: HashMap<&str, bool> = HashMap::new();
-    for (names, value) in [(dnp, false), (populate, true)] {
-        for name in names {
-            if wanted.insert(name.as_str(), value) == Some(!value) {
-                bail!("Designator {name} is listed as both DNP and populated");
-            }
-        }
-    }
-    let known: HashSet<&str> = references.iter().map(|&(_, name)| name).collect();
-    let mut unknown: Vec<&str> = wanted
-        .keys()
-        .copied()
-        .filter(|n| !known.contains(n))
-        .collect();
-    if !unknown.is_empty() {
-        unknown.sort_unstable_by(|a, b| natord::compare(a, b));
-        bail!("Designators not in the BOM: {}", unknown.join(", "));
-    }
+    let known = references.iter().map(|&(_, name)| name).collect();
+    let wanted = requested_population(dnp, populate, &known)?;
 
     let edits = references
         .iter()
@@ -54,6 +38,33 @@ pub fn set_population(xml: &str, dnp: &[String], populate: &[String]) -> Result<
     let history = crate::utils::history::file_revision_edits(&doc, &comment)?;
     let xml = doc.apply(history.into_iter().chain(edits).collect())?;
     Ok(Some(crate::utils::format::reformat_xml(&xml)?))
+}
+
+/// Each named designator's requested population: `false` for `dnp`, `true`
+/// for `populate`. Every name must be `known`, and none may be in both lists.
+pub(crate) fn requested_population<'a>(
+    dnp: &'a [String],
+    populate: &'a [String],
+    known: &HashSet<&str>,
+) -> Result<HashMap<&'a str, bool>> {
+    let mut wanted = HashMap::new();
+    for (names, value) in [(dnp, false), (populate, true)] {
+        for name in names {
+            if wanted.insert(name.as_str(), value) == Some(!value) {
+                bail!("Designator {name} is listed as both DNP and populated");
+            }
+        }
+    }
+    let mut unknown: Vec<&str> = wanted
+        .keys()
+        .copied()
+        .filter(|n| !known.contains(n))
+        .collect();
+    if !unknown.is_empty() {
+        unknown.sort_unstable_by(|a, b| natord::compare(a, b));
+        bail!("Designators not in the BOM: {}", unknown.join(", "));
+    }
+    Ok(wanted)
 }
 
 /// Every named designator of every BOM item. Population is read from all

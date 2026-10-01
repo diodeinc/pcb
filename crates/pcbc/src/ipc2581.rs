@@ -1,5 +1,7 @@
+use anyhow::Context as _;
 use clap::{Args, Subcommand, ValueEnum};
 use pcb_ir::geom::Resolution;
+use std::io::Read as _;
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
@@ -26,13 +28,29 @@ enum Commands {
         units: UnitFormat,
     },
     /// Emit the deterministic PCBA assembly report as JSON
+    #[command(group = clap::ArgGroup::new("source").required(true))]
     Assembly {
         /// IPC-2581 XML file to inspect
-        #[arg(value_hint = clap::ValueHint::FilePath)]
-        file: PathBuf,
+        #[arg(value_hint = clap::ValueHint::FilePath, group = "source")]
+        file: Option<PathBuf>,
+        /// Start from an earlier assembly report instead (`-` reads stdin)
+        #[arg(
+            long,
+            value_name = "FILE|-",
+            group = "source",
+            conflicts_with = "scope",
+            value_hint = clap::ValueHint::FilePath
+        )]
+        report: Option<PathBuf>,
         /// Counting scope: one canonical board or the complete board array
         #[arg(long, default_value = "board-array")]
         scope: LayoutTarget,
+        /// Report these designators as unpopulated
+        #[arg(long, value_delimiter = ',', value_name = "REFDES")]
+        dnp: Vec<String>,
+        /// Report these designators as populated
+        #[arg(long, value_delimiter = ',', value_name = "REFDES")]
+        populate: Vec<String>,
     },
     /// Generate Bill of Materials (BOM)
     Bom {
@@ -384,6 +402,33 @@ impl FabPanelSize {
     }
 }
 
+/// An assembly report from `path`, or from stdin for `-`.
+fn read_assembly_report(
+    path: &std::path::Path,
+) -> anyhow::Result<pcb_ipc2581_tools::assembly::AssemblyReport> {
+    let input = if path.as_os_str() == "-" {
+        let mut input = Vec::new();
+        std::io::stdin()
+            .read_to_end(&mut input)
+            .context("Failed to read the assembly report from stdin")?;
+        input
+    } else {
+        std::fs::read(path).with_context(|| format!("Failed to read {}", path.display()))?
+    };
+    serde_json::from_slice(&input).context("Failed to parse the assembly report")
+}
+
+fn write_assembly_report(
+    report: &pcb_ipc2581_tools::assembly::AssemblyReport,
+) -> anyhow::Result<()> {
+    let output = serde_json::to_vec_pretty(report)?;
+    pcb_ui::write_stdout(|stdout| {
+        stdout.write_all(&output)?;
+        stdout.write_all(b"\n")
+    })?;
+    Ok(())
+}
+
 pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> {
     utils::color::init_color();
 
@@ -393,18 +438,26 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             format,
             units,
         } => commands::info::execute(&file, format, units, resolution),
-        Commands::Assembly { file, scope } => {
-            let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse(
-                &pcb_ipc2581_tools::utils::file::load_ipc_file(&file)?,
-            )?;
-            let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
-            let report = pcb_ipc2581_tools::assembly::build_report(&imported, scope, resolution)?;
-            let output = serde_json::to_vec_pretty(&report)?;
-            pcb_ui::write_stdout(|stdout| {
-                stdout.write_all(&output)?;
-                stdout.write_all(b"\n")
-            })?;
-            Ok(())
+        Commands::Assembly {
+            file,
+            report,
+            scope,
+            dnp,
+            populate,
+        } => {
+            let mut report = match (file, report) {
+                (Some(file), _) => {
+                    let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse(
+                        &pcb_ipc2581_tools::utils::file::load_ipc_file(&file)?,
+                    )?;
+                    let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
+                    pcb_ipc2581_tools::assembly::build_report(&imported, scope, resolution)?
+                }
+                (None, Some(path)) => read_assembly_report(&path)?,
+                (None, None) => unreachable!("clap requires a report source"),
+            };
+            pcb_ipc2581_tools::assembly::set_population(&mut report, &dnp, &populate)?;
+            write_assembly_report(&report)
         }
         Commands::Bom {
             file,
@@ -419,7 +472,6 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             route,
             ipc,
         } => {
-            use anyhow::Context as _;
             let (pcb, pro) = pcb_interposer::generate(&input, layers)?;
             std::fs::write(&output, pcb).with_context(|| format!("write {}", output.display()))?;
             let pro_path = output.with_extension("kicad_pro");

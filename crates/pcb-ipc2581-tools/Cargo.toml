@@ -39,12 +39,11 @@ natord = { workspace = true }
 pcb-ir = { workspace = true }
 pcb-sch = { workspace = true, optional = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 serde-value = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true, optional = true }
 toml = { workspace = true }
-uppsala = { workspace = true }
 uuid = { workspace = true, features = ["serde"], optional = true }
 zstd = { workspace = true, optional = true }
 pcb-diode-api = { workspace = true, optional = true }

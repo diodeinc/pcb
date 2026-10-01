@@ -1,10 +1,10 @@
 //! Stable JSON-facing PCBA assembly report contract.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-pub const REPORT_SCHEMA_VERSION: u32 = 4;
+pub const REPORT_SCHEMA_VERSION: u32 = 5;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssemblyReport {
     pub schema_version: u32,
     pub units: Units,
@@ -21,45 +21,45 @@ pub struct AssemblyReport {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Units {
-    pub length: &'static str,
-    pub angle: &'static str,
+    pub length: String,
+    pub angle: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Source {
-    pub format: &'static str,
+    pub format: String,
     pub revision: String,
     pub creation_software: Option<String>,
     pub software_package: Option<SoftwarePackage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SoftwarePackage {
     pub name: String,
     pub revision: Option<String>,
     pub vendor: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Scope {
     pub kind: ScopeKind,
     pub root_step: Option<String>,
-    pub coordinate_frame: &'static str,
+    pub coordinate_frame: String,
     pub profile_ids: Vec<String>,
     pub bounds_mm: Option<Bounds>,
     pub area_mm2: Option<f64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScopeKind {
     Board,
     BoardArray,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Readiness {
     Ready,
@@ -67,7 +67,7 @@ pub enum Readiness {
     Incomplete,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Summary {
     pub board_occurrences: u64,
     pub packages: u64,
@@ -76,7 +76,7 @@ pub struct Summary {
     pub paste: PasteSummary,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComponentSummary {
     pub total: u64,
     pub included: u64,
@@ -86,7 +86,7 @@ pub struct ComponentSummary {
     pub included_population_unresolved: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminationSummary {
     pub total: u64,
     pub on_included_populated_components: u64,
@@ -95,7 +95,7 @@ pub struct TerminationSummary {
     pub blind_on_included_populated_components: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PasteSummary {
     pub islands: u64,
     pub exactly_linked_to_termination: u64,
@@ -103,7 +103,7 @@ pub struct PasteSummary {
     pub exactly_linked_on_included_populated_components: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BoardOccurrence {
     pub id: String,
     pub step: String,
@@ -115,7 +115,7 @@ pub struct BoardOccurrence {
     pub transform: [f64; 6],
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhysicalProfile {
     pub id: String,
     pub source_step: String,
@@ -125,7 +125,7 @@ pub struct PhysicalProfile {
     pub cutouts: Vec<Contour>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Bounds {
     pub min: Point,
     pub max: Point,
@@ -133,13 +133,13 @@ pub struct Bounds {
     pub height: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LayoutPathSegment {
     pub step: String,
     pub repeat: Option<RepeatPosition>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RepeatPosition {
     pub index_x: u32,
     pub index_y: u32,
@@ -151,7 +151,7 @@ pub struct RepeatPosition {
     pub mirror: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Package {
     pub id: String,
     pub source_step: String,
@@ -167,7 +167,7 @@ pub struct Package {
     pub pins: Vec<PackagePin>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageView {
     pub kind: PackageViewKind,
     pub outline: Option<PackageOutline>,
@@ -176,7 +176,7 @@ pub struct PackageView {
     pub assembly_drawing: Option<PackageAssemblyDrawing>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageViewKind {
     Primary,
@@ -184,19 +184,19 @@ pub enum PackageViewKind {
     OtherSide,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageOutline {
     pub transform: Option<SourceTransform>,
     pub shape: PackageShape,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageLandPattern {
     pub pads: Vec<PackagePad>,
     pub targets: Vec<PackageTarget>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackagePad {
     pub padstack_ref: Option<String>,
     pub x_mm: Option<f64>,
@@ -206,33 +206,33 @@ pub struct PackagePad {
     pub pin_ref: Option<PackagePinReference>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackagePinReference {
     pub component_ref: Option<String>,
     pub pin: String,
     pub title: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageTarget {
     pub location_mm: Point,
     pub transform: Option<SourceTransform>,
     pub shape: PackageShape,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageSilkscreen {
     pub outlines: Vec<PackageOutline>,
     pub markings: Vec<PackageMarking>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageAssemblyDrawing {
     pub outline: Option<PackageOutline>,
     pub markings: Vec<PackageMarking>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageMarking {
     pub usage: Option<String>,
     pub location_mm: Option<Point>,
@@ -240,7 +240,7 @@ pub struct PackageMarking {
     pub graphic: PackageGraphic,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum PackageGraphic {
     Shape(PackageShape),
@@ -248,7 +248,7 @@ pub enum PackageGraphic {
     Outline(PackageOutline),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageShape {
     pub status: PackageGeometryStatus,
     pub references: Vec<PackageGeometryReference>,
@@ -256,7 +256,7 @@ pub struct PackageShape {
     pub paths: Vec<GeometryPath>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageGeometryStatus {
     Complete,
@@ -265,13 +265,13 @@ pub enum PackageGeometryStatus {
     Unsupported,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageGeometryReference {
     pub kind: PackageGeometryReferenceKind,
     pub id: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageGeometryReferenceKind {
     StandardPrimitive,
@@ -280,14 +280,14 @@ pub enum PackageGeometryReferenceKind {
     FillDescription,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GeometryPath {
     pub paint: PathPaint,
     pub contours: Vec<Contour>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", try_from = "flat::PathPaint")]
 pub enum PathPaint {
     None,
     Fill {
@@ -301,14 +301,14 @@ pub enum PathPaint {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FillRule {
     NonZero,
     EvenOdd,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LineCap {
     Round,
@@ -316,14 +316,14 @@ pub enum LineCap {
     Butt,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LineJoin {
     /// Every stroke is the sweep of a disc, so every join is round.
     Round,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LinePattern {
     Solid,
@@ -334,14 +334,14 @@ pub enum LinePattern {
     Erase,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GeometryPolarity {
     Dark,
     Clear,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackageText {
     pub text: String,
     pub font_size: u32,
@@ -351,7 +351,7 @@ pub struct PackageText {
     pub font_ref: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackagePin {
     pub view: PackagePinView,
     pub number: String,
@@ -365,14 +365,14 @@ pub struct PackagePin {
     pub shape: PackageShape,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackagePinView {
     Primary,
     Topside,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PinType {
     Through,
@@ -380,7 +380,7 @@ pub enum PinType {
     Surface,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PinElectricalType {
     Electrical,
@@ -388,7 +388,7 @@ pub enum PinElectricalType {
     Undefined,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PinMountType {
     SurfaceMountPin,
@@ -402,7 +402,7 @@ pub enum PinMountType {
     Undefined,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PinPolarity {
     Plus,
@@ -411,7 +411,7 @@ pub enum PinPolarity {
     Cathode,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Component {
     pub id: String,
     pub board_id: Option<String>,
@@ -430,9 +430,12 @@ pub struct Component {
     /// Component-local to selected-scope affine matrix `[a, b, c, d, tx, ty]`.
     pub transform: [f64; 6],
     pub termination_ids: Vec<String>,
+    /// Paste islands attributed to this component, including those not
+    /// linked to one of its terminations.
+    pub paste_islands: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BomEvidence {
     pub bom: String,
     pub oem_design_number: String,
@@ -445,7 +448,7 @@ pub struct BomEvidence {
     pub approved_parts: Vec<ApprovedPart>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovedPart {
     pub external_vendor: Option<String>,
     pub external_mpn: Option<String>,
@@ -455,7 +458,7 @@ pub struct ApprovedPart {
     pub vendor_refs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Population {
     Unspecified,
@@ -464,7 +467,7 @@ pub enum Population {
     Conflicting,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Side {
     Top,
@@ -476,7 +479,7 @@ pub enum Side {
     Unspecified,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComponentMount {
     Smt,
@@ -491,7 +494,7 @@ pub enum ComponentMount {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BomCategory {
     Electrical,
@@ -501,20 +504,20 @@ pub enum BomCategory {
     Document,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssemblyStatus {
     Included,
     Excluded,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExclusionReason {
     DocumentBomCategory,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Termination {
     pub id: String,
     pub component_id: String,
@@ -531,25 +534,25 @@ pub struct Termination {
     pub hole_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LandEvidence {
     pub layer: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PasteEvidence {
     pub layer: String,
     pub side: Side,
     pub location_mm: Point,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaskEvidence {
     pub layer: String,
     pub side: Side,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hole {
     pub id: String,
     pub board_id: Option<String>,
@@ -566,7 +569,7 @@ pub struct Hole {
     pub protection: ProtectionIntent,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HoleKind {
     Round,
@@ -574,7 +577,7 @@ pub enum HoleKind {
     Slot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HolePlating {
     Unknown,
@@ -585,14 +588,14 @@ pub enum HolePlating {
     ViaCapped,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HoleSpan {
     pub kind: HoleSpanKind,
     pub from_layer: Option<String>,
     pub to_layer: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HoleSpanKind {
     Unknown,
@@ -601,21 +604,21 @@ pub enum HoleSpanKind {
     FromTo,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminationAssociation {
     pub status: AssociationStatus,
     pub basis: Option<AssociationBasis>,
     pub termination_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssociationBasis {
     SourceIdentity,
     ExactGeometry,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssociationStatus {
     Explicit,
@@ -626,7 +629,7 @@ pub enum AssociationStatus {
     Unsupported,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtectionIntent {
     pub status: ProtectionStatus,
     pub methods: Vec<ProtectionMethod>,
@@ -634,7 +637,7 @@ pub struct ProtectionIntent {
     pub evidence: Vec<ProtectionEvidence>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtectionStatus {
     Explicit,
@@ -642,7 +645,7 @@ pub enum ProtectionStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtectionMethod {
     Open,
@@ -653,7 +656,7 @@ pub enum ProtectionMethod {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FillMaterial {
     NonConductive,
@@ -661,7 +664,7 @@ pub enum FillMaterial {
     Copper,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtectionEvidence {
     pub id: String,
     pub kind: ProtectionEvidenceKind,
@@ -672,7 +675,7 @@ pub struct ProtectionEvidence {
     pub terms: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtectionEvidenceKind {
     SourceTerms,
@@ -680,19 +683,19 @@ pub enum ProtectionEvidenceKind {
     HoleFillLayer,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Point {
     pub x: f64,
     pub y: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Contour {
     pub commands: Vec<PathCommand>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", try_from = "flat::PathCommand")]
 pub enum PathCommand {
     MoveTo {
         x: f64,
@@ -725,7 +728,7 @@ pub enum PathCommand {
     Close,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SourceTransform {
     pub x_offset_mm: f64,
     pub y_offset_mm: f64,
@@ -735,7 +738,7 @@ pub struct SourceTransform {
     pub scale: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub id: String,
     pub severity: DiagnosticSeverity,
@@ -744,14 +747,14 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticSeverity {
     Error,
     Warning,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticCode {
     MissingPopulation,
@@ -765,16 +768,125 @@ pub enum DiagnosticCode {
     UnknownViaProtection,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiagnosticSubject {
     pub kind: DiagnosticSubjectKind,
     pub id: String,
     pub reference_designator: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticSubjectKind {
     Component,
     Hole,
+}
+
+/// Flat forms the internally tagged enums deserialize through. Serde buffers
+/// an internally tagged enum before reading its tag, and that buffer cannot
+/// hold numbers when serde_json's `arbitrary_precision` is enabled.
+mod flat {
+    use serde::Deserialize;
+
+    use super::{FillRule, LineCap, LineJoin, LinePattern};
+
+    fn field<T>(value: Option<T>, name: &str) -> Result<T, String> {
+        value.ok_or_else(|| format!("missing field `{name}`"))
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum PaintKind {
+        None,
+        Fill,
+        Stroke,
+    }
+
+    #[derive(Deserialize)]
+    pub(super) struct PathPaint {
+        kind: PaintKind,
+        rule: Option<FillRule>,
+        width_mm: Option<f64>,
+        cap: Option<LineCap>,
+        join: Option<LineJoin>,
+        pattern: Option<LinePattern>,
+    }
+
+    impl TryFrom<PathPaint> for super::PathPaint {
+        type Error = String;
+
+        fn try_from(paint: PathPaint) -> Result<Self, String> {
+            Ok(match paint.kind {
+                PaintKind::None => Self::None,
+                PaintKind::Fill => Self::Fill {
+                    rule: field(paint.rule, "rule")?,
+                },
+                PaintKind::Stroke => Self::Stroke {
+                    width_mm: field(paint.width_mm, "width_mm")?,
+                    cap: field(paint.cap, "cap")?,
+                    join: field(paint.join, "join")?,
+                    pattern: field(paint.pattern, "pattern")?,
+                },
+            })
+        }
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Op {
+        MoveTo,
+        LineTo,
+        ArcTo,
+        EllipseTo,
+        Close,
+    }
+
+    #[derive(Deserialize)]
+    pub(super) struct PathCommand {
+        op: Op,
+        x: Option<f64>,
+        y: Option<f64>,
+        center_x: Option<f64>,
+        center_y: Option<f64>,
+        x_axis_x: Option<f64>,
+        x_axis_y: Option<f64>,
+        y_axis_x: Option<f64>,
+        y_axis_y: Option<f64>,
+        clockwise: Option<bool>,
+    }
+
+    impl TryFrom<PathCommand> for super::PathCommand {
+        type Error = String;
+
+        fn try_from(command: PathCommand) -> Result<Self, String> {
+            let x = || field(command.x, "x");
+            let y = || field(command.y, "y");
+            let center_x = || field(command.center_x, "center_x");
+            let center_y = || field(command.center_y, "center_y");
+            let clockwise = || field(command.clockwise, "clockwise");
+            Ok(match command.op {
+                Op::MoveTo => Self::MoveTo { x: x()?, y: y()? },
+                Op::LineTo => Self::LineTo { x: x()?, y: y()? },
+                Op::ArcTo => Self::ArcTo {
+                    x: x()?,
+                    y: y()?,
+                    center_x: center_x()?,
+                    center_y: center_y()?,
+                    clockwise: clockwise()?,
+                },
+                Op::EllipseTo => Self::EllipseTo {
+                    x: x()?,
+                    y: y()?,
+                    center_x: center_x()?,
+                    center_y: center_y()?,
+                    x_axis_x: field(command.x_axis_x, "x_axis_x")?,
+                    x_axis_y: field(command.x_axis_y, "x_axis_y")?,
+                    y_axis_x: field(command.y_axis_x, "y_axis_x")?,
+                    y_axis_y: field(command.y_axis_y, "y_axis_y")?,
+                    clockwise: clockwise()?,
+                },
+                Op::Close => Self::Close,
+            })
+        }
+    }
 }
