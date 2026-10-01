@@ -41,6 +41,7 @@ pcb-sch = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 serde-value = { workspace = true }
+uppsala = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true, optional = true }
 toml = { workspace = true }
