@@ -128,7 +128,7 @@ Use established naming:
 - public `io()` names: uppercase;
 - `config()` names: lowercase;
 - component instances: uppercase functional names; and
-- differential signals: `_P` and `_N`.
+- differential signals: `_P` and `_N` suffixes (KiCad pairs nets by these suffixes alone).
 
 Prefer stdlib generics for common passives, discretes, connectors, test points, and mechanical features. Inspect the current stdlib package rather than relying on a memorized inventory. Use `Rectifier`, `Zener`, or `Tvs` instead of the deprecated generic `Diode`.
 
