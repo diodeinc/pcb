@@ -344,7 +344,12 @@ fn resolve_request(
         return resolve_nightly();
     }
 
-    if matches!(request, ToolchainRequest::Latest) {
+    // Lanes and latest track the newest matching release; a release within a
+    // lane is compatible by policy. Only exact versions stay pinned.
+    if matches!(
+        request,
+        ToolchainRequest::Latest | ToolchainRequest::Lane { .. }
+    ) {
         if prefer_local && let Some(local) = best_local_toolchain(request)? {
             return Ok(ResolvedToolchain { binary: local.1 });
         }
@@ -359,7 +364,8 @@ fn resolve_request(
             Err(remote_error) => {
                 if allow_latest_fallback && let Some(local) = best_local_toolchain(request)? {
                     eprintln!(
-                        "Warning: failed to check latest release ({remote_error}); using installed pcbc {}",
+                        "Warning: failed to check {} release ({remote_error}); using installed pcbc {}",
+                        format_request(request),
                         local.0
                     );
                     return Ok(ResolvedToolchain { binary: local.1 });

@@ -75,7 +75,8 @@ This command writes the generated board under `layout/`.
 
 `pcb` manages the compiler, stdlib, and sidecars as one toolchain. Workspace
 commands use `pcb-version`; `pcb auth` uses latest stable instead. An explicit
-`pcb +<version> <command>` overrides either selection.
+`pcb +<version> <command>` overrides either selection. Lanes (`0.4`) and `latest`
+update to the newest release automatically; pin an exact version to stay put.
 
 ```bash
 pcb toolchain show              # Active and available versions; --offline avoids network

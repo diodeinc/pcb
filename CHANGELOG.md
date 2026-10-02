@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb` now auto-updates to the newest `pcbc` release within the workspace's `pcb-version` lane.
+
 ### Fixed
 
 - Fix `.matches()` string comparisons for `Length` and `Mass`.
