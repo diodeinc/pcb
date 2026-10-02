@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix `.matches()` string comparisons for `Length` and `Mass`.
+
 ## [0.4.68] - 2026-10-02
 
 ### Changed

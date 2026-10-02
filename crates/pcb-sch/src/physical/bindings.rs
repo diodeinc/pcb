@@ -406,7 +406,12 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
         this: &PhysicalValue,
         #[starlark(require = pos)] other: Value<'v>,
     ) -> starlark::Result<bool> {
-        let Ok(other) = PhysicalValue::try_from(other) else {
+        let parsed = if let Some(s) = other.unpack_str() {
+            parse_physical_value(s, Some(this.unit)).map_err(starlark::Error::from)
+        } else {
+            PhysicalValue::try_from(other)
+        };
+        let Ok(other) = parsed else {
             return Ok(false);
         };
         Ok(this.same_value(&other))
@@ -1498,6 +1503,47 @@ mod tests {
             // Unit mismatch should error
             let result = volts.downcast_ref::<PhysicalValue>().unwrap().is_in(amps);
             assert!(result.is_err());
+        });
+    }
+
+    #[test]
+    fn test_matches_uses_quantity_unit_for_strings() {
+        use starlark::environment::Module;
+
+        Module::with_temp_heap(|module| {
+            let heap = module.heap();
+            let mut eval = Evaluator::new(&module);
+
+            for (unit, value, other, expected) in [
+                (PhysicalUnitDims::LENGTH, "0.23mm", "0.23mm", true),
+                (PhysicalUnitDims::LENGTH, "0.23mm", "230um", true),
+                (PhysicalUnitDims::LENGTH, "0.23mm", "0.25mm", false),
+                (PhysicalUnitDims::LENGTH, "0.23mm", "230uOhm", false),
+                (PhysicalUnitDims::LENGTH, "0.23mm", "230um 1%", false),
+                (PhysicalUnitDims::LENGTH, "0.23mm", "invalid", false),
+                (PhysicalUnitDims::LENGTH, "1m", "1m", true),
+                (PhysicalUnitDims::MASS, "1kg", "1000g", true),
+                (PhysicalUnit::Ohms.into(), "1mOhm", "1m", true),
+                (PhysicalUnit::Ohms.into(), "4.7kOhm 5%", "4k7 5%", true),
+                (PhysicalUnit::Volts.into(), "5V", "5V", true),
+            ] {
+                let constructor = heap.alloc(PhysicalValueType::new(unit));
+                let quantity = eval
+                    .eval_function(constructor, &[heap.alloc(value)], &[])
+                    .unwrap();
+                let result = eval
+                    .eval_function(
+                        quantity.get_attr("matches", heap).unwrap().unwrap(),
+                        &[heap.alloc(other)],
+                        &[],
+                    )
+                    .unwrap();
+                assert_eq!(
+                    result.unpack_bool(),
+                    Some(expected),
+                    "{value}.matches({other}) for {unit}"
+                );
+            }
         });
     }
 
