@@ -11,6 +11,8 @@ pub mod download;
 pub mod tui;
 
 pub(crate) const RRF_K: f64 = 10.0;
+const PER_INDEX_LIMIT: usize = 50;
+const MERGED_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DigikeyData {
@@ -521,68 +523,46 @@ impl RegistryClient {
             .map_err(Into::into)
     }
 
-    fn search_modules_rrf(&self, query: &str, any_term: bool) -> ModuleRrfSearchOutput {
-        const PER_INDEX_LIMIT: usize = 50;
-        const MERGED_LIMIT: usize = 100;
-
-        let query_text = query.trim();
-        if query_text.is_empty() {
-            return ModuleRrfSearchOutput::default();
-        }
-
-        let parsed = ParsedQuery::parse(query_text);
-        let trigram = self
-            .search_module_trigram_hits(&parsed, PER_INDEX_LIMIT)
-            .unwrap_or_default();
-        let (word, docs_full_text) = match prefix_fts_query(query_text, any_term) {
-            Some(fts_query) => (
-                self.search_module_word_hits(&fts_query, PER_INDEX_LIMIT)
-                    .unwrap_or_default(),
-                self.search_module_docs_full_text_hits(&fts_query, PER_INDEX_LIMIT)
-                    .unwrap_or_default(),
-            ),
-            None => Default::default(),
-        };
-        let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text], MERGED_LIMIT);
-
-        ModuleRrfSearchOutput {
-            trigram,
-            word,
-            docs_full_text,
-            merged,
-        }
+    fn module_trigram_hits(&self, query: &str) -> Vec<RegistryModuleHit> {
+        self.search_module_trigram_hits(&ParsedQuery::parse(query), PER_INDEX_LIMIT)
+            .unwrap_or_default()
     }
 
-    fn search_symbols_rrf(&self, query: &str, any_term: bool) -> SymbolRrfSearchOutput {
-        const PER_INDEX_LIMIT: usize = 50;
-        const MERGED_LIMIT: usize = 100;
-
-        let query_text = query.trim();
-        if query_text.is_empty() {
-            return SymbolRrfSearchOutput::default();
-        }
-
-        let parsed = ParsedQuery::parse(query_text);
-        let trigram = self
-            .search_symbol_trigram_hits(&parsed, PER_INDEX_LIMIT)
-            .unwrap_or_default();
-        let (word, docs_full_text) = match prefix_fts_query(query_text, any_term) {
-            Some(fts_query) => (
-                self.search_symbol_word_hits(&fts_query, PER_INDEX_LIMIT)
-                    .unwrap_or_default(),
-                self.search_symbol_docs_full_text_hits(&fts_query, PER_INDEX_LIMIT)
-                    .unwrap_or_default(),
-            ),
-            None => Default::default(),
+    fn module_keyword_hits(
+        &self,
+        query: &str,
+        any_term: bool,
+    ) -> (Vec<RegistryModuleHit>, Vec<RegistryModuleHit>) {
+        let Some(fts_query) = prefix_fts_query(query, any_term) else {
+            return Default::default();
         };
-        let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text], MERGED_LIMIT);
+        (
+            self.search_module_word_hits(&fts_query, PER_INDEX_LIMIT)
+                .unwrap_or_default(),
+            self.search_module_docs_full_text_hits(&fts_query, PER_INDEX_LIMIT)
+                .unwrap_or_default(),
+        )
+    }
 
-        SymbolRrfSearchOutput {
-            trigram,
-            word,
-            docs_full_text,
-            merged,
-        }
+    fn symbol_trigram_hits(&self, query: &str) -> Vec<RegistrySymbolHit> {
+        self.search_symbol_trigram_hits(&ParsedQuery::parse(query), PER_INDEX_LIMIT)
+            .unwrap_or_default()
+    }
+
+    fn symbol_keyword_hits(
+        &self,
+        query: &str,
+        any_term: bool,
+    ) -> (Vec<RegistrySymbolHit>, Vec<RegistrySymbolHit>) {
+        let Some(fts_query) = prefix_fts_query(query, any_term) else {
+            return Default::default();
+        };
+        (
+            self.search_symbol_word_hits(&fts_query, PER_INDEX_LIMIT)
+                .unwrap_or_default(),
+            self.search_symbol_docs_full_text_hits(&fts_query, PER_INDEX_LIMIT)
+                .unwrap_or_default(),
+        )
     }
 
     fn search_module_trigram_hits(
@@ -1005,34 +985,31 @@ impl RegistrySearchClient {
     }
 
     pub fn search_modules_rrf(&self, query: &str) -> ModuleRrfSearchOutput {
-        const MERGED_LIMIT: usize = 100;
-        let outputs = with_any_term_fallback(
+        let query = query.trim();
+        if query.is_empty() {
+            return ModuleRrfSearchOutput::default();
+        }
+
+        let trigram_lists = self
+            .clients
+            .iter()
+            .map(|client| client.module_trigram_hits(query))
+            .collect::<Vec<_>>();
+        let (word_lists, docs_full_text_lists): (Vec<_>, Vec<_>) = with_any_term_fallback(
             query,
             |any_term| {
                 self.clients
                     .iter()
-                    .map(|client| client.search_modules_rrf(query, any_term))
-                    .collect::<Vec<_>>()
+                    .map(|client| client.module_keyword_hits(query, any_term))
+                    .unzip()
             },
-            |outputs| {
-                outputs
+            |(word_lists, docs_lists): &(Vec<Vec<_>>, Vec<Vec<_>>)| {
+                word_lists
                     .iter()
-                    .any(|out| !out.word.is_empty() || !out.docs_full_text.is_empty())
+                    .chain(docs_lists)
+                    .any(|hits| !hits.is_empty())
             },
         );
-
-        let trigram_lists = outputs
-            .iter()
-            .map(|out| out.trigram.clone())
-            .collect::<Vec<_>>();
-        let word_lists = outputs
-            .iter()
-            .map(|out| out.word.clone())
-            .collect::<Vec<_>>();
-        let docs_full_text_lists = outputs
-            .iter()
-            .map(|out| out.docs_full_text.clone())
-            .collect::<Vec<_>>();
         let merged = merge_rrf_by_ranked_lists(
             &[&trigram_lists, &word_lists, &docs_full_text_lists],
             MERGED_LIMIT,
@@ -1050,34 +1027,31 @@ impl RegistrySearchClient {
     }
 
     pub fn search_symbols_rrf(&self, query: &str) -> SymbolRrfSearchOutput {
-        const MERGED_LIMIT: usize = 100;
-        let outputs = with_any_term_fallback(
+        let query = query.trim();
+        if query.is_empty() {
+            return SymbolRrfSearchOutput::default();
+        }
+
+        let trigram_lists = self
+            .clients
+            .iter()
+            .map(|client| client.symbol_trigram_hits(query))
+            .collect::<Vec<_>>();
+        let (word_lists, docs_full_text_lists): (Vec<_>, Vec<_>) = with_any_term_fallback(
             query,
             |any_term| {
                 self.clients
                     .iter()
-                    .map(|client| client.search_symbols_rrf(query, any_term))
-                    .collect::<Vec<_>>()
+                    .map(|client| client.symbol_keyword_hits(query, any_term))
+                    .unzip()
             },
-            |outputs| {
-                outputs
+            |(word_lists, docs_lists): &(Vec<Vec<_>>, Vec<Vec<_>>)| {
+                word_lists
                     .iter()
-                    .any(|out| !out.word.is_empty() || !out.docs_full_text.is_empty())
+                    .chain(docs_lists)
+                    .any(|hits| !hits.is_empty())
             },
         );
-
-        let trigram_lists = outputs
-            .iter()
-            .map(|out| out.trigram.clone())
-            .collect::<Vec<_>>();
-        let word_lists = outputs
-            .iter()
-            .map(|out| out.word.clone())
-            .collect::<Vec<_>>();
-        let docs_full_text_lists = outputs
-            .iter()
-            .map(|out| out.docs_full_text.clone())
-            .collect::<Vec<_>>();
         let merged = merge_rrf_by_ranked_lists(
             &[&trigram_lists, &word_lists, &docs_full_text_lists],
             MERGED_LIMIT,
