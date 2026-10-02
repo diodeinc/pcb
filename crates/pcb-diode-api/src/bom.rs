@@ -144,12 +144,7 @@ impl MatchBomResponse {
             if line.selected_offer_id.is_none() {
                 line.selected_offer_id = other.selected_offer_id;
             }
-            line.match_status = match (line.match_status, other.match_status) {
-                (BomMatchStatus::NeedsRetry, _) | (_, BomMatchStatus::NeedsRetry) => {
-                    BomMatchStatus::NeedsRetry
-                }
-                (BomMatchStatus::Failed, status) | (status, _) => status,
-            };
+            line.match_status = line.match_status.min(other.match_status);
         }
         self.offers.extend(other.offers);
         self
@@ -489,7 +484,7 @@ mod tests {
         let mut retry = regional(Geography::Global, &[]);
         retry.results[0].match_status = BomMatchStatus::NeedsRetry;
         let retry = regional(Geography::Us, &["us"]).merge(retry);
-        assert_eq!(retry.results[0].match_status, BomMatchStatus::NeedsRetry);
+        assert_eq!(retry.results[0].match_status, BomMatchStatus::Compatible);
     }
 
     #[test]

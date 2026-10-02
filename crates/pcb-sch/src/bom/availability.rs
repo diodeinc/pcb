@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 /// Board quantity sent to the sourcing planner and used for price presentation.
 pub const BOARD_QUANTITY: i32 = 5;
 
-/// Match result returned by the BOM service.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// Match result returned by the BOM service, ordered strongest first.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BomMatchStatus {
     #[serde(rename = "MATCH_EXACT")]
     Exact,
