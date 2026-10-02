@@ -16,7 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb layout`, `pcb build`, `pcb sim`, `pcb publish`, and the LSP no longer write BOM-matched MPNs or datasheets into the design; generic parts keep their authored value.
 - `pcb bom` always fetches live availability; `pcb bom --offline` prints the BOM without it.
-- `pcb migrate` removes obsolete `[workspace.bom]`; other commands reject it.
+- `[workspace.bom] strict` is ignored; BOM matching is always exact.
 - `pcb publish` metadata no longer records `bom.strict`.
 
 ### Fixed

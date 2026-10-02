@@ -282,6 +282,10 @@ pub struct WorkspaceConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
 
+    /// Obsolete BOM matching table, accepted so existing manifests still parse.
+    #[serde(default, skip_serializing, deserialize_with = "ignore")]
+    pub bom: (),
+
     /// Default board name to use
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_board: Option<String>,
@@ -300,6 +304,10 @@ pub struct WorkspaceConfig {
     /// Example: ["modules/deprecated/*", "boards/test-*"]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
+}
+
+fn ignore<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<(), D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer).map(|_| ())
 }
 
 /// Access control configuration.
@@ -571,16 +579,23 @@ resolver = "2"
     }
 
     #[test]
-    fn test_parse_rejects_removed_workspace_keys() {
-        for (key, value) in [
-            ("members", r#"["boards/*"]"#),
-            ("bom", "{ strict = false }"),
-        ] {
-            let err = PcbToml::parse(&format!("[workspace]\n{key} = {value}\n"))
-                .expect_err("removed workspace key should not parse");
+    fn test_parse_rejects_workspace_members() {
+        let err = PcbToml::parse(
+            r#"
+[workspace]
+members = ["boards/*"]
+"#,
+        )
+        .expect_err("workspace.members should not parse");
 
-            assert!(err.to_string().contains(&format!("unknown field `{key}`")));
-        }
+        assert!(err.to_string().contains("unknown field `members`"));
+    }
+
+    #[test]
+    fn test_obsolete_workspace_bom_is_ignored() {
+        let config = PcbToml::parse("[workspace.bom]\nstrict = false\n").unwrap();
+
+        assert!(!toml::to_string(&config).unwrap().contains("bom"));
     }
 
     #[test]
