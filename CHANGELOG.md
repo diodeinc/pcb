@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.67] - 2026-10-02
+
 ### Added
 
 - Add `pcb auth endpoint` to print the resolved API URL without authenticating.
@@ -2166,7 +2168,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.66...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.67...HEAD
+[0.4.67]: https://github.com/diodeinc/pcb/compare/v0.4.66...v0.4.67
 [0.4.66]: https://github.com/diodeinc/pcb/compare/v0.4.65...v0.4.66
 [0.4.65]: https://github.com/diodeinc/pcb/compare/v0.4.64...v0.4.65
 [0.4.64]: https://github.com/diodeinc/pcb/compare/v0.4.63...v0.4.64
