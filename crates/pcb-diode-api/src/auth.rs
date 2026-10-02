@@ -693,6 +693,8 @@ pub enum AuthCommand {
     Refresh,
     /// Print a valid access token to stdout (refreshes if expired)
     Token,
+    /// Print the resolved API URL to stdout without authenticating
+    Endpoint,
     /// Configure or provide Git credentials using PCB authentication
     Git(crate::git_auth::GitAuthArgs),
 }
@@ -732,6 +734,10 @@ pub fn execute(args: AuthArgs, ctx: &WorkspaceContext) -> Result<()> {
         Some(AuthCommand::Status) => status_with_context(ctx),
         Some(AuthCommand::Refresh) => refresh_with_context(ctx),
         Some(AuthCommand::Token) => token_with_context(ctx),
+        Some(AuthCommand::Endpoint) => {
+            pcb_ui::write_stdout(|out| writeln!(out, "{}", ctx.api_base_url()))?;
+            Ok(())
+        }
         Some(AuthCommand::Git(args)) => crate::git_auth::execute(args, ctx),
     }
 }
