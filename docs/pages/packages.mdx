@@ -175,16 +175,6 @@ endpoint = "diode.computer"
   credentials. `DIODE_API_URL` takes precedence over the workspace setting; outside
   a configured workspace, the CLI uses its default API URL.
 
-## BOM matching (`[workspace.bom]`)
-
-`pcb bom` availability queries use strict BOM matching by default, requiring
-exact MPN matches. Workspace manifests can opt out to use fuzzy matching:
-
-```toml
-[workspace.bom]
-strict = false
-```
-
 ## Registry search scope
 
 Registry-backed `pcb search` searches the public Diode registry and the

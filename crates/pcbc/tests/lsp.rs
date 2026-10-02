@@ -39,7 +39,7 @@ Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = Net("A"), P2 = Ne
                 "uri": uri, "languageId": "starlark", "version": 1, "text": source
             }}}),
             json!({"id": 3, "method": "zener/evaluate", "params": {"uri": uri, "inputs": {}}}),
-            // didOpen populates the cached viewer state, which also hydrates BOMs.
+            // didOpen populates the cached viewer state.
             json!({"id": 4, "method": "viewer/getState", "params": {"uri": uri}}),
             json!({"method": "textDocument/didChange", "params": {
                 "textDocument": {"uri": uri, "version": 2},

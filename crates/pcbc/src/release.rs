@@ -858,16 +858,14 @@ fn validate_build(
             zen_file_rel.display().to_string(),
         )));
 
-        crate::build::BuildEvalState::new(staged_resolution)
-            .with_bom_hydration(pcb_diode_api::BomMatchMode::Online)
-            .build(
-                &staged_zen_path,
-                Default::default(),
-                passes,
-                false, // don't deny warnings - we'll prompt user instead
-                &mut has_errors,
-                &mut has_warnings,
-            )
+        crate::build::BuildEvalState::new(staged_resolution).build(
+            &staged_zen_path,
+            Default::default(),
+            passes,
+            false, // don't deny warnings - we'll prompt user instead
+            &mut has_errors,
+            &mut has_warnings,
+        )
     });
 
     let crate::build::BuildResult {
@@ -959,7 +957,7 @@ fn bom_offer_diagnostics(board_path: &Path, bom: &pcb_sch::bom::Bom) -> pcb_zen_
             let (kind, message) = match issue {
                 BomOfferIssue::Unknown => (
                     "bom.sourceability.unknown",
-                    format!("Strict BOM matching does not recognize {part} ({designators})"),
+                    format!("BOM matching does not recognize {part} ({designators})"),
                 ),
                 BomOfferIssue::NoOffers => (
                     "bom.sourceability.no_offers",
@@ -985,15 +983,9 @@ fn check_bom_offers(info: &ReleaseInfo, spinner: &Spinner, bom: &pcb_sch::bom::B
         return Diagnostics::default();
     }
 
-    spinner.set_message("Checking strict BOM offers");
+    spinner.set_message("Checking BOM offers");
     let ctx = pcb_diode_api::WorkspaceContext::from_path(&info.zen_path);
-    let match_result = pcb_diode_api::match_bom_with_context(
-        &ctx,
-        None,
-        &mut sourcing_bom,
-        true,
-        pcb_diode_api::BomMatchOptions::for_schematic(pcb_diode_api::BomMatchMode::Online),
-    );
+    let match_result = pcb_diode_api::match_bom_with_context(&ctx, None, &mut sourcing_bom);
     let failure = match match_result {
         Err(error) => Some(format!("{error:#}")),
         Ok(()) if sourcing_bom.availability.len() != sourcing_bom.entries.len() => {
@@ -1007,7 +999,7 @@ fn check_bom_offers(info: &ReleaseInfo, spinner: &Spinner, bom: &pcb_sch::bom::B
         Some(error) => pcb_zen_core::Diagnostics {
             diagnostics: vec![pcb_zen_core::Diagnostic::categorized(
                 &info.zen_path.to_string_lossy(),
-                &format!("Could not check strict BOM offers: {error}"),
+                &format!("Could not check BOM offers: {error}"),
                 "bom.sourceability.check_failed",
                 starlark::errors::EvalSeverity::Warning,
             )],
@@ -1056,7 +1048,6 @@ fn write_metadata(info: &ReleaseInfo) -> Result<()> {
         layout_path: info.layout.as_ref().map(|layout| layout.layout_dir_rel()),
         description: board_description.as_deref(),
         include_kicad_version: true,
-        bom_strict: info.workspace_info().workspace_config().bom.strict,
     })
 }
 
@@ -1771,7 +1762,7 @@ mod tests {
             warnings,
             vec![
                 "No supplier offers found for Yageo RC0603FR-0710KL (R1, R2)",
-                "Strict BOM matching does not recognize Acme UNKNOWN (U1)",
+                "BOM matching does not recognize Acme UNKNOWN (U1)",
             ]
         );
     }

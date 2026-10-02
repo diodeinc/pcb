@@ -73,14 +73,6 @@ impl WorkspaceContext {
         &self.endpoint.web_base_url
     }
 
-    pub(crate) fn bom_strict(&self) -> Result<bool> {
-        let Some(workspace_root) = &self.workspace_root else {
-            return Ok(true);
-        };
-        let config = PcbToml::from_path(&workspace_root.join("pcb.toml"))?;
-        Ok(config.workspace.unwrap_or_default().bom.strict)
-    }
-
     pub(crate) fn use_legacy_auth_file(&self) -> bool {
         self.endpoint.use_legacy_auth_file
     }

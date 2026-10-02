@@ -23,7 +23,6 @@ pub(crate) struct BuildEvalState {
     caches: Arc<pcb_zen_core::lang::eval::EvalCaches>,
     file_provider: Arc<DefaultFileProvider>,
     resolution: Arc<ResolutionResult>,
-    bom_match_mode: Option<pcb_diode_api::BomMatchMode>,
 }
 
 pub(crate) struct BuildResult {
@@ -40,13 +39,7 @@ impl BuildEvalState {
             caches: Arc::default(),
             file_provider: Arc::new(DefaultFileProvider::new()),
             resolution: Arc::new(resolution),
-            bom_match_mode: None,
         }
-    }
-
-    pub(crate) fn with_bom_hydration(mut self, mode: pcb_diode_api::BomMatchMode) -> Self {
-        self.bom_match_mode = Some(mode);
-        self
     }
 
     fn eval(
@@ -99,7 +92,7 @@ impl BuildEvalState {
             None
         };
 
-        let mut schematic = output.as_ref().and_then(|eval_output| {
+        let schematic = output.as_ref().and_then(|eval_output| {
             let _span = info_span!("to_schematic").entered();
             let schematic_result = eval_output.to_schematic_with_diagnostics();
             diagnostics
@@ -120,10 +113,6 @@ impl BuildEvalState {
                 .extend(pcbc::kicad_schematic::linked_schematic_diagnostics(
                     schematic, zen_path,
                 ));
-        }
-
-        if let (Some(mode), Some(schematic)) = (self.bom_match_mode, &mut schematic) {
-            pcb_diode_api::hydrate_schematic_from_bom(zen_path, schematic, mode);
         }
 
         if diagnostics.diagnostics.is_empty() && schematic.is_none() {
@@ -431,9 +420,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
 
     let zen_files = build_input.collect_zen_files(&resolution.workspace_info)?;
 
-    // Keep builds cache-only until backend TTL support makes refreshes cheap.
-    let eval_state =
-        BuildEvalState::new(resolution).with_bom_hydration(pcb_diode_api::BomMatchMode::Offline);
+    let eval_state = BuildEvalState::new(resolution);
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());

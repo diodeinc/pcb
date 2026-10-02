@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 /// Board quantity sent to the sourcing planner and used for price presentation.
 pub const BOARD_QUANTITY: i32 = 5;
 
-/// Match result returned by the BOM service.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// Match result returned by the BOM service, ordered strongest first.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BomMatchStatus {
     #[serde(rename = "MATCH_EXACT")]
     Exact,
@@ -92,21 +92,6 @@ impl Availability {
             offer.manufacturer.as_deref()?.trim(),
         ))
         .filter(|(mpn, manufacturer)| !mpn.is_empty() && !manufacturer.is_empty())
-    }
-
-    pub fn selected_datasheet_url(&self) -> Option<&str> {
-        if !matches!(
-            self.match_status,
-            Some(BomMatchStatus::Exact | BomMatchStatus::Compatible)
-        ) {
-            return None;
-        }
-
-        self.selected_offer()?
-            .datasheet_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|url| !url.is_empty())
     }
 }
 
