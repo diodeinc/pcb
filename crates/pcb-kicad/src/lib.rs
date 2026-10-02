@@ -92,11 +92,11 @@ fn discover_path(env_var: &str, command: Option<&str>, candidates: &[&str]) -> S
 }
 
 #[cfg(target_os = "macos")]
-fn pcbnew_app_bundle_path(pcbnew_path: &str) -> Result<String> {
-    let path = Path::new(pcbnew_path);
+fn editor_app_bundle_path(editor_path: &str) -> Result<String> {
+    let path = Path::new(editor_path);
 
     if path.extension().is_some_and(|ext| ext == "app") {
-        return Ok(pcbnew_path.to_string());
+        return Ok(editor_path.to_string());
     }
 
     path.ancestors()
@@ -104,9 +104,9 @@ fn pcbnew_app_bundle_path(pcbnew_path: &str) -> Result<String> {
         .map(|ancestor| ancestor.to_string_lossy().to_string())
         .ok_or_else(|| {
             anyhow!(
-                "Failed to derive pcbnew.app bundle path from {}.\n\
-                 Set KICAD_PCBNEW to either the pcbnew.app bundle or the pcbnew binary inside it.",
-                pcbnew_path
+                "Failed to derive KiCad editor app bundle path from {}.\n\
+                 Set KICAD_PCBNEW or KICAD_EESCHEMA to the editor app bundle or its binary.",
+                editor_path
             )
         })
 }
@@ -233,10 +233,10 @@ pub fn ensure_board_compatible_with_installed_kicad(pcb_path: &Path) -> Result<(
     Ok(())
 }
 
-/// Build the per-platform command that opens a board in the KiCad GUI. On
+/// Build the per-platform command that opens a file in the KiCad GUI. On
 /// macOS `waitable` launches a dedicated app instance through `open -n -W`
 /// so the returned child tracks the editor's lifetime.
-fn pcbnew_launch_command(pcbnew_path: &str, pcb_path: &Path, waitable: bool) -> Result<Command> {
+fn editor_launch_command(editor_path: &str, file: &Path, waitable: bool) -> Result<Command> {
     #[cfg(target_os = "macos")]
     {
         let mut cmd = Command::new("open");
@@ -244,34 +244,35 @@ fn pcbnew_launch_command(pcbnew_path: &str, pcb_path: &Path, waitable: bool) -> 
             cmd.arg("-n").arg("-W");
         }
         cmd.arg("-a")
-            .arg(pcbnew_app_bundle_path(pcbnew_path)?)
-            .arg(pcb_path);
+            .arg(editor_app_bundle_path(editor_path)?)
+            .arg(file);
         Ok(cmd)
     }
 
     #[cfg(not(target_os = "macos"))]
     {
         let _ = waitable;
-        let mut cmd = Command::new(pcbnew_path);
-        cmd.arg(pcb_path);
+        let mut cmd = Command::new(editor_path);
+        cmd.arg(file);
         Ok(cmd)
     }
 }
 
 /// Open a KiCad board in the GUI that matches this toolchain's discovered install.
 pub fn open_pcbnew(pcb_path: impl AsRef<Path>) -> Result<()> {
-    let pcb_path = pcb_path.as_ref();
-    let pcbnew_path = require_pcbnew_launch(pcb_path)?;
-    let cmd = pcbnew_launch_command(&pcbnew_path, pcb_path, false)?;
-    spawn_pcbnew_command(cmd, &pcbnew_path, pcb_path)?;
-    Ok(())
+    spawn_editor(
+        pcb_path.as_ref(),
+        &KiCadInstallation::discover().pcbnew,
+        false,
+    )
+    .map(|_| ())
 }
 
-pub struct PcbnewSession {
+pub struct KiCadSession {
     child: Child,
 }
 
-impl PcbnewSession {
+impl KiCadSession {
     pub fn id(&self) -> u32 {
         self.child.id()
     }
@@ -279,78 +280,56 @@ impl PcbnewSession {
     pub fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>> {
         self.child
             .try_wait()
-            .context("Failed while checking KiCad PCB Editor status")
+            .context("Failed while checking KiCad editor status")
     }
 }
 
 /// Open a KiCad board in a process that can be waited on.
-pub fn open_pcbnew_session(pcb_path: impl AsRef<Path>) -> Result<PcbnewSession> {
-    let pcb_path = pcb_path.as_ref();
-    let pcbnew_path = require_pcbnew_launch(pcb_path)?;
-    let cmd = pcbnew_launch_command(&pcbnew_path, pcb_path, true)?;
-    spawn_pcbnew_command(cmd, &pcbnew_path, pcb_path).map(|child| PcbnewSession { child })
-}
-
-fn require_pcbnew_launch(pcb_path: &Path) -> Result<String> {
-    if !pcb_path.exists() {
-        anyhow::bail!("PCB file not found: {}", pcb_path.display());
-    }
-
-    let pcbnew = KiCadInstallation::discover().pcbnew;
-    if !Path::new(&pcbnew).exists() {
-        anyhow::bail!(
-            "KiCad PCB Editor not found at expected location: {pcbnew}\n\
-             Please ensure KiCad is installed.\n\
-             If KiCad PCB Editor is in a non-standard location, set the KICAD_PCBNEW environment variable."
-        );
-    }
-    Ok(pcbnew)
-}
-
-fn spawn_pcbnew_command(mut cmd: Command, pcbnew_path: &str, pcb_path: &Path) -> Result<Child> {
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| {
-            format!(
-                "Failed to launch KiCad PCB Editor at {} for {}",
-                pcbnew_path,
-                pcb_path.display()
-            )
-        })
+pub fn open_pcbnew_session(pcb_path: impl AsRef<Path>) -> Result<KiCadSession> {
+    spawn_editor(
+        pcb_path.as_ref(),
+        &KiCadInstallation::discover().pcbnew,
+        true,
+    )
+    .map(|child| KiCadSession { child })
 }
 
 /// Open a KiCad schematic in the editor that matches this toolchain's discovered install.
 pub fn open_eeschema(schematic_path: impl AsRef<Path>) -> Result<()> {
-    let schematic_path = schematic_path.as_ref();
-    if !schematic_path.is_file() {
-        anyhow::bail!("Schematic file not found: {}", schematic_path.display());
-    }
+    spawn_editor(
+        schematic_path.as_ref(),
+        &KiCadInstallation::discover().eeschema,
+        false,
+    )
+    .map(|_| ())
+}
 
-    let eeschema = KiCadInstallation::discover().eeschema;
-    if !Path::new(&eeschema).exists() {
+/// Open the exact schematic in a dedicated, waitable editor session.
+pub fn open_eeschema_session(schematic_path: impl AsRef<Path>) -> Result<KiCadSession> {
+    spawn_editor(
+        schematic_path.as_ref(),
+        &KiCadInstallation::discover().eeschema,
+        true,
+    )
+    .map(|child| KiCadSession { child })
+}
+
+fn spawn_editor(file: &Path, editor: &str, waitable: bool) -> Result<Child> {
+    if !file.is_file() {
+        anyhow::bail!("KiCad file not found: {}", file.display());
+    }
+    if !Path::new(editor).exists() {
         anyhow::bail!(
-            "KiCad Schematic Editor not found at expected location: {eeschema}\n\
-             Please ensure KiCad is installed.\n\
-             If KiCad Schematic Editor is in a non-standard location, set the KICAD_EESCHEMA environment variable."
+            "KiCad editor not found: {editor}\n\
+             Install KiCad or set KICAD_PCBNEW / KICAD_EESCHEMA to the corresponding editor."
         );
     }
-
-    let mut cmd = Command::new(&eeschema);
-    cmd.arg(schematic_path)
+    editor_launch_command(editor, file, waitable)?
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .with_context(|| {
-            format!(
-                "Failed to launch KiCad Schematic Editor at {} for {}",
-                eeschema,
-                schematic_path.display()
-            )
-        })?;
-    Ok(())
+        .with_context(|| format!("Failed to launch {editor} for {}", file.display()))
 }
 
 /// Builder for KiCad CLI commands

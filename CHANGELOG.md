@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add `pcb auth endpoint` to print the resolved API URL without authenticating.
+- Open `.kicad_sch` files with `pcb open`, including remote sandbox editing with nested-sheet sync and recovery.
 
 ## [0.4.66] - 2026-10-02
 

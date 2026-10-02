@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Utc};
 use inquire::Confirm;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::layout::{LayoutArgs, LayoutOutputFormat};
 use crate::open::OpenArgs;
 use crate::recovery_dialog::{RecoveryChoice, URL_LAUNCHER_ENV};
+use crate::sandbox_uri::is_kicad_sch_path;
 
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -27,6 +28,8 @@ const LOCAL_LAYOUT_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 const SYNC_RETRY_ATTEMPTS: usize = 3;
 const SYNC_RETRY_DELAY: Duration = Duration::from_millis(500);
 const SESSION_MANIFEST: &str = ".pcb-sync-session.json";
+const MAX_SYNC_DEPTH: usize = 32;
+const MAX_SYNC_ENTRIES: usize = 10_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,9 +77,11 @@ pub fn execute_open(uri: SandboxFileUri, args: OpenArgs) -> Result<()> {
     let client = lock.client();
     install_shutdown_handler(&lock)?;
 
-    let status = pcb_ui::Spinner::builder("Downloading layout from sandbox...").start();
-    let local = if crate::sandbox_uri::is_remote_kicad_pcb_file(&uri) {
-        sync_remote_pcb_file_down(&client, &uri, Some(&status))?
+    let status = pcb_ui::Spinner::builder("Downloading KiCad files from sandbox...").start();
+    let local = if crate::sandbox_uri::is_remote_kicad_pcb_file(&uri)
+        || is_kicad_sch_path(Path::new(&uri.sandbox_path))
+    {
+        sync_remote_kicad_file_down(&client, &uri, Some(&status))?
     } else {
         let layout_args = LayoutArgs {
             file: PathBuf::from(&uri.sandbox_path),
@@ -134,22 +139,22 @@ enum SyncOutcome {
 }
 
 enum EditorSession {
-    Spawned(pcb_kicad::PcbnewSession),
-    Attached(u32),
+    Spawned(pcb_kicad::KiCadSession),
+    Attached { pid: u32, file: PathBuf },
 }
 
 impl EditorSession {
     fn id(&self) -> u32 {
         match self {
             Self::Spawned(session) => session.id(),
-            Self::Attached(pid) => *pid,
+            Self::Attached { pid, .. } => *pid,
         }
     }
 
     fn is_running(&mut self) -> Result<bool> {
         match self {
             Self::Spawned(session) => Ok(session.try_wait()?.is_none()),
-            Self::Attached(pid) => Ok(editor_process_is_running(*pid)),
+            Self::Attached { pid, file } => Ok(editor_process_is_running(*pid, file)),
         }
     }
 }
@@ -255,8 +260,15 @@ fn open_layout_and_sync(
         None => format!("Opening {}...", local.pcb_file.display()),
     });
     let mut session = match local.attached_editor_pid {
-        Some(pid) => EditorSession::Attached(pid),
-        None => match pcb_kicad::open_pcbnew_session(&local.pcb_file) {
+        Some(pid) => EditorSession::Attached {
+            pid,
+            file: local.pcb_file.clone(),
+        },
+        None => match if is_kicad_sch_path(&local.pcb_file) {
+            pcb_kicad::open_eeschema_session(&local.pcb_file)
+        } else {
+            pcb_kicad::open_pcbnew_session(&local.pcb_file)
+        } {
             Ok(session) => EditorSession::Spawned(session),
             Err(err) => {
                 sync_session.mark_complete()?;
@@ -475,7 +487,7 @@ fn parse_remote_layout_result(stdout: &str) -> Result<RemoteLayoutResult> {
     Ok(result)
 }
 
-fn sync_remote_pcb_file_down(
+fn sync_remote_kicad_file_down(
     client: &SandboxClient,
     uri: &SandboxFileUri,
     status: Option<&pcb_ui::Spinner>,
@@ -509,14 +521,14 @@ fn sync_layout_down(
     let mut recovered_session = None;
     let mut attached_editor_pid = None;
     if let Some(status) = restore_status
-        && let Some(recovery) = latest_recoverable_session(&cache_root)?
+        && let Some(recovery) = latest_recoverable_session(&cache_root, &relative_pcb)?
     {
         match recovery {
             RecoverableSession::Ready(session) => {
                 match prompt_restore_recovery(status, &session)? {
                     Some(RecoveryChoice::Restore) => recovered_session = Some(session),
                     Some(RecoveryChoice::Discard) => {
-                        mark_recoverable_sessions_prompt_seen(&cache_root)
+                        mark_recoverable_sessions_prompt_seen(&cache_root, &relative_pcb)
                     }
                     Some(RecoveryChoice::Cancel) => return Ok(None),
                     None => {}
@@ -545,8 +557,13 @@ fn sync_layout_down(
                 &uri.sandbox_id,
                 &remote_layout_dir,
                 &local_layout_dir,
+                is_kicad_sch_path(&relative_pcb),
             )?;
             let pcb_file = local_layout_dir.join(&relative_pcb);
+            ensure!(
+                pcb_file.is_file(),
+                "Remote KiCad file was not downloaded: {remote_pcb_file}"
+            );
             let sync_session = if restore_status.is_some() {
                 Some(SyncSession::create(
                     uri,
@@ -586,7 +603,10 @@ fn restore_recovered_layout_if_needed(
         local.pcb_file.display()
     ));
     let stats = sync_layout_up_with_retry(client, uri, local)?;
-    mark_recoverable_sessions_prompt_seen(&local.cache_root);
+    mark_recoverable_sessions_prompt_seen(
+        &local.cache_root,
+        local.pcb_file.strip_prefix(&local.local_layout_dir)?,
+    );
     sync_session.mark_prompt_seen()?;
     status.set_message(format!(
         "Restored recovery file ({} uploaded, {} removed).",
@@ -600,24 +620,140 @@ fn sync_remote_dir_down(
     sandbox_id: &str,
     remote_dir: &str,
     local_dir: &Path,
+    schematic: bool,
 ) -> Result<()> {
     fs::create_dir_all(local_dir)?;
-    // Only mirror the direct-child files of the layout directory; KiCad needs
-    // the .kicad_pcb / .kicad_pro / .kicad_prl + friends that live alongside
-    // the board, not arbitrary nested assets (3D models, fp-info-cache, etc.).
-    let files: Vec<_> = client
-        .list(sandbox_id, remote_dir)?
-        .entries
-        .into_iter()
-        .filter(|entry| entry.kind == "file" && !should_skip_sync_name(&entry.name))
-        .collect();
-
-    files.par_iter().try_for_each(|entry| -> Result<()> {
-        let bytes = client.read_file(sandbox_id, &entry.path)?;
-        let local_path = local_dir.join(&entry.name);
+    let files = remote_sync_files(client, sandbox_id, remote_dir, schematic)?;
+    files.par_iter().try_for_each(|relative| -> Result<()> {
+        let bytes = client.read_file(sandbox_id, &remote_sync_path(remote_dir, relative))?;
+        let local_path = local_dir.join(relative);
+        fs::create_dir_all(local_path.parent().context("Sync file has no parent")?)?;
         fs::write(&local_path, bytes)
             .with_context(|| format!("Failed to write {}", local_path.display()))
     })
+}
+
+// Schematic sync is bounded to the selected file's directory, never follows
+// links, and mirrors only KiCad source/settings files. Board sync stays flat.
+fn remote_sync_files(
+    client: &SandboxClient,
+    sandbox_id: &str,
+    root: &str,
+    schematic: bool,
+) -> Result<BTreeSet<PathBuf>> {
+    let mut files = BTreeSet::new();
+    let mut pending = vec![PathBuf::new()];
+    let mut entries_seen = 0;
+    while let Some(dir) = pending.pop() {
+        for entry in client
+            .list(sandbox_id, &remote_sync_path(root, &dir))?
+            .entries
+        {
+            entries_seen += 1;
+            let relative = dir.join(&entry.name);
+            ensure!(
+                safe_sync_component(&entry.name),
+                "Unsafe sandbox entry name: {}",
+                entry.name
+            );
+            ensure!(
+                entry.path == remote_sync_path(root, &relative),
+                "Sandbox entry escaped its directory: {}",
+                entry.path
+            );
+            check_sync_bounds(&relative, entries_seen)?;
+            if skip_sync_entry(&entry.name, schematic) {
+                continue;
+            }
+            match entry.kind.as_str() {
+                "directory" if schematic => pending.push(relative),
+                "file" if sync_file_name(&entry.name, schematic) => {
+                    files.insert(relative);
+                }
+                "file" | "directory" => {}
+                // sandboxd labels symlinks and other non-regular entries "other".
+                // Refuse rather than letting a later upload write through one.
+                _ if schematic => bail!("Cannot sync non-regular sandbox entry: {}", entry.path),
+                _ => {}
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn local_sync_files(root: &Path, schematic: bool) -> Result<BTreeSet<PathBuf>> {
+    let mut files = BTreeSet::new();
+    let entries = ignore::WalkBuilder::new(root)
+        .standard_filters(false)
+        .follow_links(false)
+        .max_depth(Some(if schematic { MAX_SYNC_DEPTH + 1 } else { 1 }))
+        .filter_entry(move |entry| {
+            entry.depth() == 0 || !skip_sync_entry(&entry.file_name().to_string_lossy(), schematic)
+        })
+        .build();
+    for (index, entry) in entries.enumerate() {
+        let entry = entry?;
+        if entry.depth() == 0 {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .to_str()
+            .context("KiCad sync filename is not UTF-8")?;
+        ensure!(
+            safe_sync_component(name),
+            "Unsafe local sync filename: {name}"
+        );
+        let relative = entry.path().strip_prefix(root)?;
+        check_sync_bounds(relative, index)?;
+        let kind = entry.file_type().context("Missing sync file type")?;
+        ensure!(
+            !schematic || kind.is_file() || kind.is_dir(),
+            "Cannot sync non-regular local entry: {}",
+            entry.path().display()
+        );
+        if kind.is_file() && sync_file_name(name, schematic) {
+            files.insert(relative.to_path_buf());
+        }
+    }
+    Ok(files)
+}
+
+fn remote_sync_path(root: &str, relative: &Path) -> String {
+    if relative.as_os_str().is_empty() {
+        return root.to_string();
+    }
+    format!(
+        "{}/{}",
+        root.trim_end_matches('/'),
+        relative.to_string_lossy().replace('\\', "/")
+    )
+}
+
+fn safe_sync_component(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0'])
+}
+
+fn check_sync_bounds(path: &Path, entries: usize) -> Result<()> {
+    ensure!(
+        path.components().count() <= MAX_SYNC_DEPTH && entries <= MAX_SYNC_ENTRIES,
+        "KiCad sync exceeds the {MAX_SYNC_DEPTH}-level / {MAX_SYNC_ENTRIES}-entry project limit"
+    );
+    Ok(())
+}
+
+fn skip_sync_entry(name: &str, schematic: bool) -> bool {
+    should_skip_sync_name(name)
+        || (schematic && (name.starts_with('.') || name.ends_with("-backups")))
+}
+
+fn sync_file_name(name: &str, schematic: bool) -> bool {
+    !schematic
+        || matches!(name, "sym-lib-table" | "fp-lib-table")
+        || matches!(
+            Path::new(name).extension().and_then(|ext| ext.to_str()),
+            Some("kicad_sch" | "kicad_pro" | "kicad_prl" | "kicad_sym" | "kicad_mod" | "kicad_wks")
+        )
 }
 
 fn sync_layout_up(
@@ -625,55 +761,33 @@ fn sync_layout_up(
     uri: &SandboxFileUri,
     local: &LocalLayout,
 ) -> Result<SyncStats> {
-    // Only sync direct-child files of the layout dir, mirroring the
-    // download side. KiCad keeps the .kicad_pcb / .kicad_pro / .kicad_prl
-    // + friends flat in the board directory.
-    let mut local_names = BTreeSet::new();
-    let mut files = Vec::new();
-    for entry in fs::read_dir(&local.local_layout_dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-        let name = entry.file_name();
-        let Some(name_str) = name.to_str() else {
-            continue;
-        };
-        if should_skip_sync_name(name_str) {
-            continue;
-        }
-        let remote_path = format!(
-            "{}/{}",
-            local.remote_layout_dir.trim_end_matches('/'),
-            name_str
-        );
-        local_names.insert(name_str.to_string());
-        files.push((entry.path(), remote_path));
-    }
+    let schematic = is_kicad_sch_path(&local.pcb_file);
+    let files = local_sync_files(&local.local_layout_dir, schematic)?;
+    // Finish both inventories before any mutation: traversal failures must not
+    // turn a partial listing into deletions, or write through remote symlinks.
+    let remote_files =
+        remote_sync_files(client, &uri.sandbox_id, &local.remote_layout_dir, schematic)?;
 
-    files
-        .par_iter()
-        .try_for_each(|(local_path, remote_path)| -> Result<()> {
-            let bytes = fs::read(local_path).with_context(|| {
-                format!("Failed to read local layout file {}", local_path.display())
-            })?;
-            client.write_file(&uri.sandbox_id, remote_path, &bytes)
+    files.par_iter().try_for_each(|relative| -> Result<()> {
+        let local_path = local.local_layout_dir.join(relative);
+        let bytes = fs::read(&local_path).with_context(|| {
+            format!("Failed to read local layout file {}", local_path.display())
         })?;
+        client.write_file(
+            &uri.sandbox_id,
+            &remote_sync_path(&local.remote_layout_dir, relative),
+            &bytes,
+        )
+    })?;
 
-    let stale_remote: Vec<_> = client
-        .list(&uri.sandbox_id, &local.remote_layout_dir)?
-        .entries
-        .into_iter()
-        .filter(|entry| {
-            entry.kind == "file"
-                && !should_skip_sync_name(&entry.name)
-                && !local_names.contains(&entry.name)
-        })
-        .collect();
+    let stale_remote: Vec<_> = remote_files.difference(&files).collect();
 
-    stale_remote
-        .par_iter()
-        .try_for_each(|entry| client.remove(&uri.sandbox_id, &entry.path))?;
+    stale_remote.par_iter().try_for_each(|relative| {
+        client.remove(
+            &uri.sandbox_id,
+            &remote_sync_path(&local.remote_layout_dir, relative),
+        )
+    })?;
 
     Ok(SyncStats {
         uploaded: files.len(),
@@ -804,13 +918,17 @@ impl SyncSession {
     }
 }
 
-fn latest_recoverable_session(cache_root: &Path) -> Result<Option<RecoverableSession>> {
-    latest_recoverable_session_with(cache_root, editor_process_is_running)
+fn latest_recoverable_session(
+    cache_root: &Path,
+    target: &Path,
+) -> Result<Option<RecoverableSession>> {
+    latest_recoverable_session_with(cache_root, target, editor_process_is_running)
 }
 
 fn latest_recoverable_session_with(
     cache_root: &Path,
-    editor_is_running: impl Fn(u32) -> bool,
+    target: &Path,
+    editor_is_running: impl Fn(u32, &Path) -> bool,
 ) -> Result<Option<RecoverableSession>> {
     if !cache_root.exists() {
         return Ok(None);
@@ -826,6 +944,9 @@ fn latest_recoverable_session_with(
         let Ok(session) = SyncSession::load(entry.path()) else {
             continue;
         };
+        if !session_matches_target(&session.manifest, target) {
+            continue;
+        }
         let live_editor_pid = if matches!(
             session.manifest.state,
             SyncSessionState::Active | SyncSessionState::Recoverable
@@ -833,7 +954,7 @@ fn latest_recoverable_session_with(
             session
                 .manifest
                 .editor_pid
-                .filter(|pid| editor_is_running(*pid))
+                .filter(|pid| editor_is_running(*pid, &session.manifest.layout_file))
         } else {
             None
         };
@@ -861,7 +982,7 @@ fn prompt_resume_existing_editor(status: &pcb_ui::Spinner, session: &SyncSession
         .to_string_lossy();
     let message = format!(
         "{board} is already open in KiCad, but remote sync stopped.\n\n\
-         Resume syncing the open local board to the sandbox?"
+         Resume syncing the open local design to the sandbox?"
     );
     if std::env::var_os(URL_LAUNCHER_ENV).is_some() {
         return status.suspend(|| {
@@ -899,7 +1020,7 @@ fn prompt_restore_recovery(
             });
         }
         eprintln!(
-            "Found local recovery file for this remote layout at {}. Re-run interactively to restore it.",
+            "Found local recovery file for this remote design at {}. Re-run interactively to restore it.",
             session.manifest.layout_file.display()
         );
         return Ok(None);
@@ -921,7 +1042,7 @@ fn prompt_restore_recovery(
     }))
 }
 
-fn mark_recoverable_sessions_prompt_seen(cache_root: &Path) {
+fn mark_recoverable_sessions_prompt_seen(cache_root: &Path, target: &Path) {
     let entries = match fs::read_dir(cache_root) {
         Ok(entries) => entries,
         Err(err) => {
@@ -948,7 +1069,8 @@ fn mark_recoverable_sessions_prompt_seen(cache_root: &Path) {
         let Ok(mut session) = SyncSession::load(entry.path()) else {
             continue;
         };
-        if is_recovery_candidate(&session.manifest)
+        if session_matches_target(&session.manifest, target)
+            && is_recovery_candidate(&session.manifest)
             && let Err(err) = session.mark_prompt_seen()
         {
             log::warn!(
@@ -957,6 +1079,14 @@ fn mark_recoverable_sessions_prompt_seen(cache_root: &Path) {
             );
         }
     }
+}
+
+fn session_matches_target(manifest: &SyncSessionManifest, target: &Path) -> bool {
+    manifest
+        .layout_file
+        .strip_prefix(&manifest.local_layout_dir)
+        .ok()
+        == Some(target)
 }
 
 fn is_recovery_candidate(manifest: &SyncSessionManifest) -> bool {
@@ -968,55 +1098,82 @@ fn is_recovery_candidate(manifest: &SyncSessionManifest) -> bool {
 }
 
 /// Best-effort check that `pid` is still the editor process this session
-/// launched (`open` on macOS, pcbnew elsewhere). Matching the process name
-/// keeps a recycled pid from permanently blocking the board.
+/// launched. Check both editor kind and exact target, including the dedicated
+/// `open -n -W` launcher on macOS, rather than accepting any KiCad process.
 #[cfg(unix)]
-fn editor_process_is_running(pid: u32) -> bool {
-    std::process::Command::new("ps")
+fn editor_process_is_running(pid: u32, file: &Path) -> bool {
+    let Ok(name) = std::process::Command::new("ps")
         .args(["-o", "comm=", "-p", &pid.to_string()])
         .output()
-        .is_ok_and(|output| {
-            output.status.success()
-                && is_editor_process_name(&String::from_utf8_lossy(&output.stdout))
-        })
+    else {
+        return false;
+    };
+    let Ok(args) = std::process::Command::new("ps")
+        .args(["-ww", "-o", "args=", "-p", &pid.to_string()])
+        .output()
+    else {
+        return false;
+    };
+    name.status.success()
+        && args.status.success()
+        && is_editor_process(
+            &String::from_utf8_lossy(&name.stdout),
+            &String::from_utf8_lossy(&args.stdout),
+            file,
+        )
 }
 
 #[cfg(windows)]
-fn editor_process_is_running(pid: u32) -> bool {
+fn editor_process_is_running(pid: u32, file: &Path) -> bool {
     use std::os::windows::process::CommandExt;
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let mut command = std::process::Command::new("tasklist.exe");
+    let mut command = std::process::Command::new("powershell.exe");
     command.creation_flags(CREATE_NO_WINDOW).args([
-        "/FI",
-        &format!("PID eq {pid}"),
-        "/FO",
-        "CSV",
-        "/NH",
+        "-NoProfile", "-NonInteractive", "-Command",
+        &format!("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' | Select-Object Name, CommandLine | ConvertTo-Json -Compress"),
     ]);
     command.output().is_ok_and(|output| {
         output.status.success()
-            && String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .filter_map(|line| line.split(',').next())
-                .any(is_editor_process_name)
+            && serde_json::from_slice::<serde_json::Value>(&output.stdout).is_ok_and(|process| {
+                is_editor_process(
+                    process["Name"].as_str().unwrap_or_default(),
+                    process["CommandLine"].as_str().unwrap_or_default(),
+                    file,
+                )
+            })
     })
 }
 
 #[cfg(not(any(unix, windows)))]
-fn editor_process_is_running(_pid: u32) -> bool {
+fn editor_process_is_running(_pid: u32, _file: &Path) -> bool {
     false
 }
 
 #[cfg(any(unix, windows))]
-fn is_editor_process_name(raw: &str) -> bool {
+fn is_editor_process(raw: &str, command: &str, file: &Path) -> bool {
     let name = raw.trim().trim_matches('"');
     let name = name
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(name)
         .to_ascii_lowercase();
-    name == "open" || name.contains("pcbnew") || name.contains("kicad")
+    let editor = if is_kicad_sch_path(file) {
+        "eeschema"
+    } else {
+        "pcbnew"
+    };
+    let right_editor = name == editor
+        || name == format!("{editor}.exe")
+        || (name == "open" && command.contains(&format!("/{editor}.app")));
+    right_editor
+        && command
+            .trim()
+            .split_once(file.to_string_lossy().as_ref())
+            .is_some_and(|(before, after)| {
+                (before.ends_with(' ') || before.ends_with('"'))
+                    && (after.is_empty() || after.starts_with(' ') || after.starts_with('"'))
+            })
 }
 
 fn prune_old_layout_sessions(cache_root: &Path, retention: Duration) -> Result<()> {
@@ -1034,6 +1191,16 @@ fn prune_old_layout_sessions(cache_root: &Path, retention: Duration) -> Result<(
             continue;
         }
         let path = entry.path();
+        // Incomplete sessions can contain newer nested sheets or an editor
+        // whose lock lives below the root. Never age out unsynced recovery.
+        if let Ok(session) = SyncSession::load(path.clone())
+            && (is_recovery_candidate(&session.manifest)
+                || session.manifest.editor_pid.is_some_and(|pid| {
+                    editor_process_is_running(pid, &session.manifest.layout_file)
+                }))
+        {
+            continue;
+        }
         if session_contains_lock_file(&path)? {
             continue;
         }
@@ -1094,9 +1261,12 @@ fn remote_parent_dir(path: &str) -> Result<String> {
 fn remote_relative_path(remote_base: &str, remote_path: &str) -> Result<PathBuf> {
     let base = Path::new(remote_base);
     let path = Path::new(remote_path);
-    path.strip_prefix(base)
-        .map(Path::to_path_buf)
-        .with_context(|| format!("{remote_path} is not inside {remote_base}"))
+    let relative = path
+        .strip_prefix(base)
+        .with_context(|| format!("{remote_path} is not inside {remote_base}"))?;
+    ensure!(!relative.as_os_str().is_empty() && relative.components().all(|part| matches!(part, Component::Normal(name) if name.to_str().is_some_and(safe_sync_component))),
+        "Unsafe relative KiCad path: {}", relative.display());
+    Ok(relative.to_path_buf())
 }
 
 fn sandbox_uri_string(uri: &SandboxFileUri) -> String {
@@ -1163,26 +1333,15 @@ mod tests {
         fs::create_dir(&local_layout_dir).unwrap();
         let layout_file = local_layout_dir.join("layout.kicad_pcb");
         fs::write(&layout_file, "").unwrap();
-        let now = Utc::now();
-        let manifest = SyncSessionManifest {
-            version: 1,
-            uri: "diode://api.diode.computer/sandboxes/test/fs/read?path=%2Flayout.kicad_pcb"
-                .to_string(),
-            remote_layout_dir: "/".to_string(),
-            local_layout_dir: local_layout_dir.clone(),
-            layout_file,
-            state,
-            stop_reason: None,
-            editor_pid,
-            prompt_seen,
-            started_at: now,
-            updated_at: now,
-        };
-        fs::write(
-            local_layout_dir.join(SESSION_MANIFEST),
-            serde_json::to_vec(&manifest).unwrap(),
+        let uri = SandboxFileUri::parse(
+            "diode://api.diode.computer/sandboxes/test/fs/read?path=/layout.kicad_pcb",
         )
         .unwrap();
+        let mut session = SyncSession::create(&uri, "/", local_layout_dir, layout_file).unwrap();
+        session.manifest.state = state;
+        session.manifest.editor_pid = editor_pid;
+        session.manifest.prompt_seen = prompt_seen;
+        session.save().unwrap();
     }
 
     #[test]
@@ -1196,9 +1355,13 @@ mod tests {
             true,
         );
 
-        let recovery = latest_recoverable_session_with(cache.path(), |pid| pid == editor_pid)
-            .unwrap()
-            .unwrap();
+        let recovery = latest_recoverable_session_with(
+            cache.path(),
+            Path::new("layout.kicad_pcb"),
+            |pid, _| pid == editor_pid,
+        )
+        .unwrap()
+        .unwrap();
         assert!(matches!(
             recovery,
             RecoverableSession::EditorOpen { pid, .. } if pid == editor_pid
@@ -1217,21 +1380,121 @@ mod tests {
             false,
         );
 
-        let recovery = latest_recoverable_session_with(cache.path(), |_| false)
+        let recovery =
+            latest_recoverable_session_with(cache.path(), Path::new("layout.kicad_pcb"), |_, _| {
+                false
+            })
             .unwrap()
             .unwrap();
         assert!(matches!(recovery, RecoverableSession::Ready(_)));
     }
 
     #[test]
-    fn matches_only_editor_process_names() {
-        assert!(is_editor_process_name("/usr/bin/open\n"));
-        assert!(is_editor_process_name("pcbnew"));
-        assert!(is_editor_process_name("\"kicad.exe\""));
-        assert!(is_editor_process_name(
-            "/Applications/KiCad/KiCad.app/Contents/MacOS/pcbnew"
-        ));
-        assert!(!is_editor_process_name("cargo"));
-        assert!(!is_editor_process_name("INFO: No tasks are running"));
+    fn matches_editor_kind_and_exact_target() {
+        let sch = Path::new("/root.kicad_sch");
+        let pcb = Path::new("/root.kicad_pcb");
+        for (name, args, target, expected) in [
+            ("eeschema", "eeschema /root.kicad_sch", sch, true),
+            ("pcbnew.exe", "pcbnew.exe /root.kicad_pcb", pcb, true),
+            (
+                "/usr/bin/open\n",
+                "open -n -W -a /eeschema.app /root.kicad_sch",
+                sch,
+                true,
+            ),
+            (
+                "open",
+                "open -n -W -a /pcbnew.app /root.kicad_sch",
+                sch,
+                false,
+            ),
+            ("pcbnew", "pcbnew /root.kicad_sch", sch, false),
+            ("eeschema", "eeschema /other.kicad_sch", sch, false),
+            ("eeschema", "eeschema /root.kicad_sch.other", sch, false),
+        ] {
+            assert_eq!(is_editor_process(name, args, target), expected, "{args}");
+        }
+    }
+
+    #[test]
+    fn recovery_and_discard_are_target_specific_in_a_shared_directory() {
+        let cache = tempfile::tempdir().unwrap();
+        write_session_manifest(cache.path(), SyncSessionState::Recoverable, Some(42), false);
+        for target in ["layout.kicad_sch", "other.kicad_pcb"] {
+            assert!(
+                latest_recoverable_session_with(cache.path(), Path::new(target), |_, _| true)
+                    .unwrap()
+                    .is_none()
+            );
+            mark_recoverable_sessions_prompt_seen(cache.path(), Path::new(target));
+            assert!(
+                !SyncSession::load(cache.path().join("session"))
+                    .unwrap()
+                    .manifest
+                    .prompt_seen
+            );
+        }
+        mark_recoverable_sessions_prompt_seen(cache.path(), Path::new("layout.kicad_pcb"));
+        assert!(
+            SyncSession::load(cache.path().join("session"))
+                .unwrap()
+                .manifest
+                .prompt_seen
+        );
+    }
+
+    #[test]
+    fn nested_inventory_is_filtered_bounded_and_does_not_follow_links() {
+        let root = tempfile::tempdir().unwrap();
+        for name in [
+            "root.kicad_sch",
+            "root.kicad_pro",
+            "sheets/a.kicad_sch",
+            "sheets/deep/b.kicad_sch",
+            "sheets/_autosave-a.kicad_sch",
+            "sheets/a.kicad_sch.tmp",
+            "sheets/a.kicad_sch.lck",
+            "sheets/notes.txt",
+            "root-backups/old.kicad_sch",
+            ".git/hidden.kicad_sch",
+        ] {
+            let path = root.path().join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "test").unwrap();
+        }
+        assert_eq!(
+            local_sync_files(root.path(), true).unwrap(),
+            [
+                "root.kicad_sch",
+                "root.kicad_pro",
+                "sheets/a.kicad_sch",
+                "sheets/deep/b.kicad_sch"
+            ]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect()
+        );
+        assert_eq!(local_sync_files(root.path(), false).unwrap().len(), 2);
+        let at_limit: PathBuf = std::iter::repeat_n("d", MAX_SYNC_DEPTH).collect();
+        assert!(check_sync_bounds(&at_limit, MAX_SYNC_ENTRIES).is_ok());
+        assert!(check_sync_bounds(&at_limit.join("d"), 1).is_err());
+        assert!(check_sync_bounds(Path::new("a"), MAX_SYNC_ENTRIES + 1).is_err());
+        // The walker must fail on a missing root or excess depth, not return a
+        // partial inventory that could delete remote files.
+        assert!(local_sync_files(&root.path().join("missing"), true).is_err());
+        fs::create_dir_all(root.path().join(&at_limit)).unwrap();
+        assert!(local_sync_files(root.path(), true).is_ok());
+        fs::write(root.path().join(&at_limit).join("deep.kicad_sch"), "").unwrap();
+        assert!(local_sync_files(root.path(), true).is_err());
+        fs::remove_dir_all(root.path().join("d")).unwrap();
+        assert!(remote_relative_path("/layout", "/layout/../other.kicad_sch").is_err());
+        assert!(!safe_sync_component("../outside.kicad_sch"));
+        assert!(!safe_sync_component("C:\\outside.kicad_sch"));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.path().join("sheets"), root.path().join("link"))
+                .unwrap();
+            assert!(local_sync_files(root.path(), true).is_err());
+        }
     }
 }
