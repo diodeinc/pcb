@@ -309,32 +309,6 @@ pub struct ComponentKey {
     pub manufacturer: Option<String>,
 }
 
-fn component_part_json(component: &ComponentKey) -> serde_json::Value {
-    let mut part = serde_json::json!({ "mpn": component.mpn });
-    if let Some(manufacturer) = &component.manufacturer {
-        part["manufacturer"] = serde_json::json!(manufacturer);
-    }
-    part
-}
-
-fn component_bom_entry(index: usize, component: &ComponentKey) -> serde_json::Value {
-    let mut entry = component_part_json(component);
-    entry["path"] = serde_json::json!(format!("component_{index}"));
-    entry["designator"] = serde_json::json!(format!("X{index}"));
-    entry
-}
-
-fn grouped_component_bom_entry(
-    index: usize,
-    components: &[ComponentKey],
-) -> Option<serde_json::Value> {
-    let (primary, alternatives) = components.split_first()?;
-    let mut entry = component_bom_entry(index, primary);
-    entry["alternatives"] =
-        serde_json::Value::Array(alternatives.iter().map(component_part_json).collect());
-    Some(entry)
-}
-
 /// Format a price value for display (always 2 decimal places)
 pub fn format_price(price: f64) -> String {
     format!("${:.2}", price)
@@ -352,7 +326,7 @@ pub fn format_number_with_commas(n: i32) -> String {
 }
 
 pub fn has_search_availability(availability: &Availability) -> bool {
-    availability.us.is_some() || availability.global.is_some() || !availability.offers.is_empty()
+    !availability.offers.is_empty()
 }
 
 /// Fetch pricing for grouped alternate components as one planned BOM line per group.
@@ -360,40 +334,42 @@ pub fn fetch_pricing_grouped_batch(
     auth_token: Option<&str>,
     groups: &[Vec<ComponentKey>],
 ) -> Result<Vec<Availability>> {
-    if groups.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let bom_entries: Vec<_> = groups
+    let part = |component: &ComponentKey| {
+        let mut part = serde_json::json!({ "mpn": component.mpn });
+        if let Some(manufacturer) = &component.manufacturer {
+            part["manufacturer"] = serde_json::json!(manufacturer);
+        }
+        part
+    };
+    let design_bom = groups
         .iter()
         .enumerate()
-        .filter_map(|(index, group)| grouped_component_bom_entry(index, group))
-        .collect();
-
-    if bom_entries.is_empty() {
-        return Ok(vec![Availability::default(); groups.len()]);
+        .filter_map(|(index, group)| {
+            let (primary, alternatives) = group.split_first()?;
+            let mut entry = part(primary);
+            entry["path"] = serde_json::json!(format!("component_{index}"));
+            entry["designator"] = serde_json::json!(format!("X{index}"));
+            entry["alternatives"] = alternatives.iter().map(part).collect();
+            Some(entry)
+        })
+        .collect::<Vec<_>>();
+    let mut results = vec![Availability::default(); groups.len()];
+    if design_bom.is_empty() {
+        return Ok(results);
     }
 
     let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    let match_response =
-        call_bom_match_api(&ctx, auth_token, &serde_json::Value::Array(bom_entries), 30)?;
-    let mut results = vec![Availability::default(); groups.len()];
-
-    for bom_line in &match_response.results {
-        let Some(path) = bom_line.design_entry.path.as_deref() else {
-            continue;
-        };
-        let Some(group_idx) = path
-            .strip_prefix("component_")
-            .and_then(|s| s.parse::<usize>().ok())
-        else {
-            continue;
-        };
-        let Some(slot) = results.get_mut(group_idx) else {
-            continue;
-        };
-
-        *slot = match_response.availability(bom_line, 1);
+    let response = call_bom_match_api(&ctx, auth_token, &design_bom.into(), 30)?;
+    for line in &response.results {
+        let slot = line
+            .design_entry
+            .path
+            .as_deref()
+            .and_then(|path| path.strip_prefix("component_")?.parse::<usize>().ok())
+            .and_then(|index| results.get_mut(index));
+        if let Some(slot) = slot {
+            *slot = response.availability(line, 1);
+        }
     }
 
     Ok(results)
