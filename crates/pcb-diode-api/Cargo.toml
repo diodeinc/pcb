@@ -14,17 +14,13 @@ tempfile = { workspace = true }
 anyhow = { workspace = true }
 anstream = { workspace = true }
 atomicwrites = { workspace = true }
-arboard = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 colored = { workspace = true }
-crossterm = { workspace = true }
 dirs = { workspace = true }
 fslock = { workspace = true }
-fuzzy-matcher = "0.3"
 hex = { workspace = true }
-image = { workspace = true }
 inquire = { workspace = true }
 log = { workspace = true }
 md-5 = { workspace = true }
@@ -40,14 +36,11 @@ pcb-ui = { workspace = true }
 pcb-zen = { workspace = true }
 pcb-zen-core = { workspace = true }
 rand = { workspace = true }
-ratatui = { workspace = true }
-ratatui-image = { workspace = true }
 reqwest = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-sqlite-vec = "0.1"
 toml = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }

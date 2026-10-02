@@ -1,17 +1,14 @@
 //! Download registry index from API server + S3
 
-pub use crate::download_support::{DownloadProgress, DownloadSource};
-use crate::download_support::{
-    ProgressReader, ensure_parent_dir, http_client,
-    save_local_version as save_shared_local_version, write_decoded_index,
-};
 use anyhow::{Context, Result};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use pcb_zen_core::config::PcbToml;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
 use std::thread;
 
 const REGISTRIES_ROUTE: &str = "/api/registries";
@@ -96,35 +93,12 @@ struct RegistriesResponse {
 pub struct RegistryIndexFile {
     pub registry: RegistryInfo,
     pub path: PathBuf,
-    pub downloaded: bool,
 }
 
 #[derive(Debug, Clone)]
 pub enum RegistrySearchScope {
     Registries(Vec<RegistryInfo>),
     IndexFiles(Vec<RegistryIndexFile>),
-}
-
-impl RegistrySearchScope {
-    pub fn updates_disabled(&self) -> bool {
-        matches!(self, Self::IndexFiles(_))
-    }
-
-    pub fn index_paths(&self) -> Result<Vec<PathBuf>> {
-        match self {
-            Self::Registries(registries) => registries.iter().map(registry_db_path).collect(),
-            Self::IndexFiles(indexes) => {
-                Ok(indexes.iter().map(|index| index.path.clone()).collect())
-            }
-        }
-    }
-
-    pub fn local_indexes_exist(&self) -> bool {
-        match self.index_paths() {
-            Ok(paths) => !paths.is_empty() && paths.iter().all(|path| path.exists()),
-            Err(_) => false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -141,16 +115,43 @@ pub struct RegistryIndexMetadata {
 impl RegistryIndexMetadata {
     /// Stable token for local freshness checks.
     pub fn version_token(&self) -> Result<String> {
-        crate::download_support::sha256_version_token(&self.sha256, "registry index")
+        let sha256 = self.sha256.trim();
+        if sha256.is_empty() {
+            anyhow::bail!("registry index metadata missing sha256");
+        }
+        Ok(sha256.to_string())
     }
 }
 
-pub fn load_local_version(db_path: &Path) -> Option<String> {
-    crate::download_support::load_local_version(db_path)
+fn version_file_path(db_path: &Path) -> PathBuf {
+    db_path.with_extension("db.version")
 }
 
-pub fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
-    save_shared_local_version(db_path, version, "registry")
+fn load_local_version(db_path: &Path) -> Option<String> {
+    fs::read_to_string(version_file_path(db_path))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
+    AtomicFile::new(
+        version_file_path(db_path),
+        OverwriteBehavior::AllowOverwrite,
+    )
+    .write(|f| {
+        f.write_all(version.as_bytes())?;
+        f.flush()
+    })
+    .map_err(|err| anyhow::anyhow!("Failed to write local registry version: {err}"))
+}
+
+fn http_client() -> Result<reqwest::blocking::Client> {
+    let user_agent = format!("diode-pcb/{}", env!("CARGO_PKG_VERSION"));
+    reqwest::blocking::Client::builder()
+        .user_agent(user_agent)
+        .build()
+        .context("Failed to build HTTP client")
 }
 
 /// Fetch registries visible to the current user.
@@ -434,20 +435,11 @@ pub fn default_registry_db_path() -> Result<PathBuf> {
     Ok(home.join(".pcb").join("registry").join("packages.db"))
 }
 
-pub fn local_registry_index(path: PathBuf) -> RegistryIndexFile {
-    RegistryIndexFile {
-        registry: RegistryInfo::local(&path),
-        path,
-        downloaded: false,
-    }
-}
-
 pub fn cached_default_registry_index() -> Result<Option<RegistryIndexFile>> {
     let path = default_registry_db_path()?;
     Ok(path.exists().then_some(RegistryIndexFile {
         registry: RegistryInfo::default_registry(),
         path,
-        downloaded: false,
     }))
 }
 
@@ -481,7 +473,6 @@ fn cached_registry_indexes() -> Result<Vec<RegistryIndexFile>> {
         indexes.push(RegistryIndexFile {
             registry: RegistryInfo::cached(id, &path),
             path,
-            downloaded: false,
         });
     }
 
@@ -539,18 +530,6 @@ pub fn fetch_registry_index_metadata(registry: &RegistryInfo) -> Result<Registry
         .context("Failed to parse registry index metadata")
 }
 
-fn download_index_response(
-    client: &reqwest::blocking::Client,
-    index_url: &str,
-) -> Result<reqwest::blocking::Response> {
-    client
-        .get(index_url)
-        .send()
-        .context("Failed to download registry index")?
-        .error_for_status()
-        .context("S3 returned error when downloading registry index")
-}
-
 pub fn registry_db_path(registry: &RegistryInfo) -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not determine home directory")?;
     Ok(home
@@ -586,7 +565,6 @@ pub fn ensure_registry_index(registry: &RegistryInfo, force: bool) -> Result<Reg
             return Ok(RegistryIndexFile {
                 registry: registry.clone(),
                 path,
-                downloaded: false,
             });
         }
         Err(err) => {
@@ -605,29 +583,21 @@ pub fn ensure_registry_index(registry: &RegistryInfo, force: bool) -> Result<Reg
         return Ok(RegistryIndexFile {
             registry: registry.clone(),
             path,
-            downloaded: false,
         });
     }
 
-    let (progress_tx, progress_rx) = std::sync::mpsc::channel();
-    let _ = progress_rx;
-    let downloaded =
-        match download_registry_index_with_progress(&path, &progress_tx, force, &metadata) {
-            Ok(()) => true,
-            Err(err) if !force && path.exists() => {
-                log::debug!(
-                    "using cached registry index for {} after download failed: {err}",
-                    registry.display_name()
-                );
-                false
-            }
-            Err(err) => return Err(err),
-        };
+    match download_registry_index(&path, &metadata) {
+        Ok(()) => {}
+        Err(err) if !force && path.exists() => log::debug!(
+            "using cached registry index for {} after download failed: {err}",
+            registry.display_name()
+        ),
+        Err(err) => return Err(err),
+    }
 
     Ok(RegistryIndexFile {
         registry: registry.clone(),
         path,
-        downloaded,
     })
 }
 
@@ -667,92 +637,29 @@ pub fn ensure_registry_indexes(
     Ok(files)
 }
 
-pub fn ensure_registry_indexes_with_progress(
-    registries: Vec<RegistryInfo>,
-    progress_tx: &Sender<DownloadProgress>,
-    is_update: bool,
-    force: bool,
-) -> Result<Vec<RegistryIndexFile>> {
-    if !is_update || force {
-        let _ = progress_tx.send(DownloadProgress {
-            source: DownloadSource::Registry,
-            pct: None,
-            done: false,
-            error: None,
-            is_update,
-        });
+/// Download and decompress a registry index into place.
+fn download_registry_index(dest_path: &Path, index_metadata: &RegistryIndexMetadata) -> Result<()> {
+    if let Some(parent) = dest_path.parent() {
+        fs::create_dir_all(parent).context("Failed to create registry directory")?;
     }
 
-    match ensure_registry_indexes(registries, force) {
-        Ok(files) => {
-            if !is_update || files.iter().any(|file| file.downloaded) {
-                let _ = progress_tx.send(DownloadProgress {
-                    source: DownloadSource::Registry,
-                    pct: Some(100),
-                    done: true,
-                    error: None,
-                    is_update,
-                });
-            }
-            Ok(files)
-        }
-        Err(err) => {
-            let msg = err.to_string();
-            let _ = progress_tx.send(DownloadProgress {
-                source: DownloadSource::Registry,
-                pct: None,
-                done: true,
-                error: Some(msg.clone()),
-                is_update,
-            });
-            Err(err)
-        }
-    }
-}
-
-/// Download registry index with progress reporting via channel
-///
-pub fn download_registry_index_with_progress(
-    dest_path: &Path,
-    progress_tx: &Sender<DownloadProgress>,
-    is_update: bool,
-    index_metadata: &RegistryIndexMetadata,
-) -> Result<()> {
-    let send_progress = |pct: Option<u8>, done: bool, error: Option<String>| {
-        let _ = progress_tx.send(DownloadProgress {
-            source: DownloadSource::Registry,
-            pct,
-            done,
-            error,
-            is_update,
-        });
-    };
-
-    send_progress(None, false, None);
-
-    let client = http_client()?;
-
-    ensure_parent_dir(dest_path, "registry")?;
-
-    let response = match download_index_response(&client, &index_metadata.url) {
-        Ok(r) => r,
-        Err(e) => {
-            let msg = format!("Failed to download registry index: {e}");
-            send_progress(None, true, Some(msg.clone()));
-            anyhow::bail!(msg);
-        }
-    };
-
-    let total_size = response.content_length();
-
-    // Wrap response in a progress-tracking reader, then decompress with zstd
-    let progress_reader = ProgressReader::new(response, total_size, &send_progress);
-    write_decoded_index(dest_path, progress_reader, "registry index")?;
+    let response = http_client()?
+        .get(&index_metadata.url)
+        .send()
+        .context("Failed to download registry index")?
+        .error_for_status()
+        .context("S3 returned error when downloading registry index")?;
+    let mut decoder =
+        zstd::stream::Decoder::new(response).context("Failed to create zstd decoder")?;
+    AtomicFile::new(dest_path, OverwriteBehavior::AllowOverwrite)
+        .write(|file| {
+            io::copy(&mut decoder, file)?;
+            file.flush()
+        })
+        .context("Failed to decompress registry index into place")?;
 
     let version_token = index_metadata.version_token()?;
     let _ = save_local_version(dest_path, &version_token);
-
-    send_progress(Some(100), true, None);
     Ok(())
 }
 

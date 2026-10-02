@@ -53,7 +53,6 @@ pcb-step = { path = "crates/pcb-step" }
 anyhow = "1.0"
 anstream = "1.0"
 atomicwrites = "0.4"
-arboard = { version = "3.6", default-features = false }
 ariadne = { version = "0.6", features = ["auto-color"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.6.6", features = ["derive", "wrap_help"] }
@@ -96,10 +95,7 @@ console_error_panic_hook = "0.1"
 console_log = "1.0.0"
 crossterm = "0.29"
 ctrlc = { version = "3.5", features = ["termination"] }
-ratatui = "0.30"
-ratatui-image = { version = "11.0", default-features = false, features = ["crossterm"] }
 
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 csv = "1.4"
 derivative = "2.2"
 fixedbitset = "0.5"
