@@ -93,21 +93,6 @@ impl Availability {
         ))
         .filter(|(mpn, manufacturer)| !mpn.is_empty() && !manufacturer.is_empty())
     }
-
-    pub fn selected_datasheet_url(&self) -> Option<&str> {
-        if !matches!(
-            self.match_status,
-            Some(BomMatchStatus::Exact | BomMatchStatus::Compatible)
-        ) {
-            return None;
-        }
-
-        self.selected_offer()?
-            .datasheet_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|url| !url.is_empty())
-    }
 }
 
 /// Compact availability summary for a region

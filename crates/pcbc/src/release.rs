@@ -858,16 +858,14 @@ fn validate_build(
             zen_file_rel.display().to_string(),
         )));
 
-        crate::build::BuildEvalState::new(staged_resolution)
-            .with_bom_hydration(pcb_diode_api::BomMatchMode::Online)
-            .build(
-                &staged_zen_path,
-                Default::default(),
-                passes,
-                false, // don't deny warnings - we'll prompt user instead
-                &mut has_errors,
-                &mut has_warnings,
-            )
+        crate::build::BuildEvalState::new(staged_resolution).build(
+            &staged_zen_path,
+            Default::default(),
+            passes,
+            false, // don't deny warnings - we'll prompt user instead
+            &mut has_errors,
+            &mut has_warnings,
+        )
     });
 
     let crate::build::BuildResult {
@@ -992,7 +990,7 @@ fn check_bom_offers(info: &ReleaseInfo, spinner: &Spinner, bom: &pcb_sch::bom::B
         None,
         &mut sourcing_bom,
         true,
-        pcb_diode_api::BomMatchOptions::for_schematic(pcb_diode_api::BomMatchMode::Online),
+        pcb_diode_api::BomMatchMode::Online,
     );
     let failure = match match_result {
         Err(error) => Some(format!("{error:#}")),

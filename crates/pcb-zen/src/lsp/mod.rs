@@ -70,12 +70,10 @@ pub struct LspEvalContext {
     /// Per-file cache of the schematic extracted before dropping the evaluation.
     last_schematics: Arc<RwLock<HashMap<PathBuf, pcb_sch::Schematic>>>,
     custom_request_handler: Option<Arc<CustomRequestHandler>>,
-    schematic_hydrator: Option<Arc<SchematicHydrator>>,
 }
 
 type CustomRequestHandler =
     dyn Fn(&str, &JsonValue) -> anyhow::Result<Option<JsonValue>> + Send + Sync;
-type SchematicHydrator = dyn Fn(&Path, &mut pcb_sch::Schematic) + Send + Sync;
 
 #[derive(Default)]
 struct FileAnalysis {
@@ -206,7 +204,6 @@ impl Default for LspEvalContext {
             netlist_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             last_schematics: Arc::new(RwLock::new(HashMap::new())),
             custom_request_handler: None,
-            schematic_hydrator: None,
         }
     }
 }
@@ -239,20 +236,6 @@ impl LspEvalContext {
     {
         self.custom_request_handler = Some(Arc::new(handler));
         self
-    }
-
-    pub fn with_schematic_hydrator<F>(mut self, hydrator: F) -> Self
-    where
-        F: Fn(&Path, &mut pcb_sch::Schematic) + Send + Sync + 'static,
-    {
-        self.schematic_hydrator = Some(Arc::new(hydrator));
-        self
-    }
-
-    fn hydrate_schematic(&self, source_path: &Path, schematic: &mut pcb_sch::Schematic) {
-        if let Some(hydrator) = &self.schematic_hydrator {
-            hydrator(source_path, schematic);
-        }
     }
 
     fn open_file_contents(&self, path: &Path) -> Option<String> {
@@ -387,23 +370,15 @@ impl LspEvalContext {
         let schematic_result =
             eval_result.and_then(|output| output.to_schematic_with_diagnostics());
 
-        self.evaluation_response(
-            path_buf,
-            parameters,
-            schematic_result,
-            evaluated_content_hash,
-        )
+        self.evaluation_response(parameters, schematic_result, evaluated_content_hash)
     }
 
     fn evaluation_response(
         &self,
-        path: &Path,
         parameters: Option<Vec<ParameterInfo>>,
         schematic_result: pcb_zen_core::WithDiagnostics<pcb_sch::Schematic>,
         content_hash: Option<String>,
     ) -> ZenerEvaluateResponse {
-        let schematic_result =
-            schematic_result.inspect_mut(|schematic| self.hydrate_schematic(path, schematic));
         ZenerEvaluateResponse {
             success: schematic_result.is_success(),
             parameters,
@@ -875,7 +850,6 @@ impl LspContext for LspEvalContext {
                     Box::new(move || {
                         let response = if inputs.is_empty() {
                             self.evaluation_response(
-                                &path,
                                 parameters,
                                 schematic_result,
                                 Some(evaluated_content_hash),
@@ -1244,8 +1218,7 @@ impl LspContext for LspEvalContext {
                             // Try the cached schematic first (populated during
                             // parse_file_with_contents) so we can return the
                             // schematic without a redundant full evaluation.
-                            if let Some(mut cached) = self.get_last_schematic(path_buf) {
-                                self.hydrate_schematic(path_buf, &mut cached);
+                            if let Some(cached) = self.get_last_schematic(path_buf) {
                                 serde_json::to_value(&cached).ok()
                             } else {
                                 // Fallback: evaluate in a fresh context.
@@ -1264,10 +1237,6 @@ impl LspContext for LspEvalContext {
                                 eval_result
                                     .output
                                     .and_then(|fmv| fmv.to_schematic().ok())
-                                    .map(|mut schematic| {
-                                        self.hydrate_schematic(path_buf, &mut schematic);
-                                        schematic
-                                    })
                                     .and_then(|schematic| serde_json::to_value(&schematic).ok())
                             }
                         }
@@ -1622,11 +1591,6 @@ mod tests {
     #[test]
     fn subscribed_validation_reuses_default_evaluation_and_preserves_custom_inputs()
     -> anyhow::Result<()> {
-        use std::sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        };
-
         let dir = tempfile::tempdir()?;
         let root = dir.path().canonicalize()?;
         fs::write(
@@ -1637,24 +1601,16 @@ mod tests {
         let uri = LspUri::File(path.clone());
         let source = "label = config(str, default = \"DEFAULT\")\nsignal = Net(label)\n";
         fs::write(&path, source)?;
-        let hydrations = Arc::new(AtomicUsize::new(0));
-        let counter = hydrations.clone();
-        let ctx = LspEvalContext::default()
-            .set_offline(true)
-            .with_schematic_hydrator(move |_, _| {
-                counter.fetch_add(1, Ordering::Relaxed);
-            });
+        let ctx = LspEvalContext::default().set_offline(true);
         ctx.did_change_file_contents(&uri, source);
         ctx.set_netlist_subscription(&path, &HashMap::new());
 
         let mut previous_id = None;
-        for i in 0..2 {
+        for _ in 0..2 {
             let result = ctx.parse_file_with_contents(&uri, source.to_string());
             assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-            assert_eq!(hydrations.load(Ordering::Relaxed), i);
             let update: super::ZenerNetlistUpdateParams =
                 serde_json::from_value(result.netlist_update.unwrap()())?;
-            assert_eq!(hydrations.load(Ordering::Relaxed), i + 1);
             assert!(update.result.success);
             assert!(update.inputs.is_none());
             assert_eq!(
@@ -1677,9 +1633,7 @@ mod tests {
 
         let inputs = HashMap::from([("label".to_string(), json!("CUSTOM"))]);
         ctx.set_netlist_subscription(&path, &inputs);
-        // Save-only validation discards the update without hydrating it.
         drop(ctx.parse_file_with_contents(&uri, source.to_string()));
-        assert_eq!(hydrations.load(Ordering::Relaxed), 2);
         let result = ctx.parse_file_with_contents(&uri, source.to_string());
         let update: super::ZenerNetlistUpdateParams =
             serde_json::from_value(result.netlist_update.unwrap()())?;

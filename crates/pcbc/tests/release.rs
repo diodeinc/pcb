@@ -587,7 +587,7 @@ fn test_publish_preserves_authored_bom_intent() {
             component("GENERIC.R").mpn().as_deref(),
             component("GENERIC.R").manufacturer().as_deref()
         ),
-        (Some("SELECTED-MPN"), Some("Selected Manufacturer"))
+        (None, None)
     );
     assert_eq!(
         (
@@ -699,7 +699,7 @@ fn test_publish_board_full() {
     assert!(build_warning < preflight_finished);
     assert!(bom_finished < bom_warning);
     assert!(bom_warning < preflight_finished);
-    bom_match.assert_calls(1);
+    bom_match.assert_calls(2);
 
     let staging_dir = find_staging_dir(&sb, "TestBoard");
     let manufacturing = sb.default_cwd().join(&staging_dir).join("manufacturing");

@@ -49,14 +49,6 @@ pub struct LayoutArgs {
     /// Output format
     #[arg(short = 'f', long, value_enum, default_value_t = LayoutOutputFormat::Human)]
     pub format: LayoutOutputFormat,
-
-    /// Skip BOM hydration (MPN matching) when building the schematic.
-    ///
-    /// DFM checks copper geometry and net attribution, neither of which uses
-    /// hydrated part data, so `pcb dfm` sets this to avoid the BOM-match
-    /// network round trip. Internal only; not a CLI flag.
-    #[arg(skip)]
-    pub(crate) skip_bom_hydration: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -166,20 +158,7 @@ pub(crate) fn prepare_design(args: &LayoutArgs) -> Result<PreparedDesign> {
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
 
-    let bom_match_mode = if args.offline {
-        pcb_diode_api::BomMatchMode::Offline
-    } else {
-        pcb_diode_api::BomMatchMode::Online
-    };
-    let eval_state = BuildEvalState::new(resolution_result);
-    // DFM never reads hydrated part data (it checks copper geometry and net
-    // attribution), so it skips the BOM-match round trip entirely.
-    let eval_state = if args.skip_bom_hydration {
-        eval_state
-    } else {
-        eval_state.with_bom_hydration(bom_match_mode)
-    };
-    let build_result = eval_state.build(
+    let build_result = BuildEvalState::new(resolution_result).build(
         zen_path,
         config_inputs,
         create_diagnostics_passes(&args.suppress, &[]),

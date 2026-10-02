@@ -63,25 +63,22 @@ pub fn lsp() -> anyhow::Result<()> {
     pcb_starlark_lsp::server::stdio_server(ctx).map_err(Into::into)
 }
 
-/// Start the LSP server with dependency resolution mode, a custom request
-/// handler, and a post-evaluation schematic hydrator.
-pub fn lsp_with_custom_request_handler<F, H>(
+/// Start the LSP server with dependency resolution mode and a custom request
+/// handler.
+pub fn lsp_with_custom_request_handler<F>(
     eager: bool,
     offline: bool,
     handler: F,
-    hydrator: H,
 ) -> anyhow::Result<()>
 where
     F: Fn(&str, &serde_json::Value) -> anyhow::Result<Option<serde_json::Value>>
         + Send
         + Sync
         + 'static,
-    H: Fn(&Path, &mut Schematic) + Send + Sync + 'static,
 {
     let ctx = lsp::LspEvalContext::default()
         .set_eager(eager)
         .set_offline(offline)
-        .with_custom_request_handler(handler)
-        .with_schematic_hydrator(hydrator);
+        .with_custom_request_handler(handler);
     pcb_starlark_lsp::server::stdio_server(ctx).map_err(Into::into)
 }

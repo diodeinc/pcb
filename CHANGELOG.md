@@ -12,6 +12,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Add `pcb auth endpoint` to print the resolved API URL without authenticating.
 
+### Changed
+
+- `pcb layout`, `pcb build`, `pcb sim`, `pcb publish`, and the LSP no longer write BOM-matched MPNs or datasheets into the design; generic parts keep their authored value.
+
+### Fixed
+
+- Restore Global availability in `pcb bom` and `pcb search`.
+
 ## [0.4.66] - 2026-10-02
 
 ### Changed

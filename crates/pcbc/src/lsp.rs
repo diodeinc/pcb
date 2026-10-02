@@ -2,7 +2,7 @@ use clap::Args;
 
 #[derive(Args)]
 pub struct LspArgs {
-    /// Disable network access; use vendored dependencies and cached BOM matches
+    /// Disable network access; use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
 }
@@ -11,20 +11,9 @@ const RESOLVE_DATASHEET_METHOD: &str = "pcb/resolveDatasheet";
 
 pub fn execute(args: LspArgs) -> anyhow::Result<()> {
     let offline = args.offline;
-    pcb_zen::lsp_with_custom_request_handler(
-        false,
-        offline,
-        move |method, params| handle_custom_request(method, params, offline),
-        |source_path, schematic| {
-            // Evaluation and viewer-state requests must not wait for supplier APIs.
-            // Reuse cached BOM matches, even when dependency resolution is online.
-            pcb_diode_api::hydrate_schematic_from_bom(
-                source_path,
-                schematic,
-                pcb_diode_api::BomMatchMode::Offline,
-            );
-        },
-    )
+    pcb_zen::lsp_with_custom_request_handler(false, offline, move |method, params| {
+        handle_custom_request(method, params, offline)
+    })
 }
 
 fn handle_custom_request(

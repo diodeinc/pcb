@@ -118,7 +118,6 @@ fn export_layout(args: &DfmArgs) -> Result<(tempfile::TempDir, PathBuf)> {
         no_open: true,
         offline: args.offline,
         // Only evaluate the source to locate its saved layout.
-        skip_bom_hydration: true,
         no_sync: true,
         ..Default::default()
     };

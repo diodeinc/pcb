@@ -3,18 +3,13 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
     time::Duration,
 };
 
-use pcb_sch::{
-    AttributeValue, InstanceKind, Schematic,
-    bom::{
-        Availability, AvailabilitySummary, BOARD_QUANTITY, BomEntry, BomMatchStatus, Offer,
-        PartCollection, SourcingStockClass,
-    },
+use pcb_sch::bom::{
+    Availability, AvailabilitySummary, BOARD_QUANTITY, BomEntry, BomMatchStatus, Offer,
+    PartCollection, SourcingStockClass,
 };
-use pcb_zen_core::{attrs, lang::part::PartValue};
 
 use crate::{
     WorkspaceContext,
@@ -23,38 +18,13 @@ use crate::{
 
 const BOM_MATCH_TIMEOUT_SECS: u64 = 120;
 const BOM_MATCH_CACHE_NAMESPACE: &str = "bom-match-v3";
-const DEFAULT_BOM_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
-const SCHEMATIC_BOM_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Age at which an online read refreshes a cache entry. Stale entries remain usable.
+const BOM_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BomMatchMode {
     Online,
     Offline,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BomMatchOptions {
-    pub mode: BomMatchMode,
-    /// Age at which an online read refreshes a cache entry. Stale entries remain usable.
-    pub cache_ttl: Duration,
-}
-
-impl Default for BomMatchOptions {
-    fn default() -> Self {
-        Self {
-            mode: BomMatchMode::Online,
-            cache_ttl: DEFAULT_BOM_CACHE_TTL,
-        }
-    }
-}
-
-impl BomMatchOptions {
-    pub const fn for_schematic(mode: BomMatchMode) -> Self {
-        Self {
-            mode,
-            cache_ttl: SCHEMATIC_BOM_CACHE_TTL,
-        }
-    }
 }
 
 /// Price break structure
@@ -69,16 +39,18 @@ struct PriceBreak {
 #[serde(rename_all = "UPPERCASE")]
 enum Geography {
     Us,
-    Uk,
     Global,
+    /// Offers outside the sourcing regions are discovered but never ranked.
+    #[serde(other)]
+    Other,
 }
 
 impl std::fmt::Display for Geography {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Us => "US",
-            Self::Uk => "UK",
             Self::Global => "Global",
+            Self::Other => "Other",
         })
     }
 }
@@ -196,86 +168,6 @@ impl PreparedBomMatch {
         }
         bom.availability = self.availability;
     }
-
-    fn apply_to_schematic(&self, schematic: &mut Schematic) -> usize {
-        let mut hydrated = 0;
-
-        for (instance_ref, instance) in &mut schematic.instances {
-            if instance.kind != InstanceKind::Component {
-                continue;
-            }
-
-            let path = instance_ref.instance_path.join(".");
-            let Some(availability) = self.availability.get(&path) else {
-                continue;
-            };
-
-            let has_authored_identity = [
-                attrs::PART,
-                attrs::MPN,
-                "Mpn",
-                attrs::MANUFACTURER,
-                "Manufacturer",
-            ]
-            .iter()
-            .any(|key| instance.attributes.contains_key(*key));
-            let has_authored_datasheet = [attrs::DATASHEET, "Datasheet"]
-                .iter()
-                .any(|key| instance.attributes.contains_key(*key))
-                || instance
-                    .attributes
-                    .get(attrs::PART)
-                    .and_then(|value| match value {
-                        AttributeValue::Json(value) => Some(value.clone()),
-                        AttributeValue::String(value) => serde_json::from_str(value).ok(),
-                        _ => None,
-                    })
-                    .and_then(|value| value.get("datasheet").cloned())
-                    .and_then(|value| value.as_str().map(str::to_owned))
-                    .is_some_and(|value| !value.trim().is_empty());
-
-            let projected_datasheet = availability
-                .selected_datasheet_url()
-                .filter(|_| !has_authored_datasheet);
-            let mut changed = false;
-
-            if let Some((mpn, manufacturer)) = availability.compatible_part()
-                && !has_authored_identity
-            {
-                let part = PartValue::new(
-                    mpn.to_string(),
-                    manufacturer.to_string(),
-                    Vec::new(),
-                    projected_datasheet.map(str::to_string),
-                );
-
-                instance
-                    .attributes
-                    .insert(attrs::MPN.into(), AttributeValue::String(mpn.to_string()));
-                instance.attributes.insert(
-                    attrs::MANUFACTURER.into(),
-                    AttributeValue::String(manufacturer.to_string()),
-                );
-                instance.attributes.insert(
-                    attrs::PART.into(),
-                    AttributeValue::Json(part.to_json_value()),
-                );
-                changed = true;
-            }
-
-            if let Some(datasheet) = projected_datasheet {
-                instance.attributes.insert(
-                    attrs::DATASHEET.into(),
-                    AttributeValue::String(datasheet.to_string()),
-                );
-                changed = true;
-            }
-
-            hydrated += usize::from(changed);
-        }
-
-        hydrated
-    }
 }
 
 /// Calculate alt stock from offers, deduplicating by (distributor, mpn).
@@ -357,15 +249,16 @@ fn summarize_region<'a>(
     (regional, summary)
 }
 
-fn bom_match_request(bom_entries: &[serde_json::Value]) -> serde_json::Value {
+fn bom_match_request(bom_entries: &[serde_json::Value], region: Geography) -> serde_json::Value {
     serde_json::json!({
         "designBom": bom_entries,
         "format": "normalized",
         "boardQuantity": BOARD_QUANTITY,
-        "regions": ["US", "GLOBAL"],
+        "region": region,
     })
 }
 
+/// The API plans sourcing for one region per request. US offers rank ahead of Global.
 fn call_bom_match_api(
     ctx: &WorkspaceContext,
     auth_token: Option<&str>,
@@ -374,12 +267,27 @@ fn call_bom_match_api(
     strict: bool,
 ) -> Result<MatchBomResponse> {
     let url = bom_match_url(ctx.api_base_url(), strict);
-    let request_body = bom_match_request(bom_entries);
     let client = Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()?;
+    let fetch = |region| fetch_regional_bom_match(&client, &url, auth_token, bom_entries, region);
+    let (us, global) = std::thread::scope(|scope| {
+        let global = scope.spawn(|| fetch(Geography::Global));
+        let us = fetch(Geography::Us);
+        (us, global.join().expect("BOM match request panicked"))
+    });
+    merge_regional_bom_matches(us?, global?)
+}
+
+fn fetch_regional_bom_match(
+    client: &Client,
+    url: &str,
+    auth_token: Option<&str>,
+    bom_entries: &[serde_json::Value],
+    region: Geography,
+) -> Result<MatchBomResponse> {
     let response = crate::auth::apply_bearer_auth(client.post(url), auth_token)
-        .json(&request_body)
+        .json(&bom_match_request(bom_entries, region))
         .send()
         .context("Failed to send BOM match request")?;
     let status = response.status();
@@ -391,6 +299,39 @@ fn call_bom_match_api(
         "BOM match request failed ({status}): {response_text}"
     );
     serde_json::from_str(&response_text).context("Failed to parse BOM match response")
+}
+
+fn merge_regional_bom_matches(
+    us: MatchBomResponse,
+    global: MatchBomResponse,
+) -> Result<MatchBomResponse> {
+    anyhow::ensure!(
+        us.results.len() == global.results.len(),
+        "BOM match regions returned {} and {} results",
+        us.results.len(),
+        global.results.len()
+    );
+    let results = us
+        .results
+        .into_iter()
+        .zip(global.results)
+        .map(|(mut line, global)| {
+            anyhow::ensure!(
+                line.design_entry.path == global.design_entry.path,
+                "BOM match regions returned lines in different orders"
+            );
+            line.offer_ids.extend(global.offer_ids);
+            line.offer_stock_classes.extend(global.offer_stock_classes);
+            line.selected_offer_id = line.selected_offer_id.or(global.selected_offer_id);
+            if global.match_status == BomMatchStatus::NeedsRetry {
+                line.match_status = BomMatchStatus::NeedsRetry;
+            }
+            Ok(line)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut offers = us.offers;
+    offers.extend(global.offers);
+    Ok(MatchBomResponse { results, offers })
 }
 
 fn bom_match_url(api_base_url: &str, strict: bool) -> String {
@@ -543,7 +484,6 @@ fn load_cached_bom_match(
     key: &str,
     bom: &pcb_sch::bom::Bom,
     paths: &[String],
-    ttl: Duration,
     now: i64,
 ) -> Result<Option<CachedBomMatch>> {
     let Some(cache) = cache else {
@@ -559,7 +499,7 @@ fn load_cached_bom_match(
     let prepared = prepare_bom_match(bom, &response)?;
     Ok(Some(CachedBomMatch {
         prepared,
-        fresh: cached.is_fresh(ttl, now),
+        fresh: cached.is_fresh(BOM_CACHE_TTL, now),
     }))
 }
 
@@ -607,14 +547,14 @@ fn canonical_bom_match_request(
         .iter()
         .map(|(_, _, _, entry)| entry.clone())
         .collect::<Vec<_>>();
-    let request = bom_match_request(&canonical_entries);
+    let cache_key = cache_key(&(url, canonical_entries, BOARD_QUANTITY))?;
     let paths = lines.iter().map(|(_, path, _, _)| path.clone()).collect();
     let entries = lines.into_iter().map(|(_, _, entry, _)| entry).collect();
 
     Ok(CanonicalBomMatchRequest {
         paths,
         entries,
-        cache_key: cache_key(&(url, request))?,
+        cache_key,
     })
 }
 
@@ -669,7 +609,7 @@ pub fn match_bom_with_context(
     auth_token: Option<&str>,
     bom: &mut pcb_sch::bom::Bom,
     strict: bool,
-    options: BomMatchOptions,
+    mode: BomMatchMode,
 ) -> Result<()> {
     let cache = open_bom_cache();
     match_bom_with_cache(
@@ -677,7 +617,7 @@ pub fn match_bom_with_context(
         auth_token,
         bom,
         strict,
-        options,
+        mode,
         cache.as_ref(),
         unix_now()?,
     )
@@ -698,11 +638,11 @@ fn match_bom_with_cache(
     auth_token: Option<&str>,
     bom: &mut pcb_sch::bom::Bom,
     strict: bool,
-    options: BomMatchOptions,
+    mode: BomMatchMode,
     cache: Option<&WriteThroughCache>,
     now: i64,
 ) -> Result<()> {
-    prepare_bom_match_with_cache(ctx, auth_token, bom, strict, options, cache, now)?.apply(bom);
+    prepare_bom_match_with_cache(ctx, auth_token, bom, strict, mode, cache, now)?.apply(bom);
     Ok(())
 }
 
@@ -711,7 +651,7 @@ fn prepare_bom_match_with_cache(
     auth_token: Option<&str>,
     bom: &pcb_sch::bom::Bom,
     strict: bool,
-    options: BomMatchOptions,
+    mode: BomMatchMode,
     cache: Option<&WriteThroughCache>,
     now: i64,
 ) -> Result<PreparedBomMatch> {
@@ -721,14 +661,7 @@ fn prepare_bom_match_with_cache(
 
     let url = bom_match_url(ctx.api_base_url(), strict);
     let request = canonical_bom_match_request(&url, bom)?;
-    let cached = match load_cached_bom_match(
-        cache,
-        &request.cache_key,
-        bom,
-        &request.paths,
-        options.cache_ttl,
-        now,
-    ) {
+    let cached = match load_cached_bom_match(cache, &request.cache_key, bom, &request.paths, now) {
         Ok(cached) => cached,
         Err(error) => {
             log::warn!("Ignoring invalid BOM cache entry: {error:#}");
@@ -736,7 +669,7 @@ fn prepare_bom_match_with_cache(
         }
     };
 
-    if options.mode == BomMatchMode::Offline {
+    if mode == BomMatchMode::Offline {
         return Ok(cached.map(|cached| cached.prepared).unwrap_or_default());
     }
 
@@ -778,73 +711,6 @@ fn prepare_bom_match_with_cache(
             Ok(cached.prepared)
         }
     }
-}
-
-/// Opportunistically hydrate a schematic from BOM matches.
-///
-/// Online mode refreshes a stale or missing whole-BOM cache entry. Any failure
-/// falls back to the matching stale entry.
-pub fn hydrate_schematic_from_bom(
-    source_path: &Path,
-    schematic: &mut Schematic,
-    mode: BomMatchMode,
-) {
-    if let Err(error) = try_hydrate_schematic_from_bom(source_path, schematic, mode) {
-        log::warn!("Ignoring BOM hydration failure: {error:#}");
-    }
-}
-
-fn try_hydrate_schematic_from_bom(
-    source_path: &Path,
-    schematic: &mut Schematic,
-    mode: BomMatchMode,
-) -> Result<usize> {
-    let ctx = WorkspaceContext::from_path(source_path);
-    let strict = ctx.bom_strict()?;
-    let cache = open_bom_cache();
-    hydrate_schematic_from_bom_with_cache(
-        &ctx,
-        schematic,
-        strict,
-        mode,
-        cache.as_ref(),
-        unix_now()?,
-    )
-}
-
-fn hydrate_schematic_from_bom_with_cache(
-    ctx: &WorkspaceContext,
-    schematic: &mut Schematic,
-    strict: bool,
-    mode: BomMatchMode,
-    cache: Option<&WriteThroughCache>,
-    now: i64,
-) -> Result<usize> {
-    let mut component_paths = HashSet::new();
-    for (instance_ref, instance) in &schematic.instances {
-        if instance.kind != InstanceKind::Component {
-            continue;
-        }
-        let path = instance_ref.instance_path.join(".");
-        if path.is_empty()
-            || instance.reference_designator.is_none()
-            || !component_paths.insert(path)
-        {
-            return Ok(0);
-        }
-    }
-
-    let bom = schematic.bom().filter_excluded();
-    let prepared = prepare_bom_match_with_cache(
-        ctx,
-        None,
-        &bom,
-        strict,
-        BomMatchOptions::for_schematic(mode),
-        cache,
-        now,
-    )?;
-    Ok(prepared.apply_to_schematic(schematic))
 }
 
 /// Component key for pricing requests
@@ -963,7 +829,6 @@ fn build_search_availability(
     let (_, global) = summarize_region(offers, Geography::Global, 1, 1);
     let offers = offers
         .iter()
-        .filter(|offer| offer.geography != Geography::Uk)
         .map(|offer| offer.to_offer(1))
         .collect::<Vec<_>>();
     let selected_offer_id = retained_selected_offer_id(&offers, selected_offer_id);
@@ -982,35 +847,10 @@ fn build_search_availability(
 mod tests {
     use std::collections::BTreeMap;
 
-    use httpmock::{Method::POST, MockServer};
+    use httpmock::{Method::POST, Mock, MockServer};
     use pcb_sch::bom::{Bom, BomEntry, GenericComponent, Resistor};
-    use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Schematic};
 
     use super::*;
-
-    fn offer(id: &str, breaks: &[(i32, f64)]) -> ComponentOffer {
-        ComponentOffer {
-            id: id.to_string(),
-            geography: Geography::Us,
-            distributor: Some("testdist".to_string()),
-            distributor_part_id: Some(id.to_string()),
-            mpn: Some("TEST-MPN".to_string()),
-            manufacturer: Some("Test Manufacturer".to_string()),
-            price_breaks: Some(
-                breaks
-                    .iter()
-                    .map(|(qty, price)| PriceBreak {
-                        qty: *qty,
-                        price: *price,
-                    })
-                    .collect(),
-            ),
-            stock_available: Some(100),
-            product_url: None,
-            datasheet_url: Some(format!("https://example.com/{id}.pdf")),
-            part_collections: Vec::new(),
-        }
-    }
 
     fn bom_line(match_status: BomMatchStatus, offer_ids: Vec<String>) -> BomLine {
         let offer_stock_classes = offer_ids
@@ -1057,37 +897,6 @@ mod tests {
             HashMap::from([(path.to_string(), entry)]),
             HashMap::from([(path.to_string(), designator.to_string())]),
         )
-    }
-
-    fn test_schematic() -> Schematic {
-        let module = ModuleRef::new("/tmp/root.zen", "Root");
-        let instance_ref = InstanceRef::new(module.clone(), vec!["root".into(), "U1".into()]);
-        let mut instance = Instance::component(module);
-        instance.reference_designator = Some("U1".to_string());
-        instance
-            .attributes
-            .insert("package".into(), AttributeValue::String("0603".into()));
-        instance
-            .attributes
-            .insert("value".into(), AttributeValue::String("10kOhm".into()));
-        instance
-            .attributes
-            .insert("type".into(), AttributeValue::String("resistor".into()));
-        instance
-            .attributes
-            .insert("resistance".into(), AttributeValue::String("10kOhm".into()));
-
-        let mut schematic = Schematic::default();
-        schematic.instances.insert(instance_ref, instance);
-        schematic
-    }
-
-    fn test_component(schematic: &Schematic) -> &Instance {
-        schematic
-            .instances
-            .values()
-            .find(|instance| instance.kind == InstanceKind::Component)
-            .unwrap()
     }
 
     fn compatible_response_for_lines(lines: &[(&str, &str, &str)]) -> serde_json::Value {
@@ -1206,11 +1015,36 @@ mod tests {
         .unwrap()
     }
 
-    fn match_options(mode: BomMatchMode) -> BomMatchOptions {
-        BomMatchOptions {
-            mode,
-            ..Default::default()
+    fn without_offers(mut response: serde_json::Value) -> serde_json::Value {
+        for line in response["results"].as_array_mut().unwrap() {
+            line["offerIds"] = serde_json::json!([]);
+            line["offerStockClasses"] = serde_json::json!({});
+            line["selectedOfferId"] = serde_json::Value::Null;
         }
+        response["offers"] = serde_json::json!({});
+        response
+    }
+
+    /// Serves `response` for US and the same lines without offers for Global.
+    fn mock_match<'a>(
+        server: &'a MockServer,
+        bom: &Bom,
+        response: serde_json::Value,
+    ) -> [Mock<'a>; 2] {
+        let entries = canonical_bom_match_request("", bom).unwrap().entries;
+        [
+            (Geography::Us, response.clone()),
+            (Geography::Global, without_offers(response)),
+        ]
+        .map(|(region, response)| {
+            server.mock(|when, then| {
+                when.method(POST)
+                    .path("/api/boms/match")
+                    .query_param("strict", "true")
+                    .json_body(bom_match_request(&entries, region));
+                then.status(200).json_body(response);
+            })
+        })
     }
 
     #[test]
@@ -1247,16 +1081,48 @@ mod tests {
     }
 
     #[test]
-    fn uk_offers_are_ignored() {
-        let mut uk_offer = offer("uk-offer", &[(1, 1.0)]);
-        uk_offer.geography = Geography::Uk;
+    fn regional_matches_merge_with_us_ranked_first() {
+        let regional = |offer_id: &str, geography: &str| -> MatchBomResponse {
+            let mut response = compatible_response_for("root.U1", offer_id, "API-MPN");
+            response["offers"][offer_id]["geography"] = serde_json::json!(geography);
+            serde_json::from_value(response).unwrap()
+        };
 
-        let availability =
-            build_search_availability(&[&uk_offer], None, BomMatchStatus::Exact, false);
+        let merged = merge_regional_bom_matches(
+            regional("us-offer", "US"),
+            regional("lcsc-offer", "GLOBAL"),
+        )
+        .unwrap();
+        let bom = test_bom();
+        let prepared = prepare_bom_match(&bom, &merged).unwrap();
+        let availability = &prepared.availability["root.U1"];
+        assert_eq!(availability.selected_offer_id.as_deref(), Some("us-offer"));
+        assert!(availability.us.is_some() && availability.global.is_some());
+        assert_eq!(availability.offers.len(), 2);
 
-        assert!(availability.us.is_none());
-        assert!(availability.global.is_none());
-        assert!(availability.offers.is_empty());
+        let global_only = merge_regional_bom_matches(
+            serde_json::from_value(without_offers(compatible_response())).unwrap(),
+            regional("lcsc-offer", "GLOBAL"),
+        )
+        .unwrap();
+        assert_eq!(
+            global_only.results[0].selected_offer_id.as_deref(),
+            Some("lcsc-offer")
+        );
+
+        let retry = merge_regional_bom_matches(
+            regional("us-offer", "US"),
+            serde_json::from_value(retry_response("root.U1")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(retry.results[0].match_status, BomMatchStatus::NeedsRetry);
+
+        let unranked: ComponentOffer = serde_json::from_value(serde_json::json!({
+            "id": "uk-offer",
+            "geography": "UK"
+        }))
+        .unwrap();
+        assert_eq!(unranked.geography, Geography::Other);
     }
 
     #[test]
@@ -1356,136 +1222,6 @@ mod tests {
             json[0]["availability"]["offers"][0]["part_collections"],
             serde_json::json!(["house"])
         );
-    }
-
-    #[test]
-    fn schematic_hydration_respects_match_status() {
-        let cases = [
-            (
-                "MATCH_COMPATIBLE",
-                Some("API-MPN"),
-                Some("API Manufacturer"),
-                Some("https://example.com/API-MPN.pdf"),
-            ),
-            (
-                "MATCH_EXACT",
-                None,
-                None,
-                Some("https://example.com/API-MPN.pdf"),
-            ),
-            ("MATCH_FUZZY", None, None, None),
-        ];
-
-        for (status, expected_mpn, expected_manufacturer, expected_datasheet) in cases {
-            let mut response = compatible_response();
-            response["results"][0]["match"] = serde_json::json!(status);
-            let response: MatchBomResponse = serde_json::from_value(response).unwrap();
-            let mut schematic = test_schematic();
-            prepare_bom_match(&schematic.bom(), &response)
-                .unwrap()
-                .apply_to_schematic(&mut schematic);
-
-            let component = test_component(&schematic);
-            assert_eq!(component.mpn().as_deref(), expected_mpn, "{status}");
-            assert_eq!(
-                component.manufacturer().as_deref(),
-                expected_manufacturer,
-                "{status}"
-            );
-            assert_eq!(
-                component.string_attr(&["datasheet"]).as_deref(),
-                expected_datasheet,
-                "{status}"
-            );
-        }
-    }
-
-    #[test]
-    fn hydration_does_not_replace_authored_metadata() {
-        let response: MatchBomResponse = serde_json::from_value(compatible_response()).unwrap();
-        let mut schematic = test_schematic();
-        schematic
-            .instances
-            .values_mut()
-            .next()
-            .unwrap()
-            .attributes
-            .insert(
-                "part".into(),
-                AttributeValue::Json(serde_json::json!({
-                    "mpn": "AUTHORED-MPN",
-                    "manufacturer": "Authored Manufacturer",
-                    "qualifications": [],
-                    "datasheet": "https://example.com/authored.pdf"
-                })),
-            );
-        let before = serde_json::to_value(&schematic).unwrap();
-
-        prepare_bom_match(&schematic.bom(), &response)
-            .unwrap()
-            .apply_to_schematic(&mut schematic);
-        assert_eq!(serde_json::to_value(&schematic).unwrap(), before);
-    }
-
-    #[test]
-    fn incomplete_schematic_does_not_reach_panicking_bom_conversion() {
-        let context = WorkspaceContext::from_api_base_url("https://api.example.com");
-        let mut schematic = test_schematic();
-        schematic
-            .instances
-            .values_mut()
-            .next()
-            .unwrap()
-            .reference_designator = None;
-
-        assert_eq!(
-            hydrate_schematic_from_bom_with_cache(
-                &context,
-                &mut schematic,
-                true,
-                BomMatchMode::Offline,
-                None,
-                unix_now().unwrap(),
-            )
-            .unwrap(),
-            0
-        );
-    }
-
-    #[test]
-    fn schematic_hydration_refreshes_online_and_reuses_cache_offline() {
-        let server = MockServer::start();
-        let network = server.mock(|when, then| {
-            when.method(POST)
-                .path("/api/boms/match")
-                .query_param("strict", "true");
-            then.status(200).json_body(compatible_response());
-        });
-        let context = WorkspaceContext::from_api_base_url(server.base_url());
-        let tempdir = tempfile::tempdir().unwrap();
-        let cache = cache_for(&tempdir);
-        let now = unix_now().unwrap();
-
-        for (mode, expected_mpn, expected_calls) in [
-            (BomMatchMode::Offline, None, 0),
-            (BomMatchMode::Online, Some("API-MPN"), 1),
-            (BomMatchMode::Offline, Some("API-MPN"), 1),
-        ] {
-            let mut schematic = test_schematic();
-            let hydrated = hydrate_schematic_from_bom_with_cache(
-                &context,
-                &mut schematic,
-                true,
-                mode,
-                Some(&cache),
-                now,
-            )
-            .unwrap();
-
-            assert_eq!(hydrated, usize::from(expected_mpn.is_some()));
-            assert_eq!(test_component(&schematic).mpn().as_deref(), expected_mpn);
-            network.assert_calls(expected_calls);
-        }
     }
 
     #[test]
@@ -1632,7 +1368,7 @@ mod tests {
             None,
             &mut empty,
             true,
-            match_options(BomMatchMode::Online),
+            BomMatchMode::Online,
             None,
             now,
         )
@@ -1646,7 +1382,7 @@ mod tests {
             None,
             &mut fully_excluded,
             true,
-            match_options(BomMatchMode::Online),
+            BomMatchMode::Online,
             None,
             now,
         )
@@ -1660,12 +1396,7 @@ mod tests {
     #[test]
     fn cache_policy_is_fresh_then_live_with_one_stale_fallback() {
         let server = MockServer::start();
-        let mut success = server.mock(|when, then| {
-            when.method(POST)
-                .path("/api/boms/match")
-                .query_param("strict", "true");
-            then.status(200).json_body(compatible_response());
-        });
+        let mut success = mock_match(&server, &test_bom(), compatible_response());
         let tempdir = tempfile::tempdir().unwrap();
         let cache = cache_for(&tempdir);
         let context = WorkspaceContext::from_api_base_url(server.base_url());
@@ -1677,13 +1408,13 @@ mod tests {
             None,
             &mut offline_miss,
             true,
-            match_options(BomMatchMode::Offline),
+            BomMatchMode::Offline,
             Some(&cache),
             now,
         )
         .unwrap();
         assert!(offline_miss.entries["root.U1"].mpn.is_none());
-        success.assert_calls(0);
+        success[0].assert_calls(0);
 
         let mut network = test_bom();
         match_bom_with_cache(
@@ -1691,13 +1422,13 @@ mod tests {
             None,
             &mut network,
             true,
-            match_options(BomMatchMode::Online),
+            BomMatchMode::Online,
             Some(&cache),
             now,
         )
         .unwrap();
         assert_eq!(network.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
-        success.assert_calls(1);
+        success.iter().for_each(|mock| mock.assert_calls(1));
 
         let mut fresh = test_bom_at("nested.R99", "R99");
         match_bom_with_cache(
@@ -1705,7 +1436,7 @@ mod tests {
             None,
             &mut fresh,
             true,
-            match_options(BomMatchMode::Online),
+            BomMatchMode::Online,
             Some(&cache),
             now + 100,
         )
@@ -1717,28 +1448,22 @@ mod tests {
                 .and_then(|offer| offer.datasheet_url.as_deref()),
             Some("https://example.com/API-MPN.pdf")
         );
-        success.assert_calls(1);
+        success[0].assert_calls(1);
 
-        let mut custom_ttl = test_bom();
+        let mut expired = test_bom();
         match_bom_with_cache(
             &context,
             None,
-            &mut custom_ttl,
+            &mut expired,
             true,
-            BomMatchOptions {
-                mode: BomMatchMode::Online,
-                cache_ttl: Duration::from_secs(10),
-            },
+            BomMatchMode::Online,
             Some(&cache),
-            now + 100,
+            now + BOM_CACHE_TTL.as_secs() as i64 + 100,
         )
         .unwrap();
-        assert_eq!(
-            custom_ttl.entries["root.U1"].mpn.as_deref(),
-            Some("API-MPN")
-        );
-        success.assert_calls(2);
-        success.delete();
+        assert_eq!(expired.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        success[0].assert_calls(2);
+        success.iter_mut().for_each(Mock::delete);
 
         let failure = server.mock(|when, then| {
             when.method(POST)
@@ -1752,7 +1477,7 @@ mod tests {
             None,
             &mut stale,
             true,
-            match_options(BomMatchMode::Online),
+            BomMatchMode::Online,
             Some(&cache),
             now + 1_000,
         )
@@ -1764,7 +1489,7 @@ mod tests {
                 .and_then(|offer| offer.datasheet_url.as_deref()),
             Some("https://example.com/API-MPN.pdf")
         );
-        failure.assert_calls(1);
+        failure.assert_calls(2);
 
         let mut offline = test_bom();
         match_bom_with_cache(
@@ -1772,7 +1497,7 @@ mod tests {
             None,
             &mut offline,
             true,
-            match_options(BomMatchMode::Offline),
+            BomMatchMode::Offline,
             Some(&cache),
             now + 1_000,
         )
@@ -1784,7 +1509,7 @@ mod tests {
                 .and_then(|offer| offer.datasheet_url.as_deref()),
             Some("https://example.com/API-MPN.pdf")
         );
-        failure.assert_calls(1);
+        failure.assert_calls(2);
 
         let mut no_cache = test_bom();
         assert!(
@@ -1793,14 +1518,14 @@ mod tests {
                 None,
                 &mut no_cache,
                 true,
-                match_options(BomMatchMode::Online),
+                BomMatchMode::Online,
                 None,
                 now + 1_000,
             )
             .is_err()
         );
         assert!(no_cache.entries["root.U1"].mpn.is_none());
-        failure.assert_calls(2);
+        failure.assert_calls(4);
     }
 
     #[test]
@@ -1811,29 +1536,20 @@ mod tests {
         let context = WorkspaceContext::from_api_base_url(server.base_url());
         let now = unix_now().unwrap();
         let mut bom = test_bom_with_distinct_second_line();
-        let request =
-            canonical_bom_match_request(&bom_match_url(context.api_base_url(), true), &bom)
-                .unwrap();
 
         let mut initial_response = compatible_response();
         initial_response["results"]
             .as_array_mut()
             .unwrap()
             .push(retry_response("root.U2")["results"][0].clone());
-        let initial = server.mock(|when, then| {
-            when.method(POST)
-                .path("/api/boms/match")
-                .query_param("strict", "true")
-                .json_body(bom_match_request(&request.entries));
-            then.status(200).json_body(initial_response);
-        });
+        let initial = mock_match(&server, &bom, initial_response);
 
         match_bom_with_cache(
             &context,
             None,
             &mut bom,
             true,
-            match_options(BomMatchMode::Online),
+            BomMatchMode::Online,
             Some(&cache),
             now,
         )
@@ -1855,14 +1571,14 @@ mod tests {
             None,
             &mut offline,
             true,
-            match_options(BomMatchMode::Offline),
+            BomMatchMode::Offline,
             Some(&cache),
             now + 1,
         )
         .unwrap();
 
         assert!(offline.availability.is_empty());
-        initial.assert_calls(1);
+        initial.iter().for_each(|mock| mock.assert_calls(1));
     }
 
     #[test]
@@ -1873,27 +1589,19 @@ mod tests {
         let context = WorkspaceContext::from_api_base_url(server.base_url());
         let now = unix_now().unwrap();
 
-        let one_line_bom = test_bom();
-        let initial_request = bom_match_request(&bom_request_entries(&one_line_bom).unwrap());
-        let initial = server.mock(|when, then| {
-            when.method(POST)
-                .path("/api/boms/match")
-                .query_param("strict", "true")
-                .json_body(initial_request);
-            then.status(200).json_body(compatible_response());
-        });
-        let mut initial_bom = one_line_bom;
+        let mut initial_bom = test_bom();
+        let initial = mock_match(&server, &initial_bom, compatible_response());
         match_bom_with_cache(
             &context,
             None,
             &mut initial_bom,
             true,
-            match_options(BomMatchMode::Online),
+            BomMatchMode::Online,
             Some(&cache),
             now,
         )
         .unwrap();
-        initial.assert_calls(1);
+        initial[0].assert_calls(1);
 
         let mut different_request_offline = test_bom_with_second_line();
         match_bom_with_cache(
@@ -1901,23 +1609,18 @@ mod tests {
             None,
             &mut different_request_offline,
             true,
-            match_options(BomMatchMode::Offline),
+            BomMatchMode::Offline,
             Some(&cache),
             now + 100,
         )
         .unwrap();
         assert!(different_request_offline.entries["root.U1"].mpn.is_none());
         assert!(different_request_offline.entries["root.U2"].mpn.is_none());
-        initial.assert_calls(1);
+        initial[0].assert_calls(1);
 
         let grouped_bom = test_bom_with_second_line();
-        let grouped_entries = bom_request_entries(&grouped_bom).unwrap();
-        let refresh_request = bom_match_request(&grouped_entries);
         let mut failure = server.mock(|when, then| {
-            when.method(POST)
-                .path("/api/boms/match")
-                .query_param("strict", "true")
-                .json_body(refresh_request.clone());
+            when.method(POST).path("/api/boms/match");
             then.status(503).body("offline");
         });
         let mut failed = test_bom_with_second_line();
@@ -1927,33 +1630,31 @@ mod tests {
                 None,
                 &mut failed,
                 true,
-                match_options(BomMatchMode::Online),
+                BomMatchMode::Online,
                 Some(&cache),
                 now + 100,
             )
             .is_err()
         );
         assert!(failed.availability.is_empty());
-        failure.assert_calls(1);
+        failure.assert_calls(2);
         failure.delete();
 
-        let refresh = server.mock(|when, then| {
-            when.method(POST)
-                .path("/api/boms/match")
-                .query_param("strict", "true")
-                .json_body(refresh_request);
-            then.status(200).json_body(compatible_response_for_lines(&[
+        let refresh = mock_match(
+            &server,
+            &grouped_bom,
+            compatible_response_for_lines(&[
                 ("root.U1", "selected-offer", "API-MPN"),
                 ("root.U2", "selected-offer", "API-MPN"),
-            ]));
-        });
+            ]),
+        );
         let mut online_bom = grouped_bom;
         match_bom_with_cache(
             &context,
             None,
             &mut online_bom,
             true,
-            match_options(BomMatchMode::Online),
+            BomMatchMode::Online,
             Some(&cache),
             now + 100,
         )
@@ -1978,13 +1679,13 @@ mod tests {
             None,
             &mut offline,
             true,
-            match_options(BomMatchMode::Offline),
+            BomMatchMode::Offline,
             Some(&cache),
             now + 1_000,
         )
         .unwrap();
         assert_eq!(offline.availability.len(), 2);
-        initial.assert_calls(1);
-        refresh.assert_calls(1);
+        initial[0].assert_calls(1);
+        refresh.iter().for_each(|mock| mock.assert_calls(1));
     }
 }
