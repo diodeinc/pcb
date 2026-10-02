@@ -1,13 +1,11 @@
 //! Background search and detail worker threads
 
 use super::super::download::{DownloadProgress, RegistrySearchScope};
-use super::super::{RegistryHit, RrfSearchOutput, SearchResultKey};
 use crate::bom::ComponentKey;
 use crate::{
     ModuleRelations, RegistryModule, RegistryModuleHit, RegistrySearchClient, RegistrySymbol,
     RegistrySymbolHit,
 };
-use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -25,17 +23,6 @@ pub struct SearchQuery {
     pub force_update: bool,
 }
 
-/// Scoring details for one search result across index strategies.
-#[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct SearchScoring {
-    pub trigram_position: Option<usize>,
-    pub trigram_rank: Option<f64>,
-    pub word_position: Option<usize>,
-    pub word_rank: Option<f64>,
-    pub docs_full_text_position: Option<usize>,
-    pub docs_full_text_rank: Option<f64>,
-}
-
 /// Results from the worker thread
 #[derive(Debug, Clone, Default)]
 pub enum SearchResults {
@@ -48,21 +35,18 @@ pub enum SearchResults {
 #[derive(Debug, Clone)]
 pub struct HitResults<T> {
     pub query_id: u64,
-    pub rrf: RrfSearchOutput<T>,
-    pub scoring: HashMap<SearchResultKey, SearchScoring>,
+    pub hits: Vec<T>,
     pub duration: Duration,
 }
 
-impl<T: RegistryHit> HitResults<T> {
-    fn new(query_id: u64, search: impl FnOnce() -> RrfSearchOutput<T>) -> Self {
+impl<T> HitResults<T> {
+    fn new(query_id: u64, search: impl FnOnce() -> Vec<T>) -> Self {
         let start = Instant::now();
-        let rrf = search();
-        let duration = start.elapsed();
+        let hits = search();
         Self {
             query_id,
-            scoring: build_scoring(&rrf),
-            rrf,
-            duration,
+            hits,
+            duration: start.elapsed(),
         }
     }
 }
@@ -79,8 +63,8 @@ impl SearchResults {
     pub fn len(&self) -> usize {
         match self {
             SearchResults::Empty => 0,
-            SearchResults::RegistryModules(results) => results.rrf.merged.len(),
-            SearchResults::RegistrySymbols(results) => results.rrf.merged.len(),
+            SearchResults::RegistryModules(results) => results.hits.len(),
+            SearchResults::RegistrySymbols(results) => results.hits.len(),
         }
     }
 
@@ -96,20 +80,10 @@ impl SearchResults {
         }
     }
 
-    pub fn scoring(&self) -> &HashMap<SearchResultKey, SearchScoring> {
-        static EMPTY: OnceLock<HashMap<SearchResultKey, SearchScoring>> = OnceLock::new();
-        match self {
-            SearchResults::Empty => EMPTY.get_or_init(HashMap::new),
-            SearchResults::RegistryModules(results) => &results.scoring,
-            SearchResults::RegistrySymbols(results) => &results.scoring,
-        }
-    }
-
     pub fn availability_key_at(&self, idx: usize) -> Option<ComponentKey> {
         match self {
             SearchResults::RegistrySymbols(results) => results
-                .rrf
-                .merged
+                .hits
                 .get(idx)
                 .and_then(|hit| hit.availability_key.clone()),
             SearchResults::Empty | SearchResults::RegistryModules(_) => None,
@@ -121,13 +95,11 @@ impl SearchResults {
         match self {
             SearchResults::Empty => None,
             SearchResults::RegistryModules(results) => results
-                .rrf
-                .merged
+                .hits
                 .get(idx)
                 .map(|hit| (hit.registry.id.clone(), hit.id)),
             SearchResults::RegistrySymbols(results) => results
-                .rrf
-                .merged
+                .hits
                 .get(idx)
                 .map(|hit| (hit.registry.id.clone(), hit.id)),
         }
@@ -137,10 +109,10 @@ impl SearchResults {
         match self {
             SearchResults::Empty => None,
             SearchResults::RegistryModules(results) => {
-                results.rrf.merged.get(idx).map(|hit| hit.url.as_str())
+                results.hits.get(idx).map(|hit| hit.url.as_str())
             }
             SearchResults::RegistrySymbols(results) => {
-                results.rrf.merged.get(idx).map(|hit| hit.url.as_str())
+                results.hits.get(idx).map(|hit| hit.url.as_str())
             }
         }
     }
@@ -262,36 +234,6 @@ fn spawn_registry_update_check(
     });
 }
 
-pub(crate) fn build_scoring<T: RegistryHit>(
-    rrf: &RrfSearchOutput<T>,
-) -> HashMap<SearchResultKey, SearchScoring> {
-    let mut scoring = HashMap::new();
-    record_scores(&mut scoring, &rrf.trigram, |entry, idx, rank| {
-        entry.trigram_position = Some(idx);
-        entry.trigram_rank = rank;
-    });
-    record_scores(&mut scoring, &rrf.word, |entry, idx, rank| {
-        entry.word_position = Some(idx);
-        entry.word_rank = rank;
-    });
-    record_scores(&mut scoring, &rrf.docs_full_text, |entry, idx, rank| {
-        entry.docs_full_text_position = Some(idx);
-        entry.docs_full_text_rank = rank;
-    });
-    scoring
-}
-
-fn record_scores<T: RegistryHit>(
-    scoring: &mut HashMap<SearchResultKey, SearchScoring>,
-    hits: &[T],
-    mut update: impl FnMut(&mut SearchScoring, usize, Option<f64>),
-) {
-    for (idx, hit) in hits.iter().enumerate() {
-        let entry = scoring.entry(hit.key()).or_default();
-        update(entry, idx, hit.rank());
-    }
-}
-
 /// Spawn the search worker thread
 pub fn spawn_worker(
     query_rx: Receiver<SearchQuery>,
@@ -387,12 +329,12 @@ pub fn spawn_worker(
             let results = match query.mode {
                 SearchMode::RegistryModules => {
                     SearchResults::RegistryModules(HitResults::new(query.id, || {
-                        client.search_modules_rrf(&query.text)
+                        client.search_modules(&query.text)
                     }))
                 }
                 SearchMode::RegistryComponents => {
                     SearchResults::RegistrySymbols(HitResults::new(query.id, || {
-                        client.search_symbols_rrf(&query.text)
+                        client.search_symbols(&query.text)
                     }))
                 }
             };

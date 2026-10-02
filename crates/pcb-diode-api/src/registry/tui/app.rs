@@ -316,7 +316,6 @@ pub enum DownloadState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     CycleMode,
-    ToggleDebugPanels,
     UpdateRegistryIndex,
     OpenInDigikey,
 }
@@ -324,7 +323,6 @@ pub enum Command {
 impl Command {
     pub const ALL: &'static [Command] = &[
         Command::CycleMode,
-        Command::ToggleDebugPanels,
         Command::UpdateRegistryIndex,
         Command::OpenInDigikey,
     ];
@@ -333,7 +331,6 @@ impl Command {
     pub fn name(&self) -> &'static str {
         match self {
             Command::CycleMode => "cycle-mode",
-            Command::ToggleDebugPanels => "toggle-debug-panels",
             Command::UpdateRegistryIndex => "update-registry-index",
             Command::OpenInDigikey => "open-in-digikey",
         }
@@ -343,9 +340,6 @@ impl Command {
     pub fn description(&self) -> &'static str {
         match self {
             Command::CycleMode => "Cycle between search modes",
-            Command::ToggleDebugPanels => {
-                "Show or hide the Trigram, Word, and Docs search result panels"
-            }
             Command::UpdateRegistryIndex => "Force re-download the registry index",
             Command::OpenInDigikey => "Open the selected part on Digikey",
         }
@@ -374,7 +368,7 @@ impl Command {
     /// Check if command is enabled given current app state
     pub fn is_enabled(&self, selected_symbol: Option<&RegistrySymbol>) -> bool {
         match self {
-            Command::CycleMode | Command::UpdateRegistryIndex | Command::ToggleDebugPanels => true,
+            Command::CycleMode | Command::UpdateRegistryIndex => true,
             Command::OpenInDigikey => {
                 // Only enabled if we have a component with DigiKey product URL
                 selected_symbol
@@ -446,8 +440,6 @@ pub struct App {
     pub command_palette_input: TextInput,
     /// Filtered commands based on query
     pub command_palette_filtered: Vec<Command>,
-    /// Show debug panels (Trigram/Word/Docs)
-    pub show_debug_panels: bool,
     /// Registries being searched.
     registry_scope: RegistrySearchScope,
     /// Channel to send availability requests to worker
@@ -527,7 +519,6 @@ impl App {
             command_palette_index: 0,
             command_palette_input: TextInput::new(),
             command_palette_filtered: Command::ALL.to_vec(),
-            show_debug_panels: false,
             registry_scope,
             availability_tx,
             availability_rx,
@@ -1005,18 +996,6 @@ impl App {
         match cmd {
             Command::CycleMode => {
                 self.cycle_mode();
-            }
-            Command::ToggleDebugPanels => {
-                self.show_debug_panels = !self.show_debug_panels;
-                let state = if self.show_debug_panels {
-                    "shown"
-                } else {
-                    "hidden"
-                };
-                self.toast = Some(Toast::new(
-                    format!("Debug panels {}", state),
-                    Duration::from_secs(2),
-                ));
             }
             Command::UpdateRegistryIndex => {
                 if self.registry_scope.updates_disabled() {

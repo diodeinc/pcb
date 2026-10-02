@@ -707,8 +707,6 @@ struct RegistryModuleCliResult {
     pub entrypoints: Vec<crate::RegistryModuleEntrypoint>,
     pub dependencies: Vec<String>,
     pub dependents: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scoring: Option<crate::registry::tui::search::SearchScoring>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -731,8 +729,6 @@ struct RegistrySymbolCliResult {
     pub digikey: Option<crate::DigikeyData>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub availability: Option<pcb_sch::bom::Availability>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scoring: Option<crate::registry::tui::search::SearchScoring>,
 }
 
 fn execute_registry_module_search(
@@ -740,12 +736,9 @@ fn execute_registry_module_search(
     query: &str,
     json: bool,
 ) -> Result<()> {
-    use crate::registry::SearchResultKey;
     use crate::registry::tui::display::RegistryModuleDisplay;
 
-    let rrf = client.search_modules_rrf(query);
-    let scoring_by_url = crate::registry::tui::search::build_scoring(&rrf);
-    let hits: Vec<_> = rrf.merged.into_iter().take(25).collect();
+    let hits: Vec<_> = client.search_modules(query).into_iter().take(25).collect();
 
     if hits.is_empty() {
         if json {
@@ -780,9 +773,6 @@ fn execute_registry_module_search(
                         .into_iter()
                         .map(|dep| dep.url_with_version())
                         .collect(),
-                    scoring: scoring_by_url
-                        .get(&SearchResultKey::new(&module.registry.id, &module.url))
-                        .cloned(),
                 })
             })
             .collect();
@@ -801,7 +791,6 @@ fn execute_registry_module_search(
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
-        print_search_scoring(scoring_by_url.get(&SearchResultKey::new(&hit.registry.id, &hit.url)));
         println!();
     }
     Ok(())
@@ -812,12 +801,9 @@ fn execute_registry_symbol_search(
     query: &str,
     json: bool,
 ) -> Result<()> {
-    use crate::registry::SearchResultKey;
     use crate::registry::tui::display::RegistrySymbolDisplay;
 
-    let rrf = client.search_symbols_rrf(query);
-    let scoring_by_url = crate::registry::tui::search::build_scoring(&rrf);
-    let hits: Vec<_> = rrf.merged.into_iter().take(25).collect();
+    let hits: Vec<_> = client.search_symbols(query).into_iter().take(25).collect();
 
     if hits.is_empty() {
         if json {
@@ -854,9 +840,6 @@ fn execute_registry_symbol_search(
                     description: symbol.kicad_description,
                     digikey: symbol.digikey,
                     availability: availability_map.get(&idx).cloned(),
-                    scoring: scoring_by_url
-                        .get(&SearchResultKey::new(&hit.registry.id, &hit.url))
-                        .cloned(),
                 })
             })
             .collect();
@@ -875,7 +858,6 @@ fn execute_registry_symbol_search(
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
-        print_search_scoring(scoring_by_url.get(&SearchResultKey::new(&hit.registry.id, &hit.url)));
         if let Some(pricing) = availability_map.get(&idx) {
             print_availability_summary(pricing);
         }
@@ -902,28 +884,6 @@ fn search_availability(
         .enumerate()
         .filter(|(_, availability)| crate::bom::has_search_availability(availability))
         .collect()
-}
-
-fn print_search_scoring(scoring: Option<&crate::registry::tui::search::SearchScoring>) {
-    let Some(scoring) = scoring else {
-        return;
-    };
-
-    let format_source = |position: Option<usize>, rank: Option<f64>| match position {
-        Some(position) => match rank {
-            Some(rank) => format!("#{} ({:.2})", position + 1, rank),
-            None => format!("#{}", position + 1),
-        },
-        None => "—".to_string(),
-    };
-
-    println!(
-        "  {} tri={} word={} docs={}",
-        "score".dimmed(),
-        format_source(scoring.trigram_position, scoring.trigram_rank).dimmed(),
-        format_source(scoring.word_position, scoring.word_rank).dimmed(),
-        format_source(scoring.docs_full_text_position, scoring.docs_full_text_rank).dimmed(),
-    );
 }
 
 /// Print a compact availability summary line for CLI output.

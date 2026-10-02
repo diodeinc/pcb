@@ -9,7 +9,7 @@ pub use crate::registry::download::RegistryInfo;
 pub mod download;
 pub mod tui;
 
-pub(crate) const RRF_K: f64 = 10.0;
+const RRF_K: f64 = 10.0;
 const PER_INDEX_LIMIT: usize = 50;
 const MERGED_LIMIT: usize = 100;
 
@@ -75,8 +75,6 @@ pub struct RegistryModule {
     pub description: String,
     pub entrypoints: Vec<RegistryModuleEntrypoint>,
     pub symbols: Vec<RegistryModuleSymbol>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rank: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -100,8 +98,6 @@ pub struct RegistrySymbol {
     pub digikey: Option<DigikeyData>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_sha256: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rank: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,7 +134,6 @@ pub struct RegistryModuleHit {
     pub name: String,
     pub version: String,
     pub description: String,
-    pub rank: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,39 +146,18 @@ pub struct RegistrySymbolHit {
     pub mpn: String,
     pub manufacturer: String,
     pub kicad_description: Option<String>,
-    pub rank: Option<f64>,
     pub availability_key: Option<ComponentKey>,
-}
-
-/// Ranked hits from each search channel, and their reciprocal-rank fusion.
-#[derive(Debug, Clone)]
-pub struct RrfSearchOutput<T> {
-    pub trigram: Vec<T>,
-    pub word: Vec<T>,
-    pub docs_full_text: Vec<T>,
-    pub merged: Vec<T>,
-}
-
-impl<T> Default for RrfSearchOutput<T> {
-    fn default() -> Self {
-        Self {
-            trigram: Vec::new(),
-            word: Vec::new(),
-            docs_full_text: Vec::new(),
-            merged: Vec::new(),
-        }
-    }
 }
 
 /// Identifies a hit across registries.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SearchResultKey {
+struct SearchResultKey {
     registry_id: String,
     url: String,
 }
 
 impl SearchResultKey {
-    pub fn new(registry_id: &str, url: &str) -> Self {
+    fn new(registry_id: &str, url: &str) -> Self {
         Self {
             registry_id: registry_id.to_owned(),
             url: url.to_owned(),
@@ -191,28 +165,19 @@ impl SearchResultKey {
     }
 }
 
-pub trait RegistryHit: Clone {
+trait RegistryHit: Clone {
     fn key(&self) -> SearchResultKey;
-    fn rank(&self) -> Option<f64>;
 }
 
 impl RegistryHit for RegistryModuleHit {
     fn key(&self) -> SearchResultKey {
         SearchResultKey::new(&self.registry.id, &self.url)
     }
-
-    fn rank(&self) -> Option<f64> {
-        self.rank
-    }
 }
 
 impl RegistryHit for RegistrySymbolHit {
     fn key(&self) -> SearchResultKey {
         SearchResultKey::new(&self.registry.id, &self.url)
-    }
-
-    fn rank(&self) -> Option<f64> {
-        self.rank
     }
 }
 
@@ -442,7 +407,6 @@ impl RegistryClient {
                     description: row.get(4)?,
                     entrypoints: Vec::new(),
                     symbols: Vec::new(),
-                    rank: None,
                 })
             })
             .optional()?;
@@ -489,7 +453,6 @@ impl RegistryClient {
                 kicad_keywords: row.get(12)?,
                 digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
                 image_sha256: row.get(14)?,
-                rank: None,
             })
         })
         .optional()
@@ -674,22 +637,20 @@ impl RegistrySearchClient {
             .try_fold(0, |acc, count| count.map(|count| acc + count))
     }
 
-    pub fn search_modules_rrf(&self, query: &str) -> RrfSearchOutput<RegistryModuleHit> {
-        self.search_rrf(query, &MODULE_QUERIES)
+    pub fn search_modules(&self, query: &str) -> Vec<RegistryModuleHit> {
+        self.search(query, &MODULE_QUERIES)
     }
 
-    pub fn search_symbols_rrf(&self, query: &str) -> RrfSearchOutput<RegistrySymbolHit> {
-        self.search_rrf(query, &SYMBOL_QUERIES)
+    pub fn search_symbols(&self, query: &str) -> Vec<RegistrySymbolHit> {
+        self.search(query, &SYMBOL_QUERIES)
     }
 
-    fn search_rrf<T: RegistryHit>(
-        &self,
-        query: &str,
-        queries: &HitQueries<T>,
-    ) -> RrfSearchOutput<T> {
+    /// Hits from every registry, fused by reciprocal rank across the id, word and docs
+    /// searches.
+    fn search<T: RegistryHit>(&self, query: &str, queries: &HitQueries<T>) -> Vec<T> {
         let query = query.trim();
         if query.is_empty() {
-            return RrfSearchOutput::default();
+            return Vec::new();
         }
 
         let search = |sql: &str, fts_query: &str| {
@@ -723,16 +684,10 @@ impl RegistrySearchClient {
             (word_lists, docs_lists) = keyword_search(true);
         }
 
-        let merged = merge_rrf(
+        merge_rrf(
             trigram_lists.iter().chain(&word_lists).chain(&docs_lists),
             MERGED_LIMIT,
-        );
-        RrfSearchOutput {
-            trigram: merge_rrf(&trigram_lists, usize::MAX),
-            word: merge_rrf(&word_lists, usize::MAX),
-            docs_full_text: merge_rrf(&docs_lists, usize::MAX),
-            merged,
-        }
+        )
     }
 
     pub fn get_module_by_hit(&self, hit: &RegistryModuleHit) -> Result<Option<RegistryModule>> {
@@ -807,7 +762,7 @@ struct HitQueries<T> {
 
 const MODULE_QUERIES: HitQueries<RegistryModuleHit> = HitQueries {
     ids: r#"
-        SELECT m.id, m.url, m.version, m.description, fts.rank
+        SELECT m.id, m.url, m.version, m.description
         FROM module_fts_ids fts
         JOIN modules m ON m.id = CAST(fts.module_id AS INTEGER)
         WHERE module_fts_ids MATCH ?1
@@ -815,7 +770,7 @@ const MODULE_QUERIES: HitQueries<RegistryModuleHit> = HitQueries {
         LIMIT ?2
     "#,
     words: r#"
-        SELECT m.id, m.url, m.version, m.description, fts.rank
+        SELECT m.id, m.url, m.version, m.description
         FROM module_fts_words fts
         JOIN modules m ON m.id = CAST(fts.module_id AS INTEGER)
         WHERE module_fts_words MATCH ?1
@@ -824,14 +779,14 @@ const MODULE_QUERIES: HitQueries<RegistryModuleHit> = HitQueries {
     "#,
     // Several documents can belong to one module, so fetch extra rows to dedupe.
     docs: r#"
-        SELECT m.id, m.url, m.version, m.description, bm25(documents_fts) AS score
+        SELECT m.id, m.url, m.version, m.description
         FROM documents_fts
         JOIN documents d ON d.id = documents_fts.rowid
         JOIN document_owners o ON o.document_id = d.id
         JOIN modules m ON m.url = o.owner_url
         WHERE documents_fts MATCH ?1
           AND o.owner_kind = 'module'
-        ORDER BY score
+        ORDER BY bm25(documents_fts)
         LIMIT ?2 * 4
     "#,
     map: map_module_hit,
@@ -840,7 +795,7 @@ const MODULE_QUERIES: HitQueries<RegistryModuleHit> = HitQueries {
 const SYMBOL_QUERIES: HitQueries<RegistrySymbolHit> = HitQueries {
     ids: r#"
         SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
-               m.url AS module_url, fts.rank
+               m.url AS module_url
         FROM symbol_fts_ids fts
         JOIN symbols s ON s.id = CAST(fts.symbol_id AS INTEGER)
         JOIN modules m ON m.id = s.module_id
@@ -850,7 +805,7 @@ const SYMBOL_QUERIES: HitQueries<RegistrySymbolHit> = HitQueries {
     "#,
     words: r#"
         SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
-               m.url AS module_url, fts.rank
+               m.url AS module_url
         FROM symbol_fts_words fts
         JOIN symbols s ON s.id = CAST(fts.symbol_id AS INTEGER)
         JOIN modules m ON m.id = s.module_id
@@ -861,7 +816,7 @@ const SYMBOL_QUERIES: HitQueries<RegistrySymbolHit> = HitQueries {
     // Several documents can belong to one symbol, so fetch extra rows to dedupe.
     docs: r#"
         SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
-               m.url AS module_url, bm25(documents_fts) AS score
+               m.url AS module_url
         FROM documents_fts
         JOIN documents d ON d.id = documents_fts.rowid
         JOIN document_owners o ON o.document_id = d.id
@@ -869,7 +824,7 @@ const SYMBOL_QUERIES: HitQueries<RegistrySymbolHit> = HitQueries {
         JOIN modules m ON m.id = s.module_id
         WHERE documents_fts MATCH ?1
           AND o.owner_kind = 'symbol'
-        ORDER BY score
+        ORDER BY bm25(documents_fts)
         LIMIT ?2 * 4
     "#,
     map: map_symbol_hit,
@@ -887,7 +842,6 @@ fn map_module_hit(
         url,
         version: row.get(2)?,
         description: row.get(3)?,
-        rank: row.get(4)?,
     })
 }
 
@@ -907,7 +861,6 @@ fn map_symbol_hit(
         manufacturer: manufacturer.clone(),
         kicad_description: row.get(4)?,
         module_url: row.get(5)?,
-        rank: row.get(6)?,
         availability_key: component_lookup_key(Some(&mpn), Some(&manufacturer)),
     })
 }

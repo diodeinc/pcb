@@ -1,7 +1,6 @@
 //! UI rendering
 
 use crate::bom::format_price;
-use crate::registry::SearchResultKey;
 use crate::{RegistryModule, RegistryModuleDependency, RegistrySymbol};
 use ratatui::{
     Frame,
@@ -40,7 +39,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         ])
         .split(main_chunks[0]);
 
-    render_results_panels(frame, app, left_chunks[0]);
+    render_local_merged_list(frame, app, left_chunks[0]);
     render_results_count(frame, app, left_chunks[1]);
     render_status_bar(frame, app, left_chunks[2]);
     render_toast_line(frame, app, left_chunks[3]);
@@ -91,54 +90,6 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, area);
 }
 
-/// Render the results panels: optionally Trigram/Word/Docs on top, Merged below
-fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
-    if app.show_debug_panels {
-        // Split: debug panels on top, merged below
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(40), // Trigram + Word + Docs
-                Constraint::Percentage(60), // Merged (larger)
-            ])
-            .split(area);
-
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Ratio(1, 3); 3])
-            .split(rows[0]);
-
-        let panel_areas = [cols[0], cols[1], cols[2]];
-        match &app.results {
-            super::search::SearchResults::RegistryModules(results) => render_panel_set(
-                frame,
-                panel_areas,
-                [
-                    &results.rrf.trigram,
-                    &results.rrf.word,
-                    &results.rrf.docs_full_text,
-                ],
-                module_row_spans,
-            ),
-            super::search::SearchResults::RegistrySymbols(results) => render_panel_set(
-                frame,
-                panel_areas,
-                [
-                    &results.rrf.trigram,
-                    &results.rrf.word,
-                    &results.rrf.docs_full_text,
-                ],
-                symbol_row_spans,
-            ),
-            super::search::SearchResults::Empty => {}
-        }
-
-        render_local_merged_list(frame, app, rows[1]);
-    } else {
-        render_local_merged_list(frame, app, area);
-    }
-}
-
 /// Render results count + query time line (subtle)
 fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
     let count = app.results.len();
@@ -166,64 +117,6 @@ fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
 
     let para = Paragraph::new(line);
     frame.render_widget(para, area);
-}
-
-/// Render the three debug panels (Trigram / Word / Docs) for any hit type.
-fn render_panel_set<T>(
-    frame: &mut Frame,
-    areas: [Rect; 3],
-    hits: [&[T]; 3],
-    mut row_spans: impl FnMut(&T) -> Vec<Span<'static>>,
-) {
-    const PANELS: [(&str, Color); 3] = [
-        ("Trigram", Color::Yellow),
-        ("Word", Color::Green),
-        ("Docs", Color::LightMagenta),
-    ];
-    for (i, (title, color)) in PANELS.iter().enumerate() {
-        let items: Vec<ListItem> = hits[i]
-            .iter()
-            .map(|hit| ListItem::new(Line::from(row_spans(hit))))
-            .collect();
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_set(border::ROUNDED)
-                .border_style(Style::default().fg(*color).add_modifier(Modifier::DIM))
-                .title(format!(" {} ", title)),
-        );
-        frame.render_widget(list, areas[i]);
-    }
-}
-
-fn rank_prefix_span(rank: Option<f64>) -> Span<'static> {
-    let style = Style::default().fg(Color::DarkGray);
-    match rank {
-        Some(r) => Span::styled(format!("{:>7.2} ", r), style),
-        None => Span::styled("        ".to_string(), style),
-    }
-}
-
-fn module_row_spans(hit: &crate::RegistryModuleHit) -> Vec<Span<'static>> {
-    vec![
-        rank_prefix_span(hit.rank),
-        Span::styled(hit.name.clone(), Style::default().fg(Color::White)),
-        Span::styled(
-            format!(" ({})", hit.version),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]
-}
-
-fn symbol_row_spans(hit: &crate::RegistrySymbolHit) -> Vec<Span<'static>> {
-    vec![
-        rank_prefix_span(hit.rank),
-        Span::styled(hit.mpn.clone(), Style::default().fg(Color::White)),
-        Span::styled(
-            format!(" ({})", hit.manufacturer),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]
 }
 
 /// Build the merged-list items with selection highlighting; the closure renders the row lines.
@@ -265,20 +158,16 @@ fn render_local_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
     let selected_index = app.list_state.selected();
 
     let items: Vec<ListItem> = match &app.results {
-        super::search::SearchResults::RegistryModules(results) => build_merged_items(
-            &results.rrf.merged,
-            selected_index,
-            |hit, sel, base, prefix| {
+        super::search::SearchResults::RegistryModules(results) => {
+            build_merged_items(&results.hits, selected_index, |hit, sel, base, prefix| {
                 RegistryModuleDisplay::from_hit(hit).to_tui_lines(sel, base, prefix)
-            },
-        ),
-        super::search::SearchResults::RegistrySymbols(results) => build_merged_items(
-            &results.rrf.merged,
-            selected_index,
-            |hit, sel, base, prefix| {
+            })
+        }
+        super::search::SearchResults::RegistrySymbols(results) => {
+            build_merged_items(&results.hits, selected_index, |hit, sel, base, prefix| {
                 RegistrySymbolDisplay::from_hit(hit).to_tui_lines(sel, base, prefix)
-            },
-        ),
+            })
+        }
         super::search::SearchResults::Empty => Vec::new(),
     };
 
@@ -529,9 +418,6 @@ fn render_registry_module_details(
 ) {
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().fg(Color::White);
-    let dim_style = Style::default()
-        .fg(Color::DarkGray)
-        .add_modifier(Modifier::ITALIC);
     let mut lines: Vec<Line> = Vec::new();
 
     lines.push(Line::from(vec![
@@ -609,18 +495,6 @@ fn render_registry_module_details(
         render_dependency_tree(&mut lines, &app.module_relations.dependents);
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "─── Search Scoring ───",
-        Style::default().fg(Color::DarkGray),
-    )));
-    append_search_scoring_for_key(
-        &mut lines,
-        app,
-        &SearchResultKey::new(&module.registry.id, &module.url),
-        dim_style,
-    );
-
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -639,9 +513,6 @@ fn render_registry_symbol_details(
 ) {
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().fg(Color::White);
-    let dim_style = Style::default()
-        .fg(Color::DarkGray)
-        .add_modifier(Modifier::ITALIC);
     let mut header_lines: Vec<Line> = vec![
         Line::from(vec![
             Span::styled("URL           ", label_style),
@@ -733,20 +604,13 @@ fn render_registry_symbol_details(
             chunks[3].width,
             label_style,
             value_style,
-            dim_style,
         );
         frame.render_widget(Paragraph::new(body_lines), chunks[3]);
         return;
     }
 
-    let body_lines = render_registry_symbol_body_lines(
-        app,
-        symbol,
-        area.width,
-        label_style,
-        value_style,
-        dim_style,
-    );
+    let body_lines =
+        render_registry_symbol_body_lines(app, symbol, area.width, label_style, value_style);
     header_lines.extend(body_lines);
     frame.render_widget(Paragraph::new(header_lines), area);
 }
@@ -757,7 +621,6 @@ fn render_registry_symbol_body_lines(
     width: u16,
     label_style: Style,
     value_style: Style,
-    dim_style: Style,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -819,18 +682,6 @@ fn render_registry_symbol_body_lines(
             lines.extend(format_offer_lines(&in_stock));
         }
     }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "─── Search Scoring ───",
-        Style::default().fg(Color::DarkGray),
-    )));
-    append_search_scoring_for_key(
-        &mut lines,
-        app,
-        &SearchResultKey::new(&symbol.registry.id, &symbol.url),
-        dim_style,
-    );
 
     lines
 }
@@ -897,110 +748,6 @@ fn append_parameters(
             count += 1;
         }
     }
-}
-
-fn append_search_scoring_for_key(
-    lines: &mut Vec<Line>,
-    app: &App,
-    key: &SearchResultKey,
-    dim_style: Style,
-) {
-    let scoring = app.results.scoring().get(key);
-    let (trigram_len, word_len, docs_len, merged_len) = match &app.results {
-        super::search::SearchResults::RegistryModules(results) => (
-            results.rrf.trigram.len(),
-            results.rrf.word.len(),
-            results.rrf.docs_full_text.len(),
-            results.rrf.merged.len(),
-        ),
-        super::search::SearchResults::RegistrySymbols(results) => (
-            results.rrf.trigram.len(),
-            results.rrf.word.len(),
-            results.rrf.docs_full_text.len(),
-            results.rrf.merged.len(),
-        ),
-        super::search::SearchResults::Empty => (0, 0, 0, 0),
-    };
-
-    let format_result = |pos: Option<usize>, rank: Option<f64>, total: usize| -> Vec<Span> {
-        match pos {
-            Some(p) => {
-                let mut spans = vec![
-                    Span::styled(format!("#{}", p + 1), Style::default().fg(Color::White)),
-                    Span::styled(format!("/{}", total), dim_style),
-                ];
-                if let Some(r) = rank {
-                    spans.push(Span::styled(format!(" (rank {:.2})", r), dim_style));
-                }
-                spans
-            }
-            None => vec![Span::styled("—", dim_style)],
-        }
-    };
-
-    let (tri_pos, tri_rank) = scoring
-        .map(|s| (s.trigram_position, s.trigram_rank))
-        .unwrap_or((None, None));
-    let (word_pos, word_rank) = scoring
-        .map(|s| (s.word_position, s.word_rank))
-        .unwrap_or((None, None));
-    let (docs_pos, docs_rank) = scoring
-        .map(|s| (s.docs_full_text_position, s.docs_full_text_rank))
-        .unwrap_or((None, None));
-
-    let mut tri_line = vec![Span::styled(
-        "Trigram  ",
-        Style::default().fg(Color::Yellow),
-    )];
-    tri_line.extend(format_result(tri_pos, tri_rank, trigram_len));
-    lines.push(Line::from(tri_line));
-
-    let mut word_line = vec![Span::styled("Word     ", Style::default().fg(Color::Green))];
-    word_line.extend(format_result(word_pos, word_rank, word_len));
-    lines.push(Line::from(word_line));
-
-    let mut docs_line = vec![Span::styled(
-        "Docs     ",
-        Style::default().fg(Color::LightMagenta),
-    )];
-    docs_line.extend(format_result(docs_pos, docs_rank, docs_len));
-    lines.push(Line::from(docs_line));
-
-    // RRF score calculation
-    let rrf = |pos: Option<usize>| {
-        pos.map(|p| 1.0 / (crate::registry::RRF_K + (p + 1) as f64))
-            .unwrap_or(0.0)
-    };
-    let rrf_score = rrf(tri_pos) + rrf(word_pos) + rrf(docs_pos);
-
-    let rrf_parts: Vec<String> = [tri_pos, word_pos, docs_pos]
-        .iter()
-        .filter_map(|&pos| {
-            pos.map(|p| {
-                format!(
-                    "1/(10+{})={:.3}",
-                    p + 1,
-                    1.0 / (crate::registry::RRF_K + (p + 1) as f64)
-                )
-            })
-        })
-        .collect();
-
-    let mut merged_line = vec![
-        Span::styled("Merged   ", Style::default().fg(Color::Magenta)),
-        Span::styled(
-            format!("#{}", app.selected_index() + 1),
-            Style::default().fg(Color::White),
-        ),
-        Span::styled(format!("/{}", merged_len), dim_style),
-    ];
-    if !rrf_parts.is_empty() {
-        merged_line.push(Span::styled(
-            format!(" ({}={:.3})", rrf_parts.join("+"), rrf_score),
-            dim_style,
-        ));
-    }
-    lines.push(Line::from(merged_line));
 }
 
 /// Render dependency list with full URLs and colored paths
