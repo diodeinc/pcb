@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.68] - 2026-10-02
+
 ### Changed
 
 - `pcb search` is keyword-only; a multi-word query with no match for every word falls back to matching any word.
@@ -2178,7 +2180,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.67...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.68...HEAD
+[0.4.68]: https://github.com/diodeinc/pcb/compare/v0.4.67...v0.4.68
 [0.4.67]: https://github.com/diodeinc/pcb/compare/v0.4.66...v0.4.67
 [0.4.66]: https://github.com/diodeinc/pcb/compare/v0.4.65...v0.4.66
 [0.4.65]: https://github.com/diodeinc/pcb/compare/v0.4.64...v0.4.65
