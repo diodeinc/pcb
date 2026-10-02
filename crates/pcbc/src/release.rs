@@ -929,7 +929,7 @@ fn bom_offer_diagnostics(board_path: &Path, bom: &pcb_sch::bom::Bom) -> pcb_zen_
             .availability
             .get(path)
             .expect("validated BOM match must include every requested path");
-        let issue = if availability.no_match {
+        let issue = if availability.match_status == Some(pcb_sch::bom::BomMatchStatus::Failed) {
             BomOfferIssue::Unknown
         } else if availability.offers.is_empty() {
             BomOfferIssue::NoOffers
@@ -1738,7 +1738,7 @@ mod tests {
             (
                 "root.U1".to_string(),
                 Availability {
-                    no_match: true,
+                    match_status: Some(pcb_sch::bom::BomMatchStatus::Failed),
                     offers: vec![offer()],
                     ..Default::default()
                 },

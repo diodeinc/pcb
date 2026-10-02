@@ -6,7 +6,7 @@ use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
 use crate::bom::availability::BOARD_QUANTITY;
-use crate::bom::{AvailabilitySummary, Bom, PartCollection, SourcingStockClass};
+use crate::bom::{AvailabilitySummary, Bom, BomMatchStatus, PartCollection, SourcingStockClass};
 
 const NO_MATCH_LABEL: &str = "No match (unknown part)";
 const NO_MATCH_DATA_LABEL: &str = "No match data";
@@ -367,7 +367,12 @@ impl Bom {
 
             // Grouping guarantees that every member has the same sourcing data.
             let avail = grouped.availability.as_ref();
-            let no_match = avail.map(|availability| availability.no_match);
+            let no_match = avail.map(|_| {
+                grouped
+                    .members
+                    .iter()
+                    .any(|member| member.match_status == Some(BomMatchStatus::Failed))
+            });
             let collection = avail.and_then(|availability| availability.selected_part_collection());
 
             let us_data =
@@ -772,7 +777,7 @@ mod tests {
         bom.availability.insert(
             "root.U1".to_string(),
             Availability {
-                no_match: true,
+                match_status: Some(BomMatchStatus::Failed),
                 ..Default::default()
             },
         );
