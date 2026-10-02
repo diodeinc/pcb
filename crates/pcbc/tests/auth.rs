@@ -77,6 +77,62 @@ fn success(output: Output) -> String {
 }
 
 #[test]
+fn endpoint_resolves_workspace_and_environment_without_authenticating() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.dir.path().join("pcb.toml"),
+        "[workspace]\nendpoint = \"sandbox.example.com\"\n",
+    )
+    .unwrap();
+    let nested = fixture.dir.path().join("boards/nested");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    for cwd in [fixture.dir.path(), nested.as_path()] {
+        let output = fixture
+            .command(&["auth", "endpoint"])
+            .current_dir(cwd)
+            .env_remove("DIODE_API_URL")
+            .output()
+            .unwrap();
+        assert!(output.stderr.is_empty());
+        assert_eq!(success(output), "https://api.sandbox.example.com\n");
+    }
+
+    let token = fixture.token("must-not-be-requested");
+    let output = fixture
+        .command(&["auth", "endpoint"])
+        .current_dir(&nested)
+        .env("DIODE_CLIENT_ID", CLIENT_ID)
+        .env("DIODE_CLIENT_SECRET", SECRET)
+        .output()
+        .unwrap();
+    assert!(output.stderr.is_empty());
+    assert_eq!(success(output), format!("{}\n", fixture.server.base_url()));
+    token.assert_calls(0);
+    assert!(!fixture.dir.path().join("config").exists());
+}
+
+#[test]
+fn endpoint_outside_workspace_uses_default_without_login() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command(&["auth", "endpoint"])
+        .env_remove("DIODE_API_URL")
+        .output()
+        .unwrap();
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        success(output),
+        if cfg!(debug_assertions) {
+            "http://localhost:3001\n"
+        } else {
+            "https://api.diode.computer\n"
+        }
+    );
+    assert!(!fixture.dir.path().join("config").exists());
+}
+
+#[test]
 fn service_account_import_token_refresh_and_logout() {
     let fixture = Fixture::new();
     let mut first = fixture.token("first-machine-token");

@@ -171,6 +171,9 @@ endpoint = "diode.computer"
   `pcb publish`, and routing commands.
 - Authentication is scoped to the resolved endpoint. Authentication for one
   endpoint does not overwrite tokens for another.
+- `pcb auth endpoint` prints the resolved API URL without logging in or refreshing
+  credentials. `DIODE_API_URL` takes precedence over the workspace setting; outside
+  a configured workspace, the CLI uses its default API URL.
 
 ## BOM matching (`[workspace.bom]`)
 
