@@ -296,19 +296,29 @@ pub enum SearchOutputFormat {
     Json,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SearchMode {
+    /// Search the registry for modules/packages
+    #[value(name = "registry:modules")]
+    RegistryModules,
+    /// Search the registry for components
+    #[value(name = "registry:components")]
+    RegistryComponents,
+}
+
 #[derive(Args, Debug)]
 #[command(about = "Search for electronic components")]
 pub struct SearchArgs {
     /// Search query (MPN, description, keywords)
-    pub query: Option<String>,
+    pub query: String,
 
     /// Output format
     #[arg(short = 'f', long, value_enum, default_value_t = SearchOutputFormat::Human)]
     pub format: SearchOutputFormat,
 
     /// Search mode
-    #[arg(short = 'm', long, value_enum)]
-    pub mode: Option<crate::registry::tui::SearchMode>,
+    #[arg(short = 'm', long, value_enum, default_value_t = SearchMode::RegistryModules)]
+    pub mode: SearchMode,
 
     /// Registry SQLite index to use instead of the cached/downloaded index
     #[arg(long, value_name = "PATH")]
@@ -640,48 +650,12 @@ pub fn execute(args: SearchArgs) -> Result<()> {
         anyhow::bail!("--registry cannot be used with --registry-index");
     }
 
-    let registry_selectors = args.registries;
-
-    // Search mode (local registry database with TUI or API)
-    let query = args.query.as_deref().unwrap_or("");
-    let json = matches!(args.format, SearchOutputFormat::Json);
-    execute_search(
-        query,
-        json,
-        &workspace_root,
-        args.mode,
-        args.registry_index.as_deref(),
-        &registry_selectors,
-    )
-}
-
-fn execute_search(
-    query: &str,
-    json: bool,
-    workspace_root: &Path,
-    mode: Option<crate::registry::tui::SearchMode>,
-    registry_index: Option<&Path>,
-    registry_selectors: &[String],
-) -> Result<()> {
-    use crate::registry::tui::SearchMode;
-
-    // If no query provided, launch interactive TUI
-    if query.is_empty() {
-        crate::registry::tui::run_with_mode_and_registry_index(
-            mode,
-            registry_index.map(Path::to_path_buf),
-            registry_selectors.to_vec(),
-            Some(workspace_root.to_path_buf()),
-        )?;
-        return Ok(());
-    }
-
-    let client = match registry_index {
-        Some(path) => crate::RegistrySearchClient::single(crate::RegistryClient::open_path(path)?),
+    let client = match args.registry_index {
+        Some(path) => crate::RegistrySearchClient::single(crate::RegistryClient::open_path(&path)?),
         None => {
             let Some(scope) = crate::registry::download::resolve_registry_search_scope(
-                registry_selectors,
-                Some(workspace_root),
+                &args.registries,
+                Some(&workspace_root),
             )?
             else {
                 anyhow::bail!("No registry index available");
@@ -690,9 +664,12 @@ fn execute_search(
         }
     };
 
-    match mode.unwrap_or_default() {
-        SearchMode::RegistryModules => execute_registry_module_search(&client, query, json),
-        SearchMode::RegistryComponents => execute_registry_symbol_search(&client, query, json),
+    let json = matches!(args.format, SearchOutputFormat::Json);
+    match args.mode {
+        SearchMode::RegistryModules => execute_registry_module_search(&client, &args.query, json),
+        SearchMode::RegistryComponents => {
+            execute_registry_symbol_search(&client, &args.query, json)
+        }
     }
 }
 
@@ -736,8 +713,6 @@ fn execute_registry_module_search(
     query: &str,
     json: bool,
 ) -> Result<()> {
-    use crate::registry::tui::display::RegistryModuleDisplay;
-
     let hits: Vec<_> = client.search_modules(query).into_iter().take(25).collect();
 
     if hits.is_empty() {
@@ -787,10 +762,13 @@ fn execute_registry_module_search(
         query,
     );
     for hit in &hits {
-        let display = RegistryModuleDisplay::from_hit(hit);
-        for line in display.to_cli_lines() {
-            println!("{}", line);
-        }
+        println!(
+            "{} {} {}",
+            registry_relative_path(&hit.url, &hit.registry.registry_url).blue(),
+            format!("({})", hit.version).yellow().dimmed(),
+            format!("[{}]", hit.registry.display_name()).dimmed()
+        );
+        println!("  {}", hit.description.dimmed());
         println!();
     }
     Ok(())
@@ -801,8 +779,6 @@ fn execute_registry_symbol_search(
     query: &str,
     json: bool,
 ) -> Result<()> {
-    use crate::registry::tui::display::RegistrySymbolDisplay;
-
     let hits: Vec<_> = client.search_symbols(query).into_iter().take(25).collect();
 
     if hits.is_empty() {
@@ -854,9 +830,22 @@ fn execute_registry_symbol_search(
         query,
     );
     for (idx, hit) in hits.iter().enumerate() {
-        let display = RegistrySymbolDisplay::from_hit(hit);
-        for line in display.to_cli_lines() {
-            println!("{}", line);
+        println!(
+            "{}",
+            registry_relative_path(&hit.url, &hit.registry.registry_url).green()
+        );
+        println!(
+            "  {} {} {}",
+            hit.mpn,
+            format!("· {}", hit.manufacturer).dimmed(),
+            format!("[{}]", hit.registry.display_name()).dimmed()
+        );
+        if let Some(description) = hit
+            .kicad_description
+            .as_deref()
+            .filter(|description| !description.trim().is_empty())
+        {
+            println!("  {}", description.dimmed());
         }
         if let Some(pricing) = availability_map.get(&idx) {
             print_availability_summary(pricing);
@@ -864,6 +853,15 @@ fn execute_registry_symbol_search(
         println!();
     }
     Ok(())
+}
+
+fn registry_relative_path(url: &str, registry_url: &str) -> String {
+    let registry_url = registry_url.trim_end_matches('/');
+    if let Some(rest) = url.strip_prefix(registry_url) {
+        return rest.trim_start_matches('/').to_string();
+    }
+
+    url.split('/').skip(3).collect::<Vec<_>>().join("/")
 }
 
 fn search_availability(

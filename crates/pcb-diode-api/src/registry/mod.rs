@@ -7,7 +7,6 @@ use crate::bom::ComponentKey;
 pub use crate::registry::download::RegistryInfo;
 
 pub mod download;
-pub mod tui;
 
 const RRF_K: f64 = 10.0;
 const PER_INDEX_LIMIT: usize = 50;
@@ -322,10 +321,7 @@ impl RegistryClient {
 
     pub fn open_path_with_registry(path: &std::path::Path, registry: RegistryInfo) -> Result<Self> {
         if !path.exists() {
-            anyhow::bail!(
-                "Registry database not found at {}. Run `pcb registry update` to download it.",
-                path.display()
-            );
+            anyhow::bail!("Registry index not found at {}", path.display());
         }
 
         let conn = Connection::open_with_flags(
@@ -554,58 +550,6 @@ impl RegistrySearchClient {
         }
     }
 
-    pub fn open_registries_with_progress(
-        registries: Vec<RegistryInfo>,
-        progress_tx: &std::sync::mpsc::Sender<download::DownloadProgress>,
-        is_update: bool,
-        force: bool,
-    ) -> Result<Self> {
-        let files = download::ensure_registry_indexes_with_progress(
-            registries,
-            progress_tx,
-            is_update,
-            force,
-        )?;
-        Self::open_index_files(files)
-    }
-
-    pub fn open_scope_with_progress(
-        scope: download::RegistrySearchScope,
-        progress_tx: &std::sync::mpsc::Sender<download::DownloadProgress>,
-        is_update: bool,
-        force: bool,
-    ) -> Result<Self> {
-        match scope {
-            download::RegistrySearchScope::Registries(registries) => {
-                Self::open_registries_with_progress(registries, progress_tx, is_update, force)
-            }
-            download::RegistrySearchScope::IndexFiles(files) => Self::open_index_files(files),
-        }
-    }
-
-    pub fn open_cached(registries: &[RegistryInfo]) -> Result<Self> {
-        let files = registries
-            .iter()
-            .map(|registry| {
-                Ok(download::RegistryIndexFile {
-                    registry: registry.clone(),
-                    path: download::registry_db_path(registry)?,
-                    downloaded: false,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Self::open_index_files(files)
-    }
-
-    pub fn open_cached_scope(scope: &download::RegistrySearchScope) -> Result<Self> {
-        match scope {
-            download::RegistrySearchScope::Registries(registries) => Self::open_cached(registries),
-            download::RegistrySearchScope::IndexFiles(files) => {
-                Self::open_index_files(files.clone())
-            }
-        }
-    }
-
     pub fn single(client: RegistryClient) -> Self {
         Self {
             clients: vec![client],
@@ -709,39 +653,6 @@ impl RegistrySearchClient {
             return Ok(ModuleRelations::default());
         };
         client.get_module_relations(hit.id)
-    }
-
-    pub fn get_module_by_key(
-        &self,
-        registry_id: &str,
-        module_id: i64,
-    ) -> Result<Option<RegistryModule>> {
-        let Some(client) = self.client_for_registry(registry_id) else {
-            return Ok(None);
-        };
-        client.get_module_by_id(module_id)
-    }
-
-    pub fn get_symbol_by_key(
-        &self,
-        registry_id: &str,
-        symbol_id: i64,
-    ) -> Result<Option<RegistrySymbol>> {
-        let Some(client) = self.client_for_registry(registry_id) else {
-            return Ok(None);
-        };
-        client.get_symbol_by_id(symbol_id)
-    }
-
-    pub fn get_module_relations_by_key(
-        &self,
-        registry_id: &str,
-        module_id: i64,
-    ) -> Result<ModuleRelations> {
-        let Some(client) = self.client_for_registry(registry_id) else {
-            return Ok(ModuleRelations::default());
-        };
-        client.get_module_relations(module_id)
     }
 
     fn client_for_registry(&self, registry_id: &str) -> Option<&RegistryClient> {
