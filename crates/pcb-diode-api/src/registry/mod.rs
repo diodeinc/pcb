@@ -431,22 +431,27 @@ fn prefix_fts_clauses(query: &str) -> Vec<String> {
     clauses
 }
 
-/// Runs the word and docs searches with an all-terms prefix query. When a multi-term query
-/// matches nothing in either, retries matching any term so descriptive queries such as
-/// "RP2354 controller" still find the parts they name.
-pub(crate) fn search_prefix_fts<T>(
-    query: &str,
-    search: impl Fn(&str) -> (Vec<T>, Vec<T>),
-) -> (Vec<T>, Vec<T>) {
+/// Prefix FTS query matching every term of `query`, or any term when `any_term` is set.
+pub(crate) fn prefix_fts_query(query: &str, any_term: bool) -> Option<String> {
     let clauses = prefix_fts_clauses(query);
-    if clauses.is_empty() {
-        return (Vec::new(), Vec::new());
+    let operator = if any_term { " OR " } else { " AND " };
+    (!clauses.is_empty()).then(|| clauses.join(operator))
+}
+
+/// Runs `search` matching every term. When a multi-term query finds nothing, runs it again
+/// matching any term so descriptive queries such as "RP2354 controller" still find the parts
+/// they name. The decision covers the whole search, so loose matches never mix with complete
+/// ones.
+pub(crate) fn with_any_term_fallback<T>(
+    query: &str,
+    search: impl Fn(bool) -> T,
+    has_hits: impl Fn(&T) -> bool,
+) -> T {
+    let hits = search(false);
+    if has_hits(&hits) || prefix_fts_clauses(query).len() < 2 {
+        return hits;
     }
-    let (word, docs) = search(&clauses.join(" AND "));
-    if clauses.len() == 1 || !word.is_empty() || !docs.is_empty() {
-        return (word, docs);
-    }
-    search(&clauses.join(" OR "))
+    search(true)
 }
 
 pub(crate) fn escape_fts5(s: &str) -> String {
@@ -516,7 +521,7 @@ impl RegistryClient {
             .map_err(Into::into)
     }
 
-    pub fn search_modules_rrf(&self, query: &str) -> ModuleRrfSearchOutput {
+    fn search_modules_rrf(&self, query: &str, any_term: bool) -> ModuleRrfSearchOutput {
         const PER_INDEX_LIMIT: usize = 50;
         const MERGED_LIMIT: usize = 100;
 
@@ -529,14 +534,15 @@ impl RegistryClient {
         let trigram = self
             .search_module_trigram_hits(&parsed, PER_INDEX_LIMIT)
             .unwrap_or_default();
-        let (word, docs_full_text) = search_prefix_fts(query_text, |fts_query| {
-            (
-                self.search_module_word_hits(fts_query, PER_INDEX_LIMIT)
+        let (word, docs_full_text) = match prefix_fts_query(query_text, any_term) {
+            Some(fts_query) => (
+                self.search_module_word_hits(&fts_query, PER_INDEX_LIMIT)
                     .unwrap_or_default(),
-                self.search_module_docs_full_text_hits(fts_query, PER_INDEX_LIMIT)
+                self.search_module_docs_full_text_hits(&fts_query, PER_INDEX_LIMIT)
                     .unwrap_or_default(),
-            )
-        });
+            ),
+            None => Default::default(),
+        };
         let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text], MERGED_LIMIT);
 
         ModuleRrfSearchOutput {
@@ -547,7 +553,7 @@ impl RegistryClient {
         }
     }
 
-    pub fn search_symbols_rrf(&self, query: &str) -> SymbolRrfSearchOutput {
+    fn search_symbols_rrf(&self, query: &str, any_term: bool) -> SymbolRrfSearchOutput {
         const PER_INDEX_LIMIT: usize = 50;
         const MERGED_LIMIT: usize = 100;
 
@@ -560,14 +566,15 @@ impl RegistryClient {
         let trigram = self
             .search_symbol_trigram_hits(&parsed, PER_INDEX_LIMIT)
             .unwrap_or_default();
-        let (word, docs_full_text) = search_prefix_fts(query_text, |fts_query| {
-            (
-                self.search_symbol_word_hits(fts_query, PER_INDEX_LIMIT)
+        let (word, docs_full_text) = match prefix_fts_query(query_text, any_term) {
+            Some(fts_query) => (
+                self.search_symbol_word_hits(&fts_query, PER_INDEX_LIMIT)
                     .unwrap_or_default(),
-                self.search_symbol_docs_full_text_hits(fts_query, PER_INDEX_LIMIT)
+                self.search_symbol_docs_full_text_hits(&fts_query, PER_INDEX_LIMIT)
                     .unwrap_or_default(),
-            )
-        });
+            ),
+            None => Default::default(),
+        };
         let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text], MERGED_LIMIT);
 
         SymbolRrfSearchOutput {
@@ -999,11 +1006,20 @@ impl RegistrySearchClient {
 
     pub fn search_modules_rrf(&self, query: &str) -> ModuleRrfSearchOutput {
         const MERGED_LIMIT: usize = 100;
-        let outputs = self
-            .clients
-            .iter()
-            .map(|client| client.search_modules_rrf(query))
-            .collect::<Vec<_>>();
+        let outputs = with_any_term_fallback(
+            query,
+            |any_term| {
+                self.clients
+                    .iter()
+                    .map(|client| client.search_modules_rrf(query, any_term))
+                    .collect::<Vec<_>>()
+            },
+            |outputs| {
+                outputs
+                    .iter()
+                    .any(|out| !out.word.is_empty() || !out.docs_full_text.is_empty())
+            },
+        );
 
         let trigram_lists = outputs
             .iter()
@@ -1035,11 +1051,20 @@ impl RegistrySearchClient {
 
     pub fn search_symbols_rrf(&self, query: &str) -> SymbolRrfSearchOutput {
         const MERGED_LIMIT: usize = 100;
-        let outputs = self
-            .clients
-            .iter()
-            .map(|client| client.search_symbols_rrf(query))
-            .collect::<Vec<_>>();
+        let outputs = with_any_term_fallback(
+            query,
+            |any_term| {
+                self.clients
+                    .iter()
+                    .map(|client| client.search_symbols_rrf(query, any_term))
+                    .collect::<Vec<_>>()
+            },
+            |outputs| {
+                outputs
+                    .iter()
+                    .any(|out| !out.word.is_empty() || !out.docs_full_text.is_empty())
+            },
+        );
 
         let trigram_lists = outputs
             .iter()
@@ -1188,11 +1213,16 @@ mod tests {
 
     fn run(query: &str, hits_for: impl Fn(&str) -> Vec<i32>) -> (Vec<String>, Vec<i32>) {
         let queries = RefCell::new(Vec::new());
-        let (word, _) = search_prefix_fts(query, |fts_query| {
-            queries.borrow_mut().push(fts_query.to_owned());
-            (hits_for(fts_query), Vec::new())
-        });
-        (queries.into_inner(), word)
+        let hits = with_any_term_fallback(
+            query,
+            |any_term| {
+                let fts_query = prefix_fts_query(query, any_term).unwrap();
+                queries.borrow_mut().push(fts_query.clone());
+                hits_for(&fts_query)
+            },
+            |hits| !hits.is_empty(),
+        );
+        (queries.into_inner(), hits)
     }
 
     #[test]

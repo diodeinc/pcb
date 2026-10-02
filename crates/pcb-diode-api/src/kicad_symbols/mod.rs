@@ -7,7 +7,7 @@ use crate::SearchHit;
 use crate::bom::ComponentKey;
 use crate::registry::{
     ParsedQuery, RrfSearchOutput, collect_deduped_hits_by_url, merge_rrf_hit_lists,
-    search_prefix_fts,
+    prefix_fts_query, with_any_term_fallback,
 };
 
 pub mod download;
@@ -166,14 +166,19 @@ impl KicadSymbolsClient {
         let trigram = self
             .search_trigram_hits(&parsed, PER_INDEX_LIMIT)
             .unwrap_or_default();
-        let (word, docs_full_text) = search_prefix_fts(query_text, |fts_query| {
-            (
-                self.search_word_hits(fts_query, PER_INDEX_LIMIT)
-                    .unwrap_or_default(),
-                self.search_docs_full_text_hits(fts_query, PER_INDEX_LIMIT)
-                    .unwrap_or_default(),
-            )
-        });
+        let (word, docs_full_text) = with_any_term_fallback(
+            query_text,
+            |any_term| match prefix_fts_query(query_text, any_term) {
+                Some(fts_query) => (
+                    self.search_word_hits(&fts_query, PER_INDEX_LIMIT)
+                        .unwrap_or_default(),
+                    self.search_docs_full_text_hits(&fts_query, PER_INDEX_LIMIT)
+                        .unwrap_or_default(),
+                ),
+                None => Default::default(),
+            },
+            |(word, docs)| !word.is_empty() || !docs.is_empty(),
+        );
         let merged = merge_rrf_hit_lists(&[&trigram, &word, &docs_full_text], MERGED_LIMIT);
 
         RrfSearchOutput {
