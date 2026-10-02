@@ -344,12 +344,7 @@ fn resolve_request(
         return resolve_nightly();
     }
 
-    // Lanes and latest track the newest matching release; a release within a
-    // lane is compatible by policy. Only exact versions stay pinned.
-    if matches!(
-        request,
-        ToolchainRequest::Latest | ToolchainRequest::Lane { .. }
-    ) {
+    if tracks_newest_release(request) {
         if prefer_local && let Some(local) = best_local_toolchain(request)? {
             return Ok(ResolvedToolchain { binary: local.1 });
         }
@@ -399,6 +394,15 @@ fn resolve_nightly() -> Result<ResolvedToolchain> {
             Err(remote_error)
         }
     }
+}
+
+/// Lanes and latest track the newest matching release; a release within a
+/// lane is compatible by policy. Only exact versions stay pinned.
+fn tracks_newest_release(request: &ToolchainRequest) -> bool {
+    matches!(
+        request,
+        ToolchainRequest::Latest | ToolchainRequest::Lane { .. }
+    )
 }
 
 fn best_local_toolchain(request: &ToolchainRequest) -> Result<Option<(Version, PathBuf)>> {
@@ -1126,7 +1130,13 @@ fn show_stable_toolchain(request: &ToolchainRequest, offline: bool) -> Result<()
                 println!("latest: {version}");
             }
             match &active {
-                Some((active, _)) if active < &version => println!("update: available"),
+                Some((active, _)) if active < &version => {
+                    if tracks_newest_release(request) {
+                        println!("update: installs on next run");
+                    } else {
+                        println!("update: available");
+                    }
+                }
                 Some((active, _)) if active > &version => println!("update: installed is newer"),
                 Some(_) => println!("update: current"),
                 None => {
@@ -1160,10 +1170,11 @@ fn show_stable_toolchain(request: &ToolchainRequest, offline: bool) -> Result<()
 }
 
 fn best_toolchain_for_show(request: &ToolchainRequest) -> Result<Option<(Version, PathBuf)>> {
-    // Ordinary `latest` execution resolves the published release before
-    // considering local fallbacks. Prefer a managed stable install here so the
-    // diagnostic does not claim that a sibling development binary is active.
-    if matches!(request, ToolchainRequest::Latest) {
+    // Ordinary `latest` and lane execution resolves the published release
+    // before considering local fallbacks. Prefer a managed stable install here
+    // so the diagnostic does not claim that a sibling development binary is
+    // active.
+    if tracks_newest_release(request) {
         return Ok(installed_toolchains()?
             .into_iter()
             .rfind(|(version, _)| request_matches(request, version)));
