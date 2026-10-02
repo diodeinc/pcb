@@ -405,7 +405,10 @@ SI base symbols are resolved in the context of the declared type, so `Length("1m
 **Operators**: `+`, `-`, `*`, `/` (with unit tracking), `<`, `>`, `<=`, `>=`, `==` (strict equality against another `PhysicalValue`), unary `-`
 
 Use `.matches(other)` for coercive comparisons against strings or scalars, such
-as `Voltage("5V").matches("5V")`.
+as `Voltage("5V").matches("5V")`. String unit symbols are resolved in the
+quantity's unit context, so `Length("0.23mm").matches("230um")` is `True`.
+Matching requires identical units, nominal values, and min/max bounds; invalid
+strings or different tolerances return `False`.
 
 **String formatting**: Point values → `"3.3V"`. Symmetric tolerances → `"10k 5%"`. Ranges → `"11–26V (16V nom.)"`.
 
