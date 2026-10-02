@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
 
 use crate::bom::ComponentKey;
 pub use crate::registry::download::RegistryInfo;
@@ -153,180 +152,93 @@ pub struct RegistrySymbolHit {
     pub manufacturer: String,
     pub kicad_description: Option<String>,
     pub rank: Option<f64>,
-    pub availability_lookups: Vec<ComponentKey>,
+    pub availability_key: Option<ComponentKey>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ModuleRrfSearchOutput {
-    pub trigram: Vec<RegistryModuleHit>,
-    pub word: Vec<RegistryModuleHit>,
-    pub docs_full_text: Vec<RegistryModuleHit>,
-    pub merged: Vec<RegistryModuleHit>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SymbolRrfSearchOutput {
-    pub trigram: Vec<RegistrySymbolHit>,
-    pub word: Vec<RegistrySymbolHit>,
-    pub docs_full_text: Vec<RegistrySymbolHit>,
-    pub merged: Vec<RegistrySymbolHit>,
-}
-
-/// Lightweight search hit retained for KiCad symbols search.
+/// Ranked hits from each search channel, and their reciprocal-rank fusion.
 #[derive(Debug, Clone)]
-pub struct SearchHit {
-    pub id: i64,
-    pub url: String,
-    pub name: String,
-    pub mpn: Option<String>,
-    pub manufacturer: Option<String>,
-    pub short_description: Option<String>,
-    pub version: Option<String>,
-    pub package_category: Option<String>,
-    pub rank: Option<f64>,
-    pub availability_lookups: Vec<ComponentKey>,
+pub struct RrfSearchOutput<T> {
+    pub trigram: Vec<T>,
+    pub word: Vec<T>,
+    pub docs_full_text: Vec<T>,
+    pub merged: Vec<T>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct RrfSearchOutput {
-    pub trigram: Vec<SearchHit>,
-    pub word: Vec<SearchHit>,
-    pub docs_full_text: Vec<SearchHit>,
-    pub merged: Vec<SearchHit>,
-}
-
-trait UrlKeyedHit: Clone {
-    fn url(&self) -> &str;
-
-    fn result_key(&self) -> SearchResultKey {
-        SearchResultKey::url(self.url())
+impl<T> Default for RrfSearchOutput<T> {
+    fn default() -> Self {
+        Self {
+            trigram: Vec::new(),
+            word: Vec::new(),
+            docs_full_text: Vec::new(),
+            merged: Vec::new(),
+        }
     }
 }
 
+/// Identifies a hit across registries.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SearchResultKey {
-    registry_id: Option<String>,
+    registry_id: String,
     url: String,
 }
 
 impl SearchResultKey {
-    pub fn url(url: impl Into<String>) -> Self {
+    pub fn new(registry_id: &str, url: &str) -> Self {
         Self {
-            registry_id: None,
-            url: url.into(),
-        }
-    }
-
-    pub fn registry(registry_id: impl Into<String>, url: impl Into<String>) -> Self {
-        Self {
-            registry_id: Some(registry_id.into()),
-            url: url.into(),
+            registry_id: registry_id.to_owned(),
+            url: url.to_owned(),
         }
     }
 }
 
-impl UrlKeyedHit for SearchHit {
-    fn url(&self) -> &str {
-        &self.url
+pub trait RegistryHit: Clone {
+    fn key(&self) -> SearchResultKey;
+    fn rank(&self) -> Option<f64>;
+}
+
+impl RegistryHit for RegistryModuleHit {
+    fn key(&self) -> SearchResultKey {
+        SearchResultKey::new(&self.registry.id, &self.url)
+    }
+
+    fn rank(&self) -> Option<f64> {
+        self.rank
     }
 }
 
-impl UrlKeyedHit for RegistryModuleHit {
-    fn url(&self) -> &str {
-        &self.url
+impl RegistryHit for RegistrySymbolHit {
+    fn key(&self) -> SearchResultKey {
+        SearchResultKey::new(&self.registry.id, &self.url)
     }
 
-    fn result_key(&self) -> SearchResultKey {
-        SearchResultKey::registry(self.registry.id.as_str(), self.url.as_str())
-    }
-}
-
-impl UrlKeyedHit for RegistrySymbolHit {
-    fn url(&self) -> &str {
-        &self.url
-    }
-
-    fn result_key(&self) -> SearchResultKey {
-        SearchResultKey::registry(self.registry.id.as_str(), self.url.as_str())
+    fn rank(&self) -> Option<f64> {
+        self.rank
     }
 }
 
-fn collect_deduped_by_url<I, T>(rows: I, limit: usize) -> Result<Vec<T>>
-where
-    I: IntoIterator<Item = rusqlite::Result<T>>,
-    T: UrlKeyedHit,
-{
-    let mut seen_urls = HashSet::new();
-    let mut deduped = Vec::with_capacity(limit);
-    for row in rows {
-        let hit = row?;
-        if seen_urls.insert(hit.url().to_owned()) {
-            deduped.push(hit);
-            if deduped.len() >= limit {
-                break;
-            }
-        }
-    }
-
-    Ok(deduped)
-}
-
-pub(crate) fn collect_deduped_hits_by_url<I>(rows: I, limit: usize) -> Result<Vec<SearchHit>>
-where
-    I: IntoIterator<Item = rusqlite::Result<SearchHit>>,
-{
-    collect_deduped_by_url(rows, limit)
-}
-
-fn merge_rrf_by_url<T>(lists: &[&[T]], limit: usize) -> Vec<T>
-where
-    T: UrlKeyedHit,
-{
-    let mut rrf_scores: HashMap<SearchResultKey, f64> = HashMap::new();
+/// Reciprocal-rank fusion of `lists`, best first. Ties keep the order hits were first seen.
+fn merge_rrf<'a, T: RegistryHit + 'a>(
+    lists: impl IntoIterator<Item = &'a Vec<T>>,
+    limit: usize,
+) -> Vec<T> {
+    let mut slots: HashMap<SearchResultKey, usize> = HashMap::new();
+    let mut scored: Vec<(f64, &T)> = Vec::new();
     for hits in lists {
         for (idx, hit) in hits.iter().enumerate() {
-            *rrf_scores.entry(hit.result_key()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
+            let slot = *slots.entry(hit.key()).or_insert_with(|| {
+                scored.push((0.0, hit));
+                scored.len() - 1
+            });
+            scored[slot].0 += 1.0 / (RRF_K + (idx + 1) as f64);
         }
     }
 
-    let mut all_hits: HashMap<SearchResultKey, T> = HashMap::new();
-    for hits in lists {
-        for hit in hits.iter() {
-            all_hits
-                .entry(hit.result_key())
-                .or_insert_with(|| hit.clone());
-        }
-    }
-
-    let mut scored: Vec<_> = all_hits
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    scored
         .into_iter()
-        .map(|(key, hit)| (rrf_scores.get(&key).copied().unwrap_or(0.0), hit))
-        .collect();
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    scored.into_iter().take(limit).map(|(_, hit)| hit).collect()
-}
-
-fn merge_rrf_by_ranked_lists<T>(channels: &[&[Vec<T>]], limit: usize) -> Vec<T>
-where
-    T: UrlKeyedHit,
-{
-    let lists = channels
-        .iter()
-        .flat_map(|channel| channel.iter().map(Vec::as_slice))
-        .collect::<Vec<_>>();
-    merge_rrf_by_url(&lists, limit)
-}
-
-fn merge_all_rrf_by_ranked_lists<T>(channels: &[&[Vec<T>]]) -> Vec<T>
-where
-    T: UrlKeyedHit,
-{
-    merge_rrf_by_ranked_lists(channels, usize::MAX)
-}
-
-pub(crate) fn merge_rrf_hit_lists(lists: &[&[SearchHit]], limit: usize) -> Vec<SearchHit> {
-    merge_rrf_by_url(lists, limit)
+        .take(limit)
+        .map(|(_, hit)| hit.clone())
+        .collect()
 }
 
 pub(crate) fn package_name_from_url(url: &str) -> String {
@@ -357,26 +269,6 @@ pub(crate) fn component_lookup_key(
         mpn: mpn.to_owned(),
         manufacturer,
     })
-}
-
-#[derive(Debug)]
-pub struct ParsedQuery {
-    pub original: String,
-    pub identifier_canon: String,
-    pub mpn_canon: String,
-}
-
-impl ParsedQuery {
-    pub fn parse(query: &str) -> Self {
-        let original = query.trim().to_string();
-        let identifier_canon = canonicalize_identifier(&original);
-
-        Self {
-            original,
-            mpn_canon: identifier_canon.clone(),
-            identifier_canon,
-        }
-    }
 }
 
 fn canonicalize_identifier(s: &str) -> String {
@@ -434,29 +326,13 @@ fn prefix_fts_clauses(query: &str) -> Vec<String> {
 }
 
 /// Prefix FTS query matching every term of `query`, or any term when `any_term` is set.
-pub(crate) fn prefix_fts_query(query: &str, any_term: bool) -> Option<String> {
+fn prefix_fts_query(query: &str, any_term: bool) -> Option<String> {
     let clauses = prefix_fts_clauses(query);
     let operator = if any_term { " OR " } else { " AND " };
     (!clauses.is_empty()).then(|| clauses.join(operator))
 }
 
-/// Runs `search` matching every term. When a multi-term query finds nothing, runs it again
-/// matching any term so descriptive queries such as "RP2354 controller" still find the parts
-/// they name. The decision covers the whole search, so loose matches never mix with complete
-/// ones.
-pub(crate) fn with_any_term_fallback<T>(
-    query: &str,
-    search: impl Fn(bool) -> T,
-    has_hits: impl Fn(&T) -> bool,
-) -> T {
-    let hits = search(false);
-    if has_hits(&hits) || prefix_fts_clauses(query).len() < 2 {
-        return hits;
-    }
-    search(true)
-}
-
-pub(crate) fn escape_fts5(s: &str) -> String {
+fn escape_fts5(s: &str) -> String {
     if s.chars().any(|c| {
         matches!(
             c,
@@ -475,10 +351,6 @@ pub struct RegistryClient {
 }
 
 impl RegistryClient {
-    pub fn default_db_path() -> Result<PathBuf> {
-        download::default_registry_db_path()
-    }
-
     pub fn open_path(path: &std::path::Path) -> Result<Self> {
         Self::open_path_with_registry(path, RegistryInfo::local(path))
     }
@@ -523,212 +395,30 @@ impl RegistryClient {
             .map_err(Into::into)
     }
 
-    fn module_trigram_hits(&self, query: &str) -> Vec<RegistryModuleHit> {
-        self.search_module_trigram_hits(&ParsedQuery::parse(query), PER_INDEX_LIMIT)
-            .unwrap_or_default()
-    }
-
-    fn module_keyword_hits(
+    /// Runs one of a [`HitQueries`] statement, keeping the first `limit` distinct hits.
+    fn hits<T: RegistryHit>(
         &self,
-        query: &str,
-        any_term: bool,
-    ) -> (Vec<RegistryModuleHit>, Vec<RegistryModuleHit>) {
-        let Some(fts_query) = prefix_fts_query(query, any_term) else {
-            return Default::default();
-        };
-        (
-            self.search_module_word_hits(&fts_query, PER_INDEX_LIMIT)
-                .unwrap_or_default(),
-            self.search_module_docs_full_text_hits(&fts_query, PER_INDEX_LIMIT)
-                .unwrap_or_default(),
-        )
-    }
-
-    fn symbol_trigram_hits(&self, query: &str) -> Vec<RegistrySymbolHit> {
-        self.search_symbol_trigram_hits(&ParsedQuery::parse(query), PER_INDEX_LIMIT)
-            .unwrap_or_default()
-    }
-
-    fn symbol_keyword_hits(
-        &self,
-        query: &str,
-        any_term: bool,
-    ) -> (Vec<RegistrySymbolHit>, Vec<RegistrySymbolHit>) {
-        let Some(fts_query) = prefix_fts_query(query, any_term) else {
-            return Default::default();
-        };
-        (
-            self.search_symbol_word_hits(&fts_query, PER_INDEX_LIMIT)
-                .unwrap_or_default(),
-            self.search_symbol_docs_full_text_hits(&fts_query, PER_INDEX_LIMIT)
-                .unwrap_or_default(),
-        )
-    }
-
-    fn search_module_trigram_hits(
-        &self,
-        parsed: &ParsedQuery,
-        limit: usize,
-    ) -> Result<Vec<RegistryModuleHit>> {
-        if parsed.identifier_canon.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let fts_query = escape_fts5(&parsed.identifier_canon);
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT m.id, m.url, m.version, m.description, fts.rank
-            FROM module_fts_ids fts
-            JOIN modules m ON m.id = CAST(fts.module_id AS INTEGER)
-            WHERE module_fts_ids MATCH ?1
-            ORDER BY fts.rank
-            LIMIT ?2
-            "#,
-        )?;
-        let registry = self.registry.clone();
-        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], |row| {
-            map_module_hit(row, &registry)
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
-    }
-
-    fn search_module_word_hits(
-        &self,
+        sql: &str,
         fts_query: &str,
-        limit: usize,
-    ) -> Result<Vec<RegistryModuleHit>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT m.id, m.url, m.version, m.description, fts.rank
-            FROM module_fts_words fts
-            JOIN modules m ON m.id = CAST(fts.module_id AS INTEGER)
-            WHERE module_fts_words MATCH ?1
-            ORDER BY fts.rank
-            LIMIT ?2
-            "#,
+        map: fn(&rusqlite::Row, &RegistryInfo) -> rusqlite::Result<T>,
+    ) -> Result<Vec<T>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params![fts_query, PER_INDEX_LIMIT as i64],
+            |row| map(row, &self.registry),
         )?;
-        let registry = self.registry.clone();
-        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], |row| {
-            map_module_hit(row, &registry)
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
-    }
-
-    fn search_module_docs_full_text_hits(
-        &self,
-        fts_query: &str,
-        limit: usize,
-    ) -> Result<Vec<RegistryModuleHit>> {
-        if limit == 0 {
-            return Ok(Vec::new());
+        let mut seen = HashSet::new();
+        let mut hits = Vec::new();
+        for hit in rows {
+            let hit = hit?;
+            if seen.insert(hit.key()) {
+                hits.push(hit);
+                if hits.len() == PER_INDEX_LIMIT {
+                    break;
+                }
+            }
         }
-        let fetch_limit = limit.saturating_mul(4);
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT m.id, m.url, m.version, m.description, bm25(documents_fts) AS score
-            FROM documents_fts
-            JOIN documents d ON d.id = documents_fts.rowid
-            JOIN document_owners o ON o.document_id = d.id
-            JOIN modules m ON m.url = o.owner_url
-            WHERE documents_fts MATCH ?1
-              AND o.owner_kind = 'module'
-            ORDER BY score
-            LIMIT ?2
-            "#,
-        )?;
-        let registry = self.registry.clone();
-        let rows = stmt.query_map(rusqlite::params![fts_query, fetch_limit as i64], |row| {
-            map_module_hit(row, &registry)
-        })?;
-        collect_deduped_by_url(rows, limit)
-    }
-
-    fn search_symbol_trigram_hits(
-        &self,
-        parsed: &ParsedQuery,
-        limit: usize,
-    ) -> Result<Vec<RegistrySymbolHit>> {
-        if parsed.identifier_canon.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let fts_query = escape_fts5(&parsed.identifier_canon);
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
-                   m.url AS module_url, fts.rank
-            FROM symbol_fts_ids fts
-            JOIN symbols s ON s.id = CAST(fts.symbol_id AS INTEGER)
-            JOIN modules m ON m.id = s.module_id
-            WHERE symbol_fts_ids MATCH ?1
-            ORDER BY fts.rank
-            LIMIT ?2
-            "#,
-        )?;
-        let registry = self.registry.clone();
-        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], |row| {
-            map_symbol_hit(row, &registry)
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
-    }
-
-    fn search_symbol_word_hits(
-        &self,
-        fts_query: &str,
-        limit: usize,
-    ) -> Result<Vec<RegistrySymbolHit>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
-                   m.url AS module_url, fts.rank
-            FROM symbol_fts_words fts
-            JOIN symbols s ON s.id = CAST(fts.symbol_id AS INTEGER)
-            JOIN modules m ON m.id = s.module_id
-            WHERE symbol_fts_words MATCH ?1
-            ORDER BY fts.rank
-            LIMIT ?2
-            "#,
-        )?;
-        let registry = self.registry.clone();
-        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], |row| {
-            map_symbol_hit(row, &registry)
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
-    }
-
-    fn search_symbol_docs_full_text_hits(
-        &self,
-        fts_query: &str,
-        limit: usize,
-    ) -> Result<Vec<RegistrySymbolHit>> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-        let fetch_limit = limit.saturating_mul(4);
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
-                   m.url AS module_url, bm25(documents_fts) AS score
-            FROM documents_fts
-            JOIN documents d ON d.id = documents_fts.rowid
-            JOIN document_owners o ON o.document_id = d.id
-            JOIN symbols s ON s.url = o.owner_url
-            JOIN modules m ON m.id = s.module_id
-            WHERE documents_fts MATCH ?1
-              AND o.owner_kind = 'symbol'
-            ORDER BY score
-            LIMIT ?2
-            "#,
-        )?;
-        let registry = self.registry.clone();
-        let rows = stmt.query_map(rusqlite::params![fts_query, fetch_limit as i64], |row| {
-            map_symbol_hit(row, &registry)
-        })?;
-        collect_deduped_by_url(rows, limit)
+        Ok(hits)
     }
 
     pub fn get_module_by_id(&self, id: i64) -> Result<Option<RegistryModule>> {
@@ -984,86 +674,63 @@ impl RegistrySearchClient {
             .try_fold(0, |acc, count| count.map(|count| acc + count))
     }
 
-    pub fn search_modules_rrf(&self, query: &str) -> ModuleRrfSearchOutput {
-        let query = query.trim();
-        if query.is_empty() {
-            return ModuleRrfSearchOutput::default();
-        }
-
-        let trigram_lists = self
-            .clients
-            .iter()
-            .map(|client| client.module_trigram_hits(query))
-            .collect::<Vec<_>>();
-        let (word_lists, docs_full_text_lists): (Vec<_>, Vec<_>) = with_any_term_fallback(
-            query,
-            |any_term| {
-                self.clients
-                    .iter()
-                    .map(|client| client.module_keyword_hits(query, any_term))
-                    .unzip()
-            },
-            |(word_lists, docs_lists): &(Vec<Vec<_>>, Vec<Vec<_>>)| {
-                word_lists
-                    .iter()
-                    .chain(docs_lists)
-                    .any(|hits| !hits.is_empty())
-            },
-        );
-        let merged = merge_rrf_by_ranked_lists(
-            &[&trigram_lists, &word_lists, &docs_full_text_lists],
-            MERGED_LIMIT,
-        );
-        let trigram = merge_all_rrf_by_ranked_lists(&[&trigram_lists]);
-        let word = merge_all_rrf_by_ranked_lists(&[&word_lists]);
-        let docs_full_text = merge_all_rrf_by_ranked_lists(&[&docs_full_text_lists]);
-
-        ModuleRrfSearchOutput {
-            trigram,
-            word,
-            docs_full_text,
-            merged,
-        }
+    pub fn search_modules_rrf(&self, query: &str) -> RrfSearchOutput<RegistryModuleHit> {
+        self.search_rrf(query, &MODULE_QUERIES)
     }
 
-    pub fn search_symbols_rrf(&self, query: &str) -> SymbolRrfSearchOutput {
+    pub fn search_symbols_rrf(&self, query: &str) -> RrfSearchOutput<RegistrySymbolHit> {
+        self.search_rrf(query, &SYMBOL_QUERIES)
+    }
+
+    fn search_rrf<T: RegistryHit>(
+        &self,
+        query: &str,
+        queries: &HitQueries<T>,
+    ) -> RrfSearchOutput<T> {
         let query = query.trim();
         if query.is_empty() {
-            return SymbolRrfSearchOutput::default();
+            return RrfSearchOutput::default();
         }
 
-        let trigram_lists = self
-            .clients
-            .iter()
-            .map(|client| client.symbol_trigram_hits(query))
-            .collect::<Vec<_>>();
-        let (word_lists, docs_full_text_lists): (Vec<_>, Vec<_>) = with_any_term_fallback(
-            query,
-            |any_term| {
-                self.clients
-                    .iter()
-                    .map(|client| client.symbol_keyword_hits(query, any_term))
-                    .unzip()
-            },
-            |(word_lists, docs_lists): &(Vec<Vec<_>>, Vec<Vec<_>>)| {
-                word_lists
-                    .iter()
-                    .chain(docs_lists)
-                    .any(|hits| !hits.is_empty())
-            },
-        );
-        let merged = merge_rrf_by_ranked_lists(
-            &[&trigram_lists, &word_lists, &docs_full_text_lists],
+        let search = |sql: &str, fts_query: &str| {
+            self.clients
+                .iter()
+                .map(|client| client.hits(sql, fts_query, queries.map).unwrap_or_default())
+                .collect::<Vec<_>>()
+        };
+        let keyword_search = |any_term| match prefix_fts_query(query, any_term) {
+            Some(fts_query) => (
+                search(queries.words, &fts_query),
+                search(queries.docs, &fts_query),
+            ),
+            None => Default::default(),
+        };
+
+        let identifier = canonicalize_identifier(query);
+        let trigram_lists = if identifier.is_empty() {
+            Vec::new()
+        } else {
+            search(queries.ids, &escape_fts5(&identifier))
+        };
+        // A multi-term query that matches nothing in any registry is retried matching any
+        // term, so descriptive queries such as "RP2354 controller" still find the parts they
+        // name. Deciding across all registries keeps loose matches from mixing with complete
+        // ones.
+        let (mut word_lists, mut docs_lists) = keyword_search(false);
+        if word_lists.iter().chain(&docs_lists).all(Vec::is_empty)
+            && prefix_fts_clauses(query).len() > 1
+        {
+            (word_lists, docs_lists) = keyword_search(true);
+        }
+
+        let merged = merge_rrf(
+            trigram_lists.iter().chain(&word_lists).chain(&docs_lists),
             MERGED_LIMIT,
         );
-        let trigram = merge_all_rrf_by_ranked_lists(&[&trigram_lists]);
-        let word = merge_all_rrf_by_ranked_lists(&[&word_lists]);
-        let docs_full_text = merge_all_rrf_by_ranked_lists(&[&docs_full_text_lists]);
-
-        SymbolRrfSearchOutput {
-            trigram,
-            word,
-            docs_full_text,
+        RrfSearchOutput {
+            trigram: merge_rrf(&trigram_lists, usize::MAX),
+            word: merge_rrf(&word_lists, usize::MAX),
+            docs_full_text: merge_rrf(&docs_lists, usize::MAX),
             merged,
         }
     }
@@ -1129,6 +796,85 @@ impl RegistrySearchClient {
     }
 }
 
+/// The statements behind each search channel for one kind of hit. Each binds the FTS query and
+/// the per-registry limit, and selects the columns `map` reads.
+struct HitQueries<T> {
+    ids: &'static str,
+    words: &'static str,
+    docs: &'static str,
+    map: fn(&rusqlite::Row, &RegistryInfo) -> rusqlite::Result<T>,
+}
+
+const MODULE_QUERIES: HitQueries<RegistryModuleHit> = HitQueries {
+    ids: r#"
+        SELECT m.id, m.url, m.version, m.description, fts.rank
+        FROM module_fts_ids fts
+        JOIN modules m ON m.id = CAST(fts.module_id AS INTEGER)
+        WHERE module_fts_ids MATCH ?1
+        ORDER BY fts.rank
+        LIMIT ?2
+    "#,
+    words: r#"
+        SELECT m.id, m.url, m.version, m.description, fts.rank
+        FROM module_fts_words fts
+        JOIN modules m ON m.id = CAST(fts.module_id AS INTEGER)
+        WHERE module_fts_words MATCH ?1
+        ORDER BY fts.rank
+        LIMIT ?2
+    "#,
+    // Several documents can belong to one module, so fetch extra rows to dedupe.
+    docs: r#"
+        SELECT m.id, m.url, m.version, m.description, bm25(documents_fts) AS score
+        FROM documents_fts
+        JOIN documents d ON d.id = documents_fts.rowid
+        JOIN document_owners o ON o.document_id = d.id
+        JOIN modules m ON m.url = o.owner_url
+        WHERE documents_fts MATCH ?1
+          AND o.owner_kind = 'module'
+        ORDER BY score
+        LIMIT ?2 * 4
+    "#,
+    map: map_module_hit,
+};
+
+const SYMBOL_QUERIES: HitQueries<RegistrySymbolHit> = HitQueries {
+    ids: r#"
+        SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
+               m.url AS module_url, fts.rank
+        FROM symbol_fts_ids fts
+        JOIN symbols s ON s.id = CAST(fts.symbol_id AS INTEGER)
+        JOIN modules m ON m.id = s.module_id
+        WHERE symbol_fts_ids MATCH ?1
+        ORDER BY fts.rank
+        LIMIT ?2
+    "#,
+    words: r#"
+        SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
+               m.url AS module_url, fts.rank
+        FROM symbol_fts_words fts
+        JOIN symbols s ON s.id = CAST(fts.symbol_id AS INTEGER)
+        JOIN modules m ON m.id = s.module_id
+        WHERE symbol_fts_words MATCH ?1
+        ORDER BY fts.rank
+        LIMIT ?2
+    "#,
+    // Several documents can belong to one symbol, so fetch extra rows to dedupe.
+    docs: r#"
+        SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
+               m.url AS module_url, bm25(documents_fts) AS score
+        FROM documents_fts
+        JOIN documents d ON d.id = documents_fts.rowid
+        JOIN document_owners o ON o.document_id = d.id
+        JOIN symbols s ON s.url = o.owner_url
+        JOIN modules m ON m.id = s.module_id
+        WHERE documents_fts MATCH ?1
+          AND o.owner_kind = 'symbol'
+        ORDER BY score
+        LIMIT ?2 * 4
+    "#,
+    map: map_symbol_hit,
+};
+
 fn map_module_hit(
     row: &rusqlite::Row,
     registry: &RegistryInfo,
@@ -1162,9 +908,7 @@ fn map_symbol_hit(
         kicad_description: row.get(4)?,
         module_url: row.get(5)?,
         rank: row.get(6)?,
-        availability_lookups: component_lookup_key(Some(&mpn), Some(&manufacturer))
-            .into_iter()
-            .collect(),
+        availability_key: component_lookup_key(Some(&mpn), Some(&manufacturer)),
     })
 }
 
@@ -1183,51 +927,21 @@ fn map_module_dependency(row: &rusqlite::Row) -> rusqlite::Result<RegistryModule
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-
-    fn run(query: &str, hits_for: impl Fn(&str) -> Vec<i32>) -> (Vec<String>, Vec<i32>) {
-        let queries = RefCell::new(Vec::new());
-        let hits = with_any_term_fallback(
-            query,
-            |any_term| {
-                let fts_query = prefix_fts_query(query, any_term).unwrap();
-                queries.borrow_mut().push(fts_query.clone());
-                hits_for(&fts_query)
-            },
-            |hits| !hits.is_empty(),
-        );
-        (queries.into_inner(), hits)
-    }
 
     #[test]
-    fn multi_term_query_without_hits_retries_matching_any_term() {
-        let (queries, hits) = run("RP2354 controller", |q| {
-            if q.contains(" OR ") { vec![1] } else { vec![] }
-        });
+    fn prefix_fts_query_matches_all_or_any_term() {
         assert_eq!(
-            queries,
-            ["rp2354* AND controller*", "rp2354* OR controller*"]
+            prefix_fts_query("RP2354 controller", false).as_deref(),
+            Some("rp2354* AND controller*")
         );
-        assert_eq!(hits, [1]);
-    }
-
-    #[test]
-    fn all_terms_hits_skip_the_fallback() {
-        let (queries, hits) = run("JST XH connector", |_| vec![1]);
-        assert_eq!(queries, ["jst* AND xh* AND connector*"]);
-        assert_eq!(hits, [1]);
-    }
-
-    #[test]
-    fn single_term_query_does_not_retry() {
-        let (queries, hits) = run("LIS3DHTR", |_| vec![]);
-        assert_eq!(queries, ["lis3dhtr*"]);
-        assert!(hits.is_empty());
-    }
-
-    #[test]
-    fn quoted_phrases_stay_whole_in_the_fallback() {
-        let (queries, _) = run("\"ideal diode\" controller", |_| vec![]);
-        assert_eq!(queries[1], "\"ideal diode\" OR controller*");
+        assert_eq!(
+            prefix_fts_query("RP2354 controller", true).as_deref(),
+            Some("rp2354* OR controller*")
+        );
+        assert_eq!(
+            prefix_fts_query("\"ideal diode\" controller", true).as_deref(),
+            Some("\"ideal diode\" OR controller*")
+        );
+        assert_eq!(prefix_fts_query("  ", false), None);
     }
 }

@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Removed
 
 - `pcb search -f json` no longer emits `scoring.semantic_position` or `scoring.semantic_rank`.
+- Remove the `kicad:components` search mode from `pcb search`.
 
 ## [0.4.67] - 2026-10-02
 

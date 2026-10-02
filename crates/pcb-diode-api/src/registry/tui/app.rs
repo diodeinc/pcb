@@ -1,27 +1,21 @@
 //! Main application state and event loop
 
 use super::super::download::{
-    DownloadProgress, DownloadSource, RegistrySearchScope, local_registry_index,
-    resolve_registry_search_scope,
+    DownloadProgress, RegistrySearchScope, local_registry_index, resolve_registry_search_scope,
 };
 use super::availability::{AvailabilityStore, selected_first_indices};
 use super::image::{
     ImageKey, ImageProtocol, ImageRequest, ImageResponse, ImageStore, spawn_image_workers,
 };
 use super::search::{
-    AvailabilityKey, AvailabilityRequest, DetailRequest, DetailResponse, PricingRequest,
-    PricingResponse, SearchQuery, SearchResults, SearchWorkerOptions, spawn_availability_worker,
-    spawn_detail_worker, spawn_worker,
+    DetailRequest, DetailResponse, PricingRequest, PricingResponse, SearchQuery, SearchResults,
+    spawn_availability_worker, spawn_detail_worker, spawn_worker,
 };
 use super::ui;
-use crate::kicad_symbols::KicadSymbol;
-use crate::kicad_symbols::download::{
-    KicadSymbolsAccessResult, KicadSymbolsIndexMetadata, check_kicad_symbols_access,
-};
+use crate::bom::ComponentKey;
 use crate::registry::component_lookup_key;
 use crate::{
-    KicadSymbolsClient, ModuleRelations, RegistryClient, RegistryModule, RegistrySearchClient,
-    RegistrySymbol,
+    ModuleRelations, RegistryClient, RegistryModule, RegistrySearchClient, RegistrySymbol,
 };
 use anyhow::Result;
 use arboard::Clipboard;
@@ -283,21 +277,15 @@ pub enum SearchMode {
     /// Search registry for components (fast, local)
     #[value(name = "registry:components")]
     RegistryComponents,
-    /// Search KiCad components index (fast, local)
-    #[value(name = "kicad:components")]
-    KicadSymbols,
 }
 
 impl SearchMode {
-    /// Cycle to next mode from a set of available modes
-    pub fn cycle(self, available: &[SearchMode]) -> Self {
-        if available.is_empty() {
-            return self;
+    /// Switch to the other search mode
+    pub fn cycle(self) -> Self {
+        match self {
+            SearchMode::RegistryModules => SearchMode::RegistryComponents,
+            SearchMode::RegistryComponents => SearchMode::RegistryModules,
         }
-        // Find current position and advance to next
-        let current_idx = available.iter().position(|&m| m == self).unwrap_or(0);
-        let next_idx = (current_idx + 1) % available.len();
-        available[next_idx]
     }
 
     /// Display name for UI
@@ -305,20 +293,7 @@ impl SearchMode {
         match self {
             SearchMode::RegistryModules => "registry:modules",
             SearchMode::RegistryComponents => "registry:components",
-            SearchMode::KicadSymbols => "kicad:components",
         }
-    }
-
-    /// Whether this mode requires registry access
-    pub fn requires_registry(&self) -> bool {
-        matches!(
-            self,
-            SearchMode::RegistryModules | SearchMode::RegistryComponents
-        )
-    }
-
-    pub fn requires_kicad_symbols(&self) -> bool {
-        matches!(self, SearchMode::KicadSymbols)
     }
 }
 
@@ -397,15 +372,9 @@ impl Command {
     }
 
     /// Check if command is enabled given current app state
-    pub fn is_enabled(
-        &self,
-        selected_symbol: Option<&RegistrySymbol>,
-        available_modes: &[SearchMode],
-    ) -> bool {
+    pub fn is_enabled(&self, selected_symbol: Option<&RegistrySymbol>) -> bool {
         match self {
-            Command::CycleMode => available_modes.len() > 1,
-            Command::UpdateRegistryIndex => available_modes.iter().any(|m| m.requires_registry()),
-            Command::ToggleDebugPanels => true,
+            Command::CycleMode | Command::UpdateRegistryIndex | Command::ToggleDebugPanels => true,
             Command::OpenInDigikey => {
                 // Only enabled if we have a component with DigiKey product URL
                 selected_symbol
@@ -459,8 +428,6 @@ pub struct App {
     pub selected_module: Option<RegistryModule>,
     /// Cached selected registry symbol details (fetched asynchronously)
     pub selected_symbol: Option<RegistrySymbol>,
-    /// Cached selected KiCad symbol details (fetched asynchronously)
-    pub selected_kicad_symbol: Option<KicadSymbol>,
     /// Cached dependencies/dependents for selected registry module
     pub module_relations: ModuleRelations,
     /// Channel to send detail requests to worker
@@ -468,7 +435,7 @@ pub struct App {
     /// Channel to receive detail responses from worker
     detail_rx: Receiver<DetailResponse>,
     /// Part ID of pending detail request (None = not waiting)
-    pending_detail_for: Option<(SearchMode, Option<String>, i64)>,
+    pending_detail_for: Option<(SearchMode, String, i64)>,
     /// When we started waiting for current detail request (for delayed "Loading..." display)
     detail_request_started: Option<Instant>,
     /// Command palette visible
@@ -481,10 +448,8 @@ pub struct App {
     pub command_palette_filtered: Vec<Command>,
     /// Show debug panels (Trigram/Word/Docs)
     pub show_debug_panels: bool,
-    /// Available search modes (determines which modes can be cycled to)
-    pub available_modes: Vec<SearchMode>,
-    /// Registry search scope, when registry modes are available.
-    registry_scope: Option<RegistrySearchScope>,
+    /// Registries being searched.
+    registry_scope: RegistrySearchScope,
     /// Channel to send availability requests to worker
     availability_tx: Sender<PricingRequest>,
     /// Channel to receive availability responses from worker
@@ -501,46 +466,15 @@ pub struct App {
     _image_workers: Vec<JoinHandle<()>>,
 }
 
-/// Preflight configuration for TUI startup
-pub struct Preflight {
-    /// Starting search mode
-    pub start_mode: SearchMode,
-    /// Available search modes (empty = all modes available based on registry access)
-    pub available_modes: Vec<SearchMode>,
-    /// Registry search scope, when registry modes are available.
-    pub registry_scope: Option<RegistrySearchScope>,
-    /// Pre-fetched KiCad symbols index metadata (avoids duplicate request during download)
-    pub kicad_symbols_metadata: Option<KicadSymbolsIndexMetadata>,
-    /// Non-fatal startup warning to surface in the TUI.
-    pub warning: Option<String>,
-}
-
 impl App {
-    pub fn new(preflight: Preflight) -> Self {
-        let Preflight {
-            start_mode,
-            available_modes,
-            registry_scope,
-            kicad_symbols_metadata,
-            warning,
-        } = preflight;
+    pub fn new(mode: SearchMode, registry_scope: RegistrySearchScope) -> Self {
         let (query_tx, query_rx) = mpsc::channel::<SearchQuery>();
         let (result_tx, result_rx) = mpsc::channel::<SearchResults>();
         let (download_tx, download_rx) = mpsc::channel::<DownloadProgress>();
         let (detail_tx, detail_req_rx) = mpsc::channel::<DetailRequest>();
         let (detail_resp_tx, detail_rx) = mpsc::channel::<DetailResponse>();
 
-        spawn_worker(
-            query_rx,
-            result_tx,
-            download_tx,
-            SearchWorkerOptions {
-                registry_enabled: available_modes.iter().any(SearchMode::requires_registry),
-                kicad_enabled: available_modes.contains(&SearchMode::KicadSymbols),
-                registry_scope: registry_scope.clone(),
-                prefetched_kicad_metadata: kicad_symbols_metadata,
-            },
-        );
+        spawn_worker(query_rx, result_tx, download_tx, registry_scope.clone());
         spawn_detail_worker(detail_req_rx, detail_resp_tx, registry_scope.clone());
 
         // Pricing worker (fetches availability/availability for selected component)
@@ -564,13 +498,13 @@ impl App {
         };
 
         let mut app = Self {
-            mode: start_mode,
+            mode,
             search_input: TextInput::new(),
             results: SearchResults::default(),
             list_state: ListState::default(),
             index_count: 0,
             should_quit: false,
-            toast: warning.map(|message| Toast::error(message, Duration::from_secs(5))),
+            toast: None,
             download_state: DownloadState::Done,
             query_counter: 0,
             last_query: String::new(),
@@ -584,7 +518,6 @@ impl App {
             picker,
             selected_module: None,
             selected_symbol: None,
-            selected_kicad_symbol: None,
             module_relations: ModuleRelations::default(),
             detail_tx,
             detail_rx,
@@ -595,7 +528,6 @@ impl App {
             command_palette_input: TextInput::new(),
             command_palette_filtered: Command::ALL.to_vec(),
             show_debug_panels: false,
-            available_modes,
             registry_scope,
             availability_tx,
             availability_rx,
@@ -674,11 +606,7 @@ impl App {
                 } => {
                     self.download_state = DownloadState::Done;
                     self.toast = Some(Toast::new(
-                        match progress.source {
-                            DownloadSource::Registry => "Registry index updated",
-                            DownloadSource::KicadSymbols => "KiCad symbols index updated",
-                        }
-                        .to_string(),
+                        "Registry index updated".to_string(),
                         Duration::from_secs(2),
                     ));
                     self.refresh_local_count();
@@ -794,16 +722,14 @@ impl App {
     /// Note: We keep showing old details until new data arrives to avoid flicker.
     fn enqueue_detail_request(&mut self) {
         let idx = self.selected_index();
-        let Some(item_id) = self.results.selected_item_id(idx) else {
+        let Some((registry_id, item_id)) = self.results.selected_item(idx) else {
             self.pending_detail_for = None;
             self.detail_request_started = None;
             self.selected_module = None;
             self.selected_symbol = None;
-            self.selected_kicad_symbol = None;
             self.module_relations = ModuleRelations::default();
             return;
         };
-        let registry_id = self.results.selected_registry_id(idx).map(str::to_string);
 
         let pending_key = (self.mode, registry_id.clone(), item_id);
 
@@ -834,7 +760,6 @@ impl App {
 
             self.selected_module = resp.module;
             self.selected_symbol = resp.symbol;
-            self.selected_kicad_symbol = resp.kicad_symbol;
             self.module_relations = resp.relations;
             self.pending_detail_for = None;
             self.detail_request_started = None;
@@ -868,34 +793,16 @@ impl App {
         self.enqueue_availability_requests(self.local_availability_requests(), true);
     }
 
-    fn local_availability_requests(&self) -> Vec<AvailabilityRequest> {
-        ordered_availability_requests(self.results.len(), self.list_state.selected(), |idx| {
-            let lookups = self.results.availability_lookups_at(idx)?;
-            match self.mode {
-                SearchMode::KicadSymbols => {
-                    self.results
-                        .selected_item_id(idx)
-                        .map(|id| AvailabilityRequest {
-                            key: AvailabilityKey::KicadSymbol(id),
-                            lookups,
-                        })
-                }
-                SearchMode::RegistryComponents => {
-                    lookups.first().cloned().map(|key| AvailabilityRequest {
-                        key: AvailabilityKey::Component(key.clone()),
-                        lookups: vec![key],
-                    })
-                }
-                SearchMode::RegistryModules => None,
-            }
-        })
+    fn local_availability_requests(&self) -> Vec<ComponentKey> {
+        let mut seen = std::collections::HashSet::new();
+        selected_first_indices(self.results.len(), self.list_state.selected())
+            .into_iter()
+            .filter_map(|idx| self.results.availability_key_at(idx))
+            .filter(|key| seen.insert(key.clone()))
+            .collect()
     }
 
-    fn enqueue_availability_requests(
-        &mut self,
-        requests: Vec<AvailabilityRequest>,
-        clear_pending: bool,
-    ) {
+    fn enqueue_availability_requests(&mut self, requests: Vec<ComponentKey>, clear_pending: bool) {
         if clear_pending {
             self.availability_store.clear_pending();
         }
@@ -945,15 +852,6 @@ impl App {
         };
 
         self.availability_store.component(&key)
-    }
-
-    pub fn selected_kicad_symbol_availability(
-        &self,
-    ) -> (Option<&pcb_sch::bom::Availability>, bool) {
-        self.selected_kicad_symbol
-            .as_ref()
-            .map(|symbol| self.availability_store.kicad_symbol(symbol.id))
-            .unwrap_or((None, false))
     }
 
     /// Returns true if we're waiting for details and should show a loading indicator.
@@ -1052,44 +950,16 @@ impl App {
     }
 
     fn refresh_local_count(&mut self) {
-        if self.mode.requires_registry() {
-            let client = self
-                .registry_scope
-                .as_ref()
-                .map(RegistrySearchClient::open_cached_scope);
-
-            if let Some(Ok(client)) = client {
-                self.index_count = match self.mode {
-                    SearchMode::RegistryModules => client.count_modules().unwrap_or(0),
-                    SearchMode::RegistryComponents => client.count_symbols().unwrap_or(0),
-                    _ => 0,
-                };
-            }
-        } else if self.mode.requires_kicad_symbols()
-            && let Ok(path) = KicadSymbolsClient::default_db_path()
-            && path.exists()
-            && let Ok(client) = KicadSymbolsClient::open_path(&path)
-        {
-            self.index_count = client.count_symbols().unwrap_or(0);
-        }
-    }
-
-    fn local_index_exists(&self, mode: SearchMode) -> bool {
-        if mode.requires_registry() {
-            self.registry_scope
-                .as_ref()
-                .is_some_and(RegistrySearchScope::local_indexes_exist)
-        } else if mode.requires_kicad_symbols() {
-            KicadSymbolsClient::default_db_path()
-                .map(|path| path.exists())
-                .unwrap_or(false)
-        } else {
-            false
+        if let Ok(client) = RegistrySearchClient::open_cached_scope(&self.registry_scope) {
+            self.index_count = match self.mode {
+                SearchMode::RegistryModules => client.count_modules().unwrap_or(0),
+                SearchMode::RegistryComponents => client.count_symbols().unwrap_or(0),
+            };
         }
     }
 
     fn start_local_mode_if_needed(&mut self) {
-        if self.local_index_exists(self.mode) {
+        if self.registry_scope.local_indexes_exist() {
             self.download_state = DownloadState::Done;
             self.refresh_local_count();
             return;
@@ -1111,18 +981,13 @@ impl App {
 
     /// Cycle to next search mode
     fn cycle_mode(&mut self) {
-        // Don't allow cycling if only one mode available
-        if self.available_modes.len() <= 1 {
-            return;
-        }
-        self.mode = self.mode.cycle(&self.available_modes);
+        self.mode = self.mode.cycle();
 
         // Clear results when switching modes
         self.results = SearchResults::default();
         self.list_state = ListState::default();
         self.selected_module = None;
         self.selected_symbol = None;
-        self.selected_kicad_symbol = None;
         self.module_relations = ModuleRelations::default();
         self.pending_detail_for = None;
         self.detail_request_started = None;
@@ -1154,20 +1019,9 @@ impl App {
                 ));
             }
             Command::UpdateRegistryIndex => {
-                if self
-                    .registry_scope
-                    .as_ref()
-                    .is_some_and(RegistrySearchScope::updates_disabled)
-                {
+                if self.registry_scope.updates_disabled() {
                     self.toast = Some(Toast::error(
                         "Registry updates are disabled when --registry-index is set".to_string(),
-                        Duration::from_secs(2),
-                    ));
-                    return;
-                }
-                if !self.mode.requires_registry() {
-                    self.toast = Some(Toast::error(
-                        "Registry updates are only available in registry modes".to_string(),
                         Duration::from_secs(2),
                     ));
                     return;
@@ -1279,7 +1133,7 @@ impl App {
                         if let Some(&cmd) = self
                             .command_palette_filtered
                             .get(self.command_palette_index)
-                            && cmd.is_enabled(self.selected_symbol.as_ref(), &self.available_modes)
+                            && cmd.is_enabled(self.selected_symbol.as_ref())
                         {
                             self.close_command_palette();
                             self.execute_command(cmd);
@@ -1306,7 +1160,7 @@ impl App {
                 (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
                     self.open_command_palette();
                 }
-                (KeyCode::Char('s'), KeyModifiers::CONTROL) if self.available_modes.len() > 1 => {
+                (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
                     self.cycle_mode();
                 }
                 (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
@@ -1360,85 +1214,21 @@ fn registry_symbol_image_key(symbol: &RegistrySymbol) -> Option<ImageKey> {
     })
 }
 
-fn ordered_availability_requests(
-    len: usize,
-    selected: Option<usize>,
-    request_at: impl Fn(usize) -> Option<AvailabilityRequest>,
-) -> Vec<AvailabilityRequest> {
-    let mut seen = std::collections::HashSet::new();
-
-    selected_first_indices(len, selected)
-        .into_iter()
-        .filter_map(request_at)
-        .filter(|request| seen.insert(request.key.clone()))
-        .collect()
-}
-
-/// Determine the preflight configuration based on auth and local-index access
-fn compute_preflight(
+/// Resolve the registries to search, preferring an explicit local index.
+fn resolve_scope(
     registry_db_path_override: Option<PathBuf>,
     registry_selectors: &[String],
     workspace_root: Option<&Path>,
-) -> Result<Preflight> {
+) -> Result<RegistrySearchScope> {
     if let Some(path) = registry_db_path_override {
         RegistryClient::open_path(&path)?;
-        let registry_scope = Some(RegistrySearchScope::IndexFiles(vec![local_registry_index(
-            path.clone(),
+        return Ok(RegistrySearchScope::IndexFiles(vec![local_registry_index(
+            path,
         )]));
-
-        let mut available_modes = vec![SearchMode::RegistryModules, SearchMode::RegistryComponents];
-        if KicadSymbolsClient::default_db_path()?.exists() {
-            available_modes.push(SearchMode::KicadSymbols);
-        }
-        return Ok(Preflight {
-            start_mode: SearchMode::RegistryModules,
-            available_modes,
-            registry_scope,
-            kicad_symbols_metadata: None,
-            warning: None,
-        });
     }
 
-    let mut available_modes = Vec::new();
-    let mut kicad_symbols_metadata = None;
-    let mut warning = None;
-    let registry_scope = resolve_registry_search_scope(registry_selectors, workspace_root)?;
-
-    if registry_scope.is_some() {
-        available_modes.extend([SearchMode::RegistryModules, SearchMode::RegistryComponents]);
-    }
-
-    if KicadSymbolsClient::default_db_path()?.exists() {
-        available_modes.push(SearchMode::KicadSymbols);
-    } else {
-        match check_kicad_symbols_access() {
-            Ok(KicadSymbolsAccessResult::Allowed(metadata)) => {
-                available_modes.push(SearchMode::KicadSymbols);
-                kicad_symbols_metadata = Some(metadata);
-            }
-            Ok(KicadSymbolsAccessResult::Forbidden) => {}
-            Err(error) => {
-                log::warn!("KiCad symbols access check failed: {}", error);
-                warning = Some(format!("KiCad symbols unavailable: {error}"));
-            }
-        }
-    }
-
-    let start_mode = if available_modes.contains(&SearchMode::RegistryModules) {
-        SearchMode::RegistryModules
-    } else if available_modes.contains(&SearchMode::KicadSymbols) {
-        SearchMode::KicadSymbols
-    } else {
-        anyhow::bail!("No component search index is available");
-    };
-
-    Ok(Preflight {
-        start_mode,
-        available_modes,
-        registry_scope,
-        kicad_symbols_metadata,
-        warning,
-    })
+    resolve_registry_search_scope(registry_selectors, workspace_root)?
+        .ok_or_else(|| anyhow::anyhow!("No registry index available"))
 }
 
 pub fn run_with_mode_and_registry_index(
@@ -1447,33 +1237,19 @@ pub fn run_with_mode_and_registry_index(
     registry_selectors: Vec<String>,
     workspace_root: Option<PathBuf>,
 ) -> Result<()> {
-    let mut preflight = compute_preflight(
+    let registry_scope = resolve_scope(
         registry_db_path_override,
         &registry_selectors,
         workspace_root.as_deref(),
     )?;
-    if let Some(m) = mode {
-        // Override start mode, but validate it's available
-        if preflight.available_modes.contains(&m) {
-            preflight.start_mode = m;
-        } else {
-            anyhow::bail!(
-                "Requested search mode '{}' is unavailable",
-                m.display_name()
-            );
-        }
-    }
-    run_with_preflight(preflight)
-}
 
-fn run_with_preflight(preflight: Preflight) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, SetCursorStyle::BlinkingBar)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(preflight);
+    let mut app = App::new(mode.unwrap_or_default(), registry_scope);
 
     let result = run_loop(&mut terminal, &mut app);
 

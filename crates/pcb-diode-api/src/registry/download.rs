@@ -1,15 +1,13 @@
 //! Download registry index from API server + S3
 
-pub use crate::download_support::{DownloadProgress, DownloadSource};
-use crate::download_support::{
-    ProgressReader, ensure_parent_dir, http_client,
-    save_local_version as save_shared_local_version, write_decoded_index,
-};
 use anyhow::{Context, Result};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use pcb_zen_core::config::PcbToml;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::thread;
@@ -141,16 +139,76 @@ pub struct RegistryIndexMetadata {
 impl RegistryIndexMetadata {
     /// Stable token for local freshness checks.
     pub fn version_token(&self) -> Result<String> {
-        crate::download_support::sha256_version_token(&self.sha256, "registry index")
+        let sha256 = self.sha256.trim();
+        if sha256.is_empty() {
+            anyhow::bail!("registry index metadata missing sha256");
+        }
+        Ok(sha256.to_string())
     }
 }
 
-pub fn load_local_version(db_path: &Path) -> Option<String> {
-    crate::download_support::load_local_version(db_path)
+fn version_file_path(db_path: &Path) -> PathBuf {
+    db_path.with_extension("db.version")
 }
 
-pub fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
-    save_shared_local_version(db_path, version, "registry")
+fn load_local_version(db_path: &Path) -> Option<String> {
+    fs::read_to_string(version_file_path(db_path))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
+    AtomicFile::new(
+        version_file_path(db_path),
+        OverwriteBehavior::AllowOverwrite,
+    )
+    .write(|f| {
+        f.write_all(version.as_bytes())?;
+        f.flush()
+    })
+    .map_err(|err| anyhow::anyhow!("Failed to write local registry version: {err}"))
+}
+
+fn http_client() -> Result<reqwest::blocking::Client> {
+    let user_agent = format!("diode-pcb/{}", env!("CARGO_PKG_VERSION"));
+    reqwest::blocking::Client::builder()
+        .user_agent(user_agent)
+        .build()
+        .context("Failed to build HTTP client")
+}
+
+#[derive(Debug, Clone)]
+pub struct DownloadProgress {
+    pub pct: Option<u8>,
+    pub done: bool,
+    pub error: Option<String>,
+    pub is_update: bool,
+}
+
+struct ProgressReader<'a, R> {
+    inner: R,
+    downloaded: u64,
+    total_size: Option<u64>,
+    last_pct: u8,
+    send_progress: &'a dyn Fn(Option<u8>, bool, Option<String>),
+}
+
+impl<R: io::Read> io::Read for ProgressReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let bytes_read = self.inner.read(buf)?;
+        self.downloaded += bytes_read as u64;
+
+        if let Some(total) = self.total_size {
+            let pct = (self.downloaded as f64 / total as f64 * 100.0) as u8;
+            if pct != self.last_pct {
+                (self.send_progress)(Some(pct), false, None);
+                self.last_pct = pct;
+            }
+        }
+
+        Ok(bytes_read)
+    }
 }
 
 /// Fetch registries visible to the current user.
@@ -675,7 +733,6 @@ pub fn ensure_registry_indexes_with_progress(
 ) -> Result<Vec<RegistryIndexFile>> {
     if !is_update || force {
         let _ = progress_tx.send(DownloadProgress {
-            source: DownloadSource::Registry,
             pct: None,
             done: false,
             error: None,
@@ -687,7 +744,6 @@ pub fn ensure_registry_indexes_with_progress(
         Ok(files) => {
             if !is_update || files.iter().any(|file| file.downloaded) {
                 let _ = progress_tx.send(DownloadProgress {
-                    source: DownloadSource::Registry,
                     pct: Some(100),
                     done: true,
                     error: None,
@@ -699,7 +755,6 @@ pub fn ensure_registry_indexes_with_progress(
         Err(err) => {
             let msg = err.to_string();
             let _ = progress_tx.send(DownloadProgress {
-                source: DownloadSource::Registry,
                 pct: None,
                 done: true,
                 error: Some(msg.clone()),
@@ -720,7 +775,6 @@ pub fn download_registry_index_with_progress(
 ) -> Result<()> {
     let send_progress = |pct: Option<u8>, done: bool, error: Option<String>| {
         let _ = progress_tx.send(DownloadProgress {
-            source: DownloadSource::Registry,
             pct,
             done,
             error,
@@ -732,7 +786,9 @@ pub fn download_registry_index_with_progress(
 
     let client = http_client()?;
 
-    ensure_parent_dir(dest_path, "registry")?;
+    if let Some(parent) = dest_path.parent() {
+        fs::create_dir_all(parent).context("Failed to create registry directory")?;
+    }
 
     let response = match download_index_response(&client, &index_metadata.url) {
         Ok(r) => r,
@@ -746,8 +802,21 @@ pub fn download_registry_index_with_progress(
     let total_size = response.content_length();
 
     // Wrap response in a progress-tracking reader, then decompress with zstd
-    let progress_reader = ProgressReader::new(response, total_size, &send_progress);
-    write_decoded_index(dest_path, progress_reader, "registry index")?;
+    let progress_reader = ProgressReader {
+        inner: response,
+        downloaded: 0,
+        total_size,
+        last_pct: 0,
+        send_progress: &send_progress,
+    };
+    let mut decoder =
+        zstd::stream::Decoder::new(progress_reader).context("Failed to create zstd decoder")?;
+    AtomicFile::new(dest_path, OverwriteBehavior::AllowOverwrite)
+        .write(|file| {
+            io::copy(&mut decoder, file)?;
+            file.flush()
+        })
+        .context("Failed to decompress registry index into place")?;
 
     let version_token = index_metadata.version_token()?;
     let _ = save_local_version(dest_path, &version_token);

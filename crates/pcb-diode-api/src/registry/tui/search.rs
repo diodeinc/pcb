@@ -1,16 +1,11 @@
 //! Background search and detail worker threads
 
-use super::super::download::{DownloadProgress, DownloadSource, RegistrySearchScope};
+use super::super::download::{DownloadProgress, RegistrySearchScope};
+use super::super::{RegistryHit, RrfSearchOutput, SearchResultKey};
 use crate::bom::ComponentKey;
-use crate::kicad_symbols::KicadSymbol;
-use crate::kicad_symbols::download::{
-    KicadSymbolsIndexMetadata, download_kicad_symbols_index_with_progress,
-    fetch_kicad_symbols_index_metadata, load_local_version as load_local_kicad_symbols_version,
-    save_local_version as save_local_kicad_symbols_version,
-};
 use crate::{
-    KicadSymbolsClient, ModuleRelations, RegistryModule, RegistryModuleHit, RegistrySearchClient,
-    RegistrySymbol, RegistrySymbolHit, SearchHit,
+    ModuleRelations, RegistryModule, RegistryModuleHit, RegistrySearchClient, RegistrySymbol,
+    RegistrySymbolHit,
 };
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
@@ -41,49 +36,35 @@ pub struct SearchScoring {
     pub docs_full_text_rank: Option<f64>,
 }
 
-pub type SearchScoringKey = super::super::SearchResultKey;
-
 /// Results from the worker thread
 #[derive(Debug, Clone, Default)]
 pub enum SearchResults {
     #[default]
     Empty,
-    RegistryModules(RegistryModuleSearchResults),
-    RegistrySymbols(RegistrySymbolSearchResults),
-    KicadSymbols(KicadSearchResults),
+    RegistryModules(HitResults<RegistryModuleHit>),
+    RegistrySymbols(HitResults<RegistrySymbolHit>),
 }
 
 #[derive(Debug, Clone)]
-pub struct RegistryModuleSearchResults {
+pub struct HitResults<T> {
     pub query_id: u64,
-    pub trigram: Vec<RegistryModuleHit>,
-    pub word: Vec<RegistryModuleHit>,
-    pub docs_full_text: Vec<RegistryModuleHit>,
-    pub merged: Vec<RegistryModuleHit>,
-    pub scoring: HashMap<SearchScoringKey, SearchScoring>,
+    pub rrf: RrfSearchOutput<T>,
+    pub scoring: HashMap<SearchResultKey, SearchScoring>,
     pub duration: Duration,
 }
 
-#[derive(Debug, Clone)]
-pub struct RegistrySymbolSearchResults {
-    pub query_id: u64,
-    pub trigram: Vec<RegistrySymbolHit>,
-    pub word: Vec<RegistrySymbolHit>,
-    pub docs_full_text: Vec<RegistrySymbolHit>,
-    pub merged: Vec<RegistrySymbolHit>,
-    pub scoring: HashMap<SearchScoringKey, SearchScoring>,
-    pub duration: Duration,
-}
-
-#[derive(Debug, Clone)]
-pub struct KicadSearchResults {
-    pub query_id: u64,
-    pub trigram: Vec<SearchHit>,
-    pub word: Vec<SearchHit>,
-    pub docs_full_text: Vec<SearchHit>,
-    pub merged: Vec<SearchHit>,
-    pub scoring: HashMap<SearchScoringKey, SearchScoring>,
-    pub duration: Duration,
+impl<T: RegistryHit> HitResults<T> {
+    fn new(query_id: u64, search: impl FnOnce() -> RrfSearchOutput<T>) -> Self {
+        let start = Instant::now();
+        let rrf = search();
+        let duration = start.elapsed();
+        Self {
+            query_id,
+            scoring: build_scoring(&rrf),
+            rrf,
+            duration,
+        }
+    }
 }
 
 impl SearchResults {
@@ -92,16 +73,14 @@ impl SearchResults {
             SearchResults::Empty => 0,
             SearchResults::RegistryModules(results) => results.query_id,
             SearchResults::RegistrySymbols(results) => results.query_id,
-            SearchResults::KicadSymbols(results) => results.query_id,
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
             SearchResults::Empty => 0,
-            SearchResults::RegistryModules(results) => results.merged.len(),
-            SearchResults::RegistrySymbols(results) => results.merged.len(),
-            SearchResults::KicadSymbols(results) => results.merged.len(),
+            SearchResults::RegistryModules(results) => results.rrf.merged.len(),
+            SearchResults::RegistrySymbols(results) => results.rrf.merged.len(),
         }
     }
 
@@ -114,52 +93,43 @@ impl SearchResults {
             SearchResults::Empty => Duration::ZERO,
             SearchResults::RegistryModules(results) => results.duration,
             SearchResults::RegistrySymbols(results) => results.duration,
-            SearchResults::KicadSymbols(results) => results.duration,
         }
     }
 
-    pub fn scoring(&self) -> &HashMap<SearchScoringKey, SearchScoring> {
-        static EMPTY: OnceLock<HashMap<SearchScoringKey, SearchScoring>> = OnceLock::new();
+    pub fn scoring(&self) -> &HashMap<SearchResultKey, SearchScoring> {
+        static EMPTY: OnceLock<HashMap<SearchResultKey, SearchScoring>> = OnceLock::new();
         match self {
             SearchResults::Empty => EMPTY.get_or_init(HashMap::new),
             SearchResults::RegistryModules(results) => &results.scoring,
             SearchResults::RegistrySymbols(results) => &results.scoring,
-            SearchResults::KicadSymbols(results) => &results.scoring,
         }
     }
 
-    pub fn availability_lookups_at(&self, idx: usize) -> Option<Vec<ComponentKey>> {
+    pub fn availability_key_at(&self, idx: usize) -> Option<ComponentKey> {
         match self {
             SearchResults::RegistrySymbols(results) => results
+                .rrf
                 .merged
                 .get(idx)
-                .map(|hit| hit.availability_lookups.clone()),
-            SearchResults::KicadSymbols(results) => results
-                .merged
-                .get(idx)
-                .map(|hit| hit.availability_lookups.clone()),
+                .and_then(|hit| hit.availability_key.clone()),
             SearchResults::Empty | SearchResults::RegistryModules(_) => None,
         }
     }
 
-    pub fn selected_item_id(&self, idx: usize) -> Option<i64> {
+    /// Registry id and item id of the hit at `idx`.
+    pub fn selected_item(&self, idx: usize) -> Option<(String, i64)> {
         match self {
             SearchResults::Empty => None,
-            SearchResults::RegistryModules(results) => results.merged.get(idx).map(|hit| hit.id),
-            SearchResults::RegistrySymbols(results) => results.merged.get(idx).map(|hit| hit.id),
-            SearchResults::KicadSymbols(results) => results.merged.get(idx).map(|hit| hit.id),
-        }
-    }
-
-    pub fn selected_registry_id(&self, idx: usize) -> Option<&str> {
-        match self {
-            SearchResults::RegistryModules(results) => {
-                results.merged.get(idx).map(|hit| hit.registry.id.as_str())
-            }
-            SearchResults::RegistrySymbols(results) => {
-                results.merged.get(idx).map(|hit| hit.registry.id.as_str())
-            }
-            SearchResults::Empty | SearchResults::KicadSymbols(_) => None,
+            SearchResults::RegistryModules(results) => results
+                .rrf
+                .merged
+                .get(idx)
+                .map(|hit| (hit.registry.id.clone(), hit.id)),
+            SearchResults::RegistrySymbols(results) => results
+                .rrf
+                .merged
+                .get(idx)
+                .map(|hit| (hit.registry.id.clone(), hit.id)),
         }
     }
 
@@ -167,44 +137,20 @@ impl SearchResults {
         match self {
             SearchResults::Empty => None,
             SearchResults::RegistryModules(results) => {
-                results.merged.get(idx).map(|hit| hit.url.as_str())
+                results.rrf.merged.get(idx).map(|hit| hit.url.as_str())
             }
             SearchResults::RegistrySymbols(results) => {
-                results.merged.get(idx).map(|hit| hit.url.as_str())
-            }
-            SearchResults::KicadSymbols(results) => {
-                results.merged.get(idx).map(|hit| hit.url.as_str())
+                results.rrf.merged.get(idx).map(|hit| hit.url.as_str())
             }
         }
     }
-}
-
-impl Default for KicadSearchResults {
-    fn default() -> Self {
-        Self {
-            query_id: 0,
-            trigram: Vec::new(),
-            word: Vec::new(),
-            docs_full_text: Vec::new(),
-            merged: Vec::new(),
-            scoring: HashMap::new(),
-            duration: Duration::ZERO,
-        }
-    }
-}
-
-pub struct SearchWorkerOptions {
-    pub registry_enabled: bool,
-    pub kicad_enabled: bool,
-    pub registry_scope: Option<RegistrySearchScope>,
-    pub prefetched_kicad_metadata: Option<KicadSymbolsIndexMetadata>,
 }
 
 /// Request to fetch details for a specific local-index item.
 #[derive(Debug)]
 pub struct DetailRequest {
     pub item_id: i64,
-    pub registry_id: Option<String>,
+    pub registry_id: String,
     pub mode: SearchMode,
 }
 
@@ -212,11 +158,10 @@ pub struct DetailRequest {
 #[derive(Debug)]
 pub struct DetailResponse {
     pub item_id: i64,
-    pub registry_id: Option<String>,
+    pub registry_id: String,
     pub mode: SearchMode,
     pub module: Option<RegistryModule>,
     pub symbol: Option<RegistrySymbol>,
-    pub kicad_symbol: Option<KicadSymbol>,
     pub relations: ModuleRelations,
 }
 
@@ -224,119 +169,56 @@ pub struct DetailResponse {
 pub fn spawn_detail_worker(
     req_rx: Receiver<DetailRequest>,
     resp_tx: Sender<DetailResponse>,
-    registry_scope: Option<RegistrySearchScope>,
+    registry_scope: RegistrySearchScope,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let kicad_db_path = match KicadSymbolsClient::default_db_path() {
-            Ok(path) => path,
-            Err(_) => return,
-        };
-
         let mut registry_client: Option<RegistrySearchClient> = None;
         let mut registry_mtimes: Vec<Option<SystemTime>> = Vec::new();
-        let mut kicad_client: Option<KicadSymbolsClient> = None;
-        let mut kicad_mtime: Option<SystemTime> = None;
 
         while let Ok(mut req) = req_rx.recv() {
             while let Ok(next) = req_rx.try_recv() {
                 req = next;
             }
 
-            match req.mode {
-                SearchMode::RegistryModules | SearchMode::RegistryComponents => {
-                    let current_mtimes = registry_index_mtimes(registry_scope.as_ref());
-                    if registry_client.is_none() || current_mtimes != registry_mtimes {
-                        registry_client = registry_scope
-                            .as_ref()
-                            .and_then(|scope| RegistrySearchClient::open_cached_scope(scope).ok());
-                        registry_mtimes = current_mtimes;
-                    }
+            let current_mtimes = registry_index_mtimes(&registry_scope);
+            if registry_client.is_none() || current_mtimes != registry_mtimes {
+                registry_client = RegistrySearchClient::open_cached_scope(&registry_scope).ok();
+                registry_mtimes = current_mtimes;
+            }
 
-                    let Some(ref client) = registry_client else {
-                        let _ = resp_tx.send(DetailResponse {
-                            item_id: req.item_id,
-                            registry_id: req.registry_id.clone(),
-                            mode: req.mode,
-                            module: None,
-                            symbol: None,
-                            kicad_symbol: None,
-                            relations: ModuleRelations::default(),
-                        });
-                        continue;
-                    };
-
-                    let Some(registry_id) = req.registry_id.as_deref() else {
-                        let _ = resp_tx.send(DetailResponse {
-                            item_id: req.item_id,
-                            registry_id: req.registry_id.clone(),
-                            mode: req.mode,
-                            module: None,
-                            symbol: None,
-                            kicad_symbol: None,
-                            relations: ModuleRelations::default(),
-                        });
-                        continue;
-                    };
-
-                    let (module, symbol, relations) = match req.mode {
-                        SearchMode::RegistryModules => {
-                            let module = client
-                                .get_module_by_key(registry_id, req.item_id)
-                                .ok()
-                                .flatten();
-                            let relations = if module.is_some() {
-                                client
-                                    .get_module_relations_by_key(registry_id, req.item_id)
-                                    .unwrap_or_default()
-                            } else {
-                                ModuleRelations::default()
-                            };
-                            (module, None, relations)
+            let mut module = None;
+            let mut symbol = None;
+            let mut relations = ModuleRelations::default();
+            if let Some(client) = registry_client.as_ref() {
+                match req.mode {
+                    SearchMode::RegistryModules => {
+                        module = client
+                            .get_module_by_key(&req.registry_id, req.item_id)
+                            .ok()
+                            .flatten();
+                        if module.is_some() {
+                            relations = client
+                                .get_module_relations_by_key(&req.registry_id, req.item_id)
+                                .unwrap_or_default();
                         }
-                        SearchMode::RegistryComponents => {
-                            let symbol = client
-                                .get_symbol_by_key(registry_id, req.item_id)
-                                .ok()
-                                .flatten();
-                            (None, symbol, ModuleRelations::default())
-                        }
-                        _ => unreachable!(),
-                    };
-
-                    let _ = resp_tx.send(DetailResponse {
-                        item_id: req.item_id,
-                        registry_id: req.registry_id.clone(),
-                        mode: req.mode,
-                        module,
-                        symbol,
-                        kicad_symbol: None,
-                        relations,
-                    });
-                }
-                SearchMode::KicadSymbols => {
-                    let current_mtime = get_file_mtime(&kicad_db_path);
-                    if (kicad_client.is_none() || current_mtime != kicad_mtime)
-                        && let Ok(new_client) = KicadSymbolsClient::open_path(&kicad_db_path)
-                    {
-                        kicad_client = Some(new_client);
-                        kicad_mtime = current_mtime;
                     }
-
-                    let symbol = kicad_client
-                        .as_ref()
-                        .and_then(|client| client.get_symbol_by_id(req.item_id).ok().flatten());
-
-                    let _ = resp_tx.send(DetailResponse {
-                        item_id: req.item_id,
-                        registry_id: None,
-                        mode: req.mode,
-                        module: None,
-                        symbol: None,
-                        kicad_symbol: symbol,
-                        relations: ModuleRelations::default(),
-                    });
+                    SearchMode::RegistryComponents => {
+                        symbol = client
+                            .get_symbol_by_key(&req.registry_id, req.item_id)
+                            .ok()
+                            .flatten();
+                    }
                 }
             }
+
+            let _ = resp_tx.send(DetailResponse {
+                item_id: req.item_id,
+                registry_id: req.registry_id,
+                mode: req.mode,
+                module,
+                symbol,
+                relations,
+            });
         }
     })
 }
@@ -346,9 +228,9 @@ fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
-fn registry_index_mtimes(scope: Option<&RegistrySearchScope>) -> Vec<Option<SystemTime>> {
+fn registry_index_mtimes(scope: &RegistrySearchScope) -> Vec<Option<SystemTime>> {
     scope
-        .and_then(|scope| scope.index_paths().ok())
+        .index_paths()
         .unwrap_or_default()
         .into_iter()
         .map(|path| get_file_mtime(&path))
@@ -358,37 +240,6 @@ fn registry_index_mtimes(scope: Option<&RegistrySearchScope>) -> Vec<Option<Syst
 fn index_update_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn download_kicad_symbols_index_with_app_progress(
-    dest_path: &std::path::Path,
-    download_tx: &Sender<DownloadProgress>,
-    is_update: bool,
-    prefetched_metadata: Option<&KicadSymbolsIndexMetadata>,
-) -> anyhow::Result<()> {
-    download_kicad_symbols_index_with_progress(
-        dest_path,
-        download_tx,
-        is_update,
-        prefetched_metadata,
-    )
-}
-
-fn ensure_local_index_present<Meta>(
-    db_path: &std::path::Path,
-    download_tx: &Sender<DownloadProgress>,
-    prefetched_metadata: Option<&Meta>,
-    download_with_progress: impl FnOnce(
-        &std::path::Path,
-        &Sender<DownloadProgress>,
-        Option<&Meta>,
-    ) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
-    if !db_path.exists() {
-        return download_with_progress(db_path, download_tx, prefetched_metadata);
-    }
-
-    Ok(())
 }
 
 fn spawn_registry_update_check(
@@ -402,7 +253,6 @@ fn spawn_registry_update_check(
             RegistrySearchClient::open_scope_with_progress(scope, &download_tx, true, force)
         {
             let _ = download_tx.send(DownloadProgress {
-                source: DownloadSource::Registry,
                 pct: None,
                 done: true,
                 error: Some(format!("Update failed: {}", err)),
@@ -412,118 +262,32 @@ fn spawn_registry_update_check(
     });
 }
 
-fn spawn_kicad_update_check(db_path: std::path::PathBuf, download_tx: Sender<DownloadProgress>) {
-    thread::spawn(move || {
-        let _lock = index_update_lock().lock().unwrap();
-        let meta = match fetch_kicad_symbols_index_metadata() {
-            Ok(metadata) => metadata,
-            Err(_) => return,
-        };
-
-        let remote_version = match meta.version_token() {
-            Ok(version) => version,
-            Err(_) => return,
-        };
-        let local_version = load_local_kicad_symbols_version(&db_path);
-        if local_version.as_deref() == Some(remote_version.as_str()) {
-            return;
-        }
-
-        if let Err(err) = download_kicad_symbols_index_with_app_progress(
-            &db_path,
-            &download_tx,
-            true,
-            Some(&meta),
-        ) {
-            let _ = download_tx.send(DownloadProgress {
-                source: DownloadSource::KicadSymbols,
-                pct: None,
-                done: true,
-                error: Some(format!("Update failed: {}", err)),
-                is_update: true,
-            });
-            return;
-        }
-
-        let _ = save_local_kicad_symbols_version(&db_path, &remote_version);
-    });
-}
-
-pub(crate) trait ScoredHit {
-    fn url(&self) -> &str;
-    fn rank(&self) -> Option<f64>;
-
-    fn scoring_key(&self) -> SearchScoringKey {
-        SearchScoringKey::url(self.url())
-    }
-}
-
-impl ScoredHit for SearchHit {
-    fn url(&self) -> &str {
-        &self.url
-    }
-
-    fn rank(&self) -> Option<f64> {
-        self.rank
-    }
-}
-
-impl ScoredHit for RegistryModuleHit {
-    fn url(&self) -> &str {
-        &self.url
-    }
-
-    fn rank(&self) -> Option<f64> {
-        self.rank
-    }
-
-    fn scoring_key(&self) -> SearchScoringKey {
-        SearchScoringKey::registry(&self.registry.id, &self.url)
-    }
-}
-
-impl ScoredHit for RegistrySymbolHit {
-    fn url(&self) -> &str {
-        &self.url
-    }
-
-    fn rank(&self) -> Option<f64> {
-        self.rank
-    }
-
-    fn scoring_key(&self) -> SearchScoringKey {
-        SearchScoringKey::registry(&self.registry.id, &self.url)
-    }
-}
-
-pub(crate) fn build_scoring<T: ScoredHit>(
-    trigram: &[T],
-    word: &[T],
-    docs_full_text: &[T],
-) -> HashMap<SearchScoringKey, SearchScoring> {
+pub(crate) fn build_scoring<T: RegistryHit>(
+    rrf: &RrfSearchOutput<T>,
+) -> HashMap<SearchResultKey, SearchScoring> {
     let mut scoring = HashMap::new();
-    record_scores(&mut scoring, trigram, |entry, idx, rank| {
+    record_scores(&mut scoring, &rrf.trigram, |entry, idx, rank| {
         entry.trigram_position = Some(idx);
         entry.trigram_rank = rank;
     });
-    record_scores(&mut scoring, word, |entry, idx, rank| {
+    record_scores(&mut scoring, &rrf.word, |entry, idx, rank| {
         entry.word_position = Some(idx);
         entry.word_rank = rank;
     });
-    record_scores(&mut scoring, docs_full_text, |entry, idx, rank| {
+    record_scores(&mut scoring, &rrf.docs_full_text, |entry, idx, rank| {
         entry.docs_full_text_position = Some(idx);
         entry.docs_full_text_rank = rank;
     });
     scoring
 }
 
-fn record_scores<T: ScoredHit>(
-    scoring: &mut HashMap<SearchScoringKey, SearchScoring>,
+fn record_scores<T: RegistryHit>(
+    scoring: &mut HashMap<SearchResultKey, SearchScoring>,
     hits: &[T],
     mut update: impl FnMut(&mut SearchScoring, usize, Option<f64>),
 ) {
     for (idx, hit) in hits.iter().enumerate() {
-        let entry = scoring.entry(hit.scoring_key()).or_default();
+        let entry = scoring.entry(hit.key()).or_default();
         update(entry, idx, hit.rank());
     }
 }
@@ -533,92 +297,39 @@ pub fn spawn_worker(
     query_rx: Receiver<SearchQuery>,
     result_tx: Sender<SearchResults>,
     download_tx: Sender<DownloadProgress>,
-    options: SearchWorkerOptions,
+    registry_scope: RegistrySearchScope,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let SearchWorkerOptions {
-            registry_enabled,
-            kicad_enabled,
-            registry_scope,
-            mut prefetched_kicad_metadata,
-        } = options;
-        let registry_updates_disabled = registry_scope
-            .as_ref()
-            .is_some_and(RegistrySearchScope::updates_disabled);
-        let kicad_db_path = match KicadSymbolsClient::default_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                let _ = download_tx.send(DownloadProgress {
-                    source: DownloadSource::KicadSymbols,
-                    pct: None,
-                    done: true,
-                    error: Some(format!("Failed to get KiCad symbols db path: {}", e)),
-                    is_update: false,
-                });
-                return;
-            }
-        };
-
+        let registry_updates_disabled = registry_scope.updates_disabled();
         let mut registry_client: Option<RegistrySearchClient> = None;
         let mut registry_mtimes = Vec::new();
-        let mut kicad_client: Option<KicadSymbolsClient> = None;
-        let mut kicad_mtime = None;
-        let mut kicad_ready = false;
-        let mut kicad_update_started = false;
 
-        if registry_enabled && let Some(scope) = registry_scope.as_ref() {
-            let client = if scope.local_indexes_exist() {
-                RegistrySearchClient::open_cached_scope(scope)
-            } else {
-                RegistrySearchClient::open_scope_with_progress(
-                    scope.clone(),
-                    &download_tx,
-                    false,
-                    false,
-                )
-            };
-
-            match client {
-                Ok(client) => {
-                    registry_mtimes = registry_index_mtimes(registry_scope.as_ref());
-                    registry_client = Some(client);
-                    if !registry_updates_disabled {
-                        spawn_registry_update_check(scope.clone(), download_tx.clone(), false);
-                    }
-                }
-                Err(err) => {
-                    let _ = download_tx.send(DownloadProgress {
-                        source: DownloadSource::Registry,
-                        pct: None,
-                        done: true,
-                        error: Some(format!("Failed to open registry: {}", err)),
-                        is_update: false,
-                    });
+        let client = if registry_scope.local_indexes_exist() {
+            RegistrySearchClient::open_cached_scope(&registry_scope)
+        } else {
+            RegistrySearchClient::open_scope_with_progress(
+                registry_scope.clone(),
+                &download_tx,
+                false,
+                false,
+            )
+        };
+        match client {
+            Ok(client) => {
+                registry_mtimes = registry_index_mtimes(&registry_scope);
+                registry_client = Some(client);
+                if !registry_updates_disabled {
+                    spawn_registry_update_check(registry_scope.clone(), download_tx.clone(), false);
                 }
             }
-        }
-
-        if kicad_enabled
-            && ensure_local_index_present(
-                &kicad_db_path,
-                &download_tx,
-                prefetched_kicad_metadata.as_ref(),
-                |path, tx, metadata| {
-                    download_kicad_symbols_index_with_app_progress(path, tx, false, metadata)
-                },
-            )
-            .is_ok()
-            && let Ok(client) = KicadSymbolsClient::open_path(&kicad_db_path)
-        {
-            kicad_client = Some(client);
-            kicad_mtime = get_file_mtime(&kicad_db_path);
-            kicad_ready = true;
-            prefetched_kicad_metadata = None;
-        }
-
-        if kicad_ready {
-            kicad_update_started = true;
-            spawn_kicad_update_check(kicad_db_path.clone(), download_tx.clone());
+            Err(err) => {
+                let _ = download_tx.send(DownloadProgress {
+                    pct: None,
+                    done: true,
+                    error: Some(format!("Failed to open registry: {}", err)),
+                    is_update: false,
+                });
+            }
         }
 
         while let Ok(mut query) = query_rx.recv() {
@@ -626,193 +337,74 @@ pub fn spawn_worker(
                 query = next;
             }
 
-            match query.mode {
-                SearchMode::RegistryModules | SearchMode::RegistryComponents => {
-                    let current_mtimes = registry_index_mtimes(registry_scope.as_ref());
-                    if current_mtimes != registry_mtimes
-                        && let Some(scope) = registry_scope.as_ref()
-                        && let Ok(client) = RegistrySearchClient::open_cached_scope(scope)
-                    {
-                        registry_client = Some(client);
-                        registry_mtimes = current_mtimes;
-                    }
+            let current_mtimes = registry_index_mtimes(&registry_scope);
+            if current_mtimes != registry_mtimes
+                && let Ok(client) = RegistrySearchClient::open_cached_scope(&registry_scope)
+            {
+                registry_client = Some(client);
+                registry_mtimes = current_mtimes;
+            }
 
-                    if query.force_update && registry_updates_disabled {
+            if query.force_update && registry_updates_disabled {
+                let _ = download_tx.send(DownloadProgress {
+                    pct: None,
+                    done: true,
+                    error: Some(
+                        "Registry updates are disabled when --registry-index is set".to_string(),
+                    ),
+                    is_update: true,
+                });
+            } else if query.force_update {
+                spawn_registry_update_check(registry_scope.clone(), download_tx.clone(), true);
+            }
+
+            if registry_client.is_none() {
+                registry_client = match RegistrySearchClient::open_scope_with_progress(
+                    registry_scope.clone(),
+                    &download_tx,
+                    false,
+                    false,
+                ) {
+                    Ok(client) => {
+                        registry_mtimes = registry_index_mtimes(&registry_scope);
+                        Some(client)
+                    }
+                    Err(err) => {
                         let _ = download_tx.send(DownloadProgress {
-                            source: DownloadSource::Registry,
                             pct: None,
                             done: true,
-                            error: Some(
-                                "Registry updates are disabled when --registry-index is set"
-                                    .to_string(),
-                            ),
-                            is_update: true,
+                            error: Some(format!("Failed to open registry: {}", err)),
+                            is_update: false,
                         });
-                    } else if query.force_update
-                        && let Some(scope) = registry_scope.as_ref()
-                    {
-                        spawn_registry_update_check(scope.clone(), download_tx.clone(), true);
-                    }
-
-                    if registry_client.is_none() {
-                        let Some(scope) = registry_scope.as_ref() else {
-                            continue;
-                        };
-                        registry_client = match RegistrySearchClient::open_scope_with_progress(
-                            scope.clone(),
-                            &download_tx,
-                            false,
-                            false,
-                        ) {
-                            Ok(client) => {
-                                registry_mtimes = registry_index_mtimes(registry_scope.as_ref());
-                                Some(client)
-                            }
-                            Err(err) => {
-                                let _ = download_tx.send(DownloadProgress {
-                                    source: DownloadSource::Registry,
-                                    pct: None,
-                                    done: true,
-                                    error: Some(format!("Failed to open registry: {}", err)),
-                                    is_update: false,
-                                });
-                                continue;
-                            }
-                        };
-                    }
-
-                    let Some(client) = registry_client.as_ref() else {
                         continue;
-                    };
-                    let start = Instant::now();
-                    match query.mode {
-                        SearchMode::RegistryModules => {
-                            let rrf = client.search_modules_rrf(&query.text);
-                            let duration = start.elapsed();
-                            let scoring =
-                                build_scoring(&rrf.trigram, &rrf.word, &rrf.docs_full_text);
-                            let _ = result_tx.send(SearchResults::RegistryModules(
-                                RegistryModuleSearchResults {
-                                    query_id: query.id,
-                                    trigram: rrf.trigram,
-                                    word: rrf.word,
-                                    docs_full_text: rrf.docs_full_text,
-                                    merged: rrf.merged,
-                                    scoring,
-                                    duration,
-                                },
-                            ));
-                        }
-                        SearchMode::RegistryComponents => {
-                            let rrf = client.search_symbols_rrf(&query.text);
-                            let duration = start.elapsed();
-                            let scoring =
-                                build_scoring(&rrf.trigram, &rrf.word, &rrf.docs_full_text);
-                            let _ = result_tx.send(SearchResults::RegistrySymbols(
-                                RegistrySymbolSearchResults {
-                                    query_id: query.id,
-                                    trigram: rrf.trigram,
-                                    word: rrf.word,
-                                    docs_full_text: rrf.docs_full_text,
-                                    merged: rrf.merged,
-                                    scoring,
-                                    duration,
-                                },
-                            ));
-                        }
-                        _ => {}
                     }
-                }
-                SearchMode::KicadSymbols => {
-                    if !kicad_ready {
-                        if ensure_local_index_present(
-                            &kicad_db_path,
-                            &download_tx,
-                            prefetched_kicad_metadata.as_ref(),
-                            |path, tx, metadata| {
-                                download_kicad_symbols_index_with_app_progress(
-                                    path, tx, false, metadata,
-                                )
-                            },
-                        )
-                        .is_err()
-                        {
-                            continue;
-                        }
-                        kicad_client = match KicadSymbolsClient::open_path(&kicad_db_path) {
-                            Ok(client) => Some(client),
-                            Err(err) => {
-                                let _ = download_tx.send(DownloadProgress {
-                                    source: DownloadSource::KicadSymbols,
-                                    pct: None,
-                                    done: true,
-                                    error: Some(format!(
-                                        "Failed to open KiCad symbols index: {}",
-                                        err
-                                    )),
-                                    is_update: false,
-                                });
-                                continue;
-                            }
-                        };
-                        kicad_mtime = get_file_mtime(&kicad_db_path);
-                        kicad_ready = true;
-                        prefetched_kicad_metadata = None;
-
-                        if !kicad_update_started {
-                            kicad_update_started = true;
-                            spawn_kicad_update_check(kicad_db_path.clone(), download_tx.clone());
-                        }
-                    }
-
-                    let current_mtime = get_file_mtime(&kicad_db_path);
-                    if current_mtime != kicad_mtime
-                        && let Ok(new_client) = KicadSymbolsClient::open_path(&kicad_db_path)
-                    {
-                        kicad_client = Some(new_client);
-                        kicad_mtime = current_mtime;
-                    }
-
-                    let Some(client) = kicad_client.as_ref() else {
-                        continue;
-                    };
-                    let start = Instant::now();
-                    let mut rrf = client.search_rrf(&query.text);
-                    let duration = start.elapsed();
-                    let _ = client.populate_availability_lookups(&mut rrf.merged);
-                    let scoring = build_scoring(&rrf.trigram, &rrf.word, &rrf.docs_full_text);
-
-                    let _ = result_tx.send(SearchResults::KicadSymbols(KicadSearchResults {
-                        query_id: query.id,
-                        trigram: rrf.trigram,
-                        word: rrf.word,
-                        docs_full_text: rrf.docs_full_text,
-                        merged: rrf.merged,
-                        scoring,
-                        duration,
-                    }));
-                }
+                };
             }
+
+            let Some(client) = registry_client.as_ref() else {
+                continue;
+            };
+            let results = match query.mode {
+                SearchMode::RegistryModules => {
+                    SearchResults::RegistryModules(HitResults::new(query.id, || {
+                        client.search_modules_rrf(&query.text)
+                    }))
+                }
+                SearchMode::RegistryComponents => {
+                    SearchResults::RegistrySymbols(HitResults::new(query.id, || {
+                        client.search_symbols_rrf(&query.text)
+                    }))
+                }
+            };
+            let _ = result_tx.send(results);
         }
     })
 }
 
 const AVAILABILITY_WORKER_CHUNK_SIZE: usize = 10;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum AvailabilityKey {
-    Component(ComponentKey),
-    KicadSymbol(i64),
-}
-
-#[derive(Debug, Clone)]
-pub struct AvailabilityRequest {
-    pub key: AvailabilityKey,
-    pub lookups: Vec<ComponentKey>,
-}
-
 /// Batch availability request for the current ordered set of missing lookup keys.
-pub type PricingRequest = Vec<AvailabilityRequest>;
+pub type PricingRequest = Vec<ComponentKey>;
 
 /// Outcome for a single pricing lookup key.
 #[derive(Debug, Clone)]
@@ -823,7 +415,7 @@ pub enum PricingResult {
 }
 
 /// Chunk of resolved pricing lookup keys.
-pub type PricingResponse = Vec<(AvailabilityKey, PricingResult)>;
+pub type PricingResponse = Vec<(ComponentKey, PricingResult)>;
 
 /// Spawn a worker thread that fetches availability for components in batches
 pub fn spawn_availability_worker(
@@ -846,7 +438,7 @@ pub fn spawn_availability_worker(
                         log::warn!("Pricing auth failed: {}", e);
                         chunk
                             .into_iter()
-                            .map(|request| (request.key, PricingResult::Failed))
+                            .map(|key| (key, PricingResult::Failed))
                             .collect()
                     }
                 };
@@ -861,16 +453,13 @@ pub fn spawn_availability_worker(
     })
 }
 
-fn fetch_pricing_chunk(auth_token: Option<&str>, chunk: &[AvailabilityRequest]) -> PricingResponse {
-    let groups: Vec<_> = chunk
-        .iter()
-        .map(|request| request.lookups.clone())
-        .collect();
+fn fetch_pricing_chunk(auth_token: Option<&str>, chunk: &[ComponentKey]) -> PricingResponse {
+    let groups: Vec<_> = chunk.iter().map(|key| vec![key.clone()]).collect();
 
     match crate::bom::fetch_pricing_grouped_batch(auth_token, &groups) {
         Ok(availability_results) => chunk
             .iter()
-            .map(|request| request.key.clone())
+            .cloned()
             .zip(availability_results)
             .map(|(key, availability)| {
                 let result = if crate::bom::has_search_availability(&availability) {
@@ -885,7 +474,7 @@ fn fetch_pricing_chunk(auth_token: Option<&str>, chunk: &[AvailabilityRequest]) 
             log::warn!("Pricing API failed: {}", e);
             chunk
                 .iter()
-                .map(|request| (request.key.clone(), PricingResult::Failed))
+                .map(|key| (key.clone(), PricingResult::Failed))
                 .collect()
         }
     }

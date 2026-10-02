@@ -1,6 +1,6 @@
 use crate::bom::ComponentKey;
 
-use super::search::{AvailabilityKey, AvailabilityRequest, PricingResponse, PricingResult};
+use super::search::{PricingResponse, PricingResult};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -11,7 +11,7 @@ enum AvailabilityState {
 }
 
 pub(super) struct AvailabilityStore {
-    by_key: HashMap<AvailabilityKey, AvailabilityState>,
+    by_key: HashMap<ComponentKey, AvailabilityState>,
 }
 
 impl AvailabilityStore {
@@ -28,19 +28,17 @@ impl AvailabilityStore {
 
     pub(super) fn queue_requests(
         &mut self,
-        requests: impl IntoIterator<Item = AvailabilityRequest>,
+        keys: impl IntoIterator<Item = ComponentKey>,
         started_at: Instant,
-    ) -> Vec<AvailabilityRequest> {
+    ) -> Vec<ComponentKey> {
         let mut queued = Vec::new();
-        for request in requests {
-            if request.lookups.is_empty() || self.by_key.contains_key(&request.key) {
+        for key in keys {
+            if self.by_key.contains_key(&key) {
                 continue;
             }
-            self.by_key.insert(
-                request.key.clone(),
-                AvailabilityState::Pending { started_at },
-            );
-            queued.push(request);
+            self.by_key
+                .insert(key.clone(), AvailabilityState::Pending { started_at });
+            queued.push(key);
         }
         queued
     }
@@ -66,17 +64,6 @@ impl AvailabilityStore {
         &self,
         key: &ComponentKey,
     ) -> (Option<&pcb_sch::bom::Availability>, bool) {
-        self.lookup(&AvailabilityKey::Component(key.clone()))
-    }
-
-    pub(super) fn kicad_symbol(
-        &self,
-        symbol_id: i64,
-    ) -> (Option<&pcb_sch::bom::Availability>, bool) {
-        self.lookup(&AvailabilityKey::KicadSymbol(symbol_id))
-    }
-
-    fn lookup(&self, key: &AvailabilityKey) -> (Option<&pcb_sch::bom::Availability>, bool) {
         const LOADING_DELAY_MS: u64 = 150;
 
         match self.by_key.get(key) {
