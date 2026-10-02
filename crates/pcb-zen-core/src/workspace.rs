@@ -559,9 +559,18 @@ pub fn get_workspace_info<F: FileProvider>(
         let url = base_url
             .clone()
             .unwrap_or_else(|| LOCAL_WORKSPACE_ROOT_URL.to_string());
-        packages.insert(
-            url,
-            WorkspacePackage {
+        let entry = packages.entry(url);
+        if let std::collections::btree_map::Entry::Occupied(entry) = entry {
+            errors.push(DiscoveryError {
+                path: pcb_toml_path,
+                error: format!(
+                    "root package URL '{}' collides with a descendant package; \
+                     set [workspace].repository to disambiguate",
+                    entry.key()
+                ),
+            });
+        } else {
+            entry.or_insert(WorkspacePackage {
                 rel_path: PathBuf::new(),
                 config: root_config,
                 version: None,
@@ -570,8 +579,8 @@ pub fn get_workspace_info<F: FileProvider>(
                 dirty: false,
                 entrypoints: Vec::new(),
                 symbol_files: Vec::new(),
-            },
-        );
+            });
+        }
     }
 
     // Populate discovered zen paths for boards without explicit paths
@@ -865,5 +874,37 @@ pcb-version = "{}"
         let err = get_workspace_info(&provider, Path::new("/repo"))
             .expect_err("expected workspace requiring a newer pcb minor version to fail");
         assert!(err.to_string().contains(&required));
+    }
+
+    #[test]
+    fn test_root_sentinel_url_collision() {
+        let provider = InMemoryFileProvider::new(HashMap::from([
+            (
+                "/repo/pcb.toml".to_string(),
+                "[workspace]\npcb-version = \"0.4\"\n[board]\nname = \"Root\"\n".to_string(),
+            ),
+            (
+                "/repo/workspace/pcb.toml".to_string(),
+                "[board]\nname = \"Descendant\"\n".to_string(),
+            ),
+        ]));
+
+        let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
+
+        assert_eq!(info.errors.len(), 1);
+        assert_eq!(info.errors[0].path, Path::new("/repo/pcb.toml"));
+        assert!(info.errors[0].error.contains("collides"));
+        assert!(info.errors[0].error.contains("[workspace].repository"));
+        assert_eq!(info.packages.len(), 1);
+        assert_eq!(info.packages["workspace"].rel_path, Path::new("workspace"));
+        assert_eq!(
+            info.packages["workspace"]
+                .config
+                .board
+                .as_ref()
+                .unwrap()
+                .name,
+            "Descendant"
+        );
     }
 }
