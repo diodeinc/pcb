@@ -81,7 +81,7 @@ fn endpoint_resolves_workspace_and_environment_without_authenticating() {
     let fixture = Fixture::new();
     std::fs::write(
         fixture.dir.path().join("pcb.toml"),
-        "[workspace]\nendpoint = \"gov.diode.computer\"\n",
+        "[workspace]\nendpoint = \"sandbox.example.com\"\n",
     )
     .unwrap();
     let nested = fixture.dir.path().join("boards/nested");
@@ -95,7 +95,7 @@ fn endpoint_resolves_workspace_and_environment_without_authenticating() {
             .output()
             .unwrap();
         assert!(output.stderr.is_empty());
-        assert_eq!(success(output), "https://api.gov.diode.computer\n");
+        assert_eq!(success(output), "https://api.sandbox.example.com\n");
     }
 
     let token = fixture.token("must-not-be-requested");
