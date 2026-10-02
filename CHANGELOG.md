@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb bom` always fetches live availability; `pcb bom --offline` prints the BOM without it.
 - `[workspace.bom] strict` is ignored; BOM matching is always exact.
 - `pcb publish` metadata no longer records `bom.strict`.
+- `pcb bom -f json` no longer emits `availability.no_match`; an unknown part is `"match": "MATCH_FAILED"`.
 
 ### Fixed
 

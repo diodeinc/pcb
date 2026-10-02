@@ -191,7 +191,6 @@ impl MatchBomResponse {
             match_status: Some(line.match_status),
             us,
             global,
-            no_match: line.match_status == BomMatchStatus::Failed,
             selected_offer_id: line
                 .selected_offer_id
                 .clone()
