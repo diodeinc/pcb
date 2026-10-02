@@ -371,7 +371,7 @@ impl Bom {
                 grouped
                     .members
                     .iter()
-                    .all(|member| member.match_status == Some(BomMatchStatus::Failed))
+                    .any(|member| member.match_status == Some(BomMatchStatus::Failed))
             });
             let collection = avail.and_then(|availability| availability.selected_part_collection());
 
