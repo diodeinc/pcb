@@ -100,15 +100,17 @@ fn migrate_workspace(root: &Path) -> Result<()> {
     let pcb_toml_path = root.join("pcb.toml");
     let original = fs::read_to_string(&pcb_toml_path)
         .with_context(|| format!("Failed to read {}", pcb_toml_path.display()))?;
-    let (content, removed_members) = remove_workspace_members(&original)
+    let (content, removed) = remove_obsolete_workspace_keys(&original)
         .with_context(|| format!("Failed to update {}", pcb_toml_path.display()))?;
-    if removed_members {
+    if !removed.is_empty() {
         fs::write(&pcb_toml_path, &content)
             .with_context(|| format!("Failed to write {}", pcb_toml_path.display()))?;
-        println!(
-            "pcb: removed deprecated [workspace].members from {}",
-            pcb_toml_path.display()
-        );
+        for key in removed {
+            println!(
+                "pcb: removed obsolete [workspace].{key} from {}",
+                pcb_toml_path.display()
+            );
+        }
     }
 
     let config = PcbToml::parse_with_path(&content, &pcb_toml_path)?;
@@ -178,7 +180,7 @@ fn migrate_workspace(root: &Path) -> Result<()> {
 fn write_workspace_pcb_version(pcb_toml_path: &Path, target: &str) -> Result<()> {
     let content = fs::read_to_string(pcb_toml_path)
         .with_context(|| format!("Failed to read {}", pcb_toml_path.display()))?;
-    let (content, _) = remove_workspace_members(&content)
+    let (content, _) = remove_obsolete_workspace_keys(&content)
         .with_context(|| format!("Failed to update {}", pcb_toml_path.display()))?;
     let config = PcbToml::parse_with_path(&content, pcb_toml_path)?;
     let workspace = config.workspace.as_ref().ok_or_else(|| {
@@ -195,7 +197,9 @@ fn write_workspace_pcb_version(pcb_toml_path: &Path, target: &str) -> Result<()>
     Ok(())
 }
 
-fn remove_workspace_members(content: &str) -> Result<(String, bool)> {
+const OBSOLETE_WORKSPACE_KEYS: [&str; 2] = ["members", "bom"];
+
+fn remove_obsolete_workspace_keys(content: &str) -> Result<(String, Vec<&'static str>)> {
     let mut document = content
         .parse::<DocumentMut>()
         .context("Failed to parse manifest for editing")?;
@@ -203,14 +207,17 @@ fn remove_workspace_members(content: &str) -> Result<(String, bool)> {
         .get_mut("workspace")
         .and_then(Item::as_table_like_mut)
     else {
-        return Ok((content.to_owned(), false));
+        return Ok((content.to_owned(), Vec::new()));
     };
 
-    let removed = workspace.remove("members").is_some();
-    if removed {
-        Ok((document.to_string(), true))
+    let removed = OBSOLETE_WORKSPACE_KEYS
+        .into_iter()
+        .filter(|key| workspace.remove(key).is_some())
+        .collect::<Vec<_>>();
+    if removed.is_empty() {
+        Ok((content.to_owned(), removed))
     } else {
-        Ok((content.to_owned(), false))
+        Ok((document.to_string(), removed))
     }
 }
 
@@ -310,22 +317,26 @@ pcb-version = "not this"
     }
 
     #[test]
-    fn removes_workspace_members_without_touching_other_tables() {
+    fn removes_obsolete_workspace_keys_without_touching_other_tables() {
         let input = r#"# keep
 [workspace] # root
 name = "demo"
 members = ["boards/*"] # old
 pcb-version = "0.3"
 
+[workspace.bom]
+strict = true
+
 [dependencies]
 members = "not this"
 "#;
 
-        let (output, removed) = remove_workspace_members(input).unwrap();
+        let (output, removed) = remove_obsolete_workspace_keys(input).unwrap();
 
-        assert!(removed);
+        assert_eq!(removed, ["members", "bom"]);
         assert!(output.contains("# keep\n[workspace] # root\nname = \"demo\"\n"));
         assert!(!output.contains("members = [\"boards/*\"]"));
+        assert!(!output.contains("strict"));
         assert!(output.contains("[dependencies]\nmembers = \"not this\""));
     }
 
