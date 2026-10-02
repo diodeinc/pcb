@@ -324,9 +324,7 @@ fn test_release_check_drc_exclusion_does_not_claim_layout_checked() {
 fn test_release_check_respects_bom_suppression_and_exclusion() {
     let server = MockServer::start();
     let _bom_match = server.mock(|when, then| {
-        when.method(POST)
-            .path("/api/boms/match")
-            .query_param("strict", "true");
+        when.method(POST).path("/api/boms/match");
         then.status(200).json_body(serde_json::json!({
             "results": (["GENERIC.R", "AUTHORED.R"].map(|path| serde_json::json!({
                 "designEntry": { "path": path },
@@ -497,9 +495,7 @@ fn test_publish_board_with_version_preserves_local_only_tags() {
 fn test_publish_preserves_authored_bom_intent() {
     let server = MockServer::start();
     let _bom_match = server.mock(|when, then| {
-        when.method(POST)
-            .path("/api/boms/match")
-            .query_param("strict", "true");
+        when.method(POST).path("/api/boms/match");
         then.status(200).json_body(serde_json::json!({
             "results": [
                 {
@@ -620,9 +616,7 @@ fn test_publish_board_full() {
         })
         .collect::<Vec<_>>();
     let bom_match = server.mock(|when, then| {
-        when.method(POST)
-            .path("/api/boms/match")
-            .query_param("strict", "true");
+        when.method(POST).path("/api/boms/match");
         then.status(200).json_body(serde_json::json!({
             "results": results,
             "offers": {
@@ -720,49 +714,6 @@ fn test_publish_board_full() {
         expected_html
     );
     assert_snapshot!("publish_full", sb.snapshot_dir(&staging_dir));
-}
-
-#[test]
-fn test_publish_metadata_includes_bom_strict() {
-    let mut sb = Sandbox::new();
-    sb.cwd("src")
-        .write(
-            "pcb.toml",
-            r#"
-[workspace]
-pcb-version = "0.4"
-
-[workspace.bom]
-strict = true
-"#,
-        )
-        .write("boards/pcb.toml", BOARD_PCB_TOML)
-        .write("boards/modules/component.zen", SIMPLE_COMPONENT)
-        .write("boards/modules/test.kicad_mod", TEST_KICAD_MOD)
-        .write(
-            "boards/modules/datasheet.txt",
-            "Simple component datasheet.",
-        )
-        .write("boards/TestBoard.zen", SIMPLE_BOARD_ZEN)
-        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
-        .init_git()
-        .commit("Initial commit")
-        .sync();
-
-    sb.run("pcbc", source_only_args("boards/TestBoard.zen"))
-        .run()
-        .expect("Failed to run pcb publish command");
-
-    let staging_dir = find_staging_dir(&sb, "TestBoard");
-    let metadata_file = File::open(
-        sb.root_path()
-            .join("src")
-            .join(&staging_dir)
-            .join("metadata.json"),
-    )
-    .unwrap();
-    let metadata_json: Value = serde_json::from_reader(metadata_file).unwrap();
-    assert_eq!(metadata_json["release"]["bom"]["strict"], true);
 }
 
 #[test]

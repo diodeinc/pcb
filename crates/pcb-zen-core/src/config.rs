@@ -282,10 +282,6 @@ pub struct WorkspaceConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
 
-    /// BOM command and sourcing configuration.
-    #[serde(default, skip_serializing_if = "BomConfig::is_default")]
-    pub bom: BomConfig,
-
     /// Default board name to use
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_board: Option<String>,
@@ -304,29 +300,6 @@ pub struct WorkspaceConfig {
     /// Example: ["modules/deprecated/*", "boards/test-*"]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BomConfig {
-    /// Require exact MPN matching when fetching availability from the BOM service.
-    #[serde(default = "default_true")]
-    pub strict: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-impl Default for BomConfig {
-    fn default() -> Self {
-        Self { strict: true }
-    }
-}
-
-impl BomConfig {
-    fn is_default(&self) -> bool {
-        self == &Self::default()
-    }
 }
 
 /// Access control configuration.
@@ -598,16 +571,16 @@ resolver = "2"
     }
 
     #[test]
-    fn test_parse_rejects_workspace_members() {
-        let err = PcbToml::parse(
-            r#"
-[workspace]
-members = ["boards/*"]
-"#,
-        )
-        .expect_err("workspace.members should not parse");
+    fn test_parse_rejects_removed_workspace_keys() {
+        for (key, value) in [
+            ("members", r#"["boards/*"]"#),
+            ("bom", "{ strict = false }"),
+        ] {
+            let err = PcbToml::parse(&format!("[workspace]\n{key} = {value}\n"))
+                .expect_err("removed workspace key should not parse");
 
-        assert!(err.to_string().contains("unknown field `members`"));
+            assert!(err.to_string().contains(&format!("unknown field `{key}`")));
+        }
     }
 
     #[test]
@@ -776,35 +749,6 @@ path = "test.zen"
 
         let patch = config.patch.get("github.com/diodeinc/stdlib").unwrap();
         assert_eq!(patch.path.as_deref(), Some("../stdlib"));
-    }
-
-    #[test]
-    fn test_workspace_bom_strict_defaults_to_true() {
-        let content = r#"
-[workspace]
-pcb-version = "0.4"
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        let workspace = config.workspace.unwrap();
-
-        assert!(workspace.bom.strict);
-    }
-
-    #[test]
-    fn test_parse_workspace_bom_strict_disabled() {
-        let content = r#"
-[workspace]
-pcb-version = "0.4"
-
-[workspace.bom]
-strict = false
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        let workspace = config.workspace.unwrap();
-
-        assert!(!workspace.bom.strict);
     }
 
     #[test]
