@@ -92,66 +92,41 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, area);
 }
 
-/// Render the results panels: optionally Trigram/Word/Semantic on top, Merged below
+/// Render the results panels: optionally Trigram/Word/Docs on top, Merged below
 fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.show_debug_panels {
         // Split: debug panels on top, merged below
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(40), // Trigram + Word + Semantic
+                Constraint::Percentage(40), // Trigram + Word + Docs
                 Constraint::Percentage(60), // Merged (larger)
             ])
             .split(area);
 
-        // Semantic on left, Trigram + Word stacked on right
         let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .constraints([Constraint::Ratio(1, 3); 3])
             .split(rows[0]);
 
-        let left_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(cols[0]);
-        let right_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(cols[1]);
-
-        let panel_areas = [left_rows[0], left_rows[1], right_rows[0], right_rows[1]];
+        let panel_areas = [cols[0], cols[1], cols[2]];
         match &app.results {
             super::search::SearchResults::RegistryModules(results) => render_panel_set(
                 frame,
                 panel_areas,
-                [
-                    &results.semantic,
-                    &results.trigram,
-                    &results.word,
-                    &results.docs_full_text,
-                ],
+                [&results.trigram, &results.word, &results.docs_full_text],
                 module_row_spans,
             ),
             super::search::SearchResults::RegistrySymbols(results) => render_panel_set(
                 frame,
                 panel_areas,
-                [
-                    &results.semantic,
-                    &results.trigram,
-                    &results.word,
-                    &results.docs_full_text,
-                ],
+                [&results.trigram, &results.word, &results.docs_full_text],
                 symbol_row_spans,
             ),
             super::search::SearchResults::KicadSymbols(results) => render_panel_set(
                 frame,
                 panel_areas,
-                [
-                    &results.semantic,
-                    &results.trigram,
-                    &results.word,
-                    &results.docs_full_text,
-                ],
+                [&results.trigram, &results.word, &results.docs_full_text],
                 kicad_row_spans,
             ),
             super::search::SearchResults::Empty => {}
@@ -192,15 +167,14 @@ fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, area);
 }
 
-/// Render the four debug panels (Semantic / Trigram / Word / Docs) for any hit type.
+/// Render the three debug panels (Trigram / Word / Docs) for any hit type.
 fn render_panel_set<T>(
     frame: &mut Frame,
-    areas: [Rect; 4],
-    hits: [&[T]; 4],
+    areas: [Rect; 3],
+    hits: [&[T]; 3],
     mut row_spans: impl FnMut(&T) -> Vec<Span<'static>>,
 ) {
-    const PANELS: [(&str, Color); 4] = [
-        ("Semantic", Color::Cyan),
+    const PANELS: [(&str, Color); 3] = [
         ("Trigram", Color::Yellow),
         ("Word", Color::Green),
         ("Docs", Color::LightMagenta),
@@ -1233,29 +1207,26 @@ fn append_search_scoring_for_key(
     dim_style: Style,
 ) {
     let scoring = app.results.scoring().get(key);
-    let (trigram_len, word_len, docs_len, semantic_len, merged_len) = match &app.results {
+    let (trigram_len, word_len, docs_len, merged_len) = match &app.results {
         super::search::SearchResults::RegistryModules(results) => (
             results.trigram.len(),
             results.word.len(),
             results.docs_full_text.len(),
-            results.semantic.len(),
             results.merged.len(),
         ),
         super::search::SearchResults::RegistrySymbols(results) => (
             results.trigram.len(),
             results.word.len(),
             results.docs_full_text.len(),
-            results.semantic.len(),
             results.merged.len(),
         ),
         super::search::SearchResults::KicadSymbols(results) => (
             results.trigram.len(),
             results.word.len(),
             results.docs_full_text.len(),
-            results.semantic.len(),
             results.merged.len(),
         ),
-        super::search::SearchResults::Empty => (0, 0, 0, 0, 0),
+        super::search::SearchResults::Empty => (0, 0, 0, 0),
     };
 
     let format_result = |pos: Option<usize>, rank: Option<f64>, total: usize| -> Vec<Span> {
@@ -1283,9 +1254,6 @@ fn append_search_scoring_for_key(
     let (docs_pos, docs_rank) = scoring
         .map(|s| (s.docs_full_text_position, s.docs_full_text_rank))
         .unwrap_or((None, None));
-    let (sem_pos, sem_rank) = scoring
-        .map(|s| (s.semantic_position, s.semantic_rank))
-        .unwrap_or((None, None));
 
     let mut tri_line = vec![Span::styled(
         "Trigram  ",
@@ -1305,18 +1273,14 @@ fn append_search_scoring_for_key(
     docs_line.extend(format_result(docs_pos, docs_rank, docs_len));
     lines.push(Line::from(docs_line));
 
-    let mut sem_line = vec![Span::styled("Semantic ", Style::default().fg(Color::Cyan))];
-    sem_line.extend(format_result(sem_pos, sem_rank, semantic_len));
-    lines.push(Line::from(sem_line));
-
     // RRF score calculation
     let rrf = |pos: Option<usize>| {
         pos.map(|p| 1.0 / (crate::registry::RRF_K + (p + 1) as f64))
             .unwrap_or(0.0)
     };
-    let rrf_score = rrf(tri_pos) + rrf(word_pos) + rrf(docs_pos) + rrf(sem_pos);
+    let rrf_score = rrf(tri_pos) + rrf(word_pos) + rrf(docs_pos);
 
-    let rrf_parts: Vec<String> = [tri_pos, word_pos, docs_pos, sem_pos]
+    let rrf_parts: Vec<String> = [tri_pos, word_pos, docs_pos]
         .iter()
         .filter_map(|&pos| {
             pos.map(|p| {

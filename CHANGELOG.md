@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb search` is keyword-only; a multi-word query with no match for every word falls back to matching any word.
+
+### Removed
+
+- `pcb search -f json` no longer emits `scoring.semantic_position` or `scoring.semantic_rank`.
+
 ## [0.4.67] - 2026-10-02
 
 ### Added

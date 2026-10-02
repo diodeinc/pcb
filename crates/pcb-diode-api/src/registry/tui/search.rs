@@ -39,8 +39,6 @@ pub struct SearchScoring {
     pub word_rank: Option<f64>,
     pub docs_full_text_position: Option<usize>,
     pub docs_full_text_rank: Option<f64>,
-    pub semantic_position: Option<usize>,
-    pub semantic_rank: Option<f64>,
 }
 
 pub type SearchScoringKey = super::super::SearchResultKey;
@@ -61,7 +59,6 @@ pub struct RegistryModuleSearchResults {
     pub trigram: Vec<RegistryModuleHit>,
     pub word: Vec<RegistryModuleHit>,
     pub docs_full_text: Vec<RegistryModuleHit>,
-    pub semantic: Vec<RegistryModuleHit>,
     pub merged: Vec<RegistryModuleHit>,
     pub scoring: HashMap<SearchScoringKey, SearchScoring>,
     pub duration: Duration,
@@ -73,7 +70,6 @@ pub struct RegistrySymbolSearchResults {
     pub trigram: Vec<RegistrySymbolHit>,
     pub word: Vec<RegistrySymbolHit>,
     pub docs_full_text: Vec<RegistrySymbolHit>,
-    pub semantic: Vec<RegistrySymbolHit>,
     pub merged: Vec<RegistrySymbolHit>,
     pub scoring: HashMap<SearchScoringKey, SearchScoring>,
     pub duration: Duration,
@@ -85,7 +81,6 @@ pub struct KicadSearchResults {
     pub trigram: Vec<SearchHit>,
     pub word: Vec<SearchHit>,
     pub docs_full_text: Vec<SearchHit>,
-    pub semantic: Vec<SearchHit>,
     pub merged: Vec<SearchHit>,
     pub scoring: HashMap<SearchScoringKey, SearchScoring>,
     pub duration: Duration,
@@ -191,7 +186,6 @@ impl Default for KicadSearchResults {
             trigram: Vec::new(),
             word: Vec::new(),
             docs_full_text: Vec::new(),
-            semantic: Vec::new(),
             merged: Vec::new(),
             scoring: HashMap::new(),
             duration: Duration::ZERO,
@@ -506,7 +500,6 @@ pub(crate) fn build_scoring<T: ScoredHit>(
     trigram: &[T],
     word: &[T],
     docs_full_text: &[T],
-    semantic: &[T],
 ) -> HashMap<SearchScoringKey, SearchScoring> {
     let mut scoring = HashMap::new();
     record_scores(&mut scoring, trigram, |entry, idx, rank| {
@@ -520,10 +513,6 @@ pub(crate) fn build_scoring<T: ScoredHit>(
     record_scores(&mut scoring, docs_full_text, |entry, idx, rank| {
         entry.docs_full_text_position = Some(idx);
         entry.docs_full_text_rank = rank;
-    });
-    record_scores(&mut scoring, semantic, |entry, idx, rank| {
-        entry.semantic_position = Some(idx);
-        entry.semantic_rank = rank;
     });
     scoring
 }
@@ -700,19 +689,14 @@ pub fn spawn_worker(
                         SearchMode::RegistryModules => {
                             let rrf = client.search_modules_rrf(&query.text);
                             let duration = start.elapsed();
-                            let scoring = build_scoring(
-                                &rrf.trigram,
-                                &rrf.word,
-                                &rrf.docs_full_text,
-                                &rrf.semantic,
-                            );
+                            let scoring =
+                                build_scoring(&rrf.trigram, &rrf.word, &rrf.docs_full_text);
                             let _ = result_tx.send(SearchResults::RegistryModules(
                                 RegistryModuleSearchResults {
                                     query_id: query.id,
                                     trigram: rrf.trigram,
                                     word: rrf.word,
                                     docs_full_text: rrf.docs_full_text,
-                                    semantic: rrf.semantic,
                                     merged: rrf.merged,
                                     scoring,
                                     duration,
@@ -722,19 +706,14 @@ pub fn spawn_worker(
                         SearchMode::RegistryComponents => {
                             let rrf = client.search_symbols_rrf(&query.text);
                             let duration = start.elapsed();
-                            let scoring = build_scoring(
-                                &rrf.trigram,
-                                &rrf.word,
-                                &rrf.docs_full_text,
-                                &rrf.semantic,
-                            );
+                            let scoring =
+                                build_scoring(&rrf.trigram, &rrf.word, &rrf.docs_full_text);
                             let _ = result_tx.send(SearchResults::RegistrySymbols(
                                 RegistrySymbolSearchResults {
                                     query_id: query.id,
                                     trigram: rrf.trigram,
                                     word: rrf.word,
                                     docs_full_text: rrf.docs_full_text,
-                                    semantic: rrf.semantic,
                                     merged: rrf.merged,
                                     scoring,
                                     duration,
@@ -801,15 +780,13 @@ pub fn spawn_worker(
                     let mut rrf = client.search_rrf(&query.text);
                     let duration = start.elapsed();
                     let _ = client.populate_availability_lookups(&mut rrf.merged);
-                    let scoring =
-                        build_scoring(&rrf.trigram, &rrf.word, &rrf.docs_full_text, &rrf.semantic);
+                    let scoring = build_scoring(&rrf.trigram, &rrf.word, &rrf.docs_full_text);
 
                     let _ = result_tx.send(SearchResults::KicadSymbols(KicadSearchResults {
                         query_id: query.id,
                         trigram: rrf.trigram,
                         word: rrf.word,
                         docs_full_text: rrf.docs_full_text,
-                        semantic: rrf.semantic,
                         merged: rrf.merged,
                         scoring,
                         duration,

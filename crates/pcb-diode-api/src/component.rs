@@ -809,12 +809,8 @@ fn execute_registry_module_search(
     use crate::registry::tui::search::SearchScoringKey;
 
     let rrf = client.search_modules_rrf(query);
-    let scoring_by_url = crate::registry::tui::search::build_scoring(
-        &rrf.trigram,
-        &rrf.word,
-        &rrf.docs_full_text,
-        &rrf.semantic,
-    );
+    let scoring_by_url =
+        crate::registry::tui::search::build_scoring(&rrf.trigram, &rrf.word, &rrf.docs_full_text);
     let hits: Vec<_> = rrf.merged.into_iter().take(25).collect();
 
     if hits.is_empty() {
@@ -891,12 +887,8 @@ fn execute_registry_symbol_search(
     use crate::registry::tui::search::SearchScoringKey;
 
     let rrf = client.search_symbols_rrf(query);
-    let scoring_by_url = crate::registry::tui::search::build_scoring(
-        &rrf.trigram,
-        &rrf.word,
-        &rrf.docs_full_text,
-        &rrf.semantic,
-    );
+    let scoring_by_url =
+        crate::registry::tui::search::build_scoring(&rrf.trigram, &rrf.word, &rrf.docs_full_text);
     let hits: Vec<_> = rrf.merged.into_iter().take(25).collect();
 
     if hits.is_empty() {
@@ -992,12 +984,8 @@ fn execute_kicad_symbols_search(query: &str, json: bool) -> Result<()> {
 
     let client = crate::KicadSymbolsClient::open()?;
     let rrf = client.search_rrf(query);
-    let scoring_by_url = crate::registry::tui::search::build_scoring(
-        &rrf.trigram,
-        &rrf.word,
-        &rrf.docs_full_text,
-        &rrf.semantic,
-    );
+    let scoring_by_url =
+        crate::registry::tui::search::build_scoring(&rrf.trigram, &rrf.word, &rrf.docs_full_text);
     let results: Vec<_> = rrf
         .merged
         .into_iter()
@@ -1112,12 +1100,11 @@ fn print_search_scoring(scoring: Option<&crate::registry::tui::search::SearchSco
     };
 
     println!(
-        "  {} tri={} word={} docs={} sem={}",
+        "  {} tri={} word={} docs={}",
         "score".dimmed(),
         format_source(scoring.trigram_position, scoring.trigram_rank).dimmed(),
         format_source(scoring.word_position, scoring.word_rank).dimmed(),
         format_source(scoring.docs_full_text_position, scoring.docs_full_text_rank).dimmed(),
-        format_source(scoring.semantic_position, scoring.semantic_rank).dimmed(),
     );
 }
 

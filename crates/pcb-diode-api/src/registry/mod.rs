@@ -5,15 +5,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::bom::ComponentKey;
-use crate::ensure_sqlite_vec_registered;
 pub use crate::registry::download::RegistryInfo;
 
 pub mod download;
-pub mod embeddings;
 pub mod tui;
 
 pub(crate) const RRF_K: f64 = 10.0;
-const REGISTRY_SEMANTIC_DISTANCE_THRESHOLD: f64 = 1.3;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DigikeyData {
@@ -162,7 +159,6 @@ pub struct ModuleRrfSearchOutput {
     pub trigram: Vec<RegistryModuleHit>,
     pub word: Vec<RegistryModuleHit>,
     pub docs_full_text: Vec<RegistryModuleHit>,
-    pub semantic: Vec<RegistryModuleHit>,
     pub merged: Vec<RegistryModuleHit>,
 }
 
@@ -171,7 +167,6 @@ pub struct SymbolRrfSearchOutput {
     pub trigram: Vec<RegistrySymbolHit>,
     pub word: Vec<RegistrySymbolHit>,
     pub docs_full_text: Vec<RegistrySymbolHit>,
-    pub semantic: Vec<RegistrySymbolHit>,
     pub merged: Vec<RegistrySymbolHit>,
 }
 
@@ -195,7 +190,6 @@ pub struct RrfSearchOutput {
     pub trigram: Vec<SearchHit>,
     pub word: Vec<SearchHit>,
     pub docs_full_text: Vec<SearchHit>,
-    pub semantic: Vec<SearchHit>,
     pub merged: Vec<SearchHit>,
 }
 
@@ -409,7 +403,7 @@ fn normalize_phrase_whitespace(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub(crate) fn build_prefix_fts_query(query: &str) -> Option<String> {
+fn prefix_fts_clauses(query: &str) -> Vec<String> {
     let mut clauses = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
@@ -434,22 +428,25 @@ pub(crate) fn build_prefix_fts_query(query: &str) -> Option<String> {
     }
 
     push_prefix_fts_tokens(&current, &mut clauses);
-
-    (!clauses.is_empty()).then(|| clauses.join(" AND "))
+    clauses
 }
 
-pub(crate) fn normalize_semantic_query(query: &str) -> Option<String> {
-    let normalized = query.replace('"', " ");
-    let collapsed = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!collapsed.is_empty()).then_some(collapsed)
-}
-
-pub(crate) fn build_query_embedding(query: &str) -> Option<[f32; 1024]> {
-    normalize_semantic_query(query).and_then(|q| embeddings::get_kicad_query_embedding(&q).ok())
-}
-
-pub(crate) fn build_registry_query_embedding(query: &str) -> Option<[f32; 512]> {
-    normalize_semantic_query(query).and_then(|q| embeddings::get_registry_query_embedding(&q).ok())
+/// Runs the word and docs searches with an all-terms prefix query. When a multi-term query
+/// matches nothing in either, retries matching any term so descriptive queries such as
+/// "RP2354 controller" still find the parts they name.
+pub(crate) fn search_prefix_fts<T>(
+    query: &str,
+    search: impl Fn(&str) -> (Vec<T>, Vec<T>),
+) -> (Vec<T>, Vec<T>) {
+    let clauses = prefix_fts_clauses(query);
+    if clauses.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let (word, docs) = search(&clauses.join(" AND "));
+    if clauses.len() == 1 || !word.is_empty() || !docs.is_empty() {
+        return (word, docs);
+    }
+    search(&clauses.join(" OR "))
 }
 
 pub(crate) fn escape_fts5(s: &str) -> String {
@@ -487,8 +484,6 @@ impl RegistryClient {
             );
         }
 
-        ensure_sqlite_vec_registered()?;
-
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -524,7 +519,6 @@ impl RegistryClient {
     pub fn search_modules_rrf(&self, query: &str) -> ModuleRrfSearchOutput {
         const PER_INDEX_LIMIT: usize = 50;
         const MERGED_LIMIT: usize = 100;
-        const SEMANTIC_FETCH_LIMIT: usize = 100;
 
         let query_text = query.trim();
         if query_text.is_empty() {
@@ -535,34 +529,20 @@ impl RegistryClient {
         let trigram = self
             .search_module_trigram_hits(&parsed, PER_INDEX_LIMIT)
             .unwrap_or_default();
-        let word = self
-            .search_module_word_hits(&parsed, PER_INDEX_LIMIT)
-            .unwrap_or_default();
-        let docs_full_text = self
-            .search_module_docs_full_text_hits(&parsed, PER_INDEX_LIMIT)
-            .unwrap_or_default();
-        let semantic = build_registry_query_embedding(query_text)
-            .and_then(|embedding| {
-                self.search_module_semantic_hits(&embedding, SEMANTIC_FETCH_LIMIT)
-                    .ok()
-            })
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|hit| {
-                hit.rank
-                    .map(|d| d < REGISTRY_SEMANTIC_DISTANCE_THRESHOLD)
-                    .unwrap_or(false)
-            })
-            .take(PER_INDEX_LIMIT)
-            .collect::<Vec<_>>();
-
-        let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text, &semantic], MERGED_LIMIT);
+        let (word, docs_full_text) = search_prefix_fts(query_text, |fts_query| {
+            (
+                self.search_module_word_hits(fts_query, PER_INDEX_LIMIT)
+                    .unwrap_or_default(),
+                self.search_module_docs_full_text_hits(fts_query, PER_INDEX_LIMIT)
+                    .unwrap_or_default(),
+            )
+        });
+        let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text], MERGED_LIMIT);
 
         ModuleRrfSearchOutput {
             trigram,
             word,
             docs_full_text,
-            semantic,
             merged,
         }
     }
@@ -570,7 +550,6 @@ impl RegistryClient {
     pub fn search_symbols_rrf(&self, query: &str) -> SymbolRrfSearchOutput {
         const PER_INDEX_LIMIT: usize = 50;
         const MERGED_LIMIT: usize = 100;
-        const SEMANTIC_FETCH_LIMIT: usize = 100;
 
         let query_text = query.trim();
         if query_text.is_empty() {
@@ -581,34 +560,20 @@ impl RegistryClient {
         let trigram = self
             .search_symbol_trigram_hits(&parsed, PER_INDEX_LIMIT)
             .unwrap_or_default();
-        let word = self
-            .search_symbol_word_hits(&parsed, PER_INDEX_LIMIT)
-            .unwrap_or_default();
-        let docs_full_text = self
-            .search_symbol_docs_full_text_hits(&parsed, PER_INDEX_LIMIT)
-            .unwrap_or_default();
-        let semantic = build_registry_query_embedding(query_text)
-            .and_then(|embedding| {
-                self.search_symbol_semantic_hits(&embedding, SEMANTIC_FETCH_LIMIT)
-                    .ok()
-            })
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|hit| {
-                hit.rank
-                    .map(|d| d < REGISTRY_SEMANTIC_DISTANCE_THRESHOLD)
-                    .unwrap_or(false)
-            })
-            .take(PER_INDEX_LIMIT)
-            .collect::<Vec<_>>();
-
-        let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text, &semantic], MERGED_LIMIT);
+        let (word, docs_full_text) = search_prefix_fts(query_text, |fts_query| {
+            (
+                self.search_symbol_word_hits(fts_query, PER_INDEX_LIMIT)
+                    .unwrap_or_default(),
+                self.search_symbol_docs_full_text_hits(fts_query, PER_INDEX_LIMIT)
+                    .unwrap_or_default(),
+            )
+        });
+        let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text], MERGED_LIMIT);
 
         SymbolRrfSearchOutput {
             trigram,
             word,
             docs_full_text,
-            semantic,
             merged,
         }
     }
@@ -643,12 +608,9 @@ impl RegistryClient {
 
     fn search_module_word_hits(
         &self,
-        parsed: &ParsedQuery,
+        fts_query: &str,
         limit: usize,
     ) -> Result<Vec<RegistryModuleHit>> {
-        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
-            return Ok(Vec::new());
-        };
         let mut stmt = self.conn.prepare(
             r#"
             SELECT m.id, m.url, m.version, m.description, fts.rank
@@ -669,15 +631,12 @@ impl RegistryClient {
 
     fn search_module_docs_full_text_hits(
         &self,
-        parsed: &ParsedQuery,
+        fts_query: &str,
         limit: usize,
     ) -> Result<Vec<RegistryModuleHit>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
-            return Ok(Vec::new());
-        };
         let fetch_limit = limit.saturating_mul(4);
         let mut stmt = self.conn.prepare(
             r#"
@@ -697,29 +656,6 @@ impl RegistryClient {
             map_module_hit(row, &registry)
         })?;
         collect_deduped_by_url(rows, limit)
-    }
-
-    fn search_module_semantic_hits(
-        &self,
-        embedding: &[f32; 512],
-        limit: usize,
-    ) -> Result<Vec<RegistryModuleHit>> {
-        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT m.id, m.url, m.version, m.description, v.distance
-            FROM module_vec v
-            JOIN modules m ON m.id = v.rowid
-            WHERE v.embedding MATCH ?1 AND v.k = ?2
-            ORDER BY v.distance
-            "#,
-        )?;
-        let registry = self.registry.clone();
-        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
-            map_module_hit(row, &registry)
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
     }
 
     fn search_symbol_trigram_hits(
@@ -754,12 +690,9 @@ impl RegistryClient {
 
     fn search_symbol_word_hits(
         &self,
-        parsed: &ParsedQuery,
+        fts_query: &str,
         limit: usize,
     ) -> Result<Vec<RegistrySymbolHit>> {
-        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
-            return Ok(Vec::new());
-        };
         let mut stmt = self.conn.prepare(
             r#"
             SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
@@ -782,15 +715,12 @@ impl RegistryClient {
 
     fn search_symbol_docs_full_text_hits(
         &self,
-        parsed: &ParsedQuery,
+        fts_query: &str,
         limit: usize,
     ) -> Result<Vec<RegistrySymbolHit>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
-            return Ok(Vec::new());
-        };
         let fetch_limit = limit.saturating_mul(4);
         let mut stmt = self.conn.prepare(
             r#"
@@ -812,31 +742,6 @@ impl RegistryClient {
             map_symbol_hit(row, &registry)
         })?;
         collect_deduped_by_url(rows, limit)
-    }
-
-    fn search_symbol_semantic_hits(
-        &self,
-        embedding: &[f32; 512],
-        limit: usize,
-    ) -> Result<Vec<RegistrySymbolHit>> {
-        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
-                   m.url AS module_url, v.distance
-            FROM symbol_vec v
-            JOIN symbols s ON s.id = v.rowid
-            JOIN modules m ON m.id = s.module_id
-            WHERE v.embedding MATCH ?1 AND v.k = ?2
-            ORDER BY v.distance
-            "#,
-        )?;
-        let registry = self.registry.clone();
-        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
-            map_symbol_hit(row, &registry)
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
     }
 
     pub fn get_module_by_id(&self, id: i64) -> Result<Option<RegistryModule>> {
@@ -1112,29 +1017,18 @@ impl RegistrySearchClient {
             .iter()
             .map(|out| out.docs_full_text.clone())
             .collect::<Vec<_>>();
-        let semantic_lists = outputs
-            .iter()
-            .map(|out| out.semantic.clone())
-            .collect::<Vec<_>>();
         let merged = merge_rrf_by_ranked_lists(
-            &[
-                &trigram_lists,
-                &word_lists,
-                &docs_full_text_lists,
-                &semantic_lists,
-            ],
+            &[&trigram_lists, &word_lists, &docs_full_text_lists],
             MERGED_LIMIT,
         );
         let trigram = merge_all_rrf_by_ranked_lists(&[&trigram_lists]);
         let word = merge_all_rrf_by_ranked_lists(&[&word_lists]);
         let docs_full_text = merge_all_rrf_by_ranked_lists(&[&docs_full_text_lists]);
-        let semantic = merge_all_rrf_by_ranked_lists(&[&semantic_lists]);
 
         ModuleRrfSearchOutput {
             trigram,
             word,
             docs_full_text,
-            semantic,
             merged,
         }
     }
@@ -1159,29 +1053,18 @@ impl RegistrySearchClient {
             .iter()
             .map(|out| out.docs_full_text.clone())
             .collect::<Vec<_>>();
-        let semantic_lists = outputs
-            .iter()
-            .map(|out| out.semantic.clone())
-            .collect::<Vec<_>>();
         let merged = merge_rrf_by_ranked_lists(
-            &[
-                &trigram_lists,
-                &word_lists,
-                &docs_full_text_lists,
-                &semantic_lists,
-            ],
+            &[&trigram_lists, &word_lists, &docs_full_text_lists],
             MERGED_LIMIT,
         );
         let trigram = merge_all_rrf_by_ranked_lists(&[&trigram_lists]);
         let word = merge_all_rrf_by_ranked_lists(&[&word_lists]);
         let docs_full_text = merge_all_rrf_by_ranked_lists(&[&docs_full_text_lists]);
-        let semantic = merge_all_rrf_by_ranked_lists(&[&semantic_lists]);
 
         SymbolRrfSearchOutput {
             trigram,
             word,
             docs_full_text,
-            semantic,
             merged,
         }
     }
@@ -1296,4 +1179,51 @@ fn map_module_dependency(row: &rusqlite::Row) -> rusqlite::Result<RegistryModule
         published_at: row.get(3)?,
         description: row.get(4)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    fn run(query: &str, hits_for: impl Fn(&str) -> Vec<i32>) -> (Vec<String>, Vec<i32>) {
+        let queries = RefCell::new(Vec::new());
+        let (word, _) = search_prefix_fts(query, |fts_query| {
+            queries.borrow_mut().push(fts_query.to_owned());
+            (hits_for(fts_query), Vec::new())
+        });
+        (queries.into_inner(), word)
+    }
+
+    #[test]
+    fn multi_term_query_without_hits_retries_matching_any_term() {
+        let (queries, hits) = run("RP2354 controller", |q| {
+            if q.contains(" OR ") { vec![1] } else { vec![] }
+        });
+        assert_eq!(
+            queries,
+            ["rp2354* AND controller*", "rp2354* OR controller*"]
+        );
+        assert_eq!(hits, [1]);
+    }
+
+    #[test]
+    fn all_terms_hits_skip_the_fallback() {
+        let (queries, hits) = run("JST XH connector", |_| vec![1]);
+        assert_eq!(queries, ["jst* AND xh* AND connector*"]);
+        assert_eq!(hits, [1]);
+    }
+
+    #[test]
+    fn single_term_query_does_not_retry() {
+        let (queries, hits) = run("LIS3DHTR", |_| vec![]);
+        assert_eq!(queries, ["lis3dhtr*"]);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn quoted_phrases_stay_whole_in_the_fallback() {
+        let (queries, _) = run("\"ideal diode\" controller", |_| vec![]);
+        assert_eq!(queries[1], "\"ideal diode\" OR controller*");
+    }
 }

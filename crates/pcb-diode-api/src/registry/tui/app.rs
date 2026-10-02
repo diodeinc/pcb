@@ -369,7 +369,7 @@ impl Command {
         match self {
             Command::CycleMode => "Cycle between search modes",
             Command::ToggleDebugPanels => {
-                "Show or hide the Trigram, Word, and Semantic search result panels"
+                "Show or hide the Trigram, Word, and Docs search result panels"
             }
             Command::UpdateRegistryIndex => "Force re-download the registry index",
             Command::OpenInDigikey => "Open the selected part on Digikey",
@@ -479,7 +479,7 @@ pub struct App {
     pub command_palette_input: TextInput,
     /// Filtered commands based on query
     pub command_palette_filtered: Vec<Command>,
-    /// Show debug panels (Trigram/Word/Semantic)
+    /// Show debug panels (Trigram/Word/Docs)
     pub show_debug_panels: bool,
     /// Available search modes (determines which modes can be cycled to)
     pub available_modes: Vec<SearchMode>,
