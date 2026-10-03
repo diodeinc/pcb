@@ -132,7 +132,10 @@ pub fn fab_drawing(
     drawing.layer_sheets(layers, board, None)?;
     // The array's own copper, mask and legend show only on the whole array.
     if let Some(array) = &array {
-        let (outline, _) = views::outline(imported, ProfileSet::FabricationOutlines);
+        // Its edge as fabricated, with what is routed out of it.
+        let (boards, _) = views::outline(imported, ProfileSet::FabricationOutlines);
+        let edges = array.outlines.iter().flatten().chain(&array.removal);
+        let outline = boards.into_iter().chain(edges.cloned()).collect();
         let layers = drawing.layer_views(false)?;
         drawing.layer_sheets(layers, (outline, array.bounds), Some("ARRAY"))?;
     }
@@ -1329,13 +1332,15 @@ impl<'a> Drawing<'a> {
             (beside, scale_beside)
         };
 
+        // An array's many edges in a thin line, so they do not close up.
+        let edge = if of.is_some() { THIN } else { sheet::MEDIUM };
         let mut layers = layers.into_iter().peekable();
         while layers.peek().is_some() {
             let mut canvas = self.canvas();
             let mut names = Vec::new();
             for (index, (layer, view, _)) in layers.by_ref().take(per_sheet).enumerate() {
                 let placed = place_titled(bounds, cell(grid, index), widest);
-                let view = view.outlined(outline.clone(), sheet::MEDIUM / scale.factor())?;
+                let view = view.outlined(outline.clone(), edge / scale.factor())?;
                 let title = self.layer_title(&layer, of, Some(scale));
                 self.draw_titled(&mut canvas, &view, bounds, placed, &title)?;
                 names.push(match layer.number {

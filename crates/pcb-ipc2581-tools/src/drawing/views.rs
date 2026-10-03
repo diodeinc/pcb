@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use ipc2581::Symbol;
+use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::artwork::{self, Aperture, ApertureShape, Geometry, Object, PaintStage};
 use pcb_ir::dialects::ipc::{FeatureSpan, ProfileSet, profile_occurrences_for};
 use pcb_ir::dialects::{LayerRole, Side};
@@ -22,7 +23,6 @@ use super::sheet::{BODY, HAIR, HEADING, HEAVY, LABEL, MEDIUM, THIN};
 use super::symbols::symbol;
 use crate::geometry::render::layer_objects;
 use crate::geometry::step_artwork::root_step;
-use crate::layers::layer_role;
 
 type ViewArtwork = artwork::Document<(), Option<Symbol>>;
 type ViewObject = Object<Option<Symbol>>;
@@ -528,11 +528,15 @@ pub fn layer_view(
     )?;
     let mut objects = staged.into_iter().flatten().collect::<Vec<_>>();
 
-    // A hole images only on its own layer, so drills are laid over copper.
+    // An opening images only on its own layer, so drills and routs are laid
+    // over copper.
     if let Some(this) = layer.number.filter(|_| layer.role == LayerRole::Copper) {
         let copper = copper_order(imported);
         for (index, drill) in imported.layer_definitions.iter().enumerate() {
-            if layer_role(drill.layer_function) != LayerRole::Drill {
+            if !matches!(
+                drill.layer_function,
+                LayerFunction::Drill | LayerFunction::Rout
+            ) {
                 continue;
             }
             let span = drill
