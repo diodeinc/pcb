@@ -1,10 +1,11 @@
 //! What a fabrication drawing states, read from the design.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use ipc2581::types::{LayerFunction, WhereMeasured};
 use ipc2581::{Ipc2581, Symbol};
+use pcb_ir::dialects::ipc::analysis::ProfileOccurrence;
 use pcb_ir::dialects::ipc::lower::nc_linear_slot;
 use pcb_ir::dialects::ipc::relief::VScoreLine;
 use pcb_ir::dialects::ipc::{
@@ -22,37 +23,63 @@ use crate::layers::{ir_side, is_copper, layer_role};
 
 /// A design as the drawing reads it.
 pub struct Source<'a> {
-    pub ipc: &'a Ipc2581,
+    ipc: &'a Ipc2581,
     pub imported: &'a ImportedDesign,
-    pub accessor: IpcAccessor<'a>,
+    accessor: IpcAccessor<'a>,
     pub resolution: Resolution,
+    /// The board's stackup, where the design has one.
+    pub stackup: Option<StackupDetails>,
 }
 
-/// What the drawing requires of a fabricator where the design data states
-/// nothing: the ordinary terms a rigid board is bought to.
-#[derive(Debug, Clone, Copy)]
-pub struct Requirements {
-    /// IPC-6012 performance class.
-    pub class: u8,
-    /// Included angle of a V-score, in degrees.
-    pub score_angle: f64,
-    /// Material a V-score leaves, as a share of the board's thickness, and
-    /// how far it may be off, in millimetres.
-    pub score_web: f64,
-    pub score_tolerance: f64,
+impl<'a> Source<'a> {
+    pub fn new(ipc: &'a Ipc2581, imported: &'a ImportedDesign, resolution: Resolution) -> Self {
+        let accessor = IpcAccessor::new(ipc);
+        Self {
+            ipc,
+            imported,
+            stackup: accessor.stackup_details(),
+            accessor,
+            resolution,
+        }
+    }
+
+    /// The board's finished thickness, where its stackup states one.
+    pub fn thickness(&self) -> Option<f64> {
+        self.stackup.as_ref()?.overall_thickness_mm
+    }
 }
 
-pub const REQUIREMENTS: Requirements = Requirements {
-    class: 2,
-    score_angle: 30.0,
-    score_web: 1.0 / 3.0,
-    score_tolerance: 0.1,
-};
+// What the drawing requires of a fabricator where the design data states
+// nothing: the ordinary terms a rigid board is bought to.
+
+/// IPC-6012 performance class.
+const CLASS: u8 = 2;
+/// Included angle of a V-score, in degrees.
+pub const SCORE_ANGLE: f64 = 30.0;
+/// Material a V-score leaves, as a share of the board's thickness, and the
+/// thinnest web a score is asked to leave.
+const SCORE_WEB: f64 = 1.0 / 3.0;
+const THINNEST_WEB: f64 = 0.25;
+
+/// The web a score leaves in a board `thickness` thick, where the board is
+/// thick enough to be scored to a share of itself.
+pub fn score_web(thickness: f64) -> Option<f64> {
+    let web = thickness * SCORE_WEB;
+    (web >= THINNEST_WEB).then_some(web)
+}
+
+/// A length in whole micrometres. Sizes compare by the micrometre: two that
+/// differ by less are one size.
+pub fn micrometres(length: f64) -> i64 {
+    (length * 1000.0).round() as i64
+}
 
 /// A length as a drawing letters it: millimetres to two places.
 pub fn mm(value: f64) -> String {
-    // Rounded before it is lettered, so nothing reads "-0.00".
-    format!("{:.2}", (value * 100.0).round() / 100.0 + 0.0)
+    // Rounded to the micrometre first, so two lengths the data states alike
+    // letter alike, and before it is lettered, so nothing reads "-0.00".
+    let micrometres = (value * 1000.0).round();
+    format!("{:.2}", (micrometres / 10.0).round() / 100.0 + 0.0)
 }
 
 /// A length to the micrometre, lettered to two places where that says it
@@ -62,8 +89,9 @@ pub fn mm_fine(value: f64) -> String {
     text.strip_suffix('0').map_or(text.clone(), str::to_string)
 }
 
-pub fn mil(value_mm: f64) -> String {
-    format!("{:.1}", value_mm / 0.0254)
+/// The extents of `bounds` as a drawing letters a size.
+pub fn size_mm(bounds: BBox) -> String {
+    format!("{} × {} mm", mm(bounds.width()), mm(bounds.height()))
 }
 
 /// The copper layers top to bottom: as the stackup orders them, or as they
@@ -75,6 +103,20 @@ pub fn copper_order(imported: &ImportedDesign) -> Vec<Symbol> {
         .filter(|layer| is_copper(layer.layer_function))
         .map(|layer| layer.name)
         .collect::<Vec<_>>();
+    // Where the stackup does not place a layer its side does: the top
+    // first and the bottom last.
+    let side = |name: Symbol| {
+        let mut layers = imported.layer_definitions.iter();
+        match layers
+            .find(|layer| layer.name == name)
+            .map(|layer| ir_side(layer.side))
+        {
+            Some(Side::Top) => 0,
+            Some(Side::Bottom) => 2,
+            _ => 1,
+        }
+    };
+    copper.sort_by_key(|name| side(*name));
     let Some(stackup) = imported.stackups.first() else {
         return copper;
     };
@@ -89,12 +131,14 @@ pub fn copper_order(imported: &ImportedDesign) -> Vec<Symbol> {
     }
     let place = |name: Symbol| {
         let name = imported.resolve(name);
-        let place = stack
+        stack
             .iter()
-            .position(|layer| imported.resolve(layer.layer_ref) == name);
-        place.unwrap_or(usize::MAX)
+            .position(|layer| imported.resolve(layer.layer_ref) == name)
     };
-    copper.sort_by_key(|name| place(*name));
+    // A stackup that leaves a copper layer out orders none of them.
+    if copper.iter().all(|name| place(*name).is_some()) {
+        copper.sort_by_key(|name| place(*name));
+    }
     copper
 }
 
@@ -148,28 +192,35 @@ pub struct DrillTool {
 }
 
 impl DrillTool {
-    pub fn is_through(&self) -> bool {
+    fn is_through(&self) -> bool {
         self.layers == (1, self.layer_count.max(1))
+    }
+
+    /// A via from an outer layer that stops inside the board.
+    fn is_blind(&self) -> bool {
+        let outer = self.layers.0 == 1 || self.layers.1 == self.layer_count;
+        self.kind == HoleKind::Via && !self.is_through() && outer
+    }
+
+    /// A via between inner layers.
+    fn is_buried(&self) -> bool {
+        self.kind == HoleKind::Via && !self.is_through() && !self.is_blind()
     }
 
     /// What the hole is, as a drill table calls it.
     pub fn usage(&self) -> &'static str {
-        let outer = self.layers.0 == 1 || self.layers.1 == self.layer_count;
-        match (self.kind, self.is_through(), outer) {
-            (HoleKind::NonPlated, ..) => "NPTH",
-            (HoleKind::Plated, ..) => "PTH",
-            (HoleKind::Via, true, _) => "VIA",
-            (HoleKind::Via, false, true) => "BLIND VIA",
-            (HoleKind::Via, false, false) => "BURIED VIA",
+        match self.kind {
+            HoleKind::NonPlated => "NPTH",
+            HoleKind::Plated => "PTH",
+            HoleKind::Via if self.is_blind() => "BLIND VIA",
+            HoleKind::Via if self.is_buried() => "BURIED VIA",
+            HoleKind::Via => "VIA",
         }
     }
 
-    pub fn span(&self) -> String {
-        if self.is_through() {
-            "THRU".to_string()
-        } else {
-            format!("L{}-L{}", self.layers.0, self.layers.1)
-        }
+    /// The layers the hole connects, where it does not go through the board.
+    pub fn span(&self) -> Option<String> {
+        (!self.is_through()).then(|| format!("L{}-L{}", self.layers.0, self.layers.1))
     }
 
     /// The hole's shape, where it is not round.
@@ -179,9 +230,14 @@ impl DrillTool {
         Some(if routed {
             "ROUTED PER DATA".to_string()
         } else {
-            format!("SLOT {}", mm_fine(length))
+            format!("SLOT {} × {}", mm_fine(self.diameter), mm_fine(length))
         })
     }
+}
+
+/// How many holes `tools` drill between them.
+pub fn hole_count(tools: &[DrillTool]) -> usize {
+    tools.iter().map(|tool| tool.hits.len()).sum()
 }
 
 /// The copper layers a feature's span connects, counted from one. An end
@@ -216,9 +272,8 @@ pub fn span_layers(
 pub fn drill_tools(imported: &ImportedDesign, scope: ArtworkScope) -> Result<Vec<DrillTool>> {
     let copper = copper_order(imported);
     let layer_count = copper.len().max(1);
-    // Sizes compare by the micrometre: two holes that differ by less are
-    // drilled with one tool.
-    let micrometres = |length: f64| (length * 1000.0).round() as i64;
+    // Two holes that differ by less than a micrometre are drilled with one
+    // tool.
     let mut tools = BTreeMap::new();
     for (index, layer) in imported.layer_definitions.iter().enumerate() {
         if !matches!(
@@ -277,10 +332,10 @@ fn opening(doc: &GeometryDocument, feature: &Feature) -> Option<(f64, Option<f64
         }
         (FeatureKind::Slot, Some(SimpleShape::Oval { .. })) => {
             let (diameter, start, end) = nc_linear_slot(feature)?;
-            let run = end - start;
-            let length = run.x.hypot(run.y);
-            // An oval as wide as it is long is one plunge.
-            Some(if length > 0.0 {
+            let length = start.distance_to(end);
+            // An oval as wide as it is long, to what a table letters, is
+            // one plunge.
+            Some(if length >= 0.0005 {
                 (diameter, Some(length + diameter), Hit::Slot { start, end })
             } else {
                 (diameter, None, Hit::Hole(start))
@@ -322,12 +377,13 @@ impl FabLayer {
             Side::Inner => "INNER ",
             Side::None => "",
         };
-        match self.role {
-            LayerRole::Copper => format!("{side}COPPER"),
-            LayerRole::Soldermask => format!("{side}SOLDER MASK"),
-            LayerRole::Legend => format!("{side}LEGEND"),
-            _ => side.trim_end().to_string(),
-        }
+        let what = match self.role {
+            LayerRole::Copper => "COPPER",
+            LayerRole::Soldermask => "SOLDER MASK",
+            LayerRole::Legend => "LEGEND",
+            _ => unreachable!("fab_layers lists no other layer"),
+        };
+        format!("{side}{what}")
     }
 }
 
@@ -385,6 +441,10 @@ const COPPER_MM_PER_OZ: f64 = 0.0348;
 /// 0.86 oz foil.
 pub fn copper_weight(thickness_mm: f64) -> String {
     let oz = thickness_mm / COPPER_MM_PER_OZ;
+    // Inner foil is commonly written as its 15 µm finished thickness.
+    if (thickness_mm - 0.0152).abs() < 0.0005 {
+        return "1/2 oz".to_string();
+    }
     let stock = [
         (1.0 / 3.0, "1/3"),
         (0.5, "1/2"),
@@ -427,9 +487,23 @@ const INKS: [(&str, u32); 10] = [
 ];
 
 /// What a design that names no colour is said to have.
-pub const UNSTATED: &str = "NOT SPECIFIED";
+const UNSTATED: &str = "NOT SPECIFIED";
 
 impl Ink {
+    /// The ink a board is built with where its design names none.
+    fn stock(role: LayerRole) -> Self {
+        let name = match role {
+            LayerRole::Soldermask => "green",
+            LayerRole::Legend => "white",
+            _ => unreachable!("only a mask and a legend are inked"),
+        };
+        let stocked = INKS.iter().find(|(stocked, _)| *stocked == name);
+        Self {
+            color: stocked.map(|(_, color)| *color),
+            name: name.to_uppercase(),
+        }
+    }
+
     /// The ink a stackup layer's colour states. An exporter writes a colour
     /// nobody chose as words to that effect, and one mixed on screen as a
     /// hex code.
@@ -453,11 +527,22 @@ impl Ink {
             };
         };
         if let Some(hex) = name.strip_prefix('#') {
-            let hex = hex.get(..6).unwrap_or(hex);
-            return Self {
-                color: u32::from_str_radix(hex, 16).ok(),
-                name: format!("PER DATA #{}", hex.to_uppercase()),
+            // Six digits and an alpha the drawing has no use for, or the
+            // short form with each digit doubled.
+            let digits = hex.chars().filter(char::is_ascii_hexdigit).count();
+            let hex = match (hex.len(), digits == hex.len()) {
+                (6 | 8, true) => hex[..6].to_uppercase(),
+                (3 | 4, true) => hex[..3].chars().flat_map(|digit| [digit, digit]).collect(),
+                _ => return Self::of(None),
             };
+            let color = u32::from_str_radix(&hex, 16).ok();
+            // A value that is plainly black or white is that ink.
+            let name = match color {
+                Some(0x000000) => "BLACK".to_string(),
+                Some(0xffffff) => "WHITE".to_string(),
+                _ => format!("PER DATA #{hex}"),
+            };
+            return Self { color, name };
         }
         let stocked = INKS
             .iter()
@@ -471,68 +556,74 @@ impl Ink {
 }
 
 /// The ink of the design's layer of `role` on `side`, where it has such a
-/// layer.
+/// layer. A board is masked in one ink and printed in one, so the side that
+/// names it speaks for both; a design that names none gets what a
+/// fabricator builds unasked: green mask and white legend.
 pub fn layer_ink(source: &Source<'_>, role: LayerRole, side: Side) -> Option<Ink> {
-    let is = |layer: &ipc2581::types::Layer| {
-        layer_role(layer.layer_function) == role && ir_side(layer.side) == side
-    };
+    let of_role = |layer: &ipc2581::types::Layer| layer_role(layer.layer_function) == role;
+    let on = |layer: &ipc2581::types::Layer, side: Side| ir_side(layer.side) == side;
+    let layers = &source.imported.layer_definitions;
+    if !layers.iter().any(|layer| of_role(layer) && on(layer, side)) {
+        return None;
+    }
     let inks = source.accessor.stackup_inks();
-    let ink = inks.iter().find(|(layer, _)| is(layer)).map(|(_, ink)| ink);
-    let exists = source.imported.layer_definitions.iter().any(is);
-    exists.then(|| Ink::of(ink))
+    let stated = [Side::Top, Side::Bottom]
+        .into_iter()
+        .filter_map(|side| {
+            let mut inks = inks.iter();
+            inks.find(|(layer, _)| of_role(layer) && on(layer, side))
+        })
+        .map(|(_, ink)| Ink::of(Some(ink)))
+        .find(|ink| ink.name != UNSTATED);
+    Some(stated.unwrap_or_else(|| Ink::stock(role)))
 }
 
 /// A colour chip beside a specification's value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Chip {
     Color(u32),
-    /// The side has none of it.
+    /// The board has none of it.
     Absent,
     /// The design does not say which.
     Unstated,
 }
 
-/// One row of the specification: what, shown in which colours, and stated
-/// how.
+/// One row of the specification: what, shown in which colour where it has
+/// one, and stated how.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpecRow {
     pub label: &'static str,
-    pub chips: Vec<Chip>,
+    pub chip: Option<Chip>,
     pub value: String,
 }
 
 fn row(label: &'static str, value: impl Into<String>) -> SpecRow {
     SpecRow {
         label,
-        chips: Vec::new(),
+        chip: None,
         value: value.into(),
     }
 }
 
-/// What each side of the board carries of a mask or a legend: a chip for
-/// the top and one for the bottom, and the words for both.
+/// A mask or a legend: its one ink as a chip, and which sides carry it.
 fn sides_row(label: &'static str, top: Option<Ink>, bottom: Option<Ink>) -> SpecRow {
-    let chip = |ink: &Option<Ink>| match ink {
-        None => Chip::Absent,
-        Some(Ink { color: None, .. }) => Chip::Unstated,
-        Some(Ink {
-            color: Some(color), ..
-        }) => Chip::Color(*color),
+    let sides = match (&top, &bottom) {
+        (Some(_), Some(_)) => "BOTH SIDES",
+        (Some(_), None) => "TOP ONLY",
+        (None, Some(_)) => "BOTTOM ONLY",
+        (None, None) => "",
     };
-    let chips = vec![chip(&top), chip(&bottom)];
-    let value = match (top, bottom) {
-        (None, None) => "NONE".to_string(),
-        (Some(top), None) => format!("{} · TOP ONLY", top.name),
-        (None, Some(bottom)) => format!("{} · BOTTOM ONLY", bottom.name),
-        (Some(top), Some(bottom)) if top.name == bottom.name => {
-            format!("{} · BOTH SIDES", top.name)
-        }
-        (Some(top), Some(bottom)) => format!("{} TOP · {} BOTTOM", top.name, bottom.name),
+    let Some(ink) = top.or(bottom) else {
+        return SpecRow {
+            label,
+            chip: Some(Chip::Absent),
+            value: "NONE".to_string(),
+        };
     };
     SpecRow {
         label,
-        chips,
-        value,
+        chip: Some(ink.color.map_or(Chip::Unstated, Chip::Color)),
+        value: format!("{} · {sides}", ink.name),
     }
 }
 
@@ -544,38 +635,38 @@ pub fn specification(
     tools: &[DrillTool],
     board: BBox,
     array: Option<&ArrayData>,
-) -> Result<Vec<SpecRow>> {
+) -> Vec<SpecRow> {
     let mut rows = Vec::new();
-    let size = |bounds: BBox| format!("{} × {} mm", mm(bounds.width()), mm(bounds.height()));
     if let Some(array) = array {
         // What is delivered, before what each board of it is.
-        let boards = array.boards.len();
-        rows.push(row(
-            "DELIVERY",
-            format!(
-                "ARRAY OF {boards} · {} × {} mm",
-                mm(array.bounds.width()),
-                mm(array.bounds.height())
-            ),
-        ));
+        let (boards, size) = (array.boards.len(), size_mm(array.bounds));
+        rows.push(row("DELIVERY", format!("ARRAY OF {boards} · {size}")));
     }
-    rows.push(row("BOARD SIZE", size(board)));
+    rows.push(row("BOARD SIZE", size_mm(board)));
 
-    let stackup = source.accessor.stackup_details();
-    let stack = stackup.as_ref().map(stack_rows).unwrap_or_default();
-    let copper = stack
-        .iter()
+    let stackup = source.stackup.as_ref();
+    let copper = stackup
+        .map(stack_rows)
+        .unwrap_or_default()
+        .into_iter()
         .filter(|layer| layer.layer_type == StackupLayerType::Conductor)
         .collect::<Vec<_>>();
+    // A conductor the stackup gives no thickness and the data no artwork
+    // is a layer the board does not have.
+    let weighed = |layer: &FabLayer| {
+        let mut copper = copper.iter();
+        let row = copper.find(|row| row.name == layer.name);
+        row.is_some_and(|row| row.thickness_mm.is_some_and(|thickness| thickness > 0.0))
+    };
     let copper_layers = layers
         .iter()
-        .filter(|(layer, _)| layer.role == LayerRole::Copper)
+        .filter(|(layer, has_artwork)| {
+            layer.role == LayerRole::Copper && (*has_artwork || weighed(layer))
+        })
         .count();
     rows.push(row("COPPER LAYERS", copper_layers.to_string()));
 
-    let thickness = stackup
-        .as_ref()
-        .and_then(|stackup| stackup.overall_thickness_mm);
+    let thickness = source.thickness();
     if let Some(thickness) = thickness {
         let declared = source
             .ipc
@@ -586,10 +677,17 @@ pub fn specification(
             let (plus, minus) = (stackup.tol_plus?, stackup.tol_minus?);
             (plus > 0.0 || minus > 0.0).then(|| {
                 let unit = if stackup.tol_percent { " %" } else { "" };
+                let letter = |value: f64| {
+                    if stackup.tol_percent {
+                        value.to_string()
+                    } else {
+                        mm_fine(value)
+                    }
+                };
                 if (plus - minus).abs() < 1e-9 {
-                    format!(" ±{plus}{unit}")
+                    format!(" ±{}{unit}", letter(plus))
                 } else {
-                    format!(" +{plus}{unit} / -{minus}{unit}")
+                    format!(" +{}{unit} / -{}{unit}", letter(plus), letter(minus))
                 }
             })
         });
@@ -603,21 +701,19 @@ pub fn specification(
             "THICKNESS",
             format!(
                 "{} mm{}{over}",
-                mm(thickness),
+                mm_fine(thickness),
                 tolerance.unwrap_or_default()
             ),
         ));
     }
-    if let Some(materials) = source.accessor.material_info() {
-        rows.push(row("MATERIAL", materials.dielectric.join(", ")));
-    }
 
     // The outer layers' copper, then the inner layers' where there are any;
     // each as one weight where the layers agree.
-    let weights = |layers: &[&&&StackupLayerInfo]| {
+    let weights = |layers: &[&StackupLayerInfo]| {
         let mut weights = layers
             .iter()
-            .filter_map(|layer| layer.thickness_mm.map(copper_weight))
+            .filter_map(|layer| layer.thickness_mm.filter(|thickness| *thickness > 0.0))
+            .map(copper_weight)
             .collect::<Vec<_>>();
         weights.dedup();
         match weights.as_slice() {
@@ -627,33 +723,30 @@ pub fn specification(
         }
     };
     if let [top, inner @ .., bottom] = copper.as_slice() {
-        match (
-            weights(&[top, bottom]),
-            weights(&inner.iter().collect::<Vec<_>>()),
-        ) {
+        match (weights(&[*top, *bottom]), weights(inner)) {
             (Some(outer), Some(inner)) => {
                 rows.push(row("COPPER", format!("OUTER {outer} · INNER {inner}")));
             }
             (Some(outer), None) => rows.push(row("COPPER", outer)),
             _ => {}
         }
+    } else if let Some(only) = weights(&copper) {
+        rows.push(row("COPPER", only));
     }
 
-    let finish = stackup
-        .as_ref()
-        .and_then(|stackup| stackup.surface_finish.as_ref());
+    let finish = stackup.and_then(|stackup| stackup.surface_finish.as_ref());
     rows.push(match finish {
         Some(finish) => {
             let (red, green, blue) = finish.rgb_color();
             SpecRow {
                 label: "SURFACE FINISH",
-                chips: vec![Chip::Color(u32::from_be_bytes([0, red, green, blue]))],
+                chip: Some(Chip::Color(u32::from_be_bytes([0, red, green, blue]))),
                 value: finish.name.to_uppercase(),
             }
         }
         None => SpecRow {
             label: "SURFACE FINISH",
-            chips: vec![Chip::Unstated],
+            chip: Some(Chip::Unstated),
             value: UNSTATED.to_string(),
         },
     });
@@ -674,138 +767,33 @@ pub fn specification(
     };
     rows.push(sides_row("LEGEND", legend(Side::Top), legend(Side::Bottom)));
 
-    let holes = tools.iter().map(|tool| tool.hits.len()).sum::<usize>();
-    if let Some(smallest) = tools.first() {
-        // What plating has to reach: the board's thickness over its
-        // narrowest plated hole.
-        let plated = tools.iter().find(|tool| tool.kind != HoleKind::NonPlated);
-        let aspect = thickness
-            .zip(plated)
-            .map(|(thickness, tool)| format!(" · ASPECT {:.1}:1", thickness / tool.diameter))
-            .unwrap_or_default();
-        rows.push(row(
-            "HOLES",
+    let holes = match tools.first() {
+        None => "NONE".to_string(),
+        Some(smallest) => {
+            let size = |tool: &DrillTool| micrometres(tool.diameter);
+            let sizes = tools.iter().map(size).collect::<HashSet<_>>().len();
             format!(
-                "{holes} · {} SIZE{} · MIN Ø{}{aspect}",
-                tools.len(),
-                if tools.len() == 1 { "" } else { "S" },
+                "{} · {sizes} SIZE{} · MIN DIA {}",
+                hole_count(tools),
+                if sizes == 1 { "" } else { "S" },
                 mm_fine(smallest.diameter)
-            ),
-        ));
-    }
-    let vias = tools
-        .iter()
-        .filter(|tool| tool.kind == HoleKind::Via)
-        .map(|tool| tool.hits.len())
-        .sum::<usize>();
-    if vias > 0 {
-        let open = open_vias(source, tools)?;
-        let side = |side: Side| if side == Side::Top { "TOP" } else { "BOTTOM" };
-        let sides = if open.len() == 2 { " BOTH SIDES" } else { "" };
-        let value = if open.is_empty() {
-            None
-        } else if open.iter().all(|(_, open)| *open == 0) {
-            Some(format!("{vias} · TENTED{sides}"))
-        } else if open.iter().all(|(_, open)| *open == vias) {
-            Some(format!("{vias} · OPEN{sides}"))
-        } else {
-            let sides = open
-                .iter()
-                .map(|(at, open)| format!("{open} OPEN {}", side(*at)))
-                .collect::<Vec<_>>();
-            Some(format!("{vias} · {}", sides.join(" · ")))
-        };
-        rows.extend(value.map(|value| row("VIAS", value)));
-    }
-    if let Some(width) = min_track_width(source.imported)? {
-        rows.push(row(
-            "MIN TRACK",
-            format!("{} mm ({} mil) AS DRAWN", mm_fine(width), mil(width)),
-        ));
-    }
-
-    // Processes a fabricator prices apart, named only where the board has
-    // them.
-    let has = |test: &dyn Fn(&DrillTool) -> bool| tools.iter().any(test);
-    let cutouts = profile_occurrences_for(&source.imported.geometry, ProfileSet::BoardOutlines)
-        .iter()
-        .any(|occurrence| !occurrence.profile.cutouts.is_empty());
-    let special = [
-        (
-            has(&|tool| tool.kind != HoleKind::NonPlated && tool.slot_length.is_some()),
-            "PLATED SLOTS",
-        ),
-        (has(&|tool| tool.usage() == "BLIND VIA"), "BLIND VIAS"),
-        (has(&|tool| tool.usage() == "BURIED VIA"), "BURIED VIAS"),
-        (cutouts, "INTERNAL CUTOUTS"),
-    ];
-    let special = special
-        .into_iter()
-        .filter_map(|(present, name)| present.then_some(name))
-        .collect::<Vec<_>>();
-    if !special.is_empty() {
-        rows.push(row("SPECIAL", special.join(" · ")));
-    }
-    Ok(rows)
-}
-
-/// The narrowest track as drawn: the thinnest stroke on a copper layer that
-/// carries a net. Pours neck narrower than this where they must; lettering
-/// and graphics in copper carry no net and are not tracks.
-pub fn min_track_width(imported: &ImportedDesign) -> Result<Option<f64>> {
-    let mut narrowest = None::<f64>;
-    for (index, layer) in imported.layer_definitions.iter().enumerate() {
-        if !is_copper(layer.layer_function) {
-            continue;
+            )
         }
-        let doc = imported.materialize_layer(LayerId(index as u32), ArtworkScope::Board)?;
-        let widths = doc
-            .features
-            .iter()
-            .filter(|feature| feature.net.is_some())
-            .flat_map(|feature| feature.paths.indices())
-            .filter_map(|path| doc.arena.path(path).stroke())
-            .map(|stroke| stroke.width)
-            .filter(|width| *width > 0.0);
-        narrowest = widths.fold(narrowest, |narrowest, width| {
-            Some(narrowest.map_or(width, |narrowest| narrowest.min(width)))
-        });
-    }
-    Ok(narrowest)
+    };
+    rows.push(row("HOLES", holes));
+    rows
 }
 
-/// How the solder mask treats the board's vias: on each masked side, how
-/// many it leaves open. A via is open where its centre lies in an opening.
-pub fn open_vias(source: &Source<'_>, tools: &[DrillTool]) -> Result<Vec<(Side, usize)>> {
-    let imported = source.imported;
-    let vias = tools
-        .iter()
-        .filter(|tool| tool.kind == HoleKind::Via)
-        .flat_map(|tool| tool.hits.iter().map(Hit::center))
-        .collect::<Vec<_>>();
-    let mut open = Vec::new();
-    for (index, layer) in imported.layer_definitions.iter().enumerate() {
-        let side = ir_side(layer.side);
-        if layer_role(layer.layer_function) != LayerRole::Soldermask
-            || !matches!(side, Side::Top | Side::Bottom)
-        {
-            continue;
-        }
-        let doc = imported.materialize_layer(LayerId(index as u32), ArtworkScope::Board)?;
-        let openings =
-            doc.into_layer_image(0, LayerRole::Soldermask, Side::None, source.resolution)?;
-        let count = openings.contains_points_batch(&vias);
-        open.push((side, count.into_iter().filter(|open| *open).count()));
-    }
-    Ok(open)
-}
-
-/// A fiducial an array carries for the assembler.
-#[derive(Debug, Clone, Copy)]
+/// A fiducial an array carries for the assembler, on one side of it.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Fiducial {
     pub at: Point,
     pub diameter: f64,
     pub side: Side,
+    /// The board it stands beside, by its place in [`ArrayData::boards`]:
+    /// one set in a board's cell repeats with the board. One with none is
+    /// the array's own, on its border.
+    pub board: Option<usize>,
 }
 
 /// What an array adds around its boards.
@@ -823,6 +811,21 @@ pub struct ArrayData {
     pub tools: Vec<DrillTool>,
 }
 
+/// One breakaway tab of an array, to draw large enough to read.
+#[derive(Debug, Clone, Copy)]
+pub struct TabDetail {
+    /// The tab's perforations and the routed slots either side of them.
+    pub bounds: BBox,
+    /// The tool that drills the perforations, by its place among the
+    /// array's.
+    pub tool: usize,
+    /// How many perforations the tab has.
+    pub holes: usize,
+    pub diameter: f64,
+    /// Centre to centre of neighbouring perforations.
+    pub pitch: f64,
+}
+
 impl ArrayData {
     /// The array a design's primary step lays out, if it lays one out.
     pub fn of(source: &Source<'_>) -> Result<Option<Self>> {
@@ -832,22 +835,32 @@ impl ArrayData {
             return Ok(None);
         }
         let occurrences = profile_occurrences_for(geometry, ProfileSet::FabricationOutlines);
-        let bounds_of = |role: ProfileOccurrenceRole| {
-            occurrences
-                .iter()
-                .filter(|occurrence| occurrence.role == role)
-                .map(|occurrence| {
-                    geometry
-                        .transformed_path_bbox(occurrence.profile.outer_path, occurrence.transform)
-                })
-                .collect::<Vec<_>>()
+        let of_role = |role: ProfileOccurrenceRole| {
+            let occurrences = occurrences.iter();
+            occurrences.filter(move |occurrence| occurrence.role == role)
         };
-        let bounds = bounds_of(ProfileOccurrenceRole::RootPanel)
-            .into_iter()
+        let bbox = |occurrence: &ProfileOccurrence<'_>| {
+            geometry.transformed_path_bbox(occurrence.profile.outer_path, occurrence.transform)
+        };
+        let bounds = of_role(ProfileOccurrenceRole::RootPanel)
+            .map(bbox)
             .fold(BBox::empty(), BBox::union);
         if bounds.is_empty() {
             return Ok(None);
         }
+        // The step each board is placed in is its cell: what else that
+        // step carries is the board's.
+        let cells = of_role(ProfileOccurrenceRole::BoardInstance)
+            .enumerate()
+            .filter_map(|(board, occurrence)| {
+                let instance = geometry
+                    .layout
+                    .instances
+                    .get(occurrence.instance? as usize)?;
+                Some((instance.parent_instance?, board))
+            })
+            .collect::<HashMap<_, _>>();
+        let fiducials = fiducials(imported, &cells)?;
         let scores = crate::geometry::board_array_vscore_lines(imported)?;
         let profile = crate::geometry::board_array_fabrication_profile(
             imported,
@@ -861,11 +874,13 @@ impl ArrayData {
                 .board_layout_info()
                 .and_then(|layout| layout.board_array?.grid),
             bounds,
-            boards: bounds_of(ProfileOccurrenceRole::BoardInstance),
+            boards: of_role(ProfileOccurrenceRole::BoardInstance)
+                .map(bbox)
+                .collect(),
             outlines: profile.array_outlines,
             removal: profile.material_removal,
             scores,
-            fiducials: fiducials(imported)?,
+            fiducials,
             tools: drill_tools(imported, ArtworkScope::ArraySupport)?,
         }))
     }
@@ -880,20 +895,58 @@ impl ArrayData {
             (true, true) => "NONE",
         }
     }
-}
 
-/// One breakaway tab of an array, to draw large enough to read.
-#[derive(Debug, Clone, Copy)]
-pub struct TabDetail {
-    /// The tab's perforations and the routed slots either side of them.
-    pub bounds: BBox,
-    pub holes: usize,
-    pub diameter: f64,
-    /// Centre to centre of neighbouring perforations.
-    pub pitch: f64,
-}
+    /// The array's tooling holes: every hole of its own but the
+    /// perforations of its tabs, each with its tool, left to right.
+    pub fn tooling(&self) -> Vec<(Point, &DrillTool)> {
+        let perforations = self.tab().map(|tab| tab.tool);
+        let mut holes = self
+            .tools
+            .iter()
+            .enumerate()
+            .filter(|(tool, _)| perforations != Some(*tool))
+            .flat_map(|(_, tool)| tool.hits.iter().map(move |hit| (hit.center(), tool)))
+            .collect::<Vec<_>>();
+        holes.sort_by(|a, b| a.0.x.total_cmp(&b.0.x).then(a.0.y.total_cmp(&b.0.y)));
+        holes
+    }
 
-impl ArrayData {
+    /// The board nearest the array's middle, the one a drawing shows the
+    /// fiducials of: by its place in [`Self::boards`].
+    pub fn central_board(&self) -> Option<usize> {
+        let middle = self.bounds.center();
+        let reach = |board: usize| self.boards[board].center().distance_to(middle);
+        (0..self.boards.len()).min_by(|a, b| reach(*a).total_cmp(&reach(*b)))
+    }
+
+    /// The fiducials on `side` that each board has in its cell, placed
+    /// from the lower-left corner of the board's extents: those of the
+    /// central board where every board has the same, and nothing where
+    /// the boards differ.
+    pub fn board_fiducials(&self, side: Side) -> Option<Vec<Fiducial>> {
+        /// How far apart the same fiducial of two boards may measure.
+        const SAME: f64 = 0.002;
+        let of_board = |board: usize| {
+            let fiducials = self.fiducials.iter();
+            fiducials
+                .filter(move |fiducial| fiducial.board == Some(board) && fiducial.side == side)
+                .map(move |fiducial| Fiducial {
+                    at: fiducial.at - self.boards[board].min,
+                    ..*fiducial
+                })
+        };
+        let shown = of_board(self.central_board()?).collect::<Vec<_>>();
+        let alike = (0..self.boards.len()).all(|board| {
+            let own = of_board(board).collect::<Vec<_>>();
+            own.len() == shown.len()
+                && own.iter().all(|fiducial| {
+                    let mut shown = shown.iter();
+                    shown.any(|shown| shown.at.distance_to(fiducial.at) < SAME)
+                })
+        });
+        alike.then_some(shown)
+    }
+
     /// The perforated tab nearest the array's datum, where boards are held
     /// by tabs. Perforations are the array's smallest unplated holes, in
     /// rows a few diameters apart; holes that stand further apart are
@@ -904,23 +957,24 @@ impl ArrayData {
         if !self.scores.is_empty() || self.removal.is_empty() {
             return None;
         }
-        let tool = self
+        let (index, tool) = self
             .tools
             .iter()
-            .filter(|tool| tool.kind == HoleKind::NonPlated && tool.slot_length.is_none())
-            .filter(|tool| tool.hits.len() > 2)
-            .min_by(|a, b| a.diameter.total_cmp(&b.diameter))?;
+            .enumerate()
+            .filter(|(_, tool)| tool.kind == HoleKind::NonPlated && tool.slot_length.is_none())
+            .filter(|(_, tool)| tool.hits.len() > 2)
+            .min_by(|a, b| a.1.diameter.total_cmp(&b.1.diameter))?;
         let holes = tool.hits.iter().map(Hit::center).collect::<Vec<_>>();
-        let distance = |a: Point, b: Point| (a.x - b.x).hypot(a.y - b.y);
         let nearest = |from: Point| {
-            let others = holes.iter().filter(|hole| distance(**hole, from) > 0.0);
+            let others = holes.iter().map(|hole| hole.distance_to(from));
             others
-                .map(|hole| distance(*hole, from))
+                .filter(|distance| *distance > 0.0)
                 .min_by(f64::total_cmp)
         };
-        let first = *holes.iter().min_by(|a, b| {
-            distance(**a, self.bounds.min).total_cmp(&distance(**b, self.bounds.min))
-        })?;
+        let datum = self.bounds.min;
+        let first = *holes
+            .iter()
+            .min_by(|a, b| a.distance_to(datum).total_cmp(&b.distance_to(datum)))?;
         let pitch = nearest(first)?;
         if pitch > WIDEST_PITCH * tool.diameter {
             return None;
@@ -933,8 +987,8 @@ impl ArrayData {
             let from = tab[grown];
             grown += 1;
             for hole in &holes {
-                let near = distance(*hole, from) <= 1.5 * pitch;
-                if near && !tab.iter().any(|member| distance(*member, *hole) == 0.0) {
+                let near = hole.distance_to(from) <= 1.5 * pitch;
+                if near && !tab.iter().any(|member| member.distance_to(*hole) == 0.0) {
                     tab.push(*hole);
                 }
             }
@@ -947,6 +1001,7 @@ impl ArrayData {
         let half = bounds.width().max(bounds.height()) / 2.0 + 3.0;
         Some(TabDetail {
             bounds: BBox::from_point(bounds.center()).expand(half),
+            tool: index,
             holes: tab.len(),
             diameter: tool.diameter,
             pitch,
@@ -954,8 +1009,10 @@ impl ArrayData {
     }
 }
 
-/// The fiducials the array's rails and cells carry on their outer copper.
-fn fiducials(imported: &ImportedDesign) -> Result<Vec<Fiducial>> {
+/// The fiducials the array's own steps carry on their outer copper, each
+/// with the board whose cell it is in. `cells` maps a cell's step instance
+/// to its board.
+fn fiducials(imported: &ImportedDesign, cells: &HashMap<u32, usize>) -> Result<Vec<Fiducial>> {
     let mut fiducials = Vec::new();
     for (index, layer) in imported.layer_definitions.iter().enumerate() {
         let side = ir_side(layer.side);
@@ -963,17 +1020,35 @@ fn fiducials(imported: &ImportedDesign) -> Result<Vec<Fiducial>> {
             continue;
         }
         let doc = imported.materialize_layer(LayerId(index as u32), ArtworkScope::ArraySupport)?;
-        fiducials.extend(doc.features.iter().filter_map(|feature| {
-            let Some(SimpleShape::Circle { diameter }) = feature.shape else {
-                return None;
-            };
-            (feature.fiducial_kind != FiducialKind::Unknown).then_some(Fiducial {
-                at: feature.bbox.center(),
-                diameter,
-                side,
-            })
-        }));
+        let is_fiducial = |feature: &&Feature| feature.fiducial_kind != FiducialKind::Unknown;
+        fiducials.extend(
+            doc.features
+                .iter()
+                .filter(is_fiducial)
+                .filter_map(|feature| {
+                    let Some(SimpleShape::Circle { diameter }) = feature.shape else {
+                        return None;
+                    };
+                    Some(Fiducial {
+                        at: feature.bbox.center(),
+                        diameter,
+                        side,
+                        board: feature
+                            .source_instance
+                            .and_then(|cell| cells.get(&cell).copied()),
+                    })
+                }),
+        );
     }
+    // Top before bottom, then left to right: the order they are tagged in.
+    fiducials.sort_by(|a, b| {
+        let key =
+            |fiducial: &Fiducial| (fiducial.side == Side::Bottom, fiducial.at.x, fiducial.at.y);
+        let (a, b) = (key(a), key(b));
+        a.0.cmp(&b.0)
+            .then(a.1.total_cmp(&b.1))
+            .then(a.2.total_cmp(&b.2))
+    });
     Ok(fiducials)
 }
 
@@ -1004,10 +1079,20 @@ pub fn design_date(source: &Source<'_>) -> Option<String> {
 
 /// The drawing's notes: the few a fabricator is held to that the
 /// specification and the tables do not already state.
-pub fn notes(array: Option<&ArrayData>, requirements: &Requirements) -> Vec<String> {
-    let class = requirements.class;
+pub fn notes(source: &Source<'_>, array: Option<&ArrayData>) -> Vec<String> {
+    // A board built on polyimide is a flexible one, bought to its own
+    // standard.
+    let materials = source.accessor.material_info();
+    let flexible = materials.is_some_and(|materials| {
+        let mut names = materials.dielectric.iter();
+        names.any(|name| {
+            let name = name.to_lowercase();
+            name.contains("polyimide") || name.contains("kapton")
+        })
+    });
+    let standard = if flexible { "IPC-6013" } else { "IPC-6012" };
     let mut notes = vec![
-        format!("FABRICATE AND INSPECT TO IPC-6012 / IPC-A-600 CLASS {class}."),
+        format!("FABRICATE AND INSPECT TO {standard} / IPC-A-600 CLASS {CLASS}."),
         "DESIGN DATA GOVERNS. DIMENSIONS ARE mm, FOR REFERENCE.".to_string(),
         "100 % ELECTRICAL TEST AGAINST THE NETLIST.".to_string(),
         "DO NOT ADD OR REMOVE COPPER WITHOUT APPROVAL.".to_string(),

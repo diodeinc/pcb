@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use anyhow::Context as _;
 
 use pcb_ir::geom::{BBox, Point};
-use pcb_ir::render::pdf::{PdfForm, deflate};
+use pcb_ir::render::{artwork_pdf_form, deflate};
 use pdf_writer::types::{CidFontType, FontFlags, SystemInfo, UnicodeCmap};
 use pdf_writer::{Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 use subsetter::GlyphRemapper;
@@ -40,8 +40,8 @@ impl Default for Typeface {
     /// The face pcb bundles: Roboto Mono.
     fn default() -> Self {
         Self {
-            regular: Cow::Borrowed(pcb_fonts::ROBOTO_MONO_REGULAR),
-            bold: Cow::Borrowed(pcb_fonts::ROBOTO_MONO_BOLD),
+            regular: Cow::Borrowed(include_bytes!("../../fonts/RobotoMono-Regular.ttf")),
+            bold: Cow::Borrowed(include_bytes!("../../fonts/RobotoMono-Bold.ttf")),
         }
     }
 }
@@ -124,6 +124,16 @@ impl Fonts {
         lines
     }
 
+    /// `style` at the size `text` fits `room` in: text too long for its room
+    /// is set smaller rather than run into what stands beside it.
+    pub fn fitted(&self, style: TextStyle, text: &str, room: f64) -> TextStyle {
+        let natural = self.width(style.weight, style.size, text);
+        TextStyle {
+            size: style.size * (room / natural).min(1.0),
+            ..style
+        }
+    }
+
     /// `text` as the glyph codes of the embedded subset, in hexadecimal.
     fn encode(&self, weight: Weight, text: &str) -> String {
         let face = self.face(weight);
@@ -166,10 +176,14 @@ impl FontFace {
             .chars()
             .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
             .collect();
+        // A face that states no cap height, or states nothing for one, is
+        // sized by its ascender.
+        let stated = face.capital_height().filter(|height| *height > 0);
         let (units_per_em, cap_height) = (
             f64::from(face.units_per_em()),
-            f64::from(face.capital_height().unwrap_or(face.ascender())),
+            f64::from(stated.unwrap_or(face.ascender())),
         );
+        anyhow::ensure!(cap_height > 0.0, "font has no height to letter at");
         Ok(Self {
             name,
             units_per_em,
@@ -295,9 +309,9 @@ impl FontFace {
 /// How a line is drawn.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pen {
-    pub width: f64,
-    pub color: u32,
-    pub dash: Dash,
+    width: f64,
+    color: u32,
+    dash: Dash,
 }
 
 impl Pen {
@@ -373,6 +387,9 @@ impl TextStyle {
     }
 }
 
+/// Artwork plotted into a document, for its pages to place.
+pub type Plot = Ref;
+
 /// One page as it is drawn.
 pub struct Canvas<'a> {
     pub fonts: &'a Fonts,
@@ -412,12 +429,14 @@ impl<'a> Canvas<'a> {
         let width = pen.width;
         let dash = match pen.dash {
             Dash::Solid => "[] 0 d".to_string(),
+            // The proportions artwork draws a centre line in, so a key's
+            // sample is the line the view shows.
             Dash::Chain => format!(
                 "[{} {} {} {}] 0 d",
-                number(40.0 * width),
-                number(8.0 * width),
-                number(8.0 * width),
-                number(8.0 * width)
+                number(6.0 * width),
+                number(2.0 * width),
+                number(width),
+                number(2.0 * width)
             ),
         };
         writeln!(
@@ -532,8 +551,8 @@ impl<'a> Canvas<'a> {
 
     /// Place a plot so that the artwork point `anchor` lands on `at`, drawn
     /// at `scale`.
-    pub fn place(&mut self, form: PdfForm, anchor: Point, at: Point, scale: f64) {
-        let name = format!("X{}", form.id.get());
+    pub fn place(&mut self, plot: Plot, anchor: Point, at: Point, scale: f64) {
+        let name = format!("X{}", plot.get());
         writeln!(
             self.ops,
             "q {scale} 0 0 {scale} {} {} cm /{name} Do Q",
@@ -542,7 +561,7 @@ impl<'a> Canvas<'a> {
             scale = number(scale),
         )
         .unwrap();
-        self.forms.insert(name, form.id);
+        self.forms.insert(name, plot);
     }
 }
 
@@ -591,8 +610,8 @@ impl Document {
         &mut self,
         artwork: &pcb_ir::dialects::artwork::Document<LayerMeta, ObjectMeta>,
         options: &pcb_ir::render::RenderOptions,
-    ) -> Result<PdfForm, pcb_ir::geom::AccuracyError> {
-        pcb_ir::render::pdf::artwork_pdf_form(&mut self.pdf, &mut self.alloc, artwork, options)
+    ) -> Result<Plot, pcb_ir::geom::AccuracyError> {
+        artwork_pdf_form(&mut self.pdf, &mut self.alloc, artwork, options)
     }
 
     /// Append a page `width` by `height` millimetres, bookmarked as `name`.

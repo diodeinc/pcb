@@ -9,7 +9,7 @@ use crate::geom::path::PathCmd;
 use crate::geom::{
     Affine2, BBox, FillRule, LineCap, Path, PathArena, Point, Polarity, StrokeStyle,
 };
-use crate::render::{Drawn, LayerStyle, RenderOptions};
+use crate::render::{Drawn, LayerStyle, Num, PlacementScales, RenderOptions};
 
 /// Render mask layers to an SVG document (millimeter units, y-up source
 /// coordinates flipped for screen display).
@@ -107,56 +107,6 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
     writeln!(svg, "  <defs>\n{defs}  </defs>").unwrap();
     svg.push_str(&body);
     Ok(close_svg(svg))
-}
-
-/// The largest scale at which each aperture and block is placed, through
-/// every chain of instances that reaches it; `None` where nothing does.
-pub(crate) struct PlacementScales {
-    pub(crate) apertures: Vec<Option<f64>>,
-    pub(crate) blocks: Vec<Option<f64>>,
-}
-
-impl PlacementScales {
-    pub(crate) fn of<LayerMeta, ObjectMeta>(
-        doc: &artwork::Document<LayerMeta, ObjectMeta>,
-        layers: &[usize],
-    ) -> Self {
-        let mut scales = Self {
-            apertures: vec![None; doc.apertures.len()],
-            blocks: vec![None; doc.blocks.len()],
-        };
-        for &layer in layers {
-            scales.place(doc.layers[layer].objects.slice(&doc.objects), 1.0);
-        }
-        // Blocks reference only earlier blocks, so one backward sweep has
-        // every block's scale settled before its children read it.
-        for index in (0..doc.blocks.len()).rev() {
-            if let Some(scale) = scales.blocks[index] {
-                scales.place(&doc.blocks[index].objects, scale);
-            }
-        }
-        scales
-    }
-
-    fn place<ObjectMeta>(&mut self, objects: &[artwork::Object<ObjectMeta>], scale: f64) {
-        for object in objects {
-            let (slot, placement) = match object.geometry {
-                Geometry::Flash {
-                    aperture,
-                    transform,
-                } => (self.apertures.get_mut(aperture as usize), transform),
-                Geometry::Instance { block, transform }
-                | Geometry::GridInstance {
-                    block, transform, ..
-                } => (self.blocks.get_mut(block as usize), transform),
-                Geometry::Stroke { .. } | Geometry::Region { .. } => continue,
-            };
-            if let Some(slot) = slot {
-                let placed = scale * placement.max_scale();
-                *slot = Some(slot.map_or(placed, |largest| largest.max(placed)));
-            }
-        }
-    }
 }
 
 fn write_artwork_layer<LayerMeta, ObjectMeta>(
@@ -343,31 +293,14 @@ fn line_cap_name(cap: LineCap) -> &'static str {
     }
 }
 
-/// A placement as a `transform` attribute. The linear part multiplies every
-/// coordinate it places, so it keeps nine decimals where points keep six.
+/// A placement as a `transform` attribute.
 struct SvgTransform(Affine2);
 
 impl std::fmt::Display for SvgTransform {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Affine2 {
-            m00,
-            m01,
-            m02,
-            m10,
-            m11,
-            m12,
-        } = self.0;
-        let linear = |value| Num { value, decimals: 9 };
-        write!(
-            f,
-            " transform='matrix({} {} {} {} {} {})'",
-            linear(m00),
-            linear(m10),
-            linear(m01),
-            linear(m11),
-            num(m02),
-            num(m12),
-        )
+        let [a, b, c, d] = crate::render::linear(self.0);
+        let (x, y) = (num(self.0.m02), num(self.0.m12));
+        write!(f, " transform='matrix({a} {b} {c} {d} {x} {y})'")
     }
 }
 
@@ -505,41 +438,8 @@ fn escape_xml(input: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-/// A number in fixed notation with trailing zeros trimmed, written without
-/// allocating: a layer's path data is millions of these.
-pub(crate) struct Num {
-    pub(crate) value: f64,
-    pub(crate) decimals: u32,
-}
-
 fn num(value: f64) -> Num {
     Num { value, decimals: 6 }
-}
-
-impl std::fmt::Display for Num {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let unit = 10_u64.pow(self.decimals);
-        let scaled = (self.value.abs() * unit as f64).round();
-        // Past the exact integers, or not a number at all.
-        if scaled.is_nan() || scaled >= 9.0e15 {
-            return write!(f, "{}", self.value);
-        }
-        let scaled = scaled as u64;
-        let (whole, mut fraction) = (scaled / unit, scaled % unit);
-        if self.value < 0.0 && scaled != 0 {
-            f.write_str("-")?;
-        }
-        write!(f, "{whole}")?;
-        if fraction != 0 {
-            let mut digits = self.decimals as usize;
-            while fraction % 10 == 0 {
-                fraction /= 10;
-                digits -= 1;
-            }
-            write!(f, ".{fraction:0digits$}")?;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

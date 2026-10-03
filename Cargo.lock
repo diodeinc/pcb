@@ -3789,10 +3789,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pcb-fonts"
-version = "0.4.68"
-
-[[package]]
 name = "pcb-intern"
 version = "0.1.0"
 
@@ -3848,7 +3844,6 @@ dependencies = [
  "minijinja",
  "natord",
  "pcb-diode-api",
- "pcb-fonts",
  "pcb-ir",
  "pcb-sch",
  "pcb-ui",
@@ -4055,7 +4050,6 @@ dependencies = [
  "glam 0.33.6",
  "kurbo",
  "memchr",
- "pcb-fonts",
  "pcb-ir",
  "rustybuzz",
  "zstd",

@@ -49,7 +49,6 @@ pcb-diode-uri = { path = "crates/pcb-diode-uri" }
 pcb-native-dialog = { path = "crates/pcb-native-dialog" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools", default-features = false }
 pcb-step = { path = "crates/pcb-step" }
-pcb-fonts = { path = "crates/pcb-fonts" }
 
 anyhow = "1.0"
 anstream = "1.0"

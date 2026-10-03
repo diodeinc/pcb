@@ -15,20 +15,23 @@ use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 use pcb_ir::render::LayerStyle;
 
 use super::data::{
-    ArrayData, DrillTool, FabLayer, Hit, HoleKind, Source, copper_order, mm, mm_fine, span_layers,
+    ArrayData, DrillTool, FabLayer, Hit, Source, copper_order, micrometres, mm, mm_fine,
+    span_layers,
 };
 use super::pdf::{Align, Canvas, Fonts, INK, Pen, TextStyle, Weight};
-use super::sheet::{BODY, HAIR, HEADING, LABEL, MEDIUM, THICK, THIN};
+use super::sheet::{BODY, HAIR, HEADING, HEAVY, LABEL, MEDIUM, THIN};
 use super::symbols::symbol;
 use crate::geometry::render::layer_objects;
 use crate::geometry::step_artwork::root_step;
 use crate::layers::layer_role;
 
-pub type ViewArtwork = artwork::Document<(), Option<Symbol>>;
+type ViewArtwork = artwork::Document<(), Option<Symbol>>;
 type ViewObject = Object<Option<Symbol>>;
 
-/// Size of a drill symbol on the sheet.
+/// Size of a drill symbol on the sheet, and the smallest one is drawn
+/// where holes crowd.
 pub const SYMBOL_SIZE: f64 = 1.5;
+const SMALLEST_SYMBOL: f64 = 0.7;
 
 const fn ink(color: u32) -> LayerStyle {
     LayerStyle {
@@ -37,20 +40,15 @@ const fn ink(color: u32) -> LayerStyle {
     }
 }
 
-/// Copper, in every view that shows it.
-pub const COPPER: u32 = 0xa0501c;
-/// A board whose mask the design does not colour.
-pub const UNCOLOURED: u32 = 0xbdbdbd;
-
 const BLACK: LayerStyle = ink(INK);
-/// Material an array has routed away.
-const ROUTED: LayerStyle = ink(0xd4d4d4);
+/// The grey of material an array has routed away.
+pub const ROUTED: u32 = 0xd4d4d4;
 
 /// The ratio a view is drawn at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scale {
-    pub drawn: u32,
-    pub actual: u32,
+    drawn: u32,
+    actual: u32,
 }
 
 impl Scale {
@@ -67,6 +65,8 @@ impl Scale {
         Scale::down(10),
         Scale::down(20),
     ];
+    /// Full size.
+    pub const FULL: Scale = Scale::up(1);
 
     const fn up(drawn: u32) -> Self {
         Self { drawn, actual: 1 }
@@ -163,10 +163,11 @@ impl View {
         );
     }
 
-    fn fill(&mut self, layer: u32, contours: Vec<ContourBuf>, rule: FillRule) {
+    fn fill(&mut self, layer: u32, contours: Vec<ContourBuf>) {
         if contours.is_empty() {
             return;
         }
+        let rule = FillRule::NonZero;
         let path = self.artwork.push_path(Paint::Fill { rule }, contours);
         self.artwork.push_object(
             layer,
@@ -218,16 +219,17 @@ pub struct OutlineFeatures {
     pub edges_x: Vec<f64>,
     pub edges_y: Vec<f64>,
     /// Corner radii with how many corners have each, the commonest first.
-    pub radii: Vec<(f64, usize)>,
+    radii: Vec<(f64, usize)>,
 }
 
 impl OutlineFeatures {
     /// Edges shorter than this are detail the data states, not the drawing.
     const SHORTEST_EDGE: f64 = 1.0;
+    /// How far off its axis an edge may run, as a share of its length.
+    const OFF_AXIS: f64 = 2e-3;
 
     /// The features of an outline given as its outer contour followed by
-    /// its cutouts. Corners are the outer contour's: an arc of a cutout is
-    /// that cutout's shape, which the data states.
+    /// its cutouts. Edges and corners are the outer contour's.
     pub fn of(contours: &[ContourBuf]) -> Self {
         let mut features = Self::default();
         let mut radii = std::collections::BTreeMap::<i64, usize>::new();
@@ -237,24 +239,29 @@ impl OutlineFeatures {
         });
         for (outer, segment) in segments {
             match segment {
-                pcb_ir::geom::Segment::Line { start, end } => {
+                // A cutout's edges are its own shape, which the data states;
+                // an ordinate to one would point at nothing on the outline.
+                pcb_ir::geom::Segment::Line { start, end } if outer => {
                     let run = end - start;
-                    if run.x.hypot(run.y) < Self::SHORTEST_EDGE {
+                    let length = run.length();
+                    if length < Self::SHORTEST_EDGE {
                         continue;
                     }
-                    if run.x.abs() < 1e-6 {
-                        features.edges_x.push(start.x);
-                    } else if run.y.abs() < 1e-6 {
-                        features.edges_y.push(start.y);
+                    // An edge a layout tool left a few micrometres off its
+                    // axis is still that edge.
+                    let middle = (start + end) * 0.5;
+                    if run.x.abs() <= Self::OFF_AXIS * length {
+                        features.edges_x.push(middle.x);
+                    } else if run.y.abs() <= Self::OFF_AXIS * length {
+                        features.edges_y.push(middle.y);
                     }
                 }
+                pcb_ir::geom::Segment::Line { .. } => {}
                 // A corner turns the outline by no more than a right angle;
                 // a longer arc is a feature of its own.
                 pcb_ir::geom::Segment::Arc(arc) => {
                     if outer && arc.sweep_radians() <= 100.0_f64.to_radians() {
-                        *radii
-                            .entry((arc.radius() * 1000.0).round() as i64)
-                            .or_default() += 1;
+                        *radii.entry(micrometres(arc.radius())).or_default() += 1;
                     }
                 }
                 pcb_ir::geom::Segment::Ellipse(_) => {}
@@ -272,7 +279,7 @@ impl OutlineFeatures {
 
     /// The corner radii as a drawing letters them, where the outline has
     /// few enough to say.
-    pub fn radii_note(&self) -> Option<String> {
+    pub fn radii(&self) -> Option<String> {
         if self.radii.is_empty() || self.radii.len() > 3 {
             return None;
         }
@@ -281,7 +288,7 @@ impl OutlineFeatures {
             .iter()
             .map(|(radius, count)| format!("{count}X R{}", mm_fine(*radius)))
             .collect::<Vec<_>>();
-        Some(format!("CORNER RADII {}", radii.join(", ")))
+        Some(radii.join(", "))
     }
 }
 
@@ -292,7 +299,7 @@ fn segment(from: Point, to: Point) -> ContourBuf {
 /// The edge of a slot `diameter` wide along the centre line `start..end`.
 fn slot_outline(start: Point, end: Point, diameter: f64) -> ContourBuf {
     let run = end - start;
-    let along = run / run.x.hypot(run.y);
+    let along = run / run.length();
     let across = Point::new(-along.y, along.x) * (diameter / 2.0);
     ContourBuf::new(vec![
         PathCmd::move_to(start + across),
@@ -311,7 +318,7 @@ pub enum HoleMarks<'a> {
     /// and its edge where that stands clear of the symbol. Around a smaller
     /// hole an edge would read as part of the symbol.
     Symbols(&'a [usize]),
-    /// Each hole's edge alone: a detail, drawn large enough to show it.
+    /// Each hole's edge alone.
     Edges,
 }
 
@@ -349,19 +356,63 @@ fn draw_tools(view: &mut View, tools: &[DrillTool], marks: HoleMarks<'_>, scale:
         return;
     };
     let marks = view.layer("Symbols", LayerRole::Drill, BLACK);
-    for (tool, &index) in tools.iter().zip(symbols) {
-        let mark = view.artwork.push_aperture(symbol_aperture(index, scale));
+    let sizes = symbol_sizes(tools, scale);
+    for ((tool, &index), size) in tools.iter().zip(symbols).zip(sizes) {
+        let mark = view
+            .artwork
+            .push_aperture(symbol_aperture(index, size / scale));
         for hit in &tool.hits {
             view.flash(marks, mark, hit.center());
         }
     }
 }
 
-/// A drill symbol as an aperture that images at [`SYMBOL_SIZE`] on a sheet
-/// drawn at `scale`.
-pub fn symbol_aperture(index: usize, scale: f64) -> Aperture {
+/// The size on the sheet of each tool's symbol: the size the table shows
+/// it at, or smaller where the tool's holes stand closer to their
+/// neighbours than that, so a field of them reads as holes and not as a
+/// hatch.
+fn symbol_sizes(tools: &[DrillTool], scale: f64) -> Vec<f64> {
+    /// How much of the way to its neighbour a symbol takes.
+    const FILL: f64 = 0.85;
+    // No hole further from its neighbours than this needs a smaller symbol.
+    let reach = SYMBOL_SIZE / FILL / scale;
+    let mut holes = tools
+        .iter()
+        .enumerate()
+        .flat_map(|(tool, drill)| drill.hits.iter().map(move |hit| (hit.center(), tool)))
+        .collect::<Vec<_>>();
+    holes.sort_by(|a, b| a.0.x.total_cmp(&b.0.x));
+    // Each hole's distance to its nearest neighbour of any tool, by tool.
+    let mut nearest = vec![Vec::new(); tools.len()];
+    for (index, (at, tool)) in holes.iter().enumerate() {
+        let within = |other: &&(Point, usize)| (other.0.x - at.x).abs() <= reach;
+        let before = holes[..index].iter().rev().take_while(within);
+        let after = holes[index + 1..].iter().take_while(within);
+        let distance = before
+            .chain(after)
+            .map(|(other, _)| at.distance_to(*other))
+            .fold(reach, f64::min);
+        nearest[*tool].push(distance);
+    }
+    nearest
+        .into_iter()
+        .map(|mut distances| {
+            // The crowding of a tool's closest tenth: a few tight pairs do
+            // not shrink a symbol that stands clear everywhere else.
+            distances.sort_by(f64::total_cmp);
+            let crowded = distances
+                .get(distances.len() / 10)
+                .copied()
+                .unwrap_or(reach);
+            (FILL * crowded * scale).clamp(SMALLEST_SYMBOL, SYMBOL_SIZE)
+        })
+        .collect()
+}
+
+/// A drill symbol as an aperture `size` across.
+fn symbol_aperture(index: usize, size: f64) -> Aperture {
     Aperture::solid(ApertureShape::Contour {
-        outline: symbol(index, SYMBOL_SIZE / scale),
+        outline: symbol(index, size),
         fill_rule: FillRule::NonZero,
     })
 }
@@ -370,62 +421,56 @@ pub fn symbol_aperture(index: usize, scale: f64) -> Aperture {
 pub fn symbol_view(index: usize) -> Result<View> {
     let mut view = View::new();
     let layer = view.layer("Symbol", LayerRole::Drill, BLACK);
-    let mark = view.artwork.push_aperture(symbol_aperture(index, 1.0));
+    let mark = view
+        .artwork
+        .push_aperture(symbol_aperture(index, SYMBOL_SIZE));
     view.flash(layer, mark, Point::ZERO);
     view.finish()
 }
 
-/// A board's outline with the holes that are part of its shape: every
-/// hole but the vias, each by its edge.
-pub fn outline_view(source: &Source<'_>, tools: &[DrillTool], scale: f64) -> Result<View> {
-    let mut view = View::new();
-    let (contours, _) = outline(source.imported, ProfileSet::BoardOutlines);
-    let profile = view.layer("Profile", LayerRole::Profile, BLACK);
-    view.stroke(profile, contours, StrokeStyle::round(MEDIUM / scale));
-    let mechanical = tools
-        .iter()
-        .filter(|tool| tool.kind != HoleKind::Via)
-        .cloned()
-        .collect::<Vec<_>>();
-    draw_tools(&mut view, &mechanical, HoleMarks::Edges, scale);
-    view.finish()
-}
-
-/// A board's outline and its drill pattern.
-pub fn drill_view(
-    source: &Source<'_>,
+/// A board's outline with the holes of `tools`, marked as `marks` says.
+pub fn board_view(
+    outline: &[ContourBuf],
     tools: &[DrillTool],
-    symbols: &[usize],
+    marks: HoleMarks<'_>,
     scale: f64,
 ) -> Result<View> {
     let mut view = View::new();
-    let (contours, _) = outline(source.imported, ProfileSet::BoardOutlines);
     let profile = view.layer("Profile", LayerRole::Profile, BLACK);
-    view.stroke(profile, contours, StrokeStyle::round(MEDIUM / scale));
-    draw_tools(&mut view, tools, HoleMarks::Symbols(symbols), scale);
+    view.stroke(
+        profile,
+        outline.to_vec(),
+        StrokeStyle::round(MEDIUM / scale),
+    );
+    draw_tools(&mut view, tools, marks, scale);
     view.finish()
 }
 
+/// Lay an array's outline over `view` in a heavy line, and its boards' in
+/// a thin one, so the two are never taken for each other.
+fn array_outlines(view: &mut View, source: &Source<'_>, array: &ArrayData, scale: f64) {
+    let (boards, _) = outline(source.imported, ProfileSet::FabricationOutlines);
+    let profile = view.layer("Profile", LayerRole::Profile, BLACK);
+    view.stroke(profile, boards, StrokeStyle::round(THIN / scale));
+    for contours in &array.outlines {
+        view.stroke(profile, contours.clone(), StrokeStyle::round(HEAVY / scale));
+    }
+}
+
 /// An array as it is fabricated: its outline and its boards', what is
-/// routed out of it, where it is scored, and the tooling it carries.
+/// routed out of it, where it is scored, and the holes of its own.
 pub fn array_view(source: &Source<'_>, array: &ArrayData, scale: f64) -> Result<View> {
     let mut view = View::new();
 
-    let routed = view.layer("Routed", LayerRole::Other, ROUTED);
-    view.fill(routed, array.removal.clone(), FillRule::NonZero);
+    let routed = view.layer("Routed", LayerRole::Other, ink(ROUTED));
+    view.fill(routed, array.removal.clone());
     let routed_edge = view.layer("Routed edge", LayerRole::Other, BLACK);
     view.stroke(
         routed_edge,
         array.removal.clone(),
         StrokeStyle::round(THIN / scale),
     );
-
-    let (boards, _) = outline(source.imported, ProfileSet::FabricationOutlines);
-    let profile = view.layer("Profile", LayerRole::Profile, BLACK);
-    view.stroke(profile, boards, StrokeStyle::round(MEDIUM / scale));
-    for contours in &array.outlines {
-        view.stroke(profile, contours.clone(), StrokeStyle::round(THICK / scale));
-    }
+    array_outlines(&mut view, source, array, scale);
 
     // A score runs edge to edge; drawn a little past both, it reads as a
     // line of cut rather than an edge.
@@ -433,7 +478,7 @@ pub fn array_view(source: &Source<'_>, array: &ArrayData, scale: f64) -> Result<
     let overrun = 4.0 / scale;
     for line in &array.scores {
         let run = line.end - line.start;
-        let along = run / run.x.hypot(run.y) * overrun;
+        let along = run / run.length() * overrun;
         view.stroke(
             scores,
             vec![segment(line.start - along, line.end + along)],
@@ -444,47 +489,85 @@ pub fn array_view(source: &Source<'_>, array: &ArrayData, scale: f64) -> Result<
         );
     }
 
-    // A fiducial is a copper dot: the top side's solid, the bottom's in
-    // outline.
-    let fiducials = view.layer("Fiducials", LayerRole::Other, BLACK);
-    for fiducial in &array.fiducials {
-        let wall = THIN / scale;
-        let dot = match fiducial.side {
-            Side::Bottom => Aperture {
-                shape: ApertureShape::Circle {
-                    diameter: fiducial.diameter,
-                },
-                hole_diameter: (fiducial.diameter - 2.0 * wall).max(0.0),
-            },
-            _ => Aperture::circle(fiducial.diameter),
-        };
-        let dot = view.artwork.push_aperture(dot);
-        view.flash(fiducials, dot, fiducial.at);
-    }
-
     draw_tools(&mut view, &array.tools, HoleMarks::Edges, scale);
     view.finish()
 }
 
-/// One fabrication layer as it images, still to be [`View::outlined`]: its
-/// artwork in `ink`, over the board it is printed on filled in `ground`
-/// where the layer is seen against one, with every hole that passes through
-/// it left open. Returns the view and whether the layer has artwork of its
-/// own.
-pub fn layer_view(
-    source: &Source<'_>,
-    layer: &FabLayer,
-    board: bool,
-    ink: u32,
-    ground: Option<(u32, Vec<ContourBuf>)>,
-) -> Result<(View, bool)> {
-    let imported = source.imported;
-    let root = root_step(imported, board)?;
+/// An array with nothing drawn but its outline, its boards and what is
+/// routed out of it: what a sheet draws its tooling holes and fiducials
+/// over.
+pub fn tooling_view(source: &Source<'_>, array: &ArrayData, scale: f64) -> Result<View> {
     let mut view = View::new();
-    if let Some((color, silhouette)) = ground {
-        let ground = view.layer("Board", LayerRole::Other, self::ink(color));
-        view.fill(ground, silhouette, FillRule::EvenOdd);
+    let routed = view.layer("Routed", LayerRole::Other, ink(ROUTED));
+    view.fill(routed, array.removal.clone());
+    array_outlines(&mut view, source, array, scale);
+    view.finish()
+}
+
+/// What an array carries for whoever handles it, each drawn with a mark of
+/// its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    /// A hole in the border: a circle on a centre cross.
+    Tooling,
+    /// A fiducial of the array's own: a dot in a ring.
+    ArrayFiducial,
+    /// A fiducial beside a board: a dot.
+    BoardFiducial,
+}
+
+/// Sizes of the marks on the sheet: the radius of a tooling hole drawn no
+/// smaller than reads and the reach of its cross, and the radii of a
+/// fiducial's dot and of the ring round one of the array's own.
+const TOOLING_RADIUS: f64 = 0.7;
+const TOOLING_REACH: f64 = 1.5;
+const FIDUCIAL_DOT: f64 = 0.4;
+const FIDUCIAL_RING: f64 = 0.9;
+
+impl Mark {
+    /// How far the mark reaches from its centre: where a leader to it ends
+    /// and a tag beside it starts.
+    pub fn reach(self) -> f64 {
+        match self {
+            Self::Tooling => TOOLING_REACH,
+            Self::ArrayFiducial => FIDUCIAL_RING,
+            Self::BoardFiducial => FIDUCIAL_DOT,
+        }
     }
+
+    /// Draw the mark on the sheet at `at`. A tooling hole is drawn at its
+    /// own size where that reads: `hole` is its radius on the sheet.
+    pub fn draw(self, canvas: &mut Canvas<'_>, at: Point, hole: f64) {
+        // A ring's line lies inside its radius, as the edge of a hole does.
+        let ring = |canvas: &mut Canvas<'_>, radius: f64| {
+            canvas.circle(at, radius - THIN / 2.0, Pen::solid(THIN));
+        };
+        match self {
+            Self::Tooling => {
+                let radius = hole.max(TOOLING_RADIUS);
+                ring(canvas, radius);
+                let reach = radius + TOOLING_REACH - TOOLING_RADIUS;
+                for arm in [Point::new(reach, 0.0), Point::new(0.0, reach)] {
+                    canvas.line(at - arm, at + arm, Pen::solid(HAIR));
+                }
+            }
+            Self::ArrayFiducial => {
+                canvas.fill_circle(at, FIDUCIAL_DOT, INK);
+                ring(canvas, FIDUCIAL_RING);
+            }
+            Self::BoardFiducial => canvas.fill_circle(at, FIDUCIAL_DOT, INK),
+        }
+    }
+}
+
+/// One fabrication layer of the board as it images, still to be
+/// [`View::outlined`]: its artwork in `color`, a copper layer with every hole
+/// that passes through it left open. Returns the view and whether the layer
+/// has artwork of its own.
+pub fn layer_view(source: &Source<'_>, layer: &FabLayer, color: u32) -> Result<(View, bool)> {
+    let imported = source.imported;
+    let root = root_step(imported, true)?;
+    let mut view = View::new();
     let (staged, has_content) = layer_objects(
         imported,
         layer.id,
@@ -495,43 +578,43 @@ pub fn layer_view(
     let mut objects = staged.into_iter().flatten().collect::<Vec<_>>();
 
     // A hole images only on its own layer, so the drill layers that reach
-    // this one are laid over it: mask and legend lie on the outer copper.
-    let copper = copper_order(imported);
-    let this = match (layer.number, layer.side) {
-        (Some(number), _) => number,
-        (None, Side::Bottom) => copper.len().max(1),
-        (None, _) => 1,
-    };
-    for (index, drill) in imported.layer_definitions.iter().enumerate() {
-        if layer_role(drill.layer_function) != LayerRole::Drill {
-            continue;
+    // a copper layer are laid over it. A mask or a legend shows what is
+    // printed: a hole under an opening is in the opening, and one the mask
+    // covers is covered.
+    if let Some(this) = layer.number.filter(|_| layer.role == LayerRole::Copper) {
+        let copper = copper_order(imported);
+        for (index, drill) in imported.layer_definitions.iter().enumerate() {
+            if layer_role(drill.layer_function) != LayerRole::Drill {
+                continue;
+            }
+            let span = drill
+                .span
+                .map_or(FeatureSpan::ThroughBoard, |span| FeatureSpan::FromTo {
+                    from: span.from_layer,
+                    to: span.to_layer,
+                });
+            let (from, to) = span_layers(imported, &copper, span);
+            if !(from..=to).contains(&this) {
+                continue;
+            }
+            let (holes, _) = layer_objects(
+                imported,
+                LayerId(index as u32),
+                root,
+                &mut view.artwork,
+                source.resolution,
+            )?;
+            objects.extend(holes.into_iter().flatten().map(|mut hole| {
+                hole.order.stage = PaintStage::FinalCutout;
+                hole
+            }));
         }
-        let span = drill
-            .span
-            .map_or(FeatureSpan::ThroughBoard, |span| FeatureSpan::FromTo {
-                from: span.from_layer,
-                to: span.to_layer,
-            });
-        let (from, to) = span_layers(imported, &copper, span);
-        if !(from..=to).contains(&this) {
-            continue;
-        }
-        let (holes, _) = layer_objects(
-            imported,
-            LayerId(index as u32),
-            root,
-            &mut view.artwork,
-            source.resolution,
-        )?;
-        objects.extend(holes.into_iter().flatten().map(|mut hole| {
-            hole.order.stage = PaintStage::FinalCutout;
-            hole
-        }));
     }
 
-    // Drawn as copper whatever it is, so its holes cut it even where it
-    // paints nothing.
-    let artwork = view.layer(&layer.name, LayerRole::Copper, self::ink(ink));
+    // Drawn in the copper role whatever it is: what cuts the layer, a hole
+    // laid over it or a rout slot in its span, then removes material and
+    // never images as artwork, even where the layer paints nothing.
+    let artwork = view.layer(&layer.name, LayerRole::Copper, ink(color));
     for object in objects {
         view.artwork.push_object(artwork, object);
     }
@@ -548,7 +631,7 @@ const DIMENSION_TEXT_GAP: f64 = 0.9;
 
 fn arrow(canvas: &mut Canvas<'_>, tip: Point, toward: Point) {
     let run = toward - tip;
-    let along = run / run.x.hypot(run.y);
+    let along = run / run.length();
     let across = Point::new(-along.y, along.x) * ARROW_HALF_WIDTH;
     let base = tip + along * ARROW_LENGTH;
     canvas.fill_polygon(&[tip, base + across, base - across], INK);
@@ -627,20 +710,22 @@ const ORDINATE_PITCH: f64 = 3.4;
 /// How far an ordinate's leader runs before its label, the jog included.
 const ORDINATE_LEADER: f64 = 7.0;
 
-/// Spread label positions at least [`ORDINATE_PITCH`] apart, keeping their
-/// order. Labels too close to sit on their stations form a run at the pitch,
-/// centred on the stations it labels.
-fn spread(stations: &[f64]) -> Vec<f64> {
+/// Spread label positions at least `pitch` apart, keeping their order.
+/// Labels too close to sit on their stations form a run at the pitch,
+/// centred on the stations it labels where the datum leaves it room.
+fn spread(stations: &[f64], pitch: f64) -> Vec<f64> {
     // Runs as (first station, count).
     let mut runs = Vec::<(usize, usize)>::new();
+    // No run starts before the first station: the chain of the other axis
+    // letters there, and the two would cross.
     let start = |(first, count): (usize, usize)| {
         let mean = stations[first..first + count].iter().sum::<f64>() / count as f64;
-        mean - (count - 1) as f64 * ORDINATE_PITCH / 2.0
+        (mean - (count - 1) as f64 * pitch / 2.0).max(stations[0])
     };
     for index in 0..stations.len() {
         runs.push((index, 1));
         while let [.., previous, last] = runs[..] {
-            let previous_end = start(previous) + previous.1 as f64 * ORDINATE_PITCH;
+            let previous_end = start(previous) + previous.1 as f64 * pitch;
             if previous_end <= start(last) + 1e-9 {
                 break;
             }
@@ -649,40 +734,33 @@ fn spread(stations: &[f64]) -> Vec<f64> {
         }
     }
     runs.into_iter()
-        .flat_map(|run| (0..run.1).map(move |label| start(run) + label as f64 * ORDINATE_PITCH))
+        .flat_map(|run| (0..run.1).map(move |label| start(run) + label as f64 * pitch))
         .collect()
 }
 
-/// Ordinate dimensions along the bottom of a view, or along its top: each
-/// station's distance from the datum, on a leader run out from `edge` and
-/// jogged clear of its neighbours.
-pub fn ordinates_horizontal(
-    canvas: &mut Canvas<'_>,
-    stations: &[(f64, String)],
-    edge: f64,
-    above: bool,
-) {
+/// Ordinate dimensions along the bottom of a view: each station's distance
+/// from the datum, on a leader run out from `edge` and jogged clear of its
+/// neighbours.
+pub fn ordinates_horizontal(canvas: &mut Canvas<'_>, stations: &[(f64, String)], edge: f64) {
     let pen = Pen::solid(THIN);
-    let away = if above { 1.0 } else { -1.0 };
-    let labels = spread(&stations.iter().map(|(x, _)| *x).collect::<Vec<_>>());
+    let stood = stations.iter().map(|(x, _)| *x).collect::<Vec<_>>();
+    let labels = spread(&stood, ORDINATE_PITCH);
     for ((x, text), label) in stations.iter().zip(labels) {
-        let from = edge + away * EXTENSION_GAP;
-        let to = from + away * ORDINATE_LEADER;
+        let top = edge - EXTENSION_GAP;
         canvas.polyline(
             &[
-                Point::new(*x, from),
-                Point::new(*x, from + away * 2.0),
-                Point::new(label, to - away * 1.5),
-                Point::new(label, to),
+                Point::new(*x, top),
+                Point::new(*x, top - 2.0),
+                Point::new(label, top - ORDINATE_LEADER + 1.5),
+                Point::new(label, top - ORDINATE_LEADER),
             ],
             false,
             pen,
         );
-        let align = if above { Align::Left } else { Align::Right };
         canvas.text(
-            Point::new(label + BODY / 2.0, to + away * 0.8),
+            Point::new(label + BODY / 2.0, top - ORDINATE_LEADER - 0.8),
             text,
-            TextStyle::new(BODY).align(align).vertical(),
+            TextStyle::new(BODY).align(Align::Right).vertical(),
         );
     }
 }
@@ -690,7 +768,8 @@ pub fn ordinates_horizontal(
 /// Ordinate dimensions down the left of a view.
 pub fn ordinates_vertical(canvas: &mut Canvas<'_>, stations: &[(f64, String)], edge: f64) {
     let pen = Pen::solid(THIN);
-    let labels = spread(&stations.iter().map(|(y, _)| *y).collect::<Vec<_>>());
+    let stood = stations.iter().map(|(y, _)| *y).collect::<Vec<_>>();
+    let labels = spread(&stood, ORDINATE_PITCH);
     for ((y, text), label) in stations.iter().zip(labels) {
         let right = edge - EXTENSION_GAP;
         canvas.polyline(
@@ -708,6 +787,84 @@ pub fn ordinates_vertical(canvas: &mut Canvas<'_>, stations: &[(f64, String)], e
             text,
             TextStyle::new(BODY).align(Align::Right),
         );
+    }
+}
+
+/// Room tags take outside a view: their leaders and the tags themselves.
+pub const TAGS: f64 = 10.0;
+
+/// Tag marks of a view from outside it: each mark's tag beyond the edge of
+/// `view` it stands nearest, on a leader from the mark, the tags of an edge
+/// spread so none stands on another. A mark is where it is on the sheet,
+/// how far it reaches, and its tag.
+pub fn tags(canvas: &mut Canvas<'_>, view: BBox, marks: &[(Point, f64, String)]) {
+    /// How far apart tags sit along an edge they are lettered across, and
+    /// down one they are stacked beside.
+    const ACROSS: f64 = 4.8;
+    const DOWN: f64 = 3.0;
+    /// How far past the edge a leader bends and ends.
+    const BEND: f64 = 2.5;
+    const END: f64 = 5.0;
+    let pen = Pen::solid(HAIR);
+    let style = TextStyle::new(LABEL).bold();
+    // Top, bottom, left, right: the edge's place, whether tags run along X,
+    // and which way is out.
+    let edges = [
+        (view.max.y, true, 1.0),
+        (view.min.y, true, -1.0),
+        (view.min.x, false, -1.0),
+        (view.max.x, false, 1.0),
+    ];
+    let nearest = |at: Point| {
+        let distances = [
+            view.max.y - at.y,
+            at.y - view.min.y,
+            at.x - view.min.x,
+            view.max.x - at.x,
+        ];
+        let nearest = (0..4).min_by(|a, b| distances[*a].total_cmp(&distances[*b]));
+        nearest.expect("a view has four edges")
+    };
+    for (edge, &(place, along_x, out)) in edges.iter().enumerate() {
+        let mut marks = marks
+            .iter()
+            .filter(|(at, ..)| nearest(*at) == edge)
+            .collect::<Vec<_>>();
+        let along = |at: Point| if along_x { at.x } else { at.y };
+        marks.sort_by(|a, b| along(a.0).total_cmp(&along(b.0)));
+        let stood = marks.iter().map(|(at, ..)| along(*at)).collect::<Vec<_>>();
+        if stood.is_empty() {
+            continue;
+        }
+        // Spread about their own middle, so a cluster in a corner fans both
+        // ways rather than trailing off one.
+        let pitch = if along_x { ACROSS } else { DOWN };
+        let labels = spread(&stood, pitch);
+        let shift = (stood.iter().sum::<f64>() - labels.iter().sum::<f64>()) / stood.len() as f64;
+        for ((at, reach, tag), label) in marks.into_iter().zip(labels) {
+            let label = label + shift;
+            let point = |along: f64, across: f64| {
+                if along_x {
+                    Point::new(along, across)
+                } else {
+                    Point::new(across, along)
+                }
+            };
+            let (bend, end) = (
+                point(label, place + out * BEND),
+                point(label, place + out * END),
+            );
+            let run = bend - *at;
+            let from = *at + run / run.length().max(1e-9) * *reach;
+            canvas.polyline(&[from, bend, end], false, pen);
+            let (at, align) = match (along_x, out > 0.0) {
+                (true, true) => (end + Point::new(0.0, 0.7), Align::Center),
+                (true, false) => (end - Point::new(0.0, 0.7 + LABEL), Align::Center),
+                (false, true) => (end + Point::new(0.7, -LABEL / 2.0), Align::Left),
+                (false, false) => (end - Point::new(0.7, LABEL / 2.0), Align::Right),
+            };
+            canvas.text(at, tag, style.align(align));
+        }
     }
 }
 
@@ -732,12 +889,46 @@ pub fn datum(canvas: &mut Canvas<'_>, at: Point) {
 pub const TITLE_HEIGHT: f64 = 13.0;
 pub const TITLE_LEADING: f64 = 4.0;
 
-/// Where a view's title is lettered: under it, or to its right where the
-/// sheet has more width to spare than height.
+/// Where a view's title is lettered: under it with its details on a line,
+/// under it with a detail to a line where the line would outrun the view's
+/// room, or to its right where the sheet has more width to spare than
+/// height.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitleSide {
     Below,
+    Stacked,
     Beside,
+}
+
+/// The room a title takes however it is lettered; over the views of a
+/// sheet, the most any of their titles takes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TitleRoom {
+    /// Width with the details on one line, and with a detail to a line.
+    pub below: f64,
+    pub beside: f64,
+    /// How many details there are.
+    lines: usize,
+}
+
+impl TitleRoom {
+    pub fn most(self, other: Self) -> Self {
+        Self {
+            below: self.below.max(other.below),
+            beside: self.beside.max(other.beside),
+            lines: self.lines.max(other.lines),
+        }
+    }
+
+    /// Height lettered a detail to a line.
+    pub fn height(self) -> f64 {
+        stacked_height(self.lines)
+    }
+}
+
+/// Height of a title lettered a detail to a line, `details` of them.
+fn stacked_height(details: usize) -> f64 {
+    TITLE_HEIGHT + details.saturating_sub(1) as f64 * TITLE_LEADING
 }
 
 /// A view's title: what it shows, and what is said of it.
@@ -766,11 +957,19 @@ impl Title {
 
     /// Height the title takes lettered beside a view, a detail to a line.
     pub fn height_beside(&self) -> f64 {
-        TITLE_HEIGHT + self.details.len().saturating_sub(1) as f64 * TITLE_LEADING
+        stacked_height(self.details.len())
+    }
+
+    pub fn room(&self, fonts: &Fonts) -> TitleRoom {
+        TitleRoom {
+            below: self.width_below(fonts),
+            beside: self.width_beside(fonts),
+            lines: self.details.len(),
+        }
     }
 
     /// Width the title takes lettered beside a view, a detail to a line.
-    pub fn width_beside(&self, fonts: &Fonts) -> f64 {
+    fn width_beside(&self, fonts: &Fonts) -> f64 {
         let name = fonts.width(Weight::Bold, HEADING, &self.name);
         let details = self
             .details
@@ -781,12 +980,13 @@ impl Title {
     }
 
     /// Letter the title down from `top`: centred there under a view with
-    /// its details on one line, or from there rightwards beside one with a
-    /// detail to a line. Under the details a bar measures true at the
-    /// view's scale however the sheet is printed.
+    /// its details on one line or a detail to a line, or from there
+    /// rightwards beside one with a detail to a line. Under the details a
+    /// bar measures true at the view's scale however the sheet is printed.
     pub fn draw(&self, canvas: &mut Canvas<'_>, top: Point, side: TitleSide, scale: Scale) {
         let (align, details) = match side {
             TitleSide::Below => (Align::Center, vec![self.details.join(" · ")]),
+            TitleSide::Stacked => (Align::Center, self.details.clone()),
             TitleSide::Beside => (Align::Left, self.details.clone()),
         };
         let baseline = top.y - HEADING;
@@ -794,7 +994,7 @@ impl Title {
         let width = canvas.text(Point::new(top.x, baseline), &self.name, name);
         let rule = baseline - 1.3;
         let left = match side {
-            TitleSide::Below => top.x - width / 2.0,
+            TitleSide::Below | TitleSide::Stacked => top.x - width / 2.0,
             TitleSide::Beside => top.x,
         };
         canvas.line(
@@ -813,6 +1013,7 @@ impl Title {
         }
         let (longest, bar_left) = match side {
             TitleSide::Below => (Self::BAR_BELOW, None),
+            TitleSide::Stacked => (Self::BAR_BESIDE, None),
             TitleSide::Beside => (Self::BAR_BESIDE, Some(top.x + Self::BAR_LABELS.0)),
         };
         scale_bar(canvas, top.x, bar_left, y - 3.4, scale, longest);
@@ -861,7 +1062,21 @@ pub fn stations(values: impl IntoIterator<Item = f64>, datum: f64) -> Vec<(f64, 
     const COINCIDENT: f64 = 0.05;
     let mut values = values.into_iter().collect::<Vec<_>>();
     values.sort_by(f64::total_cmp);
+    // The ends of the chain are the extents: a station that all but stands
+    // on one is that end, not a second station beside it.
+    if let (Some(&low), Some(&high)) = (values.first(), values.last()) {
+        values.retain(|value| {
+            let interior = *value - low >= COINCIDENT && high - *value >= COINCIDENT;
+            interior || *value == low || *value == high
+        });
+    }
     values.dedup_by(|next, kept| (*next - *kept).abs() < COINCIDENT);
+    // A first station on the datum is the datum: the chain reads from it,
+    // not from a corner a few micrometres away.
+    let datum = match values.first() {
+        Some(first) if (*first - datum).abs() < COINCIDENT => *first,
+        _ => datum,
+    };
     values
         .into_iter()
         .map(|value| (value, mm(value - datum)))
@@ -873,9 +1088,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scales_fit_the_room_and_never_overflow_it() {
+    fn scales_step_down_to_fit_the_room() {
         assert_eq!(Scale::fit(100.0, 80.0, 240.0, 250.0), Scale::up(2));
-        assert_eq!(Scale::fit(100.0, 80.0, 300.0, 250.0), Scale::up(2));
         assert_eq!(Scale::fit(100.0, 80.0, 500.0, 400.0), Scale::up(5));
         assert_eq!(Scale::fit(297.0, 210.0, 290.0, 400.0), Scale::down(2));
         assert_eq!(Scale::fit(5000.0, 10.0, 100.0, 100.0), Scale::down(20));
@@ -884,12 +1098,16 @@ mod tests {
 
     #[test]
     fn ordinate_labels_keep_their_pitch_and_stay_over_their_stations() {
+        let spread = |stations: &[f64]| spread(stations, ORDINATE_PITCH);
         let labels = spread(&[0.0, 1.0, 2.0, 50.0]);
         for pair in labels.windows(2) {
             assert!(pair[1] - pair[0] >= ORDINATE_PITCH - 1e-9, "{labels:?}");
         }
-        // The tight group straddles its stations rather than trailing them.
-        assert!(labels[0] < 0.0 && labels[2] > 2.0, "{labels:?}");
+        // A tight group at the datum runs away from it, where the other
+        // axis letters nothing; one elsewhere straddles its stations.
+        assert_eq!(labels[0], 0.0, "{labels:?}");
+        let labels = spread(&[0.0, 30.0, 31.0, 32.0]);
+        assert!(labels[1] < 30.0 && labels[3] > 32.0, "{labels:?}");
         assert_eq!(spread(&[0.0, 10.0, 20.0]), [0.0, 10.0, 20.0]);
     }
 
@@ -917,11 +1135,13 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(texts(&features.edges_x), ["0.00", "8.00", "12.00", "20.00"]);
-        // Edges a drawing cannot show apart are one station.
-        assert_eq!(texts(&[0.0, 9.982, 10.0, 10.021]), ["0.00", "9.98"]);
+        // Edges a drawing cannot show apart are one station, and one that
+        // all but stands on an end of the chain is that end.
+        assert_eq!(texts(&[0.0, 4.982, 5.0, 10.0]), ["0.00", "4.98", "10.00"]);
+        assert_eq!(texts(&[0.0, 9.982, 10.0, 10.021]), ["0.00", "10.02"]);
         assert_eq!(texts(&features.edges_y), ["0.00", "7.00", "10.00"]);
         assert_eq!(features.radii, [(2.0, 1)]);
-        assert_eq!(features.radii_note().unwrap(), "CORNER RADII 1X R2.00");
+        assert_eq!(features.radii().unwrap(), "1X R2.00");
     }
 
     #[test]

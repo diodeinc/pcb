@@ -22,10 +22,9 @@ use crate::dialects::artwork::{self, Geometry};
 use crate::geom::path::PathCmd;
 use crate::geom::{
     AccuracyError, Affine2, BBox, EllipticalArc, FillRule, GeometryAccuracy, LineCap, Point,
-    Polarity, StrokeStyle,
+    Polarity, Segment, StrokeStyle,
 };
-use crate::render::svg::{Num, PlacementScales};
-use crate::render::{Drawn, LayerStyle, RenderOptions};
+use crate::render::{Drawn, LayerStyle, Num, PlacementScales, RenderOptions};
 
 /// The colour clear paint draws in.
 const PAPER: u32 = 0xffffff;
@@ -39,26 +38,18 @@ const ARC_ERROR_MM: f64 = 1e-4;
 /// draws. The plot itself is clipped to exactly what it shows.
 const FORM_MARGIN_MM: f64 = 1.0;
 
-/// Artwork written into a PDF as a form XObject.
-#[derive(Debug, Clone, Copy)]
-pub struct PdfForm {
-    pub id: Ref,
-    /// What the form shows, in the artwork's millimetres, y up. Its content
-    /// is in the same frame and clipped to these bounds.
-    pub bbox: BBox,
-}
-
 /// Plot artwork layers into `pdf` as one form XObject, taking object ids
 /// from `alloc`.
 ///
-/// The form shows `options.viewport`, or the layers' bounds padded. A
-/// layer's opacity is how strongly its ink shows against the paper.
+/// The form shows `options.viewport`, or the layers' bounds padded, in the
+/// artwork's millimetres, y up, and is clipped to it. A layer's opacity is
+/// how strongly its ink shows against the paper.
 pub fn artwork_pdf_form<LayerMeta, ObjectMeta>(
     pdf: &mut Pdf,
     alloc: &mut Ref,
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
     options: &RenderOptions,
-) -> Result<PdfForm, AccuracyError> {
+) -> Result<Ref, AccuracyError> {
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
     let bbox = options.viewport_over(layers.iter().map(|&index| doc.layers[index].bbox));
     let extent = layers
@@ -98,8 +89,7 @@ pub fn artwork_pdf_form<LayerMeta, ObjectMeta>(
             plot.object(&mut stream, object, context, ink, frame)?;
         }
     }
-    let id = plot.form(stream, bbox, 0.0);
-    Ok(PdfForm { id, bbox })
+    Ok(plot.form(stream, bbox, 0.0))
 }
 
 /// Deflate `data` as a PDF `FlateDecode` stream.
@@ -270,7 +260,15 @@ impl<LayerMeta, ObjectMeta> Plot<'_, LayerMeta, ObjectMeta> {
                     return Ok(());
                 }
                 stream.ink(color);
-                if stroke.is_solid() {
+                // A pen wider than the arc it follows folds its inner edge
+                // over, and viewers disagree on what that paints: some draw
+                // a dot as a ring. Such a stroke images through its outline.
+                let folds = doc.arena.contours(path.contours).iter().any(|contour| {
+                    crate::geom::path::segments(doc.arena.cmds(*contour)).any(|segment| {
+                        matches!(segment, Segment::Arc(arc) if arc.radius() < stroke.width / 2.0)
+                    })
+                });
+                if stroke.is_solid() && !folds {
                     for contour in doc.arena.contours(path.contours) {
                         frame.check(contour.uncertainty_mm)?;
                         stream.contour(doc.arena.cmds(*contour).iter().copied(), frame.scale);
@@ -279,7 +277,7 @@ impl<LayerMeta, ObjectMeta> Plot<'_, LayerMeta, ObjectMeta> {
                 } else {
                     // PDF dashes know nothing of IPC line patterns, so a
                     // patterned stroke images through the same expansion
-                    // the mask compositor uses.
+                    // the mask compositor uses, as does a pen that folds.
                     let dashes = crate::geom::path::stroke_to_fill(
                         &doc.arena.path_contours(path),
                         stroke,
@@ -356,31 +354,12 @@ impl Stream {
         writeln!(self.ops, "{red} {green} {blue} rg {red} {green} {blue} RG").unwrap();
     }
 
-    /// Draw form `id` under `transform`. The linear part multiplies every
-    /// coordinate it places, so it keeps nine decimals where points keep
-    /// four.
+    /// Draw form `id` under `transform`.
     fn place(&mut self, kind: char, id: Ref, transform: Affine2) {
         let name = format!("{kind}{}", id.get());
-        let Affine2 {
-            m00,
-            m01,
-            m02,
-            m10,
-            m11,
-            m12,
-        } = transform;
-        let linear = |value| Num { value, decimals: 9 };
-        writeln!(
-            self.ops,
-            "q {} {} {} {} {} {} cm /{name} Do Q",
-            linear(m00),
-            linear(m10),
-            linear(m01),
-            linear(m11),
-            coordinate(m02),
-            coordinate(m12),
-        )
-        .unwrap();
+        let [a, b, c, d] = crate::render::linear(transform);
+        let (x, y) = (coordinate(transform.m02), coordinate(transform.m12));
+        writeln!(self.ops, "q {a} {b} {c} {d} {x} {y} cm /{name} Do Q").unwrap();
         self.forms.insert(name, id);
     }
 
@@ -501,11 +480,12 @@ mod tests {
             .position(|window| window == needle)
     }
 
-    fn plot(doc: &artwork::Document<(), ()>, options: &RenderOptions) -> (PdfForm, Vec<String>) {
+    /// Plot `doc`; returns the PDF's objects and its streams.
+    fn plot(doc: &artwork::Document<(), ()>, options: &RenderOptions) -> (String, Vec<String>) {
         let mut pdf = Pdf::new();
-        let mut alloc = Ref::new(1);
-        let form = artwork_pdf_form(&mut pdf, &mut alloc, doc, options).unwrap();
-        (form, streams(&pdf.finish()))
+        artwork_pdf_form(&mut pdf, &mut Ref::new(1), doc, options).unwrap();
+        let pdf = pdf.finish();
+        (String::from_utf8_lossy(&pdf).into_owned(), streams(&pdf))
     }
 
     #[test]
@@ -541,18 +521,12 @@ mod tests {
         );
         artwork::normalize_bounds(&mut doc);
 
-        let (form, streams) = plot(&doc, &RenderOptions::default());
+        let (pdf, streams) = plot(&doc, &RenderOptions::default());
 
         assert_eq!(streams.len(), 2, "the block and the plot");
         assert_eq!(streams[0].matches("0 0 m\n1 0 l").count(), 1);
         assert_eq!(streams[1].matches(" Do Q").count(), 6);
         assert!(streams[1].contains("q 1 0 0 1 10 4 cm /B1 Do Q"));
-        assert_eq!(form.bbox, doc.layers[0].bbox.expand(1.0));
-        let pdf = {
-            let mut pdf = Pdf::new();
-            artwork_pdf_form(&mut pdf, &mut Ref::new(1), &doc, &RenderOptions::default()).unwrap();
-            String::from_utf8_lossy(&pdf.finish()).into_owned()
-        };
         // The block keeps a margin; the plot is clipped to what it shows.
         assert!(pdf.contains("/BBox [-1 -1 2 2]"), "{pdf}");
         assert!(pdf.contains("/BBox [-1 -1 12 6]"), "{pdf}");

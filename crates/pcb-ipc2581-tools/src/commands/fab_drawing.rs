@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use pcb_ir::geom::Resolution;
 use sha2::{Digest, Sha256};
 
+use crate::LayoutTarget;
 use crate::drawing::{FabDrawingOptions, Typeface, fab_drawing};
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
@@ -12,7 +13,12 @@ use crate::utils::file as file_utils;
 #[derive(Debug, Clone)]
 pub struct FabDrawingCommandOptions {
     pub output: PathBuf,
-    pub drawing: FabDrawingOptions,
+    /// The board alone, or the array the file lays it out in.
+    pub target: LayoutTarget,
+    /// The design's name, where the board step's own is not wanted.
+    pub title: Option<String>,
+    /// The revision, where the design's own is not wanted.
+    pub revision: Option<String>,
 }
 
 /// Draw the fabrication drawing of a board or a board array as a PDF.
@@ -32,17 +38,14 @@ pub fn execute(
     // Lettered in TX-02 where this machine has it, and in the bundled face
     // where it does not; the result line says which, since a drawing's
     // lettering is part of how it reads.
-    let installed = installed_typeface();
-    let face = match &installed {
-        Some((name, _)) => name.as_str(),
-        None => "Roboto Mono",
-    };
+    let (face, typeface) =
+        installed_typeface().unwrap_or_else(|| ("Roboto Mono".to_string(), Typeface::default()));
     let drawing = FabDrawingOptions {
-        source: options.drawing.source.clone().or(source),
-        typeface: installed
-            .as_ref()
-            .map_or_else(Typeface::default, |(_, typeface)| typeface.clone()),
-        ..options.drawing.clone()
+        target: options.target,
+        title: options.title.clone(),
+        revision: options.revision.clone(),
+        source,
+        typeface,
     };
     let pdf = fab_drawing(&ipc, &imported, &drawing, resolution)?;
     std::fs::write(&options.output, pdf)
@@ -114,8 +117,7 @@ fn installed_typeface() -> Option<(String, Typeface)> {
     use ttf_parser::name_id::{FAMILY, TYPOGRAPHIC_FAMILY};
     for directory in font_directories() {
         // Each face of the family in this directory, by width and weight. A
-        // file name says nothing certain, so every font is asked its family;
-        // only the names are read, which is quick.
+        // file name says nothing certain, so every font is asked its family.
         let mut faces = Vec::new();
         for path in font_files(&directory) {
             let Ok(data) = std::fs::read(&path) else {
@@ -125,8 +127,12 @@ fn installed_typeface() -> Option<(String, Typeface)> {
                 continue;
             };
             let family = [TYPOGRAPHIC_FAMILY, FAMILY].into_iter().find_map(|id| {
-                let mut names = face.names().into_iter();
-                names.find(|name| name.name_id == id)?.to_string()
+                // A face may carry the name in several encodings; the
+                // first that reads is it.
+                let names = face.names().into_iter();
+                names
+                    .filter(|name| name.name_id == id)
+                    .find_map(|name| name.to_string())
             });
             let Some(family) = family.filter(|family| FAMILIES.contains(&family.as_str())) else {
                 continue;

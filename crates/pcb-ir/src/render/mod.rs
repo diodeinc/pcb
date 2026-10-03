@@ -5,20 +5,24 @@
 //! Mask renders take an already-composed image. Both take a [`RenderOptions`].
 //! The PDF backend writes artwork into a document its caller lays out.
 
-pub mod pdf;
+#[cfg(not(target_family = "wasm"))]
+mod pdf;
 mod png;
 mod svg;
 #[cfg(not(target_family = "wasm"))]
 mod term;
 
+#[cfg(not(target_family = "wasm"))]
+pub use pdf::{artwork_pdf_form, deflate};
 pub use png::{artwork_png, png};
 pub use svg::{artwork_svg, svg, svg_path_data};
 #[cfg(not(target_family = "wasm"))]
 pub use term::{artwork_to_terminal, can_render_to_terminal, write_kitty_png};
 
 use crate::dialects::LayerRole;
+use crate::dialects::artwork::{self, Geometry};
 use crate::geom::path::{PathCmd, PathOp};
-use crate::geom::{AccuracyError, Arc, BBox, EllipticalArc, GeometryAccuracy, Point};
+use crate::geom::{AccuracyError, Affine2, Arc, BBox, EllipticalArc, GeometryAccuracy, Point};
 
 pub(crate) const VIEWBOX_PADDING_MM: f64 = 1.0;
 pub(crate) const DEFAULT_MAX_DIMENSION_PX: u32 = 3200;
@@ -174,6 +178,56 @@ pub(crate) fn local_accuracy(
     GeometryAccuracy::new(accuracy.remaining(numeric)? / scale.max(f64::MIN_POSITIVE))
 }
 
+/// The largest scale at which each aperture and block is placed, through
+/// every chain of instances that reaches it; `None` where nothing does.
+pub(crate) struct PlacementScales {
+    pub(crate) apertures: Vec<Option<f64>>,
+    pub(crate) blocks: Vec<Option<f64>>,
+}
+
+impl PlacementScales {
+    pub(crate) fn of<LayerMeta, ObjectMeta>(
+        doc: &artwork::Document<LayerMeta, ObjectMeta>,
+        layers: &[usize],
+    ) -> Self {
+        let mut scales = Self {
+            apertures: vec![None; doc.apertures.len()],
+            blocks: vec![None; doc.blocks.len()],
+        };
+        for &layer in layers {
+            scales.place(doc.layers[layer].objects.slice(&doc.objects), 1.0);
+        }
+        // Blocks reference only earlier blocks, so one backward sweep has
+        // every block's scale settled before its children read it.
+        for index in (0..doc.blocks.len()).rev() {
+            if let Some(scale) = scales.blocks[index] {
+                scales.place(&doc.blocks[index].objects, scale);
+            }
+        }
+        scales
+    }
+
+    fn place<ObjectMeta>(&mut self, objects: &[artwork::Object<ObjectMeta>], scale: f64) {
+        for object in objects {
+            let (slot, placement) = match object.geometry {
+                Geometry::Flash {
+                    aperture,
+                    transform,
+                } => (self.apertures.get_mut(aperture as usize), transform),
+                Geometry::Instance { block, transform }
+                | Geometry::GridInstance {
+                    block, transform, ..
+                } => (self.blocks.get_mut(block as usize), transform),
+                Geometry::Stroke { .. } | Geometry::Region { .. } => continue,
+            };
+            if let Some(slot) = slot {
+                let placed = scale * placement.max_scale();
+                *slot = Some(slot.map_or(placed, |largest| largest.max(placed)));
+            }
+        }
+    }
+}
+
 /// How a layer draws: one colour, and the opacity its whole image
 /// composites at, so overlapping objects never darken each other.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -239,4 +293,47 @@ pub(crate) fn drawn(cmds: impl IntoIterator<Item = PathCmd>) -> impl Iterator<It
             Drawn::Arc(arc)
         }
     })
+}
+
+/// A number in fixed notation with trailing zeros trimmed, written without
+/// allocating: a layer's path data is millions of these.
+pub(crate) struct Num {
+    pub(crate) value: f64,
+    pub(crate) decimals: u32,
+}
+
+impl std::fmt::Display for Num {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let unit = 10_u64.pow(self.decimals);
+        let scaled = (self.value.abs() * unit as f64).round();
+        // Past the exact integers, or not a number at all.
+        if scaled.is_nan() || scaled >= 9.0e15 {
+            return write!(f, "{}", self.value);
+        }
+        let scaled = scaled as u64;
+        let (whole, mut fraction) = (scaled / unit, scaled % unit);
+        if self.value < 0.0 && scaled != 0 {
+            f.write_str("-")?;
+        }
+        write!(f, "{whole}")?;
+        if fraction != 0 {
+            let mut digits = self.decimals as usize;
+            while fraction % 10 == 0 {
+                fraction /= 10;
+                digits -= 1;
+            }
+            write!(f, ".{fraction:0digits$}")?;
+        }
+        Ok(())
+    }
+}
+
+/// The linear part of a placement, in the order an SVG or a PDF matrix lists
+/// it. It multiplies every coordinate it places, so it keeps nine decimals
+/// where points keep fewer.
+pub(crate) fn linear(transform: Affine2) -> [Num; 4] {
+    let Affine2 {
+        m00, m01, m10, m11, ..
+    } = transform;
+    [m00, m10, m01, m11].map(|value| Num { value, decimals: 9 })
 }

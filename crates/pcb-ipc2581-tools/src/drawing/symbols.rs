@@ -79,7 +79,7 @@ pub fn symbol(index: usize, size: f64) -> ContourBuf {
     let reach = match figure {
         Figure::None => 0.5,
         _ => {
-            let (radius, inner) = (figure.radius(), figure.inset(WEIGHT));
+            let (radius, inner) = (figure.radius(), figure.inset());
             figure.outline(&mut cmds, radius * size, false);
             if mark != Mark::Solid {
                 figure.outline(&mut cmds, inner * size, true);
@@ -142,12 +142,12 @@ impl Figure {
     }
 
     /// Circumradius of the figure's inner edge, a line weight inside it.
-    fn inset(self, weight: f64) -> f64 {
+    fn inset(self) -> f64 {
         match self.vertices() {
-            None => self.radius() - weight,
+            None => self.radius() - WEIGHT,
             Some((count, _)) => {
                 let apothem = (std::f64::consts::PI / f64::from(count)).cos();
-                (self.radius() * apothem - weight) / apothem
+                (self.radius() * apothem - WEIGHT) / apothem
             }
         }
     }

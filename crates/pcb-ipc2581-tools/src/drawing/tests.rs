@@ -3,11 +3,10 @@ use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::dialects::{LayerRole, Side};
 use pcb_ir::geom::{BBox, ContourBuf, PathCmd, Point, Resolution};
 
-use super::data::{self, ArrayData, Chip, DrillTool, Hit, HoleKind, Ink, REQUIREMENTS, Source};
-use super::{FabDrawingOptions, SheetSize, fab_drawing};
+use super::data::{self, ArrayData, Chip, DrillTool, Hit, HoleKind, Ink, Source};
+use super::{FabDrawingOptions, fab_drawing};
 use crate::LayoutTarget;
 use crate::accessors::ColorInfo;
-use crate::accessors::IpcAccessor;
 use crate::commands::board_array::{
     BoardArrayCreateOptions, BoardMarginMm, Separation, create_board_array,
 };
@@ -152,12 +151,7 @@ fn with_source<T>(xml: &str, inspect: impl FnOnce(&Source<'_>) -> T) -> T {
     let ipc = Ipc2581::parse(xml).unwrap();
     let resolution = Resolution::default();
     let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-    inspect(&Source {
-        ipc: &ipc,
-        imported: &imported,
-        accessor: IpcAccessor::new(&ipc),
-        resolution,
-    })
+    inspect(&Source::new(&ipc, &imported, resolution))
 }
 
 fn draw(xml: &str, options: &FabDrawingOptions) -> Vec<u8> {
@@ -184,49 +178,33 @@ fn printed(source: &Source<'_>) -> Vec<(data::FabLayer, bool)> {
 }
 
 #[test]
-fn a_board_draws_its_outline_its_drill_pattern_then_a_sheet_a_layer() {
+fn a_board_draws_its_outline_its_drill_pattern_then_two_layers_a_sheet() {
     let options = FabDrawingOptions::default();
     let pdf = draw(BOARD, &options);
     assert!(pdf.starts_with(b"%PDF-"));
     // The board, its drill pattern with the table beside it, then five
-    // layers: the bottom legend has no artwork and paste is not the
-    // fabricator's.
-    assert_eq!(page_count(&pdf), 7);
+    // layers two to a sheet: the bottom legend has no artwork and paste is
+    // not the fabricator's.
+    assert_eq!(page_count(&pdf), 5);
     assert_eq!(pdf, draw(BOARD, &options), "a drawing is deterministic");
     let text = String::from_utf8_lossy(&pdf);
     assert!(text.contains("/MediaBox [0 0 841.8898 595.2756]"), "A4");
-
-    // Asked for more layers to a sheet, they share one at a smaller scale.
-    let shared = FabDrawingOptions {
-        layers_per_sheet: 6,
-        ..options.clone()
-    };
-    assert_eq!(page_count(&draw(BOARD, &shared)), 3);
-    // Left to fit its sheet, a small board still draws on A4.
-    let fitted = FabDrawingOptions {
-        sheet: None,
-        ..options
-    };
-    assert_eq!(page_count(&draw(BOARD, &fitted)), 7);
-    let large = FabDrawingOptions {
-        sheet: Some(SheetSize::A2),
-        ..FabDrawingOptions::default()
-    };
-    assert!(page_count(&draw(BOARD, &large)) <= 7);
 }
 
 #[test]
-fn an_array_adds_its_own_sheet_to_its_boards() {
+fn an_array_adds_its_own_sheets_to_its_boards() {
     let options = FabDrawingOptions::default();
     for separation in [Separation::VScore, Separation::MouseBite] {
         let xml = array(separation);
+        // The array as delivered, then its tooling holes with the
+        // fiducials of its top side, and with those of its bottom.
         assert_eq!(page_count(&draw(&xml, &options)), 8, "{separation:?}");
         // Drawn as a board, an array file is the board's drawing.
         let board = FabDrawingOptions {
             target: LayoutTarget::Board,
             ..options.clone()
         };
-        assert_eq!(page_count(&draw(&xml, &board)), 7, "{separation:?}");
+        assert_eq!(page_count(&draw(&xml, &board)), 5, "{separation:?}");
     }
 }
 
@@ -247,20 +225,20 @@ fn the_drill_table_lists_every_opening_smallest_first() {
                 )
             })
             .collect::<Vec<_>>();
-        let thru = || "THRU".to_string();
+        // Every hole goes through the board, so none states a span.
         assert_eq!(
             rows,
             [
-                ("VIA", "0.30".to_string(), None, 3, thru()),
+                ("VIA", "0.30".to_string(), None, 3, None),
                 (
                     "PTH",
                     "0.80".to_string(),
-                    Some("SLOT 2.40".to_string()),
+                    Some("SLOT 0.80 × 2.40".to_string()),
                     1,
-                    thru()
+                    None
                 ),
-                ("PTH", "1.00".to_string(), None, 2, thru()),
-                ("NPTH", "3.20".to_string(), None, 1, thru()),
+                ("PTH", "1.00".to_string(), None, 2, None),
+                ("NPTH", "3.20".to_string(), None, 1, None),
             ]
         );
         // The tools with the most holes take the lightest symbols.
@@ -321,11 +299,11 @@ fn layers_are_numbered_as_the_stackup_orders_them() {
 }
 
 #[test]
-fn the_specification_states_inks_and_finish_with_a_chip_for_each_side() {
+fn the_specification_states_inks_and_finish_with_one_chip_each() {
     with_source(BOARD, |source| {
         let tools = data::drill_tools(source.imported, ArtworkScope::Board).unwrap();
         let board = BBox::new(Point::ZERO, Point::new(40.0, 30.0));
-        let rows = data::specification(source, &printed(source), &tools, board, None).unwrap();
+        let rows = data::specification(source, &printed(source), &tools, board, None);
         let row = |label: &str| {
             let row = rows.iter().find(|row| row.label == label);
             row.unwrap_or_else(|| panic!("no {label} row in {rows:?}"))
@@ -334,26 +312,44 @@ fn the_specification_states_inks_and_finish_with_a_chip_for_each_side() {
         assert_eq!(row("COPPER LAYERS").value, "2");
         // The fixture states no tolerance, so the drawing invents none.
         assert_eq!(row("THICKNESS").value, "1.60 mm OVER MASK");
-        assert_eq!(row("MATERIAL").value, "FR4");
         assert_eq!(row("COPPER").value, "1 oz");
         assert_eq!(row("SURFACE FINISH").value, "ENIG");
-        assert!(matches!(row("SURFACE FINISH").chips[..], [Chip::Color(_)]));
+        assert!(matches!(row("SURFACE FINISH").chip, Some(Chip::Color(_))));
         assert_eq!(row("SOLDER MASK").value, "BLACK · BOTH SIDES");
-        assert!(matches!(
-            row("SOLDER MASK").chips[..],
-            [Chip::Color(0x1c1c1c), Chip::Color(0x1c1c1c)]
-        ));
+        // One ink for the board, so one chip, and the sides in words.
+        assert_eq!(row("SOLDER MASK").chip, Some(Chip::Color(0x1c1c1c)));
         // A legend layer with nothing on it prints nothing.
         assert_eq!(row("LEGEND").value, "WHITE · TOP ONLY");
-        assert!(matches!(
-            row("LEGEND").chips[..],
-            [Chip::Color(_), Chip::Absent]
-        ));
-        assert_eq!(row("HOLES").value, "7 · 4 SIZES · MIN Ø0.30 · ASPECT 5.3:1");
-        // No mask opening lies over a via on either side.
-        assert_eq!(row("VIAS").value, "3 · TENTED BOTH SIDES");
-        assert_eq!(row("SPECIAL").value, "PLATED SLOTS");
-        assert!(rows.iter().all(|row| row.label != "MIN TRACK"), "no tracks");
+        assert_eq!(row("LEGEND").chip, Some(Chip::Color(0xf4f4f0)));
+        assert_eq!(row("HOLES").value, "7 · 4 SIZES · MIN DIA 0.30");
+    });
+}
+
+#[test]
+fn a_design_that_names_no_ink_is_built_green_with_a_white_legend() {
+    let unnamed = BOARD
+        .replace(r#"<Property text="Color : Black"/>"#, "")
+        .replace(r#"<Property text="Color : White"/>"#, "");
+    assert_ne!(unnamed, BOARD);
+    with_source(&unnamed, |source| {
+        let ink = |role, side| data::layer_ink(source, role, side).unwrap();
+        for side in [Side::Top, Side::Bottom] {
+            let mask = ink(LayerRole::Soldermask, side);
+            assert_eq!((mask.color, mask.name.as_str()), (Some(0x1a6b3a), "GREEN"));
+            let legend = ink(LayerRole::Legend, side);
+            assert_eq!(
+                (legend.color, legend.name.as_str()),
+                (Some(0xf4f4f0), "WHITE")
+            );
+        }
+    });
+    // Named on one side only, an ink is the board's: both sides have it.
+    let bottom = r#"<StackupLayer layerOrGroupRef="B.Mask" thickness="0.01" sequence="6"><SpecRef id="mask"/></StackupLayer>"#;
+    assert!(BOARD.contains(bottom));
+    let one_sided = BOARD.replace(bottom, &bottom.replace(r#"<SpecRef id="mask"/>"#, ""));
+    with_source(&one_sided, |source| {
+        let mask = data::layer_ink(source, LayerRole::Soldermask, Side::Bottom).unwrap();
+        assert_eq!(mask.name, "BLACK");
     });
 }
 
@@ -385,15 +381,28 @@ fn an_ink_is_shown_as_far_as_the_design_states_it() {
 
 #[test]
 fn only_a_few_notes_are_kept_and_an_array_adds_one() {
-    let notes = data::notes(None, &REQUIREMENTS);
-    assert_eq!(notes.len(), 4);
-    assert!(notes[0].contains("IPC-6012 / IPC-A-600 CLASS 2"));
+    with_source(BOARD, |source| {
+        let notes = data::notes(source, None);
+        assert_eq!(notes.len(), 4);
+        assert!(notes[0].contains("IPC-6012 / IPC-A-600 CLASS 2"));
+    });
     with_source(&array(Separation::VScore), |source| {
         let array = ArrayData::of(source).unwrap().unwrap();
-        let notes = data::notes(Some(&array), &REQUIREMENTS);
+        let notes = data::notes(source, Some(&array));
         assert_eq!(notes.len(), 5);
         assert!(notes[4].contains("DO NOT MOVE SCORES"));
     });
+    // A board built on polyimide is bought to the flexible-board standard.
+    with_source(
+        &BOARD.replace(
+            r#"<Property text="FR4"/>"#,
+            r#"<Property text="Polyimide"/>"#,
+        ),
+        |source| {
+            let notes = data::notes(source, None);
+            assert!(notes[0].contains("IPC-6013"), "{}", notes[0]);
+        },
+    );
 }
 
 #[test]
@@ -419,6 +428,44 @@ fn an_array_says_how_it_is_separated() {
         array.tools.retain(|tool| tool.diameter != tab.diameter);
         assert!(array.tab().is_none());
         assert_eq!(array.separation(), "ROUTED, TABS");
+    });
+}
+
+#[test]
+fn an_array_places_its_tooling_and_tells_its_fiducials_from_its_boards() {
+    with_source(&array(Separation::VScore), |source| {
+        let array = ArrayData::of(source).unwrap().unwrap();
+        // A hole in each corner of the border, none of them a perforation.
+        let tooling = array.tooling();
+        assert!(tooling.len() >= 3, "{}", tooling.len());
+        assert!(
+            tooling
+                .iter()
+                .all(|(at, _)| array.bounds.contains_point(*at))
+        );
+        // The array's own fiducials are on its border, outside every board.
+        let own = array
+            .fiducials
+            .iter()
+            .filter(|fiducial| fiducial.board.is_none());
+        let own = own.collect::<Vec<_>>();
+        assert!(!own.is_empty());
+        for fiducial in own {
+            let mut boards = array.boards.iter();
+            assert!(
+                !boards.any(|board| board.contains_point(fiducial.at)),
+                "{fiducial:?}"
+            );
+        }
+        // Every board has the same fiducials in its cell, so each is listed
+        // once for its side, from its board's datum.
+        for side in [Side::Top, Side::Bottom] {
+            let cells = array.fiducials.iter();
+            let cells = cells.filter(|fiducial| fiducial.board.is_some() && fiducial.side == side);
+            let per_board = array.board_fiducials(side).expect("the boards are alike");
+            assert!(!per_board.is_empty(), "{side:?}");
+            assert_eq!(per_board.len() * array.boards.len(), cells.count());
+        }
     });
 }
 

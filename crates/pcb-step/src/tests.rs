@@ -1858,7 +1858,11 @@ fn outline_fonts_shape_and_lay_out_like_kicad() {
     let text = parse(&format!(
         "{}{}{}",
         rect_outline(0.0, 0.0, 30.0, 20.0),
-        embed_as("Bold.ttf", "font", pcb_fonts::LIBERATION_SANS_BOLD),
+        embed_as(
+            "Bold.ttf",
+            "font",
+            include_bytes!("../fonts/LiberationSans-Bold.ttf")
+        ),
         r#"(gr_text "o" (at 5 5) (layer "F.SilkS") (effects (font (face "Arial") (size 1 1) (thickness 0.15))))
 (gr_text "o" (at 15 5) (layer "F.SilkS" knockout) (effects (font (face "Arial Black") (size 1 1) (thickness 0.15))))
 "#
@@ -1954,7 +1958,11 @@ fn embedded_font_names_are_what_faces_resolve_against() {
     let text = parse(&format!(
         "{}{}",
         rect_outline(0.0, 0.0, 30.0, 20.0),
-        embed_as("Bold.ttf", "font", pcb_fonts::LIBERATION_SANS_BOLD)
+        embed_as(
+            "Bold.ttf",
+            "font",
+            include_bytes!("../fonts/LiberationSans-Bold.ttf")
+        )
     ));
     let names = crate::embedded_font_names(text.as_bytes()).unwrap();
     assert!(names.contains(&"liberation sans".to_string()), "{names:?}");

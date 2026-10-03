@@ -133,7 +133,7 @@ would silently export its bounding box.
 | `src/font.rs` | KiCad's stroke font: glyph decoding, line layout, justification, markup, pen width. |
 | `src/newstroke.rs` | The `newstroke` glyph table, generated from `common/newstroke_font.cpp`. |
 | `src/outline_font.rs` | Outline fonts: embedded and bundled faces, HarfBuzz shaping, KiCad's outline layout, glyphs as rings. |
-| `pcb-fonts/fonts/` | Liberation Sans, the fallback face, under the SIL Open Font License. |
+| `fonts/` | Liberation Sans, the fallback face, under the SIL Open Font License. |
 | `src/donor.rs` | Donor STEP files: statement split, kind byte per statement, product tree, geometry closure, renumbered copy. |
 | `src/step.rs` | The output buffer, the STEP vocabulary, the extruded board solid, product structure. |
 | `src/lib.rs` | `Board::parse` and `export`: options, model batching across threads, placement math. |

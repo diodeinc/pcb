@@ -194,8 +194,10 @@ enum Commands {
     ///
     /// A4 sheets: the board's dimensioned outline with its specification,
     /// layer stack and notes; its drill pattern and drill table; for an array
-    /// file, the array as delivered; then every layer the fabricator images,
-    /// each to scale. Lettered in TX-02 where it is installed (or found in
+    /// file, the array as delivered, and its tooling holes and fiducials on a
+    /// sheet for each side that carries fiducials; then every layer the
+    /// fabricator images, two to a sheet, each to scale and in a colour of
+    /// its own. Lettered in TX-02 where it is installed (or found in
     /// `PCB_FONT_DIR`), and in the bundled face elsewhere.
     FabDrawing {
         /// IPC-2581 XML file to draw
@@ -210,18 +212,6 @@ enum Commands {
         /// Revision. Defaults to the design's BOM revision.
         #[arg(long)]
         revision: Option<String>,
-        /// Sheet size, landscape.
-        #[arg(long, default_value = "a4", hide = true)]
-        sheet: pcb_ipc2581_tools::drawing::SheetSize,
-        /// Use the smallest sheet that shows what is delivered at half size or larger.
-        #[arg(long, hide = true, conflicts_with = "sheet")]
-        fit_sheet: bool,
-        /// How layer artwork is inked.
-        #[arg(long, default_value = "material", hide = true)]
-        ink: pcb_ipc2581_tools::drawing::LayerInk,
-        /// The fewest layer views a sheet is laid out to hold.
-        #[arg(long, default_value = "1", hide = true)]
-        layers_per_sheet: usize,
         /// Output PDF file path
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
@@ -749,24 +739,14 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             layout_target,
             title,
             revision,
-            sheet,
-            fit_sheet,
-            ink,
-            layers_per_sheet,
             output,
         } => commands::fab_drawing::execute(
             &file,
             &commands::fab_drawing::FabDrawingCommandOptions {
                 output,
-                drawing: pcb_ipc2581_tools::drawing::FabDrawingOptions {
-                    target: layout_target,
-                    sheet: (!fit_sheet).then_some(sheet),
-                    ink,
-                    layers_per_sheet,
-                    title,
-                    revision,
-                    ..Default::default()
-                },
+                target: layout_target,
+                title,
+                revision,
             },
             resolution,
         ),
@@ -851,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn fab_drawing_draws_a4_sheets() {
+    fn fab_drawing_writes_a_pdf() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("board.xml");
         let output = dir.path().join("fab.pdf");
@@ -877,12 +857,6 @@ mod tests {
         execute(args, Resolution::default()).unwrap();
         let pdf = std::fs::read(output).unwrap();
         assert!(pdf.starts_with(b"%PDF-"));
-        // A4 landscape, in points.
-        let text = String::from_utf8_lossy(&pdf);
-        assert!(text.contains("/MediaBox [0 0 841.8898 595.2756]"), "{}", {
-            let at = text.find("/MediaBox").unwrap_or(0);
-            text[at..at + 60].to_string()
-        });
     }
 
     #[test]

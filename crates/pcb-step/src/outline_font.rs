@@ -29,12 +29,12 @@ const FLATTEN_ERROR: f64 = 2.0 / 1433.6;
 /// Liberation Sans in its four styles, indexed by bold then italic.
 static LIBERATION: [[&[u8]; 2]; 2] = [
     [
-        pcb_fonts::LIBERATION_SANS_REGULAR,
-        pcb_fonts::LIBERATION_SANS_ITALIC,
+        include_bytes!("../fonts/LiberationSans-Regular.ttf"),
+        include_bytes!("../fonts/LiberationSans-Italic.ttf"),
     ],
     [
-        pcb_fonts::LIBERATION_SANS_BOLD,
-        pcb_fonts::LIBERATION_SANS_BOLD_ITALIC,
+        include_bytes!("../fonts/LiberationSans-Bold.ttf"),
+        include_bytes!("../fonts/LiberationSans-BoldItalic.ttf"),
     ],
 ];
 

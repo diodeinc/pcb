@@ -1,12 +1,13 @@
-//! What a sheet sets beside its views: tables and numbered notes, each a
-//! block of a known height that draws down from its top-left corner.
+//! What a sheet sets beside its views: tables, numbered notes, a detail
+//! figure and a score section, each a block of a known height that draws
+//! down from its top-left corner.
 
 use pcb_ir::geom::{BBox, Point};
-use pcb_ir::render::pdf::PdfForm;
 
-use super::data::Chip;
-use super::pdf::{Align, Canvas, Dash, Fonts, INK, Pen, TextStyle, Weight};
-use super::sheet::{BODY, HAIR, HEADING, LABEL, MEDIUM, THICK, THIN};
+use super::data::{Chip, SCORE_ANGLE};
+use super::pdf::{Align, Canvas, Dash, Fonts, INK, Pen, Plot, TextStyle, Weight};
+use super::sheet::{BODY, HAIR, HEADING, HEAVY, LABEL, MEDIUM, THICK, THIN};
+use super::views::{Mark, ROUTED, datum};
 
 /// Height of a block's heading, down to what it heads.
 const HEADING_HEIGHT: f64 = 4.6;
@@ -14,8 +15,8 @@ const ROW_HEIGHT: f64 = 4.0;
 const HEADER_ROW_HEIGHT: f64 = 4.4;
 /// Space between a cell's edge and its text.
 const CELL_PAD: f64 = 1.2;
-const NOTE_LEADING: f64 = 3.7;
-const NOTE_GAP: f64 = 1.5;
+const NOTE_LEADING: f64 = 3.4;
+const NOTE_GAP: f64 = 0.4;
 const NOTE_INDENT: f64 = 6.0;
 /// A colour chip.
 const CHIP_WIDTH: f64 = 5.0;
@@ -38,8 +39,7 @@ pub enum Sample {
     BoardProfile,
     Score,
     Routed,
-    FiducialTop,
-    FiducialBottom,
+    Mark(Mark),
 }
 
 #[derive(Debug, Clone)]
@@ -47,11 +47,10 @@ pub enum Cell {
     Text(String),
     Bold(String),
     /// A drill symbol, drawn at the size it has on a plot.
-    Symbol(PdfForm),
+    Symbol(Plot),
     /// A slice of the board's section, in the colour of what it is made of.
     Section(Material, u32),
-    /// Colour chips: one, or one for each side of the board.
-    Chips(Vec<Chip>),
+    Chip(Chip),
     Sample(Sample),
     Empty,
 }
@@ -64,10 +63,10 @@ impl Cell {
 
 #[derive(Debug, Clone)]
 pub struct Column {
-    pub title: &'static str,
+    title: &'static str,
     /// Share of the table's width.
-    pub width: f64,
-    pub align: Align,
+    width: f64,
+    align: Align,
 }
 
 impl Column {
@@ -103,13 +102,19 @@ pub struct Notes {
 pub struct Figure {
     pub title: String,
     /// What the figure shows, lettered under it.
-    pub captions: Vec<String>,
-    pub form: PdfForm,
+    pub caption: String,
+    pub plot: Plot,
     /// The point of the artwork drawn at the figure's centre.
     pub center: Point,
     pub scale: f64,
     /// Height the artwork takes on the sheet.
     pub height: f64,
+    /// Board fiducials: points of the artwork marked as one, each with the
+    /// tag lettered beside it.
+    pub fiducials: Vec<(Point, String)>,
+    /// The board the fiducials stand around, in the artwork: its lower
+    /// left corner is marked as their datum.
+    pub board: Option<BBox>,
 }
 
 /// A V-score in section: both cuts, the web they leave and their angle.
@@ -117,7 +122,8 @@ pub struct Figure {
 pub struct ScoreSection {
     pub title: String,
     pub thickness: String,
-    pub web: String,
+    /// The web the cuts leave, where the drawing asks for one.
+    pub web: Option<String>,
     pub angle: String,
 }
 
@@ -144,10 +150,7 @@ impl Block {
                 let text = lines.iter().map(|note| note.len()).sum::<usize>() as f64;
                 HEADING_HEIGHT + text * NOTE_LEADING + lines.len() as f64 * NOTE_GAP
             }
-            Self::Figure(figure) => {
-                let captions = figure.captions.len() as f64 * CAPTION_LEADING;
-                HEADING_HEIGHT + 2.0 + figure.height + 2.0 + captions
-            }
+            Self::Figure(figure) => HEADING_HEIGHT + 2.0 + figure.height + 2.0 + CAPTION_LEADING,
             Self::ScoreSection(_) => HEADING_HEIGHT + SECTION_HEIGHT + CAPTION_LEADING,
         }
     }
@@ -183,16 +186,38 @@ impl Figure {
     fn draw(&self, canvas: &mut Canvas<'_>, at: Point, width: f64) {
         canvas.line(at, Point::new(at.x + width, at.y), Pen::solid(MEDIUM));
         let center = Point::new(at.x + width / 2.0, at.y - 2.0 - self.height / 2.0);
-        canvas.place(self.form, self.center, center, self.scale);
-        let mut y = at.y - 2.0 - self.height - 2.0;
-        for caption in &self.captions {
-            y -= CAPTION_LEADING;
-            canvas.text(
-                Point::new(center.x, y + 0.9),
-                caption,
-                TextStyle::new(BODY).align(Align::Center),
-            );
+        canvas.place(self.plot, self.center, center, self.scale);
+        let on_sheet = |at: Point| center + (at - self.center) * self.scale;
+        if let Some(board) = self.board {
+            datum(canvas, on_sheet(board.min));
         }
+        let mark = Mark::BoardFiducial;
+        let style = TextStyle::new(LABEL).bold();
+        for (place, tag) in &self.fiducials {
+            let at = on_sheet(*place);
+            mark.draw(canvas, at, 0.0);
+            // Each tag on the far side of its mark from the board, where
+            // nothing else is drawn.
+            let clear = mark.reach() + 0.6;
+            let beside = Point::new(clear, -LABEL / 2.0);
+            let board = self.board.unwrap_or(BBox::from_point(self.center));
+            let (at, align) = if place.x < board.min.x {
+                (at + Point::new(-clear, beside.y), Align::Right)
+            } else if place.x > board.max.x {
+                (at + beside, Align::Left)
+            } else if place.y >= board.center().y {
+                (at + Point::new(0.0, clear), Align::Center)
+            } else {
+                (at - Point::new(0.0, clear + LABEL), Align::Center)
+            };
+            canvas.text(at, tag, style.align(align));
+        }
+        let y = at.y - 2.0 - self.height - 2.0 - CAPTION_LEADING;
+        canvas.text(
+            Point::new(center.x, y + 0.9),
+            &self.caption,
+            TextStyle::new(BODY).align(Align::Center),
+        );
     }
 }
 
@@ -208,9 +233,10 @@ impl ScoreSection {
         let top = at.y - 11.0;
         let bottom = top - height;
         // The web is drawn a third of the slab; the cuts open at the angle
-        // the note states.
+        // the section letters.
         let depth = height / 3.0;
-        let half = depth * 15.0_f64.to_radians().tan();
+        let slope = (SCORE_ANGLE / 2.0).to_radians().tan();
+        let half = depth * slope;
         canvas.fill_polygon(
             &[
                 Point::new(left, bottom),
@@ -262,7 +288,7 @@ impl ScoreSection {
         let cap = label.size;
         // The angle, between the cut's faces carried up past the surface.
         let reach = 6.0;
-        let spread = (depth + reach) * 15.0_f64.to_radians().tan();
+        let spread = (depth + reach) * slope;
         for side in [-1.0, 1.0] {
             canvas.line(
                 Point::new(middle + side * half, top),
@@ -278,30 +304,32 @@ impl ScoreSection {
         // The web, between the tips of the cuts.
         let (tip_top, tip_bottom) = (top - depth, bottom + depth);
         let web_x = middle + 14.0;
-        for y in [tip_top, tip_bottom] {
+        if let Some(web) = &self.web {
+            for y in [tip_top, tip_bottom] {
+                canvas.line(
+                    Point::new(middle + 0.8, y),
+                    Point::new(web_x + 1.5, y),
+                    thin,
+                );
+            }
             canvas.line(
-                Point::new(middle + 0.8, y),
-                Point::new(web_x + 1.5, y),
+                Point::new(web_x, tip_top + 4.0),
+                Point::new(web_x, tip_bottom - 4.0),
                 thin,
             );
+            arrow(canvas, Point::new(web_x, tip_top), 1.0);
+            arrow(canvas, Point::new(web_x, tip_bottom), -1.0);
+            canvas.text(
+                Point::new(right + 4.0, (tip_top + tip_bottom) / 2.0 - cap / 2.0),
+                web,
+                label,
+            );
+            canvas.line(
+                Point::new(web_x, (tip_top + tip_bottom) / 2.0),
+                Point::new(right + 3.0, (tip_top + tip_bottom) / 2.0),
+                Pen::solid(HAIR),
+            );
         }
-        canvas.line(
-            Point::new(web_x, tip_top + 4.0),
-            Point::new(web_x, tip_bottom - 4.0),
-            thin,
-        );
-        arrow(canvas, Point::new(web_x, tip_top), 1.0);
-        arrow(canvas, Point::new(web_x, tip_bottom), -1.0);
-        canvas.text(
-            Point::new(right + 4.0, (tip_top + tip_bottom) / 2.0 - cap / 2.0),
-            &self.web,
-            label,
-        );
-        canvas.line(
-            Point::new(web_x, (tip_top + tip_bottom) / 2.0),
-            Point::new(right + 3.0, (tip_top + tip_bottom) / 2.0),
-            Pen::solid(HAIR),
-        );
         // The thickness, down the left end.
         let thickness_x = left - 6.0;
         for y in [top, bottom] {
@@ -374,6 +402,39 @@ impl Notes {
             }
             y -= NOTE_GAP;
         }
+    }
+}
+
+impl Block {
+    /// The block in parts no taller than `room`: itself, or a table too
+    /// long for one column as tables that continue it, each titled with
+    /// which part it is and the last keeping the footer.
+    pub fn split(self, room: f64) -> Vec<Self> {
+        let Self::Table(table) = self else {
+            return vec![self];
+        };
+        let header = if table.header { HEADER_ROW_HEIGHT } else { 0.0 };
+        let rows = ((room - HEADING_HEIGHT - header) / ROW_HEIGHT).floor() as usize;
+        // The footer is a row of the last part.
+        let footer = usize::from(table.footer.is_some());
+        if table.rows.len() + footer <= rows || rows < 2 {
+            return vec![Self::Table(table)];
+        }
+        let parts = (table.rows.len() + footer).div_ceil(rows);
+        let mut remaining = table.rows.into_iter().peekable();
+        (1..=parts)
+            .map(|part| {
+                let last = part == parts;
+                let take = if last { rows - footer } else { rows };
+                Self::Table(Table {
+                    title: format!("{} ({part}/{parts})", table.title),
+                    columns: table.columns.clone(),
+                    rows: remaining.by_ref().take(take).collect(),
+                    footer: table.footer.clone().filter(|_| last),
+                    header: table.header,
+                })
+            })
+            .collect()
     }
 }
 
@@ -467,20 +528,17 @@ fn draw_cell(canvas: &mut Canvas<'_>, cell: &Cell, bounds: BBox, align: Align) {
                 Cell::Bold(_) => style.bold(),
                 _ => style,
             };
-            // Text too long for its cell is set smaller rather than run
-            // into the next.
             let room = bounds.width() - 2.0 * CELL_PAD;
-            let natural = canvas.fonts.width(style.weight, style.size, text);
-            let size = style.size * (room / natural).min(1.0);
+            let style = canvas.fonts.fitted(style, text, room);
             let at = Point::new(
                 anchor(bounds.min.x, bounds.width(), align),
-                center.y - size / 2.0,
+                center.y - style.size / 2.0,
             );
-            canvas.text(at, text, TextStyle { size, ..style });
+            canvas.text(at, text, style);
         }
         Cell::Symbol(symbol) => canvas.place(*symbol, Point::ZERO, center, 1.0),
         Cell::Section(material, color) => draw_section(canvas, *material, *color, bounds),
-        Cell::Chips(chips) => draw_chips(canvas, chips, bounds),
+        Cell::Chip(chip) => draw_chip(canvas, *chip, bounds),
         Cell::Sample(sample) => draw_sample(canvas, *sample, bounds),
     }
 }
@@ -493,51 +551,42 @@ fn draw_sample(canvas: &mut Canvas<'_>, sample: Sample, cell: BBox) {
         Point::new(cell.max.x - 1.5, center.y),
     );
     match sample {
-        Sample::ArrayProfile => canvas.line(left, right, Pen::solid(THICK)),
-        Sample::BoardProfile => canvas.line(left, right, Pen::solid(MEDIUM)),
+        Sample::ArrayProfile => canvas.line(left, right, Pen::solid(HEAVY)),
+        Sample::BoardProfile => canvas.line(left, right, Pen::solid(THIN)),
         Sample::Score => canvas.line(left, right, Pen::solid(THIN).dash(Dash::Chain)),
         Sample::Routed => {
             let swatch = BBox::new(
                 Point::new(left.x, cell.min.y + 0.9),
                 Point::new(right.x, cell.max.y - 0.9),
             );
-            canvas.fill_rect(swatch, 0xd4d4d4);
+            canvas.fill_rect(swatch, ROUTED);
             canvas.rect(swatch, Pen::solid(THIN));
         }
-        Sample::FiducialTop => {
-            canvas.fill_circle(center, 0.75, INK);
-            canvas.circle(center, 1.5, Pen::solid(HAIR));
-        }
-        Sample::FiducialBottom => {
-            canvas.circle(center, 0.75, Pen::solid(HAIR));
-            canvas.circle(center, 1.5, Pen::solid(HAIR));
-        }
+        Sample::Mark(mark) => mark.draw(canvas, center, 0.0),
     }
 }
 
-/// Colour chips side by side from the cell's left edge: a filled box for a
-/// colour, a struck-out one for a side that has none, and a queried one for
-/// a colour the design does not state. Every box is outlined, so white ink
-/// still reads on white paper.
-fn draw_chips(canvas: &mut Canvas<'_>, chips: &[Chip], cell: BBox) {
+/// A colour chip at the cell's left edge: a filled box for a colour, a
+/// struck-out one where the board has none, and a queried one for a colour
+/// the design does not state. The box is outlined, so white ink still reads
+/// on white paper.
+fn draw_chip(canvas: &mut Canvas<'_>, chip: Chip, cell: BBox) {
     let center = cell.center().y;
     let pen = Pen::solid(HAIR);
-    for (index, chip) in chips.iter().enumerate() {
-        let left = cell.min.x + CELL_PAD + index as f64 * (CHIP_WIDTH + 0.8);
-        let chip_box = BBox::new(
-            Point::new(left, center - CHIP_HEIGHT / 2.0),
-            Point::new(left + CHIP_WIDTH, center + CHIP_HEIGHT / 2.0),
-        );
-        match chip {
-            Chip::Color(color) => canvas.fill_rect(chip_box, *color),
-            Chip::Absent => canvas.line(chip_box.min, chip_box.max, pen),
-            Chip::Unstated => {
-                let at = Point::new(chip_box.center().x, center - LABEL / 2.0);
-                canvas.text(at, "?", TextStyle::new(LABEL).bold().align(Align::Center));
-            }
+    let left = cell.min.x + CELL_PAD;
+    let chip_box = BBox::new(
+        Point::new(left, center - CHIP_HEIGHT / 2.0),
+        Point::new(left + CHIP_WIDTH, center + CHIP_HEIGHT / 2.0),
+    );
+    match chip {
+        Chip::Color(color) => canvas.fill_rect(chip_box, color),
+        Chip::Absent => canvas.line(chip_box.min, chip_box.max, pen),
+        Chip::Unstated => {
+            let at = Point::new(chip_box.center().x, center - LABEL / 2.0);
+            canvas.text(at, "?", TextStyle::new(LABEL).bold().align(Align::Center));
         }
-        canvas.rect(chip_box, pen);
     }
+    canvas.rect(chip_box, pen);
 }
 
 /// One layer of the board's section, in the colour of what it is made of:
