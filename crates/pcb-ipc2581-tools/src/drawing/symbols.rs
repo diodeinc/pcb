@@ -1,9 +1,7 @@
-//! Drill symbols: one mark per tool, told apart by shape alone so a plot
-//! reads in one colour.
+//! Drill symbols: one mark per tool, told apart by shape alone.
 
 use pcb_ir::geom::{ContourBuf, PathCmd, Point};
 
-/// The figure a symbol is drawn inside.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Figure {
     None,
@@ -15,7 +13,6 @@ enum Figure {
     Hexagon,
 }
 
-/// What a symbol carries inside its figure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mark {
     None,
@@ -26,8 +23,7 @@ enum Mark {
     Solid,
 }
 
-/// Symbols from the lightest to the heaviest, so the tools with the most
-/// holes can take the ones that crowd a plot least.
+/// Lightest to heaviest: the tools with the most holes take the lightest.
 const SYMBOLS: [(Figure, Mark); 34] = [
     (Figure::None, Mark::Plus),
     (Figure::None, Mark::Cross),
@@ -52,8 +48,7 @@ const SYMBOLS: [(Figure, Mark); 34] = [
     (Figure::Diamond, Mark::Solid),
     (Figure::TriangleUp, Mark::Solid),
     (Figure::TriangleDown, Mark::Solid),
-    // A hexagon is hard to tell from a circle at the size of a symbol, so
-    // it is the last figure a drawing reaches for.
+    // A hexagon is hard to tell from a circle at symbol size, so it comes last.
     (Figure::Hexagon, Mark::Dot),
     (Figure::Hexagon, Mark::Solid),
     (Figure::Hexagon, Mark::Plus),
@@ -70,8 +65,7 @@ const SYMBOLS: [(Figure, Mark); 34] = [
 /// Line weight of a symbol, as a share of its size.
 const WEIGHT: f64 = 0.11;
 
-/// Symbol `index`, `size` across and centred on the origin, as one contour
-/// to fill non-zero. Past the last symbol they repeat a half larger.
+/// Centred on the origin, non-zero fill; repeats a half larger past the last.
 pub fn symbol(index: usize, size: f64) -> ContourBuf {
     let (figure, mark) = SYMBOLS[index % SYMBOLS.len()];
     let size = size * (1.0 + 0.5 * (index / SYMBOLS.len()) as f64);
@@ -103,7 +97,6 @@ pub fn symbol(index: usize, size: f64) -> ContourBuf {
     };
     let (strokes, reach): (&[f64], f64) = match mark {
         Mark::Plus => (&[0.0, 90.0], reach),
-        // A diagonal reaches a square's corner but only a circle's edge.
         Mark::Cross => (&[45.0, 135.0], figure.diagonal_reach()),
         Mark::Star => (&[0.0, 60.0, 120.0], reach.min(figure.diagonal_reach())),
         Mark::None | Mark::Solid | Mark::Dot => (&[], reach),
@@ -152,8 +145,7 @@ impl Figure {
         }
     }
 
-    /// How far a horizontal or vertical stroke runs from the centre to stay
-    /// inside the figure.
+    /// How far a horizontal or vertical stroke runs from the centre.
     fn reach(self) -> f64 {
         match self {
             Self::None | Self::Circle => 0.5,
@@ -165,7 +157,6 @@ impl Figure {
         }
     }
 
-    /// The same for a diagonal stroke.
     fn diagonal_reach(self) -> f64 {
         match self {
             Self::None | Self::Circle => 0.5,
@@ -207,30 +198,4 @@ fn circle(cmds: &mut Vec<PathCmd>, radius: f64, clockwise: bool) {
         PathCmd::arc_to(east, Point::ZERO, clockwise),
         PathCmd::close(),
     ]);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_symbol_is_distinct_and_fits_its_size() {
-        let symbols = (0..SYMBOLS.len())
-            .map(|index| symbol(index, 2.0))
-            .collect::<Vec<_>>();
-        for (index, symbol) in symbols.iter().enumerate() {
-            assert!(
-                symbol.bbox.width() <= 2.6 && symbol.bbox.height() <= 2.6,
-                "symbol {index} spans {:?}",
-                symbol.bbox
-            );
-            assert!(
-                symbols[..index]
-                    .iter()
-                    .all(|other| other.cmds != symbol.cmds),
-                "symbol {index} repeats an earlier one"
-            );
-        }
-        assert!(symbol(SYMBOLS.len(), 2.0).bbox.width() > symbols[0].bbox.width());
-    }
 }

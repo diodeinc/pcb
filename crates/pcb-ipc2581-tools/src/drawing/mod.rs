@@ -1,17 +1,5 @@
 //! Fabrication drawings: the sheets a bare-board fabricator builds a board
 //! or a board array to, as a PDF.
-//!
-//! A drawing states what the design data cannot be asked at a glance: what
-//! the board is made of and finished in, how large it is, which holes are
-//! drilled where. Every view is ordinary artwork plotted at a stated scale,
-//! so a sheet printed at full size measures true.
-//!
-//! A drawing is A4 sheets: the board's dimensioned outline beside its
-//! specification, layer stack and notes; then its drill pattern and drill
-//! table; then, for an array, the array as it is delivered, and its tooling
-//! holes and fiducials on a sheet for each side that carries fiducials; and
-//! last every layer the fabricator images, two to a sheet, each in a colour
-//! of its own.
 
 mod blocks;
 mod data;
@@ -45,34 +33,27 @@ use crate::accessors::StackupLayerType;
 
 pub use self::pdf::Typeface;
 
-/// What a fabrication drawing draws and what its title strip says.
 #[derive(Debug, Clone, Default)]
 pub struct FabDrawingOptions {
-    /// The board alone, or the array the file lays it out in.
     pub target: LayoutTarget,
     /// The design's name, where the board step's own is not wanted.
     pub title: Option<String>,
     pub revision: Option<String>,
     /// What names the data the drawing was made from: a file and its digest.
     pub source: Option<String>,
-    /// The face everything is lettered in.
     pub typeface: Typeface,
 }
 
-/// How many layer views a sheet holds.
 const LAYERS_PER_SHEET: usize = 2;
-/// The ink a mask's openings and a legend are drawn in, and a mask the
-/// design does not colour.
+/// Inks for a mask's openings, a legend, and a mask the design does not colour.
 const MASK_INK: u32 = 0x6a1b7a;
 const LEGEND_INK: u32 = 0x8a6d00;
 const UNCOLOURED: u32 = 0xbdbdbd;
 
 /// Room kept between the frame and what a sheet draws, and between blocks.
 const PAD: f64 = 4.0;
-/// Room a view keeps around its artwork.
 const VIEW_MARGIN: f64 = 3.0;
-/// How far a dimension line stands off what it measures, and the room the
-/// value beside a vertical one takes.
+/// A dimension line's offset from its feature, and the room its value takes.
 const DIMENSION_OFFSET: f64 = 7.0;
 const DIMENSION_VALUE: f64 = 13.0;
 /// Room ordinates take beside a view: their leaders and the longest label.
@@ -119,7 +100,7 @@ pub fn fab_drawing(
     };
 
     // Layer views first: the specification says which sides are printed.
-    let layers = drawing.layer_views()?;
+    let layers = drawing.layer_views(true)?;
     let printed = layers
         .iter()
         .map(|(layer, _, has_artwork)| (layer.clone(), *has_artwork))
@@ -127,15 +108,13 @@ pub fn fab_drawing(
     let tools = drill_tools(imported, ArtworkScope::Board)?;
     let symbols = assign_symbols(&tools);
 
-    // The board, its drill pattern, then the array it is delivered in.
     let specification = drawing.specification(&printed, &tools, array.as_ref());
     let notes = Block::Notes(Notes {
         title: "NOTES".to_string(),
         notes: data::notes(&source, array.as_ref()),
     });
     let carried = drawing.board_sheet(&tools, specification, drawing.stack_table(), notes)?;
-    // A board with no holes has no drill sheet, only what the first sheet
-    // had no room for.
+    // No holes, no drill sheet: only what the first sheet had no room for.
     if tools.is_empty() {
         drawing.table_sheets(carried.into_iter().collect());
     } else {
@@ -149,12 +128,18 @@ pub fn fab_drawing(
         drawing.array_sheet(array, blocks)?;
         drawing.tooling_sheets(array)?;
     }
-    drawing.layer_sheets(layers)?;
+    let board = (drawing.outline.clone(), bounds);
+    drawing.layer_sheets(layers, board, None)?;
+    // The array's own copper, mask and legend show only on the whole array.
+    if let Some(array) = &array {
+        let (outline, _) = views::outline(imported, ProfileSet::FabricationOutlines);
+        let layers = drawing.layer_views(false)?;
+        drawing.layer_sheets(layers, (outline, array.bounds), Some("ARRAY"))?;
+    }
     drawing.finish()
 }
 
-/// Ordinate stations of the design as they fall on a sheet: along X, or
-/// along Y.
+/// Ordinate stations of the design as they fall on a sheet, along X or along Y.
 fn on_sheet(placement: &Placement, stations: Vec<(f64, String)>, x: bool) -> Vec<(f64, String)> {
     stations
         .into_iter()
@@ -165,8 +150,7 @@ fn on_sheet(placement: &Placement, stations: Vec<(f64, String)>, x: bool) -> Vec
         .collect()
 }
 
-/// Give each tool a symbol: the tools with the most holes take the lightest
-/// symbols.
+/// The tools with the most holes take the lightest symbols.
 fn assign_symbols(tools: &[DrillTool]) -> Vec<usize> {
     let mut order = (0..tools.len()).collect::<Vec<_>>();
     order.sort_by_key(|&tool| std::cmp::Reverse(tools[tool].hits.len()));
@@ -180,7 +164,6 @@ fn assign_symbols(tools: &[DrillTool]) -> Vec<usize> {
 /// A sheet as it is drawn, before the drawing knows how many it has.
 struct Sheet<'a> {
     canvas: Canvas<'a>,
-    /// What the sheet shows.
     content: String,
     scale: String,
 }
@@ -189,18 +172,15 @@ struct Drawing<'a> {
     source: &'a Source<'a>,
     options: &'a FabDrawingOptions,
     fonts: &'a Fonts,
-    /// The board's outline with its cutouts, and the bounds of its outer
-    /// edge.
+    /// The board's outline with its cutouts, and the bounds of its outer edge.
     outline: Vec<ContourBuf>,
     bounds: BBox,
-    /// Whether the boards are delivered as an array.
     array: bool,
     doc: Document,
     sheets: Vec<Sheet<'a>>,
 }
 
-/// The ink of copper layer `number` of `count`: the outer layers in red and
-/// blue, the inner ones told apart in turn.
+/// The outer layers in red and blue, the inner ones told apart in turn.
 fn copper_ink(number: usize, count: usize) -> u32 {
     // None of them a colour a mask, a legend or their chips are shown in.
     const INNER: [u32; 6] = [0x0f766e, 0xc2410c, 0x475569, 0xbe185d, 0x65a30d, 0x0891b2];
@@ -211,7 +191,6 @@ fn copper_ink(number: usize, count: usize) -> u32 {
     }
 }
 
-/// A key to a view: a sample of each line or mark beside what it means.
 fn key(rows: Vec<(Sample, String)>) -> Block {
     Block::Table(Table {
         title: "KEY".to_string(),
@@ -228,8 +207,6 @@ fn key(rows: Vec<(Sample, String)>) -> Block {
     })
 }
 
-/// A tooling hole or a fiducial of the array's own, as its sheet marks,
-/// tags and lists it.
 struct Tagged {
     tag: String,
     feature: String,
@@ -252,13 +229,10 @@ fn drill_columns(kind: f64) -> Vec<Column> {
 struct Beside {
     /// Each block with its top-left corner.
     placed: Vec<(Block, Point)>,
-    /// Blocks the column has no room for.
     left_over: Vec<Block>,
-    /// What is left of the sheet for its view.
     view: BBox,
 }
 
-/// What a sheet has to draw in: its body, less a margin.
 fn area() -> BBox {
     let body = sheet::body();
     BBox::new(
@@ -267,8 +241,7 @@ fn area() -> BBox {
     )
 }
 
-/// Fit `bounds` of the design into `region` of a sheet, keeping `clear`
-/// around it for what is lettered there.
+/// Fit `bounds` of the design into `region`, keeping `clear` around it.
 fn place(bounds: BBox, region: BBox, clear: Clear) -> (Scale, Placement) {
     let room = BBox::new(
         Point::new(
@@ -284,12 +257,9 @@ fn place(bounds: BBox, region: BBox, clear: Clear) -> (Scale, Placement) {
     (scale, Placement::centered(bounds, room.center(), scale))
 }
 
-/// Fit `bounds` and a title taking `title` room into `region`: the title
-/// under the view, or beside it where that draws the view at a larger
-/// scale.
+/// Titled under the view, or beside it where that draws the view larger.
 fn place_titled(bounds: BBox, region: BBox, title: TitleRoom) -> (Scale, Placement, TitleSide) {
-    // Under a view, details too long for one line of the region stand a line
-    // each.
+    // Under a view, details too long for one line stand a line each.
     let (under, height) = if title.below > region.width() - 2.0 * VIEW_MARGIN {
         (TitleSide::Stacked, title.height())
     } else {
@@ -308,8 +278,7 @@ fn place_titled(bounds: BBox, region: BBox, title: TitleRoom) -> (Scale, Placeme
     if scale_beside.factor() <= scale_below.factor() {
         return (scale_below, placed_below, under);
     }
-    // A view with its title beside it stands at the left of its region, so
-    // all the room it leaves is in one strip.
+    // Titled beside, a view stands at the left so its spare room is one strip.
     let left = region.min.x + VIEW_MARGIN + bounds.width() * scale_beside.factor() / 2.0;
     let placed = Placement {
         at: Point::new(left, placed_beside.at.y),
@@ -330,9 +299,7 @@ impl<'a> Drawing<'a> {
             .with_viewport(viewport)
     }
 
-    /// Lay `blocks` down a column on the sheet's right, in order, as far as
-    /// they fit. A block is never split: one the column has no room for is
-    /// left over with every block after it.
+    /// Down the sheet's right; the first block that does not fit ends it.
     fn column(&self, blocks: Vec<Block>) -> Beside {
         let area = area();
         let width = sheet::COLUMN_WIDTH;
@@ -361,8 +328,7 @@ impl<'a> Drawing<'a> {
         }
     }
 
-    /// Sheets of nothing but blocks, for those a view's sheet had no room
-    /// for: columns across the sheet, left to right.
+    /// Sheets of nothing but blocks, in columns left to right.
     fn table_sheets(&mut self, blocks: Vec<Block>) {
         let area = area();
         let width = sheet::COLUMN_WIDTH;
@@ -372,7 +338,6 @@ impl<'a> Drawing<'a> {
             .flat_map(|block| block.split(area.height()))
             .collect::<Vec<_>>();
         let count = ((area.width() + PAD) / (width + PAD)).floor().max(1.0) as usize;
-        // Columns spread evenly across the sheet.
         let pitch = (area.width() - width) / (count - 1).max(1) as f64;
         while !blocks.is_empty() {
             let mut canvas = self.canvas();
@@ -383,8 +348,7 @@ impl<'a> Drawing<'a> {
                 let mut y = area.max.y;
                 while let Some(block) = remaining.peek() {
                     let height = block.height(self.fonts, width);
-                    // A block taller than a whole column is drawn anyway
-                    // rather than never.
+                    // A block taller than a column is drawn anyway.
                     if y - height < area.min.y && y < area.max.y {
                         break;
                     }
@@ -403,8 +367,6 @@ impl<'a> Drawing<'a> {
         }
     }
 
-    /// What a fabricator quotes and builds to, with a colour chip for every
-    /// ink and finish.
     fn specification(
         &self,
         layers: &[(FabLayer, bool)],
@@ -431,8 +393,6 @@ impl<'a> Drawing<'a> {
         })
     }
 
-    /// The drill table: a symbol, a count and a finished size for every
-    /// tool, and what its holes are.
     fn drill_table(&mut self, tools: &[DrillTool], symbols: &[usize]) -> Result<Table> {
         let rows = tools
             .iter()
@@ -443,8 +403,6 @@ impl<'a> Drawing<'a> {
                 let plot = self
                     .doc
                     .plot(&symbol.artwork, &self.render_options(&symbol, viewport))?;
-                // What the holes are, then what sets them apart from a round
-                // hole through the board.
                 let kind = [Some(tool.usage().to_string()), tool.span(), tool.shape()];
                 let kind = kind.into_iter().flatten().collect::<Vec<_>>().join(" · ");
                 Ok(vec![
@@ -455,8 +413,7 @@ impl<'a> Drawing<'a> {
                 ])
             })
             .collect::<Result<Vec<_>>>()?;
-        // An array's drawing lists the holes of one board; the array sheet
-        // totals them.
+        // This lists the holes of one board; the array sheet totals them.
         let footer = vec![
             Cell::Empty,
             Cell::Bold(hole_count(tools).to_string()),
@@ -476,10 +433,7 @@ impl<'a> Drawing<'a> {
         })
     }
 
-    /// The layer stack: a section, number, name, material and thickness for
-    /// every stackup row.
     fn stack_table(&self) -> Option<Block> {
-        /// Dielectrics under their hatching.
         const CORE: u32 = 0xccd5ae;
         const PREPREG: u32 = 0xe9edc9;
         const DIELECTRIC: u32 = 0xebe6dc;
@@ -557,9 +511,7 @@ impl<'a> Drawing<'a> {
                 }
             })
             .collect::<Vec<_>>();
-        // The stated thickness where the layers add up to it; where they do
-        // not, the table totals what it lists and the specification states
-        // the other.
+        // The stated thickness where the layers add up to it, else their sum.
         let footer = stackup.overall_thickness_mm.map(|thickness| {
             let (what, total) = if (sum - thickness).abs() < 0.002 {
                 ("FINISHED THICKNESS", thickness)
@@ -588,7 +540,6 @@ impl<'a> Drawing<'a> {
         }))
     }
 
-    /// What the array adds to its boards: how it steps and what holds them.
     fn array_table(&self, array: &ArrayData, board_holes: usize) -> Block {
         let mut rows = Vec::new();
         let mut row = |item: &str, value: String| {
@@ -622,8 +573,7 @@ impl<'a> Drawing<'a> {
                 ),
             );
         }
-        // The border as the ordinates measure it: from the array's edge to
-        // the nearest board's.
+        // As the ordinates measure it: array edge to the nearest board's.
         let held = array
             .boards
             .iter()
@@ -674,7 +624,6 @@ impl<'a> Drawing<'a> {
         })
     }
 
-    /// How the array's view draws what it shows.
     fn array_key(&self, array: &ArrayData) -> Block {
         let rows = [
             (true, Sample::ArrayProfile, "ARRAY PROFILE"),
@@ -689,12 +638,7 @@ impl<'a> Drawing<'a> {
         key(rows.collect())
     }
 
-    /// The array's tooling sheets: the array with every tooling hole and
-    /// fiducial marked and tagged, beside a table that places each. A side
-    /// that carries fiducials has a sheet of its own, so marks a millimetre
-    /// apart on opposite sides are never drawn over each other; an array
-    /// with fiducials on neither has one sheet for its holes, and one with
-    /// neither holes nor fiducials has none.
+    /// A sheet per side that carries fiducials, or one for the holes alone.
     fn tooling_sheets(&mut self, array: &ArrayData) -> Result<()> {
         let on = |side: Side| array.fiducials.iter().any(|fiducial| fiducial.side == side);
         let sides = [Side::Top, Side::Bottom]
@@ -715,12 +659,7 @@ impl<'a> Drawing<'a> {
         Ok(())
     }
 
-    /// One tooling sheet: the tooling holes, and the fiducials of `side`.
-    /// The array's own are placed from its datum. A board's are placed from
-    /// the lower-left corner of the board's extents, as every board has
-    /// them, and tagged in a detail of one board. Tags are numbered on from
-    /// `tagged`, the array's own and the boards'; returns how many of each
-    /// this sheet tags.
+    /// Tags number on from `tagged` (own, boards'); returns how many it adds.
     fn tooling_sheet(
         &mut self,
         array: &ArrayData,
@@ -736,8 +675,6 @@ impl<'a> Drawing<'a> {
         let per_board = side.and_then(|side| array.board_fiducials(side));
         let per_board = per_board.unwrap_or_default();
 
-        // What the array's view marks and tags: its tooling holes, then its
-        // own fiducials.
         let holes = tooling.iter().enumerate().map(|(index, (at, tool))| {
             let feature = ["TOOLING HOLE".to_string(), tool.usage().to_string()];
             let feature = feature.into_iter().chain(tool.span()).collect::<Vec<_>>();
@@ -815,8 +752,7 @@ impl<'a> Drawing<'a> {
         let key = key(marked
             .map(|(_, sample, meaning)| (sample, meaning))
             .collect());
-        // The key and the detail stay beside the view; a table too long to
-        // join them follows on a sheet of its own.
+        // A table too long to join the key and detail follows on its own sheet.
         let detail = self.board_detail(array, &per_board, &board_tags)?;
         let blocks = [Some(key), detail, Some(table)];
         let column = self.column(blocks.into_iter().flatten().collect());
@@ -861,8 +797,7 @@ impl<'a> Drawing<'a> {
         Ok((own.len(), per_board.len()))
     }
 
-    /// One board in its cell, drawn large enough to tag the fiducials
-    /// beside it: `fiducials` from the board's datum, each with its tag.
+    /// One board in its cell, large enough to tag `fiducials` beside it.
     fn board_detail(
         &mut self,
         array: &ArrayData,
@@ -896,7 +831,6 @@ impl<'a> Drawing<'a> {
         })))
     }
 
-    /// One breakaway tab, drawn large enough to read its perforations.
     fn tab_figure(&mut self, array: &ArrayData) -> Result<Option<Block>> {
         let Some(tab) = array.tab() else {
             return Ok(None);
@@ -924,7 +858,6 @@ impl<'a> Drawing<'a> {
         })))
     }
 
-    /// A V-score in section, where the array is scored.
     fn score_section(&self, array: &ArrayData) -> Option<Block> {
         if array.scores.is_empty() {
             return None;
@@ -938,8 +871,6 @@ impl<'a> Drawing<'a> {
         }))
     }
 
-    /// Plot `view`, draw it where `placement` puts it, and letter `title`
-    /// on the side of it that was kept clear.
     fn draw_titled(
         &mut self,
         canvas: &mut Canvas<'_>,
@@ -954,7 +885,6 @@ impl<'a> Drawing<'a> {
             TitleSide::Below | TitleSide::Stacked => {
                 Point::new(drawn.center().x, drawn.min.y - TITLE_DROP)
             }
-            // Beside the view's foot, where a drawing's eye lands last.
             TitleSide::Beside => Point::new(
                 drawn.max.x + TITLE_DROP,
                 drawn.min.y + title.height_beside(),
@@ -964,7 +894,6 @@ impl<'a> Drawing<'a> {
         Ok(())
     }
 
-    /// Plot `view` and draw it where `placement` puts it.
     fn draw_view(
         &mut self,
         canvas: &mut Canvas<'_>,
@@ -972,8 +901,7 @@ impl<'a> Drawing<'a> {
         bounds: BBox,
         placement: Placement,
     ) -> Result<()> {
-        // Room for what overhangs the bounds: line weights, symbols on an
-        // edge, a score drawn past the outline.
+        // Room for line weights, edge symbols and a score past the outline.
         let viewport = bounds.expand(5.0 / placement.scale);
         let plot = self
             .doc
@@ -982,10 +910,7 @@ impl<'a> Drawing<'a> {
         Ok(())
     }
 
-    /// The board's sheet: its outline, dimensioned, beside its
-    /// specification, its layer stack and the notes. The specification and
-    /// the notes never leave this sheet; a stack too tall to share it is
-    /// returned to be set with the drill table.
+    /// Returns the stack where it is too tall to share the sheet.
     fn board_sheet(
         &mut self,
         tools: &[DrillTool],
@@ -1007,11 +932,9 @@ impl<'a> Drawing<'a> {
         let mut canvas = self.canvas();
         let bounds = self.bounds;
 
-        // An axis whose outline has edges between its extents is dimensioned
-        // by ordinates from the lower-left corner; a plain one by its length.
+        // An axis with interior edges takes ordinates; a plain one its length.
         let features = OutlineFeatures::of(&self.outline);
-        // The extents are stations too: an outline whose ends are arcs
-        // still reads from its datum to its overall size.
+        // The extents are stations too, for an outline whose ends are arcs.
         let across = features.edges_x.iter().copied();
         let across = views::stations(across.chain([bounds.min.x, bounds.max.x]), bounds.min.x);
         let up = features.edges_y.iter().copied();
@@ -1039,8 +962,7 @@ impl<'a> Drawing<'a> {
             ..Clear::default()
         };
         let (scale, placement) = place(bounds, column.view, clear);
-        // The holes that are part of the board's shape: every hole but the
-        // vias, each by its edge.
+        // Holes that are part of the board's shape: every hole but the vias.
         let mechanical = tools
             .iter()
             .filter(|tool| tool.kind != HoleKind::Via)
@@ -1096,8 +1018,7 @@ impl<'a> Drawing<'a> {
         Ok(carried)
     }
 
-    /// Draw a sheet's column and file the sheet, then sheets of the blocks
-    /// its column had no room for.
+    /// Draw the column and file the sheet, then sheets of what was left over.
     fn finish_sheet(
         &mut self,
         mut canvas: Canvas<'a>,
@@ -1117,13 +1038,8 @@ impl<'a> Drawing<'a> {
         self.table_sheets(column.left_over);
     }
 
-    /// The drill sheet: the board's outline with every hole marked by its
-    /// tool's symbol, and the drill table.
-    ///
-    /// The pattern is drawn as large as the sheet allows. The table sits in
-    /// a column beside it where that costs the pattern no scale; else in the
-    /// strip the pattern leaves beside itself, above its title; and on a
-    /// sheet of its own after it where it fits neither.
+    /// The table sits beside the pattern where that costs the pattern no scale,
+    /// else in the strip the pattern leaves, else on a sheet of its own.
     fn drill_sheet(
         &mut self,
         tools: &[DrillTool],
@@ -1158,17 +1074,13 @@ impl<'a> Drawing<'a> {
             let scale = beside_placed.0;
             let view = views::board_view(&self.outline, tools, pattern, scale.factor())?;
             self.draw_titled(&mut canvas, &view, bounds, beside_placed, &title(scale))?;
-            // The sheet says what it holds besides the drill table.
             let carried = beside.placed.iter().skip(1).map(|(block, _)| block.title());
             let content = std::iter::once("DRILL").chain(carried).collect::<Vec<_>>();
             let content = content.join(", ");
             self.finish_sheet(canvas, beside, &content, scale);
             return Ok(());
         }
-        // Alone on its sheet, the pattern leaves the table a place of its
-        // own beside it: the strip above a title lettered at its right, or
-        // the corner under it, clear of a title lettered below. Set there,
-        // TYPE takes a smaller share of the table.
+        // The table takes the strip above a side title, or the corner below.
         let (scale, placement, side) = alone_placed;
         let area = area();
         let narrow = Block::Table(Table {
@@ -1193,8 +1105,7 @@ impl<'a> Drawing<'a> {
                 )
             }
             TitleSide::Below | TitleSide::Stacked => {
-                // Drawn at the top of the sheet, the pattern leaves the most
-                // room under it.
+                // Drawn at the top, the pattern leaves the most room under it.
                 let raised = Placement {
                     at: Point::new(
                         placement.at.x,
@@ -1227,8 +1138,6 @@ impl<'a> Drawing<'a> {
         Ok(())
     }
 
-    /// The array's sheet: the array as it is delivered, with ordinates from
-    /// its lower-left corner to every board edge and score, beside `blocks`.
     fn array_sheet(&mut self, array: &ArrayData, blocks: Vec<Block>) -> Result<()> {
         let column = self.column(blocks);
         let mut canvas = self.canvas();
@@ -1302,9 +1211,8 @@ impl<'a> Drawing<'a> {
         Ok(())
     }
 
-    /// Every fabrication layer of the board as a view in its own colour,
-    /// with whether it has any artwork.
-    fn layer_views(&self) -> Result<Vec<(FabLayer, View, bool)>> {
+    /// Every fabrication layer in its own colour, and whether it has artwork.
+    fn layer_views(&self, board: bool) -> Result<Vec<(FabLayer, View, bool)>> {
         let source = self.source;
         let layers = fab_layers(source.imported);
         let copper_layers = layers
@@ -1319,16 +1227,14 @@ impl<'a> Drawing<'a> {
                     LayerRole::Soldermask => MASK_INK,
                     _ => LEGEND_INK,
                 };
-                let (view, has_artwork) = views::layer_view(source, &layer, ink)
+                let (view, has_artwork) = views::layer_view(source, &layer, board, ink)
                     .with_context(|| format!("failed to draw layer '{}'", layer.name))?;
                 Ok((layer, view, has_artwork))
             })
             .collect()
     }
 
-    /// What a layer view's title says of it besides its scale: the weight
-    /// of a copper layer, and the ink a mask or a legend is printed in,
-    /// which is not the colour the view draws it in.
+    /// A copper layer's weight, or the ink a mask or legend is printed in.
     fn layer_detail(&self, layer: &FabLayer) -> Option<String> {
         let source = self.source;
         match layer.role {
@@ -1353,13 +1259,11 @@ impl<'a> Drawing<'a> {
     }
 
     /// A layer view's title, at `scale` or with room left to state one.
-    fn layer_title(&self, layer: &FabLayer, scale: Option<Scale>) -> Title {
-        let name = match layer.number {
-            Some(number) => format!("L{number} · {}", layer.name),
-            None => layer.name.clone(),
-        };
-        // Everything is viewed from the top, through the board, so what is
-        // printed on the bottom reads mirrored.
+    fn layer_title(&self, layer: &FabLayer, of: Option<&str>, scale: Option<Scale>) -> Title {
+        let number = layer.number.map(|number| format!("L{number}"));
+        let name = [of.map(str::to_string), number, Some(layer.name.clone())];
+        let name = name.into_iter().flatten().collect::<Vec<_>>().join(" · ");
+        // Everything is viewed from the top, so the bottom reads mirrored.
         let viewed = match layer.side {
             Side::Bottom => "VIEWED FROM TOP, READS MIRRORED",
             _ => "VIEWED FROM TOP",
@@ -1379,11 +1283,15 @@ impl<'a> Drawing<'a> {
         }
     }
 
-    /// The layer sheets: every layer with artwork, two to a sheet, each as
-    /// large as its half of the sheet allows.
-    fn layer_sheets(&mut self, layers: Vec<(FabLayer, View, bool)>) -> Result<()> {
-        // A legend layer with nothing on it is not imaged at all, nor is a
-        // copper layer with neither artwork nor a weight.
+    /// Two layers to a sheet, each drawn within `outline`: the board's, or
+    /// `of` the array.
+    fn layer_sheets(
+        &mut self,
+        layers: Vec<(FabLayer, View, bool)>,
+        (outline, bounds): (Vec<ContourBuf>, BBox),
+        of: Option<&str>,
+    ) -> Result<()> {
+        // Not imaged: an empty legend, or copper with no artwork and no weight.
         let layers = layers
             .into_iter()
             .filter(|(layer, _, has_artwork)| match layer.role {
@@ -1395,13 +1303,11 @@ impl<'a> Drawing<'a> {
         if layers.is_empty() {
             return Ok(());
         }
-        let bounds = self.bounds;
         let area = area();
         let widest = layers
             .iter()
-            // Every layer's title, lettered before the scale is settled:
-            // the scale a sheet draws at depends on how wide the widest is.
-            .map(|(layer, ..)| self.layer_title(layer, None).room(self.fonts))
+            // Lettered before the scale is settled: it depends on the widest.
+            .map(|(layer, ..)| self.layer_title(layer, of, None).room(self.fonts))
             .reduce(TitleRoom::most)
             .expect("there is a layer to draw");
         let cell = |(columns, rows): (usize, usize), index: usize| {
@@ -1429,25 +1335,25 @@ impl<'a> Drawing<'a> {
             let mut names = Vec::new();
             for (index, (layer, view, _)) in layers.by_ref().take(per_sheet).enumerate() {
                 let placed = place_titled(bounds, cell(grid, index), widest);
-                let view = view.outlined(self.outline.clone(), sheet::MEDIUM / scale.factor())?;
-                let title = self.layer_title(&layer, Some(scale));
+                let view = view.outlined(outline.clone(), sheet::MEDIUM / scale.factor())?;
+                let title = self.layer_title(&layer, of, Some(scale));
                 self.draw_titled(&mut canvas, &view, bounds, placed, &title)?;
                 names.push(match layer.number {
                     Some(number) => format!("L{number} {}", layer.name),
                     None => layer.name,
                 });
             }
+            let content = of.into_iter().map(str::to_string).chain(names);
             self.sheets.push(Sheet {
                 canvas,
-                content: names.join(", "),
+                content: content.collect::<Vec<_>>().join(", "),
                 scale: scale.to_string(),
             });
         }
         Ok(())
     }
 
-    /// Frame every sheet, now that each knows how many there are, and write
-    /// the document.
+    /// Frame every sheet, now that the count is known, and write the document.
     fn finish(mut self) -> Result<Vec<u8>> {
         let options = self.options;
         let name = options

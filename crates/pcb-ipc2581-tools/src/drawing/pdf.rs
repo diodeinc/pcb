@@ -1,6 +1,5 @@
-//! The PDF a drawing is written to: pages in millimetres with the origin at
-//! the bottom-left corner, text set in one typeface whose glyphs are
-//! embedded as they are used, and artwork plots placed to scale.
+//! The PDF a drawing is written to: pages in millimetres with the origin at the
+//! bottom-left, glyphs embedded as used, artwork plots placed to scale.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -16,10 +15,8 @@ use pdf_writer::{Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 use subsetter::GlyphRemapper;
 use ttf_parser::Face;
 
-/// PDF points per millimetre.
 const POINTS_PER_MM: f64 = 72.0 / 25.4;
 
-/// The ink a drawing's linework and lettering are in.
 pub const INK: u32 = 0x111111;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,8 +25,7 @@ pub enum Weight {
     Bold,
 }
 
-/// A typeface to letter a drawing in: font files of its regular and bold
-/// faces, with TrueType outlines.
+/// Font files of the regular and bold faces, with TrueType outlines.
 #[derive(Debug, Clone)]
 pub struct Typeface {
     pub regular: Cow<'static, [u8]>,
@@ -37,7 +33,6 @@ pub struct Typeface {
 }
 
 impl Default for Typeface {
-    /// The face pcb bundles: Roboto Mono.
     fn default() -> Self {
         Self {
             regular: Cow::Borrowed(include_bytes!("../../fonts/RobotoMono-Regular.ttf")),
@@ -46,29 +41,23 @@ impl Default for Typeface {
     }
 }
 
-/// The faces a drawing is lettered in, and the glyphs it has used of each.
 pub struct Fonts {
     faces: [FontFace; 2],
 }
 
 struct FontFace {
-    /// The name the face gives itself, which its embedded subset keeps.
     name: String,
     data: Cow<'static, [u8]>,
     units_per_em: f64,
     cap_height: f64,
-    /// Whether the face lets a document carry only the glyphs it uses. One
-    /// that forbids subsetting is embedded whole.
+    /// A face that forbids subsetting is embedded whole.
     subset: bool,
-    /// Each character's glyph, its advance in ems and the character the
-    /// glyph is of, as they are asked for.
+    /// Each character's glyph, its advance in ems and the character it is of.
     glyphs: RefCell<HashMap<char, (u16, f64, char)>>,
     used: RefCell<UsedGlyphs>,
 }
 
-/// The glyphs a document draws, with the character each stands for. An
-/// embedded subset renumbers them; a face embedded whole keeps its own
-/// numbering.
+/// A subset renumbers its glyphs; a face embedded whole keeps its numbering.
 struct UsedGlyphs {
     glyphs: GlyphRemapper,
     chars: BTreeMap<u16, char>,
@@ -89,8 +78,6 @@ impl Fonts {
     }
 
     /// The em a face is set at for its capitals to stand `height` tall.
-    /// Lettering is sized the way a drawing states it, by the height of its
-    /// capitals, so a drawing keeps its proportions whatever face letters it.
     fn em(&self, weight: Weight, height: f64) -> f64 {
         let face = self.face(weight);
         height * face.units_per_em / face.cap_height
@@ -102,7 +89,6 @@ impl Fonts {
         text.chars().map(|c| face.glyph(c).1).sum::<f64>() * self.em(weight, height)
     }
 
-    /// Break `text` into lines no wider than `width`, at spaces.
     pub fn wrap(&self, weight: Weight, size: f64, text: &str, width: f64) -> Vec<String> {
         let mut lines = Vec::new();
         let mut line = String::new();
@@ -124,8 +110,7 @@ impl Fonts {
         lines
     }
 
-    /// `style` at the size `text` fits `room` in: text too long for its room
-    /// is set smaller rather than run into what stands beside it.
+    /// `style` at the size `text` fits `room` in.
     pub fn fitted(&self, style: TextStyle, text: &str, room: f64) -> TextStyle {
         let natural = self.width(style.weight, style.size, text);
         TextStyle {
@@ -176,8 +161,7 @@ impl FontFace {
             .chars()
             .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
             .collect();
-        // A face that states no cap height, or states nothing for one, is
-        // sized by its ascender.
+        // A face that states no cap height is sized by its ascender.
         let stated = face.capital_height().filter(|height| *height > 0);
         let (units_per_em, cap_height) = (
             f64::from(face.units_per_em()),
@@ -202,8 +186,7 @@ impl FontFace {
         Face::parse(&self.data, 0).expect("the face parsed when it was loaded")
     }
 
-    /// The glyph for `c`, its advance in ems and the character it is of:
-    /// the face's question mark stands for a character it lacks.
+    /// The face's question mark stands for a character it lacks.
     fn glyph(&self, c: char) -> (u16, f64, char) {
         *self.glyphs.borrow_mut().entry(c).or_insert_with(|| {
             let face = self.parsed();
@@ -216,7 +199,6 @@ impl FontFace {
         })
     }
 
-    /// Embed the glyphs used of this face as font `id`.
     fn write(&self, pdf: &mut Pdf, alloc: &mut Ref, id: Ref) -> anyhow::Result<()> {
         const SYSTEM_INFO: SystemInfo = SystemInfo {
             registry: Str(b"Adobe"),
@@ -225,14 +207,11 @@ impl FontFace {
         };
         let face = self.parsed();
         let used = self.used.borrow();
-        // The font program the document carries, the glyphs it holds in the
-        // order it numbers them, and the name it goes by.
         let (program, glyphs, name) = if self.subset {
             let subset = subsetter::subset(&self.data, 0, &used.glyphs)
                 .map_err(|error| anyhow::anyhow!("cannot subset {}: {error}", self.name))?;
             let glyphs = used.glyphs.remapped_gids().collect::<Vec<_>>();
-            // A subset is tagged by six letters; these say which glyphs it
-            // has.
+            // A subset is tagged by six letters; these say which glyphs it has.
             let tag = glyphs
                 .iter()
                 .fold(0xcbf2_9ce4_8422_2325_u64, |hash, glyph| {
@@ -275,8 +254,7 @@ impl FontFace {
         if face.is_monospaced() {
             flags |= FontFlags::FIXED_PITCH;
         }
-        // The stem width matters only to a viewer that cannot use the
-        // embedded face; it grows with the face's weight.
+        // The stem width matters only to a viewer that cannot use the face.
         let stem_v = 50.0 + (f32::from(face.weight().to_number()) / 65.0).powi(2);
         pdf.font_descriptor(descriptor)
             .name(name)
@@ -306,7 +284,6 @@ impl FontFace {
     }
 }
 
-/// How a line is drawn.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pen {
     width: f64,
@@ -332,7 +309,6 @@ impl Pen {
     }
 }
 
-/// Line types of a technical drawing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Dash {
     Solid,
@@ -347,7 +323,7 @@ pub enum Align {
     Right,
 }
 
-/// How a line of text is set. Its anchor is on the baseline.
+/// The anchor is on the baseline.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextStyle {
     /// Height of the capitals, in millimetres.
@@ -390,7 +366,6 @@ impl TextStyle {
 /// Artwork plotted into a document, for its pages to place.
 pub type Plot = Ref;
 
-/// One page as it is drawn.
 pub struct Canvas<'a> {
     pub fonts: &'a Fonts,
     ops: String,
@@ -429,8 +404,7 @@ impl<'a> Canvas<'a> {
         let width = pen.width;
         let dash = match pen.dash {
             Dash::Solid => "[] 0 d".to_string(),
-            // The proportions artwork draws a centre line in, so a key's
-            // sample is the line the view shows.
+            // The proportions artwork draws a centre line in.
             Dash::Chain => format!(
                 "[{} {} {} {}] 0 d",
                 number(6.0 * width),
@@ -467,7 +441,6 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// A circle as four cubics.
     fn circle_path(&mut self, center: Point, radius: f64) {
         let handle = radius * 4.0 / 3.0 * (std::f64::consts::FRAC_PI_8).tan();
         let at = |x: f64, y: f64| format!("{} {}", number(center.x + x), number(center.y + y));
@@ -549,8 +522,7 @@ impl<'a> Canvas<'a> {
         width
     }
 
-    /// Place a plot so that the artwork point `anchor` lands on `at`, drawn
-    /// at `scale`.
+    /// Place a plot so that the artwork point `anchor` lands on `at`.
     pub fn place(&mut self, plot: Plot, anchor: Point, at: Point, scale: f64) {
         let name = format!("X{}", plot.get());
         writeln!(
@@ -574,7 +546,6 @@ fn corners(rect: BBox) -> [Point; 4] {
     ]
 }
 
-/// What a PDF says about itself.
 #[derive(Debug, Clone, Default)]
 pub struct DocumentInfo {
     pub title: String,
@@ -605,7 +576,6 @@ impl Document {
         }
     }
 
-    /// Plot artwork into the document for pages to place.
     pub fn plot<LayerMeta, ObjectMeta>(
         &mut self,
         artwork: &pcb_ir::dialects::artwork::Document<LayerMeta, ObjectMeta>,
@@ -655,7 +625,6 @@ impl Document {
             .pages(self.tree)
             .count(self.pages.len() as i32)
             .kids(self.pages.iter().map(|(page, _)| *page));
-        // One bookmark a page, so a reader can go to a sheet by its name.
         let outline = self.alloc.bump();
         let items = self
             .pages

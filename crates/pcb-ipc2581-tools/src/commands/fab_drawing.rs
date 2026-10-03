@@ -9,11 +9,9 @@ use crate::drawing::{FabDrawingOptions, Typeface, fab_drawing};
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
 
-/// Options for drawing a fabrication drawing.
 #[derive(Debug, Clone)]
 pub struct FabDrawingCommandOptions {
     pub output: PathBuf,
-    /// The board alone, or the array the file lays it out in.
     pub target: LayoutTarget,
     /// The design's name, where the board step's own is not wanted.
     pub title: Option<String>,
@@ -21,7 +19,6 @@ pub struct FabDrawingCommandOptions {
     pub revision: Option<String>,
 }
 
-/// Draw the fabrication drawing of a board or a board array as a PDF.
 pub fn execute(
     input_file: &Path,
     options: &FabDrawingCommandOptions,
@@ -30,14 +27,10 @@ pub fn execute(
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = Ipc2581::parse(&content)?;
     let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
-    // A drawing names the data it was made from, so the two can be matched.
     let digest = hex::encode(Sha256::digest(content.as_bytes()));
     let source = input_file
         .file_name()
         .map(|name| format!("{}  ·  SHA-256 {}", name.to_string_lossy(), &digest[..12]));
-    // Lettered in TX-02 where this machine has it, and in the bundled face
-    // where it does not; the result line says which, since a drawing's
-    // lettering is part of how it reads.
     let (face, typeface) =
         installed_typeface().unwrap_or_else(|| ("Roboto Mono".to_string(), Typeface::default()));
     let drawing = FabDrawingOptions {
@@ -57,12 +50,9 @@ pub fn execute(
     Ok(())
 }
 
-/// The families drawings are lettered in: TX-02, which is also sold as
-/// Berkeley Mono.
+/// TX-02 is also sold as Berkeley Mono.
 const FAMILIES: [&str; 2] = ["TX-02", "Berkeley Mono"];
 
-/// Where fonts are installed: `PCB_FONT_DIR` first, then the user's and the
-/// system's font directories.
 fn font_directories() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let in_home = |path: &str| home.as_ref().map(|home| home.join(path));
@@ -109,15 +99,11 @@ fn font_files(directory: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// TX-02 as this machine has it installed, with the name it goes by: its
-/// upright regular and bold faces of one width, semi-condensed before
-/// normal. The face is licensed, so pcb cannot carry it; a machine without
-/// it letters in the bundled face.
+/// Upright regular and bold faces of one width, semi-condensed before normal.
 fn installed_typeface() -> Option<(String, Typeface)> {
     use ttf_parser::name_id::{FAMILY, TYPOGRAPHIC_FAMILY};
     for directory in font_directories() {
-        // Each face of the family in this directory, by width and weight. A
-        // file name says nothing certain, so every font is asked its family.
+        // A file name says nothing certain, so every font is asked its family.
         let mut faces = Vec::new();
         for path in font_files(&directory) {
             let Ok(data) = std::fs::read(&path) else {
@@ -127,8 +113,7 @@ fn installed_typeface() -> Option<(String, Typeface)> {
                 continue;
             };
             let family = [TYPOGRAPHIC_FAMILY, FAMILY].into_iter().find_map(|id| {
-                // A face may carry the name in several encodings; the
-                // first that reads is it.
+                // A face may carry the name in several encodings.
                 let names = face.names().into_iter();
                 names
                     .filter(|name| name.name_id == id)
@@ -158,8 +143,7 @@ fn installed_typeface() -> Option<(String, Typeface)> {
             };
             Some((regular.0.clone(), typeface))
         });
-        // The first directory that has the family decides: a font directory
-        // given on purpose is not mixed with what the system has.
+        // The first directory that has the family decides.
         if found.is_some() {
             return found;
         }

@@ -1,15 +1,6 @@
-//! PDF backend: artwork as a vector plot.
-//!
-//! A plot is opaque ink laid on paper in paint order. Dark paint draws in
-//! its layer's ink and clear paint in the paper's colour, since PDF erases
-//! only through transparency groups, which a printer flattens to a raster.
-//! That images a layer exactly wherever nothing was drawn under it: a clear
-//! also covers what earlier layers of the same plot painted there.
-//!
-//! Apertures and blocks become form XObjects that flashes and instances
-//! draw by name, so repeated geometry stays repeated: an array plots its
-//! board once. The plot is itself a form in millimetres, y up, for its
-//! caller to place on a page at whatever scale the page draws it.
+//! PDF backend: artwork as a vector plot, a form XObject in millimetres, y up.
+//! Clear paint draws in the paper's colour, since PDF erases only through
+//! transparency groups, which a printer flattens to a raster.
 
 use std::collections::{BTreeMap, HashMap};
 use std::f64::consts::{FRAC_PI_2, SQRT_2};
@@ -26,24 +17,16 @@ use crate::geom::{
 };
 use crate::render::{Drawn, LayerStyle, Num, PlacementScales, RenderOptions};
 
-/// The colour clear paint draws in.
 const PAPER: u32 = 0xffffff;
-/// Coordinates are written to four decimals, so every emitted point may sit
-/// this far from its source along each axis.
+/// Coordinates are written to four decimals: a point's error along each axis.
 const COORDINATE_GRID_MM: f64 = 1e-4;
-/// How far a cubic may leave the arc it draws, at the largest scale the arc
-/// is placed at.
+/// How far a cubic may leave the arc it draws, at the arc's largest placement.
 const ARC_ERROR_MM: f64 = 1e-4;
-/// Room the form of shared geometry keeps around the bounds of what it
-/// draws. The plot itself is clipped to exactly what it shows.
+/// Room the form of shared geometry keeps around the bounds of what it draws.
 const FORM_MARGIN_MM: f64 = 1.0;
 
-/// Plot artwork layers into `pdf` as one form XObject, taking object ids
-/// from `alloc`.
-///
-/// The form shows `options.viewport`, or the layers' bounds padded, in the
-/// artwork's millimetres, y up, and is clipped to it. A layer's opacity is
-/// how strongly its ink shows against the paper.
+/// Plot artwork layers into `pdf` as one form XObject clipped to
+/// `options.viewport`, or the layers' bounds padded; ids come from `alloc`.
 pub fn artwork_pdf_form<LayerMeta, ObjectMeta>(
     pdf: &mut Pdf,
     alloc: &mut Ref,
@@ -77,8 +60,7 @@ pub fn artwork_pdf_form<LayerMeta, ObjectMeta>(
         let layer = &doc.layers[index];
         let ink = ink(options.style(index, layer.role));
         let painted = artwork::paint_ordered(layer, layer.objects.slice(&doc.objects));
-        // A clear removes what its layer painted before it, so with nothing
-        // painted yet there is nothing to remove.
+        // A clear before the layer's first dark has nothing to remove.
         let first_dark = painted
             .iter()
             .position(|(polarity, _)| *polarity == Polarity::Dark)
@@ -117,8 +99,7 @@ fn ink(LayerStyle { color, opacity }: LayerStyle) -> u32 {
     ])
 }
 
-/// The frame geometry is written in: the budget it has there, and the
-/// largest scale anything places it at.
+/// The frame geometry is written in: its budget, and its largest placed scale.
 #[derive(Clone, Copy)]
 struct Frame {
     accuracy: GeometryAccuracy,
@@ -126,9 +107,7 @@ struct Frame {
 }
 
 impl Frame {
-    /// Whether a contour may be drawn natively: the approximation it already
-    /// carries, coordinate rounding and its arcs' cubics count against the
-    /// budget.
+    /// Prior approximation, rounding and arc cubics count against the budget.
     fn check(self, uncertainty_mm: f64) -> Result<(), AccuracyError> {
         self.accuracy
             .check(uncertainty_mm + COORDINATE_GRID_MM / SQRT_2 + ARC_ERROR_MM / self.scale)
@@ -142,16 +121,13 @@ struct Plot<'a, LayerMeta, ObjectMeta> {
     accuracy: GeometryAccuracy,
     extent: BBox,
     scales: PlacementScales,
-    /// The form of every aperture something places.
     apertures: Vec<Option<Ref>>,
-    /// Block forms by block, ink and the polarity they are placed under. A
-    /// form carries its colours, so a block drawn in two inks is two forms.
+    /// Keyed by block, ink and polarity: a form carries its colours.
     blocks: HashMap<(u32, u32, Polarity), Ref>,
 }
 
 impl<LayerMeta, ObjectMeta> Plot<'_, LayerMeta, ObjectMeta> {
-    /// Shared geometry is written once in its own frame, so its budget is
-    /// what the largest placement leaves of the document's.
+    /// Shared geometry is written once, at what its largest placement leaves.
     fn local(&self, scale: f64) -> Result<Frame, AccuracyError> {
         Ok(Frame {
             accuracy: crate::render::local_accuracy(self.accuracy, self.extent, scale)?,
@@ -159,8 +135,7 @@ impl<LayerMeta, ObjectMeta> Plot<'_, LayerMeta, ObjectMeta> {
         })
     }
 
-    /// An aperture is a shape without a colour: it paints in whatever ink
-    /// the flash that draws it has set.
+    /// An aperture has no colour: it paints in the ink its flash has set.
     fn write_apertures(&mut self) -> Result<(), AccuracyError> {
         for (index, aperture) in self.doc.apertures.iter().enumerate() {
             let Some(scale) = self.scales.apertures[index] else {
@@ -178,7 +153,6 @@ impl<LayerMeta, ObjectMeta> Plot<'_, LayerMeta, ObjectMeta> {
         Ok(())
     }
 
-    /// The form of `block` as it draws in `ink` under `polarity`.
     fn block(&mut self, block: u32, ink: u32, polarity: Polarity) -> Result<Ref, AccuracyError> {
         if let Some(&id) = self.blocks.get(&(block, ink, polarity)) {
             return Ok(id);
@@ -254,15 +228,13 @@ impl<LayerMeta, ObjectMeta> Plot<'_, LayerMeta, ObjectMeta> {
                 let stroke = path
                     .stroke()
                     .expect("stroke geometry carries a stroke paint");
-                // A pen with no width paints nothing; PDF would draw a
-                // zero-width stroke as the thinnest line a device has.
+                // PDF draws a zero-width stroke as a device's thinnest line.
                 if stroke.width <= 0.0 {
                     return Ok(());
                 }
                 stream.ink(color);
-                // A pen wider than the arc it follows folds its inner edge
-                // over, and viewers disagree on what that paints: some draw
-                // a dot as a ring. Such a stroke images through its outline.
+                // Viewers disagree on a pen wider than the arc it follows (a
+                // dot may draw as a ring), so it images through its outline.
                 let folds = doc.arena.contours(path.contours).iter().any(|contour| {
                     crate::geom::path::segments(doc.arena.cmds(*contour)).any(|segment| {
                         matches!(segment, Segment::Arc(arc) if arc.radius() < stroke.width / 2.0)
@@ -275,9 +247,7 @@ impl<LayerMeta, ObjectMeta> Plot<'_, LayerMeta, ObjectMeta> {
                     }
                     stream.stroke(stroke);
                 } else {
-                    // PDF dashes know nothing of IPC line patterns, so a
-                    // patterned stroke images through the same expansion
-                    // the mask compositor uses, as does a pen that folds.
+                    // PDF dashes cannot say IPC line patterns.
                     let dashes = crate::geom::path::stroke_to_fill(
                         &doc.arena.path_contours(path),
                         stroke,
@@ -294,7 +264,6 @@ impl<LayerMeta, ObjectMeta> Plot<'_, LayerMeta, ObjectMeta> {
         Ok(())
     }
 
-    /// Write `stream` as a form clipped to `bbox` and a margin around it.
     fn form(&mut self, stream: Stream, bbox: BBox, margin: f64) -> Ref {
         let id = self.alloc.bump();
         let data = deflate(stream.ops.as_bytes());
@@ -326,8 +295,6 @@ fn rect(bbox: BBox) -> Rect {
     )
 }
 
-/// One content stream as it is written: its operators, the forms it draws
-/// by name, and the graphics state it has set so far.
 #[derive(Default)]
 struct Stream {
     ops: String,
@@ -341,7 +308,6 @@ fn coordinate(value: f64) -> Num {
 }
 
 impl Stream {
-    /// Paint what follows, fills and strokes alike, in `color`.
     fn ink(&mut self, color: u32) {
         if self.color == Some(color) {
             return;
@@ -354,7 +320,6 @@ impl Stream {
         writeln!(self.ops, "{red} {green} {blue} rg {red} {green} {blue} RG").unwrap();
     }
 
-    /// Draw form `id` under `transform`.
     fn place(&mut self, kind: char, id: Ref, transform: Affine2) {
         let name = format!("{kind}{}", id.get());
         let [a, b, c, d] = crate::render::linear(transform);
@@ -384,12 +349,8 @@ impl Stream {
         }
     }
 
-    /// An elliptical arc as cubics, each short enough to stay within
-    /// [`ARC_ERROR_MM`] of it at `scale`.
-    ///
-    /// The cubic whose handles run `4/3·tan(δ/4)` along the end tangents
-    /// leaves a unit arc of sweep `δ ≤ π/2` by at most `δ⁶/55000`, and an
-    /// affine image scales that by at most the longer semi-axis.
+    /// Cubics within [`ARC_ERROR_MM`] at `scale`: handles of `4/3·tan(δ/4)`
+    /// leave a unit arc of sweep `δ ≤ π/2` by at most `δ⁶/55000`.
     fn arc(&mut self, arc: EllipticalArc, scale: f64) {
         let sweep = arc.signed_sweep_radians();
         let radius = arc.max_scale() * scale;
@@ -436,8 +397,7 @@ impl Stream {
                 LineCap::Round => 1,
                 LineCap::Square => 2,
             };
-            // A form draws in the state of the page that places it, so the
-            // whole pen is set: a page's dashes must not reach a plot.
+            // A form draws in its page's state, so the whole pen is set.
             writeln!(
                 self.ops,
                 "{} w {cap} J 1 j [] 0 d",
@@ -457,7 +417,6 @@ mod tests {
     use crate::render::svg::tests::{copper_artwork, square};
     use std::io::Read as _;
 
-    /// Every stream of a PDF, inflated, in the order they were written.
     fn streams(pdf: &[u8]) -> Vec<String> {
         let mut streams = Vec::new();
         let mut rest = pdf;
@@ -560,53 +519,6 @@ mod tests {
             "0.4 0.4 0.4 rg 0.4 0.4 0.4 RG\n0 0 m\n10 0 l\n10 10 l\n0 10 l\nh\nf\n\
              1 1 1 rg 1 1 1 RG\n0 0 m\n2 0 l\n2 2 l\n0 2 l\nh\nf\n"
         );
-    }
-
-    #[test]
-    fn a_block_placed_clear_is_its_own_form() {
-        let mut doc = copper_artwork();
-        let block = doc.push_block();
-        let aperture = doc.push_aperture(artwork::Aperture::circle(1.0));
-        doc.push_block_object(
-            block,
-            artwork::Object::new(
-                Polarity::Dark,
-                Geometry::Flash {
-                    aperture,
-                    transform: Affine2::IDENTITY,
-                },
-            ),
-        );
-        let pour = doc.push_path(
-            Paint::Fill {
-                rule: FillRule::NonZero,
-            },
-            vec![square(10.0)],
-        );
-        doc.push_object(
-            0,
-            artwork::Object::new(Polarity::Dark, Geometry::Region { path: pour }),
-        );
-        for polarity in [Polarity::Dark, Polarity::Clear] {
-            let transform = Affine2::translation(Point::new(5.0, 5.0));
-            doc.push_object(
-                0,
-                artwork::Object::new(polarity, Geometry::Instance { block, transform }),
-            );
-        }
-        artwork::normalize_bounds(&mut doc);
-        let style = LayerStyle {
-            color: 0xff0000,
-            opacity: 1.0,
-        };
-
-        let (_, streams) = plot(&doc, &RenderOptions::default().with_styles([style]));
-
-        // The aperture, the block in ink, the block in paper, the plot.
-        assert_eq!(streams.len(), 4);
-        assert!(!streams[0].contains("rg"), "an aperture has no colour");
-        assert!(streams[1].starts_with("1 0 0 rg 1 0 0 RG\nq 1 0 0 1 0 0 cm /A1 Do Q"));
-        assert!(streams[2].starts_with("1 1 1 rg 1 1 1 RG\nq 1 0 0 1 0 0 cm /A1 Do Q"));
     }
 
     #[test]

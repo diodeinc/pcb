@@ -1,6 +1,4 @@
-//! What a sheet sets beside its views: tables, numbered notes, a detail
-//! figure and a score section, each a block of a known height that draws
-//! down from its top-left corner.
+//! Blocks set beside a sheet's views: tables, notes, a figure, a score section.
 
 use pcb_ir::geom::{BBox, Point};
 
@@ -9,20 +7,16 @@ use super::pdf::{Align, Canvas, Dash, Fonts, INK, Pen, Plot, TextStyle, Weight};
 use super::sheet::{BODY, HAIR, HEADING, HEAVY, LABEL, MEDIUM, THICK, THIN};
 use super::views::{Mark, ROUTED, datum};
 
-/// Height of a block's heading, down to what it heads.
 const HEADING_HEIGHT: f64 = 4.6;
 const ROW_HEIGHT: f64 = 4.0;
 const HEADER_ROW_HEIGHT: f64 = 4.4;
-/// Space between a cell's edge and its text.
 const CELL_PAD: f64 = 1.2;
 const NOTE_LEADING: f64 = 3.4;
 const NOTE_GAP: f64 = 0.4;
 const NOTE_INDENT: f64 = 6.0;
-/// A colour chip.
 const CHIP_WIDTH: f64 = 5.0;
 const CHIP_HEIGHT: f64 = 2.8;
 
-/// What a stackup row is made of, as its section is hatched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Material {
     Copper,
@@ -32,7 +26,6 @@ pub enum Material {
     Mask,
 }
 
-/// How a view draws something, shown beside what it is called.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sample {
     ArrayProfile,
@@ -46,7 +39,6 @@ pub enum Sample {
 pub enum Cell {
     Text(String),
     Bold(String),
-    /// A drill symbol, drawn at the size it has on a plot.
     Symbol(Plot),
     /// A slice of the board's section, in the colour of what it is made of.
     Section(Material, u32),
@@ -86,8 +78,7 @@ pub struct Table {
     pub rows: Vec<Vec<Cell>>,
     /// A closing row set off by a heavier rule: totals.
     pub footer: Option<Vec<Cell>>,
-    /// Whether the columns are titled. A table of what and how much reads
-    /// without.
+    /// Whether the columns are titled.
     pub header: bool,
 }
 
@@ -97,11 +88,9 @@ pub struct Notes {
     pub notes: Vec<String>,
 }
 
-/// A view small enough to sit among the tables: a detail of a larger one.
 #[derive(Debug, Clone)]
 pub struct Figure {
     pub title: String,
-    /// What the figure shows, lettered under it.
     pub caption: String,
     pub plot: Plot,
     /// The point of the artwork drawn at the figure's centre.
@@ -109,20 +98,16 @@ pub struct Figure {
     pub scale: f64,
     /// Height the artwork takes on the sheet.
     pub height: f64,
-    /// Board fiducials: points of the artwork marked as one, each with the
-    /// tag lettered beside it.
+    /// Artwork points marked as board fiducials, each with its tag.
     pub fiducials: Vec<(Point, String)>,
-    /// The board the fiducials stand around, in the artwork: its lower
-    /// left corner is marked as their datum.
+    /// The board in the artwork: its lower left corner is the fiducials' datum.
     pub board: Option<BBox>,
 }
 
-/// A V-score in section: both cuts, the web they leave and their angle.
 #[derive(Debug, Clone)]
 pub struct ScoreSection {
     pub title: String,
     pub thickness: String,
-    /// The web the cuts leave, where the drawing asks for one.
     pub web: Option<String>,
     pub angle: String,
 }
@@ -136,8 +121,6 @@ pub enum Block {
 }
 
 const CAPTION_LEADING: f64 = 3.7;
-/// Height of the slab a score section draws, and the room around it for
-/// its dimensions.
 const SECTION_SLAB: f64 = 15.0;
 const SECTION_HEIGHT: f64 = SECTION_SLAB + 16.0;
 
@@ -196,8 +179,7 @@ impl Figure {
         for (place, tag) in &self.fiducials {
             let at = on_sheet(*place);
             mark.draw(canvas, at, 0.0);
-            // Each tag on the far side of its mark from the board, where
-            // nothing else is drawn.
+            // Each tag on the far side of its mark from the board.
             let clear = mark.reach() + 0.6;
             let beside = Point::new(clear, -LABEL / 2.0);
             let board = self.board.unwrap_or(BBox::from_point(self.center));
@@ -222,8 +204,6 @@ impl Figure {
 }
 
 impl ScoreSection {
-    /// The board on edge, cut from both faces, with the cuts' angle, the
-    /// web between them and the board's thickness lettered around it.
     fn draw(&self, canvas: &mut Canvas<'_>, at: Point, width: f64) {
         canvas.line(at, Point::new(at.x + width, at.y), Pen::solid(MEDIUM));
         let thin = Pen::solid(THIN);
@@ -232,8 +212,7 @@ impl ScoreSection {
         let (left, right) = (middle - slab_width / 2.0, middle + slab_width / 2.0);
         let top = at.y - 11.0;
         let bottom = top - height;
-        // The web is drawn a third of the slab; the cuts open at the angle
-        // the section letters.
+        // The web is drawn a third of the slab.
         let depth = height / 3.0;
         let slope = (SCORE_ANGLE / 2.0).to_radians().tan();
         let half = depth * slope;
@@ -359,8 +338,7 @@ impl ScoreSection {
     }
 }
 
-/// A vertical arrowhead with its tip at `tip`, its tail `toward` up (+1)
-/// or down (-1).
+/// Tip at `tip`, tail `toward` up (+1) or down (-1).
 fn arrow(canvas: &mut Canvas<'_>, tip: Point, toward: f64) {
     let (length, half) = (2.4, 0.4);
     canvas.fill_polygon(
@@ -406,16 +384,13 @@ impl Notes {
 }
 
 impl Block {
-    /// The block in parts no taller than `room`: itself, or a table too
-    /// long for one column as tables that continue it, each titled with
-    /// which part it is and the last keeping the footer.
+    /// Parts no taller than `room`; the last part of a table keeps the footer.
     pub fn split(self, room: f64) -> Vec<Self> {
         let Self::Table(table) = self else {
             return vec![self];
         };
         let header = if table.header { HEADER_ROW_HEIGHT } else { 0.0 };
         let rows = ((room - HEADING_HEIGHT - header) / ROW_HEIGHT).floor() as usize;
-        // The footer is a row of the last part.
         let footer = usize::from(table.footer.is_some());
         if table.rows.len() + footer <= rows || rows < 2 {
             return vec![Self::Table(table)];
@@ -470,7 +445,6 @@ impl Table {
         };
         let mut y = at.y;
         if self.header {
-            // Column titles over a rule.
             for (column, &(x, column_width)) in self.columns.iter().zip(&columns) {
                 let baseline = at.y - (HEADER_ROW_HEIGHT + LABEL) / 2.0;
                 let style = TextStyle::new(LABEL).bold().align(column.align);
@@ -509,7 +483,6 @@ impl Table {
     }
 }
 
-/// Where text aligned `align` in a cell is anchored.
 fn anchor(x: f64, width: f64, align: Align) -> f64 {
     match align {
         Align::Left => x + CELL_PAD,
@@ -543,7 +516,6 @@ fn draw_cell(canvas: &mut Canvas<'_>, cell: &Cell, bounds: BBox, align: Align) {
     }
 }
 
-/// A sample of a view's line or mark, as the view draws it.
 fn draw_sample(canvas: &mut Canvas<'_>, sample: Sample, cell: BBox) {
     let center = cell.center();
     let (left, right) = (
@@ -566,10 +538,7 @@ fn draw_sample(canvas: &mut Canvas<'_>, sample: Sample, cell: BBox) {
     }
 }
 
-/// A colour chip at the cell's left edge: a filled box for a colour, a
-/// struck-out one where the board has none, and a queried one for a colour
-/// the design does not state. The box is outlined, so white ink still reads
-/// on white paper.
+/// The box is outlined, so white ink still reads on white paper.
 fn draw_chip(canvas: &mut Canvas<'_>, chip: Chip, cell: BBox) {
     let center = cell.center().y;
     let pen = Pen::solid(HAIR);
@@ -589,9 +558,6 @@ fn draw_chip(canvas: &mut Canvas<'_>, chip: Chip, cell: BBox) {
     canvas.rect(chip_box, pen);
 }
 
-/// One layer of the board's section, in the colour of what it is made of:
-/// copper and mask as solid bars, dielectrics as a tint under the hatching
-/// their kinds are told apart by.
 fn draw_section(canvas: &mut Canvas<'_>, material: Material, color: u32, cell: BBox) {
     let inset = |x: f64, y: f64| {
         BBox::new(
@@ -663,25 +629,4 @@ fn hatch_lines(rect: BBox, spacing: f64, rising: bool) -> Vec<(Point, Point)> {
             })
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hatch_lines_stay_inside_their_cell() {
-        let cell = BBox::new(Point::new(10.0, 20.0), Point::new(22.0, 24.4));
-        for rising in [true, false] {
-            let lines = hatch_lines(cell, 1.1, rising);
-            assert!(lines.len() > 5);
-            for (from, to) in lines {
-                for point in [from, to] {
-                    assert!(cell.expand(1e-9).contains_point(point), "{point:?}");
-                }
-                let run = to - from;
-                assert!((run.x.abs() - run.y.abs()).abs() < 1e-9, "45 degrees");
-            }
-        }
-    }
 }

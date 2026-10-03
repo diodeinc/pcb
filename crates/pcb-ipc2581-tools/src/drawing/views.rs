@@ -1,6 +1,5 @@
-//! The views a drawing places: each ordinary artwork in the design's own
-//! millimetres, plotted once and drawn on a sheet at a stated scale, and
-//! the dimensions lettered around it.
+//! The views a drawing places: artwork in the design's own millimetres, drawn
+//! on a sheet at a stated scale, and the dimensions lettered around it.
 
 use anyhow::Result;
 use ipc2581::Symbol;
@@ -28,8 +27,7 @@ use crate::layers::layer_role;
 type ViewArtwork = artwork::Document<(), Option<Symbol>>;
 type ViewObject = Object<Option<Symbol>>;
 
-/// Size of a drill symbol on the sheet, and the smallest one is drawn
-/// where holes crowd.
+/// Size of a drill symbol on the sheet, and the smallest where holes crowd.
 pub const SYMBOL_SIZE: f64 = 1.5;
 const SMALLEST_SYMBOL: f64 = 0.7;
 
@@ -44,7 +42,6 @@ const BLACK: LayerStyle = ink(INK);
 /// The grey of material an array has routed away.
 pub const ROUTED: u32 = 0xd4d4d4;
 
-/// The ratio a view is drawn at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scale {
     drawn: u32,
@@ -65,7 +62,6 @@ impl Scale {
         Scale::down(10),
         Scale::down(20),
     ];
-    /// Full size.
     pub const FULL: Scale = Scale::up(1);
 
     const fn up(drawn: u32) -> Self {
@@ -80,7 +76,6 @@ impl Scale {
         f64::from(self.drawn) / f64::from(self.actual)
     }
 
-    /// The largest scale at which `width` by `height` fits the room.
     pub fn fit(width: f64, height: f64, room_width: f64, room_height: f64) -> Self {
         let fits = |scale: &Scale| {
             width * scale.factor() <= room_width && height * scale.factor() <= room_height
@@ -96,7 +91,6 @@ impl std::fmt::Display for Scale {
     }
 }
 
-/// Where a view sits on its sheet.
 #[derive(Debug, Clone, Copy)]
 pub struct Placement {
     pub scale: f64,
@@ -106,7 +100,6 @@ pub struct Placement {
 }
 
 impl Placement {
-    /// Centre `bounds` of the artwork on `center` of the sheet.
     pub fn centered(bounds: BBox, center: Point, scale: Scale) -> Self {
         Self {
             scale: scale.factor(),
@@ -124,7 +117,6 @@ impl Placement {
     }
 }
 
-/// A view's artwork and the ink of each of its layers.
 pub struct View {
     pub artwork: ViewArtwork,
     pub styles: Vec<LayerStyle>,
@@ -138,8 +130,6 @@ impl View {
         }
     }
 
-    /// Lay the outline of what carries the view over it, `width` wide, and
-    /// settle the artwork.
     pub fn outlined(mut self, contours: Vec<ContourBuf>, width: f64) -> Result<Self> {
         let profile = self.layer("Profile", LayerRole::Profile, BLACK);
         self.stroke(profile, contours, StrokeStyle::round(width));
@@ -195,7 +185,6 @@ impl View {
     }
 }
 
-/// The profile contours `set` selects and the bounds of their outer edges.
 pub fn outline(imported: &ImportedDesign, set: ProfileSet) -> (Vec<ContourBuf>, BBox) {
     let geometry = &imported.geometry;
     let mut bounds = BBox::empty();
@@ -211,8 +200,6 @@ pub fn outline(imported: &ImportedDesign, set: ProfileSet) -> (Vec<ContourBuf>, 
     (contours, bounds)
 }
 
-/// What an outline says beyond its extents: where its straight edges run,
-/// and what its corners are rounded to.
 #[derive(Debug, Default, PartialEq)]
 pub struct OutlineFeatures {
     /// X of every vertical edge and Y of every horizontal one.
@@ -228,8 +215,7 @@ impl OutlineFeatures {
     /// How far off its axis an edge may run, as a share of its length.
     const OFF_AXIS: f64 = 2e-3;
 
-    /// The features of an outline given as its outer contour followed by
-    /// its cutouts. Edges and corners are the outer contour's.
+    /// The outer contour comes first; edges and corners are the outer's alone.
     pub fn of(contours: &[ContourBuf]) -> Self {
         let mut features = Self::default();
         let mut radii = std::collections::BTreeMap::<i64, usize>::new();
@@ -239,16 +225,12 @@ impl OutlineFeatures {
         });
         for (outer, segment) in segments {
             match segment {
-                // A cutout's edges are its own shape, which the data states;
-                // an ordinate to one would point at nothing on the outline.
                 pcb_ir::geom::Segment::Line { start, end } if outer => {
                     let run = end - start;
                     let length = run.length();
                     if length < Self::SHORTEST_EDGE {
                         continue;
                     }
-                    // An edge a layout tool left a few micrometres off its
-                    // axis is still that edge.
                     let middle = (start + end) * 0.5;
                     if run.x.abs() <= Self::OFF_AXIS * length {
                         features.edges_x.push(middle.x);
@@ -257,8 +239,7 @@ impl OutlineFeatures {
                     }
                 }
                 pcb_ir::geom::Segment::Line { .. } => {}
-                // A corner turns the outline by no more than a right angle;
-                // a longer arc is a feature of its own.
+                // A corner turns no more than a right angle.
                 pcb_ir::geom::Segment::Arc(arc) => {
                     if outer && arc.sweep_radians() <= 100.0_f64.to_radians() {
                         *radii.entry(micrometres(arc.radius())).or_default() += 1;
@@ -277,8 +258,6 @@ impl OutlineFeatures {
         features
     }
 
-    /// The corner radii as a drawing letters them, where the outline has
-    /// few enough to say.
     pub fn radii(&self) -> Option<String> {
         if self.radii.is_empty() || self.radii.len() > 3 {
             return None;
@@ -311,18 +290,13 @@ fn slot_outline(start: Point, end: Point, diameter: f64) -> ContourBuf {
     ])
 }
 
-/// How a view marks its holes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HoleMarks<'a> {
-    /// Each hole with its tool's symbol, at a size that reads on the sheet,
-    /// and its edge where that stands clear of the symbol. Around a smaller
-    /// hole an edge would read as part of the symbol.
+    /// Each hole's symbol, and its edge where that stands clear of the symbol.
     Symbols(&'a [usize]),
-    /// Each hole's edge alone.
     Edges,
 }
 
-/// Draw every tool's holes into `view`.
 fn draw_tools(view: &mut View, tools: &[DrillTool], marks: HoleMarks<'_>, scale: f64) {
     let edge = match marks {
         HoleMarks::Symbols(_) => HAIR / scale,
@@ -367,14 +341,10 @@ fn draw_tools(view: &mut View, tools: &[DrillTool], marks: HoleMarks<'_>, scale:
     }
 }
 
-/// The size on the sheet of each tool's symbol: the size the table shows
-/// it at, or smaller where the tool's holes stand closer to their
-/// neighbours than that, so a field of them reads as holes and not as a
-/// hatch.
+/// Each tool's symbol size on the sheet: smaller where its holes crowd.
 fn symbol_sizes(tools: &[DrillTool], scale: f64) -> Vec<f64> {
     /// How much of the way to its neighbour a symbol takes.
     const FILL: f64 = 0.85;
-    // No hole further from its neighbours than this needs a smaller symbol.
     let reach = SYMBOL_SIZE / FILL / scale;
     let mut holes = tools
         .iter()
@@ -397,8 +367,7 @@ fn symbol_sizes(tools: &[DrillTool], scale: f64) -> Vec<f64> {
     nearest
         .into_iter()
         .map(|mut distances| {
-            // The crowding of a tool's closest tenth: a few tight pairs do
-            // not shrink a symbol that stands clear everywhere else.
+            // The closest tenth: a few tight pairs do not shrink a symbol.
             distances.sort_by(f64::total_cmp);
             let crowded = distances
                 .get(distances.len() / 10)
@@ -409,7 +378,6 @@ fn symbol_sizes(tools: &[DrillTool], scale: f64) -> Vec<f64> {
         .collect()
 }
 
-/// A drill symbol as an aperture `size` across.
 fn symbol_aperture(index: usize, size: f64) -> Aperture {
     Aperture::solid(ApertureShape::Contour {
         outline: symbol(index, size),
@@ -417,7 +385,6 @@ fn symbol_aperture(index: usize, size: f64) -> Aperture {
     })
 }
 
-/// A symbol on its own, to set in a table.
 pub fn symbol_view(index: usize) -> Result<View> {
     let mut view = View::new();
     let layer = view.layer("Symbol", LayerRole::Drill, BLACK);
@@ -428,7 +395,6 @@ pub fn symbol_view(index: usize) -> Result<View> {
     view.finish()
 }
 
-/// A board's outline with the holes of `tools`, marked as `marks` says.
 pub fn board_view(
     outline: &[ContourBuf],
     tools: &[DrillTool],
@@ -446,8 +412,6 @@ pub fn board_view(
     view.finish()
 }
 
-/// Lay an array's outline over `view` in a heavy line, and its boards' in
-/// a thin one, so the two are never taken for each other.
 fn array_outlines(view: &mut View, source: &Source<'_>, array: &ArrayData, scale: f64) {
     let (boards, _) = outline(source.imported, ProfileSet::FabricationOutlines);
     let profile = view.layer("Profile", LayerRole::Profile, BLACK);
@@ -457,8 +421,6 @@ fn array_outlines(view: &mut View, source: &Source<'_>, array: &ArrayData, scale
     }
 }
 
-/// An array as it is fabricated: its outline and its boards', what is
-/// routed out of it, where it is scored, and the holes of its own.
 pub fn array_view(source: &Source<'_>, array: &ArrayData, scale: f64) -> Result<View> {
     let mut view = View::new();
 
@@ -472,8 +434,7 @@ pub fn array_view(source: &Source<'_>, array: &ArrayData, scale: f64) -> Result<
     );
     array_outlines(&mut view, source, array, scale);
 
-    // A score runs edge to edge; drawn a little past both, it reads as a
-    // line of cut rather than an edge.
+    // Drawn a little past both edges, a score reads as a line of cut.
     let scores = view.layer("Scores", LayerRole::Other, BLACK);
     let overrun = 4.0 / scale;
     for line in &array.scores {
@@ -493,9 +454,6 @@ pub fn array_view(source: &Source<'_>, array: &ArrayData, scale: f64) -> Result<
     view.finish()
 }
 
-/// An array with nothing drawn but its outline, its boards and what is
-/// routed out of it: what a sheet draws its tooling holes and fiducials
-/// over.
 pub fn tooling_view(source: &Source<'_>, array: &ArrayData, scale: f64) -> Result<View> {
     let mut view = View::new();
     let routed = view.layer("Routed", LayerRole::Other, ink(ROUTED));
@@ -504,29 +462,20 @@ pub fn tooling_view(source: &Source<'_>, array: &ArrayData, scale: f64) -> Resul
     view.finish()
 }
 
-/// What an array carries for whoever handles it, each drawn with a mark of
-/// its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
-    /// A hole in the border: a circle on a centre cross.
     Tooling,
-    /// A fiducial of the array's own: a dot in a ring.
     ArrayFiducial,
-    /// A fiducial beside a board: a dot.
     BoardFiducial,
 }
 
-/// Sizes of the marks on the sheet: the radius of a tooling hole drawn no
-/// smaller than reads and the reach of its cross, and the radii of a
-/// fiducial's dot and of the ring round one of the array's own.
+/// Mark sizes on the sheet; a tooling hole is drawn no smaller than its radius.
 const TOOLING_RADIUS: f64 = 0.7;
 const TOOLING_REACH: f64 = 1.5;
 const FIDUCIAL_DOT: f64 = 0.4;
 const FIDUCIAL_RING: f64 = 0.9;
 
 impl Mark {
-    /// How far the mark reaches from its centre: where a leader to it ends
-    /// and a tag beside it starts.
     pub fn reach(self) -> f64 {
         match self {
             Self::Tooling => TOOLING_REACH,
@@ -535,8 +484,7 @@ impl Mark {
         }
     }
 
-    /// Draw the mark on the sheet at `at`. A tooling hole is drawn at its
-    /// own size where that reads: `hole` is its radius on the sheet.
+    /// `hole` is a tooling hole's radius on the sheet, drawn where that reads.
     pub fn draw(self, canvas: &mut Canvas<'_>, at: Point, hole: f64) {
         // A ring's line lies inside its radius, as the edge of a hole does.
         let ring = |canvas: &mut Canvas<'_>, radius: f64| {
@@ -560,13 +508,16 @@ impl Mark {
     }
 }
 
-/// One fabrication layer of the board as it images, still to be
-/// [`View::outlined`]: its artwork in `color`, a copper layer with every hole
-/// that passes through it left open. Returns the view and whether the layer
-/// has artwork of its own.
-pub fn layer_view(source: &Source<'_>, layer: &FabLayer, color: u32) -> Result<(View, bool)> {
+/// One layer of the board, or of the whole array. Still to be
+/// [`View::outlined`]; the flag is whether the layer has artwork.
+pub fn layer_view(
+    source: &Source<'_>,
+    layer: &FabLayer,
+    board: bool,
+    color: u32,
+) -> Result<(View, bool)> {
     let imported = source.imported;
-    let root = root_step(imported, true)?;
+    let root = root_step(imported, board)?;
     let mut view = View::new();
     let (staged, has_content) = layer_objects(
         imported,
@@ -577,10 +528,7 @@ pub fn layer_view(source: &Source<'_>, layer: &FabLayer, color: u32) -> Result<(
     )?;
     let mut objects = staged.into_iter().flatten().collect::<Vec<_>>();
 
-    // A hole images only on its own layer, so the drill layers that reach
-    // a copper layer are laid over it. A mask or a legend shows what is
-    // printed: a hole under an opening is in the opening, and one the mask
-    // covers is covered.
+    // A hole images only on its own layer, so drills are laid over copper.
     if let Some(this) = layer.number.filter(|_| layer.role == LayerRole::Copper) {
         let copper = copper_order(imported);
         for (index, drill) in imported.layer_definitions.iter().enumerate() {
@@ -611,9 +559,7 @@ pub fn layer_view(source: &Source<'_>, layer: &FabLayer, color: u32) -> Result<(
         }
     }
 
-    // Drawn in the copper role whatever it is: what cuts the layer, a hole
-    // laid over it or a rout slot in its span, then removes material and
-    // never images as artwork, even where the layer paints nothing.
+    // In the copper role whatever it is, so what cuts the layer never images.
     let artwork = view.layer(&layer.name, LayerRole::Copper, ink(color));
     for object in objects {
         view.artwork.push_object(artwork, object);
@@ -623,8 +569,7 @@ pub fn layer_view(source: &Source<'_>, layer: &FabLayer, color: u32) -> Result<(
 
 const ARROW_LENGTH: f64 = 2.2;
 const ARROW_HALF_WIDTH: f64 = 0.42;
-/// How far an extension line starts from what it measures and runs past
-/// its dimension line.
+/// Where an extension line starts off its feature and how far it overruns.
 const EXTENSION_GAP: f64 = 1.0;
 const EXTENSION_OVERRUN: f64 = 1.5;
 const DIMENSION_TEXT_GAP: f64 = 0.9;
@@ -637,8 +582,7 @@ fn arrow(canvas: &mut Canvas<'_>, tip: Point, toward: Point) {
     canvas.fill_polygon(&[tip, base + across, base - across], INK);
 }
 
-/// Dimension the horizontal extent `from..to`, measured off features at
-/// height `edge`, on a line at height `line`.
+/// Dimension `from..to`, measured off features at `edge`, on a line at `line`.
 pub fn dimension_horizontal(
     canvas: &mut Canvas<'_>,
     from: f64,
@@ -667,8 +611,6 @@ pub fn dimension_horizontal(
     );
 }
 
-/// Dimension the vertical extent `from..to`, measured off features at
-/// `edge`, on a line at `line`.
 pub fn dimension_vertical(
     canvas: &mut Canvas<'_>,
     from: f64,
@@ -690,7 +632,6 @@ pub fn dimension_vertical(
     canvas.line(bottom, top, pen);
     arrow(canvas, bottom, top);
     arrow(canvas, top, bottom);
-    // Lettered to read from the bottom of the sheet, as every value is.
     canvas.text(
         Point::new(
             line + away * DIMENSION_TEXT_GAP * 1.6,
@@ -711,13 +652,10 @@ const ORDINATE_PITCH: f64 = 3.4;
 const ORDINATE_LEADER: f64 = 7.0;
 
 /// Spread label positions at least `pitch` apart, keeping their order.
-/// Labels too close to sit on their stations form a run at the pitch,
-/// centred on the stations it labels where the datum leaves it room.
 fn spread(stations: &[f64], pitch: f64) -> Vec<f64> {
     // Runs as (first station, count).
     let mut runs = Vec::<(usize, usize)>::new();
-    // No run starts before the first station: the chain of the other axis
-    // letters there, and the two would cross.
+    // No run starts before the first station: the other axis letters there.
     let start = |(first, count): (usize, usize)| {
         let mean = stations[first..first + count].iter().sum::<f64>() / count as f64;
         (mean - (count - 1) as f64 * pitch / 2.0).max(stations[0])
@@ -738,9 +676,6 @@ fn spread(stations: &[f64], pitch: f64) -> Vec<f64> {
         .collect()
 }
 
-/// Ordinate dimensions along the bottom of a view: each station's distance
-/// from the datum, on a leader run out from `edge` and jogged clear of its
-/// neighbours.
 pub fn ordinates_horizontal(canvas: &mut Canvas<'_>, stations: &[(f64, String)], edge: f64) {
     let pen = Pen::solid(THIN);
     let stood = stations.iter().map(|(x, _)| *x).collect::<Vec<_>>();
@@ -765,7 +700,6 @@ pub fn ordinates_horizontal(canvas: &mut Canvas<'_>, stations: &[(f64, String)],
     }
 }
 
-/// Ordinate dimensions down the left of a view.
 pub fn ordinates_vertical(canvas: &mut Canvas<'_>, stations: &[(f64, String)], edge: f64) {
     let pen = Pen::solid(THIN);
     let stood = stations.iter().map(|(y, _)| *y).collect::<Vec<_>>();
@@ -793,13 +727,9 @@ pub fn ordinates_vertical(canvas: &mut Canvas<'_>, stations: &[(f64, String)], e
 /// Room tags take outside a view: their leaders and the tags themselves.
 pub const TAGS: f64 = 10.0;
 
-/// Tag marks of a view from outside it: each mark's tag beyond the edge of
-/// `view` it stands nearest, on a leader from the mark, the tags of an edge
-/// spread so none stands on another. A mark is where it is on the sheet,
-/// how far it reaches, and its tag.
+/// Tag marks outside `view`'s nearest edge; a mark is its place, reach and tag.
 pub fn tags(canvas: &mut Canvas<'_>, view: BBox, marks: &[(Point, f64, String)]) {
-    /// How far apart tags sit along an edge they are lettered across, and
-    /// down one they are stacked beside.
+    /// Tag pitch along an edge lettered across, and down one stacked beside.
     const ACROSS: f64 = 4.8;
     const DOWN: f64 = 3.0;
     /// How far past the edge a leader bends and ends.
@@ -807,8 +737,7 @@ pub fn tags(canvas: &mut Canvas<'_>, view: BBox, marks: &[(Point, f64, String)])
     const END: f64 = 5.0;
     let pen = Pen::solid(HAIR);
     let style = TextStyle::new(LABEL).bold();
-    // Top, bottom, left, right: the edge's place, whether tags run along X,
-    // and which way is out.
+    // Top, bottom, left, right: place, tags run along X, outward sign.
     let edges = [
         (view.max.y, true, 1.0),
         (view.min.y, true, -1.0),
@@ -836,8 +765,7 @@ pub fn tags(canvas: &mut Canvas<'_>, view: BBox, marks: &[(Point, f64, String)])
         if stood.is_empty() {
             continue;
         }
-        // Spread about their own middle, so a cluster in a corner fans both
-        // ways rather than trailing off one.
+        // Spread about their own middle, so a corner cluster fans both ways.
         let pitch = if along_x { ACROSS } else { DOWN };
         let labels = spread(&stood, pitch);
         let shift = (stood.iter().sum::<f64>() - labels.iter().sum::<f64>()) / stood.len() as f64;
@@ -868,7 +796,6 @@ pub fn tags(canvas: &mut Canvas<'_>, view: BBox, marks: &[(Point, f64, String)])
     }
 }
 
-/// The datum ordinates are measured from: a target on the corner.
 pub fn datum(canvas: &mut Canvas<'_>, at: Point) {
     let pen = Pen::solid(THIN);
     canvas.circle(at, 1.6, pen);
@@ -884,15 +811,11 @@ pub fn datum(canvas: &mut Canvas<'_>, at: Point) {
     );
 }
 
-/// Height of a view's title with one line of detail and its scale bar, and
-/// of each further line of detail.
+/// Title height with one detail line and a scale bar, and each further line's.
 pub const TITLE_HEIGHT: f64 = 13.0;
 pub const TITLE_LEADING: f64 = 4.0;
 
-/// Where a view's title is lettered: under it with its details on a line,
-/// under it with a detail to a line where the line would outrun the view's
-/// room, or to its right where the sheet has more width to spare than
-/// height.
+/// Under the view on one line, under it a detail to a line, or to its right.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitleSide {
     Below,
@@ -900,14 +823,11 @@ pub enum TitleSide {
     Beside,
 }
 
-/// The room a title takes however it is lettered; over the views of a
-/// sheet, the most any of their titles takes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TitleRoom {
     /// Width with the details on one line, and with a detail to a line.
     pub below: f64,
     pub beside: f64,
-    /// How many details there are.
     lines: usize,
 }
 
@@ -920,23 +840,19 @@ impl TitleRoom {
         }
     }
 
-    /// Height lettered a detail to a line.
     pub fn height(self) -> f64 {
         stacked_height(self.lines)
     }
 }
 
-/// Height of a title lettered a detail to a line, `details` of them.
 fn stacked_height(details: usize) -> f64 {
     TITLE_HEIGHT + details.saturating_sub(1) as f64 * TITLE_LEADING
 }
 
-/// A view's title: what it shows, and what is said of it.
 #[derive(Debug, Clone)]
 pub struct Title {
     pub name: String,
-    /// The scale first, then whatever else, each short enough to stand on
-    /// a line of its own.
+    /// The scale first; each short enough for a line of its own.
     pub details: Vec<String>,
 }
 
@@ -947,7 +863,6 @@ impl Title {
     /// Room a scale bar's labels take at its ends.
     const BAR_LABELS: (f64, f64) = (3.0, 9.0);
 
-    /// Width the title takes lettered under a view, its details on a line.
     pub fn width_below(&self, fonts: &Fonts) -> f64 {
         let name = fonts.width(Weight::Bold, HEADING, &self.name);
         let details = fonts.width(Weight::Regular, BODY, &self.details.join(" · "));
@@ -955,7 +870,6 @@ impl Title {
         name.max(details).max(bar)
     }
 
-    /// Height the title takes lettered beside a view, a detail to a line.
     pub fn height_beside(&self) -> f64 {
         stacked_height(self.details.len())
     }
@@ -968,7 +882,6 @@ impl Title {
         }
     }
 
-    /// Width the title takes lettered beside a view, a detail to a line.
     fn width_beside(&self, fonts: &Fonts) -> f64 {
         let name = fonts.width(Weight::Bold, HEADING, &self.name);
         let details = self
@@ -979,10 +892,7 @@ impl Title {
         details.fold(name.max(bar), f64::max)
     }
 
-    /// Letter the title down from `top`: centred there under a view with
-    /// its details on one line or a detail to a line, or from there
-    /// rightwards beside one with a detail to a line. Under the details a
-    /// bar measures true at the view's scale however the sheet is printed.
+    /// From `top` down: centred under a view, or rightwards beside one.
     pub fn draw(&self, canvas: &mut Canvas<'_>, top: Point, side: TitleSide, scale: Scale) {
         let (align, details) = match side {
             TitleSide::Below => (Align::Center, vec![self.details.join(" · ")]),
@@ -1020,9 +930,7 @@ impl Title {
     }
 }
 
-/// A bar a round number of millimetres long at `scale`, drawn no longer
-/// than `longest` with a tick at each end and at its middle: centred on
-/// `center`, or from `left`.
+/// A round number of millimetres long; centred on `center`, or from `left`.
 fn scale_bar(
     canvas: &mut Canvas<'_>,
     center: f64,
@@ -1054,16 +962,12 @@ fn scale_bar(
     );
 }
 
-/// The distinct stations of an ordinate chain, each lettered with its
-/// distance from `datum`. Stations closer than a drawing can show apart
-/// are one station.
 pub fn stations(values: impl IntoIterator<Item = f64>, datum: f64) -> Vec<(f64, String)> {
     /// Edges nearer than this are one edge drawn twice, not two edges.
     const COINCIDENT: f64 = 0.05;
     let mut values = values.into_iter().collect::<Vec<_>>();
     values.sort_by(f64::total_cmp);
-    // The ends of the chain are the extents: a station that all but stands
-    // on one is that end, not a second station beside it.
+    // A station that all but stands on an end of the chain is that end.
     if let (Some(&low), Some(&high)) = (values.first(), values.last()) {
         values.retain(|value| {
             let interior = *value - low >= COINCIDENT && high - *value >= COINCIDENT;
@@ -1071,8 +975,7 @@ pub fn stations(values: impl IntoIterator<Item = f64>, datum: f64) -> Vec<(f64, 
         });
     }
     values.dedup_by(|next, kept| (*next - *kept).abs() < COINCIDENT);
-    // A first station on the datum is the datum: the chain reads from it,
-    // not from a corner a few micrometres away.
+    // A first station on the datum is the datum: the chain reads from it.
     let datum = match values.first() {
         Some(first) if (*first - datum).abs() < COINCIDENT => *first,
         _ => datum,
@@ -1103,8 +1006,7 @@ mod tests {
         for pair in labels.windows(2) {
             assert!(pair[1] - pair[0] >= ORDINATE_PITCH - 1e-9, "{labels:?}");
         }
-        // A tight group at the datum runs away from it, where the other
-        // axis letters nothing; one elsewhere straddles its stations.
+        // A tight group at the datum runs away from it; elsewhere it straddles.
         assert_eq!(labels[0], 0.0, "{labels:?}");
         let labels = spread(&[0.0, 30.0, 31.0, 32.0]);
         assert!(labels[1] < 30.0 && labels[3] > 32.0, "{labels:?}");
@@ -1113,8 +1015,7 @@ mod tests {
 
     #[test]
     fn an_outline_states_its_straight_edges_and_corner_radii() {
-        // A 20 x 10 board with one corner rounded to 2 mm and a 4 x 3 notch
-        // in its top edge.
+        // 20 x 10, one corner rounded to 2 mm, a 4 x 3 notch in the top edge.
         let outline = ContourBuf::new(vec![
             PathCmd::move_to(Point::new(0.0, 0.0)),
             PathCmd::line_to(Point::new(18.0, 0.0)),
@@ -1135,21 +1036,10 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(texts(&features.edges_x), ["0.00", "8.00", "12.00", "20.00"]);
-        // Edges a drawing cannot show apart are one station, and one that
-        // all but stands on an end of the chain is that end.
         assert_eq!(texts(&[0.0, 4.982, 5.0, 10.0]), ["0.00", "4.98", "10.00"]);
         assert_eq!(texts(&[0.0, 9.982, 10.0, 10.021]), ["0.00", "10.02"]);
         assert_eq!(texts(&features.edges_y), ["0.00", "7.00", "10.00"]);
         assert_eq!(features.radii, [(2.0, 1)]);
         assert_eq!(features.radii().unwrap(), "1X R2.00");
-    }
-
-    #[test]
-    fn a_slot_outline_is_its_centre_line_swept_by_the_tool() {
-        let outline = slot_outline(Point::new(0.0, 0.0), Point::new(4.0, 0.0), 1.0);
-        assert_eq!(
-            outline.bbox,
-            BBox::new(Point::new(-0.5, -0.5), Point::new(4.5, 0.5))
-        );
     }
 }

@@ -197,8 +197,9 @@ enum Commands {
     /// file, the array as delivered, and its tooling holes and fiducials on a
     /// sheet for each side that carries fiducials; then every layer the
     /// fabricator images, two to a sheet, each to scale and in a colour of
-    /// its own. Lettered in TX-02 where it is installed (or found in
-    /// `PCB_FONT_DIR`), and in the bundled face elsewhere.
+    /// its own: of one board, and for an array file of the whole array too.
+    /// Lettered in TX-02 where it is installed (or found in `PCB_FONT_DIR`),
+    /// and in the bundled face elsewhere.
     FabDrawing {
         /// IPC-2581 XML file to draw
         #[arg(value_hint = clap::ValueHint::FilePath)]
