@@ -10,6 +10,7 @@ pub mod assembly;
 pub mod board_array;
 pub mod commands;
 pub mod copper_balance;
+pub mod drawing;
 mod generated;
 pub mod geometry;
 pub mod gerber;

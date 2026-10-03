@@ -1,0 +1,9 @@
+[package]
+name = "pcb-fonts"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
+description = "Fonts bundled with pcb"
+publish = false

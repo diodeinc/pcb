@@ -3,7 +3,9 @@
 //! Artwork renders keep the source's structure: apertures stay shared, so
 //! repeated geometry stays repeated and polarity runs paint sequentially.
 //! Mask renders take an already-composed image. Both take a [`RenderOptions`].
+//! The PDF backend writes artwork into a document its caller lays out.
 
+pub mod pdf;
 mod png;
 mod svg;
 #[cfg(not(target_family = "wasm"))]

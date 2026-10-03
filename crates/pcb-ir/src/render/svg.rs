@@ -111,13 +111,13 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
 
 /// The largest scale at which each aperture and block is placed, through
 /// every chain of instances that reaches it; `None` where nothing does.
-struct PlacementScales {
-    apertures: Vec<Option<f64>>,
-    blocks: Vec<Option<f64>>,
+pub(crate) struct PlacementScales {
+    pub(crate) apertures: Vec<Option<f64>>,
+    pub(crate) blocks: Vec<Option<f64>>,
 }
 
 impl PlacementScales {
-    fn of<LayerMeta, ObjectMeta>(
+    pub(crate) fn of<LayerMeta, ObjectMeta>(
         doc: &artwork::Document<LayerMeta, ObjectMeta>,
         layers: &[usize],
     ) -> Self {
@@ -507,9 +507,9 @@ fn escape_xml(input: &str) -> String {
 
 /// A number in fixed notation with trailing zeros trimmed, written without
 /// allocating: a layer's path data is millions of these.
-struct Num {
-    value: f64,
-    decimals: u32,
+pub(crate) struct Num {
+    pub(crate) value: f64,
+    pub(crate) decimals: u32,
 }
 
 fn num(value: f64) -> Num {

@@ -190,6 +190,42 @@ enum Commands {
         #[arg(long, default_value = "board-array")]
         layout_target: LayoutTarget,
     },
+    /// Draw the fabrication drawing a bare-board shop builds to, as a PDF
+    ///
+    /// A4 sheets: the board's dimensioned outline with its specification,
+    /// layer stack and notes; its drill pattern and drill table; for an array
+    /// file, the array as delivered; then every layer the fabricator images,
+    /// each to scale. Lettered in TX-02 where it is installed (or found in
+    /// `PCB_FONT_DIR`), and in the bundled face elsewhere.
+    FabDrawing {
+        /// IPC-2581 XML file to draw
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// What to draw: the board alone, or the array the file lays it out in.
+        #[arg(long, default_value = "board-array")]
+        layout_target: LayoutTarget,
+        /// Title, where the board's own name is not wanted
+        #[arg(long)]
+        title: Option<String>,
+        /// Revision. Defaults to the design's BOM revision.
+        #[arg(long)]
+        revision: Option<String>,
+        /// Sheet size, landscape.
+        #[arg(long, default_value = "a4", hide = true)]
+        sheet: pcb_ipc2581_tools::drawing::SheetSize,
+        /// Use the smallest sheet that shows what is delivered at half size or larger.
+        #[arg(long, hide = true, conflicts_with = "sheet")]
+        fit_sheet: bool,
+        /// How layer artwork is inked.
+        #[arg(long, default_value = "material", hide = true)]
+        ink: pcb_ipc2581_tools::drawing::LayerInk,
+        /// The fewest layer views a sheet is laid out to hold.
+        #[arg(long, default_value = "1", hide = true)]
+        layers_per_sheet: usize,
+        /// Output PDF file path
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: PathBuf,
+    },
     /// Check IPC-2581 geometry against a fabrication process design kit
     Dfm {
         #[command(subcommand)]
@@ -708,6 +744,32 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             },
             resolution,
         ),
+        Commands::FabDrawing {
+            file,
+            layout_target,
+            title,
+            revision,
+            sheet,
+            fit_sheet,
+            ink,
+            layers_per_sheet,
+            output,
+        } => commands::fab_drawing::execute(
+            &file,
+            &commands::fab_drawing::FabDrawingCommandOptions {
+                output,
+                drawing: pcb_ipc2581_tools::drawing::FabDrawingOptions {
+                    target: layout_target,
+                    sheet: (!fit_sheet).then_some(sheet),
+                    ink,
+                    layers_per_sheet,
+                    title,
+                    revision,
+                    ..Default::default()
+                },
+            },
+            resolution,
+        ),
         Commands::Dfm { command } => match command {
             DfmCommands::Check {
                 file,
@@ -786,6 +848,41 @@ mod tests {
         ] {
             assert!(crate::Cli::try_parse_from(base.into_iter().chain(args)).is_err());
         }
+    }
+
+    #[test]
+    fn fab_drawing_draws_a4_sheets() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("board.xml");
+        let output = dir.path().join("fab.pdf");
+        std::fs::write(
+            &input,
+            include_str!("../../pcb-ipc2581-tools/src/assembly/testdata/report.xml"),
+        )
+        .unwrap();
+        let cli = crate::Cli::try_parse_from([
+            "pcb",
+            "ipc",
+            "fab-drawing",
+            input.to_str().unwrap(),
+            "--layout-target",
+            "board",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .unwrap();
+        let crate::Commands::Ipc2581(args) = cli.command else {
+            panic!("expected IPC command")
+        };
+        execute(args, Resolution::default()).unwrap();
+        let pdf = std::fs::read(output).unwrap();
+        assert!(pdf.starts_with(b"%PDF-"));
+        // A4 landscape, in points.
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/MediaBox [0 0 841.8898 595.2756]"), "{}", {
+            let at = text.find("/MediaBox").unwrap_or(0);
+            text[at..at + 60].to_string()
+        });
     }
 
     #[test]

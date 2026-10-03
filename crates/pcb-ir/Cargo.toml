@@ -19,7 +19,9 @@ boostvoronoi = { workspace = true }
 i_overlay = { workspace = true }
 i_triangle = { workspace = true }
 ipc2581 = { workspace = true }
+flate2 = { workspace = true }
 libm = { workspace = true }
+pdf-writer = { workspace = true }
 rayon = { workspace = true }
 rustc-hash = { workspace = true }
 tiny-skia = { workspace = true }

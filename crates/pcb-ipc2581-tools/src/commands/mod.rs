@@ -7,6 +7,8 @@ pub mod bom;
 pub mod bom_edit;
 pub mod cpl;
 pub mod dfm;
+#[cfg(feature = "cli")]
+pub mod fab_drawing;
 pub mod fab_panel;
 pub(crate) mod fabrication;
 pub mod html_export;

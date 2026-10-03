@@ -49,6 +49,7 @@ pcb-diode-uri = { path = "crates/pcb-diode-uri" }
 pcb-native-dialog = { path = "crates/pcb-native-dialog" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools", default-features = false }
 pcb-step = { path = "crates/pcb-step" }
+pcb-fonts = { path = "crates/pcb-fonts" }
 
 anyhow = "1.0"
 anstream = "1.0"
@@ -128,6 +129,10 @@ strip-ansi-escapes = "0.2"
 supports-hyperlinks = "3"
 tar = { version = "0.4", default-features = false }
 rustybuzz = "0.20"
+ttf-parser = "0.25"
+subsetter = { version = "0.2", default-features = false }
+pdf-writer = "0.15"
+flate2 = "1"
 ruzstd = "0.9"
 terminal_size = "0.4.4"
 terminal_hyperlink = "0.1"
