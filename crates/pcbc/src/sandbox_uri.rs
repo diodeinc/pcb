@@ -26,11 +26,11 @@ pub fn require_remote_zen_file(uri: &SandboxFileUri) -> Result<()> {
 
 pub fn require_remote_openable_file(uri: &SandboxFileUri) -> Result<()> {
     let path = Path::new(&uri.sandbox_path);
-    if is_zen_path(path) || is_kicad_pcb_path(path) {
+    if is_zen_path(path) || is_kicad_pcb_path(path) || is_kicad_sch_path(path) {
         return Ok(());
     }
     bail!(
-        "Expected a .zen or .kicad_pcb file URI, got: {}",
+        "Expected a .zen, .kicad_pcb or .kicad_sch file URI, got: {}",
         uri.sandbox_path
     );
 }
@@ -41,6 +41,10 @@ pub fn is_remote_kicad_pcb_file(uri: &SandboxFileUri) -> bool {
 
 pub fn is_kicad_pcb_path(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == "kicad_pcb")
+}
+
+pub fn is_kicad_sch_path(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "kicad_sch")
 }
 
 fn is_zen_path(path: &Path) -> bool {
