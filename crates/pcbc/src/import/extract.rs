@@ -868,16 +868,23 @@ fn parse_standalone_footprint_pads(
 ) -> Result<BTreeMap<KiCadPinNumber, ImportLayoutPad>> {
     let root = pcb_sexpr::parse(footprint_text)
         .context("Failed to parse .kicad_mod as an S-expression")?;
-    let pads = pcb_sexpr::kicad::footprint::pad_numbers(&root)
-        .into_iter()
-        .map(|number| {
-            let pad = ImportLayoutPad {
+    let mut pads = BTreeMap::new();
+    for pad in root.find_all_lists("pad") {
+        let Some(number) = pad
+            .get(1)
+            .and_then(|value| value.as_str().or_else(|| value.as_sym()))
+        else {
+            continue;
+        };
+        if number.is_empty() {
+            continue;
+        }
+        pads.entry(KiCadPinNumber::from(number.to_string()))
+            .or_insert_with(|| ImportLayoutPad {
                 net_names: BTreeSet::new(),
                 uuids: BTreeSet::new(),
-            };
-            (KiCadPinNumber::from(number), pad)
-        })
-        .collect();
+            });
+    }
     // Mechanical and documentation footprints such as logos and mounting holes can legitimately
     // have no numbered pads. Keep their geometry and represent them as pinless components rather
     // than blocking structural schematic import.

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use tracing::{instrument, warn};
 
 use super::symbol::{KicadSymbol, description_from_properties, parse_symbol};
@@ -33,6 +33,9 @@ pub struct KicadSymbolLibrary {
     symbol_locations: BTreeMap<String, SymbolLocation>,
     /// Cache of already-parsed and resolved symbols
     resolved_cache: RwLock<HashMap<String, KicadSymbol>>,
+    /// Symbol definitions as written, before `extends` resolution. Spans are
+    /// relative to the start of the definition.
+    definition_cache: RwLock<HashMap<String, Arc<Sexpr>>>,
     /// The `(version ...)` stamp from the library header, if declared.
     format_version: Option<i32>,
 }
@@ -74,6 +77,7 @@ impl KicadSymbolLibrary {
             sources,
             symbol_locations,
             resolved_cache: RwLock::new(HashMap::new()),
+            definition_cache: RwLock::new(HashMap::new()),
             format_version,
         })
     }
@@ -128,6 +132,37 @@ impl KicadSymbolLibrary {
         })
     }
 
+    /// The library's source texts, in the order given to [`Self::from_sources`].
+    pub fn sources(&self) -> &[String] {
+        &self.sources
+    }
+
+    /// Symbol `name` as written: its source index, its byte offset in that
+    /// source, and its parse, which symbol loading and checking share.
+    pub(super) fn definition(&self, name: &str) -> Result<Option<(usize, usize, Arc<Sexpr>)>> {
+        let Some(location) = self.symbol_locations.get(name) else {
+            return Ok(None);
+        };
+        let at = |node| Some((location.source_idx, location.range.start, node));
+        let cached = self
+            .definition_cache
+            .read()
+            .map_err(|e| anyhow!("Cache read lock poisoned: {}", e))?
+            .get(name)
+            .cloned();
+        if let Some(node) = cached {
+            return Ok(at(node));
+        }
+        let node = Arc::new(parse(
+            &self.sources[location.source_idx][location.range.clone()],
+        )?);
+        self.definition_cache
+            .write()
+            .map_err(|e| anyhow!("Cache write lock poisoned: {}", e))?
+            .insert(name.to_string(), Arc::clone(&node));
+        Ok(at(node))
+    }
+
     /// Check if a symbol exists in this library
     pub fn has_symbol(&self, name: &str) -> bool {
         self.symbol_locations.contains_key(name)
@@ -170,19 +205,20 @@ impl KicadSymbolLibrary {
             None => return Ok(None),
         };
 
+        // Parse just this symbol's substring
+        let Some((_, _, definition)) = self.definition(name)? else {
+            return Ok(None);
+        };
+        let base_symbol = parse_symbol(&definition)?;
+
         // Check for circular extends
         if chain.contains(name) {
             // Break cycle by returning symbol without parent resolution
-            let symbol_str = &self.sources[location.source_idx][location.range.clone()];
-            return Ok(Some(parse_symbol_from_substring(symbol_str)?));
+            return Ok(Some(base_symbol));
         }
 
         // Add to chain before resolving extends
         chain.insert(name.to_string());
-
-        // Parse just this symbol's substring
-        let symbol_str = &self.sources[location.source_idx][location.range.clone()];
-        let base_symbol = parse_symbol_from_substring(symbol_str)?;
 
         // Resolve extends chain if needed
         let resolved = if let Some(parent_name) = &location.extends {
@@ -553,20 +589,6 @@ fn extract_extends(content: &str) -> Option<String> {
     } else {
         let end = after.find(|c: char| c.is_whitespace() || c == ')')?;
         Some(after[..end].to_string())
-    }
-}
-
-/// Parse a single symbol from its raw S-expression substring
-fn parse_symbol_from_substring(content: &str) -> Result<KicadSymbol> {
-    let sexp = parse(content)?;
-
-    match &sexp.kind {
-        SexprKind::List(items) => {
-            let mut symbol = parse_symbol(items)?;
-            symbol.raw_sexp = Some(sexp);
-            Ok(symbol)
-        }
-        _ => Err(anyhow!("Expected symbol S-expression list")),
     }
 }
 

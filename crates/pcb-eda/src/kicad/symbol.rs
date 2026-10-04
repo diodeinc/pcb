@@ -159,14 +159,8 @@ impl FromStr for KicadSymbol {
         let symbol_sexp = match sexp.kind {
             SexprKind::List(kicad_symbol_lib) => kicad_symbol_lib
                 .into_iter()
-                .find_map(|item| match &item.kind {
-                    SexprKind::List(symbol_list) => match symbol_list.first().map(|s| &s.kind) {
-                        Some(SexprKind::Symbol(sym)) if sym == "symbol" => {
-                            Some(symbol_list.clone())
-                        }
-                        _ => None,
-                    },
-                    _ => None,
+                .find(|item| {
+                    item.as_list().and_then(|list| list.first()?.as_sym()) == Some("symbol")
                 })
                 .ok_or(anyhow::anyhow!("No 'symbol' expression found"))?,
             _ => return Err(anyhow::anyhow!("Invalid S-expression format")),
@@ -183,7 +177,10 @@ impl KicadSymbol {
     }
 }
 
-pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
+pub(super) fn parse_symbol(node: &Sexpr) -> Result<KicadSymbol> {
+    let symbol_data = node
+        .as_list()
+        .ok_or(anyhow::anyhow!("Expected symbol S-expression list"))?;
     // Extract the symbol name
     let name = symbol_data
         .get(1)
@@ -195,7 +192,7 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
 
     let mut symbol = KicadSymbol {
         name,
-        raw_sexp: Some(Sexpr::list(symbol_data.to_vec())),
+        raw_sexp: Some(node.clone()),
         in_bom: true, // KiCad default; overridden by explicit (in_bom no)
         ..Default::default()
     };
@@ -249,7 +246,7 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
     for (_unit, style_candidates) in nested_pin_groups {
         if let Some(best) = style_candidates
             .into_iter()
-            .max_by_key(|c| (c.named_pin_count, Reverse(c.style)))
+            .max_by_key(|c| style_rank(c.named_pin_count, c.style))
         {
             symbol.pins.extend(best.pins);
         }
@@ -286,7 +283,13 @@ struct NestedStylePins {
     pins: Vec<KicadPin>,
 }
 
-fn is_named_pin(pin: &KicadPin) -> bool {
+/// Rank of a body style when choosing the one whose pins stand for a unit:
+/// the style naming the most pins, the lowest style number on a tie.
+pub(super) fn style_rank(named_pin_count: usize, style: u32) -> (usize, Reverse<u32>) {
+    (named_pin_count, Reverse(style))
+}
+
+pub(super) fn is_named_pin(pin: &KicadPin) -> bool {
     !is_placeholder_kicad_pin_name(&pin.name)
 }
 

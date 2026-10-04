@@ -89,13 +89,42 @@ pub fn validate_footprint_source(source: &str) -> Result<(), FootprintValidation
 
 /// Numbers of a footprint's numbered pads. Mechanical and paste-only pads
 /// carry an empty number and are not part of the footprint's pinout.
-pub fn pad_numbers(footprint: &Sexpr) -> BTreeSet<String> {
-    footprint
-        .find_all_lists("pad")
-        .into_iter()
-        .filter_map(|pad| atom_text(pad.get(1)?))
+///
+/// Scans the text instead of parsing it: embedded 3D models make footprints
+/// megabytes of base64 around a handful of pads.
+pub fn pad_numbers(source: &str) -> BTreeSet<String> {
+    let mut depth = 0usize;
+    crate::scan::parens(source)
+        .filter_map(|(offset, opening)| {
+            if !opening {
+                depth = depth.saturating_sub(1);
+                return None;
+            }
+            depth += 1;
+            let pad = source[offset + 1..].strip_prefix("pad")?;
+            let number = pad.strip_prefix(|c: char| c.is_ascii_whitespace())?;
+            (depth == 2).then(|| first_atom(number))?
+        })
         .filter(|number| !number.is_empty())
         .collect()
+}
+
+/// The atom that `text` starts with, unquoted and unescaped.
+fn first_atom(text: &str) -> Option<String> {
+    let text = text.trim_start();
+    let Some(quoted) = text.strip_prefix('"') else {
+        let end = text.find(|c: char| c.is_ascii_whitespace() || matches!(c, '(' | ')'));
+        return Some(text[..end.unwrap_or(text.len())].to_string());
+    };
+    let mut atom = String::new();
+    let mut chars = quoted.chars();
+    loop {
+        match chars.next()? {
+            '"' => return Some(atom),
+            '\\' => atom.push(chars.next()?),
+            c => atom.push(c),
+        }
+    }
 }
 
 fn validate_embedded_file(file: &[Sexpr], issues: &mut Vec<FootprintValidationIssue>) {
@@ -344,12 +373,13 @@ mod tests {
 
     #[test]
     fn pad_numbers_skip_unnumbered_pads() {
-        let footprint = crate::parse(
-            r#"(footprint "F" (pad "A1" smd rect) (pad 2 smd rect) (pad "" np_thru_hole circle))"#,
-        )
-        .unwrap();
+        let source = r#"(footprint "F"
+            (property "Note" "(pad \"9\" smd)")
+            (pad "A1" smd rect (at 0 0)) (pad 2 smd rect) (pad "" np_thru_hole circle)
+            (group (pad "8" smd rect))
+            (embedded_files (file (data |KLUv/SAAAQAA|))))"#;
         assert_eq!(
-            pad_numbers(&footprint).into_iter().collect::<Vec<_>>(),
+            pad_numbers(source).into_iter().collect::<Vec<_>>(),
             ["2", "A1"]
         );
     }
