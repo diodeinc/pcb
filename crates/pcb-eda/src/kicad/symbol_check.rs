@@ -340,9 +340,14 @@ pub fn check_symbol(
     for def in &chain {
         check_forms(def, &mut issues);
     }
-    // Pads are compared with the pins a component gets from loading.
+    // Pads are compared with the pins a component gets from loading. A
+    // footprint without pads is a mechanical outline and a symbol without
+    // pins a mechanical part: neither has a pinout to compare.
     let loaded = library.resolved(name).ok().flatten();
-    check_body(body, footprint.zip(loaded.as_deref()), &mut issues);
+    let pairing = footprint
+        .zip(loaded.as_deref())
+        .filter(|(footprint, loaded)| !footprint.numbers.is_empty() && !loaded.pins().is_empty());
+    check_body(body, pairing, &mut issues);
     issues.sort_by_key(|issue| (issue.source, issue.span.start));
     issues
 }
@@ -543,6 +548,8 @@ fn is_plain_decimal(raw: &str) -> bool {
     let unsigned = raw.strip_prefix('-').unwrap_or(raw);
     let (integer, fraction) = unsigned.split_once('.').unwrap_or((unsigned, "0"));
     let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    // `.5` is what older KiCad files and `pcb import` write for 0.5.
+    let integer = if integer.is_empty() { "0" } else { integer };
     let negative_zero = raw.starts_with('-') && unsigned.bytes().all(|b| matches!(b, b'0' | b'.'));
     digits(integer) && digits(fraction) && !negative_zero
 }
@@ -925,7 +932,7 @@ fn check_footprint(
         .numbers
         .iter()
         .map(String::as_str)
-        .filter(|pad| !numbers.contains(pad))
+        .filter(|pad| !pad.is_empty() && !numbers.contains(pad))
         .collect();
     if !pinless.is_empty() {
         let message = format!(
@@ -1199,6 +1206,7 @@ mod tests {
     fn each_defect_is_one_issue_of_its_kind() {
         assert!(kinds(CLEAN, "U").is_empty());
         assert!(kinds(CLEAN, "D").is_empty());
+        assert!(kinds(&CLEAN.replacen("(offset 0.508)", "(offset .508)", 1), "U").is_empty());
         let library_issue = |sources: Vec<String>| {
             let library = KicadSymbolLibrary::from_sources(sources).unwrap();
             check_library(&library).map(|issue| (issue.source, issue.message))
@@ -1384,6 +1392,16 @@ mod tests {
                 .collect()
         };
         assert!(messages(CLEAN, &["1", "2"]).is_empty());
+        // An outline footprint and a pinless symbol have no pinout to compare.
+        assert!(messages(CLEAN, &[]).is_empty());
+        let pinless = r#"(kicad_symbol_lib (version 20251024) (symbol "U"
+            (property "Reference" "U") (property "Value" "U")))"#;
+        assert!(messages(pinless, &["1"]).is_empty());
+        assert!(messages(CLEAN, &["", "1", "2"]).is_empty());
+        assert_eq!(
+            messages(CLEAN, &[""]),
+            [r#"U: pins "1", "2" have no pad in U.kicad_mod"#]
+        );
         assert_eq!(
             messages(CLEAN, &["1"]),
             ["U: pin \"2\" has no pad in U.kicad_mod"]

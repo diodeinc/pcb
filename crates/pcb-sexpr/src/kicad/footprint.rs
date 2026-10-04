@@ -87,9 +87,8 @@ pub fn validate_footprint_source(source: &str) -> Result<(), FootprintValidation
     }
 }
 
-/// Numbers of the pads of a footprint that can carry a net. Mechanical and
-/// paste-only pads carry an empty number, and a non-plated hole has no copper
-/// whatever its number.
+/// Numbers of the pads of a footprint, empty for a pad without one. A
+/// non-plated hole has no copper whatever its number.
 ///
 /// Scans the text instead of parsing it: embedded 3D models make footprints
 /// megabytes of base64 around a handful of pads.
@@ -111,7 +110,6 @@ pub fn pad_numbers(source: &str) -> BTreeSet<String> {
             let (kind, _) = first_atom(rest)?;
             (kind != "np_thru_hole").then_some(number)
         })
-        .filter(|number| !number.is_empty())
         .collect()
 }
 
@@ -380,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn pad_numbers_skip_unnumbered_pads() {
+    fn pad_numbers_skip_non_plated_holes() {
         let source = r#"(footprint "F"
             (property "Note" "(pad \"9\" smd)")
             (pad "A1" smd rect (at 0 0)) (pad 2 smd rect) (pad "" smd rect)
@@ -389,7 +387,7 @@ mod tests {
             (embedded_files (file (data |KLUv/SAAAQAA|))))"#;
         assert_eq!(
             pad_numbers(source).into_iter().collect::<Vec<_>>(),
-            ["2", "A1"]
+            ["", "2", "A1"]
         );
     }
 
