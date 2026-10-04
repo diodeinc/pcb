@@ -219,7 +219,10 @@ fn run() -> anyhow::Result<()> {
     let env = if cli.debug {
         Env::default().default_filter_or("debug")
     } else {
-        Env::default().default_filter_or("error")
+        // An incomplete custom-rule preflight must not look like a fully
+        // validated DRC run. Keep these warnings visible without enabling
+        // unrelated library warnings.
+        Env::default().default_filter_or("error,pcb_kicad::dru=warn")
     };
     env_logger::Builder::from_env(env).init();
 

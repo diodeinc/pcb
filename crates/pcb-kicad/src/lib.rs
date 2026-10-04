@@ -1,4 +1,5 @@
 pub mod drc;
+mod dru;
 pub mod erc;
 pub mod footprint;
 
@@ -497,16 +498,30 @@ impl KiCadCliBuilder {
 ///
 /// Set `schematic_parity=true` to have KiCad include schematic-vs-layout parity diagnostics
 /// (useful for validating the PCB is in sync with the schematic).
+///
+/// Preflight the sibling `.kicad_dru` before invoking KiCad: reject known
+/// structural/numeric errors and log warnings when checks must be deferred.
+/// This does not compile conditions, resolve board-dependent layer names, or
+/// expand text variables, and is not proof that KiCad applied every rule.
+/// Relative paths are resolved against `working_dir` (or the current directory).
 pub fn run_drc(
     pcb_path: impl AsRef<Path>,
     schematic_parity: bool,
     working_dir: Option<&Path>,
     output_path: &Path,
 ) -> Result<drc::DrcReport> {
-    let pcb_path = pcb_path.as_ref();
+    // Resolve against the subprocess directory, not the caller's directory,
+    // so preflight and report reading use the same files as kicad-cli.
+    let current_dir = std::env::current_dir()?;
+    let working_dir = working_dir.map(|dir| current_dir.join(dir));
+    let base = working_dir.as_deref().unwrap_or(&current_dir);
+    let pcb_path = base.join(pcb_path.as_ref());
+    let output_path = base.join(output_path);
     if !pcb_path.exists() {
         anyhow::bail!("PCB file not found: {}", pcb_path.display());
     }
+
+    dru::preflight(&pcb_path)?;
 
     // Run kicad-cli pcb drc with JSON output
     let mut builder = KiCadCliBuilder::new()
@@ -525,13 +540,13 @@ pub fn run_drc(
         .arg(output_path.to_string_lossy())
         .arg(pcb_path.to_string_lossy());
 
-    if let Some(dir) = working_dir {
+    if let Some(dir) = &working_dir {
         builder = builder.current_dir(dir.to_string_lossy().to_string());
     }
 
     builder.run().context("Failed to run KiCad DRC")?;
 
-    drc::DrcReport::from_file(output_path).context("Failed to parse DRC report")
+    drc::DrcReport::from_file(&output_path).context("Failed to parse DRC report")
 }
 
 /// Run KiCad ERC checks and return the parsed JSON report.
