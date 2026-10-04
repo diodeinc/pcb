@@ -95,8 +95,8 @@ metadata; do not check downloaded PDFs into the package.
   generated, cite its basis, inspect it, and disclose its limits.
 
 Upgrade imported KiCad files before editing. `pcb embed-step` replaces the
-footprint's models with the embedded one and keeps the first model's
-transform, so verify that transform before embedding:
+footprint's models with the embedded one and keeps the transform of the
+first visible model, so verify that transform before embedding:
 
 ```bash
 kicad-cli sym upgrade <symbol.kicad_sym>

@@ -19,6 +19,13 @@ fn children<'a>(items: &'a [Sexpr], name: &'a str) -> impl Iterator<Item = &'a S
     })
 }
 
+fn is_shown(model: &Sexpr) -> bool {
+    let items = model.as_list().unwrap_or_default();
+    !items.iter().any(|item| item.as_sym() == Some("hide"))
+        && children(items, "hide")
+            .all(|hide| hide.as_list().and_then(|hide| hide.get(1)?.as_sym()) == Some("no"))
+}
+
 pub fn format_kicad_sexpr_source(source: &str, path_for_error: &Path) -> Result<String> {
     pcb_sexpr::parse(source)
         .map_err(|e| anyhow::anyhow!(e))
@@ -35,7 +42,7 @@ pub fn format_kicad_sexpr_source(source: &str, path_for_error: &Path) -> Result<
 /// Make `step_bytes` the only 3D model of a footprint, embedded in it.
 ///
 /// Every model reference and embedded model already in the footprint is
-/// replaced; the new reference keeps the placement of the first old one.
+/// replaced; the new reference keeps the placement of the first one shown.
 pub fn embed_step_in_footprint(
     footprint: &str,
     step_bytes: &[u8],
@@ -63,17 +70,21 @@ pub fn embed_step_in_footprint(
     let text = |node: &Sexpr| &footprint[node.span.start..node.span.end];
 
     let models = children(items, "model").collect::<Vec<_>>();
-    let placement = models.first().map_or_else(
-        || IDENTITY_PLACEMENT.to_string(),
-        |model| {
-            let model = model.as_list().unwrap_or_default();
-            ["offset", "at", "scale", "rotate"]
-                .into_iter()
-                .flat_map(|name| children(model, name))
-                .map(text)
-                .collect()
-        },
-    );
+    let placement = models
+        .iter()
+        .find(|model| is_shown(model))
+        .or(models.first())
+        .map_or_else(
+            || IDENTITY_PLACEMENT.to_string(),
+            |model| {
+                let model = model.as_list().unwrap_or_default();
+                ["offset", "at", "scale", "rotate"]
+                    .into_iter()
+                    .flat_map(|name| children(model, name))
+                    .map(text)
+                    .collect()
+            },
+        );
     // Files that only served the replaced models go with them.
     let replaced = models
         .iter()
@@ -165,7 +176,7 @@ mod tests {
 
         assert_eq!(result.matches("(model ").count(), 1);
         assert!(result.contains("(model \"kicad-embed://new.step\""));
-        assert!(result.contains("(xyz 1 2 3)") && result.contains("(xyz 0 0 90)"));
+        assert!(result.contains("(xyz 7 8 9)") && !result.contains("(xyz 1 2 3)"));
         assert_eq!(result.matches("(file").count(), 2);
         assert!(result.contains("(name \"a.ttf\")") && result.contains("(name new.step)"));
         assert!(!result.contains("old.step") && !result.contains("stale.step"));
