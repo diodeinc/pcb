@@ -648,7 +648,7 @@ impl<'a> Drawing<'a> {
             .into_iter()
             .filter(|side| on(*side));
         let sides = sides.map(Some).collect::<Vec<_>>();
-        if sides.is_empty() && array.tooling().is_empty() {
+        if sides.is_empty() && array.tooling.is_empty() {
             return Ok(());
         }
         let sides = if sides.is_empty() { vec![None] } else { sides };
@@ -670,15 +670,14 @@ impl<'a> Drawing<'a> {
         tagged: (usize, usize),
     ) -> Result<(usize, usize)> {
         let datum = array.bounds.min;
-        let tooling = array.tooling();
         let on_side = |fiducial: &&Fiducial| Some(fiducial.side) == side;
         let fiducials = array.fiducials.iter().filter(on_side);
         let (cells, own): (Vec<&Fiducial>, Vec<&Fiducial>) =
             fiducials.partition(|fiducial| fiducial.board.is_some());
-        let per_board = side.and_then(|side| array.board_fiducials(side));
-        let per_board = per_board.unwrap_or_default();
+        let per_board = side.map_or_else(Vec::new, |side| array.board_fiducials(side));
 
-        let holes = tooling.iter().enumerate().map(|(index, (at, tool))| {
+        let holes = array.tooling.iter().enumerate().map(|(index, (at, tool))| {
+            let tool = &array.tools[*tool];
             let feature = ["TOOLING HOLE".to_string(), tool.usage().to_string()];
             let feature = feature.into_iter().chain(tool.span()).collect::<Vec<_>>();
             Tagged {
@@ -729,31 +728,26 @@ impl<'a> Drawing<'a> {
             footer: None,
             header: true,
         });
-        let board_fiducials = if per_board.is_empty() {
-            format!("BOARD FIDUCIAL · {} · PER DATA", cells.len())
-        } else {
-            "B · BOARD FIDUCIAL · X Y FROM BOARD DATUM, EACH BOARD".to_string()
-        };
         let marked = [
             (
-                !tooling.is_empty(),
-                Sample::Mark(Mark::Tooling),
-                "T · TOOLING HOLE · X Y FROM ARRAY DATUM".to_string(),
+                !array.tooling.is_empty(),
+                Mark::Tooling,
+                "T · TOOLING HOLE · X Y FROM ARRAY DATUM",
             ),
             (
                 !own.is_empty(),
-                Sample::Mark(Mark::ArrayFiducial),
-                "F · ARRAY FIDUCIAL · X Y FROM ARRAY DATUM".to_string(),
+                Mark::ArrayFiducial,
+                "F · ARRAY FIDUCIAL · X Y FROM ARRAY DATUM",
             ),
             (
                 !cells.is_empty(),
-                Sample::Mark(Mark::BoardFiducial),
-                board_fiducials,
+                Mark::BoardFiducial,
+                "B · BOARD FIDUCIAL · X Y FROM BOARD DATUM, EACH BOARD",
             ),
         ];
         let marked = marked.into_iter().filter(|(shown, ..)| *shown);
         let key = key(marked
-            .map(|(_, sample, meaning)| (sample, meaning))
+            .map(|(_, mark, meaning)| (Sample::Mark(mark), meaning.to_string()))
             .collect());
         // A table too long to join the key and detail follows on its own sheet.
         let detail = self.board_detail(array, &per_board, &board_tags)?;
@@ -835,7 +829,7 @@ impl<'a> Drawing<'a> {
     }
 
     fn tab_figure(&mut self, array: &ArrayData) -> Result<Option<Block>> {
-        let Some(tab) = array.tab() else {
+        let Some(tab) = array.tab else {
             return Ok(None);
         };
         let (width, height) = (sheet::COLUMN_WIDTH - 10.0, 46.0);
@@ -1186,7 +1180,7 @@ impl<'a> Drawing<'a> {
         views::ordinates_vertical(&mut canvas, &on_sheet(&placement, up, false), drawn.min.x);
         views::datum(&mut canvas, drawn.min);
         // The tab the detail shows, circled where it is.
-        if let Some(tab) = array.tab() {
+        if let Some(tab) = array.tab {
             let center = placement.sheet(tab.bounds.center());
             let radius = tab.bounds.width().max(tab.bounds.height()) / 2.0 * placement.scale;
             let radius = radius.max(4.0);

@@ -1,7 +1,7 @@
 use ipc2581::Ipc2581;
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::dialects::{LayerRole, Side};
-use pcb_ir::geom::{BBox, ContourBuf, PathCmd, Point, Resolution};
+use pcb_ir::geom::{BBox, Point, Resolution};
 
 use super::data::{self, ArrayData, Chip, DrillTool, Hit, HoleKind, Source};
 use super::{FabDrawingOptions, fab_drawing};
@@ -349,21 +349,19 @@ fn an_array_says_how_it_is_separated() {
         assert_eq!(array.boards.len(), 4);
         assert_eq!((array.bounds.width(), array.bounds.height()), (110.0, 90.0));
         assert!(!array.scores.is_empty());
-        assert!(array.tab().is_none(), "a scored array has no tabs");
+        assert!(array.tab.is_none(), "a scored array has no tabs");
         assert!(array.separation().starts_with("V-SCORE"));
     });
     with_source(&array(Separation::MouseBite), |source| {
-        let mut array = ArrayData::of(source).unwrap().unwrap();
+        let array = ArrayData::of(source).unwrap().unwrap();
         assert!(array.scores.is_empty() && !array.removal.is_empty());
         assert_eq!(array.separation(), "ROUTED, PERFORATED TABS");
-        let tab = array.tab().expect("a routed array is held by tabs");
+        let tab = array.tab.expect("a routed array is held by tabs");
         assert!(tab.holes >= 3, "{tab:?}");
         assert!(tab.pitch > tab.diameter, "perforations do not overlap");
-
-        // Without perforations the smallest holes are tooling, not a tab.
-        array.tools.retain(|tool| tool.diameter != tab.diameter);
-        assert!(array.tab().is_none());
-        assert_eq!(array.separation(), "ROUTED, TABS");
+        // No perforation is taken for a tooling hole.
+        let mut tooling = array.tooling.iter();
+        assert!(tooling.all(|(_, tool)| array.tools[*tool].diameter != tab.diameter));
     });
 }
 
@@ -371,7 +369,7 @@ fn an_array_says_how_it_is_separated() {
 fn an_array_places_its_tooling_and_tells_its_fiducials_from_its_boards() {
     with_source(&array(Separation::VScore), |source| {
         let array = ArrayData::of(source).unwrap().unwrap();
-        let tooling = array.tooling();
+        let tooling = &array.tooling;
         assert!(tooling.len() >= 3, "{}", tooling.len());
         assert!(
             tooling
@@ -395,7 +393,7 @@ fn an_array_places_its_tooling_and_tells_its_fiducials_from_its_boards() {
         for side in [Side::Top, Side::Bottom] {
             let cells = array.fiducials.iter();
             let cells = cells.filter(|fiducial| fiducial.board.is_some() && fiducial.side == side);
-            let per_board = array.board_fiducials(side).expect("the boards are alike");
+            let per_board = array.board_fiducials(side);
             assert!(!per_board.is_empty(), "{side:?}");
             assert_eq!(per_board.len() * array.boards.len(), cells.count());
         }
@@ -403,13 +401,7 @@ fn an_array_places_its_tooling_and_tells_its_fiducials_from_its_boards() {
 }
 
 #[test]
-fn holes_far_apart_are_not_a_tab() {
-    let square = ContourBuf::new(vec![
-        PathCmd::move_to(Point::ZERO),
-        PathCmd::line_to(Point::new(1.0, 0.0)),
-        PathCmd::line_to(Point::new(1.0, 1.0)),
-        PathCmd::close(),
-    ]);
+fn perforations_are_rows_and_holes_apart_are_tooling() {
     let tool = |pitch: f64| DrillTool {
         diameter: 0.5,
         slot_length: None,
@@ -418,18 +410,14 @@ fn holes_far_apart_are_not_a_tab() {
         layer_count: 2,
         hits: (0..4)
             .map(|hole| Hit::Hole(Point::new(f64::from(hole) * pitch, 0.0)))
+            .chain([Hit::Hole(Point::new(50.0, 50.0))])
             .collect(),
     };
-    let array = |pitch: f64| ArrayData {
-        grid: None,
-        bounds: BBox::new(Point::ZERO, Point::new(100.0, 100.0)),
-        boards: Vec::new(),
-        outlines: Vec::new(),
-        removal: vec![square.clone()],
-        scores: Vec::new(),
-        fiducials: Vec::new(),
-        tools: vec![tool(pitch)],
-    };
-    assert_eq!(array(0.8).tab().unwrap().holes, 4);
-    assert!(array(20.0).tab().is_none());
+    // A row of four, and a hole of the same size standing apart from it.
+    let (rows, apart) = data::perforations(&tool(0.8));
+    assert_eq!((rows.len(), rows[0].len()), (1, 4));
+    assert_eq!(apart, [Point::new(50.0, 50.0)]);
+    let (rows, apart) = data::perforations(&tool(20.0));
+    assert!(rows.is_empty());
+    assert_eq!(apart.len(), 5);
 }

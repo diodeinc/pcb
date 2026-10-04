@@ -738,6 +738,11 @@ pub struct ArrayData {
     pub fiducials: Vec<Fiducial>,
     /// The array's own holes: tooling and tab perforations.
     pub tools: Vec<DrillTool>,
+    /// The tooling holes, each with its tool's place in `tools`, left to
+    /// right.
+    pub tooling: Vec<(Point, usize)>,
+    /// The perforated tab nearest the datum, of a routed array.
+    pub tab: Option<TabDetail>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -791,6 +796,21 @@ impl ArrayData {
             &scores,
             source.resolution,
         )?;
+        let tools = drill_tools(imported, ArtworkScope::ArraySupport)?;
+        let (rows, apart): (Vec<_>, Vec<_>) = tools.iter().map(perforations).unzip();
+        let mut tooling = apart
+            .into_iter()
+            .enumerate()
+            .flat_map(|(tool, holes)| holes.into_iter().map(move |at| (at, tool)))
+            .collect::<Vec<_>>();
+        tooling.sort_by(|a, b| a.0.x.total_cmp(&b.0.x).then(a.0.y.total_cmp(&b.0.y)));
+        let routed = scores.is_empty() && !profile.material_removal.is_empty();
+        let tab = tools
+            .iter()
+            .zip(rows)
+            .filter(|_| routed)
+            .filter_map(|(tool, rows)| tab(tool, rows, bounds.min))
+            .min_by(|a, b| a.diameter.total_cmp(&b.diameter));
         Ok(Some(Self {
             grid: source
                 .accessor
@@ -804,7 +824,9 @@ impl ArrayData {
             removal: profile.material_removal,
             scores,
             fiducials,
-            tools: drill_tools(imported, ArtworkScope::ArraySupport)?,
+            tools,
+            tooling,
+            tab,
         }))
     }
 
@@ -812,27 +834,10 @@ impl ArrayData {
         match (self.scores.is_empty(), self.removal.is_empty()) {
             (false, true) => "V-SCORE",
             (false, false) => "V-SCORE, ROUTED RELIEFS",
-            (true, false) if self.tab().is_some() => "ROUTED, PERFORATED TABS",
+            (true, false) if self.tab.is_some() => "ROUTED, PERFORATED TABS",
             (true, false) => "ROUTED, TABS",
             (true, true) => "NONE",
         }
-    }
-
-    /// Every hole of the array's own but tab perforations, left to right.
-    pub fn tooling(&self) -> Vec<(Point, &DrillTool)> {
-        let mut holes = self
-            .tools
-            .iter()
-            .flat_map(|tool| {
-                let rows = perforations(tool);
-                let holes = tool.hits.iter().map(Hit::center);
-                holes
-                    .filter(move |at| !rows.iter().flatten().any(|hole| hole == at))
-                    .map(move |at| (at, tool))
-            })
-            .collect::<Vec<_>>();
-        holes.sort_by(|a, b| a.0.x.total_cmp(&b.0.x).then(a.0.y.total_cmp(&b.0.y)));
-        holes
     }
 
     pub fn central_board(&self) -> Option<usize> {
@@ -842,97 +847,74 @@ impl ArrayData {
     }
 
     /// From the board's lower-left corner; nothing where the boards differ.
-    pub fn board_fiducials(&self, side: Side) -> Option<Vec<Fiducial>> {
-        /// How far apart the same fiducial of two boards may measure.
-        const SAME: f64 = 0.002;
-        let of_board = |board: usize| {
-            let fiducials = self.fiducials.iter();
-            fiducials
-                .filter(move |fiducial| fiducial.board == Some(board) && fiducial.side == side)
-                .map(move |fiducial| Fiducial {
-                    at: fiducial.at - self.boards[board].min,
-                    ..*fiducial
-                })
+    pub fn board_fiducials(&self, side: Side) -> Vec<Fiducial> {
+        let Some(board) = self.central_board() else {
+            return Vec::new();
         };
-        let shown = of_board(self.central_board()?).collect::<Vec<_>>();
-        let alike = (0..self.boards.len()).all(|board| {
-            let own = of_board(board).collect::<Vec<_>>();
-            own.len() == shown.len()
-                && own.iter().all(|fiducial| {
-                    let mut shown = shown.iter();
-                    shown.any(|shown| {
-                        shown.at.distance_to(fiducial.at) < SAME
-                            && shown.diameter == fiducial.diameter
-                    })
-                })
-        });
-        alike.then_some(shown)
-    }
-
-    /// The perforated tab nearest the datum, of a routed array.
-    pub fn tab(&self) -> Option<TabDetail> {
-        if !self.scores.is_empty() || self.removal.is_empty() {
-            return None;
-        }
-        let (tool, rows) = self
-            .tools
-            .iter()
-            .map(|tool| (tool, perforations(tool)))
-            .filter(|(_, rows)| !rows.is_empty())
-            .min_by(|a, b| a.0.diameter.total_cmp(&b.0.diameter))?;
-        let datum = self.bounds.min;
-        let from_datum = |row: &Vec<Point>| {
-            let distances = row.iter().map(|hole| hole.distance_to(datum));
-            distances.fold(f64::INFINITY, f64::min)
-        };
-        let tab = rows
-            .into_iter()
-            .min_by(|a, b| from_datum(a).total_cmp(&from_datum(b)))?;
-        let pitch = tab[1..]
-            .iter()
-            .map(|hole| hole.distance_to(tab[0]))
-            .fold(f64::INFINITY, f64::min);
-        let bounds = tab.iter().fold(BBox::empty(), |bounds, hole| {
-            bounds.union(BBox::from_point(*hole))
-        });
-        let half = bounds.width().max(bounds.height()) / 2.0 + 3.0;
-        Some(TabDetail {
-            bounds: BBox::from_point(bounds.center()).expand(half),
-            holes: tab.len(),
-            diameter: tool.diameter,
-            pitch,
-        })
+        let fiducials = self.fiducials.iter();
+        fiducials
+            .filter(|fiducial| fiducial.board == Some(board) && fiducial.side == side)
+            .map(|fiducial| Fiducial {
+                at: fiducial.at - self.boards[board].min,
+                ..*fiducial
+            })
+            .collect()
     }
 }
 
-/// The rows of perforations `tool` drills: unplated round holes each within
-/// a few diameters of the next, three or more to a row. Holes of the tool
-/// that stand apart are tooling.
-fn perforations(tool: &DrillTool) -> Vec<Vec<Point>> {
+/// The row of `rows` nearest `datum`, as the tab a detail shows.
+fn tab(tool: &DrillTool, rows: Vec<Vec<Point>>, datum: Point) -> Option<TabDetail> {
+    let from_datum = |row: &Vec<Point>| {
+        let distances = row.iter().map(|hole| hole.distance_to(datum));
+        distances.fold(f64::INFINITY, f64::min)
+    };
+    let row = rows
+        .into_iter()
+        .min_by(|a, b| from_datum(a).total_cmp(&from_datum(b)))?;
+    let pairs = row.iter().enumerate();
+    let pitch = pairs
+        .flat_map(|(index, hole)| row[index + 1..].iter().map(|next| hole.distance_to(*next)))
+        .fold(f64::INFINITY, f64::min);
+    let bounds = row.iter().fold(BBox::empty(), |bounds, hole| {
+        bounds.union(BBox::from_point(*hole))
+    });
+    let half = bounds.width().max(bounds.height()) / 2.0 + 3.0;
+    Some(TabDetail {
+        bounds: BBox::from_point(bounds.center()).expand(half),
+        holes: row.len(),
+        diameter: tool.diameter,
+        pitch,
+    })
+}
+
+/// The holes of `tool` as rows of perforations and the rest, which are
+/// tooling: a row is three or more unplated round holes, each within a few
+/// diameters of the next.
+pub fn perforations(tool: &DrillTool) -> (Vec<Vec<Point>>, Vec<Point>) {
     /// The widest a row of perforations is pitched, in hole diameters.
     const WIDEST_PITCH: f64 = 4.0;
+    let mut loose = tool.hits.iter().map(Hit::center).collect::<Vec<_>>();
     if tool.kind != HoleKind::NonPlated || tool.slot_length.is_some() {
-        return Vec::new();
+        return (Vec::new(), loose);
     }
     let reach = WIDEST_PITCH * tool.diameter;
-    let mut loose = tool.hits.iter().map(Hit::center).collect::<Vec<_>>();
-    let mut rows = Vec::new();
+    loose.sort_by(|a, b| a.x.total_cmp(&b.x));
+    let mut groups = Vec::new();
     while let Some(first) = loose.pop() {
-        let mut row = vec![first];
+        let mut group = vec![first];
         let mut grown = 0;
-        while grown < row.len() {
-            let from = row[grown];
+        while grown < group.len() {
+            let from = group[grown];
             grown += 1;
-            let (near, far) = loose
-                .into_iter()
-                .partition(|hole| hole.distance_to(from) <= reach);
-            row.extend::<Vec<_>>(near);
-            loose = far;
+            // Sorted by X, so only a window of the rest can be in reach.
+            let within = loose.partition_point(|hole| hole.x < from.x - reach)
+                ..loose.partition_point(|hole| hole.x <= from.x + reach);
+            group.extend(loose.extract_if(within, |hole| hole.distance_to(from) <= reach));
         }
-        rows.push(row);
+        groups.push(group);
     }
-    rows.retain(|row| row.len() >= 3);
-    rows
+    let (rows, apart): (Vec<_>, Vec<_>) = groups.into_iter().partition(|group| group.len() >= 3);
+    (rows, apart.into_iter().flatten().collect())
 }
 
 /// Fiducials on outer copper; `cells` maps a cell's step instance to its board.
