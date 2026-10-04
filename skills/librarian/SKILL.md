@@ -46,13 +46,9 @@ metadata; do not check downloaded PDFs into the package.
   incorrect candidate or generating one from authoritative evidence; ask only
   if required geometry remains unresolved. Review-only work produces findings.
 - For an accepted footprint, set `Datasheet` to the authoritative geometry
-  source and `Description` to its package and evidence basis. Record whether
-  the `.kicad_mod` is vendor-derived, stock-derived, generated, or
-  intentionally adjusted.
+  source and `Description` to its package and evidence basis.
 - Embed a verified STEP for the exact package, or make its absence and impact
-  explicit. A known-wrong model is not an acceptable substitute. Label
-  generated geometry as such, cite its basis, inspect it, and disclose its
-  limits.
+  explicit. A known-wrong model is not an acceptable substitute.
 
 `pcb embed-step` rewrites every model reference in the footprint, so settle
 one verified model transform before embedding. Inspect the embedded result and
