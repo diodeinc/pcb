@@ -111,8 +111,9 @@ pub fn embed_step_in_footprint(
         format!(
             "(embedded_files {other_files}\
              (file (name {name}) (type model) (data |{data}|) (checksum \"{checksum}\")))\
-             (model \"{EMBED_URI}{filename}\" {placement})",
-            name = quote_string(&filename)
+             (model {uri} {placement})",
+            name = quote_string(&filename),
+            uri = quote_string(&format!("{EMBED_URI}{filename}"))
         ),
     );
 
