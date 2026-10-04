@@ -11,6 +11,7 @@
 //! - [`PatchSet`] - Collect patches and write directly to any `std::io::Write`
 
 pub mod board;
+pub mod edit;
 pub mod formatter;
 pub mod kicad;
 pub mod scan;

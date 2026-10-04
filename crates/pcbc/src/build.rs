@@ -451,9 +451,11 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         );
 
         let diagnostics = build_result.diagnostics.iter();
+        let shown = diagnostics.filter(|diagnostic| !diagnostic.suppressed);
         fixable.extend(
-            diagnostics
-                .filter(|diagnostic| diagnostic.fixable && !diagnostic.suppressed)
+            shown
+                .map(|diagnostic| diagnostic.innermost())
+                .filter(|diagnostic| !diagnostic.fix.is_empty())
                 .map(|diagnostic| (diagnostic.path.clone(), diagnostic.span)),
         );
 

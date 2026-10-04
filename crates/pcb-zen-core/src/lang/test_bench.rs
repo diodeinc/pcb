@@ -351,7 +351,7 @@ pub fn execute_deferred_check<'v, V: ValueLike<'v>>(
         )),
         related: Vec::new(),
         suppressed: false,
-        fixable: false,
+        fix: Vec::new(),
     };
 
     (passed, vec![diagnostic])

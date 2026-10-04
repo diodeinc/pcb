@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use pcb_sexpr::edit::{Edit, apply};
 use pcb_sexpr::{Sexpr, SexprKind, Span};
 
 use super::symbol::{
@@ -21,13 +22,6 @@ pub enum Severity {
     Error,
     Warning,
     Advice,
-}
-
-/// A replacement for `span` of a library source; empty `text` deletes it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Edit {
-    pub span: Span,
-    pub text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -307,35 +301,6 @@ pub fn fix(mut sources: Vec<String>, name: &str) -> Vec<String> {
     }
 }
 
-/// `text` with `edits` made. Of two edits that overlap, the first wins.
-fn apply(text: &str, mut edits: Vec<Edit>) -> String {
-    edits.sort_by_key(|edit| edit.span.start);
-    let mut out = String::with_capacity(text.len());
-    let mut done = 0;
-    for Edit { span, text: new } in edits {
-        let (mut start, mut end) = (span.start, span.end);
-        // A deletion takes the blanks before it, and the line it leaves empty.
-        if new.is_empty() {
-            start = text[..start].trim_end_matches([' ', '\t']).len();
-            let line = text[..start].rfind('\n').map_or(0, |eol| eol + 1);
-            let rest = text[end..]
-                .find('\n')
-                .map_or(text.len(), |eol| end + eol + 1);
-            if start == line && text[end..rest].trim().is_empty() {
-                end = rest;
-            }
-        }
-        if start < done {
-            continue;
-        }
-        out.push_str(&text[done..start]);
-        out.push_str(&new);
-        done = end;
-    }
-    out.push_str(&text[done..]);
-    out
-}
-
 /// Check that KiCad can read the files of `library` at all. Symbol loading
 /// reads one definition at a time, leniently, and notices none of this.
 pub fn check_library(library: &KicadSymbolLibrary) -> Option<SymbolIssue> {
@@ -353,10 +318,7 @@ pub fn check_library(library: &KicadSymbolLibrary) -> Option<SymbolIssue> {
         if text[offset..].starts_with(';') {
             let comments = pcb_sexpr::scan::comments(text);
             issue.fix = comments
-                .map(|comment| Edit {
-                    span: Span::new(comment.start, comment.end),
-                    text: String::new(),
-                })
+                .map(|comment| Edit::delete(Span::new(comment.start, comment.end)))
                 .collect();
         }
         Some(issue)

@@ -70,7 +70,7 @@ fn make_diagnostic(
             source_error: make_source_error(&msg, kind),
             related: Vec::new(),
             suppressed,
-            fixable: false,
+            fix: Vec::new(),
         };
     }
 
@@ -107,7 +107,7 @@ fn make_diagnostic(
             },
             related: Vec::new(),
             suppressed,
-            fixable: false,
+            fix: Vec::new(),
         });
     }
 
