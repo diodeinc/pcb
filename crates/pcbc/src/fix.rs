@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use clap::Args;
 use pcb_ui::prelude::*;
 use similar::TextDiff;
@@ -57,7 +59,9 @@ pub fn execute(args: FixArgs) -> Result<()> {
                 write!(stdout, "{}", diff.unified_diff().header(&old, &new))
             })?;
         } else {
-            fs::write(path, text).with_context(|| format!("Failed to write {}", path.display()))?;
+            AtomicFile::new(path, OverwriteBehavior::AllowOverwrite)
+                .write(|file| file.write_all(text.as_bytes()))
+                .with_context(|| format!("Failed to write {}", path.display()))?;
             eprintln!("Fixed {shown}");
         }
     }

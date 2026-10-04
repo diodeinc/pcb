@@ -280,14 +280,15 @@ const HALF_GRID_NM: i64 = 1_270_000;
 const TEXT_SIZE_NM: i64 = 1_270_000;
 const OUTLINE_NM: i64 = 254_000;
 const NAME_OFFSET_NM: std::ops::RangeInclusive<i64> = 508_000..=1_270_000;
-/// A fix can uncover the next issue, as a comment hides all that follows it.
-const FIX_PASSES: usize = 8;
 
 /// The sources of a library with the fixable issues of symbol `name` fixed.
+///
+/// A fix can uncover the next issue, as a comment hides all that follows it,
+/// so this repeats until none is left. Each edit removes what it was made for.
 pub fn fix(mut sources: Vec<String>, name: &str) -> Vec<String> {
-    for _ in 0..FIX_PASSES {
+    loop {
         let Ok(library) = KicadSymbolLibrary::from_sources(sources.clone()) else {
-            break;
+            return sources;
         };
         let issues = check_library(&library)
             .map_or_else(|| check_symbol(&library, name, None), |issue| vec![issue]);
@@ -296,7 +297,7 @@ pub fn fix(mut sources: Vec<String>, name: &str) -> Vec<String> {
             edits[issue.source].extend(issue.fix);
         }
         if edits.iter().all(Vec::is_empty) {
-            break;
+            return sources;
         }
         sources = sources
             .iter()
@@ -304,7 +305,6 @@ pub fn fix(mut sources: Vec<String>, name: &str) -> Vec<String> {
             .map(|(text, edits)| apply(text, edits))
             .collect();
     }
-    sources
 }
 
 /// `text` with `edits` made. Of two edits that overlap, the first wins.
