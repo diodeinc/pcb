@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.70] - 2026-10-04
+
 ### Added
 
 - `pcb fix` fixes what `pcb build` marks as fixable: KiCad symbol problems, redundant `config()` names and redundant prelude loads.
@@ -2215,7 +2217,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.69...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.70...HEAD
+[0.4.70]: https://github.com/diodeinc/pcb/compare/v0.4.69...v0.4.70
 [0.4.69]: https://github.com/diodeinc/pcb/compare/v0.4.68...v0.4.69
 [0.4.68]: https://github.com/diodeinc/pcb/compare/v0.4.67...v0.4.68
 [0.4.67]: https://github.com/diodeinc/pcb/compare/v0.4.66...v0.4.67
