@@ -87,16 +87,14 @@ metadata; do not check downloaded PDFs into the package.
   source and `Description` to its package and evidence basis. Include a real
   `.kicad_mod`; record whether it is vendor-derived, stock-derived, generated,
   or intentionally adjusted.
-- Keep generator YAML only for generated footprints, per `kicad-footprint`;
-  downloaded and stock footprints need none.
 - Embed a verified STEP for the exact package, or make its absence and impact
   explicit. A known-wrong model is not an acceptable substitute. Scratch 3D
   geometry requires explicit user confirmation; after approval, label it as
   generated, cite its basis, inspect it, and disclose its limits.
 
-Upgrade imported KiCad files before editing. `pcb embed-step` replaces the
-footprint's models with the embedded one and keeps the transform of the
-first visible model, so verify that transform before embedding:
+Upgrade imported KiCad files before editing. Preserve one verified model
+transform before embedding because `pcb embed-step` rewrites every model
+reference:
 
 ```bash
 kicad-cli sym upgrade <symbol.kicad_sym>
