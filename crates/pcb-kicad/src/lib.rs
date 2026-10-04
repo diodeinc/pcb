@@ -93,26 +93,6 @@ fn discover_path(env_var: &str, command: Option<&str>, candidates: &[&str]) -> S
 }
 
 #[cfg(target_os = "macos")]
-fn editor_app_bundle_path(editor_path: &str) -> Result<String> {
-    let path = Path::new(editor_path);
-
-    if path.extension().is_some_and(|ext| ext == "app") {
-        return Ok(editor_path.to_string());
-    }
-
-    path.ancestors()
-        .find(|ancestor| ancestor.extension().is_some_and(|ext| ext == "app"))
-        .map(|ancestor| ancestor.to_string_lossy().to_string())
-        .ok_or_else(|| {
-            anyhow!(
-                "Failed to derive KiCad editor app bundle path from {}.\n\
-                 Set KICAD_PCBNEW or KICAD_EESCHEMA to the editor app bundle or its binary.",
-                editor_path
-            )
-        })
-}
-
-#[cfg(target_os = "macos")]
 fn platform_defaults() -> PlatformDefaults {
     PlatformDefaults {
         python_interpreter: &[
@@ -236,27 +216,26 @@ pub fn ensure_board_compatible_with_installed_kicad(pcb_path: &Path) -> Result<(
 
 /// Build the per-platform command that opens a file in the KiCad GUI. On
 /// macOS `waitable` launches a dedicated app instance through `open -n -W`
-/// so the returned child tracks the editor's lifetime.
-fn editor_launch_command(editor_path: &str, file: &Path, waitable: bool) -> Result<Command> {
+/// so the returned child tracks the editor's lifetime. Standalone executable
+/// overrides launch directly, including on macOS.
+fn editor_launch_command(editor_path: &str, file: &Path, waitable: bool) -> Command {
     #[cfg(target_os = "macos")]
+    if let Some(app) = Path::new(editor_path)
+        .ancestors()
+        .find(|ancestor| ancestor.extension().is_some_and(|ext| ext == "app"))
     {
         let mut cmd = Command::new("open");
         if waitable {
             cmd.arg("-n").arg("-W");
         }
-        cmd.arg("-a")
-            .arg(editor_app_bundle_path(editor_path)?)
-            .arg(file);
-        Ok(cmd)
+        cmd.arg("-a").arg(app).arg(file);
+        return cmd;
     }
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = waitable;
-        let mut cmd = Command::new(editor_path);
-        cmd.arg(file);
-        Ok(cmd)
-    }
+    let _ = waitable;
+    let mut cmd = Command::new(editor_path);
+    cmd.arg(file);
+    cmd
 }
 
 /// Open a KiCad board in the GUI that matches this toolchain's discovered install.
@@ -325,7 +304,7 @@ fn spawn_editor(file: &Path, editor: &str, waitable: bool) -> Result<Child> {
              Install KiCad or set KICAD_PCBNEW / KICAD_EESCHEMA to the corresponding editor."
         );
     }
-    editor_launch_command(editor, file, waitable)?
+    editor_launch_command(editor, file, waitable)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
