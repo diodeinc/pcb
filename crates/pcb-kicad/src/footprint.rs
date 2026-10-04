@@ -7,6 +7,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+const EMBED_URI: &str = "kicad-embed://";
 const IDENTITY_PLACEMENT: &str = "(offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0))";
 
 fn children<'a>(items: &'a [Sexpr], name: &'a str) -> impl Iterator<Item = &'a Sexpr> {
@@ -61,7 +62,8 @@ pub fn embed_step_in_footprint(
 
     let text = |node: &Sexpr| &footprint[node.span.start..node.span.end];
 
-    let placement = children(items, "model").next().map_or_else(
+    let models = children(items, "model").collect::<Vec<_>>();
+    let placement = models.first().map_or_else(
         || IDENTITY_PLACEMENT.to_string(),
         |model| {
             let model = model.as_list().unwrap_or_default();
@@ -72,19 +74,24 @@ pub fn embed_step_in_footprint(
                 .collect()
         },
     );
+    // Files that only served the replaced models go with them.
+    let replaced = models
+        .iter()
+        .filter_map(|model| model.as_list()?.get(1)?.as_atom()?.strip_prefix(EMBED_URI))
+        .chain([filename.as_str()])
+        .collect::<Vec<_>>();
     let other_files = children(items, "embedded_files")
         .flat_map(|files| children(files.as_list().unwrap_or_default(), "file"))
         .filter(|file| {
-            file.find_list("type")
-                .and_then(|kind| kind.get(1))
-                .and_then(Sexpr::as_atom)
-                != Some("model")
+            let field = |name| file.find_list(name)?.get(1)?.as_atom();
+            field("type") != Some("model") && field("name").is_none_or(|n| !replaced.contains(&n))
         })
         .map(text)
         .collect::<String>();
 
     let mut patches = PatchSet::new();
-    children(items, "model")
+    models
+        .into_iter()
         .chain(children(items, "embedded_files"))
         .for_each(|node| patches.replace_raw(node.span, String::new()));
     let end = root.span.end - 1;
@@ -93,7 +100,7 @@ pub fn embed_step_in_footprint(
         format!(
             "(embedded_files {other_files}\
              (file (name {filename}) (type model) (data |{data}|) (checksum \"{checksum}\")))\
-             (model \"kicad-embed://{filename}\" {placement})"
+             (model \"{EMBED_URI}{filename}\" {placement})"
         ),
     );
 
@@ -148,7 +155,8 @@ mod tests {
     (hide yes) (offset (xyz 1 2 3)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 90)))
   (embedded_files
     (file (name "a.ttf") (type font) (data |KLUv/SAAAQAA|) (checksum "{font_checksum}"))
-    (file (name old.step) (type model) (data |OLD|) (checksum "OLD")))
+    (file (name old.step) (type other) (data |OLD|) (checksum "OLD"))
+    (file (name stale.step) (type model) (data |OLD|) (checksum "OLD")))
   (model "/tmp/other.step" (offset (xyz 7 8 9)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0))))
 "#
         );
@@ -160,8 +168,8 @@ mod tests {
         assert!(result.contains("(xyz 1 2 3)") && result.contains("(xyz 0 0 90)"));
         assert_eq!(result.matches("(file").count(), 2);
         assert!(result.contains("(name \"a.ttf\")") && result.contains("(name new.step)"));
-        assert!(!result.contains("old.step") && !result.contains("other.step"));
-        assert!(!result.contains("hide"));
+        assert!(!result.contains("old.step") && !result.contains("stale.step"));
+        assert!(!result.contains("other.step") && !result.contains("hide"));
         validate_footprint_source(&result).unwrap();
 
         let again = embed_step_in_footprint(&result, b"NEW", "new.step").unwrap();
