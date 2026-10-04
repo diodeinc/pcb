@@ -3,6 +3,7 @@ use crate::{
     InternalConnectivity, Part, Pin, PinAlternate, PinAt, Symbol, is_placeholder_kicad_pin_name,
 };
 use anyhow::Result;
+use pcb_sexpr::kicad::symbol::expand_stacked_pin_number;
 use pcb_sexpr::{Sexpr, SexprKind, parse};
 use serde::Serialize;
 use std::cmp::Reverse;
@@ -249,6 +250,25 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
 
     // Keep one source of truth for description parsing/legacy alias handling.
     symbol.description = description_from_properties(&symbol.properties);
+
+    // Select unit/body styles using the original graphical pins, then expand
+    // native stacks into physical pins. Keep the raw S-expression unchanged.
+    let mut pins = Vec::new();
+    for pin in symbol.pins {
+        let numbers = expand_stacked_pin_number(&pin.number).map_err(|error| {
+            anyhow::anyhow!("symbol {:?} pin {:?}: {error}", symbol.name, pin.name)
+        })?;
+        if numbers.len() > 1 {
+            symbol.internal_connectivity.groups.push(numbers.clone());
+        }
+        for number in numbers {
+            pins.push(KicadPin {
+                number,
+                ..pin.clone()
+            });
+        }
+    }
+    symbol.pins = pins;
 
     Ok(symbol)
 }
@@ -499,6 +519,62 @@ pub(super) fn description_from_properties(properties: &HashMap<String, String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_stack_expansion_does_not_bias_style_selection() {
+        let content = r#"(kicad_symbol_lib (symbol "Stack"
+          (symbol "Stack_1_1"
+            (pin passive line (name "STACK") (number "[1-10]")))
+          (symbol "Stack_1_2"
+            (pin passive line (name "A") (number "1"))
+            (pin passive line (name "B") (number "2")))))"#;
+        let symbol = KicadSymbol::from_str(content).unwrap();
+        assert_eq!(
+            symbol.pins.iter().map(KicadPin::name).collect::<Vec<_>>(),
+            vec!["A", "B"]
+        );
+        assert!(symbol.internal_connectivity.groups.is_empty());
+    }
+
+    #[test]
+    fn native_stack_preserves_pin_metadata_and_raw_symbol() {
+        let content = r#"(kicad_symbol_lib (symbol "Stack"
+          (pin power_in line (at 1 2 90) (length 3) hide
+            (name "VDD") (number "[11,19]")
+            (alternate "GPIO" input inverted))))"#;
+        let symbol = KicadSymbol::from_str(content).unwrap();
+        assert_eq!(symbol.pins.len(), 2);
+        assert_eq!(symbol.pins[0].number, "11");
+        assert_eq!(symbol.pins[1].number, "19");
+        for pin in &symbol.pins {
+            assert_eq!(pin.name, "VDD");
+            assert_eq!(pin.electrical_type.as_deref(), Some("power_in"));
+            assert_eq!(pin.graphical_style.as_deref(), Some("line"));
+            assert_eq!(
+                pin.at.as_ref().map(|at| (at.x, at.y, at.rotation)),
+                Some((1.0, 2.0, Some(90.0)))
+            );
+            assert_eq!(pin.length, Some(3.0));
+            assert!(pin.hidden);
+            assert_eq!(pin.alternates[0].name, "GPIO");
+        }
+        assert!(symbol.raw_sexp.unwrap().to_string().contains("[11,19]"));
+    }
+
+    #[test]
+    fn invalid_native_stack_is_a_symbol_parse_error() {
+        for number in ["[11,19,BAD-RANGE]", "[AD22-AD12]", "[1-4097]"] {
+            let content = format!(
+                r#"(kicad_symbol_lib (symbol "Stack"
+              (symbol "Stack_1_1"
+                (pin power_in line (name "VDD") (number "{number}")))))"#
+            );
+            let error = KicadSymbol::from_str(&content).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains(number), "{message}");
+            assert!(message.contains("VDD"), "{message}");
+        }
+    }
 
     #[test]
     fn metadata_normalizes_legacy_ki_description() {

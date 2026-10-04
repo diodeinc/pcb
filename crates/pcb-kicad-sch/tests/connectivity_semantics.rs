@@ -516,9 +516,15 @@ fn placed_alternate_with_duplicate_pin_number_is_ambiguous() {
 fn stacked_pin_numbers_expand_to_exact_logical_numbers() {
     for (number, expected) in [
         ("[1-3]", vec!["1", "2", "3"]),
-        ("[01-03]", vec!["01", "02", "03"]),
-        ("[08-12]", vec!["08", "09", "10", "11", "12"]),
-        ("[A01-A03,7]", vec!["A01", "A02", "A03", "7"]),
+        ("[01-03]", vec!["1", "2", "3"]),
+        ("[08-12]", vec!["8", "9", "10", "11", "12"]),
+        ("[A01-A03,7]", vec!["A1", "A2", "A3", "7"]),
+        ("[AD12-AD14]", vec!["AD12", "AD13", "AD14"]),
+        ("[A{comma}B,2]", vec!["A{comma}B", "2"]),
+        (
+            "[11,19,28,50,75,100]",
+            vec!["11", "19", "28", "50", "75", "100"],
+        ),
         ("[9-11]", vec!["9", "10", "11"]),
     ] {
         let mut builder = KicadBuilder::new();
@@ -609,20 +615,15 @@ fn missing_embedded_symbol_definition_is_an_error() {
 }
 
 #[test]
-fn malformed_stacked_pin_number_remains_literal() {
+fn malformed_stacked_pin_number_is_rejected() {
     let mut builder = KicadBuilder::new();
     builder
         .define_symbol("Test:Invalid", &[TestPin::passive("[3-1]", (0.0, 0.0))])
         .component("Test:Invalid", Some("U1"), (0.0, 0.0))
         .local_label("NET", (0.0, 0.0));
 
-    let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
-    let Terminal::ComponentPin { pin_numbers, .. } = graph.groups[0].terminals.first().unwrap()
-    else {
-        panic!("expected component pin");
-    };
-
-    assert!(pin_numbers.contains("[3-1]"));
+    let error = ConnectivityGraph::from_kicad(&builder.build()).unwrap_err();
+    assert!(format!("{error:#}").contains("invalid or unsupported stacked pin number"));
 }
 
 #[test]
