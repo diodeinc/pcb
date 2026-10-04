@@ -6,6 +6,7 @@ mod broken_pipe;
 mod build;
 mod dfm;
 mod electrical_checks;
+mod fix;
 mod gerber;
 mod import;
 mod info;

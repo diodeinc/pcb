@@ -11,6 +11,7 @@ expression: sb.snapshot_dir(&staging_dir)
       "severity": "warning",
       "body": "io() 'GND' in module 'LED1' is not connected to any ports",
       "suppressed": false,
+      "fixable": false,
       "occurrences": 1,
       "stack": []
     }

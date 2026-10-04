@@ -11,7 +11,7 @@ use pcb_zen_core::{
 };
 use serde_json::Value as JsonValue;
 use starlark::collections::SmallMap;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info_span, instrument};
@@ -42,7 +42,11 @@ impl BuildEvalState {
         }
     }
 
-    fn eval(
+    pub(crate) fn file_provider(&self) -> &dyn FileProvider {
+        self.file_provider.as_ref()
+    }
+
+    pub(crate) fn eval(
         &self,
         zen_path: &Path,
         inputs: SmallMap<String, JsonValue>,
@@ -253,7 +257,7 @@ pub struct BuildArgs {
     pub warn: Vec<String>,
 }
 
-enum BuildInput {
+pub(crate) enum BuildInput {
     Discover {
         path: Option<PathBuf>,
     },
@@ -264,14 +268,17 @@ enum BuildInput {
 }
 
 impl BuildInput {
-    fn resolve_path(&self) -> Option<&Path> {
+    pub(crate) fn resolve_path(&self) -> Option<&Path> {
         match self {
             Self::Discover { path } => path.as_deref(),
             Self::ExplicitFiles { workspace_root, .. } => Some(workspace_root.as_path()),
         }
     }
 
-    fn collect_zen_files(&self, workspace_info: &pcb_zen::WorkspaceInfo) -> Result<Vec<PathBuf>> {
+    pub(crate) fn collect_zen_files(
+        &self,
+        workspace_info: &pcb_zen::WorkspaceInfo,
+    ) -> Result<Vec<PathBuf>> {
         match self {
             Self::Discover { path } => Ok(file_walker::collect_workspace_zen_files(
                 path.as_deref(),
@@ -285,7 +292,7 @@ impl BuildInput {
     }
 }
 
-fn select_build_input(paths: &[PathBuf], has_config: bool) -> Result<BuildInput> {
+pub(crate) fn select_build_input(paths: &[PathBuf], has_config: bool) -> Result<BuildInput> {
     if has_config {
         if paths.len() != 1 {
             anyhow::bail!("--config requires a single .zen file target");
@@ -430,6 +437,8 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let deny_warnings = args.deny.contains(&"warnings".to_string());
     let mut has_warnings = false;
     let mut diagnostics_report = BTreeMap::new();
+    // One symbol file serves many .zen files, each repeating its diagnostics.
+    let mut fixable = HashSet::new();
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         let build_result = eval_state.build(
@@ -439,6 +448,13 @@ pub fn execute(args: BuildArgs) -> Result<()> {
             deny_warnings,
             &mut has_errors,
             &mut has_warnings,
+        );
+
+        let diagnostics = build_result.diagnostics.iter();
+        fixable.extend(
+            diagnostics
+                .filter(|diagnostic| diagnostic.fixable && !diagnostic.suppressed)
+                .map(|diagnostic| (diagnostic.path.clone(), diagnostic.span)),
         );
 
         if args.diagnostics.is_some() {
@@ -468,6 +484,10 @@ pub fn execute(args: BuildArgs) -> Result<()> {
 
     if let Some(output_path) = &args.diagnostics {
         write_diagnostics_report(output_path, &diagnostics_report)?;
+    }
+
+    if !fixable.is_empty() {
+        eprintln!("{} fixable with `pcb fix`", fixable.len());
     }
 
     if has_errors {

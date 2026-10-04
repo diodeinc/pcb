@@ -23,6 +23,13 @@ pub enum Severity {
     Advice,
 }
 
+/// A replacement for `span` of a library source; empty `text` deletes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Edit {
+    pub span: Span,
+    pub text: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SymbolIssue {
     pub kind: &'static str,
@@ -32,6 +39,9 @@ pub struct SymbolIssue {
     /// Index of the library source that `span` points into.
     pub source: usize,
     pub span: Span,
+    /// Edits to that source that resolve the issue; empty when resolving it
+    /// takes a decision.
+    pub fix: Vec<Edit>,
 }
 
 /// Numbered pads of the footprint a symbol is paired with.
@@ -64,6 +74,7 @@ impl Rule {
             help: self.help,
             source,
             span,
+            fix: Vec::new(),
         }
     }
 }
@@ -269,6 +280,61 @@ const HALF_GRID_NM: i64 = 1_270_000;
 const TEXT_SIZE_NM: i64 = 1_270_000;
 const OUTLINE_NM: i64 = 254_000;
 const NAME_OFFSET_NM: std::ops::RangeInclusive<i64> = 508_000..=1_270_000;
+/// A fix can uncover the next issue, as a comment hides all that follows it.
+const FIX_PASSES: usize = 8;
+
+/// The sources of a library with the fixable issues of symbol `name` fixed.
+pub fn fix(mut sources: Vec<String>, name: &str) -> Vec<String> {
+    for _ in 0..FIX_PASSES {
+        let Ok(library) = KicadSymbolLibrary::from_sources(sources.clone()) else {
+            break;
+        };
+        let issues = check_library(&library)
+            .map_or_else(|| check_symbol(&library, name, None), |issue| vec![issue]);
+        let mut edits = vec![Vec::new(); sources.len()];
+        for issue in issues {
+            edits[issue.source].extend(issue.fix);
+        }
+        if edits.iter().all(Vec::is_empty) {
+            break;
+        }
+        sources = sources
+            .iter()
+            .zip(edits)
+            .map(|(text, edits)| apply(text, edits))
+            .collect();
+    }
+    sources
+}
+
+/// `text` with `edits` made. Of two edits that overlap, the first wins.
+fn apply(text: &str, mut edits: Vec<Edit>) -> String {
+    edits.sort_by_key(|edit| edit.span.start);
+    let mut out = String::with_capacity(text.len());
+    let mut done = 0;
+    for Edit { span, text: new } in edits {
+        let (mut start, mut end) = (span.start, span.end);
+        // A deletion takes the blanks before it, and the line it leaves empty.
+        if new.is_empty() {
+            start = text[..start].trim_end_matches([' ', '\t']).len();
+            let line = text[..start].rfind('\n').map_or(0, |eol| eol + 1);
+            let rest = text[end..]
+                .find('\n')
+                .map_or(text.len(), |eol| end + eol + 1);
+            if start == line && text[end..rest].trim().is_empty() {
+                end = rest;
+            }
+        }
+        if start < done {
+            continue;
+        }
+        out.push_str(&text[done..start]);
+        out.push_str(&new);
+        done = end;
+    }
+    out.push_str(&text[done..]);
+    out
+}
 
 /// Check that KiCad can read the files of `library` at all. Symbol loading
 /// reads one definition at a time, leniently, and notices none of this.
@@ -282,7 +348,18 @@ pub fn check_library(library: &KicadSymbolLibrary) -> Option<SymbolIssue> {
             (scan_format_version(text).is_none()).then(|| (0, message.to_string()))
         };
         let (offset, message) = fault.or_else(header)?;
-        Some(PARSE.issue(source, Span::new(offset, offset + 1), message))
+        let mut issue = PARSE.issue(source, Span::new(offset, offset + 1), message);
+        // KiCad reads nothing from a comment, so every one of them can go.
+        if text[offset..].starts_with(';') {
+            let comments = pcb_sexpr::scan::comments(text);
+            issue.fix = comments
+                .map(|comment| Edit {
+                    span: Span::new(comment.start, comment.end),
+                    text: String::new(),
+                })
+                .collect();
+        }
+        Some(issue)
     })
 }
 
@@ -370,9 +447,20 @@ impl Def {
         self.items().get(1).map_or(self.node.span, |name| name.span)
     }
 
+    /// `span` of the definition's node as a span of its source.
+    fn in_source(&self, span: Span) -> Span {
+        Span::new(span.start + self.offset, span.end + self.offset)
+    }
+
     fn issue(&self, rule: &Rule, span: Span, message: String) -> SymbolIssue {
-        let span = Span::new(span.start + self.offset, span.end + self.offset);
-        rule.issue(self.source, span, message)
+        rule.issue(self.source, self.in_source(span), message)
+    }
+
+    fn edit(&self, span: Span, text: impl Into<String>) -> Edit {
+        Edit {
+            span: self.in_source(span),
+            text: text.into(),
+        }
     }
 }
 
@@ -461,8 +549,10 @@ fn check_properties(chain: &[Def], issues: &mut Vec<SymbolIssue>) {
 
 /// Walk every form of a definition for what KiCad rejects or would not write.
 fn check_forms(def: &Def, issues: &mut Vec<SymbolIssue>) {
-    let mut report = |rule: &Rule, span: Span, message: String| {
-        issues.push(def.issue(rule, span, format!("{}: {message}", def.name)));
+    let mut report = |rule: &Rule, span: Span, message: String, fix: Option<Edit>| {
+        let mut issue = def.issue(rule, span, format!("{}: {message}", def.name));
+        issue.fix.extend(fix);
+        issues.push(issue);
     };
 
     for item in def.items().iter().skip(2) {
@@ -505,7 +595,17 @@ fn check_forms(def: &Def, issues: &mut Vec<SymbolIssue>) {
                             raw(value),
                             known.join(", ")
                         );
-                        report(&PARSE, value.span, message);
+                        // The two values tools most often invent: a solid
+                        // fill is `outline`, and centred text has no `justify`.
+                        let fix = match (head, raw(value)) {
+                            ("fill", "solid") => Some(def.edit(value.span, "outline")),
+                            ("justify", "center") if items.len() == 2 => {
+                                Some(def.edit(node.span, ""))
+                            }
+                            ("justify", "center") => Some(def.edit(value.span, "")),
+                            _ => None,
+                        };
+                        report(&PARSE, value.span, message, fix);
                     }
                 }
                 stack.extend(items.iter().rev());
@@ -515,6 +615,7 @@ fn check_forms(def: &Def, issues: &mut Vec<SymbolIssue>) {
                     &NUMBER_FORMAT,
                     node.span,
                     format!("`{raw}` is not a plain decimal"),
+                    plain_decimal(raw).map(|plain| def.edit(node.span, plain)),
                 );
             }
             _ => {}
@@ -527,7 +628,7 @@ fn check_child(
     item: &Sexpr,
     parent: &str,
     known: &[&str],
-    report: &mut impl FnMut(&Rule, Span, String),
+    report: &mut impl FnMut(&Rule, Span, String, Option<Edit>),
 ) {
     let head = match item.as_list() {
         Some(list) => list.first().and_then(Sexpr::as_sym),
@@ -540,7 +641,7 @@ fn check_child(
             None => (item.span, raw(item)),
         };
         let message = format!("`{found}` is not something KiCad accepts in {parent}");
-        report(&PARSE, span, message);
+        report(&PARSE, span, message, None);
     }
 }
 
@@ -552,6 +653,14 @@ fn is_plain_decimal(raw: &str) -> bool {
     let integer = if integer.is_empty() { "0" } else { integer };
     let negative_zero = raw.starts_with('-') && unsigned.bytes().all(|b| matches!(b, b'0' | b'.'));
     digits(integer) && digits(fraction) && !negative_zero
+}
+
+/// The value of `raw` to the nanometre, as a plain decimal.
+fn plain_decimal(raw: &str) -> Option<String> {
+    let value = raw.parse::<f64>().ok().filter(|value| value.is_finite())?;
+    let text = format!("{value:.6}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    Some(if text == "-0" { "0" } else { text }.to_string())
 }
 
 /// What a symbol draws: its pins, its filled body rectangles, and its units.
@@ -594,7 +703,7 @@ fn check_body(
         outlines: Vec::new(),
         units: BTreeMap::new(),
     };
-    let mut misnamed = Vec::new();
+    let mut unit_names: Option<BTreeSet<String>> = None;
     for section in sections(def.items(), &["symbol", "pin"]) {
         let items = section.as_list().unwrap_or_default();
         if items[0].as_sym() == Some("pin") {
@@ -604,11 +713,28 @@ fn check_body(
         let (unit, style) = nested_symbol_unit_style(items);
         if let Some(name) = items.get(1) {
             body.units.entry(unit).or_insert(name.span);
-            if !name
-                .as_atom()
-                .is_some_and(|unit_name| is_unit_name(unit_name, &def.name))
-            {
-                misnamed.push(name);
+            let written = name.as_atom().unwrap_or_default();
+            if !is_unit_name(written, &def.name) {
+                let message = format!(
+                    "{}: nested symbol {} is not named `{}_<unit>_<style>`",
+                    def.name,
+                    quoted(name),
+                    def.name
+                );
+                let mut issue = def.issue(&UNIT_NAMING, name.span, message);
+                // A name that ends in a unit and a style only has the wrong
+                // prefix, unless another unit already holds the right name.
+                let unit_names = unit_names.get_or_insert_with(|| {
+                    sections(def.items(), &["symbol"])
+                        .filter_map(|unit| Some(unit.as_list()?.get(1)?.as_atom()?.to_string()))
+                        .collect()
+                });
+                let renamed = unit_rename(written, &def.name)
+                    .filter(|renamed| unit_names.insert(renamed.clone()));
+                issue.fix.extend(renamed.map(|renamed| {
+                    def.edit(name.span, pcb_sexpr::formatter::quote_string(&renamed))
+                }));
+                issues.push(issue);
             }
         }
         let pins = sections(items, &["pin"]);
@@ -626,14 +752,6 @@ fn check_body(
         multi_unit: body.units.keys().filter(|unit| **unit > 0).count() > 1,
         issues,
     };
-    for name in misnamed {
-        let message = format!(
-            "nested symbol {} is not named `{}_<unit>_<style>`",
-            quoted(name),
-            def.name
-        );
-        out.push(&UNIT_NAMING, 0, name.span, message);
-    }
     for pin in &body.pins {
         check_pin(pin, &mut out);
     }
@@ -1036,11 +1154,22 @@ fn coexist(a: u32, b: u32) -> bool {
     a == b || a == 0 || b == 0
 }
 
+/// Units drop the library nickname of a `<library>:<symbol>` name.
+fn unit_prefix(symbol: &str) -> &str {
+    symbol.split_once(':').map_or(symbol, |(_, item)| item)
+}
+
+/// `name` under the prefix of `symbol`, when it ends in `_<unit>_<style>`.
+fn unit_rename(name: &str, symbol: &str) -> Option<String> {
+    let mut parts = name.rsplitn(3, '_');
+    let mut index = || parts.next()?.parse::<u32>().ok();
+    let (style, unit) = (index()?, index()?);
+    Some(format!("{}_{unit}_{style}", unit_prefix(symbol)))
+}
+
 fn is_unit_name(name: &str, symbol: &str) -> bool {
-    // Units drop the library nickname of a `<library>:<symbol>` name.
-    let symbol = symbol.split_once(':').map_or(symbol, |(_, item)| item);
     let Some(suffix) = name
-        .strip_prefix(symbol)
+        .strip_prefix(unit_prefix(symbol))
         .and_then(|rest| rest.strip_prefix('_'))
     else {
         return false;
@@ -1200,6 +1329,50 @@ mod tests {
             .iter()
             .map(|issue| issue.kind)
             .collect()
+    }
+
+    #[test]
+    fn fixes_leave_what_kicad_would_have_written() {
+        let dirty = [
+            (
+                "(version 20251024)",
+                "(version 20251024) ; generated\n  ;; \"U\" (draft",
+            ),
+            ("(type background)", "(type solid)"),
+            ("(at -5.08 0 0)", "(at -5.08 -0.0 1e-15)"),
+            ("\"U_1_1\"", "\"Draft_1_1\""),
+            (
+                "(name \"IN\" (effects (font (size 1.27 1.27))))",
+                "(name \"IN\" (effects (font (size 1.27 1.27)) (justify center)))",
+            ),
+            (
+                "(name \"VCC\" (effects (font (size 1.27 1.27))))",
+                "(name \"VCC\" (effects (font (size 1.27 1.27)) (justify center left)))",
+            ),
+        ];
+        let dirty = dirty.iter().fold(CLEAN.to_string(), |text, (from, to)| {
+            text.replacen(from, to, 1)
+        });
+        let fixed = CLEAN
+            .replacen("(type background)", "(type outline)", 1)
+            .replacen(
+                "(name \"VCC\" (effects (font (size 1.27 1.27))))",
+                "(name \"VCC\" (effects (font (size 1.27 1.27)) (justify left)))",
+                1,
+            );
+        assert_eq!(fix(vec![dirty], "U"), [fixed]);
+
+        // What takes a decision is reported and left as written.
+        for (from, to) in [
+            ("\"U_1_1\"", "\"Draft\""),
+            ("\"U_0_1\"", "\"Draft_1_1\""),
+            ("(type background)", "(type filled)"),
+            ("(number \"2\"", "(number \"1\""),
+        ] {
+            let source = CLEAN.replacen(from, to, 1);
+            assert!(!kinds(&source, "U").is_empty(), "{to}");
+            assert_eq!(fix(vec![source.clone()], "U"), [source], "{to}");
+        }
     }
 
     #[test]

@@ -115,6 +115,7 @@ impl<V: ValueLifetimeless> PathMatchesCallableGen<V> {
             source_error: None,
             related: Vec::new(),
             suppressed: false,
+            fixable: false,
         };
 
         parent.into()

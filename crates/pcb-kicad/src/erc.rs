@@ -135,6 +135,7 @@ impl ErcViolation {
             source_error: Some(Arc::new(anyhow::Error::new(categorized))),
             related: Vec::new(),
             suppressed: self.excluded,
+            fixable: false,
         })
     }
 }

@@ -27,6 +27,7 @@ mod dfm;
 mod drc;
 mod embed_step;
 mod file_walker;
+mod fix;
 mod fmt;
 mod freerouting;
 mod gerber;
@@ -143,6 +144,9 @@ enum Commands {
     /// Format .zen files
     Fmt(fmt::FmtArgs),
 
+    /// Fix what `pcb build` reports as fixable
+    Fix(fix::FixArgs),
+
     /// Language Server Protocol support
     #[command(hide = true)]
     Lsp(lsp::LspArgs),
@@ -251,6 +255,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Layout(args) => layout::execute(args),
         Commands::Dfm(args) => dfm::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
+        Commands::Fix(args) => fix::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
         Commands::Publish(args) => publish::execute(args, resolution),

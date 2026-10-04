@@ -54,6 +54,24 @@ pub fn parens(source: &str) -> impl Iterator<Item = (usize, bool)> + '_ {
     })
 }
 
+/// The `;` comments of `source`, each from a `;` outside a string to the end
+/// of its line.
+pub fn comments(source: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    let bytes = source.as_bytes();
+    let mut pos = 0;
+    std::iter::from_fn(move || {
+        loop {
+            let at = pos + memchr2(b';', b'"', bytes.get(pos..)?)?;
+            if bytes[at] == b'"' {
+                pos = string_end(bytes, at + 1)?;
+                continue;
+            }
+            pos = memchr(b'\n', &bytes[at..]).map_or(bytes.len(), |eol| at + eol);
+            return Some(at..pos - usize::from(bytes[pos - 1] == b'\r'));
+        }
+    })
+}
+
 /// Why `source` is not one well-formed list, with the offset of the fault.
 ///
 /// A `;` outside a string is a fault: this crate's parser reads it as the
@@ -96,6 +114,13 @@ mod tests {
         let source = r#"(a ")(" (b "\")") )"#;
         let found: Vec<_> = parens(source).collect();
         assert_eq!(found, [(0, true), (8, true), (16, false), (18, false)]);
+    }
+
+    #[test]
+    fn comments_run_to_the_end_of_the_line() {
+        let source = "(a \";\" ; one \"(\n b) ;two\r\n";
+        let found: Vec<_> = comments(source).map(|range| &source[range]).collect();
+        assert_eq!(found, ["; one \"(", ";two"]);
     }
 
     #[test]

@@ -351,6 +351,7 @@ fn implicit_check_diag(message: String, declaration_site: &DeclarationSite) -> c
             .map(|diag| Arc::new(anyhow::Error::new(diag))),
         related: Vec::new(),
         suppressed: false,
+        fixable: false,
     }
 }
 

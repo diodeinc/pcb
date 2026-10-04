@@ -183,6 +183,9 @@ pub struct Diagnostic {
 
     /// If true, this diagnostic should be rendered but not cause build failure
     pub suppressed: bool,
+
+    /// If true, `pcb fix` resolves this diagnostic
+    pub fixable: bool,
 }
 
 impl From<starlark::Error> for Diagnostic {
@@ -213,6 +216,7 @@ impl From<starlark::Error> for Diagnostic {
             source_error: Some(Arc::new(err.into_anyhow())),
             related: Vec::new(),
             suppressed: false,
+            fixable: false,
         }
     }
 }
@@ -229,6 +233,7 @@ impl From<EvalMessage> for Diagnostic {
             source_error: None, // EvalMessage doesn't have an underlying error to preserve
             related: Vec::new(),
             suppressed: false,
+            fixable: false,
         }
     }
 }
@@ -247,6 +252,7 @@ impl From<anyhow::Error> for Diagnostic {
             source_error: Some(Arc::new(err)),
             related: Vec::new(),
             suppressed: false,
+            fixable: false,
         }
     }
 }
@@ -256,7 +262,7 @@ impl serde::Serialize for Diagnostic {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("Diagnostic", 9)?;
+        let mut state = serializer.serialize_struct("Diagnostic", 10)?;
         state.serialize_field("path", &self.path)?;
         state.serialize_field("span", &self.span.map(|span| span.to_string()))?;
         state.serialize_field("severity", &self.severity)?;
@@ -272,6 +278,7 @@ impl serde::Serialize for Diagnostic {
         )?;
         state.serialize_field("related", &self.related)?;
         state.serialize_field("suppressed", &self.suppressed)?;
+        state.serialize_field("fixable", &self.fixable)?;
         state.end()
     }
 }
@@ -288,6 +295,7 @@ impl Diagnostic {
             source_error: None,
             related: Vec::new(),
             suppressed: false,
+            fixable: false,
         }
     }
 
@@ -306,6 +314,7 @@ impl Diagnostic {
             source_error: Some(Arc::new(anyhow::Error::new(categorized))),
             related: Vec::new(),
             suppressed: false,
+            fixable: false,
         }
     }
 
@@ -321,6 +330,10 @@ impl Diagnostic {
             span: span.into(),
             ..self
         }
+    }
+
+    pub fn with_fixable(self, fixable: bool) -> Self {
+        Self { fixable, ..self }
     }
 
     pub fn with_call_stack<S: Into<Option<CallStack>>>(self, call_stack: S) -> Self {
@@ -504,6 +517,8 @@ pub struct DiagnosticReport {
     pub body: String,
     /// Whether this diagnostic was suppressed
     pub suppressed: bool,
+    /// Whether `pcb fix` resolves this diagnostic
+    pub fixable: bool,
     /// Number of times this diagnostic occurred (1 if not aggregated)
     pub occurrences: usize,
     /// Parent context for this diagnostic (innermost to outermost)
@@ -541,6 +556,7 @@ impl DiagnosticReport {
             severity: innermost.severity,
             body: innermost.body.clone(),
             suppressed: diagnostic.suppressed, // Use outermost suppression status
+            fixable: innermost.fixable,
             occurrences,
             stack,
         }
