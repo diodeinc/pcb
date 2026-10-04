@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb ipc fab-drawing` draws the fabrication drawing of a board or a board array as a PDF.
+
 ### Changed
 
 - `pcb` now auto-updates to the newest `pcbc` release within the workspace's `pcb-version` lane.

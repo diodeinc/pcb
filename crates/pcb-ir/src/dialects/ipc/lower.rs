@@ -502,7 +502,7 @@ fn nc_object_from_feature(
 }
 
 /// Interpret a slot feature as a round-tool linear slot: `(diameter, start, end)`.
-fn nc_linear_slot(feature: &Feature) -> Option<(f64, Point, Point)> {
+pub fn nc_linear_slot(feature: &Feature) -> Option<(f64, Point, Point)> {
     let Some(SimpleShape::Oval { width, height }) = feature.shape else {
         return None;
     };

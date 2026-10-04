@@ -3847,13 +3847,16 @@ dependencies = [
  "pcb-ir",
  "pcb-sch",
  "pcb-ui",
+ "pdf-writer",
  "rayon",
  "serde",
  "serde-value",
  "serde_json",
  "sha2",
+ "subsetter",
  "tempfile",
  "toml",
+ "ttf-parser",
  "uppsala",
  "uuid",
  "zip",
@@ -3868,12 +3871,14 @@ dependencies = [
  "base64 0.23.1",
  "boostvoronoi",
  "crossterm",
+ "flate2",
  "getrandom 0.3.4",
  "i_overlay",
  "i_triangle",
  "ipc2581",
  "libm",
  "pcb-sexpr",
+ "pdf-writer",
  "rayon",
  "rustc-hash",
  "tiny-skia",
@@ -4249,6 +4254,18 @@ dependencies = [
  "uuid",
  "zip",
  "zstd",
+]
+
+[[package]]
+name = "pdf-writer"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5e456864a7a304047bff84977dc6fb162bd956475d40ba50b2dcecaada7f753"
+dependencies = [
+ "bitflags 2.13.1",
+ "itoa",
+ "memchr",
+ "ryu",
 ]
 
 [[package]]
@@ -6149,6 +6166,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "subsetter"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38803281d1c23166c5ebcb455439a5d2afe711cc909cf88af72448c297756ad6"
+dependencies = [
+ "rustc-hash",
 ]
 
 [[package]]

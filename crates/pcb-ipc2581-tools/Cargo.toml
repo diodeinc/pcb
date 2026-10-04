@@ -16,7 +16,10 @@ cli = [
     "dep:pcb-diode-api",
     "dep:pcb-sch",
     "dep:pcb-ui",
+    "dep:pdf-writer",
+    "dep:subsetter",
     "dep:tempfile",
+    "dep:ttf-parser",
     "dep:uuid",
     "dep:zstd",
     "pcb-sch/table",
@@ -37,14 +40,17 @@ log = { workspace = true }
 minijinja = { workspace = true }
 natord = { workspace = true }
 pcb-ir = { workspace = true }
+pdf-writer = { workspace = true, optional = true }
 pcb-sch = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 serde-value = { workspace = true }
 uppsala = { workspace = true }
 sha2 = { workspace = true }
+subsetter = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 toml = { workspace = true }
+ttf-parser = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["serde"], optional = true }
 zstd = { workspace = true, optional = true }
 pcb-diode-api = { workspace = true, optional = true }
