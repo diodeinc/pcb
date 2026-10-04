@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use pcb_sexpr::{Span, edit::Edit};
+
 use starlark::syntax::{
     AstModule,
     ast::{
@@ -83,12 +85,15 @@ impl DirectStyleCall {
     }
 }
 
-pub(crate) fn ast_style_lints(ast: &AstModule) -> Vec<Diagnostic> {
+/// Style diagnostics of `ast`, with the fixes of those that have one when
+/// the file is `fixable`.
+pub(crate) fn ast_style_lints(ast: &AstModule, fixable: bool) -> Vec<Diagnostic> {
     let top_level = top_level_stmts(ast.statement());
     let interface_names = interface_names(&top_level);
     let mut linter = StyleLinter {
         ast,
         path: std::path::Path::new(ast.codemap().filename()),
+        fixable,
         interface_names,
         diagnostics: Vec::new(),
     };
@@ -108,6 +113,7 @@ pub(crate) fn is_ast_style_diagnostic(diagnostic: &Diagnostic) -> bool {
 
 struct StyleLinter<'a> {
     ast: &'a AstModule,
+    fixable: bool,
     path: &'a std::path::Path,
     interface_names: InterfaceNames,
     diagnostics: Vec<Diagnostic>,
@@ -266,9 +272,14 @@ impl StyleLinter<'_> {
             self.diagnostics.push(diagnostic);
         }
 
-        if let Some(diagnostic) =
-            redundant_name_diagnostic(self.ast, &expr.node, call, assigned_name, self.path)
-        {
+        if let Some(diagnostic) = redundant_name_diagnostic(
+            self.ast,
+            &expr.node,
+            call,
+            assigned_name,
+            self.path,
+            self.fixable,
+        ) {
             self.diagnostics.push(diagnostic);
         }
     }
@@ -340,6 +351,7 @@ fn redundant_name_diagnostic(
     call: DirectStyleCall,
     assigned_name: &str,
     path: &std::path::Path,
+    fixable: bool,
 ) -> Option<Diagnostic> {
     let first_arg = first_positional_arg(expr)?;
     let ExprP::Literal(starlark::syntax::ast::AstLiteral::String(explicit_name)) = &first_arg.node
@@ -352,12 +364,33 @@ fn redundant_name_diagnostic(
     }
 
     let span = ast.codemap().file_span(first_arg.span).resolve_span();
-    Some(naming::redundant_name_diagnostic(
+    let diagnostic = naming::redundant_name_diagnostic(
         call.redundant_name_label(),
         &explicit_name.node,
         Some(span),
         path,
-    ))
+    );
+    // Only a config() is the same either way. A net named by its assignment
+    // can still be renamed by what it is passed to, and one named outright
+    // cannot, so dropping the name of a net or an io() can change the design.
+    let fix = (fixable && matches!(call, DirectStyleCall::Config))
+        .then(|| argument_deletion(ast, first_arg))
+        .flatten();
+    Some(diagnostic.with_fix(fix.into_iter().collect()))
+}
+
+/// The deletion of a call's argument with the comma after it.
+fn argument_deletion(ast: &AstModule, arg: &AstExpr) -> Option<Edit> {
+    let source = ast.codemap().source();
+    let (start, end) = (arg.span.begin().get(), arg.span.end().get());
+    let rest = source[end as usize..].trim_start();
+    let end = match rest.strip_prefix(',') {
+        Some(rest) => source.len() - rest.trim_start_matches([' ', '\t']).len(),
+        None => end as usize,
+    };
+    // Anything else after the argument is a comment, which stays.
+    rest.starts_with([',', ')'])
+        .then(|| Edit::delete(Span::new(start as usize, end)))
 }
 
 fn first_positional_arg(expr: &ExprP<AstNoPayload>) -> Option<&AstExpr> {

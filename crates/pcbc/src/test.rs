@@ -190,7 +190,7 @@ fn execute_testbench_checks(
                     )),
                     related: Vec::new(),
                     suppressed: false,
-                    fixable: false,
+                    fix: Vec::new(),
                 });
                 continue;
             };

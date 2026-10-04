@@ -3,11 +3,20 @@
 use pcb_test_utils::sandbox::Sandbox;
 
 const BOARD_ZEN: &str = r#"
+load("@stdlib/interfaces.zen", "Uart")
+
+value = config(str, default = "10k")
+kept = config("kept", str, default = "")  # suppress: style.redundant_name
+# A net named by its assignment is not the same net as one named outright.
+A = io("A", Net)
+B = Net("B")
+
 Component(
     name = "U1",
     symbol = Symbol(library = "Part.kicad_sym"),
     footprint = File("Part.kicad_mod"),
-    pins = {"P1": Net("A"), "P2": Net("B")},
+    pins = {"P1": A, "P2": B},
+    properties = {"value": value},
     part = Part(mpn = "TEST", manufacturer = "TEST"),
 )
 "#;
@@ -46,18 +55,28 @@ fn fix_applies_what_build_points_to() {
         .replacen("(type background)", "(type solid)", 1)
         .replacen("(at -5.08 0 0)", "(at -5.08 -0.0 0)", 1);
     let fixed = SYMBOL.replacen("(type background)", "(type outline)", 1);
+    // What the prelude already loads and what an assignment already names.
+    let wordy = BOARD_ZEN
+        .replacen(
+            "load(",
+            "load(\"@stdlib/interfaces.zen\", \"Power\")\nload(",
+            1,
+        )
+        .replacen("\"Uart\")", "\"Uart\", \"Net\")", 1)
+        .replacen("config(str", "config(\"value\", str", 1);
 
     let mut sandbox = Sandbox::new().with_workspace();
     sandbox
-        .write("board.zen", BOARD_ZEN)
+        .write("board.zen", &wordy)
         .write("Part.kicad_mod", FOOTPRINT)
         .write("Part.kicad_sym", &broken);
     let symbol = sandbox.default_cwd().join("Part.kicad_sym");
+    let board = sandbox.default_cwd().join("board.zen");
 
     let build = sandbox.snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(build.contains("Exit Code: 1"), "{build}");
     assert!(build.contains("`pcb fix` does this"), "{build}");
-    assert!(build.contains("1 fixable with `pcb fix`"), "{build}");
+    assert!(build.contains("4 fixable with `pcb fix`"), "{build}");
 
     let diff = sandbox.snapshot_run("pcbc", ["fix", "--diff"]);
     assert!(
@@ -68,7 +87,9 @@ fn fix_applies_what_build_points_to() {
 
     let fix = sandbox.snapshot_run("pcbc", ["fix"]);
     assert!(fix.contains("Fixed Part.kicad_sym"), "{fix}");
+    assert!(fix.contains("Fixed board.zen"), "{fix}");
     assert_eq!(std::fs::read_to_string(&symbol).unwrap(), fixed);
+    assert_eq!(std::fs::read_to_string(&board).unwrap(), BOARD_ZEN);
 
     let build = sandbox.snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(build.contains("Exit Code: 0"), "{build}");

@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `pcb fix` fixes the KiCad symbol problems that `pcb build` marks as fixable.
+- `pcb fix` fixes what `pcb build` marks as fixable: KiCad symbol problems, redundant `config()` names and redundant prelude loads.
 
 ### Changed
 

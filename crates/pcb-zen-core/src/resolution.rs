@@ -946,6 +946,13 @@ impl ResolutionResult {
         })
     }
 
+    /// Whether `file` belongs to a workspace package rather than to a
+    /// dependency or the stdlib.
+    pub fn is_workspace_file(&self, file: &Path) -> bool {
+        self.format_package_uri(file)
+            .is_some_and(|uri| self.is_workspace_uri(&uri))
+    }
+
     /// Format an absolute path as a stable URI (`package://…`).
     ///
     /// The owning package is the longest package root that prefixes the path,

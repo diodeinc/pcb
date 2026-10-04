@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use clap::Args;
+use pcb_sexpr::edit::{Edit, apply};
 use pcb_ui::prelude::*;
+use pcb_zen_core::{CommentSuppressPass, DiagnosticsPass};
 use similar::TextDiff;
 use starlark::collections::SmallMap;
 
@@ -37,15 +39,35 @@ pub fn execute(args: FixArgs) -> Result<()> {
     let zen_files = input.collect_zen_files(&resolution.workspace_info)?;
     let state = BuildEvalState::new(resolution);
 
-    // A file that does not evaluate reports no symbols; `pcb build` says why.
+    // A .zen file is fixed by the edits its diagnostics carry, which every
+    // file that loads it repeats; a `# suppress:` comment keeps what it marks.
+    // Symbols are fixed through the evaluated design; one that does not
+    // evaluate reports none, and `pcb build` says why.
     let mut fixed = BTreeMap::new();
+    let mut edits: BTreeMap<PathBuf, Vec<Edit>> = BTreeMap::new();
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         let spinner = Spinner::builder(format!("{file_name}: Checking")).start();
-        if let Some(output) = state.eval(zen_path, SmallMap::new()).output {
+        let mut result = state.eval(zen_path, SmallMap::new());
+        CommentSuppressPass::new().apply(&mut result.diagnostics);
+        let kept = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| !diagnostic.suppressed);
+        let diagnostics = kept.map(|diagnostic| diagnostic.innermost());
+        for diagnostic in diagnostics.filter(|diagnostic| !diagnostic.fix.is_empty()) {
+            let edits = edits.entry(PathBuf::from(&diagnostic.path)).or_default();
+            edits.extend(diagnostic.fix.iter().cloned());
+        }
+        if let Some(output) = result.output {
             output.fix_symbols(state.file_provider(), &mut fixed);
         }
         spinner.finish();
+    }
+    for (path, edits) in edits {
+        let text = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        fixed.insert(path, apply(&text, edits));
     }
 
     for (path, text) in &fixed {

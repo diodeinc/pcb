@@ -9,6 +9,7 @@ use std::{
 
 use anyhow::anyhow;
 use pcb_sch::physical::PhysicalValue;
+use pcb_sexpr::{Span, edit::Edit};
 use starlark::environment::FrozenModule;
 use starlark::{
     PrintHandler,
@@ -133,6 +134,7 @@ fn explicit_prelude_load_diagnostics(
         })
         .collect();
 
+    let fixable = config.resolution.is_workspace_file(source_path);
     let mut diagnostics = Vec::new();
     for stmt in top_level_stmts(ast.statement()) {
         let StmtP::Load(load) = &stmt.node else {
@@ -179,6 +181,32 @@ fn explicit_prelude_load_diagnostics(
         let message = format!(
             "{names} available from the @stdlib prelude; remove from this explicit `load()`"
         );
+        // A name loaded under itself is what the prelude binds. Each goes with
+        // the comma before it, and the statement goes when it loads no other.
+        let redundant = |arg: &LoadArgP<_>| {
+            prelude_symbols.contains(&arg.their.node.as_str())
+                && arg.local.node.ident == arg.their.node
+        };
+        let offset = |pos: starlark::codemap::Pos| pos.get() as usize;
+        let spans: Vec<Span> = if load.args.iter().all(redundant) {
+            vec![Span::new(
+                offset(stmt.span.begin()),
+                offset(stmt.span.end()),
+            )]
+        } else {
+            let before = std::iter::once(load.module.span.end())
+                .chain(load.args.iter().map(|arg| arg.span().end()));
+            let args = load.args.iter().zip(before);
+            args.filter(|(arg, _)| redundant(arg))
+                .map(|(arg, before)| Span::new(offset(before), offset(arg.span().end())))
+                .collect()
+        };
+        let source = ast.codemap().source();
+        let fix = spans
+            .into_iter()
+            .filter(|span| fixable && !source[span.start..span.end].contains('#'))
+            .map(Edit::delete)
+            .collect();
         diagnostics.push(
             Diagnostic::categorized(
                 &source_path.to_string_lossy(),
@@ -186,7 +214,8 @@ fn explicit_prelude_load_diagnostics(
                 "stdlib.prelude_load",
                 EvalSeverity::Warning,
             )
-            .with_span(Some(ast.codemap().file_span(stmt.span).resolve_span())),
+            .with_span(Some(ast.codemap().file_span(stmt.span).resolve_span()))
+            .with_fix(fix),
         );
     }
 
@@ -1342,7 +1371,8 @@ impl EvalContext {
                     diagnostics.extend(extra.diagnostics().iter().cloned());
 
                     if !diagnostics.iter().any(Diagnostic::is_error) {
-                        diagnostics.extend(ast_style_lints(&ast));
+                        let fixable = self.config.resolution.is_workspace_file(source_path);
+                        diagnostics.extend(ast_style_lints(&ast, fixable));
                     }
 
                     let output = EvalOutput {
@@ -1558,7 +1588,7 @@ impl EvalContext {
                 source_error: None,
                 related: Vec::new(),
                 suppressed: false,
-                fixable: false,
+                fix: Vec::new(),
             };
             return Err(diagnostic.into());
         }
@@ -1586,7 +1616,7 @@ impl EvalContext {
                 source_error: None,
                 related: Vec::new(),
                 suppressed: false,
-                fixable: false,
+                fix: Vec::new(),
             };
             Err(diagnostic.into())
         }
@@ -1610,7 +1640,7 @@ impl EvalContext {
                 source_error: None,
                 related: Vec::new(),
                 suppressed: false,
-                fixable: false,
+                fix: Vec::new(),
             });
         }
     }
@@ -1661,7 +1691,7 @@ impl EvalContext {
                     source_error: None,
                     related: Vec::new(),
                     suppressed: false,
-                    fixable: false,
+                    fix: Vec::new(),
                 }
             })
             .collect();
@@ -1699,7 +1729,7 @@ impl EvalContext {
                 source_error: None,
                 related: Vec::new(),
                 suppressed: false,
-                fixable: false,
+                fix: Vec::new(),
             });
         }
 

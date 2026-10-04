@@ -40,12 +40,7 @@ impl Library {
 
     fn diagnostic(&self, issue: &SymbolIssue) -> Diagnostic {
         let (path, codemap) = &self.sources[issue.source];
-        let fixable = !issue.fix.is_empty();
-        let fix = if fixable { "; `pcb fix` does this" } else { "" };
-        let body = format!(
-            "[{}] {}\nhelp: {}{fix}",
-            issue.kind, issue.message, issue.help
-        );
+        let body = format!("[{}] {}\nhelp: {}", issue.kind, issue.message, issue.help);
         let severity = match issue.severity {
             Severity::Error => EvalSeverity::Error,
             Severity::Warning => EvalSeverity::Warning,
@@ -53,7 +48,7 @@ impl Library {
         };
         Diagnostic::categorized(path, &body, issue.kind, severity)
             .with_span(Some(resolved_span(codemap, issue.span)))
-            .with_fixable(fixable)
+            .with_fix(issue.fix.clone())
     }
 }
 
