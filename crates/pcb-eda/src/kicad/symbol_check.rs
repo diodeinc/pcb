@@ -11,9 +11,9 @@ use std::sync::Arc;
 use pcb_sexpr::{Sexpr, SexprKind, Span};
 
 use super::symbol::{
-    KicadPin, is_named_pin, nested_symbol_unit_style, parse_bool_atom, parse_pin_common, style_rank,
+    KicadPin, KicadSymbol, nested_symbol_unit_style, parse_bool_atom, parse_pin_common,
 };
-use super::symbol_library::KicadSymbolLibrary;
+use super::symbol_library::{KicadSymbolLibrary, scan_format_version};
 use crate::is_placeholder_kicad_pin_name;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,32 +268,17 @@ const NAME_OFFSET_NM: std::ops::RangeInclusive<i64> = 508_000..=1_270_000;
 /// Check that KiCad can read the files of `library` at all. Symbol loading
 /// reads one definition at a time, leniently, and notices none of this.
 pub fn check_library(library: &KicadSymbolLibrary) -> Option<SymbolIssue> {
-    let issue = |source, offset: usize, message: &str| {
-        PARSE.issue(source, Span::new(offset, offset + 1), message.to_string())
-    };
-    let sources = library.sources().iter().enumerate();
-    let broken = sources.clone().find_map(|(source, text)| {
-        let offset = pcb_sexpr::scan::unbalanced_paren(text)?;
-        Some(issue(
-            source,
-            offset,
-            "file does not parse: unbalanced parenthesis",
-        ))
-    });
-    let comment = || {
-        sources.clone().find_map(|(source, text)| {
-            let offset = pcb_sexpr::scan::comment(text)?;
-            Some(issue(source, offset, "KiCad files have no `;` comments"))
-        })
-    };
-    let version = || {
-        let message = "library has no `(version …)`, which KiCad requires";
-        library
-            .format_version()
-            .is_none()
-            .then(|| issue(0, 0, message))
-    };
-    broken.or_else(comment).or_else(version)
+    let mut sources = library.sources().iter().enumerate();
+    sources.find_map(|(source, text)| {
+        let fault = pcb_sexpr::scan::malformed(text)
+            .map(|(offset, fault)| (offset, format!("file does not parse: {fault}")));
+        let header = || {
+            let message = "library does not open with `(kicad_symbol_lib (version …)`";
+            (scan_format_version(text).is_none()).then(|| (0, message.to_string()))
+        };
+        let (offset, message) = fault.or_else(header)?;
+        Some(PARSE.issue(source, Span::new(offset, offset + 1), message))
+    })
 }
 
 /// Check symbol `name` of `library`. Issues are ordered by source position.
@@ -347,11 +332,12 @@ pub fn check_symbol(
 
     let mut issues = Vec::new();
     check_properties(&chain, &mut issues);
-    check_forms(&chain[0], &mut issues);
-    if body.name != chain[0].name {
-        check_forms(body, &mut issues);
+    for def in &chain {
+        check_forms(def, &mut issues);
     }
-    check_body(body, footprint, &mut issues);
+    // Pads are compared with the pins a component gets from loading.
+    let loaded = library.resolved(name).ok().flatten();
+    check_body(body, footprint.zip(loaded.as_deref()), &mut issues);
     issues.sort_by_key(|issue| (issue.source, issue.span.start));
     issues
 }
@@ -381,8 +367,6 @@ impl Def {
 }
 
 struct Pin<'a> {
-    /// Drawn in a nested unit symbol rather than directly in the symbol.
-    nested: bool,
     unit: u32,
     style: u32,
     node: &'a Sexpr,
@@ -566,9 +550,6 @@ struct Body<'a> {
     outlines: Vec<(u32, &'a Sexpr, [i64; 4])>,
     /// Unit number → span of the name of its first nested symbol.
     units: BTreeMap<u32, Span>,
-    /// A pin named `NO` makes `NC` its normally-closed counterpart on a
-    /// relay or switch, not a pin without a connection.
-    has_contacts: bool,
 }
 
 struct Reporter<'a> {
@@ -590,19 +571,22 @@ impl Reporter<'_> {
     }
 }
 
-fn check_body(def: &Def, footprint: Option<FootprintPads>, issues: &mut Vec<SymbolIssue>) {
+fn check_body(
+    def: &Def,
+    pairing: Option<(FootprintPads, &KicadSymbol)>,
+    issues: &mut Vec<SymbolIssue>,
+) {
     let mut body = Body {
         def,
         pins: Vec::new(),
         outlines: Vec::new(),
         units: BTreeMap::new(),
-        has_contacts: false,
     };
     let mut misnamed = Vec::new();
     for section in sections(def.items(), &["symbol", "pin"]) {
         let items = section.as_list().unwrap_or_default();
         if items[0].as_sym() == Some("pin") {
-            body.pins.push(pin(false, 0, 0, section));
+            body.pins.push(pin(0, 0, section));
             continue;
         }
         let (unit, style) = nested_symbol_unit_style(items);
@@ -616,8 +600,7 @@ fn check_body(def: &Def, footprint: Option<FootprintPads>, issues: &mut Vec<Symb
             }
         }
         let pins = sections(items, &["pin"]);
-        body.pins
-            .extend(pins.map(|node| pin(true, unit, style, node)));
+        body.pins.extend(pins.map(|node| pin(unit, style, node)));
         let filled = sections(items, &["rectangle"]).filter(|node| {
             descend(node, &["fill", "type"]).and_then(|fill| fill.as_list()?.get(1)?.as_sym())
                 == Some("background")
@@ -626,10 +609,6 @@ fn check_body(def: &Def, footprint: Option<FootprintPads>, issues: &mut Vec<Symb
             .extend(filled.filter_map(|node| Some((unit, node, rectangle_bounds(node)?))));
     }
 
-    body.has_contacts = body
-        .pins
-        .iter()
-        .any(|pin| pin.name().eq_ignore_ascii_case("NO"));
     let mut out = Reporter {
         symbol: def,
         multi_unit: body.units.keys().filter(|unit| **unit > 0).count() > 1,
@@ -649,9 +628,9 @@ fn check_body(def: &Def, footprint: Option<FootprintPads>, issues: &mut Vec<Symb
     check_pin_types(&body, &mut out);
     // Pads are compared against pin numbers only once the numbers are sound.
     if check_numbering(&body, &mut out)
-        && let Some(footprint) = footprint
+        && let Some((footprint, loaded)) = pairing
     {
-        check_footprint(&body, footprint, &mut out);
+        check_footprint(&body, loaded, footprint, &mut out);
     }
     check_stacks(&body, &mut out);
     check_power_names(&body, &mut out);
@@ -726,6 +705,13 @@ fn check_pin(pin: &Pin, out: &mut Reporter) {
 /// cause share a warning: a ball-grid memory can have a hundred `NC` balls.
 fn check_pin_types(body: &Body, out: &mut Reporter) {
     let is_power_symbol = child(body.def.items(), "power").is_some();
+    // On a relay or switch, `NC` beside `NO` is the normally-closed contact.
+    let contacts: BTreeSet<u32> = body
+        .pins
+        .iter()
+        .filter(|pin| pin.name().eq_ignore_ascii_case("NO"))
+        .map(|pin| pin.unit)
+        .collect();
     let mut hidden_power: BTreeMap<&str, Vec<&Pin>> = BTreeMap::new();
     let mut nc: BTreeMap<(&str, &str), Vec<&Pin>> = BTreeMap::new();
     for pin in &body.pins {
@@ -737,7 +723,8 @@ fn check_pin_types(body: &Body, out: &mut Reporter) {
             .any(|nc| pin.name().eq_ignore_ascii_case(nc))
             && !pin.is_no_connect()
             && pin.electrical_type() != "free"
-            && !body.has_contacts
+            && !(pin.name().eq_ignore_ascii_case("NC")
+                && contacts.iter().any(|unit| coexist(*unit, pin.unit)))
         {
             nc.entry((pin.name(), pin.electrical_type()))
                 .or_default()
@@ -905,41 +892,28 @@ fn check_units(body: &Body, out: &mut Reporter) {
     }
 }
 
-fn check_footprint(body: &Body, footprint: FootprintPads, out: &mut Reporter) {
-    // A component gets the pins of one body style per unit, as loading picks it.
-    let mut named: BTreeMap<(u32, u32), usize> = BTreeMap::new();
-    for pin in body.pins.iter().filter(|pin| pin.nested) {
-        *named.entry((pin.unit, pin.style)).or_default() += usize::from(is_named_pin(&pin.parsed));
-    }
-    let mut styles: BTreeMap<u32, u32> = BTreeMap::new();
-    for ((unit, style), count) in &named {
-        let best = styles.entry(*unit).or_insert(*style);
-        if style_rank(*count, *style) > style_rank(named[&(*unit, *best)], *best) {
-            *best = *style;
-        }
-    }
-    let loaded = || {
-        body.pins
-            .iter()
-            .filter(|pin| !pin.nested || styles.get(&pin.unit) == Some(&pin.style))
-    };
-
-    let numbers: BTreeSet<&str> = loaded().map(|pin| pin.number()).collect();
-    let mut seen = BTreeSet::new();
-    let padless: Vec<&Pin> = loaded()
-        .filter(|pin| !footprint.numbers.contains(pin.number()) && seen.insert(pin.number()))
+fn check_footprint(
+    body: &Body,
+    loaded: &KicadSymbol,
+    footprint: FootprintPads,
+    out: &mut Reporter,
+) {
+    let numbers: BTreeSet<&str> = loaded.pins().iter().map(KicadPin::number).collect();
+    let padless: Vec<&str> = numbers
+        .iter()
+        .copied()
+        .filter(|number| !footprint.numbers.contains(*number))
         .collect();
     if let Some(first) = padless.first() {
         let message = format!(
             "{} {} no pad in {}",
-            list(
-                "pin",
-                padless.iter().map(|pin| format!("\"{}\"", pin.number()))
-            ),
+            list("pin", padless.iter().map(|number| format!("\"{number}\""))),
             if padless.len() == 1 { "has" } else { "have" },
             footprint.name
         );
-        let span = first.value_span("number");
+        // A native stack such as `[1-4]` has no pin written with this number.
+        let drawn = body.pins.iter().find(|pin| pin.number() == *first);
+        let span = drawn.map_or(body.def.name_span(), |pin| pin.value_span("number"));
         out.push(&PIN_FOOTPRINT_MISMATCH, 0, span, message);
     }
     let pinless: Vec<&str> = footprint
@@ -1032,11 +1006,10 @@ fn check_layout(body: &Body, out: &mut Reporter) {
     }
 }
 
-fn pin(nested: bool, unit: u32, style: u32, node: &Sexpr) -> Pin<'_> {
+fn pin(unit: u32, style: u32, node: &Sexpr) -> Pin<'_> {
     let items = node.as_list().unwrap_or_default();
     let parsed = parse_pin_common(items);
     Pin {
-        nested,
         unit,
         style,
         node,
@@ -1221,26 +1194,24 @@ mod tests {
     fn each_defect_is_one_issue_of_its_kind() {
         assert!(kinds(CLEAN, "U").is_empty());
         assert!(kinds(CLEAN, "D").is_empty());
-        let library_issue = |source: String| {
-            let library = KicadSymbolLibrary::from_string(source).unwrap();
-            check_library(&library).map(|issue| issue.message)
+        let library_issue = |sources: Vec<String>| {
+            let library = KicadSymbolLibrary::from_sources(sources).unwrap();
+            check_library(&library).map(|issue| (issue.source, issue.message))
         };
-        assert_eq!(library_issue(CLEAN.to_string()), None);
+        assert_eq!(library_issue(vec![CLEAN.to_string()]), None);
         for (from, to, message) in [
-            (
-                "))\n  (symbol \"D\"",
-                ")\n  (symbol \"D\"",
-                "unbalanced parenthesis",
-            ),
+            ("))\n  (symbol \"D\"", ")\n  (symbol \"D\"", "unclosed `(`"),
             (
                 "(symbol \"U\"",
                 "; the part\n  (symbol \"U\"",
-                "no `;` comments",
+                "starts a comment",
             ),
-            ("(version 20251024)", "", "no `(version …)`"),
+            ("(version 20251024)", "", "does not open with"),
         ] {
-            let found = library_issue(CLEAN.replacen(from, to, 1)).unwrap_or_default();
-            assert!(found.contains(message), "{from:?}: {found}");
+            // Every file of a split library is held to this, not only the first.
+            let broken = CLEAN.replacen(from, to, 1);
+            let (source, found) = library_issue(vec![CLEAN.to_string(), broken]).unwrap();
+            assert!(source == 1 && found.contains(message), "{from:?}: {found}");
         }
 
         let defects: &[(&[(&str, &str)], &str)] = &[
@@ -1341,6 +1312,8 @@ mod tests {
             .replacen("\"VCC\"", "\"NO\"", 1)
             .replacen("pin power_in", "pin passive", 1);
         assert!(kinds(&relay, "U").is_empty());
+        let do_not_use = relay.replacen("\"NC\"", "\"DNU\"", 1);
+        assert_eq!(kinds(&do_not_use, "U"), ["symbol.pin.nc_type"]);
 
         let stack = CLEAN
             .replacen("pin input", "pin no_connect", 1)
@@ -1380,6 +1353,15 @@ mod tests {
         let span = issues[0].span;
         assert_eq!(&source[span.start..span.end], "\"1\"");
         assert!(span.start > source.find("power_in").unwrap());
+
+        // A parent in the middle of the chain is held to the same forms.
+        let middle = "(symbol \"M\" (extends \"U\") (offset 0) (property \"Value\" \"M\"))";
+        let source = CLEAN
+            .replacen("(extends \"U\")", "(extends \"M\")", 1)
+            .replacen("(symbol \"D\"", &format!("{middle} (symbol \"D\""), 1);
+        let issues = check(&source, "D", None);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(issues[0].message.starts_with("M: `offset`"));
     }
 
     #[test]
@@ -1414,5 +1396,13 @@ mod tests {
             1,
         );
         assert!(messages(&alternate, &["1", "2"]).is_empty());
+
+        // A native stack is the pins it expands to.
+        let stacked = CLEAN.replacen("(number \"2\"", "(number \"[2,3]\"", 1);
+        assert!(messages(&stacked, &["1", "2", "3"]).is_empty());
+        assert_eq!(
+            messages(&stacked, &["1", "2"]),
+            ["U: pin \"3\" has no pad in U.kicad_mod"]
+        );
     }
 }

@@ -246,7 +246,7 @@ pub(super) fn parse_symbol(node: &Sexpr) -> Result<KicadSymbol> {
     for (_unit, style_candidates) in nested_pin_groups {
         if let Some(best) = style_candidates
             .into_iter()
-            .max_by_key(|c| style_rank(c.named_pin_count, c.style))
+            .max_by_key(|c| (c.named_pin_count, Reverse(c.style)))
         {
             symbol.pins.extend(best.pins);
         }
@@ -283,13 +283,7 @@ struct NestedStylePins {
     pins: Vec<KicadPin>,
 }
 
-/// Rank of a body style when choosing the one whose pins stand for a unit:
-/// the style naming the most pins, the lowest style number on a tie.
-pub(super) fn style_rank(named_pin_count: usize, style: u32) -> (usize, Reverse<u32>) {
-    (named_pin_count, Reverse(style))
-}
-
-pub(super) fn is_named_pin(pin: &KicadPin) -> bool {
+fn is_named_pin(pin: &KicadPin) -> bool {
     !is_placeholder_kicad_pin_name(&pin.name)
 }
 
