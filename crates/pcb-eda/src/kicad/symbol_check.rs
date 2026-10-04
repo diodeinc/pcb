@@ -932,7 +932,7 @@ fn check_footprint(
         .numbers
         .iter()
         .map(String::as_str)
-        .filter(|pad| !numbers.contains(pad))
+        .filter(|pad| !pad.is_empty() && !numbers.contains(pad))
         .collect();
     if !pinless.is_empty() {
         let message = format!(
@@ -1397,6 +1397,11 @@ mod tests {
         let pinless = r#"(kicad_symbol_lib (version 20251024) (symbol "U"
             (property "Reference" "U") (property "Value" "U")))"#;
         assert!(messages(pinless, &["1"]).is_empty());
+        assert!(messages(CLEAN, &["", "1", "2"]).is_empty());
+        assert_eq!(
+            messages(CLEAN, &[""]),
+            [r#"U: pins "1", "2" have no pad in U.kicad_mod"#]
+        );
         assert_eq!(
             messages(CLEAN, &["1"]),
             ["U: pin \"2\" has no pad in U.kicad_mod"]
