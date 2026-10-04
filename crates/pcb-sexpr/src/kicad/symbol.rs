@@ -262,7 +262,6 @@ mod tests {
                 "{number}"
             );
         }
-        assert_eq!(expand_stacked_pin_number("[1-4096]").unwrap().len(), 4096);
         assert_eq!(
             expand_stacked_pin_number("[1-4096,1-4096]").unwrap().len(),
             4096

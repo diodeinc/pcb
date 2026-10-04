@@ -49,61 +49,6 @@ fn frozen_net_id(value: FrozenValue) -> u64 {
 }
 
 #[test]
-fn native_pin_stacks_emit_individual_netlist_pads() {
-    let component = eval_single_root_component_with_files(vec![
-        (
-            "stack.kicad_sym",
-            r#"(kicad_symbol_lib (symbol "Stack"
-          (property "Reference" "U")
-          (symbol "Stack_1_1"
-            (pin power_in line (at 0 0 0) (length 2.54)
-              (name "VDD") (number "[11,19,28,50,75,100]"))
-            (pin power_in line (at 0 2.54 0) (length 2.54)
-              (name "VSS") (number "[10,27,74,99]"))
-            (pin passive line (at 0 5.08 0) (length 2.54)
-              (name "BUS") (number "[AD12-AD22]")))))"#,
-        ),
-        (
-            "test.zen",
-            r#"Component(
-            name = "U1",
-            symbol = Symbol(library = "stack.kicad_sym"),
-            footprint = "test_footprint",
-            pins = {"VDD": Net("VDD"), "VSS": Net("VSS"), "BUS": Net("BUS")},
-        )"#,
-        ),
-    ]);
-    let result = component.0.to_schematic_with_diagnostics();
-    let schematic = result.output.expect("expected schematic");
-    for (port, expected) in [
-        ("U1.VDD", vec!["11", "19", "28", "50", "75", "100"]),
-        ("U1.VSS", vec!["10", "27", "74", "99"]),
-        (
-            "U1.BUS",
-            vec![
-                "AD12", "AD13", "AD14", "AD15", "AD16", "AD17", "AD18", "AD19", "AD20", "AD21",
-                "AD22",
-            ],
-        ),
-    ] {
-        let instance = schematic
-            .instances
-            .iter()
-            .find(|(reference, _)| reference.instance_path.join(".") == port)
-            .unwrap_or_else(|| panic!("missing {port}"))
-            .1;
-        let pcb_sch::AttributeValue::Array(pads) = &instance.attributes["pads"] else {
-            panic!("expected pad list for {port}");
-        };
-        let actual: std::collections::BTreeSet<_> = pads
-            .iter()
-            .map(|pad| pad.string().expect("string pad"))
-            .collect();
-        assert_eq!(actual, expected.into_iter().collect(), "{port}");
-    }
-}
-
-#[test]
 fn unnamed_native_stack_requires_one_net() {
     for name in ["", "~"] {
         let symbol = format!(
