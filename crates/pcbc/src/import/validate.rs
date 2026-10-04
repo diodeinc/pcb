@@ -47,9 +47,29 @@ pub(super) fn validate(
 
         let drc_output = tempfile::NamedTempFile::new()
             .context("Failed to create temporary file for DRC output")?;
-        let drc_report =
-            pcb_kicad::run_drc(&validation_pcb, true, Some(staged_root), drc_output.path())
-                .context("KiCad DRC failed")?;
+        let drc_report = pcb_kicad::run_drc(
+            &validation_pcb,
+            true,
+            Some(staged_root),
+            drc_output.path(),
+            &source_pcb,
+            &mut diagnostics,
+        )
+        .context("KiCad DRC failed")?;
+        let Some(drc_report) = drc_report else {
+            let output = super::materialize::write_validation_diagnostics(
+                &paths.workspace_root,
+                &paths.kicad_project_root,
+                &selection.selected,
+                &diagnostics,
+            )?;
+            crate::drc::render_diagnostics(&mut diagnostics, &[], true);
+            eprintln!(
+                "Wrote import validation diagnostics to {}",
+                output.display()
+            );
+            anyhow::bail!("Invalid custom rules; KiCad DRC was not run.");
+        };
         drc_report.add_to_diagnostics(&mut diagnostics, &source_pcb.to_string_lossy());
         drc_report
             .add_unconnected_items_to_diagnostics(&mut diagnostics, &source_pcb.to_string_lossy());

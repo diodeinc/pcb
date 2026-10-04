@@ -230,6 +230,10 @@ fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Insta
 
 fn release_blocked(diagnostics: &Diagnostics) -> bool {
     diagnostics.error_count() > 0
+        || diagnostics.iter().any(|diagnostic| {
+            pcb_zen_core::diagnostics::diagnostic_kind(diagnostic).as_deref()
+                == Some("layout.drc.rules.invalid")
+        })
         || pcbc::kicad_schematic::has_unsuppressed_schematic_diagnostics(diagnostics)
 }
 
@@ -275,7 +279,12 @@ pub fn build_board_release(
     options: BoardReleaseOptions,
 ) -> Result<Option<PathBuf>> {
     let start_time = Instant::now();
-    let temporary = options.check.then(tempfile::tempdir).transpose()?;
+    // Keep staging paths consistent with canonical paths used by layout
+    // resolution, including temporary-directory aliases such as macOS /var.
+    let temporary = options
+        .check
+        .then(|| tempfile::tempdir_in(std::env::temp_dir().canonicalize()?))
+        .transpose()?;
     let mut diagnostics = Diagnostics::default();
     let outcome = preflight_board_release(
         zen_path.clone(),
@@ -793,7 +802,7 @@ fn review_release_preflight(
             info.zen_path.display()
         );
     }
-    anyhow::ensure!(diagnostics.error_count() == 0, "Release preflight failed");
+    anyhow::ensure!(!release_blocked(diagnostics), "Release preflight failed");
     let warning_count = diagnostics.warning_count();
     if !confirm_continue_on_warnings(
         spinner,
@@ -1584,8 +1593,16 @@ fn run_kicad_drc(info: &ReleaseInfo, diagnostics: &mut Diagnostics) -> Result<()
 
     // Run DRC, writing raw KiCad JSON report to staging directory
     let drc_json_path = info.staging_dir.join("drc.json");
-    let report = pcb_kicad::run_drc(&kicad_pcb_path, false, working_dir, &drc_json_path)?;
-    report.add_to_diagnostics(diagnostics, &display_pcb_file.to_string_lossy());
+    if let Some(report) = pcb_kicad::run_drc(
+        &kicad_pcb_path,
+        false,
+        working_dir,
+        &drc_json_path,
+        &display_pcb_file,
+        diagnostics,
+    )? {
+        report.add_to_diagnostics(diagnostics, &display_pcb_file.to_string_lossy());
+    }
 
     pcb_zen_core::SuppressPass::new(info.suppress.clone()).apply(diagnostics);
     Ok(())

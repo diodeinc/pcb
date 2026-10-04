@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Fix `.matches()` string comparisons for `Length` and `Mass`.
+- Report invalid KiCad custom rules before running DRC.
 
 ## [0.4.68] - 2026-10-02
 
