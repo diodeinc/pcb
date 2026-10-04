@@ -136,7 +136,7 @@ fn real_kicad_custom_rules_and_exclusions() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(diagnostics.warning_count(), 1);
+    assert_eq!(diagnostics.warning_count(), 0);
     eprintln!("Executed real KiCad {}", report.kicad_version);
     let clearances = report
         .violations
