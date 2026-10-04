@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb new board` uses `eda` as the shared layout and schematic directory.
+
 ## [0.4.70] - 2026-10-04
 
 ### Added
