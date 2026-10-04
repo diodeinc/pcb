@@ -221,6 +221,18 @@ pub fn write_layer(layer: &GerberLayer) -> Result<String> {
     Ok(writer.output)
 }
 
+/// Draws taken into one straight draw from `start`.
+#[derive(Clone, Copy)]
+struct Run {
+    start: Point,
+    /// The directions from `start` that pass within half an output unit of
+    /// every joint, from `low` counterclockwise to `high`.
+    low: (f64, f64),
+    high: (f64, f64),
+    /// How far the farthest joint is.
+    reach: f64,
+}
+
 struct Writer<'a> {
     layer: &'a GerberLayer,
     output: String,
@@ -235,9 +247,8 @@ struct Writer<'a> {
     /// Where the previous object's draw ended, while no other operation has
     /// intervened.
     stroke_end: Option<(i64, i64)>,
-    /// The start and joints of the straight run of draws the next written
-    /// draw completes.
-    run: Vec<Point>,
+    /// The straight run of draws the next written draw completes.
+    run: Option<Run>,
     /// The aperture and object attribute sets of the last object, whose
     /// attributes are the file's dictionary at this point.
     current_attribute_sets: (u32, u32),
@@ -257,7 +268,7 @@ impl<'a> Writer<'a> {
             current_coordinates: None,
             current_point: None,
             stroke_end: None,
-            run: Vec::new(),
+            run: None,
             current_attribute_sets: (AttributeSets::EMPTY, AttributeSets::EMPTY),
             current_aperture_attributes: &[],
             current_object_attributes: &[],
@@ -502,26 +513,46 @@ impl<'a> Writer<'a> {
         let ObjectKind::Draw { end: beyond, .. } = next.kind else {
             return false;
         };
-        let grid = |point| {
+        let start = self.run.map_or(start, |run| run.start);
+        let from = self.coordinates(start);
+        let offset = |point| {
             let (x, y) = self.coordinates(point);
-            (i128::from(x), i128::from(y))
+            ((x - from.0) as f64, (y - from.1) as f64)
         };
-        let (from, to) = (grid(*self.run.first().unwrap_or(&start)), grid(beyond));
-        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
-        let length2 = dx * dx + dy * dy;
-        let straight = self.run.len() <= RUN_JOINTS
-            && self.continues(object, self.coordinates(end), aperture, next)
-            && self.run.iter().skip(1).chain([&end]).all(|&joint| {
-                let (x, y) = grid(joint);
-                let along = (x - from.0) * dx + (y - from.1) * dy;
-                let across = (x - from.0) * dy - (y - from.1) * dx;
-                0 < along && along < length2 && 4 * across * across <= length2
-            });
-        if straight {
-            if self.run.is_empty() {
-                self.run.push(start);
+        let cross = |a: (f64, f64), b: (f64, f64)| a.0 * b.1 - a.1 * b.0;
+        let (joint, to) = (offset(end), offset(beyond));
+        // A draw passes within half a unit of the joint when it leaves
+        // `start` within this angle of the joint's own direction.
+        let distance = joint.0.hypot(joint.1);
+        let (sine, cosine) = (0.5 / distance, (1.0 - 0.25 / (distance * distance)).sqrt());
+        let turned = |sine: f64| {
+            (
+                joint.0 * cosine - joint.1 * sine,
+                joint.1 * cosine + joint.0 * sine,
+            )
+        };
+        let (mut low, mut high, mut reach) = (turned(-sine), turned(sine), distance);
+        if let Some(run) = self.run {
+            if cross(low, run.low) > 0.0 {
+                low = run.low;
             }
-            self.run.push(end);
+            if cross(run.high, high) > 0.0 {
+                high = run.high;
+            }
+            reach = reach.max(run.reach);
+        }
+        let straight = self.continues(object, self.coordinates(end), aperture, next)
+            && cross(low, to) >= 0.0
+            && cross(to, high) >= 0.0
+            && low.0 * to.0 + low.1 * to.1 > 0.0
+            && to.0.hypot(to.1) > reach;
+        if straight {
+            self.run = Some(Run {
+                start,
+                low,
+                high,
+                reach,
+            });
         }
         straight
     }
@@ -545,7 +576,7 @@ impl<'a> Writer<'a> {
             } => {
                 self.set_aperture(*aperture);
                 self.set_plot_mode(PlotMode::Linear);
-                let start = self.run.drain(..).next().unwrap_or(*start);
+                let start = self.run.take().map_or(*start, |run| run.start);
                 self.write_move(start);
                 self.write_plot(*end, None);
             }
@@ -827,10 +858,6 @@ impl<'a> Writer<'a> {
         self.output.push_str(&trim_decimal(value, 9));
     }
 }
-
-/// Joints a straight run holds before it is written: every draw that
-/// extends the run checks them all.
-const RUN_JOINTS: usize = 64;
 
 fn validate_attribute(attr: &AttributeValue) -> Result<()> {
     if attr.name.is_empty() {
