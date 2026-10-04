@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Stop warning about every `condition`, `layer` and `assertion` in KiCad custom rules.
+- Report KiCad custom rules with a malformed `condition` or a repeated `layer` before running DRC.
 
 ## [0.4.69] - 2026-10-04
 
