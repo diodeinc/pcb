@@ -225,12 +225,12 @@ pub fn write_layer(layer: &GerberLayer) -> Result<String> {
 #[derive(Clone, Copy)]
 struct Run {
     start: Point,
-    /// The directions from `start` that pass within half an output unit of
-    /// every joint, from `low` counterclockwise to `high`.
-    low: (f64, f64),
-    high: (f64, f64),
-    /// How far the farthest joint is.
-    reach: f64,
+    /// The directions from `start` that pass through the output cell of
+    /// every joint, from `low` counterclockwise to `high`, in half units.
+    low: (i128, i128),
+    high: (i128, i128),
+    /// The squared distance of the farthest joint.
+    reach: i128,
 }
 
 struct Writer<'a> {
@@ -495,9 +495,9 @@ impl<'a> Writer<'a> {
     }
 
     /// Take a draw into the run its successor carries straight on. The run
-    /// images as the one draw between its ends when that draw passes within
-    /// half an output unit of every joint, where the file cannot tell them
-    /// apart.
+    /// images as the one draw between its ends when that draw passes through
+    /// the output cell of every joint: the file would round a point of it to
+    /// each of them.
     fn joins_run(&mut self, object: &WriterObject, next: Option<&WriterObject>) -> bool {
         let (
             &ObjectKind::Draw {
@@ -515,37 +515,48 @@ impl<'a> Writer<'a> {
         };
         let start = self.run.map_or(start, |run| run.start);
         let from = self.coordinates(start);
+        // Half units from the run's start, where a cell's corners are whole.
         let offset = |point| {
             let (x, y) = self.coordinates(point);
-            ((x - from.0) as f64, (y - from.1) as f64)
-        };
-        let cross = |a: (f64, f64), b: (f64, f64)| a.0 * b.1 - a.1 * b.0;
-        let (joint, to) = (offset(end), offset(beyond));
-        // A draw passes within half a unit of the joint when it leaves
-        // `start` within this angle of the joint's own direction.
-        let distance = joint.0.hypot(joint.1);
-        let (sine, cosine) = (0.5 / distance, (1.0 - 0.25 / (distance * distance)).sqrt());
-        let turned = |sine: f64| {
             (
-                joint.0 * cosine - joint.1 * sine,
-                joint.1 * cosine + joint.0 * sine,
+                2 * (i128::from(x) - i128::from(from.0)),
+                2 * (i128::from(y) - i128::from(from.1)),
             )
         };
-        let (mut low, mut high, mut reach) = (turned(-sine), turned(sine), distance);
+        let cross = |a: (i128, i128), b: (i128, i128)| a.0 * b.1 - a.1 * b.0;
+        let dot = |a: (i128, i128), b: (i128, i128)| a.0 * b.0 + a.1 * b.1;
+        let (joint, to) = (offset(end), offset(beyond));
+        // A draw crosses the joint's cell when it leaves `start` between
+        // the cell's outermost corners.
+        let corners = [(-1, -1), (1, -1), (1, 1), (-1, 1)].map(|(x, y)| (joint.0 + x, joint.1 + y));
+        let (mut low, mut high) =
+            corners[1..]
+                .iter()
+                .fold((corners[0], corners[0]), |(low, high), &corner| {
+                    (
+                        if cross(low, corner) < 0 { corner } else { low },
+                        if cross(high, corner) > 0 {
+                            corner
+                        } else {
+                            high
+                        },
+                    )
+                });
+        let mut reach = dot(joint, joint);
         if let Some(run) = self.run {
-            if cross(low, run.low) > 0.0 {
+            if cross(low, run.low) > 0 {
                 low = run.low;
             }
-            if cross(run.high, high) > 0.0 {
+            if cross(run.high, high) > 0 {
                 high = run.high;
             }
             reach = reach.max(run.reach);
         }
         let straight = self.continues(object, self.coordinates(end), aperture, next)
-            && cross(low, to) >= 0.0
-            && cross(to, high) >= 0.0
-            && low.0 * to.0 + low.1 * to.1 > 0.0
-            && to.0.hypot(to.1) > reach;
+            && cross(low, to) >= 0
+            && cross(to, high) >= 0
+            && dot(low, to) > 0
+            && dot(to, to) > reach;
         if straight {
             self.run = Some(Run {
                 start,
@@ -995,7 +1006,7 @@ mod tests {
             });
             write_layer(&stroke_layer(draws.collect())).unwrap()
         };
-        // Both joints are within half a unit of the draw to (4.000002, 2).
+        // The draw to (4.000002, 2) crosses the cell of both joints.
         let output = polyline(&[
             (0.0, 0.0),
             (1.0, 0.5),
@@ -1007,7 +1018,7 @@ mod tests {
             output.contains("X0Y0D02*\nX4000002Y2000000D01*\nX3000000Y1500000D01*\n"),
             "{output}"
         );
-        // A joint one unit off the line stays.
+        // A joint whose cell the line misses stays.
         let output = polyline(&[(0.0, 0.0), (1.0, 0.000_001), (2.0, 0.0)]);
         assert_eq!(output.matches("D01*").count(), 2, "{output}");
     }
