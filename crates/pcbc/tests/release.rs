@@ -301,6 +301,13 @@ fn test_release_check_reports_invalid_rules_even_when_suppressed() {
         .init_git()
         .commit("Initial commit")
         .sync();
+    // Exercise the same canonical/noncanonical temporary-path distinction as
+    // macOS's /var -> /private/var alias, on every Unix test runner.
+    let temporary = sb.root_path().join("check-tmp");
+    let alias = sb.root_path().join("check-tmp-alias");
+    std::fs::create_dir(&temporary).unwrap();
+    std::os::unix::fs::symlink(&temporary, &alias).unwrap();
+    sb.env("TMPDIR", alias.to_string_lossy());
     let output = sb
         .run(
             "pcbc",
@@ -339,6 +346,8 @@ fn test_release_check_reports_invalid_rules_even_when_suppressed() {
             "{}:2:38",
             sb.root_path()
                 .join("src/boards/layout/layout.kicad_dru")
+                .canonicalize()
+                .unwrap()
                 .display()
         )
     );

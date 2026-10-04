@@ -279,7 +279,12 @@ pub fn build_board_release(
     options: BoardReleaseOptions,
 ) -> Result<Option<PathBuf>> {
     let start_time = Instant::now();
-    let temporary = options.check.then(tempfile::tempdir).transpose()?;
+    // Keep staging paths consistent with canonical paths used by layout
+    // resolution, including temporary-directory aliases such as macOS /var.
+    let temporary = options
+        .check
+        .then(|| tempfile::tempdir_in(std::env::temp_dir().canonicalize()?))
+        .transpose()?;
     let mut diagnostics = Diagnostics::default();
     let outcome = preflight_board_release(
         zen_path.clone(),

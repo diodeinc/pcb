@@ -112,6 +112,8 @@ fn invalid_custom_rules_stop_import_before_conversion() {
         sandbox
             .root_path()
             .join("source/layout.kicad_dru")
+            .canonicalize()
+            .unwrap()
             .to_string_lossy()
             .as_ref()
     );
