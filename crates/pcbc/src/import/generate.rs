@@ -1711,11 +1711,7 @@ fn generate_imported_components(
                 name = part_dir.component_dir
             ),
         };
-        let io_pins = pin_plan
-            .io_pins
-            .iter()
-            .map(|(io, pin)| (io.clone(), BTreeSet::from([pin.clone()])))
-            .collect();
+        let io_pins = pin_plan.io_pins;
         let skip_defaults = ModuleSkipDefaults::from(flags);
         let component_name = component_gen::sanitize_mpn_for_path(&part_dir.component_dir);
 
@@ -2101,7 +2097,7 @@ struct ImportComponentPinBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PhysicalPinPlan {
     bindings: Vec<ImportComponentPinBinding>,
-    io_pins: BTreeMap<String, KiCadPinNumber>,
+    io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>>,
 }
 
 fn sanitize_pin_number_suffix(raw: &str) -> String {
@@ -2284,8 +2280,29 @@ fn build_physical_pin_plan(
         }
     }
 
+    // Internally connected pads share one input, including when the module
+    // evaluates its defaults to discover its interface.
+    let connectivity = pcb_sch::InternalConnectivity::new(
+        symbol.internal_connectivity.duplicate_numbers_are_jumpers,
+        symbol.internal_connectivity.groups.iter().cloned(),
+    );
+    for group in connectivity.groups {
+        let Some(io_name) = group
+            .iter()
+            .find_map(|number| io_names.get(&KiCadPinNumber::from(number.clone())))
+            .cloned()
+        else {
+            continue;
+        };
+        for number in group {
+            if let Some(name) = io_names.get_mut(&KiCadPinNumber::from(number)) {
+                *name = io_name.clone();
+            }
+        }
+    }
+
     let mut bindings = Vec::with_capacity(pins.len());
-    let mut io_pins = BTreeMap::new();
+    let mut io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>> = BTreeMap::new();
     let mut all_pins = BTreeSet::new();
     for pin in pins {
         anyhow::ensure!(
@@ -2295,12 +2312,10 @@ fn build_physical_pin_plan(
         );
         let io_name = io_names.get(&pin.number).cloned();
         if let Some(io_name) = &io_name {
-            anyhow::ensure!(
-                io_pins
-                    .insert(io_name.clone(), pin.number.clone())
-                    .is_none(),
-                "Duplicate generated IO name {io_name}"
-            );
+            io_pins
+                .entry(io_name.clone())
+                .or_default()
+                .insert(pin.number.clone());
         }
         let logical_name = logical_names
             .remove(&pin.number)
@@ -2903,7 +2918,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.bindings[0].io_name.as_deref(), Some("NC"));
-        assert_eq!(plan.io_pins["NC"].as_str(), "10");
+        assert_eq!(
+            plan.io_pins["NC"],
+            BTreeSet::from([KiCadPinNumber::from("10".to_owned())])
+        );
     }
 
     #[test]
@@ -2955,13 +2973,9 @@ mod tests {
         generated
             .anchor_to_module_ident
             .insert(anchor.clone(), "DEVICE".to_string());
-        generated.module_io_pins.insert(
-            "DEVICE".to_string(),
-            plan.io_pins
-                .into_iter()
-                .map(|(io, pin)| (io, BTreeSet::from([pin])))
-                .collect(),
-        );
+        generated
+            .module_io_pins
+            .insert("DEVICE".to_string(), plan.io_pins);
         generated.module_skip_defaults.insert(
             "DEVICE".to_string(),
             ModuleSkipDefaults::from(ImportPartFlags::default()),
@@ -3117,7 +3131,7 @@ mod tests {
             ],
             io_pins: BTreeMap::from([(
                 "D_POS_3".to_string(),
-                KiCadPinNumber::from("3".to_string()),
+                BTreeSet::from([KiCadPinNumber::from("3".to_string())]),
             )]),
         };
         let rendered = render_component_zen(

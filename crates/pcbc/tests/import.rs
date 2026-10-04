@@ -1006,6 +1006,60 @@ fn standalone_import_preserves_duplicate_display_name_pin_partitions() {
 }
 
 #[test]
+fn native_pin_stack_import_preserves_physical_partitions() {
+    let mut sandbox = sandbox();
+    sandbox.write(
+        "native.kicad_sch",
+        r#"(kicad_sch
+      (version 20260306) (generator "eeschema")
+      (uuid "00000000-0000-4000-8000-000000000001") (paper "A4")
+      (lib_symbols (symbol "Test:Stack" (in_bom yes) (on_board yes)
+        (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+        (property "Value" "Stack" (at 0 0 0) (effects (font (size 1.27 1.27))))
+        (symbol "Stack_1_1"
+          (pin passive line (at 0 0 0) (length 0)
+            (name "VDD" (effects (font (size 1.27 1.27))))
+            (number "[11,19,28,A{comma}B]" (effects (font (size 1.27 1.27)))))
+          (pin passive line (at 0 5.08 0) (length 0)
+            (name "BUS" (effects (font (size 1.27 1.27))))
+            (number "[AD12-AD14]" (effects (font (size 1.27 1.27))))))))
+      (symbol (lib_id "Test:Stack") (at 101.6 101.6 0) (unit 1)
+        (in_bom yes) (on_board yes) (dnp no)
+        (uuid "00000000-0000-4000-8000-000000000002")
+        (property "Reference" "U1" (at 101.6 101.6 0) (effects (font (size 1.27 1.27))))
+        (property "Value" "Stack" (at 101.6 101.6 0) (effects (font (size 1.27 1.27))))
+        (pin "[11,19,28,A{comma}B]" (uuid "00000000-0000-4000-8000-000000000003"))
+        (pin "[AD12-AD14]" (uuid "00000000-0000-4000-8000-000000000004"))
+        (instances (project "native"
+          (path "/00000000-0000-4000-8000-000000000001" (reference "U1") (unit 1)))))
+      (sheet_instances (path "/" (page "1"))))"#,
+    );
+    let import = sandbox
+        .run("pcbc", ["import", "native.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&import.stderr);
+    assert!(import.status.success(), "{stderr}");
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(extraction_report(&stderr)).unwrap()).unwrap();
+    assert_eq!(
+        source_physical_partitions(&report),
+        BTreeSet::from([
+            vec![
+                "U1:11".into(),
+                "U1:19".into(),
+                "U1:28".into(),
+                "U1:A{comma}B".into()
+            ],
+            vec!["U1:AD12".into(), "U1:AD13".into(), "U1:AD14".into()],
+        ])
+    );
+}
+
+#[test]
 fn stacked_no_connect_import_preserves_drawing_and_distinct_physical_pads() {
     let mut sandbox = sandbox();
     let source = STANDALONE_FIXTURE

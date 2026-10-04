@@ -589,6 +589,7 @@ fn merge_symbols(parent: &KicadSymbol, child: &KicadSymbol) -> KicadSymbol {
 
     if !child.pins.is_empty() {
         merged.pins = child.pins.clone();
+        merged.native_stack_groups = child.native_stack_groups.clone();
     }
 
     if child.mpn.is_some() {
@@ -1132,6 +1133,42 @@ mod tests {
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
         let extended = lib.get_symbol_lazy("Extended").unwrap().unwrap();
         assert_eq!(extended.reference, "J");
+    }
+
+    #[test]
+    fn native_stack_groups_follow_effective_pins_through_extends() {
+        for (child_pins, stack) in [
+            ("", vec!["1", "2"]),
+            (
+                r#"(pin passive line (name "A") (number "1"))
+                (pin passive line (name "B") (number "2"))"#,
+                vec![],
+            ),
+            (
+                r#"(pin passive line (name "C") (number "[5,6]"))"#,
+                vec!["5", "6"],
+            ),
+        ] {
+            let content = format!(
+                r#"(kicad_symbol_lib
+                (symbol "Base"
+                    (jumper_pin_groups ("3" "4"))
+                    (pin passive line (name "P") (number "[1,2]")))
+                (symbol "Child" (extends "Base")
+                    (jumper_pin_groups ("7" "8"))
+                    {child_pins}))"#
+            );
+            let library = KicadSymbolLibrary::from_string(&content).unwrap();
+            let child = library.get_symbol_lazy_as_eda("Child").unwrap().unwrap();
+            let mut expected = vec![["3", "4"].into_iter().map(String::from).collect()];
+            if !stack.is_empty() {
+                expected.push(stack.into_iter().map(String::from).collect());
+            }
+            expected.sort();
+            let mut actual = child.internal_connectivity.groups;
+            actual.sort();
+            assert_eq!(actual, expected, "{child_pins}");
+        }
     }
 
     #[test]

@@ -21,6 +21,9 @@ pub struct KicadSymbol {
     pub(super) in_bom: bool,
     pub(super) internal_connectivity: InternalConnectivity,
     pub(super) pins: Vec<KicadPin>,
+    /// Unlike explicit jumper metadata, native stacks follow overridden pins.
+    #[serde(skip)]
+    pub(super) native_stack_groups: Vec<BTreeSet<String>>,
     pub(super) mpn: Option<String>,
     pub(super) manufacturer: Option<String>,
     pub(super) datasheet_url: Option<String>,
@@ -102,7 +105,11 @@ pub struct KicadPinAlternate {
 }
 
 impl From<KicadSymbol> for Symbol {
-    fn from(symbol: KicadSymbol) -> Self {
+    fn from(mut symbol: KicadSymbol) -> Self {
+        symbol
+            .internal_connectivity
+            .groups
+            .extend(symbol.native_stack_groups);
         Symbol {
             name: symbol.name,
             footprint: symbol.footprint,
@@ -259,7 +266,7 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
             anyhow::anyhow!("symbol {:?} pin {:?}: {error}", symbol.name, pin.name)
         })?;
         if numbers.len() > 1 {
-            symbol.internal_connectivity.groups.push(numbers.clone());
+            symbol.native_stack_groups.push(numbers.clone());
         }
         for number in numbers {
             pins.push(KicadPin {
@@ -533,7 +540,7 @@ mod tests {
             symbol.pins.iter().map(KicadPin::name).collect::<Vec<_>>(),
             vec!["A", "B"]
         );
-        assert!(symbol.internal_connectivity.groups.is_empty());
+        assert!(symbol.native_stack_groups.is_empty());
     }
 
     #[test]
