@@ -13,6 +13,7 @@
 pub mod board;
 pub mod formatter;
 pub mod kicad;
+pub mod scan;
 
 use std::fmt;
 use std::io::BufRead;

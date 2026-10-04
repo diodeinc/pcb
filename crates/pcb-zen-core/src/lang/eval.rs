@@ -45,6 +45,7 @@ use crate::lang::{
     file::file_globals,
     footprint::validate_footprints,
     module::{FrozenModuleValue, ModulePath},
+    symbol_check::check_symbols,
 };
 use crate::load_spec::LoadSpec;
 use crate::resolution::{PackageScopeKey, PackageUrlResolution, ResolutionResult};
@@ -324,6 +325,12 @@ impl EvalOutput {
     /// callers that actually consume footprints (e.g. layout) opt in.
     pub fn validate_footprints(&self, file_provider: &dyn FileProvider) -> Vec<Diagnostic> {
         validate_footprints(&self.module_tree(), &self.resolution, file_provider)
+    }
+
+    /// Check the KiCad symbols of components whose symbol file belongs to a
+    /// workspace package.
+    pub fn check_symbols(&self, file_provider: &dyn FileProvider) -> Vec<Diagnostic> {
+        check_symbols(&self.module_tree(), &self.resolution, file_provider)
     }
 
     /// Convert to schematic with diagnostics

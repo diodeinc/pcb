@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use tracing::{instrument, warn};
 
 use super::symbol::{KicadSymbol, description_from_properties, parse_symbol};
@@ -32,15 +32,19 @@ pub struct KicadSymbolLibrary {
     /// Map from symbol name to its location in the file (BTreeMap for deterministic iteration order)
     symbol_locations: BTreeMap<String, SymbolLocation>,
     /// Cache of already-parsed and resolved symbols
-    resolved_cache: RwLock<HashMap<String, KicadSymbol>>,
+    resolved_cache: RwLock<HashMap<String, Arc<KicadSymbol>>>,
+    /// Symbol definitions as written, before `extends` resolution. Spans are
+    /// relative to the start of the definition.
+    definition_cache: RwLock<HashMap<String, Arc<Sexpr>>>,
     /// The `(version ...)` stamp from the library header, if declared.
     format_version: Option<i32>,
 }
 
-/// Read the `(version NNNN)` stamp from a library header without parsing the
-/// file: scan only the text before the first symbol definition.
-fn scan_format_version(source: &str) -> Option<i32> {
-    let head = &source[..source.find("(symbol").unwrap_or(source.len())];
+/// Read the `(version NNNN)` stamp from the header of a `(kicad_symbol_lib …)`
+/// file without parsing it: scan only the text before the first symbol.
+pub(super) fn scan_format_version(source: &str) -> Option<i32> {
+    let head = source.trim_start().strip_prefix("(kicad_symbol_lib")?;
+    let head = &head[..head.find("(symbol").unwrap_or(head.len())];
     let rest = head.split_once("(version")?.1;
     let digits: String = rest
         .trim_start()
@@ -74,6 +78,7 @@ impl KicadSymbolLibrary {
             sources,
             symbol_locations,
             resolved_cache: RwLock::new(HashMap::new()),
+            definition_cache: RwLock::new(HashMap::new()),
             format_version,
         })
     }
@@ -128,6 +133,37 @@ impl KicadSymbolLibrary {
         })
     }
 
+    /// The library's source texts, in the order given to [`Self::from_sources`].
+    pub fn sources(&self) -> &[String] {
+        &self.sources
+    }
+
+    /// Symbol `name` as written: its source index, its byte offset in that
+    /// source, and its parse, which symbol loading and checking share.
+    pub(super) fn definition(&self, name: &str) -> Result<Option<(usize, usize, Arc<Sexpr>)>> {
+        let Some(location) = self.symbol_locations.get(name) else {
+            return Ok(None);
+        };
+        let at = |node| Some((location.source_idx, location.range.start, node));
+        let cached = self
+            .definition_cache
+            .read()
+            .map_err(|e| anyhow!("Cache read lock poisoned: {}", e))?
+            .get(name)
+            .cloned();
+        if let Some(node) = cached {
+            return Ok(at(node));
+        }
+        let node = Arc::new(parse(
+            &self.sources[location.source_idx][location.range.clone()],
+        )?);
+        self.definition_cache
+            .write()
+            .map_err(|e| anyhow!("Cache write lock poisoned: {}", e))?
+            .insert(name.to_string(), Arc::clone(&node));
+        Ok(at(node))
+    }
+
     /// Check if a symbol exists in this library
     pub fn has_symbol(&self, name: &str) -> bool {
         self.symbol_locations.contains_key(name)
@@ -144,6 +180,11 @@ impl KicadSymbolLibrary {
     /// on-demand from the raw content and resolves any extends chain.
     #[instrument(name = "get_symbol", skip(self), fields(symbol = %name))]
     pub fn get_symbol_lazy(&self, name: &str) -> Result<Option<KicadSymbol>> {
+        Ok(self.resolved(name)?.map(|symbol| (*symbol).clone()))
+    }
+
+    /// Symbol `name` as loading resolves it, shared with the cache.
+    pub(super) fn resolved(&self, name: &str) -> Result<Option<Arc<KicadSymbol>>> {
         self.get_symbol_with_chain(name, &mut std::collections::HashSet::new())
     }
 
@@ -152,7 +193,7 @@ impl KicadSymbolLibrary {
         &self,
         name: &str,
         chain: &mut std::collections::HashSet<String>,
-    ) -> Result<Option<KicadSymbol>> {
+    ) -> Result<Option<Arc<KicadSymbol>>> {
         // Check cache first (read lock)
         {
             let cache = self
@@ -160,7 +201,7 @@ impl KicadSymbolLibrary {
                 .read()
                 .map_err(|e| anyhow!("Cache read lock poisoned: {}", e))?;
             if let Some(cached) = cache.get(name) {
-                return Ok(Some(cached.clone()));
+                return Ok(Some(Arc::clone(cached)));
             }
         }
 
@@ -170,26 +211,31 @@ impl KicadSymbolLibrary {
             None => return Ok(None),
         };
 
+        // Parse just this symbol's substring
+        let Some((_, _, definition)) = self.definition(name)? else {
+            return Ok(None);
+        };
+        let base_symbol = parse_symbol(&definition)?;
+
         // Check for circular extends
         if chain.contains(name) {
             // Break cycle by returning symbol without parent resolution
-            let symbol_str = &self.sources[location.source_idx][location.range.clone()];
-            return Ok(Some(parse_symbol_from_substring(symbol_str)?));
+            return Ok(Some(Arc::new(base_symbol)));
         }
 
         // Add to chain before resolving extends
         chain.insert(name.to_string());
 
-        // Parse just this symbol's substring
-        let symbol_str = &self.sources[location.source_idx][location.range.clone()];
-        let base_symbol = parse_symbol_from_substring(symbol_str)?;
-
-        // Resolve extends chain if needed
-        let resolved = if let Some(parent_name) = &location.extends {
-            self.resolve_extends_with_chain(&base_symbol, parent_name, chain)?
-        } else {
-            base_symbol
+        // Merge into the parent, itself resolved through its own extends
+        // chain; a parent that is not found leaves the child as it is.
+        let parent = match &location.extends {
+            Some(parent_name) => self.get_symbol_with_chain(parent_name, chain)?,
+            None => None,
         };
+        let resolved = Arc::new(match parent {
+            Some(parent) => merge_symbols(&parent, &base_symbol),
+            None => base_symbol,
+        });
 
         // Cache and return (write lock)
         {
@@ -197,29 +243,9 @@ impl KicadSymbolLibrary {
                 .resolved_cache
                 .write()
                 .map_err(|e| anyhow!("Cache write lock poisoned: {}", e))?;
-            cache.insert(name.to_string(), resolved.clone());
+            cache.insert(name.to_string(), Arc::clone(&resolved));
         }
         Ok(Some(resolved))
-    }
-
-    /// Resolve the extends chain for a symbol, passing the chain for cycle detection.
-    fn resolve_extends_with_chain(
-        &self,
-        child: &KicadSymbol,
-        parent_name: &str,
-        chain: &mut std::collections::HashSet<String>,
-    ) -> Result<KicadSymbol> {
-        // Get parent (recursively resolving its extends chain)
-        let parent = match self.get_symbol_with_chain(parent_name, chain)? {
-            Some(p) => p,
-            None => {
-                // Parent not found - return child as-is
-                return Ok(child.clone());
-            }
-        };
-
-        // Merge parent and child
-        Ok(merge_symbols(&parent, child))
     }
 
     /// Convert all symbols to the generic Symbol type with lazy resolution
@@ -553,20 +579,6 @@ fn extract_extends(content: &str) -> Option<String> {
     } else {
         let end = after.find(|c: char| c.is_whitespace() || c == ')')?;
         Some(after[..end].to_string())
-    }
-}
-
-/// Parse a single symbol from its raw S-expression substring
-fn parse_symbol_from_substring(content: &str) -> Result<KicadSymbol> {
-    let sexp = parse(content)?;
-
-    match &sexp.kind {
-        SexprKind::List(items) => {
-            let mut symbol = parse_symbol(items)?;
-            symbol.raw_sexp = Some(sexp);
-            Ok(symbol)
-        }
-        _ => Err(anyhow!("Expected symbol S-expression list")),
     }
 }
 

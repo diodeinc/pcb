@@ -159,14 +159,8 @@ impl FromStr for KicadSymbol {
         let symbol_sexp = match sexp.kind {
             SexprKind::List(kicad_symbol_lib) => kicad_symbol_lib
                 .into_iter()
-                .find_map(|item| match &item.kind {
-                    SexprKind::List(symbol_list) => match symbol_list.first().map(|s| &s.kind) {
-                        Some(SexprKind::Symbol(sym)) if sym == "symbol" => {
-                            Some(symbol_list.clone())
-                        }
-                        _ => None,
-                    },
-                    _ => None,
+                .find(|item| {
+                    item.as_list().and_then(|list| list.first()?.as_sym()) == Some("symbol")
                 })
                 .ok_or(anyhow::anyhow!("No 'symbol' expression found"))?,
             _ => return Err(anyhow::anyhow!("Invalid S-expression format")),
@@ -183,7 +177,10 @@ impl KicadSymbol {
     }
 }
 
-pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
+pub(super) fn parse_symbol(node: &Sexpr) -> Result<KicadSymbol> {
+    let symbol_data = node
+        .as_list()
+        .ok_or(anyhow::anyhow!("Expected symbol S-expression list"))?;
     // Extract the symbol name
     let name = symbol_data
         .get(1)
@@ -195,7 +192,7 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
 
     let mut symbol = KicadSymbol {
         name,
-        raw_sexp: Some(Sexpr::list(symbol_data.to_vec())),
+        raw_sexp: Some(node.clone()),
         in_bom: true, // KiCad default; overridden by explicit (in_bom no)
         ..Default::default()
     };
@@ -305,7 +302,7 @@ fn parse_symbol_section(section_data: &[Sexpr]) -> Vec<KicadPin> {
     pins
 }
 
-fn nested_symbol_unit_style(section_data: &[Sexpr]) -> (u32, u32) {
+pub(super) fn nested_symbol_unit_style(section_data: &[Sexpr]) -> (u32, u32) {
     section_data
         .get(1)
         .and_then(|n| n.as_str().or_else(|| n.as_sym()))
@@ -325,7 +322,7 @@ fn nested_symbol_unit_style(section_data: &[Sexpr]) -> (u32, u32) {
         .unwrap_or((0, 0))
 }
 
-fn parse_pin_common(pin_data: &[Sexpr]) -> KicadPin {
+pub(super) fn parse_pin_common(pin_data: &[Sexpr]) -> KicadPin {
     // Format: (pin <electrical_type> <graphical_style> (at X Y Z) (length L) (name "Name") (number "N"))
     let mut pin = KicadPin {
         electrical_type: pin_data
@@ -351,14 +348,18 @@ fn parse_pin_common(pin_data: &[Sexpr]) -> KicadPin {
                 };
                 match attr_name {
                     "name" => {
-                        if let Some(name) = attr_data.get(1).and_then(Sexpr::as_str) {
+                        if let Some(name) = attr_data.get(1).and_then(Sexpr::as_atom) {
                             pin.name = name.to_string();
                         }
                     }
                     "number" => {
-                        if let Some(number) = attr_data.get(1).and_then(Sexpr::as_str) {
+                        if let Some(number) = attr_data.get(1).and_then(Sexpr::as_atom) {
                             pin.number = number.to_string();
                         }
+                    }
+                    // KiCad 8+ writes `(hide yes)`; older files use a bare `hide`.
+                    "hide" => {
+                        pin.hidden = attr_data.get(1).and_then(parse_bool_atom).unwrap_or(true)
                     }
                     "at" => pin.at = parse_pin_at(attr_data),
                     "length" => pin.length = parse_number(attr_data.get(1)),
@@ -391,7 +392,7 @@ fn parse_in_bom(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {
     symbol.in_bom = prop_list.get(1).and_then(parse_bool_atom).unwrap_or(false);
 }
 
-fn parse_bool_atom(node: &Sexpr) -> Option<bool> {
+pub(super) fn parse_bool_atom(node: &Sexpr) -> Option<bool> {
     match node.as_atom() {
         Some("yes") | Some("1") => Some(true),
         Some("no") | Some("0") => Some(false),

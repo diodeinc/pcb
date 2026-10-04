@@ -804,6 +804,49 @@ fn collect_split_library_sources(
     Ok(())
 }
 
+/// A split library reduced to `symbol_name` and the symbols it extends,
+/// with the file behind each of its sources.
+fn split_library(
+    dir: &Path,
+    symbol_name: &str,
+    file_provider: &dyn crate::FileProvider,
+) -> starlark::Result<(KicadSymbolLibrary, Vec<PathBuf>)> {
+    let mut sources = Vec::new();
+    let mut seen = HashSet::new();
+    collect_split_library_sources(dir, symbol_name, file_provider, &mut seen, &mut sources)?;
+    let (paths, contents): (Vec<_>, Vec<_>) = sources.into_iter().unzip();
+    let library = KicadSymbolLibrary::from_sources(contents).map_err(|e| {
+        starlark::Error::new_other(anyhow!(
+            "Failed to parse symbol library {}: {}",
+            dir.display(),
+            e
+        ))
+    })?;
+    Ok((library, paths))
+}
+
+/// The library that symbol `name` in file `path` was loaded from, with the
+/// file behind each of its sources.
+pub(crate) fn loaded_symbol_library(
+    path: &Path,
+    name: &str,
+    file_provider: &dyn crate::FileProvider,
+) -> starlark::Result<(Arc<KicadSymbolLibrary>, Vec<PathBuf>)> {
+    let split_dir = path
+        .parent()
+        .filter(|dir| dir.extension().is_some_and(|ext| ext == "kicad_symdir"));
+    match split_dir {
+        Some(dir) => {
+            let (library, paths) = split_library(dir, name, file_provider)?;
+            Ok((Arc::new(library), paths))
+        }
+        None => {
+            let library = get_or_load_library(path, file_provider)?;
+            Ok((library, vec![path.to_path_buf()]))
+        }
+    }
+}
+
 fn load_split_library_symbol(
     dir: &std::path::Path,
     requested_name: Option<String>,
@@ -839,23 +882,7 @@ fn load_split_library_symbol(
         )));
     };
 
-    let mut sources = Vec::new();
-    let mut seen = HashSet::new();
-    collect_split_library_sources(dir, &symbol_name, file_provider, &mut seen, &mut sources)?;
-
-    let library = KicadSymbolLibrary::from_sources(
-        sources
-            .into_iter()
-            .map(|(_, contents)| contents)
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|e| {
-        starlark::Error::new_other(anyhow!(
-            "Failed to parse symbol library {}: {}",
-            dir.display(),
-            e
-        ))
-    })?;
+    let (library, _) = split_library(dir, &symbol_name, file_provider)?;
     let symbol = library
         .get_symbol_lazy_as_eda(&symbol_name)
         .map_err(|e| {

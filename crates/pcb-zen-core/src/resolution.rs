@@ -924,6 +924,28 @@ impl ResolutionResult {
         pcb_sch::resolve_package_uri(uri, &self.indexes.package_roots)
     }
 
+    /// Whether a `package://` URI names a file of a workspace package rather
+    /// than of a dependency or the stdlib.
+    pub fn is_workspace_uri(&self, uri: &str) -> bool {
+        let Some(reference) = uri.strip_prefix(pcb_sch::PACKAGE_URI_PREFIX) else {
+            return false;
+        };
+        // The owner is the longest package coordinate that is a `/`-bounded
+        // prefix of the reference: a versioned dependency published under a
+        // workspace URL owns its own files.
+        let owner = [reference]
+            .into_iter()
+            .chain(
+                reference
+                    .rmatch_indices('/')
+                    .map(|(end, _)| &reference[..end]),
+            )
+            .find(|coord| self.indexes.package_roots.contains_key(*coord));
+        owner.is_some_and(|coord| {
+            coord == LOCAL_WORKSPACE_ROOT_URL || self.workspace_info.packages.contains_key(coord)
+        })
+    }
+
     /// Format an absolute path as a stable URI (`package://…`).
     ///
     /// The owning package is the longest package root that prefixes the path,
@@ -1007,6 +1029,54 @@ mod tests {
         );
 
         assert_eq!(result.package_roots().get(dep_coord), Some(&dep_root));
+    }
+
+    #[test]
+    fn workspace_uri_excludes_dependencies_published_under_a_workspace_url() {
+        let workspace_url = "github.com/acme/main";
+        let package = crate::workspace::WorkspacePackage {
+            rel_path: PathBuf::new(),
+            config: Default::default(),
+            version: None,
+            published_at: None,
+            preferred: false,
+            dirty: false,
+            entrypoints: Vec::new(),
+            symbol_files: Vec::new(),
+        };
+        let result = ResolutionResult::frozen(
+            WorkspaceInfo {
+                root: PathBuf::from("/workspace"),
+                cache_dir: PathBuf::new(),
+                config: None,
+                packages: BTreeMap::from([(workspace_url.to_string(), package)]),
+                errors: vec![],
+            },
+            BTreeMap::from([(
+                workspace_url.to_string(),
+                FrozenResolutionMap {
+                    selected_remote: BTreeMap::new(),
+                    packages: BTreeMap::from([(
+                        PathBuf::from("/workspace"),
+                        FrozenPackage {
+                            identity: FrozenPackageIdentity::Workspace(workspace_url.into()),
+                            deps: BTreeMap::from([(
+                                "github.com/acme/main/parts".into(),
+                                PathBuf::from("/cache/github.com/acme/main/parts/1.0.0"),
+                            )]),
+                            parts: Vec::new(),
+                        },
+                    )]),
+                },
+            )]),
+            HashMap::new(),
+        );
+
+        assert!(result.is_workspace_uri("package://github.com/acme/main/parts/Part.kicad_sym"));
+        assert!(
+            !result.is_workspace_uri("package://github.com/acme/main/parts@1.0.0/Part.kicad_sym")
+        );
+        assert!(!result.is_workspace_uri("package://stdlib/kicad-symbols/Device.kicad_sym"));
     }
 
     #[test]

@@ -265,7 +265,8 @@ fn render_diagnostic_to_writer<W: Write>(diagnostic: &Diagnostic, writer: &mut W
 
     // Render stack trace for errors (CLI only)
     // Reuse `messages` which is already outer-to-inner order
-    if color && !messages.is_empty() && !compact {
+    let has_call_stack = messages.iter().any(|msg| msg.call_stack.is_some());
+    if color && has_call_stack && !compact {
         // Build helper for rendering locations.
         let render_loc = |msg: &Diagnostic| -> String {
             if let Some(sp) = &msg.span {

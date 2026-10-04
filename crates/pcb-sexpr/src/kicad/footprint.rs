@@ -1,4 +1,4 @@
-use std::{fmt, io::Read};
+use std::{collections::BTreeSet, fmt, io::Read};
 
 use base64::Engine;
 use sha2::{Digest, Sha256};
@@ -84,6 +84,54 @@ pub fn validate_footprint_source(source: &str) -> Result<(), FootprintValidation
         Ok(())
     } else {
         Err(FootprintValidationError { issues })
+    }
+}
+
+/// Numbers of the pads of a footprint that can carry a net. Mechanical and
+/// paste-only pads carry an empty number, and a non-plated hole has no copper
+/// whatever its number.
+///
+/// Scans the text instead of parsing it: embedded 3D models make footprints
+/// megabytes of base64 around a handful of pads.
+pub fn pad_numbers(source: &str) -> BTreeSet<String> {
+    let mut depth = 0usize;
+    crate::scan::parens(source)
+        .filter_map(|(offset, opening)| {
+            if !opening {
+                depth = depth.saturating_sub(1);
+                return None;
+            }
+            depth += 1;
+            let pad = source[offset + 1..].strip_prefix("pad")?;
+            let pad = pad.strip_prefix(|c: char| c.is_ascii_whitespace())?;
+            if depth != 2 {
+                return None;
+            }
+            let (number, rest) = first_atom(pad)?;
+            let (kind, _) = first_atom(rest)?;
+            (kind != "np_thru_hole").then_some(number)
+        })
+        .filter(|number| !number.is_empty())
+        .collect()
+}
+
+/// The atom that `text` starts with, unquoted and unescaped, and what follows it.
+fn first_atom(text: &str) -> Option<(String, &str)> {
+    let text = text.trim_start();
+    let Some(quoted) = text.strip_prefix('"') else {
+        let end = text
+            .find(|c: char| c.is_ascii_whitespace() || matches!(c, '(' | ')'))
+            .unwrap_or(text.len());
+        return Some((text[..end].to_string(), &text[end..]));
+    };
+    let mut atom = String::new();
+    let mut chars = quoted.chars();
+    loop {
+        match chars.next()? {
+            '"' => return Some((atom, chars.as_str())),
+            '\\' => atom.push(chars.next()?),
+            c => atom.push(c),
+        }
     }
 }
 
@@ -329,6 +377,20 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(compressed);
         let checksum = hex::encode(Sha256::digest(bytes));
         (encoded, checksum)
+    }
+
+    #[test]
+    fn pad_numbers_skip_unnumbered_pads() {
+        let source = r#"(footprint "F"
+            (property "Note" "(pad \"9\" smd)")
+            (pad "A1" smd rect (at 0 0)) (pad 2 smd rect) (pad "" smd rect)
+            (pad "3" np_thru_hole circle)
+            (group (pad "8" smd rect))
+            (embedded_files (file (data |KLUv/SAAAQAA|))))"#;
+        assert_eq!(
+            pad_numbers(source).into_iter().collect::<Vec<_>>(),
+            ["2", "A1"]
+        );
     }
 
     fn footprint_with_data(data: &str, checksum: &str) -> String {

@@ -81,12 +81,16 @@ impl BuildEvalState {
         let mut diagnostics = eval_result.diagnostics;
 
         let output = if let Some(eval_output) = eval_result.output {
-            let _span = info_span!("electrical_checks").entered();
+            let span = info_span!("electrical_checks").entered();
             for (check, defining_module) in eval_output.collect_electrical_checks() {
                 diagnostics
                     .diagnostics
                     .push(execute_electrical_check(check, defining_module));
             }
+            drop(span);
+            diagnostics
+                .diagnostics
+                .extend(eval_output.check_symbols(self.file_provider.as_ref()));
             Some(eval_output)
         } else {
             None

@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `pcb ipc fab-drawing` draws the fabrication drawing of a board or a board array as a PDF.
+- `pcb build` checks the KiCad symbols of workspace components.
 
 ### Changed
 
@@ -21,6 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Fix `.matches()` string comparisons for `Length` and `Mass`.
 - Report invalid KiCad custom rules before running DRC.
 - Fix KiCad 10 native pin-stack parsing.
+- Recognize symbol pins hidden with `(hide yes)`.
 
 ## [0.4.68] - 2026-10-02
 

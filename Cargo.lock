@@ -4001,6 +4001,7 @@ dependencies = [
  "base64 0.23.1",
  "hex",
  "log",
+ "memchr",
  "ruzstd",
  "serde",
  "sha2",
