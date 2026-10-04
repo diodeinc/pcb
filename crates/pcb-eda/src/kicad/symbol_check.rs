@@ -108,7 +108,7 @@ const PIN_OVERLAP: Rule = Rule::new(
 const PIN_NC_TYPE: Rule = Rule::new(
     "symbol.pin.nc_type",
     Warning,
-    "use `no_connect` for a pin that must stay unconnected, or name the pin after its function",
+    "use `no_connect` for a pin that must stay open, `free` for one with no internal connection, or name the pin after its function",
 );
 const PIN_POWER_CONFLICT: Rule = Rule::new(
     "symbol.pin.power_conflict",
@@ -123,7 +123,7 @@ const PIN_FOOTPRINT_MISMATCH: Rule = Rule::new(
 const UNIT_EMPTY: Rule = Rule::new(
     "symbol.unit.empty",
     Warning,
-    "add the pins, or remove the unit",
+    "add the missing pins or graphics, or remove what is empty",
 );
 const PROPERTY_MISSING: Rule = Rule::new(
     "symbol.property.missing",
@@ -202,6 +202,61 @@ const GRAPHIC_STYLES: &[&str] = &[
     "edge_clock_high",
     "non_logic",
 ];
+/// What KiCad's parser accepts directly inside a symbol and inside a unit.
+const SYMBOL_FORMS: &[&str] = &[
+    "arc",
+    "bezier",
+    "body_styles",
+    "circle",
+    "duplicate_pin_numbers_are_jumpers",
+    "embedded_files",
+    "embedded_fonts",
+    "exclude_from_sim",
+    "extends",
+    "in_bom",
+    "in_pos_files",
+    "jumper_pin_groups",
+    "on_board",
+    "pin",
+    "pin_names",
+    "pin_numbers",
+    "polyline",
+    "power",
+    "property",
+    "rectangle",
+    "symbol",
+    "text",
+    "text_box",
+];
+const UNIT_FORMS: &[&str] = &[
+    "unit_name",
+    "arc",
+    "bezier",
+    "circle",
+    "pin",
+    "polyline",
+    "rectangle",
+    "text",
+    "text_box",
+];
+const JUSTIFY: &[&str] = &["left", "right", "top", "bottom", "mirror"];
+const FILL_TYPES: &[&str] = &[
+    "none",
+    "outline",
+    "background",
+    "color",
+    "hatch",
+    "reverse_hatch",
+    "cross_hatch",
+];
+const STROKE_TYPES: &[&str] = &[
+    "default",
+    "dash",
+    "dot",
+    "dash_dot",
+    "dash_dot_dot",
+    "solid",
+];
 const NC_NAMES: &[&str] = &["NC", "N/C", "DNC", "DNU"];
 
 const GRID_NM: i64 = 2_540_000;
@@ -210,18 +265,35 @@ const TEXT_SIZE_NM: i64 = 1_270_000;
 const OUTLINE_NM: i64 = 254_000;
 const NAME_OFFSET_NM: std::ops::RangeInclusive<i64> = 508_000..=1_270_000;
 
-/// Check that the files of `library` parse at all. Symbol loading reads one
-/// definition at a time and never notices a stray parenthesis elsewhere.
+/// Check that KiCad can read the files of `library` at all. Symbol loading
+/// reads one definition at a time, leniently, and notices none of this.
 pub fn check_library(library: &KicadSymbolLibrary) -> Option<SymbolIssue> {
-    library
-        .sources()
-        .iter()
-        .enumerate()
-        .find_map(|(source, text)| {
-            let offset = pcb_sexpr::scan::unbalanced_paren(text)?;
-            let message = "file does not parse: unbalanced parenthesis".to_string();
-            Some(PARSE.issue(source, Span::new(offset, offset + 1), message))
+    let issue = |source, offset: usize, message: &str| {
+        PARSE.issue(source, Span::new(offset, offset + 1), message.to_string())
+    };
+    let sources = library.sources().iter().enumerate();
+    let broken = sources.clone().find_map(|(source, text)| {
+        let offset = pcb_sexpr::scan::unbalanced_paren(text)?;
+        Some(issue(
+            source,
+            offset,
+            "file does not parse: unbalanced parenthesis",
+        ))
+    });
+    let comment = || {
+        sources.clone().find_map(|(source, text)| {
+            let offset = pcb_sexpr::scan::comment(text)?;
+            Some(issue(source, offset, "KiCad files have no `;` comments"))
         })
+    };
+    let version = || {
+        let message = "library has no `(version …)`, which KiCad requires";
+        library
+            .format_version()
+            .is_none()
+            .then(|| issue(0, 0, message))
+    };
+    broken.or_else(comment).or_else(version)
 }
 
 /// Check symbol `name` of `library`. Issues are ordered by source position.
@@ -275,9 +347,9 @@ pub fn check_symbol(
 
     let mut issues = Vec::new();
     check_properties(&chain, &mut issues);
-    check_numbers(&chain[0], &mut issues);
+    check_forms(&chain[0], &mut issues);
     if body.name != chain[0].name {
-        check_numbers(body, &mut issues);
+        check_forms(body, &mut issues);
     }
     check_body(body, footprint, &mut issues);
     issues.sort_by_key(|issue| (issue.source, issue.span.start));
@@ -393,17 +465,88 @@ fn check_properties(chain: &[Def], issues: &mut Vec<SymbolIssue>) {
     }
 }
 
-fn check_numbers(def: &Def, issues: &mut Vec<SymbolIssue>) {
+/// Walk every form of a definition for what KiCad rejects or would not write.
+fn check_forms(def: &Def, issues: &mut Vec<SymbolIssue>) {
+    let mut report = |rule: &Rule, span: Span, message: String| {
+        issues.push(def.issue(rule, span, format!("{}: {message}", def.name)));
+    };
+
+    for item in def.items().iter().skip(2) {
+        check_child(item, "a symbol", SYMBOL_FORMS, &mut report);
+        let children = item.as_list().unwrap_or_default();
+        let inner = match children.first().and_then(Sexpr::as_sym) {
+            Some("symbol") => Some(("a unit symbol", UNIT_FORMS, 2)),
+            Some("pin_names") => Some(("pin_names", &["offset", "hide"][..], 1)),
+            Some("pin_numbers") => Some(("pin_numbers", &["hide"][..], 1)),
+            _ => None,
+        };
+        if let Some((parent, known, skip)) = inner {
+            for child in children.iter().skip(skip) {
+                check_child(child, parent, known, &mut report);
+            }
+        }
+    }
+
     let mut stack = vec![&*def.node];
     while let Some(node) = stack.pop() {
         match (&node.kind, &node.raw_atom) {
-            (SexprKind::List(items), _) => stack.extend(items.iter().rev()),
+            (SexprKind::List(items), _) => {
+                let head = items.first().and_then(Sexpr::as_sym).unwrap_or_default();
+                let values: &[Sexpr] = match head {
+                    "fill" | "stroke" => child(items, "type")
+                        .and_then(Sexpr::as_list)
+                        .map_or(&[], |kind| kind.get(1..2).unwrap_or_default()),
+                    "justify" => &items[1..],
+                    _ => &[],
+                };
+                let known = match head {
+                    "fill" => FILL_TYPES,
+                    "stroke" => STROKE_TYPES,
+                    _ => JUSTIFY,
+                };
+                for value in values {
+                    if !value.as_sym().is_some_and(|value| known.contains(&value)) {
+                        let message = format!(
+                            "`{}` is not a {head} KiCad has; it has {}",
+                            raw(value),
+                            known.join(", ")
+                        );
+                        report(&PARSE, value.span, message);
+                    }
+                }
+                stack.extend(items.iter().rev());
+            }
             (SexprKind::Int(_) | SexprKind::F64(_), Some(raw)) if !is_plain_decimal(raw) => {
-                let message = format!("{}: `{raw}` is not a plain decimal", def.name);
-                issues.push(def.issue(&NUMBER_FORMAT, node.span, message));
+                report(
+                    &NUMBER_FORMAT,
+                    node.span,
+                    format!("`{raw}` is not a plain decimal"),
+                );
             }
             _ => {}
         }
+    }
+}
+
+/// Report `item` unless it is a form KiCad accepts inside `parent`.
+fn check_child(
+    item: &Sexpr,
+    parent: &str,
+    known: &[&str],
+    report: &mut impl FnMut(&Rule, Span, String),
+) {
+    let head = match item.as_list() {
+        Some(list) => list.first().and_then(Sexpr::as_sym),
+        // `hide` is the one bare word KiCad still reads, from older files.
+        None => item.as_sym().filter(|atom| *atom == "hide"),
+    };
+    if !head.is_some_and(|head| known.contains(&head)) {
+        let (span, found) = match item.as_list() {
+            Some(list) => (head_span(item), list.first().map_or("()", raw)),
+            None => (item.span, raw(item)),
+        };
+        let message = format!("`{found}` is not something KiCad accepts in {parent}");
+        report(&PARSE, span, message);
     }
 }
 
@@ -423,6 +566,9 @@ struct Body<'a> {
     outlines: Vec<(u32, &'a Sexpr, [i64; 4])>,
     /// Unit number → span of the name of its first nested symbol.
     units: BTreeMap<u32, Span>,
+    /// A pin named `NO` makes `NC` its normally-closed counterpart on a
+    /// relay or switch, not a pin without a connection.
+    has_contacts: bool,
 }
 
 struct Reporter<'a> {
@@ -450,6 +596,7 @@ fn check_body(def: &Def, footprint: Option<FootprintPads>, issues: &mut Vec<Symb
         pins: Vec::new(),
         outlines: Vec::new(),
         units: BTreeMap::new(),
+        has_contacts: false,
     };
     let mut misnamed = Vec::new();
     for section in sections(def.items(), &["symbol", "pin"]) {
@@ -479,6 +626,10 @@ fn check_body(def: &Def, footprint: Option<FootprintPads>, issues: &mut Vec<Symb
             .extend(filled.filter_map(|node| Some((unit, node, rectangle_bounds(node)?))));
     }
 
+    body.has_contacts = body
+        .pins
+        .iter()
+        .any(|pin| pin.name().eq_ignore_ascii_case("NO"));
     let mut out = Reporter {
         symbol: def,
         multi_unit: body.units.keys().filter(|unit| **unit > 0).count() > 1,
@@ -493,8 +644,9 @@ fn check_body(def: &Def, footprint: Option<FootprintPads>, issues: &mut Vec<Symb
         out.push(&UNIT_NAMING, 0, name.span, message);
     }
     for pin in &body.pins {
-        check_pin(&body, pin, &mut out);
+        check_pin(pin, &mut out);
     }
+    check_pin_types(&body, &mut out);
     // Pads are compared against pin numbers only once the numbers are sound.
     if check_numbering(&body, &mut out)
         && let Some(footprint) = footprint
@@ -507,7 +659,7 @@ fn check_body(def: &Def, footprint: Option<FootprintPads>, issues: &mut Vec<Symb
     check_layout(&body, &mut out);
 }
 
-fn check_pin(body: &Body, pin: &Pin, out: &mut Reporter) {
+fn check_pin(pin: &Pin, out: &mut Reporter) {
     let desc = pin.describe();
     let items = pin.items;
 
@@ -546,23 +698,6 @@ fn check_pin(body: &Body, pin: &Pin, out: &mut Reporter) {
         }
     }
 
-    if pin.parsed.hidden
-        && pin.electrical_type() == "power_in"
-        && child(body.def.items(), "power").is_none()
-    {
-        let message = format!("hidden power_in {desc} creates an implicit global net");
-        out.push(&PIN_HIDDEN_POWER, pin.unit, head_span(pin.node), message);
-    }
-    if NC_NAMES
-        .iter()
-        .any(|nc| pin.name().eq_ignore_ascii_case(nc))
-        && !pin.is_no_connect()
-        && pin.electrical_type() != "free"
-    {
-        let message = format!("{desc} is `{}`, not `no_connect`", pin.electrical_type());
-        out.push(&PIN_NC_TYPE, pin.unit, head_span(pin.node), message);
-    }
-
     if let (Some((x, y)), false) = (pin.at, pin.parsed.hidden) {
         // KLC lets no-connect pins sit on the body edge, a half step off.
         let grid = if pin.is_no_connect() {
@@ -584,6 +719,48 @@ fn check_pin(body: &Body, pin: &Pin, out: &mut Reporter) {
     if let Some((attribute, height, span)) = text_size {
         let message = format!("{desc} {attribute} text is {height} mm, not 1.27 mm");
         out.push(&STYLE_TEXT_SIZE, pin.unit, span, message);
+    }
+}
+
+/// Pin types that contradict how a pin is drawn or named. Pins that share a
+/// cause share a warning: a ball-grid memory can have a hundred `NC` balls.
+fn check_pin_types(body: &Body, out: &mut Reporter) {
+    let is_power_symbol = child(body.def.items(), "power").is_some();
+    let mut hidden_power: BTreeMap<&str, Vec<&Pin>> = BTreeMap::new();
+    let mut nc: BTreeMap<(&str, &str), Vec<&Pin>> = BTreeMap::new();
+    for pin in &body.pins {
+        if pin.parsed.hidden && pin.electrical_type() == "power_in" && !is_power_symbol {
+            hidden_power.entry(pin.name()).or_default().push(pin);
+        }
+        if NC_NAMES
+            .iter()
+            .any(|nc| pin.name().eq_ignore_ascii_case(nc))
+            && !pin.is_no_connect()
+            && pin.electrical_type() != "free"
+            && !body.has_contacts
+        {
+            nc.entry((pin.name(), pin.electrical_type()))
+                .or_default()
+                .push(pin);
+        }
+    }
+    for pins in hidden_power.values() {
+        let verb = if pins.len() == 1 { "creates" } else { "create" };
+        let message = format!(
+            "hidden power_in {} {verb} an implicit global net",
+            describe_all(pins)
+        );
+        out.push(
+            &PIN_HIDDEN_POWER,
+            pins[0].unit,
+            head_span(pins[0].node),
+            message,
+        );
+    }
+    for ((_, kind), pins) in &nc {
+        let verb = if pins.len() == 1 { "is" } else { "are" };
+        let message = format!("{} {verb} `{kind}`, not `no_connect`", describe_all(pins));
+        out.push(&PIN_NC_TYPE, pins[0].unit, head_span(pins[0].node), message);
     }
 }
 
@@ -642,21 +819,24 @@ fn check_stacks(body: &Body, out: &mut Reporter) {
     }
     for stack in by_location.values().filter(|stack| stack.len() > 1) {
         let first = stack[0];
-        let mut same_name = true;
-        // A repeated number at one location is the duplicate check's concern.
-        for pin in &stack[1..] {
-            if pin.name() != first.name() {
-                same_name = false;
-                if pin.number() != first.number() {
-                    let message = format!(
-                        "{} sits on {} at {}",
-                        pin.describe(),
-                        first.describe(),
-                        pin.at_text()
-                    );
-                    out.push(&PIN_OVERLAP, pin.unit, head_span(pin.node), message);
-                }
-            }
+        let same_name = stack.iter().all(|pin| pin.name() == first.name());
+        // A repeated number at one location is the duplicate check's concern,
+        // and no-connect pins take no wire, so a stack of them hides nothing.
+        let others: Vec<&Pin> = stack[1..]
+            .iter()
+            .copied()
+            .filter(|pin| pin.name() != first.name() && pin.number() != first.number())
+            .filter(|pin| !(pin.is_no_connect() && first.is_no_connect()))
+            .collect();
+        if let Some(pin) = others.first() {
+            let verb = if others.len() == 1 { "sits" } else { "sit" };
+            let message = format!(
+                "{} {verb} on {} at {}",
+                describe_all(&others),
+                first.describe(),
+                first.at_text()
+            );
+            out.push(&PIN_OVERLAP, pin.unit, head_span(pin.node), message);
         }
         // Registry convention stacks hidden no-connect pins.
         if !same_name || stack.iter().all(|pin| pin.is_no_connect()) {
@@ -714,7 +894,7 @@ fn check_power_names(body: &Body, out: &mut Reporter) {
 /// is a gap.
 fn check_units(body: &Body, out: &mut Reporter) {
     if body.units.is_empty() && body.pins.is_empty() {
-        let message = "symbol has no units".to_string();
+        let message = "symbol draws nothing: it has no units, graphics or pins".to_string();
         out.push(&UNIT_EMPTY, 0, body.def.name_span(), message);
     } else if !body.pins.is_empty() {
         for (unit, span) in body.units.iter().filter(|(unit, _)| **unit > 0) {
@@ -752,7 +932,10 @@ fn check_footprint(body: &Body, footprint: FootprintPads, out: &mut Reporter) {
     if let Some(first) = padless.first() {
         let message = format!(
             "{} {} no pad in {}",
-            list("pin", padless.iter().map(|pin| pin.number())),
+            list(
+                "pin",
+                padless.iter().map(|pin| format!("\"{}\"", pin.number()))
+            ),
             if padless.len() == 1 { "has" } else { "have" },
             footprint.name
         );
@@ -768,7 +951,7 @@ fn check_footprint(body: &Body, footprint: FootprintPads, out: &mut Reporter) {
     if !pinless.is_empty() {
         let message = format!(
             "{} of {} {} no symbol pin",
-            list("pad", pinless.iter().copied()),
+            list("pad", pinless.iter().map(|pad| format!("\"{pad}\""))),
             footprint.name,
             if pinless.len() == 1 { "has" } else { "have" }
         );
@@ -963,14 +1146,38 @@ fn quoted(node: &Sexpr) -> String {
     format!("\"{}\"", raw(node))
 }
 
+/// One pin as `pin "5" (VBUS)`; several as `pins "5", "7" (VBUS)` when they
+/// share a name, else each with its own.
+fn describe_all(pins: &[&Pin]) -> String {
+    let [first, rest @ ..] = pins else {
+        return String::new();
+    };
+    if rest.is_empty() {
+        return first.describe();
+    }
+    let named = |pin: &Pin| !is_placeholder_kicad_pin_name(pin.name());
+    if rest.iter().all(|pin| pin.name() == first.name()) {
+        let numbers = list(
+            "pin",
+            pins.iter().map(|pin| format!("\"{}\"", pin.number())),
+        );
+        return match named(first) {
+            true => format!("{numbers} ({})", first.name()),
+            false => numbers,
+        };
+    }
+    let each = pins.iter().map(|pin| match named(pin) {
+        true => format!("\"{}\" ({})", pin.number(), pin.name()),
+        false => format!("\"{}\"", pin.number()),
+    });
+    list("pin", each)
+}
+
 /// `pin "7"`, `pins "7", "8"`, or the first eight followed by a count.
-fn list<'a>(noun: &str, items: impl ExactSizeIterator<Item = &'a str>) -> String {
+fn list(noun: &str, items: impl ExactSizeIterator<Item = String>) -> String {
     const SHOWN: usize = 8;
     let count = items.len();
-    let shown: Vec<String> = items
-        .take(SHOWN)
-        .map(|item| format!("\"{item}\""))
-        .collect();
+    let shown: Vec<String> = items.take(SHOWN).collect();
     let more = match count.saturating_sub(SHOWN) {
         0 => String::new(),
         more => format!(" and {more} more"),
@@ -984,6 +1191,7 @@ mod tests {
     use super::*;
 
     const CLEAN: &str = r#"(kicad_symbol_lib
+  (version 20251024)
   (symbol "U"
     (pin_names (offset 0.508))
     (property "Reference" "U")
@@ -1013,15 +1221,44 @@ mod tests {
     fn each_defect_is_one_issue_of_its_kind() {
         assert!(kinds(CLEAN, "U").is_empty());
         assert!(kinds(CLEAN, "D").is_empty());
-        let unclosed = KicadSymbolLibrary::from_string(&CLEAN[..CLEAN.len() - 1]).unwrap();
-        assert_eq!(
-            check_library(&unclosed).map(|issue| issue.span.start),
-            Some(0)
-        );
+        let library_issue = |source: String| {
+            let library = KicadSymbolLibrary::from_string(source).unwrap();
+            check_library(&library).map(|issue| issue.message)
+        };
+        assert_eq!(library_issue(CLEAN.to_string()), None);
+        for (from, to, message) in [
+            (
+                "))\n  (symbol \"D\"",
+                ")\n  (symbol \"D\"",
+                "unbalanced parenthesis",
+            ),
+            (
+                "(symbol \"U\"",
+                "; the part\n  (symbol \"U\"",
+                "no `;` comments",
+            ),
+            ("(version 20251024)", "", "no `(version …)`"),
+        ] {
+            let found = library_issue(CLEAN.replacen(from, to, 1)).unwrap_or_default();
+            assert!(found.contains(message), "{from:?}: {found}");
+        }
 
         let defects: &[(&[(&str, &str)], &str)] = &[
             (&[("pin input", "pin open_drain")], "symbol.parse"),
             (&[("(at -5.08 0 0)", "(at -5.08 0 45)")], "symbol.parse"),
+            (&[("(type background)", "(type solid)")], "symbol.parse"),
+            (
+                &[("(size 1.27 1.27))", "(size 1.27 1.27)) (justify center)")],
+                "symbol.parse",
+            ),
+            (
+                &[(
+                    "(property \"Reference\"",
+                    "(offset 0) (property \"Reference\"",
+                )],
+                "symbol.parse",
+            ),
+            (&[("(rectangle", "outline (rectangle")], "symbol.parse"),
             (
                 &[("(number \"1\"", "(number \"\"")],
                 "symbol.pin.empty_number",
@@ -1094,6 +1331,41 @@ mod tests {
             let name = if *kind == "symbol.extends" { "D" } else { "U" };
             assert_eq!(kinds(&source, name), [*kind], "{edits:?}");
         }
+    }
+
+    #[test]
+    fn contact_names_and_no_connect_stacks_are_not_findings() {
+        // `NC` beside `NO` is a relay's normally-closed contact.
+        let relay = CLEAN
+            .replacen("\"IN\"", "\"NC\"", 1)
+            .replacen("\"VCC\"", "\"NO\"", 1)
+            .replacen("pin power_in", "pin passive", 1);
+        assert!(kinds(&relay, "U").is_empty());
+
+        let stack = CLEAN
+            .replacen("pin input", "pin no_connect", 1)
+            .replacen("pin power_in", "pin no_connect", 1)
+            .replacen("\"IN\"", "\"NC_1\"", 1)
+            .replacen("\"VCC\"", "\"NC_2\"", 1)
+            .replacen("(at 5.08 0 180)", "(at -5.08 0 0)", 1);
+        assert!(kinds(&stack, "U").is_empty());
+    }
+
+    #[test]
+    fn pins_with_one_cause_share_a_warning() {
+        let source = CLEAN
+            .replacen("pin input", "pin passive", 1)
+            .replacen("pin power_in", "pin passive", 1)
+            .replacen("\"IN\"", "\"NC\"", 1)
+            .replacen("\"VCC\"", "\"NC\"", 1);
+        let messages: Vec<String> = check(&source, "U", None)
+            .into_iter()
+            .map(|issue| issue.message)
+            .collect();
+        assert_eq!(
+            messages,
+            ["U: pins \"1\", \"2\" (NC) are `passive`, not `no_connect`"]
+        );
     }
 
     #[test]

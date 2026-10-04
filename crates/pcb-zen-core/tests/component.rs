@@ -343,6 +343,7 @@ fn symbol_checks_point_into_the_workspace_symbol_file() {
         (
             "hidden.kicad_sym".to_string(),
             r#"(kicad_symbol_lib
+  (version 20251024)
   (symbol "Hidden"
     (property "Reference" "U")
     (property "Value" "Hidden")
@@ -396,17 +397,17 @@ Component(
             (
                 "symbol.pin.footprint_mismatch".to_string(),
                 EvalSeverity::Warning,
-                2
+                3
             ),
             (
                 "symbol.pin.hidden_power".to_string(),
                 EvalSeverity::Warning,
-                6
+                7
             ),
             (
                 "symbol.pin.footprint_mismatch".to_string(),
                 EvalSeverity::Warning,
-                7
+                8
             ),
         ]
     );

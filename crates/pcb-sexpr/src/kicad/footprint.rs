@@ -87,8 +87,9 @@ pub fn validate_footprint_source(source: &str) -> Result<(), FootprintValidation
     }
 }
 
-/// Numbers of a footprint's numbered pads. Mechanical and paste-only pads
-/// carry an empty number and are not part of the footprint's pinout.
+/// Numbers of the pads of a footprint that can carry a net. Mechanical and
+/// paste-only pads carry an empty number, and a non-plated hole has no copper
+/// whatever its number.
 ///
 /// Scans the text instead of parsing it: embedded 3D models make footprints
 /// megabytes of base64 around a handful of pads.
@@ -102,25 +103,32 @@ pub fn pad_numbers(source: &str) -> BTreeSet<String> {
             }
             depth += 1;
             let pad = source[offset + 1..].strip_prefix("pad")?;
-            let number = pad.strip_prefix(|c: char| c.is_ascii_whitespace())?;
-            (depth == 2).then(|| first_atom(number))?
+            let pad = pad.strip_prefix(|c: char| c.is_ascii_whitespace())?;
+            if depth != 2 {
+                return None;
+            }
+            let (number, rest) = first_atom(pad)?;
+            let (kind, _) = first_atom(rest)?;
+            (kind != "np_thru_hole").then_some(number)
         })
         .filter(|number| !number.is_empty())
         .collect()
 }
 
-/// The atom that `text` starts with, unquoted and unescaped.
-fn first_atom(text: &str) -> Option<String> {
+/// The atom that `text` starts with, unquoted and unescaped, and what follows it.
+fn first_atom(text: &str) -> Option<(String, &str)> {
     let text = text.trim_start();
     let Some(quoted) = text.strip_prefix('"') else {
-        let end = text.find(|c: char| c.is_ascii_whitespace() || matches!(c, '(' | ')'));
-        return Some(text[..end.unwrap_or(text.len())].to_string());
+        let end = text
+            .find(|c: char| c.is_ascii_whitespace() || matches!(c, '(' | ')'))
+            .unwrap_or(text.len());
+        return Some((text[..end].to_string(), &text[end..]));
     };
     let mut atom = String::new();
     let mut chars = quoted.chars();
     loop {
         match chars.next()? {
-            '"' => return Some(atom),
+            '"' => return Some((atom, chars.as_str())),
             '\\' => atom.push(chars.next()?),
             c => atom.push(c),
         }
@@ -375,7 +383,8 @@ mod tests {
     fn pad_numbers_skip_unnumbered_pads() {
         let source = r#"(footprint "F"
             (property "Note" "(pad \"9\" smd)")
-            (pad "A1" smd rect (at 0 0)) (pad 2 smd rect) (pad "" np_thru_hole circle)
+            (pad "A1" smd rect (at 0 0)) (pad 2 smd rect) (pad "" smd rect)
+            (pad "3" np_thru_hole circle)
             (group (pad "8" smd rect))
             (embedded_files (file (data |KLUv/SAAAQAA|))))"#;
         assert_eq!(

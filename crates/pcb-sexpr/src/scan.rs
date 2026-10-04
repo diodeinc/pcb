@@ -31,6 +31,20 @@ fn string_end(bytes: &[u8], mut pos: usize) -> Option<usize> {
     }
 }
 
+/// Offset of the first `;` outside a string. This crate reads it as the start
+/// of a comment; KiCad has no comments and fails on what follows.
+pub fn comment(source: &str) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut pos = 0;
+    loop {
+        let at = pos + memchr2(b'"', b';', bytes.get(pos..)?)?;
+        if bytes[at] == b';' {
+            return Some(at);
+        }
+        pos = string_end(bytes, at + 1)?;
+    }
+}
+
 /// Offset of a parenthesis that has no partner: the first stray `)`, else the
 /// outermost `(` left open.
 pub fn unbalanced_paren(source: &str) -> Option<usize> {
@@ -54,6 +68,12 @@ mod tests {
         let source = r#"(a ")(" (b "\")") )"#;
         let found: Vec<_> = parens(source).collect();
         assert_eq!(found, [(0, true), (8, true), (16, false), (18, false)]);
+    }
+
+    #[test]
+    fn comment_is_found_outside_strings() {
+        assert_eq!(comment(r#"(a "b;c") ; note"#), Some(10));
+        assert_eq!(comment(r#"(a "b;c")"#), None);
     }
 
     #[test]
