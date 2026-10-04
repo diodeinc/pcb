@@ -106,7 +106,10 @@ pub(crate) fn check_symbols(
             let numbers = pads.entry(footprint.to_path_buf()).or_insert_with(|| {
                 let _span = info_span!("footprint_pads").entered();
                 let text = file_provider.read_file(footprint).ok()?;
+                // A footprint without pads is a mechanical outline for a part
+                // wired off the board; it has no pinout to compare.
                 Some(pcb_sexpr::kicad::footprint::pad_numbers(&text))
+                    .filter(|numbers| !numbers.is_empty())
             });
             Some(FootprintPads {
                 name: footprint.file_name()?.to_str()?,

@@ -356,6 +356,11 @@ fn symbol_checks_point_into_the_workspace_symbol_file() {
             .to_string(),
         ),
         (
+            "outline.kicad_mod".to_string(),
+            r#"(footprint "outline" (layer "F.Cu") (fp_rect (start -1 -1) (end 1 1) (layer "F.Fab")))"#
+                .to_string(),
+        ),
+        (
             "test.zen".to_string(),
             r#"
 Component(
@@ -363,6 +368,14 @@ Component(
     footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     symbol = Symbol(library = "hidden.kicad_sym"),
     pins = {"VCC": Net("VCC"), "P": Net("P")},
+)
+
+# A pad-less outline pairs with any pins: the part is wired off the board.
+Component(
+    name = "U2",
+    footprint = File("outline.kicad_mod"),
+    symbol = Symbol(library = "hidden.kicad_sym"),
+    pins = {"VCC": Net("VCC2"), "P": Net("P2")},
 )
 "#
             .to_string(),
