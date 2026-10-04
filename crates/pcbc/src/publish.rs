@@ -890,10 +890,10 @@ fn publish_package_waves(
     waves: &[Vec<String>],
     guard: &mut PublishGuard,
 ) -> Result<()> {
-    for (idx, wave_urls) in waves.iter().enumerate() {
-        // Previous waves are now tagged. Let `pcb sync` freeze this wave's
-        // manifests against those new workspace versions.
-        if idx > 0 && sync_dependency_wave(workspace, wave_urls, guard)? {
+    for wave_urls in waves {
+        // Let `pcb sync` freeze this wave's manifests against the latest
+        // workspace versions, including the tags of previous waves.
+        if sync_dependency_wave(workspace, wave_urls, guard)? {
             workspace.reload()?;
         }
 

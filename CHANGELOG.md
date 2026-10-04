@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb fix` fixes the KiCad symbol problems that `pcb build` marks as fixable.
 
+### Changed
+
+- `pcb publish` updates stale workspace dependency versions in every package it publishes.
+
 ### Fixed
 
 - Stop warning about every `condition`, `layer` and `assertion` in KiCad custom rules.
