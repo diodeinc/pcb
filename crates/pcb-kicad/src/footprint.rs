@@ -2,151 +2,20 @@ use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use base64::Engine;
 use pcb_sexpr::formatter::{FormatMode, prettify};
+use pcb_sexpr::{PatchSet, Sexpr, Span};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-fn replace_model_path(text: &str, new_path: &str) -> (String, usize) {
-    use regex::Regex;
+const IDENTITY_PLACEMENT: &str = "(offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0))";
 
-    let model_pattern = Regex::new(r#"(?m)(^\s*\(model\s+)(?:"[^"]+"|[^\s)]+)"#).unwrap();
-
-    let mut count = 0;
-    let result = model_pattern.replace_all(text, |caps: &regex::Captures| {
-        count += 1;
-        format!("{}\"{}\"", &caps[1], new_path)
-    });
-
-    (result.to_string(), count)
-}
-
-fn extract_sexp_block(text: &str, pattern: &str) -> Option<(String, String)> {
-    let pattern_regex =
-        regex::Regex::new(&format!(r"(?m)^(\s*)({})", regex::escape(pattern))).unwrap();
-    let captures = pattern_regex.captures(text)?;
-    let line_start = captures.get(1)?.start();
-    let block_start = captures.get(2)?.start();
-
-    let mut depth = 0;
-    let mut end_pos = block_start;
-
-    for (i, ch) in text[block_start..].char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    end_pos = block_start + i + 1;
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if end_pos <= block_start || depth != 0 {
-        return None;
-    }
-
-    let extract_end = if text[end_pos..].starts_with('\n') {
-        end_pos + 1
-    } else {
-        end_pos
-    };
-
-    let extracted = text[line_start..extract_end].to_string();
-    let remaining = text[..line_start].to_string() + &text[extract_end..];
-
-    Some((extracted, remaining))
-}
-
-fn sexp_block_end(text: &str, block_start: usize) -> Option<usize> {
-    let mut depth = 0;
-
-    for (i, ch) in text[block_start..].char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(block_start + i + 1);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    None
-}
-
-fn embedded_file_name(file_block: &str) -> Option<&str> {
-    use regex::Regex;
-
-    let name_pattern = Regex::new(r#"(?m)^\s*\(name\s+(?:"([^"]+)"|([^\s)]+))\)"#).unwrap();
-    let captures = name_pattern.captures(file_block)?;
-    captures
-        .get(1)
-        .or_else(|| captures.get(2))
-        .map(|m| m.as_str())
-}
-
-fn upsert_embedded_file(embedded_files: &str, file_block: &str, filename: &str) -> String {
-    let mut result = String::new();
-    let mut search_start = 0;
-    let mut replaced = false;
-
-    while let Some(relative_start) = embedded_files[search_start..].find("(file") {
-        let block_start = search_start + relative_start;
-        let line_start = embedded_files[..block_start]
-            .rfind('\n')
-            .map(|pos| pos + 1)
-            .unwrap_or(block_start);
-        let Some(block_end) = sexp_block_end(embedded_files, block_start) else {
-            break;
-        };
-        let block_end = if embedded_files[block_end..].starts_with('\n') {
-            block_end + 1
-        } else {
-            block_end
-        };
-        let existing_block = &embedded_files[line_start..block_end];
-
-        result.push_str(&embedded_files[search_start..line_start]);
-        if embedded_file_name(existing_block) == Some(filename) {
-            result.push_str(file_block);
-            replaced = true;
-        } else {
-            result.push_str(existing_block);
-        }
-        search_start = block_end;
-    }
-
-    result.push_str(&embedded_files[search_start..]);
-
-    if !replaced && let Some(pos) = result.rfind(')') {
-        result.insert_str(pos, file_block);
-    }
-
-    result
-}
-
-fn upsert_embedded_files_block(
-    text: &mut String,
-    embed_block: &str,
-    file_block: &str,
-    filename: &str,
-) {
-    let embedded_files = extract_sexp_block(text, "(embedded_files");
-    let block = if let Some((embedded_files, remaining_text)) = embedded_files {
-        *text = remaining_text;
-        upsert_embedded_file(&embedded_files, file_block, filename)
-    } else {
-        embed_block.to_string()
-    };
-
-    if let Some(pos) = text.rfind(')') {
-        text.insert_str(pos, &block);
-    }
+fn children<'a>(items: &'a [Sexpr], name: &'a str) -> impl Iterator<Item = &'a Sexpr> {
+    items.iter().filter(move |node| {
+        node.as_list()
+            .and_then(<[Sexpr]>::first)
+            .and_then(Sexpr::as_sym)
+            == Some(name)
+    })
 }
 
 pub fn format_kicad_sexpr_source(source: &str, path_for_error: &Path) -> Result<String> {
@@ -162,91 +31,78 @@ pub fn format_kicad_sexpr_source(source: &str, path_for_error: &Path) -> Result<
     Ok(prettify(source, FormatMode::Normal))
 }
 
+/// Make `step_bytes` the only 3D model of a footprint, embedded in it.
+///
+/// Every model reference and embedded model already in the footprint is
+/// replaced; the new reference keeps the placement of the first old one.
 pub fn embed_step_in_footprint(
-    footprint_content: String,
-    step_bytes: Vec<u8>,
+    footprint: &str,
+    step_bytes: &[u8],
     step_filename: &str,
 ) -> Result<String> {
     let filename = step_filename.replace(".stp", ".step");
-    let indent = "\t";
 
     let mut encoder = zstd::Encoder::new(Vec::new(), 17)?;
     encoder.include_contentsize(true)?;
     encoder.set_pledged_src_size(Some(step_bytes.len() as u64))?;
-    encoder.write_all(&step_bytes)?;
+    encoder.write_all(step_bytes)?;
     let compressed = encoder.finish()?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
-    let checksum = pcb_sexpr::kicad::footprint::embedded_file_checksum(&step_bytes);
-
-    let b64_formatted = b64
+    let data = base64::engine::general_purpose::STANDARD
+        .encode(&compressed)
         .as_bytes()
         .chunks(80)
-        .enumerate()
-        .map(|(i, chunk)| {
-            let line = std::str::from_utf8(chunk).unwrap();
-            if i == 0 {
-                line.to_string()
-            } else {
-                format!("{indent}{indent}{indent}{indent}{line}")
-            }
-        })
+        .map(|line| std::str::from_utf8(line).unwrap())
         .collect::<Vec<_>>()
         .join("\n");
+    let checksum = pcb_sexpr::kicad::footprint::embedded_file_checksum(step_bytes);
 
-    let file_block = format!(
-        "{indent}{indent}(file\n\
-         {indent}{indent}{indent}(name {filename})\n\
-         {indent}{indent}{indent}(type model)\n\
-         {indent}{indent}{indent}(data |{b64_formatted}|)\n\
-         {indent}{indent}{indent}(checksum \"{checksum}\")\n\
-         {indent}{indent})\n"
+    let root = pcb_sexpr::parse(footprint).map_err(|e| anyhow::anyhow!(e))?;
+    let items = root.as_list().context("Footprint is not a list")?;
+
+    let text = |node: &Sexpr| &footprint[node.span.start..node.span.end];
+
+    let placement = children(items, "model").next().map_or_else(
+        || IDENTITY_PLACEMENT.to_string(),
+        |model| {
+            let model = model.as_list().unwrap_or_default();
+            ["offset", "at", "scale", "rotate"]
+                .into_iter()
+                .flat_map(|name| children(model, name))
+                .map(text)
+                .collect()
+        },
     );
-    let embed_block = format!(
-        "{indent}(embedded_files\n\
-         {file_block}\
-         {indent})\n"
-    );
-
-    let model_block = format!(
-        "{indent}(model \"kicad-embed://{filename}\"\n\
-         {indent}{indent}(offset\n\
-         {indent}{indent}{indent}(xyz 0 0 0)\n\
-         {indent}{indent})\n\
-         {indent}{indent}(scale\n\
-         {indent}{indent}{indent}(xyz 1 1 1)\n\
-         {indent}{indent})\n\
-         {indent}{indent}(rotate\n\
-         {indent}{indent}{indent}(xyz 0 0 0)\n\
-         {indent}{indent})\n\
-         {indent})\n"
-    );
-
-    let mut text = footprint_content;
-    let (new_text, num_replaced) = replace_model_path(&text, &format!("kicad-embed://{filename}"));
-    text = new_text;
-
-    let extracted_model = if num_replaced > 0 {
-        extract_sexp_block(&text, "(model ").map(|(model_text, remaining_text)| {
-            text = remaining_text;
-            model_text
+    let other_files = children(items, "embedded_files")
+        .flat_map(|files| children(files.as_list().unwrap_or_default(), "file"))
+        .filter(|file| {
+            file.find_list("type")
+                .and_then(|kind| kind.get(1))
+                .and_then(Sexpr::as_atom)
+                != Some("model")
         })
-    } else {
-        None
-    };
+        .map(text)
+        .collect::<String>();
 
-    upsert_embedded_files_block(&mut text, &embed_block, &file_block, &filename);
+    let mut patches = PatchSet::new();
+    children(items, "model")
+        .chain(children(items, "embedded_files"))
+        .for_each(|node| patches.replace_raw(node.span, String::new()));
+    let end = root.span.end - 1;
+    patches.replace_raw(
+        Span::new(end, end),
+        format!(
+            "(embedded_files {other_files}\
+             (file (name {filename}) (type model) (data |{data}|) (checksum \"{checksum}\")))\
+             (model \"kicad-embed://{filename}\" {placement})"
+        ),
+    );
 
-    if let Some(existing_model) = extracted_model {
-        if let Some(pos) = text.rfind(')') {
-            text.insert_str(pos, &existing_model);
-        }
-    } else if num_replaced == 0
-        && let Some(pos) = text.rfind(')')
-    {
-        text.insert_str(pos, &model_block);
-    }
-
-    Ok(text)
+    let mut embedded = Vec::new();
+    patches.write_to(footprint, &mut embedded)?;
+    Ok(prettify(
+        std::str::from_utf8(&embedded)?,
+        FormatMode::Normal,
+    ))
 }
 
 pub fn embed_step_into_footprint_file(
@@ -254,21 +110,19 @@ pub fn embed_step_into_footprint_file(
     step_path: &Path,
     delete_step: bool,
 ) -> Result<()> {
-    let footprint_content =
-        fs::read_to_string(footprint_path).context("Failed to read footprint file")?;
+    let footprint = fs::read_to_string(footprint_path).context("Failed to read footprint file")?;
     let step_bytes = fs::read(step_path).context("Failed to read STEP file")?;
     let step_filename = step_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("model.step");
 
-    let embedded_content = embed_step_in_footprint(footprint_content, step_bytes, step_filename)?;
-    let normalized_content = embedded_content.replace("\r\n", "\n");
-    let formatted_content = format_kicad_sexpr_source(&normalized_content, footprint_path)?;
+    let embedded = embed_step_in_footprint(&footprint, &step_bytes, step_filename)
+        .with_context(|| format!("Failed to embed into {}", footprint_path.display()))?;
 
     AtomicFile::new(footprint_path, OverwriteBehavior::AllowOverwrite)
         .write(|f| {
-            f.write_all(formatted_content.as_bytes())?;
+            f.write_all(embedded.as_bytes())?;
             f.flush()
         })
         .map_err(|err| anyhow::anyhow!("Failed to write footprint file: {err}"))?;
@@ -283,39 +137,34 @@ pub fn embed_step_into_footprint_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pcb_sexpr::kicad::footprint::{embedded_file_checksum, validate_footprint_source};
 
     #[test]
-    fn embed_step_replaces_existing_embedded_file() {
-        let footprint = r#"(footprint "Test"
-	(layer "F.Cu")
-	(embedded_files
-		(file
-			(name model.step)
-			(type model)
-			(data |OLD|)
-			(checksum "OLD")
-		)
-	)
-	(model "kicad-embed://model.step"
-		(offset
-			(xyz 1 2 3)
-		)
-		(scale
-			(xyz 1 1 1)
-		)
-		(rotate
-			(xyz 0 0 0)
-		)
-	)
-)"#;
+    fn embed_step_replaces_every_model_and_its_payload() {
+        let font_checksum = embedded_file_checksum(b"");
+        let footprint = format!(
+            r#"(footprint "Test" (layer "F.Cu")
+  (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")) (model "kicad-embed://old.step"
+    (hide yes) (offset (xyz 1 2 3)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 90)))
+  (embedded_files
+    (file (name "a.ttf") (type font) (data |KLUv/SAAAQAA|) (checksum "{font_checksum}"))
+    (file (name old.step) (type model) (data |OLD|) (checksum "OLD")))
+  (model "/tmp/other.step" (offset (xyz 7 8 9)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0))))
+"#
+        );
 
-        let result =
-            embed_step_in_footprint(footprint.to_string(), b"NEW".to_vec(), "model.step").unwrap();
+        let result = embed_step_in_footprint(&footprint, b"NEW", "new.stp").unwrap();
 
-        assert!(!result.contains("|OLD|"));
-        assert!(!result.contains("\"OLD\""));
-        assert_eq!(result.matches("(name model.step)").count(), 1);
-        assert!(result.contains("(xyz 1 2 3)"));
-        pcb_sexpr::kicad::footprint::validate_footprint_source(&result).unwrap();
+        assert_eq!(result.matches("(model ").count(), 1);
+        assert!(result.contains("(model \"kicad-embed://new.step\""));
+        assert!(result.contains("(xyz 1 2 3)") && result.contains("(xyz 0 0 90)"));
+        assert_eq!(result.matches("(file").count(), 2);
+        assert!(result.contains("(name \"a.ttf\")") && result.contains("(name new.step)"));
+        assert!(!result.contains("old.step") && !result.contains("other.step"));
+        assert!(!result.contains("hide"));
+        validate_footprint_source(&result).unwrap();
+
+        let again = embed_step_in_footprint(&result, b"NEW", "new.step").unwrap();
+        assert_eq!(again, result);
     }
 }

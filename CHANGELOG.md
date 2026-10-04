@@ -23,6 +23,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Report invalid KiCad custom rules before running DRC.
 - Fix KiCad 10 native pin-stack parsing.
 - Recognize symbol pins hidden with `(hide yes)`.
+- `pcb embed-step` replaces a footprint's existing 3D models instead of leaving stale references and embedded files behind.
 
 ## [0.4.68] - 2026-10-02
 

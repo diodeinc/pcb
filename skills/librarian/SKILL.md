@@ -94,9 +94,9 @@ metadata; do not check downloaded PDFs into the package.
   geometry requires explicit user confirmation; after approval, label it as
   generated, cite its basis, inspect it, and disclose its limits.
 
-Upgrade imported KiCad files before editing. Preserve one verified model
-transform before embedding because `pcb embed-step` rewrites every model
-reference:
+Upgrade imported KiCad files before editing. `pcb embed-step` replaces the
+footprint's models with the embedded one and keeps the first model's
+transform, so verify that transform before embedding:
 
 ```bash
 kicad-cli sym upgrade <symbol.kicad_sym>

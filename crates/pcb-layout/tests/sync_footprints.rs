@@ -175,7 +175,7 @@ fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Resul
     let new_checksum = embedded_file_checksum(new_step);
 
     let source = std::fs::read_to_string(&footprint_file)?;
-    let source = embed_step_in_footprint(source, old_step.to_vec(), "BMI270.step")?;
+    let source = embed_step_in_footprint(&source, old_step, "BMI270.step")?;
     std::fs::write(&footprint_file, source)?;
 
     let schematic = evaluate_board(&zen_file, resolution.clone())?;
@@ -192,12 +192,12 @@ fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Resul
     add_test_track(&initial.pcb_file)?;
 
     let source = std::fs::read_to_string(&footprint_file)?;
-    let updated_source = source.replace("(rotate (xyz -90 0 0))", "(rotate (xyz -45 0 0))");
+    let updated_source = source.replace("(xyz -90 0 0)", "(xyz -45 0 0)");
     assert_ne!(
         source, updated_source,
         "test fixture model transform was not found"
     );
-    let updated_source = embed_step_in_footprint(updated_source, new_step.to_vec(), "BMI270.step")?;
+    let updated_source = embed_step_in_footprint(&updated_source, new_step, "BMI270.step")?;
     std::fs::write(&footprint_file, updated_source)?;
 
     let schematic = evaluate_board(&zen_file, resolution.clone())?;
