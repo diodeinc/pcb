@@ -755,6 +755,7 @@ fn check_body(
     for pin in &body.pins {
         check_pin(pin, &mut out);
     }
+    check_pin_style(&body, &mut out);
     check_pin_types(&body, &mut out);
     // Pads are compared against pin numbers only once the numbers are sound.
     if check_numbering(&body, &mut out)
@@ -793,41 +794,56 @@ fn check_pin(pin: &Pin, out: &mut Reporter) {
             out.push(&PARSE, pin.unit, at.span, message);
         }
     }
-    if let Some(length) = child(items, "length") {
-        match pin.parsed.length {
-            None => {
-                let message = format!("{desc} length is not a number");
-                out.push(&PARSE, pin.unit, length.span, message);
-            }
-            Some(mm) if nm(mm) % HALF_GRID_NM != 0 => {
-                let message = format!("{desc} length {mm} mm is not a multiple of 1.27 mm");
-                out.push(&STYLE_PIN_LENGTH, pin.unit, length.span, message);
-            }
-            Some(_) => {}
-        }
+    if let Some(length) = child(items, "length")
+        && pin.parsed.length.is_none()
+    {
+        let message = format!("{desc} length is not a number");
+        out.push(&PARSE, pin.unit, length.span, message);
     }
+}
 
-    if let (Some((x, y)), false) = (pin.at, pin.parsed.hidden) {
-        // KLC lets no-connect pins sit on the body edge, a half step off.
-        let grid = if pin.is_no_connect() {
-            HALF_GRID_NM
-        } else {
-            GRID_NM
-        };
-        if x % grid != 0 || y % grid != 0 {
-            let span = child(items, "at").map_or_else(|| head_span(pin.node), |at| at.span);
-            let message = format!("{desc} at {} is off the 2.54 mm grid", pin.at_text());
-            out.push(&STYLE_PIN_GRID, pin.unit, span, message);
+/// Pins that miss a style rule the same way share one finding: a symbol drawn
+/// half a step off has every pin off the grid.
+fn check_pin_style(body: &Body, out: &mut Reporter) {
+    let mut causes: BTreeMap<String, (&Rule, Span, Vec<&Pin>)> = BTreeMap::new();
+    let mut found = |rule: &'static Rule, cause: String, span: Span, pin| {
+        let (.., pins) = causes.entry(cause).or_insert((rule, span, Vec::new()));
+        pins.push(pin);
+    };
+    for pin in &body.pins {
+        let items = pin.items;
+        if let Some(length) = child(items, "length")
+            && let Some(mm) = pin.parsed.length
+            && nm(mm) % HALF_GRID_NM != 0
+        {
+            let cause = format!("length {mm} mm is not a multiple of 1.27 mm");
+            found(&STYLE_PIN_LENGTH, cause, length.span, pin);
+        }
+        if let (Some((x, y)), false) = (pin.at, pin.parsed.hidden) {
+            // KLC lets no-connect pins sit on the body edge, a half step off.
+            let grid = if pin.is_no_connect() {
+                HALF_GRID_NM
+            } else {
+                GRID_NM
+            };
+            if x % grid != 0 || y % grid != 0 {
+                let span = child(items, "at").map_or_else(|| head_span(pin.node), |at| at.span);
+                let cause = "off the 2.54 mm grid".to_string();
+                found(&STYLE_PIN_GRID, cause, span, pin);
+            }
+        }
+        let text_size = ["name", "number"].into_iter().find_map(|attribute| {
+            let size = descend(child(items, attribute)?, &["effects", "font", "size"])?;
+            let height = number(size.as_list()?.get(1)?)?;
+            (nm(height) != TEXT_SIZE_NM).then_some((attribute, height, size.span))
+        });
+        if let Some((attribute, height, span)) = text_size {
+            let cause = format!("{attribute} text is {height} mm, not 1.27 mm");
+            found(&STYLE_TEXT_SIZE, cause, span, pin);
         }
     }
-    let text_size = ["name", "number"].into_iter().find_map(|attribute| {
-        let size = descend(child(items, attribute)?, &["effects", "font", "size"])?;
-        let height = number(size.as_list()?.get(1)?)?;
-        (nm(height) != TEXT_SIZE_NM).then_some((attribute, height, size.span))
-    });
-    if let Some((attribute, height, span)) = text_size {
-        let message = format!("{desc} {attribute} text is {height} mm, not 1.27 mm");
-        out.push(&STYLE_TEXT_SIZE, pin.unit, span, message);
+    for (cause, (rule, span, pins)) in causes {
+        out.push(rule, 0, span, format!("{cause}: {}", describe_all(&pins)));
     }
 }
 
@@ -1525,6 +1541,22 @@ mod tests {
             messages,
             ["U: pins \"1\", \"2\" (NC) are `passive`, not `no_connect`"]
         );
+
+        let source = CLEAN
+            .replacen("(at -5.08 0 0)", "(at -5.08 1.27 0)", 1)
+            .replacen("(at 5.08 0 180)", "(at 5.08 1.27 180)", 1)
+            .replacen("(length 2.54)", "(length 2)", 1);
+        let issues = check(&source, "U", None);
+        let messages: Vec<&str> = issues.iter().map(|issue| &*issue.message).collect();
+        assert_eq!(
+            messages,
+            [
+                "U: off the 2.54 mm grid: pins \"1\" (IN), \"2\" (VCC)",
+                "U: length 2 mm is not a multiple of 1.27 mm: pin \"1\" (IN)",
+            ]
+        );
+        let span = issues[0].span;
+        assert_eq!(&source[span.start..span.end], "(at -5.08 1.27 0)");
     }
 
     #[test]
