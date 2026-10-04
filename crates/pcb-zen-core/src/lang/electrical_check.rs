@@ -89,5 +89,6 @@ pub fn execute_electrical_check<'v, V: ValueLike<'v>>(
         source_error: None,
         related: Vec::new(),
         suppressed: false,
+        fixable: false,
     }
 }

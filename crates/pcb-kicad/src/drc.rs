@@ -173,6 +173,7 @@ impl DrcViolation {
             source_error: Some(Arc::new(anyhow::Error::new(categorized))),
             related: Vec::new(),
             suppressed: self.excluded, // Map KiCad exclusions to suppressed diagnostics
+            fixable: false,
         })
     }
 }

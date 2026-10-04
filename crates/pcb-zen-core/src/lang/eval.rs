@@ -45,7 +45,7 @@ use crate::lang::{
     file::file_globals,
     footprint::validate_footprints,
     module::{FrozenModuleValue, ModulePath},
-    symbol_check::check_symbols,
+    symbol_check::{check_symbols, fix_symbols},
 };
 use crate::load_spec::LoadSpec;
 use crate::resolution::{PackageScopeKey, PackageUrlResolution, ResolutionResult};
@@ -331,6 +331,16 @@ impl EvalOutput {
     /// workspace package.
     pub fn check_symbols(&self, file_provider: &dyn FileProvider) -> Vec<Diagnostic> {
         check_symbols(&self.module_tree(), &self.resolution, file_provider)
+    }
+
+    /// Fix what can be fixed in the symbols [`Self::check_symbols`] checks,
+    /// adding the new text of each file that changes to `fixed`.
+    pub fn fix_symbols(
+        &self,
+        file_provider: &dyn FileProvider,
+        fixed: &mut BTreeMap<PathBuf, String>,
+    ) {
+        fix_symbols(&self.module_tree(), &self.resolution, file_provider, fixed)
     }
 
     /// Convert to schematic with diagnostics
@@ -1548,6 +1558,7 @@ impl EvalContext {
                 source_error: None,
                 related: Vec::new(),
                 suppressed: false,
+                fixable: false,
             };
             return Err(diagnostic.into());
         }
@@ -1575,6 +1586,7 @@ impl EvalContext {
                 source_error: None,
                 related: Vec::new(),
                 suppressed: false,
+                fixable: false,
             };
             Err(diagnostic.into())
         }
@@ -1598,6 +1610,7 @@ impl EvalContext {
                 source_error: None,
                 related: Vec::new(),
                 suppressed: false,
+                fixable: false,
             });
         }
     }
@@ -1648,6 +1661,7 @@ impl EvalContext {
                     source_error: None,
                     related: Vec::new(),
                     suppressed: false,
+                    fixable: false,
                 }
             })
             .collect();
@@ -1685,6 +1699,7 @@ impl EvalContext {
                 source_error: None,
                 related: Vec::new(),
                 suppressed: false,
+                fixable: false,
             });
         }
 
