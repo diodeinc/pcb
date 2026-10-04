@@ -54,7 +54,7 @@ pub(crate) fn validate_footprints(
     diagnostics
 }
 
-fn resolve_file_backed_footprint(
+pub(super) fn resolve_file_backed_footprint(
     footprint: &str,
     source_path: &std::path::Path,
     resolution: &ResolutionResult,
@@ -81,22 +81,22 @@ fn validate_footprint_file(
     match file_provider.read_file(path) {
         Ok(source) => match pcb_sexpr::kicad::footprint::validate_footprint_source(&source) {
             Ok(()) => Vec::new(),
-            Err(err) => err
-                .issues
-                .into_iter()
-                .map(|issue| {
-                    let span = issue
-                        .span
-                        .map(|span| resolved_span_from_byte_span(&path_str, &source, span));
-                    Diagnostic::categorized(
-                        &path_str,
-                        &format!("Invalid KiCad footprint: {}", issue.message),
-                        "footprint.invalid",
-                        EvalSeverity::Error,
-                    )
-                    .with_span(span)
-                })
-                .collect(),
+            Err(err) => {
+                let codemap = CodeMap::new(path_str.clone(), source);
+                err.issues
+                    .into_iter()
+                    .map(|issue| {
+                        let span = issue.span.map(|span| resolved_span(&codemap, span));
+                        Diagnostic::categorized(
+                            &path_str,
+                            &format!("Invalid KiCad footprint: {}", issue.message),
+                            "footprint.invalid",
+                            EvalSeverity::Error,
+                        )
+                        .with_span(span)
+                    })
+                    .collect()
+            }
         },
         Err(FileProviderError::NotFound(_)) => Vec::new(),
         Err(err) => vec![Diagnostic::categorized(
@@ -108,8 +108,7 @@ fn validate_footprint_file(
     }
 }
 
-fn resolved_span_from_byte_span(path: &str, source: &str, span: pcb_sexpr::Span) -> ResolvedSpan {
-    let codemap = CodeMap::new(path.to_string(), source.to_string());
+pub(super) fn resolved_span(codemap: &CodeMap, span: pcb_sexpr::Span) -> ResolvedSpan {
     let start = Pos::new(span.start as u32);
     let end = Pos::new(span.end as u32);
     codemap

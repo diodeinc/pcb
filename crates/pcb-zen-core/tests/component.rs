@@ -338,6 +338,91 @@ fn file_backed_footprint_validation_reports_embedded_file_errors() {
 }
 
 #[test]
+fn symbol_checks_point_into_the_workspace_symbol_file() {
+    let files = vec![
+        (
+            "hidden.kicad_sym".to_string(),
+            r#"(kicad_symbol_lib
+  (symbol "Hidden"
+    (property "Reference" "U")
+    (property "Value" "Hidden")
+    (symbol "Hidden_1_1"
+      (pin power_in line (at 0 0 0) (length 2.54) (hide yes) (name "VCC") (number "1"))
+      (pin passive line (at 0 -2.54 0) (length 2.54) (name "P") (number "3"))
+    )
+  )
+)"#
+            .to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+Component(
+    name = "U1",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
+    symbol = Symbol(library = "hidden.kicad_sym"),
+    pins = {"VCC": Net("VCC"), "P": Net("P")},
+)
+"#
+            .to_string(),
+        ),
+    ];
+    let result = common::eval_zen(files.clone());
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+
+    let mut files: std::collections::HashMap<_, _> = files.into_iter().collect();
+    files.extend(common::stdlib_test_files());
+    let provider = common::InMemoryFileProvider::new(files);
+    let diagnostics = result
+        .output
+        .expect("expected eval output")
+        .check_symbols(&provider);
+
+    let found: Vec<_> = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            assert!(
+                diagnostic.path.ends_with("hidden.kicad_sym"),
+                "{diagnostic:?}"
+            );
+            let line = diagnostic.span.expect("span").begin.line + 1;
+            let kind = pcb_zen_core::diagnostics::diagnostic_kind(diagnostic).expect("kind");
+            (kind, diagnostic.severity, line)
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                "symbol.pin.footprint_mismatch".to_string(),
+                EvalSeverity::Warning,
+                2
+            ),
+            (
+                "symbol.pin.hidden_power".to_string(),
+                EvalSeverity::Warning,
+                6
+            ),
+            (
+                "symbol.pin.footprint_mismatch".to_string(),
+                EvalSeverity::Warning,
+                7
+            ),
+        ]
+    );
+    assert_eq!(
+        diagnostics[1].body,
+        "[symbol.pin.hidden_power] Hidden: hidden power_in pin \"1\" (VCC) creates an implicit global net\n\
+         help: show the pin; hidden duplicates in a pin stack use `passive`"
+    );
+
+    let resolution = common::test_resolution();
+    assert!(resolution.is_workspace_uri("package://test/hidden.kicad_sym"));
+    assert!(!resolution.is_workspace_uri("package://stdlib/kicad-symbols/Device.kicad_sym"));
+    assert!(!resolution.is_workspace_uri("package://test@1.0.0/hidden.kicad_sym"));
+}
+
+#[test]
 fn component_modifier_part_without_datasheet_clears_stale_part_datasheet() {
     let component = eval_single_root_component(
         r#"

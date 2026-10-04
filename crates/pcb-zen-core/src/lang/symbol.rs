@@ -804,6 +804,32 @@ fn collect_split_library_sources(
     Ok(())
 }
 
+/// The files that define a symbol loaded from `path`: the library file, or
+/// for a split library the symbol's file and those of the symbols it extends.
+pub(crate) fn symbol_source_files(
+    path: &Path,
+    name: &str,
+    file_provider: &dyn crate::FileProvider,
+) -> starlark::Result<Vec<(PathBuf, String)>> {
+    let mut sources = Vec::new();
+    let split_library = path
+        .parent()
+        .filter(|dir| dir.extension().is_some_and(|ext| ext == "kicad_symdir"));
+    match split_library {
+        Some(dir) => {
+            let mut seen = HashSet::new();
+            collect_split_library_sources(dir, name, file_provider, &mut seen, &mut sources)?
+        }
+        None => {
+            let contents = file_provider
+                .read_file(path)
+                .map_err(|e| starlark::Error::new_other(anyhow!("{e}")))?;
+            sources.push((path.to_path_buf(), contents));
+        }
+    }
+    Ok(sources)
+}
+
 fn load_split_library_symbol(
     dir: &std::path::Path,
     requested_name: Option<String>,

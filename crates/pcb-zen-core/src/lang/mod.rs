@@ -18,6 +18,7 @@ pub(crate) mod pin_erc;
 pub mod spice_model;
 pub mod stackup;
 pub mod symbol;
+pub(crate) mod symbol_check;
 pub mod test_bench;
 pub(crate) mod type_conversion;
 pub mod type_info;

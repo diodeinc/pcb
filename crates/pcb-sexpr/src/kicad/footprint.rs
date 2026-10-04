@@ -1,4 +1,4 @@
-use std::{fmt, io::Read};
+use std::{collections::BTreeSet, fmt, io::Read};
 
 use base64::Engine;
 use sha2::{Digest, Sha256};
@@ -85,6 +85,17 @@ pub fn validate_footprint_source(source: &str) -> Result<(), FootprintValidation
     } else {
         Err(FootprintValidationError { issues })
     }
+}
+
+/// Numbers of a footprint's numbered pads. Mechanical and paste-only pads
+/// carry an empty number and are not part of the footprint's pinout.
+pub fn pad_numbers(footprint: &Sexpr) -> BTreeSet<String> {
+    footprint
+        .find_all_lists("pad")
+        .into_iter()
+        .filter_map(|pad| atom_text(pad.get(1)?))
+        .filter(|number| !number.is_empty())
+        .collect()
 }
 
 fn validate_embedded_file(file: &[Sexpr], issues: &mut Vec<FootprintValidationIssue>) {
@@ -329,6 +340,18 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(compressed);
         let checksum = hex::encode(Sha256::digest(bytes));
         (encoded, checksum)
+    }
+
+    #[test]
+    fn pad_numbers_skip_unnumbered_pads() {
+        let footprint = crate::parse(
+            r#"(footprint "F" (pad "A1" smd rect) (pad 2 smd rect) (pad "" np_thru_hole circle))"#,
+        )
+        .unwrap();
+        assert_eq!(
+            pad_numbers(&footprint).into_iter().collect::<Vec<_>>(),
+            ["2", "A1"]
+        );
     }
 
     fn footprint_with_data(data: &str, checksum: &str) -> String {

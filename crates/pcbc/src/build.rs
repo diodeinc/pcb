@@ -87,6 +87,9 @@ impl BuildEvalState {
                     .diagnostics
                     .push(execute_electrical_check(check, defining_module));
             }
+            diagnostics
+                .diagnostics
+                .extend(eval_output.check_symbols(self.file_provider.as_ref()));
             Some(eval_output)
         } else {
             None

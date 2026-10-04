@@ -924,6 +924,17 @@ impl ResolutionResult {
         pcb_sch::resolve_package_uri(uri, &self.indexes.package_roots)
     }
 
+    /// Whether a `package://` URI names a file of a workspace package rather
+    /// than of a dependency or the stdlib.
+    pub fn is_workspace_uri(&self, uri: &str) -> bool {
+        uri.strip_prefix(pcb_sch::PACKAGE_URI_PREFIX)
+            .is_some_and(|reference| {
+                std::iter::once(LOCAL_WORKSPACE_ROOT_URL)
+                    .chain(self.workspace_info.packages.keys().map(String::as_str))
+                    .any(|url| package_url_covers(url, reference))
+            })
+    }
+
     /// Format an absolute path as a stable URI (`package://…`).
     ///
     /// The owning package is the longest package root that prefixes the path,

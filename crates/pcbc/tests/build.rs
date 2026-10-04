@@ -44,11 +44,18 @@ const TEST_KICAD_MOD: &str = r#"(footprint "test"
 )
 "#;
 
+const TEST_ONE_PAD_KICAD_MOD: &str = r#"(footprint "test"
+  (layer "F.Cu")
+  (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))
+)
+"#;
+
 const TEST_NO_CONNECT_SYMBOL: &str = r#"(kicad_symbol_lib
   (version 20211014)
   (generator "test")
   (symbol "NcPin"
     (property "Reference" "U")
+    (property "Value" "NcPin")
     (symbol "NcPin_0_1"
       (pin no_connect line
         (at 0 0 0)
@@ -305,7 +312,7 @@ fn test_pin_no_connect_reports_at_net_site() {
     let mut sandbox = Sandbox::new().with_workspace();
     let output = sandbox
         .write("board.zen", PIN_NO_CONNECT_REPORTS_AT_NET_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .write("test.kicad_mod", TEST_ONE_PAD_KICAD_MOD)
         .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL)
         .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("pin_no_connect_reports_at_net_site", output);
@@ -316,7 +323,7 @@ fn test_pin_no_connect_suppresses_at_net_site() {
     let mut sandbox = Sandbox::new().with_workspace();
     let output = sandbox
         .write("board.zen", PIN_NO_CONNECT_SUPPRESSES_AT_NET_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .write("test.kicad_mod", TEST_ONE_PAD_KICAD_MOD)
         .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL)
         .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("pin_no_connect_suppresses_at_net_site", output);
@@ -328,7 +335,7 @@ fn test_pin_no_connect_dedups_in_nested_modules() {
     let output = sandbox
         .write("board.zen", PIN_NO_CONNECT_NESTED_MODULE_DEDUPS_ZEN)
         .write("child.zen", PIN_NO_CONNECT_NESTED_CHILD_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .write("test.kicad_mod", TEST_ONE_PAD_KICAD_MOD)
         .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL)
         .snapshot_run("pcbc", ["build", "board.zen"]);
 
