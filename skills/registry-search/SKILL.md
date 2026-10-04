@@ -7,13 +7,6 @@ description: Find reusable registry modules and component packages for a board o
 
 Find suitable prepared content before authoring a new reusable package.
 
-Only discover or clone other boards when the user explicitly asks to find or
-inspect them; do not search other boards proactively as part of registry
-package search. For requested board discovery, use `mcp__diode__list_boards` with
-the workspace name. If inspection is requested, `git clone` the returned HTTPS
-URL outside the current checkout; sandbox DiodeHub authentication is already
-configured.
-
 | Need | Command |
 | --- | --- |
 | Reusable circuit or entrypoint | `pcb search -m registry:modules <query> -f json` |
@@ -30,17 +23,14 @@ the raw part is needed. Compare electrical fit, package, pinout, sourcing, and
 public API. Use `preferred-parts` when choosing a concrete MPN. Ask only about
 material unresolved tradeoffs.
 
-Instantiate the chosen `.zen` entrypoint directly in the consuming design.
-For example:
+Instantiate the chosen `.zen` entrypoint directly in the consuming design, for
+example `Module("code.diode.computer/diode/registry/components/<Manufacturer>/<NAME>/<NAME>.zen")`,
+and follow `zener-language` for dependencies; do not hand-edit `pcb.toml`.
 
-```zen
-PartModule = Module("code.diode.computer/diode/registry/components/<Manufacturer>/<NAME>/<NAME>.zen")
-```
+Discover or clone other boards only when the user explicitly asks; use
+`mcp__diode__list_boards` and clone outside the current checkout.
 
-Follow `zener-language` for dependencies and validation; do not hand-edit
-`pcb.toml` to add the dependency.
-
-If no suitable result exists or a candidate needs a package/API/circuit fix,
-use `librarian` within a registry-authoring task. From board or spec work,
+If no suitable result exists or a candidate needs a package, API, or circuit
+fix, use `librarian` within a registry-authoring task. From board or spec work,
 prepare a `librarian-dispatch` request instead of patching reusable packages
 inline.

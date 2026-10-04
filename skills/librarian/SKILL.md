@@ -34,75 +34,29 @@ respect a primitive-only request.
 
 Curate the relevant symbols, footprints, and pin maps before building circuitry
 on them. Do not invent datasheet facts, limits, or sourcing claims. Focused
-repairs need only the relevant curation stages.
-
-## Acquire artifacts
-
-Use `pcb component` for authenticated catalog and EDA access; it resolves the
-configured API and credentials. Use command-specific help for current flags.
-
-```text
-pcb component search QUERY [--backends cse,lcsc,ncti | --backends none] -f json
-  -> [{mpn, manufacturer, cse, lcsc, ncti, digikey, offers}, ...]
-
-pcb component download --mpn MPN --manufacturer MANUFACTURER \
-  <one provider option> -f json
-  -> {mpn, manufacturer, <provider>: {<provider-id>, symbol_url, footprint_url, step_url}}
-```
-
-| Provider | Search reference | Download option |
-| --- | --- | --- |
-| CSE | `.cse.part_ref` | `--cse-part-ref` |
-| LCSC | `.lcsc.part_number` | `--lcsc-part-number` |
-| NCTI | `.ncti.component_id` | `--ncti-component-id` |
-
-Search returns an array merged by canonical manufacturer and MPN. Select an
-exact match and pass its reference unchanged. Provider records may be null;
-otherwise they contain availability flags, package metadata, and
-`datasheet_url`. Omit `--backends` for all EDA providers plus DigiKey metadata;
-`--backends none` requests DigiKey catalog data only. `offers` holds sourcing
-information.
-
-Download one provider's coherent asset set. Only that provider is returned,
-and `footprint_url` or `step_url` may be null. Fetch available signed URLs to
-task-local files with `curl -fL`; the URLs expire. If an asset remains
-unavailable after a reasonable attempt, use another trusted provider or the
-authoring path below and report the gap.
-
-Use the selected provider's verified `datasheet_url`, falling back to
-`digikey.datasheet_url` from the same search row. Keep the source URL in
+repairs need only the relevant curation stages. Keep the datasheet URL in
 metadata; do not check downloaded PDFs into the package.
 
 ## Curate symbols, footprints, and models
 
-- Use `kicad-symbol` for pin signatures, ERC types, units, inheritance, and
-  rendering. Functional silicon variants need distinct symbols; ordering-only
-  variants such as tape/reel, temperature grade, or RoHS suffixes do not.
-- Use `kicad-footprint` to validate the exact package geometry. An MPN match or
-  resemblance to a reference footprint does not establish correctness.
-  Requested creation or repair includes replacing an incorrect candidate or
-  generating one from authoritative evidence; ask only if required geometry
-  remains unresolved. Review-only work produces findings.
+- Functional silicon variants need distinct symbols; ordering-only variants
+  such as tape/reel, temperature grade, or RoHS suffixes do not.
+- An MPN match or resemblance to a reference footprint does not establish
+  footprint correctness. Requested creation or repair includes replacing an
+  incorrect candidate or generating one from authoritative evidence; ask only
+  if required geometry remains unresolved. Review-only work produces findings.
 - For an accepted footprint, set `Datasheet` to the authoritative geometry
-  source and `Description` to its package and evidence basis. Include a real
-  `.kicad_mod`; record whether it is vendor-derived, stock-derived, generated,
-  or intentionally adjusted.
+  source and `Description` to its package and evidence basis. Record whether
+  the `.kicad_mod` is vendor-derived, stock-derived, generated, or
+  intentionally adjusted.
 - Embed a verified STEP for the exact package, or make its absence and impact
-  explicit. A known-wrong model is not an acceptable substitute. Scratch 3D
-  geometry requires explicit user confirmation; after approval, label it as
-  generated, cite its basis, inspect it, and disclose its limits.
+  explicit. A known-wrong model is not an acceptable substitute. Label
+  generated geometry as such, cite its basis, inspect it, and disclose its
+  limits.
 
-Upgrade imported KiCad files before editing. Preserve one verified model
-transform before embedding because `pcb embed-step` rewrites every model
-reference:
-
-```bash
-kicad-cli sym upgrade <symbol.kicad_sym>
-kicad-cli fp upgrade <package-directory>
-pcb embed-step <footprint.kicad_mod> <model.step>
-```
-
-Inspect the embedded result; do not commit the standalone STEP.
+`pcb embed-step` rewrites every model reference in the footprint, so settle
+one verified model transform before embedding. Inspect the embedded result and
+do not commit the standalone STEP.
 
 ## Public API and reference circuits
 
@@ -157,7 +111,6 @@ Express requirements through stdlib generic parameters; set `mpn` or
 `pcb bom <entrypoint>.zen -f json` when checking changed part selection or
 sourceability.
 
-Complete the relevant artifact checks and Zener validation. Report verified
-results, public API or layout effects, sourcing compromises, and any remaining
-evidence or model gaps. A focused repair does not require re-curating an
-unchanged package.
+Report verified results, public API or layout effects, sourcing compromises,
+and any remaining evidence or model gaps. A focused repair does not require
+re-curating an unchanged package.
