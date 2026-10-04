@@ -3,6 +3,7 @@ use crate::{
     InternalConnectivity, Part, Pin, PinAlternate, PinAt, Symbol, is_placeholder_kicad_pin_name,
 };
 use anyhow::Result;
+use pcb_sexpr::kicad::symbol::expand_stacked_pin_number;
 use pcb_sexpr::{Sexpr, SexprKind, parse};
 use serde::Serialize;
 use std::cmp::Reverse;
@@ -20,6 +21,9 @@ pub struct KicadSymbol {
     pub(super) in_bom: bool,
     pub(super) internal_connectivity: InternalConnectivity,
     pub(super) pins: Vec<KicadPin>,
+    /// Unlike explicit jumper metadata, native stacks follow overridden pins.
+    #[serde(skip)]
+    pub(super) native_stack_groups: Vec<BTreeSet<String>>,
     pub(super) mpn: Option<String>,
     pub(super) manufacturer: Option<String>,
     pub(super) datasheet_url: Option<String>,
@@ -101,7 +105,11 @@ pub struct KicadPinAlternate {
 }
 
 impl From<KicadSymbol> for Symbol {
-    fn from(symbol: KicadSymbol) -> Self {
+    fn from(mut symbol: KicadSymbol) -> Self {
+        symbol
+            .internal_connectivity
+            .groups
+            .extend(symbol.native_stack_groups);
         Symbol {
             name: symbol.name,
             footprint: symbol.footprint,
@@ -249,6 +257,25 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
 
     // Keep one source of truth for description parsing/legacy alias handling.
     symbol.description = description_from_properties(&symbol.properties);
+
+    // Select unit/body styles using the original graphical pins, then expand
+    // native stacks into physical pins. Keep the raw S-expression unchanged.
+    let mut pins = Vec::new();
+    for pin in symbol.pins {
+        let numbers = expand_stacked_pin_number(&pin.number).map_err(|error| {
+            anyhow::anyhow!("symbol {:?} pin {:?}: {error}", symbol.name, pin.name)
+        })?;
+        if numbers.len() > 1 {
+            symbol.native_stack_groups.push(numbers.clone());
+        }
+        for number in numbers {
+            pins.push(KicadPin {
+                number,
+                ..pin.clone()
+            });
+        }
+    }
+    symbol.pins = pins;
 
     Ok(symbol)
 }
@@ -499,6 +526,22 @@ pub(super) fn description_from_properties(properties: &HashMap<String, String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_stack_expansion_does_not_bias_style_selection() {
+        let content = r#"(kicad_symbol_lib (symbol "Stack"
+          (symbol "Stack_1_1"
+            (pin passive line (name "STACK") (number "[1-10]")))
+          (symbol "Stack_1_2"
+            (pin passive line (name "A") (number "1"))
+            (pin passive line (name "B") (number "2")))))"#;
+        let symbol = KicadSymbol::from_str(content).unwrap();
+        assert_eq!(
+            symbol.pins.iter().map(KicadPin::name).collect::<Vec<_>>(),
+            vec!["A", "B"]
+        );
+        assert!(symbol.native_stack_groups.is_empty());
+    }
 
     #[test]
     fn metadata_normalizes_legacy_ki_description() {

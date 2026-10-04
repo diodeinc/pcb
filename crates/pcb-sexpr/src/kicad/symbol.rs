@@ -1,8 +1,66 @@
 //! KiCad symbol library (`.kicad_sym`) helpers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Sexpr;
+
+/// Expand a KiCad native pin stack into physical pin numbers.
+/// Plain numbers remain literal. Malformed stacks and unsupported escaping or
+/// nested brackets are errors, never literal bracketed pad names.
+pub fn expand_stacked_pin_number(number: &str) -> Result<BTreeSet<String>, String> {
+    const LIMIT: usize = 4096;
+    if !number.contains(['[', ']']) {
+        return Ok(BTreeSet::from([number.to_string()]));
+    }
+    let invalid = || format!("invalid or unsupported stacked pin number {number:?}");
+    let inner = number
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .ok_or_else(invalid)?;
+    if inner.contains(['[', ']', '\\']) {
+        return Err(invalid());
+    }
+
+    let mut expanded = BTreeSet::new();
+    for part in inner.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some((start, end)) = part.split_once('-') {
+            let (start_prefix, start_value) =
+                alpha_numeric_pin(start.trim()).ok_or_else(invalid)?;
+            let (end_prefix, end_value) = alpha_numeric_pin(end.trim()).ok_or_else(invalid)?;
+            if start_prefix != end_prefix || start_value > end_value {
+                return Err(invalid());
+            }
+            if end_value - start_value >= LIMIT as u64 {
+                return Err(format!(
+                    "stacked pin number {number:?} exceeds the limit of {LIMIT} pins"
+                ));
+            }
+            for value in start_value..=end_value {
+                expanded.insert(format!("{start_prefix}{value}"));
+            }
+        } else {
+            expanded.insert(part.to_string());
+        }
+        if expanded.len() > LIMIT {
+            return Err(format!(
+                "stacked pin number {number:?} exceeds the limit of {LIMIT} pins"
+            ));
+        }
+    }
+    if expanded.is_empty() {
+        return Err(invalid());
+    }
+    Ok(expanded)
+}
+
+fn alpha_numeric_pin(value: &str) -> Option<(&str, u64)> {
+    let prefix = value.trim_end_matches(|c: char| c.is_ascii_digit());
+    // A second dash is not an endpoint prefix: it denotes unsupported syntax.
+    if prefix.contains('-') {
+        return None;
+    }
+    Some((prefix, value[prefix.len()..].parse().ok()?))
+}
 
 /// Return root items for a KiCad symbol library `(kicad_symbol_lib ...)`.
 pub fn kicad_symbol_lib_items(sexpr: &Sexpr) -> Option<&[Sexpr]> {
@@ -186,6 +244,56 @@ fn is_nested_symbol(node: &Sexpr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expands_native_stacks() {
+        for (number, expected) in [
+            ("[AD12-AD14,7,AD13]", vec!["AD12", "AD13", "AD14", "7"]),
+            ("[A01-A3,007]", vec!["A1", "A2", "A3", "007"]),
+            ("[A{comma}B,2]", vec!["A{comma}B", "2"]),
+            ("[ P_2 - P_4 ,9,,]", vec!["P_2", "P_3", "P_4", "9"]),
+            ("[0-0]", vec!["0"]),
+            ("AD12-AD22", vec!["AD12-AD22"]),
+            ("1,2", vec!["1,2"]),
+        ] {
+            assert_eq!(
+                expand_stacked_pin_number(number).unwrap(),
+                expected.into_iter().map(str::to_owned).collect(),
+                "{number}"
+            );
+        }
+        assert_eq!(
+            expand_stacked_pin_number("[1-4096,1-4096]").unwrap().len(),
+            4096
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_or_unsupported_stacks() {
+        for number in [
+            "[]",
+            "[ , ]",
+            "[1",
+            "1]",
+            "x[1]",
+            "[[1]]",
+            "[3-1]",
+            "[AD12-22]",
+            "[AD12-ad22]",
+            "[A-A3]",
+            "[1-]",
+            "[-3]",
+            "[1-2-3]",
+            "[11,19,BAD-RANGE]",
+            r"[A\,B]",
+            "[1-18446744073709551616]",
+            "[0-18446744073709551615]",
+            "[1-4097]",
+            "[1-4096,5000]",
+        ] {
+            assert!(expand_stacked_pin_number(number).is_err(), "{number}");
+        }
+    }
 
     #[test]
     fn finds_symbols_and_properties() {

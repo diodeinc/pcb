@@ -48,6 +48,49 @@ fn frozen_net_id(value: FrozenValue) -> u64 {
         .net_id()
 }
 
+#[test]
+fn unnamed_native_stack_requires_one_net() {
+    for name in ["", "~"] {
+        let symbol = format!(
+            r#"(kicad_symbol_lib (symbol "Stack"
+          (symbol "Stack_1_1"
+            (pin passive line (name "{name}") (number "[1,2]")))))"#
+        );
+        let source = r#"Component(
+            name = "U1", footprint = "test_footprint",
+            symbol = Symbol(library = "stack.kicad_sym"),
+            pins = {"1": Net("A"), "2": Net("B")},
+        )"#;
+        let result = common::eval_zen(vec![
+            ("stack.kicad_sym".to_owned(), symbol.clone()),
+            ("test.zen".to_owned(), source.to_owned()),
+        ]);
+        assert!(
+            !result.is_success(),
+            "stack with name {name:?} allowed different nets"
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .to_string()
+                    .contains("internally connected but were assigned to different nets")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+
+        let source = source.replace(r#", "2": Net("B")"#, "");
+        let component = eval_single_root_component_with_files(vec![
+            ("stack.kicad_sym", &symbol),
+            ("test.zen", &source),
+        ]);
+        assert_eq!(
+            frozen_net_id(*component.connections().get("1").unwrap()),
+            frozen_net_id(*component.connections().get("2").unwrap()),
+        );
+    }
+}
+
 const DESCRIBED_SYMBOL: &str = r#"(kicad_symbol_lib
   (version 20231120)
   (generator "test")

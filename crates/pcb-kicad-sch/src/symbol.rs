@@ -2,10 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, anyhow, bail};
 use pcb_sexpr::Sexpr;
+use pcb_sexpr::kicad::symbol::expand_stacked_pin_number;
 
 use crate::{LabelSpin, MirrorAxis, Point, Rotation, Symbol, SymbolDefinition};
-
-const MAX_EXPANDED_STACKED_PIN_NUMBERS: usize = 4096;
 
 /// A symbol-definition pin transformed into placed schematic coordinates.
 #[derive(Debug, Clone, PartialEq)]
@@ -328,7 +327,7 @@ fn parse_pin(items: &[Sexpr]) -> Result<PlacedPin> {
         .and_then(Sexpr::as_atom)
         .context("symbol pin missing number")?
         .to_string();
-    let numbers = expand_stacked_pin_number(&crate::kicad::unescape_text(&number))?;
+    let numbers = expand_stacked_pin_number(&number).map_err(anyhow::Error::msg)?;
     let mut alternates = BTreeMap::new();
     for alternate in items
         .iter()
@@ -407,80 +406,6 @@ fn validate_electrical_type(electrical_type: &str) -> Result<()> {
     } else {
         bail!("unsupported KiCad pin electrical type {electrical_type}")
     }
-}
-
-pub(crate) fn expand_stacked_pin_number(number: &str) -> Result<BTreeSet<String>> {
-    let literal = || Ok(BTreeSet::from([number.to_string()]));
-    let has_open = number.contains('[');
-    let has_close = number.contains(']');
-    if has_open || has_close {
-        if !(number.starts_with('[') && number.ends_with(']')) {
-            return literal();
-        }
-    } else {
-        return literal();
-    }
-
-    let mut expanded = BTreeSet::new();
-    for part in number[1..number.len() - 1].split(',').map(str::trim) {
-        if part.is_empty() {
-            continue;
-        }
-        if let Some((start, end)) = part.split_once('-') {
-            let Some((start_prefix, start_value, width)) = alpha_numeric_pin(start.trim()) else {
-                return literal();
-            };
-            let Some((end_prefix, end_value, _)) = alpha_numeric_pin(end.trim()) else {
-                return literal();
-            };
-            if start_prefix != end_prefix || start_value > end_value {
-                return literal();
-            }
-            let range_len = usize::try_from(end_value - start_value)
-                .ok()
-                .and_then(|difference| difference.checked_add(1))
-                .context("stacked pin range length exceeds platform limits")?;
-            if range_len > MAX_EXPANDED_STACKED_PIN_NUMBERS
-                || expanded.len() > MAX_EXPANDED_STACKED_PIN_NUMBERS - range_len
-            {
-                bail!(
-                    "stacked pin number {number} expands beyond the limit of {MAX_EXPANDED_STACKED_PIN_NUMBERS} pins"
-                );
-            }
-            for value in start_value..=end_value {
-                expanded.insert(format!("{start_prefix}{value:0width$}"));
-            }
-        } else {
-            expanded.insert(part.to_string());
-            if expanded.len() > MAX_EXPANDED_STACKED_PIN_NUMBERS {
-                bail!(
-                    "stacked pin number {number} expands beyond the limit of {MAX_EXPANDED_STACKED_PIN_NUMBERS} pins"
-                );
-            }
-        }
-    }
-    if expanded.is_empty() {
-        literal()
-    } else {
-        Ok(expanded)
-    }
-}
-
-fn alpha_numeric_pin(value: &str) -> Option<(&str, i64, usize)> {
-    let digit_start = value
-        .char_indices()
-        .rev()
-        .find_map(|(index, character)| {
-            (!character.is_ascii_digit()).then_some(index + character.len_utf8())
-        })
-        .unwrap_or(0);
-    (digit_start < value.len()).then(|| {
-        let (prefix, digits) = value.split_at(digit_start);
-        digits
-            .parse()
-            .ok()
-            .map(|number| (prefix, number, digits.len()))
-    })?
 }
 
 fn parse_duplicate_pin_numbers_are_jumpers(items: &[Sexpr], lib_id: &str) -> Result<bool> {

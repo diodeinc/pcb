@@ -115,6 +115,7 @@ A global library is external by definition, but a resolved footprint must remain
 Generated components map each KiCad physical pin number to a distinct Zener logical signal through `pin_defs`.
 Displayed KiCad pin names are labels and do not define electrical identity.
 Pins with duplicate displayed names remain distinct unless the source netlist connects them to the same net.
+Internally connected pads share one module input while retaining distinct physical-pin bindings.
 Native no-connect markers become `NotConnected()`; floating unmarked pins remain singleton nets.
 One marker covers all stacked pins, including hidden pins, at the same symbol anchor on the same page.
 Each physical pad remains a distinct generated terminal. Wires, labels, or touching unrelated symbols
