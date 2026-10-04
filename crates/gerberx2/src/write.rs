@@ -479,6 +479,7 @@ impl<'a> Writer<'a> {
         joins
             && next.polarity == object.polarity
             && next.repeat == object.repeat
+            && next.aperture_attributes == object.aperture_attributes
             && next.attributes == object.attributes
     }
 
@@ -508,7 +509,8 @@ impl<'a> Writer<'a> {
         let (from, to) = (grid(*self.run.first().unwrap_or(&start)), grid(beyond));
         let (dx, dy) = (to.0 - from.0, to.1 - from.1);
         let length2 = dx * dx + dy * dy;
-        let straight = self.continues(object, self.coordinates(end), aperture, next)
+        let straight = self.run.len() <= RUN_JOINTS
+            && self.continues(object, self.coordinates(end), aperture, next)
             && self.run.iter().skip(1).chain([&end]).all(|&joint| {
                 let (x, y) = grid(joint);
                 let along = (x - from.0) * dx + (y - from.1) * dy;
@@ -825,6 +827,10 @@ impl<'a> Writer<'a> {
         self.output.push_str(&trim_decimal(value, 9));
     }
 }
+
+/// Joints a straight run holds before it is written: every draw that
+/// extends the run checks them all.
+const RUN_JOINTS: usize = 64;
 
 fn validate_attribute(attr: &AttributeValue) -> Result<()> {
     if attr.name.is_empty() {

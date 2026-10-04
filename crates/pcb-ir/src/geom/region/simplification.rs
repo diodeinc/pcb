@@ -48,13 +48,14 @@ pub(super) fn overlay(
         rings
             .iter()
             .map(|ring| {
-                vertices
-                    .split(ring)
-                    .into_iter()
-                    .map(|[x, y]| {
-                        IntPoint::new((x * scale).round() as i64, (y * scale).round() as i64)
-                    })
-                    .collect()
+                let mut lattice = Vec::with_capacity(ring.len());
+                vertices.split(ring, |[x, y]| {
+                    lattice.push(IntPoint::new(
+                        (x * scale).round() as i64,
+                        (y * scale).round() as i64,
+                    ));
+                });
+                lattice
             })
             .collect::<Vec<_>>()
     };
@@ -84,7 +85,7 @@ pub(super) fn overlay(
 struct VertexColumns {
     /// Vertices by column, ascending in `y` within each.
     points: Vec<[f64; 2]>,
-    /// Offsets into `points` per column; one longer than the column count.
+    /// Offsets into `points` per column; two longer than the column count.
     columns: Vec<u32>,
     origin: f64,
     pitch: f64,
@@ -92,41 +93,52 @@ struct VertexColumns {
 
 impl VertexColumns {
     fn new(rings: &[&[Ring]], bbox: BBox) -> Self {
-        let vertices = || {
-            rings
-                .iter()
-                .flat_map(|rings| rings.iter().flatten().copied())
-        };
-        let count = vertices().count();
+        let rings = || rings.iter().flat_map(|rings| rings.iter());
+        let count = rings().map(Vec::len).sum::<usize>();
         // Columns about one edge wide: an edge then reads a column or two
         // and finds a vertex or two there, however the edges are spread.
-        let extent = rings
-            .iter()
-            .flat_map(|rings| rings.iter())
+        let extent = rings()
             .flat_map(|ring| edges_of(ring))
             .map(|(start, end)| (end.x - start.x).abs() + (end.y - start.y).abs())
             .sum::<f64>()
             .max(bbox.width());
         let (origin, pitch) = (bbox.min.x, (extent / count as f64).max(ON_EDGE_MM));
         let column = |x: f64| ((x - origin) / pitch) as usize;
-        let mut columns = vec![0u32; column(bbox.max.x) + 2];
-        for [x, _] in vertices() {
-            columns[column(x) + 1] += 1;
+        // Counted two slots ahead, a column's offset is first where its
+        // vertices go next and then, once they are placed, where it starts.
+        let mut columns = vec![0u32; column(bbox.max.x) + 3];
+        for [x, _] in rings().flatten() {
+            columns[column(*x) + 2] += 1;
         }
         for column in 1..columns.len() {
             columns[column] += columns[column - 1];
         }
-        let mut next = columns.clone();
         let mut points = vec![[0.0; 2]; count];
-        for point in vertices() {
-            let slot = &mut next[column(point[0])];
-            points[*slot as usize] = point;
+        for point in rings().flatten() {
+            let slot = &mut columns[column(point[0]) + 1];
+            points[*slot as usize] = *point;
             *slot += 1;
         }
-        for column in columns.windows(2) {
-            points[column[0] as usize..column[1] as usize]
-                .sort_unstable_by(|left, right| left[1].total_cmp(&right[1]));
+        // Coincident vertices are one vertex, so stacked copies of a shape
+        // cost no more to search than one.
+        let mut kept = 0;
+        for column in 0..columns.len() - 1 {
+            let (start, end) = (columns[column] as usize, columns[column + 1] as usize);
+            points[start..end].sort_unstable_by(|left, right| {
+                left[1]
+                    .total_cmp(&right[1])
+                    .then(left[0].total_cmp(&right[0]))
+            });
+            columns[column] = kept as u32;
+            for index in start..end {
+                if kept == columns[column] as usize || points[index] != points[kept - 1] {
+                    points[kept] = points[index];
+                    kept += 1;
+                }
+            }
         }
+        *columns.last_mut().unwrap() = kept as u32;
+        points.truncate(kept);
         Self {
             points,
             columns,
@@ -139,11 +151,10 @@ impl VertexColumns {
         ((x - self.origin) / self.pitch) as usize
     }
 
-    /// `ring` with every edge split at the vertices lying on it.
-    fn split(&self, ring: &[[f64; 2]]) -> Ring {
+    /// Emit `ring` with every edge split at the vertices lying on it.
+    fn split(&self, ring: &[[f64; 2]], mut emit: impl FnMut([f64; 2])) {
         let reach = ON_EDGE_MM;
-        let last = self.columns.len() - 2;
-        let mut split = Vec::with_capacity(ring.len());
+        let last = self.columns.len() - 3;
         let mut on_edge = Vec::new();
         for (index, &[ax, ay]) in ring.iter().enumerate() {
             let [bx, by] = ring[(index + 1) % ring.len()];
@@ -178,12 +189,10 @@ impl VertexColumns {
                     }
                 }
             }
-            on_edge.sort_by(|left, right| left.partial_cmp(right).unwrap());
-            on_edge.dedup();
-            split.push([ax, ay]);
-            split.extend(on_edge.drain(..).map(|(_, point)| point));
+            on_edge.sort_by(|left, right| left.0.total_cmp(&right.0));
+            emit([ax, ay]);
+            on_edge.drain(..).for_each(|(_, point)| emit(point));
         }
-        split
     }
 }
 
