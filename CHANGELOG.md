@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb` now auto-updates to the newest `pcbc` release within the workspace's `pcb-version` lane.
+- Gerber export merges draws that continue in a straight line.
 
 ### Fixed
 
@@ -25,6 +26,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Recognize symbol pins hidden with `(hide yes)`.
 - `pcb embed-step` replaces a footprint's existing 3D models instead of leaving stale references and embedded files behind.
 - `pcb embed-step` writes a footprint KiCad can load when the STEP filename has spaces or parentheses.
+- Stop `pcb dfm` from reporting false narrow copper where same-net fills abut.
 
 ## [0.4.68] - 2026-10-02
 

@@ -1,9 +1,9 @@
 //! Polygon regularization, fixed-grid simplification, and inward decimation.
 
-use super::{ContourSet, Ring, Shape, flatten_shapes, overlay_fill_rule, rings_bbox};
+use super::{ContourSet, Ring, Shape, edges_of, flatten_shapes, overlay_fill_rule, rings_bbox};
 use crate::geom::accuracy::{lattice_per_mm, numerical_error};
 use crate::geom::dist;
-use crate::geom::{AccuracyError, BBox, FillRule, Point};
+use crate::geom::{AccuracyError, BBox, FillRule, Point, tol};
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay::{IntOverlayOptions, Overlay};
 use i_overlay::core::overlay_rule::OverlayRule;
@@ -41,16 +41,21 @@ pub(super) fn overlay(
     rule: OverlayRule,
     fill_rule: OverlayFillRule,
 ) -> Vec<Shape> {
-    let scale = lattice_per_mm(rings_bbox(subject).union(rings_bbox(clip)));
+    let bbox = rings_bbox(subject).union(rings_bbox(clip));
+    let scale = lattice_per_mm(bbox);
+    let vertices = VertexColumns::new(&[subject, clip], bbox);
     let lattice = |rings: &[Ring]| {
         rings
             .iter()
             .map(|ring| {
-                ring.iter()
-                    .map(|&[x, y]| {
-                        IntPoint::new((x * scale).round() as i64, (y * scale).round() as i64)
-                    })
-                    .collect()
+                let mut lattice = Vec::with_capacity(ring.len());
+                vertices.split(ring, |[x, y]| {
+                    lattice.push(IntPoint::new(
+                        (x * scale).round() as i64,
+                        (y * scale).round() as i64,
+                    ));
+                });
+                lattice
             })
             .collect::<Vec<_>>()
     };
@@ -69,6 +74,132 @@ pub(super) fn overlay(
         })
         .collect()
 }
+
+/// The vertices of one overlay, indexed to find those lying on an edge.
+///
+/// A source tool cuts one fill along another's edge and rounds the ends of
+/// the cut to its grid, so the fills' shared stretch is two edges a fraction
+/// of a grid step apart and an exact overlay keeps the hairline between
+/// them. Splitting every edge at the vertices that lie on it makes the
+/// stretch one edge again, which the overlay cancels.
+struct VertexColumns {
+    /// Vertices by column, ascending in `y` within each.
+    points: Vec<[f64; 2]>,
+    /// Offsets into `points` per column; two longer than the column count.
+    columns: Vec<u32>,
+    origin: f64,
+    pitch: f64,
+}
+
+impl VertexColumns {
+    fn new(rings: &[&[Ring]], bbox: BBox) -> Self {
+        let rings = || rings.iter().flat_map(|rings| rings.iter());
+        let count = rings().map(Vec::len).sum::<usize>();
+        // Columns about one edge wide: an edge then reads a column or two
+        // and finds a vertex or two there, however the edges are spread.
+        let extent = rings()
+            .flat_map(|ring| edges_of(ring))
+            .map(|(start, end)| (end.x - start.x).abs() + (end.y - start.y).abs())
+            .sum::<f64>()
+            .max(bbox.width());
+        let (origin, pitch) = (bbox.min.x, (extent / count as f64).max(ON_EDGE_MM));
+        let column = |x: f64| ((x - origin) / pitch) as usize;
+        // Counted two slots ahead, a column's offset is first where its
+        // vertices go next and then, once they are placed, where it starts.
+        let mut columns = vec![0u32; column(bbox.max.x) + 3];
+        for [x, _] in rings().flatten() {
+            columns[column(*x) + 2] += 1;
+        }
+        for column in 1..columns.len() {
+            columns[column] += columns[column - 1];
+        }
+        let mut points = vec![[0.0; 2]; count];
+        for point in rings().flatten() {
+            let slot = &mut columns[column(point[0]) + 1];
+            points[*slot as usize] = *point;
+            *slot += 1;
+        }
+        // Coincident vertices are one vertex, so stacked copies of a shape
+        // cost no more to search than one.
+        let mut kept = 0;
+        for column in 0..columns.len() - 1 {
+            let (start, end) = (columns[column] as usize, columns[column + 1] as usize);
+            points[start..end].sort_unstable_by(|left, right| {
+                left[1]
+                    .total_cmp(&right[1])
+                    .then(left[0].total_cmp(&right[0]))
+            });
+            columns[column] = kept as u32;
+            for index in start..end {
+                if kept == columns[column] as usize || points[index] != points[kept - 1] {
+                    points[kept] = points[index];
+                    kept += 1;
+                }
+            }
+        }
+        *columns.last_mut().unwrap() = kept as u32;
+        points.truncate(kept);
+        Self {
+            points,
+            columns,
+            origin,
+            pitch,
+        }
+    }
+
+    fn column(&self, x: f64) -> usize {
+        ((x - self.origin) / self.pitch) as usize
+    }
+
+    /// Emit `ring` with every edge split at the vertices lying on it.
+    fn split(&self, ring: &[[f64; 2]], mut emit: impl FnMut([f64; 2])) {
+        let reach = ON_EDGE_MM;
+        let last = self.columns.len() - 3;
+        let mut on_edge = Vec::new();
+        for (index, &[ax, ay]) in ring.iter().enumerate() {
+            let [bx, by] = ring[(index + 1) % ring.len()];
+            let (dx, dy) = (bx - ax, by - ay);
+            let length2 = dx * dx + dy * dy;
+            let (min_x, max_x) = (ax.min(bx) - reach, ax.max(bx) + reach);
+            let (min_y, max_y) = (ay.min(by) - reach, ay.max(by) + reach);
+            for column in self.column(min_x)..=self.column(max_x).min(last) {
+                // The edge's span of `y` within this column alone, so a long
+                // diagonal reads the vertices along it, not its bounding box.
+                let (low, high) = if dx == 0.0 {
+                    (min_y, max_y)
+                } else {
+                    let left = self.origin + column as f64 * self.pitch;
+                    let y_at = |x: f64| ay + (x.clamp(min_x, max_x) - ax) * dy / dx;
+                    let (y0, y1) = (y_at(left - reach), y_at(left + self.pitch + reach));
+                    (
+                        (y0.min(y1) - reach).clamp(min_y, max_y),
+                        (y0.max(y1) + reach).clamp(min_y, max_y),
+                    )
+                };
+                let points =
+                    &self.points[self.columns[column] as usize..self.columns[column + 1] as usize];
+                let first = points.partition_point(|point| point[1] < low);
+                for &[x, y] in points[first..].iter().take_while(|point| point[1] <= high) {
+                    // Strictly between the ends, which the edge already has.
+                    let along = (x - ax) * dx + (y - ay) * dy;
+                    let across = (x - ax) * dy - (y - ay) * dx;
+                    if along > 0.0 && along < length2 && across * across <= reach * reach * length2
+                    {
+                        on_edge.push((along, [x, y]));
+                    }
+                }
+            }
+            on_edge.sort_by(|left, right| left.0.total_cmp(&right.0));
+            emit([ax, ay]);
+            on_edge.drain(..).for_each(|(_, point)| emit(point));
+        }
+    }
+}
+
+/// How far a vertex may sit from an edge it lies on: source tools round
+/// the vertex and the edge's ends to their grid, each by up to half a cell
+/// diagonal.
+const ON_EDGE_MM: f64 = std::f64::consts::SQRT_2 * tol::SOURCE_GRID_MM;
 
 /// Resolve tagged rings one bounds-connected group at a time.
 ///
@@ -95,13 +226,14 @@ pub(super) fn untagged<T>(group: Vec<(Ring, T)>) -> Vec<Ring> {
 /// input order and the groups ordered by their first ring, so callers that
 /// number the resulting shapes see the same numbering for the same input.
 ///
-/// Bounds carry the overlay's rounding allowance: every group snaps to its
-/// own integer grid, and groups that stay apart by more than the allowance
-/// cannot be snapped together. A sweep in `x` keeps one hull per open group
-/// and merges a ring into every group whose hull it meets. The hull stands
-/// in for its members, so it may merge groups no member pair joins; that
-/// costs only partitioning benefit, never correctness, and lets a layer of
-/// long features degenerate to the single overlay it needed before.
+/// Bounds carry the overlay's rounding allowance and its reach from an edge
+/// to a vertex on it: every group snaps to its own integer grid, and groups
+/// that stay apart by more than that cannot be joined. A sweep in `x` keeps
+/// one hull per open group and merges a ring into every group whose hull it
+/// meets. The hull stands in for its members, so it may merge groups no
+/// member pair joins; that costs only partitioning benefit, never
+/// correctness, and lets a layer of long features degenerate to the single
+/// overlay it needed before.
 fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>) -> Vec<Vec<(Ring, T)>> {
     struct Group {
         hull: BBox,
@@ -111,7 +243,8 @@ fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>) -> Vec<Vec<(Ring, T)>> {
         .iter()
         .map(|(ring, _)| rings_bbox(std::slice::from_ref(ring)))
         .collect::<Vec<_>>();
-    let slack = numerical_error(bounds.iter().copied().fold(BBox::empty(), BBox::union));
+    let slack =
+        numerical_error(bounds.iter().copied().fold(BBox::empty(), BBox::union)) + ON_EDGE_MM;
     let mut order = bounds
         .into_iter()
         .map(|bbox| bbox.expand(slack))

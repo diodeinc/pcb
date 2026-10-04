@@ -221,6 +221,18 @@ pub fn write_layer(layer: &GerberLayer) -> Result<String> {
     Ok(writer.output)
 }
 
+/// Draws taken into one straight draw from `start`.
+#[derive(Clone, Copy)]
+struct Run {
+    start: Point,
+    /// The directions from `start` that pass through the output cell of
+    /// every joint, from `low` counterclockwise to `high`, in half units.
+    low: (i128, i128),
+    high: (i128, i128),
+    /// The squared distance of the farthest joint.
+    reach: i128,
+}
+
 struct Writer<'a> {
     layer: &'a GerberLayer,
     output: String,
@@ -235,6 +247,8 @@ struct Writer<'a> {
     /// Where the previous object's draw ended, while no other operation has
     /// intervened.
     stroke_end: Option<(i64, i64)>,
+    /// The straight run of draws the next written draw completes.
+    run: Option<Run>,
     /// The aperture and object attribute sets of the last object, whose
     /// attributes are the file's dictionary at this point.
     current_attribute_sets: (u32, u32),
@@ -254,6 +268,7 @@ impl<'a> Writer<'a> {
             current_coordinates: None,
             current_point: None,
             stroke_end: None,
+            run: None,
             current_attribute_sets: (AttributeSets::EMPTY, AttributeSets::EMPTY),
             current_aperture_attributes: &[],
             current_object_attributes: &[],
@@ -397,7 +412,8 @@ impl<'a> Writer<'a> {
 
     fn write_objects(&mut self, objects: &[WriterObject]) -> Result<()> {
         for (index, object) in objects.iter().enumerate() {
-            if !self.is_covered_dot(object, objects.get(index + 1)) {
+            let next = objects.get(index + 1);
+            if !self.is_covered_dot(object, next) && !self.joins_run(object, next) {
                 self.write_object(object)?;
             }
         }
@@ -447,26 +463,109 @@ impl<'a> Writer<'a> {
             && self.current_polarity == object.polarity
             && self.current_repeat == object.repeat
             && self.current_attribute_sets.1 == object.attributes;
-        let after = next.is_some_and(|next| {
-            let continues = match next.kind {
-                ObjectKind::Draw {
-                    start,
-                    aperture: next_aperture,
-                    ..
-                }
-                | ObjectKind::Arc {
-                    start,
-                    aperture: next_aperture,
-                    ..
-                } => next_aperture == aperture && self.coordinates(start) == at,
-                ObjectKind::Flash { .. } | ObjectKind::Region { .. } => false,
-            };
-            continues
-                && next.polarity == object.polarity
-                && next.repeat == object.repeat
-                && next.attributes == object.attributes
-        });
-        before || after
+        before || next.is_some_and(|next| self.continues(object, at, aperture, next))
+    }
+
+    /// Whether `next` carries on the stroke `object` ends at `at`.
+    fn continues(
+        &self,
+        object: &WriterObject,
+        at: (i64, i64),
+        aperture: i32,
+        next: &WriterObject,
+    ) -> bool {
+        let joins = match next.kind {
+            ObjectKind::Draw {
+                start,
+                aperture: next_aperture,
+                ..
+            }
+            | ObjectKind::Arc {
+                start,
+                aperture: next_aperture,
+                ..
+            } => next_aperture == aperture && self.coordinates(start) == at,
+            ObjectKind::Flash { .. } | ObjectKind::Region { .. } => false,
+        };
+        joins
+            && next.polarity == object.polarity
+            && next.repeat == object.repeat
+            && next.aperture_attributes == object.aperture_attributes
+            && next.attributes == object.attributes
+    }
+
+    /// Take a draw into the run its successor carries straight on. The run
+    /// images as the one draw between its ends when that draw passes through
+    /// the output cell of every joint: the file would round a point of it to
+    /// each of them.
+    fn joins_run(&mut self, object: &WriterObject, next: Option<&WriterObject>) -> bool {
+        let (
+            &ObjectKind::Draw {
+                start,
+                end,
+                aperture,
+            },
+            Some(next),
+        ) = (&object.kind, next)
+        else {
+            return false;
+        };
+        let ObjectKind::Draw { end: beyond, .. } = next.kind else {
+            return false;
+        };
+        let start = self.run.map_or(start, |run| run.start);
+        let from = self.coordinates(start);
+        // Half units from the run's start, where a cell's corners are whole.
+        let offset = |point| {
+            let (x, y) = self.coordinates(point);
+            (
+                2 * (i128::from(x) - i128::from(from.0)),
+                2 * (i128::from(y) - i128::from(from.1)),
+            )
+        };
+        let cross = |a: (i128, i128), b: (i128, i128)| a.0 * b.1 - a.1 * b.0;
+        let dot = |a: (i128, i128), b: (i128, i128)| a.0 * b.0 + a.1 * b.1;
+        let (joint, to) = (offset(end), offset(beyond));
+        // A draw crosses the joint's cell when it leaves `start` between
+        // the cell's outermost corners.
+        let corners = [(-1, -1), (1, -1), (1, 1), (-1, 1)].map(|(x, y)| (joint.0 + x, joint.1 + y));
+        let (mut low, mut high) =
+            corners[1..]
+                .iter()
+                .fold((corners[0], corners[0]), |(low, high), &corner| {
+                    (
+                        if cross(low, corner) < 0 { corner } else { low },
+                        if cross(high, corner) > 0 {
+                            corner
+                        } else {
+                            high
+                        },
+                    )
+                });
+        let mut reach = dot(joint, joint);
+        if let Some(run) = self.run {
+            if cross(low, run.low) > 0 {
+                low = run.low;
+            }
+            if cross(run.high, high) > 0 {
+                high = run.high;
+            }
+            reach = reach.max(run.reach);
+        }
+        let straight = self.continues(object, self.coordinates(end), aperture, next)
+            && cross(low, to) >= 0
+            && cross(to, high) >= 0
+            && dot(low, to) > 0
+            && dot(to, to) > reach;
+        if straight {
+            self.run = Some(Run {
+                start,
+                low,
+                high,
+                reach,
+            });
+        }
+        straight
     }
 
     fn write_object(&mut self, object: &WriterObject) -> Result<()> {
@@ -488,7 +587,8 @@ impl<'a> Writer<'a> {
             } => {
                 self.set_aperture(*aperture);
                 self.set_plot_mode(PlotMode::Linear);
-                self.write_move(*start);
+                let start = self.run.take().map_or(*start, |run| run.start);
+                self.write_move(start);
                 self.write_plot(*end, None);
             }
             ObjectKind::Arc {
@@ -891,6 +991,36 @@ mod tests {
         assert!(output.contains("G36*\nX3000000D02*"), "{output}");
         let parsed = crate::GerberX2::parse(&output).unwrap();
         assert_eq!(parsed.objects().len(), 5);
+    }
+
+    #[test]
+    fn draws_straight_on_at_output_precision_are_one_draw() {
+        let point = |x: f64, y: f64| Point { x, y };
+        let polyline = |points: &[(f64, f64)]| {
+            let draws = points.windows(2).map(|pair| {
+                WriterObject::dark(ObjectKind::Draw {
+                    start: point(pair[0].0, pair[0].1),
+                    end: point(pair[1].0, pair[1].1),
+                    aperture: 10,
+                })
+            });
+            write_layer(&stroke_layer(draws.collect())).unwrap()
+        };
+        // The draw to (4.000002, 2) crosses the cell of both joints.
+        let output = polyline(&[
+            (0.0, 0.0),
+            (1.0, 0.5),
+            (2.000_001, 1.0),
+            (4.000_002, 2.0),
+            (3.0, 1.5),
+        ]);
+        assert!(
+            output.contains("X0Y0D02*\nX4000002Y2000000D01*\nX3000000Y1500000D01*\n"),
+            "{output}"
+        );
+        // A joint whose cell the line misses stays.
+        let output = polyline(&[(0.0, 0.0), (1.0, 0.000_001), (2.0, 0.0)]);
+        assert_eq!(output.matches("D01*").count(), 2, "{output}");
     }
 
     fn stroke_layer(objects: Vec<WriterObject>) -> GerberLayer {
