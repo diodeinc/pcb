@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.69] - 2026-10-04
+
 ### Added
 
 - `pcb ipc fab-drawing` draws the fabrication drawing of a board or a board array as a PDF.
@@ -2200,7 +2202,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.68...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.69...HEAD
+[0.4.69]: https://github.com/diodeinc/pcb/compare/v0.4.68...v0.4.69
 [0.4.68]: https://github.com/diodeinc/pcb/compare/v0.4.67...v0.4.68
 [0.4.67]: https://github.com/diodeinc/pcb/compare/v0.4.66...v0.4.67
 [0.4.66]: https://github.com/diodeinc/pcb/compare/v0.4.65...v0.4.66
