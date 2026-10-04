@@ -503,7 +503,7 @@ impl KiCadCliBuilder {
 /// errors and incomplete-coverage warnings to `diagnostics`. Invalid rules return
 /// `None` without running KiCad; callers must not treat this as a successful DRC.
 /// `display_pcb_path` supplies the user-facing path for custom-rule diagnostics.
-/// This does not compile conditions, resolve board-dependent layer names, or
+/// This does not resolve names in conditions or board-dependent layer names, or
 /// expand text variables, and is not proof that KiCad applied every rule.
 /// Relative paths are resolved against `working_dir` (or the current directory).
 pub fn run_drc(

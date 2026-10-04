@@ -1,19 +1,21 @@
 //! A known-error preflight, not a replacement for KiCad's rule compiler.
 //!
 //! The lexical/schema contract follows KiCad 10.0.6's `common/dsnlexer.cpp`
-//! and `pcbnew/drc/drc_rule_parser.cpp`. Numeric arithmetic follows
-//! `common/libeval_compiler/{grammar.lemon,libeval_compiler.cpp}`. Conditions,
-//! board-dependent layer names, and text-variable expansion remain KiCad's
-//! responsibility. In particular, passing this check does not prove that
-//! KiCad compiled or applied every rule.
+//! and `pcbnew/drc/drc_rule_parser.cpp`; expressions are covered by [`expr`].
+//! Names in conditions, board-dependent layer names, and text-variable
+//! expansion remain KiCad's responsibility. In particular, passing this check
+//! does not prove that KiCad compiled or applied every rule.
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use pcb_sexpr::{Sexpr, SexprKind, Span};
 use pcb_zen_core::diagnostics::{Diagnostic, DiagnosticError, Diagnostics};
 use starlark::codemap::{CodeMap, Pos, Span as CodeSpan};
 use starlark::errors::EvalSeverity;
 use std::collections::HashSet;
 use std::path::Path;
+
+mod expr;
+use expr::{Domain, arithmetic};
 
 pub(super) fn preflight(
     board: &Path,
@@ -236,11 +238,7 @@ impl Checker<'_> {
                         return Err(self
                             .error(bound.span.start, format!("missing {name} value for {kind}")));
                     }
-                    let expression = expr
-                        .iter()
-                        .map(expression_text)
-                        .collect::<Vec<_>>()
-                        .join(" ");
+                    let expression = expression_text(expr);
                     match arithmetic(&expression, unitless) {
                         Ok(Some(units)) => {
                             if units == Domain::Time && !time_allowed {
@@ -302,12 +300,32 @@ impl Checker<'_> {
                     }
                     self.rule = Some(name.to_owned());
                     let mut seen = HashSet::new();
+                    let mut layer = None;
                     for clause in &values[1..] {
                         let (keyword, args) = self.form(clause)?;
                         match keyword {
                             "constraint" => self.constraint(clause, args, &mut seen)?,
-                            "condition" | "layer" => {
-                                self.atom(self.one(clause, args)?)?;
+                            "condition" => {
+                                let value = self.one(clause, args)?;
+                                self.atom(value)?;
+                                // Unquoted text is split by KiCad's own lexer.
+                                if let Some(Err(error)) = value.as_str().map(expr::condition) {
+                                    return Err(self
+                                        .error(clause.span.start, format!("condition: {error}")));
+                                }
+                            }
+                            "layer" => {
+                                let value = self.atom(self.one(clause, args)?)?;
+                                // KiCad allows another only while every layer is
+                                // still selected, which takes a pattern of wildcards alone.
+                                if layer.replace(value).is_some_and(|previous: &str| {
+                                    previous.contains(|c| !matches!(c, '*' | '?'))
+                                }) {
+                                    return Err(self.error(
+                                        clause.span.start,
+                                        "a rule can have only one layer clause",
+                                    ));
+                                }
                             }
                             "severity" => {
                                 let severity = self.one(clause, args)?;
@@ -541,173 +559,27 @@ impl Parser<'_, '_> {
     }
 }
 
-fn expression_text(node: &Sexpr) -> String {
-    match &node.kind {
-        SexprKind::List(children) => format!(
-            "({})",
-            children
-                .iter()
-                .map(expression_text)
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        SexprKind::Symbol(text) | SexprKind::String(text) => text.clone(),
-        _ => unreachable!("rule tokenizer preserves numeric atoms as symbols"),
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Domain {
-    Unitless,
-    Length,
-    Angle,
-    Time,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum NumericToken {
-    Number(Domain),
-    Operator(u8),
-    Left,
-    Right,
-}
-
-fn arithmetic(source: &str, unitless: bool) -> Result<Option<Domain>> {
-    let bytes = source.as_bytes();
-    let mut tokens = Vec::new();
-    let mut position = 0;
-    let mut numbers = 0;
-    let mut missing_units = None;
-    let mut unexpected_units = false;
-    while position < bytes.len() {
-        match bytes[position] {
-            b' ' | b'\t' | b'\r' | b'\n' => {
-                position += 1;
-            }
-            b'+' | b'-' | b'*' | b'/' => {
-                tokens.push(NumericToken::Operator(bytes[position]));
-                position += 1;
-            }
-            b'(' => {
-                tokens.push(NumericToken::Left);
-                position += 1;
-            }
-            b')' => {
-                tokens.push(NumericToken::Right);
-                position += 1;
-            }
-            b'0'..=b'9' => {
-                let start = position;
-                while position < bytes.len() && bytes[position].is_ascii_digit() {
-                    position += 1;
-                }
-                if bytes.get(position).is_some_and(|&b| b == b'.' || b == b',') {
-                    position += 1;
-                    while position < bytes.len() && bytes[position].is_ascii_digit() {
-                        position += 1;
-                    }
-                }
-                let literal = &source[start..position];
-                while bytes.get(position) == Some(&b' ') {
-                    position += 1;
-                }
-                let unit_start = position;
-                while bytes.get(position).is_some_and(u8::is_ascii_alphabetic) {
-                    position += 1;
-                }
-                let domain = match &source[unit_start..position] {
-                    "" => {
-                        missing_units = Some(literal);
-                        Domain::Unitless
-                    }
-                    "mm" | "mil" | "in" => Domain::Length,
-                    "deg" => Domain::Angle,
-                    "fs" | "ps" => Domain::Time,
-                    // Identifiers/functions are outside this preflight's scope.
-                    _ => return Ok(None),
-                };
-                unexpected_units |= unitless && domain != Domain::Unitless;
-                tokens.push(NumericToken::Number(domain));
-                numbers += 1;
-            }
-            // Conditions, functions, property lookups, comparisons, scientific
-            // notation, etc. require KiCad's compiler, not a guessed evaluator.
-            _ => return Ok(None),
+// The text KiCad compiles: tokens are joined by the whitespace between them,
+// so only tokens that touch in the source stay adjacent.
+fn expression_text(nodes: &[Sexpr]) -> String {
+    let mut text = String::new();
+    let mut end = None;
+    for node in nodes {
+        if end.is_some_and(|end| end != node.span.start) {
+            text.push(' ');
         }
-    }
-    let mut parser = Arithmetic {
-        tokens: &tokens,
-        position: 0,
-        implicit_numbers: 0,
-    };
-    let domain = parser.expression(0, 0)?;
-    if parser.position != tokens.len() {
-        bail!("invalid arithmetic expression {source:?}");
-    }
-    if unexpected_units {
-        bail!("unexpected units in a unitless constraint");
-    }
-    // KiCad checks missing units only if there is exactly one compiled numeric
-    // node. Unary minus introduces an implicit zero; numeric factors in compound
-    // arithmetic are intentionally allowed to be unitless.
-    if !unitless
-        && numbers + parser.implicit_numbers == 1
-        && let Some(literal) = missing_units
-    {
-        bail!("missing units for {literal:?}; use mm, in, mil, deg, fs, or ps");
-    }
-    Ok(Some(domain))
-}
-
-struct Arithmetic<'a> {
-    tokens: &'a [NumericToken],
-    position: usize,
-    implicit_numbers: usize,
-}
-
-impl Arithmetic<'_> {
-    fn expression(&mut self, precedence: u8, depth: usize) -> Result<Domain> {
-        if depth > 256 {
-            bail!("arithmetic nesting exceeds preflight limit (256)");
+        match &node.kind {
+            SexprKind::List(children) => {
+                text.push('(');
+                text += &expression_text(children);
+                text.push(')');
+            }
+            SexprKind::Symbol(atom) | SexprKind::String(atom) => text += atom,
+            _ => unreachable!("rule tokenizer preserves numeric atoms as symbols"),
         }
-        let mut left = match self.tokens.get(self.position) {
-            Some(NumericToken::Number(domain)) => {
-                self.position += 1;
-                *domain
-            }
-            Some(NumericToken::Operator(op @ (b'+' | b'-'))) => {
-                self.position += 1;
-                if *op == b'-' {
-                    self.implicit_numbers += 1;
-                }
-                self.expression(3, depth + 1)?
-            }
-            Some(NumericToken::Left) => {
-                self.position += 1;
-                let inner = self.expression(0, depth + 1)?;
-                if !matches!(self.tokens.get(self.position), Some(NumericToken::Right)) {
-                    bail!("missing ')' in arithmetic expression");
-                }
-                self.position += 1;
-                inner
-            }
-            _ => bail!("expected a number or parenthesized arithmetic expression"),
-        };
-        while let Some(NumericToken::Operator(op)) = self.tokens.get(self.position) {
-            let next = if matches!(op, b'*' | b'/') { 2 } else { 1 };
-            if next < precedence {
-                break;
-            }
-            self.position += 1;
-            let right = self.expression(next + 1, depth + 1)?;
-            // Match KiCad's actual unit propagation (not dimensional analysis):
-            // a non-unitless RHS wins, otherwise preserve the LHS's domain.
-            if right != Domain::Unitless {
-                left = right;
-            }
-        }
-        Ok(left)
+        end = Some(node.span.end);
     }
+    text
 }
 
 #[cfg(test)]
@@ -868,7 +740,7 @@ mod tests {
             assert_eq!(warnings.len(), 1);
             assert!(warnings[0].contains("this rule file was not preflighted"));
         }
-        let warnings = checked(&rules("(constraint future_constraint (min 1)) (future_clause x) (constraint length (min fn(2ps)))")).unwrap();
+        let warnings = checked(&rules("(constraint future_constraint (min 1)) (future_clause x) (constraint length (min A.Length))")).unwrap();
         assert_eq!(warnings.len(), 3);
         assert!(
             warnings
@@ -888,11 +760,35 @@ mod tests {
     }
 
     #[test]
-    fn conditions_and_layers_are_not_diagnosed() {
-        let source = rules(
-            "(layer outer) (condition \"A.Parent == 'H11' && B.Parent == 'H11'\") (constraint hole_clearance (min 0mm)) (constraint assertion \"A.Type == 'Pad'\")",
-        );
-        assert!(checked(&source).unwrap().is_empty());
+    fn conditions_and_layers_report_only_what_kicad_rejects() {
+        for valid in [
+            "(layer outer) (condition \"A.Parent == 'H11' && B.Parent == 'H11'\")",
+            "(condition \"A.Width > 0.2mm && !A.isPlated() || A.Net != B.Net\")",
+            // Names are KiCad's to judge, as is anything outside ASCII.
+            "(condition \"C.Typo == nope && A.missing('x')\")",
+            "(condition \"A.NetName == 'µ' &&\")",
+            "(layer \"*\") (layer \"F.Cu\")",
+            // KiCad loads a rule file whose assertion does not compile.
+            "(constraint assertion \"A.Type ==\")",
+        ] {
+            assert!(checked(&rules(valid)).unwrap().is_empty(), "{valid}");
+        }
+        for (body, expected) in [
+            ("(condition \"A.Type = 'Pad'\")", "unexpected character '='"),
+            (
+                "(condition \"A.Type == 'Pad' and B.Type == 'Via'\")",
+                "unexpected \"and\"",
+            ),
+            ("(condition \"A.Type ==\")", "unexpected end"),
+            ("(condition \"A.Width < 1mm < 2mm\")", "cannot be chained"),
+            ("(condition \"isPlated()\")", "needs an item"),
+            ("(condition \"A.Width > 1\")", "missing units for \"1\""),
+            ("(constraint length (min fn(2ps)))", "needs an item"),
+            ("(layer \"*.Cu\") (layer \"F.SilkS\")", "only one layer"),
+        ] {
+            let error = checked(&rules(body)).unwrap_err().to_string();
+            assert!(error.contains(expected), "{body}: {error}");
+        }
     }
 
     #[test]
@@ -911,14 +807,114 @@ mod tests {
         }
     }
 
+    // Every sequence of up to `max` atoms.
+    fn sequences(atoms: &[&str], max: usize) -> Vec<String> {
+        (0..max)
+            .scan(vec![String::new()], |longest, _| {
+                *longest = longest
+                    .iter()
+                    .flat_map(|prefix| atoms.iter().map(move |atom| format!("{prefix}{atom} ")))
+                    .collect();
+                Some(longest.clone())
+            })
+            .flatten()
+            .collect()
+    }
+
     #[test]
-    fn deeply_nested_quoted_arithmetic_fails_without_overflow() {
-        let expression = format!("{}1mm{}", "(".repeat(300), ")".repeat(300));
-        assert!(
-            arithmetic(&expression, false)
-                .unwrap_err()
-                .to_string()
-                .contains("nesting exceeds")
+    #[ignore = "requires KiCad's Python; run explicitly for KiCad compatibility"]
+    fn real_kicad_rejects_whatever_the_preflight_rejects() {
+        let conditions = sequences(
+            &[
+                "A.Type",
+                "'Pad'",
+                "1",
+                "1mm",
+                "==",
+                "<",
+                "&&",
+                "||",
+                "!",
+                "-",
+                "(",
+                ")",
+                ",",
+                ".",
+                "A.isPlated()",
+                "isPlated()",
+                "=",
+                "and",
+                "x",
+                "\t",
+            ],
+            3,
         );
+        let values = sequences(
+            &[
+                "1", "1mm", "5ps", "+", "*", "(", ")", "-", "A.Width", "fn(1mm)", "x", "mm",
+            ],
+            3,
+        );
+        let layers = sequences(
+            &[
+                "(layer outer)",
+                "(layer \"F.Cu\")",
+                "(layer \"*.Cu\")",
+                "(layer \"?*\")",
+            ],
+            3,
+        );
+        let cases: Vec<String> = conditions
+            .iter()
+            .map(|text| format!("(condition \"{text}\") (constraint clearance (min 1mm))"))
+            .chain(
+                ["clearance (min", "via_count (max"]
+                    .iter()
+                    .flat_map(|kind| {
+                        values
+                            .iter()
+                            .map(move |text| format!("(constraint {kind} \"{text}\"))"))
+                    }),
+            )
+            .chain(
+                layers
+                    .iter()
+                    .map(|clauses| format!("{clauses}(constraint clearance (min 1mm))")),
+            )
+            .map(|body| rules(&body))
+            .collect();
+
+        let root = tempfile::tempdir().unwrap();
+        let [board, input, output] =
+            ["layout.kicad_pcb", "cases.json", "accepted.json"].map(|name| root.path().join(name));
+        std::fs::write(
+            &board,
+            include_str!("../../pcb-layout/tests/resources/graphics/module/layout.kicad_pcb"),
+        )
+        .unwrap();
+        std::fs::write(&input, serde_json::to_string(&cases).unwrap()).unwrap();
+        crate::PythonScriptBuilder::new(include_str!("dru/oracle.py"))
+            .args([&board, &input, &output].map(|path| path.to_string_lossy()))
+            .run()
+            .unwrap();
+        let accepted: Vec<bool> =
+            serde_json::from_str(&std::fs::read_to_string(&output).unwrap()).unwrap();
+        assert_eq!(accepted.len(), cases.len());
+        let rejected = cases
+            .iter()
+            .zip(accepted)
+            .filter_map(|(rules, accepted)| Some((rules, accepted, checked(rules).err()?)))
+            .inspect(|(rules, accepted, error)| assert!(!accepted, "{rules}: {error}"))
+            .count();
+        eprintln!(
+            "KiCad rejects all {rejected} of {} files the preflight rejects",
+            cases.len()
+        );
+    }
+
+    #[test]
+    fn deep_nesting_is_left_to_kicad_without_overflow() {
+        let expression = format!("{}1mm{}", "(".repeat(300), ")".repeat(300));
+        assert_eq!(arithmetic(&expression, false).unwrap(), None);
     }
 }
