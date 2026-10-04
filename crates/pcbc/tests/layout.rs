@@ -80,6 +80,33 @@ fn layout_json_output_is_parseable() {
             .is_some_and(|path| path.ends_with("layout.kicad_pcb"))
     );
 
+    let rules = std::path::Path::new(json["pcbFile"].as_str().unwrap()).with_extension("kicad_dru");
+    sandbox.write(
+        rules.to_str().unwrap(),
+        "(version 1)\n(rule \"broken\" (constraint clearance (min 0.11)))",
+    );
+    for suppression in ["unrelated", "layout.drc.rules.invalid"] {
+        let output = sandbox
+            .run(
+                "pcbc",
+                ["layout", "--check", "-S", suppression, "board.zen"],
+            )
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if suppression == "unrelated" {
+            assert!(stderr.contains("Error: [invalid]"), "{stderr}");
+            assert!(stderr.contains("missing units"), "{stderr}");
+            assert!(stderr.contains("layout.kicad_dru:2:38"), "{stderr}");
+        } else {
+            assert!(stderr.contains("KiCad DRC was not run"), "{stderr}");
+        }
+    }
+
     let no_sync_output = sandbox
         .run(
             "pcbc",

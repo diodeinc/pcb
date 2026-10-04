@@ -81,7 +81,7 @@ fn invalid_custom_rules_stop_import_before_conversion() {
 
     assert!(!import.status.success());
     let stderr = String::from_utf8_lossy(&import.stderr);
-    assert!(stderr.contains("layout.kicad_dru:2:41:"), "{stderr}");
+    assert!(stderr.contains("layout.kicad_dru:2:41"), "{stderr}");
     assert!(stderr.contains("rule \"isolation\""), "{stderr}");
     assert!(stderr.contains("missing units"), "{stderr}");
     assert!(stderr.contains("KiCad DRC was not run."), "{stderr}");
@@ -95,6 +95,57 @@ fn invalid_custom_rules_stop_import_before_conversion() {
         fs::read_to_string(sandbox.root_path().join("source/layout.kicad_dru")).unwrap(),
         rules
     );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&fs::read(validation_diagnostics(&stderr)).unwrap()).unwrap();
+    let diagnostic = payload["diagnostics"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| {
+            d["body"]
+                .as_str()
+                .is_some_and(|body| body.contains("missing units"))
+        })
+        .unwrap();
+    assert_eq!(
+        diagnostic["path"],
+        sandbox
+            .root_path()
+            .join("source/layout.kicad_dru")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert_eq!(diagnostic["span"], "2:41");
+    assert_eq!(diagnostic["severity"], "error");
+    assert!(!stderr.contains("pcb-import-kicad-sources-"), "{stderr}");
+
+    // Fixing the units permits conversion; repeated deferred clauses produce
+    // one warning, saved alongside ordinary ERC/DRC findings (not just logged).
+    sandbox.write("source/layout.kicad_dru", "(version 1)\n(rule \"isolation\" (condition \"A.Type == 'Pad'\") (condition \"A.Type == 'Via'\") (constraint clearance (min 0.11mm)))\n");
+    let import = sandbox
+        .run("pcbc", ["import", "source/layout.kicad_pro", "valid-board"])
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .expect("import valid custom rules");
+    let stderr = String::from_utf8_lossy(&import.stderr);
+    assert!(stderr.contains("Warning: [incomplete]"), "{stderr}");
+    assert!(!stderr.contains("WARN  pcb_kicad"), "{stderr}");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&fs::read(validation_diagnostics(&stderr)).unwrap()).unwrap();
+    let warnings = payload["diagnostics"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| {
+            d["body"]
+                .as_str()
+                .is_some_and(|body| body.contains("condition expression compilation"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0]["severity"], "warning");
+    assert_eq!(warnings[0]["span"], "2:19");
 }
 
 #[test]

@@ -9,21 +9,33 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use pcb_sexpr::{Sexpr, SexprKind, Span};
+use pcb_zen_core::diagnostics::{Diagnostic, DiagnosticError, Diagnostics};
+use starlark::codemap::{CodeMap, Pos, Span as CodeSpan};
+use starlark::errors::EvalSeverity;
 use std::collections::HashSet;
 use std::path::Path;
 
-pub(super) fn preflight(board: &Path) -> Result<()> {
+pub(super) fn preflight(
+    board: &Path,
+    display_board: &Path,
+    diagnostics: &mut Diagnostics,
+) -> Result<bool> {
     let path = board.with_extension("kicad_dru");
     let source = match std::fs::read_to_string(&path) {
         Ok(source) => source,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
         Err(error) => return Err(error).with_context(|| format!("Read {}", path.display())),
     };
-    let warnings = check(&path, &source)?;
-    for warning in warnings {
-        log::warn!("Custom-rule preflight incomplete: {warning}");
+    match check(&display_board.with_extension("kicad_dru"), &source) {
+        Ok(warnings) => {
+            diagnostics.extend(warnings);
+            Ok(true)
+        }
+        Err(error) => {
+            diagnostics.push(error.downcast::<DiagnosticError>()?.0);
+            Ok(false)
+        }
     }
-    Ok(())
 }
 
 fn space(byte: u8) -> bool {
@@ -34,33 +46,53 @@ struct Checker<'a> {
     path: &'a Path,
     source: &'a str,
     rule: Option<String>,
-    warnings: Vec<String>,
+    warnings: Vec<Diagnostic>,
 }
 
 impl Checker<'_> {
-    fn message(&self, offset: usize, message: impl std::fmt::Display) -> String {
-        let prefix = &self.source[..offset];
-        let line = prefix.bytes().filter(|&b| b == b'\n').count() + 1;
-        let column = prefix
-            .rsplit('\n')
-            .next()
-            .unwrap_or_default()
-            .chars()
-            .count()
-            + 1;
+    fn diagnostic(
+        &self,
+        offset: usize,
+        message: impl std::fmt::Display,
+        severity: EvalSeverity,
+    ) -> Diagnostic {
         let rule = self
             .rule
             .as_ref()
             .map_or(String::new(), |name| format!("rule {name:?}: "));
-        format!("{}:{line}:{column}: {rule}{message}", self.path.display())
+        let kind = if severity == EvalSeverity::Error {
+            "layout.drc.rules.invalid"
+        } else {
+            "layout.drc.rules.incomplete"
+        };
+        let path = self.path.to_string_lossy();
+        let codemap = CodeMap::new(path.to_string(), self.source.to_owned());
+        let position = Pos::new(offset as u32);
+        Diagnostic::categorized(&path, &format!("{rule}{message}"), kind, severity).with_span(
+            codemap
+                .file_span(CodeSpan::new(position, position))
+                .resolve_span(),
+        )
     }
 
     fn error(&self, offset: usize, message: impl std::fmt::Display) -> anyhow::Error {
-        anyhow!("{}\nKiCad DRC was not run.", self.message(offset, message))
+        anyhow!(DiagnosticError(self.diagnostic(
+            offset,
+            message,
+            EvalSeverity::Error
+        )))
     }
 
     fn defer(&mut self, offset: usize, message: impl std::fmt::Display) {
-        self.warnings.push(self.message(offset, message));
+        let diagnostic = self.diagnostic(offset, message, EvalSeverity::Warning);
+        // Repeated clauses in one rule need only one warning per reason.
+        if !self
+            .warnings
+            .iter()
+            .any(|existing| existing.body == diagnostic.body)
+        {
+            self.warnings.push(diagnostic);
+        }
     }
 
     fn atom<'a>(&self, node: &'a Sexpr) -> Result<&'a str> {
@@ -322,7 +354,7 @@ impl Checker<'_> {
     }
 }
 
-fn check(path: &Path, source: &str) -> Result<Vec<String>> {
+fn check(path: &Path, source: &str) -> Result<Vec<Diagnostic>> {
     let mut checker = Checker {
         path,
         source,
@@ -702,7 +734,12 @@ mod tests {
     }
 
     fn checked(source: &str) -> Result<Vec<String>> {
-        check(Path::new("layout.kicad_dru"), source)
+        check(Path::new("layout.kicad_dru"), source).map(|warnings| {
+            warnings
+                .into_iter()
+                .map(|diagnostic| diagnostic.body)
+                .collect()
+        })
     }
 
     #[test]
@@ -710,10 +747,16 @@ mod tests {
         let error =
             checked("(version 1)\n(rule \"PoE isolation\"\n  (constraint clearance (min 0.11)))")
                 .unwrap_err()
-                .to_string();
+                .downcast::<DiagnosticError>()
+                .unwrap()
+                .0;
+        let report = pcb_zen_core::diagnostics::DiagnosticReport::from_diagnostic(&error);
+        assert_eq!(report.location, "layout.kicad_dru:3:25");
+        assert_eq!(report.kind.as_deref(), Some("layout.drc.rules.invalid"));
+        assert_eq!(report.severity, EvalSeverity::Error);
         assert_eq!(
-            error,
-            "layout.kicad_dru:3:25: rule \"PoE isolation\": clearance min: missing units for \"0.11\"; use mm, in, mil, deg, fs, or ps\nKiCad DRC was not run."
+            report.body,
+            "rule \"PoE isolation\": clearance min: missing units for \"0.11\"; use mm, in, mil, deg, fs, or ps"
         );
     }
 
@@ -865,13 +908,31 @@ mod tests {
             checked(&rules("(layer \"*\") (layer \"*\")"))
                 .unwrap()
                 .len(),
-            2
+            1
         );
         // A syntactically valid string can still fail KiCad's expression
         // compiler. Never imply this expression was validated by the guard.
         let warnings = checked(&rules("(condition \"A.Type ==\")")).unwrap();
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("condition expression compilation"));
+    }
+
+    #[test]
+    fn repeated_warnings_are_structured_and_deduplicated() {
+        let source = rules(
+            "(condition \"A.Type == 'Pad'\") (condition \"A.Type == 'Via'\") (layer \"F.Cu\") (layer \"B.Cu\")",
+        );
+        let warnings = check(Path::new("layout.kicad_dru"), &source).unwrap();
+        assert_eq!(warnings.len(), 2);
+        for warning in warnings {
+            assert_eq!(warning.severity, EvalSeverity::Warning);
+            assert_eq!(
+                pcb_zen_core::diagnostics::diagnostic_kind(&warning).as_deref(),
+                Some("layout.drc.rules.incomplete")
+            );
+            assert_eq!(warning.path, "layout.kicad_dru");
+            assert!(warning.span.is_some());
+        }
     }
 
     #[test]

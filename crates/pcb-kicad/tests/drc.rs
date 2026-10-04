@@ -1,4 +1,5 @@
 use pcb_kicad::run_drc;
+use pcb_zen_core::Diagnostics;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -11,18 +12,24 @@ fn drc_child() {
         return;
     };
     let root = Path::new(&root);
+    let mut diagnostics = Diagnostics::default();
     let report = run_drc(
         "layout.kicad_pcb",
         false,
         Some(Path::new("work")),
         Path::new("report.json"),
-    );
+        Path::new("source/layout.kicad_pcb"),
+        &mut diagnostics,
+    )
+    .unwrap();
     if let Ok(expected) = std::env::var("PCB_DRC_TEST_ERROR") {
-        let error = report.unwrap_err().to_string();
+        assert!(report.is_none());
+        assert_eq!(diagnostics.len(), 1);
+        let error = &diagnostics[0].body;
         assert!(error.contains(expected.as_str()), "{error}");
         assert!(error.contains("rule \"isolation\""), "{error}");
-        assert!(error.contains("work/layout.kicad_dru:"), "{error}");
-        assert!(error.contains("KiCad DRC was not run"), "{error}");
+        assert_eq!(diagnostics[0].path, "source/layout.kicad_dru");
+        assert!(diagnostics[0].span.is_some());
         assert!(!root.join("invoked").exists());
         assert!(!root.join("work/report.json").exists());
     } else {
@@ -118,7 +125,18 @@ fn real_kicad_custom_rules_and_exclusions() {
     // The two pads are 0.85mm apart: the implicit 0.2mm rule cannot produce
     // this violation. This proves the named custom rule actually loaded.
     fs::write(&rules, "# KiCad comment\n(version 1)\n(rule \"preflight-positive-control\"\n (condition \"A.memberOfFootprint('R1')\")\n (constraint clearance (min \"2 * (1mm + 1.5mm)\")))").unwrap();
-    let report = run_drc(&board, false, Some(root.path()), &report_path).unwrap();
+    let mut diagnostics = Diagnostics::default();
+    let report = run_drc(
+        &board,
+        false,
+        Some(root.path()),
+        &report_path,
+        &board,
+        &mut diagnostics,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(diagnostics.warning_count(), 1);
     eprintln!("Executed real KiCad {}", report.kicad_version);
     let clearances = report
         .violations
@@ -155,7 +173,17 @@ fn real_kicad_custom_rules_and_exclusions() {
         "(version 1)\n(rule \"inactive\" (constraint clearance (min 0.11)))",
     )
     .unwrap();
-    let report = run_drc(&board, false, Some(root.path()), &report_path).unwrap();
+    diagnostics = Diagnostics::default();
+    let report = run_drc(
+        &board,
+        false,
+        Some(root.path()),
+        &report_path,
+        &board,
+        &mut diagnostics,
+    )
+    .unwrap()
+    .unwrap();
     assert!(
         report
             .violations
@@ -169,12 +197,20 @@ fn real_kicad_custom_rules_and_exclusions() {
         "(version 1)\n(rule \"invalid\" (constraint clearance (min 0.11)))",
     )
     .unwrap();
+    diagnostics = Diagnostics::default();
     assert!(
-        run_drc(&board, false, Some(root.path()), &report_path)
-            .unwrap_err()
-            .to_string()
-            .contains("missing units")
+        run_drc(
+            &board,
+            false,
+            Some(root.path()),
+            &report_path,
+            &board,
+            &mut diagnostics
+        )
+        .unwrap()
+        .is_none()
     );
+    assert!(diagnostics[0].body.contains("missing units"));
     // A previous report is not overwritten or returned as a successful run.
     assert_eq!(fs::read(&report_path).unwrap(), original);
 }

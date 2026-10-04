@@ -283,6 +283,69 @@ fn test_release_check_operational_failure_is_a_diagnostic() {
 }
 
 #[test]
+fn test_release_check_reports_invalid_rules_even_when_suppressed() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write(
+            "boards/TestBoard.zen",
+            "Layout(name=\"TestBoard\", path=\"layout\")\n",
+        )
+        .write("boards/layout/layout.kicad_pro", "{}")
+        .write("boards/layout/layout.kicad_pcb", "(kicad_pcb)")
+        .write(
+            "boards/layout/layout.kicad_dru",
+            "(version 1)\n(rule \"broken\" (constraint clearance (min 0.11)))",
+        )
+        .init_git()
+        .commit("Initial commit")
+        .sync();
+    let output = sb
+        .run(
+            "pcbc",
+            [
+                "publish",
+                "boards/TestBoard.zen",
+                "--check",
+                "-S",
+                "layout.drc.rules.invalid",
+            ],
+        )
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["layoutChecked"], false);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["kind"] == "layout.drc.rules.invalid")
+        .unwrap();
+    assert_eq!(diagnostic["severity"], "error");
+    assert!(
+        diagnostic["body"]
+            .as_str()
+            .unwrap()
+            .contains("missing units")
+    );
+    assert_eq!(
+        diagnostic["location"],
+        format!(
+            "{}:2:38",
+            sb.root_path()
+                .join("src/boards/layout/layout.kicad_dru")
+                .display()
+        )
+    );
+    assert_eq!(diagnostic["suppressed"], true);
+}
+
+#[test]
 fn test_release_check_drc_exclusion_does_not_claim_layout_checked() {
     let mut sb = Sandbox::new();
     sb.cwd("src")

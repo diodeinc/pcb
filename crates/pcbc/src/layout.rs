@@ -284,11 +284,23 @@ pub(crate) fn run_drc_check(args: &LayoutArgs, result: &LayoutCommandResult) -> 
         .start();
     let drc_output = tempfile::NamedTempFile::new()?;
     let working_dir = pcb_file.parent();
-    let report = pcb_kicad::run_drc(pcb_file, false, working_dir, drc_output.path())?;
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
-    report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
+    let report = pcb_kicad::run_drc(
+        pcb_file,
+        false,
+        working_dir,
+        drc_output.path(),
+        display_pcb_file,
+        &mut diagnostics,
+    )?;
+    let rules_valid = report.is_some();
+    if let Some(report) = report {
+        report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
+    }
     spinner.finish();
-    render_or_bail(&mut diagnostics, &args.suppress, "DRC failed")
+    render_or_bail(&mut diagnostics, &args.suppress, "DRC failed")?;
+    anyhow::ensure!(rules_valid, "Invalid custom rules; KiCad DRC was not run.");
+    Ok(())
 }
 
 pub(crate) fn resolve_existing_layout(
