@@ -317,11 +317,10 @@ impl Checker<'_> {
                             "layer" => {
                                 let value = self.atom(self.one(clause, args)?)?;
                                 // KiCad allows another only while every layer is
-                                // still selected, which takes a wildcard.
-                                if layer
-                                    .replace(value)
-                                    .is_some_and(|previous: &str| !previous.contains(['*', '?']))
-                                {
+                                // still selected, which takes a pattern of wildcards alone.
+                                if layer.replace(value).is_some_and(|previous: &str| {
+                                    previous.contains(|c| !matches!(c, '*' | '?'))
+                                }) {
                                     return Err(self.error(
                                         clause.span.start,
                                         "a rule can have only one layer clause",
@@ -785,7 +784,7 @@ mod tests {
             ("(condition \"isPlated()\")", "needs an item"),
             ("(condition \"A.Width > 1\")", "missing units for \"1\""),
             ("(constraint length (min fn(2ps)))", "needs an item"),
-            ("(layer \"F.Cu\") (layer \"B.Cu\")", "only one layer"),
+            ("(layer \"*.Cu\") (layer \"F.SilkS\")", "only one layer"),
         ] {
             let error = checked(&rules(body)).unwrap_err().to_string();
             assert!(error.contains(expected), "{body}: {error}");
@@ -856,7 +855,15 @@ mod tests {
             ],
             3,
         );
-        let layers = sequences(&["(layer outer)", "(layer \"F.Cu\")", "(layer \"*\")"], 3);
+        let layers = sequences(
+            &[
+                "(layer outer)",
+                "(layer \"F.Cu\")",
+                "(layer \"*.Cu\")",
+                "(layer \"?*\")",
+            ],
+            3,
+        );
         let cases: Vec<String> = conditions
             .iter()
             .map(|text| format!("(condition \"{text}\") (constraint clearance (min 1mm))"))
