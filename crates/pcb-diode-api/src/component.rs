@@ -1161,12 +1161,9 @@ mod tests {
 	)
 )"#;
         let step_data = b"STEP DATA HERE".to_vec();
-        let result = pcb_kicad::footprint::embed_step_in_footprint(
-            footprint.to_string(),
-            step_data,
-            "test.step",
-        )
-        .unwrap();
+        let result =
+            pcb_kicad::footprint::embed_step_in_footprint(footprint, &step_data, "test.step")
+                .unwrap();
 
         // Verify balanced parentheses
         assert_eq!(
@@ -1200,12 +1197,9 @@ mod tests {
 	)
 )"#;
         let step_data = b"NEW STEP DATA".to_vec();
-        let result = pcb_kicad::footprint::embed_step_in_footprint(
-            footprint.to_string(),
-            step_data,
-            "new.step",
-        )
-        .unwrap();
+        let result =
+            pcb_kicad::footprint::embed_step_in_footprint(footprint, &step_data, "new.step")
+                .unwrap();
 
         // Verify the transforms were preserved
         assert!(result.contains("(xyz 1 2 3)"));

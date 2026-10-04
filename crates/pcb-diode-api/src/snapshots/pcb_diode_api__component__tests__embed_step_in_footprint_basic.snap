@@ -11,7 +11,7 @@ expression: result
 	)
 	(embedded_files
 		(file
-			(name test.step)
+			(name "test.step")
 			(type model)
 			(data |KLUv/SAOcQAAU1RFUCBEQVRBIEhFUkU=|)
 			(checksum "0FC02384A29118F69FFB8F37551022E3")

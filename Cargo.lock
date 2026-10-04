@@ -3896,7 +3896,6 @@ dependencies = [
  "pcb-command-runner",
  "pcb-sexpr",
  "pcb-zen-core",
- "regex",
  "serde",
  "serde_json",
  "starlark",
