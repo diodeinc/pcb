@@ -23,6 +23,9 @@ pcb import <design.kicad_sch|project.kicad_pro> <output-directory>
 KiCad CLI validation and netlist export run on temporary source copies.
 Import resolves the generated Zener workspace offline during final validation.
 Source ERC, DRC, and schematic/PCB parity findings are reported, not import blockers.
+Validation failures, including malformed custom rules, still stop import: KiCad
+can silently discard the whole custom ruleset, so its fallback report is not a
+valid source DRC result. Fix the reported rule syntax or units before retrying.
 Connectivity follows the schematic even when the PCB is out of sync; import retains
 the existing PCB placement and routing rather than repairing it. The diagnostics JSON
 retains the individual parity findings, and the extraction report records their count.

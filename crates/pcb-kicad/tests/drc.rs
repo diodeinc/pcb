@@ -139,6 +139,30 @@ fn real_kicad_custom_rules_and_exclusions() {
             .iter()
             .any(|v| v.violation_type == "lib_footprint_issues" && v.excluded)
     );
+
+    // CLI rules follow the board filename, even when the only project has a
+    // different name and references this board. Invalid project-named rules
+    // must not block checks of the valid, active board-named rules.
+    project["project_refs"] = serde_json::json!(["layout.kicad_pcb"]);
+    fs::write(
+        root.path().join("controller.kicad_pro"),
+        project.to_string(),
+    )
+    .unwrap();
+    fs::remove_file(board.with_extension("kicad_pro")).unwrap();
+    fs::write(
+        root.path().join("controller.kicad_dru"),
+        "(version 1)\n(rule \"inactive\" (constraint clearance (min 0.11)))",
+    )
+    .unwrap();
+    let report = run_drc(&board, false, Some(root.path()), &report_path).unwrap();
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.description.contains("preflight-positive-control"))
+    );
+
     let original = fs::read(&report_path).unwrap();
     fs::write(
         &rules,

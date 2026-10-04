@@ -63,6 +63,41 @@ fn import_requires_output_directory() {
 }
 
 #[test]
+fn invalid_custom_rules_stop_import_before_conversion() {
+    let mut sandbox = sandbox();
+    sandbox.write("source/layout.kicad_sch", STANDALONE_FIXTURE);
+    sandbox.write("source/layout.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write("source/layout.kicad_pcb", PCB_FIXTURE);
+    let rules = "(version 1)\n(rule \"isolation\" (constraint clearance (min 0.11)))\n";
+    sandbox.write("source/layout.kicad_dru", rules);
+
+    let import = sandbox
+        .run("pcbc", ["import", "source/layout.kicad_pro", "board"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("run pcbc import");
+
+    assert!(!import.status.success());
+    let stderr = String::from_utf8_lossy(&import.stderr);
+    assert!(stderr.contains("layout.kicad_dru:2:41:"), "{stderr}");
+    assert!(stderr.contains("rule \"isolation\""), "{stderr}");
+    assert!(stderr.contains("missing units"), "{stderr}");
+    assert!(stderr.contains("KiCad DRC was not run."), "{stderr}");
+    assert!(
+        !sandbox
+            .root_path()
+            .join("board/layout/layout.kicad_pcb")
+            .exists()
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.root_path().join("source/layout.kicad_dru")).unwrap(),
+        rules
+    );
+}
+
+#[test]
 fn validation_extraction_and_materialization_share_one_source_snapshot() {
     let mut sandbox = sandbox();
     sandbox.write("source/layout.kicad_sch", STANDALONE_FIXTURE);

@@ -274,7 +274,6 @@ impl Checker<'_> {
                     }
                     self.rule = Some(name.to_owned());
                     let mut seen = HashSet::new();
-                    let mut layer = false;
                     for clause in &values[1..] {
                         let (keyword, args) = self.form(clause)?;
                         match keyword {
@@ -292,10 +291,6 @@ impl Checker<'_> {
                                     clause.span.start,
                                     "layer names require KiCad's board-dependent layer resolution",
                                 );
-                                if layer {
-                                    self.defer(clause.span.start, "repeated layer clause needs KiCad's board-dependent layer resolution");
-                                }
-                                layer = true;
                             }
                             "severity" => {
                                 let severity = self.one(clause, args)?;
@@ -870,7 +865,7 @@ mod tests {
             checked(&rules("(layer \"*\") (layer \"*\")"))
                 .unwrap()
                 .len(),
-            3
+            2
         );
         // A syntactically valid string can still fail KiCad's expression
         // compiler. Never imply this expression was validated by the guard.
