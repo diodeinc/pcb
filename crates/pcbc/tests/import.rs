@@ -123,7 +123,7 @@ fn invalid_custom_rules_stop_import_before_conversion() {
 
     // Fixing the units permits conversion; repeated deferred clauses produce
     // one warning, saved alongside ordinary ERC/DRC findings (not just logged).
-    sandbox.write("source/layout.kicad_dru", "(version 1)\n(rule \"isolation\" (condition \"A.Type == 'Pad'\") (condition \"A.Type == 'Via'\") (constraint clearance (min 0.11mm)))\n");
+    sandbox.write("source/layout.kicad_dru", "(version 1)\n(rule \"isolation\" (future_clause x) (future_clause y) (condition \"A.Type == 'Pad'\") (constraint clearance (min 0.11mm)))\n");
     let import = sandbox
         .run("pcbc", ["import", "source/layout.kicad_pro", "valid-board"])
         .stdout_capture()
@@ -142,7 +142,7 @@ fn invalid_custom_rules_stop_import_before_conversion() {
         .filter(|d| {
             d["body"]
                 .as_str()
-                .is_some_and(|body| body.contains("condition expression compilation"))
+                .is_some_and(|body| body.contains("rule \"isolation\""))
         })
         .collect::<Vec<_>>();
     assert_eq!(warnings.len(), 1);

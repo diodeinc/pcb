@@ -141,10 +141,6 @@ impl Checker<'_> {
         match kind {
             "assertion" => {
                 self.atom(self.one(node, values)?)?;
-                self.defer(
-                    node.span.start,
-                    "assertion expression compilation is left to KiCad",
-                );
             }
             "min_resolved_spokes" => {
                 let value = self.one(node, values)?;
@@ -310,19 +306,8 @@ impl Checker<'_> {
                         let (keyword, args) = self.form(clause)?;
                         match keyword {
                             "constraint" => self.constraint(clause, args, &mut seen)?,
-                            "condition" => {
+                            "condition" | "layer" => {
                                 self.atom(self.one(clause, args)?)?;
-                                self.defer(
-                                    clause.span.start,
-                                    "condition expression compilation is left to KiCad",
-                                );
-                            }
-                            "layer" => {
-                                self.atom(self.one(clause, args)?)?;
-                                self.defer(
-                                    clause.span.start,
-                                    "layer names require KiCad's board-dependent layer resolution",
-                                );
                             }
                             "severity" => {
                                 let severity = self.one(clause, args)?;
@@ -790,9 +775,7 @@ mod tests {
     #[test]
     fn kicad_comments_and_string_escapes_preserve_content() {
         let source = "  # ${COMMENT} (( \" ignored\r\n(version 1)\r\n(rule \"résistor # ; \\x41\\101 \\\" \\\\ \\q\"\r\n (condition \"A.NetName == '${cLaSs:Power}'\")\r\n (constraint clearance (min \"2 * (1mm + 1.5mm)\")))\r\n";
-        let warnings = checked(source).unwrap();
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("condition expression compilation"));
+        assert!(checked(source).unwrap().is_empty());
         // The rule name is decoded with DSN escapes, not Lisp escapes.
         let bad = source.replace("2 * (1mm + 1.5mm)", "0.11");
         let error = checked(&bad).unwrap_err().to_string();
@@ -839,9 +822,7 @@ mod tests {
         let valid = rules(
             "(constraint min_resolved_spokes 2)\n (constraint zone_connection \"thermal_reliefs\")\n (constraint disallow track \"via\")\n (constraint via_count (max 4))\n (constraint track_angle (opt 45))\n (constraint skew (min 10ps) (max 2000fs) (within_diff_pairs))\n (constraint mechanical_clearance (min 1mm))\n (constraint assertion \"A.Type == 'Pad'\")",
         );
-        let warnings = checked(&valid).unwrap();
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("assertion expression compilation"));
+        assert!(checked(&valid).unwrap().is_empty());
         for (body, expected) in [
             ("(constraint clearance (min))", "missing min value"),
             (
@@ -897,31 +878,26 @@ mod tests {
         assert!(checked("").unwrap().is_empty());
         assert!(checked(" # comment-only\n").unwrap().is_empty());
         // A future version can change the known schema: do not reject it using
-        // version-1 assumptions. Likewise layer masks require board context.
+        // version-1 assumptions.
         assert_eq!(
             checked("(version 2) (rule name (constraint clearance (future_option x)))")
                 .unwrap()
                 .len(),
             1
         );
-        assert_eq!(
-            checked(&rules("(layer \"*\") (layer \"*\")"))
-                .unwrap()
-                .len(),
-            1
+    }
+
+    #[test]
+    fn conditions_and_layers_are_not_diagnosed() {
+        let source = rules(
+            "(layer outer) (condition \"A.Parent == 'H11' && B.Parent == 'H11'\") (constraint hole_clearance (min 0mm)) (constraint assertion \"A.Type == 'Pad'\")",
         );
-        // A syntactically valid string can still fail KiCad's expression
-        // compiler. Never imply this expression was validated by the guard.
-        let warnings = checked(&rules("(condition \"A.Type ==\")")).unwrap();
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("condition expression compilation"));
+        assert!(checked(&source).unwrap().is_empty());
     }
 
     #[test]
     fn repeated_warnings_are_structured_and_deduplicated() {
-        let source = rules(
-            "(condition \"A.Type == 'Pad'\") (condition \"A.Type == 'Via'\") (layer \"F.Cu\") (layer \"B.Cu\")",
-        );
+        let source = rules("(future_clause x) (future_clause y) (other_clause x) (other_clause y)");
         let warnings = check(Path::new("layout.kicad_dru"), &source).unwrap();
         assert_eq!(warnings.len(), 2);
         for warning in warnings {
