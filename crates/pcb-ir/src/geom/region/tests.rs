@@ -1026,3 +1026,33 @@ fn union_merges_polygons_abutting_along_a_rounded_diagonal() {
         assert!((union.area() - area).abs() < 1e-12);
     }
 }
+
+#[test]
+fn union_joins_a_fill_cut_along_an_edge_and_rounded_off_it() {
+    // KiCad cut the pour along the zone's diagonal and rounded the end of
+    // the cut to its grid, 0.025 nm outside the zone.
+    let zone = vec![
+        [156.623082, 117.179899],
+        [154.602277, 115.159093],
+        [155.27958, 114.28076],
+        [157.400901, 116.402081],
+    ];
+    let pour = vec![
+        [156.551669, 117.108486],
+        [156.623082, 117.179899],
+        [157.400901, 116.402081],
+        [157.8, 117.0],
+        [156.64, 117.3],
+        [156.617239, 117.21502],
+        [156.589462, 117.160503],
+    ];
+    let [zone, pour] = [zone, pour].map(|ring| {
+        ContourSet::from_rings(vec![ring], FillRule::NonZero, Resolution::default()).unwrap()
+    });
+    let union = zone.union(&pour).unwrap();
+    assert!(
+        crate::geom::dfm::thin_features(&union, 0.09)
+            .unwrap()
+            .is_empty()
+    );
+}
