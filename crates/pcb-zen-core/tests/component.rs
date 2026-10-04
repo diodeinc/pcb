@@ -394,21 +394,13 @@ Component(
     assert_eq!(
         found,
         [
-            (
-                "symbol.pin.footprint_mismatch".to_string(),
-                EvalSeverity::Warning,
-                3
-            ),
+            ("symbol.pad.no_pin".to_string(), EvalSeverity::Warning, 3),
             (
                 "symbol.pin.hidden_power".to_string(),
                 EvalSeverity::Warning,
                 7
             ),
-            (
-                "symbol.pin.footprint_mismatch".to_string(),
-                EvalSeverity::Warning,
-                8
-            ),
+            ("symbol.pin.no_pad".to_string(), EvalSeverity::Error, 8),
         ]
     );
     assert_eq!(

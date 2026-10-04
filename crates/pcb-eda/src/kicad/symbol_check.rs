@@ -80,6 +80,11 @@ const PIN_EMPTY_NUMBER: Rule = Rule::new(
     Error,
     "set the number to the footprint pad this pin connects to",
 );
+const PIN_NO_PAD: Rule = Rule::new(
+    "symbol.pin.no_pad",
+    Error,
+    "give the pin the number of the pad it connects to, or add the pad to the footprint",
+);
 const PIN_DUPLICATE: Rule = Rule::new(
     "symbol.pin.duplicate",
     Error,
@@ -115,10 +120,10 @@ const PIN_POWER_CONFLICT: Rule = Rule::new(
     Warning,
     "a name is either a supply input or a supply output; use one type for every pin with this name",
 );
-const PIN_FOOTPRINT_MISMATCH: Rule = Rule::new(
-    "symbol.pin.footprint_mismatch",
+const PAD_NO_PIN: Rule = Rule::new(
+    "symbol.pad.no_pin",
     Warning,
-    "make the symbol pin numbers and the footprint pad numbers match",
+    "give mechanical and shield pads a pin, or leave the pad without a number",
 );
 const UNIT_EMPTY: Rule = Rule::new(
     "symbol.unit.empty",
@@ -914,7 +919,7 @@ fn check_footprint(
         // A native stack such as `[1-4]` has no pin written with this number.
         let drawn = body.pins.iter().find(|pin| pin.number() == *first);
         let span = drawn.map_or(body.def.name_span(), |pin| pin.value_span("number"));
-        out.push(&PIN_FOOTPRINT_MISMATCH, 0, span, message);
+        out.push(&PIN_NO_PAD, 0, span, message);
     }
     let pinless: Vec<&str> = footprint
         .numbers
@@ -930,7 +935,7 @@ fn check_footprint(
             if pinless.len() == 1 { "has" } else { "have" }
         );
         let span = body.def.name_span();
-        out.push(&PIN_FOOTPRINT_MISMATCH, 0, span, message);
+        out.push(&PAD_NO_PIN, 0, span, message);
     }
 }
 
@@ -1374,7 +1379,7 @@ mod tests {
             };
             check(source, "U", Some(footprint))
                 .into_iter()
-                .filter(|issue| issue.kind == "symbol.pin.footprint_mismatch")
+                .filter(|issue| matches!(issue.kind, "symbol.pin.no_pad" | "symbol.pad.no_pin"))
                 .map(|issue| issue.message)
                 .collect()
         };
