@@ -243,13 +243,16 @@ pub(super) fn parse_symbol(node: &Sexpr) -> Result<KicadSymbol> {
         }
     }
 
-    for (_unit, style_candidates) in nested_pin_groups {
-        if let Some(best) = style_candidates
+    // Style 0 is drawn in every body style; the others are alternatives.
+    for (_unit, sections) in nested_pin_groups {
+        let (shared, alternates): (Vec<_>, Vec<_>) =
+            sections.into_iter().partition(|section| section.style == 0);
+        let best = alternates
             .into_iter()
-            .max_by_key(|c| (c.named_pin_count, Reverse(c.style)))
-        {
-            symbol.pins.extend(best.pins);
-        }
+            .max_by_key(|c| (c.named_pin_count, Reverse(c.style)));
+        symbol
+            .pins
+            .extend(shared.into_iter().chain(best).flat_map(|c| c.pins));
     }
 
     // Keep one source of truth for description parsing/legacy alias handling.

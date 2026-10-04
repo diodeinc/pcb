@@ -448,19 +448,19 @@ fn test_style_tie_uses_lowest_style_number() {
   (version 20211014)
   (generator "test")
   (symbol "Demo:Tie"
-    (symbol "Tie_1_0"
-      (pin passive line
-        (at 0 0 0)
-        (length 2.54)
-        (name "A0")
-        (number "1")
-      )
-    )
     (symbol "Tie_1_1"
       (pin passive line
         (at 0 0 0)
         (length 2.54)
         (name "A1")
+        (number "1")
+      )
+    )
+    (symbol "Tie_1_2"
+      (pin passive line
+        (at 0 0 0)
+        (length 2.54)
+        (name "A2")
         (number "1")
       )
     )
@@ -471,7 +471,50 @@ fn test_style_tie_uses_lowest_style_number() {
     let symbol = lib.first_symbol().unwrap();
     assert_eq!(symbol.pins.len(), 1);
     assert_eq!(symbol.pins[0].number, "1");
-    assert_eq!(symbol.pins[0].signal_name(), "A0");
+    assert_eq!(symbol.pins[0].signal_name(), "A1");
+}
+
+#[test]
+fn test_style_0_pins_join_the_chosen_style() {
+    let content = r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "Demo:Shared"
+    (symbol "Shared_1_0"
+      (pin passive line
+        (at 0 0 0)
+        (length 2.54)
+        (name "GND")
+        (number "3")
+      )
+    )
+    (symbol "Shared_1_1"
+      (pin passive line
+        (at 0 2.54 0)
+        (length 2.54)
+        (name "IN")
+        (number "1")
+      )
+      (pin passive line
+        (at 0 5.08 0)
+        (length 2.54)
+        (name "OUT")
+        (number "2")
+      )
+    )
+  )
+)"#;
+
+    let lib = SymbolLibrary::from_string(content, "kicad_sym").unwrap();
+    let mut numbers: Vec<_> = lib
+        .first_symbol()
+        .unwrap()
+        .pins
+        .iter()
+        .map(|pin| pin.number.as_str())
+        .collect();
+    numbers.sort_unstable();
+    assert_eq!(numbers, ["1", "2", "3"]);
 }
 
 #[test]
