@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use base64::Engine;
-use pcb_sexpr::formatter::{FormatMode, prettify};
+use pcb_sexpr::formatter::{FormatMode, prettify, quote_string};
 use pcb_sexpr::{PatchSet, Sexpr, Span};
 use std::fs;
 use std::io::Write;
@@ -110,8 +110,9 @@ pub fn embed_step_in_footprint(
         Span::new(end, end),
         format!(
             "(embedded_files {other_files}\
-             (file (name {filename}) (type model) (data |{data}|) (checksum \"{checksum}\")))\
-             (model \"{EMBED_URI}{filename}\" {placement})"
+             (file (name {name}) (type model) (data |{data}|) (checksum \"{checksum}\")))\
+             (model \"{EMBED_URI}{filename}\" {placement})",
+            name = quote_string(&filename)
         ),
     );
 
@@ -172,18 +173,20 @@ mod tests {
 "#
         );
 
-        let result = embed_step_in_footprint(&footprint, b"NEW", "new.stp").unwrap();
+        let result = embed_step_in_footprint(&footprint, b"NEW", "new part (1).stp").unwrap();
 
         assert_eq!(result.matches("(model ").count(), 1);
-        assert!(result.contains("(model \"kicad-embed://new.step\""));
+        assert!(result.contains("(model \"kicad-embed://new part (1).step\""));
         assert!(result.contains("(xyz 7 8 9)") && !result.contains("(xyz 1 2 3)"));
         assert_eq!(result.matches("(file").count(), 2);
-        assert!(result.contains("(name \"a.ttf\")") && result.contains("(name new.step)"));
+        assert!(
+            result.contains("(name \"a.ttf\")") && result.contains("(name \"new part (1).step\")")
+        );
         assert!(!result.contains("old.step") && !result.contains("stale.step"));
         assert!(!result.contains("other.step") && !result.contains("hide"));
         validate_footprint_source(&result).unwrap();
 
-        let again = embed_step_in_footprint(&result, b"NEW", "new.step").unwrap();
+        let again = embed_step_in_footprint(&result, b"NEW", "new part (1).step").unwrap();
         assert_eq!(again, result);
     }
 }
