@@ -25,6 +25,10 @@ pub enum DocumentEdit {
         index: usize,
         page: SchPage,
     },
+    RemovePage {
+        index: usize,
+        page: SchPage,
+    },
     ReplacePage {
         index: usize,
         before: SchPage,
@@ -91,6 +95,15 @@ fn apply_document_edits(document: &SchDocument, edits: &[DocumentEdit]) -> Resul
                 }
                 result.pages.insert(*index, page.clone());
             }
+            DocumentEdit::RemovePage { index, page } => {
+                if result.pages.get(*index) != Some(page) {
+                    bail!(
+                        "reconciliation removed page '{}' does not match the input document",
+                        page.id
+                    );
+                }
+                result.pages.remove(*index);
+            }
             DocumentEdit::ReplacePage {
                 index,
                 before,
@@ -135,6 +148,12 @@ fn revert_document_edits(document: &SchDocument, edits: &[DocumentEdit]) -> Resu
                     );
                 }
                 result.pages.remove(*index);
+            }
+            DocumentEdit::RemovePage { index, page } => {
+                if *index > result.pages.len() {
+                    bail!("reconciliation page restoration index {index} is out of bounds");
+                }
+                result.pages.insert(*index, page.clone());
             }
             DocumentEdit::ReplacePage {
                 index,
@@ -351,8 +370,18 @@ fn document_edits(before: &SchDocument, after: &SchDocument) -> Result<Vec<Docum
             after: after.root_page_ids.clone(),
         });
     }
+    let mut retained = before.pages.iter().collect::<Vec<_>>();
+    for (index, page) in before.pages.iter().enumerate().rev() {
+        if !after.pages.iter().any(|next| next.id == page.id) {
+            edits.push(DocumentEdit::RemovePage {
+                index,
+                page: page.clone(),
+            });
+            retained.remove(index);
+        }
+    }
     for (index, page) in after.pages.iter().enumerate() {
-        match before.pages.get(index) {
+        match retained.get(index).copied() {
             Some(previous) if previous.id != page.id => bail!(
                 "reconciliation reordered page '{}' to index {index}",
                 page.id
@@ -368,9 +397,6 @@ fn document_edits(before: &SchDocument, after: &SchDocument) -> Result<Vec<Docum
                 page: page.clone(),
             }),
         }
-    }
-    if before.pages.len() > after.pages.len() {
-        bail!("reconciliation unexpectedly removed schematic pages");
     }
     Ok(edits)
 }
@@ -396,5 +422,26 @@ mod tests {
         let applied = apply_document_edits(&before, &edits).unwrap();
         assert_eq!(applied, after);
         assert_eq!(revert_document_edits(&applied, &edits).unwrap(), before);
+    }
+
+    #[test]
+    fn removed_pages_are_reversible_with_retained_and_new_pages() {
+        let before = SchDocument {
+            root_page_ids: vec!["root".to_string()],
+            pages: ["root", "obsolete", "retained", "obsolete-child"]
+                .map(SchPage::new)
+                .to_vec(),
+        };
+        let mut retained = before.pages[2].clone();
+        retained.file_name = Some("renamed.kicad_sch".to_string());
+        let after = SchDocument {
+            root_page_ids: before.root_page_ids.clone(),
+            pages: vec![before.pages[0].clone(), retained, SchPage::new("new")],
+        };
+        let edits = document_edits(&before, &after).unwrap();
+        let applied = apply_document_edits(&before, &edits).unwrap();
+        assert_eq!(applied, after);
+        assert_eq!(revert_document_edits(&applied, &edits).unwrap(), before);
+        assert!(apply_document_edits(&after, &edits).is_err());
     }
 }

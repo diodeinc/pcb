@@ -287,6 +287,164 @@ fn apply_repairs_stale_child_instance_reference_without_touching_other_paths() {
 }
 
 #[test]
+fn apply_removes_deleted_module_sheets_files_and_retained_metadata() {
+    // Cover freshly deleted modules as well as orphans already stripped of
+    // components by older apply versions, including metadata-only placements.
+    for (empty_child, unplaced) in [(false, false), (true, false), (true, true)] {
+        let workspace = tempfile::tempdir().unwrap();
+        let project_dir = workspace.path().join("hardware");
+        let mut netlist = linked_hierarchy_fixture(&project_dir);
+        let created = apply_linked_schematic(&netlist).unwrap().unwrap();
+        let child_file = project_dir.join("FILTER_A.kicad_sch");
+        let retained_file = project_dir.join("FILTER_B.kicad_sch");
+        let retained_source = fs::read(&retained_file).unwrap();
+        let unrelated_file = project_dir.join("unrelated.kicad_sch");
+        fs::write(&unrelated_file, "unrelated schematic").unwrap();
+
+        if empty_child {
+            let mut project = KicadProject::load(&project_dir).unwrap();
+            for page in &mut project.document.pages {
+                if page.file_name.as_deref() == Some("FILTER_A.kicad_sch") {
+                    page.items.retain(|item| {
+                        !matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path").is_some())
+                    });
+                    assert!(!page.items.is_empty(), "orphan notation remains");
+                }
+                for item in &mut page.items {
+                    if let SchItem::Sheet(sheet) = item
+                        && sheet.file_name() == "FILTER_A.kicad_sch"
+                    {
+                        sheet.placed = !unplaced;
+                    }
+                }
+                let path = project_dir.join(page.file_name.as_ref().unwrap());
+                let source = fs::read_to_string(&path).unwrap();
+                if let Some(next) = pcb_kicad_sch::patch_page_source(&source, page).unwrap() {
+                    fs::write(path, next).unwrap();
+                }
+            }
+        }
+
+        let removed = netlist
+            .instances
+            .keys()
+            .filter(|reference| {
+                reference.instance_path.first().map(String::as_str) == Some("FILTER_A")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        netlist
+            .instances
+            .retain(|reference, _| !removed.contains(reference));
+        for instance in netlist.instances.values_mut() {
+            instance
+                .children
+                .retain(|_, reference| !removed.contains(reference));
+        }
+        for net in netlist.nets.values_mut() {
+            net.ports.retain(|reference| !removed.contains(reference));
+        }
+
+        let original = KicadProject::load(&project_dir).unwrap();
+        let plan = pcb_kicad_sch::reconcile::plan_reconciliation(
+            Some(&original.document),
+            &netlist,
+            "Hierarchy.kicad_sch",
+        )
+        .unwrap();
+        let desired = plan.apply(Some(&original.document)).unwrap();
+        assert_eq!(plan.revert(&desired).unwrap(), original.document);
+
+        let applied = apply_linked_schematic(&netlist).unwrap().unwrap();
+        assert!(applied.changed);
+        assert!(!applied.created);
+        assert_eq!(applied.schematic_files.len(), 2);
+        assert!(!applied.schematic_files.contains(&child_file));
+        assert!(!child_file.exists());
+        assert_eq!(fs::read(&retained_file).unwrap(), retained_source);
+        assert_eq!(
+            fs::read_to_string(&unrelated_file).unwrap(),
+            "unrelated schematic"
+        );
+
+        let repaired = KicadProject::load(&project_dir).unwrap();
+        assert_eq!(repaired.document.pages.len(), 2);
+        assert!(!repaired.document.pages.iter().flat_map(|page| &page.items).any(
+            |item| matches!(item, SchItem::Sheet(sheet) if sheet.file_name() == "FILTER_A.kicad_sch")
+        ));
+        assert!(
+            !serde_json::to_string(&repaired.project["diode"]["schematic_sheets"])
+                .unwrap()
+                .contains("FILTER_A.kicad_sch")
+        );
+        assert!(
+            inspect_schematic(&repaired.document, &netlist)
+                .unwrap()
+                .analysis
+                .is_equivalent()
+        );
+
+        let saved = applied
+            .schematic_files
+            .iter()
+            .chain([&created.project_file])
+            .map(|path| (path, fs::read(path).unwrap()))
+            .collect::<Vec<_>>();
+        assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+        for (path, source) in saved {
+            assert_eq!(fs::read(path).unwrap(), source);
+        }
+    }
+}
+
+#[test]
+fn apply_prunes_replaced_circuit_sheets_but_preserves_reused_live_pages() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let mut netlist = linked_hierarchy_fixture(&project_dir);
+    let created = apply_linked_schematic(&netlist).unwrap().unwrap();
+    let sources = created
+        .schematic_files
+        .iter()
+        .map(|path| (path, fs::read(path).unwrap()))
+        .collect::<Vec<_>>();
+
+    // Losing the module's Project declaration alone must not delete a page
+    // still containing live components: existing organization is authoritative.
+    for (reference, instance) in &mut netlist.instances {
+        if netlist.root_ref.as_ref() != Some(reference) {
+            instance.attributes.remove(ATTR_SCHEMATIC_PATH);
+        }
+    }
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    for (path, source) in sources {
+        assert_eq!(fs::read(path).unwrap(), source);
+    }
+
+    // Replace the circuit with parts that do not use child sheets. Both old
+    // pages now contain only obsolete content and must disappear.
+    let replacement = linked_fixture(&project_dir);
+    let applied = apply_linked_schematic(&replacement).unwrap().unwrap();
+    assert!(applied.changed);
+    assert_eq!(applied.schematic_files, [created.root_schematic]);
+    assert!(!project_dir.join("FILTER_A.kicad_sch").exists());
+    assert!(!project_dir.join("FILTER_B.kicad_sch").exists());
+    let repaired = KicadProject::load(&project_dir).unwrap();
+    assert!(
+        inspect_schematic(&repaired.document, &replacement)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    assert!(
+        !apply_linked_schematic(&replacement)
+            .unwrap()
+            .unwrap()
+            .changed
+    );
+}
+
+#[test]
 fn apply_restores_deleted_sheet_instance_without_recreating_child_files() {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
