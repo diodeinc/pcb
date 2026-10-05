@@ -1586,6 +1586,7 @@ fn run_kicad_drc(info: &ReleaseInfo, diagnostics: &mut Diagnostics) -> Result<()
     let drc_json_path = info.staging_dir.join("drc.json");
     let report = pcb_kicad::run_drc(&kicad_pcb_path, false, working_dir, &drc_json_path)?;
     report.add_to_diagnostics(diagnostics, &display_pcb_file.to_string_lossy());
+    report.add_unconnected_items_to_diagnostics(diagnostics, &display_pcb_file.to_string_lossy());
 
     pcb_zen_core::SuppressPass::new(info.suppress.clone()).apply(diagnostics);
     Ok(())
