@@ -400,8 +400,7 @@ fn test_release_check_respects_bom_suppression_and_exclusion() {
         then.status(200).json_body(serde_json::json!({
             "results": (["GENERIC.R", "AUTHORED.R"].map(|path| serde_json::json!({
                 "designEntry": { "path": path },
-                "offerIds": [], "offerStockClasses": {},
-                "match": "MATCH_EXACT", "selectedOfferId": null
+                "match": "MATCH_EXACT", "ranked": {}
             }))),
             "offers": {}
         }));
@@ -572,26 +571,23 @@ fn test_publish_preserves_authored_bom_intent() {
             "results": [
                 {
                     "designEntry": { "path": "GENERIC.R" },
-                    "offerIds": ["selection"],
-                    "offerStockClasses": { "selection": "PLENTY" },
                     "match": "MATCH_COMPATIBLE",
-                    "selectedOfferId": "selection"
+                    "ranked": { "US": [{ "offerId": "selection", "stockClass": "PLENTY" }] }
                 },
                 {
                     "designEntry": { "path": "AUTHORED.R" },
-                    "offerIds": ["selection"],
-                    "offerStockClasses": { "selection": "PLENTY" },
                     "match": "MATCH_COMPATIBLE",
-                    "selectedOfferId": "selection"
+                    "ranked": { "US": [{ "offerId": "selection", "stockClass": "PLENTY" }] }
                 }
             ],
             "offers": {
                 "selection": {
                     "id": "selection",
                     "geography": "US",
+                    "sellerName": "Selected Seller",
                     "mpn": "SELECTED-MPN",
                     "manufacturer": "Selected Manufacturer",
-                    "stockAvailable": 100
+                    "marketStock": 100
                 }
             }
         }));
