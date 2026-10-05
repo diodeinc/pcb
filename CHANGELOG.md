@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb layout --check` and `pcb publish --check` report unrouted connections at KiCad's severity and fail on unsuppressed errors.
+
 ### Removed
 
 - Stop checking KiCad custom rules before DRC. KiCad builds with the upstream fix fail on a `.kicad_dru` that does not compile; older builds ignore it silently.

@@ -287,6 +287,10 @@ pub(crate) fn run_drc_check(args: &LayoutArgs, result: &LayoutCommandResult) -> 
     let report = pcb_kicad::run_drc(pcb_file, false, working_dir, drc_output.path())?;
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
     report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
+    report.add_unconnected_items_to_diagnostics(
+        &mut diagnostics,
+        &display_pcb_file.to_string_lossy(),
+    );
     spinner.finish();
     render_or_bail(&mut diagnostics, &args.suppress, "DRC failed")
 }
