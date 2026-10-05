@@ -130,7 +130,8 @@ impl BoardInfo {
 }
 
 /// Discovery errors that can occur during board discovery
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
+#[error("{error}")]
 pub struct DiscoveryError {
     pub path: PathBuf,
     pub error: String,

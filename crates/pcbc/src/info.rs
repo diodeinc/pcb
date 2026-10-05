@@ -119,24 +119,42 @@ pub fn execute(args: InfoArgs) -> Result<()> {
 
 fn info_json(start_path: &Path) -> InfoJson {
     let mut errors = Vec::new();
-    let Some(mut ws) = best_effort(
-        pcb_zen::get_workspace_info(&pcb_zen_core::DefaultFileProvider::new(), start_path),
-        start_path,
-        &mut errors,
-    ) else {
+    let provider = pcb_zen_core::DefaultFileProvider::new();
+    let workspace = pcb_zen::get_workspace_info(&provider, start_path).or_else(|error| {
+        let Some(failure) = error.downcast_ref::<DiscoveryError>() else {
+            return Err(error);
+        };
+        let Some(root) = failure.path.ancestors().skip(2).find(|dir| {
+            PcbToml::from_path(&dir.join("pcb.toml")).is_ok_and(|config| config.is_workspace())
+        }) else {
+            return Err(error);
+        };
+        let mut ws = pcb_zen::get_workspace_info(&provider, root)?;
+        if !ws.errors.iter().any(|err| err.path == failure.path) {
+            ws.errors.push(failure.clone());
+        }
+        Ok(ws)
+    });
+    let Some(mut ws) = best_effort(workspace, start_path, &mut errors) else {
         return InfoJson {
             errors,
             ..InfoJson::default()
         };
     };
     errors.append(&mut ws.errors);
-    let external_dependencies = best_effort(
-        pcb_zen::resolve_workspace_dependencies(ws.clone(), start_path, false),
-        start_path,
-        &mut errors,
-    )
-    .map(|resolution| external_dependencies(&resolution.workspace_info, &resolution, &mut errors))
-    .unwrap_or_default();
+    let external_dependencies = if errors.is_empty() {
+        best_effort(
+            pcb_zen::resolve_workspace_dependencies(ws.clone(), start_path, false),
+            start_path,
+            &mut errors,
+        )
+        .map(|resolution| {
+            external_dependencies(&resolution.workspace_info, &resolution, &mut errors)
+        })
+        .unwrap_or_default()
+    } else {
+        BTreeMap::new()
+    };
     pcb_zen::workspace::enrich_git_metadata(&mut ws);
     populate_package_file_discovery(&mut ws);
     errors.append(&mut ws.errors);
@@ -178,7 +196,7 @@ fn metadata_for_workspace_package(
             .board
             .as_ref()
             .and_then(|board| board.path.as_ref())
-            .map(|path| pkg.rel_path.join(path)),
+            .and_then(|path| pathdiff::diff_paths(pkg.dir(&ws.root).join(path), &ws.root)),
         tag_prefix: Some(pcb_zen::tags::compute_tag_prefix(
             Some(&pkg.rel_path),
             ws.path(),
@@ -378,17 +396,23 @@ fn discover_package_files(
     (entrypoints, symbol_files)
 }
 
-fn best_effort<T, E: std::fmt::Display>(
+fn best_effort<T, E: Into<anyhow::Error>>(
     result: Result<T, E>,
     path: &Path,
     errors: &mut Vec<DiscoveryError>,
 ) -> Option<T> {
     result
         .map_err(|error| {
-            errors.push(DiscoveryError {
-                path: path.to_path_buf(),
-                error: format!("{error:#}"),
-            })
+            let error = error.into();
+            errors.push(
+                error
+                    .downcast_ref::<DiscoveryError>()
+                    .cloned()
+                    .unwrap_or_else(|| DiscoveryError {
+                        path: path.to_path_buf(),
+                        error: format!("{error:#}"),
+                    }),
+            )
         })
         .ok()
 }

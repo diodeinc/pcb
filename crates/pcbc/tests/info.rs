@@ -404,12 +404,15 @@ fn test_pcb_info_invalid_root_does_not_invent_workspace_members() {
         .write("pcb.toml", "[workspace\n")
         .write("boards/good/pcb.toml", TEST_BOARD_PCB_TOML);
 
+    let manifest = sandbox.root_path().join("pcb.toml");
+    sandbox.cwd("boards/good");
     let info = inspect(&sandbox);
     assert!(info.get("root").is_none());
     assert!(info.get("config").is_none());
     assert_eq!(info["packages"], serde_json::json!({}));
     let errors = info["errors"].as_array().unwrap();
     assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["path"], manifest.to_str().unwrap());
     assert!(errors[0]["error"].as_str().unwrap().contains("pcb.toml"));
 }
 
@@ -423,13 +426,22 @@ fn test_pcb_info_partial_output() {
                 "{WORKSPACE_PCB_TOML}\n[patch]\n\"example.com/broken\" = {{ path = \"fork/broken\" }}\n"
             ),
         )
-        .write("boards/good/pcb.toml", TEST_BOARD_PCB_TOML)
+        .write("boards/good/pcb.toml", format!(
+            "{TEST_BOARD_PCB_TOML}\n[dependencies]\n\"example.com/broken\" = \"1.0.0\"\n[dependencies.indirect]\n\"example.com/broken@1\" = \"1.0.0\"\n"
+        ))
         .write("boards/good/test_board.zen", TEST_BOARD_ZEN)
         .write("boards/bad/pcb.toml", "[board\n")
         .write("fork/broken/pcb.toml", "[dependencies\n")
+        .write("vendor/example.com/broken/1.0.0/pcb.toml", "")
+        .write("vendor/example.com/stale/1.0.0/pcb.toml", "# keep\n")
         .write("boards/good/broken.kicad_sym", [0xff]);
 
+    sandbox.cwd("boards/bad");
     let info = inspect(&sandbox);
+    sandbox.cwd(".");
+    assert_eq!(inspect(&sandbox), info);
+    assert_eq!(info["root"], sandbox.root_path().to_str().unwrap());
+    assert!(info.get("external_dependencies").is_none());
     assert_eq!(info["packages"].as_object().unwrap().len(), 1);
     assert_eq!(
         info["packages"]["boards/good"]["entrypoints"],
@@ -458,6 +470,25 @@ fn test_pcb_info_partial_output() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("invalid pcb.toml"));
+
+    let output = sandbox
+        .run("pcbc", ["vendor", "--all"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid pcb.toml"));
+    assert_eq!(
+        std::fs::read_to_string(
+            sandbox
+                .root_path()
+                .join("vendor/example.com/stale/1.0.0/pcb.toml")
+        )
+        .unwrap(),
+        "# keep\n"
+    );
 }
 
 #[test]
@@ -485,18 +516,20 @@ fn test_pcb_info_resolution_failure_preserves_local_files() {
 #[test]
 fn test_pcb_info_source_patch_takes_precedence_over_vendor() {
     let mut sandbox = Sandbox::new();
+    let patch_path = sandbox.root_path().join("vendor/parts/1.0.0");
     sandbox
         .write(
             "pcb.toml",
             format!(
-                "{WORKSPACE_PCB_TOML}\n[patch]\n\"example.com/parts\" = {{ path = \"vendor/parts/1.0.0\" }}\n"
+                "{WORKSPACE_PCB_TOML}\n[patch]\n\"example.com/parts\" = {{ path = {patch_path:?} }}\n"
             ),
         )
-        .write("vendor/parts/1.0.0/pcb.toml", "")
+        .write("vendor/parts/1.0.0/pcb.toml", format!("[board]\nname = \"Patched\"\npath = {:?}\n", patch_path.join("part.zen")))
         .write("vendor/parts/1.0.0/part.zen", "");
 
     let info = inspect(&sandbox);
     assert!(info.get("errors").is_none(), "{info}");
     let patch = &info["packages"]["example.com/parts"];
     assert_eq!(patch["source"], "patch");
+    assert_eq!(patch["board_entrypoint"], "vendor/parts/1.0.0/part.zen");
 }

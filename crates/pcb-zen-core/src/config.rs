@@ -509,7 +509,12 @@ pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Re
         }
 
         // Fail early if pcb.toml exists but can't be parsed
-        let config = PcbToml::from_file(file_provider, &pcb_toml)?;
+        let config = PcbToml::from_file(file_provider, &pcb_toml).map_err(|error| {
+            crate::workspace::DiscoveryError {
+                path: pcb_toml,
+                error: format!("{error:#}"),
+            }
+        })?;
         candidates.push((dir.to_path_buf(), config.is_workspace()));
     }
 
