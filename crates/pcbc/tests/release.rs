@@ -400,8 +400,7 @@ fn test_release_check_respects_bom_suppression_and_exclusion() {
         then.status(200).json_body(serde_json::json!({
             "results": (["GENERIC.R", "AUTHORED.R"].map(|path| serde_json::json!({
                 "designEntry": { "path": path },
-                "offerIds": [], "offerStockClasses": {},
-                "match": "MATCH_EXACT", "selectedOfferId": null
+                "match": "MATCH_EXACT", "ranked": {}
             }))),
             "offers": {}
         }));
@@ -572,26 +571,23 @@ fn test_publish_preserves_authored_bom_intent() {
             "results": [
                 {
                     "designEntry": { "path": "GENERIC.R" },
-                    "offerIds": ["selection"],
-                    "offerStockClasses": { "selection": "PLENTY" },
                     "match": "MATCH_COMPATIBLE",
-                    "selectedOfferId": "selection"
+                    "ranked": { "US": [{ "offerId": "selection", "stockClass": "PLENTY" }] }
                 },
                 {
                     "designEntry": { "path": "AUTHORED.R" },
-                    "offerIds": ["selection"],
-                    "offerStockClasses": { "selection": "PLENTY" },
                     "match": "MATCH_COMPATIBLE",
-                    "selectedOfferId": "selection"
+                    "ranked": { "US": [{ "offerId": "selection", "stockClass": "PLENTY" }] }
                 }
             ],
             "offers": {
                 "selection": {
                     "id": "selection",
                     "geography": "US",
+                    "sellerName": "Selected Seller",
                     "mpn": "SELECTED-MPN",
                     "manufacturer": "Selected Manufacturer",
-                    "stockAvailable": 100
+                    "marketStock": 100
                 }
             }
         }));
@@ -676,14 +672,12 @@ fn test_publish_board_full() {
             let has_offer = *path != "C1.C";
             serde_json::json!({
                 "designEntry": { "path": path },
-                "offerIds": if has_offer { vec!["offer-1"] } else { Vec::<&str>::new() },
-                "offerStockClasses": if has_offer {
-                    serde_json::json!({ "offer-1": "PLENTY" })
+                "match": "MATCH_EXACT",
+                "ranked": if has_offer {
+                    serde_json::json!({ "US": [{ "offerId": "offer-1", "stockClass": "PLENTY" }] })
                 } else {
                     serde_json::json!({})
-                },
-                "match": "MATCH_EXACT",
-                "selectedOfferId": null
+                }
             })
         })
         .collect::<Vec<_>>();
@@ -695,8 +689,8 @@ fn test_publish_board_full() {
                 "offer-1": {
                     "id": "offer-1",
                     "geography": "US",
-                    "distributor": "test",
-                    "stockAvailable": 100
+                    "sellerName": "test",
+                    "marketStock": 100
                 }
             }
         }));
@@ -765,7 +759,7 @@ fn test_publish_board_full() {
     assert!(build_warning < preflight_finished);
     assert!(bom_finished < bom_warning);
     assert!(bom_warning < preflight_finished);
-    bom_match.assert_calls(2);
+    bom_match.assert_calls(1);
 
     let staging_dir = find_staging_dir(&sb, "TestBoard");
     let manufacturing = sb.default_cwd().join(&staging_dir).join("manufacturing");

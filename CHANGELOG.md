@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb new board` uses `eda` as the shared layout and schematic directory.
+- `pcb bom` and component search pricing fetch US and Global offers in one compressed BOM match request instead of two.
 
 ### Fixed
 
