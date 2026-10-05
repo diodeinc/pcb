@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.71] - 2026-10-05
+
 ### Changed
 
 - `pcb new board` uses `eda` as the shared layout and schematic directory.
@@ -2227,7 +2229,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.70...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.71...HEAD
+[0.4.71]: https://github.com/diodeinc/pcb/compare/v0.4.70...v0.4.71
 [0.4.70]: https://github.com/diodeinc/pcb/compare/v0.4.69...v0.4.70
 [0.4.69]: https://github.com/diodeinc/pcb/compare/v0.4.68...v0.4.69
 [0.4.68]: https://github.com/diodeinc/pcb/compare/v0.4.67...v0.4.68
