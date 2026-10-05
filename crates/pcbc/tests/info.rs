@@ -158,6 +158,18 @@ pcb-version = "0.4"
 
     let human_output = sandbox.snapshot_run("pcbc", ["info"]);
     assert_snapshot!("human_with_external_dependencies", human_output);
+
+    sandbox
+        .run("pcbc", ["vendor", "--all"])
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .expect("vendor fixture dependencies");
+    let vendored = inspect(&sandbox);
+    assert!(vendored.get("errors").is_none(), "{vendored}");
+    let deps = vendored["external_dependencies"].as_object().unwrap();
+    assert_eq!(deps.len(), 2);
+    assert!(deps.values().all(|pkg| pkg["source"] == "vendor"));
 }
 
 #[test]
@@ -373,4 +385,118 @@ fn test_pcb_info_multiple_zen_files() {
         .write("boards/ambiguous/board2.zen", TEST_BOARD_ZEN)
         .snapshot_run("pcbc", ["info"]);
     assert_snapshot!("multiple_zen_files", output);
+}
+
+fn inspect(sandbox: &Sandbox) -> serde_json::Value {
+    let output = sandbox
+        .cmd(env!("CARGO_BIN_EXE_pcbc"), ["info", "-f", "json"])
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .expect("inspection succeeds even when the workspace is broken");
+    serde_json::from_slice(&output.stdout).expect("inspection emits valid JSON")
+}
+
+#[test]
+fn test_pcb_info_invalid_root_does_not_invent_workspace_members() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write("pcb.toml", "[workspace\n")
+        .write("boards/good/pcb.toml", TEST_BOARD_PCB_TOML);
+
+    let info = inspect(&sandbox);
+    assert!(info.get("root").is_none());
+    assert!(info.get("config").is_none());
+    assert_eq!(info["packages"], serde_json::json!({}));
+    let errors = info["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0]["error"].as_str().unwrap().contains("pcb.toml"));
+}
+
+#[test]
+fn test_pcb_info_partial_output() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write(
+            "pcb.toml",
+            format!(
+                "{WORKSPACE_PCB_TOML}\n[patch]\n\"example.com/broken\" = {{ path = \"fork/broken\" }}\n"
+            ),
+        )
+        .write("boards/good/pcb.toml", TEST_BOARD_PCB_TOML)
+        .write("boards/good/test_board.zen", TEST_BOARD_ZEN)
+        .write("boards/bad/pcb.toml", "[board\n")
+        .write("fork/broken/pcb.toml", "[dependencies\n")
+        .write("boards/good/broken.kicad_sym", [0xff]);
+
+    let info = inspect(&sandbox);
+    assert_eq!(info["packages"].as_object().unwrap().len(), 1);
+    assert_eq!(
+        info["packages"]["boards/good"]["entrypoints"],
+        serde_json::json!(["test_board.zen"])
+    );
+    let errors = info["errors"].as_array().unwrap();
+    for suffix in [
+        "boards/bad/pcb.toml",
+        "fork/broken/pcb.toml",
+        "broken.kicad_sym",
+    ] {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error["path"].as_str().unwrap().ends_with(suffix))
+        );
+    }
+
+    sandbox.write("boards/bad/pcb.toml", "");
+    let output = sandbox
+        .run("pcbc", ["build", "boards/good/test_board.zen"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid pcb.toml"));
+}
+
+#[test]
+fn test_pcb_info_resolution_failure_preserves_local_files() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
+        .write(
+            "boards/main/pcb.toml",
+            format!(
+                "{TEST_BOARD_PCB_TOML}\n[dependencies]\n\"example.com/missing/pkg\" = \"1.0.0\"\n"
+            ),
+        )
+        .write("boards/main/test_board.zen", TEST_BOARD_ZEN);
+
+    let info = inspect(&sandbox);
+    assert!(!info["errors"].as_array().unwrap().is_empty());
+    assert_eq!(
+        info["packages"]["boards/main"]["entrypoints"],
+        serde_json::json!(["test_board.zen"])
+    );
+    assert!(info.get("external_dependencies").is_none());
+}
+
+#[test]
+fn test_pcb_info_source_patch_takes_precedence_over_vendor() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write(
+            "pcb.toml",
+            format!(
+                "{WORKSPACE_PCB_TOML}\n[patch]\n\"example.com/parts\" = {{ path = \"vendor/parts/1.0.0\" }}\n"
+            ),
+        )
+        .write("vendor/parts/1.0.0/pcb.toml", "")
+        .write("vendor/parts/1.0.0/part.zen", "");
+
+    let info = inspect(&sandbox);
+    assert!(info.get("errors").is_none(), "{info}");
+    let patch = &info["packages"]["example.com/parts"];
+    assert_eq!(patch["source"], "patch");
 }

@@ -1,6 +1,5 @@
 ---
 source: crates/pcbc/tests/info.rs
-assertion_line: 323
 expression: output
 ---
 Command: pcbc info -f json
@@ -17,6 +16,9 @@ Exit Code: 0
   "packages": {
     "boards/discovered": {
       "rel_path": "boards/discovered",
+      "source": "workspace",
+      "board_entrypoint": "boards/discovered/discovered.zen",
+      "tag_prefix": "boards/discovered/v",
       "config": {
         "board": {
           "name": "DiscoveredBoard",
