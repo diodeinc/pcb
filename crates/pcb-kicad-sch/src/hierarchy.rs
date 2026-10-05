@@ -231,9 +231,14 @@ pub(crate) fn prune_obsolete_pages(
         for item in &page.items {
             keep |= match item {
                 SchItem::Graphic(_) => true,
-                // Opaque drawings (images, Beziers) have item UUIDs; native
-                // page metadata such as sheet_instances does not.
-                SchItem::Unsupported(node) => node.find_list("uuid").is_some(),
+                // Opaque drawings (images, Beziers) have item UUIDs, but
+                // electrical buses are also parsed as unsupported items.
+                SchItem::Unsupported(node) => {
+                    !matches!(
+                        node.as_list().and_then(|items| items.first()?.as_sym()),
+                        Some("bus" | "bus_entry")
+                    ) && node.find_list("uuid").is_some()
+                }
                 SchItem::Symbol(symbol) => {
                     symbol.field_value("Path").is_some()
                         || page

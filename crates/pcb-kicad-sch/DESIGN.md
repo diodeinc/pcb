@@ -30,8 +30,8 @@ symbols, linked modules, drawings, native documentation symbols or
 user-organized pages. Root pages are always retained. This narrow cleanup also
 removes the child files and relationship metadata; renamed or relocated pages
 and sheets containing live content remain authoritative. Orphan power symbols,
-labels and wires alone do not retain obsolete pages. Scoped issue repairs do
-not prune pages.
+labels, wires, buses and bus entries alone do not retain obsolete pages. Scoped
+issue repairs do not prune pages.
 
 ## Shared core
 

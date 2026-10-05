@@ -445,8 +445,8 @@ fn apply_prunes_replaced_circuit_sheets_but_preserves_reused_live_pages() {
 }
 
 #[test]
-fn apply_preserves_drawings_on_obsolete_pages_but_prunes_orphan_power_symbols() {
-    for kind in ["graphic", "opaque", "symbol", "power"] {
+fn apply_preserves_drawings_on_obsolete_pages_but_prunes_orphan_electrical_notation() {
+    for kind in ["graphic", "opaque", "symbol", "power", "bus", "bus_entry"] {
         let workspace = tempfile::tempdir().unwrap();
         let project_dir = workspace.path().join("hardware");
         let netlist = linked_hierarchy_fixture(&project_dir);
@@ -475,6 +475,15 @@ fn apply_preserves_drawings_on_obsolete_pages_but_prunes_orphan_power_symbols() 
                     _ => false,
                 })
                 .unwrap()
+        } else if matches!(kind, "bus" | "bus_entry") {
+            let source = if kind == "bus" {
+                r#"(bus (pts (xy 250 200) (xy 250 210))
+                    (stroke (width 0) (type default)) (uuid "orphan-bus"))"#
+            } else {
+                r#"(bus_entry (at 250 200) (size 2.54 2.54)
+                    (stroke (width 0) (type default)) (uuid "orphan-entry"))"#
+            };
+            SchItem::Unsupported(pcb_sexpr::parse(source).unwrap())
         } else {
             let mut symbol = page
                 .items
@@ -518,10 +527,10 @@ fn apply_preserves_drawings_on_obsolete_pages_but_prunes_orphan_power_symbols() 
         let applied = apply_linked_schematic(&replacement).unwrap().unwrap();
         assert!(applied.changed);
         assert!(!project_dir.join("FILTER_B.kicad_sch").exists());
-        if kind == "power" {
+        if matches!(kind, "power" | "bus" | "bus_entry") {
             assert!(
                 !child.exists(),
-                "orphan electrical notation does not retain obsolete pages"
+                "orphan {kind} does not retain obsolete pages"
             );
             assert_eq!(applied.schematic_files.len(), 1);
         } else {
