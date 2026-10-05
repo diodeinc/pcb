@@ -193,7 +193,10 @@ pub(crate) fn sheet_id(module_path: &str) -> String {
 /// Remove obsolete generated pages, without imposing generated organization on
 /// live content. Both the filename and UUID must still identify a module page;
 /// renamed/user-created pages and references remain authoritative.
-pub(crate) fn prune_obsolete_pages(document: &mut SchDocument, modules: &[LinkedModule]) {
+pub(crate) fn prune_obsolete_pages(
+    document: &mut SchDocument,
+    modules: &[LinkedModule],
+) -> Result<()> {
     let module_paths = document
         .pages
         .iter()
@@ -219,20 +222,35 @@ pub(crate) fn prune_obsolete_pages(document: &mut SchDocument, modules: &[Linked
             })
         })
         .collect::<BTreeMap<_, _>>();
-    let mut retained = document
-        .pages
-        .iter()
-        .enumerate()
-        .filter_map(|(index, page)| {
-            let live = module_paths[index].as_ref().is_none_or(|path| {
-                modules.iter().any(|module| &module.path == path)
-            }) || document.root_page_ids.contains(&page.id)
-                || page.items.iter().any(|item| {
-                    matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path").is_some())
-                });
-            live.then_some(index)
-        })
-        .collect::<BTreeSet<_>>();
+    let mut retained = BTreeSet::new();
+    for (index, page) in document.pages.iter().enumerate() {
+        let mut keep = module_paths[index]
+            .as_ref()
+            .is_none_or(|path| modules.iter().any(|module| &module.path == path))
+            || document.root_page_ids.contains(&page.id);
+        for item in &page.items {
+            keep |= match item {
+                SchItem::Graphic(_) => true,
+                // Opaque drawings (images, Beziers) have item UUIDs; native
+                // page metadata such as sheet_instances does not.
+                SchItem::Unsupported(node) => node.find_list("uuid").is_some(),
+                SchItem::Symbol(symbol) => {
+                    symbol.field_value("Path").is_some()
+                        || page
+                            .library
+                            .definitions
+                            .get(symbol.library_key())
+                            .map(crate::symbol::ParsedSymbolDefinition::parse)
+                            .transpose()?
+                            .is_some_and(|definition| definition.is_unmanaged_graphic(symbol))
+                }
+                _ => false,
+            };
+        }
+        if keep {
+            retained.insert(index);
+        }
+    }
     let mut relationships = Vec::new();
     for (parent, page) in document.pages.iter().enumerate() {
         for sheet in page.items.iter().filter_map(|item| match item {
@@ -242,10 +260,9 @@ pub(crate) fn prune_obsolete_pages(document: &mut SchDocument, modules: &[Linked
             let Some(&child) = by_file.get(&resolve_file_name(page, sheet.file_name())) else {
                 continue;
             };
-            if module_paths[child]
-                .as_ref()
-                .is_none_or(|path| sheet.id != sheet_id(path))
-            {
+            if module_paths[child].as_ref().is_none_or(|path| {
+                sheet.id != sheet_id(path) || sheet.file_name() != format!("{path}.kicad_sch")
+            }) {
                 retained.insert(child);
             }
             relationships.push((parent, child, sheet.id.clone()));
@@ -277,6 +294,7 @@ pub(crate) fn prune_obsolete_pages(document: &mut SchDocument, modules: &[Linked
         index += 1;
         keep
     });
+    Ok(())
 }
 
 pub(crate) fn is_descendant(path: &str, ancestor: &str) -> bool {
@@ -361,7 +379,7 @@ mod tests {
                 notes.clone(),
             ],
         };
-        prune_obsolete_pages(&mut document, &[module("KEEP.MIDDLE.CHILD")]);
+        prune_obsolete_pages(&mut document, &[module("KEEP.MIDDLE.CHILD")]).unwrap();
         assert_eq!(
             document
                 .pages
@@ -383,24 +401,29 @@ mod tests {
 
     #[test]
     fn renamed_or_user_referenced_module_pages_are_not_pruned() {
-        for rename_file in [false, true] {
+        for organization in ["user-reference", "renamed", "relocated"] {
             let mut child = page("OLD", &[]);
             let mut root = page("ROOT", &["OLD"]);
             let SchItem::Sheet(sheet) = &mut root.items[0] else {
                 unreachable!()
             };
-            if rename_file {
-                child.file_name = Some("eda/renamed.kicad_sch".to_string());
-                sheet.file.value = "renamed.kicad_sch".to_string();
-            } else {
-                sheet.id = "user-reference".to_string();
+            match organization {
+                "renamed" => {
+                    child.file_name = Some("eda/renamed.kicad_sch".to_string());
+                    sheet.file.value = "renamed.kicad_sch".to_string();
+                }
+                "relocated" => {
+                    child.file_name = Some("eda/archive/OLD.kicad_sch".to_string());
+                    sheet.file.value = "archive/OLD.kicad_sch".to_string();
+                }
+                _ => sheet.id = "user-reference".to_string(),
             }
             let mut document = SchDocument {
                 root_page_ids: vec![root.id.clone()],
                 pages: vec![root, child],
             };
             let original = document.clone();
-            prune_obsolete_pages(&mut document, &[]);
+            prune_obsolete_pages(&mut document, &[]).unwrap();
             assert_eq!(document, original);
         }
     }

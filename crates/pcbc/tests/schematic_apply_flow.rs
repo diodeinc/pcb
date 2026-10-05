@@ -445,6 +445,107 @@ fn apply_prunes_replaced_circuit_sheets_but_preserves_reused_live_pages() {
 }
 
 #[test]
+fn apply_preserves_drawings_on_obsolete_pages_but_prunes_orphan_power_symbols() {
+    for kind in ["graphic", "opaque", "symbol", "power"] {
+        let workspace = tempfile::tempdir().unwrap();
+        let project_dir = workspace.path().join("hardware");
+        let netlist = linked_hierarchy_fixture(&project_dir);
+        apply_linked_schematic(&netlist).unwrap().unwrap();
+        let mut project = KicadProject::load(&project_dir).unwrap();
+        let page = project
+            .document
+            .pages
+            .iter_mut()
+            .find(|page| page.file_name.as_deref() == Some("FILTER_A.kicad_sch"))
+            .unwrap();
+        let artwork = if matches!(kind, "graphic" | "opaque") {
+            let graphics = pcb_kicad_sch::parse_kicad_sch_page(
+                None,
+                include_str!("../../pcb-kicad-sch/test-data/kicad-10/sheet-graphics.kicad_sch"),
+            )
+            .unwrap();
+            graphics
+                .items
+                .into_iter()
+                .find(|item| match item {
+                    SchItem::Graphic(_) => kind == "graphic",
+                    SchItem::Unsupported(node) => {
+                        kind == "opaque" && node.find_list("uuid").is_some()
+                    }
+                    _ => false,
+                })
+                .unwrap()
+        } else {
+            let mut symbol = page
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    SchItem::Symbol(symbol) => Some(symbol.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            symbol.id = "native-annotation".to_string();
+            symbol.lib_id = "Test:Annotation".to_string();
+            symbol.lib_name = None;
+            symbol.fields.remove("Path");
+            symbol.fields.get_mut("Reference").unwrap().value = "#DOC1".to_string();
+            symbol.pins.clear();
+            symbol.on_board = false;
+            let source = if kind == "power" {
+                r#"(symbol "Test:Annotation" (power global)
+                    (symbol "Annotation_1_1" (pin power_out line (at 0 0 0) (length 0)
+                        (name "") (number "1"))))"#
+            } else {
+                r#"(symbol "Test:Annotation" (symbol "Annotation_0_1"))"#
+            };
+            let definition = SymbolDefinition::from_kicad_symbol_sexpr(source).unwrap();
+            page.library
+                .definitions
+                .insert(definition.lib_id.clone(), definition);
+            SchItem::Symbol(symbol)
+        };
+        page.items.push(artwork.clone());
+        let child = project_dir.join("FILTER_A.kicad_sch");
+        let edited = project
+            .document
+            .to_kicad_sch_files()
+            .into_iter()
+            .find(|file| file.file_name.as_deref() == Some("FILTER_A.kicad_sch"))
+            .unwrap();
+        fs::write(&child, edited.content).unwrap();
+
+        let replacement = linked_fixture(&project_dir);
+        let applied = apply_linked_schematic(&replacement).unwrap().unwrap();
+        assert!(applied.changed);
+        assert!(!project_dir.join("FILTER_B.kicad_sch").exists());
+        if kind == "power" {
+            assert!(
+                !child.exists(),
+                "orphan electrical notation does not retain obsolete pages"
+            );
+            assert_eq!(applied.schematic_files.len(), 1);
+        } else {
+            assert!(child.exists(), "{kind} must retain its page");
+            assert_eq!(applied.schematic_files.len(), 2);
+            let repaired = KicadProject::load(&project_dir).unwrap();
+            let page = repaired
+                .document
+                .pages
+                .iter()
+                .find(|page| page.file_name.as_deref() == Some("FILTER_A.kicad_sch"))
+                .unwrap();
+            assert!(page.items.contains(&artwork));
+        }
+        assert!(
+            !apply_linked_schematic(&replacement)
+                .unwrap()
+                .unwrap()
+                .changed
+        );
+    }
+}
+
+#[test]
 fn apply_restores_deleted_sheet_instance_without_recreating_child_files() {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");

@@ -25,11 +25,13 @@ Generation may give a new module instance its own child sheet and file. Later
 applications preserve user reorganizations rather than restoring that layout.
 Full reconciliation removes an obsolete generated subtree only when its page
 filenames, page UUIDs and incoming sheet UUIDs still identify the generated
-module paths, and it contains no live managed symbols, linked modules or
+module paths and parent-relative filenames, and it contains no live managed
+symbols, linked modules, drawings, native documentation symbols or
 user-organized pages. Root pages are always retained. This narrow cleanup also
-removes the child files and relationship metadata; renamed pages and sheets
-containing live content remain authoritative. Scoped issue repairs do not
-prune pages.
+removes the child files and relationship metadata; renamed or relocated pages
+and sheets containing live content remain authoritative. Orphan power symbols,
+labels and wires alone do not retain obsolete pages. Scoped issue repairs do
+not prune pages.
 
 ## Shared core
 

@@ -313,7 +313,7 @@ pub(crate) fn reconcile_document(
     // touch pages outside its selection.
     if complete {
         prune_unused_symbol_definitions(&mut document);
-        hierarchy::prune_obsolete_pages(&mut document, &self::linked_modules(netlist)?);
+        hierarchy::prune_obsolete_pages(&mut document, &self::linked_modules(netlist)?)?;
     }
     Ok(document)
 }
