@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Removed
+
+- Stop checking KiCad custom rules before DRC. KiCad builds with the upstream fix fail on a `.kicad_dru` that does not compile; older builds ignore it silently.
+
 ## [0.4.71] - 2026-10-05
 
 ### Changed

@@ -20,7 +20,7 @@ pub(super) fn materialize_board(
     let validation_diagnostics_json = write_validation_diagnostics(
         &board_dir,
         &paths.kicad_project_root,
-        &validation.summary.selected,
+        &validation.summary,
         &validation.diagnostics,
     )?;
 
@@ -74,10 +74,10 @@ pub(super) fn materialize_board(
     })
 }
 
-pub(super) fn write_validation_diagnostics(
+fn write_validation_diagnostics(
     board_dir: &Path,
     kicad_project_root: &Path,
-    selected: &SelectedKicadFiles,
+    validation: &ImportValidation,
     diagnostics: &Diagnostics,
 ) -> Result<PathBuf> {
     #[derive(Serialize)]
@@ -90,7 +90,7 @@ pub(super) fn write_validation_diagnostics(
     let out_path = board_dir.join(".kicad.validation.diagnostics.json");
     let payload = ImportValidationDiagnosticsFile {
         kicad_project_root,
-        selected,
+        selected: &validation.selected,
         diagnostics,
     };
 
