@@ -309,10 +309,11 @@ pub(crate) fn reconcile_document(
     // Refresh even when only the instance annotation (not the field) is stale.
     component_slots::sync_symbol_instance_references(&mut document, &project_slots)?;
 
-    // Library cleanup is a whole-document concern; a scoped repair must not
+    // Cleanup is a whole-document concern; a scoped repair must not
     // touch pages outside its selection.
     if complete {
         prune_unused_symbol_definitions(&mut document);
+        hierarchy::prune_obsolete_pages(&mut document, &self::linked_modules(netlist)?)?;
     }
     Ok(document)
 }

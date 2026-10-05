@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb new board` uses `eda` as the shared layout and schematic directory.
 
+### Fixed
+
+- `pcb apply schematic` removes obsolete generated module sheets, child files, and retained sheet metadata while preserving live and user-organized sheets.
+
 ## [0.4.70] - 2026-10-04
 
 ### Added

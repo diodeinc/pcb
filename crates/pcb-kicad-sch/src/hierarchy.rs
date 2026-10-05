@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, bail};
 use pcb_sch::InstanceRef;
 
-use crate::deterministic_uuid;
+use crate::{
+    SchDocument, SchItem, connectivity::kicad::resolve_file_name, deterministic_uuid,
+    normalize_schematic_path,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LinkedModule {
@@ -187,6 +190,118 @@ pub(crate) fn sheet_id(module_path: &str) -> String {
     deterministic_uuid(format!("zener:module-sheet:{module_path}"))
 }
 
+/// Remove obsolete generated pages, without imposing generated organization on
+/// live content. Both the filename and UUID must still identify a module page;
+/// renamed/user-created pages and references remain authoritative.
+pub(crate) fn prune_obsolete_pages(
+    document: &mut SchDocument,
+    modules: &[LinkedModule],
+) -> Result<()> {
+    let module_paths = document
+        .pages
+        .iter()
+        .map(|page| {
+            let path = std::path::Path::new(page.file_name.as_deref()?)
+                .file_stem()?
+                .to_str()?;
+            (page.id == page_id(path)).then(|| path.to_string())
+        })
+        .collect::<Vec<_>>();
+    let by_file = document
+        .pages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, page)| {
+            page.file_name.as_deref().map(|name| {
+                (
+                    normalize_schematic_path(std::path::Path::new(name))
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    index,
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut retained = BTreeSet::new();
+    for (index, page) in document.pages.iter().enumerate() {
+        let mut keep = module_paths[index]
+            .as_ref()
+            .is_none_or(|path| modules.iter().any(|module| &module.path == path))
+            || document.root_page_ids.contains(&page.id);
+        for item in &page.items {
+            keep |= match item {
+                SchItem::Graphic(_) => true,
+                // Opaque drawings (images, Beziers) have item UUIDs, but
+                // electrical buses are also parsed as unsupported items.
+                SchItem::Unsupported(node) => {
+                    !matches!(
+                        node.as_list().and_then(|items| items.first()?.as_sym()),
+                        Some("bus" | "bus_entry")
+                    ) && node.find_list("uuid").is_some()
+                }
+                SchItem::Symbol(symbol) => {
+                    symbol.field_value("Path").is_some()
+                        || page
+                            .library
+                            .definitions
+                            .get(symbol.library_key())
+                            .map(crate::symbol::ParsedSymbolDefinition::parse)
+                            .transpose()?
+                            .is_some_and(|definition| definition.is_unmanaged_graphic(symbol))
+                }
+                _ => false,
+            };
+        }
+        if keep {
+            retained.insert(index);
+        }
+    }
+    let mut relationships = Vec::new();
+    for (parent, page) in document.pages.iter().enumerate() {
+        for sheet in page.items.iter().filter_map(|item| match item {
+            SchItem::Sheet(sheet) => Some(sheet),
+            _ => None,
+        }) {
+            let Some(&child) = by_file.get(&resolve_file_name(page, sheet.file_name())) else {
+                continue;
+            };
+            if module_paths[child].as_ref().is_none_or(|path| {
+                sheet.id != sheet_id(path) || sheet.file_name() != format!("{path}.kicad_sch")
+            }) {
+                retained.insert(child);
+            }
+            relationships.push((parent, child, sheet.id.clone()));
+        }
+    }
+    // A live or user-organized descendant keeps every ancestor, including
+    // shared pages. Iterate to a fixed point so page order does not matter.
+    loop {
+        let previous = retained.len();
+        for (parent, child, _) in &relationships {
+            if retained.contains(child) {
+                retained.insert(*parent);
+            }
+        }
+        if retained.len() == previous {
+            break;
+        }
+    }
+    for (parent, child, sheet_id) in relationships {
+        if !retained.contains(&child) {
+            document.pages[parent]
+                .items
+                .retain(|item| !matches!(item, SchItem::Sheet(sheet) if sheet.id == sheet_id));
+        }
+    }
+    let mut index = 0;
+    document.pages.retain(|_| {
+        let keep = retained.contains(&index);
+        index += 1;
+        keep
+    });
+    Ok(())
+}
+
 pub(crate) fn is_descendant(path: &str, ancestor: &str) -> bool {
     path == ancestor
         || path
@@ -224,6 +339,98 @@ mod tests {
                 pages
             },
         )
+    }
+
+    fn page(path: &str, children: &[&str]) -> crate::SchPage {
+        let mut page = crate::SchPage::new(page_id(path));
+        page.file_name = Some(format!("eda/{path}.kicad_sch"));
+        page.items = children
+            .iter()
+            .map(|child| {
+                SchItem::Sheet(Box::new(crate::Sheet {
+                    id: sheet_id(child),
+                    placed: true,
+                    at: None,
+                    size: None,
+                    name: None,
+                    file: crate::SymbolField::new(
+                        "Sheetfile",
+                        format!("{child}.kicad_sch"),
+                        crate::Point::new(0.0, 0.0),
+                    ),
+                    pins: Vec::new(),
+                    unsupported: Vec::new(),
+                }))
+            })
+            .collect();
+        page
+    }
+
+    #[test]
+    fn prunes_obsolete_subtrees_but_preserves_live_descendants_and_user_pages() {
+        let mut notes = page("NOTES", &[]);
+        notes.id = "user-page".to_string();
+        let mut document = SchDocument {
+            root_page_ids: vec![page_id("ROOT")],
+            // Deliberately put leaves first: retention must propagate more
+            // than one level and must not depend on load order.
+            pages: vec![
+                page("OLD.CHILD", &[]),
+                page("KEEP.MIDDLE.CHILD", &[]),
+                page("ROOT", &["OLD", "KEEP", "NOTES"]),
+                page("KEEP", &["KEEP.MIDDLE"]),
+                page("KEEP.MIDDLE", &["KEEP.MIDDLE.CHILD"]),
+                page("OLD", &["OLD.CHILD"]),
+                notes.clone(),
+            ],
+        };
+        prune_obsolete_pages(&mut document, &[module("KEEP.MIDDLE.CHILD")]).unwrap();
+        assert_eq!(
+            document
+                .pages
+                .iter()
+                .map(|page| page.id.clone())
+                .collect::<Vec<_>>(),
+            ["KEEP.MIDDLE.CHILD", "ROOT", "KEEP", "KEEP.MIDDLE"]
+                .map(page_id)
+                .into_iter()
+                .chain([notes.id.clone()])
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(document.pages.last(), Some(&notes));
+        assert_eq!(
+            document.pages[1].items,
+            page("ROOT", &["KEEP", "NOTES"]).items
+        );
+    }
+
+    #[test]
+    fn renamed_or_user_referenced_module_pages_are_not_pruned() {
+        for organization in ["user-reference", "renamed", "relocated"] {
+            let mut child = page("OLD", &[]);
+            let mut root = page("ROOT", &["OLD"]);
+            let SchItem::Sheet(sheet) = &mut root.items[0] else {
+                unreachable!()
+            };
+            match organization {
+                "renamed" => {
+                    child.file_name = Some("eda/renamed.kicad_sch".to_string());
+                    sheet.file.value = "renamed.kicad_sch".to_string();
+                }
+                "relocated" => {
+                    child.file_name = Some("eda/archive/OLD.kicad_sch".to_string());
+                    sheet.file.value = "archive/OLD.kicad_sch".to_string();
+                }
+                _ => sheet.id = "user-reference".to_string(),
+            }
+            let mut document = SchDocument {
+                root_page_ids: vec![root.id.clone()],
+                pages: vec![root, child],
+            };
+            let original = document.clone();
+            prune_obsolete_pages(&mut document, &[]).unwrap();
+            assert_eq!(document, original);
+        }
     }
 
     #[test]

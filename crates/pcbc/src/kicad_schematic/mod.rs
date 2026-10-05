@@ -127,7 +127,7 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
                 writes.push(PendingWrite {
                     path,
                     source: Some(source),
-                    next,
+                    next: Some(next),
                 });
             }
         } else {
@@ -145,7 +145,19 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
             writes.push(PendingWrite {
                 path,
                 source: None,
-                next,
+                next: Some(next),
+            });
+        }
+    }
+    let desired_paths = desired_file_paths(&project.directory, &desired)?;
+    for path in &project.schematic_files {
+        if !desired_paths.contains(path) {
+            let source = fs::read_to_string(path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            writes.push(PendingWrite {
+                path: path.clone(),
+                source: Some(source),
+                next: None,
             });
         }
     }
@@ -157,7 +169,7 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
         writes.push(PendingWrite {
             path: project.project_file.clone(),
             source: Some(source),
-            next,
+            next: Some(next),
         });
     }
     if writes.is_empty() {
@@ -174,7 +186,7 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
     Ok(SchematicApplyResult {
         project_file: project.project_file,
         root_schematic,
-        schematic_files: desired_file_paths(&project.directory, &desired)?,
+        schematic_files: desired_paths,
         changed: true,
         created: false,
     })
@@ -183,7 +195,7 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
 struct PendingWrite {
     path: PathBuf,
     source: Option<String>,
-    next: String,
+    next: Option<String>,
 }
 
 fn unchanged(project: KicadProject, root_schematic: PathBuf) -> SchematicApplyResult {
@@ -209,7 +221,10 @@ fn commit_and_verify(
     let result = writes
         .iter()
         .try_for_each(|write| {
-            write_atomically(&write.path, &write.next)?;
+            match &write.next {
+                Some(next) => write_atomically(&write.path, next)?,
+                None => remove_file_if_present(&write.path)?,
+            }
             written += 1;
             Ok(())
         })
@@ -286,7 +301,7 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
     let mut writes = vec![PendingWrite {
         path: project_file.clone(),
         source: original_project,
-        next: project_source,
+        next: Some(project_source),
     }];
     writes.extend(
         document
@@ -296,7 +311,7 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
             .map(|(file, path)| PendingWrite {
                 path: path.clone(),
                 source: None,
-                next: file.content,
+                next: Some(file.content),
             }),
     );
     commit_and_verify(
@@ -446,4 +461,51 @@ fn write_atomically(path: &Path, content: &str) -> Result<()> {
     AtomicFile::new(path, OverwriteBehavior::AllowOverwrite)
         .write(|file| file.write_all(content.as_bytes()))
         .with_context(|| format!("failed to write {} atomically", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_apply_restores_deleted_files_and_earlier_writes() {
+        for fail_write in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let child = directory.path().join("child.kicad_sch");
+            let project = directory.path().join("demo.kicad_pro");
+            let new_file = directory.path().join("new.kicad_sch");
+            fs::write(&child, "original child\n").unwrap();
+            fs::write(&project, "{}\n").unwrap();
+            let mut writes = vec![
+                PendingWrite {
+                    path: child.clone(),
+                    source: Some("original child\n".to_string()),
+                    next: None,
+                },
+                PendingWrite {
+                    path: new_file.clone(),
+                    source: None,
+                    next: Some("new child".to_string()),
+                },
+                PendingWrite {
+                    path: project.clone(),
+                    source: Some("{}\n".to_string()),
+                    next: Some("invalid project JSON".to_string()),
+                },
+            ];
+            if fail_write {
+                writes.push(PendingWrite {
+                    path: directory.path().join("missing/file.kicad_sch"),
+                    source: None,
+                    next: Some("cannot write".to_string()),
+                });
+            }
+            let error = commit_and_verify(&writes, &project, &Schematic::default(), "test apply")
+                .unwrap_err();
+            assert!(error.to_string().contains("restored original files"));
+            assert_eq!(fs::read_to_string(&child).unwrap(), "original child\n");
+            assert_eq!(fs::read_to_string(&project).unwrap(), "{}\n");
+            assert!(!new_file.exists());
+        }
+    }
 }

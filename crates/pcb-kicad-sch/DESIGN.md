@@ -11,7 +11,8 @@ generated labels, wires, sheets, and other items do not grant continued
 ownership of those items.
 
 Analysis interprets the schematic as KiCad does. Reconciliation preserves an
-equivalent schematic except to refresh netlist-derived symbol assembly flags.
+equivalent schematic except to refresh netlist-derived symbol assembly flags
+and prune obsolete generated module sheets as described below.
 Otherwise, it makes the smallest repair needed to restore equivalence.
 
 KiCad power symbols are adopted by their exact effective net name and
@@ -22,6 +23,15 @@ an existing equivalent schematic.
 
 Generation may give a new module instance its own child sheet and file. Later
 applications preserve user reorganizations rather than restoring that layout.
+Full reconciliation removes an obsolete generated subtree only when its page
+filenames, page UUIDs and incoming sheet UUIDs still identify the generated
+module paths and parent-relative filenames, and it contains no live managed
+symbols, linked modules, drawings, native documentation symbols or
+user-organized pages. Root pages are always retained. This narrow cleanup also
+removes the child files and relationship metadata; renamed or relocated pages
+and sheets containing live content remain authoritative. Orphan power symbols,
+labels, wires, buses and bus entries alone do not retain obsolete pages. Scoped
+issue repairs do not prune pages.
 
 ## Shared core
 
