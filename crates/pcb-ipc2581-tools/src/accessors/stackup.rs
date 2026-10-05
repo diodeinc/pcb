@@ -459,13 +459,6 @@ pub struct ImpedanceControlInfo {
     pub loss_tangents: Vec<f64>,
 }
 
-impl ImpedanceControlInfo {
-    /// A design is likely impedance-controlled if Dk values are specified
-    pub fn is_impedance_controlled(&self) -> bool {
-        self.has_dielectric_constant
-    }
-}
-
 impl<'a> IpcAccessor<'a> {
     /// Extract dielectric material names from the stackup
     pub fn material_info(&self) -> Option<MaterialInfo> {

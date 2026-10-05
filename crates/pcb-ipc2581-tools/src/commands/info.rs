@@ -458,9 +458,7 @@ fn output_text(
         }
 
         // Impedance control
-        if let Some(imp) = accessor.impedance_control_info()
-            && imp.is_impedance_controlled()
-        {
+        if let Some(imp) = accessor.impedance_control_info() {
             println!();
             println!("{}", "Impedance Control".bold());
             let mut imp_table = Table::new();
@@ -468,7 +466,7 @@ fn output_text(
             imp_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
             imp_table.add_row(vec![
                 Cell::new("Controlled").fg(Color::Cyan),
-                Cell::new("Yes"),
+                Cell::new("Unknown"),
             ]);
             if !imp.dielectric_constants.is_empty() {
                 let dk_str: Vec<String> = imp
@@ -839,8 +837,9 @@ pub fn info_json(
 
     // Impedance control
     if let Some(imp) = accessor.impedance_control_info() {
+        // KiCad exports material properties, not its impedance-control flag.
         info["impedance_control"] = json!({
-            "controlled": imp.is_impedance_controlled(),
+            "controlled": null,
             "dielectric_constants": imp.dielectric_constants,
             "loss_tangents": imp.loss_tangents,
         });
