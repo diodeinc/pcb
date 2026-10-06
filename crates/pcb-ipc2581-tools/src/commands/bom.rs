@@ -97,22 +97,12 @@ pub fn execute(file: &Path, format: BomFormat, offline: bool) -> Result<()> {
 
 /// Export the populated IPC BOM using its selected AVL parts and supplier metadata.
 /// Missing selections remain exportable; unrelated items without MPNs stay separate.
+/// Components alone are not a substitute for BOM population and sourcing data.
 pub fn emit_jlc_bom_csv(accessor: &IpcAccessor) -> String {
-    #[derive(Default)]
-    struct Row {
-        value: String,
-        designators: Vec<String>,
-        footprint: String,
-        lcsc: String,
-    }
-
     let ipc = accessor.ipc();
-    let mut groups = HashMap::new();
+    let mut groups: HashMap<_, Vec<String>> = HashMap::new();
     if let Some(bom) = ipc.bom() {
         for item in &bom.items {
-            if matches!(item.category, Some(ipc2581::types::BomCategory::Document)) {
-                continue;
-            }
             let chars = item
                 .characteristics
                 .as_ref()
@@ -144,42 +134,45 @@ pub fn emit_jlc_bom_csv(accessor: &IpcAccessor) -> String {
 
             for ref_des in item.reference_designators() {
                 let designator = ipc.resolve(ref_des.name);
-                if ref_des.populate == Some(false) || designator.is_empty() {
+                if ref_des.populate == Some(false)
+                    || designator.is_empty()
+                    || (matches!(item.category, Some(ipc2581::types::BomCategory::Document))
+                        && ref_des.populate != Some(true))
+                {
                     continue;
                 }
-                let row = groups.entry(key.clone()).or_insert_with(|| Row {
-                    value: chars.value.clone().unwrap_or_default(),
-                    footprint: chars
-                        .package
-                        .clone()
-                        .or_else(|| {
-                            ref_des
-                                .package_ref
-                                .map(|package| ipc.resolve(package).to_string())
-                        })
-                        .unwrap_or_default(),
-                    lcsc: lcsc.clone(),
-                    ..Default::default()
-                });
-                row.designators.push(designator.to_string());
+                let footprint = chars
+                    .package
+                    .clone()
+                    .or_else(|| {
+                        ref_des
+                            .package_ref
+                            .map(|package| ipc.resolve(package).to_string())
+                    })
+                    .unwrap_or_default();
+                // Group only when both the selected part and all CSV fields agree.
+                let fields = [
+                    chars.value.clone().unwrap_or_default(),
+                    footprint,
+                    lcsc.clone(),
+                ];
+                groups
+                    .entry((key.clone(), fields))
+                    .or_default()
+                    .push(designator.to_string());
             }
         }
     }
-    let mut rows: Vec<_> = groups.into_values().collect();
-    for row in &mut rows {
-        row.designators.sort_by(|a, b| natord::compare(a, b));
+    let mut rows: Vec<_> = groups.into_iter().collect();
+    for (_, designators) in &mut rows {
+        designators.sort_by(|a, b| natord::compare(a, b));
     }
-    rows.sort_by(|a, b| natord::compare(&a.designators[0], &b.designators[0]));
+    rows.sort_by(|(_, a), (_, b)| natord::compare(&a[0], &b[0]));
     let mut csv = String::from("Comment,Designator,Footprint,JLCPCB Part #\n");
-    for row in rows {
+    for ((_, [value, footprint, lcsc]), designators) in rows {
         super::cpl::write_csv_row(
             &mut csv,
-            &[
-                &row.value,
-                &row.designators.join(","),
-                &row.footprint,
-                &row.lcsc,
-            ],
+            &[&value, &designators.join(","), &footprint, &lcsc],
         );
     }
     csv
@@ -324,7 +317,39 @@ mod tests {
                     ",C3,,\n",
                     "\"10k, \"\"1%\"\"\",\"R2,R3,R10\",CAD-R0402,C123\n",
                     "22k,R4,0603,\n",
+                    ",TP1,TestPoint,\n",
                 )
+            );
+        }
+    }
+
+    #[test]
+    fn jlc_bom_splits_conflicting_fields_for_the_same_selected_part() {
+        for (from, to, expected_rows) in [
+            (
+                "c123",
+                "c456",
+                "\"10k, \"\"1%\"\"\",\"R2,R10\",CAD-R0402,C456\n\"10k, \"\"1%\"\"\",R3,CAD-R0402,C123\n",
+            ),
+            (
+                "10k, &quot;1%&quot;",
+                "47k",
+                "47k,\"R2,R10\",CAD-R0402,C123\n\"10k, \"\"1%\"\"\",R3,CAD-R0402,C123\n",
+            ),
+            (
+                "name=\"R2\" packageRef=\"CAD-R0402\"",
+                "name=\"R2\" packageRef=\"CAD-R0603\"",
+                "\"10k, \"\"1%\"\"\",R2,CAD-R0603,C123\n\"10k, \"\"1%\"\"\",\"R3,R10\",CAD-R0402,C123\n",
+            ),
+        ] {
+            let source = include_str!("testdata/jlc_bom.xml").replacen(from, to, 1);
+            let ipc = ipc2581::Ipc2581::parse(&source).unwrap();
+            assert_eq!(
+                emit_jlc_bom_csv(&IpcAccessor::new(&ipc)),
+                format!(
+                    "Comment,Designator,Footprint,JLCPCB Part #\n100nF,C1,0402,C16133\n,C2,CAD-C0805,\n,C3,,\n{expected_rows}22k,R4,0603,\n,TP1,TestPoint,\n"
+                ),
+                "changed {from} to {to}",
             );
         }
     }

@@ -22,6 +22,11 @@
     </BomItem>
     <BomItem OEMDesignNumberRef="R-a-second" quantity="1" category="ELECTRICAL">
       <RefDes name="R3" packageRef="CAD-R0402"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="pcb" textualCharacteristicName="Value" textualCharacteristicValue="10k, &quot;1%&quot;"/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierEnterpriseRef" textualCharacteristicValue="vendor-7"/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierPartNumber" textualCharacteristicValue="C123"/>
+      </Characteristics>
     </BomItem>
     <BomItem OEMDesignNumberRef="R-b" quantity="1" category="ELECTRICAL">
       <RefDes name="R4" packageRef="CAD-R0603" populate="true"/>
@@ -52,8 +57,10 @@
         <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierPartNumber" textualCharacteristicValue="C404"/>
       </Characteristics>
     </BomItem>
-    <BomItem OEMDesignNumberRef="TP" quantity="1" category="DOCUMENT">
+    <BomItem OEMDesignNumberRef="TP" quantity="3" category="DOCUMENT">
       <RefDes name="TP1" packageRef="TestPoint" populate="true"/>
+      <RefDes name="TP2" packageRef="TestPoint" populate="false"/>
+      <RefDes name="TP3" packageRef="TestPoint"/>
     </BomItem>
   </Bom>
   <Avl name="avl">
