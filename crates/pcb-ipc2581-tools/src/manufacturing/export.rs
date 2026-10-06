@@ -251,21 +251,25 @@ fn build_gerber_job(
                 if let Some(name) = layer.material.or_else(|| spec.and_then(|s| s.material)) {
                     material["Material"] = json!(imported.resolve(name));
                 }
-                if let Some((r, g, b)) = spec.and_then(|s| s.color_rgb) {
-                    material["Color"] = json!(format!("R{r:03}G{g:03}B{b:03}"));
-                } else if let Some(color) = spec.and_then(|s| {
-                    s.color_term
-                        .and_then(|color| gerber_job_color(imported.resolve(color)))
-                        .or_else(|| {
-                            // KiCad writes material colors as free-text IPC
-                            // properties, rather than Color/ColorTerm elements.
-                            s.properties.iter().find_map(|property| {
-                                imported
-                                    .resolve(*property)
-                                    .strip_prefix("Color : ")
-                                    .and_then(gerber_job_color)
-                            })
-                        })
+                if let Some(color) = spec.and_then(|s| {
+                    // KiCad writes material colors as free-text IPC properties.
+                    // Contradictory declarations must not become fabrication instructions.
+                    let colors = s
+                        .color_rgb
+                        .map(|(r, g, b)| format!("R{r:03}G{g:03}B{b:03}"))
+                        .into_iter()
+                        .chain(
+                            s.color_term
+                                .and_then(|color| gerber_job_color(imported.resolve(color))),
+                        )
+                        .chain(s.properties.iter().filter_map(|property| {
+                            imported
+                                .resolve(*property)
+                                .strip_prefix("Color : ")
+                                .and_then(gerber_job_color)
+                        }))
+                        .collect::<std::collections::BTreeSet<_>>();
+                    (colors.len() == 1).then(|| colors.into_iter().next().unwrap())
                 }) {
                     material["Color"] = json!(color);
                 }
@@ -575,6 +579,23 @@ mod tests {
                     "{function}: {property}"
                 );
             }
+        }
+        for colors in [
+            r#"<Property text="Color : Black"/><Property text="Color : White"/>"#,
+            r#"<ColorTerm name="GREEN"/><Property text="Color : White"/>"#,
+            r#"<Color r="25" g="116" b="171"/><Property text="Color : White"/>"#,
+        ] {
+            let source = JOB_BOARD.replace(r#"<ColorTerm name="GREEN"/>"#, colors);
+            let design = import_design(
+                &ipc2581::Ipc2581::parse(&source).unwrap(),
+                Resolution::default(),
+            )
+            .unwrap();
+            assert!(
+                job_value(&design, &[])["MaterialStackup"][0]
+                    .get("Color")
+                    .is_none()
+            );
         }
     }
 
