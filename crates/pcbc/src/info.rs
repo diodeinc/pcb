@@ -109,8 +109,10 @@ pub fn execute(args: InfoArgs) -> Result<()> {
             })?;
         }
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&info_json(&start_path))?;
+            let info = info_json(&start_path);
+            let json = serde_json::to_string_pretty(&info)?;
             pcb_ui::write_stdout(|stdout| writeln!(stdout, "{json}"))?;
+            anyhow::ensure!(info.root.is_some(), "Could not discover workspace root");
         }
     }
 

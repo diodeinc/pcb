@@ -348,8 +348,9 @@ pcb info                     # Show workspace summary
 pcb info --format json       # Machine-readable output
 ```
 
-JSON output preserves partial results and exits 0 with failures in `errors`.
-Consumers requiring complete metadata must check `errors`; `root` is omitted
-when discovery fails. Packages include `source`; workspace packages also include
+JSON output preserves partial results with failures in `errors`. It exits nonzero
+if no `root` is discovered, but still prints JSON; otherwise it exits 0.
+Consumers requiring complete metadata must check `errors`. Packages include
+`source`; workspace packages also include
 `tag_prefix` (ending in `v`) and, when resolved, a workspace-relative
 `board_entrypoint`. Human-readable output, build, and publish remain strict.

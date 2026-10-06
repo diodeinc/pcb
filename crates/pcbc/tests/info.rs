@@ -406,7 +406,15 @@ fn test_pcb_info_invalid_root_does_not_invent_workspace_members() {
 
     let manifest = sandbox.root_path().join("pcb.toml");
     sandbox.cwd("boards/good");
-    let info = inspect(&sandbox);
+    let output = sandbox
+        .run("pcbc", ["info", "-f", "json"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let info: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(info.get("root").is_none());
     assert!(info.get("config").is_none());
     assert_eq!(info["packages"], serde_json::json!({}));
