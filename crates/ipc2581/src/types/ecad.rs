@@ -890,12 +890,12 @@ ipc_enum! {
         Osp = "OSP", // Organic Solderability Preservative
         HtOsp = "HT_OSP", // High Temperature OSP
 
-        // Bare copper
-        N = "N", // Bare copper (none)
-        NB = "NB", // Bare copper no bondability requirement
+        // Electroplated nickel (not a "no finish" designation)
+        N = "N", // Nickel electroplate for edge connectors
+        NB = "NB", // Nickel electroplate as a barrier
 
-        // Carbon contact
-        C = "C", // Carbon contact
+        // Bare copper
+        C = "C", // Bare copper
 
         // Gold wire bond finishes
         G = "G", // Gold (wire bond)

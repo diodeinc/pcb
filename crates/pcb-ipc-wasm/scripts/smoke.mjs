@@ -80,7 +80,17 @@ if (!isMainThread) {
       assert.deepEqual(production, withDrawing.export({ format: 'gerber', includeAuxiliaryLayers: false }));
       const auxiliary = withDrawing.export({ format: 'gerber', includeAuxiliaryLayers: true });
       assert.match(text(auxiliary.find(f => f.name === 'TOP.gbr')), /%TF.FileFunction,AssemblyDrawing,Top\*%/);
-      for (const file of production) assert.deepEqual(auxiliary.find(f => f.name === file.name), file);
+      for (const file of production.filter(f => f.name !== 'job.gbrjob')) {
+        assert.deepEqual(auxiliary.find(f => f.name === file.name), file);
+      }
+      for (const packageFiles of [production, auxiliary]) {
+        const job = JSON.parse(text(packageFiles.find(f => f.name === 'job.gbrjob')));
+        assert.deepEqual(job.FilesAttributes.map(f => f.Path).sort(),
+          packageFiles.filter(f => f.name !== 'job.gbrjob').map(f => f.name).sort());
+        if (packageFiles === auxiliary) {
+          assert.equal(job.FilesAttributes.find(f => f.Path === 'TOP.gbr').FileFunction, 'AssemblyDrawing,Top');
+        }
+      }
       const auxiliaryZip = withDrawing.export({ format: 'gerber', zip: true, includeAuxiliaryLayers: true })[0];
       assert.ok(Buffer.from(auxiliaryZip.data).includes(Buffer.from('TOP.gbr')));
     } finally {
