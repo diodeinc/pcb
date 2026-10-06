@@ -258,7 +258,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Fix(args) => fix::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
-        Commands::Publish(args) => publish::execute(args, resolution),
+        Commands::Publish(args) => publish::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
         Commands::Fork => {
             println!("`pcb fork` is a reserved subcommand for future use.");

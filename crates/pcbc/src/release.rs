@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use log::{debug, warn};
-use pcb_ir::geom::Resolution;
 use pcb_kicad::{KiCadCliBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
@@ -61,7 +60,6 @@ struct ReleaseInfo {
     output_name: String,
     suppress: Vec<String>,
     resolution: ResolutionResult,
-    geometry_resolution: Resolution,
     root_package_url: Option<String>,
 }
 
@@ -246,7 +244,6 @@ pub struct BoardReleaseOptions {
     pub version: Option<String>,
     pub suppress: Vec<String>,
     pub exclude: Vec<ArtifactType>,
-    pub geometry_resolution: Resolution,
     pub check: bool,
 }
 
@@ -430,7 +427,6 @@ fn preflight_board_release(
             output_name,
             suppress: options.suppress.clone(),
             resolution,
-            geometry_resolution: options.geometry_resolution,
             root_package_url: package_url,
         };
 
@@ -1338,27 +1334,7 @@ fn generate_ipc2581(info: &ReleaseInfo) -> Result<()> {
         .context("No layout directory for IPC-2581 generation")?;
     let ipc2581_path = manufacturing_dir.join("ipc2581.xml");
 
-    export_ipc2581(&kicad_pcb_path, &ipc2581_path)?;
-
-    // Generate HTML export from the IPC-2581 XML file (silently, without printing)
-    let ipc2581_html_path = manufacturing_dir.join("ipc2581.html");
-    let ipc_content = pcb_ipc2581_tools::utils::file::load_ipc_file(&ipc2581_path)
-        .context("Failed to load IPC-2581 file for HTML export")?;
-    let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse(&ipc_content)
-        .context("Failed to parse IPC-2581 file for HTML export")?;
-    let imported = pcb_ir::import::ipc2581::import_design(&ipc, info.geometry_resolution)
-        .context("Failed to import IPC-2581 design for HTML export")?;
-    let accessor = pcb_ipc2581_tools::accessors::IpcAccessor::new(&ipc);
-    let html = pcb_ipc2581_tools::commands::html_export::generate_html(
-        &accessor,
-        &imported,
-        pcb_ipc2581_tools::UnitFormat::Mm,
-        info.geometry_resolution,
-    )
-    .context("Failed to generate HTML from IPC-2581")?;
-    fs::write(&ipc2581_html_path, html).context("Failed to write IPC-2581 HTML export")?;
-
-    Ok(())
+    export_ipc2581(&kicad_pcb_path, &ipc2581_path)
 }
 
 pub(crate) fn export_ipc2581(kicad_pcb_path: &Path, ipc2581_path: &Path) -> Result<()> {

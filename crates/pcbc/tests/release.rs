@@ -656,8 +656,6 @@ fn test_publish_board_full() {
                 "-S",
                 "layout",
                 "--no-push",
-                "--accuracy-um",
-                "30",
             ],
         )
         .stderr_capture()
@@ -685,22 +683,8 @@ fn test_publish_board_full() {
 
     let staging_dir = find_staging_dir(&sb, "TestBoard");
     let manufacturing = sb.default_cwd().join(&staging_dir).join("manufacturing");
-    let ipc =
-        pcb_ipc2581_tools::ipc2581::Ipc2581::parse_file(manufacturing.join("ipc2581.xml")).unwrap();
-    let accessor = pcb_ipc2581_tools::accessors::IpcAccessor::new(&ipc);
-    let resolution = pcb_ir::geom::Resolution::default()
-        .with_accuracy(pcb_ir::geom::GeometryAccuracy::micrometres(30));
-    let expected_html = pcb_ipc2581_tools::commands::html_export::generate_html(
-        &accessor,
-        &pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap(),
-        pcb_ipc2581_tools::UnitFormat::Mm,
-        resolution,
-    )
-    .unwrap();
-    assert_eq!(
-        std::fs::read_to_string(manufacturing.join("ipc2581.html")).unwrap(),
-        expected_html
-    );
+    pcb_ipc2581_tools::ipc2581::Ipc2581::parse_file(manufacturing.join("ipc2581.xml")).unwrap();
+    assert!(!manufacturing.join("ipc2581.html").exists());
     assert_snapshot!("publish_full", sb.snapshot_dir(&staging_dir));
 }
 
