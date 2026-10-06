@@ -218,6 +218,7 @@ impl IpcDocument {
                     &manufacturing::ManufacturingExportOptions {
                         view: layout_target.artwork_scope(),
                         relief_debug_dir: None,
+                        include_auxiliary_layers: false,
                     },
                     resolution,
                 )?;

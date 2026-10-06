@@ -46,6 +46,8 @@ pub struct GerberX2File {
 #[derive(Debug, Clone, Default)]
 pub struct GerberExportOptions {
     pub relief_debug_dir: Option<PathBuf>,
+    /// Include assembly, fabrication drawing, glue, courtyard, and document layers.
+    pub include_auxiliary_layers: bool,
 }
 
 /// Profiles image as round strokes of this width.
@@ -69,7 +71,11 @@ pub fn build_gerber_x2_files(
     } else {
         view
     };
-    let plans = export_layer_plans(imported, &imported.layer_definitions);
+    let plans = export_layer_plans(
+        imported,
+        &imported.layer_definitions,
+        options.include_auxiliary_layers,
+    );
     let has_profile_plan = plans
         .iter()
         .any(|plan| plan.role == GerberLayerRole::Profile);
@@ -168,6 +174,8 @@ enum GerberLayerRole {
     Legend,
     AssemblyDrawing,
     FabricationDrawing,
+    Glue,
+    AuxiliaryDrawing,
     Profile,
     Vcut,
     Score,
@@ -176,6 +184,7 @@ enum GerberLayerRole {
 fn export_layer_plans<'a>(
     imported: &ImportedDesign,
     layers: &'a [Layer],
+    include_auxiliary_layers: bool,
 ) -> Vec<ExportLayerPlan<'a>> {
     let copper_count = layers
         .iter()
@@ -189,6 +198,9 @@ fn export_layer_plans<'a>(
         let Some(role) = gerber_layer_role(layer.layer_function) else {
             continue;
         };
+        if !include_auxiliary_layers && role.is_auxiliary() {
+            continue;
+        }
         if role == GerberLayerRole::Copper {
             copper_index += 1;
         }
@@ -200,7 +212,6 @@ fn export_layer_plans<'a>(
             copper_count,
             source_layer_name,
         );
-        let filename = allocate_filename(&mut used_filenames, &filename, source_layer_name);
         plans.push(ExportLayerPlan {
             layer_id: LayerId(layer_index as u32),
             layer,
@@ -208,6 +219,21 @@ fn export_layer_plans<'a>(
             filename,
             file_function,
         });
+    }
+
+    // Reserve production names, including repeated-role fallbacks, before
+    // drawings can claim them. Keep plans in their original source order.
+    for auxiliary in [false, true] {
+        for plan in plans
+            .iter_mut()
+            .filter(|plan| plan.role.is_auxiliary() == auxiliary)
+        {
+            plan.filename = allocate_filename(
+                &mut used_filenames,
+                &plan.filename,
+                imported.resolve(plan.layer.name),
+            );
+        }
     }
 
     plans
@@ -272,6 +298,10 @@ fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
         LayerFunction::Silkscreen | LayerFunction::Legend => Some(GerberLayerRole::Legend),
         LayerFunction::Assembly => Some(GerberLayerRole::AssemblyDrawing),
         LayerFunction::BoardFab => Some(GerberLayerRole::FabricationDrawing),
+        LayerFunction::Glue => Some(GerberLayerRole::Glue),
+        LayerFunction::Document | LayerFunction::Courtyard => {
+            Some(GerberLayerRole::AuxiliaryDrawing)
+        }
         LayerFunction::BoardOutline => Some(GerberLayerRole::Profile),
         LayerFunction::VCut => Some(GerberLayerRole::Vcut),
         LayerFunction::Score => Some(GerberLayerRole::Score),
@@ -280,15 +310,23 @@ fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
 }
 
 impl GerberLayerRole {
+    fn is_auxiliary(self) -> bool {
+        matches!(
+            self,
+            Self::AssemblyDrawing | Self::FabricationDrawing | Self::Glue | Self::AuxiliaryDrawing
+        )
+    }
+
     fn ir_role(self) -> LayerRole {
         match self {
             GerberLayerRole::Copper => LayerRole::Copper,
             GerberLayerRole::Paste => LayerRole::Paste,
             GerberLayerRole::Soldermask => LayerRole::Soldermask,
             GerberLayerRole::Legend => LayerRole::Legend,
-            GerberLayerRole::AssemblyDrawing | GerberLayerRole::FabricationDrawing => {
-                LayerRole::Mechanical
-            }
+            GerberLayerRole::AssemblyDrawing
+            | GerberLayerRole::FabricationDrawing
+            | GerberLayerRole::Glue
+            | GerberLayerRole::AuxiliaryDrawing => LayerRole::Mechanical,
             GerberLayerRole::Profile | GerberLayerRole::Vcut | GerberLayerRole::Score => {
                 LayerRole::Profile
             }
@@ -331,6 +369,11 @@ fn layer_output(
         GerberLayerRole::Paste => outer("F_Paste.gtp", "B_Paste.gbp", "Paste"),
         GerberLayerRole::Soldermask => outer("F_Mask.gts", "B_Mask.gbs", "Soldermask"),
         GerberLayerRole::Legend => outer("F_SilkS.gto", "B_SilkS.gbo", "Legend"),
+        GerberLayerRole::Glue => outer("F_Adhesive.gta", "B_Adhesive.gba", "Glue"),
+        GerberLayerRole::AuxiliaryDrawing => (
+            drawing_filename(source_layer_name, "User"),
+            fields(&["Other", "User"]),
+        ),
         GerberLayerRole::AssemblyDrawing => {
             let (fallback_stem, file_function) = match side {
                 Some(IpcSide::Top) => ("F_Fab", ["AssemblyDrawing", "Top"]),
@@ -939,7 +982,10 @@ fn aperture_function(
         GerberLayerRole::Soldermask | GerberLayerRole::Paste | GerberLayerRole::Legend => {
             &["Material"]
         }
-        GerberLayerRole::AssemblyDrawing | GerberLayerRole::FabricationDrawing => return None,
+        GerberLayerRole::AssemblyDrawing
+        | GerberLayerRole::FabricationDrawing
+        | GerberLayerRole::Glue
+        | GerberLayerRole::AuxiliaryDrawing => return None,
         GerberLayerRole::Profile => &["Profile"],
         GerberLayerRole::Vcut => &["Other", "Vcut"],
         GerberLayerRole::Score => &["Other", "Score"],
@@ -1032,10 +1078,18 @@ mod tests {
     type Files = BTreeMap<String, String>;
 
     fn gerber_files(ipc: &Ipc2581, view: ArtworkScope) -> Files {
+        gerber_files_with_options(ipc, view, &GerberExportOptions::default())
+    }
+
+    fn gerber_files_with_options(
+        ipc: &Ipc2581,
+        view: ArtworkScope,
+        options: &GerberExportOptions,
+    ) -> Files {
         build_gerber_x2_files(
             &import_design(ipc, Resolution::default()).unwrap(),
             view,
-            &GerberExportOptions::default(),
+            options,
             Resolution::default(),
         )
         .unwrap()
@@ -1050,6 +1104,7 @@ mod tests {
             &ManufacturingExportOptions {
                 view,
                 relief_debug_dir: None,
+                include_auxiliary_layers: false,
             },
             Resolution::default(),
         )
@@ -1322,7 +1377,7 @@ mod tests {
             ))
             .unwrap();
             let imported = import_design(&ipc, Resolution::default()).unwrap();
-            let outputs = export_layer_plans(&imported, &imported.layer_definitions)
+            let outputs = export_layer_plans(&imported, &imported.layer_definitions, true)
                 .iter()
                 .map(|plan| format!("{}: {}", plan.filename, plan.file_function.join(",")))
                 .collect::<Vec<_>>();
@@ -1331,9 +1386,132 @@ mod tests {
     }
 
     #[test]
-    fn assembly_gerbers_preserve_phantom_patterns_for_boards_and_arrays() {
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
+    fn auxiliary_drawings_do_not_claim_production_filenames() {
+        // Drawings precede both canonical names and repeated-role fallbacks.
+        // The ignored dielectric and interleaved drawing also exercise LayerIds
+        // and copper indices independently of the filename allocation order.
+        let layers = [
+            ("V Cut", "DOCUMENT", "NONE"),
+            ("Score", "ASSEMBLY", "TOP"),
+            ("VCUT B", "BOARD_FAB", "NONE"),
+            ("SCORE B", "COURTYARD", "BOTTOM"),
+            ("TOP", "SIGNAL", "TOP"),
+            ("Ignored", "DIELCORE", "INTERNAL"),
+            ("In1.Cu", "DOCUMENT", "NONE"),
+            ("INNER", "SIGNAL", "INTERNAL"),
+            ("VCUT-A", "V_CUT", "NONE"),
+            ("VCUT-B", "V_CUT", "NONE"),
+            ("SCORE-A", "SCORE", "NONE"),
+            ("SCORE-B", "SCORE", "NONE"),
+            ("BOTTOM", "SIGNAL", "BOTTOM"),
+        ];
+        let definitions = layers
+            .iter()
+            .map(|(name, function, side)| {
+                format!(r#"<Layer name="{name}" layerFunction="{function}" side="{side}"/>"#)
+            })
+            .collect::<String>();
+        let features = layers
+            .iter()
+            .enumerate()
+            .map(|(index, (name, _, _))| {
+                let x = index * 3;
+                let end = x + 1;
+                format!(
+                    r#"<LayerFeature layerRef="{name}"><Set><Features>
+                      <Line startX="{x}" startY="2" endX="{end}" endY="2">
+                        <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
+                      </Line>
+                    </Features></Set></LayerFeature>"#
+                )
+            })
+            .collect::<String>();
+        let ipc = Ipc2581::parse(&format!(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+              <Content roleRef="owner"><FunctionMode mode="FABRICATION"/></Content>
+              <Ecad><CadHeader units="MILLIMETER"/><CadData>
+                {definitions}<Step name="board" type="BOARD">{features}</Step>
+              </CadData></Ecad>
+            </IPC-2581>"#
+        ))
+        .unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let production_ids = [4, 7, 8, 9, 10, 11, 12];
+        let production_functions = [
+            "Copper,L1,Top",
+            "Copper,L2,Inr",
+            "Vcut",
+            "Vcut",
+            "Vcut",
+            "Vcut",
+            "Copper,L3,Bot",
+        ];
+        let mut production_files = Vec::new();
+        for include_auxiliary_layers in [false, true] {
+            let plans = export_layer_plans(
+                &imported,
+                &imported.layer_definitions,
+                include_auxiliary_layers,
+            );
+            let expected_ids = if include_auxiliary_layers {
+                (0..layers.len()).filter(|index| *index != 5).collect()
+            } else {
+                production_ids.to_vec()
+            };
+            assert_eq!(
+                plans
+                    .iter()
+                    .map(|plan| plan.layer_id.0 as usize)
+                    .collect::<Vec<_>>(),
+                expected_ids
+            );
+            let files = build_gerber_x2_files(
+                &imported,
+                ArtworkScope::Board,
+                &GerberExportOptions {
+                    include_auxiliary_layers,
+                    ..Default::default()
+                },
+                Resolution::default(),
+            )
+            .unwrap();
+            assert_eq!(files.len(), plans.len());
+            let mut production = BTreeMap::new();
+            for (plan, file) in plans.iter().zip(files) {
+                assert_eq!(file.filename, plan.filename);
+                let artwork = extracted(&file.contents);
+                let index = plan.layer_id.0 as usize;
+                assert_eq!(imported.resolve(plan.layer.name), layers[index].0);
+                assert!((artwork.layers[0].bbox.min.x - (index as f64 * 3.0 - 0.1)).abs() < 1e-6);
+                if let Some(position) = production_ids.iter().position(|id| *id == index) {
+                    let function = artwork.layers[0].meta.join(",");
+                    assert_eq!(function, production_functions[position]);
+                    assert!(
+                        production
+                            .insert(file.filename, (function, file.contents))
+                            .is_none()
+                    );
+                }
+            }
+            for filename in ["V_Cut.gbr", "VCUT_B.gbr", "Score.gbr", "SCORE_B.gbr"] {
+                assert_eq!(production[filename].0, "Vcut");
+            }
+            production_files.push(production);
+        }
+        assert_eq!(production_files[0], production_files[1]);
+    }
+
+    #[test]
+    fn optional_auxiliary_gerbers_preserve_phantom_patterns_for_boards_and_arrays() {
+        for (function, filename, file_function) in [
+            ("ASSEMBLY", "F_Fab.gbr", "AssemblyDrawing,Top"),
+            ("BOARD_FAB", "F_Fab.gbr", "FabricationDrawing"),
+            ("DOCUMENT", "F_Fab.gbr", "Other,User"),
+            ("COURTYARD", "F_Fab.gbr", "Other,User"),
+            ("GLUE", "F_Adhesive.gta", "Glue,Top"),
+        ] {
+            let ipc = ipc::Ipc2581::parse(
+                &r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
     <FunctionMode mode="FABRICATION"/>
@@ -1360,35 +1538,45 @@ mod tests {
       </Step>
     </CadData>
   </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
+</IPC-2581>"#
+                    .replace("ASSEMBLY", function),
+            )
+            .unwrap();
 
-        let board_fab = &gerber_files(&ipc, ArtworkScope::Board)["F_Fab.gbr"];
-        assert!(board_fab.contains("%TF.FileFunction,AssemblyDrawing,Top*%"));
-        assert!(board_fab.contains("%TF.Part,Single*%"));
-        assert_eq!(
-            count(board_fab, |kind| matches!(kind, ObjectKind::Draw { .. })),
-            2
-        );
-        assert_eq!(
-            count(board_fab, |kind| matches!(kind, ObjectKind::Flash { .. })),
-            2
-        );
+            assert!(gerber_files(&ipc, ArtworkScope::Board).is_empty());
+            assert!(gerber_files(&ipc, ArtworkScope::ArrayFlattened).is_empty());
+            let options = GerberExportOptions {
+                include_auxiliary_layers: true,
+                ..Default::default()
+            };
+            let board_fab =
+                &gerber_files_with_options(&ipc, ArtworkScope::Board, &options)[filename];
+            assert!(board_fab.contains(&format!("%TF.FileFunction,{file_function}*%")));
+            assert!(board_fab.contains("%TF.Part,Single*%"));
+            assert_eq!(
+                count(board_fab, |kind| matches!(kind, ObjectKind::Draw { .. })),
+                2
+            );
+            assert_eq!(
+                count(board_fab, |kind| matches!(kind, ObjectKind::Flash { .. })),
+                2
+            );
 
-        let array_fab = &gerber_files(&ipc, ArtworkScope::ArrayFlattened)["F_Fab.gbr"];
-        assert!(array_fab.contains("%TF.Part,Array*%"));
-        assert!(!array_fab.contains("%ABD"));
-        assert!(array_fab.contains("%SRX2Y1I30J0*%"));
-        assert_eq!(count(array_fab, |_| true), 4);
-        let artwork = extracted(array_fab);
-        assert_eq!(artwork.blocks.len(), 1);
-        assert_eq!(
-            pcb_ir::dialects::artwork::expand_instances(&artwork)
-                .objects
-                .len(),
-            8
-        );
+            let array_fab =
+                &gerber_files_with_options(&ipc, ArtworkScope::ArrayFlattened, &options)[filename];
+            assert!(array_fab.contains("%TF.Part,Array*%"));
+            assert!(!array_fab.contains("%ABD"));
+            assert!(array_fab.contains("%SRX2Y1I30J0*%"));
+            assert_eq!(count(array_fab, |_| true), 4);
+            let artwork = extracted(array_fab);
+            assert_eq!(artwork.blocks.len(), 1);
+            assert_eq!(
+                pcb_ir::dialects::artwork::expand_instances(&artwork)
+                    .objects
+                    .len(),
+                8
+            );
+        }
     }
 
     #[test]

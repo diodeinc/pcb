@@ -22,6 +22,8 @@ use crate::ipc2581 as ipc;
 #[derive(Debug, Clone)]
 pub struct ManufacturingExportOptions {
     pub view: ArtworkScope,
+    /// Include assembly, fabrication drawing, glue, courtyard, and document layers.
+    pub include_auxiliary_layers: bool,
     /// Write the V-score relief construction as debug SVGs into this
     /// directory.
     pub relief_debug_dir: Option<PathBuf>,
@@ -56,6 +58,7 @@ pub fn build_manufacturing_package(
         options.view,
         &gerber::GerberExportOptions {
             relief_debug_dir: options.relief_debug_dir.clone(),
+            include_auxiliary_layers: options.include_auxiliary_layers,
         },
         resolution,
     )?
