@@ -369,7 +369,15 @@ fn layer_output(
         GerberLayerRole::Paste => outer("F_Paste.gtp", "B_Paste.gbp", "Paste"),
         GerberLayerRole::Soldermask => outer("F_Mask.gts", "B_Mask.gbs", "Soldermask"),
         GerberLayerRole::Legend => outer("F_SilkS.gto", "B_SilkS.gbo", "Legend"),
-        GerberLayerRole::Glue => outer("F_Adhesive.gta", "B_Adhesive.gba", "Glue"),
+        GerberLayerRole::Glue => match side {
+            Some(IpcSide::Top | IpcSide::Bottom) => {
+                outer("F_Adhesive.gta", "B_Adhesive.gba", "Glue")
+            }
+            _ => (
+                drawing_filename(source_layer_name, "Glue"),
+                fields(&["OtherDrawing", "Glue"]),
+            ),
+        },
         GerberLayerRole::AuxiliaryDrawing => (
             drawing_filename(source_layer_name, "User"),
             fields(&["Other", "User"]),
@@ -1503,12 +1511,18 @@ mod tests {
 
     #[test]
     fn optional_auxiliary_gerbers_preserve_phantom_patterns_for_boards_and_arrays() {
-        for (function, filename, file_function) in [
-            ("ASSEMBLY", "F_Fab.gbr", "AssemblyDrawing,Top"),
-            ("BOARD_FAB", "F_Fab.gbr", "FabricationDrawing"),
-            ("DOCUMENT", "F_Fab.gbr", "Other,User"),
-            ("COURTYARD", "F_Fab.gbr", "Other,User"),
-            ("GLUE", "F_Adhesive.gta", "Glue,Top"),
+        for (function, side, filename, file_function) in [
+            ("ASSEMBLY", "TOP", "F_Fab.gbr", "AssemblyDrawing,Top"),
+            ("BOARD_FAB", "TOP", "F_Fab.gbr", "FabricationDrawing"),
+            ("DOCUMENT", "TOP", "F_Fab.gbr", "Other,User"),
+            ("COURTYARD", "TOP", "F_Fab.gbr", "Other,User"),
+            ("GLUE", "TOP", "F_Adhesive.gta", "Glue,Top"),
+            ("GLUE", "BOTTOM", "B_Adhesive.gba", "Glue,Bot"),
+            ("GLUE", "BOTH", "F_Fab.gbr", "OtherDrawing,Glue"),
+            ("GLUE", "NONE", "F_Fab.gbr", "OtherDrawing,Glue"),
+            ("GLUE", "ALL", "F_Fab.gbr", "OtherDrawing,Glue"),
+            ("GLUE", "INTERNAL", "F_Fab.gbr", "OtherDrawing,Glue"),
+            ("GLUE", "", "F_Fab.gbr", "OtherDrawing,Glue"),
         ] {
             let ipc = ipc::Ipc2581::parse(
                 &r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1539,7 +1553,15 @@ mod tests {
     </CadData>
   </Ecad>
 </IPC-2581>"#
-                    .replace("ASSEMBLY", function),
+                    .replace("ASSEMBLY", function)
+                    .replace(
+                        " side=\"TOP\"",
+                        &if side.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" side=\"{side}\"")
+                        },
+                    ),
             )
             .unwrap();
 

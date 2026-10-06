@@ -113,6 +113,29 @@ fn write_manufacturing_directory(package: &ManufacturingPackage, output_dir: &Pa
             output_dir.display()
         )
     })?;
+    // An opt-out export must not succeed with older auxiliary Gerbers still
+    // present. Refuse before writing anything rather than delete user files.
+    for entry in fs::read_dir(output_dir)? {
+        let path = entry?.path();
+        let auxiliary_extension =
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    ["gbr", "gta", "gba"]
+                        .iter()
+                        .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+                });
+        if auxiliary_extension {
+            anyhow::ensure!(
+                package
+                    .files
+                    .iter()
+                    .any(|file| path.file_name() == Some(file.filename.as_ref())),
+                "output directory contains a Gerber not in this package: {}; use a fresh directory or a ZIP output",
+                path.display()
+            );
+        }
+    }
     for file in &package.files {
         fs::write(output_dir.join(&file.filename), &file.contents).with_context(|| {
             format!(
@@ -162,6 +185,66 @@ fn write_zip<W: Write + Seek>(package: &ManufacturingPackage, writer: W) -> Resu
 mod tests {
     use super::*;
     use std::io::Read;
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn directory_rejects_stale_auxiliary_files_without_changing_existing_files() {
+        for name in [
+            "F_Fab.gbr",
+            "F_Adhesive.gta",
+            "B_Adhesive.gba",
+            "Custom.GBR",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let output = directory.path().join("gerbers");
+            let mut package = ManufacturingPackage {
+                files: vec![
+                    ManufacturingFile {
+                        filename: "F_Cu.gtl".into(),
+                        contents: "old copper".into(),
+                    },
+                    ManufacturingFile {
+                        filename: name.into(),
+                        contents: "drawing".into(),
+                    },
+                ],
+            };
+            write_manufacturing_package(&package, &output).unwrap();
+            fs::write(output.join("notes.txt"), "keep me").unwrap();
+            // Re-exporting the same file set remains supported.
+            write_manufacturing_package(&package, &output).unwrap();
+            let zip = directory.path().join("gerbers.zip");
+            write_manufacturing_package(&package, &zip).unwrap();
+            package.files.pop();
+            package.files[0].contents = "new copper".into();
+            let error = write_manufacturing_package(&package, &output).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("use a fresh directory or a ZIP output")
+            );
+            assert_eq!(
+                fs::read_to_string(output.join("F_Cu.gtl")).unwrap(),
+                "old copper"
+            );
+            assert_eq!(fs::read_to_string(output.join(name)).unwrap(), "drawing");
+            assert_eq!(
+                fs::read_to_string(output.join("notes.txt")).unwrap(),
+                "keep me"
+            );
+            // ZIP replacement does remove the old entry.
+            write_manufacturing_package(&package, &zip).unwrap();
+            let mut archive = zip::ZipArchive::new(fs::File::open(zip).unwrap()).unwrap();
+            assert_eq!(archive.len(), 1);
+            assert_eq!(archive.by_index(0).unwrap().name(), "F_Cu.gtl");
+            fs::remove_file(output.join(name)).unwrap();
+            write_manufacturing_package(&package, &output).unwrap();
+            assert_eq!(
+                fs::read_to_string(output.join("F_Cu.gtl")).unwrap(),
+                "new copper"
+            );
+        }
+    }
 
     #[test]
     fn in_memory_zip_preserves_every_filename_and_contents() {

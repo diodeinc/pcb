@@ -19,7 +19,7 @@ export interface IpcInfo {
 
 export type ExportOptions =
   | { format: "ipc2581"; mode?: ViewMode }
-  | { format: "gerber"; layoutTarget?: LayoutTarget; zip?: boolean }
+  | { format: "gerber"; layoutTarget?: LayoutTarget; zip?: boolean; includeAuxiliaryLayers?: boolean }
   | { format: "svg"; layer: string; layoutTarget?: LayoutTarget }
   | { format: "png"; layer: string; layoutTarget?: LayoutTarget }
   | { format: "dxf"; layoutTarget?: LayoutTarget }
