@@ -501,6 +501,56 @@ fn lowers_hollow_user_circle_as_stroked_path() {
 }
 
 #[test]
+fn zero_width_glyph_outlines_fill_polygons_and_preserve_counters() {
+    // A 4x3 glyph with a clockwise 2x1 counter joined by a retraced bridge.
+    // Zero outline stroke width does not remove the polygon's filled area.
+    let glyph = r#"<Outline><Polygon>
+      <PolyBegin x="0" y="0"/><PolyStepSegment x="4" y="0"/>
+      <PolyStepSegment x="4" y="3"/><PolyStepSegment x="0" y="3"/>
+      <PolyStepSegment x="0" y="0"/><PolyStepSegment x="1" y="1"/>
+      <PolyStepSegment x="1" y="2"/><PolyStepSegment x="3" y="2"/>
+      <PolyStepSegment x="3" y="1"/><PolyStepSegment x="1" y="1"/>
+      <PolyStepSegment x="0" y="0"/><Xform rotation="90"/>
+      </Polygon><LineDescRef id="zero"/></Outline>"#;
+    for shape in [
+        glyph.to_string(),
+        format!("<UserSpecial>{glyph}</UserSpecial>"),
+    ] {
+        let doc = top_layer(&top_board(
+            r#"<DictionaryLineDesc units="MILLIMETER"><EntryLineDesc id="zero">
+              <LineDesc lineWidth="0" lineEnd="ROUND"/>
+            </EntryLineDesc></DictionaryLineDesc>"#,
+            &format!(
+                r#"<Set geometryUsage="TEXT"><Features><Location x="10" y="20"/>{shape}</Features></Set>"#
+            ),
+        ));
+        let image = painted_image(&doc);
+        assert!((image.area() - 10.0).abs() < 1e-9);
+        assert!(image.contains_point(Point::new(9.5, 20.5)));
+        assert!(!image.contains_point(Point::new(8.5, 22.0)));
+        assert_eq!(doc.arena.paths[0].bbox.min, Point::new(7.0, 20.0));
+        assert_eq!(doc.arena.paths[0].bbox.max, Point::new(10.0, 24.0));
+    }
+}
+
+#[test]
+fn outline_polygon_hollow_style_is_not_filled() {
+    let doc = top_layer(&top_board(
+        "",
+        &format!(
+            r#"<Set><Features><UserSpecial><Outline><Polygon>{}
+          <FillDesc fillProperty="HOLLOW"/>
+          <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
+        </Polygon><LineDesc lineWidth="0" lineEnd="ROUND"/></Outline></UserSpecial></Features></Set>"#,
+            rect_steps(0.0, 0.0, 4.0, 3.0),
+        ),
+    ));
+    assert_eq!(doc.arena.paths.len(), 1);
+    assert_eq!(doc.arena.paths[0].stroke().unwrap().width, 0.2);
+    assert!(!painted_image(&doc).contains_point(Point::new(2.0, 1.5)));
+}
+
+#[test]
 fn strokes_without_a_line_description_are_reported_not_invented() {
     let ipc = top_board(
         r#"<DictionaryUser units="MILLIMETER"><EntryUser id="bare_line"><UserSpecial>

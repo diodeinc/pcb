@@ -811,7 +811,8 @@ def run_kicad_gerbers(
             "gerbers",
             "--layers",
             ",".join(layers),
-            "--check-zones",
+            # Both exporters must use the same prepared zone fills. Refilling
+            # here would change only the native side after IPC was exported.
             "--output",
             str(output_dir),
             str(layout),

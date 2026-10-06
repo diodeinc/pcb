@@ -81,8 +81,12 @@ pub(super) fn lower_feature_shape(
             lower_user_shape(context, doc, shape, transform, primitive_start)?;
             (false, None)
         }
-        FeatureShape::Text(_) | FeatureShape::Outline(_) => {
-            doc.warn("Skipping feature whose shape is text or a package outline");
+        FeatureShape::Outline(outline) => {
+            lower_outline_polygon(context, doc, outline, transform, doc.arena.paths.len())?;
+            (false, None)
+        }
+        FeatureShape::Text(_) => {
+            doc.warn("Skipping feature whose shape is text without glyph geometry");
             return Ok(None);
         }
     }))
@@ -356,9 +360,11 @@ pub(super) fn lower_user_shape(
                 ));
             }
         }
-        // Text has no glyphs here, and KiCad's zero-width glyph Outlines have
-        // no area to image.
-        UserShapeType::Text(_) | UserShapeType::Outline(_) => {}
+        UserShapeType::Outline(outline) => {
+            lower_outline_polygon(context, doc, outline, transform, primitive_start)?;
+        }
+        // Text without explicit glyph geometry cannot be imaged here.
+        UserShapeType::Text(_) => {}
         UserShapeType::UserPrimitive(primitive) => {
             lower_user_primitive(context, doc, primitive, transform)?;
         }
@@ -416,6 +422,41 @@ pub(super) fn lower_user_shape(
         warn_patterned_fill(doc, fill);
     }
     Ok(())
+}
+
+/// Feature Outlines contain polygons, including KiCad's filled glyphs.
+/// A zero-width boundary does not make the polygon's interior empty.
+fn lower_outline_polygon(
+    context: &ExtractContext<'_>,
+    doc: &mut GeometryDocument,
+    outline: &ipc2581::types::PackageOutline,
+    transform: Affine2,
+    primitive_start: usize,
+) -> Result<()> {
+    let (line_desc, line_desc_ref) = match outline.line_desc {
+        ipc2581::types::LineDescGroup::Inline(line) => (Some(line), None),
+        ipc2581::types::LineDescGroup::Ref(id) => (None, Some(id)),
+    };
+    let has_polygon_line =
+        outline.polygon_line_desc.is_some() || outline.polygon_line_desc_ref.is_some();
+    let polygon = ipc2581::types::UserShape {
+        shape: UserShapeType::Polygon(outline.polygon.clone()),
+        line_desc: if has_polygon_line {
+            outline.polygon_line_desc
+        } else {
+            line_desc
+        },
+        line_desc_ref: if has_polygon_line {
+            outline.polygon_line_desc_ref
+        } else {
+            line_desc_ref
+        },
+        fill_desc: outline.polygon_fill_desc.map(Box::new),
+        fill_desc_ref: outline.polygon_fill_desc_ref,
+    };
+    let transform =
+        transform.concat(ipc_placement(Point::default(), outline.polygon_xform).transform);
+    lower_user_shape(context, doc, &polygon, transform, primitive_start)
 }
 
 /// Subtract the fills pushed since `cutter_start` from the fills in
