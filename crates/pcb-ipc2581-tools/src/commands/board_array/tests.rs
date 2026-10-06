@@ -33,6 +33,7 @@ fn manufacturing_package(
         &ManufacturingExportOptions {
             view,
             relief_debug_dir: None,
+            include_auxiliary_layers: false,
         },
         Resolution::default(),
     )

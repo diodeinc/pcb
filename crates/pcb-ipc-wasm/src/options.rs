@@ -26,6 +26,8 @@ pub enum ExportOptions {
         layout_target: LayoutTarget,
         #[serde(default)]
         zip: bool,
+        #[serde(default)]
+        include_auxiliary_layers: bool,
     },
     Svg {
         layer: String,

@@ -191,6 +191,7 @@ fn accuracy_reaches_ipc_manufacturing_geometry() {
             &pcb_ipc2581_tools::manufacturing::ManufacturingExportOptions {
                 view: pcb_ipc2581_tools::LayoutTarget::BoardArray.artwork_scope(),
                 relief_debug_dir: None,
+                include_auxiliary_layers: false,
             },
             resolution,
         )
