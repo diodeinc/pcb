@@ -404,7 +404,7 @@ fn test_pcb_info_invalid_root_does_not_invent_workspace_members() {
         .write("pcb.toml", "[workspace\n")
         .write("boards/good/pcb.toml", TEST_BOARD_PCB_TOML);
 
-    let manifest = sandbox.root_path().join("pcb.toml");
+    let manifest = sandbox.root_path().join("pcb.toml").canonicalize().unwrap();
     sandbox.cwd("boards/good");
     let output = sandbox
         .run("pcbc", ["info", "-f", "json"])
@@ -448,7 +448,15 @@ fn test_pcb_info_partial_output() {
     let info = inspect(&sandbox);
     sandbox.cwd(".");
     assert_eq!(inspect(&sandbox), info);
-    assert_eq!(info["root"], sandbox.root_path().to_str().unwrap());
+    assert_eq!(
+        info["root"],
+        sandbox
+            .root_path()
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
     assert!(info.get("external_dependencies").is_none());
     assert_eq!(info["packages"].as_object().unwrap().len(), 1);
     assert_eq!(
@@ -524,7 +532,11 @@ fn test_pcb_info_resolution_failure_preserves_local_files() {
 #[test]
 fn test_pcb_info_source_patch_takes_precedence_over_vendor() {
     let mut sandbox = Sandbox::new();
-    let patch_path = sandbox.root_path().join("vendor/parts/1.0.0");
+    let patch_path = sandbox
+        .root_path()
+        .canonicalize()
+        .unwrap()
+        .join("vendor/parts/1.0.0");
     sandbox
         .write(
             "pcb.toml",
