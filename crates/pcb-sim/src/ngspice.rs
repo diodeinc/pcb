@@ -98,25 +98,29 @@ pub fn check_ngspice_installed() -> Result<String> {
     }
 }
 
-/// Default timeout for ngspice simulations (5 seconds).
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// Run ngspice in batch mode, capturing output.
 ///
 /// `work_dir` sets the working directory for ngspice (e.g. the directory of the
 /// `.zen` source file so that relative includes resolve correctly).
 ///
-/// The process is killed after 30 seconds to prevent hanging the caller (e.g. LSP).
-pub fn run_ngspice_captured(cir_path: &Path, work_dir: &Path) -> Result<SimulationResult> {
+/// ngspice runs with `-b` and a null stdin, so it cannot wait for input; it runs
+/// until the analysis finishes. A caller that must stay responsive (e.g. the LSP)
+/// passes a `timeout`, after which the process is killed.
+pub fn run_ngspice_captured(
+    cir_path: &Path,
+    work_dir: &Path,
+    timeout: Option<Duration>,
+) -> Result<SimulationResult> {
     let ngspice = check_ngspice_installed()?;
 
-    let output = CommandRunner::new(&ngspice)
+    let mut runner = CommandRunner::new(&ngspice)
         .arg("-b")
         .arg(cir_path.to_string_lossy())
-        .current_dir(work_dir.to_string_lossy())
-        .timeout(DEFAULT_TIMEOUT)
-        .run()
-        .context("Failed to execute ngspice")?;
+        .current_dir(work_dir.to_string_lossy());
+    if let Some(timeout) = timeout {
+        runner = runner.timeout(timeout);
+    }
+    let output = runner.run().context("Failed to execute ngspice")?;
 
     Ok(SimulationResult {
         success: output.success,

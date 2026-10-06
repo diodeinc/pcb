@@ -123,7 +123,7 @@ fn simulate_one(
     tmp.flush()?;
     let cir_path = tmp.into_temp_path();
 
-    let result = run_ngspice_captured(cir_path.as_ref(), zen_dir)?;
+    let result = run_ngspice_captured(cir_path.as_ref(), zen_dir, None)?;
 
     if result.success {
         if args.verbose {
