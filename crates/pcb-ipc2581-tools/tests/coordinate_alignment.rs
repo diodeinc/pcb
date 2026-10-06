@@ -269,25 +269,24 @@ fn package_keeps_ipc_frame_for_all_layers_and_nc_in_boards_and_arrays() {
                 )
             };
             let parsed = gerberx2::GerberX2::parse(&files[filename]).unwrap();
-            let mut corners = Vec::new();
+            // Winding and command order may vary, but every complete edge
+            // must occur exactly once. Start points alone cannot prove closure.
+            let edge = |a: (f64, f64), b: (f64, f64)| if a < b { (a, b) } else { (b, a) };
+            let mut edges = Vec::new();
             for object in parsed.objects() {
-                if let gerberx2::ObjectKind::Draw { start, .. } = object.kind {
-                    corners.push((start.x, start.y));
-                }
+                let gerberx2::ObjectKind::Draw { start, end, .. } = object.kind else {
+                    panic!("unexpected profile object: {:?}", object.kind);
+                };
+                edges.push(edge((start.x, start.y), (end.x, end.y)));
             }
             let mut expected = Vec::new();
             for (x0, y0, x1, y1) in rectangles {
-                expected.extend([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]);
+                let [a, b, c, d] = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+                expected.extend([edge(a, b), edge(b, c), edge(c, d), edge(d, a)]);
             }
-            let sort =
-                |points: &mut Vec<(f64, f64)>| points.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            sort(&mut corners);
-            corners.dedup();
-            sort(&mut expected);
-            assert_eq!(
-                corners, expected,
-                "{units} {scope:?} nested={nested} profile"
-            );
+            edges.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            assert_eq!(edges, expected, "{units} {scope:?} nested={nested} profile");
         }
     }
 }
