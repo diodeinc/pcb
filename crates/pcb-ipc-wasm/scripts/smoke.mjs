@@ -73,6 +73,20 @@ if (!isMainThread) {
     for (const file of files) assert.ok(Buffer.from(archive.data).includes(Buffer.from(file.name)));
     assert.deepEqual(archive.data, document.export({ format: 'gerber', zip: true })[0].data);
 
+    const withDrawing = new IpcDocument(xml.replace('layerFunction="SIGNAL"', 'layerFunction="ASSEMBLY"'));
+    try {
+      const production = withDrawing.export({ format: 'gerber' });
+      assert.ok(!production.some(f => f.name === 'TOP.gbr'));
+      assert.deepEqual(production, withDrawing.export({ format: 'gerber', includeAuxiliaryLayers: false }));
+      const auxiliary = withDrawing.export({ format: 'gerber', includeAuxiliaryLayers: true });
+      assert.match(text(auxiliary.find(f => f.name === 'TOP.gbr')), /%TF.FileFunction,AssemblyDrawing,Top\*%/);
+      for (const file of production) assert.deepEqual(auxiliary.find(f => f.name === file.name), file);
+      const auxiliaryZip = withDrawing.export({ format: 'gerber', zip: true, includeAuxiliaryLayers: true })[0];
+      assert.ok(Buffer.from(auxiliaryZip.data).includes(Buffer.from('TOP.gbr')));
+    } finally {
+      withDrawing.free();
+    }
+
     const report = document.checkDfm({ pdk, generatedAt });
     assert.equal(report.verdict, 'fail');
     assert.equal(report.summary.errors, 3);

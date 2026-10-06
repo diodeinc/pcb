@@ -212,12 +212,17 @@ impl IpcDocument {
                     None => self.xml.clone(),
                 },
             ),
-            ExportOptions::Gerber { layout_target, zip } => {
+            ExportOptions::Gerber {
+                layout_target,
+                zip,
+                include_auxiliary_layers,
+            } => {
                 let package = manufacturing::build_manufacturing_package(
                     self.design()?,
                     &manufacturing::ManufacturingExportOptions {
                         view: layout_target.artwork_scope(),
                         relief_debug_dir: None,
+                        include_auxiliary_layers,
                     },
                     resolution,
                 )?;

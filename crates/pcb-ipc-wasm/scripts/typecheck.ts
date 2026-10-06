@@ -25,7 +25,7 @@ export async function checkUsage(
     expectType<string[]>(pcb.layers());
     const exports = [
       { format: "ipc2581", mode: "fabrication" },
-      { format: "gerber", layoutTarget: "board-array", zip: true },
+      { format: "gerber", layoutTarget: "board-array", zip: true, includeAuxiliaryLayers: true },
       { format: "svg", layer: "F.Cu" },
       { format: "png", layer: "F.Cu" },
       { format: "dxf" },

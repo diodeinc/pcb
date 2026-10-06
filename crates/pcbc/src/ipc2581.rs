@@ -242,6 +242,9 @@ enum Commands {
         /// Output directory, or a .zip file for an archived manufacturing package
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
+        /// Include assembly/fabrication drawings, glue, courtyard, and document layers
+        #[arg(long)]
+        include_auxiliary_layers: bool,
         /// Write V-score relief debug SVGs to this directory.
         #[arg(long, hide = true, value_hint = clap::ValueHint::DirPath)]
         debug_reliefs: Option<PathBuf>,
@@ -779,6 +782,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             file,
             layout_target,
             output,
+            include_auxiliary_layers,
             debug_reliefs,
         } => {
             let package = manufacturing::export_manufacturing_package(
@@ -787,6 +791,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 &manufacturing::ManufacturingExportOptions {
                     view: layout_target.artwork_scope(),
                     relief_debug_dir: debug_reliefs,
+                    include_auxiliary_layers,
                 },
                 resolution,
             )?;
