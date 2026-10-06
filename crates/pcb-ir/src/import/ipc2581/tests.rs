@@ -551,6 +551,97 @@ fn outline_polygon_hollow_style_is_not_filled() {
 }
 
 #[test]
+fn outline_boundary_style_distinguishes_strokes_from_fills() {
+    for line in [
+        "<LineDesc lineWidth='0.2' lineEnd='ROUND'/>",
+        "<LineDescRef id='boundary'/>",
+    ] {
+        for fill in ["", "<FillDesc fillProperty='FILL'/>"] {
+            let outline = format!(
+                "<Outline><Polygon>{fill}{}<Xform scale='2'/></Polygon>{line}</Outline>",
+                rect_steps(0.0, 0.0, 4.0, 3.0)
+            );
+            for shape in [
+                outline.clone(),
+                format!("<UserSpecial>{outline}</UserSpecial>"),
+            ] {
+                let doc = top_layer(&top_board(
+                    "<DictionaryLineDesc units='MILLIMETER'><EntryLineDesc id='boundary'><LineDesc lineWidth='0.2' lineEnd='ROUND'/></EntryLineDesc></DictionaryLineDesc>",
+                    &format!("<Set><Features>{shape}</Features></Set>"),
+                ));
+                let path = &doc.arena.paths[0];
+                if fill.is_empty() {
+                    assert_eq!(
+                        path.stroke().expect("outline must remain a stroke").width,
+                        0.4
+                    );
+                    assert!(!painted_image(&doc).contains_point(Point::new(4.0, 3.0)));
+                } else {
+                    assert!(path.is_filled());
+                    assert!((painted_image(&doc).area() - 48.0).abs() < 1e-9);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn void_shapes_preserve_feature_polarity_and_user_special_scope() {
+    for style in [
+        "<FillDesc fillProperty='VOID'/>",
+        "<FillDescRef id='void'/>",
+    ] {
+        let polygon = format!(
+            "<Polygon>{}{style}</Polygon>",
+            rect_steps(1.0, 1.0, 3.0, 2.0)
+        );
+        for cutter in [
+            polygon.clone(),
+            format!("<Outline>{polygon}<LineDesc lineWidth='0' lineEnd='ROUND'/></Outline>"),
+        ] {
+            let solid = format!("<Polygon>{}</Polygon>", rect_steps(0.0, 0.0, 4.0, 3.0));
+            // The independent first feature must survive a nested cutter but not a direct one.
+            let prior = format!(
+                "<Pad><Location x='0' y='0'/><Polygon>{}</Polygon></Pad>",
+                rect_steps(1.5, 1.2, 2.0, 1.6)
+            );
+            for (features, area) in [
+                (
+                    format!(
+                        "<Pad><Location x='0' y='0'/>{solid}</Pad><Pad><Location x='0' y='0'/>{cutter}</Pad>"
+                    ),
+                    10.0,
+                ),
+                (
+                    format!("<Features><UserSpecial>{solid}{cutter}</UserSpecial></Features>"),
+                    10.2,
+                ),
+            ] {
+                let ipc = top_board(
+                    "<DictionaryFillDesc units='MILLIMETER'><EntryFillDesc id='void'><FillDesc fillProperty='VOID'/></EntryFillDesc></DictionaryFillDesc>",
+                    &format!("<Set>{prior}{features}</Set>"),
+                );
+                let imported = import_design(&ipc, Resolution::default()).unwrap();
+                let image = imported
+                    .composed_layer_image(
+                        imported.layer_id("TOP").unwrap(),
+                        ArtworkScope::Board,
+                        Resolution::default(),
+                    )
+                    .unwrap();
+                assert!(
+                    (image.area() - area).abs() < 1e-6,
+                    "expected {area}, got {}",
+                    image.area()
+                );
+                assert!(!image.contains_point(Point::new(2.5, 1.5)));
+                assert_eq!(image.contains_point(Point::new(1.75, 1.4)), area > 10.0);
+            }
+        }
+    }
+}
+
+#[test]
 fn strokes_without_a_line_description_are_reported_not_invented() {
     let ipc = top_board(
         r#"<DictionaryUser units="MILLIMETER"><EntryUser id="bare_line"><UserSpecial>

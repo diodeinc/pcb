@@ -76,15 +76,11 @@ pub(super) fn lower_feature_shape(
             lower_user_primitive(context, doc, primitive, transform)?;
             (false, Some(PrimitiveRef::User(*id)))
         }
-        FeatureShape::UserShape(shape) => {
-            let primitive_start = doc.arena.paths.len();
-            lower_user_shape(context, doc, shape, transform, primitive_start)?;
-            (false, None)
-        }
-        FeatureShape::Outline(outline) => {
-            lower_outline_polygon(context, doc, outline, transform, doc.arena.paths.len())?;
-            (false, None)
-        }
+        FeatureShape::UserShape(shape) => (lower_user_shape(context, doc, shape, transform)?, None),
+        FeatureShape::Outline(outline) => (
+            lower_outline_polygon(context, doc, outline, transform),
+            None,
+        ),
         FeatureShape::Text(_) => {
             doc.warn("Skipping feature whose shape is text without glyph geometry");
             return Ok(None);
@@ -303,22 +299,26 @@ pub(super) fn lower_user_primitive(
             // A Contour's Polygon and Cutouts stay together (§3.5.9.3); sibling
             // contours are additive, including KiCad zone fills and text islands.
             for shape in &user_special.shapes {
-                lower_user_shape(context, doc, shape, transform, primitive_start)?;
+                let shape_start = doc.arena.paths.len();
+                if lower_user_shape(context, doc, shape, transform)? {
+                    // A VOID clears preceding fills in this UserSpecial only,
+                    // never strokes, later islands or other primitives.
+                    subtract_trailing_paths(doc, primitive_start, shape_start, context.resolution)?;
+                }
             }
             Ok(())
         }
     }
 }
 
-/// Lower one shape of a user primitive whose paths start at
-/// `primitive_start`; a VOID shape clears the fills pushed since then.
+/// Lower one user shape and report VOID polarity. The caller owns composition:
+/// a direct feature clears its set, while a UserSpecial scopes its own cutters.
 pub(super) fn lower_user_shape(
     context: &ExtractContext<'_>,
     doc: &mut GeometryDocument,
     shape: &ipc2581::types::UserShape,
     transform: Affine2,
-    primitive_start: usize,
-) -> Result<()> {
+) -> Result<bool> {
     let path_start = doc.arena.paths.len() as u32;
     let mut void = false;
     let mut outline = None;
@@ -361,7 +361,7 @@ pub(super) fn lower_user_shape(
             }
         }
         UserShapeType::Outline(outline) => {
-            lower_outline_polygon(context, doc, outline, transform, primitive_start)?;
+            void = lower_outline_polygon(context, doc, outline, transform);
         }
         // Text without explicit glyph geometry cannot be imaged here.
         UserShapeType::Text(_) => {}
@@ -409,54 +409,47 @@ pub(super) fn lower_user_shape(
         paint_paths(doc, path_start, line_desc, transform);
     }
     let fill = fill_desc.map(|fill| fill.fill_property);
-    // IPC-2581C §3.5.6.1: a VOID clears only the fills before it in its own
-    // UserSpecial, never strokes, later islands or other primitives.
-    if void || fill == Some(FillProperty::Void) {
-        subtract_trailing_paths(
-            doc,
-            primitive_start,
-            path_start as usize,
-            context.resolution,
-        )?;
-    } else {
-        warn_patterned_fill(doc, fill);
-    }
-    Ok(())
+    warn_patterned_fill(doc, fill);
+    Ok(void || fill == Some(FillProperty::Void))
 }
 
-/// Feature Outlines contain polygons, including KiCad's filled glyphs.
-/// A zero-width boundary does not make the polygon's interior empty.
+/// Resolve Outline paint once for both standalone and UserSpecial shapes.
+/// Explicit polygon fill wins; otherwise a boundary is stroked, except for
+/// KiCad's zero-width glyph outlines, whose polygons carry the filled area.
 fn lower_outline_polygon(
     context: &ExtractContext<'_>,
     doc: &mut GeometryDocument,
     outline: &ipc2581::types::PackageOutline,
     transform: Affine2,
-    primitive_start: usize,
-) -> Result<()> {
-    let (line_desc, line_desc_ref) = match outline.line_desc {
-        ipc2581::types::LineDescGroup::Inline(line) => (Some(line), None),
-        ipc2581::types::LineDescGroup::Ref(id) => (None, Some(id)),
-    };
-    let has_polygon_line =
-        outline.polygon_line_desc.is_some() || outline.polygon_line_desc_ref.is_some();
-    let polygon = ipc2581::types::UserShape {
-        shape: UserShapeType::Polygon(outline.polygon.clone()),
-        line_desc: if has_polygon_line {
-            outline.polygon_line_desc
-        } else {
-            line_desc
-        },
-        line_desc_ref: if has_polygon_line {
-            outline.polygon_line_desc_ref
-        } else {
-            line_desc_ref
-        },
-        fill_desc: outline.polygon_fill_desc.map(Box::new),
-        fill_desc_ref: outline.polygon_fill_desc_ref,
-    };
+) -> bool {
+    let (line_desc, line_desc_ref) =
+        match (outline.polygon_line_desc, outline.polygon_line_desc_ref) {
+            (None, None) => match outline.line_desc {
+                ipc2581::types::LineDescGroup::Inline(line) => (Some(line), None),
+                ipc2581::types::LineDescGroup::Ref(id) => (None, Some(id)),
+            },
+            polygon_line => polygon_line,
+        };
+    let line = resolve_line_desc(context, doc, "outline", line_desc_ref, line_desc);
+    let fill = outline
+        .polygon_fill_desc
+        .or_else(|| {
+            outline
+                .polygon_fill_desc_ref
+                .and_then(|id| context.fill_descs.get(&id).copied())
+        })
+        .map(|fill| fill.fill_property);
     let transform =
         transform.concat(ipc_placement(Point::default(), outline.polygon_xform).transform);
-    lower_user_shape(context, doc, &polygon, transform, primitive_start)
+    let path_start = doc.arena.paths.len() as u32;
+    push_filled_shape(doc, transform, Some(polygon_contour(&outline.polygon)));
+    if fill == Some(FillProperty::Hollow)
+        || (fill.is_none() && !line.is_some_and(|line| line.line_width == 0.0))
+    {
+        paint_paths(doc, path_start, line, transform);
+    }
+    warn_patterned_fill(doc, fill);
+    fill == Some(FillProperty::Void)
 }
 
 /// Subtract the fills pushed since `cutter_start` from the fills in
