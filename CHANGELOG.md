@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb sim` runs ngspice until the simulation finishes instead of killing it after 5 seconds. Save-time simulation in the LSP keeps the 5-second limit and now reports it in the diagnostic.
+
 ## [0.4.72] - 2026-10-06
 
 ### Fixed
