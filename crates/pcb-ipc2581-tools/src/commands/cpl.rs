@@ -218,7 +218,7 @@ fn clean_zero(value: f64) -> f64 {
     }
 }
 
-fn write_csv_row(output: &mut String, fields: &[&str]) {
+pub(super) fn write_csv_row(output: &mut String, fields: &[&str]) {
     for (index, field) in fields.iter().enumerate() {
         if index > 0 {
             output.push(',');

@@ -1,4 +1,3 @@
-#[cfg(feature = "cli")]
 use std::collections::HashMap;
 #[cfg(feature = "cli")]
 use std::path::Path;
@@ -11,12 +10,19 @@ use pcb_sch::bom::{
     trim_description,
 };
 
-#[cfg(feature = "cli")]
-use crate::OutputFormat;
 use crate::accessors::{CharacteristicsData, IpcAccessor};
 #[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
 use serde::Serialize;
+
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, Copy)]
+pub enum BomFormat {
+    Text,
+    Json,
+    /// JLCPCB CSV from the IPC BOM, without availability requests.
+    Jlc,
+}
 
 /// Build GenericComponent from extracted characteristics
 /// Reuses the same logic as detect_generic_component in pcb-sch
@@ -49,10 +55,16 @@ fn build_generic_component(data: &CharacteristicsData) -> Option<GenericComponen
 }
 
 #[cfg(feature = "cli")]
-pub fn execute(file: &Path, format: OutputFormat, offline: bool) -> Result<()> {
+pub fn execute(file: &Path, format: BomFormat, offline: bool) -> Result<()> {
     let content = file_utils::load_ipc_file(file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let accessor = IpcAccessor::new(&ipc);
+
+    if matches!(format, BomFormat::Jlc) {
+        let csv = emit_jlc_bom_csv(&accessor);
+        pcb_ui::write_stdout(|writer| writer.write_all(csv.as_bytes()))?;
+        return Ok(());
+    }
 
     let mut bom = extract_bom_from_ipc(&accessor);
 
@@ -73,13 +85,104 @@ pub fn execute(file: &Path, format: OutputFormat, offline: bool) -> Result<()> {
     }
 
     pcb_ui::write_stdout(|writer| match format {
-        OutputFormat::Json => {
+        BomFormat::Json => {
             write!(writer, "{}", bom.ungrouped_json())
         }
-        OutputFormat::Text => bom.write_table(writer),
+        BomFormat::Text => bom.write_table(writer),
+        BomFormat::Jlc => unreachable!("JLC output is handled before availability lookup"),
     })?;
 
     Ok(())
+}
+
+/// Export the populated IPC BOM using its selected AVL parts and supplier metadata.
+/// Missing selections remain exportable; unrelated items without MPNs stay separate.
+pub fn emit_jlc_bom_csv(accessor: &IpcAccessor) -> String {
+    #[derive(Default)]
+    struct Row {
+        value: String,
+        designators: Vec<String>,
+        footprint: String,
+        lcsc: String,
+    }
+
+    let ipc = accessor.ipc();
+    let mut groups = HashMap::new();
+    if let Some(bom) = ipc.bom() {
+        for item in &bom.items {
+            if matches!(item.category, Some(ipc2581::types::BomCategory::Document)) {
+                continue;
+            }
+            let chars = item
+                .characteristics
+                .as_ref()
+                .map(|chars| accessor.extract_characteristics(chars))
+                .unwrap_or_default();
+            let avl = accessor.lookup_avl(item.oem_design_number_ref);
+            let mpn = avl.primary_mpn.filter(|mpn| !mpn.trim().is_empty());
+            let fallback = mpn
+                .is_none()
+                .then(|| ipc.resolve(item.oem_design_number_ref).to_string());
+            let key = (mpn, avl.primary_manufacturer, fallback);
+            let supplier = chars
+                .properties
+                .get("SelectedSupplierEnterpriseRef")
+                .and_then(|id| {
+                    ipc.logistic_header()?
+                        .enterprises
+                        .iter()
+                        .find(|enterprise| ipc.resolve(enterprise.id) == id)
+                })
+                .and_then(|enterprise| ipc.resolve_enterprise(enterprise.id));
+            let lcsc = supplier
+                .filter(|name| name.trim().eq_ignore_ascii_case("lcsc"))
+                .and_then(|_| chars.properties.get("SelectedSupplierPartNumber"))
+                .map(|sku| sku.trim())
+                .filter(|sku| !sku.is_empty())
+                .map(|sku| format!("C{}", sku.strip_prefix(['C', 'c']).unwrap_or(sku)))
+                .unwrap_or_default();
+
+            for ref_des in item.reference_designators() {
+                let designator = ipc.resolve(ref_des.name);
+                if ref_des.populate == Some(false) || designator.is_empty() {
+                    continue;
+                }
+                let row = groups.entry(key.clone()).or_insert_with(|| Row {
+                    value: chars.value.clone().unwrap_or_default(),
+                    footprint: chars
+                        .package
+                        .clone()
+                        .or_else(|| {
+                            ref_des
+                                .package_ref
+                                .map(|package| ipc.resolve(package).to_string())
+                        })
+                        .unwrap_or_default(),
+                    lcsc: lcsc.clone(),
+                    ..Default::default()
+                });
+                row.designators.push(designator.to_string());
+            }
+        }
+    }
+    let mut rows: Vec<_> = groups.into_values().collect();
+    for row in &mut rows {
+        row.designators.sort_by(|a, b| natord::compare(a, b));
+    }
+    rows.sort_by(|a, b| natord::compare(&a.designators[0], &b.designators[0]));
+    let mut csv = String::from("Comment,Designator,Footprint,JLCPCB Part #\n");
+    for row in rows {
+        super::cpl::write_csv_row(
+            &mut csv,
+            &[
+                &row.value,
+                &row.designators.join(","),
+                &row.footprint,
+                &row.lcsc,
+            ],
+        );
+    }
+    csv
 }
 
 /// One populated or DNP component instance, resolved through the IPC BOM and AVL.
@@ -206,6 +309,25 @@ fn extract_bom_from_ipc(accessor: &IpcAccessor) -> Bom {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jlc_bom_groups_selected_parts_and_resolves_supplier_and_footprint() {
+        let source = include_str!("testdata/jlc_bom.xml");
+        for sku in ["123", "c123", "C123"] {
+            let ipc = ipc2581::Ipc2581::parse(&source.replace("c123", sku)).unwrap();
+            assert_eq!(
+                emit_jlc_bom_csv(&IpcAccessor::new(&ipc)),
+                concat!(
+                    "Comment,Designator,Footprint,JLCPCB Part #\n",
+                    "100nF,C1,0402,C16133\n",
+                    ",C2,CAD-C0805,\n",
+                    ",C3,,\n",
+                    "\"10k, \"\"1%\"\"\",\"R2,R3,R10\",CAD-R0402,C123\n",
+                    "22k,R4,0603,\n",
+                )
+            );
+        }
+    }
 
     #[test]
     fn portable_bom_resolves_avl_and_keeps_dnp_instances() {

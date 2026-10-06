@@ -1,0 +1,71 @@
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="ASSEMBLY"/></Content>
+  <LogisticHeader>
+    <Role id="owner" roleFunction="OWNER"/>
+    <Enterprise id="vendor-7" name="LcSc" code="SUPPLIER"/>
+    <Enterprise id="vendor-8" name="DigiKey" code="SUPPLIER"/>
+    <Enterprise id="mfr-a" name="Manufacturer A" code="MFR"/>
+    <Enterprise id="mfr-b" name="Manufacturer B" code="MFR"/>
+  </LogisticHeader>
+  <Bom name="bom">
+    <BomHeader assembly="board" revision="1"/>
+    <BomItem OEMDesignNumberRef="R-a" quantity="3" category="ELECTRICAL">
+      <RefDes name="R1" packageRef="DNP-FOOTPRINT" populate="false"/>
+      <RefDes name="R10" packageRef="CAD-R0402" populate="true"/>
+      <RefDes name="R2" packageRef="CAD-R0402" populate="true"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="pcb" textualCharacteristicName="Value" textualCharacteristicValue="10k, &quot;1%&quot;"/>
+        <Textual definitionSource="pcb" textualCharacteristicName="Package" textualCharacteristicValue=" "/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierEnterpriseRef" textualCharacteristicValue="vendor-7"/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierPartNumber" textualCharacteristicValue="c123"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="R-a-second" quantity="1" category="ELECTRICAL">
+      <RefDes name="R3" packageRef="CAD-R0402"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="R-b" quantity="1" category="ELECTRICAL">
+      <RefDes name="R4" packageRef="CAD-R0603" populate="true"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="pcb" textualCharacteristicName="Value" textualCharacteristicValue="22k"/>
+        <Textual definitionSource="pcb" textualCharacteristicName="Footprint" textualCharacteristicValue="0603"/>
+        <Textual definitionSource="pcb" textualCharacteristicName="Package" textualCharacteristicValue=""/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierEnterpriseRef" textualCharacteristicValue="vendor-8"/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierPartNumber" textualCharacteristicValue="C999"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="C-a" quantity="1" category="ELECTRICAL">
+      <RefDes name="C1" packageRef="CAD-C0402" populate="true"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="pcb" textualCharacteristicName="Value" textualCharacteristicValue="100nF"/>
+        <Textual definitionSource="pcb" textualCharacteristicName="Package" textualCharacteristicValue="0402"/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierEnterpriseRef" textualCharacteristicValue="vendor-7"/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierPartNumber" textualCharacteristicValue="16133"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="C-b" quantity="1" category="ELECTRICAL">
+      <RefDes name="C2" packageRef="CAD-C0805" populate="true"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="C-c" quantity="1" category="ELECTRICAL">
+      <RefDes name="C3" populate="true"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierEnterpriseRef" textualCharacteristicValue="lcsc"/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierPartNumber" textualCharacteristicValue="C404"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="TP" quantity="1" category="DOCUMENT">
+      <RefDes name="TP1" packageRef="TestPoint" populate="true"/>
+    </BomItem>
+  </Bom>
+  <Avl name="avl">
+    <AvlItem OEMDesignNumber="R-a">
+      <AvlVmpn chosen="false"><AvlMpn name="OTHER"/><AvlVendor enterpriseRef="mfr-b"/></AvlVmpn>
+      <AvlVmpn chosen="true"><AvlMpn name="SHARED-MPN"/><AvlVendor enterpriseRef="mfr-a"/></AvlVmpn>
+    </AvlItem>
+    <AvlItem OEMDesignNumber="R-a-second">
+      <AvlVmpn chosen="true"><AvlMpn name="SHARED-MPN"/><AvlVendor enterpriseRef="mfr-a"/></AvlVmpn>
+    </AvlItem>
+    <AvlItem OEMDesignNumber="R-b">
+      <AvlVmpn chosen="true"><AvlMpn name="SHARED-MPN"/><AvlVendor enterpriseRef="mfr-b"/></AvlVmpn>
+    </AvlItem>
+  </Avl>
+</IPC-2581>
