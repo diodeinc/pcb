@@ -32,10 +32,7 @@ pub enum ArtifactType {
     Bom,
     Gerbers,
     Cpl,
-    Assembly,
-    Odb,
     Ipc2581,
-    Step,
     Vrml,
 }
 
@@ -114,20 +111,9 @@ const MANUFACTURING_TASKS: &[(ArtifactType, &str, TaskFn)] = &[
         generate_cpl,
     ),
     (
-        ArtifactType::Assembly,
-        "Generating assembly drawings",
-        generate_assembly_drawings,
-    ),
-    (ArtifactType::Odb, "Generating ODB++ files", generate_odb),
-    (
         ArtifactType::Ipc2581,
         "Generating IPC-2581 file",
         generate_ipc2581,
-    ),
-    (
-        ArtifactType::Step,
-        "Generating STEP model",
-        generate_step_model,
     ),
     (
         ArtifactType::Vrml,
@@ -135,8 +121,6 @@ const MANUFACTURING_TASKS: &[(ArtifactType, &str, TaskFn)] = &[
         generate_vrml_model,
     ),
 ];
-
-const ODB_EXPORT_PRECISION: &str = "4";
 
 const FINALIZATION_TASKS: &[(&str, TaskFn)] = &[
     ("Writing release metadata", write_metadata),
@@ -1307,55 +1291,6 @@ fn generate_cpl(info: &ReleaseInfo) -> Result<()> {
     Ok(())
 }
 
-/// Generate assembly drawings (front and back PDFs)
-fn generate_assembly_drawings(info: &ReleaseInfo) -> Result<()> {
-    let manufacturing_dir = info.staging_dir.join("manufacturing");
-    fs::create_dir_all(&manufacturing_dir)?;
-
-    let kicad_pcb_path = info
-        .staged_pcb_path()
-        .context("No layout directory for assembly drawings")?;
-
-    // Generate front assembly drawing
-    KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("pdf")
-        .arg("--output")
-        .arg(
-            manufacturing_dir
-                .join("assembly_front.pdf")
-                .to_string_lossy(),
-        )
-        .arg("--layers")
-        .arg("F.Fab,Edge.Cuts")
-        .arg("--include-border-title")
-        .arg(kicad_pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to generate front assembly drawing")?;
-
-    // Generate back assembly drawing
-    KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("pdf")
-        .arg("--output")
-        .arg(
-            manufacturing_dir
-                .join("assembly_back.pdf")
-                .to_string_lossy(),
-        )
-        .arg("--layers")
-        .arg("B.Fab,Edge.Cuts")
-        .arg("--mirror")
-        .arg("--include-border-title")
-        .arg(kicad_pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to generate back assembly drawing")?;
-
-    Ok(())
-}
-
 /// Create a ZIP archive from gerber files directory
 fn create_gerbers_zip(gerbers_dir: &Path, zip_path: &Path) -> Result<()> {
     let zip_file = fs::File::create(zip_path)?;
@@ -1390,35 +1325,6 @@ fn fix_cpl_header(cpl_path: &Path) -> Result<()> {
         );
         fs::write(cpl_path, fixed_content)?;
     }
-    Ok(())
-}
-
-/// Generate ODB++ files
-fn generate_odb(info: &ReleaseInfo) -> Result<()> {
-    let manufacturing_dir = info.staging_dir.join("manufacturing");
-    fs::create_dir_all(&manufacturing_dir)?;
-
-    let kicad_pcb_path = info
-        .staged_pcb_path()
-        .context("No layout directory for ODB++ generation")?;
-    let odb_path = manufacturing_dir.join("odb.zip");
-
-    KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("odb")
-        .arg("--output")
-        .arg(odb_path.to_string_lossy())
-        .arg("--units")
-        .arg("mm")
-        .arg("--precision")
-        .arg(ODB_EXPORT_PRECISION)
-        .arg("--compression")
-        .arg("zip")
-        .arg(kicad_pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to generate ODB++ files")?;
-
     Ok(())
 }
 
@@ -1471,48 +1377,6 @@ pub(crate) fn export_ipc2581(kicad_pcb_path: &Path, ipc2581_path: &Path) -> Resu
         .arg(kicad_pcb_path.to_string_lossy())
         .run()
         .context("Failed to generate IPC-2581 file")?;
-
-    Ok(())
-}
-
-/// Generate STEP model
-fn generate_step_model(info: &ReleaseInfo) -> Result<()> {
-    let models_dir = info.staging_dir.join("3d");
-    fs::create_dir_all(&models_dir)?;
-
-    let kicad_pcb_path = info
-        .staged_pcb_path()
-        .context("No layout directory for STEP model generation")?;
-
-    // Create a temp file to capture and discard verbose KiCad output
-    let devnull = tempfile::tempfile()?;
-
-    // Generate STEP model - KiCad CLI has platform-specific exit code issues
-    let step_path = models_dir.join("model.step");
-    let step_result = KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("step")
-        .arg("--subst-models")
-        .arg("--force")
-        .arg("--output")
-        .arg(step_path.to_string_lossy())
-        .arg("--no-dnp")
-        // FIXME: kicad-imported projects have unspecified footprints, so allow these temporarily
-        // .arg("--no-unspecified")
-        .arg("--include-silkscreen")
-        .arg(kicad_pcb_path.to_string_lossy())
-        .log_file(devnull)
-        .suppress_error_output(true)
-        .run();
-
-    if let Err(e) = step_result {
-        if step_path.exists() {
-            warn!("KiCad CLI reported error but STEP file was created: {e}");
-        } else {
-            return Err(e).context("Failed to generate STEP model");
-        }
-    }
 
     Ok(())
 }
