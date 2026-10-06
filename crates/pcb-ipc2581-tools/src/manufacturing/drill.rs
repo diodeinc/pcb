@@ -65,10 +65,10 @@ fn xnc_files_from_nc(
             span: xnc_span_key(copper_layers, &object.span),
         };
         let file_function = xnc_file_function(&key, copper_layers);
+        let tool_attributes = xnc_tool_attributes(object, key.span);
         let builder = groups
             .entry(key)
             .or_insert_with(|| XncBuilder::new(vec![file_function]));
-        let tool_attributes = xnc_tool_attributes(object);
         let object_attributes = xnc_object_attributes(imported, object);
         match &object.geometry {
             nc::Geometry::Drill { at, diameter } => {
@@ -116,14 +116,19 @@ fn xnc_file_function(key: &XncGroupKey, copper_layers: &[ipc2581::Symbol]) -> Xn
     )
 }
 
-fn xnc_tool_attributes(object: &nc::Object) -> Vec<XncAttribute> {
+fn xnc_tool_attributes(object: &nc::Object, span: XncSpanKey) -> Vec<XncAttribute> {
     let drill_function = match object.function {
         nc::Function::Via => "ViaDrill",
         nc::Function::Component => "ComponentDrill",
     };
-    let fields = match object.plating {
-        nc::Plating::Plated => vec!["Plated", "PTH", drill_function],
-        nc::Plating::NonPlated => vec!["NonPlated", "NPTH", drill_function],
+    let fields = match (object.plating, span) {
+        (nc::Plating::Plated, XncSpanKey::ThroughBoard) => vec!["Plated", "PTH", drill_function],
+        // KiCad uses Buried for both blind and buried tools; FileFunction
+        // carries the exact span and distinguishes Blind from Buried.
+        (nc::Plating::Plated, XncSpanKey::FromTo { .. }) => {
+            vec!["Plated", "Buried", drill_function]
+        }
+        (nc::Plating::NonPlated, _) => vec!["NonPlated", "NPTH", drill_function],
     };
     vec![XncAttribute::tool("AperFunction", fields)]
 }
@@ -206,4 +211,67 @@ fn xnc_filename(key: &XncGroupKey) -> String {
     }
     let (from, to) = key.span.layer_numbers(1);
     format!("{base}_L{from}_L{to}.drl")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drill_tools_follow_normalized_layer_spans() {
+        for (from, to, filename, file_function, tool_function) in [
+            ("TOP", "BOTTOM", "PTH.drl", "Plated,1,4,PTH", "PTH"),
+            (
+                "TOP",
+                "INNER1",
+                "PTH_L1_L2.drl",
+                "Plated,1,2,Blind",
+                "Buried",
+            ),
+            (
+                "INNER1",
+                "INNER2",
+                "PTH_L2_L3.drl",
+                "Plated,2,3,Buried",
+                "Buried",
+            ),
+            (
+                "BOTTOM",
+                "INNER2",
+                "PTH_L3_L4.drl",
+                "Plated,3,4,Blind",
+                "Buried",
+            ),
+        ] {
+            let ipc = ipc2581::Ipc2581::parse(&format!(
+                r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+                  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/></Content>
+                  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+                    <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+                    <Layer name="INNER1" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
+                    <Layer name="INNER2" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
+                    <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+                    <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE">
+                      <Span fromLayer="{from}" toLayer="{to}"/>
+                    </Layer>
+                    <Step name="board" type="BOARD"><LayerFeature layerRef="DRILL"><Set>
+                      <Hole name="V1" diameter="0.25" platingStatus="VIA" plusTol="0" minusTol="0" x="3" y="-7"/>
+                    </Set></LayerFeature></Step>
+                  </CadData></Ecad>
+                </IPC-2581>"#,
+            ))
+            .unwrap();
+            let imported =
+                pcb_ir::import::ipc2581::import_design(&ipc, Default::default()).unwrap();
+            let files = build_xnc_drill_files_from_design(&imported, ArtworkScope::Board).unwrap();
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].filename, filename);
+            let contents = &files[0].contents;
+            assert!(contents.contains(&format!("; #@! TF.FileFunction,{file_function}\n")));
+            assert!(contents.contains(&format!(
+                "; #@! TA.AperFunction,Plated,{tool_function},ViaDrill\nT01C0.25\n"
+            )));
+            assert!(contents.contains("X3.0Y-7.0\n"));
+        }
+    }
 }

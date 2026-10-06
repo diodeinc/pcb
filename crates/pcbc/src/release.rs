@@ -1128,7 +1128,7 @@ fn generate_gerbers(info: &ReleaseInfo) -> Result<()> {
     fab_export_result?;
     fab_cleanup_result?;
 
-    // Generate drill files (separate PTH/NPTH) with PDF map(s)
+    // Generate drill files (separate PTH/NPTH).
     KiCadCliBuilder::new()
         .command("pcb")
         .subcommand("export")
@@ -1144,35 +1144,9 @@ fn generate_gerbers(info: &ReleaseInfo) -> Result<()> {
         .arg("--excellon-units")
         .arg("mm")
         .arg("--excellon-separate-th")
-        .arg("--generate-map")
-        .arg("--map-format")
-        .arg("pdf")
         .arg(kicad_pcb_path.to_string_lossy())
         .run()
         .context("Failed to generate drill files")?;
-
-    // Generate drill map(s) as Gerber X2 as well (for CAM tooling that prefers Gerber over PDF)
-    KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("drill")
-        .arg("--output")
-        .arg(gerbers_dir.to_string_lossy())
-        .arg("--format")
-        .arg("excellon")
-        .arg("--drill-origin")
-        .arg("plot")
-        .arg("--excellon-zeros-format")
-        .arg("decimal")
-        .arg("--excellon-units")
-        .arg("mm")
-        .arg("--excellon-separate-th")
-        .arg("--generate-map")
-        .arg("--map-format")
-        .arg("gerberx2")
-        .arg(kicad_pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to generate gerber drill map(s)")?;
 
     // Create gerbers.zip from the temp directory
     create_gerbers_zip(&gerbers_dir, &manufacturing_dir.join("gerbers.zip"))?;
