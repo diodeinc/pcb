@@ -107,6 +107,7 @@ pub fn build_gerber_x2_files(
             let mut doc = imported
                 .materialize_layer(plan.layer_id, view)
                 .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
+            retain_gerber_features(&mut doc, spec.role);
             pcb_ir::dialects::ipc::process::normalize_for_positive_artwork(&mut doc, resolution)
                 .with_context(|| format!("failed to normalize IPC-2581 layer '{layer_name}'"))?;
             if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
@@ -476,6 +477,7 @@ fn hierarchical_artwork_from_ipc_layer(
         geometry::step_artwork::root_step(imported, false)?,
         header,
         |step, mut local, artwork| {
+            retain_gerber_features(&mut local, spec.role);
             pcb_ir::dialects::ipc::process::normalize_for_positive_artwork(&mut local, resolution)?;
             if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&local) {
                 bail!(
@@ -495,6 +497,22 @@ fn hierarchical_artwork_from_ipc_layer(
         },
     )
     .with_context(|| format!("failed to lower IPC-2581 layer '{layer_name}'"))
+}
+
+/// Copper artwork precedes plated machining: full pads image across openings,
+/// whose finished dimensions are carried separately by the plated NC files.
+/// Filter only the export copy, before normalization subtracts the cavities;
+/// the imported material geometry still needs them for viewers and DFM.
+fn retain_gerber_features(doc: &mut GeometryDocument, role: GerberLayerRole) {
+    if role == GerberLayerRole::Copper {
+        pcb_ir::dialects::ipc::process::retain_features(doc, |feature| {
+            !(feature.is_drill_like()
+                && matches!(
+                    feature.intent.plating,
+                    PlatingKind::Plated | PlatingKind::Via | PlatingKind::ViaCapped
+                ))
+        });
+    }
 }
 
 /// Gerber's half of IPC artwork lowering: standard-dictionary primitives
@@ -1578,6 +1596,106 @@ mod tests {
                 actual > restored_area,
                 "{overlay} was not restored after the local cut-in; area was {actual}"
             );
+        }
+    }
+
+    #[test]
+    fn plated_slots_keep_copper_artwork_but_not_material_across_repeated_boards() {
+        // An asymmetric rotated slot inside a 4 x 3 pad, on a three-layer
+        // board. The same slot must cut material and nonplated artwork, but
+        // leave plated artwork whole, including in hierarchical arrays.
+        for plating in ["PLATED", "VIA", "VIA_CAPPED", "NONPLATED"] {
+            let layers = [("TOP", "TOP"), ("INNER", "INTERNAL"), ("BOTTOM", "BOTTOM")];
+            let definitions = layers.iter().map(|(name, side)| format!(
+                r#"<Layer name="{name}" layerFunction="SIGNAL" side="{side}" polarity="POSITIVE"/>"#
+            )).collect::<String>();
+            let copper = layers.iter().map(|(name, _)| format!(
+                r#"<LayerFeature layerRef="{name}"><Set><Features><UserSpecial>{}</UserSpecial></Features></Set></LayerFeature>"#,
+                rect_contour(3.0, 4.0, 7.0, 7.0)
+            )).collect::<String>();
+            let ipc = ipc::Ipc2581::parse(&format!(
+                r#"
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/></Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    {definitions}
+    <Layer name="ROUTE" layerFunction="ROUT" side="ALL">
+      <Span fromLayer="TOP" toLayer="BOTTOM"/>
+    </Layer>
+    <Step name="board" type="BOARD">
+      {copper}
+      <LayerFeature layerRef="ROUTE"><Set>
+        <SlotCavity name="slot" platingStatus="{plating}" plusTol="0" minusTol="0">
+          <Location x="5" y="5.5"/><Xform rotation="30"/>
+          <Oval width="2" height="0.8"/>
+        </SlotCavity>
+      </Set></LayerFeature>
+    </Step>
+    <Step name="panel" type="PALLET">
+      <StepRepeat stepRef="board" x="2" y="1" nx="2" ny="1" dx="15" dy="0" angle="90"/>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#
+            ))
+            .unwrap();
+            let imported = import_design(&ipc, Resolution::default()).unwrap();
+            let slot_area = 1.2 * 0.8 + std::f64::consts::PI * 0.4_f64.powi(2);
+            for (scope, copies) in [
+                (ArtworkScope::Board, 1.0),
+                (ArtworkScope::ArrayFlattened, 2.0),
+            ] {
+                let files = manufacturing_files(&ipc, scope);
+                for filename in ["F_Cu.gtl", "In1_Cu.gbr", "B_Cu.gbl"] {
+                    let expected = copies
+                        * if plating == "NONPLATED" {
+                            12.0 - slot_area
+                        } else {
+                            12.0
+                        };
+                    let actual = area(&files[filename]);
+                    assert!(
+                        (actual - expected).abs() < 0.01,
+                        "{plating} {scope:?} {filename}: {actual} != {expected}"
+                    );
+                }
+                let drill = &files[if plating == "NONPLATED" {
+                    "NPTH.drl"
+                } else {
+                    "PTH.drl"
+                }];
+                assert!(
+                    drill.contains("C0.8"),
+                    "finished slot width must not receive plating compensation"
+                );
+                assert_eq!(drill.matches("G85").count(), copies as usize);
+            }
+            // Manufacturing export must not remove cavities from the shared
+            // imported geometry or change normal material normalization.
+            let mut material = imported
+                .materialize_layer(LayerId(0), ArtworkScope::Board)
+                .unwrap();
+            assert!(
+                material
+                    .features
+                    .iter()
+                    .any(|feature| feature.is_drill_like())
+            );
+            pcb_ir::dialects::ipc::process::normalize_for_positive_artwork(
+                &mut material,
+                Resolution::default(),
+            )
+            .unwrap();
+            let material = pcb_ir::dialects::ipc::lower_layer_to_artwork(
+                &material,
+                0,
+                LayerRole::Copper,
+                IrSide::Top,
+            );
+            let material_area =
+                pcb_ir::dialects::artwork::compose_layer_image(&material, Resolution::default())
+                    .unwrap()
+                    .area();
+            assert!((material_area - (12.0 - slot_area)).abs() < 0.01);
         }
     }
 
