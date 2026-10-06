@@ -173,7 +173,6 @@ fn package_keeps_ipc_frame_for_all_layers_and_nc_in_boards_and_arrays() {
                 &imported,
                 &ManufacturingExportOptions {
                     view: scope,
-                    include_auxiliary_layers: false,
                     relief_debug_dir: None,
                     include_auxiliary_layers: false,
                 },
