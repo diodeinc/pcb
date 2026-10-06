@@ -61,7 +61,7 @@ KICAD_LAYER_BY_GERBER = {
     "B_SilkS.gbo": "B.SilkS",
     "Edge_Cuts.gm1": "Edge.Cuts",
 }
-INNER_COPPER_RE = re.compile(r"In(\d+)_Cu\.gbr$")
+INNER_COPPER_RE = re.compile(r"In([1-9]\d*)_Cu\.g\1$")
 
 
 def main() -> int:
@@ -277,9 +277,8 @@ def select_layers(ipc_gerber_dir: Path, layers_arg: str) -> list[tuple[str, str]
             inner = INNER_COPPER_RE.fullmatch(path.name)
             if inner is None:
                 continue
-            # pcbc numbers inner copper by absolute stack position (top = 1);
-            # KiCad numbers inner layers from 1.
-            kicad_layer = f"In{int(inner.group(1)) - 1}.Cu"
+            # Both filenames and KiCad number inner layers from 1.
+            kicad_layer = f"In{inner.group(1)}.Cu"
         available[kicad_layer] = path.name
 
     if layers_arg == "all":

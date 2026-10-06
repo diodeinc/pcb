@@ -360,7 +360,7 @@ fn layer_output(
                 Some(IpcSide::Bottom) => ("B_Cu.gbl".to_string(), copper_count, "Bot"),
                 // KiCad numbers inner layers from 1, excluding the top layer.
                 _ => (
-                    format!("In{}_Cu.gbr", copper_index - 1),
+                    format!("In{0}_Cu.g{0}", copper_index - 1),
                     copper_index,
                     "Inr",
                 ),
@@ -1522,6 +1522,7 @@ mod tests {
             for filename in ["V_Cut.gbr", "VCUT_B.gbr", "Score.gbr", "SCORE_B.gbr"] {
                 assert_eq!(production[filename].0, "Vcut");
             }
+            assert_eq!(production["In1_Cu.g1"].0, "Copper,L2,Inr");
             production_files.push(production);
         }
         assert_eq!(production_files[0], production_files[1]);
@@ -1666,6 +1667,64 @@ mod tests {
             let geometry = extracted(profile);
             geometry.validate().unwrap();
             assert_eq!(geometry.layers[0].objects.count, 8);
+        }
+    }
+
+    #[test]
+    fn multilayer_copper_filenames_keep_physical_x2_numbering() {
+        for copper_count in [2, 4, 12] {
+            let layers = (1..=copper_count)
+                .map(|index| {
+                    let side = if index == 1 {
+                        "TOP"
+                    } else if index == copper_count {
+                        "BOTTOM"
+                    } else {
+                        "INTERNAL"
+                    };
+                    format!(
+                        r#"<Layer name="Cu{index}" layerFunction="SIGNAL" side="{side}" polarity="POSITIVE"/>"#
+                    )
+                })
+                .collect::<String>();
+            let ipc = ipc::Ipc2581::parse(&format!(
+                r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/></Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    {layers}
+    <Step name="board" type="BOARD"/>
+  </CadData></Ecad>
+</IPC-2581>"#
+            ))
+            .unwrap();
+            let files = gerber_files(&ipc, ArtworkScope::Board);
+            let expected = [
+                ("F_Cu.gtl", "Copper,L1,Top"),
+                ("In1_Cu.g1", "Copper,L2,Inr"),
+                ("In2_Cu.g2", "Copper,L3,Inr"),
+                ("In3_Cu.g3", "Copper,L4,Inr"),
+                ("In4_Cu.g4", "Copper,L5,Inr"),
+                ("In5_Cu.g5", "Copper,L6,Inr"),
+                ("In6_Cu.g6", "Copper,L7,Inr"),
+                ("In7_Cu.g7", "Copper,L8,Inr"),
+                ("In8_Cu.g8", "Copper,L9,Inr"),
+                ("In9_Cu.g9", "Copper,L10,Inr"),
+                ("In10_Cu.g10", "Copper,L11,Inr"),
+            ];
+            assert_eq!(files.len(), copper_count);
+            for (filename, function) in expected.iter().take(copper_count - 1).copied().chain([(
+                "B_Cu.gbl",
+                match copper_count {
+                    2 => "Copper,L2,Bot",
+                    4 => "Copper,L4,Bot",
+                    12 => "Copper,L12,Bot",
+                    _ => unreachable!(),
+                },
+            )]) {
+                let contents = &files[filename];
+                assert!(contents.contains(&format!("%TF.FileFunction,{function}*%")));
+                gerberx2::GerberX2::parse(contents).unwrap();
+            }
         }
     }
 
@@ -1855,7 +1914,7 @@ mod tests {
                 (ArtworkScope::ArrayFlattened, 2.0),
             ] {
                 let files = manufacturing_files(&ipc, scope);
-                for filename in ["F_Cu.gtl", "In1_Cu.gbr", "B_Cu.gbl"] {
+                for filename in ["F_Cu.gtl", "In1_Cu.g1", "B_Cu.gbl"] {
                     let expected = copies
                         * if plating == "NONPLATED" {
                             12.0 - slot_area
