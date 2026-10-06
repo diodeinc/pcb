@@ -1,6 +1,5 @@
 ---
 source: crates/pcbc/tests/info.rs
-assertion_line: 284
 expression: normalized
 ---
 Command: pcbc info -f json
@@ -18,6 +17,9 @@ Exit Code: 0
     "boards/test-board": {
       "version": "0.2.0",
       "rel_path": "boards/test-board",
+      "source": "workspace",
+      "board_entrypoint": "boards/test-board/test_board.zen",
+      "tag_prefix": "boards/test-board/v",
       "config": {
         "board": {
           "name": "TestBoard",

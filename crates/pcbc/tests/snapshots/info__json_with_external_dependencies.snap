@@ -23,6 +23,8 @@ Exit Code: 0
   "packages": {
     "workspace": {
       "rel_path": "",
+      "source": "workspace",
+      "tag_prefix": "v",
       "config": {
         "workspace": {
           "pcb-version": "0.4"
@@ -43,6 +45,7 @@ Exit Code: 0
     "github.com/vendor/components/Leaf@1.0.0": {
       "version": "1.0.0",
       "rel_path": ".pcb/cache/github.com/vendor/components/Leaf/1.0.0",
+      "source": "cache",
       "preferred": false,
       "entrypoints": [
         "Leaf.zen"
@@ -51,6 +54,7 @@ Exit Code: 0
     "github.com/vendor/components/Thing@1.0.0": {
       "version": "1.0.0",
       "rel_path": ".pcb/cache/github.com/vendor/components/Thing/1.0.0",
+      "source": "cache",
       "config": {
         "dependencies": {
           "github.com/vendor/components/Leaf": "1.0.0"

@@ -28,6 +28,7 @@ pub fn execute(args: VendorArgs) -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap())
         .canonicalize()?;
     let workspace_info = get_workspace_info(&DefaultFileProvider::new(), &zen_path)?;
+    crate::pcb_mod::validate_workspace(&workspace_info)?;
 
     if !args.all {
         println!(

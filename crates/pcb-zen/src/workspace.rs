@@ -184,7 +184,7 @@ pub fn get_workspace_info<F: FileProvider>(
     // Add path-patched forks as workspace packages.
     {
         let _span = info_span!("add_path_patched_forks").entered();
-        add_path_patched_forks(file_provider, &mut info)?;
+        add_path_patched_forks(file_provider, &mut info);
     }
 
     Ok(info)
@@ -265,12 +265,9 @@ pub fn enrich_git_metadata(info: &mut WorkspaceInfo) {
 ///
 /// This allows forks to be treated like regular workspace packages for dependency
 /// resolution, without requiring special handling in resolve.rs.
-fn add_path_patched_forks<F: FileProvider>(
-    file_provider: &F,
-    info: &mut WorkspaceInfo,
-) -> Result<()> {
+fn add_path_patched_forks<F: FileProvider>(file_provider: &F, info: &mut WorkspaceInfo) {
     let Some(root_cfg) = info.config.as_ref() else {
-        return Ok(());
+        return;
     };
 
     for (url, patch) in &root_cfg.patch {
@@ -298,8 +295,16 @@ fn add_path_patched_forks<F: FileProvider>(
             continue;
         }
 
-        // Load config and add as a workspace package.
-        let pkg_cfg = PcbToml::from_file(file_provider, &pcb_toml_path)?;
+        let pkg_cfg = match PcbToml::from_file(file_provider, &pcb_toml_path) {
+            Ok(config) => config,
+            Err(error) => {
+                info.errors.push(DiscoveryError {
+                    path: pcb_toml_path,
+                    error: format!("{error:#}"),
+                });
+                continue;
+            }
+        };
 
         // Extract version from fork path if under fork/ directory
         // Fork paths are: fork/<url>/<version>/
@@ -327,6 +332,4 @@ fn add_path_patched_forks<F: FileProvider>(
             },
         );
     }
-
-    Ok(())
 }
