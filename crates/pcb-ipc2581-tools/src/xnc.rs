@@ -2,8 +2,8 @@
 //!
 //! This file implements a compact CAD/CAM Exchange NC dialect for
 //! Excellon-compatible drill output: the drill subset of Ucamco XNC
-//! (IPC-NC-349) plus the Excellon `G85` canned cycle. Slots are always
-//! `G85`. That cycle is not part of XNC, which routs slots instead, but it is
+//! (IPC-NC-349) plus Excellon `G90` absolute mode and the `G85` canned cycle.
+//! Slots are always `G85`. XNC routs slots instead, but `G85` is
 //! what fabricators ask for and what ships today, so it is the one slot
 //! encoding here and rout mode is not written at all. The target dialect is
 //! intentionally decimal and self-describing; it does not use legacy implied
@@ -19,6 +19,7 @@
 //!   is a positive decimal in the file unit. Tool diameter is the finished hole
 //!   or slot width.
 //! - Body state consists of current point, selected tool, and drill mode.
+//!   `G90` explicitly selects absolute coordinates, matching KiCad Excellon.
 //!   Tools are selected with `Tnn`.
 //! - Drill mode is selected with `G05`. A drill hit is `XxYy` and creates one
 //!   circular hole at that coordinate with the selected tool.
@@ -249,7 +250,7 @@ pub fn write_xnc(doc: &XncDocument) -> Result<String> {
             format_decimal(tool.diameter)
         ));
     }
-    out.push_str("%\n");
+    out.push_str("%\nG90\n");
 
     let mut drilling = false;
     let mut selected_tool = None;
@@ -442,7 +443,9 @@ mod tests {
         }
 
         let output = write_xnc(&builder.finish()).unwrap();
-        assert!(output.contains("%\nT01\nG05\nX2.0Y5.0\nX4.0Y5.0\nT02\nX1.0Y5.0\nX3.0Y5.0\nM30\n"));
+        assert!(
+            output.contains("%\nG90\nT01\nG05\nX2.0Y5.0\nX4.0Y5.0\nT02\nX1.0Y5.0\nX3.0Y5.0\nM30\n")
+        );
     }
 
     #[test]
