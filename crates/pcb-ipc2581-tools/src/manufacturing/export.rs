@@ -256,7 +256,7 @@ fn build_gerber_job(
                     // Contradictory declarations must not become fabrication instructions.
                     let colors = s
                         .color_rgb
-                        .map(|(r, g, b)| format!("R{r:03}G{g:03}B{b:03}"))
+                        .and_then(|(r, g, b)| gerber_job_color(&format!("#{r:02X}{g:02X}{b:02X}")))
                         .into_iter()
                         .chain(
                             s.color_term
@@ -328,7 +328,13 @@ fn gerber_job_color(value: &str) -> Option<String> {
     let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
     let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
     let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some(format!("R{r:03}G{g:03}B{b:03}"))
+    // Black and white have unambiguous RGB equivalents. Do not guess a
+    // particular shade for named inks such as Green.
+    Some(match (r, g, b) {
+        (0, 0, 0) => "Black".to_owned(),
+        (255, 255, 255) => "White".to_owned(),
+        _ => format!("R{r:03}G{g:03}B{b:03}"),
+    })
 }
 
 /// Parse, import, build, and write a manufacturing package to `output`: a
@@ -595,6 +601,31 @@ mod tests {
                 job_value(&design, &[])["MaterialStackup"][0]
                     .get("Color")
                     .is_none()
+            );
+        }
+        for (colors, expected) in [
+            (
+                r#"<ColorTerm name="BLACK"/><Color r="0" g="0" b="0"/><Property text="Color : #000000"/>"#,
+                "Black",
+            ),
+            (
+                r#"<ColorTerm name="WHITE"/><Color r="255" g="255" b="255"/><Property text="Color : #FFFFFFDD"/>"#,
+                "White",
+            ),
+            (
+                r#"<Color r="25" g="116" b="171"/><Property text="Color : #1974AB"/>"#,
+                "R025G116B171",
+            ),
+        ] {
+            let source = JOB_BOARD.replace(r#"<ColorTerm name="GREEN"/>"#, colors);
+            let design = import_design(
+                &ipc2581::Ipc2581::parse(&source).unwrap(),
+                Resolution::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                job_value(&design, &[])["MaterialStackup"][0]["Color"],
+                expected
             );
         }
     }
