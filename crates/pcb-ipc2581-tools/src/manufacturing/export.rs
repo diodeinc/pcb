@@ -9,7 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use pcb_ir::dialects::ipc::ArtworkScope;
+use pcb_ir::dialects::ipc::{ArtworkScope, LayoutStepKind};
 use pcb_ir::import::ipc2581::ImportedDesign;
 #[cfg(feature = "cli")]
 use pcb_ir::import::ipc2581::import_design;
@@ -69,7 +69,7 @@ pub fn build_manufacturing_package(
         imported,
         options.view,
     )?);
-    files.push(build_gerber_job(imported, &files)?);
+    files.push(build_gerber_job(imported, options.view, &files)?);
 
     Ok(ManufacturingPackage { files })
 }
@@ -80,6 +80,7 @@ pub fn build_manufacturing_package(
 /// material specs do not supply CAD clearance/width design rules.
 fn build_gerber_job(
     imported: &ImportedDesign,
+    scope: ArtworkScope,
     files: &[ManufacturingFile],
 ) -> Result<ManufacturingFile> {
     use ipc2581::types::{FinishType, LayerFunction, WhereMeasured};
@@ -112,16 +113,26 @@ fn build_gerber_job(
         .collect::<Vec<_>>();
     let mut general = json!({});
     // The job spec describes a single PCB, not its assembly panel. Keep the
-    // canonical board dimensions even when FilesAttributes describes an array.
-    // Select the same reachable board as artwork before checking its profile;
-    // another (possibly unused) board's nonempty bounds are not a fallback.
+    // single-board dimensions for repeated arrays, but omit them for panels
+    // containing distinct board steps. Unused boards are not a fallback.
     let board_bounds = imported
-        .layout_occurrences(ArtworkScope::Board)
+        .layout_occurrences(if scope == ArtworkScope::Board {
+            ArtworkScope::Board
+        } else {
+            ArtworkScope::ArrayFlattened
+        })
         .ok()
-        .and_then(|boards| {
-            boards
-                .first()
-                .map(|(step, _)| imported.geometry.layout.steps[*step as usize].bbox)
+        .and_then(|occurrences| {
+            let boards = occurrences
+                .iter()
+                .map(|(step, _)| *step)
+                .filter(|step| {
+                    imported.geometry.layout.steps[*step as usize].kind == LayoutStepKind::Board
+                })
+                .collect::<std::collections::HashSet<_>>();
+            (boards.len() == 1).then(|| {
+                imported.geometry.layout.steps[*boards.iter().next().unwrap() as usize].bbox
+            })
         });
     if let Some(bounds) = board_bounds.filter(|bounds| !bounds.is_empty()) {
         general["Size"] = json!({ "X": bounds.width(), "Y": bounds.height() });
@@ -164,6 +175,12 @@ fn build_gerber_job(
         if numbers.len() == layers.len() {
             layers.sort_by_key(|layer| layer.layer_number);
         }
+        let unique = layers
+            .iter()
+            .map(|layer| layer.layer_ref)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == layers.len();
         // Require coverage of known planar materials, not just resolution of
         // the rows that happen to be present. Glue and hole-protection coating
         // artwork are not necessarily layers in the bare-board stack.
@@ -185,6 +202,7 @@ fn build_gerber_job(
                     .any(|layer| layer.layer_ref == definition.name)
         });
         let mut finishes = std::collections::BTreeSet::new();
+        let mut unknown_finish = false;
         let materials = layers
             .iter()
             .map(|layer| {
@@ -209,17 +227,22 @@ fn build_gerber_job(
                 if matches!(
                     function,
                     LayerFunction::CoatingCond | LayerFunction::CoatingNonCond
-                ) && let Some(finish) = spec.and_then(|spec| spec.surface_finish.as_ref())
-                {
-                    // Preserve ambiguous IPC tokens rather than asserting, e.g.,
-                    // that solder type S is specifically lead-free HASL.
-                    finishes.insert(match finish.finish_type {
-                        FinishType::EnigN | FinishType::EnigG => "ENIG",
-                        FinishType::EnepigN | FinishType::EnepigG | FinishType::EnepigP => "ENEPIG",
-                        FinishType::IAg => "Immersion silver",
-                        FinishType::ISn => "Immersion tin",
-                        f => f.as_str(),
-                    });
+                ) {
+                    if let Some(finish) = spec.and_then(|spec| spec.surface_finish.as_ref()) {
+                        // Preserve ambiguous IPC tokens rather than asserting, e.g.,
+                        // that solder type S is specifically lead-free HASL.
+                        finishes.insert(match finish.finish_type {
+                            FinishType::EnigN | FinishType::EnigG => "ENIG",
+                            FinishType::EnepigN | FinishType::EnepigG | FinishType::EnepigP => {
+                                "ENEPIG"
+                            }
+                            FinishType::IAg => "Immersion silver",
+                            FinishType::ISn => "Immersion tin",
+                            f => f.as_str(),
+                        });
+                    } else {
+                        unknown_finish = true;
+                    }
                 }
                 let mut material = json!({"Type": kind, "Name": imported.resolve(layer.layer_ref)});
                 if let Some(name) = layer.material.or_else(|| spec.and_then(|s| s.material)) {
@@ -258,10 +281,10 @@ fn build_gerber_job(
             .collect::<Option<Vec<_>>>();
         // A partial material stack is forbidden by section 2.5.
         if let Some(materials) =
-            materials.filter(|layers| complete && ordered && !layers.is_empty())
+            materials.filter(|layers| complete && ordered && unique && !layers.is_empty())
         {
             job["MaterialStackup"] = json!(materials);
-            if finishes.len() == 1 && !finishes.contains("OTHER") {
+            if !unknown_finish && finishes.len() == 1 && !finishes.contains("OTHER") {
                 general["Finish"] = json!(finishes.first().unwrap());
             }
         }
@@ -417,7 +440,12 @@ mod tests {
     }
 
     fn job_value(design: &ImportedDesign, files: &[ManufacturingFile]) -> Value {
-        serde_json::from_str(&build_gerber_job(design, files).unwrap().contents).unwrap()
+        serde_json::from_str(
+            &build_gerber_job(design, ArtworkScope::Board, files)
+                .unwrap()
+                .contents,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -467,15 +495,38 @@ mod tests {
 
     #[test]
     fn finish_does_not_guess_lead_content_or_choose_between_conflicting_coatings() {
+        let two_coatings = JOB_BOARD
+            .replace(
+                "<Layer name=\"FINISH\"",
+                "<Layer name=\"FINISH_BOTTOM\" layerFunction=\"COATINGCOND\" side=\"BOTTOM\"/><Layer name=\"FINISH\"",
+            )
+            .replace("</StackupGroup>", r#"<StackupLayer layerOrGroupRef="FINISH_BOTTOM" sequence="6"><SpecRef id="unused"/></StackupLayer></StackupGroup>"#);
         for (source, expected) in [
             (JOB_BOARD.replace("ENIG-N", "S"), Some(json!("S"))),
             (JOB_BOARD.replace("ENIG-N", "N"), Some(json!("N"))),
             (JOB_BOARD.replace("ENIG-N", "NB"), Some(json!("NB"))),
             (JOB_BOARD.replace("ENIG-N", "OTHER"), None),
-            (JOB_BOARD.replace("</StackupGroup>", r#"<StackupLayer layerOrGroupRef="FINISH" sequence="6"><SpecRef id="unused"/></StackupLayer></StackupGroup>"#), None),
+            (two_coatings.clone(), None),
+            (two_coatings.replace("<SpecRef id=\"unused\"/>", ""), None),
+            (
+                two_coatings.replace("<SurfaceFinish type=\"OSP\"/>", ""),
+                None,
+            ),
+            (
+                two_coatings.replace("<SpecRef id=\"unused\"/>", "<SpecRef id=\"missing\"/>"),
+                None,
+            ),
+            (two_coatings.replace("OSP", "ENIG-G"), Some(json!("ENIG"))),
         ] {
-            let design = import_design(&ipc2581::Ipc2581::parse(&source).unwrap(), Resolution::default()).unwrap();
-            assert_eq!(job_value(&design, &[])["GeneralSpecs"].get("Finish"), expected.as_ref());
+            let design = import_design(
+                &ipc2581::Ipc2581::parse(&source).unwrap(),
+                Resolution::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                job_value(&design, &[])["GeneralSpecs"].get("Finish"),
+                expected.as_ref()
+            );
         }
     }
 
@@ -519,6 +570,51 @@ mod tests {
         let mut design = job_design();
         design.stackups[0].layers[0].layer_number = Some(1);
         assert!(job_value(&design, &[]).get("MaterialStackup").is_none());
+
+        let mut design = job_design();
+        let mut duplicate = design.stackups[0].layers[3].clone();
+        duplicate.layer_number = Some(6);
+        design.stackups[0].layers.push(duplicate);
+        assert!(job_value(&design, &[]).get("MaterialStackup").is_none());
+    }
+
+    #[test]
+    fn mixed_board_array_omits_single_board_size() {
+        let source = JOB_BOARD
+            .replace(
+                "<Step name=\"panel\"",
+                r#"<Step name="other" type="BOARD"><Profile><Polygon>
+              <PolyBegin x="0" y="0"/><PolyStepSegment x="3" y="0"/>
+              <PolyStepSegment x="3" y="1"/><PolyStepSegment x="0" y="1"/>
+              <PolyStepSegment x="0" y="0"/>
+            </Polygon></Profile></Step><Step name="panel""#,
+            )
+            .replace(
+                "<StepRepeat stepRef=\"board\"",
+                "<StepRepeat stepRef=\"other\" x=\"0\" y=\"2\"/><StepRepeat stepRef=\"board\"",
+            );
+        let design = import_design(
+            &ipc2581::Ipc2581::parse(&source).unwrap(),
+            Resolution::default(),
+        )
+        .unwrap();
+        for view in [ArtworkScope::Board, ArtworkScope::ArrayFlattened] {
+            let package = build_manufacturing_package(
+                &design,
+                &ManufacturingExportOptions {
+                    view,
+                    relief_debug_dir: None,
+                },
+                Resolution::default(),
+            )
+            .unwrap();
+            let job: Value = serde_json::from_str(&package.files.last().unwrap().contents).unwrap();
+            if view == ArtworkScope::Board {
+                assert!((job["GeneralSpecs"]["Size"]["X"].as_f64().unwrap() - 76.2).abs() < 1e-8);
+            } else {
+                assert!(job["GeneralSpecs"].get("Size").is_none());
+            }
+        }
     }
 
     #[test]
