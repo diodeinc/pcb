@@ -1522,6 +1522,7 @@ mod tests {
             for filename in ["V_Cut.gbr", "VCUT_B.gbr", "Score.gbr", "SCORE_B.gbr"] {
                 assert_eq!(production[filename].0, "Vcut");
             }
+            assert_eq!(production["In1_Cu.g1"].0, "Copper,L2,Inr");
             production_files.push(production);
         }
         assert_eq!(production_files[0], production_files[1]);
@@ -1913,7 +1914,7 @@ mod tests {
                 (ArtworkScope::ArrayFlattened, 2.0),
             ] {
                 let files = manufacturing_files(&ipc, scope);
-                for filename in ["F_Cu.gtl", "In1_Cu.gbr", "B_Cu.gbl"] {
+                for filename in ["F_Cu.gtl", "In1_Cu.g1", "B_Cu.gbl"] {
                     let expected = copies
                         * if plating == "NONPLATED" {
                             12.0 - slot_area
