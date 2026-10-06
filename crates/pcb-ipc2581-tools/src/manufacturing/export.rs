@@ -253,11 +253,20 @@ fn build_gerber_job(
                 }
                 if let Some((r, g, b)) = spec.and_then(|s| s.color_rgb) {
                     material["Color"] = json!(format!("R{r:03}G{g:03}B{b:03}"));
-                } else if let Some(color) = spec.and_then(|s| s.color_term)
-                    && let Some(color) = ["Red", "Yellow", "Green", "Blue", "White", "Black"]
-                        .into_iter()
-                        .find(|name| name.eq_ignore_ascii_case(imported.resolve(color)))
-                {
+                } else if let Some(color) = spec.and_then(|s| {
+                    s.color_term
+                        .and_then(|color| gerber_job_color(imported.resolve(color)))
+                        .or_else(|| {
+                            // KiCad writes material colors as free-text IPC
+                            // properties, rather than Color/ColorTerm elements.
+                            s.properties.iter().find_map(|property| {
+                                imported
+                                    .resolve(*property)
+                                    .strip_prefix("Color : ")
+                                    .and_then(gerber_job_color)
+                            })
+                        })
+                }) {
                     material["Color"] = json!(color);
                 }
                 for (key, value) in [
@@ -297,6 +306,25 @@ fn build_gerber_job(
         filename: "job.gbrjob".to_owned(),
         contents: serde_json::to_string_pretty(&job)? + "\n",
     })
+}
+
+fn gerber_job_color(value: &str) -> Option<String> {
+    if let Some(name) = ["Red", "Yellow", "Green", "Blue", "White", "Black"]
+        .into_iter()
+        .find(|name| name.eq_ignore_ascii_case(value))
+    {
+        return Some(name.to_owned());
+    }
+    let hex = value.strip_prefix('#')?;
+    if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    // KiCad's optional alpha is display transparency, not a fabrication color.
+    // Gerber job RGB has no alpha component.
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(format!("R{r:03}G{g:03}B{b:03}"))
 }
 
 /// Parse, import, build, and write a manufacturing package to `output`: a
@@ -517,6 +545,37 @@ mod tests {
         let missing = job_value(&design, &[]);
         assert!(missing.get("MaterialStackup").is_none());
         assert!(missing["GeneralSpecs"].get("Finish").is_none());
+    }
+
+    #[test]
+    fn job_preserves_kicad_material_color_properties() {
+        for function in ["SOLDERMASK", "SILKSCREEN"] {
+            for (property, expected) in [
+                ("Black", Some("Black")),
+                ("White", Some("White")),
+                ("#1974AB", Some("R025G116B171")),
+                ("#1974ABDD", Some("R025G116B171")),
+                ("Not specified", None),
+                ("#12345", None),
+                ("#1974ABZZ", None),
+            ] {
+                let source = JOB_BOARD.replace("SOLDERMASK", function).replace(
+                    r#"<ColorTerm name="GREEN"/>"#,
+                    &format!(r#"<Property text="Color : {property}"/>"#),
+                );
+                let design = import_design(
+                    &ipc2581::Ipc2581::parse(&source).unwrap(),
+                    Resolution::default(),
+                )
+                .unwrap();
+                let job = job_value(&design, &[]);
+                assert_eq!(
+                    job["MaterialStackup"][0]["Color"].as_str(),
+                    expected,
+                    "{function}: {property}"
+                );
+            }
+        }
     }
 
     #[test]
