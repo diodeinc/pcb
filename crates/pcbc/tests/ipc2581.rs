@@ -11,6 +11,57 @@ fn fixture() -> PathBuf {
         .join("../pcb-ipc2581-tools/src/assembly/testdata/report.xml")
 }
 
+#[test]
+fn jlc_bom_command_exports_hydrated_supplier_without_availability() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../pcb-ipc2581-tools/src/commands/testdata/jlc_bom.xml");
+    let selections = temp.path().join("selections.json");
+    let hydrated = temp.path().join("hydrated.xml");
+    std::fs::write(
+        &selections,
+        r#"[{
+        "path":"Board.C1", "refdes":"C1",
+        "manufacturerId":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        "manufacturer":"Selected Manufacturer", "mpn":"Selected-MPN",
+        "distributor":"LCSC", "distributorPartId":"C9999"
+    }]"#,
+    )
+    .unwrap();
+    let edit = Command::new(env!("CARGO_BIN_EXE_pcbc"))
+        .args(["ipc", "edit", "bom"])
+        .arg(input)
+        .arg("--selections")
+        .arg(selections)
+        .arg("--output")
+        .arg(&hydrated)
+        .output()
+        .unwrap();
+    assert!(
+        edit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+
+    // No --offline or credentials: JLC output uses only the hydrated file.
+    let output = Command::new(env!("CARGO_BIN_EXE_pcbc"))
+        .args(["ipc", "bom"])
+        .arg(hydrated)
+        .args(["--format", "jlc"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let csv = String::from_utf8(output.stdout).unwrap();
+    assert!(csv.starts_with("Comment,Designator,Footprint,JLCPCB Part #\n"));
+    assert!(csv.contains("100nF,C1,0402,C9999\n"));
+    assert!(!csv.contains("C16133"));
+}
+
 fn assembly_report(scope: &str) -> (Vec<u8>, Value) {
     let output = Command::new(env!("CARGO_BIN_EXE_pcbc"))
         .arg("ipc")

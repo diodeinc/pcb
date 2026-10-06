@@ -55,7 +55,11 @@ impl<'a> IpcAccessor<'a> {
                 let val_str = self.ipc.resolve(val).to_string();
 
                 match name_lower.as_str() {
-                    "package" | "footprint" => data.package = Some(val_str),
+                    "package" | "footprint" => {
+                        if !val_str.trim().is_empty() {
+                            data.package = Some(val_str);
+                        }
+                    }
                     "value" => data.value = Some(val_str),
                     "path" => data.path = Some(val_str),
                     "alternatives" => {
