@@ -55,7 +55,7 @@ enum Commands {
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
         #[arg(short, long, default_value = "text")]
-        format: OutputFormat,
+        format: commands::bom::BomFormat,
         /// Run in offline mode without fetching part availability
         #[arg(long)]
         offline: bool,
