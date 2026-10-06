@@ -22,10 +22,7 @@ const excludedArtifacts = [
   'bom',
   'gerbers',
   'cpl',
-  'assembly',
-  'odb',
   'ipc2581',
-  'step',
   'vrml',
 ]
 

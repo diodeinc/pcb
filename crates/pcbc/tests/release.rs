@@ -147,13 +147,7 @@ fn source_only_args(board_zen: &str) -> Vec<&str> {
         "--exclude",
         "cpl",
         "--exclude",
-        "assembly",
-        "--exclude",
-        "odb",
-        "--exclude",
         "ipc2581",
-        "--exclude",
-        "step",
         "--exclude",
         "vrml",
     ]
