@@ -140,14 +140,14 @@ struct BomLine {
     design_entry: DesignBomEntry,
     #[serde(rename = "match")]
     match_status: BomMatchStatus,
-    #[serde(default)]
     ranked: HashMap<Geography, Vec<RankedOffer>>,
 }
 
 /// Response from /api/boms/match endpoint
 #[derive(Debug, Deserialize)]
 struct MatchBomResponse {
-    results: Vec<BomLine>,
+    #[serde(alias = "results")]
+    lines: Vec<BomLine>,
     offers: HashMap<String, ComponentOffer>,
 }
 
@@ -267,7 +267,7 @@ pub fn match_bom_with_context(
 }
 
 fn apply_bom_match(bom: &mut pcb_sch::bom::Bom, response: &MatchBomResponse) {
-    for line in &response.results {
+    for line in &response.lines {
         let Some(path) = line.design_entry.path.as_deref() else {
             continue;
         };
@@ -341,7 +341,7 @@ pub fn fetch_pricing_grouped_batch(
 
     let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
     let response = call_bom_match_api(&ctx, auth_token, &design_bom.into(), 30)?;
-    for line in &response.results {
+    for line in &response.lines {
         let slot = line
             .design_entry
             .path
@@ -418,7 +418,7 @@ mod tests {
             .collect::<serde_json::Map<_, _>>();
         let matched = !us.is_empty() || !global.is_empty();
         serde_json::json!({
-            "results": [{
+            "lines": [{
                 "designEntry": {"path": "root.U1"},
                 "match": if matched { "MATCH_COMPATIBLE" } else { "MATCH_FAILED" },
                 "ranked": {"US": ranked(us), "GLOBAL": ranked(global)}
@@ -498,9 +498,9 @@ mod tests {
     fn inconsistent_lines_degrade_without_failing_the_match() {
         let mut matched = response(&["us"], &[]);
         matched.offers.clear();
-        let mut unknown = response(&["us"], &[]).results.remove(0);
+        let mut unknown = response(&["us"], &[]).lines.remove(0);
         unknown.design_entry.path = Some("root.UNKNOWN".to_string());
-        matched.results.push(unknown);
+        matched.lines.push(unknown);
         let mut bom = test_bom();
         apply_bom_match(&mut bom, &matched);
 
