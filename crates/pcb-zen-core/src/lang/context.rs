@@ -95,6 +95,14 @@ pub struct FrozenContextValue {
     pub(crate) pending_children: Vec<FrozenPendingChild>,
 }
 
+impl FrozenContextValue {
+    /// The evaluated module, e.g. to read its `io()`/`config()` signature
+    /// (with declaration spans) from a `ModuleLoader` for editor intelligence.
+    pub fn module(&self) -> &FrozenModuleValue {
+        &self.module
+    }
+}
+
 impl Freeze for ContextValue<'_> {
     type Frozen = FrozenContextValue;
 
