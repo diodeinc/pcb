@@ -43,6 +43,9 @@ def compare(tmp_path, monkeypatch):
         ("Plated,1,4,PTH", "NonPlated,1,4,NPTH"),
         ("Plated,1,2,Blind", "Plated,1,4,Blind"),
         ("Plated,2,5,Buried", "Plated,3,5,Buried"),
+        ("Plated,1,4,PTH", "Plated,1,4,Blind"),
+        ("NonPlated,1,4,NPTH", "NonPlated,1,4,Blind"),
+        ("Plated,2,4,Blind", "Plated,2,4,Buried"),
     ],
 )
 @pytest.mark.parametrize(
@@ -58,8 +61,7 @@ def test_swapped_groups_cannot_cancel(compare, first, second, body):
     )
     assert result.failed()
     assert len(result.missing) == len(result.extra) == 2
-    plating, start, end, _ = first.split(",")
-    assert any(f"{plating} layers {start}-{end}:" in s for s in result.missing)
+    assert any(s.startswith(f"{first}:") for s in result.missing)
 
 
 def test_same_group_matches_across_files_and_reversed_slot_endpoints(compare):
@@ -82,8 +84,21 @@ def test_same_group_matches_across_files_and_reversed_slot_endpoints(compare):
 
 def test_missing_group_reports_geometry(compare):
     result = compare({"a.drl": drill(header("NonPlated,1,4,NPTH"), "X10.0Y20.0")}, {})
-    assert result.missing == ["NonPlated layers 1-4: hole d=0.600 at (10.000, 20.000)"]
+    assert result.missing == ["NonPlated,1,4,NPTH: hole d=0.600 at (10.000, 20.000)"]
     assert not result.extra
+
+
+@pytest.mark.parametrize(
+    "function", ["Plated,1,4,PTH", "NonPlated,2,4,Blind", "NonPlated,2,4,Buried"]
+)
+def test_layer_order_and_optional_label_do_not_change_function(compare, function):
+    plating, first, last, kind = function.split(",")
+    body = "X10.0Y20.0G85X12.0Y23.0"
+    result = compare(
+        {"a.drl": drill(header(function), body)},
+        {"b.drl": drill(header(f"{plating},{last},{first},{kind},Rout"), body)},
+    )
+    assert result == diff.DrillResult(0, 0, 1, 1, [], [])
 
 
 @pytest.mark.parametrize(
@@ -92,8 +107,12 @@ def test_missing_group_reports_geometry(compare):
         "",
         header("MixedPlating,1,4"),
         header("Plated,0,4,PTH"),
-        header("Plated,4,1,PTH"),
         header("Plated,1,1,PTH"),
+        header("Plated,1,4,NPTH"),
+        header("NonPlated,1,4,PTH"),
+        header("Plated,2,4,PTH"),
+        header("NonPlated,2,4,NPTH"),
+        header("Plated,1,4,Buried"),
         header("Plated,1,4,PTH") + "\n" + header("NonPlated,1,4,NPTH"),
     ],
 )
