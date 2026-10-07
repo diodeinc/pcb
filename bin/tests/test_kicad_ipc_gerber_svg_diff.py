@@ -1,4 +1,4 @@
-"""Run with uv run --with numpy --with pillow --with scipy pytest bin/tests."""
+"""Run with uv run --locked pytest bin/tests."""
 
 from __future__ import annotations
 
