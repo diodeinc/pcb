@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Scan S-expression tokens in runs using one parser for strings and buffered readers.
 - Reduce schematic reconciliation copies and repeated work by sharing symbol trees, caching definitions, and reusing connectivity inspections.
+- Share page traversal across connectivity readers and use petgraph for union-find.
 
 ### Added
 

@@ -315,46 +315,25 @@ mod tests {
     const MULTI: &str = r#"(symbol "Multi" (symbol "Multi_3_1") (symbol "Multi_0_1") (symbol "Multi_1_1") (symbol "Multi_3_2"))"#;
     const OTHER: &str = r#"(symbol "Other" (symbol "Other_2_1"))"#;
 
-    fn component(key: &str, value: AttributeValue) -> Instance {
-        let mut instance =
-            Instance::new(ModuleRef::new("test.zen", "Test"), InstanceKind::Component);
-        instance.attributes.insert(key.into(), value);
-        instance
-    }
-
     #[test]
     fn repeated_raw_definitions_share_units_and_slots_are_sorted() -> Result<()> {
         let mut netlist = Schematic::new();
+        let module = ModuleRef::new("test.zen", "Test");
         netlist.symbols.insert("lib:Multi".into(), MULTI.into());
         netlist.symbols.insert("alias:Multi".into(), MULTI.into());
-        for (path, instance) in [
-            (
-                "Z",
-                component(SYMBOL_VALUE_ATTR, AttributeValue::String(MULTI.into())),
-            ),
-            (
-                "B",
-                component(SYMBOL_PATH_ATTR, AttributeValue::String("lib:Multi".into())),
-            ),
-            (
-                "C",
-                component(
-                    SYMBOL_PATH_ATTR,
-                    AttributeValue::String("alias:Multi".into()),
-                ),
-            ),
-            (
-                "A",
-                component(SYMBOL_VALUE_ATTR, AttributeValue::String(OTHER.into())),
-            ),
-            (
-                "D",
-                Instance::new(ModuleRef::new("test.zen", "Test"), InstanceKind::Component),
-            ),
+        netlist.add_instance(
+            InstanceRef::new(module.clone(), vec!["D".into()]),
+            Instance::component(module.clone()),
+        );
+        for (path, key, value) in [
+            ("Z", SYMBOL_VALUE_ATTR, MULTI),
+            ("B", SYMBOL_PATH_ATTR, "lib:Multi"),
+            ("C", SYMBOL_PATH_ATTR, "alias:Multi"),
+            ("A", SYMBOL_VALUE_ATTR, OTHER),
         ] {
-            netlist.instances.insert(
-                InstanceRef::new(instance.type_ref.clone(), vec![path.into()]),
-                instance,
+            netlist.add_instance(
+                InstanceRef::new(module.clone(), vec![path.into()]),
+                Instance::component(module.clone()).with_attribute(key, value.to_owned()),
             );
         }
         let expected = [

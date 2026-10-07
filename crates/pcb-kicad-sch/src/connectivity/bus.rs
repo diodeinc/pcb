@@ -200,7 +200,7 @@ pub(super) fn collect(instances: &[PageInstance<'_>]) -> Result<Vec<PageBuses>> 
         let mut uf = UnionFind::new(nodes.len());
         union_touching(&nodes, &mut uf);
         for claim in &claims[first_claim..] {
-            clusters.push((page_index, uf.find(claim.node)));
+            clusters.push((page_index, uf.find_mut(claim.node)));
         }
         pages.push(page);
     }
@@ -243,7 +243,7 @@ pub(super) fn collect(instances: &[PageInstance<'_>]) -> Result<Vec<PageBuses>> 
     let mut by_bundle = BTreeMap::<usize, Vec<usize>>::new();
     for index in 0..claims.len() {
         by_bundle
-            .entry(bundles.find(index))
+            .entry(bundles.find_mut(index))
             .or_default()
             .push(index);
     }
