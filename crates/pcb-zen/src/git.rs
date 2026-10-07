@@ -182,7 +182,7 @@ fn run_lines(cmd: Command) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn run_with_input(mut cmd: Command, input: &str) -> anyhow::Result<String> {
+fn run_with_input(mut cmd: Command, input: &str) -> anyhow::Result<Vec<u8>> {
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -197,7 +197,7 @@ fn run_with_input(mut cmd: Command, input: &str) -> anyhow::Result<String> {
     })?;
 
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        Ok(output.stdout)
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("git command failed: {}", stderr.trim())
@@ -522,7 +522,7 @@ pub(crate) fn tag_annotations(
     cmd.env("GIT_NO_LAZY_FETCH", "1")
         .args(["cat-file", "--batch"]);
     let output = run_with_input(cmd, &input)?;
-    let mut bytes = output.as_bytes();
+    let mut bytes = output.as_slice();
     let mut annotations = HashMap::new();
     for tag in tags {
         let end = bytes
@@ -543,7 +543,8 @@ pub(crate) fn tag_annotations(
             "Truncated tag object {}",
             tag.name
         );
-        let object = std::str::from_utf8(&bytes[..size])?;
+        // Decode only after framing: legacy annotations may not be UTF-8.
+        let object = String::from_utf8_lossy(&bytes[..size]);
         let (_, message) = object
             .split_once("\n\n")
             .context("Missing tag annotation")?;
@@ -819,7 +820,7 @@ pub fn fetch_missing_blobs(repo_root: &Path, treeishes: &[String]) -> anyhow::Re
         "--stdin",
     ]);
     let listing = run_with_input(cmd, &format!("{}\n", treeishes.join("\n")))?;
-    let missing: String = listing
+    let missing: String = String::from_utf8_lossy(&listing)
         .lines()
         .filter_map(|line| line.strip_prefix('?'))
         .map(|oid| format!("{oid}\n"))

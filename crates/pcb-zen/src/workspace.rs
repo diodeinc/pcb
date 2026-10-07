@@ -186,8 +186,8 @@ fn latest_package_tags(
         .map(|(url, pkg)| {
             let tag_path = match (workspace_path, pkg.rel_path.as_os_str().is_empty()) {
                 (Some(path), true) => path.to_string(),
-                (Some(path), false) => format!("{}/{}", path, pkg.rel_path.to_string_lossy()),
-                (None, _) => pkg.rel_path.to_string_lossy().into_owned(),
+                (Some(path), false) => format!("{}/{}", path, pkg.rel_path.to_slash_lossy()),
+                (None, _) => pkg.rel_path.to_slash_lossy().into_owned(),
             };
             (tag_path, url.clone())
         })
@@ -414,5 +414,79 @@ fn add_path_patched_forks<F: FileProvider>(file_provider: &F, info: &mut Workspa
                 symbol_files: Vec::new(),
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inventory_reads_nested_releases_with_non_utf8_annotations() -> Result<()> {
+        let repo = tempfile::tempdir()?;
+        let root = repo.path();
+        for name in ["a", "b"] {
+            let dir = root.join("parts").join(name);
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(dir.join("pcb.toml"), "")?;
+        }
+        git::run_in(root, &["init", "--quiet"])?;
+        git::run_in(root, &["config", "user.name", "Test"])?;
+        git::run_in(root, &["config", "user.email", "test@example.com"])?;
+        git::run_in(
+            root,
+            &[
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "release",
+            ],
+        )?;
+        let commit = git::run_output(root, &["rev-parse", "HEAD"])?;
+        let hash = "h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        // Exercise both tag-path branches with native filesystem separators.
+        for (prefix, config) in [("", ""), ("registry/", "path = \"registry\"\n")] {
+            std::fs::write(
+                root.join("pcb.toml"),
+                format!("[workspace]\nrepository = \"example.com/repo\"\n{config}"),
+            )?;
+            for name in ["a", "b"] {
+                let mut message = b"Legacy caf\xe9\n".to_vec();
+                if name == "a" {
+                    message.extend_from_slice(
+                        format!("example.com/repo/{prefix}parts/a v1.2.0 {hash}\n").as_bytes(),
+                    );
+                }
+                std::fs::write(root.join("message"), message)?;
+                git::run_in(
+                    root,
+                    &[
+                        "tag",
+                        "-a",
+                        &format!("{prefix}parts/{name}/v1.2.0"),
+                        "-F",
+                        "message",
+                    ],
+                )?;
+            }
+            let inventory = package_inventory(root)?;
+            assert_eq!(inventory.len(), 2);
+            for (package, name) in inventory.iter().zip(["a", "b"]) {
+                assert_eq!(package.path, format!("parts/{name}"));
+                let release = package
+                    .release
+                    .as_ref()
+                    .expect("nested package is published");
+                assert_eq!(release.version, "1.2.0");
+                assert_eq!(release.commit, commit.trim());
+                assert_eq!(
+                    release.content_hash.as_deref(),
+                    (name == "a").then_some(hash)
+                );
+            }
+        }
+        Ok(())
     }
 }
