@@ -2230,7 +2230,6 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 
 ### Added
 
-- Support `schematic="embed"/"collapse"` as a top-level kwarg
 - Add `dirty` status to `pcb info -f json` output
 - Warn on duplicate module name
 
