@@ -15,7 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Reduce schematic load and reconciliation work with shared symbol definitions, buffered parsing, and connectivity inspection reuse.
+- Speed up schematic loading and reconciliation.
 
 ## [0.4.73] - 2026-10-07
 
