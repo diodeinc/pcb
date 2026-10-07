@@ -20,6 +20,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Collect schematic pins without building a connectivity graph when only pin geometry is needed.
 - Reuse parsed local symbol definitions and unit lists for repeated netlist symbol definitions during schematic reconciliation.
 - Reuse the intermediate connectivity inspection when reconciliation needs neither electrical repair nor obsolete-page removal, instead of rescanning the final document.
+- Skip initial electrical inspection during read-only projection when no sheet restoration or symbol removal is needed, while retaining final verification and invalid-input recovery.
+- Reuse the candidate path while finding a port's owning component instead of cloning each prefix.
 
 ### Added
 

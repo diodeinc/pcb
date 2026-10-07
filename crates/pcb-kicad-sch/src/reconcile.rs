@@ -216,10 +216,15 @@ pub fn reconcile_read_only(
     netlist: &Schematic,
 ) -> Result<(SchDocument, ConnectivityInspection)> {
     component_slots::validate_symbol_library_versions(netlist)?;
-    // Full composition also uses initial issues to restore missing sheets and
-    // remove unbound symbols. Preserve that behavior, including invalid inputs
-    // that composition can repair, rather than treating this as selected repair.
-    let inspection_before = inspect_schematic(document, netlist).ok();
+    // Complete projection discovers electrical repairs after projecting symbols.
+    // Initial inspection only contributes sheet restoration and symbol removals.
+    // If neither is possible, even a failed inspection would contribute nothing.
+    // Otherwise preserve the existing inspection/error-recovery behavior.
+    let inspection_before = if needs_initial_structural_repairs(document, netlist).unwrap_or(true) {
+        inspect_schematic(document, netlist).ok()
+    } else {
+        None
+    };
     let (desired, inspection_after) = compose::reconcile_document(
         Some(document),
         netlist,
@@ -235,6 +240,40 @@ pub fn reconcile_read_only(
         );
     }
     Ok((desired, inspection_after))
+}
+
+fn needs_initial_structural_repairs(document: &SchDocument, netlist: &Schematic) -> Result<bool> {
+    let expected = component_slots::component_symbol_slots(netlist)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    for page in &document.pages {
+        for item in &page.items {
+            match item {
+                crate::SchItem::Sheet(sheet) if !sheet.placed => return Ok(true),
+                crate::SchItem::Symbol(symbol) => {
+                    if symbol
+                        .field_value("Path")
+                        .and_then(|path| crate::SymbolSlotKey::new(path, symbol.unit))
+                        .is_some_and(|slot| expected.contains(&slot))
+                    {
+                        continue;
+                    }
+                    let Some(definition) = page.library.definitions.get(symbol.library_key())
+                    else {
+                        return Ok(true);
+                    };
+                    let definition = crate::symbol::ParsedSymbolDefinition::parse(definition)?;
+                    if definition.power_scope().is_none()
+                        && !definition.is_unmanaged_graphic(symbol)
+                    {
+                        return Ok(true);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Refresh assembly properties owned by the Zener netlist without changing
@@ -440,6 +479,18 @@ mod tests {
     use super::*;
     use crate::{SchPage, root_page_id};
 
+    fn assert_read_only_outcome_matches_plan(document: &SchDocument, netlist: &Schematic) {
+        match plan_reconciliation(Some(document), netlist, "root.kicad_sch") {
+            Ok(_) => {
+                assert_read_only_matches_plan(document, netlist);
+            }
+            Err(planned) => {
+                let direct = reconcile_read_only(document, netlist).unwrap_err();
+                assert_eq!(format!("{direct:#}"), format!("{planned:#}"));
+            }
+        }
+    }
+
     fn assert_read_only_matches_plan(document: &SchDocument, netlist: &Schematic) -> SchDocument {
         let before = document.clone();
         let plan = plan_reconciliation(Some(document), netlist, "root.kicad_sch").unwrap();
@@ -462,6 +513,7 @@ mod tests {
         document.pages[0]
             .items
             .retain(|item| !matches!(item, crate::SchItem::Label(_)));
+        assert!(!needs_initial_structural_repairs(&document, &netlist).unwrap());
         assert!(
             !inspect_schematic(&document, &netlist)
                 .unwrap()
@@ -478,6 +530,7 @@ mod tests {
             .unwrap()
             .apply(None)
             .unwrap();
+        assert!(!needs_initial_structural_repairs(&document, &netlist).unwrap());
         for instance in netlist
             .instances
             .values_mut()
@@ -549,7 +602,140 @@ mod tests {
                         .retain(|i| !matches!(i, crate::SchItem::NoConnect(_)));
                 }
             }
+            assert_eq!(
+                needs_initial_structural_repairs(&document, &netlist).unwrap(),
+                project == "hierarchy"
+            );
             assert_read_only_matches_plan(&document, &netlist);
+            if project == "hierarchy" {
+                for page in &mut document.pages {
+                    page.library.definitions.clear();
+                }
+                assert!(needs_initial_structural_repairs(&document, &netlist).unwrap());
+                assert!(inspect_schematic(&document, &netlist).is_err());
+                assert_read_only_outcome_matches_plan(&document, &netlist);
+            }
+        }
+    }
+
+    #[test]
+    fn read_only_matches_expected_slot_projection_and_invalid_recovery() {
+        let netlist = common::compile_fixture("analysis", "simple.zen");
+        let document = plan_reconciliation(None, &netlist, "root.kicad_sch")
+            .unwrap()
+            .apply(None)
+            .unwrap();
+        let index = document.pages[0]
+            .items
+            .iter()
+            .position(
+                |item| matches!(item, crate::SchItem::Symbol(s) if s.field_value("Path").is_some()),
+            )
+            .unwrap();
+
+        // Missing slots need no initial removal; projection creates them.
+        let mut missing = document.clone();
+        missing.pages[0].items.remove(index);
+        assert!(!needs_initial_structural_repairs(&missing, &netlist).unwrap());
+        assert_read_only_matches_plan(&missing, &netlist);
+
+        // A duplicate expected slot is still eligible, with or without a unique UUID.
+        for duplicate_uuid in [false, true] {
+            let mut duplicate = document.clone();
+            let mut item = duplicate.pages[0].items[index].clone();
+            if let crate::SchItem::Symbol(symbol) = &mut item
+                && !duplicate_uuid {
+                    symbol.id = "duplicate-slot".into();
+                }
+            duplicate.pages[0].items.push(item);
+            assert!(!needs_initial_structural_repairs(&duplicate, &netlist).unwrap());
+            if duplicate_uuid {
+                assert!(inspect_schematic(&duplicate, &netlist).is_err());
+            }
+            assert_read_only_matches_plan(&duplicate, &netlist);
+        }
+
+        // Expected identities can refresh missing cached definitions without inspection.
+        let mut uncached = document.clone();
+        uncached.pages[0].library.definitions.clear();
+        assert!(!needs_initial_structural_repairs(&uncached, &netlist).unwrap());
+        assert!(inspect_schematic(&uncached, &netlist).is_err());
+        assert_read_only_matches_plan(&uncached, &netlist);
+
+        // Retain the canonical UUID while making its occupant unbound or mismatched.
+        // Initial removal is essential before projection tries to fill the missing slot.
+        for mismatch in [false, true] {
+            let mut unbound = document.clone();
+            let crate::SchItem::Symbol(symbol) = &mut unbound.pages[0].items[index] else {
+                unreachable!();
+            };
+            if mismatch {
+                symbol.fields.get_mut("Path").unwrap().value = "absent-component".into();
+            } else {
+                symbol.fields.remove("Path");
+            }
+            assert!(needs_initial_structural_repairs(&unbound, &netlist).unwrap());
+            assert_read_only_matches_plan(&unbound, &netlist);
+        }
+    }
+
+    #[test]
+    fn read_only_native_classification_uses_exact_power_and_graphic_predicates() {
+        let netlist = common::compile_fixture("analysis", "simple.zen");
+        let document = plan_reconciliation(None, &netlist, "root.kicad_sch")
+            .unwrap()
+            .apply(None)
+            .unwrap();
+        for power in [false, true] {
+            let mut native = document.clone();
+            let mut symbol = native.pages[0]
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    crate::SchItem::Symbol(symbol) => Some(symbol.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            symbol.id = "native-artwork".into();
+            symbol.lib_id = "Test:Native".into();
+            symbol.lib_name = None;
+            symbol.fields.remove("Path");
+            symbol.on_board = power;
+            symbol.pins.clear();
+            let definition = crate::SymbolDefinition::from_kicad_symbol_sexpr(&format!(
+                "(symbol \"Test:Native\" {})",
+                if power { "(power global)" } else { "" }
+            ))
+            .unwrap();
+            native.pages[0]
+                .library
+                .definitions
+                .insert(symbol.lib_id.clone(), definition);
+            native.pages[0].items.push(crate::SchItem::Symbol(symbol));
+            assert!(!needs_initial_structural_repairs(&native, &netlist).unwrap());
+            assert_read_only_matches_plan(&native, &netlist);
+            if !power {
+                let crate::SchItem::Symbol(symbol) = native.pages[0].items.last_mut().unwrap()
+                else {
+                    unreachable!();
+                };
+                symbol.on_board = true;
+                assert!(needs_initial_structural_repairs(&native, &netlist).unwrap());
+                assert_read_only_matches_plan(&native, &netlist);
+            }
+            native.pages[0].library.definitions.remove("Test:Native");
+            assert!(needs_initial_structural_repairs(&native, &netlist).unwrap());
+            assert_read_only_outcome_matches_plan(&native, &netlist);
+            let invalid = crate::SymbolDefinition::from_kicad_symbol_sexpr(
+                "(symbol \"Test:Native\" (power invalid))",
+            )
+            .unwrap();
+            native.pages[0]
+                .library
+                .definitions
+                .insert("Test:Native".into(), invalid);
+            assert!(needs_initial_structural_repairs(&native, &netlist).is_err());
+            assert_read_only_outcome_matches_plan(&native, &netlist);
         }
     }
 
