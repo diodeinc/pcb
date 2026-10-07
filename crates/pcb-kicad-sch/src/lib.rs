@@ -6,9 +6,6 @@
 //! The crate performs no filesystem operations; callers supply and persist
 //! schematic sources.
 
-#[cfg(test)]
-extern crate self as pcb_kicad_sch;
-
 pub(crate) const CONNECTION_GRID_MM: f64 = 1.27;
 pub(crate) const GEOMETRY_EPS_MM: f64 = 1.0e-9;
 

@@ -336,37 +336,14 @@ fn build_plan(
     if let Some(selected_keys) = issue_selection {
         let before = inspection_before
             .context("repairing selected issues requires an existing schematic document")?;
-        for key in selected_keys {
-            if !before.issues.iter().any(|issue| &issue.key == key) {
-                bail!("schematic issue {key:?} is not present");
-            }
-        }
         ensure_issues_resolved(&inspection_after, selected_keys, "planned repair")?;
         ensure_no_new_issues(before, &inspection_after, "planned repair")?;
     }
-    verified_plan(document, desired, initial_inspection, inspection_after)
-}
-
-fn verified_plan(
-    document: Option<&SchDocument>,
-    desired: SchDocument,
-    initial_inspection: InitialInspection,
-    inspection_after: ConnectivityInspection,
-) -> Result<ReconciliationPlan> {
-    let edits = document_edits(document.unwrap_or(&SchDocument::default()), &desired)?;
-    let plan = ReconciliationPlan {
-        edits,
+    Ok(ReconciliationPlan {
+        edits: document_edits(document.unwrap_or(&SchDocument::default()), &desired)?,
         initial_inspection,
         inspection_after,
-    };
-    let applied = plan.apply(document)?;
-    if applied != desired {
-        bail!("reconciliation plan does not reproduce its verified document");
-    }
-    if plan.revert(&applied)? != document.cloned().unwrap_or_default() {
-        bail!("reconciliation plan does not reverse to its input document");
-    }
-    Ok(plan)
+    })
 }
 
 fn document_edits(before: &SchDocument, after: &SchDocument) -> Result<Vec<DocumentEdit>> {

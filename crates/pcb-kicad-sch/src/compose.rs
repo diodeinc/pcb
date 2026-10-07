@@ -83,9 +83,10 @@ pub(crate) fn reconcile_document(
         .context("KiCad schematic project has no loaded root page")?;
 
     let existing_slots = existing_slot_locations(&document);
-    let expected_slots = component_slots::component_symbol_slots(netlist)?
+    let definitions = component_slots::component_symbols(netlist)?
         .into_iter()
-        .collect::<BTreeSet<_>>();
+        .collect::<BTreeMap<_, _>>();
+    let expected_slots = definitions.keys().cloned().collect::<BTreeSet<_>>();
     let RepairTargets {
         missing_sheets,
         project_slots,
@@ -191,10 +192,26 @@ pub(crate) fn reconcile_document(
         } else {
             hierarchy.page_for_new_component(slot.component_path())?
         };
+        let instance = instances.get(slot.component_path()).with_context(|| {
+            format!(
+                "component '{}' is absent from the netlist",
+                slot.component_path()
+            )
+        })?;
+        let definition = definitions
+            .get(slot)
+            .with_context(|| format!("symbol slot '{slot}' is absent from the netlist"))?
+            .as_ref()
+            .with_context(|| {
+                format!(
+                    "component '{}' has no KiCad symbol definition",
+                    slot.component_path()
+                )
+            })?;
         project_component_slot(
             &mut document,
             netlist,
-            &instances,
+            (instance, definition),
             slot,
             selected,
             page_index,
@@ -320,9 +337,7 @@ pub(crate) fn reconcile_document(
         prune_unused_symbol_definitions(&mut document);
         hierarchy::prune_obsolete_pages(&mut document, &self::linked_modules(netlist)?)?;
     }
-    // Annotation refresh and pruning unused definitions cannot alter connectivity.
-    // Page pruning can remove electrical items and shift page indices, so retain
-    // the intermediate inspection only when neither repair nor page removal ran.
+    // Only electrical edits or page removal invalidate the inspection.
     let inspection = if repairs_connectivity || document.pages.len() != page_count_before_cleanup {
         crate::analysis::inspect_schematic(&document, netlist)?
     } else {
@@ -428,26 +443,12 @@ fn repair_targets(
 fn project_component_slot(
     document: &mut SchDocument,
     netlist: &Schematic,
-    instances: &BTreeMap<String, &Instance>,
+    (instance, definition): (&Instance, &SymbolDefinition),
     slot: &SymbolSlotKey,
     selected: Option<&ExistingSymbol>,
     page_index: usize,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
 ) -> Result<()> {
-    let instance = instances.get(slot.component_path()).with_context(|| {
-        format!(
-            "component '{}' is absent from the netlist",
-            slot.component_path()
-        )
-    })?;
-    let definition = component_slots::component_symbol_definition(netlist, instance)?
-        .with_context(|| {
-            format!(
-                "component '{}' has no KiCad symbol definition",
-                slot.component_path()
-            )
-        })?;
-
     let symbol_id = slot.symbol_id();
     if document.pages.iter().any(|page| {
         page.items.iter().any(|item| {
@@ -465,12 +466,12 @@ fn project_component_slot(
     let at = previous.map(|symbol| symbol.at).unwrap_or_default();
     let rotation = match previous {
         Some(symbol) => symbol.rotation,
-        None => initial_component_rotation(netlist, slot, &definition, net_symbol_specs)?,
+        None => initial_component_rotation(netlist, slot, definition, net_symbol_specs)?,
     };
     let mirror = previous.and_then(|symbol| symbol.mirror);
     // Derive fields and library identity from the authoritative definition, never a cache key.
     let mut symbol =
-        build_component_symbol(instance, slot, &definition, at, rotation, mirror, previous)?;
+        build_component_symbol(instance, slot, definition, at, rotation, mirror, previous)?;
 
     // A native save may give an instance its own presentation without changing
     // the library identity. Keep that presentation unless the symbol is replaced
@@ -484,10 +485,11 @@ fn project_component_slot(
             .definitions
             .get(previous.library_key())
         && symbol::ParsedSymbolDefinition::parse(cached)?
-            .same_pin_interface(&symbol::ParsedSymbolDefinition::parse(&definition)?)
+            .same_pin_interface(&symbol::ParsedSymbolDefinition::parse(definition)?)
     {
-        definition = cached.clone();
+        definition = cached;
     }
+    let definition = definition.clone();
     cache_symbol_definition(&mut document.pages[page_index], &mut symbol, &definition)?;
     if let Some(selected) = selected {
         let selected_page_id = document.pages[selected.page_index].id.clone();
@@ -2066,8 +2068,9 @@ pub(crate) fn plan_net_driver_kinds(
         .iter()
         .find_map(|id| document.pages.iter().position(|page| &page.id == id))
         .context("KiCad schematic project has no loaded root page")?;
-    let expected_slots = component_slots::component_symbol_slots(netlist)?
+    let expected_slots = component_slots::component_symbols(netlist)?
         .into_iter()
+        .map(|(slot, _)| slot)
         .collect::<BTreeSet<_>>();
     let placed = placed_symbols_from_document(document, &expected_slots)?;
     let targets = connectivity_targets(netlist, &placed, nets)?;

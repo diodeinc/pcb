@@ -697,7 +697,14 @@ where
                     continue;
                 }
                 StreamMode::Atom { start, bytes } => {
-                    if byte.is_ascii_whitespace() || byte == b'(' || byte == b')' {
+                    let len = buffer[i..]
+                        .iter()
+                        .position(|b| b.is_ascii_whitespace() || matches!(b, b'(' | b')'))
+                        .unwrap_or(buffer.len() - i);
+                    bytes.extend_from_slice(&buffer[i..i + len]);
+                    i += len;
+                    offset += len;
+                    if i < buffer.len() {
                         let node =
                             stream_parse_atom(std::mem::take(bytes), Span::new(*start, offset))?;
                         mode = StreamMode::Normal;
@@ -706,16 +713,7 @@ where
                             reader.consume(i);
                             return Ok(roots);
                         }
-                        continue;
                     }
-
-                    let len = buffer[i..]
-                        .iter()
-                        .position(|b| b.is_ascii_whitespace() || matches!(b, b'(' | b')'))
-                        .unwrap_or(buffer.len() - i);
-                    bytes.extend_from_slice(&buffer[i..i + len]);
-                    i += len;
-                    offset += len;
                     continue;
                 }
                 StreamMode::String {

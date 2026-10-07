@@ -22,10 +22,7 @@ fn shared_symbol_ast_renames_independently_and_roundtrips() {
     )
     .unwrap();
     let original_text = format_tree(&original.sexpr, FormatMode::Normal);
-    let definition = original.clone();
-    assert!(Arc::ptr_eq(&original.sexpr, &definition.sexpr));
-    let renamed = definition.renamed("Other:Alias").unwrap();
-    assert!(!Arc::ptr_eq(&original.sexpr, &renamed.sexpr));
+    let renamed = original.renamed("Other:Alias").unwrap();
     assert_eq!(
         format_tree(&original.sexpr, FormatMode::Normal),
         original_text

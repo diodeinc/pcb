@@ -15,13 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Scan S-expression tokens in runs using one parser for strings and buffered readers.
-- Reduce schematic reconciliation copies and repeated work by sharing symbol trees, caching definitions, and reusing connectivity inspections.
-- Share page traversal across connectivity readers and use petgraph for union-find.
-
-### Added
-
-- Read-only reconciliation uses the same verified projection as editable reconciliation without constructing undo history.
+- Reduce schematic load and reconciliation work with shared symbol definitions, buffered parsing, and connectivity inspection reuse.
 
 ## [0.4.73] - 2026-10-07
 

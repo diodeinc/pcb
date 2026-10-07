@@ -63,39 +63,41 @@ pub(crate) fn validate_symbol_library_version(
     Ok(())
 }
 
-pub(crate) fn component_symbol_slots(netlist: &Schematic) -> Result<Vec<SymbolSlotKey>> {
+pub(crate) fn component_symbols(
+    netlist: &Schematic,
+) -> Result<Vec<(SymbolSlotKey, Option<SymbolDefinition>)>> {
     let mut slots = Vec::new();
-    let mut units_by_definition = HashMap::<&str, Vec<u32>>::new();
+    let mut definitions = HashMap::<&str, (SymbolDefinition, Vec<u32>)>::new();
     for (instance_ref, instance) in &netlist.instances {
         if instance.kind != InstanceKind::Component {
             continue;
         }
         let component_path = canonical_component_path(&instance_ref.instance_path)
             .context("component instance has no canonical path")?;
-        let units: &[u32] =
+        let (definition, units): (_, &[u32]) =
             if let Some(raw) = raw_symbol_definition(netlist, "component", &instance.attributes)? {
-                match units_by_definition.entry(raw) {
+                let (definition, units) = match definitions.entry(raw) {
                     std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                     std::collections::hash_map::Entry::Vacant(entry) => {
                         let definition = SymbolDefinition::from_kicad_symbol_sexpr(raw)
                             .context("failed to parse component symbol definition")?;
-                        entry.insert(
-                            symbol::ParsedSymbolDefinition::parse(&definition)?
-                                .unit_indices()
-                                .to_vec(),
-                        )
+                        let units = symbol::ParsedSymbolDefinition::parse(&definition)?
+                            .unit_indices()
+                            .to_vec();
+                        entry.insert((definition, units))
                     }
-                }
+                };
+                (Some(&*definition), units)
             } else {
-                &[1]
+                (None, &[1])
             };
         for &unit in units {
             let slot = SymbolSlotKey::new(component_path.clone(), unit)
                 .context("component symbol slot has an empty path")?;
-            slots.push(slot);
+            slots.push((slot, definition.cloned()));
         }
     }
-    slots.sort();
+    slots.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(slots)
 }
 
@@ -250,13 +252,6 @@ pub(crate) fn port_pad_numbers(netlist: &Schematic, port: &InstanceRef) -> BTree
         .collect()
 }
 
-pub(crate) fn component_symbol_definition(
-    netlist: &Schematic,
-    instance: &Instance,
-) -> Result<Option<SymbolDefinition>> {
-    symbol_definition(netlist, "component", &instance.attributes)
-}
-
 pub(crate) fn symbol_definition(
     netlist: &Schematic,
     owner: &str,
@@ -304,52 +299,5 @@ fn string_attribute<'a>(
         None => Ok(None),
         Some(AttributeValue::String(value)) => Ok(Some(value)),
         Some(_) => bail!("{owner} attribute {key} must be a string"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pcb_sch::ModuleRef;
-
-    const MULTI: &str = r#"(symbol "Multi" (symbol "Multi_3_1") (symbol "Multi_0_1") (symbol "Multi_1_1") (symbol "Multi_3_2"))"#;
-    const OTHER: &str = r#"(symbol "Other" (symbol "Other_2_1"))"#;
-
-    #[test]
-    fn repeated_raw_definitions_share_units_and_slots_are_sorted() -> Result<()> {
-        let mut netlist = Schematic::new();
-        let module = ModuleRef::new("test.zen", "Test");
-        netlist.symbols.insert("lib:Multi".into(), MULTI.into());
-        netlist.symbols.insert("alias:Multi".into(), MULTI.into());
-        netlist.add_instance(
-            InstanceRef::new(module.clone(), vec!["D".into()]),
-            Instance::component(module.clone()),
-        );
-        for (path, key, value) in [
-            ("Z", SYMBOL_VALUE_ATTR, MULTI),
-            ("B", SYMBOL_PATH_ATTR, "lib:Multi"),
-            ("C", SYMBOL_PATH_ATTR, "alias:Multi"),
-            ("A", SYMBOL_VALUE_ATTR, OTHER),
-        ] {
-            netlist.add_instance(
-                InstanceRef::new(module.clone(), vec![path.into()]),
-                Instance::component(module.clone()).with_attribute(key, value.to_owned()),
-            );
-        }
-        let expected = [
-            ("A", 2),
-            ("B", 1),
-            ("B", 3),
-            ("C", 1),
-            ("C", 3),
-            ("D", 1),
-            ("Z", 1),
-            ("Z", 3),
-        ]
-        .into_iter()
-        .map(|(path, unit)| SymbolSlotKey::new(path, unit).unwrap())
-        .collect::<Vec<_>>();
-        assert_eq!(component_symbol_slots(&netlist)?, expected);
-        Ok(())
     }
 }

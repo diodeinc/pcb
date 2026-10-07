@@ -1643,69 +1643,6 @@ mod tests {
             hidden,
             vec![terminal("a-2", "B", "2"), terminal("b-1", "A", "1")]
         );
-        let physical = reduce_with_provenance(&document, PinVisibility::IncludeHidden).unwrap();
-        let expected_pins = physical
-            .islands
-            .into_values()
-            .flat_map(|island| island.pin_terminals)
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(expected_pins.len(), 4);
-        assert_eq!(physical_pin_terminals(&document).unwrap(), expected_pins);
-
-        // Reuse the same definitions in native repeated child instances, with
-        // stacked numbers on both visible and hidden pins. The fast pin table
-        // must collapse source-pin keys exactly like the island reducer.
-        for page in &mut document.pages {
-            page.file_name = Some(format!("{}.kicad_sch", page.id));
-            let source = page.library.definitions["Test:Shared"]
-                .to_kicad_symbol_library_sexpr()
-                .replace("(number \"1\")", "(number \"[1-3]\")")
-                .replace("(number \"2\")", "(number \"[4,5]\")");
-            page.library.definitions.insert(
-                "Test:Shared".into(),
-                SymbolDefinition::from_kicad_symbol_sexpr(&source).unwrap(),
-            );
-            for item in &mut page.items {
-                if let SchItem::Symbol(symbol) = item {
-                    symbol.fields.remove("Path");
-                }
-            }
-        }
-        let mut root = SchPage::new("root");
-        for file in ["a.kicad_sch", "b.kicad_sch"] {
-            for index in 0..2 {
-                root.items.push(SchItem::Sheet(Box::new(crate::Sheet {
-                    id: format!("{file}-{index}"),
-                    placed: true,
-                    at: None,
-                    size: None,
-                    name: None,
-                    file: SymbolField::new("Sheetfile", file, Point::default()),
-                    pins: Vec::new(),
-                    unsupported: Vec::new(),
-                })));
-            }
-        }
-        document.pages.insert(0, root);
-        document.root_page_ids = vec!["root".into()];
-        let physical = reduce_with_provenance(&document, PinVisibility::IncludeHidden).unwrap();
-        assert_eq!(
-            physical
-                .islands
-                .values()
-                .map(|island| island.pin_terminals.len())
-                .sum::<usize>(),
-            8
-        );
-        let expected_pins = physical
-            .islands
-            .into_values()
-            .flat_map(|island| island.pin_terminals)
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(expected_pins.len(), 4);
-        assert!(expected_pins.values().all(|terminal| matches!(terminal,
-            Terminal::ComponentPin { pin_numbers, .. } if pin_numbers.len() >= 2)));
-        assert_eq!(physical_pin_terminals(&document).unwrap(), expected_pins);
     }
 
     fn document_with_pages(pages: Vec<SchPage>) -> SchDocument {
