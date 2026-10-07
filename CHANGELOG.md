@@ -13,6 +13,18 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Release source bundles skip git-ignored files.
 - `pcb publish --check` removes its temporary staging directory when interrupted or terminated.
 
+### Changed
+
+- Parse in-memory S-expressions in UTF-8 runs instead of buffering individual bytes, while preserving streaming parsing behavior.
+- Share immutable S-expression trees with copy-on-write mutation to avoid deep cloning unchanged schematic data.
+- Collect schematic pins without building a connectivity graph when only pin geometry is needed.
+- Reuse parsed local symbol definitions and unit lists for repeated netlist symbol definitions during schematic reconciliation.
+- Reuse the intermediate connectivity inspection when reconciliation needs neither electrical repair nor obsolete-page removal, instead of rescanning the final document.
+
+### Added
+
+- Experimental verified read-only schematic projection without reversible edit-plan construction or its associated cloning and diffing.
+
 ## [0.4.73] - 2026-10-07
 
 ### Added

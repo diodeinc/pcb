@@ -43,11 +43,14 @@ pub(crate) fn reconcile_document(
     issue_selection: Option<&BTreeSet<SchematicIssueKey>>,
     placement_page_id: Option<&str>,
     inspection_before: Option<&ConnectivityInspection>,
-) -> Result<SchDocument> {
+) -> Result<(SchDocument, ConnectivityInspection)> {
     if issue_selection.is_some_and(BTreeSet::is_empty) {
-        return existing
-            .cloned()
-            .context("repairing selected issues requires an existing document");
+        let document =
+            existing.context("repairing selected issues requires an existing document")?;
+        return Ok((
+            document.clone(),
+            crate::analysis::inspect_schematic(document, netlist)?,
+        ));
     }
     let complete = issue_selection.is_none();
     // The generated document is not a canonical representation. Any existing
@@ -282,7 +285,8 @@ pub(crate) fn reconcile_document(
             .map(|issue| issue.key.clone())
             .collect::<BTreeSet<_>>()
     };
-    if creating || !repair_keys.is_empty() {
+    let repairs_connectivity = creating || !repair_keys.is_empty();
+    if repairs_connectivity {
         let intent = plan_connectivity_repair_core(
             &document,
             netlist,
@@ -311,11 +315,20 @@ pub(crate) fn reconcile_document(
 
     // Cleanup is a whole-document concern; a scoped repair must not
     // touch pages outside its selection.
+    let page_count_before_cleanup = document.pages.len();
     if complete {
         prune_unused_symbol_definitions(&mut document);
         hierarchy::prune_obsolete_pages(&mut document, &self::linked_modules(netlist)?)?;
     }
-    Ok(document)
+    // Annotation refresh and pruning unused definitions cannot alter connectivity.
+    // Page pruning can remove electrical items and shift page indices, so retain
+    // the intermediate inspection only when neither repair nor page removal ran.
+    let inspection = if repairs_connectivity || document.pages.len() != page_count_before_cleanup {
+        crate::analysis::inspect_schematic(&document, netlist)?
+    } else {
+        current
+    };
+    Ok((document, inspection))
 }
 
 fn is_connectivity_issue(issue: &SchematicIssue) -> bool {

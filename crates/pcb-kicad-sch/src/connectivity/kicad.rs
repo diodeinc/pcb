@@ -128,6 +128,39 @@ pub enum ConnectivityItemRef {
     },
 }
 
+/// All physical pins, including hidden pins, without building electrical islands.
+/// Union and driver resolution never alter a connectable's pin or terminal.
+pub(crate) fn physical_pin_terminals(
+    document: &SchDocument,
+) -> Result<BTreeMap<PhysicalPinRef, Terminal>> {
+    let instances = page_instances(document)?;
+    let buses = bus::collect(&instances)?;
+    let instance_counts = instances
+        .iter()
+        .fold(BTreeMap::new(), |mut counts, instance| {
+            *counts.entry(instance.page.id.as_str()).or_insert(0usize) += 1;
+            counts
+        });
+    let mut definitions =
+        BTreeMap::<String, BTreeMap<String, symbol::ParsedSymbolDefinition>>::new();
+    let mut pins = BTreeMap::new();
+    for (instance, buses) in instances.iter().zip(&buses) {
+        let (_, connectables) = collect_page_connectables(
+            instance,
+            instance_counts[instance.page.id.as_str()] > 1,
+            definitions.entry(instance.page.id.clone()).or_default(),
+            PinVisibility::IncludeHidden,
+            buses,
+        )?;
+        pins.extend(
+            connectables
+                .into_iter()
+                .filter_map(|item| item.pin.zip(item.terminal)),
+        );
+    }
+    Ok(pins)
+}
+
 pub(crate) fn reduce_with_provenance(
     document: &SchDocument,
     pin_visibility: PinVisibility,
@@ -149,7 +182,7 @@ pub(crate) fn reduce_with_provenance(
         let definitions = parsed_definitions
             .entry(instance.page.id.clone())
             .or_default();
-        let reduced = reduce_page(
+        let mut reduced = reduce_page(
             instance,
             instance_counts[instance.page.id.as_str()] > 1,
             definitions,
@@ -157,8 +190,8 @@ pub(crate) fn reduce_with_provenance(
             buses,
         )?;
         components.extend(reduced.components);
-        for group in &reduced.groups {
-            islands.insert(group.island.clone(), group.provenance.clone());
+        for group in &mut reduced.groups {
+            islands.insert(group.island.clone(), std::mem::take(&mut group.provenance));
         }
         groups.extend(reduced.groups);
     }

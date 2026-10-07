@@ -15,6 +15,7 @@ pub mod edit;
 pub mod formatter;
 pub mod kicad;
 pub mod scan;
+mod slice;
 
 use std::fmt;
 use std::io::BufRead;
@@ -489,12 +490,8 @@ impl From<bool> for Sexpr {
 /// Parse a string into an S-expression
 pub fn parse(input: &str) -> Result<Sexpr, ParseError> {
     log::trace!("Parsing S-expression from {} bytes of input", input.len());
-    let result = finish_in_memory_parse(parse_stream(
-        std::io::Cursor::new(input.as_bytes()),
-        Some(1),
-        |_node| true,
-    ))
-    .and_then(|roots| roots.into_iter().next().ok_or(ParseError::UnexpectedEof));
+    let result = slice::parse(input, Some(1))
+        .and_then(|roots| roots.into_iter().next().ok_or(ParseError::UnexpectedEof));
     match &result {
         Ok(_) => log::trace!("Successfully parsed S-expression"),
         Err(e) => log::trace!("Failed to parse S-expression: {e:?}"),
@@ -508,11 +505,7 @@ pub fn parse_all(input: &str) -> Result<Vec<Sexpr>, ParseError> {
         "Parsing multiple S-expressions from {} bytes of input",
         input.len()
     );
-    let result = finish_in_memory_parse(parse_stream(
-        std::io::Cursor::new(input.as_bytes()),
-        None,
-        |_node| true,
-    ));
+    let result = slice::parse(input, None);
     match &result {
         Ok(exprs) => log::trace!("Successfully parsed {} S-expressions", exprs.len()),
         Err(e) => log::trace!("Failed to parse S-expressions: {e:?}"),
@@ -590,21 +583,24 @@ impl From<std::string::FromUtf8Error> for StreamParseError {
 
 fn stream_parse_atom(bytes: Vec<u8>, span: Span) -> Result<Sexpr, StreamParseError> {
     let atom_str = String::from_utf8(bytes)?;
+    Ok(parse_owned_atom(atom_str, span))
+}
 
+fn parse_owned_atom(atom_str: String, span: Span) -> Sexpr {
     if let Ok(int_val) = atom_str.parse::<i64>() {
-        Ok(Sexpr {
+        Sexpr {
             kind: SexprKind::Int(int_val),
             span,
             raw_atom: Some(atom_str),
-        })
+        }
     } else if let Ok(float_val) = atom_str.parse::<f64>() {
-        Ok(Sexpr {
+        Sexpr {
             kind: SexprKind::F64(float_val),
             span,
             raw_atom: Some(atom_str),
-        })
+        }
     } else {
-        Ok(Sexpr::with_span(SexprKind::Symbol(atom_str), span))
+        Sexpr::with_span(SexprKind::Symbol(atom_str), span)
     }
 }
 
@@ -773,6 +769,7 @@ where
     Ok(roots)
 }
 
+#[cfg(test)]
 fn finish_in_memory_parse<T>(result: Result<T, StreamParseError>) -> Result<T, ParseError> {
     match result {
         Ok(value) => Ok(value),

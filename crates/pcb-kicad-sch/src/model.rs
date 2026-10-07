@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use pcb_sexpr::Sexpr;
 use serde::{Deserialize, Serialize};
@@ -29,7 +30,7 @@ pub struct SymbolDefinition {
     pub lib_id: LibId,
     /// Raw KiCad library-symbol S-expression. We keep this opaque until the
     /// editor needs to own symbol graphics and pin definitions directly.
-    pub sexpr: Sexpr,
+    pub sexpr: Arc<Sexpr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

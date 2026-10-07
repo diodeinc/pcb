@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use pcb_sexpr::{
@@ -104,8 +105,7 @@ impl SymbolDefinition {
     /// Rename the library/cache key and unit-section prefixes, preserving all content.
     pub fn renamed(&self, name: &str) -> Result<Self> {
         let mut definition = self.clone();
-        let items = definition
-            .sexpr
+        let items = Arc::make_mut(&mut definition.sexpr)
             .as_list_mut()
             .context("expected symbol list")?;
         items[1] = Sexpr::string(name);
@@ -388,7 +388,10 @@ fn symbol_definition_from_symbol_items(
     let mut sexpr = root.clone();
     normalize_internal_metadata_properties(&mut sexpr);
 
-    Some(SymbolDefinition { lib_id, sexpr })
+    Some(SymbolDefinition {
+        lib_id,
+        sexpr: Arc::new(sexpr),
+    })
 }
 
 fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
@@ -1436,7 +1439,7 @@ fn library_to_sexpr(library: &SymbolLibrary) -> Sexpr {
         library
             .definitions
             .values()
-            .map(|definition| definition.sexpr.clone()),
+            .map(|definition| definition.sexpr.as_ref().clone()),
     );
     items.extend(library.unsupported.iter().cloned());
     Sexpr::list(items)
