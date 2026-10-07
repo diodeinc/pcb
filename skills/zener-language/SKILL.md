@@ -28,7 +28,7 @@ LocalBlock = Module("./LocalBlock.zen")
 RemoteBlock = Module("github.com/org/repo/modules/RemoteBlock.zen")
 ```
 
-An instantiation passes `name=...`, its public `io()` and `config()` inputs, and optional properties such as `dnp`, `properties`, or `schematic`.
+An instantiation passes `name=...`, its public `io()` and `config()` inputs, and optional `dnp` and `properties` arguments.
 
 `name` establishes instance-path identity, not a fixed reference designator. Refdes-like names are only annotation hints; exact source-reference preservation is not supported.
 
