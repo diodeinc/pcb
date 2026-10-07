@@ -588,32 +588,50 @@ def compare_drills(
         ]
     )
 
-    kicad = DrillFile()
+    kicad: dict[tuple[str, int, int], DrillFile] = {}
     for path in sorted(kicad_drill_dir.glob("*.drl")):
         parse_excellon(path, kicad)
-    ipc = DrillFile()
+    ipc: dict[tuple[str, int, int], DrillFile] = {}
     for path in sorted(ipc_gerber_dir.glob("*.drl")):
         parse_excellon(path, ipc)
 
     missing: list[str] = []
     extra: list[str] = []
-    match_entries(kicad.holes, ipc.holes, format_hole, missing, extra)
-    match_entries(kicad.slots, ipc.slots, format_slot, missing, extra)
+    for group in sorted(kicad.keys() | ipc.keys()):
+        reference = kicad.get(group, DrillFile())
+        candidate = ipc.get(group, DrillFile())
+        group_missing: list[str] = []
+        group_extra: list[str] = []
+        match_entries(
+            reference.holes, candidate.holes, format_hole, group_missing, group_extra
+        )
+        match_entries(
+            reference.slots, candidate.slots, format_slot, group_missing, group_extra
+        )
+        label = f"{group[0]} layers {group[1]}-{group[2]}"
+        missing.extend(f"{label}: {entry}" for entry in group_missing)
+        extra.extend(f"{label}: {entry}" for entry in group_extra)
     return DrillResult(
-        kicad_holes=len(kicad.holes),
-        ipc_holes=len(ipc.holes),
-        kicad_slots=len(kicad.slots),
-        ipc_slots=len(ipc.slots),
+        kicad_holes=sum(len(drills.holes) for drills in kicad.values()),
+        ipc_holes=sum(len(drills.holes) for drills in ipc.values()),
+        kicad_slots=sum(len(drills.slots) for drills in kicad.values()),
+        ipc_slots=sum(len(drills.slots) for drills in ipc.values()),
         missing=missing,
         extra=extra,
     )
 
 
 COORD_RE = re.compile(r"([XY])(-?\d*\.?\d+)")
+FILE_FUNCTION_RE = re.compile(
+    r";\s*#@!\s*TF\.FileFunction,(Plated|NonPlated),([1-9]\d*),([1-9]\d*),"
+    r"(?:PTH|NPTH|Blind|Buried)(?:,(?:Drill|Route|Mixed))?"
+)
 
 
-def parse_excellon(path: Path, out: DrillFile) -> None:
+def parse_excellon(path: Path, groups: dict[tuple[str, int, int], DrillFile]) -> None:
     """Parse the decimal-format Excellon/XNC subset KiCad and pcbc emit."""
+    out = DrillFile()
+    group: tuple[str, int, int] | None = None
     tools: dict[str, float] = {}
     current: float | None = None
     in_header = True
@@ -624,6 +642,15 @@ def parse_excellon(path: Path, out: DrillFile) -> None:
 
     for raw_line in path.read_text().splitlines():
         line = raw_line.strip()
+        if line.startswith(";") and "TF.FileFunction" in line:
+            metadata = FILE_FUNCTION_RE.fullmatch(line)
+            if metadata is None or group is not None:
+                fail(f"invalid or duplicate drill FileFunction in {path}: {line}")
+            plating, start, end = metadata.groups()
+            group = (plating, int(start), int(end))
+            if group[1] >= group[2]:
+                fail(f"invalid physical layer span in {path}: {line}")
+            continue
         if not line or line.startswith(";"):
             continue
         if line == "M48":
@@ -684,6 +711,14 @@ def parse_excellon(path: Path, out: DrillFile) -> None:
             coords = parse_coords(line, scale)
             if coords is not None:
                 out.holes.append((coords[0], coords[1], current))
+
+    # FileFunction uses physical copper-layer numbers, not KiCad layer IDs.
+    # Require it even for empty files; filenames cannot establish plating/span.
+    if group is None:
+        fail(f"missing drill FileFunction in {path}")
+    target = groups.setdefault(group, DrillFile())
+    target.holes.extend(out.holes)
+    target.slots.extend(out.slots)
 
 
 def parse_coords(text: str, scale: float) -> tuple[float, float] | None:
