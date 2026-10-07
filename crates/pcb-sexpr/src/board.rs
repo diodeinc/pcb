@@ -127,6 +127,7 @@ pub struct FootprintInfo {
 /// See `docs/specs/kicad-import.md` for the full math model.
 pub fn transform_board_instance_footprint_to_standalone(
     footprint_sexpr: &str,
+    board: &Sexpr,
 ) -> Result<String, String> {
     let root = crate::parse(footprint_sexpr).map_err(|e| format!("{e:#}"))?;
     let items = root
@@ -147,9 +148,15 @@ pub fn transform_board_instance_footprint_to_standalone(
     out_items.push(Sexpr::symbol("footprint"));
     out_items.push(Sexpr::string(name.clone()));
 
-    let mut version_node: Option<Sexpr> = None;
-    let mut generator_node: Option<Sexpr> = None;
-    let mut generator_version_node: Option<Sexpr> = None;
+    // Embedded footprints inherit the board's format, including version-dependent syntax.
+    let board_items = kicad_pcb_items(board)?;
+    for tag in ["version", "generator", "generator_version"] {
+        if let Some(node) = direct_child(board_items, tag) {
+            out_items.push(node.clone());
+        } else if tag == "version" {
+            return Err("KiCad PCB is missing its format version".to_string());
+        }
+    }
     let mut has_fp_text = false;
 
     // First pass: keep most children, filtering board-instance fields.
@@ -165,41 +172,13 @@ pub fn transform_board_instance_footprint_to_standalone(
         match tag {
             "at" | "path" | "sheetname" | "sheetfile" | "property" | "locked" => continue,
             "uuid" => continue,
-            "version" => {
-                if version_node.is_none() {
-                    version_node = Some(child.clone());
-                }
-            }
-            "generator" => {
-                if generator_node.is_none() {
-                    generator_node = Some(child.clone());
-                }
-            }
-            "generator_version" => {
-                if generator_version_node.is_none() {
-                    generator_version_node = Some(child.clone());
-                }
-            }
+            "version" | "generator" | "generator_version" => continue,
             "fp_text" => {
                 has_fp_text = true;
                 children.push(deinstance_node(child, &pose, DeinstanceCtx::default())?);
             }
             _ => children.push(deinstance_node(child, &pose, DeinstanceCtx::default())?),
         }
-    }
-
-    // Canonicalize header fields: ensure version/generator exist and appear at the top.
-    out_items.push(
-        version_node
-            .unwrap_or_else(|| Sexpr::list(vec![Sexpr::symbol("version"), Sexpr::int(20211014)])),
-    );
-    out_items.push(
-        generator_node.unwrap_or_else(|| {
-            Sexpr::list(vec![Sexpr::symbol("generator"), Sexpr::symbol("pcbnew")])
-        }),
-    );
-    if let Some(node) = generator_version_node {
-        out_items.push(node);
     }
 
     // Many `.kicad_mod` footprints contain fp_text reference/value/user.
@@ -1293,13 +1272,20 @@ mod tests {
             (sheetname "Top")
             (sheetfile "top.kicad_sch")
             (attr smd)
+            (zone (net 0) (net_name "") (layer "F.Cu")
+                (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+                (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.3))
+                (polygon (pts (xy 10 20) (xy 12 20) (xy 12 23) (xy 10 23)))
+                (filled_polygon (layer "F.Cu")
+                    (pts (xy 10 20) (xy 12 20) (xy 12 23) (xy 10 23))))
             (fp_line (start 0 0) (end 1 1) (stroke (width 0.1) (type solid)) (layer "F.SilkS"))
             (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VCC") (uuid "p1"))
             (pad "2" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "GND"))
         )
         "#;
 
-        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let board = parse("(kicad_pcb (version 20260206) (generator pcbnew))").unwrap();
+        let out = transform_board_instance_footprint_to_standalone(input, &board).unwrap();
         let parsed = parse(&out).unwrap();
         let items = parsed.as_list().unwrap();
         assert_eq!(items.first().and_then(Sexpr::as_sym), Some("footprint"));
@@ -1321,8 +1307,27 @@ mod tests {
         assert!(!out.contains("(uuid \"p1\")"));
 
         // Has required header fields.
-        assert!(out.contains("(version 20211014)"));
+        assert!(out.contains("(version 20260206)"));
         assert!(out.contains("(generator pcbnew)"));
+        let zone = direct_child(items, "zone").unwrap();
+        let filled = zone.find_all_lists("filled_polygon");
+        assert_eq!(filled.len(), 1);
+        let points = crate::find_child_list(filled[0], "pts").unwrap();
+        let coordinates: Vec<_> = points
+            .iter()
+            .skip(1)
+            .map(|point| {
+                let xy = point.as_list().unwrap();
+                (
+                    number_as_f64(&xy[1]).unwrap(),
+                    number_as_f64(&xy[2]).unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            coordinates,
+            vec![(0.0, 0.0), (2.0, 0.0), (2.0, 3.0), (0.0, 3.0)]
+        );
     }
 
     #[test]
@@ -1336,11 +1341,13 @@ mod tests {
         )
         "#;
 
-        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let board = parse("(kicad_pcb (version 20211014) (generator pcbnew))").unwrap();
+        let out = transform_board_instance_footprint_to_standalone(input, &board).unwrap();
         let version_pos = out.find("(version").unwrap();
         let generator_pos = out.find("(generator").unwrap();
         let fp_text_pos = out.find("(fp_text").unwrap();
 
+        assert!(out.contains("(version 20211014)"));
         assert!(version_pos < fp_text_pos);
         assert!(generator_pos < fp_text_pos);
     }
@@ -1357,7 +1364,16 @@ mod tests {
         )
         "#;
 
-        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let board = parse(
+            r#"(kicad_pcb (generator_version "10.0") (generator "other") (version 20260206))"#,
+        )
+        .unwrap();
+        let out = transform_board_instance_footprint_to_standalone(input, &board).unwrap();
+        assert!(out.contains("(version 20260206)"));
+        assert!(out.contains(r#"(generator "other")"#));
+        assert!(out.contains(r#"(generator_version "10.0")"#));
+        assert!(!out.contains("20211014"));
+        assert!(!out.contains("pcbnew"));
         let root = crate::parse(&out).unwrap();
         let items = root.as_list().unwrap();
         assert_eq!(items.first().and_then(Sexpr::as_sym), Some("footprint"));
@@ -1394,7 +1410,8 @@ mod tests {
         )
         "#;
 
-        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let board = parse("(kicad_pcb (version 20211014) (generator pcbnew))").unwrap();
+        let out = transform_board_instance_footprint_to_standalone(input, &board).unwrap();
         let parsed = parse(&out).unwrap();
 
         let mut pad_at: Option<(usize, f64, f64, Option<f64>)> = None;
@@ -1440,7 +1457,8 @@ mod tests {
         )
         "#;
 
-        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let board = parse("(kicad_pcb (version 20211014) (generator pcbnew))").unwrap();
+        let out = transform_board_instance_footprint_to_standalone(input, &board).unwrap();
         let parsed = parse(&out).unwrap();
 
         // Root layer should be normalized to F.*.
@@ -1511,7 +1529,8 @@ mod tests {
         )
         "#;
 
-        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let board = parse("(kicad_pcb (version 20211014) (generator pcbnew))").unwrap();
+        let out = transform_board_instance_footprint_to_standalone(input, &board).unwrap();
         let parsed = parse(&out).unwrap();
 
         let mut xy: Option<(f64, f64)> = None;

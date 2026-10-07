@@ -2064,17 +2064,6 @@ fn render_component_footprint(
     let fp_name = sanitize_component_dir_name(&sexpr_board::footprint_name_from_fpid(fpid));
     let filename = format!("{fp_name}.kicad_mod");
     let mod_text = match &layout.footprint_geometry {
-        ImportFootprintGeometry::BoardInstance(sexpr) => {
-            sexpr_board::transform_board_instance_footprint_to_standalone(sexpr)
-                .map_err(|e| anyhow::anyhow!(e))
-                .with_context(|| {
-                    format!(
-                        "Failed to transform footprint {} for {}",
-                        fpid,
-                        component.netlist.refdes.as_str()
-                    )
-                })?
-        }
         ImportFootprintGeometry::LibraryFile(sexpr) => sexpr.clone(),
         ImportFootprintGeometry::StandardLibrary | ImportFootprintGeometry::Unresolved => {
             unreachable!()

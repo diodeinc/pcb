@@ -399,6 +399,16 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     // and repairs identity hooks, while retaining placement, routing and stackup.
     let footprint_path = output.join("components/ERJ-2RKF1003X/CustomR.kicad_mod");
     let embedded_geometry = fs::read(&footprint_path).unwrap();
+    let footprint_text = std::str::from_utf8(&embedded_geometry).unwrap();
+    assert!(footprint_text.contains("(version 20241229)"));
+    assert!(footprint_text.contains(r#"(generator "pcbnew")"#));
+    assert!(footprint_text.contains(r#"(generator_version "9.0")"#));
+    // Forced reimport also repairs footprints written with the old hardcoded header.
+    fs::write(
+        &footprint_path,
+        footprint_text.replace("(version 20241229)", "(version 20211014)"),
+    )
+    .unwrap();
     let retained_pcb = std::str::from_utf8(&pcb_before_apply).unwrap();
     let parsed = pcb_sexpr::parse(retained_pcb).unwrap();
     let mut patches = pcb_sexpr::PatchSet::new();

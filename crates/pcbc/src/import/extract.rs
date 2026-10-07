@@ -555,17 +555,14 @@ fn extract_kicad_layout_data(
         };
         let component = netlist_components.get_mut(key).expect("indexed component");
 
-        let sexpr = pcb_text
-            .get(fp.span.start..fp.span.end)
-            .with_context(|| {
-                format!(
-                    "Failed to slice footprint S-expression span {}..{} from {}",
-                    fp.span.start,
-                    fp.span.end,
-                    pcb_path.display()
-                )
-            })?
-            .to_string();
+        let sexpr = pcb_text.get(fp.span.start..fp.span.end).with_context(|| {
+            format!(
+                "Failed to slice footprint S-expression span {}..{} from {}",
+                fp.span.start,
+                fp.span.end,
+                pcb_path.display()
+            )
+        })?;
 
         let mut pads: BTreeMap<KiCadPinNumber, ImportLayoutPad> = BTreeMap::new();
         for pad in fp.pads {
@@ -601,7 +598,16 @@ fn extract_kicad_layout_data(
             attrs: fp.attrs,
             properties: fp.properties,
             pads,
-            footprint_geometry: ImportFootprintGeometry::BoardInstance(sexpr),
+            footprint_geometry: ImportFootprintGeometry::LibraryFile(
+                sexpr_board::transform_board_instance_footprint_to_standalone(sexpr, &root)
+                    .map_err(|e| anyhow::anyhow!(e))
+                    .with_context(|| {
+                        format!(
+                            "Failed to transform footprint for {}",
+                            component.netlist.refdes.as_str()
+                        )
+                    })?,
+            ),
         };
 
         anyhow::ensure!(
@@ -1171,6 +1177,7 @@ mod tests {
     fn layout_import_rejects_conflicting_native_identity_but_ignores_retained_sync_paths()
     -> Result<()> {
         let board = r#"(kicad_pcb
+            (version 20260206) (generator "pcbnew")
             (footprint "Small" (path "/a") (property "Reference" "R2")
                 (pad "1" smd rect (size 1 1)))
             (footprint "Large" (path "/b") (property "Reference" "R1")
