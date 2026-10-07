@@ -20,6 +20,11 @@ pub struct InfoArgs {
     #[arg(short = 'f', long, value_enum, default_value = "human")]
     pub format: OutputFormat,
 
+    /// Offline package/release inventory (requires --format json).
+    /// Uses checkout manifests and local tags; requires complete Git history.
+    #[arg(long)]
+    pub inventory: bool,
+
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
 }
@@ -92,6 +97,17 @@ pub fn execute(args: InfoArgs) -> Result<()> {
         Some(path) => Path::new(path).to_path_buf(),
         None => env::current_dir()?,
     };
+
+    if args.inventory {
+        anyhow::ensure!(
+            matches!(args.format, OutputFormat::Json),
+            "--inventory requires --format json"
+        );
+        let packages = pcb_zen::workspace::package_inventory(&start_path)?;
+        let json = serde_json::to_string(&serde_json::json!({ "packages": packages }))?;
+        pcb_ui::write_stdout(|stdout| writeln!(stdout, "{json}"))?;
+        return Ok(());
+    }
 
     match args.format {
         OutputFormat::Human => {

@@ -5,6 +5,7 @@
 //! that need workspace metadata.
 
 use anyhow::Result;
+use path_slash::PathExt;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -25,6 +26,88 @@ use crate::tags;
 struct PackageTagInfo {
     tag: git::Tag,
     version: Version,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct InventoryPackage {
+    pub path: String,
+    pub preferred: bool,
+    pub release: Option<InventoryRelease>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryRelease {
+    pub version: String,
+    pub commit: String,
+    /// Publisher provenance, not a hash of the current checkout.
+    pub content_hash: Option<String>,
+}
+
+/// Inventory physical checkout packages and their selected local releases.
+/// The caller supplies a stable checkout and complete local refs; this never
+/// fetches, resolves dependencies, scans symbols, or inspects dirty status.
+pub fn package_inventory(start_path: &Path) -> Result<Vec<InventoryPackage>> {
+    let provider = DefaultFileProvider::new();
+    let workspace = pcb_zen_core::workspace::get_workspace_info(&provider, start_path)?;
+    // Core discovery omits root listing errors; inventory must surface them.
+    provider.list_directory_entries(&workspace.root)?;
+    if let Some(error) = workspace.errors.first() {
+        anyhow::bail!("{}: {}", error.path.display(), error.error);
+    }
+    anyhow::ensure!(
+        provider.exists(&workspace.root.join("pcb.toml")),
+        "Inventory requires a pcb.toml manifest"
+    );
+    anyhow::ensure!(
+        git::run_local_output(&workspace.root, &["rev-parse", "--is-shallow-repository"])?.trim()
+            == "false",
+        "Inventory requires complete Git history; shallow repositories are not supported"
+    );
+    let prefix = git::run_local_output(&workspace.root, &["rev-parse", "--show-prefix"])?;
+    let subpath = Path::new(prefix.trim_end().trim_end_matches('/'));
+    let history = git::run_local_output(&workspace.root, &["rev-list", "HEAD"])?;
+    let merged: HashSet<_> = history.lines().collect();
+    let mut tags = git::try_list_peeled_tags(&workspace.root)?;
+    tags.retain(|tag| merged.contains(tag.commit.as_str()));
+    let latest = latest_package_tags(&workspace, &tags);
+    let selected: Vec<_> = latest.values().map(|info| info.tag.clone()).collect();
+    let annotations = git::tag_annotations(&workspace.root, &selected)?;
+
+    let mut packages = Vec::new();
+    for (url, package) in &workspace.packages {
+        let release = latest.get(url).map(|info| {
+            let version = info.version.to_string();
+            let annotation_version = format!("v{version}");
+            let content_hash = annotations.get(&info.tag.object).and_then(|message| {
+                message.lines().find_map(|line| {
+                    let fields: Vec<_> = line.split_whitespace().collect();
+                    (fields.len() == 3
+                        && fields[0] == url
+                        && fields[1] == annotation_version
+                        && fields[2].starts_with("h1:"))
+                    .then(|| fields[2].to_owned())
+                })
+            });
+            InventoryRelease {
+                version,
+                commit: info.tag.commit.clone(),
+                content_hash,
+            }
+        });
+        let path = if package.rel_path.as_os_str().is_empty() {
+            subpath.to_path_buf()
+        } else {
+            subpath.join(&package.rel_path)
+        };
+        packages.push(InventoryPackage {
+            path: path.to_slash_lossy().into_owned(),
+            preferred: package.preferred,
+            release,
+        });
+    }
+    packages.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(packages)
 }
 
 /// Extension methods for WorkspaceInfo that require native features (git, filesystem)
@@ -103,8 +186,8 @@ fn latest_package_tags(
         .map(|(url, pkg)| {
             let tag_path = match (workspace_path, pkg.rel_path.as_os_str().is_empty()) {
                 (Some(path), true) => path.to_string(),
-                (Some(path), false) => format!("{}/{}", path, pkg.rel_path.to_string_lossy()),
-                (None, _) => pkg.rel_path.to_string_lossy().into_owned(),
+                (Some(path), false) => format!("{}/{}", path, pkg.rel_path.to_slash_lossy()),
+                (None, _) => pkg.rel_path.to_slash_lossy().into_owned(),
             };
             (tag_path, url.clone())
         })
@@ -331,5 +414,79 @@ fn add_path_patched_forks<F: FileProvider>(file_provider: &F, info: &mut Workspa
                 symbol_files: Vec::new(),
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inventory_reads_nested_releases_with_non_utf8_annotations() -> Result<()> {
+        let repo = tempfile::tempdir()?;
+        let root = repo.path();
+        for name in ["a", "b"] {
+            let dir = root.join("parts").join(name);
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(dir.join("pcb.toml"), "")?;
+        }
+        git::run_in(root, &["init", "--quiet"])?;
+        git::run_in(root, &["config", "user.name", "Test"])?;
+        git::run_in(root, &["config", "user.email", "test@example.com"])?;
+        git::run_in(
+            root,
+            &[
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "release",
+            ],
+        )?;
+        let commit = git::run_output(root, &["rev-parse", "HEAD"])?;
+        let hash = "h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        // Exercise both tag-path branches with native filesystem separators.
+        for (prefix, config) in [("", ""), ("registry/", "path = \"registry\"\n")] {
+            std::fs::write(
+                root.join("pcb.toml"),
+                format!("[workspace]\nrepository = \"example.com/repo\"\n{config}"),
+            )?;
+            for name in ["a", "b"] {
+                let mut message = b"Legacy caf\xe9\n".to_vec();
+                if name == "a" {
+                    message.extend_from_slice(
+                        format!("example.com/repo/{prefix}parts/a v1.2.0 {hash}\n").as_bytes(),
+                    );
+                }
+                std::fs::write(root.join("message"), message)?;
+                git::run_in(
+                    root,
+                    &[
+                        "tag",
+                        "-a",
+                        &format!("{prefix}parts/{name}/v1.2.0"),
+                        "-F",
+                        "message",
+                    ],
+                )?;
+            }
+            let inventory = package_inventory(root)?;
+            assert_eq!(inventory.len(), 2);
+            for (package, name) in inventory.iter().zip(["a", "b"]) {
+                assert_eq!(package.path, format!("parts/{name}"));
+                let release = package
+                    .release
+                    .as_ref()
+                    .expect("nested package is published");
+                assert_eq!(release.version, "1.2.0");
+                assert_eq!(release.commit, commit.trim());
+                assert_eq!(
+                    release.content_hash.as_deref(),
+                    (name == "a").then_some(hash)
+                );
+            }
+        }
+        Ok(())
     }
 }
