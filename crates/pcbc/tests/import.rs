@@ -1358,3 +1358,129 @@ fn hierarchy_and_no_connect_markers_survive_import_and_apply() {
     assert_preserved_schematic(&output.join("issue24201.kicad_sch"), &root, true);
     assert_preserved_schematic(&output.join("child/aSheet.kicad_sch"), &child, true);
 }
+
+#[test]
+fn cross_sheet_multi_unit_components_survive_import_and_apply() {
+    let mut sandbox = sandbox();
+    let root_uuid = "00000000-0000-0000-0000-000000000001";
+    let mut root = format!(
+        r#"(kicad_sch (version 20250114) (generator "eeschema")
+        (uuid "{root_uuid}") (paper "A4") (lib_symbols)
+        (sheet_instances (path "/" (page "1")))"#
+    );
+    let library = r#"(lib_symbols (symbol "Test:Dual"
+        (in_bom no) (on_board yes)
+        (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+        (property "Value" "Dual" (at 0 0 0) (effects (font (size 1.27 1.27))))
+        (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 0 0 0)
+            (effects (font (size 1.27 1.27)) (hide yes)))
+        (symbol "Dual_1_1"
+            (pin passive line (at -2.54 0 0) (length 2.54)
+                (name "A" (effects (font (size 1.27 1.27))))
+                (number "1" (effects (font (size 1.27 1.27))))))
+        (symbol "Dual_2_1"
+            (pin passive line (at -2.54 0 0) (length 2.54)
+                (name "B" (effects (font (size 1.27 1.27))))
+                (number "2" (effects (font (size 1.27 1.27))))))))"#;
+    let mut sources = BTreeMap::new();
+    // Both physical components span A and B. B has no independently anchored component:
+    // it must still be included in the extracted sheet tree for native binding.
+    for (unit, sheet, nets) in [(1, "A", ["ALPHA", "GAMMA"]), (2, "B", ["BETA", "ALPHA"])] {
+        let sheet_uuid = format!("00000000-0000-0000-0000-00000000001{unit}");
+        root.push_str(&format!(r#"
+            (sheet (at 20 {y}) (size 20 10)
+                (stroke (width 0) (type default)) (fill (color 0 0 0 0))
+                (uuid "{sheet_uuid}")
+                (property "Sheetname" "{sheet}" (at 20 {y} 0) (effects (font (size 1.27 1.27))))
+                (property "Sheetfile" "{sheet}.kicad_sch" (at 20 {y} 0) (effects (font (size 1.27 1.27))))
+                (instances (project "split" (path "/{root_uuid}" (page "{page}")))))"#,
+            y = 20 * unit, page = unit + 1));
+        let mut child = format!(
+            r#"(kicad_sch (version 20250114) (generator "eeschema")
+            (uuid "00000000-0000-0000-0000-00000000002{unit}") (paper "A4") {library}"#
+        );
+        for (index, net) in nets.iter().enumerate() {
+            let reference = index + 1;
+            let y = 30 + 20 * index;
+            child.push_str(&format!(r#"
+                (symbol (lib_id "Test:Dual") (at 50 {y} 0) (unit {unit})
+                    (in_bom no) (on_board yes) (dnp no)
+                    (uuid "00000000-0000-0000-0000-0000000001{unit}{reference}")
+                    (property "Reference" "U{reference}" (at 50 {y} 0) (effects (font (size 1.27 1.27))))
+                    (property "Value" "Dual" (at 50 {y} 0) (effects (font (size 1.27 1.27))))
+                    (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 50 {y} 0)
+                        (effects (font (size 1.27 1.27)) (hide yes)))
+                    (property "Description" "Dual" (at 50 {y} 0)
+                        (effects (font (size 1.27 1.27)) (hide yes)))
+                    (pin "{unit}" (uuid "00000000-0000-0000-0000-0000000003{unit}{reference}"))
+                    (instances (project "split"
+                        (path "/{root_uuid}/{sheet_uuid}" (reference "U{reference}") (unit {unit})))))
+                (global_label "{net}" (shape input) (at 47.46 {y} 0)
+                    (effects (font (size 1.27 1.27)) (justify left))
+                    (uuid "00000000-0000-0000-0000-0000000002{unit}{reference}"))"#));
+        }
+        child.push(')');
+        sources.insert(format!("{sheet}.kicad_sch"), child);
+    }
+    root.push(')');
+    sources.insert("split.kicad_sch".into(), root);
+    for (file, source) in &sources {
+        sandbox.write(format!("source/{file}"), source);
+    }
+    let import = sandbox
+        .run("pcbc", ["import", "source/split.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&import.stderr);
+    assert!(import.status.success(), "import failed:\n{stderr}");
+    assert!(stderr.contains("Validated generated Zener against 3 physical-pin partition(s)"));
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(extraction_report(&stderr)).unwrap()).unwrap();
+    assert_eq!(
+        source_physical_partitions(&report),
+        BTreeSet::from([
+            vec!["U1:1".into(), "U2:2".into()],
+            vec!["U1:2".into()],
+            vec!["U2:1".into()],
+        ])
+    );
+
+    let output = sandbox.root_path().join("out/layout");
+    let project = pcbc::kicad_schematic::KicadProject::load(&output).unwrap();
+    let bindings = project
+        .document
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            pcb_kicad_sch::SchItem::Symbol(symbol) => {
+                Some((symbol.field_value("Path").unwrap().to_string(), symbol.unit))
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        bindings.len(),
+        4,
+        "every unit must be bound, without merging U1 and U2"
+    );
+    let paths = bindings
+        .iter()
+        .map(|(path, _)| path)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(paths.len(), 2);
+    for path in paths {
+        assert!(bindings.contains(&(path.clone(), 1)));
+        assert!(bindings.contains(&(path.clone(), 2)));
+    }
+    for (file, source) in &sources {
+        assert_preserved_schematic(&output.join(file), source, false);
+    }
+    assert_repeated_schematic_apply(&mut sandbox, "out/split.zen", &[]);
+    for (file, source) in &sources {
+        assert_preserved_schematic(&output.join(file), source, true);
+    }
+}

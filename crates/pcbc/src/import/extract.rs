@@ -33,10 +33,21 @@ pub(super) fn extract_ir(
     let schematic = extract_kicad_schematic_data(
         staged_root,
         &paths.kicad_project_root,
+        &validation.summary.selected.kicad_sch,
         &selection.files.kicad_sch,
-        &netlist.unit_to_anchor,
         &mut netlist.components,
     )?;
+    netlist.unit_to_anchor = netlist
+        .components
+        .iter()
+        .flat_map(|(anchor, component)| {
+            component
+                .netlist
+                .unit_pcb_paths
+                .iter()
+                .map(move |key| (key.clone(), anchor.clone()))
+        })
+        .collect();
 
     let schematic_sheet_tree = build_schematic_sheet_tree(
         &validation.summary.selected.kicad_sch,
@@ -155,13 +166,22 @@ fn parse_kicad_pcb_refdes_to_anchor_key(
 fn extract_kicad_schematic_data(
     staged_root: &Path,
     source_root: &Path,
+    root_schematic: &Path,
     kicad_sch_files: &[PathBuf],
-    unit_to_anchor: &BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>,
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
 ) -> Result<KiCadSchematicExtraction> {
     let mut lib_symbols: BTreeMap<KiCadLibId, String> = BTreeMap::new();
     let mut power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl> = Vec::new();
     let mut sheet_symbols_by_uuid: BTreeMap<String, SchematicSheetSymbol> = BTreeMap::new();
+    let root_text = fs::read_to_string(staged_root.join(root_schematic))?;
+    let root = pcb_sexpr::parse(&root_text)?;
+    let root_uuid =
+        sexpr_kicad::string_prop(root.as_list().context("Invalid root schematic")?, "uuid")
+            .context("Root schematic has no UUID")?;
+    let refdes_to_anchor = netlist_components
+        .iter()
+        .map(|(key, component)| (component.netlist.refdes.clone(), key.clone()))
+        .collect();
 
     for rel in kicad_sch_files {
         let staged_abs = staged_root.join(rel);
@@ -320,17 +340,12 @@ fn extract_kicad_schematic_data(
                 continue;
             }
 
-            let selected = select_schematic_symbol_keys(
-                &instance_paths,
-                &symbol_uuid,
-                unit_to_anchor,
-                netlist_components,
-            )?;
+            let selected =
+                select_schematic_symbol_keys(sym, &symbol_uuid, &root_uuid, &refdes_to_anchor)?;
             if selected.is_empty() {
                 continue;
             }
 
-            let unit = sexpr_kicad::int_prop(sym, "unit");
             let lib_name = sexpr_kicad::string_prop(sym, "lib_name");
             let at =
                 sexpr_kicad::schematic_at(sym).map(|(x, y, rot)| ImportSchematicAt { x, y, rot });
@@ -343,7 +358,13 @@ fn extract_kicad_schematic_data(
 
             let pins = sexpr_kicad::schematic_pins(sym);
 
-            for (key, anchor, instance_path) in selected {
+            for SelectedSchematicSymbol {
+                key,
+                anchor,
+                instance_path,
+                unit,
+            } in selected
+            {
                 let unit_data = ImportSchematicUnit {
                     lib_name: lib_name.clone(),
                     lib_id: lib_id.clone(),
@@ -377,6 +398,14 @@ fn extract_kicad_schematic_data(
         }
     }
 
+    // The exported netlist has only one sheetpath per physical component and may omit
+    // UUIDs of units on other sheets. Replace its provisional paths with actual instances.
+    for component in netlist_components.values_mut() {
+        if let Some(schematic) = &component.schematic {
+            component.netlist.unit_pcb_paths = schematic.units.keys().cloned().collect();
+        }
+    }
+
     Ok(KiCadSchematicExtraction {
         lib_symbols,
         power_symbol_decls,
@@ -384,25 +413,54 @@ fn extract_kicad_schematic_data(
     })
 }
 
-fn select_schematic_symbol_keys(
-    instance_paths: &[String],
-    symbol_uuid: &str,
-    unit_to_anchor: &BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>,
-    netlist_components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
-) -> Result<Vec<(KiCadUuidPathKey, KiCadUuidPathKey, String)>> {
-    // A symbol can have multiple project instances (KiCad supports re-using a schematic in
-    // multiple projects). Keep every instance path that matches the extracted netlist keys.
-    let mut out: Vec<(KiCadUuidPathKey, KiCadUuidPathKey, String)> = Vec::new();
-    let mut seen_anchors: BTreeSet<KiCadUuidPathKey> = BTreeSet::new();
+struct SelectedSchematicSymbol {
+    key: KiCadUuidPathKey,
+    anchor: KiCadUuidPathKey,
+    instance_path: String,
+    unit: Option<i64>,
+}
 
-    for instance_path in instance_paths {
-        let key = key_from_schematic_instance_path(instance_path, symbol_uuid)?;
-        let anchor = unit_to_anchor
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(|| key.clone());
-        if netlist_components.contains_key(&anchor) && seen_anchors.insert(anchor.clone()) {
-            out.push((key, anchor, instance_path.clone()));
+fn select_schematic_symbol_keys(
+    symbol: &[Sexpr],
+    symbol_uuid: &str,
+    root_uuid: &str,
+    refdes_to_anchor: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
+) -> Result<Vec<SelectedSchematicSymbol>> {
+    let mut out = Vec::new();
+    let Some(instances) = sexpr_kicad::child_list(symbol, "instances") else {
+        return Ok(out);
+    };
+    for project in instances.iter().filter_map(Sexpr::as_list) {
+        if project.first().and_then(Sexpr::as_sym) != Some("project") {
+            continue;
+        }
+        for instance in project.iter().filter_map(Sexpr::as_list) {
+            if instance.first().and_then(Sexpr::as_sym) != Some("path") {
+                continue;
+            }
+            let Some(path) = instance.get(1).and_then(Sexpr::as_str) else {
+                continue;
+            };
+            // A reused file can retain instances from other projects. Their references
+            // are unrelated even when their symbol UUID or reference happens to match.
+            if path.trim_matches('/').split('/').next() != Some(root_uuid) {
+                continue;
+            }
+            let Some(reference) = sexpr_kicad::string_prop(instance, "reference") else {
+                continue;
+            };
+            let Some(anchor) = refdes_to_anchor.get(&KiCadRefDes::from(reference)) else {
+                continue;
+            };
+            let key = key_from_schematic_instance_path(path, symbol_uuid)?;
+            let unit = sexpr_kicad::int_prop(instance, "unit")
+                .or_else(|| sexpr_kicad::int_prop(symbol, "unit"));
+            out.push(SelectedSchematicSymbol {
+                key,
+                anchor: anchor.clone(),
+                instance_path: path.to_string(),
+                unit,
+            });
         }
     }
     Ok(out)
@@ -445,7 +503,9 @@ fn build_schematic_sheet_tree(
     let mut all_paths: BTreeSet<KiCadSheetPath> = BTreeSet::new();
     all_paths.insert(KiCadSheetPath::root());
 
-    for key in netlist_components.keys() {
+    for key in netlist_components.iter().flat_map(|(anchor, component)| {
+        std::iter::once(anchor).chain(component.netlist.unit_pcb_paths.iter())
+    }) {
         let sheet_path = KiCadSheetPath::from_sheetpath_tstamps(&key.sheetpath_tstamps);
         // Add this path and all prefixes (ancestors) so the tree contains intermediate sheets.
         let segments: Vec<&str> = sheet_path.segments().collect();
@@ -1001,6 +1061,8 @@ fn parse_kicad_sexpr_netlist_components(
             }
         };
 
+        // Provisional owning-sheet paths only: the netlist does not describe every
+        // unit's sheet. Schematic extraction replaces these before layout binding.
         let mut unit_keys: Vec<KiCadUuidPathKey> = Vec::new();
         for uuid in &symbol_uuids {
             let unit_key = KiCadUuidPathKey {
@@ -1294,54 +1356,82 @@ mod tests {
     }
 
     #[test]
-    fn select_schematic_symbol_key_prefers_path_matching_netlist() -> Result<()> {
-        let symbol_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-
-        // Key from "/root" collapses to sheetpath "/" (root UUID stripped) => "/<symbol_uuid>"
-        let root_path = "/11111111-2222-3333-4444-555555555555".to_string();
-        // Key from "/root/sheet" => sheetpath "/sheet/" => "/sheet/<symbol_uuid>"
-        let other_path =
-            "/11111111-2222-3333-4444-555555555555/99999999-8888-7777-6666-555555555555"
-                .to_string();
-
-        let instance_paths = vec![other_path.clone(), root_path.clone()];
-
-        let mut netlist_components: BTreeMap<KiCadUuidPathKey, ImportComponentData> =
-            BTreeMap::new();
-        netlist_components.insert(
-            KiCadUuidPathKey {
-                sheetpath_tstamps: "/".to_string(),
-                symbol_uuid: symbol_uuid.to_string(),
-            },
-            ImportComponentData {
-                netlist: ImportNetlistComponent {
-                    refdes: KiCadRefDes::from("R1".to_string()),
-                    value: None,
-                    footprint: None,
-                    sheetpath_names: Some("/".to_string()),
-                    unit_pcb_paths: vec![],
-                },
-                schematic: None,
-                layout: None,
-            },
-        );
-
-        let unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
-
-        let selected = select_schematic_symbol_keys(
-            &instance_paths,
-            symbol_uuid,
-            &unit_to_anchor,
-            &netlist_components,
+    fn extraction_keeps_reused_sheet_instances_and_foreign_projects_separate() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = PathBuf::from("root.kicad_sch");
+        let child = PathBuf::from("child.kicad_sch");
+        fs::write(
+            dir.path().join(&root),
+            r#"(kicad_sch (uuid "root")
+            (symbol (uuid "second-unit") (unit 2) (property "Reference" "U2")
+                (instances (project "demo" (path "/root" (reference "U1") (unit 2))))))"#,
         )?;
-        let selected = selected
-            .into_iter()
-            .next()
-            .expect("expected to select a matching path");
-
-        assert_eq!(selected.2, root_path);
-        assert_eq!(selected.1.sheetpath_tstamps, "/");
-        assert_eq!(selected.1.symbol_uuid, symbol_uuid);
+        fs::write(
+            dir.path().join(&child),
+            r#"(kicad_sch (uuid "child")
+            (symbol (uuid "shared-symbol") (unit 1) (property "Reference" "U1")
+                (instances
+                    (project "demo"
+                        (path "/root/sheet-a" (reference "U1") (unit 1))
+                        (path "/root/sheet-b" (reference "U2") (unit 2)))
+                    (project "foreign"
+                        (path "/other-root/sheet-a" (reference "U2") (unit 1))))))"#,
+        )?;
+        // KiCad can omit the cross-sheet unit from the exported UUID list altogether.
+        // Also exercise a PCB anchor on that other sheet, rather than the netlist's sheet.
+        for pcb_anchor in [None, Some("/second-unit")] {
+            let mut pcb_anchors = BTreeMap::new();
+            if let Some(path) = pcb_anchor {
+                pcb_anchors.insert(
+                    KiCadRefDes::from("U1".to_string()),
+                    KiCadUuidPathKey::from_pcb_path(path)?,
+                );
+            }
+            let mut netlist = parse_kicad_sexpr_netlist(
+                r#"(export (components
+            (comp (ref "U1") (sheetpath (tstamps "/sheet-a/")) (tstamps "shared-symbol"))
+            (comp (ref "U2") (sheetpath (tstamps "/sheet-b/")) (tstamps "shared-symbol")))
+            (nets))"#,
+                &pcb_anchors,
+            )?;
+            extract_kicad_schematic_data(
+                dir.path(),
+                dir.path(),
+                &root,
+                &[root.clone(), child.clone()],
+                &mut netlist.components,
+            )?;
+            for (anchor, expected) in [
+                (
+                    pcb_anchor.unwrap_or("/sheet-a/shared-symbol"),
+                    vec![
+                        ("/second-unit", Some(2)),
+                        ("/sheet-a/shared-symbol", Some(1)),
+                    ],
+                ),
+                (
+                    "/sheet-b/shared-symbol",
+                    vec![("/sheet-b/shared-symbol", Some(2))],
+                ),
+            ] {
+                let component = &netlist.components[&KiCadUuidPathKey::from_pcb_path(anchor)?];
+                let units = &component.schematic.as_ref().unwrap().units;
+                assert_eq!(
+                    units
+                        .iter()
+                        .map(|(key, unit)| (key.pcb_path(), unit.unit))
+                        .collect::<Vec<_>>(),
+                    expected
+                        .iter()
+                        .map(|(key, unit)| (key.to_string(), *unit))
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    component.netlist.unit_pcb_paths,
+                    units.keys().cloned().collect::<Vec<_>>()
+                );
+            }
+        }
         Ok(())
     }
 
@@ -1368,7 +1458,7 @@ mod tests {
     (uuid "sym-a")
     (instances
       (project "demo"
-        (path "/root-uuid")
+        (path "/root-uuid" (reference "R1") (unit 1))
       )
     )
   )
@@ -1379,7 +1469,7 @@ mod tests {
     (uuid "sym-b")
     (instances
       (project "demo"
-        (path "/root-uuid")
+        (path "/root-uuid" (reference "C1") (unit 1))
       )
     )
   )
@@ -1429,12 +1519,11 @@ mod tests {
             );
         }
 
-        let unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
         let extracted = extract_kicad_schematic_data(
             dir.path(),
             dir.path(),
-            &[sch_rel],
-            &unit_to_anchor,
+            &sch_rel,
+            std::slice::from_ref(&sch_rel),
             &mut netlist_components,
         )?;
 
@@ -1504,13 +1593,12 @@ mod tests {
 
         let mut netlist_components: BTreeMap<KiCadUuidPathKey, ImportComponentData> =
             BTreeMap::new();
-        let unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
 
         let extracted = extract_kicad_schematic_data(
             dir.path(),
             dir.path(),
-            &[sch_rel],
-            &unit_to_anchor,
+            &sch_rel,
+            std::slice::from_ref(&sch_rel),
             &mut netlist_components,
         )?;
 
