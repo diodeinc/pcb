@@ -15,17 +15,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Parse in-memory S-expressions in UTF-8 runs instead of buffering individual bytes, while preserving streaming parsing behavior.
-- Share immutable S-expression trees with copy-on-write mutation to avoid deep cloning unchanged schematic data.
-- Collect schematic pins without building a connectivity graph when only pin geometry is needed.
-- Reuse parsed local symbol definitions and unit lists for repeated netlist symbol definitions during schematic reconciliation.
-- Reuse the intermediate connectivity inspection when reconciliation needs neither electrical repair nor obsolete-page removal, instead of rescanning the final document.
-- Skip initial electrical inspection during read-only projection when no sheet restoration or symbol removal is needed, while retaining final verification and invalid-input recovery.
-- Reuse the candidate path while finding a port's owning component instead of cloning each prefix.
+- Scan S-expression tokens in runs using one parser for strings and buffered readers.
+- Reduce schematic reconciliation copies and repeated work by sharing symbol trees, caching definitions, and reusing connectivity inspections.
 
 ### Added
 
-- Experimental verified read-only schematic projection without reversible edit-plan construction or its associated cloning and diffing.
+- Read-only reconciliation uses the same verified projection as editable reconciliation without constructing undo history.
 
 ## [0.4.73] - 2026-10-07
 

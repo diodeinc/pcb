@@ -7,9 +7,46 @@ use pcb_kicad_sch::{
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
     connectivity::ConnectivityItemRef,
     plan_connectivity_repair,
-    reconcile::{plan_reconciliation, plan_repairs},
+    reconcile::{plan_reconciliation, plan_repairs, reconcile_read_only},
     verify_connectivity_repair,
 };
+
+#[test]
+fn read_only_projection_matches_editable_reconciliation() {
+    for (project, entrypoint) in [
+        ("analysis", "simple.zen"),
+        ("hierarchy", "nested_not_connected.zen"),
+    ] {
+        let netlist = common::compile_fixture(project, entrypoint);
+        let mut document = plan_reconciliation(None, &netlist, "root.kicad_sch")
+            .unwrap()
+            .apply(None)
+            .unwrap();
+        for page in &mut document.pages {
+            page.items
+                .retain(|item| !matches!(item, SchItem::Label(_) | SchItem::NoConnect(_)));
+            for item in &mut page.items {
+                match item {
+                    SchItem::Sheet(sheet) => sheet.placed = false,
+                    SchItem::Symbol(symbol) => symbol.dnp = !symbol.dnp,
+                    _ => {}
+                }
+            }
+        }
+        let plan = plan_reconciliation(Some(&document), &netlist, "root.kicad_sch").unwrap();
+        let (projected, inspection) = reconcile_read_only(&document, &netlist).unwrap();
+        assert_ne!(projected, document);
+        assert_eq!(projected, plan.apply(Some(&document)).unwrap());
+        assert_eq!(&inspection, plan.inspection_after());
+        assert_eq!(inspection, inspect_schematic(&projected, &netlist).unwrap());
+        assert!(inspection.analysis.is_equivalent());
+
+        document.root_page_ids = vec!["absent".into()];
+        let planned = plan_reconciliation(Some(&document), &netlist, "root.kicad_sch").unwrap_err();
+        let direct = reconcile_read_only(&document, &netlist).unwrap_err();
+        assert_eq!(format!("{direct:#}"), format!("{planned:#}"));
+    }
+}
 
 #[test]
 fn batch_cut_removes_a_shared_wire_from_every_sheet_instance() {

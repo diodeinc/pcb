@@ -8,7 +8,7 @@ use crate::{
     CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, NoConnect, Paper,
     Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
     SymbolField, SymbolSlotKey, Wire,
-    analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
+    analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey, issue_summaries},
     component_slots,
     connectivity::{
         ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland,
@@ -328,6 +328,12 @@ pub(crate) fn reconcile_document(
     } else {
         current
     };
+    if complete && !inspection.analysis.is_equivalent() {
+        bail!(
+            "planned schematic is not netlist-equivalent: {}",
+            issue_summaries(inspection.analysis.issues().iter())
+        );
+    }
     Ok((document, inspection))
 }
 

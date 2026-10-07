@@ -15,7 +15,6 @@ pub mod edit;
 pub mod formatter;
 pub mod kicad;
 pub mod scan;
-mod slice;
 
 use std::fmt;
 use std::io::BufRead;
@@ -490,7 +489,7 @@ impl From<bool> for Sexpr {
 /// Parse a string into an S-expression
 pub fn parse(input: &str) -> Result<Sexpr, ParseError> {
     log::trace!("Parsing S-expression from {} bytes of input", input.len());
-    let result = slice::parse(input, Some(1))
+    let result = finish_in_memory_parse(parse_stream(input.as_bytes(), Some(1), |_| true))
         .and_then(|roots| roots.into_iter().next().ok_or(ParseError::UnexpectedEof));
     match &result {
         Ok(_) => log::trace!("Successfully parsed S-expression"),
@@ -505,7 +504,7 @@ pub fn parse_all(input: &str) -> Result<Vec<Sexpr>, ParseError> {
         "Parsing multiple S-expressions from {} bytes of input",
         input.len()
     );
-    let result = slice::parse(input, None);
+    let result = finish_in_memory_parse(parse_stream(input.as_bytes(), None, |_| true));
     match &result {
         Ok(exprs) => log::trace!("Successfully parsed {} S-expressions", exprs.len()),
         Err(e) => log::trace!("Failed to parse S-expressions: {e:?}"),
@@ -583,24 +582,21 @@ impl From<std::string::FromUtf8Error> for StreamParseError {
 
 fn stream_parse_atom(bytes: Vec<u8>, span: Span) -> Result<Sexpr, StreamParseError> {
     let atom_str = String::from_utf8(bytes)?;
-    Ok(parse_owned_atom(atom_str, span))
-}
 
-fn parse_owned_atom(atom_str: String, span: Span) -> Sexpr {
     if let Ok(int_val) = atom_str.parse::<i64>() {
-        Sexpr {
+        Ok(Sexpr {
             kind: SexprKind::Int(int_val),
             span,
             raw_atom: Some(atom_str),
-        }
+        })
     } else if let Ok(float_val) = atom_str.parse::<f64>() {
-        Sexpr {
+        Ok(Sexpr {
             kind: SexprKind::F64(float_val),
             span,
             raw_atom: Some(atom_str),
-        }
+        })
     } else {
-        Sexpr::with_span(SexprKind::Symbol(atom_str), span)
+        Ok(Sexpr::with_span(SexprKind::Symbol(atom_str), span))
     }
 }
 
@@ -643,12 +639,10 @@ where
     let mut roots = Vec::new();
     let mut mode = StreamMode::Normal;
     let mut offset = 0usize;
-    let mut buffer = Vec::new();
 
     loop {
-        buffer.clear();
-        let read = reader.read_until(b'\n', &mut buffer)?;
-        if read == 0 {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
             break;
         }
 
@@ -672,6 +666,7 @@ where
                         );
                         if !stream_finish_node(&mut stack, &mut roots, root_limit, node, &mut visit)
                         {
+                            reader.consume(i + 1);
                             return Ok(roots);
                         }
                     }
@@ -687,14 +682,19 @@ where
                     _ => {
                         mode = StreamMode::Atom {
                             start: offset,
-                            bytes: vec![byte],
+                            bytes: Vec::new(),
                         };
+                        continue;
                     }
                 },
                 StreamMode::Comment => {
-                    if byte == b'\n' {
+                    let len = memchr::memchr(b'\n', &buffer[i..]).unwrap_or(buffer.len() - i);
+                    i += len;
+                    offset += len;
+                    if i < buffer.len() {
                         mode = StreamMode::Normal;
                     }
+                    continue;
                 }
                 StreamMode::Atom { start, bytes } => {
                     if byte.is_ascii_whitespace() || byte == b'(' || byte == b')' {
@@ -703,12 +703,20 @@ where
                         mode = StreamMode::Normal;
                         if !stream_finish_node(&mut stack, &mut roots, root_limit, node, &mut visit)
                         {
+                            reader.consume(i);
                             return Ok(roots);
                         }
                         continue;
                     }
 
-                    bytes.push(byte);
+                    let len = buffer[i..]
+                        .iter()
+                        .position(|b| b.is_ascii_whitespace() || matches!(b, b'(' | b')'))
+                        .unwrap_or(buffer.len() - i);
+                    bytes.extend_from_slice(&buffer[i..i + len]);
+                    i += len;
+                    offset += len;
+                    continue;
                 }
                 StreamMode::String {
                     start,
@@ -737,10 +745,18 @@ where
                                 if !stream_finish_node(
                                     &mut stack, &mut roots, root_limit, node, &mut visit,
                                 ) {
+                                    reader.consume(i + 1);
                                     return Ok(roots);
                                 }
                             }
-                            _ => bytes.push(byte),
+                            _ => {
+                                let len = memchr::memchr2(b'"', b'\\', &buffer[i..])
+                                    .unwrap_or(buffer.len() - i);
+                                bytes.extend_from_slice(&buffer[i..i + len]);
+                                i += len;
+                                offset += len;
+                                continue;
+                            }
                         }
                     }
                 }
@@ -749,6 +765,7 @@ where
             i += 1;
             offset += 1;
         }
+        reader.consume(i);
     }
 
     match mode {
@@ -769,7 +786,6 @@ where
     Ok(roots)
 }
 
-#[cfg(test)]
 fn finish_in_memory_parse<T>(result: Result<T, StreamParseError>) -> Result<T, ParseError> {
     match result {
         Ok(value) => Ok(value),
@@ -922,7 +938,62 @@ impl fmt::Display for Sexpr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{BufReader, Cursor};
+
+    #[test]
+    fn test_buffer_boundaries() {
+        let input =
+            "(;comment )\"\n日本語 +001 12.000000 foo;bar a\"b \"🔥\\n\\r\\t\\\\\\\"\\é\") tail";
+        let expected = parse_all(input).unwrap();
+        for capacity in 1..=input.len() {
+            let actual = parse_stream(
+                BufReader::with_capacity(capacity, Cursor::new(input)),
+                None,
+                |_| true,
+            )
+            .unwrap();
+            // Debug includes spans and raw atoms, unlike Sexpr's PartialEq.
+            assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+            let items = actual[0].as_list().unwrap();
+            assert_eq!(items[1].raw_atom.as_deref(), Some("+001"));
+            assert_eq!(items[2].raw_atom.as_deref(), Some("12.000000"));
+            assert_eq!(items[5].as_str(), Some("🔥\n\r\t\\\"é"));
+        }
+        for (input, error) in [
+            ("(日本語", ParseError::UnclosedList),
+            ("\"🔥\\", ParseError::UnterminatedString),
+            (")", ParseError::UnexpectedChar(')', '(')),
+        ] {
+            for capacity in 1..=input.len() {
+                assert_eq!(
+                    finish_in_memory_parse(parse_stream(
+                        BufReader::with_capacity(capacity, Cursor::new(input)),
+                        None,
+                        |_| true,
+                    )),
+                    Err(error.clone()),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_stop_leaves_trailing_bytes_unconsumed() {
+        for prefix in ["日本語", "\"🔥\"", "(日本語)"] {
+            let input = [prefix.as_bytes(), b" \xff"].concat();
+            for capacity in 1..=input.len() {
+                let mut reader = BufReader::with_capacity(capacity, Cursor::new(&input));
+                parse_stream(&mut reader, Some(1), |_| true).unwrap();
+                assert_eq!(reader.fill_buf().unwrap()[0], b' ');
+                let mut reader = BufReader::with_capacity(capacity, Cursor::new(&input));
+                walk_stream(&mut reader, |node| {
+                    node.as_sym() == Some("日本語") && prefix.starts_with('(')
+                })
+                .unwrap();
+                assert_eq!(reader.fill_buf().unwrap()[0], b' ');
+            }
+        }
+    }
 
     #[test]
     fn test_parse_atom() {

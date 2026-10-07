@@ -9,7 +9,7 @@ use crate::{
     SchDocument, SchPage,
     analysis::{
         ConnectivityInspection, SchematicIssueKey, ensure_issues_resolved, ensure_no_new_issues,
-        inspect_schematic, issue_summaries,
+        inspect_schematic,
     },
     component_slots, compose,
 };
@@ -206,74 +206,22 @@ pub fn plan_reconciliation(
     )
 }
 
-/// Project an existing document for read-only use and verify netlist equivalence.
-///
-/// This runs the full property, library, and topology projection, even when the
-/// input connectivity is already equivalent. The owned result is not a reversible
-/// edit plan; callers must use [`plan_reconciliation`] for editable workflows.
+/// Project and verify a document without constructing reversible edit history.
+/// Uses the same projection as [`plan_reconciliation`].
 pub fn reconcile_read_only(
     document: &SchDocument,
     netlist: &Schematic,
 ) -> Result<(SchDocument, ConnectivityInspection)> {
     component_slots::validate_symbol_library_versions(netlist)?;
-    // Complete projection discovers electrical repairs after projecting symbols.
-    // Initial inspection only contributes sheet restoration and symbol removals.
-    // If neither is possible, even a failed inspection would contribute nothing.
-    // Otherwise preserve the existing inspection/error-recovery behavior.
-    let inspection_before = if needs_initial_structural_repairs(document, netlist).unwrap_or(true) {
-        inspect_schematic(document, netlist).ok()
-    } else {
-        None
-    };
-    let (desired, inspection_after) = compose::reconcile_document(
+    let inspection = inspect_schematic(document, netlist).ok();
+    compose::reconcile_document(
         Some(document),
         netlist,
         None,
         None,
         None,
-        inspection_before.as_ref(),
-    )?;
-    if !inspection_after.analysis.is_equivalent() {
-        bail!(
-            "planned schematic is not netlist-equivalent: {}",
-            issue_summaries(inspection_after.analysis.issues().iter())
-        );
-    }
-    Ok((desired, inspection_after))
-}
-
-fn needs_initial_structural_repairs(document: &SchDocument, netlist: &Schematic) -> Result<bool> {
-    let expected = component_slots::component_symbol_slots(netlist)?
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    for page in &document.pages {
-        for item in &page.items {
-            match item {
-                crate::SchItem::Sheet(sheet) if !sheet.placed => return Ok(true),
-                crate::SchItem::Symbol(symbol) => {
-                    if symbol
-                        .field_value("Path")
-                        .and_then(|path| crate::SymbolSlotKey::new(path, symbol.unit))
-                        .is_some_and(|slot| expected.contains(&slot))
-                    {
-                        continue;
-                    }
-                    let Some(definition) = page.library.definitions.get(symbol.library_key())
-                    else {
-                        return Ok(true);
-                    };
-                    let definition = crate::symbol::ParsedSymbolDefinition::parse(definition)?;
-                    if definition.power_scope().is_none()
-                        && !definition.is_unmanaged_graphic(symbol)
-                    {
-                        return Ok(true);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    Ok(false)
+        inspection.as_ref(),
+    )
 }
 
 /// Refresh assembly properties owned by the Zener netlist without changing
@@ -385,26 +333,16 @@ fn build_plan(
         placement_page_id,
         inspection_before,
     )?;
-    match issue_selection {
-        None => {
-            if !inspection_after.analysis.is_equivalent() {
-                bail!(
-                    "planned schematic is not netlist-equivalent: {}",
-                    issue_summaries(inspection_after.analysis.issues().iter())
-                );
+    if let Some(selected_keys) = issue_selection {
+        let before = inspection_before
+            .context("repairing selected issues requires an existing schematic document")?;
+        for key in selected_keys {
+            if !before.issues.iter().any(|issue| &issue.key == key) {
+                bail!("schematic issue {key:?} is not present");
             }
         }
-        Some(selected_keys) => {
-            let before = inspection_before
-                .context("repairing selected issues requires an existing schematic document")?;
-            for key in selected_keys {
-                if !before.issues.iter().any(|issue| &issue.key == key) {
-                    bail!("schematic issue {key:?} is not present");
-                }
-            }
-            ensure_issues_resolved(&inspection_after, selected_keys, "planned repair")?;
-            ensure_no_new_issues(before, &inspection_after, "planned repair")?;
-        }
+        ensure_issues_resolved(&inspection_after, selected_keys, "planned repair")?;
+        ensure_no_new_issues(before, &inspection_after, "planned repair")?;
     }
     verified_plan(document, desired, initial_inspection, inspection_after)
 }
@@ -471,315 +409,9 @@ fn document_edits(before: &SchDocument, after: &SchDocument) -> Result<Vec<Docum
 }
 
 #[cfg(test)]
-#[path = "../tests/common/mod.rs"]
-mod common;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{SchPage, root_page_id};
-
-    fn assert_read_only_outcome_matches_plan(document: &SchDocument, netlist: &Schematic) {
-        match plan_reconciliation(Some(document), netlist, "root.kicad_sch") {
-            Ok(_) => {
-                assert_read_only_matches_plan(document, netlist);
-            }
-            Err(planned) => {
-                let direct = reconcile_read_only(document, netlist).unwrap_err();
-                assert_eq!(format!("{direct:#}"), format!("{planned:#}"));
-            }
-        }
-    }
-
-    fn assert_read_only_matches_plan(document: &SchDocument, netlist: &Schematic) -> SchDocument {
-        let before = document.clone();
-        let plan = plan_reconciliation(Some(document), netlist, "root.kicad_sch").unwrap();
-        let (projected, inspection) = reconcile_read_only(document, netlist).unwrap();
-        assert_eq!(projected, plan.apply(Some(document)).unwrap());
-        assert_eq!(&inspection, plan.inspection_after());
-        assert_eq!(inspection, inspect_schematic(&projected, netlist).unwrap());
-        assert!(inspection.analysis.is_equivalent());
-        assert_eq!(document, &before);
-        projected
-    }
-
-    #[test]
-    fn read_only_repairs_changed_topology() {
-        let netlist = common::compile_fixture("analysis", "simple.zen");
-        let mut document = plan_reconciliation(None, &netlist, "root.kicad_sch")
-            .unwrap()
-            .apply(None)
-            .unwrap();
-        document.pages[0]
-            .items
-            .retain(|item| !matches!(item, crate::SchItem::Label(_)));
-        assert!(!needs_initial_structural_repairs(&document, &netlist).unwrap());
-        assert!(
-            !inspect_schematic(&document, &netlist)
-                .unwrap()
-                .analysis
-                .is_equivalent()
-        );
-        assert_ne!(assert_read_only_matches_plan(&document, &netlist), document);
-    }
-
-    #[test]
-    fn read_only_refreshes_properties_even_with_equivalent_topology() {
-        let mut netlist = common::compile_fixture("analysis", "simple.zen");
-        let document = plan_reconciliation(None, &netlist, "root.kicad_sch")
-            .unwrap()
-            .apply(None)
-            .unwrap();
-        assert!(!needs_initial_structural_repairs(&document, &netlist).unwrap());
-        for instance in netlist
-            .instances
-            .values_mut()
-            .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
-        {
-            instance
-                .attributes
-                .insert("dnp".into(), pcb_sch::AttributeValue::Boolean(true));
-            instance
-                .attributes
-                .insert("skip_bom".into(), pcb_sch::AttributeValue::Boolean(true));
-        }
-        assert!(
-            inspect_schematic(&document, &netlist)
-                .unwrap()
-                .analysis
-                .is_equivalent()
-        );
-        let projected = assert_read_only_matches_plan(&document, &netlist);
-        assert_ne!(projected, document);
-        assert!(
-            projected
-                .pages
-                .iter()
-                .flat_map(|p| &p.items)
-                .filter_map(|item| match item {
-                    crate::SchItem::Symbol(s) if s.field_value("Path").is_some() => Some(s),
-                    _ => None,
-                })
-                .all(|s| s.dnp && !s.in_bom)
-        );
-    }
-
-    #[test]
-    fn read_only_matches_multi_page_and_no_connect_projection() {
-        for (project, entrypoint) in [
-            ("hierarchy", "nested_not_connected.zen"),
-            ("multi_pad_nc", "root.zen"),
-        ] {
-            let mut netlist = common::compile_fixture(project, entrypoint);
-            if project == "multi_pad_nc" {
-                for net in netlist.nets.values_mut() {
-                    net.kind = "NotConnected".into();
-                }
-            }
-            let mut document = plan_reconciliation(None, &netlist, "root.kicad_sch")
-                .unwrap()
-                .apply(None)
-                .unwrap();
-            if project == "hierarchy" {
-                assert!(document.pages.len() > 1);
-                for page in &mut document.pages {
-                    for item in &mut page.items {
-                        if let crate::SchItem::Sheet(sheet) = item {
-                            sheet.placed = false;
-                        }
-                    }
-                }
-            } else {
-                assert!(
-                    document
-                        .pages
-                        .iter()
-                        .flat_map(|p| &p.items)
-                        .any(|i| matches!(i, crate::SchItem::NoConnect(_)))
-                );
-                for page in &mut document.pages {
-                    page.items
-                        .retain(|i| !matches!(i, crate::SchItem::NoConnect(_)));
-                }
-            }
-            assert_eq!(
-                needs_initial_structural_repairs(&document, &netlist).unwrap(),
-                project == "hierarchy"
-            );
-            assert_read_only_matches_plan(&document, &netlist);
-            if project == "hierarchy" {
-                for page in &mut document.pages {
-                    page.library.definitions.clear();
-                }
-                assert!(needs_initial_structural_repairs(&document, &netlist).unwrap());
-                assert!(inspect_schematic(&document, &netlist).is_err());
-                assert_read_only_outcome_matches_plan(&document, &netlist);
-            }
-        }
-    }
-
-    #[test]
-    fn read_only_matches_expected_slot_projection_and_invalid_recovery() {
-        let netlist = common::compile_fixture("analysis", "simple.zen");
-        let document = plan_reconciliation(None, &netlist, "root.kicad_sch")
-            .unwrap()
-            .apply(None)
-            .unwrap();
-        let index = document.pages[0]
-            .items
-            .iter()
-            .position(
-                |item| matches!(item, crate::SchItem::Symbol(s) if s.field_value("Path").is_some()),
-            )
-            .unwrap();
-
-        // Missing slots need no initial removal; projection creates them.
-        let mut missing = document.clone();
-        missing.pages[0].items.remove(index);
-        assert!(!needs_initial_structural_repairs(&missing, &netlist).unwrap());
-        assert_read_only_matches_plan(&missing, &netlist);
-
-        // A duplicate expected slot is still eligible, with or without a unique UUID.
-        for duplicate_uuid in [false, true] {
-            let mut duplicate = document.clone();
-            let mut item = duplicate.pages[0].items[index].clone();
-            if let crate::SchItem::Symbol(symbol) = &mut item
-                && !duplicate_uuid
-            {
-                symbol.id = "duplicate-slot".into();
-            }
-            duplicate.pages[0].items.push(item);
-            assert!(!needs_initial_structural_repairs(&duplicate, &netlist).unwrap());
-            if duplicate_uuid {
-                assert!(inspect_schematic(&duplicate, &netlist).is_err());
-            }
-            assert_read_only_matches_plan(&duplicate, &netlist);
-        }
-
-        // Expected identities can refresh missing cached definitions without inspection.
-        let mut uncached = document.clone();
-        uncached.pages[0].library.definitions.clear();
-        assert!(!needs_initial_structural_repairs(&uncached, &netlist).unwrap());
-        assert!(inspect_schematic(&uncached, &netlist).is_err());
-        assert_read_only_matches_plan(&uncached, &netlist);
-
-        // Retain the canonical UUID while making its occupant unbound or mismatched.
-        // Initial removal is essential before projection tries to fill the missing slot.
-        for mismatch in [false, true] {
-            let mut unbound = document.clone();
-            let crate::SchItem::Symbol(symbol) = &mut unbound.pages[0].items[index] else {
-                unreachable!();
-            };
-            if mismatch {
-                symbol.fields.get_mut("Path").unwrap().value = "absent-component".into();
-            } else {
-                symbol.fields.remove("Path");
-            }
-            assert!(needs_initial_structural_repairs(&unbound, &netlist).unwrap());
-            assert_read_only_matches_plan(&unbound, &netlist);
-        }
-    }
-
-    #[test]
-    fn read_only_native_classification_uses_exact_power_and_graphic_predicates() {
-        let netlist = common::compile_fixture("analysis", "simple.zen");
-        let document = plan_reconciliation(None, &netlist, "root.kicad_sch")
-            .unwrap()
-            .apply(None)
-            .unwrap();
-        for power in [false, true] {
-            let mut native = document.clone();
-            let mut symbol = native.pages[0]
-                .items
-                .iter()
-                .find_map(|item| match item {
-                    crate::SchItem::Symbol(symbol) => Some(symbol.clone()),
-                    _ => None,
-                })
-                .unwrap();
-            symbol.id = "native-artwork".into();
-            symbol.lib_id = "Test:Native".into();
-            symbol.lib_name = None;
-            symbol.fields.remove("Path");
-            symbol.on_board = power;
-            symbol.pins.clear();
-            let definition = crate::SymbolDefinition::from_kicad_symbol_sexpr(&format!(
-                "(symbol \"Test:Native\" {})",
-                if power { "(power global)" } else { "" }
-            ))
-            .unwrap();
-            native.pages[0]
-                .library
-                .definitions
-                .insert(symbol.lib_id.clone(), definition);
-            native.pages[0].items.push(crate::SchItem::Symbol(symbol));
-            assert!(!needs_initial_structural_repairs(&native, &netlist).unwrap());
-            assert_read_only_matches_plan(&native, &netlist);
-            if !power {
-                let crate::SchItem::Symbol(symbol) = native.pages[0].items.last_mut().unwrap()
-                else {
-                    unreachable!();
-                };
-                symbol.on_board = true;
-                assert!(needs_initial_structural_repairs(&native, &netlist).unwrap());
-                assert_read_only_matches_plan(&native, &netlist);
-            }
-            native.pages[0].library.definitions.remove("Test:Native");
-            assert!(needs_initial_structural_repairs(&native, &netlist).unwrap());
-            assert_read_only_outcome_matches_plan(&native, &netlist);
-            let invalid = crate::SymbolDefinition::from_kicad_symbol_sexpr(
-                "(symbol \"Test:Native\" (power invalid))",
-            )
-            .unwrap();
-            native.pages[0]
-                .library
-                .definitions
-                .insert("Test:Native".into(), invalid);
-            assert!(needs_initial_structural_repairs(&native, &netlist).is_err());
-            assert_read_only_outcome_matches_plan(&native, &netlist);
-        }
-    }
-
-    #[test]
-    fn read_only_matches_malformed_input_and_library_version_errors() {
-        let netlist = common::compile_fixture("analysis", "simple.zen");
-        let document = plan_reconciliation(None, &netlist, "root.kicad_sch")
-            .unwrap()
-            .apply(None)
-            .unwrap();
-        let assert_error = |document: &SchDocument, netlist: &Schematic| {
-            let planned =
-                plan_reconciliation(Some(document), netlist, "root.kicad_sch").unwrap_err();
-            let direct = reconcile_read_only(document, netlist).unwrap_err();
-            assert_eq!(format!("{direct:#}"), format!("{planned:#}"));
-        };
-        assert_error(&SchDocument::default(), &netlist);
-        let mut malformed = document.clone();
-        malformed.root_page_ids = vec!["absent".into()];
-        assert_error(&malformed, &netlist);
-        for version in [
-            None,
-            Some(pcb_sch::AttributeValue::Number(20200101.0)),
-            Some(pcb_sch::AttributeValue::String("bad".into())),
-        ] {
-            let mut invalid = netlist.clone();
-            for instance in invalid
-                .instances
-                .values_mut()
-                .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
-            {
-                instance
-                    .attributes
-                    .remove(pcb_sch::ATTR_SYMBOL_FORMAT_VERSION);
-                if let Some(version) = &version {
-                    instance
-                        .attributes
-                        .insert(pcb_sch::ATTR_SYMBOL_FORMAT_VERSION.into(), version.clone());
-                }
-            }
-            assert_error(&document, &invalid);
-        }
-    }
 
     #[test]
     fn document_edits_are_exact_and_reversible_at_the_page_boundary() {

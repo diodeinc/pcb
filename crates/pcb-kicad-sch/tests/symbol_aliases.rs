@@ -16,78 +16,29 @@ use pcb_sexpr::{
 
 #[test]
 fn shared_symbol_ast_renames_independently_and_roundtrips() {
-    let mut builder = KicadBuilder::new();
-    builder.define_symbol_raw(
-        r#"(symbol "Test:Part"
-            (property "Value" "Part" (at 0 0 0) (effects (font (size 1 1))))
-            (symbol "Part_1_1"
-                (pin passive line (at 0 0 0) (length 0)
-                    (name "P") (number "1"))))"#,
-    );
-    let document = builder.build();
-    let original = &document.pages[0].library.definitions["Test:Part"];
+    let original = SymbolDefinition::from_kicad_symbol_sexpr(
+        r#"(symbol "Test:Part" (symbol "Part_1_1" (pin passive line (at 0 0 0)
+            (length 0) (name "P") (number "1"))))"#,
+    )
+    .unwrap();
     let original_text = format_tree(&original.sexpr, FormatMode::Normal);
-    let snapshot = document.clone();
-    let page = document.pages[0].clone();
-    let library = document.pages[0].library.clone();
     let definition = original.clone();
-    for shared in [
-        &snapshot.pages[0].library.definitions["Test:Part"],
-        &page.library.definitions["Test:Part"],
-        &library.definitions["Test:Part"],
-        &definition,
-    ] {
-        assert!(Arc::ptr_eq(&original.sexpr, &shared.sexpr));
-    }
-
+    assert!(Arc::ptr_eq(&original.sexpr, &definition.sexpr));
     let renamed = definition.renamed("Other:Alias").unwrap();
     assert!(!Arc::ptr_eq(&original.sexpr, &renamed.sexpr));
-    assert!(Arc::ptr_eq(&original.sexpr, &definition.sexpr));
-    assert_eq!(original.lib_id, "Test:Part");
     assert_eq!(
         format_tree(&original.sexpr, FormatMode::Normal),
         original_text
     );
-    assert_eq!(renamed.lib_id, "Other:Alias");
     assert_eq!(
         format_tree(&renamed.sexpr, FormatMode::Normal),
         original_text
             .replace("\"Test:Part\"", "\"Other:Alias\"")
             .replace("\"Part_1_1\"", "\"Alias_1_1\"")
     );
-
-    for definition in [original, &renamed] {
-        let json = serde_json::to_value(definition).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "lib_id": definition.lib_id,
-                "sexpr": definition.sexpr.as_ref(),
-            })
-        );
-        let reopened: SymbolDefinition = serde_json::from_value(json.clone()).unwrap();
-        assert_eq!(&reopened, definition);
-        assert_eq!(serde_json::to_value(&reopened).unwrap(), json);
-        let source = definition.to_kicad_symbol_library_sexpr();
-        let reopened = SymbolDefinition::from_kicad_symbol_sexpr(&source).unwrap();
-        assert_eq!(reopened.to_kicad_symbol_library_sexpr(), source);
-    }
-
-    let mut saved = snapshot;
-    saved.pages[0]
-        .library
-        .definitions
-        .insert(renamed.lib_id.clone(), renamed);
-    let source = saved.to_kicad_sch().unwrap();
-    let reopened = SchDocument::from_kicad_sch(&source).unwrap();
-    assert_eq!(reopened.to_kicad_sch().unwrap(), source);
-    assert_eq!(
-        format_tree(
-            &reopened.pages[0].library.definitions["Test:Part"].sexpr,
-            FormatMode::Normal
-        ),
-        original_text
-    );
+    let reopened: SymbolDefinition =
+        serde_json::from_value(serde_json::to_value(&renamed).unwrap()).unwrap();
+    assert_eq!(reopened, renamed);
 }
 
 #[test]

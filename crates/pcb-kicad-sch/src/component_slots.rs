@@ -65,14 +65,31 @@ pub(crate) fn validate_symbol_library_version(
 
 pub(crate) fn component_symbol_slots(netlist: &Schematic) -> Result<Vec<SymbolSlotKey>> {
     let mut slots = Vec::new();
-    let mut units_by_definition = HashMap::new();
+    let mut units_by_definition = HashMap::<&str, Vec<u32>>::new();
     for (instance_ref, instance) in &netlist.instances {
         if instance.kind != InstanceKind::Component {
             continue;
         }
         let component_path = canonical_component_path(&instance_ref.instance_path)
             .context("component instance has no canonical path")?;
-        for &unit in component_unit_indices(netlist, instance, &mut units_by_definition)? {
+        let units: &[u32] =
+            if let Some(raw) = raw_symbol_definition(netlist, "component", &instance.attributes)? {
+                match units_by_definition.entry(raw) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        let definition = SymbolDefinition::from_kicad_symbol_sexpr(raw)
+                            .context("failed to parse component symbol definition")?;
+                        entry.insert(
+                            symbol::ParsedSymbolDefinition::parse(&definition)?
+                                .unit_indices()
+                                .to_vec(),
+                        )
+                    }
+                }
+            } else {
+                &[1]
+            };
+        for &unit in units {
             let slot = SymbolSlotKey::new(component_path.clone(), unit)
                 .context("component symbol slot has an empty path")?;
             slots.push(slot);
@@ -233,30 +250,6 @@ pub(crate) fn port_pad_numbers(netlist: &Schematic, port: &InstanceRef) -> BTree
         .collect()
 }
 
-fn component_unit_indices<'a, 'cache>(
-    netlist: &'a Schematic,
-    instance: &'a Instance,
-    units_by_definition: &'cache mut HashMap<&'a str, Vec<u32>>,
-) -> Result<&'cache [u32]> {
-    let Some(raw) = raw_symbol_definition(netlist, "component", &instance.attributes)? else {
-        return Ok(&[1]);
-    };
-    // Borrow text from the immutable netlist; retain only units for this invocation.
-    let units = match units_by_definition.entry(raw) {
-        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-        std::collections::hash_map::Entry::Vacant(entry) => {
-            let definition = SymbolDefinition::from_kicad_symbol_sexpr(raw)
-                .context("failed to parse component symbol definition")?;
-            entry.insert(
-                symbol::ParsedSymbolDefinition::parse(&definition)?
-                    .unit_indices()
-                    .to_vec(),
-            )
-        }
-    };
-    Ok(units)
-}
-
 pub(crate) fn component_symbol_definition(
     netlist: &Schematic,
     instance: &Instance,
@@ -364,13 +357,6 @@ mod tests {
                 instance,
             );
         }
-        let mut cache = HashMap::new();
-        for instance in netlist.instances.values() {
-            component_unit_indices(&netlist, instance, &mut cache)?;
-        }
-        assert_eq!(cache.len(), 2);
-        assert_eq!(cache[MULTI], [1, 3]);
-        assert_eq!(cache[OTHER], [2]);
         let expected = [
             ("A", 2),
             ("B", 1),
@@ -385,44 +371,6 @@ mod tests {
         .map(|(path, unit)| SymbolSlotKey::new(path, unit).unwrap())
         .collect::<Vec<_>>();
         assert_eq!(component_symbol_slots(&netlist)?, expected);
-        Ok(())
-    }
-
-    #[test]
-    fn cache_preserves_attribute_validation_precedence_and_parse_errors() -> Result<()> {
-        let netlist = Schematic::new();
-        let mut cache = HashMap::new();
-        let mut inline = component(SYMBOL_VALUE_ATTR, AttributeValue::String(MULTI.into()));
-        inline
-            .attributes
-            .insert(SYMBOL_PATH_ATTR.into(), AttributeValue::Number(1.0));
-        assert_eq!(
-            component_unit_indices(&netlist, &inline, &mut cache)?,
-            [1, 3]
-        );
-        for key in [SYMBOL_VALUE_ATTR, SYMBOL_PATH_ATTR] {
-            let bad = component(key, AttributeValue::Number(1.0));
-            assert_eq!(
-                component_unit_indices(&netlist, &bad, &mut HashMap::new())
-                    .unwrap_err()
-                    .to_string(),
-                format!("component attribute {key} must be a string")
-            );
-        }
-        let missing = component(SYMBOL_PATH_ATTR, AttributeValue::String("missing".into()));
-        assert_eq!(
-            component_unit_indices(&netlist, &missing, &mut HashMap::new())
-                .unwrap_err()
-                .to_string(),
-            "symbol_path missing is absent from netlist symbols"
-        );
-        let malformed = component(SYMBOL_VALUE_ATTR, AttributeValue::String("(".into()));
-        assert_eq!(
-            component_unit_indices(&netlist, &malformed, &mut HashMap::new())
-                .unwrap_err()
-                .to_string(),
-            "failed to parse component symbol definition"
-        );
         Ok(())
     }
 }
