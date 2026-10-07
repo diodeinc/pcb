@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use pcb_eda::kicad::{metadata::SymbolMetadata, symbol_library::KicadSymbolLibrary};
 use serde::Serialize;
@@ -36,17 +36,6 @@ struct SymbolInspection {
 }
 
 pub fn execute(args: InspectArgs) -> Result<()> {
-    let file_type = std::fs::metadata(&args.path)
-        .with_context(|| format!("Cannot inspect {}", args.path.display()))?;
-    ensure!(
-        match args.path.extension().and_then(|ext| ext.to_str()) {
-            Some("kicad_sym") => file_type.is_file(),
-            Some("kicad_symdir") => file_type.is_dir(),
-            _ => false,
-        },
-        "Unsupported inspection path {}: expected a .kicad_sym file or .kicad_symdir directory",
-        args.path.display()
-    );
     let library = KicadSymbolLibrary::from_file_strict(&args.path)
         .with_context(|| format!("Cannot inspect {}", args.path.display()))?;
     let symbols = library

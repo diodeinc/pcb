@@ -29,7 +29,7 @@ fn assert_failure(output: &Output, expected: &str) {
 
 const BASE: &str = r#"(symbol "Z\"Base"
     (property "Value" "Base value")
-    (property "ki_description" "Base description")
+    (property "ki_description" "Base; description")
     (property "ki_keywords" "power  buck\tconverter")
     (property "Footprint" "../footprints/part.kicad_mod")
     (property "Datasheet" "../docs/part.pdf")
@@ -72,7 +72,7 @@ fn inspect_metadata_is_resolved_deterministic_and_read_only() {
                 }},
                 {"name": "Empty", "metadata": {"primary": {}, "custom_properties": {}}},
                 {"name": "Z\"Base", "metadata": {
-                    "primary": {"value": "Base value", "description": "Base description",
+                    "primary": {"value": "Base value", "description": "Base; description",
                         "keywords": ["power", "buck", "converter"], "footprint": "../footprints/part.kicad_mod", "datasheet": "../docs/part.pdf"},
                     "custom_properties": {"Manufacturer_Name": "Acme", "Manufacturer_Part_Number": "BASE-42"}
                 }}
@@ -166,6 +166,10 @@ fn inspect_errors_never_emit_partial_json() {
         (
             format!("{} trailing", library("(symbol \"A\")")),
             "Invalid symbol library",
+        ),
+        (
+            format!("{} ; comment", library("(symbol \"A\")")),
+            "KiCad does not support comments",
         ),
         ("(not_a_library)".into(), "Expected a kicad_symbol_lib root"),
     ] {

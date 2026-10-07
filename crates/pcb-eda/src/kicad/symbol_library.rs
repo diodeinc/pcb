@@ -115,10 +115,13 @@ impl KicadSymbolLibrary {
     /// Each source is parsed once; definitions are cached for the usual resolver.
     /// Reject ambiguous metadata and invalid inheritance before resolving any symbol.
     pub fn from_file_strict(path: &Path) -> Result<Self> {
-        let paths = if path.is_dir() {
-            symbol_library_paths(path)?
-        } else {
-            vec![path.to_path_buf()]
+        let file_type = fs::metadata(path)?;
+        let paths = match path.extension().and_then(|ext| ext.to_str()) {
+            Some("kicad_sym") if file_type.is_file() => vec![path.to_path_buf()],
+            Some("kicad_symdir") if file_type.is_dir() => symbol_library_paths(path)?,
+            _ => bail!(
+                "Unsupported inspection path: expected a .kicad_sym file or .kicad_symdir directory"
+            ),
         };
         ensure!(
             !paths.is_empty(),
@@ -140,21 +143,20 @@ impl KicadSymbolLibrary {
                 .with_context(|| format!("Invalid symbol library {}", path.display()))?;
         }
 
-        // Validate independently of the resolved cache, so no fallback can hide a
-        // missing parent or cycle. Completed chains are visited only once.
-        let mut checked = HashSet::new();
+        // Validate before resolution can cache a missing-parent/cycle fallback.
+        let mut visited = HashSet::new();
         for name in library.symbol_locations.keys() {
             let mut chain = Vec::new();
-            let mut visiting = HashSet::new();
             let mut current = name.as_str();
-            while !checked.contains(current) {
-                if !visiting.insert(current) {
-                    chain.push(current);
-                    bail!(
-                        "{}: inheritance cycle: {}",
+            loop {
+                if !visited.insert(current) {
+                    ensure!(
+                        !chain.contains(&current),
+                        "{}: inheritance cycle: {} -> {current}",
                         path.display(),
                         chain.join(" -> ")
                     );
+                    break;
                 }
                 chain.push(current);
                 let location = &library.symbol_locations[current];
@@ -168,15 +170,15 @@ impl KicadSymbolLibrary {
                 );
                 current = parent;
             }
-            checked.extend(chain);
         }
         Ok(library)
     }
 
     /// Validate and cache one source, retaining symbol-relative definition spans.
     fn add_source_strict(&mut self, source: String) -> Result<()> {
-        if let Some((offset, fault)) = pcb_sexpr::scan::malformed(&source) {
-            bail!("at byte {offset}: {fault}");
+        // The S-expression parser accepts comments; KiCad does not.
+        if let Some(comment) = pcb_sexpr::scan::comments(&source).next() {
+            bail!("at byte {}: KiCad does not support comments", comment.start);
         }
         let mut roots = pcb_sexpr::parse_all(&source)?;
         ensure!(roots.len() == 1, "Expected exactly one library root");
