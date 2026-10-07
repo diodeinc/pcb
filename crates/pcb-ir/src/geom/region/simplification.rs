@@ -295,13 +295,22 @@ fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>) -> Vec<Vec<(Ring, T)>> {
 /// Open groups a sweep line compares each ring against before folding them.
 const MAX_OPEN_GROUPS: usize = 256;
 
+const GRID_SUBDIVISIONS: i128 = 1024;
+
 /// Integer coordinate on a fixed grid, using translation-invariant half-up
 /// rounding. Ties are decided on a 1/1024 sub-grid to absorb floating-point
 /// noise. Callers must supply a positive finite grid and coordinates within
 /// the exact integer range (2^50 grid steps).
 pub fn grid_coordinate(value: f64, grid: f64) -> i64 {
     // The sub-grid intermediate needs more range than the output coordinate.
-    ((value / grid * 1024.0 + 0.5).floor() as i128 + 512).div_euclid(1024) as i64
+    ((value / grid * GRID_SUBDIVISIONS as f64 + 0.5).floor() as i128 + GRID_SUBDIVISIONS / 2)
+        .div_euclid(GRID_SUBDIVISIONS) as i64
+}
+
+/// Maximum planar displacement from rounding both axes with [`grid_coordinate`],
+/// including its half-sub-grid tie tolerance.
+pub fn grid_rounding_error(grid: f64) -> f64 {
+    grid * (1.0 + 1.0 / GRID_SUBDIVISIONS as f64) / std::f64::consts::SQRT_2
 }
 
 /// Regularize filled rings on an exact output grid.

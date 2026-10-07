@@ -724,9 +724,7 @@ fn prepare_on_grid(
     // The grid overlay is the only regularization: it resolves the fill rule
     // on the coordinates the file will actually carry.
     let (rings, uncertainty_mm) = region::flatten_within(payloads, accuracy)?;
-    // Include the half-sub-grid tie tolerance of grid_coordinate, on both axes.
-    let rounding_error = DEFAULT_GRID_MM * (1.0 + 1.0 / 1024.0) / std::f64::consts::SQRT_2;
-    accuracy.check(uncertainty_mm + rounding_error)?;
+    accuracy.check(uncertainty_mm + region::grid_rounding_error(DEFAULT_GRID_MM))?;
     region::decompose_on_grid(
         rings,
         fill_rule,

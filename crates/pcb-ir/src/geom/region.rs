@@ -27,7 +27,7 @@ pub use gaps::{DiskGapRegularization, GapRegularizationError};
 pub(crate) use gaps::{TwoSidedResidualComponent, gap_reach_mm};
 pub use query::PreparedRegion;
 pub(crate) use simplification::{decimate_rings_inward, simplify_rings};
-pub use simplification::{grid_coordinate, simplify_shapes};
+pub use simplification::{grid_coordinate, grid_rounding_error, simplify_shapes};
 
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 
