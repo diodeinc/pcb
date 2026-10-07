@@ -31,14 +31,11 @@ import zipfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 from xml.etree import ElementTree as ET
 
-import numpy as np
-from PIL import Image, ImageDraw
-from scipy import ndimage
-
-Image.MAX_IMAGE_PIXELS = None  # our own renders; sizes are capped below
+if TYPE_CHECKING:
+    import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SVG_NAMESPACE = "http://www.w3.org/2000/svg"
@@ -350,6 +347,8 @@ def compare_layer(
     kicad_gerber: Path,
     ipc_gerber: Path,
 ) -> LayerResult:
+    from scipy import ndimage
+
     safe = kicad_layer.replace(".", "_")
     kicad_svg = out_dir / f"kicad-gerber-{safe}.svg"
     ipc_svg = out_dir / f"ipc-gerber-{safe}.svg"
@@ -403,6 +402,10 @@ def compare_layer(
 
 
 def alpha_mask(png: Path, threshold: int) -> np.ndarray:
+    import numpy as np
+    from PIL import Image
+
+    Image.MAX_IMAGE_PIXELS = None  # our own renders; sizes are capped below
     image = np.asarray(Image.open(png).convert("RGBA"))
     return image[:, :, 3] > threshold
 
@@ -414,6 +417,9 @@ def write_diff_panel(
     candidate: np.ndarray,
     px_per_mm: int,
 ) -> None:
+    import numpy as np
+    from PIL import Image, ImageDraw
+
     height, width = reference.shape
     rgb = np.full((height, width, 3), 255, dtype=np.uint8)
     rgb[reference & candidate] = (18, 18, 18)
@@ -543,8 +549,10 @@ def rasterize_svg(
 
 @dataclass
 class DrillFile:
-    holes: list[tuple[float, float, float]] = field(default_factory=list)
-    slots: list[tuple[float, float, float, float, float]] = field(default_factory=list)
+    holes: list[tuple[float, float, float, str]] = field(default_factory=list)
+    slots: list[tuple[float, float, float, float, float, str]] = field(
+        default_factory=list
+    )
 
 
 @dataclass
@@ -610,10 +618,31 @@ def compare_drills(
 
 
 COORD_RE = re.compile(r"([XY])(-?\d*\.?\d+)")
+FILE_FUNCTION_RE = re.compile(
+    r";\s*#@!\s*TF\.FileFunction,(Plated|NonPlated),([1-9]\d*),([1-9]\d*),"
+    r"(PTH|NPTH|Blind|Buried)(?:,(?:Drill|Rout|Mixed))?"
+)
 
 
 def parse_excellon(path: Path, out: DrillFile) -> None:
     """Parse the decimal-format Excellon/XNC subset KiCad and pcbc emit."""
+    lines = [line.strip() for line in path.read_text().splitlines()]
+    headers = [
+        line for line in lines if line.startswith(";") and "TF.FileFunction" in line
+    ]
+    if len(headers) != 1:
+        fail(f"expected one drill FileFunction in {path}, got {len(headers)}")
+    metadata = FILE_FUNCTION_RE.fullmatch(headers[0])
+    if metadata is None:
+        fail(f"invalid drill FileFunction in {path}: {headers[0]}")
+    plating, first, last, kind = metadata.groups()
+    first, last = sorted((int(first), int(last)))
+    # XNC adopts Gerber FileFunction semantics: layer order is insignificant.
+    # Compare the declared type; do not infer it from an incomplete stackup.
+    through = {"Plated": "PTH", "NonPlated": "NPTH"}[plating]
+    if first == last or kind not in (through, "Blind", "Buried"):
+        fail(f"contradictory drill FileFunction in {path}: {headers[0]}")
+    function = f"{plating},{first},{last},{kind}"
     tools: dict[str, float] = {}
     current: float | None = None
     in_header = True
@@ -622,8 +651,7 @@ def parse_excellon(path: Path, out: DrillFile) -> None:
     plunged = False
     scale = 1.0
 
-    for raw_line in path.read_text().splitlines():
-        line = raw_line.strip()
+    for line in lines:
         if not line or line.startswith(";"):
             continue
         if line == "M48":
@@ -657,7 +685,9 @@ def parse_excellon(path: Path, out: DrillFile) -> None:
             if route_start is not None and route_points and current is not None:
                 start = route_start
                 for end in route_points:
-                    out.slots.append((start[0], start[1], end[0], end[1], current))
+                    out.slots.append(
+                        (start[0], start[1], end[0], end[1], current, function)
+                    )
                     start = end
             route_start = None
             route_points = []
@@ -679,11 +709,13 @@ def parse_excellon(path: Path, out: DrillFile) -> None:
                 start = parse_coords(first, scale)
                 end = parse_coords(second, scale)
                 if start is not None and end is not None:
-                    out.slots.append((start[0], start[1], end[0], end[1], current))
+                    out.slots.append(
+                        (start[0], start[1], end[0], end[1], current, function)
+                    )
                 continue
             coords = parse_coords(line, scale)
             if coords is not None:
-                out.holes.append((coords[0], coords[1], current))
+                out.holes.append((coords[0], coords[1], current, function))
 
 
 def parse_coords(text: str, scale: float) -> tuple[float, float] | None:
@@ -716,11 +748,11 @@ def match_entries(
     extra.extend(describe(entry) for entry in remaining)
 
 
-def entries_match(a: Sequence[float], b: Sequence[float]) -> bool:
-    if len(a) != len(b):
+def entries_match(a: Sequence, b: Sequence) -> bool:
+    if len(a) != len(b) or a[-1] != b[-1]:
         return False
-    *a_coords, a_diameter = a
-    *b_coords, b_diameter = b
+    *a_coords, a_diameter, _ = a
+    *b_coords, b_diameter, _ = b
     if abs(a_diameter - b_diameter) > DRILL_DIAMETER_TOLERANCE_MM:
         return False
     if len(a_coords) == 2:
@@ -741,13 +773,13 @@ def coords_close(a: Sequence[float], b: Sequence[float]) -> bool:
     )
 
 
-def format_hole(hole: tuple[float, float, float]) -> str:
-    return f"hole d={hole[2]:.3f} at ({hole[0]:.3f}, {hole[1]:.3f})"
+def format_hole(hole: tuple[float, float, float, str]) -> str:
+    return f"{hole[3]}: hole d={hole[2]:.3f} at ({hole[0]:.3f}, {hole[1]:.3f})"
 
 
-def format_slot(slot: tuple[float, float, float, float, float]) -> str:
+def format_slot(slot: tuple[float, float, float, float, float, str]) -> str:
     return (
-        f"slot d={slot[4]:.3f} from ({slot[0]:.3f}, {slot[1]:.3f}) "
+        f"{slot[5]}: slot d={slot[4]:.3f} from ({slot[0]:.3f}, {slot[1]:.3f}) "
         f"to ({slot[2]:.3f}, {slot[3]:.3f})"
     )
 

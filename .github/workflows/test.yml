@@ -171,6 +171,8 @@ jobs:
       - run: uv run --locked ruff check .
       - run: uv run --locked ruff format --check .
       - run: uv run --locked pytest lens/tests -v
+      - run: uv run --locked pytest bin/tests -v
+        working-directory: .
 
   check_readme:
     name: Check README Sync
