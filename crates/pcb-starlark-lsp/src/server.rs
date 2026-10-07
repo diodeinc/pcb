@@ -466,6 +466,31 @@ pub trait LspContext {
         ServerCapabilities::default()
     }
 
+    /// Language-specific completion, consulted before the generic
+    /// AST-based completion. Return `None` (or an empty list) to fall back.
+    fn completion_items(
+        &self,
+        _uri: &LspUri,
+        _position: lsp_types::Position,
+    ) -> Option<Vec<CompletionItem>> {
+        None
+    }
+
+    /// Definition for positions the generic AST walk does not model
+    /// (e.g. keyword-argument keys). `Some` is authoritative, even when empty.
+    fn definition_at(
+        &self,
+        _uri: &LspUri,
+        _position: lsp_types::Position,
+    ) -> Option<Vec<LocationLink>> {
+        None
+    }
+
+    /// Hover for such positions. `None` falls back to the generic hover.
+    fn hover_at(&self, _uri: &LspUri, _position: lsp_types::Position) -> Option<Hover> {
+        None
+    }
+
     /// Return additional diagnostics that should only run on save (e.g. simulation).
     /// The returned diagnostics are merged with parse diagnostics before publishing.
     fn on_save_diagnostics(&self, _uri: &LspUri) -> Vec<Diagnostic> {
@@ -623,6 +648,9 @@ impl<T: LspContext> Backend<T> {
                 },
             )),
             definition_provider,
+            // Deliberately no trigger characters. With the editor's default
+            // first-item selection, Enter after `(`/`,` in a multi-line call would accept a
+            // suggestion instead of inserting a newline; typing a letter or Ctrl+Space completes.
             completion_provider: Some(CompletionOptions::default()),
             hover_provider: Some(HoverProviderCapability::Simple(true)),
             workspace_symbol_provider: if context.is_eager() {
@@ -1059,6 +1087,13 @@ impl<T: LspContext> Backend<T> {
         let workspace_root =
             Self::get_workspace_root(initialize_params.workspace_folders.as_ref(), &uri);
 
+        if let Some(links) = self
+            .context
+            .definition_at(&uri, params.text_document_position_params.position)
+        {
+            return Ok(GotoDefinitionResponse::Link(links));
+        }
+
         let location = match self.get_ast(&uri) {
             Some(ast) => {
                 let location = ast.find_definition_at_location(line, character);
@@ -1120,6 +1155,14 @@ impl<T: LspContext> Backend<T> {
         let uri = params.text_document_position.text_document.uri.try_into()?;
         let line = params.text_document_position.position.line;
         let character = params.text_document_position.position.character;
+
+        if let Some(items) = self
+            .context
+            .completion_items(&uri, params.text_document_position.position)
+            && !items.is_empty()
+        {
+            return Ok(CompletionResponse::Array(items));
+        }
 
         let symbols: Option<Vec<_>> = match self.get_ast(&uri) {
             Some(document) => {
@@ -1259,6 +1302,13 @@ impl<T: LspContext> Backend<T> {
             contents: HoverContents::Array(vec![]),
             range: None,
         };
+
+        if let Some(hover) = self
+            .context
+            .hover_at(&uri, params.text_document_position_params.position)
+        {
+            return Ok(hover);
+        }
 
         Ok(match self.get_ast(&uri) {
             Some(document) => {
