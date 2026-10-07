@@ -509,6 +509,22 @@ fn check_properties(chain: &[Def], issues: &mut Vec<SymbolIssue>) {
     }
 }
 
+/// Strict loading needs parse errors, not the lint warnings or suggested fixes.
+pub(super) fn validate_symbol_forms(name: &str, node: &Arc<Sexpr>) -> anyhow::Result<()> {
+    let def = Def {
+        source: 0,
+        offset: 0,
+        name: name.to_owned(),
+        node: Arc::clone(node),
+    };
+    let mut issues = Vec::new();
+    check_forms(&def, &mut issues);
+    if let Some(issue) = issues.into_iter().find(|issue| issue.severity == Error) {
+        anyhow::bail!("{}", issue.message);
+    }
+    Ok(())
+}
+
 /// Walk every form of a definition for what KiCad rejects or would not write.
 fn check_forms(def: &Def, issues: &mut Vec<SymbolIssue>) {
     let mut report = |rule: &Rule, span: Span, message: String, fix: Option<Edit>| {

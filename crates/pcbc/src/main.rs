@@ -33,6 +33,7 @@ mod freerouting;
 mod gerber;
 mod import;
 mod info;
+mod inspect;
 mod ipc2581;
 mod layout;
 mod list;
@@ -125,6 +126,9 @@ enum Commands {
 
     /// Display workspace and board information
     Info(info::InfoArgs),
+
+    /// Inspect metadata in a local KiCad symbol library
+    Inspect(inspect::InspectArgs),
 
     /// Import a KiCad schematic or project into a Zener board repository
     Import(import::ImportArgs),
@@ -242,6 +246,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Update(args) => update::execute(args),
         Commands::Bom(args) => bom::execute(args),
         Commands::Info(args) => info::execute(args),
+        Commands::Inspect(args) => inspect::execute(args),
         Commands::Import(args) => import::execute(args),
         Commands::Changelog(args) => changelog::execute(args),
         Commands::Layout(args) => layout::execute(args),
