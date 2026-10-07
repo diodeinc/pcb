@@ -21,7 +21,7 @@ use pcb_ir::geom::{
     Affine2, FillRule, LineCap, Point, Polarity, Segment, StrokePatternMark, StrokeStyle,
 };
 
-const GERBER_GEOMETRY_GRID_MM: f64 = 0.001;
+use crate::write::DEFAULT_GRID_MM;
 const GERBER_OUTLINE_MAX_VERTICES: usize = 5000;
 
 /// Gerber file-level attributes carried as artwork layer metadata.
@@ -724,11 +724,13 @@ fn prepare_on_grid(
     // The grid overlay is the only regularization: it resolves the fill rule
     // on the coordinates the file will actually carry.
     let (rings, uncertainty_mm) = region::flatten_within(payloads, accuracy)?;
-    accuracy.check(uncertainty_mm + GERBER_GEOMETRY_GRID_MM / std::f64::consts::SQRT_2)?;
+    // Include the half-sub-grid tie tolerance of grid_coordinate, on both axes.
+    let rounding_error = DEFAULT_GRID_MM * (1.0 + 1.0 / 1024.0) / std::f64::consts::SQRT_2;
+    accuracy.check(uncertainty_mm + rounding_error)?;
     region::decompose_on_grid(
         rings,
         fill_rule,
-        GERBER_GEOMETRY_GRID_MM,
+        DEFAULT_GRID_MM,
         GERBER_OUTLINE_MAX_VERTICES,
     )
     .map_err(|error| GerberError::InvalidStructure(error.to_string()))
@@ -786,11 +788,11 @@ fn lower_point(point: Point) -> GerberPoint {
 }
 
 fn quantize_mm(value: f64) -> i64 {
-    (value * 1_000_000.0).round() as i64
+    region::grid_coordinate(value, DEFAULT_GRID_MM)
 }
 
 fn gerber_coordinate(value: f64) -> f64 {
-    quantize_mm(value) as f64 / 1_000_000.0
+    quantize_mm(value) as f64 * DEFAULT_GRID_MM
 }
 
 #[cfg(test)]
@@ -995,16 +997,95 @@ mod tests {
     }
 
     #[test]
+    fn regions_and_draws_preserve_the_same_output_coordinates() {
+        // Independent nanometre expectations, including signed ties and both
+        // sides of a rounding boundary. Whole-grid translations retain width.
+        for (source, expected) in [
+            (102.290499, 102290499_i64),
+            (-102.290499, -102290499),
+            (1.00000049, 1000000),
+            (1.0000005, 1000001),
+            (1.00000051, 1000001),
+            (-1.00000049, -1000000),
+            (-1.0000005, -1000000),
+            (-1.00000051, -1000001),
+        ] {
+            for translation in [-1_i64, 0, 1] {
+                let x = source + translation as f64 * 1e-6;
+                let expected = expected + translation;
+                let rings = prepare_on_grid(
+                    &[rect_payload(x, x, x + 0.000003, x + 0.000007)],
+                    FillRule::NonZero,
+                    GeometryAccuracy::default(),
+                )
+                .unwrap();
+                assert_eq!(rings.len(), 1);
+                let mut actual: Vec<_> = rings[0]
+                    .iter()
+                    .map(|p| ((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64))
+                    .collect();
+                actual.sort();
+                assert_eq!(
+                    actual,
+                    [
+                        (expected, expected),
+                        (expected, expected + 7),
+                        (expected + 3, expected),
+                        (expected + 3, expected + 7),
+                    ],
+                    "source {source}, translation {translation}"
+                );
+                let layer = GerberLayer {
+                    apertures: vec![WriterAperture {
+                        code: 10,
+                        template: WriterApertureTemplate::Circle {
+                            diameter: 0.1,
+                            hole_diameter: None,
+                        },
+                        attributes: AttributeSets::EMPTY,
+                    }],
+                    objects: vec![WriterObject::dark(ObjectKind::Draw {
+                        start: GerberPoint { x, y: x },
+                        end: GerberPoint {
+                            x: x + 0.000003,
+                            y: x + 0.000007,
+                        },
+                        aperture: 10,
+                    })],
+                    ..GerberLayer::default()
+                };
+                let (text, _) = reread(&layer);
+                assert!(
+                    text.contains(&format!("X{expected}Y{expected}D02*")),
+                    "{text}"
+                );
+                assert!(
+                    text.contains(&format!("X{}Y{}D01*", expected + 3, expected + 7)),
+                    "{text}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn grid_preparation_rejects_subgrid_budgets() {
         let contour = rect_payload(0.0001, 0.0001, 0.0002, 0.0002);
-        assert!(
-            prepare_on_grid(
-                &[contour],
-                FillRule::NonZero,
-                GeometryAccuracy::new(0.0001).unwrap()
-            )
-            .is_err()
-        );
+        for (budget, accepted) in [
+            (0.0000001, false),
+            (0.0000007075, false),
+            (0.000000708, true),
+        ] {
+            assert_eq!(
+                prepare_on_grid(
+                    std::slice::from_ref(&contour),
+                    FillRule::NonZero,
+                    GeometryAccuracy::new(budget).unwrap()
+                )
+                .is_ok(),
+                accepted,
+                "budget {budget}"
+            );
+        }
     }
 
     #[test]
@@ -1092,7 +1173,7 @@ mod tests {
                 Polarity::Dark,
                 &mut ApertureTable::default(),
                 &mut AttributeSets::default(),
-                GeometryAccuracy::new(0.0001).unwrap(),
+                GeometryAccuracy::new(0.0000001).unwrap(),
             )
             .is_err()
         );
@@ -1449,19 +1530,19 @@ mod tests {
         for (offset, reflected) in [
             (0.0, false),
             (0.0, true),
-            (0.00025, false),
-            (0.00075, false),
-            (0.00025, true),
+            (0.0000005, false),
+            (-0.0000005, false),
+            (0.0000005, true),
         ] {
             let map =
                 |x: f64, y: f64| Point::new((if reflected { -x } else { x }) + offset, y + offset);
             let hole = [
                 map(-2.0, -2.0),
                 map(2.0, -2.0),
-                map(0.0004, 0.0),
+                map(0.0000004, 0.0),
                 map(2.0, 2.0),
                 map(-2.0, 2.0),
-                map(-0.0004, 0.0),
+                map(-0.0000004, 0.0),
             ];
             let (rings, layer) = even_odd_region_layer(&[
                 polygon_payload([
@@ -1472,15 +1553,9 @@ mod tests {
                 ]),
                 polygon_payload(hole),
             ]);
-            let snapped_hole = hole
-                .iter()
-                .map(|point| {
-                    [point.x, point.y].map(|value| {
-                        (value / GERBER_GEOMETRY_GRID_MM).round() * GERBER_GEOMETRY_GRID_MM
-                    })
-                })
-                .collect();
-            let expected_area = 100.0 - region::ring_signed_area(&snapped_hole).abs();
+            // Two triangles of base 4 and height 2 when the neck collapses;
+            // at a half-grid offset the neck remains one nanometre wide.
+            let expected_area = if offset == 0.0 { 92.0 } else { 91.999998 };
             let area: f64 = rings
                 .iter()
                 .map(|ring| region::ring_signed_area(ring).abs())

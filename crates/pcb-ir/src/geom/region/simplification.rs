@@ -295,6 +295,15 @@ fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>) -> Vec<Vec<(Ring, T)>> {
 /// Open groups a sweep line compares each ring against before folding them.
 const MAX_OPEN_GROUPS: usize = 256;
 
+/// Integer coordinate on a fixed grid, using translation-invariant half-up
+/// rounding. Ties are decided on a 1/1024 sub-grid to absorb floating-point
+/// noise. Callers must supply a positive finite grid and coordinates within
+/// the exact integer range (2^50 grid steps).
+pub fn grid_coordinate(value: f64, grid: f64) -> i64 {
+    // The sub-grid intermediate needs more range than the output coordinate.
+    ((value / grid * 1024.0 + 0.5).floor() as i128 + 512).div_euclid(1024) as i64
+}
+
 /// Regularize filled rings on an exact output grid.
 ///
 /// The fixed-scale integer overlay resolves crossings and removes coincident
@@ -307,16 +316,11 @@ pub(super) fn integer_shapes_on_grid(
     grid: f64,
     options: IntOverlayOptions<u128>,
 ) -> IntShapes<i64> {
-    // Round half up, deciding ties on a 1/1024 sub-grid so floating-point
-    // noise cannot flip them. Unlike rounding away from zero this commutes
-    // with translation by grid multiples: a dimension that is a whole number
-    // of grid steps survives exactly wherever the shape sits.
-    let snap = |value: f64| ((value / grid * 1024.0 + 0.5).floor() as i64 + 512).div_euclid(1024);
     let rings = rings
         .into_iter()
         .map(|ring| {
             ring.into_iter()
-                .map(|[x, y]| IntPoint::new(snap(x), snap(y)))
+                .map(|[x, y]| IntPoint::new(grid_coordinate(x, grid), grid_coordinate(y, grid)))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
