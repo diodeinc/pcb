@@ -644,9 +644,10 @@ mod tests {
             let mut duplicate = document.clone();
             let mut item = duplicate.pages[0].items[index].clone();
             if let crate::SchItem::Symbol(symbol) = &mut item
-                && !duplicate_uuid {
-                    symbol.id = "duplicate-slot".into();
-                }
+                && !duplicate_uuid
+            {
+                symbol.id = "duplicate-slot".into();
+            }
             duplicate.pages[0].items.push(item);
             assert!(!needs_initial_structural_repairs(&duplicate, &netlist).unwrap());
             if duplicate_uuid {
