@@ -519,7 +519,6 @@ pub(super) struct ImportSchematicAt {
 
 #[derive(Debug, Clone)]
 pub(super) enum ImportFootprintGeometry {
-    BoardInstance(String),
     LibraryFile(String),
     StandardLibrary,
     /// The schematic names a footprint whose geometry is not available locally.
