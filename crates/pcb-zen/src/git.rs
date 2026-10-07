@@ -230,6 +230,13 @@ pub fn run_output(repo_root: &Path, args: &[&str]) -> anyhow::Result<String> {
     run_stdout(cmd)
 }
 
+/// Read local Git data without fetching missing objects in partial clones.
+pub(crate) fn run_local_output(repo_root: &Path, args: &[&str]) -> anyhow::Result<String> {
+    let mut cmd = git(repo_root);
+    cmd.env("GIT_NO_LAZY_FETCH", "1").args(args);
+    run_stdout(cmd)
+}
+
 pub fn run_output_opt(repo_root: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = git(repo_root);
     cmd.args(args);
@@ -458,8 +465,32 @@ pub fn list_peeled_tags(repo_root: &Path) -> Vec<Tag> {
         cmd
     });
 
+    parse_peeled_tags(lines.iter().map(String::as_str))
+}
+
+/// Strict counterpart for consumers that cannot accept a partial inventory.
+pub(crate) fn try_list_peeled_tags(repo_root: &Path) -> anyhow::Result<Vec<Tag>> {
+    let output = git(repo_root)
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .args(["show-ref", "--tags", "--dereference"])
+        .output()?;
+    // show-ref exits 1 (without diagnostics) when there are no tags.
+    anyhow::ensure!(
+        output.status.success()
+            || (output.status.code() == Some(1)
+                && output.stdout.is_empty()
+                && output.stderr.is_empty()),
+        "Cannot list local tags: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(parse_peeled_tags(
+        std::str::from_utf8(&output.stdout)?.lines(),
+    ))
+}
+
+fn parse_peeled_tags<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<Tag> {
     let mut tags: Vec<Tag> = Vec::new();
-    for line in &lines {
+    for line in lines {
         let Some((object, name)) = line.split_once(" refs/tags/") else {
             continue;
         };
@@ -474,6 +505,52 @@ pub fn list_peeled_tags(repo_root: &Path) -> Vec<Tag> {
         }
     }
     tags
+}
+
+/// Read selected annotated tag objects by immutable object ID, in one process.
+/// Lightweight tags have no annotation and are omitted.
+pub(crate) fn tag_annotations(
+    repo_root: &Path,
+    tags: &[Tag],
+) -> anyhow::Result<HashMap<String, String>> {
+    let tags: Vec<_> = tags.iter().filter(|tag| tag.object != tag.commit).collect();
+    if tags.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let input: String = tags.iter().map(|tag| format!("{}\n", tag.object)).collect();
+    let mut cmd = git(repo_root);
+    cmd.env("GIT_NO_LAZY_FETCH", "1")
+        .args(["cat-file", "--batch"]);
+    let output = run_with_input(cmd, &input)?;
+    let mut bytes = output.as_bytes();
+    let mut annotations = HashMap::new();
+    for tag in tags {
+        let end = bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .context("Missing tag object header")?;
+        let header = std::str::from_utf8(&bytes[..end])?;
+        let fields: Vec<_> = header.split_whitespace().collect();
+        anyhow::ensure!(
+            fields.len() == 3 && fields[0] == tag.object && fields[1] == "tag",
+            "Cannot read tag {}: {header}",
+            tag.name
+        );
+        let size: usize = fields[2].parse()?;
+        bytes = &bytes[end + 1..];
+        anyhow::ensure!(
+            bytes.len() > size && bytes[size] == b'\n',
+            "Truncated tag object {}",
+            tag.name
+        );
+        let object = std::str::from_utf8(&bytes[..size])?;
+        let (_, message) = object
+            .split_once("\n\n")
+            .context("Missing tag annotation")?;
+        annotations.insert(tag.object.clone(), message.to_owned());
+        bytes = &bytes[size + 1..];
+    }
+    Ok(annotations)
 }
 
 /// Commits reachable from `commit`, newest first.

@@ -553,3 +553,156 @@ fn test_pcb_info_source_patch_takes_precedence_over_vendor() {
     assert_eq!(patch["source"], "patch");
     assert_eq!(patch["board_entrypoint"], "vendor/parts/1.0.0/part.zen");
 }
+
+fn inventory(sandbox: &Sandbox) -> serde_json::Value {
+    let output = sandbox
+        .cmd(
+            env!("CARGO_BIN_EXE_pcbc"),
+            ["info", "--format", "json", "--inventory"],
+        )
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .expect("inventory succeeds");
+    serde_json::from_slice(&output.stdout).expect("inventory emits one JSON document")
+}
+
+#[test]
+fn test_inventory_pins_selected_release_not_checkout_contents() {
+    use serde_json::json;
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write(
+            "pcb.toml",
+            "[workspace]\nrepository = \"example.com/registry\"\npreferred = [\"parts/a\"]\n",
+        )
+        .write(
+            "parts/a/pcb.toml",
+            "[dependencies]\n\"example.invalid/missing\" = \"1.0.0\"\n",
+        )
+        .write("parts/a/broken.kicad_sym", "not a symbol library")
+        .write("parts/legacy/pcb.toml", "")
+        .write("parts/lightweight/pcb.toml", "")
+        .write("parts/unpublished/pcb.toml", "")
+        .init_git()
+        .commit("published snapshot")
+        .tag("parts/a/v0.9.0")
+        .tag("parts/lightweight/v0.4.0");
+    let release_commit = sandbox.cmd("git", ["rev-parse", "HEAD"]).read().unwrap();
+    let content_hash = "h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    // No v prefix in the selected tag. Ignore manifest and other-package hashes.
+    sandbox.cmd("git", ["tag", "-a", "parts/a/0.10.0", "-m", &format!(
+        "example.com/registry/parts/a v0.10.0/pcb.toml h1:manifest\nexample.com/registry/parts/other v0.10.0 h1:other\nexample.com/registry/parts/a v0.10.0 {content_hash}"
+    )]).run().unwrap();
+    sandbox
+        .cmd(
+            "git",
+            ["tag", "-a", "parts/legacy/v0.2.0", "-m", "Legacy release"],
+        )
+        .run()
+        .unwrap();
+    sandbox
+        .cmd("git", ["checkout", "-b", "side"])
+        .run()
+        .unwrap();
+    sandbox
+        .write("side.txt", "side branch")
+        .commit("unmerged")
+        .tag("parts/a/v9.0.0");
+    sandbox.cmd("git", ["checkout", "main"]).run().unwrap();
+    sandbox
+        .write("parts/a/new.zen", "unpublished bytes")
+        .commit("unpublished package edits");
+    sandbox.write("parts/a/dirty.zen", "dirty bytes");
+    let expected = json!({"packages": [
+        {"path": "parts/a", "preferred": true, "release": {"version": "0.10.0", "commit": release_commit, "contentHash": content_hash}},
+        {"path": "parts/legacy", "preferred": false, "release": {"version": "0.2.0", "commit": release_commit, "contentHash": null}},
+        {"path": "parts/lightweight", "preferred": false, "release": {"version": "0.4.0", "commit": release_commit, "contentHash": null}},
+        {"path": "parts/unpublished", "preferred": false, "release": null}
+    ]});
+    assert_eq!(inventory(&sandbox), expected);
+    assert!(
+        !sandbox.root_path().join(".pcb").exists(),
+        "inventory must not materialize dependencies"
+    );
+    assert!(!sandbox.root_path().join("pcb.sum").exists());
+}
+
+#[test]
+fn test_inventory_physical_membership_and_repository_relative_paths() {
+    use serde_json::json;
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write("registry/pcb.toml", "[workspace]\nrepository = \"example.com/repo\"\npath = \"registry\"\nexclude = [\"excluded\"]\n[patch]\n\"example.com/outside\" = { path = \"../outside\" }\n\"example.com/fork\" = { path = \"fork/example.com/fork/1.0.0\" }\n")
+        .write("registry/parent/pcb.toml", "")
+        .write("registry/parent/child/pcb.toml", "")
+        .write("registry/excluded/pcb.toml", "invalid [")
+        .write("registry/fork/example.com/fork/1.0.0/pcb.toml", "")
+        .write("outside/pcb.toml", "")
+        .init_git()
+        .commit("nested workspace")
+        .tag("registry/parent/child/v1.2.0");
+    let commit = sandbox.cmd("git", ["rev-parse", "HEAD"]).read().unwrap();
+    sandbox.cwd("registry");
+    assert_eq!(
+        inventory(&sandbox),
+        json!({"packages": [
+            {"path": "registry/parent", "preferred": false, "release": null},
+            {"path": "registry/parent/child", "preferred": false, "release": {"version": "1.2.0", "commit": commit, "contentHash": null}}
+        ]})
+    );
+    sandbox.cwd("outside");
+    assert_eq!(
+        inventory(&sandbox),
+        json!({"packages": [
+            {"path": "outside", "preferred": false, "release": null}
+        ]})
+    );
+}
+
+#[test]
+fn test_inventory_unpublished_root_and_failures_emit_no_document() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
+        .init_git()
+        .commit("no tags");
+    assert_eq!(
+        inventory(&sandbox),
+        serde_json::json!({"packages": [
+            {"path": "", "preferred": false, "release": null}
+        ]})
+    );
+    let fails = |sandbox: &Sandbox, args: &[&str], diagnostic: &str| {
+        let output = sandbox
+            .cmd(env!("CARGO_BIN_EXE_pcbc"), args)
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            output.stdout.is_empty(),
+            "partial inventory: {:?}",
+            output.stdout
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(diagnostic),
+            "{:?}",
+            output
+        );
+    };
+    let args = ["info", "--inventory", "--format", "json"];
+    sandbox
+        .write("good/pcb.toml", "")
+        .write("broken/pcb.toml", "[broken");
+    fails(&sandbox, &args, "broken/pcb.toml");
+    sandbox.write("broken/pcb.toml", "");
+    let head = sandbox.cmd("git", ["rev-parse", "HEAD"]).read().unwrap();
+    sandbox.write(".git/shallow", format!("{head}\n"));
+    fails(&sandbox, &args, "shallow");
+    std::fs::remove_file(sandbox.root_path().join(".git/shallow")).unwrap();
+    sandbox.write(".git/refs/tags/broken", "not an object id\n");
+    fails(&sandbox, &args, "Cannot list local tags");
+}
