@@ -638,14 +638,9 @@ def parse_excellon(path: Path, out: DrillFile) -> None:
     plating, first, last, kind = metadata.groups()
     first, last = sorted((int(first), int(last)))
     # XNC adopts Gerber FileFunction semantics: layer order is insignificant.
-    # Only layer 1 is known to be outer; do not guess the board's bottom layer.
+    # Compare the declared type; do not infer it from an incomplete stackup.
     through = {"Plated": "PTH", "NonPlated": "NPTH"}[plating]
-    if (
-        first == last
-        or kind not in (through, "Blind", "Buried")
-        or (kind == through and first != 1)
-        or (kind == "Buried" and first == 1)
-    ):
+    if first == last or kind not in (through, "Blind", "Buried"):
         fail(f"contradictory drill FileFunction in {path}: {headers[0]}")
     function = f"{plating},{first},{last},{kind}"
     tools: dict[str, float] = {}

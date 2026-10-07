@@ -89,7 +89,16 @@ def test_missing_group_reports_geometry(compare):
 
 
 @pytest.mark.parametrize(
-    "function", ["Plated,1,4,PTH", "NonPlated,2,4,Blind", "NonPlated,2,4,Buried"]
+    "function",
+    [
+        "Plated,1,4,PTH",
+        "NonPlated,2,4,Blind",
+        "NonPlated,2,4,Buried",
+        # The comparator preserves declared types without stackup inference.
+        "Plated,2,4,PTH",
+        "NonPlated,2,4,NPTH",
+        "Plated,1,4,Buried",
+    ],
 )
 def test_layer_order_and_optional_label_do_not_change_function(compare, function):
     plating, first, last, kind = function.split(",")
@@ -110,9 +119,6 @@ def test_layer_order_and_optional_label_do_not_change_function(compare, function
         header("Plated,1,1,PTH"),
         header("Plated,1,4,NPTH"),
         header("NonPlated,1,4,PTH"),
-        header("Plated,2,4,PTH"),
-        header("NonPlated,2,4,NPTH"),
-        header("Plated,1,4,Buried"),
         header("Plated,1,4,PTH") + "\n" + header("NonPlated,1,4,NPTH"),
     ],
 )
