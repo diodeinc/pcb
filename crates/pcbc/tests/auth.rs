@@ -172,25 +172,19 @@ fn service_account_import_token_refresh_and_logout() {
 }
 
 #[test]
-fn component_command_uses_environment_credentials_without_a_login_file() {
+fn token_command_uses_environment_credentials_without_a_login_file() {
     let fixture = Fixture::new();
     let token = fixture.token("ci-machine-token");
-    let component = fixture.server.mock(|when, then| {
-        when.method(POST)
-            .path("/api/v2/components/search")
-            .header("authorization", "Bearer ci-machine-token");
-        then.status(200).json_body(json!([]));
-    });
-    success(
+    let output = success(
         fixture
-            .command(&["component", "search", "STM32", "--format", "json"])
+            .command(&["auth", "token"])
             .env("DIODE_CLIENT_ID", CLIENT_ID)
             .env("DIODE_CLIENT_SECRET", SECRET)
             .output()
             .unwrap(),
     );
+    assert_eq!(output, "ci-machine-token\n");
     token.assert_calls(1);
-    component.assert_calls(1);
     assert!(!fixture.dir.path().join("config").exists());
 }
 
