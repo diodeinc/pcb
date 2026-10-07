@@ -32,6 +32,17 @@ fn erosion_of_a_convex_polygon_does_not_spend_round_join_error() {
 }
 
 #[test]
+fn fixed_grid_coordinates_retain_the_supported_range() {
+    // Sub-grid tie handling must not overflow before the final grid division.
+    // Using a power-of-two grid makes these expected coordinates exact.
+    let limit = 1_i64 << 50;
+    let grid = 1.0 / 1024.0;
+    for coordinate in [-limit, -limit + 1, limit - 1, limit] {
+        assert_eq!(grid_coordinate(coordinate as f64 * grid, grid), coordinate);
+    }
+}
+
+#[test]
 fn fixed_grid_regularization_removes_sub_grid_geometry() {
     let rings = decompose_on_grid(
         vec![

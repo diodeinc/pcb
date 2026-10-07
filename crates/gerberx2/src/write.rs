@@ -1,9 +1,12 @@
 use crate::types::*;
 use crate::{GerberError, Result};
 use pcb_ir::geom::Polarity;
-use pcb_ir::geom::region::Ring;
+use pcb_ir::geom::region::{Ring, grid_coordinate};
 use std::collections::HashMap;
 use std::fmt::Write as _;
+
+const DEFAULT_DECIMAL_DIGITS: u8 = 6;
+pub(crate) const DEFAULT_GRID_MM: f64 = 1.0 / 10_u64.pow(DEFAULT_DECIMAL_DIGITS as u32) as f64;
 
 /// String-backed X2 attribute used by the Gerber writer.
 ///
@@ -202,9 +205,9 @@ impl Default for GerberLayer {
             unit: Unit::Millimeter,
             coordinate_format: CoordinateFormat {
                 x_integer_digits: 6,
-                x_decimal_digits: 6,
+                x_decimal_digits: DEFAULT_DECIMAL_DIGITS,
                 y_integer_digits: 6,
-                y_decimal_digits: 6,
+                y_decimal_digits: DEFAULT_DECIMAL_DIGITS,
             },
             file_attributes: Vec::new(),
             attribute_sets: AttributeSets::default(),
@@ -856,9 +859,8 @@ impl<'a> Writer<'a> {
     /// `point` in integer output units.
     fn coordinates(&self, point: Point) -> (i64, i64) {
         let format = self.layer.coordinate_format;
-        let scaled = |value: f64, decimals: u8| {
-            (value * 10_f64.powi(decimals as i32)).round_ties_even() as i64
-        };
+        let scaled =
+            |value: f64, decimals: u8| grid_coordinate(value, 10_f64.powi(-(decimals as i32)));
         (
             scaled(point.x, format.x_decimal_digits),
             scaled(point.y, format.y_decimal_digits),
@@ -924,6 +926,27 @@ pub fn trim_decimal(value: f64, decimals: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coordinate_rounding_uses_each_declared_axis_precision() {
+        let layer = GerberLayer {
+            unit: Unit::Inch,
+            coordinate_format: CoordinateFormat {
+                x_integer_digits: 2,
+                x_decimal_digits: 3,
+                y_integer_digits: 2,
+                y_decimal_digits: 4,
+            },
+            ..GerberLayer::default()
+        };
+        assert_eq!(
+            Writer::new(&layer).coordinates(Point {
+                x: -1.2345,
+                y: 2.34565,
+            }),
+            (-1234, 23457)
+        );
+    }
 
     #[test]
     fn escapes_freeform_attribute_fields() {
