@@ -160,6 +160,27 @@ fn inspect_errors_never_emit_partial_json() {
         (library("(symbol \"A\" (extends))"), "invalid extends"),
         (library("(symbol)"), "missing symbol name"),
         (
+            library("(symbol \"A\" (offset 0))"),
+            "not something KiCad accepts in a symbol",
+        ),
+        (
+            library("(symbol \"A\" (symbol \"A_1_1\" (offset 0)))"),
+            "not something KiCad accepts in a unit symbol",
+        ),
+        (
+            library("(offset 0) (symbol \"A\")"),
+            "invalid library field",
+        ),
+        (
+            library("(generator) (symbol \"A\")"),
+            "invalid library field",
+        ),
+        (
+            library("(generator_version (nested))"),
+            "invalid library field",
+        ),
+        (library("(version 20241209)"), "invalid library field"),
+        (
             "(kicad_symbol_lib (version 20241209) (symbol \"A\")".into(),
             "Invalid symbol library",
         ),
@@ -189,5 +210,30 @@ fn inspect_errors_never_emit_partial_json() {
     ] {
         let output = inspect(dir.path(), path, "json");
         assert_failure(&output, expected);
+    }
+}
+
+#[test]
+fn inspect_accepts_valid_headers_and_lint_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    for (version, host) in [
+        (20200101, "(host eeschema \"5.99\")"),
+        (20241209, "(host eeschema)"),
+    ] {
+        // -0 is a formatting warning, missing properties are lint, and `hide`
+        // is valid legacy syntax. None should block metadata inspection.
+        let source = format!(
+            r#"(kicad_symbol_lib (version {version})
+            (generator "test") (generator_version "10.0") {host}
+            (symbol "A" (pin_names (offset -0) hide)))"#
+        );
+        fs::write(dir.path().join("valid.kicad_sym"), source).unwrap();
+        let output = inspect(dir.path(), "valid.kicad_sym", "json");
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+            json!({"symbols": [{"name": "A", "metadata": {"primary": {}, "custom_properties": {}}}]})
+        );
     }
 }

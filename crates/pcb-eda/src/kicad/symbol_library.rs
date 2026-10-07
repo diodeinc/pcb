@@ -188,17 +188,35 @@ impl KicadSymbolLibrary {
             "Expected a kicad_symbol_lib root"
         );
         let version = root
-            .find_list("version")
+            .as_list()
+            .and_then(|items| items.get(1))
+            .and_then(Sexpr::as_list)
+            .filter(|items| items.len() == 2 && items[0].as_sym() == Some("version"))
             .and_then(|items| items.get(1))
             .and_then(Sexpr::as_int)
             .and_then(|version| i32::try_from(version).ok())
             .ok_or_else(|| anyhow!("Missing or invalid library version"))?;
         self.format_version.get_or_insert(version);
-        for mut node in root.as_list_mut().unwrap().drain(1..) {
+        for mut node in root.as_list_mut().unwrap().drain(2..) {
             let items = node
                 .as_list()
                 .ok_or_else(|| anyhow!("expected a library field at byte {}", node.span.start))?;
-            if items.first().and_then(Sexpr::as_sym) != Some("symbol") {
+            let tag = items.first().and_then(Sexpr::as_sym).unwrap_or_default();
+            if tag != "symbol" {
+                let valid = match tag {
+                    "generator" => items.len() == 2 && items[1].as_atom().is_some(),
+                    "generator_version" => items.len() == 2 && items[1].as_list().is_none(),
+                    "host" => {
+                        items.len() == if version < 20200827 { 3 } else { 2 }
+                            && items[1..].iter().all(|item| item.as_atom().is_some())
+                    }
+                    _ => false,
+                };
+                ensure!(
+                    valid,
+                    "invalid library field {tag:?} at byte {}",
+                    node.span.start
+                );
                 continue;
             }
             let name = items
@@ -245,10 +263,12 @@ impl KicadSymbolLibrary {
             }
             let range = node.span.start..node.span.end;
             relativize_spans(&mut node, range.start);
+            let node = Arc::new(node);
+            super::symbol_check::validate_symbol_forms(&name, &node)?;
             self.definition_cache
                 .get_mut()
                 .unwrap()
-                .insert(name.clone(), Arc::new(node));
+                .insert(name.clone(), node);
             self.symbol_locations.insert(
                 name,
                 SymbolLocation {
