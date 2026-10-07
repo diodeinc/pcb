@@ -34,7 +34,6 @@ mod gerber;
 mod import;
 mod info;
 mod ipc2581;
-mod kq;
 mod layout;
 mod list;
 mod lsp;
@@ -192,10 +191,6 @@ enum Commands {
     /// Export a KiCad board to STEP without kicad-cli
     Step(step::StepArgs),
 
-    /// Inspect KiCad symbol libraries as structured JSON
-    #[command(hide = true)]
-    Kq(kq::KqArgs),
-
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -272,7 +267,6 @@ fn run() -> anyhow::Result<()> {
         Commands::Ipc2581(args) => ipc2581::execute(args, resolution),
         Commands::Gerber(args) => gerber::execute(args, resolution),
         Commands::Step(args) => step::execute(args),
-        Commands::Kq(args) => kq::execute(args),
         Commands::External(args) => execute_external(args),
     }
 }
