@@ -10,6 +10,7 @@ mod fix;
 mod gerber;
 mod import;
 mod info;
+mod inspect;
 mod ipc2581;
 mod layout;
 mod list;
