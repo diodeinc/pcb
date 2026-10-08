@@ -3941,6 +3941,7 @@ dependencies = [
  "pcb-sch",
  "pcb-sexpr",
  "pcb-zen-core",
+ "petgraph",
  "serde",
  "serde_json",
  "tempfile",

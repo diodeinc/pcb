@@ -7,9 +7,103 @@ use pcb_kicad_sch::{
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
     connectivity::ConnectivityItemRef,
     plan_connectivity_repair,
-    reconcile::{plan_reconciliation, plan_repairs},
+    reconcile::{plan_reconciliation, plan_repairs, reconcile_read_only},
     verify_connectivity_repair,
 };
+
+#[test]
+fn read_only_projection_matches_editable_reconciliation() {
+    for (project, entrypoint) in [
+        ("analysis", "simple.zen"),
+        ("hierarchy", "nested_not_connected.zen"),
+    ] {
+        let netlist = common::compile_fixture(project, entrypoint);
+        let mut document = plan_reconciliation(None, &netlist, "root.kicad_sch")
+            .unwrap()
+            .apply(None)
+            .unwrap();
+        for page in &mut document.pages {
+            page.items
+                .retain(|item| !matches!(item, SchItem::Label(_) | SchItem::NoConnect(_)));
+            for item in &mut page.items {
+                match item {
+                    SchItem::Sheet(sheet) => sheet.placed = false,
+                    SchItem::Symbol(symbol) => symbol.dnp = !symbol.dnp,
+                    _ => {}
+                }
+            }
+        }
+        let plan = plan_reconciliation(Some(&document), &netlist, "root.kicad_sch").unwrap();
+        let (projected, inspection) = reconcile_read_only(&document, &netlist).unwrap();
+        assert_ne!(projected, document);
+        assert_eq!(projected, plan.apply(Some(&document)).unwrap());
+        assert_eq!(&inspection, plan.inspection_after());
+        assert_eq!(inspection, inspect_schematic(&projected, &netlist).unwrap());
+        assert!(inspection.analysis.is_equivalent());
+
+        let (unchanged, reused) = reconcile_read_only(&projected, &netlist).unwrap();
+        assert_eq!(unchanged, projected);
+        assert_eq!(reused, inspect_schematic(&unchanged, &netlist).unwrap());
+    }
+}
+
+#[test]
+fn stale_symbol_selection_returns_an_error_after_netlist_changes() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut document = plan_reconciliation(None, &netlist, "root.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    document.pages[0].items.clear();
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let selected = inspection
+        .issues
+        .iter()
+        .find_map(|issue| match &issue.issue {
+            SchematicIssue::MissingSymbol { slot } => Some((issue.key.clone(), slot)),
+            _ => None,
+        })
+        .unwrap();
+    for remove_component in [true, false] {
+        let mut changed = netlist.clone();
+        let instance_ref = changed
+            .instances
+            .keys()
+            .find(|instance| instance.instance_path.join(".") == selected.1.component_path())
+            .unwrap()
+            .clone();
+        if remove_component {
+            changed.instances.remove(&instance_ref);
+        } else {
+            changed
+                .instances
+                .get_mut(&instance_ref)
+                .unwrap()
+                .attributes
+                .insert(
+                    "__symbol_value".into(),
+                    pcb_sch::AttributeValue::String(
+                        r#"(symbol "Part" (symbol "Part_9_1"))"#.into(),
+                    ),
+                );
+        }
+        let error = plan_repairs(
+            &document,
+            &changed,
+            &inspection,
+            BTreeSet::from([selected.0.clone()]),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains(if remove_component {
+                "absent from the netlist"
+            } else {
+                "slot"
+            }),
+            "{error:#}"
+        );
+    }
+}
 
 #[test]
 fn batch_cut_removes_a_shared_wire_from_every_sheet_instance() {

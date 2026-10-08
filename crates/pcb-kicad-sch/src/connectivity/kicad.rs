@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use petgraph::unionfind::UnionFind;
 
 use super::{
     ComponentIdentity, ComponentNode, ComponentOrigin, ConnectionGroup, ConnectionOrigin,
@@ -128,6 +129,23 @@ pub enum ConnectivityItemRef {
     },
 }
 
+/// All physical pins, including hidden pins, without building electrical islands.
+/// Union and driver resolution never alter a connectable's pin or terminal.
+pub(crate) fn physical_pin_terminals(
+    document: &SchDocument,
+) -> Result<BTreeMap<PhysicalPinRef, Terminal>> {
+    let mut pins = BTreeMap::new();
+    for page in page_connectivity(document, PinVisibility::IncludeHidden)? {
+        pins.extend(
+            page?
+                .connectables
+                .into_iter()
+                .filter_map(|item| item.pin.zip(item.terminal)),
+        );
+    }
+    Ok(pins)
+}
+
 pub(crate) fn reduce_with_provenance(
     document: &SchDocument,
     pin_visibility: PinVisibility,
@@ -135,32 +153,23 @@ pub(crate) fn reduce_with_provenance(
     let mut components = Vec::new();
     let mut groups = Vec::new();
     let mut islands = BTreeMap::new();
-    let instances = page_instances(document)?;
-    let buses = bus::collect(&instances)?;
-    let instance_counts = instances
-        .iter()
-        .fold(BTreeMap::new(), |mut counts, instance| {
-            *counts.entry(instance.page.id.as_str()).or_insert(0usize) += 1;
-            counts
-        });
-    let mut parsed_definitions =
-        BTreeMap::<String, BTreeMap<String, symbol::ParsedSymbolDefinition>>::new();
-    for (instance, buses) in instances.iter().zip(&buses) {
-        let definitions = parsed_definitions
-            .entry(instance.page.id.clone())
-            .or_default();
-        let reduced = reduce_page(
-            instance,
-            instance_counts[instance.page.id.as_str()] > 1,
-            definitions,
-            pin_visibility,
-            buses,
-        )?;
-        components.extend(reduced.components);
-        for group in &reduced.groups {
-            islands.insert(group.island.clone(), group.provenance.clone());
+    for page in page_connectivity(document, pin_visibility)? {
+        let PageConnectivity {
+            id,
+            components: page_components,
+            mut connectables,
+        } = page?;
+        components.extend(page_components);
+        let mut union_find = UnionFind::new(connectables.len());
+        union_internal_connections(&connectables, &mut union_find);
+        union_touching(&connectables, &mut union_find);
+        resolve_legacy_power_drivers(&mut connectables, &mut union_find);
+        union_same_page_drivers(&connectables, &mut union_find);
+        let mut page_groups = connection_groups(&id, connectables, union_find);
+        for group in &mut page_groups {
+            islands.insert(group.island.clone(), std::mem::take(&mut group.provenance));
         }
-        groups.extend(reduced.groups);
+        groups.extend(page_groups);
     }
     components.sort();
     components.dedup();
@@ -299,34 +308,43 @@ pub(crate) fn resolve_file_name(parent: &SchPage, child: &str) -> String {
         .replace('\\', "/")
 }
 
-struct ReducedPage {
+struct PageConnectivity {
+    id: String,
     components: Vec<ComponentNode>,
-    groups: Vec<ScopedConnectionGroup>,
+    connectables: Vec<Connectable>,
 }
 
-fn reduce_page(
-    instance: &PageInstance<'_>,
-    repeated_page: bool,
-    symbol_definitions: &mut BTreeMap<String, symbol::ParsedSymbolDefinition>,
+/// Traverse hierarchy and decode page data once per consumer, one page at a time.
+fn page_connectivity(
+    document: &SchDocument,
     pin_visibility: PinVisibility,
-    buses: &bus::PageBuses,
-) -> Result<ReducedPage> {
-    let (components, mut connectables) = collect_page_connectables(
-        instance,
-        repeated_page,
-        symbol_definitions,
-        pin_visibility,
-        buses,
-    )?;
-    let mut union_find = UnionFind::new(connectables.len());
-    union_internal_connections(&connectables, &mut union_find);
-    union_touching(&connectables, &mut union_find);
-    resolve_legacy_power_drivers(&mut connectables, &mut union_find);
-    union_same_page_drivers(&connectables, &mut union_find);
-    Ok(ReducedPage {
-        components,
-        groups: connection_groups(&instance.id, connectables, union_find),
-    })
+) -> Result<impl Iterator<Item = Result<PageConnectivity>> + '_> {
+    let instances = page_instances(document)?;
+    let buses = bus::collect(&instances)?;
+    let mut instance_counts = BTreeMap::new();
+    for instance in &instances {
+        *instance_counts
+            .entry(instance.page.id.as_str())
+            .or_insert(0usize) += 1;
+    }
+    let mut definitions = BTreeMap::<_, BTreeMap<_, _>>::new();
+    Ok(instances
+        .into_iter()
+        .zip(buses)
+        .map(move |(instance, buses)| {
+            let (components, connectables) = collect_page_connectables(
+                &instance,
+                instance_counts[instance.page.id.as_str()] > 1,
+                definitions.entry(instance.page.id.clone()).or_default(),
+                pin_visibility,
+                &buses,
+            )?;
+            Ok(PageConnectivity {
+                id: instance.id,
+                components,
+                connectables,
+            })
+        }))
 }
 
 /// Every connectable item of one page instance, before any union step.
@@ -501,32 +519,15 @@ pub(crate) struct CutNode {
 }
 
 pub(crate) fn cut_graph(document: &SchDocument, pin_visibility: PinVisibility) -> Result<CutGraph> {
-    let instances = page_instances(document)?;
-    let buses = bus::collect(&instances)?;
-    let instance_counts = instances
-        .iter()
-        .fold(BTreeMap::new(), |mut counts, instance| {
-            *counts.entry(instance.page.id.as_str()).or_insert(0usize) += 1;
-            counts
-        });
-    let mut parsed_definitions =
-        BTreeMap::<String, BTreeMap<String, symbol::ParsedSymbolDefinition>>::new();
     let mut graph = CutGraph {
         nodes: Vec::new(),
         edges: Vec::new(),
     };
     let mut shared_nodes = BTreeMap::<String, usize>::new();
-    for (instance, buses) in instances.iter().zip(&buses) {
-        let definitions = parsed_definitions
-            .entry(instance.page.id.clone())
-            .or_default();
-        let (_, connectables) = collect_page_connectables(
-            instance,
-            instance_counts[instance.page.id.as_str()] > 1,
-            definitions,
-            pin_visibility,
-            buses,
-        )?;
+    for page in page_connectivity(document, pin_visibility)? {
+        let PageConnectivity {
+            id, connectables, ..
+        } = page?;
         let base = graph.nodes.len();
         for item in &connectables {
             graph.nodes.push(CutNode {
@@ -603,8 +604,7 @@ pub(crate) fn cut_graph(document: &SchDocument, pin_visibility: PinVisibility) -
             }
             if let Some(driver) = &item.driver {
                 if driver.merge_by_name {
-                    let shared =
-                        shared_node(&mut graph, format!("name:{}:{}", instance.id, driver.name));
+                    let shared = shared_node(&mut graph, format!("name:{id}:{}", driver.name));
                     graph.edges.push((base + index, shared));
                 }
                 // Legacy hidden power pins resolve to global drivers only when
@@ -617,7 +617,7 @@ pub(crate) fn cut_graph(document: &SchDocument, pin_visibility: PinVisibility) -
             }
             match &item.hierarchy {
                 Some(HierarchyEndpoint::Parent { name }) => {
-                    let shared = shared_node(&mut graph, format!("hier:{}:{name}", instance.id));
+                    let shared = shared_node(&mut graph, format!("hier:{id}:{name}"));
                     graph.edges.push((base + index, shared));
                 }
                 Some(HierarchyEndpoint::Child { instance_id, name }) => {
@@ -975,15 +975,18 @@ enum DriverKind {
     LegacyGlobal,
 }
 
-fn resolve_legacy_power_drivers(connectables: &mut [Connectable], union_find: &mut UnionFind) {
+fn resolve_legacy_power_drivers(
+    connectables: &mut [Connectable],
+    union_find: &mut UnionFind<usize>,
+) {
     // KiCad's generateGlobalPowerPinSubGraphs() suppresses the implicit global
     // connection for an invisible power-input pin on a non-power symbol when
     // ConnectedItems() is non-empty; ERC reports the wired legacy pin instead.
     // Modern power symbols take the separate PowerScope path above and always
     // retain their declared local or global drive.
-    let mut group_sizes = BTreeMap::new();
+    let mut group_sizes = vec![0usize; connectables.len()];
     for index in 0..connectables.len() {
-        *group_sizes.entry(union_find.find(index)).or_insert(0usize) += 1;
+        group_sizes[union_find.find_mut(index)] += 1;
     }
     for (index, item) in connectables.iter_mut().enumerate() {
         let Some(driver) = &mut item.driver else {
@@ -992,7 +995,7 @@ fn resolve_legacy_power_drivers(connectables: &mut [Connectable], union_find: &m
         if driver.kind != DriverKind::LegacyGlobal {
             continue;
         }
-        if group_sizes[&union_find.find(index)] == 1 {
+        if group_sizes[union_find.find_mut(index)] == 1 {
             driver.kind = DriverKind::Global;
         } else {
             item.driver = None;
@@ -1000,7 +1003,7 @@ fn resolve_legacy_power_drivers(connectables: &mut [Connectable], union_find: &m
     }
 }
 
-fn union_same_page_drivers(connectables: &[Connectable], union_find: &mut UnionFind) {
+fn union_same_page_drivers(connectables: &[Connectable], union_find: &mut UnionFind<usize>) {
     let mut first = BTreeMap::<&str, usize>::new();
     for (index, item) in connectables.iter().enumerate() {
         let Some(driver) = &item.driver else {
@@ -1015,7 +1018,7 @@ fn union_same_page_drivers(connectables: &[Connectable], union_find: &mut UnionF
     }
 }
 
-fn union_internal_connections(connectables: &[Connectable], union_find: &mut UnionFind) {
+fn union_internal_connections(connectables: &[Connectable], union_find: &mut UnionFind<usize>) {
     let mut first = BTreeMap::<&str, usize>::new();
     for (index, item) in connectables.iter().enumerate() {
         for link in &item.internal_links {
@@ -1048,7 +1051,7 @@ fn internal_link_keys(
     links
 }
 
-fn union_touching(connectables: &[Connectable], union_find: &mut UnionFind) {
+fn union_touching(connectables: &[Connectable], union_find: &mut UnionFind<usize>) {
     let mut at_point = BTreeMap::<GridPoint, Vec<usize>>::new();
     let mut segments = Vec::new();
     for (index, item) in connectables.iter().enumerate() {
@@ -1127,11 +1130,14 @@ fn point_near_segment(point: GridPoint, segment: Segment, tolerance: i64) -> boo
 fn connection_groups(
     page_instance_id: &str,
     connectables: Vec<Connectable>,
-    mut union_find: UnionFind,
+    mut union_find: UnionFind<usize>,
 ) -> Vec<ScopedConnectionGroup> {
     let mut groups = BTreeMap::<usize, Vec<Connectable>>::new();
     for (index, item) in connectables.into_iter().enumerate() {
-        groups.entry(union_find.find(index)).or_default().push(item);
+        groups
+            .entry(union_find.find_mut(index))
+            .or_default()
+            .push(item);
     }
     groups
         .into_values()
@@ -1276,7 +1282,7 @@ fn merge_scoped_groups(groups: Vec<ScopedConnectionGroup>) -> Vec<ConnectionGrou
     }
     let mut merged = BTreeMap::<usize, ConnectionGroup>::new();
     for (index, group) in groups.into_iter().enumerate() {
-        let entry = merged.entry(union_find.find(index)).or_default();
+        let entry = merged.entry(union_find.find_mut(index)).or_default();
         entry.names.extend(group.group.names);
         entry.terminals.extend(group.group.terminals);
         entry.origins.extend(group.group.origins);
@@ -1285,40 +1291,4 @@ fn merge_scoped_groups(groups: Vec<ScopedConnectionGroup>) -> Vec<ConnectionGrou
         .into_values()
         .filter(|group| !group.names.is_empty() || !group.terminals.is_empty())
         .collect()
-}
-
-struct UnionFind {
-    parents: Vec<usize>,
-    ranks: Vec<u8>,
-}
-
-impl UnionFind {
-    fn new(size: usize) -> Self {
-        Self {
-            parents: (0..size).collect(),
-            ranks: vec![0; size],
-        }
-    }
-
-    fn find(&mut self, value: usize) -> usize {
-        if self.parents[value] != value {
-            self.parents[value] = self.find(self.parents[value]);
-        }
-        self.parents[value]
-    }
-
-    fn union(&mut self, a: usize, b: usize) {
-        let mut a = self.find(a);
-        let mut b = self.find(b);
-        if a == b {
-            return;
-        }
-        if self.ranks[a] < self.ranks[b] {
-            std::mem::swap(&mut a, &mut b);
-        }
-        self.parents[b] = a;
-        if self.ranks[a] == self.ranks[b] {
-            self.ranks[a] += 1;
-        }
-    }
 }

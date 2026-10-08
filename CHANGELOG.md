@@ -13,6 +13,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Release source bundles skip git-ignored files.
 - `pcb publish --check` removes its temporary staging directory when interrupted or terminated.
 
+### Changed
+
+- Speed up schematic loading and reconciliation.
+
 ## [0.4.73] - 2026-10-07
 
 ### Added

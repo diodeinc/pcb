@@ -773,11 +773,8 @@ impl Schematic {
     /// This is robust to `InstanceRef` string roundtrips where dotted port names
     /// can be split into multiple `instance_path` segments.
     pub fn component_ref_for_port(&self, port_ref: &InstanceRef) -> Option<InstanceRef> {
-        for prefix_len in (0..=port_ref.instance_path.len()).rev() {
-            let candidate = InstanceRef {
-                module: port_ref.module.clone(),
-                instance_path: port_ref.instance_path[..prefix_len].to_vec(),
-            };
+        let mut candidate = port_ref.clone();
+        loop {
             if self
                 .instances
                 .get(&candidate)
@@ -785,8 +782,8 @@ impl Schematic {
             {
                 return Some(candidate);
             }
+            candidate.instance_path.pop()?;
         }
-        None
     }
 
     /// Resolve the owning component and full port/pin name for a port reference.
@@ -1130,6 +1127,8 @@ mod tests {
         let mut schematic = Schematic::new();
         schematic.add_instance(comp_ref, component);
         schematic.add_instance(port_ref.clone(), port);
+        let shorter = InstanceRef::new(module_ref.clone(), vec!["USB_C".into()]);
+        schematic.add_instance(shorter.clone(), Instance::component(module_ref.clone()));
 
         let owner_ref = schematic
             .component_ref_for_port(&port_ref)
@@ -1144,6 +1143,26 @@ mod tests {
             .expect("owner and pin name should resolve");
         assert_eq!(owner_ref2.instance_path, owner_ref.instance_path);
         assert_eq!(pin_name, "NC.2");
+
+        assert_eq!(owner_ref.module, module_ref);
+        schematic.instances.remove(&owner_ref);
+        assert_eq!(
+            schematic.component_ref_for_port(&port_ref),
+            Some(shorter.clone())
+        );
+        schematic.instances.remove(&shorter);
+        assert_eq!(schematic.component_ref_for_port(&port_ref), None);
+
+        let root = InstanceRef::new(module_ref.clone(), vec![]);
+        schematic.add_instance(root.clone(), Instance::component(module_ref.clone()));
+        assert_eq!(
+            schematic.component_ref_for_port(&port_ref),
+            Some(root.clone())
+        );
+        assert_eq!(schematic.component_ref_for_port(&root), Some(root));
+        let other_module = ModuleRef::from_path(Path::new("/tmp/other.zen"), "<root>");
+        let other_port = InstanceRef::new(other_module, port_ref.instance_path.clone());
+        assert_eq!(schematic.component_ref_for_port(&other_port), None);
     }
 
     #[test]

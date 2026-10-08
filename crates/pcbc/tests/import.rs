@@ -1100,7 +1100,10 @@ fn project_import_retains_symbols_missing_from_pcb() {
         let mut logo = document.pages[0].library.definitions["Device:R"]
             .renamed("Test:Logo")
             .unwrap();
-        for section in logo.sexpr.as_list_mut().unwrap() {
+        for section in std::sync::Arc::make_mut(&mut logo.sexpr)
+            .as_list_mut()
+            .unwrap()
+        {
             if let Some(items) = section.as_list_mut() {
                 items.retain(|item| {
                     item.as_list()

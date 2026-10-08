@@ -10,9 +10,9 @@ use super::{
 use crate::{component_slots, root_interface};
 
 pub(super) fn reduce(netlist: &Schematic) -> Result<ConnectivityGraph> {
-    let mut components = component_slots::component_symbol_slots(netlist)?
+    let mut components = component_slots::component_symbols(netlist)?
         .into_iter()
-        .map(|slot| ComponentNode {
+        .map(|(slot, _)| ComponentNode {
             managed_slot: Some(slot),
             origin: ComponentOrigin::Zener,
         })

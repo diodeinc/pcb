@@ -9,7 +9,7 @@ use crate::{
     SchDocument, SchPage,
     analysis::{
         ConnectivityInspection, SchematicIssueKey, ensure_issues_resolved, ensure_no_new_issues,
-        inspect_schematic, issue_summaries,
+        inspect_schematic,
     },
     component_slots, compose,
 };
@@ -206,6 +206,24 @@ pub fn plan_reconciliation(
     )
 }
 
+/// Project and verify a document without constructing reversible edit history.
+/// Uses the same projection as [`plan_reconciliation`].
+pub fn reconcile_read_only(
+    document: &SchDocument,
+    netlist: &Schematic,
+) -> Result<(SchDocument, ConnectivityInspection)> {
+    component_slots::validate_symbol_library_versions(netlist)?;
+    let inspection = inspect_schematic(document, netlist).ok();
+    compose::reconcile_document(
+        Some(document),
+        netlist,
+        None,
+        None,
+        None,
+        inspection.as_ref(),
+    )
+}
+
 /// Refresh assembly properties owned by the Zener netlist without changing
 /// schematic topology, placement, fields, or unmanaged symbols.
 ///
@@ -307,7 +325,7 @@ fn build_plan(
         InitialInspection::Available(inspection) => Some(inspection),
         InitialInspection::NoDocument | InitialInspection::Invalid { .. } => None,
     };
-    let desired = compose::reconcile_document(
+    let (desired, inspection_after) = compose::reconcile_document(
         document,
         netlist,
         root_file_name,
@@ -315,51 +333,17 @@ fn build_plan(
         placement_page_id,
         inspection_before,
     )?;
-    let inspection_after = inspect_schematic(&desired, netlist)?;
-    match issue_selection {
-        None => {
-            if !inspection_after.analysis.is_equivalent() {
-                bail!(
-                    "planned schematic is not netlist-equivalent: {}",
-                    issue_summaries(inspection_after.analysis.issues().iter())
-                );
-            }
-        }
-        Some(selected_keys) => {
-            let before = inspection_before
-                .context("repairing selected issues requires an existing schematic document")?;
-            for key in selected_keys {
-                if !before.issues.iter().any(|issue| &issue.key == key) {
-                    bail!("schematic issue {key:?} is not present");
-                }
-            }
-            ensure_issues_resolved(&inspection_after, selected_keys, "planned repair")?;
-            ensure_no_new_issues(before, &inspection_after, "planned repair")?;
-        }
+    if let Some(selected_keys) = issue_selection {
+        let before = inspection_before
+            .context("repairing selected issues requires an existing schematic document")?;
+        ensure_issues_resolved(&inspection_after, selected_keys, "planned repair")?;
+        ensure_no_new_issues(before, &inspection_after, "planned repair")?;
     }
-    verified_plan(document, desired, initial_inspection, inspection_after)
-}
-
-fn verified_plan(
-    document: Option<&SchDocument>,
-    desired: SchDocument,
-    initial_inspection: InitialInspection,
-    inspection_after: ConnectivityInspection,
-) -> Result<ReconciliationPlan> {
-    let edits = document_edits(document.unwrap_or(&SchDocument::default()), &desired)?;
-    let plan = ReconciliationPlan {
-        edits,
+    Ok(ReconciliationPlan {
+        edits: document_edits(document.unwrap_or(&SchDocument::default()), &desired)?,
         initial_inspection,
         inspection_after,
-    };
-    let applied = plan.apply(document)?;
-    if applied != desired {
-        bail!("reconciliation plan does not reproduce its verified document");
-    }
-    if plan.revert(&applied)? != document.cloned().unwrap_or_default() {
-        bail!("reconciliation plan does not reverse to its input document");
-    }
-    Ok(plan)
+    })
 }
 
 fn document_edits(before: &SchDocument, after: &SchDocument) -> Result<Vec<DocumentEdit>> {

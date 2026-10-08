@@ -63,21 +63,41 @@ pub(crate) fn validate_symbol_library_version(
     Ok(())
 }
 
-pub(crate) fn component_symbol_slots(netlist: &Schematic) -> Result<Vec<SymbolSlotKey>> {
+pub(crate) fn component_symbols(
+    netlist: &Schematic,
+) -> Result<Vec<(SymbolSlotKey, Option<SymbolDefinition>)>> {
     let mut slots = Vec::new();
+    let mut definitions = HashMap::<&str, (SymbolDefinition, Vec<u32>)>::new();
     for (instance_ref, instance) in &netlist.instances {
         if instance.kind != InstanceKind::Component {
             continue;
         }
         let component_path = canonical_component_path(&instance_ref.instance_path)
             .context("component instance has no canonical path")?;
-        for unit in component_unit_indices(netlist, instance)? {
+        let (definition, units): (_, &[u32]) =
+            if let Some(raw) = raw_symbol_definition(netlist, "component", &instance.attributes)? {
+                let (definition, units) = match definitions.entry(raw) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        let definition = SymbolDefinition::from_kicad_symbol_sexpr(raw)
+                            .context("failed to parse component symbol definition")?;
+                        let units = symbol::ParsedSymbolDefinition::parse(&definition)?
+                            .unit_indices()
+                            .to_vec();
+                        entry.insert((definition, units))
+                    }
+                };
+                (Some(&*definition), units)
+            } else {
+                (None, &[1])
+            };
+        for &unit in units {
             let slot = SymbolSlotKey::new(component_path.clone(), unit)
                 .context("component symbol slot has an empty path")?;
-            slots.push(slot);
+            slots.push((slot, definition.cloned()));
         }
     }
-    slots.sort();
+    slots.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(slots)
 }
 
@@ -232,45 +252,38 @@ pub(crate) fn port_pad_numbers(netlist: &Schematic, port: &InstanceRef) -> BTree
         .collect()
 }
 
-fn component_unit_indices(netlist: &Schematic, instance: &Instance) -> Result<Vec<u32>> {
-    match component_symbol_definition(netlist, instance)? {
-        Some(definition) => Ok(symbol::ParsedSymbolDefinition::parse(&definition)?
-            .unit_indices()
-            .to_vec()),
-        None => Ok(vec![1]),
-    }
-}
-
-pub(crate) fn component_symbol_definition(
-    netlist: &Schematic,
-    instance: &Instance,
-) -> Result<Option<SymbolDefinition>> {
-    symbol_definition(netlist, "component", &instance.attributes)
-}
-
 pub(crate) fn symbol_definition(
     netlist: &Schematic,
     owner: &str,
     attributes: &HashMap<String, AttributeValue>,
 ) -> Result<Option<SymbolDefinition>> {
+    raw_symbol_definition(netlist, owner, attributes)?
+        .map(|raw| {
+            SymbolDefinition::from_kicad_symbol_sexpr(raw)
+                .with_context(|| format!("failed to parse {owner} symbol definition"))
+        })
+        .transpose()
+}
+
+fn raw_symbol_definition<'a>(
+    netlist: &'a Schematic,
+    owner: &str,
+    attributes: &'a HashMap<String, AttributeValue>,
+) -> Result<Option<&'a str>> {
     let raw = if let Some(raw) = string_attribute(owner, attributes, SYMBOL_VALUE_ATTR)? {
-        Some(raw.to_string())
+        Some(raw)
     } else if let Some(path) = string_attribute(owner, attributes, SYMBOL_PATH_ATTR)? {
         Some(
             netlist
                 .symbols
                 .get(path)
                 .with_context(|| format!("symbol_path {path} is absent from netlist symbols"))?
-                .clone(),
+                .as_str(),
         )
     } else {
         None
     };
-    raw.map(|raw| {
-        SymbolDefinition::from_kicad_symbol_sexpr(&raw)
-            .with_context(|| format!("failed to parse {owner} symbol definition"))
-    })
-    .transpose()
+    Ok(raw)
 }
 
 pub(crate) fn attribute_string<'a>(instance: &'a Instance, key: &str) -> Result<Option<&'a str>> {

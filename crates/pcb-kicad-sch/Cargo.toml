@@ -11,7 +11,8 @@ description = "Pure KiCad schematic document model and connectivity analysis"
 anyhow = { workspace = true }
 pcb-sch = { path = "../pcb-sch", default-features = false }
 pcb-sexpr = { workspace = true, features = ["serde"] }
-serde = { workspace = true }
+petgraph = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]

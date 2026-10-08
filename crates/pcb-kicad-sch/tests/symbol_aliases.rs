@@ -1,6 +1,7 @@
 mod common;
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use common::kicad_builder::{KicadBuilder, TestPin};
 use pcb_kicad_sch::{
@@ -12,6 +13,30 @@ use pcb_sexpr::{
     Sexpr,
     formatter::{FormatMode, format_tree},
 };
+
+#[test]
+fn shared_symbol_ast_renames_independently_and_roundtrips() {
+    let original = SymbolDefinition::from_kicad_symbol_sexpr(
+        r#"(symbol "Test:Part" (symbol "Part_1_1" (pin passive line (at 0 0 0)
+            (length 0) (name "P") (number "1"))))"#,
+    )
+    .unwrap();
+    let original_text = format_tree(&original.sexpr, FormatMode::Normal);
+    let renamed = original.renamed("Other:Alias").unwrap();
+    assert_eq!(
+        format_tree(&original.sexpr, FormatMode::Normal),
+        original_text
+    );
+    assert_eq!(
+        format_tree(&renamed.sexpr, FormatMode::Normal),
+        original_text
+            .replace("\"Test:Part\"", "\"Other:Alias\"")
+            .replace("\"Part_1_1\"", "\"Alias_1_1\"")
+    );
+    let reopened: SymbolDefinition =
+        serde_json::from_value(serde_json::to_value(&renamed).unwrap()).unwrap();
+    assert_eq!(reopened, renamed);
+}
 
 #[test]
 fn cache_alias_lookup_is_distinct_from_library_identity() {
@@ -80,8 +105,7 @@ fn save_apply_reopen_preserves_distinct_native_alias_presentation() {
         let base = saved.pages[0].library.definitions[&base_id].clone();
         let alias = with_name(&base, "Native_1");
         let mut alias = alias;
-        let section = alias
-            .sexpr
+        let section = Arc::make_mut(&mut alias.sexpr)
             .as_list_mut()
             .unwrap()
             .iter_mut()
@@ -222,7 +246,7 @@ fn stale_alias_pin_or_unit_interfaces_are_refreshed() {
                 .unwrap()
                 .number = number.into();
         } else {
-            alias.sexpr.as_list_mut().unwrap().push(
+            Arc::make_mut(&mut alias.sexpr).as_list_mut().unwrap().push(
                 pcb_sexpr::parse(
                     r#"(symbol "Native_1_2_1" (pin passive line (at 0 0 0)
                     (length 0) (name "BAD") (number "99")))"#,

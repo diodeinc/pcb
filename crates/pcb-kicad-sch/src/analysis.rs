@@ -11,7 +11,8 @@ use crate::{
         ComponentIdentity, ComponentOrigin, ConnectionGroup, ConnectionOrigin, ConnectivityGraph,
         ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland, PinVisibility,
         SymbolLocation, Terminal, TerminalIndex, connected_component_terminals,
-        not_connected_terminals, points_connect, reduce_with_provenance,
+        kicad::physical_pin_terminals, not_connected_terminals, points_connect,
+        reduce_with_provenance,
     },
     symbol,
 };
@@ -395,12 +396,7 @@ pub(crate) fn inspect_no_connects(
     document: &SchDocument,
     netlist: &Schematic,
 ) -> anyhow::Result<(Vec<NoConnectTarget>, Vec<SchematicIssue>)> {
-    let physical = reduce_with_provenance(document, PinVisibility::IncludeHidden)?;
-    let pins = physical
-        .islands
-        .values()
-        .flat_map(|island| island.pin_terminals.iter())
-        .collect::<BTreeMap<_, _>>();
+    let pins = physical_pin_terminals(document)?;
     let expected_not_connected = not_connected_terminals(netlist);
     let expected_connected = connected_component_terminals(netlist);
     let targets_for = |terminals: &BTreeSet<Terminal>| {
@@ -793,6 +789,7 @@ fn managed_terminals_by_visibility(
     let mut visible = Vec::new();
     let mut hidden = Vec::new();
     for page in &document.pages {
+        let mut definitions = BTreeMap::new();
         for placed in page.items.iter().filter_map(|item| match item {
             SchItem::Symbol(symbol) => Some(symbol),
             _ => None,
@@ -801,17 +798,22 @@ fn managed_terminals_by_visibility(
             else {
                 continue;
             };
-            let definition = page
-                .library
-                .definitions
-                .get(placed.library_key())
-                .with_context(|| {
-                    format!(
-                        "managed symbol {} has no cached definition {}",
-                        placed.id, placed.lib_id
-                    )
-                })?;
-            let parsed = symbol::ParsedSymbolDefinition::parse(definition)?;
+            let parsed = match definitions.entry(placed.library_key()) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    let definition = page
+                        .library
+                        .definitions
+                        .get(placed.library_key())
+                        .with_context(|| {
+                            format!(
+                                "managed symbol {} has no cached definition {}",
+                                placed.id, placed.lib_id
+                            )
+                        })?;
+                    entry.insert(symbol::ParsedSymbolDefinition::parse(definition)?)
+                }
+            };
             for pin in parsed.placed_pins(placed)? {
                 let terminal = Terminal::ComponentPin {
                     component: ComponentIdentity::ManagedPath(component_path.to_string()),
@@ -1595,6 +1597,52 @@ mod tests {
 
         assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
         assert_eq!(analysis.nets["GND"].connected_islands.len(), 1);
+    }
+
+    #[test]
+    fn visibility_reuses_definitions_but_keeps_page_and_placement_identity() {
+        let mut document = document_with_pages(vec![SchPage::new("a"), SchPage::new("b")]);
+        for (page, hides) in document.pages.iter_mut().zip([["", "hide"], ["hide", ""]]) {
+            let definition = SymbolDefinition::from_kicad_symbol_sexpr(&format!(
+                r#"(symbol "Test:Shared"
+                  (symbol "Shared_1_1"
+                    (pin passive line (at 0 0 0) (length 1) {}
+                      (name "A") (number "1")))
+                  (symbol "Shared_2_1"
+                    (pin passive line (at 0 0 0) (length 1) {}
+                      (name "B") (number "2"))))"#,
+                hides[0], hides[1]
+            ))
+            .unwrap();
+            page.library
+                .definitions
+                .insert(definition.lib_id.clone(), definition);
+            for unit in [1, 2] {
+                let path = format!("{}-{unit}", page.id);
+                let mut placed = power_symbol(path.clone(), Point::default());
+                placed.lib_id = "Test:Shared".into();
+                placed.unit = unit;
+                placed.fields.insert(
+                    "Path".into(),
+                    SymbolField::new("Path", path, Point::default()),
+                );
+                page.items.push(SchItem::Symbol(placed));
+            }
+        }
+        let terminal = |path: &str, name: &str, number: &str| Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath(path.into()),
+            pin_name: name.into(),
+            pin_numbers: BTreeSet::from([number.into()]),
+        };
+        let (visible, hidden) = managed_terminals_by_visibility(&document).unwrap();
+        assert_eq!(
+            visible,
+            vec![terminal("a-1", "A", "1"), terminal("b-2", "B", "2")]
+        );
+        assert_eq!(
+            hidden,
+            vec![terminal("a-2", "B", "2"), terminal("b-1", "A", "1")]
+        );
     }
 
     fn document_with_pages(pages: Vec<SchPage>) -> SchDocument {
