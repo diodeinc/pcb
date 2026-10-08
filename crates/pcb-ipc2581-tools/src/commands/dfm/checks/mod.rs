@@ -58,6 +58,7 @@ pub(super) struct Results {
     /// frame of all its placements comes first, at the design's own index.
     pub(super) frames: Vec<(u32, Vec<u32>)>,
     pub(super) findings: Vec<Finding>,
+    pub(super) shared_evidence: Vec<Evidence>,
     pub(super) waivers: Option<WaiverOutcome>,
 }
 
@@ -229,6 +230,7 @@ pub(super) fn run(
         );
     }
     let waiver_aliases = assign_ids(&mut results.findings, &annular_rules);
+    results.shared_evidence = share_evidence(&mut results.findings, &results.frames, designs);
     results.waivers =
         waiver_file.map(|file| waivers::apply(&mut results.findings, file, &waiver_aliases, today));
 
@@ -346,6 +348,44 @@ fn judge_in(
         }
     }
     Ok(None)
+}
+
+/// Build the report's shared-evidence table. A site names its board profile
+/// by its design's outline pool index; the table holds each referenced
+/// profile once, in design and pool order, so report size follows the
+/// findings rather than findings times the outline every one measures to.
+fn share_evidence(
+    findings: &mut [Finding],
+    frames: &[(u32, Vec<u32>)],
+    designs: &[Design],
+) -> Vec<Evidence> {
+    fn references<'a>(
+        findings: &'a mut [Finding],
+        frames: &'a [(u32, Vec<u32>)],
+    ) -> impl Iterator<Item = (u32, &'a mut u32)> {
+        findings.iter_mut().flat_map(|finding| {
+            let design = frames[finding.frame as usize].0;
+            finding
+                .sites
+                .iter_mut()
+                .flat_map(|site| &mut site.evidence)
+                .filter_map(move |evidence| Some((design, evidence.shared.as_mut()?)))
+        })
+    }
+    let outlines = references(findings, frames)
+        .map(|(design, index)| (design, *index))
+        .collect::<std::collections::BTreeSet<_>>();
+    for (design, index) in references(findings, frames) {
+        *index = outlines.range(..(design, *index)).count() as u32;
+    }
+    outlines
+        .into_iter()
+        .map(|(design, index)| {
+            drilled_board_edge_clearance::profile_evidence(
+                &designs[design as usize].board_outlines[index as usize],
+            )
+        })
+        .collect()
 }
 
 /// How a measured distance stands against a minimum.

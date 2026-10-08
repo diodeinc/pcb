@@ -860,6 +860,18 @@ impl Evidence {
         }
     }
 
+    /// A reference to evidence held once in the report's shared table. Until
+    /// the engine builds that table, `index` is the check's own pool index.
+    pub fn shared(role: &'static str, index: u32, bounding_box: BBox) -> Self {
+        Self {
+            role,
+            kind: "shared",
+            bounding_box: Some(bounding_box.into()),
+            shared: Some(index),
+            ..Self::default()
+        }
+    }
+
     /// Drop vertices within `SIMPLIFY_MM` of the simplified path, and open
     /// paths that draw nothing the others do not.
     pub(super) fn simplify(&mut self) {
@@ -894,10 +906,10 @@ impl Evidence {
 
 const SIMPLIFY_MM: f64 = 1e-4;
 
-/// The shared-evidence table: path and region evidence that recurs verbatim,
-/// written once wherever its references and that one copy are shorter than
-/// the copies they replace.
-pub(super) fn share_repeated_evidence(findings: &mut [Finding]) -> Vec<Evidence> {
+/// Write path and region evidence that recurs verbatim once, in `shared`,
+/// wherever its references and that one copy are shorter than the copies
+/// they replace.
+pub(super) fn share_repeated_evidence(findings: &mut [Finding], shared: &mut Vec<Evidence>) {
     fn evidence(findings: &mut [Finding]) -> impl Iterator<Item = &mut Evidence> {
         findings.iter_mut().flat_map(|finding| {
             let sites = finding.sites.iter_mut().flat_map(|site| &mut site.evidence);
@@ -905,7 +917,6 @@ pub(super) fn share_repeated_evidence(findings: &mut [Finding]) -> Vec<Evidence>
         })
     }
     let written = |evidence: &Evidence| serde_json::to_vec(evidence).expect("evidence serializes");
-    let mut shared = Vec::new();
     let mut uses = HashMap::<Vec<u8>, (usize, Option<u32>)>::new();
     for item in evidence(findings).filter(|item| !item.paths.is_empty()) {
         uses.entry(written(item)).or_default().0 += 1;
@@ -929,7 +940,6 @@ pub(super) fn share_repeated_evidence(findings: &mut [Finding]) -> Vec<Evidence>
         });
         *item = reference;
     }
-    shared
 }
 
 /// Open paths are stroked with round caps and joins, so a path that repeats
