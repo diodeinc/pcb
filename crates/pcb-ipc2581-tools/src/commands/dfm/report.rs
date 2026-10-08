@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use pcb_ir::geom::region::ContourSet;
 use pcb_ir::geom::{BBox, Point, dist};
@@ -846,29 +846,11 @@ impl Evidence {
         }
     }
 
-    /// A reference to evidence held once in the report's shared table. Until
-    /// the engine builds that table, `index` is the check's own pool index.
-    pub fn shared(role: &'static str, index: u32, bounding_box: BBox) -> Self {
-        Self {
-            role,
-            kind: "shared",
-            bounding_box: Some(bounding_box.into()),
-            shared: Some(index),
-            ..Self::default()
-        }
-    }
-
-    /// Drop vertices within `SIMPLIFY_MM` of the simplified path, and open
-    /// paths that repeat another as written.
+    /// Drop vertices within `SIMPLIFY_MM` of the simplified path.
     pub(super) fn simplify(&mut self) {
         let closed = self.kind == "region";
         for path in &mut self.paths {
             *path = simplified(path, closed);
-        }
-        if !closed {
-            let mut seen = HashSet::new();
-            self.paths
-                .retain(|path| seen.insert(serde_json::to_string(path).expect("paths serialize")));
         }
         if let Some(EvidenceDisplay::RoundStroke { paths, .. }) = &mut self.display {
             for path in paths {
@@ -893,6 +875,43 @@ impl Evidence {
 }
 
 const SIMPLIFY_MM: f64 = 1e-4;
+
+/// The shared-evidence table: evidence that recurs verbatim, written once
+/// wherever its references and that one copy are shorter than the copies
+/// they replace.
+pub(super) fn share_repeated_evidence(findings: &mut [Finding]) -> Vec<Evidence> {
+    fn evidence(findings: &mut [Finding]) -> impl Iterator<Item = &mut Evidence> {
+        findings.iter_mut().flat_map(|finding| {
+            let sites = finding.sites.iter_mut().flat_map(|site| &mut site.evidence);
+            finding.evidence.iter_mut().chain(sites)
+        })
+    }
+    let written = |evidence: &Evidence| serde_json::to_vec(evidence).expect("evidence serializes");
+    let mut uses = HashMap::<Vec<u8>, (usize, Option<u32>)>::new();
+    for item in evidence(findings) {
+        uses.entry(written(item)).or_default().0 += 1;
+    }
+    let mut shared = Vec::new();
+    for item in evidence(findings) {
+        let body = written(item);
+        let (count, index) = uses.get_mut(&body).expect("counted above");
+        let reference = Evidence {
+            role: item.role,
+            kind: "shared",
+            bounding_box: item.bounding_box,
+            shared: Some(index.unwrap_or(shared.len() as u32)),
+            ..Evidence::default()
+        };
+        if *count * written(&reference).len() + body.len() < *count * body.len() {
+            index.get_or_insert_with(|| {
+                shared.push(item.clone());
+                shared.len() as u32 - 1
+            });
+            *item = reference;
+        }
+    }
+    shared
+}
 
 /// Douglas–Peucker. A ring is the path back to its first vertex; one that
 /// would collapse keeps every vertex.
