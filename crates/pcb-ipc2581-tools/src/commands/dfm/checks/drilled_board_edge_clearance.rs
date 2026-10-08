@@ -14,7 +14,7 @@ use pcb_ir::geom::{AccuracyError, BBox, ContourSet, Point};
 
 use crate::commands::dfm::design::{BoardOutline, Design, Hole, HoleClass, Slot};
 use crate::commands::dfm::pdk::SlotPlating;
-use crate::commands::dfm::report::{Evidence, EvidenceDisplay, LayerRef, MeasurementKind, Subject};
+use crate::commands::dfm::report::{Evidence, LayerRef, MeasurementKind, Subject};
 
 use super::{
     Evaluation, Measured, MeasuredSite, hole_subject, holes_of_class, linework_clearance,
@@ -42,8 +42,7 @@ pub(super) fn evaluate_holes(
                 subject: hole_subject(design, hole, "offender"),
                 bbox: hole.bbox,
                 layer: &hole.layer,
-                evidence: drilled.clone(),
-                site_evidence: vec![drilled, required],
+                evidence: vec![drilled, required],
             };
             Some(measured(
                 feature,
@@ -82,8 +81,7 @@ pub(super) fn evaluate_slots(
                 subject: slot_subject(design, slot, "offender"),
                 bbox: slot.bbox,
                 layer: &slot.layer,
-                evidence: Evidence::bounds("routed_slot", slot.bbox),
-                site_evidence: vec![
+                evidence: vec![
                     slot_evidence(slot),
                     Evidence::region("required_board_edge_clearance", &required),
                 ],
@@ -221,14 +219,13 @@ fn broad_search(feature: BBox, outline: BBox) -> f64 {
     bounds.width().hypot(bounds.height()).max(1.0)
 }
 
-/// What a drilled feature brings to its measurement: its evidence in the
-/// finding, and in the site, where the clearance it requires follows it.
+/// What a drilled feature brings to its measurement: its site evidence,
+/// where the clearance it requires follows it.
 struct Drilled<'a> {
     subject: Subject,
     bbox: BBox,
     layer: &'a LayerRef,
-    evidence: Evidence,
-    site_evidence: Vec<Evidence>,
+    evidence: Vec<Evidence>,
 }
 
 fn measured(
@@ -239,13 +236,11 @@ fn measured(
     limit_mm: f64,
     outside_of: impl FnOnce(&ContourSet) -> Result<ContourSet, AccuracyError>,
 ) -> anyhow::Result<Measured> {
-    let mut evidence = vec![feature.evidence];
-    let mut site_evidence = feature.site_evidence;
+    let mut site_evidence = feature.evidence;
     let mut subjects = vec![feature.subject];
     if let Some(outline) = outline {
         subjects.push(linework_clearance::outline_subject(outline, "reference"));
-        evidence.push(Evidence::bounds("board_profile", outline.bbox));
-        site_evidence.push(profile_evidence(outline));
+        site_evidence.push(Evidence::region("board_profile", &outline.region));
         if outside {
             let outside_region = outside_of(&outline.region)?;
             if !outside_region.is_empty() {
@@ -272,34 +267,12 @@ fn measured(
         bbox: feature.bbox,
         layers: vec![feature.layer.clone()],
         subjects,
-        evidence,
         sites: vec![site],
     })
 }
 
 pub(super) fn slot_evidence(slot: &Slot) -> Evidence {
-    Evidence {
-        display: Some(EvidenceDisplay::Path {
-            paths: slot
-                .native_outline
-                .iter()
-                .map(|contour| pcb_ir::render::svg_path_data(std::slice::from_ref(contour)))
-                .collect(),
-            fill_rule: "evenodd",
-        }),
-        ..Evidence::region("routed_slot", &slot.outline)
-    }
-}
-
-/// The measured board material and its native outline.
-fn profile_evidence(outline: &BoardOutline) -> Evidence {
-    Evidence {
-        display: Some(EvidenceDisplay::Path {
-            paths: vec![pcb_ir::render::svg_path_data(&outline.native_outline)],
-            fill_rule: "evenodd",
-        }),
-        ..Evidence::region("board_profile", &outline.region)
-    }
+    Evidence::region("routed_slot", &slot.outline)
 }
 
 fn local_bounds(feature: BBox, distance: Distance, limit_mm: f64) -> BBox {
@@ -321,7 +294,6 @@ fn outside_note(has_profile: bool) -> String {
 mod tests {
     use super::*;
     use crate::LayoutTarget;
-    use crate::commands::dfm::DfmReport;
     use crate::commands::dfm::fixtures::{pdk, report as check};
     use crate::commands::dfm::report::{Measurement, RuleStatus, Site, Verdict};
 
@@ -349,16 +321,12 @@ mod tests {
         measurement.actual_mm().unwrap()
     }
 
-    /// The board profile a site measures to, wherever the report holds it.
-    fn board_profile<'a>(report: &'a DfmReport, site: &'a Site) -> &'a Evidence {
-        let evidence = site
-            .evidence
+    /// The board profile a site measures to.
+    fn board_profile(site: &Site) -> &Evidence {
+        site.evidence
             .iter()
             .find(|evidence| evidence.role == "board_profile")
-            .unwrap();
-        evidence
-            .shared
-            .map_or(evidence, |index| &report.shared_evidence[index as usize])
+            .unwrap()
     }
 
     #[test]
@@ -380,7 +348,12 @@ limit = { minimum = "0.3 mm", preferred = "0.4 mm" }"#);
         assert_eq!(report.rules[0].checked, 2);
         assert!(matches!(report.rules[0].status, RuleStatus::Fail));
         assert_eq!(report.rules[1].checked, 2, "preferred tier is lowered");
-        assert_eq!(report.findings.len(), 2);
+        assert!(matches!(report.rules[1].status, RuleStatus::Warning));
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "the required error stands for the preferred tier"
+        );
         let required = report
             .findings
             .iter()
@@ -390,13 +363,9 @@ limit = { minimum = "0.3 mm", preferred = "0.4 mm" }"#);
         assert_eq!(required.layers[0].name, "DRILL");
         assert_eq!(required.subjects[0].kind, "plated_hole");
         assert_eq!(required.subjects[1].kind, "board_outline");
-        assert_eq!(required.location.witnesses.len(), 2);
         let site = &required.sites[0];
         assert!(matches!(site.measurement_kind, MeasurementKind::Clearance));
-        assert!(matches!(
-            board_profile(&report, site).display,
-            Some(EvidenceDisplay::Path { .. })
-        ));
+        assert_eq!(board_profile(site).kind, "region");
         assert!(site.evidence.iter().any(|evidence| {
             evidence.role == "drilled_hole"
                 && evidence.kind == "circle"
@@ -481,7 +450,7 @@ limit = { minimum = "0.2 mm" }"#);
 
         assert_eq!(report.findings.len(), 1);
         assert!((actual_mm(&report.findings[0].measurement) - 0.1).abs() < 1e-9);
-        let profile = board_profile(&report, &report.findings[0].sites[0]);
+        let profile = board_profile(&report.findings[0].sites[0]);
         assert_eq!(profile.paths.len(), 2, "the cutout ring is retained");
     }
 
@@ -519,10 +488,12 @@ limit = { minimum = "0.4 mm" }"#);
             plated.sites[0].measurement_kind,
             MeasurementKind::Clearance
         ));
-        assert!(plated.sites[0].evidence.iter().any(|evidence| {
-            evidence.role == "routed_slot"
-                && matches!(evidence.display, Some(EvidenceDisplay::Path { .. }))
-        }));
+        assert!(
+            plated.sites[0]
+                .evidence
+                .iter()
+                .any(|evidence| { evidence.role == "routed_slot" && evidence.kind == "region" })
+        );
         let nonplated = report
             .findings
             .iter()
@@ -582,7 +553,7 @@ limit = { minimum = "0.3 mm" }"#);
             assert_eq!(provenance.step.as_deref(), Some("board"));
             assert_eq!(provenance.instance_index, None, "the board's own");
         }
-        let profile = board_profile(&report, &finding.sites[0])
+        let profile = board_profile(&finding.sites[0])
             .bounding_box
             .unwrap()
             .as_bbox();

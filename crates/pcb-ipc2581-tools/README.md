@@ -12,7 +12,7 @@ alias provides the same commands.
 | `html` | Export an HTML board summary. |
 | `outline` | Export a KiCad-compatible DXF outline. |
 | `render` | Render the finished board from both sides or one, or a single layer, as terminal graphics, SVG, or PNG. |
-| `dfm check` | Check IPC-2581 geometry against a fabrication PDK and emit self-contained JSON. |
+| `dfm check` | Check IPC-2581 geometry against a fabrication PDK; print a JSON summary and write a SQLite report. |
 | `gerber` | Export fabrication layers and drill files. |
 | `view` | Export a filtered IPC-2581 function-mode document. |
 | `board-array create` | Create a rectangular board array. |
@@ -46,7 +46,7 @@ by the retained geometry.
 or a strict, versioned TOML file:
 
 ```bash
-pcb ipc dfm check fabrication-panel.xml --pdk standard --output dfm-report.json
+pcb ipc dfm check fabrication-panel.xml --pdk standard --output panel.dfm
 ```
 
 `standard` currently supports 2 through 10 copper layers.
@@ -65,10 +65,11 @@ do not imply IPC certification.
 Pass a path such as `--pdk ./fab-process.toml` to use a custom PDK. Exact
 built-in names take precedence, so prefix a same-named file with `./`.
 
-Complete JSON reports contain diagnostics, native vector artwork, and the exact
-PDK source for external viewers. PCB does not generate DFM HTML or host a viewer.
+Complete reports are SQLite databases with diagnostics, native vector artwork,
+and the exact PDK source for external viewers. PCB does not generate DFM HTML or
+host a viewer.
 
-See the [PDK, waiver, and JSON formats](docs/dfm.md) and the
+See the [PDK and report formats](docs/dfm.md) and the
 [standard PDK](pdks/standard.toml) for details.
 
 ## Panels and copper balancing

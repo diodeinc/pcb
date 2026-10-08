@@ -25,7 +25,7 @@
 use pcb_ir::geom::dfm::{circular_region, disk_clearance};
 
 use crate::commands::dfm::design::{Design, HoleClass, spans};
-use crate::commands::dfm::report::{DisplayCircle, Evidence, EvidenceDisplay, MeasurementKind};
+use crate::commands::dfm::report::{Evidence, MeasurementKind};
 
 use super::{COMPARISON_EPSILON_MM, Evaluation, Measured, MeasuredSite, hole_subject, layers};
 
@@ -68,11 +68,10 @@ pub(super) fn evaluate(
                             second.center,
                             second.diameter_mm / 2.0,
                         );
-                        let evidence = vec![
+                        let mut site_evidence = vec![
                             Evidence::circle("first_hole", first.center, first.diameter_mm),
                             Evidence::circle("second_hole", second.center, second.diameter_mm),
                         ];
-                        let mut site_evidence = evidence.clone();
                         site_evidence.push(Evidence::circle(
                             "required_hole_separation",
                             first.center,
@@ -91,19 +90,7 @@ pub(super) fn evaluate(
                                 second.diameter_mm / 2.0,
                                 design.resolution,
                             )?)?;
-                            site_evidence.push(Evidence {
-                                display: Some(EvidenceDisplay::CircleIntersection {
-                                    first: DisplayCircle {
-                                        center: first.center.into(),
-                                        diameter: first.diameter_mm,
-                                    },
-                                    second: DisplayCircle {
-                                        center: second.center.into(),
-                                        diameter: second.diameter_mm,
-                                    },
-                                }),
-                                ..Evidence::region("overlap_region", &overlap_region)
-                            });
+                            site_evidence.push(Evidence::region("overlap_region", &overlap_region));
                         }
                         let mut site = MeasuredSite::new(
                             distance,
@@ -133,7 +120,6 @@ pub(super) fn evaluate(
                                 hole_subject(design, first, "first"),
                                 hole_subject(design, second, "second"),
                             ],
-                            evidence,
                             sites: vec![site],
                         })
                     })
@@ -238,14 +224,6 @@ limit = { minimum = "0.2 mm" }"#,
         assert_eq!(
             site.distance.uncertainty_mm, 0.0,
             "disk separation is exact"
-        );
-        assert_eq!(
-            serde_json::to_value(&overlap.display).unwrap(),
-            serde_json::json!({
-                "kind": "circle_intersection",
-                "first": {"center": {"x": 10.0, "y": -20.0}, "diameter": 1.2},
-                "second": {"center": {"x": 10.5, "y": -20.0}, "diameter": 0.8},
-            })
         );
     }
 }

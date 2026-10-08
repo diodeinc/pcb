@@ -1355,8 +1355,6 @@ pub(super) struct BoardOutline {
     /// Finished board material: the filled outer profile minus every cutout.
     pub region: ContourSet,
     pub boundary: PreparedRegion,
-    /// Native outer and cutout contours in the checked frame.
-    pub native_outline: Vec<ContourBuf>,
     pub bbox: BBox,
 }
 
@@ -2522,7 +2520,6 @@ fn collect_board_outlines(source: Source<'_>, step: u32) -> anyhow::Result<Vec<B
                 kind: definition.kind,
                 region,
                 boundary,
-                native_outline,
                 bbox,
             }))
         })

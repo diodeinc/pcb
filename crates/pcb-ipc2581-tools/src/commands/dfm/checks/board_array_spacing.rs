@@ -26,7 +26,7 @@
 use pcb_ir::geom::dfm::{Distance, region_clearance, region_clearance_sites};
 
 use crate::commands::dfm::design::{BoardArray, Design};
-use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
+use crate::commands::dfm::report::{SourceLocator, Subject};
 
 use super::{Evaluation, Measured, linework_clearance, violates};
 
@@ -59,17 +59,12 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> anyhow::Result<Evaluat
                     board_array_subject(first, "first"),
                     board_array_subject(second, "second"),
                 ],
-                evidence: vec![
-                    Evidence::bounds("first_board_array", first.region.bbox),
-                    Evidence::bounds("second_board_array", second.region.bbox),
-                ],
                 sites: if violates(&distance, limit_mm) {
                     linework_clearance::report_sites(
                         region_clearance_sites(&first.region, &second.region, limit_mm)?,
                         &[],
                         limit_mm,
-                        design.resolution,
-                    )?
+                    )
                 } else {
                     Vec::new()
                 },

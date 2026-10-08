@@ -39,9 +39,7 @@ use pcb_ir::geom::{BBox, ContourSet, Point, tol};
 use rayon::prelude::*;
 
 use crate::commands::dfm::design::{CopperLayer, Design, Hole, HoleClass, HoleLand, Land};
-use crate::commands::dfm::report::{
-    Evidence, EvidenceDisplay, MeasurementKind, SourceLocator, Subject,
-};
+use crate::commands::dfm::report::{Evidence, MeasurementKind, SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
 
 use super::{
@@ -142,20 +140,14 @@ pub(super) fn evaluate(
             if let Some(worst) = &mut worst {
                 worst.sites = enclosures.iter().map(|(subject, enclosure)| {
                     let Some(enclosure) = (*enclosure).filter(|distance| violates(distance, limit_mm)) else { return Ok(None); };
-                    let mut detail = measured(design, hole, subject, enclosure, radius + limit_mm);
+                    let detail = measured(design, hole, subject, enclosure, radius + limit_mm);
                     let required = circular_region(hole.center, radius + limit_mm, design.resolution)?;
-                    detail.evidence.push(Evidence {
-                        display: Some(EvidenceDisplay::CircleMinusLayer {
-                            center: hole.center.into(),
-                            diameter: 2.0 * (radius + limit_mm),
-                            layer: subject.copper.layer.name.clone(),
-                        }),
-                        ..Evidence::region("missing_copper", &missing_copper(
-                            &required, &subject.copper.image, subject.ring_index,
-                        )?)
-                    });
+                    let mut evidence = ring_evidence(hole, subject, radius + limit_mm);
+                    evidence.push(Evidence::region("missing_copper", &missing_copper(
+                        &required, &subject.copper.image, subject.ring_index,
+                    )?));
                     let mut site = MeasuredSite::new(
-                        enclosure, detail.bbox, detail.layers, detail.evidence,
+                        enclosure, detail.bbox, detail.layers, evidence,
                         if subject.in_copper { MeasurementKind::RadialEnclosure } else { MeasurementKind::MissingCopper },
                     );
                     site.subjects = detail.subjects;
@@ -268,27 +260,32 @@ fn measured(
             ..Subject::default()
         },
     );
-    let land_evidence = subject
-        .land
-        .map(|land| Evidence::bounds("source_padstack_land_bounds", land.bbox));
     Measured {
         distance: enclosure,
         bbox: BBox::from_point(hole.center).expand(required_radius_mm),
         layers: layers([&hole.layer, &copper.layer]),
         subjects: vec![hole_subject(design, hole, "hole"), land_subject],
-        evidence: [
-            Evidence::circle("drilled_hole", hole.center, hole.diameter_mm),
-            Evidence::circle(
-                "required_copper_envelope",
-                hole.center,
-                2.0 * required_radius_mm,
-            ),
-        ]
-        .into_iter()
-        .chain(land_evidence)
-        .collect(),
         sites: Vec::new(),
     }
+}
+
+/// The drill, the copper it requires, and the land it was assigned.
+fn ring_evidence(hole: &Hole, subject: &RingSubject, required_radius_mm: f64) -> Vec<Evidence> {
+    [
+        Evidence::circle("drilled_hole", hole.center, hole.diameter_mm),
+        Evidence::circle(
+            "required_copper_envelope",
+            hole.center,
+            2.0 * required_radius_mm,
+        ),
+    ]
+    .into_iter()
+    .chain(
+        subject
+            .land
+            .map(|land| Evidence::bounds("source_padstack_land_bounds", land.bbox)),
+    )
+    .collect()
 }
 
 #[cfg(test)]
@@ -498,30 +495,14 @@ limit = { minimum = "0.2 mm" }"#,
                 .iter()
                 .find(|evidence| evidence.role == "missing_copper")
                 .unwrap();
-            let Some(EvidenceDisplay::CircleMinusLayer {
-                center,
-                diameter,
-                layer,
-            }) = &evidence.display
-            else {
-                panic!("missing copper retains its analytic construction");
-            };
-            assert_eq!((center.x, center.y), (0.0, 0.0));
-            assert!((*diameter - 1.4).abs() < 1e-12);
-            assert_eq!(
-                layer, &site.layers[1].name,
-                "each site cuts its own copper layer"
-            );
+            assert!(!evidence.paths.is_empty());
             let envelope = site
                 .evidence
                 .iter()
                 .find(|evidence| evidence.role == "required_copper_envelope")
                 .unwrap();
-            assert_eq!(Some(*diameter), envelope.diameter);
-            assert_eq!(
-                site.distance.mm, 0.0,
-                "display leaves the measurement unchanged"
-            );
+            assert!((envelope.diameter.unwrap() - 1.4).abs() < 1e-12);
+            assert_eq!(site.distance.mm, 0.0);
         }
     }
 

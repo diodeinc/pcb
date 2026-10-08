@@ -122,7 +122,6 @@ pub(super) fn evaluate(
                 bbox: worst.bbox,
                 layers: worst.layers.clone(),
                 subjects: worst.subjects.clone(),
-                evidence: worst.evidence.clone(),
                 sites,
             });
         } else if let Some((distance, layers)) = least {
@@ -131,7 +130,6 @@ pub(super) fn evaluate(
                 bbox: slot.bbox,
                 layers,
                 subjects: vec![slot_subject(design, slot, "slot")],
-                evidence: Vec::new(),
                 sites: Vec::new(),
             });
         }
@@ -209,7 +207,11 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }"#;
                 report.rules[0].checked, 2,
                 "intermediate anti-pad is exempt"
             );
-            assert_eq!(report.findings.len(), failures);
+            assert_eq!(
+                report.findings.len(),
+                failures.min(1),
+                "a required error stands for its preferred tier"
+            );
             assert_eq!(
                 matches!(report.verdict, Verdict::Fail),
                 failures == 2,
@@ -251,12 +253,12 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }"#;
                 finding.sites[0].measurement_kind,
                 MeasurementKind::MissingCopper
             ));
-            assert!(finding.sites[0].evidence.iter().any(|e| {
-                let resolved = e
-                    .shared
-                    .map_or(e, |index| &report.shared_evidence[index as usize]);
-                e.role == "missing_copper" && !resolved.paths.is_empty()
-            }));
+            assert!(
+                finding.sites[0]
+                    .evidence
+                    .iter()
+                    .any(|e| e.role == "missing_copper" && !e.paths.is_empty())
+            );
         }
     }
 
@@ -330,13 +332,8 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }"#;
                 imported.stackups.clear();
             }
             let design = Design::board(&imported, &rules, Resolution::default());
-            let results = crate::commands::dfm::checks::run(
-                &rules,
-                std::slice::from_ref(&design),
-                None,
-                chrono::NaiveDate::default(),
-            )
-            .unwrap();
+            let results =
+                crate::commands::dfm::checks::run(&rules, std::slice::from_ref(&design)).unwrap();
             assert!(results.findings.is_empty());
             for rule in &results.rules {
                 assert!(matches!(rule.status, RuleStatus::Incomplete));

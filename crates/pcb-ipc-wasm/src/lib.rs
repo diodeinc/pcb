@@ -108,7 +108,8 @@ impl IpcDocument {
         )
     }
 
-    /// Violations return a report with verdict "fail". Invalid input throws.
+    /// The run's summary: its verdict and per-rule results. Violations return
+    /// verdict "fail"; invalid input throws.
     #[wasm_bindgen(js_name = checkDfm, unchecked_return_type = "DfmReport")]
     pub fn check_dfm(
         &self,
@@ -137,16 +138,13 @@ impl IpcDocument {
                 dfm::CheckRequest {
                     input: self.input.clone(),
                     pdk,
-                    waivers: options.waivers.as_ref().map(|input| dfm::TextSource {
-                        path: input.name.as_deref().unwrap_or("waivers.toml"),
-                        source: &input.source,
-                    }),
                     layout_target: options.layout_target,
                     generated_at,
                 },
                 resolution,
             )
-            .map_err(js_error)?,
+            .map_err(js_error)?
+            .summary_record(),
         )
     }
 }

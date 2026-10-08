@@ -63,7 +63,6 @@ pub(super) fn evaluate(
             bbox: slot.bbox,
             layers: vec![slot.layer.clone()],
             subjects: vec![subject],
-            evidence: vec![Evidence::bounds("routed_slot", slot.bbox)],
             sites,
         })}).collect::<anyhow::Result<_>>()?;
     Ok(Evaluation {
@@ -76,7 +75,6 @@ pub(super) fn evaluate(
 mod tests {
     use super::*;
     use crate::commands::dfm::fixtures;
-    use crate::commands::dfm::report::EvidenceDisplay;
     use pcb_ir::geom::Resolution;
 
     #[test]
@@ -122,15 +120,6 @@ limit = { minimum = "0.8 mm" }"#,
             .iter()
             .find(|evidence| evidence.role == "routed_slot")
             .unwrap();
-        let Some(EvidenceDisplay::Path { paths, fill_rule }) = &slot.display else {
-            panic!("nominal slot evidence must retain native path data");
-        };
-        assert_eq!(*fill_rule, "evenodd");
-        assert_eq!(paths.len(), 1);
-        assert!(
-            paths[0].contains('A') || paths[0].contains('C'),
-            "rounded ends must stay curved"
-        );
         let measured = Evidence::region("routed_slot", &design.slots[0].outline);
         assert_eq!(
             serde_json::to_value(&slot.paths).unwrap(),
@@ -138,7 +127,7 @@ limit = { minimum = "0.8 mm" }"#,
         );
         assert!(
             slot.paths[0].len() > 8,
-            "the checked polygon remains available alongside native display geometry"
+            "rounded ends are measured as curves"
         );
     }
 }

@@ -823,6 +823,11 @@ fn lower_length_rule(
     })
 }
 
+/// The required tier whose stricter `.preferred` tier `id` names.
+pub(super) fn required_tier(id: &str) -> Option<&str> {
+    id.strip_suffix(".preferred")
+}
+
 fn lower_limit(
     authored_id: &str,
     id: &str,

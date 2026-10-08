@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use crate::commands::dfm::design::{
     ConductorId, CopperLayer, Design, NET_SHORT_LOCATION_TOLERANCE_MM, component_copper, spans,
 };
-use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
+use crate::commands::dfm::report::{SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
 
 use super::{Evaluation, Measured, linework_clearance, violates};
@@ -241,10 +241,6 @@ pub(super) fn evaluate(
                     conductor_subject(design, left_id, "first_conductor", &layer.layer.name),
                     conductor_subject(design, right_id, "second_conductor", &layer.layer.name),
                 ],
-                evidence: vec![
-                    Evidence::bounds("first_conductor_component", left.region.bbox),
-                    Evidence::bounds("second_conductor_component", right.region.bbox),
-                ],
                 sites: if violates(&distance, limit_mm) {
                     let sites = region_clearance_sites_with_index(
                         &left.region,
@@ -257,8 +253,7 @@ pub(super) fn evaluate(
                         sites,
                         std::slice::from_ref(&layer.layer),
                         limit_mm,
-                        design.resolution,
-                    )?
+                    )
                 } else {
                     Vec::new()
                 },
@@ -559,7 +554,6 @@ mod tests {
             CheckRequest {
                 input: FileIdentity::new("antenna.xml", xml.as_bytes()),
                 pdk: PdkSource::Builtin(pdk_name),
-                waivers: None,
                 layout_target: crate::LayoutTarget::Board,
                 generated_at: "2026-09-06T00:00:00Z".parse().unwrap(),
             },
@@ -659,7 +653,6 @@ mod tests {
                 .iter()
                 .find(|s| s.net.as_deref() == Some("GND"))
                 .unwrap();
-            assert_eq!(graphic.provenance, None, "it would repeat the source");
             let locator = graphic.source.as_ref().unwrap();
             assert_eq!(locator.step.as_deref(), Some("antenna"));
             assert_eq!(locator.layer.as_deref(), Some("F.Cu"));

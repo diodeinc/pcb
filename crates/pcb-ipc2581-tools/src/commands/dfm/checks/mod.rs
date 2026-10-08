@@ -5,7 +5,7 @@
 //! the measurement mathematically, and returns those measurements with the
 //! report identity of what was measured. The engine here owns everything
 //! else — the verdict against the limit, finding text, witness roles, skip
-//! reasons, checked counts, finding order, stable ids, waivers, statuses —
+//! reasons, checked counts, finding order, stable ids, statuses —
 //! so a check only measures, and may assume its subject pools are non-empty.
 //!
 //! A check measures one [`Design`]: one Step with everything it places. It
@@ -33,7 +33,6 @@ mod thin_regions;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
-use chrono::NaiveDate;
 use ipc2581::Symbol;
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::geom::dfm::{COMPARISON_EPSILON_MM, Distance};
@@ -47,8 +46,7 @@ use super::report::{
     DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportPoint,
     RuleResult, RuleStatus, Severity, Site, SourceLocator, Subject, Unresolved, Witness,
 };
-use super::rules::{Comparison, Linework, Pools, Rule, RuleKind, slot_label};
-use super::waivers::{self, WaiverFile, WaiverOutcome};
+use super::rules::{Comparison, Linework, Pools, Rule, RuleKind, required_tier, slot_label};
 
 #[derive(Default)]
 pub(super) struct Results {
@@ -58,7 +56,6 @@ pub(super) struct Results {
     /// frame of all its placements comes first, at the design's own index.
     pub(super) frames: Vec<(u32, Vec<u32>)>,
     pub(super) findings: Vec<Finding>,
-    pub(super) waivers: Option<WaiverOutcome>,
 }
 
 /// One subject measured by a check: the distance and what it is about.
@@ -68,7 +65,6 @@ struct Measured {
     bbox: BBox,
     layers: Vec<LayerRef>,
     subjects: Vec<Subject>,
-    evidence: Vec<Evidence>,
     sites: Vec<MeasuredSite>,
 }
 
@@ -153,12 +149,7 @@ impl From<Evaluation> for RuleEvaluation {
     }
 }
 
-pub(super) fn run(
-    rules: &[Rule],
-    designs: &[Design],
-    waiver_file: Option<&WaiverFile>,
-    today: NaiveDate,
-) -> anyhow::Result<Results> {
+pub(super) fn run(rules: &[Rule], designs: &[Design]) -> anyhow::Result<Results> {
     let mut results = Results {
         frames: designs
             .iter()
@@ -167,11 +158,6 @@ pub(super) fn run(
             .collect(),
         ..Results::default()
     };
-    let annular_rules = rules
-        .iter()
-        .filter(|rule| matches!(rule.kind, RuleKind::AnnularRing(_)))
-        .map(|rule| rule.id.as_str())
-        .collect::<HashSet<_>>();
     for rule in rules {
         let mut result = RuleResult::new(rule);
         // A rule is evaluated in the design of every Step. One design that
@@ -228,19 +214,20 @@ pub(super) fn run(
             finding.rule_id,
         );
     }
-    let waiver_aliases = assign_ids(&mut results.findings, &annular_rules);
-    results.waivers =
-        waiver_file.map(|file| waivers::apply(&mut results.findings, file, &waiver_aliases, today));
-
-    let mut per_rule: HashMap<&str, (usize, usize)> = HashMap::new();
-    for finding in &results.findings {
-        let (total, waived) = per_rule.entry(finding.rule_id.as_str()).or_default();
-        *total += 1;
-        *waived += usize::from(finding.waived);
-    }
+    let count = |findings: &[Finding]| {
+        let mut per_rule: HashMap<String, usize> = HashMap::new();
+        for finding in findings {
+            *per_rule.entry(finding.rule_id.clone()).or_default() += 1;
+        }
+        per_rule
+    };
+    let violations = count(&results.findings);
+    drop_preferred_repeats(&mut results.findings);
+    assign_ids(&mut results.findings);
+    let reported = count(&results.findings);
     for result in &mut results.rules {
-        let (total, waived) = per_rule.get(result.id.as_str()).copied().unwrap_or((0, 0));
-        result.finish(total, waived);
+        let of = |counts: &HashMap<String, usize>| counts.get(&result.id).copied().unwrap_or(0);
+        result.finish(of(&violations), of(&reported));
     }
     Ok(results)
 }
@@ -764,9 +751,6 @@ fn finding(rule: &Rule, measured: Measured) -> Finding {
         id: String::new(),
         rule_id: rule.id.clone(),
         severity: rule.severity,
-        waived: false,
-        waiver_reason: None,
-        title: semantics.finding_title,
         message: format!(
             "{} is {:.6} mm{on_layers}; the PDK requires at least {limit:.6} mm",
             semantics.quantity_label, distance.mm
@@ -775,14 +759,9 @@ fn finding(rule: &Rule, measured: Measured) -> Finding {
         location: Location {
             point: Some(distance.midpoint().into()),
             bounding_box: Some(measured.bbox.into()),
-            witnesses: vec![
-                Witness::new(first_role, distance.first),
-                Witness::new(second_role, distance.second),
-            ],
         },
         layers: measured.layers,
         subjects: measured.subjects,
-        evidence: measured.evidence,
         sites,
         frame: 0,
     }
@@ -793,29 +772,23 @@ fn assembly_finding(rule: &Rule, issue: assembly::Issue) -> Finding {
         id: String::new(),
         rule_id: rule.id.clone(),
         severity: rule.severity,
-        waived: false,
-        waiver_reason: None,
-        title: rule.kind.semantics().finding_title,
         message: issue.message,
         measurement: Measurement::maximum_count(1, 0),
         location: Location::default(),
         layers: Vec::new(),
         subjects: vec![issue.subject],
-        evidence: Vec::new(),
         sites: Vec::new(),
         frame: 0,
     }
 }
 
 fn count_finding(rule: &Rule, measured: CountEvaluation, limit: u32) -> Finding {
-    let (title, requirement, measurement) = match rule.comparison {
+    let (requirement, measurement) = match rule.comparison {
         Comparison::Minimum => (
-            "Copper layer count is below the minimum",
             format!("requires at least {limit}"),
             Measurement::minimum_count(measured.actual, limit),
         ),
         Comparison::Maximum => (
-            "Copper layer count exceeds the maximum",
             format!("permits at most {limit}"),
             Measurement::maximum_count(measured.actual, limit),
         ),
@@ -824,9 +797,6 @@ fn count_finding(rule: &Rule, measured: CountEvaluation, limit: u32) -> Finding 
         id: String::new(),
         rule_id: rule.id.clone(),
         severity: rule.severity,
-        waived: false,
-        waiver_reason: None,
-        title: title.to_owned(),
         message: format!(
             "copper layer count is {}; the PDK {requirement}",
             measured.actual
@@ -835,7 +805,6 @@ fn count_finding(rule: &Rule, measured: CountEvaluation, limit: u32) -> Finding 
         location: Location::default(),
         layers: measured.layers,
         subjects: measured.subjects,
-        evidence: Vec::new(),
         sites: Vec::new(),
         frame: 0,
     }
@@ -859,16 +828,13 @@ fn ratio_finding(rule: &Rule, measured: RatioMeasured, maximum: f64) -> Finding 
         bounding_box: measured.bbox.into(),
         layers: measured.layers.clone(),
         subjects: measured.subjects.clone(),
-        evidence: measured.evidence.clone(),
+        evidence: measured.evidence,
         note: Some(measured.note),
     };
     Finding {
         id: String::new(),
         rule_id: rule.id.clone(),
         severity: rule.severity,
-        waived: false,
-        waiver_reason: None,
-        title: semantics.finding_title,
         message: format!(
             "{} is {:.6} ({:.6} mm drilled span / {:.6} mm finished diameter); the PDK permits at most {maximum:.6}; thickness source is {}",
             semantics.quantity_label,
@@ -881,11 +847,9 @@ fn ratio_finding(rule: &Rule, measured: RatioMeasured, maximum: f64) -> Finding 
         location: Location {
             point: Some(measured.center.into()),
             bounding_box: Some(measured.bbox.into()),
-            witnesses: Vec::new(),
         },
         layers: measured.layers,
         subjects: measured.subjects,
-        evidence: measured.evidence,
         sites: vec![site],
         frame: 0,
     }
@@ -1057,35 +1021,6 @@ fn slot_subject(design: &Design, slot: &Slot, role: &'static str) -> Subject {
     subject
 }
 
-/// This projection is the original v1 subject serialization, including field
-/// order and nulls. New diagnostic metadata must never silently re-key waivers.
-#[derive(serde::Serialize)]
-struct LegacySubject<'a> {
-    role: &'static str,
-    kind: &'static str,
-    name: &'a Option<String>,
-    reference_designator: &'a Option<String>,
-    pin: &'a Option<String>,
-    net: &'a Option<String>,
-    padstack_ref: &'a Option<String>,
-    source: &'a Option<SourceLocator>,
-}
-
-impl<'a> From<&'a Subject> for LegacySubject<'a> {
-    fn from(subject: &'a Subject) -> Self {
-        Self {
-            role: subject.role,
-            kind: subject.kind,
-            name: &subject.name,
-            reference_designator: &subject.reference_designator,
-            pin: &subject.pin,
-            net: &subject.net,
-            padstack_ref: &subject.padstack_ref,
-            source: &subject.source,
-        }
-    }
-}
-
 /// What identifies a subject across equivalent exports: who it is, not how
 /// the file happened to name or number it. Generated IPC primitive names,
 /// padstack ids, and set/feature indices change between clean exports of the
@@ -1146,20 +1081,52 @@ fn layers<'a>(layers: impl IntoIterator<Item = &'a LayerRef>) -> Vec<LayerRef> {
     layers
 }
 
+/// What a finding is about, under a rule: its stable subjects, its layers,
+/// and, unless a drilled subject places it, where it is in whole micrometres.
+fn identity(rule_id: &str, finding: &Finding) -> Vec<u8> {
+    let subjects = finding
+        .subjects
+        .iter()
+        .map(StableSubject::from)
+        .collect::<Vec<_>>();
+    let placed_by_subject = subjects.iter().any(|subject| subject.anchor.is_some());
+    serde_json::to_vec(&(
+        rule_id,
+        &subjects,
+        &finding.layers,
+        finding
+            .location
+            .point
+            .filter(|_| !placed_by_subject)
+            .map(micrometres),
+    ))
+    .expect("finding identity serializes")
+}
+
+/// A preferred tier measures what its required tier does against a stricter
+/// limit, so what fails both is reported once: as the required tier's error.
+fn drop_preferred_repeats(findings: &mut Vec<Finding>) {
+    let errors = findings
+        .iter()
+        .filter(|finding| finding.severity == Severity::Error)
+        .map(|finding| (finding.frame, identity(&finding.rule_id, finding)))
+        .collect::<HashSet<_>>();
+    findings.retain(|finding| {
+        finding.severity == Severity::Error
+            || required_tier(&finding.rule_id).is_none_or(|required| {
+                !errors.contains(&(finding.frame, identity(required, finding)))
+            })
+    });
+}
+
 /// Sort findings into rule/location order and give each an id hashed from
 /// what it is about: its rule, its stable subjects, its layers, and where it
 /// is, in whole micrometres. A drilled subject carries its own source
 /// location; only a finding without one is placed by its measured point,
 /// which depends on which of several equally near boundaries was the witness.
-/// No raw float and no evidence geometry enters an id, so noise-level
-/// coordinate changes do not re-key findings and strand their waivers. The
-/// measured value is excluded too: a waived violation that changes magnitude
-/// in place keeps its waiver.
-///
-/// Ids released earlier hashed raw coordinates and export-specific indices.
-/// Each is still computed, exactly as it was, and returned as an alias of the
-/// finding's id so a waiver written against it keeps matching.
-fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) -> HashMap<String, String> {
+/// No raw float, no evidence geometry and no measured value enters an id, so
+/// noise-level changes do not re-key findings.
+fn assign_ids(findings: &mut [Finding]) {
     findings.sort_by(|left, right| {
         left.rule_id
             .cmp(&right.rule_id)
@@ -1168,28 +1135,8 @@ fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) -> HashMa
     });
     let short = |fingerprint: &[u8]| hex::encode(&Sha256::digest(fingerprint)[..6]);
     let mut seen: HashMap<String, u32> = HashMap::new();
-    let mut released_seen: HashMap<String, u32> = HashMap::new();
-    let mut waiver_aliases = HashMap::new();
     for finding in findings.iter_mut() {
-        let subjects = finding
-            .subjects
-            .iter()
-            .map(StableSubject::from)
-            .collect::<Vec<_>>();
-        let placed_by_subject = subjects.iter().any(|subject| subject.anchor.is_some());
-        let digest = short(
-            &serde_json::to_vec(&(
-                &finding.rule_id,
-                &subjects,
-                &finding.layers,
-                finding
-                    .location
-                    .point
-                    .filter(|_| !placed_by_subject)
-                    .map(micrometres),
-            ))
-            .expect("finding identity serializes"),
-        );
+        let digest = short(&identity(&finding.rule_id, finding));
         let repeat = seen
             .entry(digest.clone())
             .and_modify(|n| *n += 1)
@@ -1199,23 +1146,6 @@ fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) -> HashMa
         } else {
             format!("dfm-{digest}-{repeat}")
         };
-
-        for released in released_fingerprints(finding, annular_rules) {
-            let released_id = format!("dfm-{}", short(released.as_bytes()));
-            let repeat = released_seen
-                .entry(released_id.clone())
-                .and_modify(|n| *n += 1)
-                .or_insert(1);
-            if *repeat == 1 {
-                if released_id != finding.id {
-                    waiver_aliases.insert(released_id, finding.id.clone());
-                }
-            } else {
-                // An ordinal id can move when equivalent findings are
-                // reordered. Do not transfer either waiver ambiguously.
-                waiver_aliases.remove(&released_id);
-            }
-        }
 
         let mut sites_seen: HashMap<String, usize> = HashMap::new();
         for site in &mut finding.sites {
@@ -1236,71 +1166,13 @@ fn assign_ids(findings: &mut [Finding], annular_rules: &HashSet<&str>) -> HashMa
                 .entry(digest.clone())
                 .and_modify(|n| *n += 1)
                 .or_insert(1);
-            site.id = format!("{}-site-{digest}", finding.id);
-            if *ordinal > 1 {
-                site.id.push_str(&format!("-{ordinal}"));
-            }
+            site.id = if *ordinal == 1 {
+                digest
+            } else {
+                format!("{digest}-{ordinal}")
+            };
         }
     }
-    waiver_aliases
-}
-
-/// The identity records of every released id format, byte for byte. The first
-/// served every rule; the second placed annular findings at their drilled
-/// hole, with the stable subject projection minus its anchor.
-fn released_fingerprints(finding: &Finding, annular_rules: &HashSet<&str>) -> Vec<String> {
-    let original = serde_json::to_string(&(
-        &finding.rule_id,
-        finding
-            .subjects
-            .iter()
-            .map(LegacySubject::from)
-            .collect::<Vec<_>>(),
-        &finding.layers,
-        finding.location.point.map(|point| RawPoint {
-            x: point.x,
-            y: point.y,
-        }),
-    ));
-    let annular = annular_rules
-        .contains(finding.rule_id.as_str())
-        .then(|| {
-            finding
-                .evidence
-                .iter()
-                .find(|evidence| evidence.role == "drilled_hole")
-        })
-        .flatten()
-        .map(|hole| {
-            serde_json::to_string(&(
-                &finding.rule_id,
-                finding
-                    .subjects
-                    .iter()
-                    .map(|subject| StableSubject {
-                        anchor: None,
-                        ..StableSubject::from(subject)
-                    })
-                    .collect::<Vec<_>>(),
-                &finding.layers,
-                hole.center.map(|point| RawPoint {
-                    x: point.x,
-                    y: point.y,
-                }),
-                &hole.diameter,
-            ))
-        });
-    std::iter::once(original)
-        .chain(annular)
-        .map(|fingerprint| fingerprint.expect("released finding identity serializes"))
-        .collect()
-}
-
-/// A point as released ids hashed it, before the report rounded points.
-#[derive(serde::Serialize)]
-struct RawPoint {
-    x: f64,
-    y: f64,
 }
 
 fn compare_locations(left: &Location, right: &Location) -> Ordering {
@@ -1320,28 +1192,19 @@ mod tests {
     use super::*;
     use crate::commands::dfm::report::ReportPoint;
 
-    fn assign_ids(findings: &mut [Finding]) -> HashMap<String, String> {
-        super::assign_ids(findings, &HashSet::new())
-    }
-
     fn finding_at(x: f64) -> Finding {
         Finding {
             id: String::new(),
             rule_id: "rule".to_owned(),
             severity: super::super::report::Severity::Error,
-            waived: false,
-            waiver_reason: None,
-            title: String::new(),
             message: String::new(),
             measurement: Measurement::minimum_distance(0.0, 1.0),
             location: Location {
                 point: Some(ReportPoint { x, y: 0.0 }),
                 bounding_box: None,
-                witnesses: Vec::new(),
             },
             layers: Vec::new(),
             subjects: Vec::new(),
-            evidence: Vec::new(),
             sites: Vec::new(),
             frame: 0,
         }
@@ -1420,31 +1283,15 @@ mod tests {
     }
 
     #[test]
-    fn released_fingerprints_keep_every_digit_the_report_rounds_away() {
-        let finding = finding_at(0.1 + 0.2);
-        let fingerprint = &released_fingerprints(&finding, &HashSet::new())[0];
-        assert!(
-            fingerprint.contains(r#"{"x":0.30000000000000004,"y":0.0}"#),
-            "{fingerprint}"
-        );
-        assert_eq!(
-            serde_json::to_string(&finding.location.point).unwrap(),
-            r#"{"x":0.3,"y":0.0}"#
-        );
-    }
-
-    #[test]
-    fn visual_metadata_does_not_change_the_id_and_the_released_id_still_resolves() {
+    fn visual_metadata_does_not_change_the_id() {
         let mut finding = finding_at(1.0);
         finding.subjects.push(Subject {
             role: "hole",
             kind: "via_hole",
             ..Subject::default()
         });
-        let aliases = assign_ids(std::slice::from_mut(&mut finding));
+        assign_ids(std::slice::from_mut(&mut finding));
         let id = finding.id.clone();
-        // Independently computed from the pre-sites v1 JSON identity record.
-        assert_eq!(aliases.get("dfm-bee136ee7a39"), Some(&id));
         finding.subjects[0].provenance = Some(SourceLocator {
             step: Some("board".into()),
             layer: Some("DRILL".into()),
@@ -1452,35 +1299,10 @@ mod tests {
             feature_index: Some(1),
             instance_index: Some(7),
         });
-        finding
-            .evidence
-            .push(Evidence::circle("hole", Point::new(1.0, 0.0), 0.1));
         let site = site_at(Point::new(1.0, 0.0), finding.subjects.clone());
         finding.sites.push(site);
-        let aliases = assign_ids(std::slice::from_mut(&mut finding));
+        assign_ids(std::slice::from_mut(&mut finding));
         assert_eq!(finding.id, id);
-        assert_eq!(aliases.get("dfm-bee136ee7a39"), Some(&id));
-        assert!(finding.sites[0].id.starts_with(&format!("{id}-site-")));
-
-        // A waiver written against the released id still applies.
-        use crate::commands::dfm::waivers::{Waiver, WaiverFile, apply};
-        assert_ne!(finding.id, "dfm-bee136ee7a39");
-        let file = WaiverFile {
-            waiver: vec![Waiver {
-                finding: "dfm-bee136ee7a39".to_owned(),
-                reason: "approved by fab".to_owned(),
-                expires: None,
-            }],
-        };
-        let outcome = apply(
-            std::slice::from_mut(&mut finding),
-            &file,
-            &aliases,
-            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-        );
-        assert!(finding.waived);
-        assert_eq!(outcome.applied, 1);
-        assert!(outcome.unmatched.is_empty());
     }
 
     #[test]
@@ -1547,22 +1369,11 @@ mod tests {
             anchor: Some(Point::new(2.0, 3.0).into()),
             ..Subject::default()
         });
-        finding
-            .evidence
-            .push(Evidence::circle("drilled_hole", Point::new(2.0, 3.0), 0.2));
         let site = site_at(Point::new(1.0, 0.0), finding.subjects.clone());
         finding.sites.push(site);
-        let annular = HashSet::from(["annular"]);
-        let aliases = super::assign_ids(std::slice::from_mut(&mut finding), &annular);
+        assign_ids(std::slice::from_mut(&mut finding));
         let finding_id = finding.id.clone();
         let site_id = finding.sites[0].id.clone();
-        for released in ["dfm-ed8c542f1d5c", "dfm-96a22f500f68"] {
-            assert_eq!(
-                aliases.get(released),
-                Some(&finding_id),
-                "both released annular id formats remain waiver aliases"
-            );
-        }
 
         for subject in [&mut finding.subjects[0], &mut finding.sites[0].subjects[0]] {
             subject.name = Some("OVAL_10".into());
@@ -1576,7 +1387,7 @@ mod tests {
             Point::new(1.05, 0.05).into(),
         ]];
         finding.location.point = Some(Point::new(9.0, 9.0).into());
-        super::assign_ids(std::slice::from_mut(&mut finding), &annular);
+        assign_ids(std::slice::from_mut(&mut finding));
 
         assert_eq!(finding.id, finding_id);
         assert_eq!(finding.sites[0].id, site_id);
@@ -1586,10 +1397,7 @@ mod tests {
         different_hole.subjects = finding.subjects.clone();
         different_hole.subjects[0].anchor = Some(Point::new(5.0, 3.0).into());
         different_hole.layers = finding.layers.clone();
-        different_hole
-            .evidence
-            .push(Evidence::circle("drilled_hole", Point::new(5.0, 3.0), 0.2));
-        super::assign_ids(std::slice::from_mut(&mut different_hole), &annular);
+        assign_ids(std::slice::from_mut(&mut different_hole));
         assert_ne!(different_hole.id, finding.id);
     }
 }

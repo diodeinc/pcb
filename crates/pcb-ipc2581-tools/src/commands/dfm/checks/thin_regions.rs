@@ -191,7 +191,6 @@ fn measured_piece(
             name: Some(layer.name.clone()),
             ..Subject::default()
         }],
-        evidence: vec![Evidence::bounds("thin_piece", piece.bbox)],
         sites: piece_sites(piece, limit_mm, layer)?,
     })
 }

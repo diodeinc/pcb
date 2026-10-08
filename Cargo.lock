@@ -4253,6 +4253,7 @@ dependencies = [
  "petgraph",
  "rayon",
  "reqwest",
+ "rusqlite",
  "semver",
  "serde",
  "serde_json",

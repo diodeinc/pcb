@@ -86,10 +86,6 @@ pub(super) fn evaluate(
                 hole.center,
                 hole.diameter_mm + 2.0 * limit_mm,
             );
-            let evidence = vec![
-                drilled.clone(),
-                Evidence::bounds("offending_copper", offender.image.bbox),
-            ];
             let mut sites = Vec::new();
             if violates(&distance, limit_mm) {
                 let drill = circular_region(hole.center, radius_mm, design.resolution)?;
@@ -97,8 +93,7 @@ pub(super) fn evaluate(
                     region_clearance_sites(&drill, &offender.image, limit_mm)?,
                     &finding_layers,
                     limit_mm,
-                    design.resolution,
-                )?;
+                );
                 for site in &mut sites {
                     site.evidence.extend([drilled.clone(), keepout.clone()]);
                 }
@@ -132,7 +127,6 @@ pub(super) fn evaluate(
                 bbox,
                 layers: finding_layers,
                 subjects,
-                evidence,
                 sites,
             });
         }
@@ -311,7 +305,6 @@ limit = {{ minimum = "0.20 mm" }}"#
         assert_eq!(finding.subjects[1].role, "offender");
         assert_eq!(finding.subjects[1].net.as_deref(), Some("N2"));
         assert_eq!(finding.layers[1].name, "L0");
-        assert_eq!(finding.location.witnesses.len(), 2);
         assert!(!finding.id.is_empty());
         assert!(finding.sites.iter().all(|site| {
             site.evidence

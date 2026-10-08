@@ -14,7 +14,6 @@ export async function checkUsage(
   xml: string,
   bytes: Uint8Array,
   pdkToml: string,
-  waiverToml: string,
 ): Promise<void> {
   await init({ module_or_path: module });
   const pcb = new IpcDocument(xml, { name: "board.xml", validate: true });
@@ -45,7 +44,6 @@ export async function checkUsage(
     expectType<DfmReport>(pcb.checkDfm({ pdk: builtinPdks()[0].name }));
     const report = pcb.checkDfm({
       pdk: { name: "fab.toml", source: pdkToml },
-      waivers: { name: "waivers.toml", source: waiverToml },
       layoutTarget: "board-array",
       generatedAt: "2026-08-30T12:00:00Z",
     });
@@ -56,13 +54,7 @@ export async function checkUsage(
     expectType<"executable" | "metadata_only">(report.pdk.profile_status);
     expectType<number | null>(report.pdk.support.copper_layers?.minimum ?? null);
     expectType<string | null>(report.pdk.defaults.outer_copper_weight);
-    expectType<string>(report.layout.kind);
-    expectType<string>(report.scene.passes[0].svg);
-    expectType<number>(report.scene.bounds.min.x);
-    for (const finding of report.findings) {
-      expectType<number>(finding.sites[0].bounding_box.max.y);
-    }
-    if (report.waivers) expectType<string[]>(report.waivers.expired);
+    expectType<number>(report.summary.errors);
   } finally {
     decoded.free();
     pcb.free();
@@ -84,8 +76,8 @@ export function rejectInvalidOptions(pcb: IpcDocument, bytes: Uint8Array): void 
   pcb.export({ format: "cpl", side: "left" });
   // @ts-expect-error Input layout names use kebab-case.
   pcb.checkDfm({ layoutTarget: "board_array" });
-  // @ts-expect-error Waivers are text, not paths.
-  pcb.checkDfm({ waivers: "waivers.toml" });
+  // @ts-expect-error Waivers are no longer an option.
+  pcb.checkDfm({ waivers: { source: "" } });
   // @ts-expect-error Custom PDKs require source text.
   pcb.checkDfm({ pdk: { name: "fab.toml" } });
   // @ts-expect-error Report verdict retains its type.

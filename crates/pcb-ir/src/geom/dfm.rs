@@ -492,34 +492,6 @@ pub fn region_clearance_sites_with_index(
     Ok(sites)
 }
 
-/// A local required-clearance band around the supplied reference paths.
-pub fn linework_envelope(
-    paths: &[Vec<Point>],
-    radius_mm: f64,
-    resolution: Resolution,
-) -> Result<ContourSet, AccuracyError> {
-    use crate::geom::path::{ContourBuf, PathCmd, stroke_to_fill};
-    use crate::geom::{FillRule, StrokeStyle};
-    let contours = paths
-        .iter()
-        .filter(|path| path.len() >= 2)
-        .map(|path| {
-            ContourBuf::new(
-                std::iter::once(PathCmd::move_to(path[0]))
-                    .chain(path[1..].iter().copied().map(PathCmd::line_to))
-                    .collect(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let band = stroke_to_fill(
-        &contours,
-        StrokeStyle::round(2.0 * radius_mm),
-        resolution.accuracy,
-    )?
-    .unwrap_or_default();
-    ContourSet::from_contours(&band, FillRule::NonZero, resolution)
-}
-
 /// Circular material in the same flattened representation as check images.
 /// Analytic diameter/radial measurements should continue to use the circle
 /// parameters; this region is for boolean evidence such as missing copper.

@@ -82,7 +82,6 @@ pub struct TextInput {
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct DfmOptions {
     pub pdk: PdkInput,
-    pub waivers: Option<TextInput>,
     pub layout_target: LayoutTarget,
     pub generated_at: Option<String>,
 }

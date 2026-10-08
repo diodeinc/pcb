@@ -25,16 +25,15 @@
 //! curves and count toward the measurement's uncertainty; a score line is
 //! exact.
 
-use pcb_ir::geom::Resolution;
 use std::ops::Range;
 
-use pcb_ir::geom::dfm::{ClearanceSite, Distance, linework_clearance_sites, linework_envelope};
+use pcb_ir::geom::dfm::{ClearanceSite, Distance, linework_clearance_sites};
 use pcb_ir::geom::region::ring_edges;
 use pcb_ir::geom::{BBox, Point};
 
 use crate::commands::dfm::design::{BoardOutline, CopperLayer, Design, Score};
 use crate::commands::dfm::report::{
-    Evidence, EvidenceDisplay, LayerRef, MeasurementKind, ReportPoint, SourceLocator, Subject,
+    Evidence, LayerRef, MeasurementKind, ReportPoint, SourceLocator, Subject,
 };
 use crate::commands::dfm::rules::{Conditions, Linework};
 
@@ -47,7 +46,6 @@ struct LineworkItem {
     uncertainty_mm: f64,
     layer: Option<LayerRef>,
     subject: Subject,
-    evidence: Evidence,
 }
 
 /// The reference items and their segments, flattened into one pool so the
@@ -81,7 +79,6 @@ impl LineworkPool {
                 provenance: Some(score.provenance.clone()),
                 ..Subject::default()
             },
-            evidence: Evidence::segment("vscore_centerline", score.start, score.end),
         });
     }
 }
@@ -121,7 +118,6 @@ fn linework_pools(linework: Linework, design: &Design) -> Vec<(Option<Vec<u32>>,
                         uncertainty_mm: outline.region.uncertainty_mm,
                         layer: None,
                         subject: outline_subject(outline, "reference"),
-                        evidence: Evidence::bounds("board_outline", outline.bbox),
                     },
                 );
             }
@@ -206,7 +202,7 @@ fn measure(
                     limit_mm,
                     item.uncertainty_mm,
                 );
-                report_sites(geometry, &site_layers, limit_mm, design.resolution)?
+                report_sites(geometry, &site_layers, limit_mm)
             } else {
                 Vec::new()
             };
@@ -215,7 +211,6 @@ fn measure(
                 bbox: BBox::spanning(distance.first, distance.second),
                 layers: site_layers,
                 subjects: vec![item.subject.clone(), copper_subject(copper)],
-                evidence: vec![item.evidence.clone()],
                 sites,
             });
         }
@@ -235,22 +230,16 @@ pub(super) fn report_sites(
     geometry: Vec<ClearanceSite>,
     layers: &[LayerRef],
     limit_mm: f64,
-    resolution: Resolution,
-) -> anyhow::Result<Vec<MeasuredSite>> {
+) -> Vec<MeasuredSite> {
     geometry
         .into_iter()
-        .map(|site| report_site(site, layers.to_vec(), limit_mm, resolution))
+        .map(|site| report_site(site, layers.to_vec(), limit_mm))
         .collect()
 }
 
 /// All clearance families share the same local path/constraint construction;
 /// the rule and inherited subjects give these boundaries their physical roles.
-fn report_site(
-    geometry: ClearanceSite,
-    layers: Vec<LayerRef>,
-    limit_mm: f64,
-    resolution: Resolution,
-) -> anyhow::Result<MeasuredSite> {
+fn report_site(geometry: ClearanceSite, layers: Vec<LayerRef>, limit_mm: f64) -> MeasuredSite {
     let mut evidence = [
         ("first_boundary", &geometry.first_paths),
         ("second_boundary", &geometry.second_paths),
@@ -264,25 +253,23 @@ fn report_site(
         ..Evidence::default()
     })
     .collect::<Vec<_>>();
-    let band = linework_envelope(&geometry.first_paths, limit_mm, resolution)?;
-    if !band.is_empty() {
-        evidence.push(Evidence {
-            display: Some(EvidenceDisplay::RoundStroke {
-                paths: joined_boundary_paths(&geometry.first_paths),
-                width_mm: 2.0 * limit_mm,
-            }),
-            ..Evidence::region("required_clearance_band", &band)
-        });
+    // The band is everything within the limit of the first boundary.
+    let mut bbox = geometry.bbox;
+    let band = joined_boundary_paths(&geometry.first_paths);
+    if band.iter().any(|path| path.len() >= 2) {
+        for point in band.iter().flatten() {
+            bbox = bbox.union(BBox::from_point(Point::new(point.x, point.y)).expand(limit_mm));
+        }
+        evidence.push(Evidence::stroke(
+            "required_clearance_band",
+            band,
+            2.0 * limit_mm,
+        ));
     }
     let overlaps = !geometry.overlap.is_empty();
     if overlaps {
         evidence.push(Evidence::region("overlap_region", &geometry.overlap));
     }
-    let bbox = if band.is_empty() {
-        geometry.bbox
-    } else {
-        geometry.bbox.union(band.bbox)
-    };
     let mut site = MeasuredSite::new(
         geometry.distance,
         bbox,
@@ -301,7 +288,7 @@ fn report_site(
     } else {
         site.note = Some("Highlighted boundary spans are below the limit after accounting for geometric uncertainty.".to_owned());
     }
-    Ok(site)
+    site
 }
 
 /// Consecutive open paths that share an exact endpoint describe the same
@@ -376,19 +363,19 @@ mod tests {
             second_paths: vec![vec![Point::new(3.1, 2.0), Point::new(3.1, 4.0)]],
             overlap: pcb_ir::geom::ContourSet::empty(pcb_ir::geom::Resolution::default()),
         };
-        let site = report_site(geometry, Vec::new(), 0.2, Resolution::default()).unwrap();
+        let site = report_site(geometry, Vec::new(), 0.2);
         let band = site
             .evidence
             .iter()
             .find(|evidence| evidence.role == "required_clearance_band")
             .unwrap();
-        let Some(EvidenceDisplay::RoundStroke { paths, width_mm }) = &band.display else {
-            panic!("clearance band must retain its exact stroke construction");
-        };
+        assert_eq!(band.kind, "stroke");
         assert_eq!(
-            *width_mm, 0.4,
+            band.width_mm,
+            Some(0.4),
             "the band extends the full limit on each side"
         );
+        let paths = &band.paths;
         assert_eq!(paths.len(), 2, "disconnected spans must stay disconnected");
         assert_eq!(
             paths[0].iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
@@ -397,10 +384,6 @@ mod tests {
         assert_eq!(
             paths[1].iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
             vec![(8.0, 8.0), (9.0, 9.0)]
-        );
-        assert!(
-            !band.paths.is_empty(),
-            "measured polygon evidence remains available"
         );
         assert_eq!(site.distance.mm, 0.1);
         assert_eq!(site.distance.uncertainty_mm, 0.005);
