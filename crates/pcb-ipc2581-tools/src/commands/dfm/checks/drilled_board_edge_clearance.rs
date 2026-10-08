@@ -589,7 +589,11 @@ limit = { minimum = "0.3 mm" }"#);
             "the finding occurs wherever the panel places the board"
         );
         for subject in &finding.subjects {
-            let provenance = subject.provenance.as_ref().unwrap();
+            let provenance = subject
+                .provenance
+                .as_ref()
+                .or(subject.source.as_ref())
+                .unwrap();
             assert_eq!(provenance.step.as_deref(), Some("board"));
             assert_eq!(provenance.instance_index, None, "the board's own");
         }

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use pcb_ir::geom::region::ContourSet;
 use pcb_ir::geom::{BBox, Point, dist};
@@ -718,6 +718,16 @@ pub struct Subject {
     pub anchor: Option<ReportPoint>,
 }
 
+impl Subject {
+    /// Readers fall back to `source`, so a provenance that repeats it is
+    /// left unwritten. Finding ids hash `source`, never `provenance`.
+    pub(super) fn omit_repeated_provenance(&mut self) {
+        if self.provenance == self.source {
+            self.provenance = None;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DrillSpan {
     pub first_copper_index: u16,
@@ -751,7 +761,7 @@ impl DrillSpan {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SourceLocator {
     pub step: Option<String>,
     pub layer: Option<String>,
@@ -895,6 +905,51 @@ impl Evidence {
 }
 
 const SIMPLIFY_MM: f64 = 1e-4;
+
+/// Write path and region evidence that recurs verbatim once, in `shared`,
+/// wherever a reference to it is shorter than the evidence itself.
+pub(super) fn share_repeated_evidence(findings: &mut [Finding], shared: &mut Vec<Evidence>) {
+    fn evidence(findings: &mut [Finding]) -> impl Iterator<Item = &mut Evidence> {
+        findings.iter_mut().flat_map(|finding| {
+            let sites = finding.sites.iter_mut().flat_map(|site| &mut site.evidence);
+            finding.evidence.iter_mut().chain(sites)
+        })
+    }
+    let written = |evidence: &mut Evidence| {
+        let role = std::mem::take(&mut evidence.role);
+        let bytes = serde_json::to_vec(evidence).expect("evidence serializes");
+        evidence.role = role;
+        bytes
+    };
+    let mut uses = HashMap::<Vec<u8>, (usize, Option<u32>)>::new();
+    for item in evidence(findings).filter(|item| !item.paths.is_empty()) {
+        uses.entry(written(item)).or_default().0 += 1;
+    }
+    for item in evidence(findings).filter(|item| !item.paths.is_empty()) {
+        let body = written(item);
+        let (count, index) = uses.get_mut(&body).expect("counted above");
+        let reference = Evidence {
+            role: item.role,
+            kind: "shared",
+            bounding_box: item.bounding_box,
+            shared: Some(index.unwrap_or(shared.len() as u32)),
+            ..Evidence::default()
+        };
+        if *count < 2
+            || serde_json::to_vec(&reference)
+                .expect("evidence serializes")
+                .len()
+                >= body.len()
+        {
+            continue;
+        }
+        index.get_or_insert_with(|| {
+            shared.push(item.clone());
+            shared.len() as u32 - 1
+        });
+        *item = reference;
+    }
+}
 
 /// Open paths are stroked with round caps and joins, so a path that repeats
 /// another as written, in either direction, draws nothing new, and neither
