@@ -810,6 +810,7 @@ def apply_changeset(
         fp = _lookup_fp(entity_id)
         if fp:
             if entity_id.path in replacements:
+                _inherit_fields(fp, replacements[entity_id.path])
                 _inherit_uuids(fp, replacements[entity_id.path])
             kicad_board.Delete(fp)
             if entity_id in fps_by_entity_id:
@@ -827,6 +828,9 @@ def apply_changeset(
     for entity_id in sorted(changeset.added_footprints, key=lambda e: str(e.path)):
         fp_view = view.footprints[entity_id]
         fp = materialized_footprints[entity_id]
+        # Source text/metadata wins over inherited board fields, but does not
+        # change their presentation or remove board-only fields.
+        _apply_view_to_footprint(fp, fp_view, package_roots, layout_dir)
         kicad_board.Add(fp)
         fps_by_entity_id[entity_id] = fp
 
@@ -1484,6 +1488,28 @@ def apply_footprint_placement(
 
     fp.SetOrientation(pcbnew.EDA_ANGLE(complement.orientation, pcbnew.DEGREES_T))
     fp.SetLocked(complement.locked)
+
+
+def _inherit_fields(old_fp: Any, new_fp: Any) -> None:
+    """Merge board fields into a positioned, detached replacement by name.
+
+    SetAttributes retains text presentation, including absolute position/angle.
+    Both footprints must already share placement, so no further transform is
+    needed. CopyFrom cannot copy PCB_FIELDs in KiCad 9; copying text attributes
+    also leaves the replacement's field identity and parent intact.
+    Library-only fields remain on the replacement.
+    """
+    for old_field in old_fp.GetFields():
+        name = old_field.GetName()
+        new_fp.SetField(name, old_field.GetText())
+        new_field = get_footprint_field(new_fp, name)
+        assert new_field is not None
+        new_field.SetAttributes(old_field)
+        new_field.SetLayer(old_field.GetLayer())
+        new_field.SetVisible(old_field.IsVisible())
+        new_field.SetIsKnockout(old_field.IsKnockout())
+        new_field.SetLocked(old_field.IsLocked())
+        new_field.m_Uuid.Clone(old_field.m_Uuid)
 
 
 def _inherit_uuids(old_fp: Any, new_fp: Any) -> None:
