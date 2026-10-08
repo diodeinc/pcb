@@ -242,37 +242,24 @@ fn remove_empty_ancestors_until(base: &Path, removed_root: &Path) -> Result<()> 
     Ok(())
 }
 
-/// Recursively copy a directory, excluding hidden directories/files and symlinks.
+/// Recursively copy a directory, skipping hidden, git-ignored and symlinked entries.
 ///
 /// Optionally excludes specified directory roots (used when copying workspace
 /// packages to exclude nested packages that are separate workspace packages).
 pub fn copy_dir_all(src: &Path, dst: &Path, excluded_roots: &HashSet<PathBuf>) -> Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
+    let excluded_roots = excluded_roots.clone();
+    let walker = ignore::WalkBuilder::new(src)
+        .filter_entry(move |entry| !excluded_roots.contains(entry.path()))
+        .build();
+    for entry in walker {
         let entry = entry?;
-        let name = entry.file_name();
-        // Skip hidden files/directories (starting with .)
-        if name.to_string_lossy().starts_with('.') {
-            continue;
-        }
-        let src_path = entry.path();
-        let dst_path = dst.join(name);
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
-            // Skip if this directory is the root of another workspace package
-            if excluded_roots.contains(&src_path) {
-                log::debug!(
-                    "Skipping nested package dir during staging: {}",
-                    src_path.display()
-                );
-                continue;
+        let dst_path = dst.join(entry.path().strip_prefix(src)?);
+        match entry.file_type() {
+            Some(kind) if kind.is_dir() => fs::create_dir_all(&dst_path)?,
+            Some(kind) if kind.is_file() => {
+                fs::copy(entry.path(), &dst_path)?;
             }
-            copy_dir_all(&src_path, &dst_path, excluded_roots)?;
-        } else {
-            fs::copy(&src_path, &dst_path)?;
+            _ => {}
         }
     }
     Ok(())
