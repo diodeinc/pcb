@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use pcb_ir::geom::region::ContourSet;
 use pcb_ir::geom::{BBox, Point, dist};
 use serde::ser::SerializeStruct;
@@ -419,7 +421,9 @@ pub enum RuleStatus {
 pub struct Unresolved {
     /// Index into the report's `frames`, as for a finding.
     pub frame: u32,
+    #[serde(serialize_with = "nanometres")]
     pub actual_mm: f64,
+    #[serde(serialize_with = "nanometres")]
     pub uncertainty_mm: f64,
     pub point: ReportPoint,
     pub layers: Vec<String>,
@@ -498,6 +502,7 @@ pub struct Site {
     pub id: String,
     pub measurement: Measurement,
     pub measurement_kind: MeasurementKind,
+    #[serde(serialize_with = "nanometres")]
     pub uncertainty_mm: f64,
     pub witnesses: Vec<Witness>,
     /// Check-owned region of interest in the checked frame. The viewer adds
@@ -523,8 +528,11 @@ pub enum Severity {
 #[serde(untagged)]
 pub enum Measurement {
     Distance {
+        #[serde(serialize_with = "nanometres")]
         actual_mm: f64,
+        #[serde(serialize_with = "nanometres")]
         required_mm: f64,
+        #[serde(serialize_with = "nanometres")]
         margin_mm: f64,
     },
     Count {
@@ -536,7 +544,9 @@ pub enum Measurement {
         actual_ratio: f64,
         maximum_ratio: f64,
         margin_ratio: f64,
+        #[serde(serialize_with = "nanometres")]
         drilled_span_thickness_mm: f64,
+        #[serde(serialize_with = "nanometres")]
         finished_hole_diameter_mm: f64,
         thickness_source: &'static str,
     },
@@ -621,13 +631,27 @@ pub struct ReportPoint {
     pub y: f64,
 }
 
-/// Written to the nanometre; finer digits are floating-point noise.
+/// Lengths are written to the nanometre; finer digits are floating-point noise.
+fn to_nanometre(millimetres: f64) -> f64 {
+    (millimetres * 1e6).round() / 1e6 + 0.0
+}
+
+fn nanometres<S: Serializer>(millimetres: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_f64(to_nanometre(*millimetres))
+}
+
+fn optional_nanometres<S: Serializer>(
+    millimetres: &Option<f64>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    millimetres.map(to_nanometre).serialize(serializer)
+}
+
 impl Serialize for ReportPoint {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let nanometres = |millimetres: f64| (millimetres * 1e6).round() / 1e6 + 0.0;
         let mut point = serializer.serialize_struct("ReportPoint", 2)?;
-        point.serialize_field("x", &nanometres(self.x))?;
-        point.serialize_field("y", &nanometres(self.y))?;
+        point.serialize_field("x", &to_nanometre(self.x))?;
+        point.serialize_field("y", &to_nanometre(self.y))?;
         point.end()
     }
 }
@@ -740,6 +764,7 @@ pub struct Evidence {
     pub role: &'static str,
     pub kind: &'static str,
     pub center: Option<ReportPoint>,
+    #[serde(serialize_with = "optional_nanometres")]
     pub diameter: Option<f64>,
     pub start: Option<ReportPoint>,
     pub end: Option<ReportPoint>,
@@ -771,11 +796,13 @@ pub enum EvidenceDisplay {
     /// A physical-width round-capped, round-joined stroke of these paths.
     RoundStroke {
         paths: Vec<Vec<ReportPoint>>,
+        #[serde(serialize_with = "nanometres")]
         width_mm: f64,
     },
     /// Required circular copper minus the named native copper layer image.
     CircleMinusLayer {
         center: ReportPoint,
+        #[serde(serialize_with = "nanometres")]
         diameter: f64,
         layer: String,
     },
@@ -788,6 +815,7 @@ pub enum EvidenceDisplay {
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct DisplayCircle {
     pub center: ReportPoint,
+    #[serde(serialize_with = "nanometres")]
     pub diameter: f64,
 }
 
@@ -833,9 +861,13 @@ impl Evidence {
         }
     }
 
-    /// Drop vertices within `SIMPLIFY_MM` of the simplified path.
+    /// Drop vertices within `SIMPLIFY_MM` of the simplified path, and open
+    /// paths that draw nothing the others do not.
     pub(super) fn simplify(&mut self) {
         let closed = self.kind == "region";
+        if !closed {
+            self.paths = distinct_strokes(std::mem::take(&mut self.paths));
+        }
         for path in &mut self.paths {
             *path = simplified(path, closed);
         }
@@ -862,6 +894,46 @@ impl Evidence {
 }
 
 const SIMPLIFY_MM: f64 = 1e-4;
+
+/// Open paths are stroked with round caps and joins, so a path that repeats
+/// another as written, in either direction, draws nothing new, and neither
+/// does a point on another path's vertex.
+fn distinct_strokes(paths: Vec<Vec<ReportPoint>>) -> Vec<Vec<ReportPoint>> {
+    let written = |path: &[ReportPoint]| {
+        path.iter()
+            .map(|point| {
+                (
+                    to_nanometre(point.x).to_bits(),
+                    to_nanometre(point.y).to_bits(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let paths = paths
+        .into_iter()
+        .map(|path| (written(&path), path))
+        .collect::<Vec<_>>();
+    let point = |key: &[(u64, u64)]| {
+        key.first()
+            .filter(|first| key.iter().all(|vertex| vertex == *first))
+            .copied()
+    };
+    let vertices = paths
+        .iter()
+        .filter(|(key, _)| point(key).is_none())
+        .flat_map(|(key, _)| key.iter().copied())
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    paths
+        .into_iter()
+        .filter(|(key, _)| {
+            let reversed = key.iter().rev().copied().collect::<Vec<_>>();
+            !point(key).is_some_and(|point| vertices.contains(&point))
+                && seen.insert(key.clone().min(reversed))
+        })
+        .map(|(_, path)| path)
+        .collect()
+}
 
 /// Douglas–Peucker. A ring is the path back to its first vertex; one that
 /// would collapse keeps every vertex.
@@ -924,5 +996,27 @@ mod tests {
         );
         let sliver = path(&[(0.0, 0.0), (1.0, 0.0), (1.0, 5e-5), (0.0, 5e-5)]);
         assert_eq!(simplified(&sliver, true), sliver);
+    }
+
+    #[test]
+    fn strokes_keep_only_what_they_draw() {
+        let path = |coordinates: &[(f64, f64)]| {
+            coordinates
+                .iter()
+                .map(|&(x, y)| ReportPoint { x, y })
+                .collect::<Vec<_>>()
+        };
+        let wall = path(&[(0.0, 0.0), (1.0, 0.0)]);
+        let tangency = path(&[(0.5, 1.0), (0.5, 1.0)]);
+        assert_eq!(
+            distinct_strokes(vec![
+                wall.clone(),
+                path(&[(1.0, 0.0), (0.0, 1e-10)]),
+                path(&[(1.0, 0.0), (1.0, 0.0)]),
+                tangency.clone(),
+                tangency.clone(),
+            ]),
+            vec![wall, tangency]
+        );
     }
 }
