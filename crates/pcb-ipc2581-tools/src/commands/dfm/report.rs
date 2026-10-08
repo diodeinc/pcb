@@ -557,7 +557,8 @@ impl Measurement {
         Self::Distance {
             actual_mm,
             required_mm,
-            margin_mm: actual_mm - required_mm,
+            // From the written values, so the margin agrees with them.
+            margin_mm: to_nanometre(actual_mm) - to_nanometre(required_mm),
         }
     }
 
@@ -865,11 +866,11 @@ impl Evidence {
     /// paths that draw nothing the others do not.
     pub(super) fn simplify(&mut self) {
         let closed = self.kind == "region";
-        if !closed {
-            self.paths = distinct_strokes(std::mem::take(&mut self.paths));
-        }
         for path in &mut self.paths {
             *path = simplified(path, closed);
+        }
+        if !closed {
+            self.paths = distinct_strokes(std::mem::take(&mut self.paths));
         }
         if let Some(EvidenceDisplay::RoundStroke { paths, .. }) = &mut self.display {
             for path in paths {
