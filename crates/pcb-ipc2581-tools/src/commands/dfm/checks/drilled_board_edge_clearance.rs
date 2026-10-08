@@ -31,8 +31,7 @@ pub(super) fn evaluate_holes(
         .iter()
         .filter_map(|&(_, hole)| {
             let outline = enclosing_outline(&design.board_outlines, hole.center);
-            let (distance, outside) =
-                hole_clearance(hole, outline.map(|(_, outline)| outline), limit_mm)?;
+            let (distance, outside) = hole_clearance(hole, outline, limit_mm)?;
             let drilled = Evidence::circle("drilled_hole", hole.center, hole.diameter_mm);
             let required = Evidence::circle(
                 "required_board_edge_clearance",
@@ -75,9 +74,7 @@ pub(super) fn evaluate_slots(
         .iter()
         .map(|&(_, slot)| {
             let outline = enclosing_outline(&design.board_outlines, slot.bbox.center());
-            let Some((distance, outside)) =
-                slot_clearance(slot, outline.map(|(_, outline)| outline), limit_mm)?
-            else {
+            let Some((distance, outside)) = slot_clearance(slot, outline, limit_mm)? else {
                 return Ok(None);
             };
             let required = slot.outline.disk_dilate(limit_mm)?;
@@ -106,25 +103,20 @@ pub(super) fn evaluate_slots(
 
 /// The Step's own profile a feature belongs to. Containment breaks ties
 /// between multiple physical profiles in one Step; bounds distance gives an
-/// outside feature a deterministic related profile. The profile comes with
-/// its index in the outline pool.
-fn enclosing_outline(outlines: &[BoardOutline], point: Point) -> Option<(u32, &BoardOutline)> {
-    outlines
-        .iter()
-        .enumerate()
-        .map(|(index, outline)| (index as u32, outline))
-        .min_by(|(_, left), (_, right)| {
-            let left_outside = !left.region.contains_point(point);
-            let right_outside = !right.region.contains_point(point);
-            left_outside
-                .cmp(&right_outside)
-                .then_with(|| {
-                    left.bbox
-                        .distance_to(BBox::from_point(point))
-                        .total_cmp(&right.bbox.distance_to(BBox::from_point(point)))
-                })
-                .then_with(|| left.region.area().total_cmp(&right.region.area()))
-        })
+/// outside feature a deterministic related profile.
+fn enclosing_outline(outlines: &[BoardOutline], point: Point) -> Option<&BoardOutline> {
+    outlines.iter().min_by(|left, right| {
+        let left_outside = !left.region.contains_point(point);
+        let right_outside = !right.region.contains_point(point);
+        left_outside
+            .cmp(&right_outside)
+            .then_with(|| {
+                left.bbox
+                    .distance_to(BBox::from_point(point))
+                    .total_cmp(&right.bbox.distance_to(BBox::from_point(point)))
+            })
+            .then_with(|| left.region.area().total_cmp(&right.region.area()))
+    })
 }
 
 /// `None` proves the hole clears the limit. A returned distance is either a
@@ -241,7 +233,7 @@ struct Drilled<'a> {
 
 fn measured(
     feature: Drilled,
-    outline: Option<(u32, &BoardOutline)>,
+    outline: Option<&BoardOutline>,
     distance: Distance,
     outside: bool,
     limit_mm: f64,
@@ -250,14 +242,10 @@ fn measured(
     let mut evidence = vec![feature.evidence];
     let mut site_evidence = feature.site_evidence;
     let mut subjects = vec![feature.subject];
-    if let Some((outline_index, outline)) = outline {
+    if let Some(outline) = outline {
         subjects.push(linework_clearance::outline_subject(outline, "reference"));
         evidence.push(Evidence::bounds("board_profile", outline.bbox));
-        site_evidence.push(Evidence::shared(
-            "board_profile",
-            outline_index,
-            outline.bbox,
-        ));
+        site_evidence.push(profile_evidence(outline));
         if outside {
             let outside_region = outside_of(&outline.region)?;
             if !outside_region.is_empty() {
@@ -303,9 +291,8 @@ pub(super) fn slot_evidence(slot: &Slot) -> Evidence {
     }
 }
 
-/// The measured board material and its native outline. Every site of one
-/// board measures to the same profile, so the report holds it once.
-pub(super) fn profile_evidence(outline: &BoardOutline) -> Evidence {
+/// The measured board material and its native outline.
+fn profile_evidence(outline: &BoardOutline) -> Evidence {
     Evidence {
         display: Some(EvidenceDisplay::Path {
             paths: vec![pcb_ir::render::svg_path_data(&outline.native_outline)],
@@ -362,16 +349,16 @@ mod tests {
         measurement.actual_mm().unwrap()
     }
 
-    /// The shared board profile a site measures to.
-    fn board_profile<'a>(report: &'a DfmReport, site: &Site) -> &'a Evidence {
-        let reference = site
+    /// The board profile a site measures to, wherever the report holds it.
+    fn board_profile<'a>(report: &'a DfmReport, site: &'a Site) -> &'a Evidence {
+        let evidence = site
             .evidence
             .iter()
             .find(|evidence| evidence.role == "board_profile")
             .unwrap();
-        assert_eq!(reference.kind, "shared");
-        assert!(reference.paths.is_empty() && reference.display.is_none());
-        &report.shared_evidence[reference.shared.unwrap() as usize]
+        evidence
+            .shared
+            .map_or(evidence, |index| &report.shared_evidence[index as usize])
     }
 
     #[test]
@@ -615,6 +602,5 @@ limit = { minimum = "0.3 mm" }"#);
                     .unwrap()
             )
         );
-        assert_eq!(report.shared_evidence.len(), 1);
     }
 }

@@ -152,11 +152,7 @@ pub fn check(
             .chain(sites)
             .for_each(report::Evidence::simplify);
     }
-    checked
-        .shared_evidence
-        .iter_mut()
-        .for_each(report::Evidence::simplify);
-    report::share_repeated_evidence(&mut checked.findings, &mut checked.shared_evidence);
+    let shared_evidence = report::share_repeated_evidence(&mut checked.findings);
     Ok(DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: request.generated_at.to_rfc3339(),
@@ -203,7 +199,7 @@ pub fn check(
         rules: checked.rules,
         frames,
         findings: checked.findings,
-        shared_evidence: checked.shared_evidence,
+        shared_evidence,
         scene,
     })
 }
