@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Release source bundles skip git-ignored files.
 - `pcb publish --check` removes its temporary staging directory when interrupted or terminated.
+- DFM checks no longer exhaust memory on some boards with large copper pours.
 
 ### Changed
 
