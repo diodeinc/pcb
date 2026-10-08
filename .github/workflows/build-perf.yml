@@ -15,6 +15,7 @@ permissions:
 jobs:
   build_perf:
     name: pcb build performance
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     steps:
@@ -30,23 +31,26 @@ jobs:
           cache-bin: false
 
       - name: Checkout benchmark workspace
+        env:
+          DIODE_CLIENT_ID: ${{ secrets.DIODE_CLIENT_ID }}
+          DIODE_CLIENT_SECRET: ${{ secrets.DIODE_CLIENT_SECRET }}
         run: |
-          key="$RUNNER_TEMP/code-diode-key"
-          ssh-keygen -q -t ed25519 -N '' -f "$key"
-          export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityFile=$key -o IdentityAgent=none -o StrictHostKeyChecking=accept-new"
-          git clone --depth 1 git@code.diode.computer:demo/b/Demeter workspaces/Demeter
-          git clone --depth 1 git@code.diode.computer:demo/b/DM0001 workspaces/DM0001
+          ./install.sh
+          export PATH="$HOME/.local/bin:$PATH"
+          pcb auth git configure https://code.diode.computer/demo/b/Demeter
+          git clone --depth 1 https://code.diode.computer/demo/b/Demeter workspaces/Demeter
+          git clone --depth 1 https://code.diode.computer/demo/b/DM0001 workspaces/DM0001
           # Keep the benchmark workload before the AM32 redesign, which needs
           # an INA199 symbol not present in the compiler's bundled library.
           git -C workspaces/DM0001 fetch --depth 1 origin a02803dbc47eb6a31ef6a511c77ec921ecf85a16
           git -C workspaces/DM0001 checkout --detach FETCH_HEAD
-          git clone --depth 1 git@code.diode.computer:demo/b/DM0002 workspaces/DM0002
-          git clone --depth 1 git@code.diode.computer:demo/b/DM0003 workspaces/DM0003
-          git clone --depth 1 git@code.diode.computer:demo/b/Feign workspaces/Feign
-          git clone --depth 1 git@code.diode.computer:demo/b/Renfield workspaces/Renfield
-          git clone --depth 1 git@code.diode.computer:demo/b/Seward workspaces/Seward
-          git clone --depth 1 git@code.diode.computer:arduino/b/Nano workspaces/Nano
-          git clone --depth 1 git@code.diode.computer:arduino/b/unoQ workspaces/unoQ
+          git clone --depth 1 https://code.diode.computer/demo/b/DM0002 workspaces/DM0002
+          git clone --depth 1 https://code.diode.computer/demo/b/DM0003 workspaces/DM0003
+          git clone --depth 1 https://code.diode.computer/demo/b/Feign workspaces/Feign
+          git clone --depth 1 https://code.diode.computer/demo/b/Renfield workspaces/Renfield
+          git clone --depth 1 https://code.diode.computer/demo/b/Seward workspaces/Seward
+          git clone --depth 1 https://code.diode.computer/arduino/b/Nano workspaces/Nano
+          git clone --depth 1 https://code.diode.computer/arduino/b/unoQ workspaces/unoQ
 
       - name: Install hyperfine
         run: |

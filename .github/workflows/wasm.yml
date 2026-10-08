@@ -120,14 +120,19 @@ jobs:
           echo "WASM bundle size is within limits."
 
       - name: Checkout board workspaces
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          DIODE_CLIENT_ID: ${{ secrets.DIODE_CLIENT_ID }}
+          DIODE_CLIENT_SECRET: ${{ secrets.DIODE_CLIENT_SECRET }}
         run: |
-          key="$RUNNER_TEMP/code-diode-key"
-          ssh-keygen -q -t ed25519 -N '' -f "$key"
-          export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityFile=$key -o IdentityAgent=none -o StrictHostKeyChecking=accept-new"
-          git clone --depth 1 git@code.diode.computer:demo/b/Demeter workspaces/Demeter
-          git clone --depth 1 git@code.diode.computer:demo/b/Feign workspaces/Feign
+          ./install.sh
+          export PATH="$HOME/.local/bin:$PATH"
+          pcb auth git configure https://code.diode.computer/demo/b/Demeter
+          git clone --depth 1 https://code.diode.computer/demo/b/Demeter workspaces/Demeter
+          git clone --depth 1 https://code.diode.computer/demo/b/Feign workspaces/Feign
 
       - name: Evaluate publish bundles with WASM
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           for board in Demeter Feign; do
             node crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs \
