@@ -17,6 +17,7 @@ cli = [
     "dep:pcb-sch",
     "dep:pcb-ui",
     "dep:pdf-writer",
+    "dep:rusqlite",
     "dep:subsetter",
     "dep:tempfile",
     "dep:ttf-parser",
@@ -41,6 +42,7 @@ minijinja = { workspace = true }
 natord = { workspace = true }
 pcb-ir = { workspace = true }
 pdf-writer = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true, features = ["serialize"] }
 pcb-sch = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["float_roundtrip"] }

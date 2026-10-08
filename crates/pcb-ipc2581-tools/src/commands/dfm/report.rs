@@ -630,7 +630,7 @@ pub struct ReportPoint {
 }
 
 /// Lengths are written to the nanometre; finer digits are floating-point noise.
-fn to_nanometre(millimetres: f64) -> f64 {
+pub(super) fn to_nanometre(millimetres: f64) -> f64 {
     (millimetres * 1e6).round() / 1e6 + 0.0
 }
 

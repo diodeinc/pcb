@@ -3860,6 +3860,7 @@ dependencies = [
  "pcb-ui",
  "pdf-writer",
  "rayon",
+ "rusqlite",
  "serde",
  "serde-value",
  "serde_json",

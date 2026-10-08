@@ -28,6 +28,8 @@ mod pdk;
 pub mod report;
 mod rules;
 mod scene;
+#[cfg(feature = "cli")]
+mod store;
 mod waivers;
 
 #[cfg(feature = "cli")]
@@ -281,7 +283,11 @@ pub fn execute_check(
             return Ok(CheckOutcome::Failed(error));
         }
     };
-    write_report(options, &report)?;
+    if writes_database(options) {
+        write_bytes(options, &store::database(&report)?)?;
+    } else {
+        write_report(options, &report)?;
+    }
 
     let summary = &report.summary;
     // A rule that could not be evaluated is named, never just counted.
@@ -334,7 +340,21 @@ pub fn write_error_report(
         },
         "error": { "message": format!("{error:#}") },
     });
-    write_report(options, &incomplete)
+    if writes_database(options) {
+        write_bytes(options, &store::incomplete_database(&incomplete)?)
+    } else {
+        write_report(options, &incomplete)
+    }
+}
+
+/// A `.sqlite` destination receives the report as a SQLite database.
+#[cfg(feature = "cli")]
+fn writes_database(options: &CheckOptions) -> bool {
+    options
+        .output
+        .as_deref()
+        .and_then(Path::extension)
+        .is_some_and(|extension| extension == "sqlite")
 }
 
 #[cfg(feature = "cli")]
@@ -489,7 +509,11 @@ fn serialize_within(report: &impl Serialize, limit: usize) -> Result<Vec<u8>> {
 
 #[cfg(feature = "cli")]
 fn write_report(options: &CheckOptions, report: &impl Serialize) -> Result<()> {
-    let bytes = serialize_within(report, MAX_REPORT_BYTES)?;
+    write_bytes(options, &serialize_within(report, MAX_REPORT_BYTES)?)
+}
+
+#[cfg(feature = "cli")]
+fn write_bytes(options: &CheckOptions, bytes: &[u8]) -> Result<()> {
     match options.output.as_deref() {
         Some(path) => {
             // Replace only after serialization and the complete write succeed.
@@ -500,7 +524,7 @@ fn write_report(options: &CheckOptions, report: &impl Serialize) -> Result<()> {
             let mut temporary = tempfile::NamedTempFile::new_in(parent)
                 .with_context(|| format!("failed to create DFM report in {}", parent.display()))?;
             temporary
-                .write_all(&bytes)
+                .write_all(bytes)
                 .with_context(|| format!("failed to write DFM report to {}", path.display()))?;
             temporary
                 .as_file()
@@ -512,7 +536,7 @@ fn write_report(options: &CheckOptions, report: &impl Serialize) -> Result<()> {
                 .with_context(|| format!("failed to replace DFM report {}", path.display()))?;
             Ok(())
         }
-        None => pcb_ui::write_stdout(|stdout| stdout.write_all(&bytes))
+        None => pcb_ui::write_stdout(|stdout| stdout.write_all(bytes))
             .context("failed to write DFM report to stdout"),
     }
 }
@@ -827,6 +851,49 @@ limit = { minimum = "300 mil" }
         );
         assert_eq!(finding.layers[0].name, "TOP");
         assert!(!finding.sites.is_empty());
+    }
+
+    #[test]
+    fn database_report_is_reproducible_and_holds_every_finding() {
+        let ipc = builtin_pdks::find("ipc").unwrap();
+        let board = BOARD.replace(
+            "</Profile>",
+            r#"<Cutout>
+              <PolyBegin x="10" y="1.3"/><PolyStepSegment x="20" y="1.3"/>
+              <PolyStepSegment x="20" y="5"/><PolyStepSegment x="10" y="5"/>
+              <PolyStepSegment x="10" y="1.3"/>
+            </Cutout></Profile>"#,
+        );
+        let report = check_with_pdk(&board, LayoutTarget::Board, ipc.source);
+        assert!(!report.findings.is_empty());
+        let bytes = store::database(&report).unwrap();
+        assert_eq!(bytes, store::database(&report).unwrap());
+
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .deserialize_read_exact("main", bytes.as_slice(), bytes.len(), true)
+            .unwrap();
+        let count = |sql: &str| {
+            connection
+                .query_row(sql, [], |row| row.get::<_, i64>(0))
+                .map(|count| count as usize)
+        };
+        assert_eq!(
+            count("SELECT count(*) FROM findings").unwrap(),
+            report.findings.len()
+        );
+        assert_eq!(
+            count("SELECT count(*) FROM sites").unwrap(),
+            report
+                .findings
+                .iter()
+                .map(|finding| finding.sites.len())
+                .sum::<usize>()
+        );
+        assert_eq!(
+            count("SELECT count(*) FROM findings f, json_each(f.evidence) e JOIN shapes s ON s.id = e.value ->> 1").unwrap(),
+            report.findings.iter().map(|finding| finding.evidence.len()).sum::<usize>()
+        );
     }
 
     #[test]
