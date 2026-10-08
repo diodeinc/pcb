@@ -124,12 +124,7 @@ jobs:
         env:
           DIODE_CLIENT_ID: ${{ secrets.DIODE_CLIENT_ID }}
           DIODE_CLIENT_SECRET: ${{ secrets.DIODE_CLIENT_SECRET }}
-        run: |
-          ./install.sh
-          export PATH="$HOME/.local/bin:$PATH"
-          pcb auth git configure https://code.diode.computer/demo/b/Demeter
-          git clone --depth 1 https://code.diode.computer/demo/b/Demeter workspaces/Demeter
-          git clone --depth 1 https://code.diode.computer/demo/b/Feign workspaces/Feign
+        run: .github/scripts/clone-diodehub.sh demo/b/Demeter demo/b/Feign
 
       - name: Evaluate publish bundles with WASM
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
