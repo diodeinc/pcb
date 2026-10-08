@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use pcb_ir::geom::region::ContourSet;
 use pcb_ir::geom::{BBox, Point, dist};
@@ -530,7 +530,6 @@ pub enum Measurement {
     Distance {
         #[serde(serialize_with = "nanometres")]
         actual_mm: f64,
-        #[serde(serialize_with = "nanometres")]
         required_mm: f64,
         #[serde(serialize_with = "nanometres")]
         margin_mm: f64,
@@ -544,9 +543,7 @@ pub enum Measurement {
         actual_ratio: f64,
         maximum_ratio: f64,
         margin_ratio: f64,
-        #[serde(serialize_with = "nanometres")]
         drilled_span_thickness_mm: f64,
-        #[serde(serialize_with = "nanometres")]
         finished_hole_diameter_mm: f64,
         thickness_source: &'static str,
     },
@@ -639,13 +636,6 @@ fn to_nanometre(millimetres: f64) -> f64 {
 
 fn nanometres<S: Serializer>(millimetres: &f64, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_f64(to_nanometre(*millimetres))
-}
-
-fn optional_nanometres<S: Serializer>(
-    millimetres: &Option<f64>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    millimetres.map(to_nanometre).serialize(serializer)
 }
 
 impl Serialize for ReportPoint {
@@ -775,7 +765,6 @@ pub struct Evidence {
     pub role: &'static str,
     pub kind: &'static str,
     pub center: Option<ReportPoint>,
-    #[serde(serialize_with = "optional_nanometres")]
     pub diameter: Option<f64>,
     pub start: Option<ReportPoint>,
     pub end: Option<ReportPoint>,
@@ -807,13 +796,11 @@ pub enum EvidenceDisplay {
     /// A physical-width round-capped, round-joined stroke of these paths.
     RoundStroke {
         paths: Vec<Vec<ReportPoint>>,
-        #[serde(serialize_with = "nanometres")]
         width_mm: f64,
     },
     /// Required circular copper minus the named native copper layer image.
     CircleMinusLayer {
         center: ReportPoint,
-        #[serde(serialize_with = "nanometres")]
         diameter: f64,
         layer: String,
     },
@@ -826,7 +813,6 @@ pub enum EvidenceDisplay {
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct DisplayCircle {
     pub center: ReportPoint,
-    #[serde(serialize_with = "nanometres")]
     pub diameter: f64,
 }
 
@@ -873,14 +859,16 @@ impl Evidence {
     }
 
     /// Drop vertices within `SIMPLIFY_MM` of the simplified path, and open
-    /// paths that draw nothing the others do not.
+    /// paths that repeat another as written.
     pub(super) fn simplify(&mut self) {
         let closed = self.kind == "region";
         for path in &mut self.paths {
             *path = simplified(path, closed);
         }
         if !closed {
-            self.paths = distinct_strokes(std::mem::take(&mut self.paths));
+            let mut seen = HashSet::new();
+            self.paths
+                .retain(|path| seen.insert(serde_json::to_string(path).expect("paths serialize")));
         }
         if let Some(EvidenceDisplay::RoundStroke { paths, .. }) = &mut self.display {
             for path in paths {
@@ -905,82 +893,6 @@ impl Evidence {
 }
 
 const SIMPLIFY_MM: f64 = 1e-4;
-
-/// Write path and region evidence that recurs verbatim once, in `shared`,
-/// wherever its references and that one copy are shorter than the copies
-/// they replace.
-pub(super) fn share_repeated_evidence(findings: &mut [Finding], shared: &mut Vec<Evidence>) {
-    fn evidence(findings: &mut [Finding]) -> impl Iterator<Item = &mut Evidence> {
-        findings.iter_mut().flat_map(|finding| {
-            let sites = finding.sites.iter_mut().flat_map(|site| &mut site.evidence);
-            finding.evidence.iter_mut().chain(sites)
-        })
-    }
-    let written = |evidence: &Evidence| serde_json::to_vec(evidence).expect("evidence serializes");
-    let mut uses = HashMap::<Vec<u8>, (usize, Option<u32>)>::new();
-    for item in evidence(findings).filter(|item| !item.paths.is_empty()) {
-        uses.entry(written(item)).or_default().0 += 1;
-    }
-    for item in evidence(findings).filter(|item| !item.paths.is_empty()) {
-        let body = written(item);
-        let (count, index) = uses.get_mut(&body).expect("counted above");
-        let reference = Evidence {
-            role: item.role,
-            kind: "shared",
-            bounding_box: item.bounding_box,
-            shared: Some(index.unwrap_or(shared.len() as u32)),
-            ..Evidence::default()
-        };
-        if *count * written(&reference).len() + body.len() >= *count * body.len() {
-            continue;
-        }
-        index.get_or_insert_with(|| {
-            shared.push(item.clone());
-            shared.len() as u32 - 1
-        });
-        *item = reference;
-    }
-}
-
-/// Open paths are stroked with round caps and joins, so a path that repeats
-/// another as written, in either direction, draws nothing new, and neither
-/// does a point on another path's vertex.
-fn distinct_strokes(paths: Vec<Vec<ReportPoint>>) -> Vec<Vec<ReportPoint>> {
-    let written = |path: &[ReportPoint]| {
-        path.iter()
-            .map(|point| {
-                (
-                    to_nanometre(point.x).to_bits(),
-                    to_nanometre(point.y).to_bits(),
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    let paths = paths
-        .into_iter()
-        .map(|path| (written(&path), path))
-        .collect::<Vec<_>>();
-    let point = |key: &[(u64, u64)]| {
-        key.first()
-            .filter(|first| key.iter().all(|vertex| vertex == *first))
-            .copied()
-    };
-    let vertices = paths
-        .iter()
-        .filter(|(key, _)| point(key).is_none())
-        .flat_map(|(key, _)| key.iter().copied())
-        .collect::<HashSet<_>>();
-    let mut seen = HashSet::new();
-    paths
-        .into_iter()
-        .filter(|(key, _)| {
-            let reversed = key.iter().rev().copied().collect::<Vec<_>>();
-            !point(key).is_some_and(|point| vertices.contains(&point))
-                && seen.insert(key.clone().min(reversed))
-        })
-        .map(|(_, path)| path)
-        .collect()
-}
 
 /// Douglas–Peucker. A ring is the path back to its first vertex; one that
 /// would collapse keeps every vertex.
@@ -1043,27 +955,5 @@ mod tests {
         );
         let sliver = path(&[(0.0, 0.0), (1.0, 0.0), (1.0, 5e-5), (0.0, 5e-5)]);
         assert_eq!(simplified(&sliver, true), sliver);
-    }
-
-    #[test]
-    fn strokes_keep_only_what_they_draw() {
-        let path = |coordinates: &[(f64, f64)]| {
-            coordinates
-                .iter()
-                .map(|&(x, y)| ReportPoint { x, y })
-                .collect::<Vec<_>>()
-        };
-        let wall = path(&[(0.0, 0.0), (1.0, 0.0)]);
-        let tangency = path(&[(0.5, 1.0), (0.5, 1.0)]);
-        assert_eq!(
-            distinct_strokes(vec![
-                wall.clone(),
-                path(&[(1.0, 0.0), (0.0, 1e-10)]),
-                path(&[(1.0, 0.0), (1.0, 0.0)]),
-                tangency.clone(),
-                tangency.clone(),
-            ]),
-            vec![wall, tangency]
-        );
     }
 }

@@ -156,7 +156,6 @@ pub fn check(
         .shared_evidence
         .iter_mut()
         .for_each(report::Evidence::simplify);
-    report::share_repeated_evidence(&mut checked.findings, &mut checked.shared_evidence);
     Ok(DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: request.generated_at.to_rfc3339(),

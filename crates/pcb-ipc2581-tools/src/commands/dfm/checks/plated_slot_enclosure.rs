@@ -251,12 +251,12 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }"#;
                 finding.sites[0].measurement_kind,
                 MeasurementKind::MissingCopper
             ));
-            assert!(finding.sites[0].evidence.iter().any(|e| {
-                let resolved = e
-                    .shared
-                    .map_or(e, |index| &report.shared_evidence[index as usize]);
-                e.role == "missing_copper" && !resolved.paths.is_empty()
-            }));
+            assert!(
+                finding.sites[0]
+                    .evidence
+                    .iter()
+                    .any(|e| e.role == "missing_copper" && !e.paths.is_empty())
+            );
         }
     }
 
