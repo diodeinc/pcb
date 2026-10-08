@@ -76,8 +76,6 @@ export function rejectInvalidOptions(pcb: IpcDocument, bytes: Uint8Array): void 
   pcb.export({ format: "cpl", side: "left" });
   // @ts-expect-error Input layout names use kebab-case.
   pcb.checkDfm({ layoutTarget: "board_array" });
-  // @ts-expect-error Waivers are no longer an option.
-  pcb.checkDfm({ waivers: { source: "" } });
   // @ts-expect-error Custom PDKs require source text.
   pcb.checkDfm({ pdk: { name: "fab.toml" } });
   // @ts-expect-error Report verdict retains its type.

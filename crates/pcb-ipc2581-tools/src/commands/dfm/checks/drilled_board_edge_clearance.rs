@@ -330,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn circular_holes_pass_and_fail_on_true_edge_clearance_with_native_evidence() {
+    fn circular_holes_pass_and_fail_on_true_edge_clearance_with_evidence() {
         let xml = board(
             r#"<LayerFeature layerRef="DRILL"><Set>
               <Hole name="pass" diameter="1" platingStatus="PLATED" x="5" y="2"/>
