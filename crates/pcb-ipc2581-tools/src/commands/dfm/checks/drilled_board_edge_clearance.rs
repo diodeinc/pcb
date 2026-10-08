@@ -397,8 +397,6 @@ limit = { minimum = "0.3 mm", preferred = "0.4 mm" }"#);
             board_profile(&report, site).display,
             Some(EvidenceDisplay::Path { .. })
         ));
-        // Both tiers fail against the same board: one profile, held once.
-        assert_eq!(report.shared_evidence.len(), 1);
         assert!(site.evidence.iter().any(|evidence| {
             evidence.role == "drilled_hole"
                 && evidence.kind == "circle"

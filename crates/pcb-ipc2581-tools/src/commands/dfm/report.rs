@@ -895,7 +895,8 @@ impl Evidence {
 const SIMPLIFY_MM: f64 = 1e-4;
 
 /// The shared-evidence table: path and region evidence that recurs verbatim,
-/// written once wherever a reference to it is shorter than the evidence.
+/// written once wherever its references and that one copy are shorter than
+/// the copies they replace.
 pub(super) fn share_repeated_evidence(findings: &mut [Finding]) -> Vec<Evidence> {
     fn evidence(findings: &mut [Finding]) -> impl Iterator<Item = &mut Evidence> {
         findings.iter_mut().flat_map(|finding| {
@@ -903,12 +904,7 @@ pub(super) fn share_repeated_evidence(findings: &mut [Finding]) -> Vec<Evidence>
             finding.evidence.iter_mut().chain(sites)
         })
     }
-    let written = |evidence: &mut Evidence| {
-        let role = std::mem::take(&mut evidence.role);
-        let bytes = serde_json::to_vec(evidence).expect("evidence serializes");
-        evidence.role = role;
-        bytes
-    };
+    let written = |evidence: &Evidence| serde_json::to_vec(evidence).expect("evidence serializes");
     let mut shared = Vec::new();
     let mut uses = HashMap::<Vec<u8>, (usize, Option<u32>)>::new();
     for item in evidence(findings).filter(|item| !item.paths.is_empty()) {
@@ -924,12 +920,7 @@ pub(super) fn share_repeated_evidence(findings: &mut [Finding]) -> Vec<Evidence>
             shared: Some(index.unwrap_or(shared.len() as u32)),
             ..Evidence::default()
         };
-        if *count < 2
-            || serde_json::to_vec(&reference)
-                .expect("evidence serializes")
-                .len()
-                >= body.len()
-        {
+        if *count * written(&reference).len() + body.len() >= *count * body.len() {
             continue;
         }
         index.get_or_insert_with(|| {
