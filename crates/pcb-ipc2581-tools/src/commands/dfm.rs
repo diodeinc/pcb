@@ -283,11 +283,7 @@ pub fn execute_check(
             return Ok(CheckOutcome::Failed(error));
         }
     };
-    if writes_database(options) {
-        write_bytes(options, &store::database(&report)?)?;
-    } else {
-        write_report(options, &report)?;
-    }
+    write_report(options, &report, || store::database(&report))?;
 
     let summary = &report.summary;
     // A rule that could not be evaluated is named, never just counted.
@@ -340,21 +336,9 @@ pub fn write_error_report(
         },
         "error": { "message": format!("{error:#}") },
     });
-    if writes_database(options) {
-        write_bytes(options, &store::incomplete_database(&incomplete)?)
-    } else {
-        write_report(options, &incomplete)
-    }
-}
-
-/// A `.sqlite` destination receives the report as a SQLite database.
-#[cfg(feature = "cli")]
-fn writes_database(options: &CheckOptions) -> bool {
-    options
-        .output
-        .as_deref()
-        .and_then(Path::extension)
-        .is_some_and(|extension| extension == "sqlite")
+    write_report(options, &incomplete, || {
+        store::incomplete_database(&incomplete)
+    })
 }
 
 #[cfg(feature = "cli")]
@@ -507,14 +491,20 @@ fn serialize_within(report: &impl Serialize, limit: usize) -> Result<Vec<u8>> {
     written.map(|()| capped.bytes)
 }
 
+/// Write the report as JSON, or as a SQLite database to a `.sqlite` path.
 #[cfg(feature = "cli")]
-fn write_report(options: &CheckOptions, report: &impl Serialize) -> Result<()> {
-    write_bytes(options, &serialize_within(report, MAX_REPORT_BYTES)?)
-}
-
-#[cfg(feature = "cli")]
-fn write_bytes(options: &CheckOptions, bytes: &[u8]) -> Result<()> {
-    match options.output.as_deref() {
+fn write_report(
+    options: &CheckOptions,
+    report: &impl Serialize,
+    database: impl FnOnce() -> Result<Vec<u8>>,
+) -> Result<()> {
+    let output = options.output.as_deref();
+    let bytes = if output.and_then(Path::extension) == Some("sqlite".as_ref()) {
+        database()?
+    } else {
+        serialize_within(report, MAX_REPORT_BYTES)?
+    };
+    match output {
         Some(path) => {
             // Replace only after serialization and the complete write succeed.
             let parent = path
@@ -524,7 +514,7 @@ fn write_bytes(options: &CheckOptions, bytes: &[u8]) -> Result<()> {
             let mut temporary = tempfile::NamedTempFile::new_in(parent)
                 .with_context(|| format!("failed to create DFM report in {}", parent.display()))?;
             temporary
-                .write_all(bytes)
+                .write_all(&bytes)
                 .with_context(|| format!("failed to write DFM report to {}", path.display()))?;
             temporary
                 .as_file()
@@ -536,7 +526,7 @@ fn write_bytes(options: &CheckOptions, bytes: &[u8]) -> Result<()> {
                 .with_context(|| format!("failed to replace DFM report {}", path.display()))?;
             Ok(())
         }
-        None => pcb_ui::write_stdout(|stdout| stdout.write_all(bytes))
+        None => pcb_ui::write_stdout(|stdout| stdout.write_all(&bytes))
             .context("failed to write DFM report to stdout"),
     }
 }
@@ -1276,7 +1266,8 @@ reason = "old finding"
 
         let file = directory.path().join("report.dfm.json");
         std::fs::write(&file, b"previous report").unwrap();
-        let error = write_report(&options(file.clone()), &Unserializable).unwrap_err();
+        let error =
+            write_report(&options(file.clone()), &Unserializable, || unreachable!()).unwrap_err();
         assert!(error.to_string().contains("serialization failed"));
         assert_eq!(std::fs::read(file).unwrap(), b"previous report");
 
@@ -1285,7 +1276,8 @@ reason = "old finding"
         std::fs::create_dir(&occupied).unwrap();
         std::fs::write(occupied.join("sentinel"), b"untouched").unwrap();
         let report = serde_json::json!({"verdict": "incomplete"});
-        let error = write_report(&options(occupied.clone()), &report).unwrap_err();
+        let error =
+            write_report(&options(occupied.clone()), &report, || unreachable!()).unwrap_err();
         assert!(error.to_string().contains("failed to replace DFM report"));
         assert_eq!(
             std::fs::read(occupied.join("sentinel")).unwrap(),
