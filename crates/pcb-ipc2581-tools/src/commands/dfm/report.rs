@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use pcb_ir::geom::region::ContourSet;
 use pcb_ir::geom::{BBox, Point, dist};
 use serde::ser::SerializeStruct;
@@ -419,7 +421,9 @@ pub enum RuleStatus {
 pub struct Unresolved {
     /// Index into the report's `frames`, as for a finding.
     pub frame: u32,
+    #[serde(serialize_with = "nanometres")]
     pub actual_mm: f64,
+    #[serde(serialize_with = "nanometres")]
     pub uncertainty_mm: f64,
     pub point: ReportPoint,
     pub layers: Vec<String>,
@@ -498,6 +502,7 @@ pub struct Site {
     pub id: String,
     pub measurement: Measurement,
     pub measurement_kind: MeasurementKind,
+    #[serde(serialize_with = "nanometres")]
     pub uncertainty_mm: f64,
     pub witnesses: Vec<Witness>,
     /// Check-owned region of interest in the checked frame. The viewer adds
@@ -523,8 +528,10 @@ pub enum Severity {
 #[serde(untagged)]
 pub enum Measurement {
     Distance {
+        #[serde(serialize_with = "nanometres")]
         actual_mm: f64,
         required_mm: f64,
+        #[serde(serialize_with = "nanometres")]
         margin_mm: f64,
     },
     Count {
@@ -547,7 +554,8 @@ impl Measurement {
         Self::Distance {
             actual_mm,
             required_mm,
-            margin_mm: actual_mm - required_mm,
+            // From the written values, so the margin agrees with them.
+            margin_mm: to_nanometre(actual_mm) - to_nanometre(required_mm),
         }
     }
 
@@ -621,13 +629,20 @@ pub struct ReportPoint {
     pub y: f64,
 }
 
-/// Written to the nanometre; finer digits are floating-point noise.
+/// Lengths are written to the nanometre; finer digits are floating-point noise.
+fn to_nanometre(millimetres: f64) -> f64 {
+    (millimetres * 1e6).round() / 1e6 + 0.0
+}
+
+fn nanometres<S: Serializer>(millimetres: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_f64(to_nanometre(*millimetres))
+}
+
 impl Serialize for ReportPoint {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let nanometres = |millimetres: f64| (millimetres * 1e6).round() / 1e6 + 0.0;
         let mut point = serializer.serialize_struct("ReportPoint", 2)?;
-        point.serialize_field("x", &nanometres(self.x))?;
-        point.serialize_field("y", &nanometres(self.y))?;
+        point.serialize_field("x", &to_nanometre(self.x))?;
+        point.serialize_field("y", &to_nanometre(self.y))?;
         point.end()
     }
 }
@@ -693,6 +708,16 @@ pub struct Subject {
     pub anchor: Option<ReportPoint>,
 }
 
+impl Subject {
+    /// Readers fall back to `source`, so a provenance that repeats it is
+    /// left unwritten. Finding ids hash `source`, never `provenance`.
+    pub(super) fn omit_repeated_provenance(&mut self) {
+        if self.provenance == self.source {
+            self.provenance = None;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DrillSpan {
     pub first_copper_index: u16,
@@ -726,7 +751,7 @@ impl DrillSpan {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SourceLocator {
     pub step: Option<String>,
     pub layer: Option<String>,
@@ -821,18 +846,6 @@ impl Evidence {
         }
     }
 
-    /// A reference to evidence held once in the report's shared table. Until
-    /// the engine builds that table, `index` is the check's own pool index.
-    pub fn shared(role: &'static str, index: u32, bounding_box: BBox) -> Self {
-        Self {
-            role,
-            kind: "shared",
-            bounding_box: Some(bounding_box.into()),
-            shared: Some(index),
-            ..Self::default()
-        }
-    }
-
     /// Drop vertices within `SIMPLIFY_MM` of the simplified path.
     pub(super) fn simplify(&mut self) {
         let closed = self.kind == "region";
@@ -862,6 +875,43 @@ impl Evidence {
 }
 
 const SIMPLIFY_MM: f64 = 1e-4;
+
+/// The shared-evidence table: evidence that recurs verbatim, written once
+/// wherever its references and that one copy are shorter than the copies
+/// they replace.
+pub(super) fn share_repeated_evidence(findings: &mut [Finding]) -> Vec<Evidence> {
+    fn evidence(findings: &mut [Finding]) -> impl Iterator<Item = &mut Evidence> {
+        findings.iter_mut().flat_map(|finding| {
+            let sites = finding.sites.iter_mut().flat_map(|site| &mut site.evidence);
+            finding.evidence.iter_mut().chain(sites)
+        })
+    }
+    let written = |evidence: &Evidence| serde_json::to_vec(evidence).expect("evidence serializes");
+    let mut uses = HashMap::<Vec<u8>, (usize, Option<u32>)>::new();
+    for item in evidence(findings) {
+        uses.entry(written(item)).or_default().0 += 1;
+    }
+    let mut shared = Vec::new();
+    for item in evidence(findings) {
+        let body = written(item);
+        let (count, index) = uses.get_mut(&body).expect("counted above");
+        let reference = Evidence {
+            role: item.role,
+            kind: "shared",
+            bounding_box: item.bounding_box,
+            shared: Some(index.unwrap_or(shared.len() as u32)),
+            ..Evidence::default()
+        };
+        if *count * written(&reference).len() + body.len() < *count * body.len() {
+            index.get_or_insert_with(|| {
+                shared.push(item.clone());
+                shared.len() as u32 - 1
+            });
+            *item = reference;
+        }
+    }
+    shared
+}
 
 /// Douglas–Peucker. A ring is the path back to its first vertex; one that
 /// would collapse keeps every vertex.

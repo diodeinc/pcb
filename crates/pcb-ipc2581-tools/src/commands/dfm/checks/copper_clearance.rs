@@ -659,13 +659,12 @@ mod tests {
                 .iter()
                 .find(|s| s.net.as_deref() == Some("GND"))
                 .unwrap();
-            for locator in [graphic.source.as_ref(), graphic.provenance.as_ref()] {
-                let locator = locator.unwrap();
-                assert_eq!(locator.step.as_deref(), Some("antenna"));
-                assert_eq!(locator.layer.as_deref(), Some("F.Cu"));
-                assert_eq!(locator.set_index, Some(0));
-                assert_eq!(locator.feature_index, Some(0));
-            }
+            assert_eq!(graphic.provenance, None, "it would repeat the source");
+            let locator = graphic.source.as_ref().unwrap();
+            assert_eq!(locator.step.as_deref(), Some("antenna"));
+            assert_eq!(locator.layer.as_deref(), Some("F.Cu"));
+            assert_eq!(locator.set_index, Some(0));
+            assert_eq!(locator.feature_index, Some(0));
         }
     }
 

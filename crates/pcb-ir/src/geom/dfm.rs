@@ -795,6 +795,10 @@ pub fn min_width_disk(region: &ContourSet) -> Result<Option<WidthDisk>, Accuracy
         .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm)))
 }
 
+fn bits(point: Point) -> [u64; 2] {
+    [point.x.to_bits(), point.y.to_bits()]
+}
+
 /// Measure the retained analytic bisectors and their opposing source contacts.
 /// Only widths below the requested minimum beyond their scalar boundary
 /// uncertainty are reportable. This does not recover topology lost in
@@ -858,11 +862,15 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                         (disk.width.first, disk.width.first),
                         (disk.width.second, disk.width.second),
                     ]);
+                    // Axes through one corner share its contact, and a
+                    // bisector reached from both edges at a corner repeats.
+                    walls.sort_unstable_by_key(|&(start, end)| [bits(start), bits(end)]);
+                    walls.dedup();
                     for &(start, end) in &walls {
                         bbox.include_point(start);
                         bbox.include_point(end);
                     }
-                    let axis = group
+                    let mut axis = group
                         .into_iter()
                         .map(|index| {
                             let (start, end) = lines[index];
@@ -870,7 +878,11 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                             bbox.include_point(end);
                             narrow_axis[index].3.clone()
                         })
-                        .collect();
+                        .collect::<Vec<_>>();
+                    axis.sort_unstable_by_key(|path| {
+                        path.iter().copied().map(bits).collect::<Vec<_>>()
+                    });
+                    axis.dedup();
                     ThinSite {
                         bbox,
                         disk,

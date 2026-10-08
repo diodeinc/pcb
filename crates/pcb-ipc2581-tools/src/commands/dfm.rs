@@ -139,6 +139,12 @@ pub fn check(
         &checked.findings,
     )?;
     for finding in &mut checked.findings {
+        let sites = finding.sites.iter_mut().flat_map(|site| &mut site.subjects);
+        finding
+            .subjects
+            .iter_mut()
+            .chain(sites)
+            .for_each(report::Subject::omit_repeated_provenance);
         let sites = finding.sites.iter_mut().flat_map(|site| &mut site.evidence);
         finding
             .evidence
@@ -146,10 +152,7 @@ pub fn check(
             .chain(sites)
             .for_each(report::Evidence::simplify);
     }
-    checked
-        .shared_evidence
-        .iter_mut()
-        .for_each(report::Evidence::simplify);
+    let shared_evidence = report::share_repeated_evidence(&mut checked.findings);
     Ok(DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: request.generated_at.to_rfc3339(),
@@ -196,7 +199,7 @@ pub fn check(
         rules: checked.rules,
         frames,
         findings: checked.findings,
-        shared_evidence: checked.shared_evidence,
+        shared_evidence,
         scene,
     })
 }
