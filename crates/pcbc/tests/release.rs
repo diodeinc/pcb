@@ -698,6 +698,8 @@ fn test_publish_board_with_file() {
         .write("boards/modules/component.zen", SIMPLE_COMPONENT)
         .write("boards/modules/test.kicad_mod", TEST_KICAD_MOD)
         .write("boards/modules/datasheet.txt", DATASHEET_CONTENTS)
+        .write("boards/modules/reference.pdf", "git-ignored")
+        .write("boards/.gitignore", "*.pdf\n")
         .write("boards/TB0002.zen", SIMPLE_BOARD_ZEN)
         .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
         .init_git()
@@ -723,6 +725,7 @@ fn test_publish_board_with_file() {
         .join("src/boards/modules/datasheet.txt");
     let datasheet_contents = std::fs::read_to_string(&datasheet_path).unwrap();
     assert_eq!(datasheet_contents, DATASHEET_CONTENTS);
+    assert!(!datasheet_path.with_file_name("reference.pdf").exists());
 
     assert_snapshot!("publish_with_file", sb.snapshot_dir(&staging_dir));
 }

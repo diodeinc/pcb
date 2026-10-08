@@ -257,6 +257,15 @@ pub fn build_board_release(
 ) -> Result<Option<PathBuf>> {
     let start_time = Instant::now();
     let temporary = options.check.then(tempfile::tempdir).transpose()?;
+    if let Some(temporary) = &temporary {
+        // A terminated check never drops its TempDir.
+        let path = temporary.path().to_path_buf();
+        ctrlc::set_handler(move || {
+            let _ = fs::remove_dir_all(&path);
+            std::process::exit(130);
+        })
+        .context("Failed to set termination handler")?;
+    }
     let mut diagnostics = Diagnostics::default();
     let outcome = preflight_board_release(
         zen_path.clone(),

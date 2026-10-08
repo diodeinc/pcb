@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Release source bundles skip git-ignored files.
+- `pcb publish --check` removes its temporary staging directory when interrupted or terminated.
+
 ## [0.4.73] - 2026-10-07
 
 ### Added
