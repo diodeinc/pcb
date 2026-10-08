@@ -151,7 +151,7 @@ rust_decimal_macros = "1.40"
 comfy-table = { version = "8", features = ["custom_styling"] }
 url = "2.5"
 ignore = "0.4.33"
-i_overlay = "8.1"
+i_overlay = "8.1.2"
 i_triangle = "0.48"
 boostvoronoi = "0.12.1"
 sha2 = "0.11"
