@@ -641,7 +641,11 @@ where
     let mut offset = 0usize;
 
     loop {
-        let buffer = reader.fill_buf()?;
+        let buffer = match reader.fill_buf() {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        };
         if buffer.is_empty() {
             break;
         }
@@ -990,6 +994,38 @@ mod tests {
                 .unwrap();
                 assert_eq!(reader.fill_buf().unwrap()[0], b' ');
             }
+        }
+    }
+
+    #[test]
+    fn test_stream_retries_interrupted_reads() {
+        struct InterruptOnce {
+            cursor: Cursor<&'static [u8]>,
+            at: Option<u64>,
+        }
+        impl std::io::Read for InterruptOnce {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.at == Some(self.cursor.position()) {
+                    self.at = None;
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                self.cursor.read(buf)
+            }
+        }
+        for at in [0, 3] {
+            let reader = InterruptOnce {
+                cursor: Cursor::new(b"(a b)"),
+                at: Some(at),
+            };
+            let mut symbols = Vec::new();
+            walk_stream(BufReader::with_capacity(1, reader), |node| {
+                if let Some(symbol) = node.as_sym() {
+                    symbols.push(symbol.to_owned());
+                }
+                true
+            })
+            .unwrap();
+            assert_eq!(symbols, ["a", "b"]);
         }
     }
 
