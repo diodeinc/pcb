@@ -1,14 +1,16 @@
 """
-Tests for kicad_adapter pure functions and helpers.
+Tests for kicad_adapter functions and helpers.
 
-These tests verify the pure computation logic in the adapter layer
-without requiring actual KiCad objects.
+Most tests run without KiCad. Native replacement regressions run when pcbnew
+is importable (on Debian, set PYTHONPATH=/usr/lib/python3/dist-packages).
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import Mock
+
+import pytest
 
 from .. import kicad_adapter
 from ..lens import (
@@ -585,3 +587,207 @@ def test_replacement_inherits_footprint_and_pad_uuids():
         "old-1",
         "new-added",
     ]
+
+
+@pytest.mark.parametrize(
+    "sync_footprints", [True, False], ids=["forced", "fpid-change"]
+)
+@pytest.mark.parametrize("back", [False, True], ids=["front", "back"])
+def test_replacement_preserves_fields_through_save_reload(
+    tmp_path, sync_footprints, back
+):
+    """Exercise real transforms, field ownership and serialization, not SWIG mocks."""
+    pcbnew = pytest.importorskip("pcbnew")
+    from ..changeset import build_sync_changeset
+    from ..lens import extract
+    from ..types import BoardComplement, FootprintView
+
+    library = tmp_path / "Test.pretty"
+    library.mkdir()
+    template = pcbnew.FOOTPRINT(None)
+    template.SetField("LibraryOnly", "library text")
+    template.SetField("Rating", "library rating")
+    pad = pcbnew.PAD(template)
+    pad.SetNumber("1")
+    pad.SetAttribute(pcbnew.PAD_ATTRIB_SMD)
+    pad.SetShape(pcbnew.PAD_SHAPE_RECT)
+    pad.SetLayerSet(pcbnew.PAD.SMDMask())
+    pad.SetPosition(pcbnew.VECTOR2I(700_000, -300_000))
+    pad.SetSize(pcbnew.VECTOR2I(1_200_000, 800_000))
+    template.Add(pad)
+    model = pcbnew.FP_3DMODEL()
+    model.m_Filename = "library.step"
+    template.Models().push_back(model)
+    for name in ("Original", "Replacement"):
+        template.SetFPIDAsString(f"Test:{name}")
+        pcbnew.PCB_IO_KICAD_SEXPR().FootprintSave(str(library), template)
+
+    board = pcbnew.BOARD()
+    old_id = EntityId.from_string("R", fpid="Test:Original")
+    old = kicad_adapter._create_footprint(
+        FootprintView(old_id, "R1", "old value", old_id.fpid, fields={"Path": "R"}),
+        FootprintComplement(
+            position=Position(31_000_000, 47_000_000),
+            orientation=37.0,
+            layer="B.Cu" if back else "F.Cu",
+            locked=True,
+        ),
+        board,
+        pcbnew,
+        {"Test": str(library)},
+        {},
+        None,
+    )
+    board.Add(old)
+    old.Remove(kicad_adapter.get_footprint_field(old, "LibraryOnly"))
+    for name, text in {
+        "Manufacturer": "board manufacturer",
+        "Mpn": "board mpn",
+        "Rating": "board rating",
+        "Datasheet": "board.pdf",
+    }.items():
+        old.SetField(name, text)
+
+    # Deliberately asymmetric, board-authored presentation on both built-ins
+    # and custom fields, unlike the library defaults after rotation/flip.
+    for i, name in enumerate(
+        ("Reference", "Value", "Manufacturer", "Mpn", "Rating", "Datasheet")
+    ):
+        field = kicad_adapter.get_footprint_field(old, name)
+        field.SetVisible(name != "Reference")
+        field.SetLayer(pcbnew.B_SilkS if back else pcbnew.F_Fab)
+        field.SetKeepUpright(False)
+        field.SetPosition(
+            pcbnew.VECTOR2I(29_000_000 + i * 300_000, 44_000_000 - i * 700_000)
+        )
+        field.SetTextAngle(pcbnew.EDA_ANGLE(13 + i * 19, pcbnew.DEGREES_T))
+        field.SetTextSize(pcbnew.VECTOR2I(900_000 + i * 50_000, 1_300_000))
+        field.SetTextThickness(170_000)
+        field.SetBold(True)
+        field.SetItalic(i % 2 == 0)
+        field.SetMirrored(back)
+        field.SetIsKnockout(i % 2 == 1)
+        field.SetHorizJustify(pcbnew.GR_TEXT_H_ALIGN_LEFT)
+        field.SetVertJustify(pcbnew.GR_TEXT_V_ALIGN_TOP)
+
+    # Board geometry/models must NOT survive a library refresh.
+    next(iter(old.Pads())).SetSize(pcbnew.VECTOR2I(3_000_000, 2_000_000))
+    old.Models()[0].m_Filename = "board.step"
+    board_file = tmp_path / "test.kicad_pcb"
+
+    def reload_board():
+        pcbnew.SaveBoard(str(board_file), board)
+        return pcbnew.LoadBoard(str(board_file))
+
+    def presentation(field):
+        return (
+            field.m_Uuid.AsString(),
+            tuple(field.GetPosition()),
+            field.GetTextAngle().AsDegrees(),
+            field.GetLayer(),
+            field.IsVisible(),
+            tuple(field.GetTextSize()),
+            field.GetTextThickness(),
+            field.IsBold(),
+            field.IsItalic(),
+            field.IsMirrored(),
+            field.IsKeepUpright(),
+            field.IsKnockout(),
+            field.GetHorizJustify(),
+            field.GetVertJustify(),
+        )
+
+    board = reload_board()
+    old = next(iter(board.GetFootprints()))
+    expected_fields = {f.GetName(): presentation(f) for f in old.GetFields()}
+    fp_uuid = old.m_Uuid.AsString()
+    pad_uuid = next(iter(old.Pads())).m_Uuid.AsString()
+    new_id = EntityId.from_string(
+        "R", fpid="Test:Original" if sync_footprints else "Test:Replacement"
+    )
+    view = BoardView(
+        footprints={
+            new_id: FootprintView(
+                new_id,
+                "R9",
+                "22k",
+                new_id.fpid,
+                dnp=True,
+                exclude_from_bom=True,
+                exclude_from_pos=True,
+                fields={
+                    "Path": "R",
+                    "Rating": "source rating",
+                    "SourceOnly": "new source field",
+                    "Datasheet": "package://test/datasheet.pdf",
+                },
+            )
+        }
+    )
+
+    def check_fields():
+        fp = next(iter(board.GetFootprints()))
+        fields = {f.GetName(): f for f in fp.GetFields()}
+        assert len(fields) == len(list(fp.GetFields()))  # No duplicate named fields.
+        assert {
+            name: presentation(fields[name]) for name in expected_fields
+        } == expected_fields
+        assert {
+            name: fields[name].GetText()
+            for name in (
+                "Reference",
+                "Value",
+                "Manufacturer",
+                "Mpn",
+                "Rating",
+                "Datasheet",
+                "LibraryOnly",
+            )
+        } == {
+            "Reference": "R9",
+            "Value": "22k",
+            "Manufacturer": "board manufacturer",
+            "Mpn": "board mpn",
+            "Rating": "source rating",
+            "Datasheet": "datasheet.pdf",
+            "LibraryOnly": "library text",
+        }
+        assert fields["SourceOnly"].GetText() == "new source field"
+        assert not fields["SourceOnly"].IsVisible()
+        assert fp.m_Uuid.AsString() == fp_uuid
+        assert fp.GetFPIDAsString() == new_id.fpid
+        assert tuple(fp.GetPosition()) == (31_000_000, 47_000_000)
+        assert fp.GetOrientation().AsDegrees() == 37.0
+        assert fp.IsFlipped() == back
+        assert fp.IsLocked()
+        assert fp.IsDNP() and fp.IsExcludedFromBOM() and fp.IsExcludedFromPosFiles()
+        pad = next(iter(fp.Pads()))
+        assert pad.m_Uuid.AsString() == pad_uuid
+        assert tuple(pad.GetSize()) == (1_200_000, 800_000)
+        assert [m.m_Filename for m in fp.Models()] == ["library.step"]
+        assert all(f.GetParent() == fp for f in fields.values())
+
+    for iteration in range(3):
+        _, complement = extract(board, pcbnew)
+        old_comp = next(iter(complement.footprints.values()))
+        changeset = build_sync_changeset(
+            view,
+            BoardComplement(footprints={new_id: old_comp}),
+            complement,
+            sync_footprints=sync_footprints or iteration > 0,
+        )
+        assert changeset.added_footprints == {new_id}
+        kicad_adapter.apply_changeset(
+            changeset,
+            board,
+            pcbnew,
+            {"Test": str(library)},
+            {"test": str(tmp_path)},
+            board_file,
+        )
+        check_fields()
+        board = reload_board()
+        check_fields()
+        # Fields introduced by this refresh must retain UUIDs/presentation too.
+        fp = next(iter(board.GetFootprints()))
+        expected_fields = {f.GetName(): presentation(f) for f in fp.GetFields()}
