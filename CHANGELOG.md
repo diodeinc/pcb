@@ -10,6 +10,33 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [0.4.73] - 2026-10-07
 
+### Added
+
+- `pcb ipc bom --format jlc` writes a JLC BOM CSV from hydrated IPC-2581.
+- `pcb ipc gerber` writes a Gerber job file alongside the manufacturing files.
+- `pcb ipc gerber --include-auxiliary-layers` exports assembly, fabrication, glue, courtyard and document layers, which are now left out by default.
+- `pcb inspect` reads metadata from local KiCad symbol libraries offline.
+- `pcb info --format json --inventory` lists workspace packages and their releases offline.
+
+### Changed
+
+- Inner copper Gerbers use `.g1`, `.g2`, … extensions.
+- Drill exports match KiCad's coordinate and blind/buried tool attributes.
+- `pcb publish` no longer generates ODB++, assembly PDF, STEP, IPC HTML or drill maps.
+
+### Fixed
+
+- Gerber export keeps copper pads intact across plated slots.
+- Mask and silkscreen text from filled IPC outline polygons no longer disappears.
+- Gerber region coordinates are rounded once on the output grid.
+- `pcb import` binds multi-unit components whose units span several sheets.
+- `pcb import` keeps the source board's format version in extracted footprints, so KiCad 10 loads their zone fills.
+
+### Removed
+
+- `pcb component search` and `pcb component download`.
+- The hidden `pcb kq` command.
+
 ## [0.4.72] - 2026-10-06
 
 ### Fixed
