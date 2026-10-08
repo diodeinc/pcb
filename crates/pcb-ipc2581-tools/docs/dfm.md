@@ -561,8 +561,8 @@ severity is `incomplete`.
 
 The report is one SQLite 3 database. Its header's `application_id` is
 `0x44464D52` (`DFMR`), and its `user_version` is the report schema version,
-currently `3`. Open it with any SQLite client; `json_each` and `->>` read its
-JSON columns. Coordinates are integer nanometres in the
+currently `3`. Open it with any SQLite client; `json_each` and `json_extract`
+read its JSON columns. Coordinates are integer nanometres in the
 [frame](#frames) of their finding, X right and Y up. Every distinct layer,
 subject and evidence shape is stored once and referred to by id.
 

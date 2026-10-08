@@ -26,6 +26,7 @@ use super::report::{
 /// `DFMR`; `user_version` is the report schema version.
 const APPLICATION_ID: i32 = 0x4446_4d52;
 
+// Plain SQL and `json_extract`, which readers back to SQLite 3.9 parse.
 const SCHEMA: &str = "
 CREATE TABLE report (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 CREATE TABLE rules (
@@ -84,11 +85,11 @@ CREATE TABLE scene (
 CREATE VIEW finding_summary AS
 SELECT
     f.id, f.finding_id, r.rule_id, r.severity, r.finding_title AS title, f.message,
-    coalesce(f.measurement ->> '$.actual_mm', f.measurement ->> '$.actual_count',
-        f.measurement ->> '$.actual_ratio') AS actual,
+    coalesce(json_extract(f.measurement, '$.actual_mm'), json_extract(f.measurement, '$.actual_count'),
+        json_extract(f.measurement, '$.actual_ratio')) AS actual,
     r.limit_value AS limit_value, r.limit_unit AS unit,
-    coalesce(f.measurement ->> '$.margin_mm', f.measurement ->> '$.margin_count',
-        f.measurement ->> '$.margin_ratio') AS margin,
+    coalesce(json_extract(f.measurement, '$.margin_mm'), json_extract(f.measurement, '$.margin_count'),
+        json_extract(f.measurement, '$.margin_ratio')) AS margin,
     (SELECT group_concat(l.name, ', ') FROM json_each(f.layers) j JOIN layers l ON l.id = j.value)
         AS layers,
     (SELECT group_concat(DISTINCT s.net) FROM json_each(f.subjects) j JOIN subjects s ON s.id = j.value)
