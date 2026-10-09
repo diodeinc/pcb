@@ -177,9 +177,14 @@ pub fn embedded_font_names(source: &[u8]) -> Result<Vec<String>, Error> {
     Ok(outline_font::Fonts::load(&board, &mut warnings).names())
 }
 
-/// Write the STEP assembly for `board` to `sink`.
-pub fn export(board: &Board, options: &Options, sink: &mut dyn Write) -> Result<Report, Error> {
-    let mut report = Report::default();
+/// Write the STEP assembly for `board` to `sink`, adding warnings and
+/// models that could not be read to `report` as they are found.
+pub fn export(
+    board: &Board,
+    options: &Options,
+    sink: &mut dyn Write,
+    report: &mut Report,
+) -> Result<(), Error> {
     let scene = Scene::build(board, options, &mut report.warnings)?;
 
     let mut w = Writer::new(1);
@@ -195,15 +200,7 @@ FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\n\
 ENDSEC;\nDATA;\n",
     );
     let mut placements: Vec<u32> = Vec::new();
-    export_components(
-        board,
-        &scene,
-        &root,
-        &mut w,
-        sink,
-        &mut report,
-        &mut placements,
-    )?;
+    export_components(board, &scene, &root, &mut w, sink, report, &mut placements)?;
 
     let threads = worker_threads();
     for layer in &scene.layers {
@@ -296,7 +293,7 @@ ENDSEC;\nDATA;\n",
     root.emit(&mut w, &options.name, &placements);
     w.text("ENDSEC;\nEND-ISO-10303-21;\n");
     sink.write_all(&w.buf)?;
-    Ok(report)
+    Ok(())
 }
 
 /// Write items in parallel batches with ids from 1, a wave of batches at

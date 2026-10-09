@@ -19,7 +19,7 @@ enum Commands {
 
 pub fn execute(args: StepArgs) -> Result<()> {
     let Commands::Export(args) = args.command;
-    args.run("step", |board, options, sink| {
-        Ok(pcb_step::export(board, options, sink)?)
+    args.run("step", |board, options, sink, report| {
+        Ok(pcb_step::export(board, options, sink, report)?)
     })
 }

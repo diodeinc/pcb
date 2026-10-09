@@ -351,7 +351,8 @@ fn bare() -> Options {
 fn export_text(board: &str, options: &Options) -> (String, crate::Report) {
     let board = Board::parse(board.as_bytes()).unwrap();
     let mut out = Vec::new();
-    let report = export(&board, options, &mut out).unwrap();
+    let mut report = crate::Report::default();
+    export(&board, options, &mut out, &mut report).unwrap();
     (String::from_utf8(out).unwrap(), report)
 }
 
@@ -621,7 +622,7 @@ fn crossing_outline_loops_are_an_error() {
     );
     let text = parse(&edges);
     let board = Board::parse(text.as_bytes()).unwrap();
-    let err = export(&board, &bare(), &mut Vec::new()).unwrap_err();
+    let err = export(&board, &bare(), &mut Vec::new(), &mut Default::default()).unwrap_err();
     assert!(matches!(err, crate::Error::Outline(_)), "{err}");
 }
 

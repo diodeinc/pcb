@@ -16,14 +16,18 @@ use anyhow::Result;
 use pcb_step::scene::Scene;
 use pcb_step::{Board, Options, Report};
 
-/// Write the GLB for `board` to `sink`.
-pub fn export(board: &Board, options: &Options, sink: &mut dyn Write) -> Result<Report> {
-    let mut report = Report::default();
+/// Write the GLB for `board` to `sink`, adding warnings and models that
+/// could not be read to `report` as they are found.
+pub fn export(
+    board: &Board,
+    options: &Options,
+    sink: &mut dyn Write,
+    report: &mut Report,
+) -> Result<()> {
     let scene = Scene::build(board, options, &mut report.warnings)?;
     let (layers, mut models) =
         rayon::join(|| board::mesh(&scene), || models::tessellate(board, &scene));
     report.warnings.append(&mut models.warnings);
     report.failed_models += models.failed;
-    glb::write(&options.name, &scene, &layers, &models, sink)?;
-    Ok(report)
+    glb::write(&options.name, &scene, &layers, &models, sink)
 }

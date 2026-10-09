@@ -106,13 +106,13 @@ impl ExportArgs {
     /// with `extension`. The assembly is named after the board file and
     /// `${NAME}` text variables come from the project file beside it. The
     /// output is replaced atomically, so a failure leaves any previous
-    /// output alone. Warnings are printed;
-    /// models that could not be read fail the command once the file is
-    /// written.
+    /// output alone. Warnings are printed, whether or not the export
+    /// succeeds; models that could not be read fail the command once the
+    /// file is written.
     pub fn run(
         &self,
         extension: &str,
-        write: impl FnOnce(&Board, &Options, &mut dyn Write) -> Result<Report>,
+        write: impl FnOnce(&Board, &Options, &mut dyn Write, &mut Report) -> Result<()>,
     ) -> Result<()> {
         let board = &self.board;
         let output = self
@@ -131,21 +131,24 @@ impl ExportArgs {
             .map_err(anyhow::Error::from)
             .with_context(|| format!("Failed to parse {}", board.display()))?;
 
-        let report = AtomicFile::new(&output, OverwriteBehavior::AllowOverwrite)
+        let mut report = Report::default();
+        let written = AtomicFile::new(&output, OverwriteBehavior::AllowOverwrite)
             .write(|file| {
                 let mut sink = BufWriter::with_capacity(1 << 20, file);
-                let report = write(&parsed, &options, &mut sink)?;
+                write(&parsed, &options, &mut sink, &mut report)?;
                 sink.flush()?;
-                anyhow::Ok(report)
+                anyhow::Ok(())
             })
             .map_err(|err| match err {
                 atomicwrites::Error::Internal(err) => err.into(),
                 atomicwrites::Error::User(err) => err,
-            })
-            .with_context(|| format!("Failed to export {}", board.display()))?;
+            });
+        // Warnings explain a failed export too, such as models that could
+        // not be read leaving nothing to export.
         for warning in &report.warnings {
             eprintln!("warning: {warning}");
         }
+        written.with_context(|| format!("Failed to export {}", board.display()))?;
         if report.failed_models > 0 {
             bail!(
                 "{} written, but {} model(s) could not be read",
