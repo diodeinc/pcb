@@ -8,7 +8,6 @@ use pcb_kicad::{KiCadCliBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
-use crate::bom::generate_bom_with_fallback;
 use crate::bundle::{self, MetadataInput, SourceBundlePlan};
 use pcb_zen::workspace::WorkspaceInfoExt;
 use pcb_zen_core::resolution::ResolutionResult;
@@ -31,7 +30,6 @@ use pcb_zen::git;
 #[value(rename_all = "lowercase")]
 pub enum ArtifactType {
     Drc,
-    Bom,
     Gerbers,
     Ipc2581,
     Vrml,
@@ -57,7 +55,7 @@ struct ReleaseInfo {
     git_hash: String,
     staging_dir: PathBuf,
     layout: Option<ReleaseLayout>,
-    design_bom: pcb_sch::bom::Bom,
+    bom: pcb_sch::bom::Bom,
     output_dir: PathBuf,
     output_name: String,
     suppress: Vec<String>,
@@ -383,7 +381,7 @@ fn preflight_board_release(
             None => None,
         };
 
-        let design_bom = eval_output.to_schematic()?.bom();
+        let bom = eval_output.to_schematic()?.bom();
 
         let info = ReleaseInfo {
             zen_path,
@@ -392,7 +390,7 @@ fn preflight_board_release(
             git_hash,
             staging_dir,
             layout,
-            design_bom,
+            bom,
             output_dir,
             output_name,
             suppress: options.suppress.clone(),
@@ -474,15 +472,14 @@ fn display_release_info(info: &ReleaseInfo) {
     println!("{table}");
 }
 
-/// Get KiCad CLI version
-pub(crate) struct DiscoveredLayout {
-    pub(crate) layout_dir: PathBuf,
+struct DiscoveredLayout {
+    layout_dir: PathBuf,
     kicad_files: layout_utils::KiCadLayoutFiles,
 }
 
 /// Discover layout info from zen evaluation output.
 /// Returns None if no layout_path property exists or the layout directory doesn't contain KiCad files.
-pub(crate) fn discover_layout_from_output(output: &EvalOutput) -> Result<Option<DiscoveredLayout>> {
+fn discover_layout_from_output(output: &EvalOutput) -> Result<Option<DiscoveredLayout>> {
     let properties = output.sch_module().properties();
 
     let Some(layout_path_value) = properties.get("layout_path") else {
@@ -713,17 +710,12 @@ fn run_release_preflight(
             return Ok(());
         }
     }
-    if !excluded.contains(&ArtifactType::Bom) {
-        diagnostics.diagnostics.extend(
-            execute_task(
-                info,
-                "Generating design BOM",
-                start_time,
-                generate_design_bom,
-            )?
-            .diagnostics,
-        );
-    }
+    diagnostics.extend(execute_task(
+        info,
+        "Checking BOM offers",
+        start_time,
+        |info, _| Ok(check_bom_offers(info)),
+    )?);
 
     // Process late-added BOM warnings before either JSON or interactive review.
     pcb_zen_core::FilterHiddenPass.apply(diagnostics);
@@ -926,30 +918,15 @@ fn bom_offer_diagnostics(board_path: &Path, bom: &pcb_sch::bom::Bom) -> pcb_zen_
     pcb_zen_core::Diagnostics { diagnostics }
 }
 
-fn check_bom_offers(info: &ReleaseInfo, spinner: &Spinner, bom: &pcb_sch::bom::Bom) -> Diagnostics {
-    let mut sourcing_bom = bom.filter_excluded();
-    sourcing_bom.entries.retain(|_, entry| !entry.dnp);
-    if sourcing_bom.is_empty() {
-        return Diagnostics::default();
-    }
-
-    spinner.set_message("Checking BOM offers");
-    let ctx = pcb_diode_api::WorkspaceContext::from_path(&info.zen_path);
-    let match_result = pcb_diode_api::match_bom_with_context(&ctx, None, &mut sourcing_bom);
-    let failure = match match_result {
-        Err(error) => Some(format!("{error:#}")),
-        Ok(()) if sourcing_bom.availability.len() != sourcing_bom.entries.len() => {
-            Some("BOM matching could not complete".to_string())
-        }
-        Ok(()) => None,
-    };
-
-    match failure {
-        None => bom_offer_diagnostics(&info.zen_path, &sourcing_bom),
-        Some(error) => pcb_zen_core::Diagnostics {
+/// BOM offer findings are warnings, so every failure to check them is a warning too.
+fn check_bom_offers(info: &ReleaseInfo) -> Diagnostics {
+    match match_sourcing_bom(info) {
+        Ok(None) => Diagnostics::default(),
+        Ok(Some(bom)) => bom_offer_diagnostics(&info.zen_path, &bom),
+        Err(error) => Diagnostics {
             diagnostics: vec![pcb_zen_core::Diagnostic::categorized(
                 &info.zen_path.to_string_lossy(),
-                &format!("Could not check BOM offers: {error}"),
+                &format!("Could not check BOM offers: {error:#}"),
                 "bom.sourceability.check_failed",
                 starlark::errors::EvalSeverity::Warning,
             )],
@@ -957,27 +934,21 @@ fn check_bom_offers(info: &ReleaseInfo, spinner: &Spinner, bom: &pcb_sch::bom::B
     }
 }
 
-/// Generate design BOM JSON file (with optional KiCad fallback if layout exists)
-fn generate_design_bom(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> {
-    // Create bom directory in staging
-    let bom_dir = info.staging_dir.join("bom");
-    fs::create_dir_all(&bom_dir)?;
+/// Match the placed BOM parts, or return `None` when there are none to source.
+fn match_sourcing_bom(info: &ReleaseInfo) -> Result<Option<pcb_sch::bom::Bom>> {
+    let mut bom = info.bom.filter_excluded();
+    bom.entries.retain(|_, entry| !entry.dnp);
+    if bom.is_empty() {
+        return Ok(None);
+    }
 
-    // Apply fallback logic only if layout exists
-    let layout_path = info
-        .layout
-        .as_ref()
-        .map(|l| info.workspace_root().join(l.layout_dir_rel()));
-    let final_bom = generate_bom_with_fallback(info.design_bom.clone(), layout_path.as_deref())?;
-
-    let diagnostics = check_bom_offers(info, spinner, &final_bom);
-
-    // Write design BOM as JSON
-    let bom_file = bom_dir.join("design_bom.json");
-    let mut file = fs::File::create(&bom_file)?;
-    write!(file, "{}", final_bom.ungrouped_json())?;
-
-    Ok(diagnostics)
+    let ctx = pcb_diode_api::WorkspaceContext::from_path(&info.zen_path);
+    pcb_diode_api::match_bom_with_context(&ctx, None, &mut bom)?;
+    anyhow::ensure!(
+        bom.availability.len() == bom.entries.len(),
+        "BOM matching could not complete"
+    );
+    Ok(Some(bom))
 }
 
 /// Write release metadata to JSON file

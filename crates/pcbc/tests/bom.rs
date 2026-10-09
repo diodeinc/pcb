@@ -2,7 +2,6 @@
 
 use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
-use std::fs;
 
 const LED_MODULE_ZEN: &str = r#"
 load("@stdlib/interfaces.zen", "Gpio")
@@ -303,37 +302,6 @@ fn test_bom_capacitors_with_dielectric() {
         .sync()
         .snapshot_run("pcbc", ["bom", "boards/Capacitors.zen", "-f", "json"]);
     assert_snapshot!("bom_capacitors_json", output);
-}
-
-#[test]
-fn test_bom_kicad_fallback_json() {
-    // Test BOM fallback to kicad-cli when design has no components
-    // Copy the kicad project files into the sandbox
-    let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let test_dir = workspace_root.join("crates/pcb-sch/test/kicad-bom");
-
-    let kicad_sch = fs::read_to_string(test_dir.join("layout.kicad_sch")).unwrap();
-    let kicad_pcb = fs::read_to_string(test_dir.join("layout.kicad_pcb")).unwrap();
-    let kicad_pro = fs::read_to_string(test_dir.join("layout.kicad_pro")).unwrap();
-
-    let zen_file = r#"
-Layout(name="kicad-bom", path="layout")
-"#;
-
-    let output = Sandbox::new()
-        .write("pcb.toml", WORKSPACE_TOML)
-        .write("kicad-bom.zen", zen_file)
-        .write("layout/layout.kicad_sch", kicad_sch)
-        .write("layout/layout.kicad_pcb", kicad_pcb)
-        .write("layout/layout.kicad_pro", kicad_pro)
-        .sync()
-        .snapshot_run("pcbc", ["bom", "kicad-bom.zen", "-f", "json"]);
-    assert_snapshot!("bom_kicad_fallback_json", output);
 }
 
 #[test]

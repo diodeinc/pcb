@@ -18,7 +18,6 @@ log = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 natord = { workspace = true }
-csv = { workspace = true }
 starlark = { workspace = true, optional = true }
 starlark_map = { workspace = true, optional = true }
 allocative = { workspace = true, optional = true }
