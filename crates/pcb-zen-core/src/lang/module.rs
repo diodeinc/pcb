@@ -1878,12 +1878,26 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         invoke_config(args, eval)
     }
 
-    /// Record a path movement directive for refactoring support.
+    /// Deprecated. Record a path movement directive for refactoring support.
     fn moved<'v>(
         #[starlark(require = pos)] old_path: String,
         #[starlark(require = pos)] new_path: String,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
+        let (path, span) = eval
+            .call_stack_top_location()
+            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+        eval.add_diagnostic(
+            crate::Diagnostic::categorized(
+                &path,
+                "`moved()` is deprecated and will be removed in a future release",
+                "deprecated.moved",
+                starlark::errors::EvalSeverity::Warning,
+            )
+            .with_span(span)
+            .with_call_stack(Some(eval.call_stack())),
+        );
         if let Some(ctx) = eval.context_value() {
             ctx.add_moved_directive(old_path, new_path, false);
         }
