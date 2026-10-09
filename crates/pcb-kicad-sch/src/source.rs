@@ -16,6 +16,7 @@ pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<
     let desired_source = SchDocument {
         pages: vec![desired_page.clone()],
         root_page_ids: vec![desired_page.id.clone()],
+        ..SchDocument::default()
     }
     .to_kicad_sch()?;
     let source_root = pcb_sexpr::parse(source).context("failed to parse source schematic")?;

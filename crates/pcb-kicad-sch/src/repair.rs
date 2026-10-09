@@ -1664,6 +1664,7 @@ mod tests {
         SchDocument {
             root_page_ids: vec![pages[0].id.clone()],
             pages,
+            ..Default::default()
         }
     }
 

@@ -140,6 +140,7 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
             let next = SchDocument {
                 pages: vec![page.clone()],
                 root_page_ids: vec![page.id.clone()],
+                ..Default::default()
             }
             .to_kicad_sch()?;
             writes.push(PendingWrite {

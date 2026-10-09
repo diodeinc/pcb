@@ -38,6 +38,7 @@ impl SchDocument {
         Ok(Self {
             root_page_ids: vec![page.id.clone()],
             pages: vec![page],
+            ..Self::default()
         })
     }
 

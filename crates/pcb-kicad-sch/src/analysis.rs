@@ -1650,6 +1650,7 @@ mod tests {
         SchDocument {
             pages,
             root_page_ids,
+            ..Default::default()
         }
     }
 

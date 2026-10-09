@@ -145,6 +145,12 @@ fn load_schematic_hierarchy(
         SchDocument {
             pages,
             root_page_ids,
+            bus_aliases: project
+                .pointer("/schematic/bus_aliases")
+                .map(|aliases| serde_json::from_value(aliases.clone()))
+                .transpose()
+                .context("schematic.bus_aliases must map alias names to member lists")?
+                .unwrap_or_default(),
         },
     ))
 }
@@ -338,6 +344,24 @@ mod tests {
     }
 
     #[test]
+    fn loads_kicad_10_project_bus_aliases() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("demo.kicad_pro"),
+            r#"{"schematic":{"bus_aliases":{"UART":["TX","RX"]}}}"#,
+        )
+        .unwrap();
+        fs::write(directory.path().join("demo.kicad_sch"), schematic("root")).unwrap();
+
+        let project = KicadProject::load(directory.path()).unwrap();
+
+        assert_eq!(
+            project.document.bus_aliases,
+            [("UART".to_string(), vec!["TX".to_string(), "RX".to_string()])].into()
+        );
+    }
+
+    #[test]
     fn rejects_ambiguous_project_directories() {
         let directory = tempfile::tempdir().unwrap();
         fs::write(directory.path().join("one.kicad_pro"), "{}").unwrap();
@@ -422,6 +446,7 @@ mod tests {
             &SchDocument {
                 pages: vec![parent],
                 root_page_ids: vec!["root".into()],
+                ..Default::default()
             },
         )
         .unwrap();
@@ -470,6 +495,7 @@ mod tests {
                 &SchDocument {
                     pages: vec![parent],
                     root_page_ids: vec!["parent".into()],
+                    ..Default::default()
                 },
             )
             .unwrap();
