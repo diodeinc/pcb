@@ -1966,16 +1966,58 @@ fn component_symbol_definition(
             })?;
         // Extract the actual cache content, but keep the external library identity.
         let cached = cached.renamed(&symbol.lib_id)?;
+        // A sheet's cache is authoritative only for the units it places: KiCad never renders the
+        // others, so they may be stale.
+        let unit = symbol.unit;
+        let Some((merged, placed)) = &mut definition else {
+            definition = Some((cached, BTreeSet::from([unit])));
+            continue;
+        };
+        let shared = placed.contains(&unit).then_some(unit);
         anyhow::ensure!(
-            definition
-                .as_ref()
-                .is_none_or(|previous| previous == &cached),
+            unit_view(merged, shared) == unit_view(&cached, shared),
             "Component {} uses different embedded definitions across units",
             component.netlist.refdes.as_str()
         );
-        definition = Some(cached);
+        if placed.insert(unit) {
+            let items = std::sync::Arc::make_mut(&mut merged.sexpr)
+                .as_list_mut()
+                .context("expected symbol list")?;
+            for (item, child) in items
+                .iter_mut()
+                .zip(cached.sexpr.as_list().unwrap_or_default())
+            {
+                if unit_section(child) == Some(unit) {
+                    *item = child.clone();
+                }
+            }
+        }
     }
-    definition.context("Imported component has no symbol units")
+    definition
+        .map(|(definition, _)| definition)
+        .context("Imported component has no symbol units")
+}
+
+fn unit_section(child: &Sexpr) -> Option<u32> {
+    let items = child.as_list()?;
+    if items.first()?.as_sym()? != "symbol" {
+        return None;
+    }
+    items.get(1)?.as_atom()?.rsplit('_').nth(1)?.parse().ok()
+}
+
+/// The definition as a sheet placing only `unit` sees it: other units keep just their name.
+fn unit_view(definition: &pcb_kicad_sch::SymbolDefinition, unit: Option<u32>) -> Vec<Sexpr> {
+    let items = definition.sexpr.as_list().unwrap_or_default();
+    items
+        .iter()
+        .map(|child| match unit_section(child) {
+            Some(section) if section != 0 && Some(section) != unit => {
+                Sexpr::list(child.as_list().unwrap_or_default()[..2].to_vec())
+            }
+            _ => child.clone(),
+        })
+        .collect()
 }
 
 fn render_component_symbol(component_name: &str, sym: &str) -> Result<RenderedComponentSymbol> {

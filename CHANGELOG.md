@@ -22,6 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- `pcb import` accepts multi-unit symbols whose sheets keep stale caches of units they don't place.
 - `pcb apply schematic` renames a root schematic that does not match its KiCad project, so KiCad saves project settings such as bus aliases and ERC exclusions.
 - `pcb apply` schematic symbols and layout footprints now agree on Footprint, Value and Datasheet; footprints show the part value instead of its MPN.
 - `pcb apply` names a new root schematic after its KiCad project, matching the board so DRC schematic parity runs.
