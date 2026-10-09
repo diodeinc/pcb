@@ -11,7 +11,7 @@ use anyhow::{Context, Result, ensure};
 use pcb_ir::dialects::artwork::{self, Aperture, ApertureShape, Geometry, Object};
 use pcb_ir::dialects::ipc::process;
 use pcb_ir::dialects::ipc::{
-    ArtworkScope, ArtworkTarget, ProfileSet, lower_layer_to_artwork_objects_with,
+    ArtworkScope, ArtworkTarget, FeatureBucket, ProfileSet, lower_layer_to_artwork_objects_with,
     profile_occurrences_for,
 };
 use pcb_ir::geom::path::{ContourBuf, stroke_to_fill};
@@ -295,7 +295,9 @@ fn material(designs: &[Design<'_>], layer: &str) -> Result<Vec<(u32, Shape)>> {
         let mut doc =
             imported.materialize_occurrence_layer(id, design.scope, root, &|held| held == root)?;
         process::normalize_for_artwork(&mut doc, design.resolution)?;
+        // Cutouts only remove material here: one with nothing to cut is gone.
         process::subtract_layer_cutouts(&mut doc, design.resolution)?;
+        process::retain_features(&mut doc, |feature| feature.bucket != FeatureBucket::Cutout);
         process::resolve_negative_polarity(&mut doc, design.resolution)?;
         let mut artwork = artwork::Document::<(), ()>::new();
         let objects =
@@ -560,6 +562,33 @@ mod tests {
         };
         assert_eq!(opening.kind, "region");
         assert_eq!(opening.paths.len(), 2, "the clear square is a hole");
+    }
+
+    #[test]
+    fn a_slot_alone_on_copper_paints_no_copper() {
+        let imported = fixtures::import(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+          <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/><LayerRef name="F.Cu"/><LayerRef name="ROUT"/></Content>
+          <Ecad><CadHeader units="MILLIMETER"/><CadData>
+            <Layer name="F.Cu" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+            <Layer name="ROUT" layerFunction="ROUT" side="ALL" polarity="POSITIVE"><Span fromLayer="F.Cu" toLayer="F.Cu"/></Layer>
+            <Step name="board" type="BOARD">
+              <LayerFeature layerRef="ROUT"><Set>
+                <SlotCavity name="S1" platingStatus="PLATED" plusTol="0" minusTol="0"><Location x="10" y="20"/><Oval width="1.8" height="0.6"/></SlotCavity>
+              </Set></LayerFeature>
+            </Step>
+          </CadData></Ecad>
+        </IPC-2581>"#,
+        );
+        let rules = fixtures::rules(&fixtures::pdk(
+            "[[rules.copper.clearance]]\nid = \"clearance\"\nlimit = { minimum = \"0.1 mm\" }",
+        ));
+        let design = Design::board(&imported, &rules, Resolution::default());
+        assert!(
+            material(std::slice::from_ref(&design), "F.Cu")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
