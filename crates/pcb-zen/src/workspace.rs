@@ -348,9 +348,6 @@ fn add_path_patched_forks<F: FileProvider>(file_provider: &F, info: &mut Workspa
     };
 
     for (url, patch) in &root_cfg.patch {
-        if pcb_zen_core::is_stdlib_module_path(url) {
-            continue;
-        }
         let Some(rel_path) = patch.path.as_ref() else {
             continue;
         };
