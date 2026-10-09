@@ -1482,13 +1482,15 @@ fn refuses_to_initialize_a_top_level_schematic_outside_the_project() {
 "#;
     fs::write(&project_file, project_source).unwrap();
     let outside = workspace.path().join("outside.kicad_sch");
+    fs::write(&outside, "outside").unwrap();
     let netlist = linked_fixture(&project_dir);
 
     let error = apply_linked_schematic(&netlist).unwrap_err();
 
     assert!(error.to_string().contains("escapes project directory"));
     assert_eq!(fs::read_to_string(project_file).unwrap(), project_source);
-    assert!(!outside.exists());
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "outside");
+    assert!(!project_dir.join("layout.kicad_sch").exists());
 }
 
 #[test]
