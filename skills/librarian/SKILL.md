@@ -12,12 +12,7 @@ only when the user asks. Use the artifact skills as needed: `kicad-symbol`,
 
 ## Package scope
 
-Search before creating a package:
-
-```bash
-pcb search -m registry:modules <query> -f json
-pcb search -m registry:components <query> -f json
-```
+Search the registry before creating a package.
 
 Inspect and extend a suitable existing package, including published results.
 Group a family when it shares footprint, pinout, feature set, and fundamental
