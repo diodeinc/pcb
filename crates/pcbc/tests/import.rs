@@ -146,11 +146,11 @@ fn validation_extraction_and_materialization_share_one_source_snapshot() {
 
     let output = sandbox.root_path().join("out");
     assert_eq!(
-        fs::read(output.join("layout/layout.kicad_pro")).unwrap(),
+        fs::read(output.join("eda/layout.kicad_pro")).unwrap(),
         initial_project
     );
     assert_ne!(
-        fs::read(output.join("layout/layout.kicad_pcb")).unwrap(),
+        fs::read(output.join("eda/layout.kicad_pcb")).unwrap(),
         fs::read(&mutated_pcb).unwrap()
     );
 
@@ -224,12 +224,12 @@ fn standalone_import_links_schematic_without_creating_a_pcb_or_archive() {
 
     let output = sandbox.root_path().join("out");
     assert!(output.join("layout.zen").is_file());
-    assert!(output.join("layout/layout.kicad_pro").is_file());
-    assert!(output.join("layout/layout.kicad_sch").is_file());
-    assert!(!output.join("layout/layout.kicad_pcb").exists());
+    assert!(output.join("eda/layout.kicad_pro").is_file());
+    assert!(output.join("eda/layout.kicad_sch").is_file());
+    assert!(!output.join("eda/layout.kicad_pcb").exists());
     assert!(!output.join("layout.kicad.archive.zip").exists());
     assert_preserved_schematic(
-        &output.join("layout/layout.kicad_sch"),
+        &output.join("eda/layout.kicad_sch"),
         STANDALONE_FIXTURE,
         false,
     );
@@ -356,10 +356,10 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
 
     let output = sandbox.root_path().join("out");
     assert!(output.join("layout.kicad.archive.zip").is_file());
-    assert!(output.join("layout/layout.kicad_pro").is_file());
-    assert!(output.join("layout/layout.kicad_pcb").is_file());
-    assert_preserved_schematic(&output.join("layout/layout.kicad_sch"), &schematic, false);
-    let pcb_before_apply = fs::read(output.join("layout/layout.kicad_pcb")).unwrap();
+    assert!(output.join("eda/layout.kicad_pro").is_file());
+    assert!(output.join("eda/layout.kicad_pcb").is_file());
+    assert_preserved_schematic(&output.join("eda/layout.kicad_sch"), &schematic, false);
+    let pcb_before_apply = fs::read(output.join("eda/layout.kicad_pcb")).unwrap();
     let mut source_pcb = pcb_sexpr::parse(
         &pcb.replace("Signal_Name", "Signal_Name_2")
             .replace("Signal.Name", "Signal_Name"),
@@ -391,7 +391,7 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
     assert_eq!(
         pcb_before_apply,
-        fs::read(output.join("layout/layout.kicad_pcb")).unwrap()
+        fs::read(output.join("eda/layout.kicad_pcb")).unwrap()
     );
 
     // Retained PCB paths are generated UUIDs, not native schematic UUIDs. Damage
@@ -424,8 +424,8 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     let mut stale = Vec::new();
     patches.write_to(retained_pcb, &mut stale).unwrap();
     assert_ne!(stale, pcb_before_apply);
-    fs::write(output.join("layout/layout.kicad_pcb"), stale).unwrap();
-    let retained_project = fs::read(output.join("layout/layout.kicad_pro")).unwrap();
+    fs::write(output.join("eda/layout.kicad_pcb"), stale).unwrap();
+    let retained_project = fs::read(output.join("eda/layout.kicad_pro")).unwrap();
     let reimport = sandbox
         .run(
             "pcbc",
@@ -446,17 +446,17 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     assert_eq!(embedded_geometry, fs::read(footprint_path).unwrap());
     assert_eq!(
         retained_project,
-        fs::read(output.join("layout/layout.kicad_pro")).unwrap()
+        fs::read(output.join("eda/layout.kicad_pro")).unwrap()
     );
     assert_eq!(
         pcb_before_apply,
-        fs::read(output.join("layout/layout.kicad_pcb")).unwrap()
+        fs::read(output.join("eda/layout.kicad_pcb")).unwrap()
     );
     assert!(!output.join("layout.kicad.archive.zip").exists());
     assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
     assert_eq!(
         pcb_before_apply,
-        fs::read(output.join("layout/layout.kicad_pcb")).unwrap()
+        fs::read(output.join("eda/layout.kicad_pcb")).unwrap()
     );
 }
 
@@ -681,11 +681,11 @@ fn reimport_refuses_without_force_and_force_regenerates() {
 
     // A retained differently named project must be rejected before any forced cleanup.
     fs::rename(
-        output.join("layout/layout.kicad_pro"),
-        output.join("layout/custom.kicad_pro"),
+        output.join("eda/layout.kicad_pro"),
+        output.join("eda/custom.kicad_pro"),
     )
     .unwrap();
-    fs::write(output.join("layout/custom.kicad_pcb"), "retained PCB\n").unwrap();
+    fs::write(output.join("eda/custom.kicad_pcb"), "retained PCB\n").unwrap();
     let conflict = sandbox
         .run("pcbc", ["import", "layout.kicad_sch", "out", "--force"])
         .stdout_capture()
@@ -697,10 +697,10 @@ fn reimport_refuses_without_force_and_force_regenerates() {
     assert!(
         String::from_utf8_lossy(&conflict.stderr).contains("conflicts with retained KiCad project")
     );
-    assert!(!output.join("layout/layout.kicad_pro").exists());
+    assert!(!output.join("eda/layout.kicad_pro").exists());
     assert_eq!(fs::read_to_string(component).unwrap(), regenerated);
     assert_eq!(
-        fs::read_to_string(output.join("layout/custom.kicad_pcb")).unwrap(),
+        fs::read_to_string(output.join("eda/custom.kicad_pcb")).unwrap(),
         "retained PCB\n"
     );
 }
@@ -920,7 +920,7 @@ fn standalone_import_preserves_duplicate_display_name_pin_partitions() {
         generated_physical_partitions(&netlist)
     );
     assert_preserved_schematic(
-        &output.join("layout/layout.kicad_sch"),
+        &output.join("eda/layout.kicad_sch"),
         &duplicate_pin_connectivity_fixture(),
         false,
     );
@@ -1053,7 +1053,7 @@ fn stacked_no_connect_import_preserves_drawing_and_distinct_physical_pads() {
             .count(),
         2
     );
-    let schematic_path = sandbox.root_path().join("out/layout/layout.kicad_sch");
+    let schematic_path = sandbox.root_path().join("out/eda/layout.kicad_sch");
     assert_preserved_schematic(&schematic_path, &source, false);
     let mut first_apply = None;
     for _ in 0..2 {
@@ -1165,7 +1165,7 @@ fn project_import_retains_symbols_missing_from_pcb() {
                 .len(),
             if pinless { 2 } else { 3 }
         );
-        let output = sandbox.root_path().join("out/layout");
+        let output = sandbox.root_path().join("out/eda");
         assert_preserved_schematic(&output.join("layout.kicad_sch"), &source, false);
         let pcb_before = fs::read(output.join("layout.kicad_pcb")).unwrap();
         assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
@@ -1244,7 +1244,7 @@ fn shared_parts_preserve_distinct_schematic_descriptions() {
         "{}",
         String::from_utf8_lossy(&import.stderr)
     );
-    let output = sandbox.root_path().join("out/layout/layout.kicad_sch");
+    let output = sandbox.root_path().join("out/eda/layout.kicad_sch");
     assert_preserved_schematic(&output, &source, false);
     assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
     let applied =
@@ -1285,7 +1285,7 @@ fn unwired_hidden_power_net_preserves_native_name_with_logical_binding() {
         "{}",
         String::from_utf8_lossy(&import.stderr)
     );
-    let output = sandbox.root_path().join("out/layout/layout.kicad_sch");
+    let output = sandbox.root_path().join("out/eda/layout.kicad_sch");
     let document =
         pcb_kicad_sch::SchDocument::from_kicad_sch(&fs::read_to_string(&output).unwrap()).unwrap();
     let symbols = document.pages[0]
@@ -1342,7 +1342,7 @@ fn hierarchy_and_no_connect_markers_survive_import_and_apply() {
         "{}",
         String::from_utf8_lossy(&import.stderr)
     );
-    let output = sandbox.root_path().join("out/layout");
+    let output = sandbox.root_path().join("out/eda");
     assert_preserved_schematic(&output.join("issue24201.kicad_sch"), &root, false);
     assert_preserved_schematic(&output.join("child/aSheet.kicad_sch"), &child, false);
     let project = pcbc::kicad_schematic::KicadProject::load(&output).unwrap();
@@ -1451,7 +1451,7 @@ fn cross_sheet_multi_unit_components_survive_import_and_apply() {
         ])
     );
 
-    let output = sandbox.root_path().join("out/layout");
+    let output = sandbox.root_path().join("out/eda");
     let project = pcbc::kicad_schematic::KicadProject::load(&output).unwrap();
     let bindings = project
         .document

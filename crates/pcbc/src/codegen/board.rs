@@ -5,6 +5,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
+/// Board-relative KiCad project directory shared by layout and schematic.
+pub const BOARD_PROJECT_DIR: &str = "eda";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportedNetKind {
     Net,
@@ -79,8 +82,8 @@ pub fn render_imported_board(args: RenderImportedBoardArgs<'_>) -> String {
         starlark::string(args.board_name)
     ));
     out.push_str(&format!(
-        "    layout_path = {},\n",
-        starlark::string("layout")
+        "    path = {},\n",
+        starlark::string(BOARD_PROJECT_DIR)
     ));
     out.push_str("    schematic = True,\n");
     out.push_str(&format!("    layers = {},\n", args.copper_layers));
@@ -135,35 +138,8 @@ fn render_imported_module_body(
     module_decls: &[(String, String)],
     instance_calls: &[ImportedInstanceCall],
 ) -> String {
+    // Net, Power, Ground, NotConnected, and io come from the stdlib prelude.
     let mut out = String::new();
-    let uses_not_connected = instance_calls_use_not_connected(instance_calls);
-
-    let uses_kind = |kind: ImportedNetKind| {
-        internal_net_decls.iter().any(|n| n.kind == kind) || io_nets.iter().any(|n| n.kind == kind)
-    };
-    let uses_power = uses_kind(ImportedNetKind::Power);
-    let uses_ground = uses_kind(ImportedNetKind::Ground);
-
-    if uses_not_connected || uses_power || uses_ground {
-        let mut items: Vec<&str> = Vec::new();
-        if uses_not_connected {
-            items.push("NotConnected");
-        }
-        if uses_power {
-            items.push("Power");
-        }
-        if uses_ground {
-            items.push("Ground");
-        }
-        out.push_str("load(\"@stdlib/interfaces.zen\", ");
-        for (i, item) in items.iter().enumerate() {
-            if i != 0 {
-                out.push_str(", ");
-            }
-            out.push_str(&starlark::string(item));
-        }
-        out.push_str(")\n\n");
-    }
 
     if !io_nets.is_empty() {
         for net in io_nets {
@@ -265,14 +241,6 @@ fn render_imported_module_body(
     out
 }
 
-fn instance_calls_use_not_connected(instance_calls: &[ImportedInstanceCall]) -> bool {
-    instance_calls.iter().any(|call| {
-        call.io_nets
-            .values()
-            .any(|expr| expr.trim_start().starts_with("NotConnected("))
-    })
-}
-
 fn imported_net_ctor(kind: ImportedNetKind) -> &'static str {
     match kind {
         ImportedNetKind::Net => "Net",
@@ -282,7 +250,7 @@ fn imported_net_ctor(kind: ImportedNetKind) -> &'static str {
 }
 
 fn render_board_config_load_stmt(has_stackup: bool, has_design_rules: bool) -> String {
-    let mut symbols = vec!["Board", "BoardConfig"];
+    let mut symbols = vec!["BoardConfig"];
     if has_design_rules {
         symbols.extend([
             "DesignRules",

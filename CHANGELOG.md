@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Speed up schematic loading and reconciliation.
+- `pcb import` writes the KiCad project to `eda/` with `Board(path = "eda")`, matching `pcb new board`. Reimports into boards with a legacy `layout/` directory ask you to move it first.
 
 ## [0.4.73] - 2026-10-07
 

@@ -48,8 +48,8 @@ For a board named `<board>`, a standalone schematic import produces:
 ├── components/.../*.zen
 ├── components/.../*.kicad_sym
 ├── components/.../*.kicad_mod
-├── layout/<board>.kicad_pro
-├── layout/<board>.kicad_sch       # and its original child sheets
+├── eda/<board>.kicad_pro
+├── eda/<board>.kicad_sch          # and its original child sheets
 ├── .kicad.import.extraction.json
 └── .kicad.validation.diagnostics.json
 ```
@@ -63,15 +63,17 @@ names are retained, not passed through the source-name allocator again; otherwis
 already-generated names can collide with other source names and merge PCB nets.
 A differently named retained project is rejected before cleanup;
 import its matching schematic or choose a new output directory instead.
-The board enables `schematic = True` at the standard `layout`
-path so Quiche and `pcb apply schematic` use the copied document.
+The board passes `path = "eda"` and `schematic = True`, so layout, Quiche, and
+`pcb apply schematic` share the copied project directory, matching `pcb new board`.
+Import refuses a board repository that still has an older `layout/` directory and
+no `eda/`; move it with `git mv layout eda` before reimporting.
 
 A project import also creates:
 
 ```text
 <output-directory>/
 ├── <board>.kicad.archive.zip
-└── layout/
+└── eda/
     ├── <selected-project>.kicad_pro
     ├── <selected-board>.kicad_pcb
     └── <selected-project>.kicad_dru   # when present

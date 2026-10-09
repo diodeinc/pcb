@@ -324,6 +324,7 @@ pub(crate) fn init_board_repo(dir: &Path, board: &str, repository: &str) -> Resu
         board => board,
         repository => repository,
         pcb_version => pcb_version_from_cargo(),
+        project_dir => codegen::board::BOARD_PROJECT_DIR,
     };
 
     let pcb_toml_content = env
