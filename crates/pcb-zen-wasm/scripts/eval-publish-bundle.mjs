@@ -21,7 +21,6 @@ const excludedArtifacts = [
   'drc',
   'bom',
   'gerbers',
-  'cpl',
   'ipc2581',
   'vrml',
 ]
