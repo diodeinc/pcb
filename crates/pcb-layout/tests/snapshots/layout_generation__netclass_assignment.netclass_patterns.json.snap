@@ -13,11 +13,35 @@ expression: content
   },
   {
     "netclass": "85Ohm Diff",
+    "pattern": "EXT_N"
+  },
+  {
+    "netclass": "85Ohm Diff",
+    "pattern": "EXT_P"
+  },
+  {
+    "netclass": "85Ohm Diff",
     "pattern": "HDMI_N"
   },
   {
     "netclass": "85Ohm Diff",
     "pattern": "HDMI_P"
+  },
+  {
+    "netclass": "100Ohm Diff",
+    "pattern": "LINK_TX_N"
+  },
+  {
+    "netclass": "100Ohm Diff",
+    "pattern": "LINK_TX_P"
+  },
+  {
+    "netclass": "90Ohm Diff",
+    "pattern": "LOCAL_N"
+  },
+  {
+    "netclass": "90Ohm Diff",
+    "pattern": "LOCAL_P"
   },
   {
     "netclass": "50Ohm SE",
