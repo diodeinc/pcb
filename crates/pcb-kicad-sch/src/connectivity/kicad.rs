@@ -320,7 +320,7 @@ fn page_connectivity(
     pin_visibility: PinVisibility,
 ) -> Result<impl Iterator<Item = Result<PageConnectivity>> + '_> {
     let instances = page_instances(document)?;
-    let buses = bus::collect(&instances)?;
+    let buses = bus::collect(&instances, &document.bus_aliases)?;
     let mut instance_counts = BTreeMap::new();
     for instance in &instances {
         *instance_counts

@@ -383,6 +383,7 @@ mod tests {
                 page("OLD", &["OLD.CHILD"]),
                 notes.clone(),
             ],
+            ..Default::default()
         };
         prune_obsolete_pages(&mut document, &[module("KEEP.MIDDLE.CHILD")]).unwrap();
         assert_eq!(
@@ -426,6 +427,7 @@ mod tests {
             let mut document = SchDocument {
                 root_page_ids: vec![root.id.clone()],
                 pages: vec![root, child],
+                ..Default::default()
             };
             let original = document.clone();
             prune_obsolete_pages(&mut document, &[]).unwrap();

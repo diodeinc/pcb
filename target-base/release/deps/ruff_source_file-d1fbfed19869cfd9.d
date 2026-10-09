@@ -1,0 +1,10 @@
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/ruff_source_file-d1fbfed19869cfd9.d: /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/lib.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/line_index.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/line_ranges.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/newlines.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libruff_source_file-d1fbfed19869cfd9.rlib: /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/lib.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/line_index.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/line_ranges.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/newlines.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libruff_source_file-d1fbfed19869cfd9.rmeta: /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/lib.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/line_index.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/line_ranges.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/newlines.rs
+
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/lib.rs:
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/line_index.rs:
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/line_ranges.rs:
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_source_file/src/newlines.rs:

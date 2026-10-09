@@ -1,0 +1,10 @@
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/ruff_diagnostics-d4fe9370680892f9.d: /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/lib.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/edit.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/fix.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/source_map.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libruff_diagnostics-d4fe9370680892f9.rlib: /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/lib.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/edit.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/fix.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/source_map.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libruff_diagnostics-d4fe9370680892f9.rmeta: /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/lib.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/edit.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/fix.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/source_map.rs
+
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/lib.rs:
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/edit.rs:
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/fix.rs:
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_diagnostics/src/source_map.rs:

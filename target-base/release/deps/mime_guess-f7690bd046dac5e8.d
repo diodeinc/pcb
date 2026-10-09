@@ -1,0 +1,12 @@
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/mime_guess-f7690bd046dac5e8.d: /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/lib.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/impl_bin_search.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/mime_types.rs /Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/build/mime_guess-539c6eb9df0d04ff/out/mime_types_generated.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libmime_guess-f7690bd046dac5e8.rlib: /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/lib.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/impl_bin_search.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/mime_types.rs /Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/build/mime_guess-539c6eb9df0d04ff/out/mime_types_generated.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libmime_guess-f7690bd046dac5e8.rmeta: /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/lib.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/impl_bin_search.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/mime_types.rs /Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/build/mime_guess-539c6eb9df0d04ff/out/mime_types_generated.rs
+
+/Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/lib.rs:
+/Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/impl_bin_search.rs:
+/Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mime_guess-2.0.5/src/mime_types.rs:
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/build/mime_guess-539c6eb9df0d04ff/out/mime_types_generated.rs:
+
+# env-dep:MIME_TYPES_GENERATED_PATH=/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/build/mime_guess-539c6eb9df0d04ff/out/mime_types_generated.rs

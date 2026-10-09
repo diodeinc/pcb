@@ -1,0 +1,10 @@
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/compression_core-d507013a7cb27fe9.d: /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/lib.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/level.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/unshared.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/util.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libcompression_core-d507013a7cb27fe9.rlib: /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/lib.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/level.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/unshared.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/util.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libcompression_core-d507013a7cb27fe9.rmeta: /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/lib.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/level.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/unshared.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/util.rs
+
+/Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/lib.rs:
+/Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/level.rs:
+/Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/unshared.rs:
+/Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/compression-core-0.4.33/src/util.rs:

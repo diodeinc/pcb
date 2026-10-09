@@ -1,0 +1,10 @@
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/ruff_text_size-af57c7f9d11cd7c6.d: /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/lib.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/range.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/size.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/traits.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libruff_text_size-af57c7f9d11cd7c6.rlib: /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/lib.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/range.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/size.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/traits.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libruff_text_size-af57c7f9d11cd7c6.rmeta: /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/lib.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/range.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/size.rs /Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/traits.rs
+
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/lib.rs:
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/range.rs:
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/size.rs:
+/Users/akhilles/.cargo/git/checkouts/ruff-b18f69e2b025fac7/3265ed1/crates/ruff_text_size/src/traits.rs:

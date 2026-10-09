@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - `pcb apply` schematic symbols and layout footprints now agree on Footprint, Value and Datasheet; footprints show the part value instead of its MPN.
+- `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 
 ## [0.4.74] - 2026-10-09
 

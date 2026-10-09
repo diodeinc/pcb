@@ -1,0 +1,10 @@
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/hashlink-06438d8199807b9d.d: /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lib.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_map.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_set.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lru_cache.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libhashlink-06438d8199807b9d.rlib: /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lib.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_map.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_set.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lru_cache.rs
+
+/Users/akhilles/src/diode/pcb/.claude/worktrees/agent-a78ca63d9e1df8849/target-base/release/deps/libhashlink-06438d8199807b9d.rmeta: /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lib.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_map.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_set.rs /Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lru_cache.rs
+
+/Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lib.rs:
+/Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_map.rs:
+/Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/linked_hash_set.rs:
+/Users/akhilles/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashlink-0.12.2/src/lru_cache.rs:
