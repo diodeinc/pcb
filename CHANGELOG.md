@@ -16,6 +16,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
 
+### Fixed
+
+- `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
+
 ## [0.4.74] - 2026-10-09
 
 ### Changed

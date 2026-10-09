@@ -137,11 +137,7 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
                     path.display()
                 );
             }
-            let next = SchDocument {
-                pages: vec![page.clone()],
-                root_page_ids: vec![page.id.clone()],
-            }
-            .to_kicad_sch()?;
+            let next = page.to_kicad_sch();
             writes.push(PendingWrite {
                 path,
                 source: None,

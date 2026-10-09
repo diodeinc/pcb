@@ -70,6 +70,7 @@ pub(crate) fn reconcile_document(
                 ..SchPage::new(root_page_id())
             }],
             root_page_ids: vec![root_page_id()],
+            ..SchDocument::default()
         },
     };
     if document.pages.is_empty() {
@@ -4533,6 +4534,7 @@ mod tests {
         let mut document = SchDocument {
             pages: vec![page, other_page],
             root_page_ids: vec!["page".to_string(), "other".to_string()],
+            ..Default::default()
         };
         let targets_by_net = BTreeMap::from([("GND".to_string(), vec![target, other])]);
         let specs = BTreeMap::from([("GND".to_string(), spec)]);
@@ -4598,6 +4600,7 @@ mod tests {
         let mut document = SchDocument {
             pages: vec![page],
             root_page_ids: vec!["page".to_string()],
+            ..Default::default()
         };
         let targets_by_net = BTreeMap::from([("GND".to_string(), vec![target.clone()])]);
         let specs = BTreeMap::from([("GND".to_string(), spec)]);
