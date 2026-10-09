@@ -2,8 +2,8 @@
 //!
 //! Each Step's own layers, drills and lines are report shapes in the Step's
 //! frame, drawn wherever the layout places the Step, exactly as its findings
-//! are. The material is dark only: negative polarity is resolved into it, and
-//! holes are the drill layers'. Pads keep their exact standard shapes.
+//! are. The material is the dark image the checks measure, cutouts and
+//! negative polarity resolved into it; pads keep their exact standard shapes.
 
 use std::collections::BTreeSet;
 
@@ -11,12 +11,12 @@ use anyhow::{Context, Result, ensure};
 use pcb_ir::dialects::artwork::{self, Aperture, ApertureShape, Geometry, Object};
 use pcb_ir::dialects::ipc::process;
 use pcb_ir::dialects::ipc::{
-    ArtworkScope, ArtworkTarget, FeatureBucket, ProfileSet, lower_layer_to_artwork_objects_with,
+    ArtworkScope, ArtworkTarget, ProfileSet, lower_layer_to_artwork_objects_with,
     profile_occurrences_for,
 };
 use pcb_ir::geom::path::{ContourBuf, stroke_to_fill};
 use pcb_ir::geom::region::ContourSet;
-use pcb_ir::geom::{Affine2, BBox, FillRule, LineCap, Paint, Point, Polarity, Resolution};
+use pcb_ir::geom::{Affine2, BBox, FillRule, LineCap, Paint, Point, Resolution};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
@@ -295,7 +295,7 @@ fn material(designs: &[Design<'_>], layer: &str) -> Result<Vec<(u32, Shape)>> {
         let mut doc =
             imported.materialize_occurrence_layer(id, design.scope, root, &|held| held == root)?;
         process::normalize_for_artwork(&mut doc, design.resolution)?;
-        process::retain_features(&mut doc, |feature| feature.bucket != FeatureBucket::Cutout);
+        process::subtract_layer_cutouts(&mut doc, design.resolution)?;
         process::resolve_negative_polarity(&mut doc, design.resolution)?;
         let mut artwork = artwork::Document::<(), ()>::new();
         let objects =
@@ -326,10 +326,6 @@ fn draw(
     shapes: &mut Vec<Shape>,
 ) -> Result<()> {
     for object in objects {
-        ensure!(
-            object.polarity == Polarity::Dark,
-            "scene material is dark only"
-        );
         match object.geometry {
             Geometry::Flash {
                 aperture,
