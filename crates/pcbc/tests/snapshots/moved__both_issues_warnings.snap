@@ -8,6 +8,16 @@ Exit Code: 0
 --- STDOUT ---
 
 --- STDERR ---
+Warning: `moved()` is deprecated and will be removed in a future release
+    ╭─[ <TEMP_DIR>/board.zen:17:1 ]
+ 17 │moved("OLD_POWER_SUPPLY", "NEW_POWER_SUPPLY")
+    │                      ╰─────────────────────── `moved()` is deprecated and will be removed in a future release
+
+Warning: `moved()` is deprecated and will be removed in a future release
+    ╭─[ <TEMP_DIR>/board.zen:20:1 ]
+ 20 │moved("NONEXISTENT_OLD", "NONEXISTENT_NEW")
+    │                     ╰────────────────────── `moved()` is deprecated and will be removed in a future release
+
 Warning: moved() references path 'OLD_POWER_SUPPLY' that still exists.
     ╭─[ <TEMP_DIR>/board.zen:17:7 ]
  17 │moved("OLD_POWER_SUPPLY", "NEW_POWER_SUPPLY")

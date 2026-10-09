@@ -8,4 +8,9 @@ Exit Code: 0
 --- STDOUT ---
 
 --- STDERR ---
+Warning: `moved()` is deprecated and will be removed in a future release
+    ╭─[ <TEMP_DIR>/board.zen:17:1 ]
+ 17 │moved("OLD_COMPONENT", "NEW_COMPONENT")
+    │                   ╰──────────────────── `moved()` is deprecated and will be removed in a future release
+
 ✓ board.zen (1 components)
