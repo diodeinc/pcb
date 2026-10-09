@@ -107,23 +107,24 @@ fn prepare_output(
         crate::codegen::board::BOARD_PROJECT_DIR
     );
 
-    // Standalone reimport retains the project directory, so reject conflicting projects before cleanup.
-    if selection.portable.source_kind == ImportSourceKind::Schematic && layout_dir.is_dir() {
-        let expected = layout_dir.join(selection.selected.kicad_sch.with_extension("kicad_pro"));
+    // Without a source board, reimport retains the project directory, so reject conflicting projects before cleanup.
+    let source_board = selection.selected.kicad_pcb.is_some();
+    if !source_board && layout_dir.is_dir() {
+        let expected = layout_dir.join(selection.selected.layout_kicad_pro());
         for entry in std::fs::read_dir(&layout_dir)? {
             let path = entry?.path();
             anyhow::ensure!(
                 path.extension()
                     .is_none_or(|extension| extension != "kicad_pro")
                     || path == expected,
-                "Standalone import conflicts with retained KiCad project {}. Import its matching schematic or choose a new output directory.",
+                "Import conflicts with retained KiCad project {}. Import its matching schematic or choose a new output directory.",
                 path.display()
             );
         }
     }
 
     if args.force {
-        remove_generated_output(paths, &selection.board_name, selection.portable.source_kind)?;
+        remove_generated_output(paths, &selection.board_name, source_board)?;
     }
 
     if !existing_board_repo {
@@ -139,7 +140,7 @@ fn prepare_output(
 fn remove_generated_output(
     import_paths: &ImportPaths,
     board_name: &str,
-    source_kind: ImportSourceKind,
+    source_board: bool,
 ) -> Result<()> {
     let board_dir = &import_paths.workspace_root;
     let mut paths = vec![
@@ -150,7 +151,7 @@ fn remove_generated_output(
         board_dir.join(".kicad.validation.diagnostics.json"),
         board_dir.join(format!("{board_name}.kicad.archive.zip")),
     ];
-    if source_kind == ImportSourceKind::Project {
+    if source_board {
         paths.push(import_paths.project_dir());
     }
 
@@ -340,12 +341,8 @@ mod tests {
         std::fs::write(&layout_file, "user layout").expect("write layout");
         std::fs::write(&archive_file, "stale project archive").expect("write archive");
 
-        remove_generated_output(
-            &import_paths(board_dir),
-            "board",
-            ImportSourceKind::Schematic,
-        )
-        .expect("clean standalone output");
+        remove_generated_output(&import_paths(board_dir), "board", false)
+            .expect("clean standalone output");
 
         assert_eq!(
             std::fs::read_to_string(layout_file).expect("read preserved layout"),
@@ -364,12 +361,8 @@ mod tests {
         let board_zen = board_dir.join("board.zen");
         symlink(board_dir.join("missing-target"), &board_zen).expect("create dangling symlink");
 
-        remove_generated_output(
-            &import_paths(board_dir),
-            "board",
-            ImportSourceKind::Schematic,
-        )
-        .expect("clean standalone output");
+        remove_generated_output(&import_paths(board_dir), "board", false)
+            .expect("clean standalone output");
 
         assert!(std::fs::symlink_metadata(board_zen).is_err());
     }

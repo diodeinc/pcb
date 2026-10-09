@@ -465,7 +465,7 @@ impl std::str::FromStr for PhysicalUnit {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")] // Match original casing in JSON (String, Number ...)
 pub enum AttributeValue {
     String(String),

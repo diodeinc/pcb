@@ -68,11 +68,7 @@ pub(super) fn bind_imported_schematic(
         }
     }
 
-    let project_file = board
-        .layout_kicad_pro
-        .as_ref()
-        .context("Import has no KiCad project")?;
-    let project = pcbc::kicad_schematic::KicadProject::load(project_file)?;
+    let project = pcbc::kicad_schematic::KicadProject::load(&board.layout_kicad_pro)?;
     for file in &project.schematic_files {
         let relative = file.strip_prefix(&board.layout_dir)?;
         let source = fs::read_to_string(file)?;
@@ -120,8 +116,8 @@ pub(super) fn bind_imported_schematic(
         bindings.is_empty(),
         "Some imported symbol identities were not found in the copied schematic"
     );
-    bind_net_names(project_file, netlist)?;
-    let project = pcbc::kicad_schematic::KicadProject::load(project_file)?;
+    bind_net_names(&board.layout_kicad_pro, netlist)?;
+    let project = pcbc::kicad_schematic::KicadProject::load(&board.layout_kicad_pro)?;
     let inspection = inspect_schematic(&project.document, netlist)?;
     ensure!(
         inspection.analysis.issues().is_empty(),

@@ -23,10 +23,7 @@ pub(super) fn build_import_report(
             &materialized.import_extraction_json,
         ),
         layout_dir: super::rel_to_root(&paths.workspace_root, &materialized.layout_dir),
-        layout_kicad_pro: materialized
-            .layout_kicad_pro
-            .as_ref()
-            .map(|path| super::rel_to_root(&paths.workspace_root, path)),
+        layout_kicad_pro: super::rel_to_root(&paths.workspace_root, &materialized.layout_kicad_pro),
         layout_kicad_pcb: materialized
             .layout_kicad_pcb
             .as_ref()

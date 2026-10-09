@@ -14,15 +14,13 @@ pub(super) fn extract_ir(
     validation: &ImportValidationRun,
     staged_root: &Path,
 ) -> Result<ImportIr> {
-    let pcb_refdes_to_anchor_key = if selection.portable.source_kind == ImportSourceKind::Project {
-        extract_kicad_pcb_refdes_to_anchor_key(
-            staged_root,
-            &paths.kicad_project_root,
-            &validation.summary.selected,
-        )?
-    } else {
-        BTreeMap::new()
-    };
+    let source_pcb = validation.summary.selected.kicad_pcb.as_deref();
+    let pcb_refdes_to_anchor_key = source_pcb
+        .map(|pcb| {
+            extract_kicad_pcb_refdes_to_anchor_key(staged_root, &paths.kicad_project_root, pcb)
+        })
+        .transpose()?
+        .unwrap_or_default();
 
     let mut netlist = extract_kicad_netlist(
         staged_root,
@@ -55,11 +53,7 @@ pub(super) fn extract_ir(
         &schematic.sheet_symbols,
     );
 
-    let layout_pcb = validation
-        .summary
-        .selected
-        .kicad_pcb
-        .as_ref()
+    let layout_pcb = source_pcb
         .map(|relative| staged_root.join(relative))
         .or_else(|| {
             let retained = paths
@@ -68,8 +62,7 @@ pub(super) fn extract_ir(
             retained.is_file().then_some(retained)
         });
     if let Some(pcb) = layout_pcb {
-        let native_unit_anchors = (selection.portable.source_kind == ImportSourceKind::Project)
-            .then_some(&netlist.unit_to_anchor);
+        let native_unit_anchors = source_pcb.is_some().then_some(&netlist.unit_to_anchor);
         extract_kicad_layout_data(&pcb, native_unit_anchors, &mut netlist.components)?;
     }
     // Missing PCB footprints are source parity findings, not missing schematic components.
@@ -138,12 +131,8 @@ struct KiCadNetlistComponentsExtraction {
 fn extract_kicad_pcb_refdes_to_anchor_key(
     staged_root: &Path,
     source_root: &Path,
-    selected: &SelectedKicadFiles,
+    kicad_pcb: &Path,
 ) -> Result<BTreeMap<KiCadRefDes, KiCadUuidPathKey>> {
-    let kicad_pcb = selected
-        .kicad_pcb
-        .as_ref()
-        .context("Project import is missing a selected .kicad_pcb file")?;
     let staged_pcb = staged_root.join(kicad_pcb);
     let source_pcb = source_root.join(kicad_pcb);
     if !staged_pcb.exists() {
@@ -1729,10 +1718,9 @@ mod tests {
             portable: PortableKicadProject {
                 project_dir: root.to_path_buf(),
                 project_name: "root".to_string(),
-                source_kind: ImportSourceKind::Schematic,
                 kicad_pro_rel: None,
                 root_schematic_rel: PathBuf::from("root.kicad_sch"),
-                primary_kicad_pcb_rel: None,
+                kicad_pcb_rel: None,
                 schematic_files_rel: vec![PathBuf::from("root.kicad_sch")],
                 files_to_bundle_rel: vec![PathBuf::from("root.kicad_sch")],
                 resolved_project_footprints,

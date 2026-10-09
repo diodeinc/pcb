@@ -14,7 +14,7 @@ pub(super) fn validate(
     let source_sch = paths.kicad_project_root.join(&selection.selected.kicad_sch);
     let mut diagnostics = Diagnostics::default();
 
-    // ERC is the only source validation available for standalone schematics.
+    // ERC is the only source validation available without a board.
     let erc_report = pcb_kicad::run_erc_report(&validation_sch, Some(staged_root))
         .context("KiCad ERC failed")?;
     erc_report.add_to_diagnostics(&mut diagnostics, &source_sch.to_string_lossy());
@@ -24,27 +24,9 @@ pub(super) fn validate(
     let mut drc_errors = 0;
     let mut drc_warnings = 0;
 
-    if selection.portable.source_kind == ImportSourceKind::Project {
-        let kicad_pro = selection
-            .selected
-            .kicad_pro
-            .as_ref()
-            .context("Project import is missing a selected .kicad_pro file")?;
-        let kicad_pcb = selection
-            .selected
-            .kicad_pcb
-            .as_ref()
-            .context("Project import is missing a selected .kicad_pcb file")?;
-        let validation_pro = staged_root.join(kicad_pro);
+    if let Some(kicad_pcb) = &selection.selected.kicad_pcb {
         let validation_pcb = staged_root.join(kicad_pcb);
         let source_pcb = paths.kicad_project_root.join(kicad_pcb);
-        if !validation_pro.exists() {
-            anyhow::bail!(
-                "Selected KiCad project file does not exist: {}",
-                paths.kicad_project_root.join(kicad_pro).display()
-            );
-        }
-
         let drc_output = tempfile::NamedTempFile::new()
             .context("Failed to create temporary file for DRC output")?;
         let drc_report =
