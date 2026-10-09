@@ -745,7 +745,7 @@ fn creates_a_verified_project_and_then_makes_no_changes() {
     assert!(created.changed);
     assert_eq!(
         created.schematic_files[0].file_name().unwrap(),
-        "layout.kicad_sch"
+        "Simple.kicad_sch"
     );
     let source = fs::read(&created.schematic_files[0]).unwrap();
 
@@ -846,7 +846,7 @@ fn initializes_each_linked_module_instance_as_its_own_child_sheet() {
             .map(|path| path.file_name().unwrap().to_str().unwrap())
             .collect::<Vec<_>>(),
         [
-            "layout.kicad_sch",
+            "Hierarchy.kicad_sch",
             "FILTER_A.kicad_sch",
             "FILTER_B.kicad_sch"
         ]
@@ -856,7 +856,7 @@ fn initializes_each_linked_module_instance_as_its_own_child_sheet() {
         .document
         .pages
         .iter()
-        .find(|page| page.file_name.as_deref() == Some("layout.kicad_sch"))
+        .find(|page| page.file_name.as_deref() == Some("Hierarchy.kicad_sch"))
         .unwrap();
     assert_eq!(
         root.items
@@ -1555,6 +1555,41 @@ fn initializes_the_missing_schematic_in_an_existing_layout_project() {
         .unwrap()
         .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
+}
+
+#[test]
+fn renames_a_root_schematic_that_does_not_match_the_project() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let netlist = linked_hierarchy_fixture(&project_dir);
+    let created = apply_linked_schematic(&netlist).unwrap().unwrap();
+    let project_file = project_dir.join("layout.kicad_pro");
+    fs::rename(&created.project_file, &project_file).unwrap();
+    let root_source = fs::read_to_string(&created.root_schematic).unwrap();
+
+    let applied = apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    assert!(!applied.changed);
+    assert_eq!(applied.project_file, project_file);
+    assert_eq!(applied.root_schematic, project_dir.join("layout.kicad_sch"));
+    assert!(!created.root_schematic.exists());
+    assert_eq!(
+        fs::read_to_string(&applied.root_schematic).unwrap(),
+        root_source
+    );
+    let project_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&project_file).unwrap()).unwrap();
+    assert_eq!(
+        project_json["schematic"]["top_level_sheets"][0]["filename"],
+        "layout.kicad_sch"
+    );
+    assert!(
+        project_json["diode"]["schematic_sheets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|sheet| sheet["parent_file"] != "Hierarchy.kicad_sch")
+    );
 }
 
 #[test]

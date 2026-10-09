@@ -49,9 +49,6 @@ pub const ATTR_SCHEMATIC_NAME: &str = "schematic_name";
 /// Used with `AttributeValue::Number`.
 pub const ATTR_SYMBOL_FORMAT_VERSION: &str = "__symbol_format_version";
 
-/// Default basename used when creating a shared KiCad project.
-pub const KICAD_PROJECT_BASENAME: &str = "layout";
-
 /// URI prefix for stable, machine-independent package references.
 pub const PACKAGE_URI_PREFIX: &str = "package://";
 

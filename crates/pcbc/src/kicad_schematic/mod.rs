@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
+use pcb_layout::utils as layout_utils;
 use pcb_sch::{ATTR_SCHEMATIC_NAME, AttributeValue, Schematic};
 use serde::Serialize;
 
@@ -40,19 +41,24 @@ pub struct SchematicApplyResult {
 /// replacements, written atomically, then reloaded and analyzed to verify the
 /// postcondition.
 pub fn apply_linked_schematic(netlist: &Schematic) -> Result<Option<SchematicApplyResult>> {
-    let Some(path) = schematic_project_path(netlist)? else {
+    let Some(directory) = schematic_project_path(netlist)? else {
         return Ok(None);
     };
-    let project_file = pcb_layout::utils::resolve_kicad_files(&path)?.kicad_pro;
-    // A project whose declared roots are all missing, or no project at all, is created from scratch.
-    let has_root = project_file.is_file()
-        && declared_root_schematics(&project_file)?
-            .iter()
-            .any(|root| root.is_file());
-    if has_root {
+    let name = schematic_name(netlist)?;
+    let files = layout_utils::resolve_kicad_files(&directory, &name)?;
+    if !files.kicad_pro.is_file() {
+        return initialize_project(files.kicad_pro, &name, netlist).map(Some);
+    }
+    // KiCad pairs a root schematic only with the same-stem project.
+    let project_file = files.rename(files.name())?.kicad_pro;
+    // A project whose declared roots are all missing is created from scratch.
+    if declared_root_schematics(&project_file)?
+        .iter()
+        .any(|root| root.is_file())
+    {
         apply_existing(KicadProject::load(&project_file)?, netlist).map(Some)
     } else {
-        initialize_project(project_file, netlist).map(Some)
+        initialize_project(project_file, &name, netlist).map(Some)
     }
 }
 
@@ -200,13 +206,15 @@ fn commit_and_verify(
     Err(error.context(format!("{context}; restored original files")))
 }
 
-fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<SchematicApplyResult> {
+fn initialize_project(
+    project_file: PathBuf,
+    schematic_name: &str,
+    netlist: &Schematic,
+) -> Result<SchematicApplyResult> {
     let directory = project_file
         .parent()
         .context("schematic project path has no parent directory")?
         .to_path_buf();
-    let schematic_name = schematic_name(netlist, &project_file)?;
-    // KiCad pairs a board with the schematic sharing its basename.
     let root_schematic = project_file.with_extension("kicad_sch");
     if root_schematic.exists() {
         bail!(
@@ -225,7 +233,7 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
     for path in &schematic_files {
         if !unique_paths.insert(path) {
             bail!(
-                "two schematic pages resolve to the same file {}; rename the root schematic or the conflicting module",
+                "two schematic pages resolve to the same file {}; rename the conflicting module",
                 path.display()
             );
         }
@@ -247,7 +255,7 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
         original_project
             .as_deref()
             .unwrap_or("{\"meta\":{\"version\":1}}"),
-        &schematic_name,
+        schematic_name,
         file_name,
     )?;
     let mut project: Value = serde_json::from_str(&project_source)?;
@@ -289,7 +297,7 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
     })
 }
 
-fn schematic_name(netlist: &Schematic, project_file: &Path) -> Result<String> {
+fn schematic_name(netlist: &Schematic) -> Result<String> {
     let value = netlist
         .root_ref
         .as_ref()
@@ -298,11 +306,7 @@ fn schematic_name(netlist: &Schematic, project_file: &Path) -> Result<String> {
     match value {
         Some(AttributeValue::String(name)) => Ok(name.clone()),
         Some(_) => bail!("schematic_name must be a string"),
-        None => Ok(project_file
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .context("KiCad project filename has no UTF-8 stem")?
-            .to_string()),
+        None => bail!("Project() did not set schematic_name"),
     }
 }
 

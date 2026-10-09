@@ -77,7 +77,7 @@ fn layout_json_output_is_parseable() {
     assert!(
         json["pcbFile"]
             .as_str()
-            .is_some_and(|path| path.ends_with("layout.kicad_pcb"))
+            .is_some_and(|path| path.ends_with("TestBoard.kicad_pcb"))
     );
 
     let no_sync_output = sandbox

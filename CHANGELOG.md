@@ -17,9 +17,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
 - `pcb build` rejects dependency symbol libraries KiCad cannot load.
 - `pcb build` and `pcb inspect` reject symbol libraries KiCad cannot load, such as ones with a root-level `embedded_fonts`, and accept what KiCad loads, such as repeated symbol names and private properties.
+- New KiCad projects are named after the board instead of `layout`; `pcb migrate` renames existing ones.
 
 ### Fixed
 
+- `pcb apply schematic` renames a root schematic that does not match its KiCad project, so KiCad saves project settings such as bus aliases and ERC exclusions.
 - `pcb apply` names a new root schematic after its KiCad project, matching the board so DRC schematic parity runs.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.

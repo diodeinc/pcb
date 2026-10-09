@@ -781,7 +781,9 @@ pub fn generate_layout_in(
         .map(|r| r.module.source_path.clone())
         .unwrap_or_default();
 
-    let kicad_files = utils::resolve_kicad_files(&layout_dir)?;
+    let layout_name =
+        utils::extract_layout_name(schematic).context("Project() did not set layout_name")?;
+    let kicad_files = utils::resolve_kicad_files(&layout_dir, &layout_name)?;
     let paths = utils::get_layout_paths_for_pcb(&layout_dir, kicad_files.kicad_pcb());
     let diagnostics_pcb_path = paths.pcb.to_string_lossy().to_string();
 
@@ -870,7 +872,6 @@ pub fn generate_layout_in(
         ));
     }
 
-    let layout_name = utils::extract_layout_name(schematic);
     let netclass_assignments = board_config
         .as_ref()
         .map(|config| build_netclass_assignments(schematic, config.netclasses()))
@@ -879,12 +880,12 @@ pub fn generate_layout_in(
         &paths.pcb.with_extension("kicad_pro"),
         board_config.as_ref(),
         &netclass_assignments,
-        layout_name.as_deref(),
+        &layout_name,
     )?;
     patch_pcb_file(
         &paths.pcb,
         board_config.as_ref(),
-        layout_name.as_deref(),
+        &layout_name,
         &component_internal_connectivity_by_path(schematic),
     )?;
 
@@ -934,8 +935,6 @@ pub mod utils {
         }
     }
 
-    pub const DEFAULT_KICAD_BASENAME: &str = pcb_sch::KICAD_PROJECT_BASENAME;
-
     #[derive(Debug, Clone)]
     pub struct KiCadLayoutFiles {
         /// KiCad project file path (`.kicad_pro`).
@@ -943,12 +942,138 @@ pub mod utils {
     }
 
     impl KiCadLayoutFiles {
+        /// The files of a project named `name` in `dir`.
+        pub fn named(dir: &Path, name: &str) -> anyhow::Result<Self> {
+            if name.trim().is_empty()
+                || name != name.trim()
+                || name.contains(['/', '\\'])
+                || matches!(name, "." | "..")
+            {
+                anyhow::bail!("KiCad project name must be a non-empty file basename, got '{name}'");
+            }
+            Ok(Self {
+                kicad_pro: dir.join(format!("{name}.kicad_pro")),
+            })
+        }
+
+        pub fn name(&self) -> &str {
+            self.kicad_pro
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .expect("KiCad project files are named from UTF-8 names")
+        }
+
         pub fn kicad_pcb(&self) -> PathBuf {
             self.kicad_pro.with_extension("kicad_pcb")
         }
 
         pub fn kicad_sch(&self) -> PathBuf {
             self.kicad_pro.with_extension("kicad_sch")
+        }
+
+        pub fn kicad_prl(&self) -> PathBuf {
+            self.kicad_pro.with_extension("kicad_prl")
+        }
+
+        pub fn kicad_dru(&self) -> PathBuf {
+            self.kicad_pro.with_extension("kicad_dru")
+        }
+
+        /// Rename the project and its same-stem files to `name`. KiCad pairs a
+        /// board, design rules or root schematic only with the same-stem
+        /// `.kicad_pro`, so this also realigns a root schematic that drifted
+        /// from its project. A root below the project directory stays put,
+        /// since moving it would break its sheets' relative paths.
+        pub fn rename(&self, name: &str) -> anyhow::Result<Self> {
+            let dir = self
+                .kicad_pro
+                .parent()
+                .context("KiCad project file has no parent directory")?;
+            let renamed = Self::named(dir, name)?;
+            let source = fs::read_to_string(&self.kicad_pro)
+                .with_context(|| format!("Failed to read {}", self.kicad_pro.display()))?;
+            let original: serde_json::Value = serde_json::from_str(&source)
+                .with_context(|| format!("Failed to parse {}", self.kicad_pro.display()))?;
+            let old_root_file = original
+                .pointer("/schematic/top_level_sheets/0/filename")
+                .and_then(serde_json::Value::as_str)
+                .map_or_else(|| format!("{}.kicad_sch", self.name()), str::to_string);
+            let root_file = if Path::new(&old_root_file).file_name() == Some(old_root_file.as_ref())
+            {
+                format!("{name}.kicad_sch")
+            } else {
+                old_root_file.clone()
+            };
+
+            let mut project = original.clone();
+            for (list, key) in [
+                ("/schematic/top_level_sheets", "filename"),
+                ("/diode/schematic_sheets", "parent_file"),
+            ] {
+                project
+                    .pointer_mut(list)
+                    .and_then(serde_json::Value::as_array_mut)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|sheet| sheet.get_mut(key))
+                    .filter(|file| file.as_str() == Some(old_root_file.as_str()))
+                    .for_each(|file| *file = root_file.clone().into());
+            }
+
+            let moves = [
+                (dir.join(&old_root_file), dir.join(&root_file)),
+                (self.kicad_pcb(), renamed.kicad_pcb()),
+                (self.kicad_dru(), renamed.kicad_dru()),
+                (self.kicad_prl(), renamed.kicad_prl()),
+                (self.kicad_pro.clone(), renamed.kicad_pro.clone()),
+            ]
+            .into_iter()
+            .filter(|(from, to)| from != to && from.exists())
+            .collect::<Vec<_>>();
+            if moves.is_empty() && project == original {
+                return Ok(renamed);
+            }
+            // A case-only rename targets the source itself on case-insensitive
+            // filesystems.
+            for (from, to) in &moves {
+                anyhow::ensure!(
+                    !to.exists() || same_file::is_same_file(from, to)?,
+                    "Cannot rename KiCad project {} to '{name}': {} already exists",
+                    self.kicad_pro.display(),
+                    to.display()
+                );
+            }
+
+            let mut moved = 0;
+            let result = (|| {
+                if project != original {
+                    let mut next = serde_json::to_string_pretty(&project)?;
+                    next.push('\n');
+                    fs::write(&self.kicad_pro, next)
+                        .with_context(|| format!("Failed to write {}", self.kicad_pro.display()))?;
+                }
+                for (from, to) in &moves {
+                    fs::rename(from, to).with_context(|| {
+                        format!("Failed to rename {} to {}", from.display(), to.display())
+                    })?;
+                    moved += 1;
+                }
+                anyhow::Ok(())
+            })();
+            let Err(error) = result else {
+                return Ok(renamed);
+            };
+            let rollback = moves[..moved]
+                .iter()
+                .rev()
+                .try_for_each(|(from, to)| fs::rename(to, from))
+                .and_then(|()| fs::write(&self.kicad_pro, &source));
+            Err(match rollback {
+                Ok(()) => error.context("restored the original KiCad project files"),
+                Err(rollback) => {
+                    error.context(format!("restoring the project also failed: {rollback}"))
+                }
+            })
         }
     }
 
@@ -997,14 +1122,12 @@ pub mod utils {
             .ok_or_else(|| anyhow::anyhow!("No .kicad_pro file found in {}", layout_dir.display()))
     }
 
-    /// Resolve target file names for layout generation (defaults to `layout.*`).
-    pub fn resolve_kicad_files(layout_dir: &Path) -> anyhow::Result<KiCadLayoutFiles> {
-        if let Some(existing) = discover_kicad_files(layout_dir)? {
-            return Ok(existing);
+    /// The existing project in `layout_dir`, or a new one named `name`.
+    pub fn resolve_kicad_files(layout_dir: &Path, name: &str) -> anyhow::Result<KiCadLayoutFiles> {
+        match discover_kicad_files(layout_dir)? {
+            Some(existing) => Ok(existing),
+            None => KiCadLayoutFiles::named(layout_dir, name),
         }
-        Ok(KiCadLayoutFiles {
-            kicad_pro: layout_dir.join(format!("{DEFAULT_KICAD_BASENAME}.kicad_pro")),
-        })
     }
 
     /// Get all the file paths that would be generated for a layout, with explicit PCB path.
@@ -1270,7 +1393,7 @@ fn patch_project_file(
     pro_path: &Path,
     board_config: Option<&BoardConfig>,
     assignments: &HashMap<String, String>,
-    layout_name: Option<&str>,
+    layout_name: &str,
 ) -> AnyhowResult<()> {
     info!("Updating project settings in {}", pro_path.display());
     kicad_project_patch::patch_kicad_pro(pro_path, board_config, assignments, layout_name)
@@ -1279,7 +1402,7 @@ fn patch_project_file(
 fn patch_pcb_file(
     pcb_path: &Path,
     board_config: Option<&BoardConfig>,
-    layout_name: Option<&str>,
+    layout_name: &str,
     internal_connectivity_by_path: &BTreeMap<String, pcb_sch::InternalConnectivity>,
 ) -> Result<(), LayoutError> {
     let pcb_content = fs::read_to_string(pcb_path).map_err(|e| {
@@ -1312,7 +1435,7 @@ fn patch_pcb_file(
 fn build_pcb_patchset(
     board: &pcb_sexpr::Sexpr,
     board_config: Option<&BoardConfig>,
-    layout_name: Option<&str>,
+    layout_name: &str,
     internal_connectivity_by_path: &BTreeMap<String, pcb_sch::InternalConnectivity>,
 ) -> Result<pcb_sexpr::PatchSet, LayoutError> {
     let mut patches = build_title_block_patchset(board)?;
@@ -1479,7 +1602,7 @@ fn format_jumper_pad_groups(groups: &[std::collections::BTreeSet<String>]) -> St
 
 fn build_board_properties_patchset(
     board: &pcb_sexpr::Sexpr,
-    layout_name: Option<&str>,
+    layout_name: &str,
 ) -> Result<pcb_sexpr::PatchSet, LayoutError> {
     let root_items = board.as_list().ok_or_else(|| {
         LayoutError::StackupPatchingError("PCB root is not an S-expression list".to_string())
@@ -1493,13 +1616,10 @@ fn build_board_properties_patchset(
     let mut patches = pcb_sexpr::PatchSet::new();
     let mut inserted = Vec::new();
     for (name, value) in [
-        layout_name.map(|value| ("PCB_NAME", value)),
-        Some(("PCB_VERSION", PCB_VERSION_PLACEHOLDER)),
-        Some(("PCB_GIT_HASH", PCB_GIT_HASH_PLACEHOLDER)),
-    ]
-    .into_iter()
-    .flatten()
-    {
+        ("PCB_NAME", layout_name),
+        ("PCB_VERSION", PCB_VERSION_PLACEHOLDER),
+        ("PCB_GIT_HASH", PCB_GIT_HASH_PLACEHOLDER),
+    ] {
         let property = root_items.iter().find_map(|item| {
             let items = item.as_list()?;
             (items.first().and_then(|item| item.as_sym()) == Some("property")
@@ -1763,6 +1883,58 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
+    fn renames_every_reference_even_when_only_the_case_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = r#"{"schematic":{"top_level_sheets":[
+            {"filename":"layout.kicad_sch"},{"filename":"other.kicad_sch"},{"filename":"layout.kicad_sch"}
+        ]}}"#;
+        for (file, content) in [
+            ("layout.kicad_pro", project),
+            ("layout.kicad_pcb", "board"),
+            ("layout.kicad_dru", "rules"),
+            ("layout.kicad_sch", "root"),
+        ] {
+            std::fs::write(dir.path().join(file), content).unwrap();
+        }
+        let files = super::utils::discover_kicad_files(dir.path())
+            .unwrap()
+            .unwrap();
+
+        files.rename("Layout").unwrap();
+
+        let mut names = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "Layout.kicad_dru",
+                "Layout.kicad_pcb",
+                "Layout.kicad_pro",
+                "Layout.kicad_sch"
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("Layout.kicad_pcb")).unwrap(),
+            "board"
+        );
+        let project: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("Layout.kicad_pro")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            project["schematic"]["top_level_sheets"],
+            serde_json::json!([
+                {"filename": "Layout.kicad_sch"},
+                {"filename": "other.kicad_sch"},
+                {"filename": "Layout.kicad_sch"}
+            ])
+        );
+    }
+
+    #[test]
     fn stackup_thickness_iu_rounds_like_kicad() {
         let stackup = Stackup {
             materials: None,
@@ -1809,7 +1981,7 @@ mod tests {
 )"#;
 
         let board = pcb_sexpr::parse(input).unwrap();
-        let patches = build_board_properties_patchset(&board, Some("DemoBoard")).unwrap();
+        let patches = build_board_properties_patchset(&board, "DemoBoard").unwrap();
         let mut out = Vec::new();
         patches.write_to(input, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
@@ -2055,7 +2227,7 @@ mod tests {
         patch_pcb_file(
             &pcb_path,
             Some(&board_config),
-            Some("DemoBoard"),
+            "DemoBoard",
             &BTreeMap::new(),
         )
         .unwrap();
@@ -2071,7 +2243,7 @@ mod tests {
         patch_pcb_file(
             &pcb_path,
             Some(&board_config),
-            Some("DemoBoard"),
+            "DemoBoard",
             &BTreeMap::new(),
         )
         .unwrap();
