@@ -9,7 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use pcb_sexpr::edit::{Edit, apply};
-use pcb_sexpr::{Sexpr, SexprKind, Span};
+use pcb_sexpr::kicad::symbol::property_name_value;
+use pcb_sexpr::{Sexpr, Span, parse, scan};
 
 use super::symbol::{
     KicadPin, KicadSymbol, nested_symbol_unit_style, parse_bool_atom, parse_pin_common,
@@ -36,6 +37,13 @@ pub struct SymbolIssue {
     /// Edits to that source that resolve the issue; empty when resolving it
     /// takes a decision.
     pub fix: Vec<Edit>,
+}
+
+impl SymbolIssue {
+    /// Whether KiCad refuses to load the library over this issue.
+    pub fn blocks_kicad(&self) -> bool {
+        [PARSE.kind, UNIT_NAMING.kind, EXTENDS.kind].contains(&self.kind)
+    }
 }
 
 /// Numbered pads of the footprint a symbol is paired with.
@@ -186,94 +194,245 @@ const STYLE_STACK: Rule = Rule::new(
     "keep one visible pin with the functional type; hidden stack members use `passive`",
 );
 
-const ELECTRICAL_TYPES: &[&str] = &[
-    "input",
-    "output",
-    "bidirectional",
-    "tri_state",
-    "passive",
-    "free",
-    "unspecified",
-    "power_in",
-    "power_out",
-    "open_collector",
-    "open_emitter",
-    "no_connect",
-    "unconnected",
-];
-const GRAPHIC_STYLES: &[&str] = &[
-    "line",
-    "inverted",
-    "clock",
-    "inverted_clock",
-    "input_low",
-    "clock_low",
-    "output_low",
-    "edge_clock_high",
-    "non_logic",
-];
-/// What KiCad's parser accepts directly inside a symbol and inside a unit.
-const SYMBOL_FORMS: &[&str] = &[
-    "arc",
-    "bezier",
-    "body_styles",
-    "circle",
-    "duplicate_pin_numbers_are_jumpers",
-    "embedded_files",
-    "embedded_fonts",
-    "exclude_from_sim",
-    "extends",
-    "in_bom",
-    "in_pos_files",
-    "jumper_pin_groups",
-    "on_board",
-    "pin",
-    "pin_names",
-    "pin_numbers",
-    "polyline",
-    "power",
-    "property",
-    "rectangle",
-    "symbol",
-    "text",
-    "text_box",
-];
-const UNIT_FORMS: &[&str] = &[
-    "unit_name",
-    "arc",
-    "bezier",
-    "circle",
-    "pin",
-    "polyline",
-    "rectangle",
-    "text",
-    "text_box",
-];
-const JUSTIFY: &[&str] = &["left", "right", "top", "bottom", "mirror"];
-const FILL_TYPES: &[&str] = &[
-    "none",
-    "outline",
-    "background",
-    "color",
-    "hatch",
-    "reverse_hatch",
-    "cross_hatch",
-];
-const STROKE_TYPES: &[&str] = &[
-    "default",
-    "dash",
-    "dot",
-    "dash_dot",
-    "dash_dot_dot",
-    "solid",
-];
 const NC_NAMES: &[&str] = &["NC", "N/C", "DNC", "DNU"];
+/// The newest symbol library format KiCad 10 reads.
+const KICAD_SYMBOL_LIB_VERSION: i64 = 20251024;
 
 const GRID_NM: i64 = 2_540_000;
 const HALF_GRID_NM: i64 = 1_270_000;
 const TEXT_SIZE_NM: i64 = 1_270_000;
 const OUTLINE_NM: i64 = 254_000;
 const NAME_OFFSET_NM: std::ops::RangeInclusive<i64> = 508_000..=1_270_000;
+
+/// What KiCad's parser reads at one position of a form.
+#[derive(Clone, Copy)]
+enum Atom {
+    /// A quoted string or a bare word; a number is neither.
+    Text,
+    /// Text that is not empty.
+    Name,
+    /// Any number; KiCad truncates where it wants a whole one.
+    Number,
+    /// A pin orientation.
+    Rotation,
+    /// `yes` or `no`.
+    Bool,
+    /// Any one atom.
+    Any,
+    /// One of a set of bare words, named by what they are.
+    Word(&'static str, &'static [&'static str]),
+    /// One of a set of bare words, or nothing.
+    Flag(&'static [&'static str]),
+}
+
+impl Atom {
+    fn accepts(self, node: &Sexpr) -> bool {
+        match self {
+            Atom::Text => node.as_atom().is_some(),
+            Atom::Name => node.as_atom().is_some_and(|text| !text.is_empty()),
+            Atom::Number => number(node).is_some(),
+            Atom::Rotation => number(node).is_some_and(|r| [0.0, 90.0, 180.0, 270.0].contains(&r)),
+            Atom::Bool => matches!(node.as_sym(), Some("yes" | "no")),
+            Atom::Any => node.as_list().is_none(),
+            Atom::Word(_, words) | Atom::Flag(words) => {
+                node.as_sym().is_some_and(|word| words.contains(&word))
+            }
+        }
+    }
+
+    fn is_number(self) -> bool {
+        matches!(self, Atom::Number | Atom::Rotation)
+    }
+
+    fn expected(self) -> String {
+        match self {
+            Atom::Text => "text".to_string(),
+            Atom::Name => "a name".to_string(),
+            Atom::Number => "a number".to_string(),
+            Atom::Rotation => "0, 90, 180 or 270".to_string(),
+            Atom::Bool => "`yes` or `no`".to_string(),
+            Atom::Any => "a value".to_string(),
+            Atom::Word(what, _) => format!("a {what}"),
+            Atom::Flag(words) => words.join(" or "),
+        }
+    }
+}
+
+/// The atoms a form takes before its child forms: some in order, then any
+/// number of one kind. Bare words may stand among the children.
+struct Form {
+    atoms: &'static [Atom],
+    rest: Option<Atom>,
+    bare: &'static [&'static str],
+}
+
+const ELECTRICAL: Atom = Atom::Word(
+    "electrical type",
+    &[
+        "input",
+        "output",
+        "bidirectional",
+        "tri_state",
+        "passive",
+        "free",
+        "unspecified",
+        "power_in",
+        "power_out",
+        "open_collector",
+        "open_emitter",
+        "no_connect",
+        "unconnected",
+    ],
+);
+const GRAPHIC: Atom = Atom::Word(
+    "graphic style",
+    &[
+        "line",
+        "inverted",
+        "clock",
+        "inverted_clock",
+        "input_low",
+        "clock_low",
+        "output_low",
+        "edge_clock_high",
+        "non_logic",
+    ],
+);
+const JUSTIFY: Atom = Atom::Word(
+    "justification",
+    &["left", "right", "top", "bottom", "mirror"],
+);
+const STROKE_TYPE: Atom = Atom::Word(
+    "stroke type",
+    &[
+        "default",
+        "dash",
+        "dot",
+        "dash_dot",
+        "dash_dot_dot",
+        "solid",
+    ],
+);
+const FILL_TYPE: Atom = Atom::Word(
+    "fill type",
+    &[
+        "none",
+        "outline",
+        "background",
+        "color",
+        "hatch",
+        "reverse_hatch",
+        "cross_hatch",
+    ],
+);
+const PRIVATE: Atom = Atom::Flag(&["private"]);
+const NUMBER: Atom = Atom::Number;
+
+/// KiCad's grammar, from its symbol library parser, for a form in a given
+/// role. Roles are heads, or shapes several heads share.
+fn form(role: &str) -> Form {
+    let f = |atoms, rest, bare| Form { atoms, rest, bare };
+    match role {
+        "symbol" | "unit" | "pin_text" | "string" | "generator" | "host" => {
+            f(&[Atom::Text], None, &[])
+        }
+        "old_host" => f(&[Atom::Text, Atom::Text], None, &[]),
+        "generator_version" => f(&[Atom::Any], None, &[]),
+        "pin" => f(&[ELECTRICAL, GRAPHIC], None, &["hide"]),
+        "alternate" => f(&[Atom::Text, ELECTRICAL, GRAPHIC], None, &[]),
+        "property" => f(&[PRIVATE, Atom::Name, Atom::Text], None, &[]),
+        "effects" | "pin_names" | "pin_numbers" => f(&[], None, &["hide"]),
+        "font" => f(&[], None, &["bold", "italic"]),
+        "justify" => f(&[], Some(JUSTIFY), &[]),
+        "stroke_type" => f(&[STROKE_TYPE], None, &[]),
+        "fill_type" => f(&[FILL_TYPE], None, &[]),
+        "arc" | "bezier" | "circle" | "polyline" | "rectangle" => f(&[PRIVATE], None, &[]),
+        "text" | "text_box" => f(&[PRIVATE, Atom::Text], None, &[]),
+        "power" => f(&[Atom::Flag(&["global", "local"])], None, &[]),
+        "body_styles" => f(&[], Some(Atom::Text), &[]),
+        "number" | "version" => f(&[NUMBER], None, &[]),
+        "bool" => f(&[Atom::Bool], None, &[]),
+        "maybe_bool" => f(&[Atom::Flag(&["yes", "no"])], None, &[]),
+        "xy" => f(&[NUMBER, NUMBER], None, &[]),
+        "xyz" => f(&[NUMBER, NUMBER, NUMBER], None, &[]),
+        "pin_at" => f(&[NUMBER, NUMBER, Atom::Rotation], None, &[]),
+        "quad" => f(&[NUMBER, NUMBER, NUMBER, NUMBER], None, &[]),
+        "opaque" => f(&[], Some(Atom::Any), &[]),
+        _ => f(&[], None, &[]),
+    }
+}
+
+/// The role of a child form with head `head` inside a form of `role`, if
+/// KiCad reads one there.
+fn child_role(role: &str, head: &str) -> Option<&'static str> {
+    let drawing = matches!(role, "symbol" | "unit");
+    let shape = matches!(
+        role,
+        "arc" | "bezier" | "circle" | "polyline" | "rectangle" | "text_box"
+    );
+    Some(match (role, head) {
+        ("opaque", _) => "opaque",
+        (_, "arc") if drawing => "arc",
+        (_, "bezier") if drawing => "bezier",
+        (_, "circle") if drawing => "circle",
+        (_, "pin") if drawing => "pin",
+        (_, "polyline") if drawing => "polyline",
+        (_, "rectangle") if drawing => "rectangle",
+        (_, "text") if drawing => "text",
+        (_, "text_box") if drawing => "text_box",
+        (_, "stroke") if shape => "stroke",
+        (_, "fill") if shape => "fill",
+        ("symbol", "symbol") => "unit",
+        ("symbol", "extends") | ("unit", "unit_name") | ("effects", "href") | ("font", "face") => {
+            "string"
+        }
+        ("symbol", "property") => "property",
+        ("symbol", "power") => "power",
+        ("symbol", "body_styles") => "body_styles",
+        ("symbol", "pin_names") => "pin_names",
+        ("symbol", "pin_numbers") => "pin_numbers",
+        ("symbol", "jumper_pin_groups" | "embedded_files") => "opaque",
+        (
+            "symbol",
+            "exclude_from_sim"
+            | "in_bom"
+            | "on_board"
+            | "in_pos_files"
+            | "duplicate_pin_numbers_are_jumpers"
+            | "embedded_fonts",
+        )
+        | ("pin" | "property" | "pin_names" | "pin_numbers", "hide") => "bool",
+        ("property", "show_name" | "do_not_autoplace")
+        | ("effects", "hide")
+        | ("font", "bold" | "italic") => "maybe_bool",
+        ("pin", "at") => "pin_at",
+        ("pin", "name" | "number") => "pin_text",
+        ("pin", "alternate") => "alternate",
+        ("pin" | "arc_radius", "length")
+        | ("pin_names", "offset")
+        | ("property", "id")
+        | ("stroke", "width")
+        | ("font", "thickness" | "line_spacing")
+        | ("circle" | "rectangle", "radius") => "number",
+        ("pin_text" | "property" | "text" | "text_box", "effects") => "effects",
+        ("property" | "text" | "text_box", "at") => "xyz",
+        ("effects", "font") => "font",
+        ("effects", "justify") => "justify",
+        ("font", "size")
+        | ("arc" | "rectangle" | "text_box", "start" | "end")
+        | ("arc", "mid")
+        | ("arc_radius", "at" | "angles")
+        | ("circle", "center")
+        | ("pts", "xy")
+        | ("text_box", "size") => "xy",
+        ("font" | "stroke" | "fill", "color") | ("text_box", "margins") => "quad",
+        ("arc", "radius") => "arc_radius",
+        ("bezier" | "polyline", "pts") => "pts",
+        ("stroke", "type") => "stroke_type",
+        ("fill", "type") => "fill_type",
+        _ => return None,
+    })
+}
 
 /// The sources of a library with the fixable issues of symbol `name` fixed.
 ///
@@ -306,23 +465,79 @@ pub fn fix(mut sources: Vec<String>, name: &str) -> Vec<String> {
 pub fn check_library(library: &KicadSymbolLibrary) -> Option<SymbolIssue> {
     let mut sources = library.sources().iter().enumerate();
     sources.find_map(|(source, text)| {
-        let fault = pcb_sexpr::scan::malformed(text)
-            .map(|(offset, fault)| (offset, format!("file does not parse: {fault}")));
-        let header = || {
-            let message = "library does not open with `(kicad_symbol_lib (version …)`";
-            (scan_format_version(text).is_none()).then(|| (0, message.to_string()))
-        };
-        let (offset, message) = fault.or_else(header)?;
+        let (offset, message, fix) = library_fault(text)?;
         let mut issue = PARSE.issue(source, Span::new(offset, offset + 1), message);
-        // KiCad reads nothing from a comment, so every one of them can go.
-        if text[offset..].starts_with(';') {
-            let comments = pcb_sexpr::scan::comments(text);
-            issue.fix = comments
-                .map(|comment| Edit::delete(Span::new(comment.start, comment.end)))
-                .collect();
-        }
+        issue.fix = fix;
         Some(issue)
     })
+}
+
+/// The first thing that stops KiCad from reading `text` as a symbol library:
+/// its structure, then its header and the forms at its root.
+fn library_fault(text: &str) -> Option<(usize, String, Vec<Edit>)> {
+    if let Some((offset, fault)) = scan::malformed(text) {
+        // KiCad reads nothing from a comment, so every one of them can go.
+        let comments =
+            scan::comments(text).map(|comment| Edit::delete(Span::new(comment.start, comment.end)));
+        let fix = text[offset..].starts_with(';').then(|| comments.collect());
+        let message = format!("file does not parse: {fault}");
+        return Some((offset, message, fix.unwrap_or_default()));
+    }
+    let root = text.find('(').unwrap_or_default();
+    let mut children = scan::children(text);
+    let first = children.next().filter(|range| {
+        scan::head(text, root) == "kicad_symbol_lib" && scan::head(text, range.start) == "version"
+    });
+    let Some(first) = first else {
+        let message = "library does not open with `(kicad_symbol_lib (version …)`";
+        return Some((root, message.to_string(), Vec::new()));
+    };
+    let version = scan_format_version(text).map_or(0, i64::from);
+    for (index, range) in std::iter::once(first).chain(children).enumerate() {
+        let head = scan::head(text, range.start);
+        let role = match head {
+            _ if index == 0 => "version",
+            "symbol" => continue,
+            "generator" | "generator_version" => head,
+            "host" if version < 20200827 => "old_host",
+            "host" => head,
+            _ => {
+                let message = format!(
+                    "`{head}` is not something KiCad accepts in a symbol library; it accepts generator, generator_version, host and symbol"
+                );
+                // A symbol-level flag at the root means nothing to KiCad.
+                let fix = (head == "embedded_fonts")
+                    .then(|| vec![Edit::delete(Span::new(range.start, range.end))]);
+                return Some((range.start, message, fix.unwrap_or_default()));
+            }
+        };
+        let Ok(node) = parse(&text[range.clone()]) else {
+            continue;
+        };
+        let def = Def {
+            source: 0,
+            offset: range.start,
+            name: String::new(),
+            node: Arc::new(node),
+        };
+        let mut fault = None;
+        check_form(&def.node, role, &def, &mut |rule, span, message, fix| {
+            if rule.kind == PARSE.kind {
+                let at = def.in_source(span).start;
+                fault.get_or_insert((at, message, fix.into_iter().collect()));
+            }
+        });
+        if fault.is_some() {
+            return fault;
+        }
+        if index == 0 && version > KICAD_SYMBOL_LIB_VERSION {
+            let message = format!(
+                "format version {version} is newer than KiCad 10 reads; it reads up to {KICAD_SYMBOL_LIB_VERSION}"
+            );
+            return Some((range.start, message, Vec::new()));
+        }
+    }
+    None
 }
 
 /// Check symbol `name` of `library`. Issues are ordered by source position.
@@ -345,20 +560,22 @@ pub fn check_symbol(
     };
 
     // The symbol followed by each symbol it extends, nearest parent first.
+    // KiCad ignores an empty parent name, and loading stops at a cycle.
     let mut chain = vec![symbol];
     loop {
         let def = &chain[chain.len() - 1];
-        let Some(target) = child(def.items(), "extends")
+        let target = child(def.items(), "extends")
             .and_then(Sexpr::as_list)
             .and_then(|extends| extends.get(1))
-        else {
+            .filter(|target| target.as_atom().is_some_and(|name| !name.is_empty()));
+        let Some(target) = target else {
             break;
         };
-        let parent = target
-            .as_atom()
-            .and_then(find)
-            .filter(|parent| chain.iter().all(|def| def.name != parent.name));
-        let Some(parent) = parent else {
+        let parent = target.as_atom().unwrap_or_default();
+        if chain.iter().any(|def| def.name == parent) {
+            break;
+        }
+        let Some(parent) = find(parent) else {
             let message = format!(
                 "{}: extends {}, which this library does not define",
                 def.name,
@@ -485,9 +702,9 @@ fn check_properties(chain: &[Def], issues: &mut Vec<SymbolIssue>) {
         chain.iter().find_map(|def| {
             sections(def.items(), &["property"])
                 .filter_map(Sexpr::as_list)
-                .find(|property| property.get(1).and_then(Sexpr::as_atom) == Some(key))
-                .and_then(|property| property.get(2))
-                .map(|value| (def, value))
+                .filter_map(property_name_value)
+                .find(|(name, _)| name.as_atom() == Some(key))
+                .map(|(_, value)| (def, value))
         })
     };
 
@@ -509,118 +726,125 @@ fn check_properties(chain: &[Def], issues: &mut Vec<SymbolIssue>) {
     }
 }
 
-/// Strict loading needs parse errors, not the lint warnings or suggested fixes.
-pub(super) fn validate_symbol_forms(name: &str, node: &Arc<Sexpr>) -> anyhow::Result<()> {
-    let def = Def {
-        source: 0,
-        offset: 0,
-        name: name.to_owned(),
-        node: Arc::clone(node),
-    };
-    let mut issues = Vec::new();
-    check_forms(&def, &mut issues);
-    if let Some(issue) = issues.into_iter().find(|issue| issue.severity == Error) {
-        anyhow::bail!("{}", issue.message);
-    }
-    Ok(())
-}
-
-/// Walk every form of a definition for what KiCad rejects or would not write.
+/// Walk a definition against KiCad's grammar for what KiCad rejects or
+/// would not write.
 fn check_forms(def: &Def, issues: &mut Vec<SymbolIssue>) {
     let mut report = |rule: &Rule, span: Span, message: String, fix: Option<Edit>| {
-        let mut issue = def.issue(rule, span, format!("{}: {message}", def.name));
+        let named = (!def.name.is_empty()).then(|| format!("{}: ", def.name));
+        let mut issue = def.issue(rule, span, named.unwrap_or_default() + &message);
         issue.fix.extend(fix);
         issues.push(issue);
     };
+    check_form(&def.node, "symbol", def, &mut report);
+    // KiCad reads the name as a library identifier.
+    if let Some(name) = def.items().get(1)
+        && let Some(illegal) = unit_prefix(name.as_atom().unwrap_or_default())
+            .chars()
+            .find(|c| matches!(c, ':' | '\\' | '<' | '>' | '"' | '\t' | '\n' | '\r'))
+    {
+        let message = format!(
+            "`{}` cannot be part of a symbol name",
+            illegal.escape_default()
+        );
+        report(&PARSE, name.span, message, None);
+    }
+}
 
-    for item in def.items().iter().skip(2) {
-        check_child(item, "a symbol", SYMBOL_FORMS, &mut report);
-        let children = item.as_list().unwrap_or_default();
-        let inner = match children.first().and_then(Sexpr::as_sym) {
-            Some("symbol") => Some(("a unit symbol", UNIT_FORMS, 2)),
-            Some("pin_names") => Some(("pin_names", &["offset", "hide"][..], 1)),
-            Some("pin_numbers") => Some(("pin_numbers", &["hide"][..], 1)),
-            _ => None,
-        };
-        if let Some((parent, known, skip)) = inner {
-            for child in children.iter().skip(skip) {
-                check_child(child, parent, known, &mut report);
+/// Check `node` as the form of `role` and, recursively, its children.
+fn check_form(
+    node: &Sexpr,
+    role: &str,
+    def: &Def,
+    report: &mut impl FnMut(&Rule, Span, String, Option<Edit>),
+) {
+    let items = node.as_list().unwrap_or_default();
+    let form = form(role);
+    let what = match role {
+        "symbol" => "a symbol".to_string(),
+        "unit" => "a unit symbol".to_string(),
+        _ => format!("`{}`", items.first().map_or("()", raw)),
+    };
+    let mut rest = items.get(1..).unwrap_or_default();
+    for atom in form.atoms {
+        match (atom, rest.first()) {
+            (Atom::Flag(_), Some(next)) if atom.accepts(next) => rest = &rest[1..],
+            (Atom::Flag(_), _) => {}
+            (_, Some(next)) => {
+                check_atom(*atom, next, node, role, def, report);
+                rest = &rest[1..];
+            }
+            (_, None) => {
+                let message = format!("{what} is missing {}", atom.expected());
+                return report(&PARSE, head_span(node), message, None);
             }
         }
     }
-
-    let mut stack = vec![&*def.node];
-    while let Some(node) = stack.pop() {
-        match (&node.kind, &node.raw_atom) {
-            (SexprKind::List(items), _) => {
-                let head = items.first().and_then(Sexpr::as_sym).unwrap_or_default();
-                let values: &[Sexpr] = match head {
-                    "fill" | "stroke" => child(items, "type")
-                        .and_then(Sexpr::as_list)
-                        .map_or(&[], |kind| kind.get(1..2).unwrap_or_default()),
-                    "justify" => &items[1..],
-                    _ => &[],
-                };
-                let known = match head {
-                    "fill" => FILL_TYPES,
-                    "stroke" => STROKE_TYPES,
-                    _ => JUSTIFY,
-                };
-                for value in values {
-                    if !value.as_sym().is_some_and(|value| known.contains(&value)) {
-                        let message = format!(
-                            "`{}` is not a {head} KiCad has; it has {}",
-                            raw(value),
-                            known.join(", ")
-                        );
-                        // The two values tools most often invent: a solid
-                        // fill is `outline`, and centred text has no `justify`.
-                        let fix = match (head, raw(value)) {
-                            ("fill", "solid") => Some(def.edit(value.span, "outline")),
-                            ("justify", "center") if items.len() == 2 => {
-                                Some(def.edit(node.span, ""))
-                            }
-                            ("justify", "center") => Some(def.edit(value.span, "")),
-                            _ => None,
-                        };
-                        report(&PARSE, value.span, message, fix);
-                    }
+    for item in rest {
+        let Some(list) = item.as_list() else {
+            match form.rest {
+                Some(atom) => check_atom(atom, item, node, role, def, report),
+                None if item.as_sym().is_some_and(|word| form.bare.contains(&word)) => {}
+                None => {
+                    let message =
+                        format!("`{}` is not something KiCad accepts in {what}", raw(item));
+                    report(&PARSE, item.span, message, None);
                 }
-                stack.extend(items.iter().rev());
             }
-            (SexprKind::Int(_) | SexprKind::F64(_), Some(raw)) if !is_plain_decimal(raw) => {
-                report(
-                    &NUMBER_FORMAT,
-                    node.span,
-                    format!("`{raw}` is not a plain decimal"),
-                    plain_decimal(raw).map(|plain| def.edit(node.span, plain)),
-                );
+            continue;
+        };
+        let head = list.first().and_then(Sexpr::as_sym).unwrap_or_default();
+        match child_role(role, head) {
+            Some(role) => check_form(item, role, def, report),
+            None => {
+                let found = list.first().map_or("()", raw);
+                let message = format!("`{found}` is not something KiCad accepts in {what}");
+                report(&PARSE, head_span(item), message, None);
             }
-            _ => {}
         }
     }
 }
 
-/// Report `item` unless it is a form KiCad accepts inside `parent`.
-fn check_child(
-    item: &Sexpr,
-    parent: &str,
-    known: &[&str],
+fn check_atom(
+    atom: Atom,
+    node: &Sexpr,
+    parent: &Sexpr,
+    role: &str,
+    def: &Def,
     report: &mut impl FnMut(&Rule, Span, String, Option<Edit>),
 ) {
-    let head = match item.as_list() {
-        Some(list) => list.first().and_then(Sexpr::as_sym),
-        // `hide` is the one bare word KiCad still reads, from older files.
-        None => item.as_sym().filter(|atom| *atom == "hide"),
-    };
-    if !head.is_some_and(|head| known.contains(&head)) {
-        let (span, found) = match item.as_list() {
-            Some(list) => (head_span(item), list.first().map_or("()", raw)),
-            None => (item.span, raw(item)),
-        };
-        let message = format!("`{found}` is not something KiCad accepts in {parent}");
-        report(&PARSE, span, message, None);
+    let written = raw(node);
+    if atom.is_number() && !is_plain_decimal(written) {
+        let fix = plain_decimal(written).map(|plain| def.edit(node.span, plain));
+        let message = format!("`{written}` is not a plain decimal");
+        report(&NUMBER_FORMAT, node.span, message, fix);
     }
+    if atom.accepts(node) {
+        return;
+    }
+    let head = parent
+        .as_list()
+        .and_then(|items| items.first())
+        .map_or("()", raw);
+    let message = match atom {
+        Atom::Word(what, words) => {
+            format!(
+                "`{written}` is not a {what} KiCad has; it has {}",
+                words.join(", ")
+            )
+        }
+        _ => format!("`{head}` takes {}, not `{written}`", atom.expected()),
+    };
+    // The two values tools most often invent: a solid fill is `outline`, and
+    // centred text has no `justify`.
+    let fix = match (role, written) {
+        ("fill_type", "solid") => Some(def.edit(node.span, "outline")),
+        ("justify", "center") if parent.as_list().is_some_and(|items| items.len() == 2) => {
+            Some(def.edit(parent.span, ""))
+        }
+        ("justify", "center") => Some(def.edit(node.span, "")),
+        _ => None,
+    };
+    report(&PARSE, node.span, message, fix);
 }
 
 fn is_plain_decimal(raw: &str) -> bool {
@@ -730,9 +954,6 @@ fn check_body(
         multi_unit: body.units.keys().filter(|unit| **unit > 0).count() > 1,
         issues,
     };
-    for pin in &body.pins {
-        check_pin(pin, &mut out);
-    }
     check_pin_style(&body, &mut out);
     check_pin_types(&body, &mut out);
     // Pads are compared against pin numbers only once the numbers are sound.
@@ -745,39 +966,6 @@ fn check_body(
     check_power_names(&body, &mut out);
     check_units(&body, &mut out);
     check_layout(&body, &mut out);
-}
-
-fn check_pin(pin: &Pin, out: &mut Reporter) {
-    let desc = pin.describe();
-    let items = pin.items;
-
-    for (index, known, what) in [
-        (1, ELECTRICAL_TYPES, "electrical type"),
-        (2, GRAPHIC_STYLES, "graphic style"),
-    ] {
-        let value = items.get(index).and_then(Sexpr::as_sym);
-        if !value.is_some_and(|value| known.contains(&value)) {
-            let span = items
-                .get(index)
-                .map_or_else(|| head_span(pin.node), |node| node.span);
-            let found = items.get(index).map_or("nothing", raw);
-            let message = format!("{desc} has unknown {what} `{found}`");
-            out.push(&PARSE, pin.unit, span, message);
-        }
-    }
-    if let Some(at) = child(items, "at") {
-        let rotation = pin.parsed.at.as_ref().map(|at| at.rotation.unwrap_or(0.0));
-        if !rotation.is_some_and(|r| [0.0, 90.0, 180.0, 270.0].contains(&r)) {
-            let message = format!("{desc} position is not `(at <x> <y> <0|90|180|270>)`");
-            out.push(&PARSE, pin.unit, at.span, message);
-        }
-    }
-    if let Some(length) = child(items, "length")
-        && pin.parsed.length.is_none()
-    {
-        let message = format!("{desc} length is not a number");
-        out.push(&PARSE, pin.unit, length.span, message);
-    }
 }
 
 /// Pins that miss a style rule the same way share one finding: a symbol drawn
@@ -1482,6 +1670,118 @@ mod tests {
             let name = if *kind == "symbol.extends" { "D" } else { "U" };
             assert_eq!(kinds(&source, name), [*kind], "{edits:?}");
         }
+    }
+
+    #[test]
+    fn grammar_follows_kicad() {
+        // Each of these loads in KiCad 10.0.7 and is not an error here.
+        let loads = [
+            "(symbol \"A\" (property \"Value\" \"1\") (property \"Value\" \"2\")) (symbol \"A\")",
+            "(symbol \"A\" (extends \"A\"))",
+            "(symbol \"A\" (extends \"\"))",
+            "(symbol \"A:B\" (symbol \"B_1_1\"))",
+            "(symbol \"\" (property private \"Value\" \"\"))",
+            "(symbol \"A\" (property \"Value\" \"v\" (at .5 -0 1e-1) (effects (font (size 1.27 1.27) (color 0.6 0.6 0.6 1) bold) (justify) hide)))",
+            "(symbol \"A\" (power local) (body_styles demorgan \"x\") (pin_names hide) (pin_numbers (hide yes)) (embedded_fonts no) (jumper_pin_groups (\"1\" \"2\")))",
+            "(symbol \"A\" (symbol \"A_1_1\" (unit_name \"u\") (pin passive line hide (at 0 0 90) (length 2.54) (name A) (number A1) (alternate \"x\" input clock)) (text private \"t\" (at 0 0 0)) (arc (start 0 0) (mid 1 1) (end 2 0) (radius (at 1 0) (length 1) (angles 0 90)) (stroke (width 0) (type solid)) (fill (type none)))))",
+        ];
+        for symbols in loads {
+            let source = format!("(kicad_symbol_lib (version 20251024) {symbols})");
+            let library = KicadSymbolLibrary::from_string(&source).unwrap();
+            let name = library.symbol_names()[0].to_string();
+            let errors: Vec<_> = check_library(&library)
+                .into_iter()
+                .chain(check_symbol(&library, &name, None))
+                .filter(SymbolIssue::blocks_kicad)
+                .map(|issue| issue.message)
+                .collect();
+            assert!(errors.is_empty(), "{symbols}: {errors:?}");
+        }
+
+        // Each of these KiCad refuses, for the stated reason.
+        let refuses = [
+            ("(symbol)", "a symbol is missing text"),
+            ("(symbol 1)", "`symbol` takes text, not `1`"),
+            (
+                "(symbol \"A\") (embedded_fonts no)",
+                "`embedded_fonts` is not something KiCad accepts in a symbol library",
+            ),
+            (
+                "(generator x y) (symbol \"A\")",
+                "`y` is not something KiCad accepts in `generator`",
+            ),
+            (
+                "(symbol \"A\" (property \"\" \"v\"))",
+                "`property` takes a name, not ``",
+            ),
+            (
+                "(symbol \"A\" (property \"Value\" \"v\" private))",
+                "`private` is not something KiCad accepts in `property`",
+            ),
+            (
+                "(symbol \"A\" (property \"Value\" \"v\" (at 0 0)))",
+                "`at` is missing a number",
+            ),
+            (
+                "(symbol \"A\" (property \"Value\" \"v\" (at 0 0 0 0)))",
+                "`0` is not something KiCad accepts in `at`",
+            ),
+            (
+                "(symbol \"A\" (in_bom))",
+                "`in_bom` is missing `yes` or `no`",
+            ),
+            (
+                "(symbol \"A\" (pin_names (offset x)))",
+                "`offset` takes a number, not `x`",
+            ),
+            (
+                "(symbol \"A\" (symbol \"A_1_1\" (pin passive line (at 0 0 45) (length 2.54))))",
+                "`at` takes 0, 90, 180 or 270, not `45`",
+            ),
+            (
+                "(symbol \"A\" (symbol \"A_1_1\" (pin passive line (at 0 0 0) (length 2.54) (number 1))))",
+                "`number` takes text, not `1`",
+            ),
+            (
+                "(symbol \"A\" (symbol \"A_1_1\" (rectangle (start 0 0) (end 1 1) (stroke (type nope)))))",
+                "`nope` is not a stroke type KiCad has",
+            ),
+            (
+                "(symbol \"A\" (symbol \"A_1_1\" (symbol \"A_1_2\")))",
+                "`symbol` is not something KiCad accepts in a unit symbol",
+            ),
+            (
+                "(symbol \"A\\\\B\")",
+                "`\\\\` cannot be part of a symbol name",
+            ),
+            ("(symbol \"A:B:C\")", "`:` cannot be part of a symbol name"),
+        ];
+        for (symbols, expected) in refuses {
+            let source = format!("(kicad_symbol_lib (version 20251024) {symbols})");
+            let library = KicadSymbolLibrary::from_string(&source).unwrap();
+            let name = library.symbol_names().first().map(|name| name.to_string());
+            let found = check_library(&library)
+                .into_iter()
+                .chain(
+                    name.iter()
+                        .flat_map(|name| check_symbol(&library, name, None)),
+                )
+                .find(SymbolIssue::blocks_kicad)
+                .map(|issue| issue.message);
+            assert!(
+                found
+                    .as_deref()
+                    .is_some_and(|found| found.contains(expected)),
+                "{symbols}: {found:?}"
+            );
+        }
+
+        // Only the misplaced root field keeps KiCad from loading these; fixing it is safe.
+        let source = "(kicad_symbol_lib (version 20251024) (embedded_fonts no)\n  (symbol \"A\"))";
+        assert_eq!(
+            fix(vec![source.to_string()], "A"),
+            ["(kicad_symbol_lib (version 20251024)\n  (symbol \"A\"))"]
+        );
     }
 
     #[test]

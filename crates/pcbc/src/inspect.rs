@@ -1,12 +1,15 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Args, ValueEnum};
-use pcb_eda::kicad::{metadata::SymbolMetadata, symbol_library::KicadSymbolLibrary};
+use pcb_eda::kicad::metadata::SymbolMetadata;
+use pcb_eda::kicad::symbol_check::{check_library, check_symbol};
+use pcb_eda::kicad::symbol_library::{KicadSymbolLibrary, library_paths};
 use serde::Serialize;
+use std::fs;
 use std::path::PathBuf;
 
 #[derive(Args, Debug)]
 #[command(
-    after_help = "Examples:\n  pcb inspect ./parts.kicad_sym\n  pcb inspect ./parts.kicad_symdir --format json\n\nJSON contains a symbols array sorted by name. Each entry has name and metadata\n(primary and custom_properties). Inheritance is resolved within the library;\nrelative references and empty property values are preserved. Invalid libraries\nfail without emitting partial JSON. No network or workspace resolution is used."
+    after_help = "Examples:\n  pcb inspect ./parts.kicad_sym\n  pcb inspect ./parts.kicad_symdir --format json\n\nJSON contains a symbols array sorted by name. Each entry has name and metadata\n(primary and custom_properties). Inheritance is resolved within the library;\nrelative references and empty property values are preserved. A library KiCad\ncannot load fails without emitting partial JSON. No network or workspace\nresolution is used."
 )]
 pub struct InspectArgs {
     /// Local .kicad_sym file or .kicad_symdir library (no workspace required)
@@ -36,27 +39,9 @@ struct SymbolInspection {
 }
 
 pub fn execute(args: InspectArgs) -> Result<()> {
-    let library = KicadSymbolLibrary::from_file_strict(&args.path)
-        .with_context(|| format!("Cannot inspect {}", args.path.display()))?;
-    let symbols = library
-        .symbol_names()
-        .into_iter()
-        .map(|name| {
-            let symbol = library
-                .get_symbol_lazy(name)
-                .with_context(|| {
-                    format!("{}: failed to resolve symbol {name:?}", args.path.display())
-                })?
-                .expect("strict library contains every listed symbol");
-            Ok(SymbolInspection {
-                name: name.to_owned(),
-                metadata: symbol.metadata(),
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let inspection = Inspection { symbols };
+    let inspection =
+        inspect(&args.path).with_context(|| format!("Cannot inspect {}", args.path.display()))?;
 
-    // Complete validation/resolution before emitting anything, including in JSON mode.
     match args.format {
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(&inspection)?;
@@ -79,4 +64,49 @@ pub fn execute(args: InspectArgs) -> Result<()> {
         })?,
     }
     Ok(())
+}
+
+/// Load the library the way a build does and refuse what KiCad refuses.
+fn inspect(path: &std::path::Path) -> Result<Inspection> {
+    let paths = library_paths(path)?;
+    let sources = paths
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))
+        })
+        .collect::<Result<_>>()?;
+    let library = KicadSymbolLibrary::from_sources(sources)?;
+    let names = library.symbol_names();
+    let symbol_issues = names
+        .iter()
+        .flat_map(|name| check_symbol(&library, name, None));
+    let unloadable = check_library(&library)
+        .into_iter()
+        .chain(symbol_issues)
+        .find(|issue| issue.blocks_kicad());
+    if let Some(issue) = unloadable {
+        let text = &library.sources()[issue.source];
+        let line = text[..issue.span.start].matches('\n').count() + 1;
+        let column = issue.span.start - text[..issue.span.start].rfind('\n').map_or(0, |at| at + 1);
+        return Err(anyhow!(
+            "{}:{line}:{}: [{}] {}",
+            paths[issue.source].display(),
+            column + 1,
+            issue.kind,
+            issue.message
+        ));
+    }
+    let symbols = names
+        .into_iter()
+        .map(|name| {
+            let symbol = library
+                .get_symbol_lazy(name)?
+                .ok_or_else(|| anyhow!("symbol {name:?} is listed but not defined"))?;
+            Ok(SymbolInspection {
+                name: name.to_owned(),
+                metadata: symbol.metadata(),
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(Inspection { symbols })
 }

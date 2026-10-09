@@ -27,16 +27,16 @@ fn assert_failure(output: &Output, expected: &str) {
     );
 }
 
-const BASE: &str = r#"(symbol "Z\"Base"
+const BASE: &str = r#"(symbol "ZBase"
     (property "Value" "Base value")
-    (property "ki_description" "Base; description")
+    (property "ki_description" "Base; \"quoted\" description")
     (property "ki_keywords" "power  buck\tconverter")
     (property "Footprint" "../footprints/part.kicad_mod")
     (property "Datasheet" "../docs/part.pdf")
     (property "Manufacturer_Name" "Acme")
-    (property "Manufacturer_Part_Number" "BASE-42"))"#;
+    (property private "Manufacturer_Part_Number" "BASE-42"))"#;
 const CHILD: &str = r#"(symbol "AChild" (extends
-    "Z\"Base")
+    "ZBase")
     (property "Value" "Child value")
     (property "Description" "Child description")
     (property "Footprint" "")
@@ -71,8 +71,8 @@ fn inspect_metadata_is_resolved_deterministic_and_read_only() {
                     "custom_properties": {"Manufacturer_Name": "Acme", "Manufacturer_Part_Number": "CHILD-17"}
                 }},
                 {"name": "Empty", "metadata": {"primary": {}, "custom_properties": {}}},
-                {"name": "Z\"Base", "metadata": {
-                    "primary": {"value": "Base value", "description": "Base; description",
+                {"name": "ZBase", "metadata": {
+                    "primary": {"value": "Base value", "description": "Base; \"quoted\" description",
                         "keywords": ["power", "buck", "converter"], "footprint": "../footprints/part.kicad_mod", "datasheet": "../docs/part.pdf"},
                     "custom_properties": {"Manufacturer_Name": "Acme", "Manufacturer_Part_Number": "BASE-42"}
                 }}
@@ -123,90 +123,132 @@ fn inspect_split_library_resolves_across_files() {
     assert!(flat.status.success(), "{flat:?}");
     assert_eq!(split.stdout, flat.stdout);
 
+    // KiCad keeps the last definition of a repeated name.
     fs::write(
         dir.path().join("parts.kicad_symdir/duplicate.kicad_sym"),
-        library(BASE),
+        library(&BASE.replace("Base value", "earlier")),
     )
     .unwrap();
     let duplicate = inspect(dir.path(), "parts.kicad_symdir", "json");
-    assert_failure(&duplicate, "duplicate symbol");
+    assert!(duplicate.status.success(), "{duplicate:?}");
+    assert_eq!(duplicate.stdout, flat.stdout);
 }
 
 #[test]
-fn inspect_errors_never_emit_partial_json() {
+fn inspect_rejects_what_kicad_cannot_load_without_partial_json() {
     let dir = tempfile::tempdir().unwrap();
     for (source, expected) in [
         (
             library("(symbol \"Valid\") (symbol \"Child\" (extends \"Missing\"))"),
-            "extends missing parent \"Missing\"",
+            "[symbol.extends] Child: extends \"Missing\", which this library does not define",
         ),
-        (
-            library("(symbol \"A\" (extends \"B\")) (symbol \"B\" (extends \"A\"))"),
-            "inheritance cycle: A -> B -> A",
-        ),
-        (
-            library("(symbol \"Self\" (extends \"Self\"))"),
-            "inheritance cycle: Self -> Self",
-        ),
-        (library("(symbol \"A\") (symbol \"A\")"), "duplicate symbol"),
         (
             library("(symbol \"A\" (property \"Value\"))"),
-            "property requires a name and value",
+            "`property` is missing text",
         ),
         (
-            library("(symbol \"A\" (property \"Value\" \"1\") (property \"Value\" \"2\"))"),
-            "duplicate property",
+            library("(symbol \"A\" (property \"\" \"v\"))"),
+            "`property` takes a name, not ``",
         ),
-        (library("(symbol \"A\" (extends))"), "invalid extends"),
-        (library("(symbol)"), "missing symbol name"),
+        (
+            library("(symbol \"A\" (property \"Value\" 1))"),
+            "`property` takes text, not `1`",
+        ),
+        (
+            library("(symbol \"A\" (property \"Value\" \"v\" (at 0 0)))"),
+            "`at` is missing a number",
+        ),
+        (
+            library("(symbol \"A\" (extends))"),
+            "`extends` is missing text",
+        ),
+        (
+            library("(symbol)"),
+            ":1:38: [symbol.parse] a symbol is missing text",
+        ),
         (
             library("(symbol \"A\" (offset 0))"),
-            "not something KiCad accepts in a symbol",
+            "`offset` is not something KiCad accepts in a symbol",
         ),
         (
             library("(symbol \"A\" (symbol \"A_1_1\" (offset 0)))"),
-            "not something KiCad accepts in a unit symbol",
+            "`offset` is not something KiCad accepts in a unit symbol",
+        ),
+        (
+            library("(symbol \"A\" (symbol \"B_1_1\"))"),
+            "[symbol.unit.naming]",
+        ),
+        (
+            library(
+                "(symbol \"A\" (symbol \"A_1_1\" (pin passive line (at 0 0 0) (length 2.54) (name \"A\") (number 1)))))",
+            ),
+            "`number` takes text, not `1`",
+        ),
+        (
+            library(
+                "(symbol \"A\" (symbol \"A_1_1\" (pin passive line (at 0 0 0) (length 2.54) (name \"A\" (bogus 1)) (number \"1\")))))",
+            ),
+            "`bogus` is not something KiCad accepts in `name`",
+        ),
+        (
+            library("(symbol \"A\" (in_bom maybe))"),
+            "`in_bom` takes `yes` or `no`, not `maybe`",
+        ),
+        (
+            library("(symbol \"A<B\")"),
+            "`<` cannot be part of a symbol name",
         ),
         (
             library("(offset 0) (symbol \"A\")"),
-            "invalid library field",
+            "`offset` is not something KiCad accepts in a symbol library",
+        ),
+        (
+            library("(symbol \"A\") (embedded_fonts no)"),
+            "`embedded_fonts` is not something KiCad accepts in a symbol library",
         ),
         (
             library("(generator) (symbol \"A\")"),
-            "invalid library field",
+            "`generator` is missing text",
         ),
         (
             library("(generator_version (nested))"),
-            "invalid library field",
+            "`generator_version` takes a value, not `(…)`",
         ),
-        (library("(version 20241209)"), "invalid library field"),
+        (
+            library("(host eeschema \"5.99\")"),
+            "`5.99` is not something KiCad accepts in `host`",
+        ),
+        (
+            library("(version 20241209)"),
+            "`version` is not something KiCad accepts in a symbol library",
+        ),
+        (
+            "(kicad_symbol_lib (version 20991231) (symbol \"A\"))".into(),
+            "format version 20991231 is newer than KiCad 10 reads",
+        ),
+        (
+            "(kicad_symbol_lib (generator \"x\") (version 20241209))".into(),
+            "library does not open with `(kicad_symbol_lib (version …)`",
+        ),
         (
             "(kicad_symbol_lib (version 20241209) (symbol \"A\")".into(),
-            "Invalid symbol library",
+            "file does not parse: unclosed `(`",
         ),
         (
-            format!("{} trailing", library("(symbol \"A\")")),
-            "Invalid symbol library",
+            library("(symbol \"A\") ; comment\n"),
+            "`;` starts a comment here, but KiCad reads it as text",
         ),
-        (
-            format!("{} ; comment", library("(symbol \"A\")")),
-            "KiCad does not support comments",
-        ),
-        ("(not_a_library)".into(), "Expected a kicad_symbol_lib root"),
+        ("(not_a_library)".into(), "library does not open with"),
     ] {
         fs::write(dir.path().join("bad.kicad_sym"), source).unwrap();
         let output = inspect(dir.path(), "bad.kicad_sym", "json");
         assert_failure(&output, expected);
-        assert!(String::from_utf8_lossy(&output.stderr).contains("bad.kicad_sym"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("bad.kicad_sym:1:"));
     }
-    fs::write(dir.path().join("wrong.txt"), library("")).unwrap();
     fs::create_dir(dir.path().join("empty.kicad_symdir")).unwrap();
-    fs::create_dir(dir.path().join("directory.kicad_sym")).unwrap();
     for (path, expected) in [
         ("missing.kicad_sym", "Cannot inspect"),
-        ("wrong.txt", "Unsupported inspection path"),
-        ("directory.kicad_sym", "Unsupported inspection path"),
-        ("empty.kicad_symdir", "No .kicad_sym files"),
+        ("empty.kicad_symdir", "No symbol library sources"),
     ] {
         let output = inspect(dir.path(), path, "json");
         assert_failure(&output, expected);
@@ -214,26 +256,42 @@ fn inspect_errors_never_emit_partial_json() {
 }
 
 #[test]
-fn inspect_accepts_valid_headers_and_lint_warnings() {
+fn inspect_accepts_what_kicad_loads() {
     let dir = tempfile::tempdir().unwrap();
-    for (version, host) in [
-        (20200101, "(host eeschema \"5.99\")"),
-        (20241209, "(host eeschema)"),
-    ] {
+    let old = "(kicad_symbol_lib (version 20200101) (host eeschema \"5.99\")";
+    let new = "(kicad_symbol_lib (version 20241209) (generator kicad) (generator_version 10.0) (host eeschema)";
+    for (head, symbols) in [
         // -0 is a formatting warning, missing properties are lint, and `hide`
         // is valid legacy syntax. None should block metadata inspection.
-        let source = format!(
-            r#"(kicad_symbol_lib (version {version})
-            (generator "test") (generator_version "10.0") {host}
-            (symbol "A" (pin_names (offset -0) hide)))"#
-        );
-        fs::write(dir.path().join("valid.kicad_sym"), source).unwrap();
+        (old, "(symbol \"A\" (pin_names (offset -0) hide))"),
+        (new, "(symbol \"A\" (pin_names (offset -0) hide))"),
+        // Repeated names, properties, a cycle and an empty parent all load.
+        (
+            new,
+            "(symbol \"A\" (property \"Value\" \"1\") (property \"Value\" \"2\")) (symbol \"A\")",
+        ),
+        (new, "(symbol \"A\" (extends \"A\"))"),
+        (new, "(symbol \"A\" (extends \"\"))"),
+        // Duplicate and empty pin numbers are a build's concern, not KiCad's.
+        (
+            new,
+            "(symbol \"A\" (symbol \"A_1_1\" (pin passive line (at 0 0 0) (length 2.54) (name \"X\") (number \"\")) (pin passive line (at 0 2.54 0) (length 2.54) (name \"Y\") (number \"\"))))",
+        ),
+    ] {
+        let source = format!("{head} {symbols})");
+        fs::write(dir.path().join("valid.kicad_sym"), &source).unwrap();
         let output = inspect(dir.path(), "valid.kicad_sym", "json");
-        assert!(output.status.success(), "{output:?}");
-        assert!(output.stderr.is_empty(), "{output:?}");
+        assert!(output.status.success(), "{source}: {output:?}");
+        assert!(output.stderr.is_empty(), "{source}: {output:?}");
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
-            json!({"symbols": [{"name": "A", "metadata": {"primary": {}, "custom_properties": {}}}]})
+            json!({"symbols": [{"name": "A", "metadata": {"primary": {}, "custom_properties": {}}}]}),
+            "{source}"
         );
     }
+    // What follows the root list is not read, like KiCad.
+    let source = format!("{new} (symbol \"A\")) (symbol \"B\")");
+    fs::write(dir.path().join("valid.kicad_sym"), &source).unwrap();
+    let output = inspect(dir.path(), "valid.kicad_sym", "json");
+    assert!(output.status.success(), "{output:?}");
 }

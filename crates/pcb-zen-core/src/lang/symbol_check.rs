@@ -38,7 +38,8 @@ impl Library {
         Some(Self { library, sources })
     }
 
-    fn diagnostic(&self, issue: &SymbolIssue) -> Diagnostic {
+    /// `issue` as a diagnostic, with its fix only when the file is `owned`.
+    fn diagnostic(&self, issue: &SymbolIssue, owned: bool) -> Diagnostic {
         let (path, codemap) = &self.sources[issue.source];
         let body = format!("[{}] {}\nhelp: {}", issue.kind, issue.message, issue.help);
         let severity = match issue.severity {
@@ -46,19 +47,20 @@ impl Library {
             Severity::Warning => EvalSeverity::Warning,
             Severity::Advice => EvalSeverity::Advice,
         };
+        let fix = if owned { issue.fix.clone() } else { Vec::new() };
         Diagnostic::categorized(path, &body, issue.kind, severity)
             .with_span(Some(resolved_span(codemap, issue.span)))
-            .with_fix(issue.fix.clone())
+            .with_fix(fix)
     }
 }
 
-/// Each component whose symbol file belongs to a workspace package, with that
-/// file and the symbol's name; a dependency's symbols are not the workspace's
-/// to fix.
-fn workspace_symbols<'a>(
+/// Each component with the file and name of its KiCad symbol, and whether
+/// the file belongs to a workspace package; a dependency's symbols are not
+/// the workspace's to style or to fix.
+fn symbols<'a>(
     module_tree: &'a BTreeMap<ModulePath, &FrozenModuleValue>,
     resolution: &'a ResolutionResult,
-) -> impl Iterator<Item = (&'a FrozenComponentValue, PathBuf, &'a str)> {
+) -> impl Iterator<Item = (&'a FrozenComponentValue, PathBuf, &'a str, bool)> {
     let mut seen = HashSet::new();
     let components = module_tree.values().flat_map(|module| module.components());
     components.filter_map(move |component| {
@@ -66,9 +68,8 @@ fn workspace_symbols<'a>(
         let (uri, name) = (symbol.source_uri()?, symbol.name()?);
         // Instances of one component repeat; resolving paths is the costly part.
         let fresh = seen.insert((uri, name, component.footprint(), component.source_path()));
-        let path = (fresh && resolution.is_workspace_uri(uri))
-            .then(|| resolution.resolve_package_uri(uri).ok())??;
-        Some((component, path, name))
+        let path = fresh.then(|| resolution.resolve_package_uri(uri).ok())??;
+        Some((component, path, name, resolution.is_workspace_uri(uri)))
     })
 }
 
@@ -81,7 +82,8 @@ pub(crate) fn fix_symbols(
     file_provider: &dyn FileProvider,
     fixed: &mut BTreeMap<PathBuf, String>,
 ) {
-    for (_, path, name) in workspace_symbols(module_tree, resolution) {
+    let owned = symbols(module_tree, resolution).filter(|(.., workspace)| *workspace);
+    for (_, path, name, _) in owned {
         let Ok((library, paths)) = loaded_symbol_library(&path, name, file_provider) else {
             continue;
         };
@@ -98,9 +100,9 @@ pub(crate) fn fix_symbols(
     }
 }
 
-/// Check the KiCad symbol of every component whose symbol file belongs to a
-/// workspace package. Diagnostics point into the symbol file, the file that
-/// has to change.
+/// Check the KiCad symbol of every component. Diagnostics point into the
+/// symbol file, the file that has to change; a dependency's file gets only
+/// the errors, without fixes.
 #[instrument(name = "check_symbols", skip_all)]
 pub(crate) fn check_symbols(
     module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
@@ -113,14 +115,14 @@ pub(crate) fn check_symbols(
     let mut libraries: HashMap<PathBuf, Option<Library>> = HashMap::new();
     let mut pads: HashMap<PathBuf, Option<BTreeSet<String>>> = HashMap::new();
 
-    for (component, path, name) in workspace_symbols(module_tree, resolution) {
+    for (component, path, name, workspace) in symbols(module_tree, resolution) {
         // The library is the one the symbol was loaded from, already parsed.
         // One KiCad cannot read is reported once and its symbols left alone.
         let library = libraries.entry(path).or_insert_with_key(|path| {
             let library = Library::load(path, name, file_provider)?;
             match check_library(&library.library) {
                 Some(unreadable) => {
-                    diagnostics.push(library.diagnostic(&unreadable));
+                    diagnostics.push(library.diagnostic(&unreadable, workspace));
                     None
                 }
                 None => Some(library),
@@ -146,10 +148,13 @@ pub(crate) fn check_symbols(
             })
         });
 
-        for issue in check_symbol(&library.library, name, footprint_pads) {
+        let issues = check_symbol(&library.library, name, footprint_pads)
+            .into_iter()
+            .filter(|issue| workspace || issue.severity == Severity::Error);
+        for issue in issues {
             let file = library.sources[issue.source].0.clone();
             if reported.insert((file, issue.span.start, issue.message.clone())) {
-                diagnostics.push(library.diagnostic(&issue));
+                diagnostics.push(library.diagnostic(&issue, workspace));
             }
         }
     }
