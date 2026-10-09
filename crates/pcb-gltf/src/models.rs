@@ -12,8 +12,8 @@ use triangulate::colored_mesh::{ColoredSubmesh, tessellate_step_bytes};
 
 use crate::mesh::Primitive;
 
-/// How far simplification may move a model's surface, in millimetres: the
-/// tolerance models are tessellated to.
+/// How far simplification may move a model's surface, in output
+/// millimetres: the tolerance models are tessellated to.
 const SIMPLIFY_ERROR: f32 = 0.01;
 
 /// A tessellated model: one simplified, optimized primitive per colour, in
@@ -43,8 +43,9 @@ pub(crate) fn tessellate(board: &Board, scene: &Scene) -> Models {
     let mut warnings = Vec::new();
     let mut failed = 0;
     // Distinct payloads by content, so one file embedded under two names,
-    // or used at two scales, is tessellated once.
-    let mut payloads: Vec<(&str, Vec<u8>)> = Vec::new();
+    // or used at two scales, is tessellated once. Each keeps the largest
+    // scale it is placed at.
+    let mut payloads: Vec<(&str, Vec<u8>, f64)> = Vec::new();
     let mut by_hash: HashMap<u64, usize> = HashMap::new();
     let mut payload_of: Vec<Option<usize>> = Vec::with_capacity(decoded.len());
     for (model, decoded) in scene.models.iter().zip(decoded) {
@@ -61,10 +62,12 @@ pub(crate) fn tessellate(board: &Board, scene: &Scene) -> Models {
             Some(Ok(bytes)) => {
                 let mut hasher = DefaultHasher::new();
                 bytes.hash(&mut hasher);
-                Some(*by_hash.entry(hasher.finish()).or_insert_with(|| {
-                    payloads.push((&model.key, bytes));
+                let i = *by_hash.entry(hasher.finish()).or_insert_with(|| {
+                    payloads.push((&model.key, bytes, 0.0));
                     payloads.len() - 1
-                }))
+                });
+                payloads[i].2 = payloads[i].2.max(model.scale);
+                Some(i)
             }
         });
     }
@@ -74,7 +77,13 @@ pub(crate) fn tessellate(board: &Board, scene: &Scene) -> Models {
     let mut outcomes: Vec<(usize, Outcome)> = order
         .into_par_iter()
         .with_max_len(1)
-        .map(|i| (i, tessellate_one(payloads[i].0, &payloads[i].1)))
+        .map(|i| {
+            let (key, bytes, scale) = &payloads[i];
+            (
+                i,
+                tessellate_one(key, bytes, SIMPLIFY_ERROR / *scale as f32),
+            )
+        })
         .collect();
     outcomes.sort_by_key(|(i, _)| *i);
 
@@ -116,7 +125,9 @@ struct Outcome {
     notes: Vec<String>,
 }
 
-fn tessellate_one(key: &str, bytes: &[u8]) -> Outcome {
+/// Tessellate one payload and simplify it within `simplify_error` model
+/// millimetres.
+fn tessellate_one(key: &str, bytes: &[u8], simplify_error: f32) -> Outcome {
     let mut notes = Vec::new();
     let (tessellated, stats) = match tessellate_step_bytes(bytes) {
         Ok(ok) => ok,
@@ -151,7 +162,7 @@ fn tessellate_one(key: &str, bytes: &[u8]) -> Outcome {
                 normals,
                 indices,
             };
-            primitive.simplify(SIMPLIFY_ERROR);
+            primitive.simplify(simplify_error);
             primitive.optimize();
             (color, primitive)
         })
