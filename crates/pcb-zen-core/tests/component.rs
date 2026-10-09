@@ -267,6 +267,59 @@ Component(
 }
 
 #[test]
+fn kicad_value_prefers_explicit_value_then_part_mpn_then_symbol_name() {
+    let symbol = r#"(kicad_symbol_lib
+  (version 20251024)
+  (generator "test")
+  (symbol "Plain"
+    (property "Reference" "R")
+    (symbol "Plain_1_1"
+      (pin passive line (at 0 0 0) (length 2.54) (name "P") (number "1"))
+    )
+  )
+)"#;
+    let cases = [
+        (
+            r#"properties = {"Val": "10k"}, part = builtin.Part(mpn = "MPN-1", manufacturer = "M")"#,
+            "10k",
+        ),
+        // A modifier-assigned part still supplies the value.
+        (r#"properties = {"matched": True}"#, "HOUSE-1"),
+        ("", "Plain"),
+    ];
+    for (args, expected) in cases {
+        let source = format!(
+            r#"
+def match_part(component):
+    if hasattr(component, "matched"):
+        component.part = builtin.Part(mpn = "HOUSE-1", manufacturer = "M")
+
+builtin.add_component_modifier(match_part)
+
+Component(
+    name = "R1",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
+    symbol = Symbol(library = "plain.kicad_sym"),
+    pins = {{"P": Net("P")}},
+    {args}
+)
+"#
+        );
+        let component = eval_single_root_component_with_files(vec![
+            ("plain.kicad_sym", symbol),
+            ("test.zen", &source),
+        ]);
+        let schematic = component.0.to_schematic_with_diagnostics().output.unwrap();
+        let instance = schematic
+            .instances
+            .values()
+            .find(|instance| instance.kind == pcb_sch::InstanceKind::Component)
+            .unwrap();
+        assert_eq!(instance.kicad_value(), expected, "{args}");
+    }
+}
+
+#[test]
 fn file_backed_footprint_validation_reports_embedded_file_errors() {
     let files = vec![
         (

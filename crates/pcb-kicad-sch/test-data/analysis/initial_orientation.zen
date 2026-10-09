@@ -37,7 +37,7 @@ Resistor(
 
 Component(
     name="U_LARGE",
-    footprint="Package_DIP:DIP-8_W7.62mm",
+    footprint="Package_DIP.pretty/DIP-8_W7.62mm.kicad_mod",
     symbol=Symbol(library="large_symbol.kicad_sym"),
     pins={
         "A": SIDE_DRIVER,

@@ -20,6 +20,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- `pcb apply` schematic symbols and layout footprints now agree on Footprint, Value and Datasheet; footprints show the part value instead of its MPN.
 - `pcb apply` names a new root schematic after its KiCad project, matching the board so DRC schematic parity runs.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.

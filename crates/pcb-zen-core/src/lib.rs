@@ -120,6 +120,7 @@ pub mod attrs {
     pub const SKIP_POS: &str = "skip_pos";
     pub const DATASHEET: &str = "datasheet";
     pub const DESCRIPTION: &str = "description";
+    pub const VALUE: &str = "value";
     pub const SIM_SETUP: &str = "__sim_setup";
     pub const SIM_SETUP_SPAN: &str = "__sim_setup_span";
 }
