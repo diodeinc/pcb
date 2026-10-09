@@ -95,34 +95,32 @@ struct Claim {
     root_port: bool,
 }
 
-pub(super) fn collect(instances: &[PageInstance<'_>]) -> Result<Vec<PageBuses>> {
-    let mut aliases = BTreeMap::new();
-    for instance in instances {
-        for item in &instance.page.items {
-            let Some(list) = raw(item, "bus_alias") else {
-                continue;
-            };
-            let name = list
-                .get(1)
-                .and_then(Sexpr::as_atom)
-                .context("bus_alias missing name")?;
+pub(super) fn collect(
+    instances: &[PageInstance<'_>],
+    project_aliases: &BTreeMap<String, Vec<String>>,
+) -> Result<Vec<PageBuses>> {
+    // KiCad loads project aliases first and appends in-sheet blocks; lookups
+    // take the first definition of a name (SCHEMATIC::GetBusAlias).
+    let project = project_aliases
+        .iter()
+        .map(|(name, members)| alias(name, members.iter().map(String::as_str)));
+    let sheets = instances
+        .iter()
+        .flat_map(|instance| &instance.page.items)
+        .filter_map(|item| raw(item, "bus_alias"))
+        .map(|list| {
+            let name = list.get(1).and_then(Sexpr::as_atom);
             let members = find_child_list(list, "members").context("bus_alias missing members")?;
             let members = members[1..]
                 .iter()
-                .map(|member| {
-                    static_net_text(
-                        "bus alias member",
-                        member.as_atom().context("invalid bus alias member")?,
-                    )
-                })
+                .map(|member| member.as_atom().context("invalid bus alias member"))
                 .collect::<Result<Vec<_>>>()?;
-            let name = static_net_text("bus alias", name)?;
-            if let Some(previous) = aliases.insert(name.clone(), members.clone())
-                && previous != members
-            {
-                bail!("conflicting KiCad bus alias definitions for {name}");
-            }
-        }
+            alias(name.context("bus_alias missing name")?, members)
+        });
+    let mut aliases = BTreeMap::new();
+    for entry in project.chain(sheets) {
+        let (name, members) = entry?;
+        aliases.entry(name).or_insert(members);
     }
 
     let mut pages = Vec::new();
@@ -397,6 +395,19 @@ fn bus_segment(item: &SchItem) -> Result<Option<Segment>> {
         a: xy(pts[1].as_list().context("invalid bus endpoint")?)?.into(),
         b: xy(pts[2].as_list().context("invalid bus endpoint")?)?.into(),
     }))
+}
+
+fn alias<'a>(
+    name: &str,
+    members: impl IntoIterator<Item = &'a str>,
+) -> Result<(String, Vec<String>)> {
+    Ok((
+        static_net_text("bus alias", name)?,
+        members
+            .into_iter()
+            .map(|member| static_net_text("bus alias member", member))
+            .collect::<Result<_>>()?,
+    ))
 }
 
 fn raw<'a>(item: &'a SchItem, tag: &str) -> Option<&'a [Sexpr]> {

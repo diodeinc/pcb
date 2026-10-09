@@ -175,6 +175,7 @@ impl TestProject {
             document: SchDocument {
                 pages,
                 root_page_ids,
+                ..Default::default()
             },
         }
     }

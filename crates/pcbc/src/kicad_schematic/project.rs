@@ -51,7 +51,7 @@ impl KicadProject {
             };
         let project: Value = serde_json::from_str(&fs::read_to_string(&project_file)?)
             .with_context(|| format!("failed to parse {}", project_file.display()))?;
-        let project_roots = project_root_schematics(&directory, &project_file)?;
+        let project_roots = project_root_schematics(&directory, &project_file, &project)?;
         let root_schematics = project_roots.iter().map(|root| root.path.clone()).collect();
         let (schematic_files, document) =
             load_schematic_hierarchy(&directory, &project_roots, &project)?;
@@ -145,15 +145,21 @@ fn load_schematic_hierarchy(
         SchDocument {
             pages,
             root_page_ids,
+            bus_aliases: project
+                .pointer("/schematic/bus_aliases")
+                .map(|aliases| serde_json::from_value(aliases.clone()))
+                .transpose()
+                .context("schematic.bus_aliases must map alias names to member lists")?
+                .unwrap_or_default(),
         },
     ))
 }
 
-fn project_root_schematics(directory: &Path, project_file: &Path) -> Result<Vec<ProjectRoot>> {
-    let content = fs::read_to_string(project_file)
-        .with_context(|| format!("failed to read {}", project_file.display()))?;
-    let project: Value = serde_json::from_str(&content)
-        .with_context(|| format!("failed to parse {}", project_file.display()))?;
+fn project_root_schematics(
+    directory: &Path,
+    project_file: &Path,
+    project: &Value,
+) -> Result<Vec<ProjectRoot>> {
     let Some(top_levels) = project
         .get("schematic")
         .and_then(|schematic| schematic.get("top_level_sheets"))
@@ -422,6 +428,7 @@ mod tests {
             &SchDocument {
                 pages: vec![parent],
                 root_page_ids: vec!["root".into()],
+                ..Default::default()
             },
         )
         .unwrap();
@@ -470,6 +477,7 @@ mod tests {
                 &SchDocument {
                     pages: vec![parent],
                     root_page_ids: vec!["parent".into()],
+                    ..Default::default()
                 },
             )
             .unwrap();

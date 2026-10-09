@@ -395,12 +395,14 @@ mod tests {
         let before = SchDocument {
             root_page_ids: vec!["old-root".to_string()],
             pages: vec![SchPage::new("old-root")],
+            ..Default::default()
         };
         let mut first = before.pages[0].clone();
         first.file_name = Some("main.kicad_sch".to_string());
         let after = SchDocument {
             root_page_ids: vec![root_page_id()],
             pages: vec![first, SchPage::new("child")],
+            ..Default::default()
         };
         let edits = document_edits(&before, &after).unwrap();
         let applied = apply_document_edits(&before, &edits).unwrap();
@@ -415,12 +417,14 @@ mod tests {
             pages: ["root", "obsolete", "retained", "obsolete-child"]
                 .map(SchPage::new)
                 .to_vec(),
+            ..Default::default()
         };
         let mut retained = before.pages[2].clone();
         retained.file_name = Some("renamed.kicad_sch".to_string());
         let after = SchDocument {
             root_page_ids: before.root_page_ids.clone(),
             pages: vec![before.pages[0].clone(), retained, SchPage::new("new")],
+            ..Default::default()
         };
         let edits = document_edits(&before, &after).unwrap();
         let applied = apply_document_edits(&before, &edits).unwrap();

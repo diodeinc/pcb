@@ -21,6 +21,7 @@ impl KicadBuilder {
             document: SchDocument {
                 pages: vec![page("root", "root.kicad_sch")],
                 root_page_ids: vec!["root".to_string()],
+                ..Default::default()
             },
             page: 0,
             next_id: 0,
