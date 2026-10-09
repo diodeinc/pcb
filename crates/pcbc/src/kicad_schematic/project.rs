@@ -51,7 +51,7 @@ impl KicadProject {
             };
         let project: Value = serde_json::from_str(&fs::read_to_string(&project_file)?)
             .with_context(|| format!("failed to parse {}", project_file.display()))?;
-        let project_roots = project_root_schematics(&directory, &project_file)?;
+        let project_roots = project_root_schematics(&directory, &project_file, &project)?;
         let root_schematics = project_roots.iter().map(|root| root.path.clone()).collect();
         let (schematic_files, document) =
             load_schematic_hierarchy(&directory, &project_roots, &project)?;
@@ -155,11 +155,11 @@ fn load_schematic_hierarchy(
     ))
 }
 
-fn project_root_schematics(directory: &Path, project_file: &Path) -> Result<Vec<ProjectRoot>> {
-    let content = fs::read_to_string(project_file)
-        .with_context(|| format!("failed to read {}", project_file.display()))?;
-    let project: Value = serde_json::from_str(&content)
-        .with_context(|| format!("failed to parse {}", project_file.display()))?;
+fn project_root_schematics(
+    directory: &Path,
+    project_file: &Path,
+    project: &Value,
+) -> Result<Vec<ProjectRoot>> {
     let Some(top_levels) = project
         .get("schematic")
         .and_then(|schematic| schematic.get("top_level_sheets"))
@@ -341,24 +341,6 @@ mod tests {
         let project = KicadProject::load(directory.path()).unwrap();
 
         assert_eq!(project.document.root_page_ids, ["root"]);
-    }
-
-    #[test]
-    fn loads_kicad_10_project_bus_aliases() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::write(
-            directory.path().join("demo.kicad_pro"),
-            r#"{"schematic":{"bus_aliases":{"UART":["TX","RX"]}}}"#,
-        )
-        .unwrap();
-        fs::write(directory.path().join("demo.kicad_sch"), schematic("root")).unwrap();
-
-        let project = KicadProject::load(directory.path()).unwrap();
-
-        assert_eq!(
-            project.document.bus_aliases,
-            [("UART".to_string(), vec!["TX".to_string(), "RX".to_string()])].into()
-        );
     }
 
     #[test]

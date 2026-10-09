@@ -66,7 +66,7 @@ impl SchDocument {
             );
         };
 
-        Ok(format_kicad_sch_page(page))
+        Ok(page.to_kicad_sch())
     }
 
     pub fn to_kicad_sch_files(&self) -> Vec<KicadSchFile> {
@@ -74,9 +74,15 @@ impl SchDocument {
             .iter()
             .map(|page| KicadSchFile {
                 file_name: page.file_name.clone(),
-                content: format_kicad_sch_page(page),
+                content: page.to_kicad_sch(),
             })
             .collect()
+    }
+}
+
+impl SchPage {
+    pub fn to_kicad_sch(&self) -> String {
+        format_kicad_sch_page(self)
     }
 }
 

@@ -86,8 +86,6 @@ fn intermediate_bus_members_connect_without_breakouts() {
 
 #[test]
 fn scalar_named_items_on_buses_take_the_bus_connection() {
-    // KiCad 10 keeps aliases in the project and appends legacy sheet blocks
-    // after them, so a stale sheet copy never overrides the project.
     for (project_alias, sheet_alias, child_names_bus) in [
         (None, Some("A"), true),
         (None, Some("A"), false),

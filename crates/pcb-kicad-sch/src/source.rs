@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, bail};
 use pcb_sexpr::{PatchSet, Sexpr, formatter::FormatMode};
 
-use crate::{SchDocument, SchItem, SchPage, SymbolLibrary, parse_kicad_sch_page};
+use crate::{SchItem, SchPage, SymbolLibrary, parse_kicad_sch_page};
 
 /// Patch one parsed page into its original KiCad source.
 ///
@@ -13,12 +13,7 @@ use crate::{SchDocument, SchItem, SchPage, SymbolLibrary, parse_kicad_sch_page};
 /// rewrites it as KiCad 10, rather than mixing modern nodes with legacy
 /// version-dependent string and body-style semantics.
 pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<String>> {
-    let desired_source = SchDocument {
-        pages: vec![desired_page.clone()],
-        root_page_ids: vec![desired_page.id.clone()],
-        ..SchDocument::default()
-    }
-    .to_kicad_sch()?;
+    let desired_source = desired_page.to_kicad_sch();
     let source_root = pcb_sexpr::parse(source).context("failed to parse source schematic")?;
     let desired_root =
         pcb_sexpr::parse(&desired_source).context("failed to parse desired schematic")?;

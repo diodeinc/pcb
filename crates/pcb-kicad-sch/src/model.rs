@@ -16,8 +16,7 @@ pub struct SchDocument {
     pub pages: Vec<SchPage>,
     /// UUIDs of the project's top-level schematic pages, in project order.
     pub root_page_ids: Vec<Id>,
-    /// KiCad 10 project bus aliases (`schematic.bus_aliases`). Legacy in-sheet
-    /// `bus_alias` blocks stay page items and are resolved after these.
+    /// KiCad 10 project bus aliases (`schematic.bus_aliases`).
     pub bus_aliases: BTreeMap<String, Vec<String>>,
 }
 
