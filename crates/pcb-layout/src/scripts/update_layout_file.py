@@ -642,6 +642,29 @@ class FinalizeBoard(Step):
             ],
         }
 
+    @staticmethod
+    def _drawing_sort_key(g: dict[str, Any]) -> tuple[Any, ...]:
+        # Use a comprehensive sort key to ensure deterministic ordering even
+        # when multiple drawings share the same position. This prevents the
+        # output snapshot from changing across runs.
+        return (
+            g["position"]["x"],
+            g["position"]["y"],
+            g.get("type") or "",
+            g.get("layer") or "",
+            # Start/end coordinates provide deterministic tie-breakers for shapes
+            (g.get("start", {}).get("x") if g.get("start") else None) or -1,
+            (g.get("start", {}).get("y") if g.get("start") else None) or -1,
+            (g.get("end", {}).get("x") if g.get("end") else None) or -1,
+            (g.get("end", {}).get("y") if g.get("end") else None) or -1,
+            # Numeric attributes
+            (g.get("angle") if g.get("angle") is not None else -1),
+            (g.get("shape") if g.get("shape") is not None else -1),
+            (g.get("width") if g.get("width") is not None else -1),
+            # Text last to avoid impacting geometry-first ordering
+            g.get("text") or "",
+        )
+
     def _get_group_data(self, group: pcbnew.PCB_GROUP) -> dict:
         """Extract relevant data from a group."""
         bbox = group.GetBoundingBox()
@@ -687,26 +710,7 @@ class FinalizeBoard(Step):
                     for item in get_group_items(group)
                     if isinstance(item, (pcbnew.PCB_SHAPE, pcbnew.PCB_TEXT))
                 ],
-                # Use a comprehensive sort key to ensure deterministic ordering even
-                # when multiple drawings share the same position. This prevents the
-                # output snapshot from changing across runs.
-                key=lambda g: (
-                    g["position"]["x"],
-                    g["position"]["y"],
-                    g.get("type") or "",
-                    g.get("layer") or "",
-                    # Start/end coordinates provide deterministic tie-breakers for shapes
-                    (g.get("start", {}).get("x") if g.get("start") else None) or -1,
-                    (g.get("start", {}).get("y") if g.get("start") else None) or -1,
-                    (g.get("end", {}).get("x") if g.get("end") else None) or -1,
-                    (g.get("end", {}).get("y") if g.get("end") else None) or -1,
-                    # Numeric attributes
-                    (g.get("angle") if g.get("angle") is not None else -1),
-                    (g.get("shape") if g.get("shape") is not None else -1),
-                    (g.get("width") if g.get("width") is not None else -1),
-                    # Text last to avoid impacting geometry-first ordering
-                    g.get("text") or "",
-                ),
+                key=self._drawing_sort_key,
             ),
             "locked": group.IsLocked(),
             "name": group.GetName(),
