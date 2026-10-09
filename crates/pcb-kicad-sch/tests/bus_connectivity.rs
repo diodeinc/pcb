@@ -85,6 +85,36 @@ fn intermediate_bus_members_connect_without_breakouts() {
 }
 
 #[test]
+fn scalar_named_items_on_buses_take_the_bus_connection() {
+    for child_names_bus in [true, false] {
+        let mut builder = KicadBuilder::new();
+        builder
+            .sheet("child.kicad_sch", &[("PORT", (0.0, 0.0))])
+            .local_label("{SIG}", (5.0, 0.0))
+            .local_label("A", (20.0, 0.0))
+            .add_page("child", "child.kicad_sch")
+            .hierarchical_label("PORT", (0.0, 0.0))
+            .local_label("BUS_ONLY", (8.0, 0.0))
+            .local_label("A", (20.0, 0.0));
+        if child_names_bus {
+            builder.local_label("{SIG}", (5.0, 0.0));
+        }
+        let mut document = builder.build();
+        raw(
+            &mut document,
+            0,
+            "(bus_alias \"SIG\" (members \"A\" \"B\"))",
+        );
+        for page in 0..2 {
+            raw(&mut document, page, "(bus (pts (xy 0 0) (xy 10 0)))");
+        }
+        let groups = ConnectivityGraph::from_kicad(&document).unwrap().groups;
+        let count = |name: &str| groups.iter().filter(|g| g.names.contains(name)).count();
+        assert_eq!((count("A"), count("BUS_ONLY")), (1, 0), "{child_names_bus}");
+    }
+}
+
+#[test]
 fn crossing_buses_only_connect_at_a_junction_and_never_to_crossing_wires() {
     let mut builder = KicadBuilder::new();
     builder

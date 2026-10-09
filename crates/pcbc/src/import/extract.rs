@@ -52,7 +52,7 @@ pub(super) fn extract_ir(
     let schematic_sheet_tree = build_schematic_sheet_tree(
         &validation.summary.selected.kicad_sch,
         &netlist.components,
-        &schematic.sheet_symbols_by_uuid,
+        &schematic.sheet_symbols,
     );
 
     let layout_pcb = validation
@@ -91,7 +91,7 @@ pub(super) fn extract_ir(
 struct KiCadSchematicExtraction {
     lib_symbol_ids: BTreeSet<KiCadLibId>,
     power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl>,
-    sheet_symbols_by_uuid: BTreeMap<String, SchematicSheetSymbol>,
+    sheet_symbols: SheetSymbols,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +99,26 @@ struct SchematicSheetSymbol {
     sheet_name: Option<String>,
     /// Resolved schematic file path relative to the project root when possible.
     sheet_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Default)]
+struct SheetSymbols(BTreeMap<(PathBuf, String), SchematicSheetSymbol>);
+
+impl SheetSymbols {
+    fn resolve<'a>(
+        &self,
+        root_file: &Path,
+        sheet_uuids: impl IntoIterator<Item = &'a str>,
+    ) -> Option<&SchematicSheetSymbol> {
+        let mut file = Some(root_file);
+        let mut sheet = None;
+        for uuid in sheet_uuids {
+            let found = self.0.get(&(file?.to_path_buf(), uuid.to_string()))?;
+            file = found.sheet_file.as_deref();
+            sheet = Some(found);
+        }
+        sheet
+    }
 }
 
 #[derive(Debug)]
@@ -171,7 +191,7 @@ fn extract_kicad_schematic_data(
 ) -> Result<KiCadSchematicExtraction> {
     let mut lib_symbol_ids: BTreeSet<KiCadLibId> = BTreeSet::new();
     let mut power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl> = Vec::new();
-    let mut sheet_symbols_by_uuid: BTreeMap<String, SchematicSheetSymbol> = BTreeMap::new();
+    let mut sheet_symbols = SheetSymbols::default();
     let root_text = fs::read_to_string(staged_root.join(root_schematic))?;
     let root = pcb_sexpr::parse(&root_text)?;
     let root_uuid =
@@ -182,6 +202,7 @@ fn extract_kicad_schematic_data(
         .map(|(key, component)| (component.netlist.refdes.clone(), key.clone()))
         .collect();
 
+    let mut parsed_files = Vec::new();
     for rel in kicad_sch_files {
         let staged_abs = staged_root.join(rel);
         let source_abs = source_root.join(rel);
@@ -236,21 +257,19 @@ fn extract_kicad_schematic_data(
                 sheet_name,
                 sheet_file,
             };
-            match sheet_symbols_by_uuid.get(&sheet_uuid) {
-                None => {
-                    sheet_symbols_by_uuid.insert(sheet_uuid, new);
-                }
-                Some(existing)
-                    if existing.sheet_name == new.sheet_name
-                        && existing.sheet_file == new.sheet_file => {}
-                Some(_) => {
-                    debug!(
-                        "Conflicting sheet symbol metadata for uuid {}; keeping first",
-                        sheet_uuid
-                    );
-                }
-            }
+            let key = (pcb_kicad_sch::normalize_schematic_path(rel), sheet_uuid);
+            sheet_symbols.0.entry(key).or_insert(new);
         }
+
+        parsed_files.push((rel, root, power_lib_ids));
+    }
+
+    let root_file = pcb_kicad_sch::normalize_schematic_path(root_schematic);
+    for (rel, root, power_lib_ids) in parsed_files {
+        let file = pcb_kicad_sch::normalize_schematic_path(rel);
+        let targets_file = |instance_path: &str| {
+            instance_path_targets_file(instance_path, &file, &root_file, &sheet_symbols)
+        };
 
         // Extract placed symbol instances (direct children of the schematic root).
         for sym in root.find_all_lists("symbol") {
@@ -278,7 +297,7 @@ fn extract_kicad_schematic_data(
                 if instance_paths.is_empty() {
                     sheet_paths.insert(KiCadSheetPath::root());
                 } else {
-                    for instance_path in &instance_paths {
+                    for instance_path in instance_paths.iter().filter(|path| targets_file(path)) {
                         if let Ok(key) =
                             key_from_schematic_instance_path(instance_path, &symbol_uuid)
                         {
@@ -316,8 +335,13 @@ fn extract_kicad_schematic_data(
                 continue;
             }
 
-            let selected =
-                select_schematic_symbol_keys(sym, &symbol_uuid, &root_uuid, &refdes_to_anchor)?;
+            let selected = select_schematic_symbol_keys(
+                sym,
+                &symbol_uuid,
+                &root_uuid,
+                &refdes_to_anchor,
+                targets_file,
+            )?;
             if selected.is_empty() {
                 continue;
             }
@@ -385,7 +409,7 @@ fn extract_kicad_schematic_data(
     Ok(KiCadSchematicExtraction {
         lib_symbol_ids,
         power_symbol_decls,
-        sheet_symbols_by_uuid,
+        sheet_symbols,
     })
 }
 
@@ -401,6 +425,7 @@ fn select_schematic_symbol_keys(
     symbol_uuid: &str,
     root_uuid: &str,
     refdes_to_anchor: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
+    targets_file: impl Fn(&str) -> bool,
 ) -> Result<Vec<SelectedSchematicSymbol>> {
     let mut out = Vec::new();
     let Some(instances) = sexpr_kicad::child_list(symbol, "instances") else {
@@ -422,6 +447,9 @@ fn select_schematic_symbol_keys(
             if path.trim_matches('/').split('/').next() != Some(root_uuid) {
                 continue;
             }
+            if !targets_file(path) {
+                continue;
+            }
             let Some(reference) = sexpr_kicad::string_prop(instance, "reference") else {
                 continue;
             };
@@ -440,6 +468,26 @@ fn select_schematic_symbol_keys(
         }
     }
     Ok(out)
+}
+
+fn instance_path_targets_file(
+    instance_path: &str,
+    file: &Path,
+    root_file: &Path,
+    sheet_symbols: &SheetSymbols,
+) -> bool {
+    let sheet_uuids = instance_path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .skip(1)
+        .collect::<Vec<_>>();
+    if sheet_uuids.is_empty() {
+        return file == root_file;
+    }
+    sheet_symbols
+        .resolve(root_file, sheet_uuids)
+        .and_then(|sheet| sheet.sheet_file.as_deref())
+        .is_none_or(|sheet_file| sheet_file == file)
 }
 
 fn resolve_sheet_file(
@@ -474,8 +522,9 @@ fn resolve_sheet_file(
 fn build_schematic_sheet_tree(
     root_schematic_rel: &Path,
     netlist_components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
-    sheet_symbols_by_uuid: &BTreeMap<String, SchematicSheetSymbol>,
+    sheet_symbols: &SheetSymbols,
 ) -> ImportSheetTree {
+    let root_file = pcb_kicad_sch::normalize_schematic_path(root_schematic_rel);
     let mut all_paths: BTreeSet<KiCadSheetPath> = BTreeSet::new();
     all_paths.insert(KiCadSheetPath::root());
 
@@ -515,9 +564,8 @@ fn build_schematic_sheet_tree(
         }
 
         let sheet_uuid = path.last_uuid().map(|s| s.to_string());
-        let (sheet_name, schematic_file) = sheet_uuid
-            .as_deref()
-            .and_then(|uuid| sheet_symbols_by_uuid.get(uuid))
+        let (sheet_name, schematic_file) = sheet_symbols
+            .resolve(&root_file, path.segments())
             .map(|meta| (meta.sheet_name.clone(), meta.sheet_file.clone()))
             .unwrap_or((None, None));
 
@@ -1407,6 +1455,80 @@ mod tests {
                     units.keys().cloned().collect::<Vec<_>>()
                 );
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn extraction_resolves_sheet_files_through_copied_parents() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = PathBuf::from("root.kicad_sch");
+        let files = [
+            (
+                "root.kicad_sch",
+                r#"(kicad_sch (uuid "root")
+                (sheet (uuid "sheet-a") (property "Sheetname" "A") (property "Sheetfile" "a.kicad_sch"))
+                (sheet (uuid "sheet-b") (property "Sheetname" "B") (property "Sheetfile" "b.kicad_sch")))"#,
+            ),
+            (
+                "a.kicad_sch",
+                r#"(kicad_sch (uuid "copied")
+                (sheet (uuid "nested") (property "Sheetname" "N") (property "Sheetfile" "left.kicad_sch")))"#,
+            ),
+            (
+                "b.kicad_sch",
+                r#"(kicad_sch (uuid "copied")
+                (sheet (uuid "nested") (property "Sheetname" "N") (property "Sheetfile" "right.kicad_sch")))"#,
+            ),
+            (
+                "left.kicad_sch",
+                r#"(kicad_sch (uuid "leaf")
+                (symbol (uuid "r-left") (unit 1) (property "Reference" "R1")
+                    (instances (project "demo"
+                        (path "/root/sheet-a/nested" (reference "R1") (unit 1))))))"#,
+            ),
+            (
+                "right.kicad_sch",
+                r#"(kicad_sch (uuid "leaf")
+                (symbol (uuid "r-right") (unit 1) (property "Reference" "R2")
+                    (instances (project "demo"
+                        (path "/root/sheet-a/nested" (reference "R1") (unit 1))
+                        (path "/root/sheet-b/nested" (reference "R2") (unit 1))))))"#,
+            ),
+        ];
+        for (name, text) in files {
+            fs::write(dir.path().join(name), text)?;
+        }
+        let mut netlist = parse_kicad_sexpr_netlist(
+            r#"(export (components
+            (comp (ref "R1") (sheetpath (tstamps "/sheet-a/nested/")) (tstamps "r-left"))
+            (comp (ref "R2") (sheetpath (tstamps "/sheet-b/nested/")) (tstamps "r-right")))
+            (nets))"#,
+            &BTreeMap::new(),
+        )?;
+        let schematic = extract_kicad_schematic_data(
+            dir.path(),
+            dir.path(),
+            &root,
+            &files.map(|(name, _)| PathBuf::from(name)),
+            &mut netlist.components,
+        )?;
+        let tree = build_schematic_sheet_tree(&root, &netlist.components, &schematic.sheet_symbols);
+        for (anchor, file) in [
+            ("/sheet-a/nested/r-left", "left.kicad_sch"),
+            ("/sheet-b/nested/r-right", "right.kicad_sch"),
+        ] {
+            let key = KiCadUuidPathKey::from_pcb_path(anchor)?;
+            let units = &netlist.components[&key].schematic.as_ref().unwrap().units;
+            assert_eq!(
+                units.keys().map(|key| key.pcb_path()).collect::<Vec<_>>(),
+                [anchor]
+            );
+            let sheet = KiCadSheetPath::from_sheetpath_tstamps(&key.sheetpath_tstamps);
+            assert_eq!(
+                tree.nodes[&sheet].schematic_file.as_deref(),
+                Some(Path::new(file))
+            );
         }
         Ok(())
     }

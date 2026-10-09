@@ -88,7 +88,7 @@ struct Claim {
     page: usize,
     node: usize,
     name: String,
-    schema: BusSchema,
+    schema: Option<BusSchema>,
     child: Option<String>,
     hierarchical: bool,
     global: bool,
@@ -148,46 +148,58 @@ pub(super) fn collect(instances: &[PageInstance<'_>]) -> Result<Vec<PageBuses>> 
             .map(|segment| empty(Geometry::Segment(*segment)))
             .collect::<Vec<_>>();
         let first_claim = claims.len();
+        let pin_points = if page.segments.is_empty() {
+            BTreeSet::new()
+        } else {
+            symbol_pin_points(instance.page)?
+        };
         for item in &instance.page.items {
             match item {
                 SchItem::Label(label) if !matches!(label.kind, LabelKind::Directive { .. }) => {
                     let name = static_net_text("bus label", &label.text)?;
-                    if let Some(schema) = bus_name::parse(&name, &aliases)? {
-                        page.label_ids.insert(label.id.clone());
+                    let schema = bus_name::parse(&name, &aliases)?;
+                    if schema.is_none()
+                        && (!page.contains(label.at)
+                            || touches_scalar(instance.page, label.at, &pin_points))
+                    {
+                        continue;
+                    }
+                    let hierarchical = matches!(label.kind, LabelKind::Hierarchical { .. });
+                    page.label_ids.insert(label.id.clone());
+                    claims.push(Claim {
+                        page: page_index,
+                        node: nodes.len(),
+                        name,
+                        schema,
+                        child: None,
+                        hierarchical,
+                        global: matches!(label.kind, LabelKind::Global { .. }),
+                        root_port: instance.id == instance.page.id && hierarchical,
+                    });
+                    nodes.push(anchor(label.at, 1));
+                }
+                SchItem::Sheet(sheet) if sheet.placed => {
+                    for pin in &sheet.pins {
+                        let name = static_net_text("bus sheet pin", &pin.name)?;
+                        let schema = bus_name::parse(&name, &aliases)?;
+                        if schema.is_none() && !page.contains(pin.at) {
+                            continue;
+                        }
+                        page.pin_ids.insert((sheet.id.clone(), pin.id.clone()));
                         claims.push(Claim {
                             page: page_index,
                             node: nodes.len(),
                             name,
                             schema,
-                            child: None,
-                            hierarchical: matches!(label.kind, LabelKind::Hierarchical { .. }),
-                            global: matches!(label.kind, LabelKind::Global { .. }),
-                            root_port: instance.id == instance.page.id
-                                && matches!(label.kind, LabelKind::Hierarchical { .. }),
+                            child: Some(instance.child_ids[&sheet.id].clone()),
+                            hierarchical: false,
+                            global: false,
+                            root_port: false,
                         });
-                        nodes.push(anchor(label.at, 1));
-                    }
-                }
-                SchItem::Sheet(sheet) if sheet.placed => {
-                    for pin in &sheet.pins {
-                        let name = static_net_text("bus sheet pin", &pin.name)?;
-                        if let Some(schema) = bus_name::parse(&name, &aliases)? {
-                            page.pin_ids.insert((sheet.id.clone(), pin.id.clone()));
-                            claims.push(Claim {
-                                page: page_index,
-                                node: nodes.len(),
-                                name,
-                                schema,
-                                child: Some(instance.child_ids[&sheet.id].clone()),
-                                hierarchical: false,
-                                global: false,
-                                root_port: false,
-                            });
-                            nodes.push(empty(Geometry::Point {
-                                at: pin.at.into(),
-                                segment_interior_tolerance: None,
-                            }));
-                        }
+                        nodes.push(empty(Geometry::Point {
+                            at: pin.at.into(),
+                            segment_interior_tolerance: None,
+                        }));
                     }
                 }
                 SchItem::Junction(junction) if page.contains(junction.at) => {
@@ -259,7 +271,12 @@ pub(super) fn collect(instances: &[PageInstance<'_>]) -> Result<Vec<PageBuses>> 
                 claim.page,
             )
         });
-        let canonical = &claims[indices[0]].schema;
+        let Some(canonical) = indices
+            .iter()
+            .find_map(|&index| claims[index].schema.as_ref())
+        else {
+            continue;
+        };
         let mut slots = canonical
             .members
             .iter()
@@ -267,9 +284,10 @@ pub(super) fn collect(instances: &[PageInstance<'_>]) -> Result<Vec<PageBuses>> 
             .collect::<Vec<_>>();
         for index in indices {
             let claim = &claims[index];
+            let schema = claim.schema.as_ref().unwrap_or(canonical);
             let mut used = BTreeSet::new();
-            for (ordinal, member) in claim.schema.members.iter().enumerate() {
-                let slot = if canonical.group && claim.schema.group {
+            for (ordinal, member) in schema.members.iter().enumerate() {
+                let slot = if canonical.group && schema.group {
                     slots
                         .iter()
                         .enumerate()
@@ -338,6 +356,35 @@ pub(crate) fn is_bus_junction(page: &SchPage, at: Point) -> bool {
             .flatten()
             .is_some_and(|segment| point_near_segment(at.into(), segment, 0))
     })
+}
+
+fn touches_scalar(page: &SchPage, at: Point, pin_points: &BTreeSet<GridPoint>) -> bool {
+    let at = GridPoint::from(at);
+    pin_points.contains(&at)
+        || page.items.iter().any(|item| {
+            matches!(item, SchItem::Wire(wire) if point_near_segment(
+                at,
+                Segment { a: wire.a.into(), b: wire.b.into() },
+                0,
+            ))
+        })
+}
+
+fn symbol_pin_points(page: &SchPage) -> Result<BTreeSet<GridPoint>> {
+    let mut points = BTreeSet::new();
+    for item in &page.items {
+        if let SchItem::Symbol(placed) = item
+            && let Some(definition) = page.library.definitions.get(placed.library_key())
+        {
+            points.extend(
+                definition
+                    .placed_pins(placed)?
+                    .into_iter()
+                    .map(|pin| GridPoint::from(pin.point)),
+            );
+        }
+    }
+    Ok(points)
 }
 
 fn bus_segment(item: &SchItem) -> Result<Option<Segment>> {
