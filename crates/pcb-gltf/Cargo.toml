@@ -12,8 +12,10 @@ publish = false
 anyhow = { workspace = true }
 glam = { workspace = true }
 i_triangle = { workspace = true }
+meshopt-rs = { workspace = true, features = ["experimental"] }
 pcb-step = { workspace = true }
 rayon = { workspace = true }
+rustc-hash = { workspace = true }
 serde_json = { workspace = true }
 # Foxtrot STEP parsing + tessellation
 triangulate = { workspace = true, features = ["parallel"] }

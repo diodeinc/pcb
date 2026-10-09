@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Add `pcb gltf export` to write a GLB for a KiCad board without kicad-cli.
+- Add `pcb gltf export` to write a compressed, instanced GLB for a KiCad board without kicad-cli.
 
 ### Changed
 

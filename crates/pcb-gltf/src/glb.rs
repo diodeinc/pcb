@@ -1,14 +1,23 @@
-//! glTF 2.0 binary container: one mesh for the board with a primitive per
-//! layer, one mesh per distinct model with a primitive per colour, and a
-//! node per component placing its model's mesh. A root node converts the
-//! millimetre, z-up scene to glTF's metres, y up.
+//! glTF 2.0 binary container, written small and cheap to draw: one mesh for
+//! the board with a primitive per layer, and one mesh per distinct model
+//! with a primitive per colour, drawn once for all its footprints with
+//! `EXT_mesh_gpu_instancing`. Positions are snapped to a 16-bit grid per mesh
+//! and normals to 8 bits (`KHR_mesh_quantization`), and every vertex and index
+//! buffer is compressed with `EXT_meshopt_compression`. A root node converts
+//! the millimetre, z-up scene to glTF's metres, y up.
 
 use std::f64::consts::FRAC_PI_2;
 use std::io::Write;
 
 use anyhow::{Result, ensure};
 use glam::{DMat4, DVec3};
+use meshopt_rs::index::IndexEncodingVersion;
+use meshopt_rs::index::buffer::{encode_index_buffer, encode_index_buffer_bound};
+use meshopt_rs::vertex::VertexEncodingVersion;
+use meshopt_rs::vertex::buffer::{encode_vertex_buffer, encode_vertex_buffer_bound};
+use meshopt_rs::vertex::filter::encode_filter_oct_8;
 use pcb_step::scene::{LayerKind, Scene};
+use rayon::prelude::*;
 use serde_json::{Value, json};
 
 use crate::mesh::Primitive;
@@ -16,9 +25,14 @@ use crate::models::Models;
 
 const ARRAY_BUFFER: u32 = 34962;
 const ELEMENT_ARRAY_BUFFER: u32 = 34963;
+const BYTE: u32 = 5120;
 const FLOAT: u32 = 5126;
 const UNSIGNED_SHORT: u32 = 5123;
 const UNSIGNED_INT: u32 = 5125;
+
+const QUANTIZATION: &str = "KHR_mesh_quantization";
+const MESHOPT: &str = "EXT_meshopt_compression";
+const INSTANCING: &str = "EXT_mesh_gpu_instancing";
 
 #[derive(Clone, Copy, PartialEq)]
 struct Material {
@@ -86,26 +100,150 @@ fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
+/// The 16-bit grid a mesh's positions are snapped to: a position is
+/// `origin + q * step`. One step on every axis keeps the dequantization a
+/// uniform scale, which instance transforms can absorb.
+#[derive(Clone, Copy)]
+struct Grid {
+    origin: DVec3,
+    step: f64,
+}
+
+impl Grid {
+    fn of<'a>(primitives: impl IntoIterator<Item = &'a Primitive>) -> Self {
+        let (mut lo, mut hi) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
+        for p in primitives.into_iter().flat_map(|p| &p.positions) {
+            let p = DVec3::from(p.map(f64::from));
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+        let extent = (hi - lo).max_element();
+        Grid {
+            origin: lo,
+            step: if extent > 0.0 { extent / 65535.0 } else { 1.0 },
+        }
+    }
+
+    /// Grid units to millimetres.
+    fn matrix(&self) -> DMat4 {
+        DMat4::from_translation(self.origin) * DMat4::from_scale(DVec3::splat(self.step))
+    }
+}
+
+/// A primitive's buffers, quantized and compressed.
+struct Encoded {
+    vertices: usize,
+    positions: Vec<u8>,
+    /// Grid bounds of the positions.
+    bounds: [[u16; 3]; 2],
+    normals: Vec<u8>,
+    indices: Vec<u8>,
+    index_count: usize,
+}
+
+fn encode(primitive: &Primitive, grid: Grid) -> Encoded {
+    let positions: Vec<[u16; 4]> = primitive
+        .positions
+        .iter()
+        .map(|p| {
+            let q = ((DVec3::from(p.map(f64::from)) - grid.origin) / grid.step)
+                .round()
+                .clamp(DVec3::ZERO, DVec3::splat(65535.0));
+            [q.x as u16, q.y as u16, q.z as u16, 0]
+        })
+        .collect();
+    let mut bounds = [[u16::MAX; 3], [0; 3]];
+    for q in &positions {
+        for k in 0..3 {
+            bounds[0][k] = bounds[0][k].min(q[k]);
+            bounds[1][k] = bounds[1][k].max(q[k]);
+        }
+    }
+    // Normals take the octahedral filter: two 8-bit components that the
+    // decoder expands back to a unit vector, which compress better than
+    // three independent ones.
+    let unit: Vec<[f32; 4]> = primitive
+        .normals
+        .iter()
+        .map(|&[x, y, z]| [x, y, z, 0.0])
+        .collect();
+    let mut normals = vec![[0u8; 4]; unit.len()];
+    encode_filter_oct_8(normals.iter_mut(), 8, unit.iter());
+    let mut indices = vec![0; encode_index_buffer_bound(primitive.indices.len(), positions.len())];
+    let size = encode_index_buffer(&mut indices, &primitive.indices, IndexEncodingVersion::V1)
+        .expect("buffer is at the bound");
+    indices.truncate(size);
+    Encoded {
+        vertices: positions.len(),
+        positions: encode_vertices(&positions),
+        bounds,
+        normals: encode_vertices(&normals),
+        indices,
+        index_count: primitive.indices.len(),
+    }
+}
+
+fn encode_vertices<V>(vertices: &[V]) -> Vec<u8> {
+    let mut out = vec![0; encode_vertex_buffer_bound(vertices.len(), size_of::<V>())];
+    let size = encode_vertex_buffer(&mut out, vertices, VertexEncodingVersion::V0)
+        .expect("buffer is at the bound");
+    out.truncate(size);
+    out
+}
+
 #[derive(Default)]
 struct Gltf {
+    /// The GLB's binary chunk: compressed buffers and instance data.
     bin: Vec<u8>,
+    /// Size of the buffer the compressed views decode into.
+    decoded: usize,
     views: Vec<Value>,
     accessors: Vec<Value>,
     materials: Vec<Material>,
 }
 
 impl Gltf {
-    fn view(&mut self, bytes: Vec<u8>, target: u32) -> usize {
-        self.views.push(json!({
-            "buffer": 0,
-            "byteOffset": self.bin.len(),
-            "byteLength": bytes.len(),
-            "target": target,
-        }));
-        self.bin.extend(bytes);
-        // Every component type here is four bytes or two bytes in pairs
-        // of triangles' worth; keep each view four-byte aligned.
+    fn push_bin(&mut self, bytes: &[u8]) -> usize {
+        let offset = self.bin.len();
+        self.bin.extend_from_slice(bytes);
         self.bin.resize(self.bin.len().next_multiple_of(4), 0);
+        offset
+    }
+
+    /// A view that decodes `data` into `count` elements of `stride` bytes.
+    fn compressed_view(
+        &mut self,
+        data: &[u8],
+        stride: usize,
+        count: usize,
+        mode: &str,
+        filter: Option<&str>,
+        target: u32,
+    ) -> usize {
+        let offset = self.push_bin(data);
+        let length = stride * count;
+        let mut view = json!({
+            "buffer": 1,
+            "byteOffset": self.decoded,
+            "byteLength": length,
+            "target": target,
+            "extensions": { MESHOPT: {
+                "buffer": 0,
+                "byteOffset": offset,
+                "byteLength": data.len(),
+                "byteStride": stride,
+                "count": count,
+                "mode": mode,
+            }},
+        });
+        if mode == "ATTRIBUTES" {
+            view["byteStride"] = json!(stride);
+        }
+        if let Some(filter) = filter {
+            view["extensions"][MESHOPT]["filter"] = json!(filter);
+        }
+        self.decoded = (self.decoded + length).next_multiple_of(4);
+        self.views.push(view);
         self.views.len() - 1
     }
 
@@ -114,58 +252,75 @@ impl Gltf {
         self.accessors.len() - 1
     }
 
-    fn vec3s(&mut self, values: &[[f32; 3]], bounds: bool) -> usize {
-        let bytes = values
+    /// Instance data, uncompressed.
+    fn floats<const N: usize>(&mut self, values: &[[f32; N]], kind: &str) -> usize {
+        let bytes: Vec<u8> = values
             .iter()
             .flatten()
             .flat_map(|v| v.to_le_bytes())
             .collect();
-        let view = self.view(bytes, ARRAY_BUFFER);
-        let mut accessor = json!({
+        let offset = self.push_bin(&bytes);
+        self.views
+            .push(json!({ "buffer": 0, "byteOffset": offset, "byteLength": bytes.len() }));
+        let view = self.views.len() - 1;
+        self.accessor(json!({
             "bufferView": view,
             "componentType": FLOAT,
             "count": values.len(),
-            "type": "VEC3",
-        });
-        if bounds {
-            let mut min = [f32::INFINITY; 3];
-            let mut max = [f32::NEG_INFINITY; 3];
-            for v in values {
-                for k in 0..3 {
-                    min[k] = min[k].min(v[k]);
-                    max[k] = max[k].max(v[k]);
-                }
-            }
-            accessor["min"] = json!(min);
-            accessor["max"] = json!(max);
-        }
-        self.accessor(accessor)
+            "type": kind,
+        }))
     }
 
-    fn primitive(&mut self, primitive: &Primitive, material: Material) -> Value {
-        let position = self.vec3s(&primitive.positions, true);
-        let normal = self.vec3s(&primitive.normals, false);
+    fn primitive(&mut self, encoded: &Encoded, material: Material) -> Value {
+        let view = self.compressed_view(
+            &encoded.positions,
+            8,
+            encoded.vertices,
+            "ATTRIBUTES",
+            None,
+            ARRAY_BUFFER,
+        );
+        let position = self.accessor(json!({
+            "bufferView": view,
+            "componentType": UNSIGNED_SHORT,
+            "count": encoded.vertices,
+            "type": "VEC3",
+            "min": encoded.bounds[0],
+            "max": encoded.bounds[1],
+        }));
+        let view = self.compressed_view(
+            &encoded.normals,
+            4,
+            encoded.vertices,
+            "ATTRIBUTES",
+            Some("OCTAHEDRAL"),
+            ARRAY_BUFFER,
+        );
+        let normal = self.accessor(json!({
+            "bufferView": view,
+            "componentType": BYTE,
+            "normalized": true,
+            "count": encoded.vertices,
+            "type": "VEC3",
+        }));
         // The largest index value is reserved for primitive restart.
-        let (bytes, component): (Vec<u8>, _) = if primitive.positions.len() <= u16::MAX as usize {
-            let bytes = primitive
-                .indices
-                .iter()
-                .flat_map(|&i| (i as u16).to_le_bytes())
-                .collect();
-            (bytes, UNSIGNED_SHORT)
+        let (stride, component) = if encoded.vertices <= u16::MAX as usize {
+            (2, UNSIGNED_SHORT)
         } else {
-            let bytes = primitive
-                .indices
-                .iter()
-                .flat_map(|i| i.to_le_bytes())
-                .collect();
-            (bytes, UNSIGNED_INT)
+            (4, UNSIGNED_INT)
         };
-        let view = self.view(bytes, ELEMENT_ARRAY_BUFFER);
+        let view = self.compressed_view(
+            &encoded.indices,
+            stride,
+            encoded.index_count,
+            "TRIANGLES",
+            None,
+            ELEMENT_ARRAY_BUFFER,
+        );
         let indices = self.accessor(json!({
             "bufferView": view,
             "componentType": component,
-            "count": primitive.indices.len(),
+            "count": encoded.index_count,
             "type": "SCALAR",
         }));
         let material = match self.materials.iter().position(|m| *m == material) {
@@ -194,45 +349,90 @@ pub(crate) fn write(
     models: &Models,
     sink: &mut dyn Write,
 ) -> Result<()> {
-    let mut gltf = Gltf::default();
-    let mut meshes = Vec::new();
-    let mut children = Vec::new();
-    let mut nodes = vec![Value::Null];
-
-    let board: Vec<Value> = scene
+    let board: Vec<(&pcb_step::scene::Layer, &Primitive)> = scene
         .layers
         .iter()
         .zip(layers)
         .filter(|(_, primitive)| !primitive.is_empty())
-        .map(|(layer, primitive)| {
-            let material = layer_material(layer.kind, layer.color, layer.transparency);
-            gltf.primitive(primitive, material)
-        })
         .collect();
+    let board_grid = Grid::of(board.iter().map(|(_, p)| *p));
+    let model_grids: Vec<Grid> = models
+        .meshes
+        .iter()
+        .map(|mesh| Grid::of(mesh.primitives.iter().map(|(_, p)| p)))
+        .collect();
+
+    // Quantize and compress every primitive in parallel, in output order.
+    let jobs: Vec<(&Primitive, Grid)> = board
+        .iter()
+        .map(|(_, p)| (*p, board_grid))
+        .chain(
+            models
+                .meshes
+                .iter()
+                .zip(&model_grids)
+                .flat_map(|(mesh, grid)| mesh.primitives.iter().map(move |(_, p)| (p, *grid))),
+        )
+        .collect();
+    let encoded: Vec<Encoded> = jobs.par_iter().map(|(p, grid)| encode(p, *grid)).collect();
+    let mut encoded = encoded.iter();
+
+    let mut gltf = Gltf::default();
+    let mut meshes = Vec::new();
+    let mut nodes = vec![Value::Null];
+    let mut children = Vec::new();
+
     if !board.is_empty() {
-        meshes.push(json!({ "name": format!("{name}_PCB"), "primitives": board }));
-        nodes.push(json!({ "name": "PCB", "mesh": 0 }));
+        let primitives: Vec<Value> = board
+            .iter()
+            .map(|(layer, _)| {
+                let material = layer_material(layer.kind, layer.color, layer.transparency);
+                gltf.primitive(encoded.next().unwrap(), material)
+            })
+            .collect();
+        meshes.push(json!({ "name": format!("{name}_PCB"), "primitives": primitives }));
+        nodes.push(json!({ "name": "PCB", "mesh": 0, "matrix": matrix(board_grid.matrix()) }));
         children.push(nodes.len() - 1);
     }
 
-    let first_model = meshes.len();
-    for mesh in &models.meshes {
+    // Each model's placements, in footprint order.
+    let mut instances: Vec<Vec<(&str, DMat4)>> = vec![Vec::new(); models.meshes.len()];
+    for component in &scene.components {
+        if let Some(mesh) = models.of_model[component.model] {
+            let scale = scene.models[component.model].scale;
+            let placement = component.transform
+                * DMat4::from_scale(DVec3::splat(scale))
+                * model_grids[mesh].matrix();
+            instances[mesh].push((&component.reference, placement));
+        }
+    }
+    for (mesh, placements) in models.meshes.iter().zip(&instances) {
         let primitives: Vec<Value> = mesh
             .primitives
             .iter()
-            .map(|(color, primitive)| gltf.primitive(primitive, model_material(*color)))
+            .map(|(color, _)| gltf.primitive(encoded.next().unwrap(), model_material(*color)))
             .collect();
         meshes.push(json!({ "name": mesh.name, "primitives": primitives }));
-    }
-    for component in &scene.components {
-        let Some(mesh) = models.of_model[component.model] else {
-            continue;
-        };
-        let scale = scene.models[component.model].scale;
+        // Placements are rotations with uniform scale, so each is exactly a
+        // translation, rotation and scale.
+        let (mut translations, mut rotations, mut scales) = (Vec::new(), Vec::new(), Vec::new());
+        for (_, placement) in placements {
+            let (scale, rotation, translation) = placement.to_scale_rotation_translation();
+            translations.push(translation.as_vec3().to_array());
+            rotations.push(rotation.normalize().as_quat().to_array());
+            scales.push(scale.as_vec3().to_array());
+        }
+        let attributes = json!({
+            "TRANSLATION": gltf.floats(&translations, "VEC3"),
+            "ROTATION": gltf.floats(&rotations, "VEC4"),
+            "SCALE": gltf.floats(&scales, "VEC3"),
+        });
+        let references: Vec<&str> = placements.iter().map(|(r, _)| *r).collect();
         nodes.push(json!({
-            "name": component.reference,
-            "mesh": first_model + mesh,
-            "matrix": matrix(component.transform * DMat4::from_scale(DVec3::splat(scale))),
+            "name": mesh.name,
+            "mesh": meshes.len() - 1,
+            "extensions": { INSTANCING: { "attributes": attributes } },
+            "extras": { "references": references },
         }));
         children.push(nodes.len() - 1);
     }
@@ -245,8 +445,11 @@ pub(crate) fn write(
     let root = DMat4::from_rotation_x(-FRAC_PI_2) * DMat4::from_scale(DVec3::splat(0.001));
     nodes[0] = json!({ "name": name, "matrix": matrix(root), "children": children });
 
-    let mut document = json!({
+    let extensions = [MESHOPT, QUANTIZATION, INSTANCING];
+    let document = json!({
         "asset": { "version": "2.0", "generator": "pcb-gltf" },
+        "extensionsUsed": extensions,
+        "extensionsRequired": extensions,
         "scene": 0,
         "scenes": [{ "name": name, "nodes": [0] }],
         "nodes": nodes,
@@ -254,23 +457,15 @@ pub(crate) fn write(
         "materials": gltf.materials.iter().map(Material::json).collect::<Vec<_>>(),
         "accessors": gltf.accessors,
         "bufferViews": gltf.views,
+        "buffers": [
+            { "byteLength": gltf.bin.len() },
+            { "byteLength": gltf.decoded, "extensions": { MESHOPT: { "fallback": true } } },
+        ],
     });
-    if !gltf.bin.is_empty() {
-        document["buffers"] = json!([{ "byteLength": gltf.bin.len() }]);
-    }
-    // glTF forbids empty top-level arrays.
-    if let Some(document) = document.as_object_mut() {
-        document.retain(|_, v| v.as_array().is_none_or(|a| !a.is_empty()));
-    }
     let mut json = serde_json::to_vec(&document)?;
     json.resize(json.len().next_multiple_of(4), b' ');
 
-    let bin_chunk = if gltf.bin.is_empty() {
-        0
-    } else {
-        8 + gltf.bin.len()
-    };
-    let total = 12 + 8 + json.len() + bin_chunk;
+    let total = 12 + 8 + json.len() + 8 + gltf.bin.len();
     ensure!(
         total <= u32::MAX as usize,
         "GLB would be {total} bytes, over the format's 4 GiB limit"
@@ -281,10 +476,8 @@ pub(crate) fn write(
     sink.write_all(&(json.len() as u32).to_le_bytes())?;
     sink.write_all(b"JSON")?;
     sink.write_all(&json)?;
-    if !gltf.bin.is_empty() {
-        sink.write_all(&(gltf.bin.len() as u32).to_le_bytes())?;
-        sink.write_all(b"BIN\0")?;
-        sink.write_all(&gltf.bin)?;
-    }
+    sink.write_all(&(gltf.bin.len() as u32).to_le_bytes())?;
+    sink.write_all(b"BIN\0")?;
+    sink.write_all(&gltf.bin)?;
     Ok(())
 }
