@@ -9,7 +9,7 @@ use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use starlark::{codemap::CodeMap, errors::EvalSeverity, values::ValueLike};
 use tracing::{info_span, instrument};
 
-use crate::{Diagnostic, FileProvider, resolution::ResolutionResult};
+use crate::{Diagnostic, FileProvider, STDLIB_MODULE_PATH, resolution::ResolutionResult};
 
 use super::component::FrozenComponentValue;
 use super::footprint::{resolve_file_backed_footprint, resolved_span};
@@ -55,8 +55,7 @@ impl Library {
 }
 
 /// Each component with the file and name of its KiCad symbol, and whether
-/// the file belongs to a workspace package; a dependency's symbols are not
-/// the workspace's to style or to fix.
+/// the file belongs to a workspace package. The stdlib ships checked.
 fn symbols<'a>(
     module_tree: &'a BTreeMap<ModulePath, &FrozenModuleValue>,
     resolution: &'a ResolutionResult,
@@ -66,6 +65,13 @@ fn symbols<'a>(
     components.filter_map(move |component| {
         let symbol = component.symbol().downcast_ref::<SymbolValue>()?;
         let (uri, name) = (symbol.source_uri()?, symbol.name()?);
+        let package = uri
+            .strip_prefix(pcb_sch::PACKAGE_URI_PREFIX)?
+            .split('/')
+            .next()?;
+        if package == STDLIB_MODULE_PATH {
+            return None;
+        }
         // Instances of one component repeat; resolving paths is the costly part.
         let fresh = seen.insert((uri, name, component.footprint(), component.source_path()));
         let path = fresh.then(|| resolution.resolve_package_uri(uri).ok())??;
@@ -101,8 +107,8 @@ pub(crate) fn fix_symbols(
 }
 
 /// Check the KiCad symbol of every component. Diagnostics point into the
-/// symbol file, the file that has to change; a dependency's file gets only
-/// the errors, without fixes.
+/// symbol file, the file that has to change; a dependency's file is only
+/// held to what KiCad loads, without fixes.
 #[instrument(name = "check_symbols", skip_all)]
 pub(crate) fn check_symbols(
     module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
@@ -128,7 +134,7 @@ pub(crate) fn check_symbols(
             );
             faults.is_empty().then_some(library)
         });
-        let Some(library) = library else {
+        let Some(library) = library.as_ref().filter(|_| workspace) else {
             continue;
         };
         let footprint = resolve_file_backed_footprint(
@@ -148,13 +154,10 @@ pub(crate) fn check_symbols(
             })
         });
 
-        let issues = check_symbol(&library.library, name, footprint_pads)
-            .into_iter()
-            .filter(|issue| workspace || issue.severity == Severity::Error);
-        for issue in issues {
+        for issue in check_symbol(&library.library, name, footprint_pads) {
             let file = library.sources[issue.source].0.clone();
             if reported.insert((file, issue.span.start, issue.message.clone())) {
-                diagnostics.push(library.diagnostic(&issue, workspace));
+                diagnostics.push(library.diagnostic(&issue, true));
             }
         }
     }
