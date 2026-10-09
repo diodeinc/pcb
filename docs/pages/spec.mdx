@@ -266,7 +266,7 @@ power = PowerIf(vcc = ext)
 # ext stays "EXT"
 ```
 
-The standard library provides common interfaces (`Spi`, `I2c`, `Uart`, `Usb2`, `DiffPair`, `Pcie`, `Jtag`, `Swd`, etc.) in `@stdlib/interfaces.zen`. Helper functions `UartPair(a, b)` and `UsartPair(a, b)` create cross-connected pairs for point-to-point links.
+The standard library provides common interfaces (`Spi`, `I2c`, `Uart`, `Usb2`, `DiffPair`, `Pcie`, `Jtag`, `Swd`, etc.) in `@stdlib/interfaces.zen`. `DiffPair(impedance=...)` sets `differential_impedance` on its `P` and `N` nets at construction, so it applies wherever those nets are wired, with or without an `io()` boundary. Like `Net(x, impedance=...)`, a pair built from existing nets casts them: wire the pair's nets, not the originals. Conflicting impedance values on one net keep the first seen and warn. Helper functions `UartPair(a, b)` and `UsartPair(a, b)` create cross-connected pairs for point-to-point links.
 
 ## Components and symbols
 

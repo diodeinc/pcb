@@ -1,0 +1,56 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+    (comp (ref "U1")
+      (value "?")
+      (footprint "stdlib_kicad-footprints_Resistor_SMD:R_0402_1005Metric")
+      (libsource (lib "lib") (part "?") (description "unknown"))
+      (sheetpath (names "U1") (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db"))
+      (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db")
+      (property (name "Reference") (value "U1"))
+      (property (name "skip_bom") (value "true"))
+    )
+    (comp (ref "U2")
+      (value "?")
+      (footprint "stdlib_kicad-footprints_Resistor_SMD:R_0402_1005Metric")
+      (libsource (lib "lib") (part "?") (description "unknown"))
+      (sheetpath (names "U2") (tstamps "36c85f89-8191-5cff-96a2-01503cd7115a"))
+      (tstamps "36c85f89-8191-5cff-96a2-01503cd7115a")
+      (property (name "Reference") (value "U2"))
+      (property (name "skip_bom") (value "true"))
+    )
+  )
+  (libparts
+    (libpart (lib "lib") (part "?")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "1") (type "stereo"))
+        (pin (num "2") (name "2") (type "stereo"))
+      )
+    )
+  )
+  (nets
+    (net (code "1") (name "N")
+      (node (ref "U1") (pin "2") (pintype "stereo"))
+      (node (ref "U2") (pin "2") (pintype "stereo"))
+    )
+    (net (code "2") (name "P")
+      (node (ref "U1") (pin "1") (pintype "stereo"))
+      (node (ref "U2") (pin "1") (pintype "stereo"))
+    )
+  )
+)
+
+
+Warning: test.zen:8:5-13 Net 'P' has conflicting values for 'differential_impedance': keeping 90, ignoring 100
+Warning: test.zen:9:5-13 Net 'N' has conflicting values for 'differential_impedance': keeping 90, ignoring 100
