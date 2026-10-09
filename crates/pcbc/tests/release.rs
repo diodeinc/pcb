@@ -310,9 +310,9 @@ fn test_release_check_drc_exclusion_does_not_claim_layout_checked() {
 }
 
 #[test]
-fn test_release_check_respects_bom_suppression() {
+fn test_publish_checks_bom_offers_only_on_bump() {
     let server = MockServer::start();
-    let _bom_match = server.mock(|when, then| {
+    let bom_match = server.mock(|when, then| {
         when.method(POST).path("/api/boms/match");
         then.status(200).json_body(serde_json::json!({
             "results": (["GENERIC.R", "AUTHORED.R"].map(|path| serde_json::json!({
@@ -334,8 +334,32 @@ fn test_release_check_respects_bom_suppression() {
         .commit("Initial commit")
         .sync();
 
-    for flags in [vec![], vec!["-S", "bom"]] {
-        let mut args = vec!["publish", "boards/TestBoard.zen", "--check"];
+    // Local preflight stays offline.
+    let output = sb
+        .run("pcbc", ["publish", "boards/TestBoard.zen", "--check"])
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .unwrap();
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|finding| !finding["kind"].as_str().unwrap_or("").starts_with("bom."))
+    );
+    bom_match.assert_calls(0);
+
+    // A versioned publish checks offers, and late BOM warnings honor -S.
+    let warning = "No supplier offers found for";
+    for (flags, expect_warning) in [(vec![], true), (vec!["-S", "bom"], false)] {
+        let mut args = vec![
+            "publish",
+            "boards/TestBoard.zen",
+            "--bump=patch",
+            "--no-push",
+        ];
         args.extend(&flags);
         let output = sb
             .run("pcbc", args)
@@ -343,19 +367,10 @@ fn test_release_check_respects_bom_suppression() {
             .stderr_capture()
             .run()
             .unwrap();
-        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let bom_findings = report["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|finding| finding["kind"] == "bom.sourceability.no_offers")
-            .collect::<Vec<_>>();
-        assert_eq!(bom_findings.len(), 2);
-        for finding in bom_findings {
-            assert_eq!(finding["suppressed"], flags.contains(&"-S"));
-            assert_eq!(finding["severity"], "warning");
-        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(stderr.contains(warning), expect_warning, "{stderr}");
     }
+    bom_match.assert_calls(2);
 }
 
 #[test]
@@ -558,43 +573,8 @@ fn test_publish_preserves_authored_bom_intent() {
 
 #[test]
 fn test_publish_board_full() {
-    let server = MockServer::start();
-    let matched_paths = ["C1.C", "C2.C", "LED1.D1.LED", "LED1.R1.R", "R1.R"];
-    let results = matched_paths
-        .iter()
-        .map(|path| {
-            let has_offer = *path != "C1.C";
-            serde_json::json!({
-                "designEntry": { "path": path },
-                "match": "MATCH_EXACT",
-                "ranked": if has_offer {
-                    serde_json::json!({ "US": [{ "offerId": "offer-1", "stockClass": "PLENTY" }] })
-                } else {
-                    serde_json::json!({})
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    let bom_match = server.mock(|when, then| {
-        when.method(POST).path("/api/boms/match");
-        then.status(200).json_body(serde_json::json!({
-            "results": results,
-            "offers": {
-                "offer-1": {
-                    "id": "offer-1",
-                    "geography": "US",
-                    "sellerName": "test",
-                    "marketStock": 100
-                }
-            }
-        }));
-    });
-
     let mut sb = Sandbox::new();
     sb.cwd("src")
-        .env("DIODE_API_URL", server.base_url())
-        .env("NO_PROXY", "127.0.0.1,localhost")
-        .env("no_proxy", "127.0.0.1,localhost")
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_PCB_TOML)
         .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
@@ -635,23 +615,14 @@ fn test_publish_board_full() {
         .run()
         .expect("Failed to run pcb publish command");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let bom_finished = stderr
-        .find("Checking BOM offers")
-        .expect("BOM task should finish before preflight review");
     let build_warning = stderr
         .find("io() 'GND' in module 'LED1' is not connected to any ports")
         .expect("staged build warning should be reported");
-    let bom_warning = stderr
-        .find("No supplier offers found for 100nF 0402 (C1)")
-        .expect("BOM sourceability warning should be reported");
     let preflight_finished = stderr
         .find("Reviewing release preflight")
         .expect("preflight review should complete");
-    assert!(bom_finished < build_warning);
     assert!(build_warning < preflight_finished);
-    assert!(bom_finished < bom_warning);
-    assert!(bom_warning < preflight_finished);
-    bom_match.assert_calls(1);
+    assert!(!stderr.contains("Checking BOM offers"));
 
     let staging_dir = find_staging_dir(&sb, "TestBoard");
     let manufacturing = sb.default_cwd().join(&staging_dir).join("manufacturing");
