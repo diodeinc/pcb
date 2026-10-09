@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use log::{debug, warn};
+use pcb_ipc2581_tools::manufacturing::{ManufacturingExportOptions, export_manufacturing_package};
+use pcb_ir::dialects::ipc::ArtworkScope;
+use pcb_ir::geom::{GeometryAccuracy, Resolution};
 use pcb_kicad::{KiCadCliBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
@@ -30,7 +33,6 @@ pub enum ArtifactType {
     Drc,
     Bom,
     Gerbers,
-    Cpl,
     Ipc2581,
     Vrml,
 }
@@ -96,50 +98,10 @@ impl ReleaseInfo {
 
 type TaskFn = fn(&ReleaseInfo) -> Result<()>;
 
-/// Manufacturing work that runs only after the release preflight is accepted.
-const MANUFACTURING_TASKS: &[(ArtifactType, &str, TaskFn)] = &[
-    (
-        ArtifactType::Gerbers,
-        "Generating gerber files",
-        generate_gerbers,
-    ),
-    (
-        ArtifactType::Cpl,
-        "Generating pick-and-place file",
-        generate_cpl,
-    ),
-    (
-        ArtifactType::Ipc2581,
-        "Generating IPC-2581 file",
-        generate_ipc2581,
-    ),
-    (
-        ArtifactType::Vrml,
-        "Generating VRML model",
-        generate_vrml_model,
-    ),
-];
-
 const FINALIZATION_TASKS: &[(&str, TaskFn)] = &[
     ("Writing release metadata", write_metadata),
     ("Creating release archive", zip_release),
 ];
-
-/// Get manufacturing tasks as (name, function) pairs, filtered by exclusions and layout availability
-fn get_manufacturing_tasks(
-    excluded: &[ArtifactType],
-    has_layout: bool,
-) -> Vec<(&'static str, TaskFn)> {
-    if !has_layout {
-        return Vec::new();
-    }
-
-    MANUFACTURING_TASKS
-        .iter()
-        .filter(|(artifact, _, _)| !excluded.contains(artifact))
-        .map(|(_, name, task)| (*name, *task))
-        .collect()
-}
 
 /// Format cumulative time as MM:SS
 fn format_cumulative_time(seconds: f64) -> String {
@@ -315,8 +277,7 @@ pub fn build_board_release(
         |info, spinner| review_release_preflight(info, spinner, &mut diagnostics),
     )?;
 
-    let manufacturing_tasks = get_manufacturing_tasks(&options.exclude, release_info.has_layout());
-    execute_tasks(&release_info, &manufacturing_tasks, start_time)?;
+    generate_manufacturing(&release_info, &options.exclude, start_time)?;
     execute_tasks(&release_info, FINALIZATION_TASKS, start_time)?;
     let zip_path = archive_zip_path(&release_info);
     eprintln!(
@@ -1088,236 +1049,56 @@ fn add_directory_to_zip<W: std::io::Write + std::io::Seek>(
     Ok(())
 }
 
-/// Generate gerber files
-fn generate_gerbers(info: &ReleaseInfo) -> Result<()> {
-    let manufacturing_dir = info.staging_dir.join("manufacturing");
-    fs::create_dir_all(&manufacturing_dir)?;
-
-    let kicad_pcb_path = info
-        .staged_pcb_path()
-        .context("No layout directory for gerber generation")?;
-
-    // Generate gerber files to a temporary directory
-    let gerbers_dir = manufacturing_dir.join("gerbers_temp");
-    fs::create_dir_all(&gerbers_dir)?;
-
-    KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("gerbers")
-        .arg("--output")
-        .arg(gerbers_dir.to_string_lossy())
-        .arg("--use-drill-file-origin")
-        .arg(kicad_pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to generate gerber files")?;
-
-    // KiCad's default Gerber layer set has changed across releases. Export
-    // fabrication drawings explicitly in isolation so its job file cannot
-    // replace the primary manufacturing job file.
-    let fab_gerbers_dir = manufacturing_dir.join("fab_gerbers_temp");
-    fs::create_dir_all(&fab_gerbers_dir)?;
-    let fab_export_result = (|| -> Result<()> {
-        KiCadCliBuilder::new()
-            .command("pcb")
-            .subcommand("export")
-            .subcommand("gerbers")
-            .arg("--output")
-            .arg(fab_gerbers_dir.to_string_lossy())
-            .arg("--layers")
-            .arg("F.Fab,B.Fab")
-            .arg("--use-drill-file-origin")
-            .arg(kicad_pcb_path.to_string_lossy())
-            .run()
-            .context("Failed to generate fabrication drawing gerbers")?;
-        copy_assembly_drawing_gerbers(&fab_gerbers_dir, &gerbers_dir)?;
-        Ok(())
-    })();
-    let fab_cleanup_result = fs::remove_dir_all(&fab_gerbers_dir);
-    fab_export_result?;
-    fab_cleanup_result?;
-
-    // Generate drill files (separate PTH/NPTH).
-    KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("drill")
-        .arg("--output")
-        .arg(gerbers_dir.to_string_lossy())
-        .arg("--format")
-        .arg("excellon")
-        .arg("--drill-origin")
-        .arg("plot")
-        .arg("--excellon-zeros-format")
-        .arg("decimal")
-        .arg("--excellon-units")
-        .arg("mm")
-        .arg("--excellon-separate-th")
-        .arg(kicad_pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to generate drill files")?;
-
-    // Create gerbers.zip from the temp directory
-    create_gerbers_zip(&gerbers_dir, &manufacturing_dir.join("gerbers.zip"))?;
-
-    // Clean up temp directory
-    fs::remove_dir_all(&gerbers_dir)?;
-
-    Ok(())
-}
-
-fn copy_assembly_drawing_gerbers(source_dir: &Path, destination_dir: &Path) -> Result<usize> {
-    let mut copied = 0;
-    for entry in fs::read_dir(source_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("gbr") {
-            continue;
-        }
-        let contents = fs::read_to_string(&path)?;
-        if !contents.contains("%TF.FileFunction,AssemblyDrawing,") {
-            continue;
-        }
-        fs::copy(&path, destination_dir.join(entry.file_name()))?;
-        copied += 1;
-    }
-    merge_assembly_drawing_job_attributes(source_dir, destination_dir)?;
-    Ok(copied)
-}
-
-fn merge_assembly_drawing_job_attributes(source_dir: &Path, destination_dir: &Path) -> Result<()> {
-    let Some(source_job) = find_gerber_job_file(source_dir)? else {
+/// Export IPC once, then derive the board's manufacturing package from it.
+fn generate_manufacturing(
+    info: &ReleaseInfo,
+    excluded: &[ArtifactType],
+    start_time: Instant,
+) -> Result<()> {
+    let Some(kicad_pcb_path) = info.staged_pcb_path() else {
         return Ok(());
     };
-    let Some(destination_job) = find_gerber_job_file(destination_dir)? else {
-        return Ok(());
-    };
-    let source: serde_json::Value = serde_json::from_slice(&fs::read(&source_job)?)?;
-    let mut destination: serde_json::Value = serde_json::from_slice(&fs::read(&destination_job)?)?;
-    let source_files = source
-        .get("FilesAttributes")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|entry| {
-            entry
-                .get("FileFunction")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|function| function.starts_with("AssemblyDrawing,"))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let destination_files = destination
-        .get_mut("FilesAttributes")
-        .and_then(serde_json::Value::as_array_mut)
-        .context("primary Gerber job file has no FilesAttributes array")?;
-    for source_entry in source_files {
-        let source_path = source_entry.get("Path").and_then(serde_json::Value::as_str);
-        if let Some(existing) = destination_files
-            .iter_mut()
-            .find(|entry| entry.get("Path").and_then(serde_json::Value::as_str) == source_path)
-        {
-            *existing = source_entry;
-        } else {
-            destination_files.push(source_entry);
+    let gerbers = !excluded.contains(&ArtifactType::Gerbers);
+    let ipc2581 = !excluded.contains(&ArtifactType::Ipc2581);
+    if gerbers || ipc2581 {
+        let manufacturing_dir = info.staging_dir.join("manufacturing");
+        fs::create_dir_all(&manufacturing_dir)?;
+        // IPC is also an intermediate when its published artifact is excluded.
+        let temporary = tempfile::tempdir()?;
+        let ipc2581_path = temporary.path().join("ipc2581.xml");
+        execute_task(info, "Generating IPC-2581 file", start_time, |_, _| {
+            export_ipc2581(&kicad_pcb_path, &ipc2581_path)
+        })?;
+        if gerbers {
+            execute_task(
+                info,
+                "Generating Gerber and drill files",
+                start_time,
+                |_, _| {
+                    export_manufacturing_package(
+                        &ipc2581_path,
+                        &manufacturing_dir.join("gerbers.zip"),
+                        &ManufacturingExportOptions {
+                            view: ArtworkScope::Board,
+                            include_auxiliary_layers: true,
+                            relief_debug_dir: None,
+                        },
+                        Resolution::default().with_accuracy(GeometryAccuracy::micrometres(1)),
+                    )?;
+                    Ok(())
+                },
+            )?;
+        }
+        if ipc2581 {
+            fs::copy(&ipc2581_path, manufacturing_dir.join("ipc2581.xml"))?;
         }
     }
-    let mut serialized = serde_json::to_string_pretty(&destination)?;
-    serialized.push('\n');
-    fs::write(destination_job, serialized)?;
-    Ok(())
-}
-
-fn find_gerber_job_file(directory: &Path) -> Result<Option<PathBuf>> {
-    for entry in fs::read_dir(directory)? {
-        let path = entry?.path();
-        if path.is_file()
-            && path.extension().and_then(|extension| extension.to_str()) == Some("gbrjob")
-        {
-            return Ok(Some(path));
-        }
-    }
-    Ok(None)
-}
-
-/// Generate pick-and-place file
-fn generate_cpl(info: &ReleaseInfo) -> Result<()> {
-    let manufacturing_dir = info.staging_dir.join("manufacturing");
-    fs::create_dir_all(&manufacturing_dir)?;
-
-    let kicad_pcb_path = info
-        .staged_pcb_path()
-        .context("No layout directory for CPL generation")?;
-
-    KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("pos")
-        .arg("--format")
-        .arg("csv")
-        .arg("--units")
-        .arg("mm")
-        .arg("--use-drill-file-origin")
-        .arg("--output")
-        .arg(manufacturing_dir.join("cpl.csv").to_string_lossy())
-        .arg(kicad_pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to generate pick-and-place file")?;
-
-    // Fix CPL CSV header to match expected format
-    fix_cpl_header(&manufacturing_dir.join("cpl.csv"))?;
-
-    Ok(())
-}
-
-/// Create a ZIP archive from gerber files directory
-fn create_gerbers_zip(gerbers_dir: &Path, zip_path: &Path) -> Result<()> {
-    let zip_file = fs::File::create(zip_path)?;
-    let buffered = BufWriter::with_capacity(256 * 1024, zip_file);
-    let mut zip = zip::ZipWriter::new(buffered);
-
-    for entry in fs::read_dir(gerbers_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        // Skip symlinks for safety
-        if path.is_symlink() {
-            continue;
-        }
-        if path.is_file() {
-            let name = path.file_name().unwrap().to_string_lossy();
-            zip.start_file(name, zip::write::FileOptions::<()>::default())?;
-            std::io::copy(&mut fs::File::open(&path)?, &mut zip)?;
-        }
-    }
-    zip.finish()?;
-    Ok(())
-}
-
-/// Fix the CPL CSV header to match expected format
-fn fix_cpl_header(cpl_path: &Path) -> Result<()> {
-    let content = fs::read_to_string(cpl_path)?;
-    let lines: Vec<&str> = content.lines().collect();
-    if lines.len() > 1 {
-        let fixed_content = format!(
-            "Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n{}",
-            lines[1..].join("\n")
-        );
-        fs::write(cpl_path, fixed_content)?;
+    if !excluded.contains(&ArtifactType::Vrml) {
+        execute_task(info, "Generating VRML model", start_time, |info, _| {
+            generate_vrml_model(info)
+        })?;
     }
     Ok(())
-}
-
-/// Generate IPC-2581 file
-fn generate_ipc2581(info: &ReleaseInfo) -> Result<()> {
-    let manufacturing_dir = info.staging_dir.join("manufacturing");
-    fs::create_dir_all(&manufacturing_dir)?;
-
-    let kicad_pcb_path = info
-        .staged_pcb_path()
-        .context("No layout directory for IPC-2581 generation")?;
-    let ipc2581_path = manufacturing_dir.join("ipc2581.xml");
-
-    export_ipc2581(&kicad_pcb_path, &ipc2581_path)
 }
 
 pub(crate) fn export_ipc2581(kicad_pcb_path: &Path, ipc2581_path: &Path) -> Result<()> {
@@ -1589,51 +1370,5 @@ mod tests {
                 "BOM matching does not recognize Acme UNKNOWN (U1)",
             ]
         );
-    }
-
-    #[test]
-    fn copies_only_explicit_assembly_drawing_gerbers() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let source = temp_dir.path().join("source");
-        let destination = temp_dir.path().join("destination");
-        fs::create_dir_all(&source)?;
-        fs::create_dir_all(&destination)?;
-        fs::write(
-            source.join("layout-F_Fab.gbr"),
-            "%TF.FileFunction,AssemblyDrawing,Top*%\nM02*\n",
-        )?;
-        fs::write(
-            source.join("layout-F_Cu.gtl"),
-            "%TF.FileFunction,Copper,L1,Top*%\nM02*\n",
-        )?;
-        fs::write(
-            source.join("layout-job.gbrjob"),
-            r#"{
-  "FilesAttributes": [
-    {"Path":"layout-F_Fab.gbr","FileFunction":"AssemblyDrawing,Top","FilePolarity":"Positive"}
-  ]
-}"#,
-        )?;
-        fs::write(
-            destination.join("layout-job.gbrjob"),
-            r#"{
-  "FilesAttributes": [
-    {"Path":"layout-F_Cu.gtl","FileFunction":"Copper,L1,Top","FilePolarity":"Positive"}
-  ]
-}"#,
-        )?;
-
-        assert_eq!(copy_assembly_drawing_gerbers(&source, &destination)?, 1);
-
-        assert!(destination.join("layout-F_Fab.gbr").is_file());
-        assert!(!destination.join("layout-F_Cu.gtl").exists());
-        let job: serde_json::Value =
-            serde_json::from_slice(&fs::read(destination.join("layout-job.gbrjob"))?)?;
-        let files = job["FilesAttributes"].as_array().unwrap();
-        assert_eq!(files.len(), 2);
-        assert!(files.iter().any(|entry| {
-            entry["FileFunction"] == "AssemblyDrawing,Top" && entry["Path"] == "layout-F_Fab.gbr"
-        }));
-        Ok(())
     }
 }

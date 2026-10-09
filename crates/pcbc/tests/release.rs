@@ -1,5 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
+use std::collections::BTreeSet;
 use std::fs::File;
 
 use httpmock::prelude::*;
@@ -144,8 +145,6 @@ fn source_only_args(board_zen: &str) -> Vec<&str> {
         "bom",
         "--exclude",
         "gerbers",
-        "--exclude",
-        "cpl",
         "--exclude",
         "ipc2581",
         "--exclude",
@@ -685,7 +684,87 @@ fn test_publish_board_full() {
     let manufacturing = sb.default_cwd().join(&staging_dir).join("manufacturing");
     pcb_ipc2581_tools::ipc2581::Ipc2581::parse_file(manufacturing.join("ipc2581.xml")).unwrap();
     assert!(!manufacturing.join("ipc2581.html").exists());
+    assert!(!manufacturing.join("cpl.csv").exists());
+    let mut gerbers =
+        zip::ZipArchive::new(File::open(manufacturing.join("gerbers.zip")).unwrap()).unwrap();
+    let names = gerbers
+        .file_names()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let job_name = names.iter().find(|name| name.ends_with(".gbrjob")).unwrap();
+    let job: Value = serde_json::from_reader(gerbers.by_name(job_name).unwrap()).unwrap();
+    let inventory = job["FilesAttributes"].as_array().unwrap();
+    assert_eq!(
+        inventory
+            .iter()
+            .map(|entry| entry["Path"].as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        names
+            .iter()
+            .filter(|name| *name != job_name)
+            .map(String::as_str)
+            .collect()
+    );
+    for function in [
+        "Copper,L1,Top",
+        "Copper,L2,Bot",
+        "AssemblyDrawing,Top",
+        "AssemblyDrawing,Bot",
+    ] {
+        let entry = inventory
+            .iter()
+            .find(|entry| entry["FileFunction"] == function)
+            .unwrap();
+        let mut file = gerbers.by_name(entry["Path"].as_str().unwrap()).unwrap();
+        let mut contents = String::new();
+        std::io::Read::read_to_string(&mut file, &mut contents).unwrap();
+        assert!(contents.contains(&format!("%TF.FileFunction,{function}*%")));
+        assert!(contents.contains("%TF.Part,Single*%"));
+    }
     assert_snapshot!("publish_full", sb.snapshot_dir(&staging_dir));
+
+    // Excluding the published IPC must not remove the Gerbers' input. Check
+    // the final archive too, including repeated publishes into the same staging.
+    for excluded in [vec!["ipc2581"], vec!["gerbers"], vec!["ipc2581", "gerbers"]] {
+        let mut args = vec![
+            "publish",
+            "boards/TestBoard.zen",
+            "-S",
+            "layout",
+            "--no-push",
+            "--exclude",
+            "bom",
+            "--exclude",
+            "vrml",
+        ];
+        for artifact in &excluded {
+            args.extend(["--exclude", artifact]);
+        }
+        sb.run("pcbc", args)
+            .run()
+            .expect("publish with exclusions failed");
+        let archive = zip::ZipArchive::new(
+            File::open(sb.default_cwd().join(format!("{staging_dir}.zip"))).unwrap(),
+        )
+        .unwrap();
+        let files = archive.file_names().collect::<BTreeSet<_>>();
+        assert!(!files.contains("manufacturing/cpl.csv"));
+        assert_eq!(
+            files.contains("manufacturing/ipc2581.xml"),
+            !excluded.contains(&"ipc2581")
+        );
+        assert_eq!(
+            files.contains("manufacturing/gerbers.zip"),
+            !excluded.contains(&"gerbers")
+        );
+        assert_eq!(
+            files
+                .iter()
+                .filter(|name| name.starts_with("manufacturing/"))
+                .count(),
+            2 - excluded.len()
+        );
+    }
 }
 
 #[test]
