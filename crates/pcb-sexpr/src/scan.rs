@@ -73,14 +73,15 @@ pub fn comments(source: &str) -> impl Iterator<Item = Range<usize>> + '_ {
 }
 
 /// Why `source` is not one well-formed list, with the offset of the fault.
+/// What follows the root list is not read, as KiCad does not read it.
 ///
 /// A `;` outside a string is a fault: this crate's parser reads it as the
-/// start of a comment, but KiCad has no comments and fails on what follows.
+/// start of a comment, but KiCad reads it as text and fails on it.
 pub fn malformed(source: &str) -> Option<(usize, &'static str)> {
     let bytes = source.as_bytes();
     let comment = |gap: Range<usize>| {
         let at = gap.start + memchr(b';', &bytes[gap])?;
-        Some((at, "`;` starts a comment, which KiCad does not have"))
+        Some((at, "`;` starts a comment here, but KiCad reads it as text"))
     };
     let (mut depth, mut root, mut scanned) = (0usize, None, 0);
     for (range, token) in tokens(source) {
@@ -89,20 +90,50 @@ pub fn malformed(source: &str) -> Option<(usize, &'static str)> {
         }
         scanned = range.end;
         match token {
-            Token::Open if depth == 0 && root.is_some() => {
-                return Some((range.start, "a second top-level form"));
-            }
             Token::Open => {
                 root.get_or_insert(range.start);
                 depth += 1;
             }
             Token::Close if depth == 0 => return Some((range.start, "unmatched `)`")),
+            Token::Close if depth == 1 => return None,
             Token::Close => depth -= 1,
+            Token::String if depth == 0 => {
+                return Some((range.start, "text outside the root list"));
+            }
             Token::String => {}
             Token::UnterminatedString => return Some((range.start, "unterminated string")),
         }
     }
-    comment(scanned..bytes.len()).or_else(|| Some((root.filter(|_| depth > 0)?, "unclosed `(`")))
+    comment(scanned..bytes.len()).or_else(|| Some((root?, "unclosed `(`")))
+}
+
+/// The direct child lists of the root list of a well-formed `source`, as
+/// byte ranges in order. Nothing after the root list is read.
+pub fn children(source: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    let (mut depth, mut start) = (0usize, 0);
+    parens(source)
+        .map(move |(at, open)| {
+            depth = if open {
+                depth + 1
+            } else {
+                depth.saturating_sub(1)
+            };
+            if open && depth == 2 {
+                start = at;
+            }
+            (depth, open, start..at + 1)
+        })
+        .take_while(|(depth, open, _)| *open || *depth > 0)
+        .filter_map(|(depth, open, range)| (!open && depth == 1).then_some(range))
+}
+
+/// The head word of the list that opens at `open`.
+pub fn head(source: &str, open: usize) -> &str {
+    let rest = &source[open + 1..];
+    let end = rest
+        .find(|c: char| c.is_ascii_whitespace() || matches!(c, '(' | ')' | '"'))
+        .unwrap_or(rest.len());
+    &rest[..end]
 }
 
 #[cfg(test)]
@@ -128,15 +159,35 @@ mod tests {
         for (source, fault) in [
             (r#"(a (b ";") c)"#, None),
             ("(a (b c)", Some((0, "unclosed `(`"))),
-            ("(a) b)", Some((5, "unmatched `)`"))),
-            ("(a) (b)", Some((4, "a second top-level form"))),
-            (r#"(a) "b"#, Some((4, "unterminated string"))),
+            (") (a)", Some((0, "unmatched `)`"))),
+            ("(a) b) (", None),
+            (r#""b" (a)"#, Some((0, "text outside the root list"))),
+            (r#"(a "b"#, Some((3, "unterminated string"))),
             (
                 "(a ; (\n b)",
-                Some((3, "`;` starts a comment, which KiCad does not have")),
+                Some((3, "`;` starts a comment here, but KiCad reads it as text")),
             ),
         ] {
             assert_eq!(malformed(source), fault, "{source}");
         }
+    }
+
+    #[test]
+    fn children_are_the_direct_lists_of_the_root() {
+        let source = r#"(lib (version 1) "x" (symbol "a" (unit (pin))) (b)) (c (d))"#;
+        let found: Vec<_> = children(source)
+            .map(|range| (head(source, range.start), &source[range]))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("version", "(version 1)"),
+                ("symbol", r#"(symbol "a" (unit (pin)))"#),
+                ("b", "(b)"),
+            ]
+        );
+        assert_eq!(head(source, 0), "lib");
+        assert_eq!(head("(a)", 0), "a");
+        assert_eq!(head("()", 0), "");
     }
 }

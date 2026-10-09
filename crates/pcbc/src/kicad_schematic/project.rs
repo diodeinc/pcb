@@ -32,15 +32,8 @@ impl KicadProject {
                     .to_path_buf();
                 (directory, requested.to_path_buf())
             } else {
-                let mut project_files = files_with_extension(requested, "kicad_pro")?;
-                if project_files.len() != 1 {
-                    bail!(
-                        "expected exactly one .kicad_pro in {}, found {}",
-                        requested.display(),
-                        project_files.len()
-                    );
-                }
-                (requested.to_path_buf(), project_files.remove(0))
+                let project_file = pcb_layout::utils::require_kicad_files(requested)?.kicad_pro;
+                (requested.to_path_buf(), project_file)
             };
         let file_name = project_file
             .file_name()
@@ -64,6 +57,23 @@ impl KicadProject {
             project_file,
         })
     }
+}
+
+/// Absolute paths of the root schematics a project declares, which need not exist yet.
+pub(crate) fn declared_root_schematics(project_file: &Path) -> Result<Vec<PathBuf>> {
+    let directory = project_file
+        .parent()
+        .context("KiCad project file has no parent directory")?;
+    let file_name = project_file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("KiCad project file name is not UTF-8")?;
+    let project: Value = serde_json::from_str(&fs::read_to_string(project_file)?)
+        .with_context(|| format!("failed to parse {}", project_file.display()))?;
+    pcb_kicad_sch::project_root_schematics(file_name, &project)?
+        .iter()
+        .map(|root| project_schematic_path(directory, directory, root))
+        .collect()
 }
 
 fn read_project_file(directory: &Path, relative: &str) -> Result<Option<String>> {
@@ -143,22 +153,6 @@ pub(crate) fn schematic_project_path(netlist: &Schematic) -> Result<Option<PathB
     netlist.resolve_package_uri(path).map(Some)
 }
 
-pub(crate) fn files_with_extension(directory: &Path, extension: &str) -> Result<Vec<PathBuf>> {
-    let entries = fs::read_dir(directory)
-        .with_context(|| format!("failed to read {}", directory.display()))?;
-    let mut files = Vec::new();
-    for entry in entries {
-        let path = entry
-            .with_context(|| format!("failed to read an entry in {}", directory.display()))?
-            .path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some(extension) {
-            files.push(path);
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -208,7 +202,7 @@ mod tests {
 
         let error = KicadProject::load(directory.path()).unwrap_err();
 
-        assert!(error.to_string().contains("exactly one .kicad_pro"));
+        assert!(error.to_string().contains("Multiple .kicad_pro files"));
     }
 
     #[test]

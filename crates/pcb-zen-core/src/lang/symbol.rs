@@ -665,7 +665,7 @@ fn get_or_load_library(
         ))
     })?;
 
-    let library = KicadSymbolLibrary::from_string_lazy(contents).map_err(|e| {
+    let library = KicadSymbolLibrary::from_string(contents).map_err(|e| {
         starlark::Error::new_other(anyhow!(
             "Failed to parse symbol library {}: {}",
             path.display(),
@@ -776,7 +776,7 @@ fn collect_split_library_sources(
         ))
     })?;
 
-    let library = KicadSymbolLibrary::from_string_lazy(contents.clone()).map_err(|e| {
+    let library = KicadSymbolLibrary::from_string(contents.clone()).map_err(|e| {
         starlark::Error::new_other(anyhow!(
             "Failed to parse symbol library {}: {}",
             symbol_path.display(),
