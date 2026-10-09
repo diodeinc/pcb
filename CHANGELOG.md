@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb build` rejects dependency symbol libraries KiCad cannot load.
 - `pcb build` and `pcb inspect` reject symbol libraries KiCad cannot load, such as ones with a root-level `embedded_fonts`, and accept what KiCad loads, such as repeated symbol names and private properties.
 - New KiCad projects are named after the board instead of `layout`; `pcb migrate` renames existing ones.
+- `moved()` is deprecated and emits a warning on each use; it still works for now.
 
 ### Fixed
 
