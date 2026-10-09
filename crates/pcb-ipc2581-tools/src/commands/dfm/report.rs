@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use pcb_ir::geom::region::ContourSet;
 use pcb_ir::geom::{BBox, Point, dist};
 use serde::ser::SerializeStruct;
@@ -8,9 +6,9 @@ use serde::{Serialize, Serializer};
 use super::pdk::Pdk;
 use super::rules::{LimitValue, Rule, RuleKind};
 
-pub const REPORT_SCHEMA_VERSION: u32 = 2;
+pub const REPORT_SCHEMA_VERSION: u32 = 3;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct DfmReport {
     pub schema_version: u32,
     pub generated_at: String,
@@ -22,49 +20,62 @@ pub struct DfmReport {
     pub coordinate_system: CoordinateSystem,
     /// The actual checked frame and its hierarchy, not a second layout model.
     pub layout: LayoutContext,
-    pub waivers: Option<WaiversApplied>,
     pub summary: Summary,
     pub rules: Vec<RuleResult>,
     /// The Steps the layout places, the layout root first. Each is checked
     /// once, in its own coordinates, wherever and however often it is placed.
     pub frames: Vec<Frame>,
     pub findings: Vec<Finding>,
-    /// Evidence that many sites reference by index instead of repeating, such
-    /// as the board profile every edge-clearance site of one board measures to.
-    pub shared_evidence: Vec<Evidence>,
-    /// Full native artwork for external diagnostic viewers.
+    /// The checked material, for viewers to draw findings over.
     pub scene: Scene,
 }
 
-#[derive(Debug, Serialize)]
-pub struct Scene {
+/// What a run prints: its identity, verdict and per-rule results.
+#[derive(Serialize)]
+pub struct ReportSummary<'a> {
     pub schema_version: u32,
+    pub generated_at: &'a str,
+    pub verdict: &'a Verdict,
+    pub tool: &'a ToolIdentity,
+    pub input: &'a FileIdentity,
+    pub pdk: &'a PdkIdentity,
+    pub layout_target: &'static str,
+    pub summary: &'a Summary,
+    pub rules: &'a [RuleResult],
+}
+
+impl DfmReport {
+    pub fn summary_record(&self) -> ReportSummary<'_> {
+        ReportSummary {
+            schema_version: self.schema_version,
+            generated_at: &self.generated_at,
+            verdict: &self.verdict,
+            tool: &self.tool,
+            input: &self.input,
+            pdk: &self.pdk,
+            layout_target: self.layout_target,
+            summary: &self.summary,
+            rules: &self.rules,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Scene {
     /// Full checked layout extent in the report's millimeter, Y-up frame.
     pub bounds: ReportBBox,
     pub passes: Vec<ScenePass>,
 }
 
-#[derive(Debug, Serialize)]
+/// One layer of material, drawn as its shapes. Each shape is in the frame
+/// of the Step that paints it and appears wherever that frame is placed.
+#[derive(Debug)]
 pub struct ScenePass {
     pub label: String,
     pub feature: &'static str,
     pub layer: Option<String>,
     pub color: &'static str,
-    /// One full vector image in world coordinates. The SVG root applies the
-    /// usual Y display flip; finding sites never crop or duplicate this image.
-    pub svg: String,
-}
-
-/// The waiver file applied to this run and what came of every entry.
-#[derive(Debug, Serialize)]
-pub struct WaiversApplied {
-    pub path: String,
-    pub sha256: String,
-    pub applied: usize,
-    /// Waived finding ids whose waiver has expired; they count as findings.
-    pub expired: Vec<String>,
-    /// Waiver entries naming no finding in this run — stale or mistyped.
-    pub unmatched: Vec<String>,
+    pub shapes: Vec<(u32, Shape)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -298,11 +309,8 @@ pub struct Summary {
     /// fails the verdict: what was not measured is never reported as passing.
     pub rules_incomplete: usize,
     pub findings: usize,
-    /// Unwaived error-severity findings.
     pub errors: usize,
-    /// Unwaived warning-severity findings.
     pub warnings: usize,
-    pub waived: usize,
     /// Measurements no rule could decide; see [`RuleResult::unresolved`].
     pub unresolved: usize,
 }
@@ -311,6 +319,8 @@ pub struct Summary {
 pub struct RuleResult {
     pub id: String,
     pub title: String,
+    /// What every finding of this rule says is wrong.
+    pub finding_title: String,
     pub severity: Severity,
     pub status: RuleStatus,
     pub limit: RuleLimit,
@@ -325,10 +335,10 @@ pub struct RuleResult {
     /// Measurements evaluated against the limit.
     pub checked: usize,
     pub finding_count: usize,
-    pub waived_count: usize,
     /// Measurements below the limit by less than their own uncertainty. They
     /// are not findings, since tessellation alone could account for the
     /// shortfall, and they are not proof the limit is met either.
+    #[serde(skip)]
     pub unresolved: Vec<Unresolved>,
     /// Why a `not_applicable` or `incomplete` rule was not evaluated.
     pub skip_reason: Option<String>,
@@ -344,6 +354,7 @@ impl RuleResult {
         Self {
             id: rule.id.clone(),
             title: rule.title.clone(),
+            finding_title: rule.finding_title(),
             severity: rule.severity,
             status: RuleStatus::Pass,
             limit: RuleLimit::from_rule(rule),
@@ -353,7 +364,6 @@ impl RuleResult {
             method: semantics.method,
             checked: 0,
             finding_count: 0,
-            waived_count: 0,
             unresolved: Vec::new(),
             skip_reason: None,
             assumptions: Vec::new(),
@@ -366,17 +376,17 @@ impl RuleResult {
         }
     }
 
-    /// Settle the rule's status from its finding counts: unwaived findings
-    /// carry the rule's severity, a fully waived or clean rule passes. A rule
-    /// one Step's design could not certify stays incomplete, and still
+    /// Settle the rule's status from its violations, which carry the rule's
+    /// severity: a rule without any passes. It reports `finding_count` of
+    /// them; a preferred tier leaves out those its required tier reports. A
+    /// rule one Step's design could not certify stays incomplete, and still
     /// counts what the others found.
-    pub fn finish(&mut self, finding_count: usize, waived_count: usize) {
+    pub fn finish(&mut self, violations: usize, finding_count: usize) {
         self.finding_count = finding_count;
-        self.waived_count = waived_count;
         if !self.evaluated() {
             return;
         }
-        self.status = if finding_count == waived_count {
+        self.status = if violations == 0 {
             RuleStatus::Pass
         } else if self.severity == Severity::Warning {
             RuleStatus::Warning
@@ -417,13 +427,11 @@ pub enum RuleStatus {
 }
 
 /// One measurement the limit falls inside the uncertainty band of.
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct Unresolved {
     /// Index into the report's `frames`, as for a finding.
     pub frame: u32,
-    #[serde(serialize_with = "nanometres")]
     pub actual_mm: f64,
-    #[serde(serialize_with = "nanometres")]
     pub uncertainty_mm: f64,
     pub point: ReportPoint,
     pub layers: Vec<String>,
@@ -462,21 +470,17 @@ impl RuleLimit {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct Finding {
     pub id: String,
     pub rule_id: String,
     pub severity: Severity,
-    pub waived: bool,
-    pub waiver_reason: Option<String>,
-    pub title: String,
     pub message: String,
     pub measurement: Measurement,
     pub location: Location,
     pub layers: Vec<LayerRef>,
     pub subjects: Vec<Subject>,
-    pub evidence: Vec<Evidence>,
-    /// Check-owned connected regions/layers. The finding remains the waiver unit.
+    /// Check-owned connected regions/layers.
     pub sites: Vec<Site>,
     /// Index into the report's `frames`: the Step whose own coordinates every
     /// point of this finding is in, and every place the layout repeats it.
@@ -497,12 +501,11 @@ pub enum MeasurementKind {
     MissingCopper,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Site {
     pub id: String,
     pub measurement: Measurement,
     pub measurement_kind: MeasurementKind,
-    #[serde(serialize_with = "nanometres")]
     pub uncertainty_mm: f64,
     pub witnesses: Vec<Witness>,
     /// Check-owned region of interest in the checked frame. The viewer adds
@@ -601,14 +604,13 @@ impl Measurement {
     }
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default)]
 pub struct Location {
     pub point: Option<ReportPoint>,
     pub bounding_box: Option<ReportBBox>,
-    pub witnesses: Vec<Witness>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy)]
 pub struct Witness {
     pub role: &'static str,
     pub point: ReportPoint,
@@ -630,7 +632,7 @@ pub struct ReportPoint {
 }
 
 /// Lengths are written to the nanometre; finer digits are floating-point noise.
-fn to_nanometre(millimetres: f64) -> f64 {
+pub(super) fn to_nanometre(millimetres: f64) -> f64 {
     (millimetres * 1e6).round() / 1e6 + 0.0
 }
 
@@ -708,16 +710,6 @@ pub struct Subject {
     pub anchor: Option<ReportPoint>,
 }
 
-impl Subject {
-    /// Readers fall back to `source`, so a provenance that repeats it is
-    /// left unwritten. Finding ids hash `source`, never `provenance`.
-    pub(super) fn omit_repeated_provenance(&mut self) {
-        if self.provenance == self.source {
-            self.provenance = None;
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct DrillSpan {
     pub first_copper_index: u16,
@@ -753,73 +745,93 @@ impl DrillSpan {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SourceLocator {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub set_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub feature_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_index: Option<u32>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct Evidence {
-    pub role: &'static str,
+/// A shape in its frame's millimetres, in exactly one form: a `circle`,
+/// `segment` or `bounds`; open `path`s; closed `region` rings, filled nonzero
+/// like the checked material; or a round-capped `stroke` of `width_mm` along
+/// paths. A region with a `width_mm` is stroked so too: a rounded pad is its
+/// inner rectangle drawn that way.
+#[derive(Debug, Clone, Default)]
+pub struct Shape {
     pub kind: &'static str,
     pub center: Option<ReportPoint>,
     pub diameter: Option<f64>,
     pub start: Option<ReportPoint>,
     pub end: Option<ReportPoint>,
     pub bounding_box: Option<ReportBBox>,
-    /// Closed rings for `region`, open point sequences for `path`. Region rings
-    /// use the same nonzero winding as the checked composed material.
     pub paths: Vec<Vec<ReportPoint>>,
-    /// Optional native construction for display. The measured paths above,
-    /// witness points, and uncertainty remain the check's authoritative data.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display: Option<EvidenceDisplay>,
-    /// For `shared` evidence, the index of its record in the report's
-    /// `shared_evidence` table.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shared: Option<u32>,
+    pub width_mm: Option<f64>,
 }
 
-/// Compact display geometry in the report's millimeter, Y-up frame. These
-/// constructions retain source curves without fitting or smoothing measured
-/// polygons, and never participate in measurements or diagnostic identity.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum EvidenceDisplay {
-    /// Independently filled native SVG paths, union-composited by the viewer.
-    Path {
-        paths: Vec<String>,
-        fill_rule: &'static str,
-    },
-    /// A physical-width round-capped, round-joined stroke of these paths.
-    RoundStroke {
-        paths: Vec<Vec<ReportPoint>>,
-        width_mm: f64,
-    },
-    /// Required circular copper minus the named native copper layer image.
-    CircleMinusLayer {
-        center: ReportPoint,
-        diameter: f64,
-        layer: String,
-    },
-    CircleIntersection {
-        first: DisplayCircle,
-        second: DisplayCircle,
-    },
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-pub struct DisplayCircle {
-    pub center: ReportPoint,
-    pub diameter: f64,
+/// A shape a check shows, named for what it shows.
+#[derive(Debug, Clone)]
+pub struct Evidence {
+    pub role: &'static str,
+    pub shape: Shape,
 }
 
 impl Evidence {
     pub fn circle(role: &'static str, center: Point, diameter: f64) -> Self {
         Self {
             role,
+            shape: Shape::circle(center, diameter),
+        }
+    }
+
+    pub fn segment(role: &'static str, start: Point, end: Point) -> Self {
+        Self {
+            role,
+            shape: Shape::segment(start, end),
+        }
+    }
+
+    pub fn bounds(role: &'static str, bounding_box: BBox) -> Self {
+        Self {
+            role,
+            shape: Shape {
+                kind: "bounds",
+                bounding_box: Some(bounding_box.into()),
+                ..Shape::default()
+            },
+        }
+    }
+
+    pub fn path(role: &'static str, paths: Vec<Vec<ReportPoint>>) -> Self {
+        Self {
+            role,
+            shape: Shape::path(paths),
+        }
+    }
+
+    pub fn region(role: &'static str, region: &ContourSet) -> Self {
+        Self {
+            role,
+            shape: Shape::region(region),
+        }
+    }
+
+    pub fn stroke(role: &'static str, paths: Vec<Vec<ReportPoint>>, width_mm: f64) -> Self {
+        Self {
+            role,
+            shape: Shape::stroke(paths, width_mm),
+        }
+    }
+}
+
+impl Shape {
+    pub fn circle(center: Point, diameter: f64) -> Self {
+        Self {
             kind: "circle",
             center: Some(center.into()),
             diameter: Some(diameter),
@@ -827,9 +839,8 @@ impl Evidence {
         }
     }
 
-    pub fn segment(role: &'static str, start: Point, end: Point) -> Self {
+    pub fn segment(start: Point, end: Point) -> Self {
         Self {
-            role,
             kind: "segment",
             start: Some(start.into()),
             end: Some(end.into()),
@@ -837,31 +848,16 @@ impl Evidence {
         }
     }
 
-    pub fn bounds(role: &'static str, bounding_box: BBox) -> Self {
+    pub fn path(paths: Vec<Vec<ReportPoint>>) -> Self {
         Self {
-            role,
-            kind: "bounds",
-            bounding_box: Some(bounding_box.into()),
+            kind: "path",
+            paths,
             ..Self::default()
         }
     }
 
-    /// Drop vertices within `SIMPLIFY_MM` of the simplified path.
-    pub(super) fn simplify(&mut self) {
-        let closed = self.kind == "region";
-        for path in &mut self.paths {
-            *path = simplified(path, closed);
-        }
-        if let Some(EvidenceDisplay::RoundStroke { paths, .. }) = &mut self.display {
-            for path in paths {
-                *path = simplified(path, false);
-            }
-        }
-    }
-
-    pub fn region(role: &'static str, region: &ContourSet) -> Self {
+    pub fn region(region: &ContourSet) -> Self {
         Self {
-            role,
             kind: "region",
             bounding_box: (!region.is_empty()).then(|| region.bbox.into()),
             paths: region
@@ -872,46 +868,42 @@ impl Evidence {
             ..Self::default()
         }
     }
+
+    pub fn polygon(ring: Vec<ReportPoint>) -> Self {
+        Self {
+            kind: "region",
+            paths: vec![ring],
+            ..Self::default()
+        }
+    }
+
+    /// The closed polygon `ring`, its outline drawn round to `width_mm`.
+    pub fn rounded(ring: Vec<ReportPoint>, width_mm: f64) -> Self {
+        Self {
+            width_mm: Some(width_mm),
+            ..Self::polygon(ring)
+        }
+    }
+
+    pub fn stroke(paths: Vec<Vec<ReportPoint>>, width_mm: f64) -> Self {
+        Self {
+            kind: "stroke",
+            paths,
+            width_mm: Some(width_mm),
+            ..Self::default()
+        }
+    }
+
+    /// Drop vertices within `SIMPLIFY_MM` of the simplified path.
+    pub(super) fn simplify(&mut self) {
+        let closed = self.kind == "region";
+        for path in &mut self.paths {
+            *path = simplified(path, closed);
+        }
+    }
 }
 
 const SIMPLIFY_MM: f64 = 1e-4;
-
-/// The shared-evidence table: evidence that recurs verbatim, written once
-/// wherever its references and that one copy are shorter than the copies
-/// they replace.
-pub(super) fn share_repeated_evidence(findings: &mut [Finding]) -> Vec<Evidence> {
-    fn evidence(findings: &mut [Finding]) -> impl Iterator<Item = &mut Evidence> {
-        findings.iter_mut().flat_map(|finding| {
-            let sites = finding.sites.iter_mut().flat_map(|site| &mut site.evidence);
-            finding.evidence.iter_mut().chain(sites)
-        })
-    }
-    let written = |evidence: &Evidence| serde_json::to_vec(evidence).expect("evidence serializes");
-    let mut uses = HashMap::<Vec<u8>, (usize, Option<u32>)>::new();
-    for item in evidence(findings) {
-        uses.entry(written(item)).or_default().0 += 1;
-    }
-    let mut shared = Vec::new();
-    for item in evidence(findings) {
-        let body = written(item);
-        let (count, index) = uses.get_mut(&body).expect("counted above");
-        let reference = Evidence {
-            role: item.role,
-            kind: "shared",
-            bounding_box: item.bounding_box,
-            shared: Some(index.unwrap_or(shared.len() as u32)),
-            ..Evidence::default()
-        };
-        if *count * written(&reference).len() + body.len() < *count * body.len() {
-            index.get_or_insert_with(|| {
-                shared.push(item.clone());
-                shared.len() as u32 - 1
-            });
-            *item = reference;
-        }
-    }
-    shared
-}
 
 /// Douglas–Peucker. A ring is the path back to its first vertex; one that
 /// would collapse keeps every vertex.

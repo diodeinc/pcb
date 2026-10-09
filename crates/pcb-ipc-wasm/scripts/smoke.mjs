@@ -25,7 +25,7 @@ if (!isMainThread) {
   const document = new IpcDocument(xml);
   try {
     const report = document.checkDfm({ pdk, generatedAt });
-    parentPort.postMessage({ verdict: report.verdict, ids: report.findings.map(f => f.id), scene: report.scene });
+    parentPort.postMessage({ verdict: report.verdict, rules: report.rules });
   } finally {
     document.free();
   }
@@ -108,32 +108,11 @@ if (!isMainThread) {
     assert.equal(report.pdk.profile, 'test');
     assert.equal(report.pdk.profile_status, 'executable');
     assert.deepEqual(report.pdk.support.copper_layers, { exact: null, minimum: 2, maximum: 4 });
-    assert.equal(report.layout.kind, 'board');
-    assert.equal(report.scene.schema_version, 1);
-    assert.ok(report.scene.bounds.min.x <= 0 && report.scene.bounds.max.x >= 30);
-    assert.ok(report.scene.passes.some(pass => pass.layer === 'TOP'));
-    for (const pass of report.scene.passes) assert.match(pass.svg, /<svg/);
-    for (const finding of report.findings) {
-      assert.ok(finding.sites.length > 0);
-      for (const site of finding.sites) {
-        assert.equal(typeof site.id, 'string');
-        assert.ok(site.bounding_box.min.x <= site.bounding_box.max.x);
-      }
-    }
-    assert.deepEqual(report.findings.map(f => f.rule_id).sort(), [
+    assert.deepEqual(report.rules.filter(r => r.finding_count > 0).map(r => r.id).sort(), [
       'copper.minimum_feature_width', 'drilling.minimum_pth_hole_diameter', 'soldermask.minimum_web',
     ]);
     assert.equal(report.rules.find(r => r.id === 'copper.minimum_pth_annular_ring').checked, 2);
     assert.deepEqual(report, document.checkDfm({ pdk, generatedAt }));
-    const waivers = { name: 'waivers.toml', source: report.findings.map(f =>
-      `[[waiver]]\nfinding = "${f.id}"\nreason = "test"\nexpires = "2026-08-31"\n`).join('\n') };
-    const waived = document.checkDfm({ pdk, generatedAt, waivers });
-    assert.equal(waived.verdict, 'pass');
-    assert.equal(waived.summary.waived, 3);
-    assert.equal(waived.findings.length, 3);
-    const expired = document.checkDfm({ pdk, generatedAt: '2026-08-31T00:00:00Z', waivers });
-    assert.equal(expired.verdict, 'fail');
-    assert.equal(expired.waivers.expired.length, 3);
     const defaultReport = document.checkDfm();
     assert.equal(defaultReport.pdk.path, 'builtin:standard');
     assert.ok(Date.parse(defaultReport.generated_at) > Date.parse('2026-01-01T00:00:00Z'));
@@ -216,9 +195,8 @@ if (!isMainThread) {
       worker.once('exit', code => { if (code !== 0) reject(new Error(`worker exited ${code}`)); });
     });
     assert.equal(fromWorker.verdict, report.verdict);
-    assert.deepEqual(fromWorker.ids, report.findings.map(f => f.id));
-    assert.deepEqual(fromWorker.scene, report.scene);
-    console.log('IPC WASM: import, all exports, DFM/waivers, malformed input, and worker checks passed');
+    assert.deepEqual(fromWorker.rules, report.rules);
+    console.log('IPC WASM: import, all exports, DFM, malformed input, and worker checks passed');
   } finally {
     document.free();
   }

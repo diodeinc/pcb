@@ -28,10 +28,9 @@ mod pdk;
 pub mod report;
 mod rules;
 mod scene;
-mod waivers;
-
 #[cfg(feature = "cli")]
-const MAX_REPORT_BYTES: usize = 128 * 1024 * 1024;
+mod store;
+
 const MAX_PDK_BYTES: usize = 1024 * 1024;
 
 pub use builtin_pdks::BuiltinPdk;
@@ -55,13 +54,12 @@ pub enum PdkSource<'a> {
 /// Inputs to one DFM run over an already imported physical design.
 ///
 /// The host supplies the source identity and timestamp so this API performs
-/// no filesystem, environment, or clock access. Waivers expire on the UTC
-/// date of `generated_at`; supplying the same inputs yields the same report.
+/// no filesystem, environment, or clock access; supplying the same inputs
+/// yields the same report.
 #[derive(Debug)]
 pub struct CheckRequest<'a> {
     pub input: report::FileIdentity,
     pub pdk: PdkSource<'a>,
-    pub waivers: Option<TextSource<'a>>,
     pub layout_target: LayoutTarget,
     pub generated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -104,26 +102,13 @@ pub fn check(
     if rules.is_empty() {
         bail!("PDK {pdk_path} configures no DFM rules; add at least one capability");
     }
-    let waivers = request
-        .waivers
-        .map(|source| {
-            waivers::WaiverFile::parse(source.source)
-                .with_context(|| format!("failed to parse waiver file {}", source.path))
-        })
-        .transpose()?;
-
     let designs = design::Design::frames(
         imported,
         request.layout_target.artwork_scope(),
         &rules,
         resolution,
     )?;
-    let mut checked = checks::run(
-        &rules,
-        &designs,
-        waivers.as_ref(),
-        request.generated_at.date_naive(),
-    )?;
+    let mut checked = checks::run(&rules, &designs)?;
     let summary = summarize(&checked);
     let layout = designs[0].report_layout();
     let frames = checked
@@ -138,21 +123,12 @@ pub fn check(
         &frames,
         &checked.findings,
     )?;
-    for finding in &mut checked.findings {
-        let sites = finding.sites.iter_mut().flat_map(|site| &mut site.subjects);
-        finding
-            .subjects
-            .iter_mut()
-            .chain(sites)
-            .for_each(report::Subject::omit_repeated_provenance);
-        let sites = finding.sites.iter_mut().flat_map(|site| &mut site.evidence);
-        finding
-            .evidence
-            .iter_mut()
-            .chain(sites)
-            .for_each(report::Evidence::simplify);
-    }
-    let shared_evidence = report::share_repeated_evidence(&mut checked.findings);
+    checked
+        .findings
+        .iter_mut()
+        .flat_map(|finding| &mut finding.sites)
+        .flat_map(|site| &mut site.evidence)
+        .for_each(|evidence| evidence.shape.simplify());
     Ok(DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: request.generated_at.to_rfc3339(),
@@ -185,21 +161,10 @@ pub fn check(
             axes: "x_right_y_up",
             origin: "ipc_2581_design",
         },
-        waivers: checked
-            .waivers
-            .zip(request.waivers)
-            .map(|(outcome, source)| report::WaiversApplied {
-                path: source.path.to_owned(),
-                sha256: sha256(source.source.as_bytes()),
-                applied: outcome.applied,
-                expired: outcome.expired,
-                unmatched: outcome.unmatched,
-            }),
         summary,
         rules: checked.rules,
         frames,
         findings: checked.findings,
-        shared_evidence,
         scene,
     })
 }
@@ -208,7 +173,6 @@ pub fn check(
 #[derive(Debug)]
 pub struct CheckOptions {
     pub pdk: PathBuf,
-    pub waivers: Option<PathBuf>,
     pub output: Option<PathBuf>,
     pub layout_target: LayoutTarget,
 }
@@ -248,10 +212,7 @@ pub fn validate_output(file: &Path, options: &CheckOptions) -> Result<()> {
         .and_then(builtin_pdks::find)
         .is_none()
         .then_some(options.pdk.as_path());
-    for source in [Some(file), pdk_file, options.waivers.as_deref()]
-        .into_iter()
-        .flatten()
-    {
+    for source in [Some(file), pdk_file].into_iter().flatten() {
         ensure!(
             output != source
                 && !output_canonical.as_ref().is_some_and(|output| source
@@ -281,7 +242,9 @@ pub fn execute_check(
             return Ok(CheckOutcome::Failed(error));
         }
     };
-    write_report(options, &report)?;
+    write_report(options, &report.summary_record(), || {
+        store::database(&report)
+    })?;
 
     let summary = &report.summary;
     // A rule that could not be evaluated is named, never just counted.
@@ -334,7 +297,9 @@ pub fn write_error_report(
         },
         "error": { "message": format!("{error:#}") },
     });
-    write_report(options, &incomplete)
+    write_report(options, &incomplete, || {
+        store::incomplete_database(&incomplete)
+    })
 }
 
 #[cfg(feature = "cli")]
@@ -350,18 +315,6 @@ fn build_report(file: &Path, options: &CheckOptions, resolution: Resolution) -> 
     } else {
         None
     };
-    let waivers = options
-        .waivers
-        .as_deref()
-        .map(|path| -> Result<_> {
-            let bytes = std::fs::read(path)
-                .with_context(|| format!("failed to read waiver file {}", path.display()))?;
-            let source = String::from_utf8(bytes)
-                .with_context(|| format!("waiver file {} is not UTF-8", path.display()))?;
-            Ok((path.display().to_string(), source))
-        })
-        .transpose()?;
-
     let generated_at = generation_time();
     let content = file_utils::ipc_text(file, &input_bytes)?;
     let ipc = Ipc2581::parse(&content).context("failed to parse IPC-2581 file")?;
@@ -380,9 +333,6 @@ fn build_report(file: &Path, options: &CheckOptions, resolution: Resolution) -> 
                 }),
                 None => PdkSource::Builtin(&pdk_path),
             },
-            waivers: waivers
-                .as_ref()
-                .map(|(path, source)| TextSource { path, source }),
             layout_target: options.layout_target,
             generated_at,
         },
@@ -397,7 +347,6 @@ fn annotations(summary: &report::Summary) -> String {
         (summary.rules_incomplete, "not evaluated"),
         (summary.rules_not_applicable, "not applicable"),
         (summary.warnings, "warning(s)"),
-        (summary.waived, "waived"),
         (summary.unresolved, "within measurement uncertainty"),
     ]
     .into_iter()
@@ -423,10 +372,10 @@ fn summarize(checked: &checks::Results) -> report::Summary {
         let rules = checked.rules.iter();
         rules.filter(|rule| rule.status == status).count()
     };
-    let unwaived = |severity: Severity| {
+    let findings = |severity: Severity| {
         let findings = checked.findings.iter();
         findings
-            .filter(|finding| !finding.waived && finding.severity == severity)
+            .filter(|finding| finding.severity == severity)
             .count()
     };
     report::Summary {
@@ -437,84 +386,44 @@ fn summarize(checked: &checks::Results) -> report::Summary {
         rules_not_applicable: rules(RuleStatus::NotApplicable),
         rules_incomplete: rules(RuleStatus::Incomplete),
         findings: checked.findings.len(),
-        errors: unwaived(Severity::Error),
-        warnings: unwaived(Severity::Warning),
-        waived: checked
-            .findings
-            .iter()
-            .filter(|finding| finding.waived)
-            .count(),
+        errors: findings(Severity::Error),
+        warnings: findings(Severity::Warning),
         unresolved: checked.rules.iter().map(|rule| rule.unresolved.len()).sum(),
     }
 }
 
-/// The report as compact, newline-terminated JSON of at most `limit` bytes.
-/// Serialization stops at the limit: a panel's report can be many times over
-/// it, and building all of that in memory only to refuse it cost gigabytes.
+/// Write the database to the output path, if any, replacing it only once
+/// the whole file is written; then print the summary as one line of JSON.
 #[cfg(feature = "cli")]
-fn serialize_within(report: &impl Serialize, limit: usize) -> Result<Vec<u8>> {
-    struct Capped {
-        bytes: Vec<u8>,
-        limit: usize,
-        exceeded: bool,
+fn write_report(
+    options: &CheckOptions,
+    summary: &impl Serialize,
+    database: impl FnOnce() -> Result<Vec<u8>>,
+) -> Result<()> {
+    if let Some(path) = options.output.as_deref() {
+        let bytes = database()?;
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)
+            .with_context(|| format!("failed to create DFM report in {}", parent.display()))?;
+        temporary
+            .write_all(&bytes)
+            .with_context(|| format!("failed to write DFM report to {}", path.display()))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .context("failed to flush DFM report to disk")?;
+        temporary
+            .persist(path)
+            .map_err(|error| error.error)
+            .with_context(|| format!("failed to replace DFM report {}", path.display()))?;
     }
-    impl Write for Capped {
-        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-            if self.bytes.len() + buffer.len() > self.limit {
-                self.exceeded = true;
-                return Err(std::io::Error::other("report limit reached"));
-            }
-            self.bytes.extend_from_slice(buffer);
-            Ok(buffer.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut capped = Capped {
-        bytes: Vec::new(),
-        limit,
-        exceeded: false,
-    };
-    let written = serde_json::to_writer(&mut capped, report)
-        .map_err(anyhow::Error::from)
-        .and_then(|()| Ok(capped.write_all(b"\n")?));
-    ensure!(
-        !capped.exceeded,
-        "DFM report exceeds the {limit} byte limit"
-    );
-    written.map(|()| capped.bytes)
-}
-
-#[cfg(feature = "cli")]
-fn write_report(options: &CheckOptions, report: &impl Serialize) -> Result<()> {
-    let bytes = serialize_within(report, MAX_REPORT_BYTES)?;
-    match options.output.as_deref() {
-        Some(path) => {
-            // Replace only after serialization and the complete write succeed.
-            let parent = path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or_else(|| Path::new("."));
-            let mut temporary = tempfile::NamedTempFile::new_in(parent)
-                .with_context(|| format!("failed to create DFM report in {}", parent.display()))?;
-            temporary
-                .write_all(&bytes)
-                .with_context(|| format!("failed to write DFM report to {}", path.display()))?;
-            temporary
-                .as_file()
-                .sync_all()
-                .context("failed to flush DFM report to disk")?;
-            temporary
-                .persist(path)
-                .map_err(|error| error.error)
-                .with_context(|| format!("failed to replace DFM report {}", path.display()))?;
-            Ok(())
-        }
-        None => pcb_ui::write_stdout(|stdout| stdout.write_all(&bytes))
-            .context("failed to write DFM report to stdout"),
-    }
+    let mut line = serde_json::to_vec(summary)?;
+    line.push(b'\n');
+    pcb_ui::write_stdout(|stdout| stdout.write_all(&line))
+        .context("failed to write the DFM summary to stdout")
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -548,7 +457,6 @@ mod fixtures {
                 path: "pdk.toml",
                 source: pdk,
             }),
-            waivers: None,
             layout_target,
             generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
         }
@@ -568,13 +476,7 @@ mod fixtures {
     pub fn run_board(xml: &str, pdk: &str) -> checks::Results {
         let (imported, rules) = (import(xml), rules(pdk));
         let design = design::Design::board(&imported, &rules, Resolution::default());
-        checks::run(
-            &rules,
-            std::slice::from_ref(&design),
-            None,
-            chrono::NaiveDate::default(),
-        )
-        .unwrap()
+        checks::run(&rules, std::slice::from_ref(&design)).unwrap()
     }
 }
 
@@ -830,6 +732,54 @@ limit = { minimum = "300 mil" }
     }
 
     #[test]
+    fn database_report_is_reproducible_and_holds_every_finding() {
+        let ipc = builtin_pdks::find("ipc").unwrap();
+        let board = BOARD.replace(
+            "</Profile>",
+            r#"<Cutout>
+              <PolyBegin x="10" y="1.3"/><PolyStepSegment x="20" y="1.3"/>
+              <PolyStepSegment x="20" y="5"/><PolyStepSegment x="10" y="5"/>
+              <PolyStepSegment x="10" y="1.3"/>
+            </Cutout></Profile>"#,
+        );
+        let report = check_with_pdk(&board, LayoutTarget::Board, ipc.source);
+        assert!(!report.findings.is_empty());
+        let bytes = store::database(&report).unwrap();
+        assert_eq!(bytes, store::database(&report).unwrap());
+
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .deserialize_read_exact("main", bytes.as_slice(), bytes.len(), true)
+            .unwrap();
+        let count = |sql: &str| {
+            connection
+                .query_row(sql, [], |row| row.get::<_, i64>(0))
+                .map(|count| count as usize)
+        };
+        assert_eq!(
+            count("SELECT count(*) FROM findings").unwrap(),
+            report.findings.len()
+        );
+        assert_eq!(
+            count("SELECT count(*) FROM sites").unwrap(),
+            report
+                .findings
+                .iter()
+                .map(|finding| finding.sites.len())
+                .sum::<usize>()
+        );
+        assert_eq!(
+            count("SELECT count(*) FROM sites, json_each(sites.evidence) e JOIN shapes s ON s.id = e.value ->> 1").unwrap(),
+            report
+                .findings
+                .iter()
+                .flat_map(|finding| &finding.sites)
+                .map(|site| site.evidence.len())
+                .sum::<usize>()
+        );
+    }
+
+    #[test]
     fn standard_soldermask_web_warns_without_failing_verdict() {
         let mask_web = r#"
         <LayerFeature layerRef="F.Mask">
@@ -877,7 +827,6 @@ limit = { minimum = "300 mil" }
                 CheckRequest {
                     input: report::FileIdentity::new("assembly.xml", xml.as_bytes()),
                     pdk,
-                    waivers: None,
                     layout_target: LayoutTarget::BoardArray,
                     generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
                 },
@@ -1006,7 +955,7 @@ limit = { minimum = "300 mil" }
             Resolution::default(),
         )
         .unwrap();
-        let checked = checks::run(&rules, &designs, None, NaiveDate::default()).unwrap();
+        let checked = checks::run(&rules, &designs).unwrap();
         let status = |id| {
             &checked
                 .rules
@@ -1081,71 +1030,26 @@ limit = { minimum = "300 mil" }
     }
 
     #[test]
-    fn in_memory_report_keeps_source_identity_and_waiver_dates() {
-        let imported = fixtures::import(BOARD);
+    fn in_memory_report_keeps_source_identity() {
         let pdk_source = PDK.replace("minimum = 2", "minimum = 3");
-        let run = |waivers, day| {
-            super::check(
-                &imported,
-                CheckRequest {
-                    waivers,
-                    generated_at: NaiveDate::from_ymd_opt(2026, 8, day)
-                        .unwrap()
-                        .and_hms_opt(0, 0, 0)
-                        .unwrap()
-                        .and_utc(),
-                    ..fixtures::request(BOARD, &pdk_source, LayoutTarget::Board)
-                },
-                Resolution::default(),
-            )
-            .unwrap()
-        };
-        let initial = run(None, 30);
-        assert!(matches!(initial.verdict, report::Verdict::Fail));
-        assert_eq!(initial.summary.errors, 1);
-        assert_eq!(initial.input.sha256, sha256(BOARD.as_bytes()));
-        assert_eq!(initial.pdk.sha256, sha256(pdk_source.as_bytes()));
-        assert_eq!(initial.generated_at, "2026-08-30T00:00:00+00:00");
-        let id = &initial.findings[0].id;
-        let source = format!(
-            r#"[[waiver]]
-finding = "{id}"
-reason = "approved by fab"
-expires = "2026-08-31"
-
-[[waiver]]
-finding = "dfm-stale"
-reason = "old finding"
-"#
-        );
-        let waivers = Some(TextSource {
-            path: "waivers.toml",
-            source: &source,
-        });
-        let active = run(waivers, 30);
-        assert!(matches!(active.verdict, report::Verdict::Pass));
-        assert_eq!(active.summary.errors, 0);
-        assert_eq!(active.summary.findings, 1);
-        assert_eq!(active.summary.waived, 1);
-        assert_eq!(active.findings[0].id, *id);
-        assert_eq!(
-            active.findings[0].waiver_reason.as_deref(),
-            Some("approved by fab")
-        );
-        assert!(active.findings[0].waived);
-        let applied = active.waivers.unwrap();
-        assert_eq!(applied.path, "waivers.toml");
-        assert_eq!(applied.sha256, sha256(source.as_bytes()));
-        assert_eq!(applied.applied, 1);
-        assert!(applied.expired.is_empty());
-        assert_eq!(applied.unmatched, ["dfm-stale"]);
-
-        let expired = run(waivers, 31);
-        assert!(matches!(expired.verdict, report::Verdict::Fail));
-        assert_eq!(expired.summary.errors, 1);
-        assert_eq!(expired.summary.waived, 0);
-        assert!(!expired.findings[0].waived);
-        assert_eq!(expired.waivers.unwrap().expired, std::slice::from_ref(id));
+        let report = super::check(
+            &fixtures::import(BOARD),
+            CheckRequest {
+                generated_at: NaiveDate::from_ymd_opt(2026, 8, 30)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_utc(),
+                ..fixtures::request(BOARD, &pdk_source, LayoutTarget::Board)
+            },
+            Resolution::default(),
+        )
+        .unwrap();
+        assert!(matches!(report.verdict, report::Verdict::Fail));
+        assert_eq!(report.summary.errors, 1);
+        assert_eq!(report.input.sha256, sha256(BOARD.as_bytes()));
+        assert_eq!(report.pdk.sha256, sha256(pdk_source.as_bytes()));
+        assert_eq!(report.generated_at, "2026-08-30T00:00:00+00:00");
     }
 
     #[cfg(feature = "cli")]
@@ -1154,7 +1058,7 @@ reason = "old finding"
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("board.xml.zst");
         let pdk = directory.path().join("custom.toml");
-        let output = directory.path().join("report.json");
+        let output = directory.path().join("report.dfm");
         let pdk_source = PDK.replace("minimum = 2", "minimum = 3");
         let bytes = zstd::encode_all(BOARD.as_bytes(), 0).unwrap();
         std::fs::write(&input, &bytes).unwrap();
@@ -1163,7 +1067,6 @@ reason = "old finding"
             &input,
             &CheckOptions {
                 pdk: pdk.clone(),
-                waivers: None,
                 output: Some(output.clone()),
                 layout_target: LayoutTarget::Board,
             },
@@ -1178,74 +1081,56 @@ reason = "old finding"
                 .to_string()
                 .contains("DFM check failed with 1 error finding(s)")
         );
-        let cli: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        let cli = std::fs::read(output).unwrap();
+        let generated_at: String = rusqlite::Connection::open_in_memory()
+            .and_then(|mut connection| {
+                connection.deserialize_read_exact("main", cli.as_slice(), cli.len(), true)?;
+                connection.query_row(
+                    "SELECT value ->> '$' FROM report WHERE key = 'generated_at'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
         let mut report = check_with_pdk(BOARD, LayoutTarget::Board, &pdk_source);
         report.input = report::FileIdentity::new(input.display().to_string(), &bytes);
         report.pdk.path = pdk.display().to_string();
-        report.generated_at = cli["generated_at"].as_str().unwrap().to_owned();
-        assert_eq!(cli, serde_json::to_value(report).unwrap());
+        report.generated_at = generated_at;
+        assert_eq!(cli, store::database(&report).unwrap());
     }
 
     #[cfg(feature = "cli")]
     #[test]
     fn a_failed_report_write_leaves_the_destination_and_no_temporary_file() {
-        struct Unserializable;
-        impl Serialize for Unserializable {
-            fn serialize<S: serde::Serializer>(
-                &self,
-                _serializer: S,
-            ) -> std::result::Result<S::Ok, S::Error> {
-                Err(serde::ser::Error::custom("serialization failed"))
-            }
-        }
         let directory = tempfile::tempdir().unwrap();
         let options = |output: PathBuf| CheckOptions {
             pdk: "standard".into(),
-            waivers: None,
             output: Some(output),
             layout_target: LayoutTarget::Board,
         };
+        let summary = serde_json::json!({"verdict": "incomplete"});
 
-        let file = directory.path().join("report.dfm.json");
+        let file = directory.path().join("report.dfm");
         std::fs::write(&file, b"previous report").unwrap();
-        let error = write_report(&options(file.clone()), &Unserializable).unwrap_err();
-        assert!(error.to_string().contains("serialization failed"));
+        let error = write_report(&options(file.clone()), &summary, || {
+            anyhow::bail!("database failed")
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("database failed"));
         assert_eq!(std::fs::read(file).unwrap(), b"previous report");
 
         // A destination that cannot be replaced: a directory.
         let occupied = directory.path().join("occupied");
         std::fs::create_dir(&occupied).unwrap();
         std::fs::write(occupied.join("sentinel"), b"untouched").unwrap();
-        let report = serde_json::json!({"verdict": "incomplete"});
-        let error = write_report(&options(occupied.clone()), &report).unwrap_err();
+        let error =
+            write_report(&options(occupied.clone()), &summary, || Ok(Vec::new())).unwrap_err();
         assert!(error.to_string().contains("failed to replace DFM report"));
         assert_eq!(
             std::fs::read(occupied.join("sentinel")).unwrap(),
             b"untouched"
         );
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
-    }
-
-    #[cfg(feature = "cli")]
-    #[test]
-    fn serialization_stops_at_the_report_limit() {
-        let report = serde_json::json!({"verdict": "fail", "findings": vec!["x"; 64]});
-        let whole = serialize_within(&report, usize::MAX).unwrap();
-        assert_eq!(whole.last(), Some(&b'\n'));
-        assert_eq!(
-            whole[..whole.len() - 1],
-            serde_json::to_vec(&report).unwrap()
-        );
-        // The limit is inclusive of the trailing newline.
-        assert_eq!(serialize_within(&report, whole.len()).unwrap(), whole);
-        for limit in [whole.len() - 1, 16, 0] {
-            let error = serialize_within(&report, limit).unwrap_err();
-            assert_eq!(
-                error.to_string(),
-                format!("DFM report exceeds the {limit} byte limit")
-            );
-        }
     }
 
     #[test]
@@ -1472,8 +1357,8 @@ limit = { minimum = "0.2 mm" }
         assert_eq!(board.findings.len(), 1);
         assert_eq!(board.findings[0].id, array.findings[0].id);
         assert_eq!(
-            serde_json::to_value(&board.findings[0].sites).unwrap(),
-            serde_json::to_value(&array.findings[0].sites).unwrap()
+            format!("{:?}", board.findings[0].sites),
+            format!("{:?}", array.findings[0].sites)
         );
     }
 
@@ -1583,7 +1468,7 @@ limit = { minimum = "0.1 mm" }
                 .as_deref(),
             Some(results.frames[0].step.as_str())
         );
-        let witness = finding.location.witnesses[0].point;
+        let witness = finding.sites[0].witnesses[0].point;
         assert!((0.0..=30.0).contains(&witness.x) && witness.y.abs() < 1e-9);
     }
 

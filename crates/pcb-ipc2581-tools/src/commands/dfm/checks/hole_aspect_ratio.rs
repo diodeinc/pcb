@@ -124,7 +124,9 @@ fn incomplete(
 mod tests {
     use crate::LayoutTarget;
     use crate::commands::dfm::fixtures;
-    use crate::commands::dfm::report::{DfmReport, Measurement, RuleResult, RuleStatus, Verdict};
+    use crate::commands::dfm::report::{
+        DfmReport, Measurement, MeasurementKind, RuleResult, RuleStatus, Verdict,
+    };
 
     const BOARD: &str = r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/>
@@ -220,32 +222,25 @@ cases = [
                 ..
             }
         ));
-        let json = serde_json::to_value(&report).unwrap();
-        assert_eq!(json["rules"][0]["comparison"], "maximum");
-        assert_eq!(json["rules"][0]["subject"], "hole");
-        assert_eq!(json["findings"][0]["measurement"]["actual_ratio"], 10.0);
-        assert_eq!(json["findings"][0]["measurement"]["maximum_ratio"], 8.0);
+        assert_eq!(report.rules[0].comparison, "maximum");
+        assert_eq!(report.rules[0].subject, "hole");
+        let finding = &report.findings[0];
+        let span = finding.subjects[0].drill_span.as_ref().unwrap();
         assert_eq!(
-            json["findings"][0]["measurement"]["thickness_source"],
-            "ipc_2581_overall_thickness"
+            (
+                span.first_copper_index,
+                span.last_copper_index,
+                span.interpretation
+            ),
+            (0, 3, "declared_through_board")
         );
-        assert_eq!(
-            json["findings"][0]["subjects"][0]["drill_span"],
-            serde_json::json!({
-                "first_copper_index": 0,
-                "last_copper_index": 3,
-                "interpretation": "declared_through_board"
-            })
-        );
-        assert_eq!(
-            json["findings"][0]["sites"][0]["measurement_kind"],
-            "aspect_ratio"
-        );
-        assert_eq!(
-            json["findings"][0]["sites"][0]["witnesses"],
-            serde_json::json!([])
-        );
-        assert_eq!(json["findings"][0]["evidence"][0]["kind"], "circle");
+        let site = &finding.sites[0];
+        assert!(matches!(
+            site.measurement_kind,
+            MeasurementKind::AspectRatio
+        ));
+        assert!(site.witnesses.is_empty());
+        assert_eq!(site.evidence[0].shape.kind, "circle");
     }
 
     #[test]

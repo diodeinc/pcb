@@ -15,7 +15,7 @@ npx --yes --package typescript@5.9.3 tsc --noEmit --strict --module nodenext --m
 
 This uses the same browser-bundle builder as [pcb-zen-wasm](../pcb-zen-wasm/README.md),
 writing to `target/ipc-wasm-bundle`. It does not publish anything. The smoke test
-requires Node 24+ and checks all formats, compressed input, DFM/waivers, malformed
+requires Node 24+ and checks all formats, compressed input, DFM, malformed
 input, and a worker.
 
 ## Use
@@ -49,7 +49,7 @@ are owned copies and remain valid after `free()`.
 | `info()` | The native `ipc info --format json` summary. |
 | `layers()` | Source layer names accepted by SVG/PNG export. |
 | `export(options)` | `{ name, mediaType, data: Uint8Array }[]`. |
-| `checkDfm(options?)` | The full native DFM report, including evidence and waivers. |
+| `checkDfm(options?)` | The DFM summary: verdict, counts and per-rule results. |
 | `builtinPdks()` | Bundled PDK names and TOML sources. |
 
 Export formats: `ipc2581`, `gerber` (Gerber X2 and XNC, optionally zipped),
@@ -61,19 +61,18 @@ CPL keeps the native single-board semantics. The generated package includes
 TypeScript declarations (TS 5.7+); unknown options and enum values throw errors.
 Raw IR snapshots, editing, and panel generation are deliberately outside this API.
 
-Custom PDKs and waivers are supplied as text:
+Custom PDKs are supplied as text:
 
 ```ts
 const report = pcb.checkDfm({
   pdk: { name: "fab.toml", source: pdkToml },
-  waivers: { name: "waivers.toml", source: waiverToml },
-  generatedAt: "2026-08-30T12:00:00Z", // Optional; controls UTC waiver expiry.
+  generatedAt: "2026-08-30T12:00:00Z", // Optional.
 });
 ```
 
 All native PDK checks are available. Violations return a `fail` verdict; invalid
-inputs or unsupported geometry throw JavaScript `Error`s. Reports preserve the
-native schema, vector scene, exact PDK source, and input/PDK/waiver hashes,
+inputs or unsupported geometry throw JavaScript `Error`s. The summary is the one
+`pcb ipc dfm check` prints, with the exact PDK source and input/PDK hashes,
 including compressed input bytes. See the [DFM contract](../pcb-ipc2581-tools/docs/dfm.md).
 
 ## Portable Rust crates

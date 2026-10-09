@@ -1,8 +1,9 @@
-# DFM PDK, waiver, and report formats
+# DFM PDK and report formats
 
 `pcb ipc dfm check` checks an IPC-2581 design against a built-in or file-backed
-TOML fabrication PDK. It writes one self-contained JSON report with diagnostics,
-native vector geometry, and the exact PDK source for external viewers.
+TOML fabrication PDK. It prints a JSON summary and can write the full report:
+one self-contained SQLite database with diagnostics, native vector geometry,
+and the exact PDK source.
 
 ## PDK
 
@@ -182,7 +183,8 @@ both:
   `<id>.preferred` or `<id>.<case>.preferred`. Warning findings are reported
   and counted but do not fail the verdict. It may stand alone when the PDK has
   no binding minimum. When both tiers are present, the preferred value must
-  exceed the minimum.
+  exceed the minimum, and a subject that fails both is reported once, as the
+  required tier's error; the preferred rule still reports `warning`.
 
 Each direct or named-case hole-aspect-ratio limit instead has one required
 **error**-severity `maximum`; values above it fail the rule. It has no preferred
@@ -443,31 +445,11 @@ says why, under one of two statuses:
   that was not measured is never reported as met. The CLI names each one as
   `not evaluated: <rule>: <reason>`.
 
-## Waivers
-
-A waiver file accepts specific findings by their stable ids without
-silencing the rule:
-
-```toml
-[[waiver]]
-finding = "dfm-9c41f2ab8d10"
-reason = "edge plating intentional, approved by fab 2026-08"
-expires = "2027-01-01"   # optional, YYYY-MM-DD
-```
-
-Waived findings stay in the report — marked `waived` with the reason,
-counted in the summary — and are excluded from the verdict. Waivers that
-name no finding in the run, and waivers past their expiry, are listed in the
-report's `waivers` block instead of being applied, so the file cannot rot
-silently.
-
 ## CLI
 
 ```bash
-pcb ipc dfm check board.xml -o board.dfm.json
-pcb dfm board.zen -o board.dfm.json
-pcb dfm board.zen --open
-pcb open board.dfm.json
+pcb ipc dfm check board.xml -o board.dfm
+pcb dfm board.zen -o board.dfm
 ```
 
 `pcb dfm` prepares and synchronizes the board's KiCad layout before exporting
@@ -479,8 +461,7 @@ path. `standard`, `jlcpcb-1oz` (`jlc`), and `ipc-1a` through `ipc-3c` are
 bundled. `ipc` selects the opinionated Class 2 / Producibility Level B default.
 Use `./standard` to select a same-named file. Both sources use the same parser
 and checks. `--layout-target` accepts
-`board` or `board-array` and defaults to `board-array`. Add
-`--waivers waivers.toml` to apply a [waiver file](#waivers).
+`board` or `board-array` and defaults to `board-array`.
 
 The `standard` PDK prefers 0.40 mm plated and nonplated slot-to-copper
 clearance. Shortfalls produce warnings, not a failed manufacturing verdict.
@@ -528,7 +509,7 @@ requirements or qualified capabilities for every technology or copper weight.
 | Hole diameter | Required minimum 0.20 mm for vias/NPTHs, 15 mil (0.381 mm) for PTHs | Source-declared circular hole diameter, interpreted as finished size |
 | Slot width | Required minimum 0.5 mm plated, 31 mil (0.7874 mm) nonplated | IPC primitive width or PCB IR outline minimum width; excludes the optional 0.6 mm plated preferred tier |
 | Hole-to-hole clearance | Required minimum 10 mil (0.254 mm) | All six unordered circular via/PTH/NPTH pair classes with overlapping physical drill spans; excludes routed-slot pairs |
-| Copper-to-board-edge clearance | Required minimum 15 mil (0.381 mm) | Each layer's composed copper image against board edges, including cutouts; intentional edge plating uses finding-specific [waivers](#waivers) |
+| Copper-to-board-edge clearance | Required minimum 15 mil (0.381 mm) | Each layer's composed copper image against board edges, including cutouts |
 | Soldermask web | Preferred 4 mil (0.1016 mm), warning only | Webs between final composed mask openings, not mask-to-pad registration; warnings do not fail the verdict |
 
 Hole-diameter checks do not model a separate drill-tool diameter, plating
@@ -539,206 +520,155 @@ Standard and all nine IPC profiles warn below 0.25 mm nominal plated-slot
 copper enclosure through a preferred tier. Custom PDKs can supply a required
 minimum. JLCPCB profiles do not enable this check.
 
-Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
-recommended suffix is `.dfm.json`. Every complete report includes the native
-scene and PDK source for viewing without companion files. PCB generates no
-DFM HTML or viewer application.
-
-`pcb open <report.dfm.json>` opens an existing report in
-`https://dfm.diode.computer`. A one-shot local page redirects the same browser
-tab with the compressed report in a temporary URL fragment. The viewer removes
-the fragment before loading the report, and no report bytes are uploaded.
-`pcb dfm --open` performs the same handoff after generating the report. With
-`-o`, it saves and opens that file; without `-o`, it uses a temporary report
-instead of writing JSON to stdout. Fresh `pass`, `fail`, and `incomplete`
-reports are all opened, while the DFM command keeps its normal exit status.
-Reports over 16 MiB or encoded URLs over 900 KiB must be selected in the
-viewer manually.
+Every run prints its [summary](#summary) as one line of JSON on stdout. With
+`-o` / `--output` it first writes the full [report](#report-database), a
+SQLite database; `.dfm` is the recommended suffix. Every complete report
+includes the checked material and PDK source for viewing without companion
+files.
 
 A completed report is written before the command returns a failing status.
-Unwaived error findings fail its verdict, and so does a required rule that
-could not be evaluated. Preparation and output errors
-also return a failing status. Preparation errors emit an explicit
-[incomplete report](#incomplete-reports). File output is replaced atomically,
-including incomplete reports. I/O, serialization, or size-limit failures can
-prevent output and leave a previous artifact untouched; callers must check exit
-status. Output must not overwrite a source or use a KiCad board path.
+Error findings fail its verdict, and so does a required rule that could not be
+evaluated. Preparation and output errors also return a failing status.
+Preparation errors produce an explicit [incomplete report](#incomplete-reports).
+File output is replaced atomically, including incomplete reports. I/O failures
+can prevent output and leave a previous artifact untouched; callers must check
+exit status. Output must not overwrite a source or use a KiCad board path.
 
-`SOURCE_DATE_EPOCH` fixes both `generated_at` and the date used for waiver
-expiry. Pinning an old epoch reproduces that date's verdict, including waivers
-that would have expired today. The same input bytes, source labels, options,
-and epoch produce identical JSON. A separate `.zen` layout/export operation
-may change its IPC bytes or temporary source label.
+`SOURCE_DATE_EPOCH` fixes `generated_at`. The same input bytes, source labels,
+options, and epoch produce an identical summary and a byte-identical database.
+A separate `.zen` layout/export operation may change its IPC bytes or temporary
+source label.
 
-## JSON report
+## Summary
 
-A complete report has these fields:
+The summary is a JSON object with `schema_version`, `generated_at`, `verdict`
+(`pass` or `fail`), `tool`, `input`, `pdk`, `layout_target`, `summary`, and
+`rules`, each as described for the [report](#report-database). It holds no
+findings or geometry.
 
-- `schema_version`: integer report schema version.
-- `generated_at`: RFC 3339 generation time.
-- `verdict`: `pass` or `fail`.
-- `tool`: producer name and version.
-- `input`: original IPC input path, SHA-256, and byte size.
+- `input`: original IPC input path, SHA-256, and byte size; see
+  [source identity](#source-identity).
 - `pdk`: resolved kit and profile metadata, assumptions, source citation, path,
   exact TOML `source`, SHA-256, and the selected profile's
   `support.copper_layers` range (`exact`, `minimum`, and `maximum`).
-- `waivers`: file path and SHA-256 plus applied, expired, and unmatched entries;
-  `null` when no waiver file was given. See [source identity](#source-identity).
-- `layout_target`: `board` or `board_array`.
-- `layout`: the selected step, actual layout kind, checked coordinate frame,
-  bounds, and physical occurrences. Occurrences retain their parent, source
-  step, repeat indices, and transform into the checked frame; see
-  [coordinates and topology](#coordinates-and-topology).
-- `coordinate_system`: the unit, axis convention, and origin for all report
-  geometry: `mm`, `x_right_y_up`, and `ipc_2581_design` in versions 1 and 2.
-- `summary`: rule counts by status and finding counts by severity and
-  waiver state.
-- `frames`: the Steps the checked layout places, its root first; see
-  [frames](#frames).
-- `rules`: one result per lowered rule. A direct limit uses its authored id; a
-  named case uses `<id>.<case>`; a preferred tier appends `.preferred` to
-  either form. Each result includes severity, source and normalized limit,
-  status (`pass`, `warning`, `fail`, `not_applicable`, or `incomplete`), the
-  reason a rule was not evaluated (`skip_reason`), and the
-  measurement contract shared by all of its findings — `subject` (what one
-  checked unit is), `quantity`, `method`, `comparison` (`minimum` or
-  `maximum`), and `checked`, the number of subjects decided across the
-  physical layout: each Step's own subjects count once per placement of that
-  Step. Findings are not multiplied: `finding_count` counts entries of
-  `findings`, each of which names its frame. `view`
-  specifies the diagnostic family, whether it is spatial, and its semantic
-  rendering features; `tier` distinguishes required and preferred limits.
-  `assumptions` lists profile defaults actually used while evaluating that
-  rule, and is empty when no assumption was needed.
-- `findings`: violations in deterministic rule, frame, and location order.
-- `shared_evidence`: evidence records that sites reference by index rather
-  than repeat; see [findings](#findings).
-- `scene`: required native artwork for the complete checked layout; see
-  [native scene](#native-scene).
+- `summary`: rule counts by status, `findings`, `errors` and `warnings` by
+  severity, and `unresolved`, the measurements no rule could decide.
+- `rules`: one result per lowered rule, as in the `rules` table below.
 
-`rule.finding_count` includes waived findings, and `waived_count` counts that
-subset. A rule that one Step's design could not certify is `incomplete` and
-still lists and counts what the other Steps found. A rule whose findings are all waived reports `pass`; active findings
-determine `warning` or `fail` from rule severity. Unevaluated rules retain
-`not_applicable` or `incomplete` and their reason rather than becoming a pass
-from zero counts; `summary.rules_not_applicable` and `summary.rules_incomplete`
-count them. Similarly, `summary.findings` includes all findings,
-`summary.waived` counts the waived subset, and `summary.errors`/`warnings` count
-only unwaived findings. A complete verdict fails exactly when
-`summary.errors > 0` or a rule of error severity is `incomplete`.
+A complete verdict fails exactly when `summary.errors > 0` or a rule of error
+severity is `incomplete`.
 
-### Source identity
+## Report database
 
-`pdk.source` is required in complete reports. It contains the exact resolved
-UTF-8 TOML used for evaluation, including comments, unit spelling, CRLF line
-endings, and any final newline. Built-in and file-backed PDKs follow the same
-contract. Do not reserialize TOML or normalize text. `pdk.sha256` is the SHA-256
-of the UTF-8 bytes of that decoded JSON string, encoded as 64 lowercase
-hexadecimal characters. Consumers verify this hash; a checksum detects
-corruption, not authenticity or fabrication approval.
+The report is one SQLite 3 database. Its header's `application_id` is
+`0x44464D52` (`DFMR`), and its `user_version` is the report schema version,
+currently `3`. Open it with any SQLite client; `json_each` and `json_extract`
+read its JSON columns. Coordinates are integer nanometres in the
+[frame](#frames) of their finding, X right and Y up. Every distinct layer,
+subject, role, note and shape is stored once and referred to by id.
 
-`input.sha256` and `size_bytes` identify the original on-disk IPC input bytes,
-including compression for a `.xml.zst` input. For `pcb dfm`, they identify its
-temporary exported IPC input. The XML is not included. Waiver source is also
-not included: its hash, applied/expired/unmatched entries, and each finding's
-waiver fields preserve what was applied.
+| Table | One row per | Columns |
+| --- | --- | --- |
+| `report` | report-level record | `key`, JSON `value`: `schema_version`, `generated_at`, `verdict`, `tool`, `input`, `pdk`, `layout_target`, `coordinate_system`, `layout`, `summary`, `frames`, `scene` (its `bounds`) |
+| `rules` | lowered rule | `rule_id`, `title`, `finding_title`, `severity`, `tier`, `status`, `comparison`, `limit_value`, `limit_unit`, `limit_pdk_value`, `subject`, `quantity`, `method`, `checked`, `finding_count`, `skip_reason`, JSON `assumptions` and `view` |
+| `unresolved` | measurement below a limit by less than its uncertainty | `rule`, `frame`, `actual_mm`, `uncertainty_mm`, `x`, `y`, JSON layer names |
+| `findings` | violation | `finding_id`, `rule`, `frame`, JSON `measurement`, `message`, location `x`, `y`, bounds `min_x` … `max_y`, `layers`, `subjects` |
+| `sites` | failing region or layer of a finding | `finding`, `position`, `site_id`, JSON `measurement`, `measurement_kind`, `uncertainty_mm`, bounds, `note` id, `layers`, `subjects`, `witnesses`, `evidence` |
+| `layers` | layer | `name`, IPC-2581 `function`, `side` (`top`, `inner`, `bottom`) |
+| `subjects` | subject | `role`, `kind`, `name`, `reference_designator`, `pin`, `net`, `padstack_ref`, JSON `locator` and `drill_span` |
+| `roles` | witness or evidence role | `name` |
+| `notes` | site note | `text` |
+| `shapes` | evidence or scene geometry | `kind`, `center_x`/`center_y`/`diameter`, `start_x` … `end_y`, bounds, `paths`, `width_mm` |
+| `scene` | layer of checked material | `label`, `feature`, `layer`, `color` |
+| `draws` | shape a scene layer draws | `pass`, `frame`, `shape` |
 
-All `path` fields are descriptive provenance. They may be absolute,
-`builtin:standard`, or no-longer-existing temporary paths. Input and waiver
-hashes identify absent source files; never fetch paths or open files on the
-consumer's machine to render or validate the report.
+`layers` and `subjects` columns are JSON arrays of ids, `witnesses` an array
+of `[role id, x, y]`, and `evidence` an array of `[role id, shape id]`. The view
+`finding_summary` joins each finding with its rule, actual value, limit,
+margin, layer names, nets and site count:
+
+```bash
+sqlite3 board.dfm "SELECT rule_id, count(*), min(actual) FROM finding_summary GROUP BY rule_id"
+```
+
+### Rules
+
+A direct limit uses its authored id; a named case uses `<id>.<case>`; a
+preferred tier appends `.preferred` to either form. `status` is `pass`,
+`warning`, `fail`, `not_applicable`, or `incomplete`, and `skip_reason` says
+why a rule was not evaluated. `subject`, `quantity`, `method` and `comparison`
+(`minimum` or `maximum`) are the measurement contract every finding of the rule
+shares; `finding_title` is what each finding of it says is wrong. `checked`
+counts the subjects decided across the physical layout: each Step's own
+subjects once per placement of that Step. `finding_count` counts the rule's
+findings. `view` specifies the diagnostic family, whether it is spatial, and
+its semantic rendering features; `assumptions` lists profile defaults actually
+used. A rule that one Step's design could not certify is `incomplete` and still
+lists and counts what the other Steps found.
 
 ### Findings
 
-- `id` hashes the rule, the subjects' stable identity, the layers, and where
-  the finding is in its frame, in whole micrometres. A drilled subject is
-  placed by where the source drills it; only a finding without one is placed
-  by its measured point. A board's findings therefore keep their ids however
-  it is panelized, and a waiver written against a board check applies to the
-  same finding in a check of its array. Generated primitive names, padstack ids, set and feature indices, raw
-  floating-point coordinates, and evidence geometry never enter an id, so an
-  equivalent re-export or a noise-level coordinate change does not re-key a
-  finding. Moving a violation by micrometres creates a new finding; its old
-  waiver becomes `unmatched`. The measured value, added sites, presentation
-  grouping, and extended provenance do not affect identity: a violation that
-  shrinks or grows in place keeps its waiver. Ids in every format released
-  earlier are still computed and accepted as aliases, so existing waiver files
-  keep matching while the geometry they were written against is unchanged.
-- `rule_id`, `severity`, `title`, and `message` identify and explain the
-  violation; `waived` and `waiver_reason` record acceptance.
+A finding says what is wrong and where; its sites hold the geometry.
+
+- `finding_id` hashes the rule, the subjects' stable identity, the layers, and
+  where the finding is in its frame, in whole micrometres. A drilled subject
+  is placed by where the source drills it; only a finding without one is
+  placed by its measured point. A board's findings therefore keep their ids
+  however it is panelized. Generated primitive names, padstack ids, set and
+  feature indices, raw coordinates, evidence geometry and the measured value
+  never enter an id, so an equivalent re-export or a noise-level change does
+  not re-key a finding.
 - `measurement` carries `actual_mm`, `required_mm`, and signed `margin_mm` for
   geometry, or the corresponding `actual_count`, `required_count`, and
   `margin_count` for discrete counts. Aspect-ratio measurements instead carry
   `actual_ratio`, `maximum_ratio`, signed `margin_ratio`,
   `drilled_span_thickness_mm`, `finished_hole_diameter_mm`, and
-  `thickness_source`. A nonnegative margin satisfies the limit.
-  Signed annular enclosure can be negative. Do not clamp measurements or
-  recompute the verdict from rounded display values.
-- `location` carries a representative point, bounding box, and role-labelled
-  witnesses. Nonspatial findings use `{point: null, bounding_box: null,
-  witnesses: []}`, never a null `location`.
-- `layers` identify every involved manufacturing layer: name, IPC-2581
-  layer function, and `side` (`top`, `inner`, `bottom`) where the stackup
-  determines it.
-- `subjects` preserve role, kind, component, pin, net, padstack, and source
-  indices when IPC-2581 provides them. `provenance` identifies the source
-  definition and its occurrence separately from the legacy `source` locator:
-  `instance_index` is `null` for the frame's own Step and otherwise names,
-  in `layout.instances`, the occurrence under the frame's first placement.
-  A V-score line a Step meets from above keeps the provenance of the Step
-  that draws it. `drill_span` records the applicable copper-layer span.
-  Unavailable fields remain `null` so consumers see one stable shape.
-- `evidence` records `kind`, `role`, and applicable circle, segment, or bounds
-  fields; unused fields remain `null`. `paths` contains closed region rings or
-  open paths, preserving the checked material's winding and holes. Optional
-  `display` retains native constructions for rendering, as specified below.
-  Evidence of kind `shared` carries only its `role`, bounds, and `shared`, the
-  index of the complete record in the report's `shared_evidence` table. The
-  board profile that every hole- and slot-to-board-edge site of one board
-  measures to is shared this way, so a report grows with its findings rather
-  than with findings times the outline.
-- `sites` retain individual failing regions or layers with their measurement,
-  `measurement_kind`, `witnesses`, uncertainty, bounds, layers, subjects, and
-  evidence. Nonspatial findings use `sites: []`. Site bounds describe the
-  finding; viewers add their own camera padding. `outside_board` identifies a
-  drilled feature that crosses or lies outside its physical board material and
-  therefore has zero clearance. Witness-point separation is not necessarily
-  the measured width or diameter. Scalar aspect-ratio sites have no measurement
-  witnesses; their circle evidence locates the hole.
-- `frame` is the index of the finding's [frame](#frames). An `unresolved`
-  measurement carries the same index.
+  `thickness_source`. A nonnegative margin satisfies the limit. Signed annular
+  enclosure can be negative. Lengths are written to the nanometre.
+- `x`, `y` and the bounds locate the finding; nonspatial findings leave them
+  null and have no sites.
+- `subjects` preserve role, kind, component, pin, net, padstack, and the
+  source `locator` when IPC-2581 provides them: its `step`, `layer`, set and
+  feature indices, and `instance_index`, which is null for the frame's own
+  Step and otherwise names, in `layout.instances`, the occurrence under the
+  frame's first placement. `drill_span` records the applicable copper-layer
+  span.
+- Sites carry their measurement, `measurement_kind`, uncertainty, bounds,
+  layers, subjects, witnesses and evidence. Site bounds describe the finding;
+  viewers add their own camera padding. `outside_board` identifies a drilled
+  feature that crosses or lies outside its physical board material and so has
+  zero clearance. Witness-point separation is not necessarily the measured
+  width or diameter; scalar aspect-ratio sites have no witnesses.
 
-Check-owned sites, measurements, witnesses, and evidence paths are authoritative.
-Coordinates are written to the nanometre. Evidence paths, rings, and stroke
-centerlines omit vertices within 0.1 µm of the path without them.
-The optional `evidence.display` construction uses the same world millimeters:
+Each piece of evidence has exactly one form, its shape's `kind`:
 
-| `kind` | Fields and rendering |
+| `kind` | Geometry |
 | --- | --- |
-| `path` | SVG `paths` and `fill_rule`; fill each path separately, then union |
-| `round_stroke` | Centerline `paths` and physical `width_mm`; round caps and joins |
-| `circle_intersection` | `first` and `second` circles, each with `center` and `diameter` |
-| `circle_minus_layer` | `center`, `diameter`, and exact copper `layer`; subtract that layer's composed native image from the circle |
+| `circle` | `center_x`, `center_y`, `diameter` (mm) |
+| `segment` | `start_x` … `end_y` |
+| `bounds` | `min_x` … `max_y` |
+| `path` | open polylines in `paths` |
+| `region` | closed rings in `paths`, filled nonzero like the checked material, holes included; a `width_mm` also draws their outline round to that width, as a rounded pad's inner rectangle |
+| `stroke` | round-capped, round-joined polylines in `paths` of physical `width_mm` |
 
-Display constructions do not affect finding or site identity.
-`circle_minus_layer` needs its named scene pass even when the pass is hidden as
-artwork. A missing required operand makes the scene invalid. Do not fit curves
-to measured polygons, invent precision by changing tessellation tolerance, or
-infer an inscribed width or radial enclosure from witness separation.
+`paths` holds zigzag LEB128 varints: the path count, each path's point count,
+then every point's x and y in nanometres, each as the difference from the
+previous point (the first from zero). Paths omit vertices within 0.1 µm of
+the path without them. Measurements, witnesses and evidence are authoritative:
+do not fit curves to them, change their tessellation, or infer a width or
+enclosure from witness separation.
 
 ### Coordinates and topology
 
-All geometry uses millimeters with X right and Y up. `layout.kind` distinguishes
-`board`, `board_array`, and `fab_panel`; the `board_array` target also selects
-fabrication panels. Board scope uses the canonical board's local frame
-(`selected_board`). Array and fabrication-panel scope use `root_layout`,
-including nested repeats. A canonical board check does not certify every
-design in a mixed fabrication panel.
+`layout.kind` distinguishes `board`, `board_array`, and `fab_panel`; the
+`board_array` target also selects fabrication panels. Board scope uses the
+canonical board's local frame (`selected_board`). Array and fabrication-panel
+scope use `root_layout`, including nested repeats. A canonical board check does
+not certify every design in a mixed fabrication panel.
 
 Each occurrence's cumulative `[a,b,c,d,tx,ty]` transform maps definition-local
 coordinates to the checked frame: `x' = a*x + c*y + tx`,
-`y' = b*x + d*y + ty`. Scene coordinates are already placed; do not transform
-them again. A parent occurrence filter includes descendants.
+`y' = b*x + d*y + ty`. A parent occurrence filter includes descendants.
 
 ### Frames
 
@@ -753,93 +683,72 @@ at: a V-score line that crosses only the boards of one row is found at those
 placements only.
 
 A finding is measured once, in the coordinates of the Step its `frame` names,
-and occurs at every placement of that frame: its location, witnesses, site
-bounds, evidence and display constructions are all in those Step coordinates.
-To show an occurrence in the scene, apply that placement's transform; a
-`circle_minus_layer` construction subtracts the scene pass as seen through
-the same transform. The root frame's transform is the identity, so its
-findings are already placed. Waivers, ids and counts are per finding, not per
-placement.
+and occurs at every placement of that frame, as does the Step's material in
+the scene. To show an occurrence, apply that placement's transform. The root frame's transform is the
+identity, so its findings are already placed. Ids and counts are per finding,
+not per placement.
 
-### Native scene
+### Scene
 
-Every complete report contains a scene, including reports with only nonspatial
-checks. Scene version 1 contains `schema_version: 1`, full-layout `bounds`, and
-`passes`.
-Each pass has `label`, semantic `feature`, exact `layer` name or `null` for shared
-context, display `color`, and a full-layout native `svg` string. All passes
-share the same viewport; sites never crop or duplicate the artwork.
+Every complete report has a scene: the checked material findings are drawn
+over. The `scene` record in `report` holds the full-layout `bounds` (in
+millimetres), and the `scene` table holds its layers. Each has a `label`,
+semantic `feature`, exact `layer` name or null for shared context, and display
+`color`. `draws` lists each layer's shapes, each in the coordinates of the
+Step whose `frame` it names; draw it at every placement of that frame. Each
+Step draws only its own material, once.
 
-Select passes using the rule's `view.features` and the selected **site's** exact
-layer names, including shared `layer: null` passes. Finding-level layers are
-only a summary. Every spatial site requires a matching pass for each feature
-except `stackup`. An empty pass represents empty context; an absent required
-pass makes the export incomplete. A scene with no spatial findings may have
-an empty pass list.
+The material is dark: draw every shape filled (or stroked) in the layer's
+color, in any order. Negative polarity is already resolved into it, and holes
+and slots are the drill layers'. Pads keep their exact standard shapes: a round
+pad is a `circle`, an oval a `stroke`, and a rounded rectangle a `region` with
+`width_mm`.
 
-The SVG root applies one PCB IR display Y flip. When inserting its contents
-into a shared world-coordinate scene, remove that flip and apply the viewer's
-camera convention. Preserve nested rotations, mirrors, aperture instances,
-ordered polarity, masks, nonzero winding, holes, and final cutouts. Namespace
-IDs and fragment references per compiled pass/view.
+Select layers using the rule's `view.features` and the selected site's exact
+layer names, including shared null-layer ones. Every spatial site requires a
+matching layer for each feature except `stackup`. An empty layer represents
+empty context; an absent required layer makes the export incomplete.
 
-The report is the scene authority. Render its native SVG and check-owned
-evidence; do not infer geometry from messages or screenshots, rerun DFM, or
-recreate the verdict in a second geometry engine. Measurements, IDs, waivers,
-and checked scope do not depend on display constructions.
+### Source identity
+
+`pdk.source` contains the exact resolved UTF-8 TOML used for evaluation,
+including comments, unit spelling, CRLF line endings, and any final newline.
+`pdk.sha256` is the SHA-256 of its UTF-8 bytes, as 64 lowercase hexadecimal
+characters. Consumers verify this hash; a checksum detects corruption, not
+authenticity or fabrication approval.
+
+`input.sha256` and `size_bytes` identify the original on-disk IPC input bytes,
+including compression for a `.xml.zst` input. For `pcb dfm`, they identify its
+temporary exported IPC input. The XML is not included. All `path` fields are
+descriptive provenance; never fetch paths or open files on the consumer's
+machine to render or validate the report.
 
 ### Incomplete reports
 
-An incomplete report has `verdict: "incomplete"`, `schema_version`,
-`generated_at`, `tool`, `input: {path}`, `pdk: {path}`, `layout_target`, and
-`error: {message}`. It has no `summary`, `rules`, `findings`, or `scene`. Consumers
-must handle this verdict before requiring complete-report fields; it is never
-a pass, a clean board, or a skipped check. Its minimal `pdk` has no source or
-hash, even if a PDK was read before the failure.
+An incomplete run prints, and writes into the `report` table, only
+`verdict: "incomplete"`, `schema_version`, `generated_at`, `tool`,
+`input: {path}`, `pdk: {path}`, `layout_target`, and `error: {message}`. Its
+other tables are empty. Consumers must handle this verdict before requiring
+complete-report records; it is never a pass, a clean board, or a skipped check.
 
-### Reader limits and safety
+### Reader safety
 
-Producer and consumer enforce these inclusive limits (1 MiB = 1,048,576 bytes):
-
-| Resource | Limit |
-| --- | --- |
-| UTF-8 JSON report | 128 MiB |
-| UTF-8 bytes of decoded `pdk.source` | 1 MiB |
-
-Readers check file size before allocating or parsing. Decode strict UTF-8 and
-parse in a worker so cancellation and malformed input do not block the UI. Validate
-versions, finite numbers, ordered bounds, supported coordinate frames, unique
-IDs, references, and aggregate counts before rendering. Bound JSON/geometry
-complexity and SVG reference traversal independently of byte size.
-
-All JSON, TOML, and SVG are untrusted even when the PDK hash matches. Parse SVG
-into an inert allowlisted tree; never inject uploaded markup as HTML. Reject
-scripts, event handlers, foreign objects, styles, entities, external resources,
-and nonlocal fragment references. Show an explicit invalid or unsupported
-report error when safe rendering is unavailable.
-
-Reports can contain private board data, local paths, components, nets, PDK
-comments, and waiver reasons. A file picker or drop action authorizes local
-inspection only, not backend uploads or telemetry. Do not log payloads, persist
-uploads silently, or keep hidden copies after replacement. Terminate workers,
-release buffers/object URLs, and ignore stale async results when a new file
-replaces the current load.
+The database, its JSON and TOML are untrusted even when the PDK hash matches.
+Open it read-only, without loading extensions or running SQL it contains, and
+never inject its text as markup. Reports can
+contain private board data, local paths, components, nets and PDK comments: a
+file picker or drop action authorizes local inspection only, not uploads or
+telemetry.
 
 ### Schema evolution
 
-Report and scene versions are independent; the report uses integer `2` and the
-scene integer `1`. Report version 2 checks every Step once: findings and
-unresolved measurements are in the coordinates of their `frame` and occur at
-each of its placements instead of being repeated per board, and `group_key`,
-which grouped those repeats, is gone. It also moved each edge-clearance site's
-`board_profile` region into the `shared_evidence` table, and split the rule
-status `skipped` (and `summary.rules_skipped`) into `not_applicable` and
-`incomplete`, the latter failing the verdict for a required rule. Rules list
-`unresolved` measurements and the summary counts them. `rules` may
-hold one extra `incomplete` result per authored rule whose cases do not cover
-the design.
-New fields and new `kind`, `role`, `status`, rule, and method values may be
-added within a version. Unknown optional fields can be ignored; unknown required
-semantics must produce an explicit unsupported state, never a guessed rendering
-or fabricated pass. Removing or changing existing field meanings requires a
-new schema version.
+Report version 3 is a SQLite database instead of JSON. The scene is shapes,
+not SVG, and evidence shares them. Findings keep only their identity, location
+and subjects, and their sites hold all geometry; evidence has one form, with
+the clearance band a `stroke`;
+the subject `source`/`provenance` pair is one `locator`; and waivers are gone.
+A required error stands for a preferred-tier finding of the same subject.
+New columns, records, and `kind`, `role`, `status`, rule, and method values may
+be added within a version. Unknown required semantics must produce an explicit
+unsupported state, never a guessed rendering or fabricated pass. Removing or
+changing existing meanings requires a new schema version.

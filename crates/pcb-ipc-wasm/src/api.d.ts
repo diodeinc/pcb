@@ -36,9 +36,8 @@ export interface BuiltinPdk { name: string; profile: string; source: string; }
 export interface DfmOptions {
   /** A built-in name (default: standard) or custom TOML. */
   pdk?: PdkInput;
-  waivers?: TextInput;
   layoutTarget?: LayoutTarget;
-  /** RFC 3339; defaults to the host clock. Controls waiver expiry in UTC. */
+  /** RFC 3339; defaults to the host clock. */
   generatedAt?: string;
 }
 export interface FileIdentity { path: string; sha256: string; size_bytes: number; }
@@ -74,52 +73,18 @@ export interface DfmSummary {
   rules_configured: number; rules_passed: number; rules_warned: number;
   rules_failed: number; rules_not_applicable: number; rules_incomplete: number;
   findings: number;
-  errors: number; warnings: number; waived: number; unresolved: number;
+  errors: number; warnings: number; unresolved: number;
 }
-export interface DfmFinding {
-  id: string; rule_id: string; severity: "error" | "warning";
-  message: string; waived: boolean; waiver_reason: string | null;
-  measurement: Record<string, unknown>;
-  layers: Array<Record<string, unknown>>;
-  subjects: Array<Record<string, unknown>>;
-  evidence: unknown;
-  sites: Array<{ id: string; bounding_box: DfmBounds; [key: string]: unknown }>;
-  /** Index into `DfmReport.frames`: whose coordinates the finding is in, and where it occurs. */
-  frame: number;
-  [key: string]: unknown;
-}
-/** One Step of the checked layout, checked once in its own coordinates. */
-export interface DfmFrame {
-  step: string;
-  /** Everywhere the layout places the Step: `instance` indexes `layout.instances`
-   * (`null` is the checked frame itself) and `transform` is `[a, b, c, d, tx, ty]`. */
-  placements: Array<{ instance: number | null; transform: [number, number, number, number, number, number] }>;
-}
-export interface DfmBounds { min: { x: number; y: number }; max: { x: number; y: number }; }
-export interface DfmScene {
-  schema_version: number;
-  bounds: DfmBounds;
-  passes: Array<{ label: string; feature: string; layer: string | null; color: string; svg: string }>;
-}
-/** Preserves the native DFM JSON schema, including snake_case field names. */
+/** The summary `pcb ipc dfm check` prints, with snake_case field names. The
+ * findings themselves are in the SQLite report the CLI writes. */
 export interface DfmReport {
   schema_version: number;
   generated_at: string;
   verdict: "pass" | "fail";
+  tool: { name: string; version: string };
   input: FileIdentity;
   pdk: PdkIdentity;
   layout_target: "board" | "board_array";
-  layout: {
-    kind: string; selected_step: string | null; coordinate_frame: string;
-    bounding_box: DfmBounds | null; instances: Array<Record<string, unknown>>;
-  };
-  scene: DfmScene;
   summary: DfmSummary;
-  frames: DfmFrame[];
-  findings: DfmFinding[];
-  /** Evidence that sites reference by `shared` index instead of repeating. */
-  shared_evidence: Array<Record<string, unknown>>;
   rules: Array<{ id: string; status: "pass" | "warning" | "fail" | "not_applicable" | "incomplete"; [key: string]: unknown }>;
-  waivers: null | { path: string; sha256: string; applied: number; expired: string[]; unmatched: string[] };
-  [key: string]: unknown;
 }

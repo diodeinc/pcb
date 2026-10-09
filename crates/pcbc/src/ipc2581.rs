@@ -297,13 +297,11 @@ enum DfmCommands {
         /// Built-in PDK name or fabrication PDK TOML path
         #[arg(long, default_value = "standard")]
         pdk: PathBuf,
-        /// Waiver file of accepted finding ids (TOML)
-        #[arg(long, value_hint = clap::ValueHint::FilePath)]
-        waivers: Option<PathBuf>,
         /// What to check: the canonical board, or the file's root step with every repeat materialized.
         #[arg(long, default_value = "board-array")]
         layout_target: LayoutTarget,
-        /// Output self-contained JSON report path. Omit to write to stdout.
+        /// Write the full report, a SQLite database, to this path. A JSON
+        /// summary is always printed to stdout.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
     },
@@ -758,14 +756,12 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             DfmCommands::Check {
                 file,
                 pdk,
-                waivers,
                 layout_target,
                 output,
             } => match commands::dfm::execute_check(
                 &file,
                 &commands::dfm::CheckOptions {
                     pdk,
-                    waivers,
                     output,
                     layout_target,
                 },

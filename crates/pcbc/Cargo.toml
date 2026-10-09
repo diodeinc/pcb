@@ -91,5 +91,6 @@ zstd = { workspace = true }
 
 [dev-dependencies]
 httpmock = { workspace = true }
+rusqlite = { workspace = true }
 insta = { workspace = true }
 pcb-test-utils = { workspace = true }

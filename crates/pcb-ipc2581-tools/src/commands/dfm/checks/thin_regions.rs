@@ -191,7 +191,6 @@ fn measured_piece(
             name: Some(layer.name.clone()),
             ..Subject::default()
         }],
-        evidence: vec![Evidence::bounds("thin_piece", piece.bbox)],
         sites: piece_sites(piece, limit_mm, layer)?,
     })
 }
@@ -330,20 +329,10 @@ pub(super) fn piece_sites(
             Evidence::circle("required_width_disk", disk.center, limit_mm),
         ];
         if !geometry.axis.is_empty() {
-            evidence.push(Evidence {
-                role: "verified_width_axis",
-                kind: "path",
-                paths: geometry.axis.iter().map(|path| path.iter().copied().map(Into::into).collect()).collect(),
-                ..Evidence::default()
-            });
+            evidence.push(Evidence::path("verified_width_axis", geometry.axis.iter().map(|path| path.iter().copied().map(Into::into).collect()).collect()));
         }
         if !geometry.walls.is_empty() {
-            evidence.push(Evidence {
-                role: "width_boundary",
-                kind: "path",
-                paths: geometry.walls.iter().map(|&(start, end)| vec![start.into(), end.into()]).collect(),
-                ..Evidence::default()
-            });
+            evidence.push(Evidence::path("width_boundary", geometry.walls.iter().map(|&(start, end)| vec![start.into(), end.into()]).collect()));
         }
         let mut site = MeasuredSite::new(disk.width, bbox, vec![layer.clone()], evidence, MeasurementKind::InscribedWidth);
         site.note = Some("Width is the inscribed disk diameter. Candidate contours are context; highlighted axis portions are verified below the limit, including geometric uncertainty.".to_owned());

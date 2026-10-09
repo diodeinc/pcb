@@ -26,23 +26,15 @@ pub(super) fn evaluate(limit_mm: f64, class: HoleClass, design: &Design) -> Eval
             let radius = Point::new(hole.diameter_mm / 2.0, 0.0);
             let distance =
                 Distance::exact(hole.diameter_mm, hole.center - radius, hole.center + radius);
-            let evidence = vec![Evidence::circle(
-                "drilled_hole",
-                hole.center,
-                hole.diameter_mm,
-            )];
-            let mut site_evidence = evidence.clone();
-            site_evidence.push(Evidence::circle(
-                "required_hole_diameter",
-                hole.center,
-                limit_mm,
-            ));
+            let site_evidence = vec![
+                Evidence::circle("drilled_hole", hole.center, hole.diameter_mm),
+                Evidence::circle("required_hole_diameter", hole.center, limit_mm),
+            ];
             Measured {
                 distance,
                 bbox: hole.bbox,
                 layers: vec![hole.layer.clone()],
                 subjects: vec![hole_subject(design, hole, "offender")],
-                evidence,
                 sites: vec![MeasuredSite::new(
                     distance,
                     pcb_ir::geom::BBox::from_point(hole.center)

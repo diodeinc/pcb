@@ -95,8 +95,7 @@ pub(super) fn evaluate(
                     )?,
                     &finding_layers,
                     limit_mm,
-                    design.resolution,
-                )?;
+                );
                 for site in &mut sites {
                     site.subjects = subjects.clone();
                     site.evidence.extend(evidence.clone());
@@ -109,7 +108,6 @@ pub(super) fn evaluate(
                     .union(pcb_ir::geom::BBox::from_point(distance.second)),
                 layers: finding_layers,
                 subjects,
-                evidence,
                 sites,
             });
         }

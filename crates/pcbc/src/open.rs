@@ -10,7 +10,7 @@ use std::{
 use tiny_http::{Header, Method, Response, Server};
 use uuid::Uuid;
 
-const DFM_REPORT_SUFFIX: &str = ".dfm.json";
+const DFM_REPORT_SUFFIXES: [&str; 2] = [".dfm", ".dfm.json"];
 const DFM_VIEWER_URL: &str = "https://dfm.diode.computer/";
 const MAX_DFM_REPORT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_DFM_URL_BYTES: usize = 900 * 1024;
@@ -18,7 +18,7 @@ const DFM_BRIDGE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Args, Debug)]
 pub struct OpenArgs {
-    /// Path to .zen/.kicad_pcb/.kicad_sch/.dfm.json file or diode:// sandbox URI
+    /// Path to .zen/.kicad_pcb/.kicad_sch/.dfm file or diode:// sandbox URI
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     pub file: PathBuf,
 
@@ -75,7 +75,11 @@ pub fn execute(args: OpenArgs) -> Result<()> {
 pub(crate) fn is_dfm_report_path(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.ends_with(DFM_REPORT_SUFFIX))
+        .is_some_and(|name| {
+            DFM_REPORT_SUFFIXES
+                .iter()
+                .any(|suffix| name.ends_with(suffix))
+        })
 }
 
 pub(crate) fn open_dfm_report(path: &Path) -> Result<()> {
@@ -192,8 +196,8 @@ mod tests {
     #[test]
     fn bridge_encodes_the_exact_report_and_filename() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("board ü.dfm.json");
-        let expected = b"{\"verdict\":\"fail\"}\n\0exact";
+        let path = directory.path().join("board ü.dfm");
+        let expected = b"SQLite format 3\0\xff\n\0exact";
         fs::write(&path, expected).unwrap();
         let bridge = DfmBridge::new(&path).unwrap();
         let page = std::str::from_utf8(&bridge.page).unwrap();
@@ -210,7 +214,7 @@ mod tests {
         assert_eq!(zstd::decode_all(report.as_slice()).unwrap(), expected);
         assert_eq!(
             URL_SAFE_NO_PAD.decode(filename).unwrap(),
-            "board ü.dfm.json".as_bytes()
+            "board ü.dfm".as_bytes()
         );
     }
 }
