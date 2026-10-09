@@ -108,21 +108,23 @@ pub fn malformed(source: &str) -> Option<(usize, &'static str)> {
 }
 
 /// The direct child lists of the root list of a well-formed `source`, as
-/// byte ranges in order.
+/// byte ranges in order. Nothing after the root list is read.
 pub fn children(source: &str) -> impl Iterator<Item = Range<usize>> + '_ {
-    let mut depth = 0usize;
-    let mut start = 0;
-    parens(source).filter_map(move |(at, open)| {
-        depth = if open {
-            depth + 1
-        } else {
-            depth.saturating_sub(1)
-        };
-        if open && depth == 2 {
-            start = at;
-        }
-        (!open && depth == 1).then_some(start..at + 1)
-    })
+    let (mut depth, mut start) = (0usize, 0);
+    parens(source)
+        .map(move |(at, open)| {
+            depth = if open {
+                depth + 1
+            } else {
+                depth.saturating_sub(1)
+            };
+            if open && depth == 2 {
+                start = at;
+            }
+            (depth, open, start..at + 1)
+        })
+        .take_while(|(depth, open, _)| *open || *depth > 0)
+        .filter_map(|(depth, open, range)| (!open && depth == 1).then_some(range))
 }
 
 /// The head word of the list that opens at `open`.
@@ -172,7 +174,7 @@ mod tests {
 
     #[test]
     fn children_are_the_direct_lists_of_the_root() {
-        let source = r#"(lib (version 1) "x" (symbol "a" (unit (pin))) (b))"#;
+        let source = r#"(lib (version 1) "x" (symbol "a" (unit (pin))) (b)) (c (d))"#;
         let found: Vec<_> = children(source)
             .map(|range| (head(source, range.start), &source[range]))
             .collect();

@@ -290,7 +290,7 @@ fn inspect_accepts_what_kicad_loads() {
         );
     }
     // What follows the root list is not read, like KiCad.
-    let source = format!("{new} (symbol \"A\")) (symbol \"B\")");
+    let source = format!("{new} (symbol \"A\")) (symbol \"B\" (symbol \"B_1_1\"))");
     fs::write(dir.path().join("valid.kicad_sym"), &source).unwrap();
     let output = inspect(dir.path(), "valid.kicad_sym", "json");
     assert!(output.status.success(), "{output:?}");
