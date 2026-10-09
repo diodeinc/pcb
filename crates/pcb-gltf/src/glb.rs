@@ -67,7 +67,8 @@ impl Material {
 fn layer_material(kind: LayerKind, srgb: [f64; 3], transparency: Option<f64>) -> Material {
     let (metallic, roughness) = match kind {
         LayerKind::Body => (0.0, 0.8),
-        LayerKind::Copper | LayerKind::Pads | LayerKind::Vias => (1.0, 0.35),
+        // Not metallic: without an environment map, metal renders black.
+        LayerKind::Copper | LayerKind::Pads | LayerKind::Vias => (0.0, 0.4),
         LayerKind::Silkscreen { .. } => (0.0, 0.9),
         LayerKind::Soldermask { .. } => (0.0, 0.4),
     };

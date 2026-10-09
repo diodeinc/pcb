@@ -16,8 +16,12 @@ Models come from the board's embedded files; nothing is looked up on disk.
 ## What is written
 
 - **Board**: one mesh, with a primitive per scene layer: body, copper, pads,
-  vias, silkscreen and solder mask in the colours `pcb-step` writes to STEP.
-  Arcs and round holes are chords within 0.01 mm, and curved walls carry the
+  vias, silkscreen and solder mask in KiCad's colours, read as sRGB as
+  KiCad's VRML export reads them. Exposed copper, pads included, takes the
+  colour of the stackup's copper finish (ENIG gold when none is named) and
+  is not metallic, so it does not render black without an environment map.
+  The board outline, cutouts and drills are chords within 0.005 mm, other
+  arcs and round holes within 0.01 mm, and curved walls carry the
   exact normal of the arc or cylinder they lie on. Copper faces the body
   hides are left out: caps resting on it, copper inside it, and via barrels
   when vias are not cut.

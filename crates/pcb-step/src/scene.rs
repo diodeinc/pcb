@@ -43,7 +43,9 @@ pub struct Component {
 
 pub struct Layer {
     pub kind: LayerKind,
-    /// sRGB, as KiCad writes it to STEP.
+    /// KiCad's colour for the layer. The STEP writer encodes it from linear
+    /// to sRGB as KiCad's STEP export does; other writers can take it as
+    /// sRGB, as KiCad's VRML export does.
     pub color: [f64; 3],
     pub transparency: Option<f64>,
     pub shape: Shape,
@@ -148,9 +150,9 @@ impl Scene {
                 worker_threads(),
                 warnings,
             );
-            let copper_rgb = [0.7, 0.61, 0.0].map(board::linear_to_srgb);
+            let copper_rgb = [0.7, 0.61, 0.0];
             let pad_rgb = if options.components {
-                [0.5, 0.5, 0.5].map(board::linear_to_srgb)
+                [0.5; 3]
             } else {
                 copper_rgb
             };

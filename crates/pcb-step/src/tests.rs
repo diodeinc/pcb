@@ -134,7 +134,7 @@ fn stackup_gives_kicad_body_extents() {
     assert_eq!(physical.copper_z[3], (-0.035, 0.0));
     assert!((physical.copper_z[0].0 - 1.6162).abs() < 1e-9);
     // Black mask, darkened by 0.2, encoded to sRGB: what KiCad writes.
-    let color = board.body_color();
+    let color = board.body_color().map(crate::board::linear_to_srgb);
     assert!((color[0] - 0.2044548).abs() < 1e-5);
 }
 
