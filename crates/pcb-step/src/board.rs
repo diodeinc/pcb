@@ -182,6 +182,8 @@ pub(crate) struct Stackup {
     pub(crate) front_silk_color: Option<[f64; 3]>,
     pub(crate) back_silk_color: Option<[f64; 3]>,
     pub(crate) core_color: Option<[f64; 3]>,
+    /// sRGB colour of the copper finish, when it has one.
+    pub(crate) finish_color: Option<[f64; 3]>,
 }
 
 #[derive(Clone, Copy)]
@@ -632,8 +634,14 @@ impl<'a> Board<'a> {
             front_silk_color: None,
             back_silk_color: None,
             core_color: None,
+            finish_color: None,
         };
         while let Some(name) = p.open()? {
+            if name == "copper_finish" {
+                stackup.finish_color = p.atom()?.and_then(finish_color);
+                p.skip()?;
+                continue;
+            }
             if name != "layer" {
                 p.skip()?;
                 continue;
@@ -1154,8 +1162,7 @@ impl<'a> Board<'a> {
         }
     }
 
-    /// Board body colour as written to STEP: the front mask colour darkened
-    /// the way KiCad does, then encoded from linear to sRGB by OCCT.
+    /// Board body colour: the front mask colour.
     pub(crate) fn body_color(&self) -> [f64; 3] {
         self.mask_color(true)
     }
@@ -1167,7 +1174,6 @@ impl<'a> Board<'a> {
             .as_ref()
             .and_then(|s| s.core_color)
             .unwrap_or(DEFAULT_CORE_COLOR)
-            .map(linear_to_srgb)
     }
 
     /// Solder mask colour of one side, darkened as KiCad darkens it.
@@ -1183,7 +1189,15 @@ impl<'a> Board<'a> {
             })
             .map(|c| c.map(|v| v * (1.0 - MASK_DARKEN)))
             .unwrap_or(DEFAULT_MASK_COLOR)
-            .map(linear_to_srgb)
+    }
+
+    /// sRGB colour of exposed copper: its finish's colour as KiCad's VRML
+    /// export draws it, ENIG gold when the stackup names none.
+    pub fn copper_color(&self) -> [f64; 3] {
+        self.stackup
+            .as_ref()
+            .and_then(|s| s.finish_color)
+            .unwrap_or(ENIG_COLOR)
     }
 
     /// Silkscreen colour of one side; white unless the stackup says.
@@ -1198,7 +1212,6 @@ impl<'a> Board<'a> {
                 }
             })
             .unwrap_or([1.0; 3])
-            .map(linear_to_srgb)
     }
 }
 
@@ -1222,6 +1235,20 @@ pub(crate) fn linear_to_srgb(v: f64) -> f64 {
     } else {
         1.055 * v.powf(1.0 / 2.4) - 0.055
     }
+}
+
+const ENIG_COLOR: [f64; 3] = [178.0 / 255.0, 156.0 / 255.0, 0.0];
+
+/// The colour of a KiCad copper finish, as its VRML export draws it.
+fn finish_color(name: &str) -> Option<[f64; 3]> {
+    let rgb: [u8; 3] = match name {
+        "ENIG" | "ENEPIG" | "Immersion gold" | "Hard gold" => return Some(ENIG_COLOR),
+        "HAL SnPb" | "HAL lead-free" | "Immersion tin" | "Immersion nickel" => [160, 160, 160],
+        "Immersion silver" => [213, 213, 213],
+        "OSP" | "HT_OSP" => [184, 115, 50],
+        _ => return None,
+    };
+    Some(rgb.map(|c| c as f64 / 255.0))
 }
 
 fn mask_color(name: &str) -> Option<[f64; 3]> {

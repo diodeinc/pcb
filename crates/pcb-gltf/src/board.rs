@@ -22,6 +22,10 @@ use crate::mesh::Primitive;
 /// Chord error for arcs and circles, in millimetres.
 const MAX_ERROR: f64 = 0.01;
 
+/// Chord error for the board body's outline, cutouts and drills: KiCad's
+/// VRML tolerance, so large round outlines do not look faceted.
+const OUTLINE_ERROR: f64 = 0.005;
+
 /// Tolerance for a copper face to count as resting on the body.
 const TOUCHING: f64 = 1e-6;
 
@@ -66,7 +70,14 @@ fn layer(layer: &Layer, hidden: Hidden) -> Primitive {
         barrels: hidden.barrels && layer.kind == LayerKind::Vias,
     };
     let parts: Vec<Primitive> = match &layer.shape {
-        Shape::Solids(prisms) => prisms.par_iter().map(|p| prism(p, hidden)).collect(),
+        Shape::Solids(prisms) => {
+            let error = if layer.kind == LayerKind::Body {
+                OUTLINE_ERROR
+            } else {
+                MAX_ERROR
+            };
+            prisms.par_iter().map(|p| prism(p, hidden, error)).collect()
+        }
         Shape::Faces { z, up, faces } => faces
             .par_iter()
             .map(|face| {
@@ -87,7 +98,8 @@ fn layer(layer: &Layer, hidden: Hidden) -> Primitive {
     out
 }
 
-fn prism(prism: &Prism, hidden: Hidden) -> Primitive {
+/// A prism's faces, with curves chorded within `error` millimetres.
+fn prism(prism: &Prism, hidden: Hidden, error: f64) -> Primitive {
     let Prism { z0, z1, solid } = prism;
     let (z0, z1) = (*z0, *z1);
     // Which faces the body hides: all of copper inside it, and a cap
@@ -103,15 +115,15 @@ fn prism(prism: &Prism, hidden: Hidden) -> Primitive {
         None => (false, false),
     };
     let mut out = Primitive::default();
-    let outer = solid.outer.polyline(MAX_ERROR);
-    let holes: Vec<Vec<Vertex>> = solid.holes.iter().map(|h| h.polyline(MAX_ERROR)).collect();
+    let outer = solid.outer.polyline(error);
+    let holes: Vec<Vec<Vertex>> = solid.holes.iter().map(|h| h.polyline(error)).collect();
     let mut top: Vec<Vec<DVec2>> = std::iter::once(&outer)
         .chain(&holes)
         .map(|r| points(r))
         .collect();
     let mut bottom = top.clone();
     for hole in &solid.round {
-        let n = segments(hole.max_radius());
+        let n = segments(hole.max_radius(), error);
         let (z_top, r_top) = hole.profile[0];
         let (z_bottom, r_bottom) = hole.profile[hole.profile.len() - 1];
         if z_top >= z1 - 1e-9 && r_top > 0.0 {
@@ -141,9 +153,9 @@ fn points(ring: &[Vertex]) -> Vec<DVec2> {
     ring.iter().map(|v| v.point).collect()
 }
 
-/// Chords for a whole circle of radius `r` within `MAX_ERROR`.
-fn segments(r: f64) -> usize {
-    let step = 2.0 * (1.0 - MAX_ERROR / r).clamp(-1.0, 1.0).acos();
+/// Chords for a whole circle of radius `r` within `error`.
+fn segments(r: f64, error: f64) -> usize {
+    let step = 2.0 * (1.0 - error / r).clamp(-1.0, 1.0).acos();
     ((TAU / step.max(1e-3)).ceil() as usize).max(8)
 }
 

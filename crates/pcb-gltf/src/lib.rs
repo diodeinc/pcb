@@ -13,7 +13,7 @@ mod models;
 use std::io::Write;
 
 use anyhow::Result;
-use pcb_step::scene::Scene;
+use pcb_step::scene::{LayerKind, Scene};
 use pcb_step::{Board, Options, Report};
 
 /// Write the GLB for `board` to `sink`, adding warnings and models that
@@ -41,5 +41,15 @@ pub fn export(
     report.failed_models += models.failed;
     let (layers, meshes) = layers?;
     scene.layers = layers;
+    // Exposed copper, pads included, takes the finish colour, as in KiCad's
+    // VRML export; STEP keeps KiCad's STEP colours.
+    for layer in &mut scene.layers {
+        if matches!(
+            layer.kind,
+            LayerKind::Copper | LayerKind::Pads | LayerKind::Vias
+        ) {
+            layer.color = board.copper_color();
+        }
+    }
     glb::write(&options.name, &scene, &meshes, &models, sink)
 }

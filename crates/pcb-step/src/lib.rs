@@ -214,6 +214,8 @@ ENDSEC;\nDATA;\n",
             LayerKind::Soldermask { front: true } => ("soldermask", "Top Soldermask"),
             LayerKind::Soldermask { front: false } => ("soldermask", "Bottom Soldermask"),
         };
+        // OCCT encodes KiCad's colours from linear to sRGB.
+        let srgb = layer.color.map(board::linear_to_srgb);
         let placement = w.axis_placement(&Transform::IDENTITY);
         let mut items = vec![placement];
         let representation = match (&layer.shape, layer.kind) {
@@ -226,7 +228,7 @@ ENDSEC;\nDATA;\n",
                         format!("PCB {}", index + 1)
                     };
                     let id = w.solid(&name, &prism.solid, prism.z0, prism.z1);
-                    styled.push(w.styled_solid(id, layer.color));
+                    styled.push(w.styled_solid(id, srgb));
                     items.push(id);
                 }
                 let representation = w.id();
@@ -235,7 +237,7 @@ ENDSEC;\nDATA;\n",
                 representation
             }
             (Shape::Solids(solids), _) => {
-                let style = w.style_assignment(layer.color);
+                let style = w.style_assignment(srgb);
                 let weights: Vec<usize> = solids.iter().map(|s| solid_edges(&s.solid)).collect();
                 let ids = write_batched(&mut w, sink, threads, &weights, |local, i| {
                     let s = &solids[i];
@@ -252,7 +254,7 @@ ENDSEC;\nDATA;\n",
                 representation
             }
             (Shape::Faces { z, up, faces }, _) => {
-                let style = w.style_assignment_with(layer.color, layer.transparency);
+                let style = w.style_assignment_with(srgb, layer.transparency);
                 let weights: Vec<usize> = faces
                     .iter()
                     .map(|f| {
