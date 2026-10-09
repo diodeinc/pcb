@@ -15,18 +15,17 @@ pub(super) fn discover_and_select(paths: &ImportPaths) -> Result<ImportSelection
             paths.kicad_input_abs.display()
         )
     })?;
-    let source_kind = portable.source_kind;
 
     let selected = SelectedKicadFiles {
         kicad_pro: portable.kicad_pro_rel.clone(),
         kicad_sch: portable.root_schematic_rel.clone(),
-        kicad_pcb: portable.primary_kicad_pcb_rel.clone(),
+        kicad_pcb: portable.kicad_pcb_rel.clone(),
     };
 
     let files = build_discovered_files(&portable);
-    let board_name_source = match source_kind {
-        ImportSourceKind::Schematic => BoardNameSource::KicadSchArgument,
-        ImportSourceKind::Project => BoardNameSource::KicadProArgument,
+    let board_name_source = match paths.kicad_input_abs.extension() {
+        Some(ext) if ext == "kicad_pro" => BoardNameSource::KicadProArgument,
+        _ => BoardNameSource::KicadSchArgument,
     };
 
     Ok(ImportSelection {
@@ -204,27 +203,33 @@ mod tests {
     }
 
     #[test]
-    fn discovers_standalone_schematic_without_synthetic_layout_files() -> Result<()> {
+    fn schematic_input_uses_its_same_name_project_and_board() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../pcb-sch/test/kicad-bom");
-        let schematic = root.join("layout.kicad_sch");
-        let paths = ImportPaths {
+        let selection = discover_and_select(&ImportPaths {
             workspace_root: root.clone(),
             kicad_project_root: root.clone(),
-            kicad_input_abs: schematic,
-        };
-        let selection = discover_and_select(&paths)?;
-        assert_eq!(selection.board_name, "layout");
-        assert_eq!(selection.portable.source_kind, ImportSourceKind::Schematic);
+            kicad_input_abs: root.join("layout.kicad_sch"),
+        })?;
         assert!(matches!(
             selection.board_name_source,
             BoardNameSource::KicadSchArgument
         ));
+        assert_eq!(
+            selection.selected.kicad_pro,
+            Some(PathBuf::from("layout.kicad_pro"))
+        );
+        assert_eq!(
+            selection.selected.kicad_pcb,
+            Some(PathBuf::from("layout.kicad_pcb"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn discovers_schematic_without_project() -> Result<()> {
+        let selection = discover_schematic_named("layout")?;
         assert_eq!(selection.selected.kicad_pro, None);
         assert_eq!(selection.selected.kicad_pcb, None);
-        assert_eq!(
-            selection.selected.kicad_sch,
-            PathBuf::from("layout.kicad_sch")
-        );
         assert!(selection.files.kicad_pro.is_empty());
         assert!(selection.files.kicad_pcb.is_empty());
         assert_eq!(

@@ -426,6 +426,9 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     assert_ne!(stale, pcb_before_apply);
     fs::write(output.join("eda/layout.kicad_pcb"), stale).unwrap();
     let retained_project = fs::read(output.join("eda/layout.kicad_pro")).unwrap();
+    // A schematic without its project and board reimports against the retained layout.
+    fs::remove_file(source.join("layout.kicad_pro")).unwrap();
+    fs::remove_file(source.join("layout.kicad_pcb")).unwrap();
     let reimport = sandbox
         .run(
             "pcbc",
@@ -1486,4 +1489,92 @@ fn cross_sheet_multi_unit_components_survive_import_and_apply() {
     for (file, source) in &sources {
         assert_preserved_schematic(&output.join(file), source, true);
     }
+}
+
+#[test]
+fn schematic_import_reads_bus_aliases_from_its_project() {
+    let mut sandbox = sandbox();
+    let root_uuid = "00000000-0000-0000-0000-000000000001";
+    let font = "(effects (font (size 1.27 1.27)))";
+    let mut root = format!(
+        r#"(kicad_sch (version 20250114) (generator "eeschema")
+        (uuid "{root_uuid}") (paper "A4") (lib_symbols)
+        (sheet_instances (path "/" (page "1")))
+        (bus (pts (xy 40 25) (xy 60 25)) (stroke (width 0) (type default))
+            (uuid "00000000-0000-0000-0000-000000000002"))"#
+    );
+    // KiCad 10 keeps SIG only in the project, so connectivity across the sheets needs it.
+    for (index, (sheet, bus, x, edge)) in [("A", "X", 20, 40), ("B", "Y", 60, 60)]
+        .into_iter()
+        .enumerate()
+    {
+        let sheet_uuid = format!("00000000-0000-0000-0000-00000000001{index}");
+        let angle = if edge == 40 { 0 } else { 180 };
+        root.push_str(&format!(
+            r#"
+            (sheet (at {x} 20) (size 20 10)
+                (stroke (width 0) (type default)) (fill (color 0 0 0 0))
+                (uuid "{sheet_uuid}")
+                (property "Sheetname" "{sheet}" (at {x} 20 0) {font})
+                (property "Sheetfile" "{sheet}.kicad_sch" (at {x} 20 0) {font})
+                (pin "{bus}{{SIG}}" bidirectional (at {edge} 25 {angle}) {font}
+                    (uuid "00000000-0000-0000-0000-00000000002{index}"))
+                (instances (project "alias" (path "/{root_uuid}" (page "{page}")))))"#,
+            page = index + 2
+        ));
+        let child = format!(
+            r#"(kicad_sch (version 20250114) (generator "eeschema")
+            (uuid "00000000-0000-0000-0000-00000000003{index}") (paper "A4")
+            (lib_symbols (symbol "Test:P" (in_bom no) (on_board yes)
+                (property "Reference" "U" (at 0 0 0) {font})
+                (property "Value" "P" (at 0 0 0) {font})
+                (symbol "P_1_1" (pin passive line (at -2.54 0 0) (length 2.54)
+                    (name "A" {font}) (number "1" {font})))))
+            (hierarchical_label "{bus}{{SIG}}" (shape bidirectional) (at 30 30 180) {font}
+                (uuid "00000000-0000-0000-0000-00000000004{index}"))
+            (bus (pts (xy 30 30) (xy 30 50)) (stroke (width 0) (type default))
+                (uuid "00000000-0000-0000-0000-00000000005{index}"))
+            (label "{bus}.M1" (at 47.46 30 0) {font}
+                (uuid "00000000-0000-0000-0000-00000000006{index}"))
+            (symbol (lib_id "Test:P") (at 50 30 0) (unit 1)
+                (in_bom no) (on_board yes) (dnp no)
+                (uuid "00000000-0000-0000-0000-00000000007{index}")
+                (property "Reference" "U{reference}" (at 50 30 0) {font})
+                (property "Value" "P" (at 50 30 0) {font})
+                (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 50 30 0) {font})
+                (pin "1" (uuid "00000000-0000-0000-0000-00000000008{index}"))
+                (instances (project "alias"
+                    (path "/{root_uuid}/{sheet_uuid}" (reference "U{reference}") (unit 1))))))"#,
+            reference = index + 1
+        );
+        sandbox.write(format!("source/{sheet}.kicad_sch"), &child);
+    }
+    root.push(')');
+    sandbox.write("source/alias.kicad_sch", &root);
+    sandbox.write(
+        "source/alias.kicad_pro",
+        r#"{"schematic": {"bus_aliases": {"SIG": ["M1", "M2"]}}}"#,
+    );
+
+    let import = sandbox
+        .run("pcbc", ["import", "source/alias.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&import.stderr);
+    assert!(import.status.success(), "import failed:\n{stderr}");
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(extraction_report(&stderr)).unwrap()).unwrap();
+    assert_eq!(
+        source_physical_partitions(&report),
+        BTreeSet::from([vec!["U1:1".into(), "U2:1".into()]])
+    );
+    let project =
+        pcbc::kicad_schematic::KicadProject::load(sandbox.root_path().join("out/eda")).unwrap();
+    assert_eq!(
+        project.document.bus_aliases,
+        [("SIG".to_string(), vec!["M1".to_string(), "M2".to_string()])].into()
+    );
 }
