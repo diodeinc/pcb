@@ -3964,6 +3964,7 @@ dependencies = [
  "pcb-zen-core",
  "regex",
  "rust_decimal",
+ "same-file",
  "serde",
  "serde_json",
  "starlark",

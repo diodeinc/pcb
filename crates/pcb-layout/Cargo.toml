@@ -28,6 +28,7 @@ rust_decimal = { workspace = true }
 serde = { workspace = true }
 starlark = { workspace = true }
 include_dir = "0.7.4"
+same-file = { workspace = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }

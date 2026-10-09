@@ -65,7 +65,7 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
     assert!(
         sandbox
             .default_cwd()
-            .join("build/layout.kicad_pcb")
+            .join("build/MyBoard.kicad_pcb")
             .exists()
     );
     assert!(!Path::new(report["input"]["path"].as_str().unwrap()).exists());
@@ -126,7 +126,7 @@ fn dfm_with_workspace_root_layout_preserves_sources_and_writes_relative_report()
         "{}",
         String::from_utf8_lossy(&layout.stderr)
     );
-    let pcb_before = std::fs::read(sandbox.default_cwd().join("layout.kicad_pcb")).unwrap();
+    let pcb_before = std::fs::read(sandbox.default_cwd().join("MyBoard.kicad_pcb")).unwrap();
     let source_before = std::fs::read(sandbox.default_cwd().join("MyBoard.zen")).unwrap();
 
     let output = run_pcbc(
@@ -139,7 +139,7 @@ fn dfm_with_workspace_root_layout_preserves_sources_and_writes_relative_report()
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        std::fs::read(sandbox.default_cwd().join("layout.kicad_pcb")).unwrap(),
+        std::fs::read(sandbox.default_cwd().join("MyBoard.kicad_pcb")).unwrap(),
         pcb_before
     );
     assert_eq!(
@@ -165,10 +165,10 @@ fn dfm_checks_kicad_board_and_project_without_a_workspace() {
 
     let layout = run_pcbc(&mut sandbox, ["layout", "MyBoard.zen", "--no-open"]);
     assert!(layout.status.success());
-    let layout_before = std::fs::read(sandbox.default_cwd().join("build/layout.kicad_pcb"))
+    let layout_before = std::fs::read(sandbox.default_cwd().join("build/MyBoard.kicad_pcb"))
         .expect("layout command creates the board");
     let project_before =
-        std::fs::read(sandbox.default_cwd().join("build/layout.kicad_pro")).unwrap();
+        std::fs::read(sandbox.default_cwd().join("build/MyBoard.kicad_pro")).unwrap();
     let reference = run_pcbc(&mut sandbox, ["dfm", "MyBoard.zen"]);
     assert!(reference.status.success());
     let reference: Value = serde_json::from_slice(&reference.stdout).unwrap();
@@ -240,7 +240,7 @@ fn dfm_without_a_layout_reports_an_incomplete_run() {
     assert!(
         !sandbox
             .default_cwd()
-            .join("build/layout.kicad_pcb")
+            .join("build/MyBoard.kicad_pcb")
             .exists()
     );
 }

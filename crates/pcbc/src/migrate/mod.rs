@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, value};
 
+mod kicad_projects;
 mod registry;
 
 type PcbLane = (u32, u32);
@@ -143,6 +144,14 @@ fn migrate_workspace(root: &Path) -> Result<()> {
         println!(
             "pcb: migrated registry references in {} manifest(s) and {} .zen file(s)",
             registry_migration.manifests, registry_migration.sources
+        );
+    }
+
+    for (from, to) in kicad_projects::migrate_kicad_projects(root)? {
+        println!(
+            "pcb: renamed KiCad project {} to {}",
+            from.display(),
+            to.display()
         );
     }
 

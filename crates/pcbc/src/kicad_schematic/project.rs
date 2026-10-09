@@ -32,8 +32,8 @@ impl KicadProject {
                     .to_path_buf();
                 (directory, requested.to_path_buf())
             } else {
-                let project_file = pcb_layout::utils::require_kicad_files(requested)?.kicad_pro;
-                (requested.to_path_buf(), project_file)
+                let files = pcb_layout::utils::require_kicad_files(requested)?;
+                (requested.to_path_buf(), files.kicad_pro)
             };
         let file_name = project_file
             .file_name()
