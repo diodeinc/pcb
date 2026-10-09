@@ -18,6 +18,7 @@ use crate::board::{Board, Fill, Pad, PadKind, PadShape, Physical, Primitive, Tra
 use crate::geom::{Vec2, ccw_sweep, circle_center, rotate_kicad};
 use crate::outline::{Edge, Frame, Loop, Solid, crosses, orient};
 use crate::rings::{IndexedRing, loops_of, polygons_of};
+use crate::scene::Prism;
 
 /// KiCad's plating thickness for through holes.
 pub(crate) const PLATING: f64 = 0.025;
@@ -38,21 +39,14 @@ impl CopperOptions {
     }
 }
 
-/// A copper solid between two heights.
-pub(crate) struct CopperSolid {
-    pub(crate) z0: f64,
-    pub(crate) z1: f64,
-    pub(crate) solid: Solid,
-}
-
 #[derive(Default)]
 pub(crate) struct Copper {
     /// Tracks, zone fills and via rings: one solid per island.
-    pub(crate) islands: Vec<CopperSolid>,
+    pub(crate) islands: Vec<Prism>,
     /// Pad prisms and their plating tubes.
-    pub(crate) pads: Vec<CopperSolid>,
+    pub(crate) pads: Vec<Prism>,
     /// Via barrels.
-    pub(crate) vias: Vec<CopperSolid>,
+    pub(crate) vias: Vec<Prism>,
 }
 
 pub(crate) fn point(v: Vec2) -> Point {
@@ -235,7 +229,7 @@ fn pad_solids(
     layout: &Layout,
     pad: &Pad,
     drills: &Knockouts,
-    out: &mut Vec<CopperSolid>,
+    out: &mut Vec<Prism>,
     cutters: &mut Vec<(u32, PadCutter)>,
     warnings: &mut Vec<String>,
 ) {
@@ -298,7 +292,7 @@ fn pad_solids(
             match subtract(&outline_loop, &all) {
                 Some(solids) => {
                     for solid in solids {
-                        out.push(CopperSolid { z0, z1, solid });
+                        out.push(Prism { z0, z1, solid });
                     }
                     continue;
                 }
@@ -319,7 +313,7 @@ fn pad_solids(
                 match subtract(&outline_loop, &[h]) {
                     Some(solids) => {
                         for solid in solids {
-                            out.push(CopperSolid { z0, z1, solid });
+                            out.push(Prism { z0, z1, solid });
                         }
                         continue;
                     }
@@ -336,7 +330,7 @@ fn pad_solids(
                 round: Vec::new(),
             },
         };
-        out.push(CopperSolid { z0, z1, solid });
+        out.push(Prism { z0, z1, solid });
     }
 
     if pad.kind == PadKind::ThroughHole
@@ -392,14 +386,14 @@ pub(crate) fn pad_drill(pad: &Pad, frame: Frame) -> (Vec2, Vec2, f64) {
 }
 
 /// A plated barrel: a tube of wall `PLATING` inside the drill.
-fn tube(a: Vec2, b: Vec2, r: f64, z0: f64, z1: f64) -> Option<CopperSolid> {
+fn tube(a: Vec2, b: Vec2, r: f64, z0: f64, z1: f64) -> Option<Prism> {
     let inner = r - PLATING;
     if inner <= 1e-6 || z1 - z0 <= 1e-9 {
         return None;
     }
     let mut outer = Loop::stadium(a, b, r);
     outer.reverse();
-    Some(CopperSolid {
+    Some(Prism {
         z0,
         z1,
         solid: Solid {
@@ -1102,7 +1096,7 @@ fn island_solids(
     layout: &Layout,
     group: &Group,
     knockouts: &Knockouts,
-) -> (Vec<CopperSolid>, Vec<String>) {
+) -> (Vec<Prism>, Vec<String>) {
     let (board, frame, physical) = (layout.board, layout.frame, layout.physical);
     let (connectivity, last) = (&layout.connectivity, layout.last);
     let mut warnings = Vec::new();
@@ -1184,7 +1178,7 @@ fn island_solids(
     let (z0, z1) = physical.copper_z[group.layer as usize];
     let solids = loops_of(&region)
         .into_iter()
-        .map(|(outer, holes)| CopperSolid {
+        .map(|(outer, holes)| Prism {
             z0,
             z1,
             solid: Solid {

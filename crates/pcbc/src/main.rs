@@ -31,6 +31,7 @@ mod fix;
 mod fmt;
 mod freerouting;
 mod gerber;
+mod gltf;
 mod import;
 mod info;
 mod inspect;
@@ -192,6 +193,9 @@ enum Commands {
     /// Export a KiCad board to STEP without kicad-cli
     Step(step::StepArgs),
 
+    /// Export a KiCad board to glTF (GLB) without kicad-cli
+    Gltf(gltf::GltfArgs),
+
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -268,6 +272,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Ipc2581(args) => ipc2581::execute(args, resolution),
         Commands::Gerber(args) => gerber::execute(args, resolution),
         Commands::Step(args) => step::execute(args),
+        Commands::Gltf(args) => gltf::execute(args),
         Commands::External(args) => execute_external(args),
     }
 }
