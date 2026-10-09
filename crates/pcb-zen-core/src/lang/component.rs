@@ -2065,6 +2065,8 @@ where
 
             // Properties map.
             let mut properties_map = parse_component_properties(properties_val)?;
+            // Older imports persisted the source schematic's footprint ID; apply now derives it.
+            properties_map.shift_remove("Footprint");
             let legacy_value = ["Value", "Val"]
                 .into_iter()
                 .filter_map(|key| properties_map.shift_remove(key))

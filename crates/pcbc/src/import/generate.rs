@@ -1816,7 +1816,7 @@ fn derive_part_key(
     symbol_definition: String,
 ) -> Result<ImportPartKey> {
     let props = component.best_properties();
-    for name in ["Value", "Description", "Footprint"] {
+    for name in ["Value", "Description"] {
         anyhow::ensure!(
             component
                 .schematic
@@ -1854,7 +1854,7 @@ fn derive_part_key(
     let schematic_properties = props
         .into_iter()
         .flat_map(|properties| properties.iter())
-        .filter(|(name, _)| matches!(name.as_str(), "Value" | "Description" | "Footprint"))
+        .filter(|(name, _)| matches!(name.as_str(), "Value" | "Description"))
         .map(|(name, value)| {
             let name = if name == "Description" {
                 "schematic_description"
