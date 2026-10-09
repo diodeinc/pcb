@@ -8,19 +8,22 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-### Fixed
-
-- Release source bundles skip git-ignored files.
-- `pcb publish --check` removes its temporary staging directory when interrupted or terminated.
-- DFM checks no longer exhaust memory on some boards with large copper pours.
-- `pcb import` handles copied sheet files, scalar-named bus ports, and footprint names with `.` or `+`.
-
 ### Changed
 
 - Speed up schematic loading and reconciliation.
 - `pcb import` writes the KiCad project to `eda/`, matching `pcb new board`.
 - `pcb publish` no longer writes `bom/design_bom.json` or accepts `--exclude bom`; BOMs no longer fall back to the KiCad schematic.
 - `pcb publish` builds only the packages it publishes.
+- `pcb publish` generates Gerbers from IPC-2581 and no longer writes `cpl.csv`.
+- Remove `[patch] stdlib` support; pcb always uses the toolchain stdlib.
+
+### Fixed
+
+- Release source bundles skip git-ignored files.
+- `pcb publish --check` removes its temporary staging directory when interrupted or terminated.
+- DFM checks no longer exhaust memory on some boards with large copper pours.
+- `pcb import` handles copied sheet files, scalar-named bus ports, and footprint names with `.` or `+`.
+- `pcb layout` keeps board footprint fields when it replaces a footprint.
 
 ## [0.4.73] - 2026-10-07
 
