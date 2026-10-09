@@ -193,7 +193,7 @@ fn angle_of(v: Vec2) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Loop {
+pub struct Loop {
     pub(crate) edges: Vec<Edge>,
     /// Polyline approximation, for containment tests only.
     poly: Vec<Vec2>,
@@ -314,11 +314,11 @@ pub(crate) fn orient(edges: Vec<Edge>, ccw: bool) -> Vec<Edge> {
 }
 
 /// One board solid: an outer loop and the holes through it.
-pub(crate) struct Solid {
-    pub(crate) outer: Loop,
-    pub(crate) holes: Vec<Loop>,
+pub struct Solid {
+    pub outer: Loop,
+    pub holes: Vec<Loop>,
     /// Round holes with a depth profile, kept clear of everything else.
-    pub(crate) round: Vec<RoundHole>,
+    pub round: Vec<RoundHole>,
 }
 
 /// Board-to-STEP coordinate mapping: origin shift, then y flipped.
@@ -571,9 +571,16 @@ fn cut_profile(solid: &Solid, drills: &[&Loop]) -> Result<Vec<Solid>, pcb_ir::ge
 /// The vertices of a closed edge list, arcs as chords within `max_error`.
 pub(crate) fn flatten(edges: &[Edge], max_error: f64) -> Vec<Vec2> {
     let mut points: Vec<Vec2> = Vec::new();
+    walk_chords(edges, max_error, |p, _| points.push(p));
+    points
+}
+
+/// Visit the chord vertices of a closed edge list in order, each with the
+/// centre of the arc its outgoing chord lies on, if it lies on one.
+fn walk_chords(edges: &[Edge], max_error: f64, mut visit: impl FnMut(Vec2, Option<Vec2>)) {
     for edge in edges {
         match *edge {
-            Edge::Line { a, .. } => points.push(a),
+            Edge::Line { a, .. } => visit(a, None),
             Edge::Arc { a, c, .. } => {
                 let r = edge.radius();
                 let sweep = edge.sweep();
@@ -582,12 +589,31 @@ pub(crate) fn flatten(edges: &[Edge], max_error: f64) -> Vec<Vec2> {
                 let n = ((sweep.abs() / step.max(1e-3)).ceil() as usize).max(1);
                 for k in 0..n {
                     let angle = from + sweep * k as f64 / n as f64;
-                    points.push(c + Vec2::new(angle.cos(), angle.sin()) * r);
+                    visit(c + Vec2::new(angle.cos(), angle.sin()) * r, Some(c));
                 }
             }
         }
     }
-    points
+}
+
+/// A vertex of a loop's polyline.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Vertex {
+    pub point: Vec2,
+    /// Centre of the arc the chord from this vertex to the next lies on;
+    /// `None` on a straight edge.
+    pub center: Option<Vec2>,
+}
+
+impl Loop {
+    /// The loop as a closed polyline, arcs as chords within `max_error`.
+    pub fn polyline(&self, max_error: f64) -> Vec<Vertex> {
+        let mut out = Vec::new();
+        walk_chords(&self.edges, max_error, |point, center| {
+            out.push(Vertex { point, center })
+        });
+        out
+    }
 }
 
 fn flat_contour(edges: &[Edge]) -> ContourBuf {

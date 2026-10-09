@@ -14,18 +14,18 @@
 use crate::board::{Backdrill, Machining, Mouth, Physical, Via};
 use crate::geom::Vec2;
 
-/// A round hole: its centre and radius profile, top down. A radius of zero
+/// A round hole: its centre and `(z, radius)` profile, top down. A radius of zero
 /// at either end is the flat floor of a pocket.
-pub(crate) struct RoundHole {
-    pub(crate) center: Vec2,
-    pub(crate) profile: Vec<(f64, f64)>,
+pub struct RoundHole {
+    pub center: Vec2,
+    pub profile: Vec<(f64, f64)>,
     /// Radius of the plain drill to fall back to when the machined shape
     /// cannot be placed; `None` when there is no through drill.
     pub(crate) fallback: Option<f64>,
 }
 
 impl RoundHole {
-    pub(crate) fn max_radius(&self) -> f64 {
+    pub fn max_radius(&self) -> f64 {
         self.profile.iter().map(|p| p.1).fold(0.0, f64::max)
     }
 
