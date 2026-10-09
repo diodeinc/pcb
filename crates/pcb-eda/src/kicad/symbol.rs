@@ -3,7 +3,7 @@ use crate::{
     InternalConnectivity, Part, Pin, PinAlternate, PinAt, Symbol, is_placeholder_kicad_pin_name,
 };
 use anyhow::Result;
-use pcb_sexpr::kicad::symbol::expand_stacked_pin_number;
+use pcb_sexpr::kicad::symbol::{expand_stacked_pin_number, property_name_value};
 use pcb_sexpr::{Sexpr, SexprKind, parse};
 use serde::Serialize;
 use std::cmp::Reverse;
@@ -424,15 +424,9 @@ fn parse_jumper_pin_groups(prop_list: &[Sexpr]) -> Vec<BTreeSet<String>> {
 }
 
 fn parse_property(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {
-    let key = prop_list.get(1).and_then(|s| match &s.kind {
-        SexprKind::Symbol(k) | SexprKind::String(k) => Some(k.clone()),
-        _ => None,
-    });
-    let value = prop_list.get(2).and_then(|s| match &s.kind {
-        SexprKind::Symbol(v) | SexprKind::String(v) => Some(v.clone()),
-        _ => None,
-    });
-    if let (Some(key), Some(value)) = (key, value) {
+    let fields = property_name_value(prop_list)
+        .and_then(|(key, value)| Some((key.as_atom()?.to_string(), value.as_atom()?.to_string())));
+    if let Some((key, value)) = fields {
         match key.as_str() {
             "Reference" => symbol.reference = value.clone(),
             "Footprint" => {

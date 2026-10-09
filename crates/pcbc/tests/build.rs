@@ -505,6 +505,102 @@ SimpleResistor3(name = "R3", value = "3kOhm", P1 = vcc, P2 = gnd)
     assert_snapshot!("aggregated_warnings", output);
 }
 
+const DEPENDENCY_PART_ZEN: &str = r#"
+A = io(Net)
+B = io(Net)
+
+Component(
+    name = "U",
+    prefix = "U",
+    footprint = File("test.kicad_mod"),
+    symbol = Symbol(library = "Part.kicad_sym", name = "Part"),
+    pins = {"A": A, "B": B},
+    type = "resistor",
+    properties = {"value": "1k"},
+)
+"#;
+
+/// A missing `Reference` is a warning and an off-grid pin is advice.
+const DEPENDENCY_PART_SYMBOL: &str = r#"(kicad_symbol_lib
+  (version 20251024)
+  (symbol "Part"
+    (property "Value" "Part")
+    (symbol "Part_1_1"
+      (pin passive line (at -5.08 1.27 0) (length 2.54) (name "A") (number "1"))
+      (pin passive line (at 5.08 0 180) (length 2.54) (name "B") (number "2"))))
+)"#;
+
+/// Build a board using one dependency component whose symbol file is `symbol`.
+fn build_with_dependency_symbol(symbol: &str) -> String {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .git_fixture("https://github.com/mycompany/components.git")
+        .write("Part/pcb.toml", "[dependencies]\n")
+        .write("Part/Part.zen", DEPENDENCY_PART_ZEN)
+        .write("Part/Part.kicad_sym", symbol)
+        .write("Part/test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add part")
+        .tag("Part/v1.0.0", false)
+        .push_mirror();
+    sandbox
+        .write(
+            "pcb.toml",
+            r#"
+[workspace]
+pcb-version = "0.4"
+
+[dependencies]
+"github.com/mycompany/components/Part" = "1.0.0"
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"
+Part = Module("github.com/mycompany/components/Part/Part.zen")
+Part(name = "U1", A = Net("A"), B = Net("B"))
+"#,
+        )
+        .snapshot_run("pcbc", ["build", "board.zen"])
+}
+
+#[test]
+fn dependency_symbols_report_what_kicad_rejects_and_nothing_else() {
+    // A dependency's warnings and style are its own business.
+    let output = build_with_dependency_symbol(DEPENDENCY_PART_SYMBOL);
+    assert!(output.contains("Exit Code: 0"), "{output}");
+    assert!(!output.contains("symbol."), "{output}");
+
+    // A library KiCad cannot load fails the build, without an offer to fix it.
+    let unloadable = DEPENDENCY_PART_SYMBOL.replacen(
+        "(symbol \"Part\"",
+        "(embedded_fonts no) (symbol \"Part\"",
+        1,
+    );
+    let output = build_with_dependency_symbol(&unloadable);
+    assert!(output.contains("Exit Code: 1"), "{output}");
+    assert!(
+        output.contains(
+            "[symbol.parse] `embedded_fonts` is not something KiCad accepts in a symbol library"
+        ),
+        "{output}"
+    );
+    assert!(output.contains("Part.kicad_sym:3:"), "{output}");
+    assert!(!output.contains("pcb fix"), "{output}");
+
+    // KiCad reads every definition, used or not.
+    let sibling = DEPENDENCY_PART_SYMBOL.replacen(
+        "(symbol \"Part\"",
+        "(symbol \"Other\" (property \"Value\" 1)) (symbol \"Part\"",
+        1,
+    );
+    let output = build_with_dependency_symbol(&sibling);
+    assert!(output.contains("Exit Code: 1"), "{output}");
+    assert!(
+        output.contains("Other: `property` takes text, not `1`"),
+        "{output}"
+    );
+}
+
 #[test]
 fn test_mixed_aggregated_and_unique_warnings() {
     let mut sandbox = Sandbox::new();

@@ -1,8 +1,9 @@
 use crate::Symbol;
-use anyhow::{Context, Result, anyhow, bail, ensure};
+use anyhow::{Result, anyhow};
+use pcb_sexpr::kicad::symbol::property_name_value;
 use pcb_sexpr::{Sexpr, SexprKind, parse};
 use regex::Regex;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -88,214 +89,23 @@ impl KicadSymbolLibrary {
         self.format_version
     }
 
-    /// Parse a KiCad symbol library from a string with lazy parsing.
-    ///
-    /// This only scans for symbol names and byte ranges - no S-expr parsing.
-    /// Actual parsing happens on-demand when symbols are requested via `get_symbol_lazy`.
-    pub fn from_string_lazy(content: impl Into<String>) -> Result<Self> {
+    /// Parse a KiCad symbol library from a string: only symbol names and byte
+    /// ranges are scanned here, each symbol is parsed when first requested.
+    pub fn from_string(content: impl Into<String>) -> Result<Self> {
         Self::from_sources(vec![content.into()])
     }
 
-    /// Parse a KiCad symbol library from a string (same as from_string_lazy).
-    pub fn from_string(content: impl Into<String>) -> Result<Self> {
-        Self::from_string_lazy(content)
-    }
-
-    /// Parse a KiCad symbol library from a file
+    /// Load a flat `.kicad_sym` file or a split `.kicad_symdir` directory.
     pub fn from_file(path: &Path) -> Result<Self> {
-        if path.is_dir() {
-            return Self::from_directory(path);
-        }
-
-        let content = fs::read_to_string(path)?;
-        Self::from_string_lazy(content)
-    }
-
-    /// Load a complete library for inspection without the lazy loader's fallbacks.
-    /// Each source is parsed once; definitions are cached for the usual resolver.
-    /// Reject ambiguous metadata and invalid inheritance before resolving any symbol.
-    pub fn from_file_strict(path: &Path) -> Result<Self> {
-        let file_type = fs::metadata(path)?;
-        let paths = match path.extension().and_then(|ext| ext.to_str()) {
-            Some("kicad_sym") if file_type.is_file() => vec![path.to_path_buf()],
-            Some("kicad_symdir") if file_type.is_dir() => symbol_library_paths(path)?,
-            _ => bail!(
-                "Unsupported inspection path: expected a .kicad_sym file or .kicad_symdir directory"
-            ),
-        };
-        ensure!(
-            !paths.is_empty(),
-            "No .kicad_sym files in {}",
-            path.display()
-        );
-        let mut library = Self {
-            sources: Vec::new(),
-            symbol_locations: BTreeMap::new(),
-            resolved_cache: RwLock::new(HashMap::new()),
-            definition_cache: RwLock::new(HashMap::new()),
-            format_version: None,
-        };
-        for path in &paths {
-            let source = fs::read_to_string(path)
-                .with_context(|| format!("Failed to read {}", path.display()))?;
-            library
-                .add_source_strict(source)
-                .with_context(|| format!("Invalid symbol library {}", path.display()))?;
-        }
-
-        // Validate before resolution can cache a missing-parent/cycle fallback.
-        let mut visited = HashSet::new();
-        for name in library.symbol_locations.keys() {
-            let mut chain = Vec::new();
-            let mut current = name.as_str();
-            loop {
-                if !visited.insert(current) {
-                    ensure!(
-                        !chain.contains(&current),
-                        "{}: inheritance cycle: {} -> {current}",
-                        path.display(),
-                        chain.join(" -> ")
-                    );
-                    break;
-                }
-                chain.push(current);
-                let location = &library.symbol_locations[current];
-                let Some(parent) = location.extends.as_deref() else {
-                    break;
-                };
-                ensure!(
-                    library.has_symbol(parent),
-                    "{}: symbol {current:?} extends missing parent {parent:?}",
-                    paths[location.source_idx].display()
-                );
-                current = parent;
-            }
-        }
-        Ok(library)
-    }
-
-    /// Validate and cache one source, retaining symbol-relative definition spans.
-    fn add_source_strict(&mut self, source: String) -> Result<()> {
-        // The S-expression parser accepts comments; KiCad does not.
-        if let Some(comment) = pcb_sexpr::scan::comments(&source).next() {
-            bail!("at byte {}: KiCad does not support comments", comment.start);
-        }
-        let mut roots = pcb_sexpr::parse_all(&source)?;
-        ensure!(roots.len() == 1, "Expected exactly one library root");
-        let mut root = roots.pop().unwrap();
-        ensure!(
-            pcb_sexpr::kicad::symbol::kicad_symbol_lib_items(&root).is_some(),
-            "Expected a kicad_symbol_lib root"
-        );
-        let version = root
-            .as_list()
-            .and_then(|items| items.get(1))
-            .and_then(Sexpr::as_list)
-            .filter(|items| items.len() == 2 && items[0].as_sym() == Some("version"))
-            .and_then(|items| items.get(1))
-            .and_then(Sexpr::as_int)
-            .and_then(|version| i32::try_from(version).ok())
-            .ok_or_else(|| anyhow!("Missing or invalid library version"))?;
-        self.format_version.get_or_insert(version);
-        for mut node in root.as_list_mut().unwrap().drain(2..) {
-            let items = node
-                .as_list()
-                .ok_or_else(|| anyhow!("expected a library field at byte {}", node.span.start))?;
-            let tag = items.first().and_then(Sexpr::as_sym).unwrap_or_default();
-            if tag != "symbol" {
-                let valid = match tag {
-                    "generator" => items.len() == 2 && items[1].as_atom().is_some(),
-                    "generator_version" => items.len() == 2 && items[1].as_list().is_none(),
-                    "host" => {
-                        items.len() == if version < 20200827 { 3 } else { 2 }
-                            && items[1..].iter().all(|item| item.as_atom().is_some())
-                    }
-                    _ => false,
-                };
-                ensure!(
-                    valid,
-                    "invalid library field {tag:?} at byte {}",
-                    node.span.start
-                );
-                continue;
-            }
-            let name = items
-                .get(1)
-                .and_then(Sexpr::as_atom)
-                .filter(|name| !name.is_empty())
-                .ok_or_else(|| anyhow!("missing symbol name at byte {}", node.span.start))?
-                .to_string();
-            ensure!(!self.has_symbol(&name), "duplicate symbol {name:?}");
-            let mut extends = None;
-            let mut properties = HashSet::new();
-            for field in &items[2..] {
-                let field = field
-                    .as_list()
-                    .ok_or_else(|| anyhow!("symbol {name:?}: expected a field"))?;
-                match field.first().and_then(Sexpr::as_sym) {
-                    Some("extends") => {
-                        ensure!(
-                            extends.is_none() && field.len() == 2,
-                            "symbol {name:?}: invalid extends"
-                        );
-                        extends = Some(
-                            field[1]
-                                .as_atom()
-                                .filter(|name| !name.is_empty())
-                                .ok_or_else(|| anyhow!("symbol {name:?}: invalid extends target"))?
-                                .to_string(),
-                        );
-                    }
-                    Some("property") => {
-                        let (Some(key), Some(_)) = (
-                            field.get(1).and_then(Sexpr::as_atom),
-                            field.get(2).and_then(Sexpr::as_atom),
-                        ) else {
-                            bail!("symbol {name:?}: property requires a name and value");
-                        };
-                        ensure!(
-                            properties.insert(key),
-                            "symbol {name:?}: duplicate property {key:?}"
-                        );
-                    }
-                    _ => {}
-                }
-            }
-            let range = node.span.start..node.span.end;
-            relativize_spans(&mut node, range.start);
-            let node = Arc::new(node);
-            super::symbol_check::validate_symbol_forms(&name, &node)?;
-            self.definition_cache
-                .get_mut()
-                .unwrap()
-                .insert(name.clone(), node);
-            self.symbol_locations.insert(
-                name,
-                SymbolLocation {
-                    source_idx: self.sources.len(),
-                    range,
-                    extends,
-                },
-            );
-        }
-        self.sources.push(source);
-        Ok(())
-    }
-
-    /// Parse a split KiCad symbol library from a `.kicad_symdir` directory.
-    pub fn from_directory(path: &Path) -> Result<Self> {
-        let sources: Vec<String> = symbol_library_paths(path)?
-            .into_iter()
-            .map(fs::read_to_string)
-            .collect::<std::result::Result<_, _>>()?;
-
-        Self::from_sources(sources).map_err(|err| {
-            anyhow!(
-                "Failed to parse symbol library directory {}: {}",
-                path.display(),
-                err
-            )
-        })
+        let sources = library_paths(path)?
+            .iter()
+            .map(|path| {
+                fs::read_to_string(path)
+                    .map_err(|err| anyhow!("Failed to read {}: {err}", path.display()))
+            })
+            .collect::<Result<_>>()?;
+        Self::from_sources(sources)
+            .map_err(|err| anyhow!("Failed to parse symbol library {}: {err}", path.display()))
     }
 
     /// The library's source texts, in the order given to [`Self::from_sources`].
@@ -487,10 +297,10 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
             match prop_type.as_str() {
                 "extends" => continue, // Skip extends in merged output
                 "property" => {
-                    if let Some(second) = prop_items.get(1)
-                        && let SexprKind::Symbol(key) | SexprKind::String(key) = &second.kind
+                    if let Some(key) =
+                        property_name_value(prop_items).and_then(|(k, _)| k.as_atom())
                     {
-                        push_child_item(&mut child_props, key.clone(), item.clone());
+                        push_child_item(&mut child_props, key.to_string(), item.clone());
                     }
                 }
                 "in_bom" => {
@@ -517,8 +327,8 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
         {
             match prop_type.as_str() {
                 "property" => {
-                    if let Some(second) = prop_items.get(1)
-                        && let SexprKind::Symbol(key) | SexprKind::String(key) = &second.kind
+                    if let Some(key) =
+                        property_name_value(prop_items).and_then(|(k, _)| k.as_atom())
                         && !child_props.iter().any(|(existing, _)| existing == key)
                     {
                         merged_items.push(item.clone());
@@ -596,30 +406,25 @@ fn push_child_item(items: &mut Vec<(String, Sexpr)>, key: String, item: Sexpr) {
     }
 }
 
-/// Regex to find `(symbol` followed by whitespace (handles newlines after keyword)
+/// `(symbol` as a keyword: followed by whitespace, or by `)` when it has no name.
 static SYMBOL_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\(symbol\s").expect("Invalid regex"));
+    LazyLock::new(|| Regex::new(r"\(symbol[\s)]").expect("Invalid regex"));
 
-fn symbol_library_paths(path: &Path) -> Result<Vec<PathBuf>> {
+/// The files of a library: the file itself, or the sorted `.kicad_sym` files
+/// of a split `.kicad_symdir` directory.
+pub fn library_paths(path: &Path) -> Result<Vec<PathBuf>> {
+    if !path.is_dir() {
+        return Ok(vec![path.to_path_buf()]);
+    }
     let mut paths = Vec::new();
     for entry in fs::read_dir(path)? {
         let path = entry?.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("kicad_sym") {
+        if path.extension().is_some_and(|ext| ext == "kicad_sym") {
             paths.push(path);
         }
     }
     paths.sort();
     Ok(paths)
-}
-
-fn relativize_spans(node: &mut Sexpr, offset: usize) {
-    node.span.start -= offset;
-    node.span.end -= offset;
-    if let Some(items) = node.as_list_mut() {
-        for item in items {
-            relativize_spans(item, offset);
-        }
-    }
 }
 
 /// Scan content for symbol locations without parsing S-expressions.
@@ -636,21 +441,19 @@ fn scan_symbol_locations(
 
     let mut locations = BTreeMap::new();
     let mut current_top_end = 0;
+    // KiCad reads nothing after the root list.
+    let root_end = content.find('(').map_or(0, |root| {
+        find_matching_paren(bytes, root).unwrap_or(bytes.len())
+    });
 
-    for mat in SYMBOL_REGEX.find_iter(content) {
+    for mat in SYMBOL_REGEX.find_iter(&content[..root_end]) {
         let symbol_start = mat.start();
-        let after_keyword = mat.end(); // Position right after "(symbol" + whitespace char
-
         if symbol_start < current_top_end {
             continue;
         }
 
-        if after_keyword >= bytes.len() {
-            continue;
-        }
-
-        // Skip any additional whitespace/newlines after the match
-        let mut name_start = after_keyword;
+        // Skip the whitespace between the keyword and the name
+        let mut name_start = mat.end() - 1;
         while name_start < bytes.len() && bytes[name_start].is_ascii_whitespace() {
             name_start += 1;
         }
@@ -683,10 +486,6 @@ fn scan_symbol_locations(
             let name = String::from_utf8_lossy(&bytes[start..end]).to_string();
             (name, end)
         };
-
-        if name.is_empty() {
-            continue;
-        }
 
         // Find the end of this symbol by counting parentheses
         let symbol_end = match find_matching_paren(bytes, symbol_start) {
@@ -748,25 +547,18 @@ fn find_matching_paren(bytes: &[u8], start: usize) -> Result<usize> {
     Err(anyhow!("Unmatched parenthesis at position {}", start))
 }
 
-/// Extract the extends target from a symbol's content
+/// The `extends` target written in a symbol's content, quoted or not; KiCad
+/// ignores an empty one.
 fn extract_extends(content: &str) -> Option<String> {
-    // Look for (extends "ParentName") pattern
-    let pattern = "(extends ";
-    let start = content.find(pattern)?;
-    let after = &content[start + pattern.len()..];
-
-    // Skip whitespace
-    let after = after.trim_start();
-
-    // Extract the name (quoted or unquoted)
-    if let Some(inner) = after.strip_prefix('"') {
-        // Find the closing quote
-        let end = inner.find('"')?;
-        Some(inner[..end].to_string())
-    } else {
-        let end = after.find(|c: char| c.is_whitespace() || c == ')')?;
-        Some(after[..end].to_string())
-    }
+    let after = &content[content.find("(extends")? + "(extends".len()..];
+    let after = after
+        .strip_prefix(|c: char| c.is_whitespace())?
+        .trim_start();
+    let name = match after.strip_prefix('"') {
+        Some(inner) => &inner[..inner.find('"')?],
+        None => &after[..after.find(|c: char| c.is_whitespace() || c == ')')?],
+    };
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Merge parent and child symbols (child overrides parent)
@@ -847,14 +639,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strict_definitions_keep_symbol_relative_spans_and_share_the_cache() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("parts.kicad_sym");
+    fn definitions_keep_symbol_relative_spans_and_are_shared() {
         let source = r#"(kicad_symbol_lib (version 20241209)
             (symbol "Base" (property "Value" "(symbol not-a-definition)"))
             (symbol "Child" (extends "Base")))"#;
-        fs::write(&path, source).unwrap();
-        let library = KicadSymbolLibrary::from_file_strict(&path).unwrap();
+        let library = KicadSymbolLibrary::from_string(source).unwrap();
         assert_eq!(library.symbol_names(), ["Base", "Child"]);
         let (source_idx, offset, definition) = library.definition("Child").unwrap().unwrap();
         assert_eq!(source_idx, 0);
@@ -874,6 +663,22 @@ mod tests {
             child.metadata().primary.value.as_deref(),
             Some("(symbol not-a-definition)")
         );
+    }
+
+    #[test]
+    fn kicad_accepts_duplicate_names_private_properties_and_empty_extends() {
+        let source = r#"(kicad_symbol_lib (version 20241209)
+            (symbol "U" (property "Value" "first"))
+            (symbol "U" (property private "Value" "last") (property private "Note" "n"))
+            (symbol "C" (extends "") (property "Value" "C"))) (symbol "T")"#;
+        let library = KicadSymbolLibrary::from_string(source).unwrap();
+        assert_eq!(library.symbol_names(), ["C", "U"]);
+        let last = library.get_symbol_lazy("U").unwrap().unwrap();
+        assert_eq!(last.properties()["Value"], "last");
+        assert_eq!(last.properties()["Note"], "n");
+        assert!(!last.properties().contains_key("private"));
+        let child = library.get_symbol_lazy("C").unwrap().unwrap();
+        assert_eq!(child.properties().len(), 1);
     }
 
     #[test]
@@ -927,7 +732,7 @@ mod tests {
         )
         .unwrap();
 
-        let lib = KicadSymbolLibrary::from_directory(dir.path()).unwrap();
+        let lib = KicadSymbolLibrary::from_file(dir.path()).unwrap();
         assert_eq!(lib.symbol_names(), vec!["GND", "VCC"]);
         assert!(lib.has_symbol("GND"));
         assert!(lib.has_symbol("VCC"));
@@ -963,7 +768,7 @@ mod tests {
         )
         .unwrap();
 
-        let lib = KicadSymbolLibrary::from_directory(dir.path()).unwrap();
+        let lib = KicadSymbolLibrary::from_file(dir.path()).unwrap();
         let child = lib.get_symbol_lazy("Child").unwrap().unwrap();
         assert_eq!(child.pins().len(), 1);
         assert_eq!(child.pins()[0].number, "1");
@@ -974,111 +779,30 @@ mod tests {
     }
 
     #[test]
-    fn test_symbol_name_with_trailing_underscore() {
-        // Regression test: symbol names ending with underscore should not be
-        // filtered out as sub-symbols (e.g., "BM04B-SRSS-TB_LF__SN_")
+    fn scans_top_level_symbol_names_however_they_are_written() {
         let content = r#"(kicad_symbol_lib
-            (symbol "BM04B-SRSS-TB_LF__SN_"
-                (property "Reference" "J" (at 0 0 0))
-                (property "Value" "BM04B-SRSS-TB_LF__SN_" (at 0 0 0))
-            )
-        )"#;
-
-        let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        assert_eq!(lib.symbol_names().len(), 1);
-        assert!(lib.has_symbol("BM04B-SRSS-TB_LF__SN_"));
-
-        let symbol = lib
-            .get_symbol_lazy("BM04B-SRSS-TB_LF__SN_")
-            .unwrap()
-            .unwrap();
-        assert_eq!(symbol.name(), "BM04B-SRSS-TB_LF__SN_");
-    }
-
-    #[test]
-    fn test_symbol_name_with_underscores_not_subsymbol() {
-        // Symbol names with underscores but not ending in digits should be kept
-        let content = r#"(kicad_symbol_lib
-            (symbol "My_Component_V2"
-                (property "Reference" "U" (at 0 0 0))
-            )
-            (symbol "Another_Part_"
-                (property "Reference" "U" (at 0 0 0))
-            )
-        )"#;
-
-        let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        assert_eq!(lib.symbol_names().len(), 2);
-        assert!(lib.has_symbol("My_Component_V2"));
-        assert!(lib.has_symbol("Another_Part_"));
-    }
-
-    #[test]
-    fn test_symbol_name_on_separate_line() {
-        // Regression test: symbol name can be on a separate line after "(symbol"
-        let content = r#"(kicad_symbol_lib
+            (symbol "BM04B-SRSS-TB_LF__SN_" (property "Reference" "J" (at 0 0 0)))
+            (symbol "Another_Part_")
             (symbol
                 "TYPE-C24PQT"
-                (property "Reference" "J" (at 0 0 0))
-                (property "Value" "TYPE-C24PQT" (at 0 0 0))
-            )
-        )"#;
-
-        let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        assert_eq!(lib.symbol_names().len(), 1);
-        assert!(lib.has_symbol("TYPE-C24PQT"));
-
-        let symbol = lib.get_symbol_lazy("TYPE-C24PQT").unwrap().unwrap();
-        assert_eq!(symbol.name(), "TYPE-C24PQT");
-    }
-
-    #[test]
-    fn test_subsymbol_filtering_by_containment() {
-        // Sub-symbols should be filtered out based on containment, not name pattern
-        let content = r#"(kicad_symbol_lib
+                (property "Value" "TYPE-C24PQT" (at 0 0 0)))
             (symbol "MyComponent"
-                (property "Reference" "U" (at 0 0 0))
                 (symbol "MyComponent_0_1"
-                    (pin input line (at 0 0 0) (length 2.54)
-                        (name "A" (effects (font (size 1.27 1.27))))
-                        (number "1" (effects (font (size 1.27 1.27))))
-                    )
-                )
-            )
-        )"#;
-
+                    (pin input line (at 0 0 0) (length 2.54) (name "A") (number "1")))))"#;
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        // Should only have the top-level symbol, not the sub-symbol
-        assert_eq!(lib.symbol_names().len(), 1);
-        assert!(lib.has_symbol("MyComponent"));
-        assert!(!lib.has_symbol("MyComponent_0_1"));
-    }
-
-    #[test]
-    fn test_extract_extends_quoted() {
-        // Test the extract_extends helper function with quoted parent name
-        let content = r#"(extends "BaseSymbol")"#;
-        let result = extract_extends(content);
-        assert_eq!(result, Some("BaseSymbol".to_string()));
-    }
-
-    #[test]
-    fn test_extract_extends_unquoted() {
-        // Test extract_extends with unquoted parent name
-        let content = r#"(extends BaseSymbol)"#;
-        let result = extract_extends(content);
-        assert_eq!(result, Some("BaseSymbol".to_string()));
-    }
-
-    #[test]
-    fn test_extract_extends_in_symbol() {
-        // Test extract_extends within a full symbol definition
-        let content = r#"(symbol "Child"
-            (extends "ParentSymbol")
-            (property "Value" "ChildValue" (at 0 0 0))
-        )"#;
-        let result = extract_extends(content);
-        assert_eq!(result, Some("ParentSymbol".to_string()));
+        assert_eq!(
+            lib.symbol_names(),
+            [
+                "Another_Part_",
+                "BM04B-SRSS-TB_LF__SN_",
+                "MyComponent",
+                "TYPE-C24PQT"
+            ]
+        );
+        assert_eq!(
+            lib.get_symbol_lazy("TYPE-C24PQT").unwrap().unwrap().name(),
+            "TYPE-C24PQT"
+        );
     }
 
     #[test]

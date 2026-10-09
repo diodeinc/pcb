@@ -15,6 +15,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
+- `pcb build` rejects dependency symbol libraries KiCad cannot load.
+- `pcb build` and `pcb inspect` reject symbol libraries KiCad cannot load, such as ones with a root-level `embedded_fonts`, and accept what KiCad loads, such as repeated symbol names and private properties.
 
 ### Fixed
 

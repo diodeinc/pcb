@@ -3,13 +3,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pcb_eda::kicad::symbol_check::{
-    FootprintPads, Severity, SymbolIssue, check_library, check_symbol, fix,
+    FootprintPads, Severity, SymbolIssue, check_symbol, fix, unloadable,
 };
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use starlark::{codemap::CodeMap, errors::EvalSeverity, values::ValueLike};
 use tracing::{info_span, instrument};
 
-use crate::{Diagnostic, FileProvider, resolution::ResolutionResult};
+use crate::{Diagnostic, FileProvider, STDLIB_MODULE_PATH, resolution::ResolutionResult};
 
 use super::component::FrozenComponentValue;
 use super::footprint::{resolve_file_backed_footprint, resolved_span};
@@ -38,7 +38,8 @@ impl Library {
         Some(Self { library, sources })
     }
 
-    fn diagnostic(&self, issue: &SymbolIssue) -> Diagnostic {
+    /// `issue` as a diagnostic, with its fix only when the file is `owned`.
+    fn diagnostic(&self, issue: &SymbolIssue, owned: bool) -> Diagnostic {
         let (path, codemap) = &self.sources[issue.source];
         let body = format!("[{}] {}\nhelp: {}", issue.kind, issue.message, issue.help);
         let severity = match issue.severity {
@@ -46,29 +47,35 @@ impl Library {
             Severity::Warning => EvalSeverity::Warning,
             Severity::Advice => EvalSeverity::Advice,
         };
+        let fix = if owned { issue.fix.clone() } else { Vec::new() };
         Diagnostic::categorized(path, &body, issue.kind, severity)
             .with_span(Some(resolved_span(codemap, issue.span)))
-            .with_fix(issue.fix.clone())
+            .with_fix(fix)
     }
 }
 
-/// Each component whose symbol file belongs to a workspace package, with that
-/// file and the symbol's name; a dependency's symbols are not the workspace's
-/// to fix.
-fn workspace_symbols<'a>(
+/// Each component with the file and name of its KiCad symbol, and whether
+/// the file belongs to a workspace package. The stdlib ships checked.
+fn symbols<'a>(
     module_tree: &'a BTreeMap<ModulePath, &FrozenModuleValue>,
     resolution: &'a ResolutionResult,
-) -> impl Iterator<Item = (&'a FrozenComponentValue, PathBuf, &'a str)> {
+) -> impl Iterator<Item = (&'a FrozenComponentValue, PathBuf, &'a str, bool)> {
     let mut seen = HashSet::new();
     let components = module_tree.values().flat_map(|module| module.components());
     components.filter_map(move |component| {
         let symbol = component.symbol().downcast_ref::<SymbolValue>()?;
         let (uri, name) = (symbol.source_uri()?, symbol.name()?);
+        let package = uri
+            .strip_prefix(pcb_sch::PACKAGE_URI_PREFIX)?
+            .split('/')
+            .next()?;
+        if package == STDLIB_MODULE_PATH {
+            return None;
+        }
         // Instances of one component repeat; resolving paths is the costly part.
         let fresh = seen.insert((uri, name, component.footprint(), component.source_path()));
-        let path = (fresh && resolution.is_workspace_uri(uri))
-            .then(|| resolution.resolve_package_uri(uri).ok())??;
-        Some((component, path, name))
+        let path = fresh.then(|| resolution.resolve_package_uri(uri).ok())??;
+        Some((component, path, name, resolution.is_workspace_uri(uri)))
     })
 }
 
@@ -81,7 +88,8 @@ pub(crate) fn fix_symbols(
     file_provider: &dyn FileProvider,
     fixed: &mut BTreeMap<PathBuf, String>,
 ) {
-    for (_, path, name) in workspace_symbols(module_tree, resolution) {
+    let owned = symbols(module_tree, resolution).filter(|(.., workspace)| *workspace);
+    for (_, path, name, _) in owned {
         let Ok((library, paths)) = loaded_symbol_library(&path, name, file_provider) else {
             continue;
         };
@@ -89,7 +97,7 @@ pub(crate) fn fix_symbols(
         let sources = texts
             .map(|(path, text)| fixed.get(path).unwrap_or(text).clone())
             .collect();
-        let after = fix(sources, name);
+        let after = fix(sources);
         for ((path, before), after) in paths.into_iter().zip(library.sources()).zip(after) {
             if after != *before {
                 fixed.insert(path, after);
@@ -98,9 +106,9 @@ pub(crate) fn fix_symbols(
     }
 }
 
-/// Check the KiCad symbol of every component whose symbol file belongs to a
-/// workspace package. Diagnostics point into the symbol file, the file that
-/// has to change.
+/// Check the KiCad symbol of every component. Diagnostics point into the
+/// symbol file, the file that has to change; a dependency's file is only
+/// held to what KiCad loads, without fixes.
 #[instrument(name = "check_symbols", skip_all)]
 pub(crate) fn check_symbols(
     module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
@@ -113,20 +121,20 @@ pub(crate) fn check_symbols(
     let mut libraries: HashMap<PathBuf, Option<Library>> = HashMap::new();
     let mut pads: HashMap<PathBuf, Option<BTreeSet<String>>> = HashMap::new();
 
-    for (component, path, name) in workspace_symbols(module_tree, resolution) {
+    for (component, path, name, workspace) in symbols(module_tree, resolution) {
         // The library is the one the symbol was loaded from, already parsed.
-        // One KiCad cannot read is reported once and its symbols left alone.
+        // What KiCad refuses in it is reported, and its symbols left alone.
         let library = libraries.entry(path).or_insert_with_key(|path| {
             let library = Library::load(path, name, file_provider)?;
-            match check_library(&library.library) {
-                Some(unreadable) => {
-                    diagnostics.push(library.diagnostic(&unreadable));
-                    None
-                }
-                None => Some(library),
-            }
+            let faults = unloadable(&library.library);
+            diagnostics.extend(
+                faults
+                    .iter()
+                    .map(|issue| library.diagnostic(issue, workspace)),
+            );
+            faults.is_empty().then_some(library)
         });
-        let Some(library) = library else {
+        let Some(library) = library.as_ref().filter(|_| workspace) else {
             continue;
         };
         let footprint = resolve_file_backed_footprint(
@@ -149,7 +157,7 @@ pub(crate) fn check_symbols(
         for issue in check_symbol(&library.library, name, footprint_pads) {
             let file = library.sources[issue.source].0.clone();
             if reported.insert((file, issue.span.start, issue.message.clone())) {
-                diagnostics.push(library.diagnostic(&issue));
+                diagnostics.push(library.diagnostic(&issue, true));
             }
         }
     }

@@ -114,25 +114,29 @@ pub fn find_symbol_index(kicad_symbol_lib: &[Sexpr], name: &str) -> Option<usize
     })
 }
 
+/// The name and value of a `(property [private] "<name>" "<value>" ...)`.
+pub fn property_name_value(property: &[Sexpr]) -> Option<(&Sexpr, &Sexpr)> {
+    let fields = &property[1 + private_offset(property)..];
+    Some((fields.first()?, fields.get(1)?))
+}
+
+/// One when a property starts with KiCad's `private` flag.
+fn private_offset(property: &[Sexpr]) -> usize {
+    usize::from(property.get(1).and_then(Sexpr::as_sym) == Some("private"))
+}
+
 /// Extract direct `(property "<name>" "<value>" ...)` pairs from a symbol.
 pub fn symbol_properties(symbol: &[Sexpr]) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    for child in symbol.iter().skip(2) {
-        let Some(items) = child.as_list() else {
-            continue;
-        };
-        if items.first().and_then(Sexpr::as_sym) != Some("property") {
-            continue;
-        }
-        let Some(name) = items.get(1).and_then(atom_to_string) else {
-            continue;
-        };
-        let Some(value) = items.get(2).and_then(atom_to_string) else {
-            continue;
-        };
-        out.insert(name, value);
-    }
-    out
+    symbol
+        .iter()
+        .skip(2)
+        .filter_map(|child| {
+            let items = child.as_list()?;
+            (items.first().and_then(Sexpr::as_sym) == Some("property")).then_some(items)
+        })
+        .filter_map(property_name_value)
+        .filter_map(|(name, value)| Some((atom_to_string(name)?, atom_to_string(value)?)))
+        .collect()
 }
 
 /// Rewrite a symbol's direct `(property ...)` nodes to match `next`.
@@ -187,19 +191,16 @@ fn property_name(node: &Sexpr) -> Option<String> {
     if items.first().and_then(Sexpr::as_sym) != Some("property") {
         return None;
     }
-    items.get(1).and_then(atom_to_string)
+    items
+        .get(1 + private_offset(items))
+        .and_then(atom_to_string)
 }
 
 fn set_property_value(mut node: Sexpr, value: &str) -> Sexpr {
     if let Some(items) = node.as_list_mut() {
-        if items.len() <= 2 {
-            while items.len() < 2 {
-                items.push(Sexpr::string(""));
-            }
-            items.push(Sexpr::string(value));
-        } else {
-            items[2] = Sexpr::string(value);
-        }
+        let at = 2 + private_offset(items);
+        items.resize_with(items.len().max(at + 1), || Sexpr::string(""));
+        items[at] = Sexpr::string(value);
     }
     node
 }
@@ -329,6 +330,7 @@ mod tests {
             (symbol "A"
                 (property "Reference" "U" (at 0 0 0))
                 (property "Obsolete" "x" (at 0 0 0))
+                (property private "Private" "p" (at 0 0 0))
                 (symbol "A_0_1")
             )
         )"#;
@@ -341,11 +343,13 @@ mod tests {
             &BTreeMap::from([
                 ("Reference".to_string(), "Q".to_string()),
                 ("Value".to_string(), "A".to_string()),
+                ("Private".to_string(), "p".to_string()),
             ]),
         );
 
         let props = symbol_properties(sym);
         assert_eq!(props.get("Reference"), Some(&"Q".to_string()));
+        assert_eq!(props.get("Private"), Some(&"p".to_string()));
         assert_eq!(props.get("Value"), Some(&"A".to_string()));
         assert!(!props.contains_key("Obsolete"));
 
