@@ -285,27 +285,20 @@ fn collect_page_instances<'a>(
     Ok(())
 }
 
-fn normalize_file_name(name: &str) -> String {
-    normalize_schematic_path(Path::new(name))
+/// KiCad accepts Windows separators in sheet paths (SCH_SHEET::SetFileName).
+pub(crate) fn normalize_file_name(name: &str) -> String {
+    normalize_schematic_path(Path::new(&name.replace('\\', "/")))
         .to_string_lossy()
         .replace('\\', "/")
 }
 
 pub(crate) fn resolve_file_name(parent: &SchPage, child: &str) -> String {
-    let child = Path::new(child);
-    let path = if child.is_absolute() {
-        child.to_path_buf()
-    } else {
-        parent
-            .file_name
-            .as_deref()
-            .and_then(|name| Path::new(name).parent())
-            .unwrap_or_else(|| Path::new(""))
-            .join(child)
-    };
-    normalize_schematic_path(&path)
-        .to_string_lossy()
-        .replace('\\', "/")
+    let parent = parent
+        .file_name
+        .as_deref()
+        .and_then(|name| Path::new(name).parent())
+        .unwrap_or_else(|| Path::new(""));
+    normalize_file_name(&parent.join(child.replace('\\', "/")).to_string_lossy())
 }
 
 struct PageConnectivity {

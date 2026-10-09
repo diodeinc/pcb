@@ -25,6 +25,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.
 - `DiffPair(impedance=...)` applies to its nets even when the pair never crosses an `io()` boundary; conflicting impedance values on one net now warn.
+- Schematic sheet paths written with Windows separators, including `..`, resolve as KiCad resolves them.
 
 ## [0.4.74] - 2026-10-09
 
