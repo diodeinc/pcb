@@ -96,26 +96,42 @@ impl Scene {
         {
             return Err(Error::NothingToExport);
         }
-        let origin = match options.origin {
-            Origin::Board => Vec2::ZERO,
-            Origin::Drill => board.aux_origin,
-            Origin::Grid => board.grid_origin,
-            Origin::User { x, y } => Vec2::new(x, y),
-        };
-        let frame = Frame { origin };
-        let physical = board.physical();
+        let mut scene = Self::components(board, options, warnings);
+        scene.layers = Self::layers(board, options, warnings)?;
+        Ok(scene)
+    }
+
+    /// The scene without its layers, so a writer can start on the models
+    /// while [`Scene::layers`] runs.
+    pub fn components(board: &Board, options: &Options, warnings: &mut Vec<String>) -> Self {
         let mut scene = Scene {
             models: Vec::new(),
             components: Vec::new(),
             layers: Vec::new(),
         };
         if options.components {
-            scene.place_components(board, options, frame, &physical, warnings);
+            scene.place_components(
+                board,
+                options,
+                frame(board, options),
+                &board.physical(),
+                warnings,
+            );
         }
+        scene
+    }
+
+    /// The scene's layers, as [`Scene::build`] gives them.
+    pub fn layers(
+        board: &Board,
+        options: &Options,
+        warnings: &mut Vec<String>,
+    ) -> Result<Vec<Layer>, Error> {
+        let frame = frame(board, options);
+        let physical = board.physical();
+        let mut layers = Vec::new();
         if options.board_body {
-            scene
-                .layers
-                .push(body(board, options, frame, &physical, warnings)?);
+            layers.push(body(board, options, frame, &physical, warnings)?);
         }
         let copper_options = copper::CopperOptions {
             pads: options.pads,
@@ -144,7 +160,7 @@ impl Scene {
                 (copper.vias, LayerKind::Vias, copper_rgb),
             ] {
                 if !solids.is_empty() {
-                    scene.layers.push(Layer {
+                    layers.push(Layer {
                         kind,
                         color,
                         transparency: None,
@@ -160,7 +176,7 @@ impl Scene {
                 .chain(&options.text_variables)
                 .cloned()
                 .collect();
-            let layers = faces::build(
+            let tech_layers = faces::build(
                 board,
                 frame,
                 &physical,
@@ -170,7 +186,7 @@ impl Scene {
                 worker_threads(),
                 warnings,
             )?;
-            for layer in layers {
+            for layer in tech_layers {
                 if layer.faces.is_empty() {
                     continue;
                 }
@@ -187,7 +203,7 @@ impl Scene {
                         0.17,
                     ),
                 };
-                scene.layers.push(Layer {
+                layers.push(Layer {
                     kind,
                     color,
                     transparency: Some(transparency),
@@ -199,7 +215,7 @@ impl Scene {
                 });
             }
         }
-        Ok(scene)
+        Ok(layers)
     }
 
     /// Place every selected footprint's models with KiCad's transform:
@@ -279,6 +295,16 @@ impl Scene {
             }
         }
     }
+}
+
+fn frame(board: &Board, options: &Options) -> Frame {
+    let origin = match options.origin {
+        Origin::Board => Vec2::ZERO,
+        Origin::Drill => board.aux_origin,
+        Origin::Grid => board.grid_origin,
+        Origin::User { x, y } => Vec2::new(x, y),
+    };
+    Frame { origin }
 }
 
 /// The board body: one solid per outline with its drills cut. Plain

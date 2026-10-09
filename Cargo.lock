@@ -3150,6 +3150,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "meshopt-rs"
+version = "0.1.2"
+source = "git+https://github.com/yzsolt/meshopt-rs?rev=7b64153167830dfe4fb28d6bd699a28d106f172e#7b64153167830dfe4fb28d6bd699a28d106f172e"
+dependencies = [
+ "bitflags 2.13.2",
+]
+
+[[package]]
 name = "mimalloc"
 version = "0.1.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3783,8 +3791,10 @@ dependencies = [
  "anyhow",
  "glam 0.34.1",
  "i_triangle",
+ "meshopt-rs",
  "pcb-step",
  "rayon",
+ "rustc-hash",
  "serde_json",
  "triangulate",
 ]

@@ -12,7 +12,12 @@ use triangulate::colored_mesh::{ColoredSubmesh, tessellate_step_bytes};
 
 use crate::mesh::Primitive;
 
-/// A tessellated model: one primitive per colour, in model millimetres.
+/// How far simplification may move a model's surface, in millimetres: the
+/// tolerance models are tessellated to.
+const SIMPLIFY_ERROR: f32 = 0.01;
+
+/// A tessellated model: one simplified, optimized primitive per colour, in
+/// model millimetres.
 pub(crate) struct Mesh {
     pub(crate) name: String,
     /// sRGB colour and its triangles, by colour.
@@ -141,14 +146,14 @@ fn tessellate_one(key: &str, bytes: &[u8]) -> Outcome {
                 indices,
             } = s;
             repair_normals(&positions, &mut normals, &indices);
-            (
-                color,
-                Primitive {
-                    positions,
-                    normals,
-                    indices,
-                },
-            )
+            let mut primitive = Primitive {
+                positions,
+                normals,
+                indices,
+            };
+            primitive.simplify(SIMPLIFY_ERROR);
+            primitive.optimize();
+            (color, primitive)
         })
         .collect();
     if primitives.is_empty() {
