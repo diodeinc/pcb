@@ -41,6 +41,11 @@ pub(super) fn materialize_board(
         fs::copy(staged_root.join(relative), &destination)
             .with_context(|| format!("Failed to copy schematic {}", relative.display()))?;
     }
+    make_sheet_file_ids_unique(
+        &layout_dir,
+        &selection.selected.kicad_sch,
+        &selection.portable.schematic_files_rel,
+    )?;
     let layout_kicad_pro = match layout_kicad_pro {
         Some(path) => path,
         None => {
@@ -73,6 +78,53 @@ pub(super) fn materialize_board(
         validation_diagnostics_json,
         import_extraction_json,
     })
+}
+
+fn make_sheet_file_ids_unique(
+    layout_dir: &Path,
+    root_schematic: &Path,
+    schematic_files: &[PathBuf],
+) -> Result<()> {
+    let root = pcb_kicad_sch::normalize_schematic_path(root_schematic);
+    let mut files = schematic_files
+        .iter()
+        .map(|relative| pcb_kicad_sch::normalize_schematic_path(relative))
+        .collect::<Vec<_>>();
+    files.sort_by_key(|relative| *relative != root);
+
+    let mut seen = std::collections::BTreeSet::new();
+    for relative in files {
+        let path = layout_dir.join(&relative);
+        let source = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let tree = pcb_sexpr::parse(&source)
+            .with_context(|| format!("Failed to parse {}", path.display()))?;
+        let Some(id) = tree
+            .as_list()
+            .and_then(|items| pcb_sexpr::find_child_list(items, "uuid"))
+            .and_then(|items| items.get(1))
+        else {
+            continue;
+        };
+        let Some(value) = id.as_str() else {
+            continue;
+        };
+        let mut replacement = value.to_string();
+        while !seen.insert(replacement.clone()) {
+            let key = format!("{replacement}/{}", relative.display());
+            replacement =
+                uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, key.as_bytes()).to_string();
+        }
+        if replacement == value {
+            continue;
+        }
+        let mut patches = pcb_sexpr::PatchSet::new();
+        patches.replace_string(id.span, &replacement);
+        let mut output = Vec::new();
+        patches.write_to(&source, &mut output)?;
+        fs::write(&path, output).with_context(|| format!("Failed to write {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn write_validation_diagnostics(

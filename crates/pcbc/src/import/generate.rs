@@ -2061,7 +2061,7 @@ fn render_component_footprint(
         });
     }
 
-    let fp_name = sanitize_component_dir_name(&sexpr_board::footprint_name_from_fpid(fpid));
+    let fp_name = footprint_file_stem(&sexpr_board::footprint_name_from_fpid(fpid));
     let filename = format!("{fp_name}.kicad_mod");
     let mod_text = match &layout.footprint_geometry {
         ImportFootprintGeometry::LibraryFile(sexpr) => sexpr.clone(),
@@ -2074,6 +2074,11 @@ fn render_component_footprint(
         symbol_property: fp_name,
         local_file: Some((filename, mod_text)),
     })
+}
+
+fn footprint_file_stem(name: &str) -> String {
+    name.trim()
+        .replace(['/', '\\', ':', '"', '<', '>', '|', '?', '*'], "_")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
