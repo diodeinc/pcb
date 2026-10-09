@@ -868,7 +868,7 @@ impl ModuleConverter {
         let symbol = component.symbol();
         if let Some(symbol_value) = symbol.downcast_ref::<SymbolValue>() {
             // First, group pads by signal name
-            let mut signal_to_pads: HashMap<String, Vec<String>> = HashMap::new();
+            let mut signal_to_pads: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
             for (pad_number, signal_val) in symbol_value.pad_to_signal().iter() {
                 signal_to_pads
