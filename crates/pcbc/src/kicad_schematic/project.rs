@@ -39,15 +39,8 @@ impl KicadProject {
                     .to_path_buf();
                 (directory, requested.to_path_buf())
             } else {
-                let mut project_files = files_with_extension(requested, "kicad_pro")?;
-                if project_files.len() != 1 {
-                    bail!(
-                        "expected exactly one .kicad_pro in {}, found {}",
-                        requested.display(),
-                        project_files.len()
-                    );
-                }
-                (requested.to_path_buf(), project_files.remove(0))
+                let project_file = pcb_layout::utils::require_kicad_files(requested)?.kicad_pro;
+                (requested.to_path_buf(), project_file)
             };
         let project: Value = serde_json::from_str(&fs::read_to_string(&project_file)?)
             .with_context(|| format!("failed to parse {}", project_file.display()))?;
@@ -345,7 +338,7 @@ mod tests {
 
         let error = KicadProject::load(directory.path()).unwrap_err();
 
-        assert!(error.to_string().contains("exactly one .kicad_pro"));
+        assert!(error.to_string().contains("Multiple .kicad_pro files"));
     }
 
     #[test]
