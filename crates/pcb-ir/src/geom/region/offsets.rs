@@ -3,8 +3,8 @@
 use super::{ContourSet, decimate_rings_inward, edges_of, flatten_shapes};
 use crate::geom::AccuracyError;
 use crate::geom::accuracy::numerical_error;
-use i_overlay::mesh::outline::offset::OutlineOffset;
-use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
+use i_overlay::mesh::float::outline::offset::OutlineOffset;
+use i_overlay::mesh::float::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 
 impl ContourSet {
     /// Morphological opening by a disk: `(self ⊖ D_radius) ⊕ D_radius`.
@@ -61,7 +61,8 @@ impl ContourSet {
         let style = OutlineStyle::new(offset).line_join(OutlineLineJoin::Round(join_angle));
         let rings = flatten_shapes(self.overlay_source().outline_as::<i64>(&style));
         // Only rounded corners incur chord error; inward corners intersect straight edges.
-        // The backend emits floor(sweep / join_angle) chords at each rounded corner.
+        // The backend keeps every chord's sweep at or below join_angle, so sizing each
+        // chord as one of floor(sweep / join_angle) equal steps bounds its sag from above.
         let added = self
             .rings()
             .flat_map(|ring| {
