@@ -1243,7 +1243,8 @@ const ENIG_COLOR: [f64; 3] = [178.0 / 255.0, 156.0 / 255.0, 0.0];
 fn finish_color(name: &str) -> Option<[f64; 3]> {
     let rgb: [u8; 3] = match name {
         "ENIG" | "ENEPIG" | "Immersion gold" | "Hard gold" => return Some(ENIG_COLOR),
-        "HAL SnPb" | "HAL lead-free" | "Immersion tin" | "Immersion nickel" => [160, 160, 160],
+        "HAL SnPb" | "HAL lead-free" | "HASL" | "HASL Lead-free" | "Immersion tin"
+        | "Immersion nickel" => [160, 160, 160],
         "Immersion silver" => [213, 213, 213],
         "OSP" | "HT_OSP" => [184, 115, 50],
         _ => return None,
