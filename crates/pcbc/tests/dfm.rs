@@ -50,7 +50,7 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
         &mut sandbox,
         ["dfm", "MyBoard.zen", "--output", "report.dfm"],
     );
-    let mut report = read_report(&sandbox, "report.dfm");
+    let report = read_report(&sandbox, "report.dfm");
     let printed = summary(&output);
     for field in ["verdict", "pdk", "layout_target", "summary"] {
         assert_eq!(printed[field], report[field], "{field} differs from stdout");
@@ -58,7 +58,6 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
 
     assert_eq!(report["pdk"]["path"], "builtin:standard");
     assert_eq!(report["layout_target"], "board");
-    assert_eq!(report["scene"]["schema_version"], 1);
     assert_eq!(report["layout"]["coordinate_frame"], "selected_board");
     let standard_pdk = include_str!("../../pcb-ipc2581-tools/pdks/standard.toml");
     assert_eq!(report["pdk"]["source"], standard_pdk);
@@ -89,17 +88,8 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
         ],
     );
     assert_eq!(file_output.status.code(), output.status.code());
-    let mut file_report = read_report(&sandbox, "accurate.dfm");
+    let file_report = read_report(&sandbox, "accurate.dfm");
     assert!(!Path::new(file_report["input"]["path"].as_str().unwrap()).exists());
-    // Each .zen run asks KiCad for new IPC, which can reorder independent
-    // features. Compare scene metadata here; the fixed-IPC test below checks
-    // exact SVG parity as well as the full checked geometry.
-    for generated in [&mut report, &mut file_report] {
-        for pass in generated["scene"]["passes"].as_array_mut().unwrap() {
-            let svg = pass.as_object_mut().unwrap().remove("svg").unwrap();
-            assert!(svg.as_str().unwrap().starts_with("<svg "));
-        }
-    }
     for field in [
         "pdk",
         "layout_target",
@@ -345,10 +335,56 @@ fn read_report(sandbox: &Sandbox, path: &str) -> Value {
         );
         report["scene"]["passes"] = json(
             "SELECT json_group_array(json_object('label', label, 'feature', feature, \
-             'layer', layer, 'color', color, 'svg', svg)) FROM scene",
+             'layer', layer, 'color', color)) FROM scene",
         );
     }
     report
+}
+
+/// The polylines of the scene shapes drawn on `layer`, in millimetres.
+fn scene_lines(sandbox: &Sandbox, path: &str, layer: &str) -> Vec<Vec<[f64; 2]>> {
+    let connection = rusqlite::Connection::open(sandbox.default_cwd().join(path)).unwrap();
+    let mut query = connection
+        .prepare(
+            "SELECT s.paths FROM draws d JOIN scene p ON p.id = d.pass \
+             JOIN shapes s ON s.id = d.shape WHERE p.layer = ? AND s.paths IS NOT NULL",
+        )
+        .unwrap();
+    let blobs = query
+        .query_map([layer], |row| row.get::<_, Vec<u8>>(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+    blobs.iter().flat_map(|blob| decode(blob)).collect()
+}
+
+/// Zigzag varints: path count, point counts, then nanometre deltas.
+fn decode(blob: &[u8]) -> Vec<Vec<[f64; 2]>> {
+    let mut bytes = blob.iter();
+    let mut next = || {
+        let mut value = 0_u64;
+        for shift in (0..).step_by(7) {
+            let byte = *bytes.next().unwrap();
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte < 0x80 {
+                break;
+            }
+        }
+        (value >> 1) as i64 ^ -((value & 1) as i64)
+    };
+    let lengths = (0..next()).map(|_| next()).collect::<Vec<_>>();
+    let mut point = [0, 0];
+    lengths
+        .into_iter()
+        .map(|length| {
+            (0..length)
+                .map(|_| {
+                    point = [point[0] + next(), point[1] + next()];
+                    point.map(|nanometres| nanometres as f64 / 1e6)
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn summary(output: &Output) -> Value {
@@ -414,19 +450,16 @@ fn ipc_dfm_report_is_reproducible_and_preserves_full_scene() {
     let exported = read_report(&sandbox, "first.dfm");
     assert_eq!(exported["summary"], printed["summary"]);
     let scene = &exported["scene"];
-    assert_eq!(scene["schema_version"], 1);
-    let passes = scene["passes"].as_array().unwrap();
     // Both whole copper layers and one shared outline are exported, regardless
-    // of which sites currently fail. There are no per-finding crop assets.
-    assert_eq!(passes.len(), 3);
-    let top = passes.iter().find(|pass| pass["layer"] == "TOP").unwrap();
-    let svg = top["svg"].as_str().unwrap();
+    // of which sites currently fail.
+    assert_eq!(scene["passes"].as_array().unwrap().len(), 3);
+    let top = scene_lines(&sandbox, "first.dfm", "TOP");
     assert!(
-        svg.contains("M1 1 L29 1"),
-        "the whole trace must remain visible"
+        top.contains(&vec![[1.0, 1.0], [29.0, 1.0]]),
+        "the whole trace must remain visible: {top:?}"
     );
     assert!(
-        svg.contains("M8 20 L22 20"),
+        top.contains(&vec![[8.0, 20.0], [22.0, 20.0]]),
         "passing geometry far outside the finding must remain visible"
     );
     let bounds = &scene["bounds"];
@@ -435,24 +468,6 @@ fn ipc_dfm_report_is_reproducible_and_preserves_full_scene() {
     let right = bounds["max"]["x"].as_f64().unwrap();
     let top = bounds["max"]["y"].as_f64().unwrap();
     assert!(x <= 0.0 && y <= 0.0 && right >= 30.0 && top >= 30.0);
-    for pass in passes {
-        let viewport = pass["svg"]
-            .as_str()
-            .unwrap()
-            .split_once("viewBox='")
-            .unwrap()
-            .1
-            .split_once('\'')
-            .unwrap()
-            .0
-            .split_whitespace()
-            .map(|value| value.parse::<f64>().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(viewport, [x, -top, right - x, top - y]);
-    }
-    assert_eq!(svg.matches("scale(1 -1)").count(), 1);
-    assert!(!svg.contains("<image"));
-    assert!(passes.iter().all(|pass| pass.get("assets").is_none()));
 }
 
 #[test]
@@ -488,14 +503,7 @@ fn ipc_dfm_passing_report_still_includes_native_scene_and_pdk() {
         report["pdk"]["support"]["copper_layers"],
         serde_json::json!({ "exact": null, "minimum": 2, "maximum": 4 })
     );
-    assert_eq!(report["scene"]["schema_version"], 1);
-    let top = report["scene"]["passes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|pass| pass["layer"] == "TOP")
-        .unwrap();
-    assert!(top["svg"].as_str().unwrap().contains("M1 1 L29 1"));
+    assert!(scene_lines(&sandbox, "pass.dfm", "TOP").contains(&vec![[1.0, 1.0], [29.0, 1.0]]));
 }
 
 #[test]
@@ -606,7 +614,7 @@ fn ipc_dfm_replaces_stale_report_and_reports_all_incomplete_runs() {
     assert!(!complete.status.success());
     let complete_report = read_report(&sandbox, "complete.dfm");
     assert_eq!(complete_report["verdict"], "fail");
-    assert_eq!(complete_report["scene"]["schema_version"], 1);
+    assert!(complete_report["scene"]["bounds"].is_object());
 
     // Copper no net owns leaves copper clearance uncertified, not the run:
     // that rule is incomplete and fails the verdict, the rest is reported.
@@ -818,7 +826,6 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
         );
         assert!(!output.status.success());
         let report = read_report(&sandbox, &path);
-        assert_eq!(report["scene"]["schema_version"], 1);
         let layout = &report["layout"];
         assert_eq!(layout["kind"], kind);
         assert_eq!(layout["selected_step"], step);

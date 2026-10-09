@@ -26,7 +26,7 @@ pub struct DfmReport {
     /// once, in its own coordinates, wherever and however often it is placed.
     pub frames: Vec<Frame>,
     pub findings: Vec<Finding>,
-    /// Full native artwork for external diagnostic viewers.
+    /// The checked material, for viewers to draw findings over.
     pub scene: Scene,
 }
 
@@ -62,21 +62,20 @@ impl DfmReport {
 
 #[derive(Debug)]
 pub struct Scene {
-    pub schema_version: u32,
     /// Full checked layout extent in the report's millimeter, Y-up frame.
     pub bounds: ReportBBox,
     pub passes: Vec<ScenePass>,
 }
 
+/// One layer of material, drawn as its shapes. Each shape is in the frame
+/// of the Step that paints it and appears wherever that frame is placed.
 #[derive(Debug)]
 pub struct ScenePass {
     pub label: String,
     pub feature: &'static str,
     pub layer: Option<String>,
     pub color: &'static str,
-    /// One full vector image in world coordinates. The SVG root applies the
-    /// usual Y display flip; finding sites never crop or duplicate this image.
-    pub svg: String,
+    pub shapes: Vec<(u32, Shape)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -746,19 +745,25 @@ impl DrillSpan {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SourceLocator {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub set_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub feature_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_index: Option<u32>,
 }
 
-/// One piece of evidence, in exactly one form: a `circle`, `segment` or
-/// `bounds`; open `path`s; closed `region` rings, filled nonzero like the
-/// checked material; or a round-capped `stroke` of `width_mm` along paths.
+/// A shape in its frame's millimetres, in exactly one form: a `circle`,
+/// `segment` or `bounds`; open `path`s; closed `region` rings, filled nonzero
+/// like the checked material; or a round-capped `stroke` of `width_mm` along
+/// paths. A region with a `width_mm` is stroked so too: a rounded pad is its
+/// inner rectangle drawn that way.
 #[derive(Debug, Clone, Default)]
-pub struct Evidence {
-    pub role: &'static str,
+pub struct Shape {
     pub kind: &'static str,
     pub center: Option<ReportPoint>,
     pub diameter: Option<f64>,
@@ -769,10 +774,64 @@ pub struct Evidence {
     pub width_mm: Option<f64>,
 }
 
+/// A shape a check shows, named for what it shows.
+#[derive(Debug, Clone)]
+pub struct Evidence {
+    pub role: &'static str,
+    pub shape: Shape,
+}
+
 impl Evidence {
     pub fn circle(role: &'static str, center: Point, diameter: f64) -> Self {
         Self {
             role,
+            shape: Shape::circle(center, diameter),
+        }
+    }
+
+    pub fn segment(role: &'static str, start: Point, end: Point) -> Self {
+        Self {
+            role,
+            shape: Shape::segment(start, end),
+        }
+    }
+
+    pub fn bounds(role: &'static str, bounding_box: BBox) -> Self {
+        Self {
+            role,
+            shape: Shape {
+                kind: "bounds",
+                bounding_box: Some(bounding_box.into()),
+                ..Shape::default()
+            },
+        }
+    }
+
+    pub fn path(role: &'static str, paths: Vec<Vec<ReportPoint>>) -> Self {
+        Self {
+            role,
+            shape: Shape::path(paths),
+        }
+    }
+
+    pub fn region(role: &'static str, region: &ContourSet) -> Self {
+        Self {
+            role,
+            shape: Shape::region(region),
+        }
+    }
+
+    pub fn stroke(role: &'static str, paths: Vec<Vec<ReportPoint>>, width_mm: f64) -> Self {
+        Self {
+            role,
+            shape: Shape::stroke(paths, width_mm),
+        }
+    }
+}
+
+impl Shape {
+    pub fn circle(center: Point, diameter: f64) -> Self {
+        Self {
             kind: "circle",
             center: Some(center.into()),
             diameter: Some(diameter),
@@ -780,9 +839,8 @@ impl Evidence {
         }
     }
 
-    pub fn segment(role: &'static str, start: Point, end: Point) -> Self {
+    pub fn segment(start: Point, end: Point) -> Self {
         Self {
-            role,
             kind: "segment",
             start: Some(start.into()),
             end: Some(end.into()),
@@ -790,18 +848,16 @@ impl Evidence {
         }
     }
 
-    pub fn bounds(role: &'static str, bounding_box: BBox) -> Self {
+    pub fn path(paths: Vec<Vec<ReportPoint>>) -> Self {
         Self {
-            role,
-            kind: "bounds",
-            bounding_box: Some(bounding_box.into()),
+            kind: "path",
+            paths,
             ..Self::default()
         }
     }
 
-    pub fn region(role: &'static str, region: &ContourSet) -> Self {
+    pub fn region(region: &ContourSet) -> Self {
         Self {
-            role,
             kind: "region",
             bounding_box: (!region.is_empty()).then(|| region.bbox.into()),
             paths: region
@@ -813,9 +869,24 @@ impl Evidence {
         }
     }
 
-    pub fn stroke(role: &'static str, paths: Vec<Vec<ReportPoint>>, width_mm: f64) -> Self {
+    pub fn polygon(ring: Vec<ReportPoint>) -> Self {
         Self {
-            role,
+            kind: "region",
+            paths: vec![ring],
+            ..Self::default()
+        }
+    }
+
+    /// The closed polygon `ring`, its outline drawn round to `width_mm`.
+    pub fn rounded(ring: Vec<ReportPoint>, width_mm: f64) -> Self {
+        Self {
+            width_mm: Some(width_mm),
+            ..Self::polygon(ring)
+        }
+    }
+
+    pub fn stroke(paths: Vec<Vec<ReportPoint>>, width_mm: f64) -> Self {
+        Self {
             kind: "stroke",
             paths,
             width_mm: Some(width_mm),

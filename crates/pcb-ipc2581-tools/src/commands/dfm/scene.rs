@@ -1,159 +1,31 @@
-//! Full-scene vector data for external diagnostic viewers.
+//! The checked material, for viewers to draw findings over.
 //!
-//! The native PCB IR renderer retains arcs, polarity, apertures, and cutouts.
-//! Every semantic layer is exported once in world millimeters. Check-owned
-//! evidence keeps its measured geometry and uncertainty separately; a camera
-//! never clips, reconstructs, or replaces the checked finding.
+//! Each Step's own layers, drills and lines are report shapes in the Step's
+//! frame, drawn wherever the layout places the Step, exactly as its findings
+//! are. The material is dark only: negative polarity is resolved into it, and
+//! holes are the drill layers'. Pads keep their exact standard shapes.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, ensure};
-use pcb_ir::dialects::ipc::{ArtworkScope, ProfileSet, profile_occurrences_for};
-use pcb_ir::dialects::{LayerRole, Side, artwork, mask};
-use pcb_ir::geom::path::{ContourBuf, PathCmd};
-use pcb_ir::geom::{Affine2, BBox, FillRule, Paint, Point, Polarity};
-use pcb_ir::render::RenderOptions;
+use pcb_ir::dialects::artwork::{self, Aperture, ApertureShape, Geometry, Object};
+use pcb_ir::dialects::ipc::process;
+use pcb_ir::dialects::ipc::{
+    ArtworkScope, ArtworkTarget, FeatureBucket, ProfileSet, lower_layer_to_artwork_objects_with,
+    profile_occurrences_for,
+};
+use pcb_ir::geom::path::{ContourBuf, stroke_to_fill};
+use pcb_ir::geom::region::ContourSet;
+use pcb_ir::geom::{Affine2, BBox, FillRule, LineCap, Paint, Point, Polarity, Resolution};
+#[cfg(not(target_family = "wasm"))]
+use rayon::prelude::*;
 
 use super::design::Design;
 use super::report::{
-    Finding, Frame, LayerRef, LayoutContext, ReportBBox, RuleResult, Scene, ScenePass,
+    Finding, Frame, LayerRef, LayoutContext, ReportPoint, RuleResult, Scene, ScenePass, Shape,
 };
-use crate::geometry;
+use crate::gerber::{catalogue_aperture, standard_primitives};
 
-struct GeometryPass {
-    label: String,
-    feature: &'static str,
-    layer: Option<String>,
-    role: LayerRole,
-    color: &'static str,
-    source: GeometrySource,
-    bounds: BBox,
-}
-
-enum GeometrySource {
-    /// Native artwork uses the same scope and manufacturing composition as
-    /// the checks, while retaining analytic curves for close inspection.
-    Layer,
-    /// Analytic drills, drawn once for each Step that owns some and placed
-    /// wherever the layout places that Step.
-    Placed(artwork::Document<(), ()>),
-    /// Un-clipped physical profile paths and score lines.
-    Shapes {
-        shapes: Vec<Vec<ContourBuf>>,
-        fill_rule: FillRule,
-    },
-}
-
-impl GeometryPass {
-    fn layer(
-        label: String,
-        feature: &'static str,
-        role: LayerRole,
-        color: &'static str,
-        layer: Option<String>,
-        bounds: BBox,
-    ) -> Self {
-        Self {
-            label,
-            feature,
-            layer,
-            role,
-            color,
-            source: GeometrySource::Layer,
-            bounds,
-        }
-    }
-
-    fn placed(
-        feature: &'static str,
-        color: &'static str,
-        layer: String,
-        artwork: artwork::Document<(), ()>,
-    ) -> Self {
-        let drawn = &artwork.layers[0];
-        Self {
-            label: drawn.name.clone(),
-            feature,
-            layer: Some(layer),
-            role: drawn.role,
-            color,
-            bounds: drawn.bbox,
-            source: GeometrySource::Placed(artwork),
-        }
-    }
-
-    fn shapes(
-        label: String,
-        feature: &'static str,
-        role: LayerRole,
-        color: &'static str,
-        layer: Option<String>,
-        fill_rule: FillRule,
-        shapes: Vec<Vec<ContourBuf>>,
-    ) -> Self {
-        let bounds = shapes
-            .iter()
-            .flatten()
-            .map(|contour| contour.bbox)
-            .fold(BBox::empty(), BBox::union);
-        Self {
-            label,
-            feature,
-            layer,
-            role,
-            color,
-            source: GeometrySource::Shapes { shapes, fill_rule },
-            bounds,
-        }
-    }
-
-    /// `pass` numbers this render within its scene: the passes are inlined
-    /// into one page, where element ids are global.
-    fn svg(&self, design: &Design<'_>, bounds: BBox, pass: usize) -> Result<String> {
-        let options = RenderOptions::default()
-            .with_viewport(bounds)
-            .with_accuracy(design.resolution.accuracy)
-            .with_id_prefix(format!("p{pass}-"));
-        match &self.source {
-            GeometrySource::Layer => {
-                let layer = self.layer.as_deref().context("artwork pass has no layer")?;
-                let artwork = native_artwork(design, layer)
-                    .with_context(|| format!("failed to prepare DFM scene layer {layer}"))?;
-                Ok(pcb_ir::render::artwork_svg(&artwork, &options)?)
-            }
-            GeometrySource::Placed(artwork) => Ok(pcb_ir::render::artwork_svg(artwork, &options)?),
-            GeometrySource::Shapes { shapes, fill_rule } => {
-                let mut doc = mask::Document::<()>::new();
-                let layer = doc.push_layer(mask::Layer::new(&self.label, self.role, Side::None));
-                for contours in shapes {
-                    // Keep every shape's rings together: filling its inner
-                    // rings independently would turn holes into material.
-                    doc.push_shape(layer, *fill_rule, contours.clone());
-                }
-                Ok(pcb_ir::render::svg(&doc, &options))
-            }
-        }
-    }
-}
-
-fn native_artwork(
-    design: &Design<'_>,
-    layer: &str,
-) -> Result<
-    pcb_ir::dialects::artwork::Document<ipc2581::types::LayerFunction, Option<ipc2581::Symbol>>,
-> {
-    Ok(geometry::render::layer_artwork(
-        design.imported,
-        layer,
-        design.scope,
-        false,
-        design.resolution,
-    )?
-    .artwork)
-}
-
-/// The scene is the whole checked layout, drawn from its root Step's design,
-/// which holds everything the layout places.
 pub(super) fn export(
     designs: &[Design<'_>],
     layout: &LayoutContext,
@@ -161,11 +33,33 @@ pub(super) fn export(
     frames: &[Frame],
     findings: &[Finding],
 ) -> Result<Scene> {
-    let design = &designs[0];
-    let sources = scene_passes(rules, designs);
-    let mut bounds = scene_bounds(layout.bounding_box, &sources);
+    let wanted = rules
+        .iter()
+        .flat_map(|rule| rule.view.features.iter().copied())
+        .collect();
+    let mut passes = scene_passes(&wanted, designs)?;
+    passes
+        .iter_mut()
+        .flat_map(|pass| &mut pass.shapes)
+        .for_each(|(_, shape)| shape.simplify());
+    let placed = |frame: u32, bounds: BBox| {
+        frames[frame as usize]
+            .placements
+            .iter()
+            .map(move |placement| bounds.transformed(affine(placement.transform)))
+    };
+    let mut bounds = passes
+        .iter()
+        .flat_map(|pass| &pass.shapes)
+        .flat_map(|(frame, shape)| placed(*frame, extent(shape)))
+        .fold(
+            layout
+                .bounding_box
+                .map(|bbox| bbox.as_bbox())
+                .unwrap_or_default(),
+            BBox::union,
+        );
     for finding in findings {
-        let frame = &frames[finding.frame as usize];
         let rule = rules
             .iter()
             .find(|rule| rule.id == finding.rule_id)
@@ -182,22 +76,7 @@ pub(super) fn export(
                 "DFM site {} has invalid bounds",
                 site.id
             );
-            // A site is in its Step's frame and occurs wherever that is placed.
-            bounds = frame
-                .placements
-                .iter()
-                .map(|placement| {
-                    let [m00, m10, m01, m11, m02, m12] = placement.transform;
-                    site_bounds.transformed(Affine2 {
-                        m00,
-                        m01,
-                        m02,
-                        m10,
-                        m11,
-                        m12,
-                    })
-                })
-                .fold(bounds, BBox::union);
+            bounds = placed(finding.frame, site_bounds).fold(bounds, BBox::union);
             for feature in rule
                 .view
                 .features
@@ -205,10 +84,9 @@ pub(super) fn export(
                 .filter(|&&feature| feature != "stackup")
             {
                 ensure!(
-                    sources
+                    passes
                         .iter()
-                        .any(|source| source.feature == *feature
-                            && pass_applies(source, &site.layers)),
+                        .any(|pass| pass.feature == *feature && pass_applies(pass, &site.layers)),
                     "DFM site {} has no matching {} context in its declared layers",
                     site.id,
                     feature
@@ -218,152 +96,71 @@ pub(super) fn export(
     }
     if bounds.is_empty() {
         bounds = BBox::new(Point::ZERO, Point::new(100.0, 100.0));
-    } else if bounds.width() == 0.0 || bounds.height() == 0.0 {
-        // A lone line or point still needs a positive SVG viewport. This
-        // display padding never changes the site's measured bounding box.
-        bounds = bounds.expand(0.5);
     }
     ensure!(bounds.is_valid(), "DFM scene has invalid bounds");
-    let passes = sources
-        .iter()
-        .enumerate()
-        .map(|(pass, source)| {
-            Ok(ScenePass {
-                label: source.label.clone(),
-                feature: source.feature,
-                layer: source.layer.clone(),
-                color: source.color,
-                svg: source.svg(design, bounds, pass)?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
     Ok(Scene {
-        schema_version: 1,
         bounds: bounds.into(),
         passes,
     })
 }
 
-/// One drill layer of the whole layout: each Step's own holes and slots are a
-/// block, placed wherever the layout places the Step.
-fn placed_drills(designs: &[Design<'_>], layer: &str) -> artwork::Document<(), ()> {
-    let mut artwork = artwork::Document::new();
-    let drawn = artwork.push_layer(artwork::Layer::new(
-        format!("{layer} drills / routes"),
-        LayerRole::Drill,
-        Side::None,
-    ));
-    for design in designs {
-        let holes = design
-            .holes
-            .iter()
-            .filter(|hole| hole.branch.is_none() && hole.layer.name == layer)
-            .collect::<Vec<_>>();
-        let slots = design
-            .slots
-            .iter()
-            .filter(|slot| slot.branch.is_none() && slot.layer.name == layer)
-            .collect::<Vec<_>>();
-        if holes.is_empty() && slots.is_empty() {
-            continue;
-        }
-        let block = artwork.push_block();
-        for hole in holes {
-            let aperture = artwork.push_aperture(artwork::Aperture::circle(hole.diameter_mm));
-            let flash = artwork::Geometry::Flash {
-                aperture,
-                transform: Affine2::translation(hole.center),
-            };
-            artwork.push_block_object(block, artwork::Object::new(Polarity::Dark, flash));
-        }
-        // Match the check's independently filled contour union; source
-        // curves are retained instead of polygonized again.
-        for contour in slots.iter().flat_map(|slot| &slot.native_outline) {
-            let path = artwork.push_path(
-                Paint::Fill {
-                    rule: FillRule::EvenOdd,
-                },
-                [contour.clone()],
-            );
-            let region = artwork::Geometry::Region { path };
-            artwork.push_block_object(block, artwork::Object::new(Polarity::Dark, region));
-        }
-        for &placement in &design.placements {
-            let (transform, _) = design.placed(placement);
-            let instance = artwork::Geometry::Instance { block, transform };
-            artwork.push_object(drawn, artwork::Object::new(Polarity::Dark, instance));
-        }
+fn affine([m00, m10, m01, m11, m02, m12]: [f64; 6]) -> Affine2 {
+    Affine2 {
+        m00,
+        m01,
+        m02,
+        m10,
+        m11,
+        m12,
     }
-    artwork::normalize_bounds(&mut artwork);
-    artwork
 }
 
-fn pass_applies(source: &GeometryPass, layers: &[LayerRef]) -> bool {
-    source
-        .layer
+fn pass_applies(pass: &ScenePass, layers: &[LayerRef]) -> bool {
+    pass.layer
         .as_ref()
         .is_none_or(|layer| layers.iter().any(|candidate| candidate.name == *layer))
 }
 
-fn scene_bounds(layout: Option<ReportBBox>, sources: &[GeometryPass]) -> BBox {
-    sources.iter().map(|source| source.bounds).fold(
-        layout.map(ReportBBox::as_bbox).unwrap_or_default(),
-        BBox::union,
-    )
+fn pass(
+    label: String,
+    feature: &'static str,
+    color: &'static str,
+    layer: Option<String>,
+    shapes: Vec<(u32, Shape)>,
+) -> ScenePass {
+    ScenePass {
+        label,
+        feature,
+        layer,
+        color,
+        shapes,
+    }
 }
 
-/// The bounds of one layer over the whole layout. Every Step's design holds
-/// the image of its own content, wherever the layout places the Step.
-fn placed_bounds<'a>(
-    designs: &'a [Design<'a>],
-    image: impl Fn(&'a Design<'a>) -> Option<BBox>,
-) -> BBox {
-    designs
-        .iter()
-        .filter_map(|design| Some((design, image(design)?)))
-        .flat_map(|(design, bounds)| {
-            let placements = design.placements.iter();
-            placements.map(move |&placement| bounds.transformed(design.placed(placement).0))
-        })
-        .fold(BBox::empty(), BBox::union)
-}
-
-fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> Vec<GeometryPass> {
+fn scene_passes(wanted: &BTreeSet<&str>, designs: &[Design<'_>]) -> Result<Vec<ScenePass>> {
     let design = &designs[0];
     let layout = &design.imported.geometry;
-    let wanted = rules
-        .iter()
-        .flat_map(|rule| rule.view.features.iter().copied())
-        .collect::<BTreeSet<_>>();
-    let mut passes = Vec::new();
-    if wanted.contains("copper") {
-        for (index, layer) in design.copper_layers.iter().enumerate() {
-            passes.push(GeometryPass::layer(
-                layer.layer.name.clone(),
-                "copper",
-                LayerRole::Copper,
-                "#d87822",
-                Some(layer.layer.name.clone()),
-                placed_bounds(designs, |design| {
-                    Some(design.copper_layers.get(index)?.image.bbox)
-                }),
-            ));
-        }
-    }
-    if wanted.contains("mask_openings") {
-        for (index, layer) in design.mask_layers.iter().enumerate() {
-            passes.push(GeometryPass::layer(
-                format!("{} openings", layer.layer.name),
-                "mask_openings",
-                LayerRole::Soldermask,
-                "#159447",
-                Some(layer.layer.name.clone()),
-                placed_bounds(designs, |design| {
-                    Some(design.mask_layers.get(index)?.image.bbox)
-                }),
-            ));
-        }
-    }
+    let frames = || designs.iter().zip(0_u32..);
+    let copper = design.copper_layers.iter().map(|layer| &layer.layer.name);
+    let masks = design.mask_layers.iter().map(|layer| &layer.layer.name);
+    let layers = (copper.filter(|_| wanted.contains("copper")))
+        .map(|name| (name.clone(), "copper", "#d87822", name))
+        .chain(
+            masks
+                .filter(|_| wanted.contains("mask_openings"))
+                .map(|name| (format!("{name} openings"), "mask_openings", "#159447", name)),
+        )
+        .collect::<Vec<_>>();
+    #[cfg(not(target_family = "wasm"))]
+    let layers = layers.into_par_iter();
+    #[cfg(target_family = "wasm")]
+    let layers = layers.into_iter();
+    let mut passes = layers
+        .map(|(label, feature, color, layer)| {
+            let shapes = material(designs, layer)?;
+            Ok(pass(label, feature, color, Some(layer.clone()), shapes))
+        })
+        .collect::<Result<Vec<_>>>()?;
     if wanted.contains("drills") {
         let layers = designs
             .iter()
@@ -373,79 +170,90 @@ fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> Vec<GeometryPas
             })
             .collect::<BTreeSet<_>>();
         for layer in layers {
-            passes.push(GeometryPass::placed(
+            // Each Step's own holes and slots; placed ones are their Step's.
+            let shapes = frames()
+                .flat_map(|(design, frame)| {
+                    let holes = design
+                        .holes
+                        .iter()
+                        .filter(|hole| hole.branch.is_none() && hole.layer.name == *layer)
+                        .map(|hole| Shape::circle(hole.center, hole.diameter_mm));
+                    let slots = design
+                        .slots
+                        .iter()
+                        .filter(|slot| slot.branch.is_none() && slot.layer.name == *layer)
+                        .map(|slot| Shape::region(&slot.outline));
+                    holes.chain(slots).map(move |shape| (frame, shape))
+                })
+                .collect();
+            let label = format!("{layer} drills / routes");
+            passes.push(pass(
+                label,
                 "drills",
                 "#5c7cfa",
-                layer.clone(),
-                placed_drills(designs, layer),
+                Some(layer.clone()),
+                shapes,
             ));
         }
     }
     if wanted.contains("scores") {
-        let mut layers = BTreeMap::<String, Vec<Vec<ContourBuf>>>::new();
-        // Every Step draws its own lines, wherever the layout places it.
-        for design in designs {
-            for &placement in &design.placements {
-                let (placed, _) = design.placed(placement);
-                for score in &design.scores {
-                    layers
-                        .entry(score.layer.name.clone())
-                        .or_default()
-                        .push(vec![ContourBuf::new(vec![
-                            PathCmd::move_to(placed.transform_point(score.start)),
-                            PathCmd::line_to(placed.transform_point(score.end)),
-                        ])]);
-                }
-            }
-        }
-        for (layer, shapes) in layers {
-            passes.push(GeometryPass::shapes(
-                format!("{layer} centerlines"),
+        let layers = designs
+            .iter()
+            .flat_map(|design| design.scores.iter().map(|score| &score.layer.name))
+            .collect::<BTreeSet<_>>();
+        for layer in layers {
+            let shapes = frames()
+                .flat_map(|(design, frame)| {
+                    design
+                        .scores
+                        .iter()
+                        .filter(|score| score.layer.name == *layer)
+                        .map(move |score| (frame, Shape::segment(score.start, score.end)))
+                })
+                .collect();
+            let label = format!("{layer} centerlines");
+            passes.push(pass(
+                label,
                 "scores",
-                LayerRole::Profile,
                 "#333333",
-                Some(layer),
-                FillRule::NonZero,
+                Some(layer.clone()),
                 shapes,
             ));
         }
     }
     // Even a clean report retains its physical frame for navigation. Board
     // scope must only show the canonical definition, never the root panel.
-    let profile_set = if design.scope == ArtworkScope::Board {
+    let board = design.scope == ArtworkScope::Board;
+    let profiles = if board {
         ProfileSet::BoardOutlines
     } else {
         ProfileSet::FabricationOutlines
     };
-    let outlines = profile_occurrences_for(layout, profile_set)
+    let outlines = profile_occurrences_for(layout, profiles)
         .into_iter()
         .map(|occurrence| {
-            let mut contours = layout
-                .transformed_path_contours(occurrence.profile.outer_path, occurrence.transform);
-            for cutout in occurrence.profile.cutouts.slice(&layout.profile_cutouts) {
-                contours
-                    .extend(layout.transformed_path_contours(cutout.path, occurrence.transform));
-            }
-            contours
+            let cutouts = occurrence.profile.cutouts.slice(&layout.profile_cutouts);
+            let contours = [occurrence.profile.outer_path]
+                .into_iter()
+                .chain(cutouts.iter().map(|cutout| cutout.path))
+                .flat_map(|path| layout.transformed_path_contours(path, occurrence.transform))
+                .collect::<Vec<_>>();
+            Ok((0, Shape::path(closed_lines(&contours, design.resolution)?)))
         })
-        .collect();
-    passes.push(GeometryPass::shapes(
+        .collect::<Result<_>>()?;
+    passes.push(pass(
         "Physical outlines".into(),
         "board_outlines",
-        LayerRole::Profile,
         "#333333",
         None,
-        FillRule::NonZero,
         outlines,
     ));
-    if wanted.contains("array_outlines") && design.scope != ArtworkScope::Board {
+    if wanted.contains("array_outlines") && !board {
         let arrays = design
             .board_arrays
             .iter()
             .map(|array| array.instance_index)
             .collect::<BTreeSet<_>>();
-        // Retain native profile arcs instead of reconstructing the check's
-        // tessellated array region for display.
         let outlines = profile_occurrences_for(layout, ProfileSet::LayoutBoundaries)
             .into_iter()
             .filter(|occurrence| {
@@ -454,28 +262,280 @@ fn scene_passes(rules: &[RuleResult], designs: &[Design<'_>]) -> Vec<GeometryPas
                     .is_none_or(|index| arrays.contains(&index))
             })
             .map(|occurrence| {
-                layout
-                    .transformed_path_contours(occurrence.profile.outer_path, occurrence.transform)
+                let contours = layout
+                    .transformed_path_contours(occurrence.profile.outer_path, occurrence.transform);
+                Ok((0, Shape::path(closed_lines(&contours, design.resolution)?)))
             })
-            .collect();
-        passes.push(GeometryPass::shapes(
+            .collect::<Result<_>>()?;
+        passes.push(pass(
             "Array / panel outlines".into(),
             "array_outlines",
-            LayerRole::Profile,
             "#333333",
             None,
-            FillRule::NonZero,
             outlines,
         ));
     }
-    passes
+    Ok(passes)
+}
+
+/// One layer's material, each Step's own in its own frame.
+fn material(designs: &[Design<'_>], layer: &str) -> Result<Vec<(u32, Shape)>> {
+    let primitives = standard_primitives(designs[0].imported);
+    let target = ArtworkTarget {
+        catalogue: &|primitive| catalogue_aperture(&primitives, primitive),
+        ..ArtworkTarget::default()
+    };
+    let mut shapes = Vec::new();
+    for (design, frame) in designs.iter().zip(0_u32..) {
+        let imported = design.imported;
+        let id = imported
+            .layer_id(layer)
+            .with_context(|| format!("IPC-2581 layer '{layer}' was not found"))?;
+        let root = design.placements[0];
+        let mut doc =
+            imported.materialize_occurrence_layer(id, design.scope, root, &|held| held == root)?;
+        process::normalize_for_artwork(&mut doc, design.resolution)?;
+        process::retain_features(&mut doc, |feature| feature.bucket != FeatureBucket::Cutout);
+        process::resolve_negative_polarity(&mut doc, design.resolution)?;
+        let mut artwork = artwork::Document::<(), ()>::new();
+        let objects =
+            lower_layer_to_artwork_objects_with(&doc, 0, &mut artwork, &target, &|_, _| ());
+        let mut own = Vec::new();
+        draw(
+            &artwork,
+            &objects,
+            Affine2::IDENTITY,
+            design.resolution,
+            &mut own,
+        )
+        .with_context(|| format!("failed to draw DFM scene layer {layer}"))?;
+        // A fill too thin to regularize paints nothing.
+        let painted = own
+            .into_iter()
+            .filter(|shape| shape.kind != "region" || !shape.paths.is_empty());
+        shapes.extend(painted.map(|shape| (frame, shape)));
+    }
+    Ok(shapes)
+}
+
+fn draw(
+    artwork: &artwork::Document,
+    objects: &[Object],
+    at: Affine2,
+    resolution: Resolution,
+    shapes: &mut Vec<Shape>,
+) -> Result<()> {
+    for object in objects {
+        ensure!(
+            object.polarity == Polarity::Dark,
+            "scene material is dark only"
+        );
+        match object.geometry {
+            Geometry::Flash {
+                aperture,
+                transform,
+            } => shapes.push(flash(
+                &artwork.apertures[aperture as usize],
+                at.concat(transform),
+                resolution,
+            )?),
+            Geometry::Stroke { path } | Geometry::Region { path } => {
+                let path = &artwork.arena.paths[path as usize];
+                let contours = artwork
+                    .arena
+                    .path_contours(path)
+                    .into_iter()
+                    .map(|contour| contour.transformed(at))
+                    .collect::<Vec<_>>();
+                shapes.push(painted(&contours, path.paint, at.max_scale(), resolution)?);
+            }
+            Geometry::Instance { block, transform } => {
+                let block = &artwork.blocks[block as usize].objects;
+                draw(artwork, block, at.concat(transform), resolution, shapes)?;
+            }
+            Geometry::GridInstance {
+                block,
+                transform,
+                repeat,
+            } => {
+                let block = &artwork.blocks[block as usize].objects;
+                for offset in repeat.offsets() {
+                    let placed = at.concat(Affine2::translation(offset).concat(transform));
+                    draw(artwork, block, placed, resolution, shapes)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A standard aperture keeps its exact form: a circle, a round-capped
+/// stroke for an obround, and a rectangle's corners drawn round to its corner
+/// radius. Anything else is its regularized outline.
+fn flash(aperture: &Aperture, at: Affine2, resolution: Resolution) -> Result<Shape> {
+    let point = |x: f64, y: f64| ReportPoint::from(at.transform_point(Point::new(x, y)));
+    let scale = at.max_scale();
+    Ok(match aperture.shape {
+        _ if aperture.hole_diameter > 0.0 => region(
+            &transformed(aperture.contours(), at),
+            FillRule::EvenOdd,
+            resolution,
+        )?,
+        ApertureShape::Circle { diameter } => {
+            Shape::circle(at.transform_point(Point::ZERO), diameter * scale)
+        }
+        ApertureShape::Obround { width, height } => {
+            let half = (width - height).abs() / 2.0;
+            let ends = if width >= height {
+                [point(-half, 0.0), point(half, 0.0)]
+            } else {
+                [point(0.0, -half), point(0.0, half)]
+            };
+            Shape::stroke(vec![ends.to_vec()], width.min(height) * scale)
+        }
+        ApertureShape::Rectangle { width, height } => rounded(width, height, 0.0, point, scale),
+        ApertureShape::RoundRect {
+            width,
+            height,
+            radius,
+        } => rounded(width, height, radius, point, scale),
+        ApertureShape::Contour {
+            ref outline,
+            fill_rule,
+        } => region(
+            &transformed(vec![outline.clone()], at),
+            fill_rule,
+            resolution,
+        )?,
+        ApertureShape::Polygon { .. } => region(
+            &transformed(aperture.contours(), at),
+            FillRule::EvenOdd,
+            resolution,
+        )?,
+    })
+}
+
+fn rounded(
+    width: f64,
+    height: f64,
+    radius: f64,
+    point: impl Fn(f64, f64) -> ReportPoint,
+    scale: f64,
+) -> Shape {
+    let radius = radius.min(width.min(height) / 2.0);
+    let (x, y) = (width / 2.0 - radius, height / 2.0 - radius);
+    let ring = vec![point(-x, -y), point(x, -y), point(x, y), point(-x, y)];
+    if radius > 0.0 {
+        Shape::rounded(ring, 2.0 * radius * scale)
+    } else {
+        Shape::polygon(ring)
+    }
+}
+
+fn transformed(contours: Vec<ContourBuf>, at: Affine2) -> Vec<ContourBuf> {
+    contours
+        .into_iter()
+        .map(|contour| contour.transformed(at))
+        .collect()
+}
+
+/// A painted path: a fill is its regularized region and a round-capped stroke
+/// its centerlines; any other stroke is the region it outlines.
+fn painted(
+    contours: &[ContourBuf],
+    paint: Paint,
+    scale: f64,
+    resolution: Resolution,
+) -> Result<Shape> {
+    match paint {
+        Paint::Fill { rule } => region(contours, rule, resolution),
+        Paint::Stroke(style) if style.cap == LineCap::Round => Ok(Shape::stroke(
+            lines(contours, resolution)?,
+            style.width * scale,
+        )),
+        Paint::Stroke(mut style) => {
+            style.width *= scale;
+            let outline = stroke_to_fill(contours, style, resolution.accuracy)?.unwrap_or_default();
+            region(&outline, FillRule::NonZero, resolution)
+        }
+        Paint::None => anyhow::bail!("scene material paints every path"),
+    }
+}
+
+fn region(contours: &[ContourBuf], rule: FillRule, resolution: Resolution) -> Result<Shape> {
+    Ok(Shape::region(&ContourSet::from_contours(
+        contours, rule, resolution,
+    )?))
+}
+
+/// Contours as polylines, their curves in chords within the resolution.
+fn polylines(contours: &[ContourBuf], resolution: Resolution) -> Result<Vec<Vec<Point>>> {
+    let tolerance = resolution.accuracy.max_error_mm();
+    contours
+        .iter()
+        .map(|contour| {
+            let mut line = contour
+                .segments()
+                .next()
+                .map(|first| first.start())
+                .into_iter()
+                .collect::<Vec<_>>();
+            for segment in contour.segments() {
+                line.extend(segment.chords(tolerance)?.0);
+            }
+            Ok(line)
+        })
+        .collect()
+}
+
+fn lines(contours: &[ContourBuf], resolution: Resolution) -> Result<Vec<Vec<ReportPoint>>> {
+    Ok(points(polylines(contours, resolution)?))
+}
+
+/// Closed contours as lines that return to where they start.
+fn closed_lines(contours: &[ContourBuf], resolution: Resolution) -> Result<Vec<Vec<ReportPoint>>> {
+    let mut lines = polylines(contours, resolution)?;
+    for line in &mut lines {
+        if line.first() != line.last() {
+            line.extend(line.first().copied());
+        }
+    }
+    Ok(points(lines))
+}
+
+fn points(lines: Vec<Vec<Point>>) -> Vec<Vec<ReportPoint>> {
+    lines
+        .into_iter()
+        .map(|line| line.into_iter().map(ReportPoint::from).collect())
+        .collect()
+}
+
+/// The bounds a shape paints.
+fn extent(shape: &Shape) -> BBox {
+    let point = |point: ReportPoint| Point::new(point.x, point.y);
+    let half = shape.width_mm.or(shape.diameter).unwrap_or(0.0) / 2.0;
+    let points = (shape.paths.iter().flatten().copied())
+        .chain(shape.center)
+        .chain(shape.start)
+        .chain(shape.end)
+        .map(point)
+        .chain(
+            shape
+                .bounding_box
+                .into_iter()
+                .flat_map(|bbox| [point(bbox.min), point(bbox.max)]),
+        );
+    points
+        .fold(BBox::empty(), |bounds, point| {
+            bounds.union(BBox::new(point, point))
+        })
+        .expand(half)
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::fixtures;
     use super::*;
-    use pcb_ir::geom::{ContourSet, Resolution};
 
     const MASK_BOARD: &str = r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
       <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/><LayerRef name="F.Mask"/></Content>
@@ -491,81 +551,23 @@ mod tests {
       </CadData></Ecad>
     </IPC-2581>"#;
 
-    const MASK_RULE: &str =
-        "[[rules.soldermask.web]]\nid = \"mask-web\"\nlimit = { minimum = \"0.1 mm\" }";
-
     #[test]
-    fn native_mask_scene_preserves_openings_voids_and_world_coordinates() {
-        let resolution = Resolution::default();
-
-        let rules = fixtures::rules(&fixtures::pdk(MASK_RULE));
+    fn negative_polarity_is_resolved_into_dark_material() {
+        let rules = fixtures::rules(&fixtures::pdk(
+            "[[rules.soldermask.web]]\nid = \"mask-web\"\nlimit = { minimum = \"0.1 mm\" }",
+        ));
         let imported = fixtures::import(MASK_BOARD);
-        let design = Design::board(&imported, &rules, resolution);
-        let artwork = native_artwork(&design, "F.Mask").unwrap();
-        let rendered = pcb_ir::dialects::artwork::compose_to_mask(&artwork, resolution).unwrap();
-        let contours = rendered
-            .shapes(&rendered.layers[0])
-            .iter()
-            .flat_map(|shape| rendered.arena.path_contours(shape))
-            .collect::<Vec<_>>();
-        let image = ContourSet::from_contours(&contours, FillRule::NonZero, resolution).unwrap();
-        let samples = [Point::ZERO, Point::new(8.0, 0.0), Point::new(15.0, 0.0)];
-        assert_eq!(image.contains_points_batch(&samples), [false, true, false]);
-        assert_eq!(
-            image.contains_points_batch(&samples),
-            design.mask_layers[0].image.contains_points_batch(&samples)
-        );
-        assert!((image.area() - design.mask_layers[0].image.area()).abs() < 1e-8);
-
-        let pass = GeometryPass::layer(
-            "F.Mask openings".into(),
-            "mask_openings",
-            LayerRole::Soldermask,
-            "#159447",
-            Some("F.Mask".into()),
-            image.bbox,
-        );
-        let bounds = BBox::new(Point::new(-20.0, -20.0), Point::new(20.0, 20.0));
-        let svg = pass.svg(&design, bounds, 0).unwrap();
-        assert!(svg.contains("viewBox='-20 -20 40 40'"));
-        assert_eq!(svg.matches("scale(1 -1)").count(), 1);
-        assert!(svg.contains("<mask "));
-        assert!(svg.contains("M-10 -10"));
-        assert!(!svg.contains("<image"));
+        let design = Design::board(&imported, &rules, Resolution::default());
+        let shapes = material(std::slice::from_ref(&design), "F.Mask").unwrap();
+        let [(0, opening)] = shapes.as_slice() else {
+            panic!("one opening: {shapes:?}");
+        };
+        assert_eq!(opening.kind, "region");
+        assert_eq!(opening.paths.len(), 2, "the clear square is a hole");
     }
 
     #[test]
-    fn outlines_remain_full_native_paths_outside_any_site() {
-        let resolution = Resolution::default();
-
-        let rules = fixtures::rules(&fixtures::pdk(MASK_RULE));
-        let imported = fixtures::import(MASK_BOARD);
-        let design = Design::board(&imported, &rules, resolution);
-        let outline = ContourSet::rectangle(
-            BBox::new(Point::new(-50.0, -50.0), Point::new(50.0, 50.0)),
-            resolution,
-        );
-        let pass = GeometryPass::shapes(
-            "Physical outlines".into(),
-            "board_outlines",
-            LayerRole::Profile,
-            "#333333",
-            None,
-            FillRule::NonZero,
-            vec![outline.to_contours()],
-        );
-        // Even a viewport wholly inside the board does not remove its distant
-        // perimeter from the vector document. Panning can always reach it.
-        let viewport = BBox::new(Point::new(-2.0, -2.0), Point::new(2.0, 2.0));
-        let svg = pass.svg(&design, viewport, 0).unwrap();
-        assert!(svg.contains("data-board-outline='true'"));
-        assert!(svg.contains("-50"));
-        assert!(svg.contains("50"));
-        assert!(svg.contains("fill='none'"));
-    }
-
-    #[test]
-    fn drills_are_drawn_once_for_their_step_and_placed_with_it() {
+    fn drills_are_drawn_once_in_their_step_frame() {
         let resolution = Resolution::default();
         let imported = fixtures::import(
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -587,21 +589,19 @@ mod tests {
         ));
         let designs =
             Design::frames(&imported, ArtworkScope::ArrayFlattened, &rules, resolution).unwrap();
-        let drills = placed_drills(&designs, "DRILL");
-        let pass = GeometryPass::placed("drills", "#5c7cfa", "DRILL".into(), drills);
+        let passes = scene_passes(&BTreeSet::from(["drills"]), &designs).unwrap();
+        let drills = passes.iter().find(|pass| pass.feature == "drills").unwrap();
+        let mut holes = drills
+            .shapes
+            .iter()
+            .map(|(frame, shape)| (*frame, shape.center.unwrap().x, shape.diameter.unwrap()))
+            .collect::<Vec<_>>();
+        holes.sort_by_key(|hole| hole.0);
         assert_eq!(
-            pass.bounds,
-            BBox::new(Point::new(3.5, -30.5), Point::new(240.5, 6.5)),
-            "every placement counts toward the scene"
+            holes,
+            [(0, 5.0, 3.0), (1, 40.0, 1.0)],
+            "the via once, in the board's frame"
         );
-        let svg = pass.svg(&designs[0], pass.bounds, 0).unwrap();
-        assert_eq!(svg.matches(" A").count(), 2 * 4, "two analytic circles");
-        assert!(svg.contains("matrix(1 0 0 1 40 -30)"), "in its own Step");
-        for x in [100, 150, 200] {
-            assert!(
-                svg.contains(&format!("matrix(1 0 0 1 {x} 0)")),
-                "placed at {x}"
-            );
-        }
+        assert_eq!(designs[1].placements.len(), 3);
     }
 }

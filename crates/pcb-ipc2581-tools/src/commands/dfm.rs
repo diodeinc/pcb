@@ -128,7 +128,7 @@ pub fn check(
         .iter_mut()
         .flat_map(|finding| &mut finding.sites)
         .flat_map(|site| &mut site.evidence)
-        .for_each(report::Evidence::simplify);
+        .for_each(|evidence| evidence.shape.simplify());
     Ok(DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: request.generated_at.to_rfc3339(),

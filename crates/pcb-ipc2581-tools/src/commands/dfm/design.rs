@@ -34,7 +34,6 @@ use pcb_ir::dialects::ipc::{
 };
 use pcb_ir::dialects::{LayerRole, Side, artwork};
 use pcb_ir::geom::dfm::{BBoxIndex, Distance, WidthDisk, min_width_disk, thin_gaps_reach_mm};
-use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::region::ring_signed_area;
 use pcb_ir::geom::{Affine2, BBox, ContourSet, Point, Polarity, PreparedRegion, Span};
 #[cfg(not(target_family = "wasm"))]
@@ -1158,9 +1157,6 @@ pub(super) struct Slot {
     /// the design of the Step that owns it.
     pub width: Option<SlotWidth>,
     pub outline: ContourSet,
-    /// Source contours in world coordinates, retained for display only. The
-    /// physical cavity is their independently filled union, like `outline`.
-    pub native_outline: Vec<ContourBuf>,
     pub provenance: SourceLocator,
     /// As for [`Hole::branch`].
     pub branch: Option<u32>,
@@ -1429,7 +1425,7 @@ fn collect_drilled(
                     None => min_width_disk(&outline)?,
                     Some(_) => None,
                 };
-                Ok((contours, outline, width_disk))
+                Ok((outline, width_disk))
             })
             .collect::<Result<Vec<_>>>()?
             .into_iter();
@@ -1497,7 +1493,7 @@ fn collect_drilled(
                     });
                 }
                 FeatureKind::Slot => {
-                    let (contours, outline, width_disk) = slot_shapes
+                    let (outline, width_disk) = slot_shapes
                         .next()
                         .expect("every slot feature of the layer was measured");
                     let at = format!(
@@ -1548,7 +1544,6 @@ fn collect_drilled(
                         plating: feature.intent.plating,
                         width,
                         outline,
-                        native_outline: contours,
                         provenance: feature_provenance(source, layer_name, feature),
                         branch: source.branch(placed),
                         bbox: feature.bbox,
@@ -2894,8 +2889,6 @@ mod tests {
 
     #[test]
     fn slot_width_is_stated_when_given_and_measured_otherwise() {
-        let resolution = Resolution::default();
-
         let oval = slot_fixture(
             r#"<Location x="10" y="20"/>
               <Oval width="1.8" height="0.6"/>"#,
@@ -2908,35 +2901,6 @@ mod tests {
         assert!(
             slot_width(Some(0.9), stated).is_err(),
             "a stated width must match the outline"
-        );
-        let native = &slots[0].native_outline;
-        assert!(
-            native
-                .iter()
-                .flat_map(|contour| &contour.cmds)
-                .any(|command| { command.op == pcb_ir::geom::path::PathOp::ArcTo }),
-            "native slot outlines retain source curves"
-        );
-        assert_eq!(
-            native
-                .iter()
-                .map(|contour| contour.bbox)
-                .fold(BBox::empty(), BBox::union),
-            slots[0].bbox
-        );
-        let reconstructed = ContourSet::from_filled_contours(native, resolution).unwrap();
-        assert!(
-            reconstructed
-                .difference(&slots[0].outline)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            slots[0]
-                .outline
-                .difference(&reconstructed)
-                .unwrap()
-                .is_empty()
         );
 
         let outline = slot_fixture(
@@ -2962,14 +2926,6 @@ mod tests {
         assert!(
             width.uncertainty_mm > 0.0,
             "a measured outline carries uncertainty"
-        );
-        assert!(
-            slots[0]
-                .native_outline
-                .iter()
-                .flat_map(|contour| &contour.cmds)
-                .all(|command| command.op != pcb_ir::geom::path::PathOp::ArcTo),
-            "actual source polygons must not be smoothed into curves"
         );
     }
 }

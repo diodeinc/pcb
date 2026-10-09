@@ -523,7 +523,8 @@ minimum. JLCPCB profiles do not enable this check.
 Every run prints its [summary](#summary) as one line of JSON on stdout. With
 `-o` / `--output` it first writes the full [report](#report-database), a
 SQLite database; `.dfm` is the recommended suffix. Every complete report
-includes the native scene and PDK source for viewing without companion files.
+includes the checked material and PDK source for viewing without companion
+files.
 
 A completed report is written before the command returns a failing status.
 Error findings fail its verdict, and so does a required rule that could not be
@@ -564,22 +565,25 @@ The report is one SQLite 3 database. Its header's `application_id` is
 currently `3`. Open it with any SQLite client; `json_each` and `json_extract`
 read its JSON columns. Coordinates are integer nanometres in the
 [frame](#frames) of their finding, X right and Y up. Every distinct layer,
-subject and evidence shape is stored once and referred to by id.
+subject, role, note and shape is stored once and referred to by id.
 
 | Table | One row per | Columns |
 | --- | --- | --- |
-| `report` | report-level record | `key`, JSON `value`: `schema_version`, `generated_at`, `verdict`, `tool`, `input`, `pdk`, `layout_target`, `coordinate_system`, `layout`, `summary`, `frames`, `scene` (its version and bounds) |
+| `report` | report-level record | `key`, JSON `value`: `schema_version`, `generated_at`, `verdict`, `tool`, `input`, `pdk`, `layout_target`, `coordinate_system`, `layout`, `summary`, `frames`, `scene` (its `bounds`) |
 | `rules` | lowered rule | `rule_id`, `title`, `finding_title`, `severity`, `tier`, `status`, `comparison`, `limit_value`, `limit_unit`, `limit_pdk_value`, `subject`, `quantity`, `method`, `checked`, `finding_count`, `skip_reason`, JSON `assumptions` and `view` |
 | `unresolved` | measurement below a limit by less than its uncertainty | `rule`, `frame`, `actual_mm`, `uncertainty_mm`, `x`, `y`, JSON layer names |
 | `findings` | violation | `finding_id`, `rule`, `frame`, JSON `measurement`, `message`, location `x`, `y`, bounds `min_x` … `max_y`, `layers`, `subjects` |
-| `sites` | failing region or layer of a finding | `finding`, `position`, `site_id`, JSON `measurement`, `measurement_kind`, `uncertainty_mm`, bounds, `note`, `layers`, `subjects`, `witnesses`, `evidence` |
+| `sites` | failing region or layer of a finding | `finding`, `position`, `site_id`, JSON `measurement`, `measurement_kind`, `uncertainty_mm`, bounds, `note` id, `layers`, `subjects`, `witnesses`, `evidence` |
 | `layers` | layer | `name`, IPC-2581 `function`, `side` (`top`, `inner`, `bottom`) |
 | `subjects` | subject | `role`, `kind`, `name`, `reference_designator`, `pin`, `net`, `padstack_ref`, JSON `locator` and `drill_span` |
-| `shapes` | evidence geometry | `kind`, `center_x`/`center_y`/`diameter`, `start_x` … `end_y`, bounds, `paths`, `width_mm` |
-| `scene` | native scene pass | `label`, `feature`, `layer`, `color`, `svg` |
+| `roles` | witness or evidence role | `name` |
+| `notes` | site note | `text` |
+| `shapes` | evidence or scene geometry | `kind`, `center_x`/`center_y`/`diameter`, `start_x` … `end_y`, bounds, `paths`, `width_mm` |
+| `scene` | layer of checked material | `label`, `feature`, `layer`, `color` |
+| `draws` | shape a scene layer draws | `pass`, `frame`, `shape` |
 
 `layers` and `subjects` columns are JSON arrays of ids, `witnesses` an array
-of `[role, x, y]`, and `evidence` an array of `[role, shape id]`. The view
+of `[role id, x, y]`, and `evidence` an array of `[role id, shape id]`. The view
 `finding_summary` joins each finding with its rule, actual value, limit,
 margin, layer names, nets and site count:
 
@@ -644,7 +648,7 @@ Each piece of evidence has exactly one form, its shape's `kind`:
 | `segment` | `start_x` … `end_y` |
 | `bounds` | `min_x` … `max_y` |
 | `path` | open polylines in `paths` |
-| `region` | closed rings in `paths`, filled nonzero like the checked material, holes included |
+| `region` | closed rings in `paths`, filled nonzero like the checked material, holes included; a `width_mm` also draws their outline round to that width, as a rounded pad's inner rectangle |
 | `stroke` | round-capped, round-joined polylines in `paths` of physical `width_mm` |
 
 `paths` holds zigzag LEB128 varints: the path count, each path's point count,
@@ -664,8 +668,7 @@ not certify every design in a mixed fabrication panel.
 
 Each occurrence's cumulative `[a,b,c,d,tx,ty]` transform maps definition-local
 coordinates to the checked frame: `x' = a*x + c*y + tx`,
-`y' = b*x + d*y + ty`. Scene coordinates are already placed; do not transform
-them again. A parent occurrence filter includes descendants.
+`y' = b*x + d*y + ty`. A parent occurrence filter includes descendants.
 
 ### Frames
 
@@ -680,30 +683,31 @@ at: a V-score line that crosses only the boards of one row is found at those
 placements only.
 
 A finding is measured once, in the coordinates of the Step its `frame` names,
-and occurs at every placement of that frame. To show an occurrence in the
-scene, apply that placement's transform. The root frame's transform is the
+and occurs at every placement of that frame, as does the Step's material in
+the scene. To show an occurrence, apply that placement's transform. The root frame's transform is the
 identity, so its findings are already placed. Ids and counts are per finding,
 not per placement.
 
-### Native scene
+### Scene
 
-Every complete report has a scene: the `scene` record in `report` holds
-`schema_version: 1` and the full-layout `bounds` (in millimetres), and the
-`scene` table holds its passes. Each pass has a `label`, semantic `feature`,
-exact `layer` name or null for shared context, display `color`, and a
-full-layout native `svg` string. All passes share the same viewport; sites
-never crop or duplicate the artwork.
+Every complete report has a scene: the checked material findings are drawn
+over. The `scene` record in `report` holds the full-layout `bounds` (in
+millimetres), and the `scene` table holds its layers. Each has a `label`,
+semantic `feature`, exact `layer` name or null for shared context, and display
+`color`. `draws` lists each layer's shapes, each in the coordinates of the
+Step whose `frame` it names; draw it at every placement of that frame. Each
+Step draws only its own material, once.
 
-Select passes using the rule's `view.features` and the selected site's exact
-layer names, including shared null-layer passes. Every spatial site requires a
-matching pass for each feature except `stackup`. An empty pass represents empty
-context; an absent required pass makes the export incomplete.
+The material is dark: draw every shape filled (or stroked) in the layer's
+color, in any order. Negative polarity is already resolved into it, and holes
+and slots are the drill layers'. Pads keep their exact standard shapes: a round
+pad is a `circle`, an oval a `stroke`, and a rounded rectangle a `region` with
+`width_mm`.
 
-The SVG root applies one PCB IR display Y flip. When inserting its contents
-into a shared world-coordinate scene, remove that flip and apply the viewer's
-camera convention. Preserve nested rotations, mirrors, aperture instances,
-ordered polarity, masks, nonzero winding, holes, and final cutouts. Namespace
-IDs and fragment references per compiled pass/view.
+Select layers using the rule's `view.features` and the selected site's exact
+layer names, including shared null-layer ones. Every spatial site requires a
+matching layer for each feature except `stackup`. An empty layer represents
+empty context; an absent required layer makes the export incomplete.
 
 ### Source identity
 
@@ -729,21 +733,19 @@ complete-report records; it is never a pass, a clean board, or a skipped check.
 
 ### Reader safety
 
-The database, its JSON, TOML and SVG are untrusted even when the PDK hash
-matches. Open it read-only, without loading extensions or running SQL it
-contains. Parse SVG into an inert allowlisted tree; never inject uploaded
-markup as HTML. Reject scripts, event handlers, foreign objects, styles,
-entities, external resources, and nonlocal fragment references. Reports can
+The database, its JSON and TOML are untrusted even when the PDK hash matches.
+Open it read-only, without loading extensions or running SQL it contains, and
+never inject its text as markup. Reports can
 contain private board data, local paths, components, nets and PDK comments: a
 file picker or drop action authorizes local inspection only, not uploads or
 telemetry.
 
 ### Schema evolution
 
-Report and scene versions are independent; the report uses integer `3` and the
-scene integer `1`. Report version 3 is a SQLite database instead of JSON.
-Findings keep only their identity, location and subjects, and their sites
-hold all geometry; evidence has one form, with the clearance band a `stroke`;
+Report version 3 is a SQLite database instead of JSON. The scene is shapes,
+not SVG, and evidence shares them. Findings keep only their identity, location
+and subjects, and their sites hold all geometry; evidence has one form, with
+the clearance band a `stroke`;
 the subject `source`/`provenance` pair is one `locator`; and waivers are gone.
 A required error stands for a preferred-tier finding of the same subject.
 New columns, records, and `kind`, `role`, `status`, rule, and method values may

@@ -257,7 +257,7 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }"#;
                 finding.sites[0]
                     .evidence
                     .iter()
-                    .any(|e| e.role == "missing_copper" && !e.paths.is_empty())
+                    .any(|e| e.role == "missing_copper" && !e.shape.paths.is_empty())
             );
         }
     }

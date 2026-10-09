@@ -246,12 +246,7 @@ fn report_site(geometry: ClearanceSite, layers: Vec<LayerRef>, limit_mm: f64) ->
     ]
     .into_iter()
     .filter(|(_, paths)| !paths.is_empty())
-    .map(|(role, paths)| Evidence {
-        role,
-        kind: "path",
-        paths: joined_boundary_paths(paths),
-        ..Evidence::default()
-    })
+    .map(|(role, paths)| Evidence::path(role, joined_boundary_paths(paths)))
     .collect::<Vec<_>>();
     // The band is everything within the limit of the first boundary.
     let mut bbox = geometry.bbox;
@@ -369,13 +364,13 @@ mod tests {
             .iter()
             .find(|evidence| evidence.role == "required_clearance_band")
             .unwrap();
-        assert_eq!(band.kind, "stroke");
+        assert_eq!(band.shape.kind, "stroke");
         assert_eq!(
-            band.width_mm,
+            band.shape.width_mm,
             Some(0.4),
             "the band extends the full limit on each side"
         );
-        let paths = &band.paths;
+        let paths = &band.shape.paths;
         assert_eq!(paths.len(), 2, "disconnected spans must stay disconnected");
         assert_eq!(
             paths[0].iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),

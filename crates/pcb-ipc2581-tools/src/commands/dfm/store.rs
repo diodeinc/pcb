@@ -1,13 +1,15 @@
-//! The DFM report as a single SQLite database. Every distinct layer, subject
-//! and evidence shape is stored once and referenced by id; coordinates are
+//! The DFM report as a single SQLite database. Every distinct layer, subject,
+//! role, note and shape is stored once and referenced by id; coordinates are
 //! integer nanometres. A finding's or site's short lists are JSON arrays in
 //! its own row, readable with SQLite's JSON functions:
 //!
 //! - `layers`, `subjects`: ids into those tables
-//! - `witnesses`: `[role, x, y]`
-//! - `evidence`: `[role, shape id]`
+//! - `witnesses`: `[role id, x, y]`
+//! - `evidence`: `[role id, shape id]`
 //!
-//! Findings say what is wrong and where; their sites hold the geometry.
+//! Findings say what is wrong and where; their sites hold the geometry. The
+//! scene is the checked material they are drawn over: each layer's shapes,
+//! in the frame of the Step that paints them, drawn wherever it is placed.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -19,8 +21,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::report::{
-    DfmReport, Evidence, LayerRef, REPORT_SCHEMA_VERSION, ReportBBox, ReportPoint, Subject,
-    Witness, to_nanometre,
+    DfmReport, LayerRef, REPORT_SCHEMA_VERSION, ReportBBox, ReportPoint, Shape, Subject,
+    to_nanometre,
 };
 
 /// `DFMR`; `user_version` is the report schema version.
@@ -45,15 +47,18 @@ CREATE TABLE unresolved (
     x INTEGER NOT NULL, y INTEGER NOT NULL, layers TEXT NOT NULL
 );
 CREATE TABLE layers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, function TEXT NOT NULL, side TEXT);
+CREATE TABLE roles (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT NOT NULL);
 CREATE TABLE subjects (
     id INTEGER PRIMARY KEY, role TEXT NOT NULL, kind TEXT NOT NULL, name TEXT,
     reference_designator TEXT, pin TEXT, net TEXT, padstack_ref TEXT,
     locator TEXT, drill_span TEXT
 );
 -- `kind` is circle, segment, bounds, path (open), region (closed rings,
--- filled nonzero) or stroke (round-capped paths of `width_mm`). `paths` holds
--- zigzag LEB128 varints: the path count, each path's point count, then every
--- point's x and y as a delta from the last.
+-- filled nonzero, outlines drawn round to any `width_mm`) or stroke
+-- (round-capped paths of `width_mm`). `paths` holds zigzag LEB128 varints:
+-- the path count, each path's point count, then every point's x and y as a
+-- delta from the last.
 CREATE TABLE shapes (
     id INTEGER PRIMARY KEY, kind TEXT NOT NULL,
     center_x INTEGER, center_y INTEGER, diameter REAL,
@@ -74,14 +79,18 @@ CREATE TABLE sites (
     site_id TEXT NOT NULL, measurement TEXT NOT NULL, measurement_kind TEXT NOT NULL,
     uncertainty_mm REAL NOT NULL,
     min_x INTEGER NOT NULL, min_y INTEGER NOT NULL, max_x INTEGER NOT NULL, max_y INTEGER NOT NULL,
-    note TEXT,
+    note INTEGER REFERENCES notes,
     layers TEXT NOT NULL, subjects TEXT NOT NULL, witnesses TEXT NOT NULL, evidence TEXT NOT NULL,
     PRIMARY KEY (finding, position)
 ) WITHOUT ROWID;
 CREATE TABLE scene (
     id INTEGER PRIMARY KEY, label TEXT NOT NULL, feature TEXT NOT NULL, layer TEXT,
-    color TEXT NOT NULL, svg TEXT NOT NULL
+    color TEXT NOT NULL
 );
+CREATE TABLE draws (
+    pass INTEGER NOT NULL REFERENCES scene, frame INTEGER NOT NULL,
+    shape INTEGER NOT NULL REFERENCES shapes, PRIMARY KEY (pass, frame, shape)
+) WITHOUT ROWID;
 CREATE VIEW finding_summary AS
 SELECT
     f.id, f.finding_id, r.rule_id, r.severity, r.finding_title AS title, f.message,
@@ -128,9 +137,9 @@ fn write(fill: impl FnOnce(&Connection) -> Result<()>) -> Result<Vec<u8>> {
     Ok(connection.serialize("main")?.to_vec())
 }
 
-/// A shape row: evidence without the role its referrers keep.
+/// A shape row, keyed by its stored values.
 #[derive(PartialEq, Eq, Hash)]
-struct Shape {
+struct Row {
     kind: &'static str,
     center: Option<[i64; 2]>,
     diameter: Option<u64>,
@@ -141,17 +150,17 @@ struct Shape {
     width_mm: Option<u64>,
 }
 
-impl Shape {
-    fn new(evidence: &Evidence) -> Self {
+impl Row {
+    fn new(shape: &Shape) -> Self {
         Self {
-            kind: evidence.kind,
-            center: evidence.center.map(nanometres),
-            diameter: evidence.diameter.map(f64::to_bits),
-            start: evidence.start.map(nanometres),
-            end: evidence.end.map(nanometres),
-            bounds: evidence.bounding_box.map(bounds),
-            paths: (!evidence.paths.is_empty()).then(|| encode(&evidence.paths)),
-            width_mm: evidence.width_mm.map(f64::to_bits),
+            kind: shape.kind,
+            center: shape.center.map(nanometres),
+            diameter: shape.diameter.map(f64::to_bits),
+            start: shape.start.map(nanometres),
+            end: shape.end.map(nanometres),
+            bounds: shape.bounding_box.map(bounds),
+            paths: (!shape.paths.is_empty()).then(|| encode(&shape.paths)),
+            width_mm: shape.width_mm.map(f64::to_bits),
         }
     }
 }
@@ -190,14 +199,19 @@ struct Writer<'a> {
     rule: Statement<'a>,
     unresolved: Statement<'a>,
     layer: Statement<'a>,
+    role: Statement<'a>,
+    note: Statement<'a>,
     subject: Statement<'a>,
     shape: Statement<'a>,
     finding: Statement<'a>,
     site: Statement<'a>,
     scene: Statement<'a>,
+    draw: Statement<'a>,
     layers: Interned<String>,
+    roles: Interned<&'static str>,
+    notes: Interned<String>,
     subjects: Interned<String>,
-    shapes: Interned<Shape>,
+    shapes: Interned<Row>,
 }
 
 impl<'a> Writer<'a> {
@@ -213,12 +227,17 @@ impl<'a> Writer<'a> {
             rule: insert("rules", 19)?,
             unresolved: insert("unresolved", 7)?,
             layer: insert("layers", 4)?,
+            role: insert("roles", 2)?,
+            note: insert("notes", 2)?,
             subject: insert("subjects", 10)?,
             shape: insert("shapes", 15)?,
             finding: insert("findings", 14)?,
             site: insert("sites", 15)?,
-            scene: insert("scene", 6)?,
+            scene: insert("scene", 5)?,
+            draw: connection.prepare("INSERT OR IGNORE INTO draws VALUES (?, ?, ?)")?,
             layers: Interned::new(),
+            roles: Interned::new(),
+            notes: Interned::new(),
             subjects: Interned::new(),
             shapes: Interned::new(),
         })
@@ -237,13 +256,7 @@ impl<'a> Writer<'a> {
             ("layout", text(&report.layout)),
             ("summary", text(&report.summary)),
             ("frames", text(&report.frames)),
-            (
-                "scene",
-                text(&json!({
-                    "schema_version": report.scene.schema_version,
-                    "bounds": report.scene.bounds,
-                })),
-            ),
+            ("scene", text(&json!({ "bounds": report.scene.bounds }))),
         ];
         for (key, value) in metadata {
             self.report.execute(params![key, value])?;
@@ -313,11 +326,20 @@ impl<'a> Writer<'a> {
                 let [min_x, min_y, max_x, max_y] = bounds(site.bounding_box);
                 let layers = self.layers(&site.layers)?;
                 let subjects = self.subjects(&site.subjects)?;
+                let witnesses = site
+                    .witnesses
+                    .iter()
+                    .map(|witness| {
+                        let [x, y] = nanometres(witness.point);
+                        Ok((self.role(witness.role)?, x, y))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 let evidence = site
                     .evidence
                     .iter()
-                    .map(|item| Ok((item.role, self.shape(item)?)))
+                    .map(|item| Ok((self.role(item.role)?, self.shape(&item.shape)?)))
                     .collect::<Result<Vec<_>>>()?;
+                let note = site.note.as_ref().map(|note| self.note(note)).transpose()?;
                 self.site.execute(params![
                     id,
                     position,
@@ -329,10 +351,10 @@ impl<'a> Writer<'a> {
                     min_y,
                     max_x,
                     max_y,
-                    site.note,
+                    note,
                     layers,
                     subjects,
-                    witnesses(&site.witnesses),
+                    text(&witnesses),
                     text(&evidence),
                 ])?;
             }
@@ -343,9 +365,12 @@ impl<'a> Writer<'a> {
                 pass.label,
                 pass.feature,
                 pass.layer,
-                pass.color,
-                pass.svg
+                pass.color
             ])?;
+            for (frame, shape) in &pass.shapes {
+                let shape = self.shape(shape)?;
+                self.draw.execute(params![id, frame, shape])?;
+            }
         }
         Ok(())
     }
@@ -362,6 +387,17 @@ impl<'a> Writer<'a> {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(text(&ids))
+    }
+
+    fn role(&mut self, role: &'static str) -> Result<i64> {
+        self.roles
+            .id(role, |_, id| self.role.execute(params![id, role]))
+    }
+
+    fn note(&mut self, note: &str) -> Result<i64> {
+        self.notes.id(note.to_owned(), |_, id| {
+            self.note.execute(params![id, note])
+        })
     }
 
     /// The ids of `subjects`, as a JSON array.
@@ -392,8 +428,8 @@ impl<'a> Writer<'a> {
         Ok(text(&ids))
     }
 
-    fn shape(&mut self, evidence: &Evidence) -> Result<i64> {
-        self.shapes.id(Shape::new(evidence), |shape, id| {
+    fn shape(&mut self, shape: &Shape) -> Result<i64> {
+        self.shapes.id(Row::new(shape), |shape, id| {
             let x = |point: Option<[i64; 2]>| point.map(|[x, _]| x);
             let y = |point: Option<[i64; 2]>| point.map(|[_, y]| y);
             self.shape.execute(params![
@@ -415,17 +451,6 @@ impl<'a> Writer<'a> {
             ])
         })
     }
-}
-
-fn witnesses(witnesses: &[Witness]) -> String {
-    let witnesses = witnesses
-        .iter()
-        .map(|witness| {
-            let [x, y] = nanometres(witness.point);
-            (witness.role, x, y)
-        })
-        .collect::<Vec<_>>();
-    text(&witnesses)
 }
 
 fn text(value: &impl Serialize) -> String {

@@ -484,10 +484,9 @@ limit = { minimum = "0.2 mm" }"#,
         );
         assert!(finding.sites.iter().all(|site| {
             matches!(site.measurement_kind, MeasurementKind::MissingCopper)
-                && site
-                    .evidence
-                    .iter()
-                    .any(|evidence| evidence.role == "missing_copper" && !evidence.paths.is_empty())
+                && site.evidence.iter().any(|evidence| {
+                    evidence.role == "missing_copper" && !evidence.shape.paths.is_empty()
+                })
         }));
         for site in &finding.sites {
             let evidence = site
@@ -495,13 +494,13 @@ limit = { minimum = "0.2 mm" }"#,
                 .iter()
                 .find(|evidence| evidence.role == "missing_copper")
                 .unwrap();
-            assert!(!evidence.paths.is_empty());
+            assert!(!evidence.shape.paths.is_empty());
             let envelope = site
                 .evidence
                 .iter()
                 .find(|evidence| evidence.role == "required_copper_envelope")
                 .unwrap();
-            assert!((envelope.diameter.unwrap() - 1.4).abs() < 1e-12);
+            assert!((envelope.shape.diameter.unwrap() - 1.4).abs() < 1e-12);
             assert_eq!(site.distance.mm, 0.0);
         }
     }

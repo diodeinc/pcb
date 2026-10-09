@@ -35,7 +35,20 @@ use rayon::prelude::*;
 
 /// The standard-primitive dictionary by entry id, built once per export:
 /// every pad-like feature of every layer looks its primitive up.
-type StandardPrimitives<'a> = HashMap<ipc2581::Symbol, &'a StandardPrimitive>;
+pub(crate) type StandardPrimitives<'a> = HashMap<ipc2581::Symbol, &'a StandardPrimitive>;
+
+/// The dictionary's standard primitives by id. The first entry of an id
+/// wins, as a scan of the dictionary finds it.
+pub(crate) fn standard_primitives(imported: &ImportedDesign) -> StandardPrimitives<'_> {
+    imported
+        .content
+        .dictionary_standard
+        .entries
+        .iter()
+        .rev()
+        .map(|entry| (entry.id, &entry.primitive))
+        .collect()
+}
 
 #[derive(Debug, Clone)]
 pub struct GerberX2File {
@@ -80,15 +93,7 @@ pub fn build_gerber_x2_files(
         .iter()
         .any(|plan| plan.role == GerberLayerRole::Profile);
     let part = gerber_part_for_ipc_view(imported, view)?;
-    // The first entry of an id wins, as a scan of the dictionary finds it.
-    let standard_primitives: StandardPrimitives = imported
-        .content
-        .dictionary_standard
-        .entries
-        .iter()
-        .rev()
-        .map(|entry| (entry.id, &entry.primitive))
-        .collect();
+    let standard_primitives = standard_primitives(imported);
 
     // Layers are independent of one another.
     let export = |plan: &ExportLayerPlan<'_>| -> Result<Option<GerberX2File>> {
@@ -924,7 +929,7 @@ fn append_profile_payloads(artwork: &mut GerberArtwork, layer: u32, payloads: Ve
 
 /// The standard-dictionary primitives the artwork dialect carries as exact
 /// apertures.
-fn catalogue_aperture(
+pub(crate) fn catalogue_aperture(
     standard_primitives: &StandardPrimitives,
     primitive: PrimitiveRef,
 ) -> Option<Aperture> {

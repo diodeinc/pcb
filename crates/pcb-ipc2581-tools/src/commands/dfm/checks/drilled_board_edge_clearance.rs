@@ -365,11 +365,11 @@ limit = { minimum = "0.3 mm", preferred = "0.4 mm" }"#);
         assert_eq!(required.subjects[1].kind, "board_outline");
         let site = &required.sites[0];
         assert!(matches!(site.measurement_kind, MeasurementKind::Clearance));
-        assert_eq!(board_profile(site).kind, "region");
+        assert_eq!(board_profile(site).shape.kind, "region");
         assert!(site.evidence.iter().any(|evidence| {
             evidence.role == "drilled_hole"
-                && evidence.kind == "circle"
-                && evidence.diameter == Some(1.0)
+                && evidence.shape.kind == "circle"
+                && evidence.shape.diameter == Some(1.0)
         }));
     }
 
@@ -451,7 +451,7 @@ limit = { minimum = "0.2 mm" }"#);
         assert_eq!(report.findings.len(), 1);
         assert!((actual_mm(&report.findings[0].measurement) - 0.1).abs() < 1e-9);
         let profile = board_profile(&report.findings[0].sites[0]);
-        assert_eq!(profile.paths.len(), 2, "the cutout ring is retained");
+        assert_eq!(profile.shape.paths.len(), 2, "the cutout ring is retained");
     }
 
     #[test]
@@ -489,10 +489,9 @@ limit = { minimum = "0.4 mm" }"#);
             MeasurementKind::Clearance
         ));
         assert!(
-            plated.sites[0]
-                .evidence
-                .iter()
-                .any(|evidence| { evidence.role == "routed_slot" && evidence.kind == "region" })
+            plated.sites[0].evidence.iter().any(|evidence| {
+                evidence.role == "routed_slot" && evidence.shape.kind == "region"
+            })
         );
         let nonplated = report
             .findings
@@ -554,6 +553,7 @@ limit = { minimum = "0.3 mm" }"#);
             assert_eq!(provenance.instance_index, None, "the board's own");
         }
         let profile = board_profile(&finding.sites[0])
+            .shape
             .bounding_box
             .unwrap()
             .as_bbox();

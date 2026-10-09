@@ -217,7 +217,7 @@ limit = { minimum = "0.2 mm" }"#,
             .find(|evidence| evidence.role == "overlap_region")
             .unwrap();
         assert!(
-            !overlap.paths.is_empty(),
+            !overlap.shape.paths.is_empty(),
             "the measured polygon remains in the report"
         );
         assert_eq!(site.distance.mm, 0.0);

@@ -240,7 +240,7 @@ cases = [
             MeasurementKind::AspectRatio
         ));
         assert!(site.witnesses.is_empty());
-        assert_eq!(site.evidence[0].kind, "circle");
+        assert_eq!(site.evidence[0].shape.kind, "circle");
     }
 
     #[test]

@@ -122,11 +122,11 @@ limit = { minimum = "0.8 mm" }"#,
             .unwrap();
         let measured = Evidence::region("routed_slot", &design.slots[0].outline);
         assert_eq!(
-            serde_json::to_value(&slot.paths).unwrap(),
-            serde_json::to_value(&measured.paths).unwrap()
+            serde_json::to_value(&slot.shape.paths).unwrap(),
+            serde_json::to_value(&measured.shape.paths).unwrap()
         );
         assert!(
-            slot.paths[0].len() > 8,
+            slot.shape.paths[0].len() > 8,
             "rounded ends are measured as curves"
         );
     }

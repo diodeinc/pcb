@@ -1382,7 +1382,7 @@ mod tests {
             source.set_index = Some(10);
             source.feature_index = Some(29);
         }
-        finding.sites[0].evidence[0].paths = vec![vec![
+        finding.sites[0].evidence[0].shape.paths = vec![vec![
             Point::new(0.95, -0.05).into(),
             Point::new(1.05, 0.05).into(),
         ]];
