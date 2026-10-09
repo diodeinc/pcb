@@ -114,6 +114,11 @@ impl PcbToml {
     fn finish_parse(mut self) -> Result<Self> {
         self.dependencies.remove_kicad_library_dependencies();
         self.validate_pcb_version()?;
+        if self.patch.contains_key(crate::STDLIB_MODULE_PATH) {
+            anyhow::bail!(
+                "[patch] stdlib is no longer supported; remove it from pcb.toml to use the toolchain stdlib"
+            );
+        }
         Ok(self)
     }
 

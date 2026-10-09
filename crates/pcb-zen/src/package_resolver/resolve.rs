@@ -123,9 +123,7 @@ fn resolve_frozen(
     package_urls: Vec<String>,
     offline: bool,
 ) -> Result<ResolutionResult> {
-    if workspace_info.stdlib_patch_path().is_none() {
-        crate::cache_index::ensure_workspace_stdlib_symlink(&workspace_info.root)?;
-    }
+    crate::cache_index::ensure_workspace_stdlib_symlink(&workspace_info.root)?;
 
     let resolution_set = build_frozen_resolution_maps(&workspace_info, package_urls, offline)?;
     // Package roots are canonical, so the cache prefix that maps them back

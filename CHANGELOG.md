@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Speed up schematic loading and reconciliation.
 - `pcb import` writes the KiCad project to `eda/`, matching `pcb new board`.
 - `pcb publish` no longer writes `bom/design_bom.json` or accepts `--exclude bom`; BOMs no longer fall back to the KiCad schematic.
+- `pcb publish` builds only the packages it publishes.
 
 ## [0.4.73] - 2026-10-07
 
