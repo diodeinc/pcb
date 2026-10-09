@@ -52,7 +52,7 @@ CREATE TABLE subjects (
 );
 -- `kind` is circle, segment, bounds, path (open), region (closed rings,
 -- filled nonzero) or stroke (round-capped paths of `width_mm`). `paths` holds
--- little-endian i32: the path count, each path's point count, then every
+-- zigzag LEB128 varints: the path count, each path's point count, then every
 -- point's x and y as a delta from the last.
 CREATE TABLE shapes (
     id INTEGER PRIMARY KEY, kind TEXT NOT NULL,
@@ -142,19 +142,17 @@ struct Shape {
 }
 
 impl Shape {
-    fn new(evidence: &Evidence) -> Result<Self> {
-        Ok(Self {
+    fn new(evidence: &Evidence) -> Self {
+        Self {
             kind: evidence.kind,
             center: evidence.center.map(nanometres),
             diameter: evidence.diameter.map(f64::to_bits),
             start: evidence.start.map(nanometres),
             end: evidence.end.map(nanometres),
             bounds: evidence.bounding_box.map(bounds),
-            paths: (!evidence.paths.is_empty())
-                .then(|| encode(&evidence.paths))
-                .transpose()?,
+            paths: (!evidence.paths.is_empty()).then(|| encode(&evidence.paths)),
             width_mm: evidence.width_mm.map(f64::to_bits),
-        })
+        }
     }
 }
 
@@ -395,7 +393,7 @@ impl<'a> Writer<'a> {
     }
 
     fn shape(&mut self, evidence: &Evidence) -> Result<i64> {
-        self.shapes.id(Shape::new(evidence)?, |shape, id| {
+        self.shapes.id(Shape::new(evidence), |shape, id| {
             let x = |point: Option<[i64; 2]>| point.map(|[x, _]| x);
             let y = |point: Option<[i64; 2]>| point.map(|[_, y]| y);
             self.shape.execute(params![
@@ -449,7 +447,7 @@ fn bounds(bbox: ReportBBox) -> [i64; 4] {
     [min_x, min_y, max_x, max_y]
 }
 
-fn encode(paths: &[Vec<ReportPoint>]) -> Result<Vec<u8>> {
+fn encode(paths: &[Vec<ReportPoint>]) -> Vec<u8> {
     let mut last = [0, 0];
     let deltas = paths.iter().flatten().flat_map(|&point| {
         let point = nanometres(point);
@@ -460,9 +458,13 @@ fn encode(paths: &[Vec<ReportPoint>]) -> Result<Vec<u8>> {
     std::iter::once(paths.len() as i64)
         .chain(paths.iter().map(|path| path.len() as i64))
         .chain(deltas)
-        .try_fold(Vec::new(), |mut bytes, value| {
-            let value = i32::try_from(value).context("evidence geometry spans more than 2.1 m")?;
-            bytes.extend(value.to_le_bytes());
-            Ok(bytes)
+        .fold(Vec::new(), |mut bytes, value| {
+            let mut zigzag = ((value << 1) ^ (value >> 63)) as u64;
+            while zigzag >= 0x80 {
+                bytes.push(zigzag as u8 | 0x80);
+                zigzag >>= 7;
+            }
+            bytes.push(zigzag as u8);
+            bytes
         })
 }

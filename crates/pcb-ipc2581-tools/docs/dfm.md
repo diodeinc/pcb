@@ -647,9 +647,9 @@ Each piece of evidence has exactly one form, its shape's `kind`:
 | `region` | closed rings in `paths`, filled nonzero like the checked material, holes included |
 | `stroke` | round-capped, round-joined polylines in `paths` of physical `width_mm` |
 
-`paths` holds little-endian `i32` values: the path count, each path's point
-count, then every point's x and y in nanometres, each as the difference from
-the previous point (the first from zero). Paths omit vertices within 0.1 µm of
+`paths` holds zigzag LEB128 varints: the path count, each path's point count,
+then every point's x and y in nanometres, each as the difference from the
+previous point (the first from zero). Paths omit vertices within 0.1 µm of
 the path without them. Measurements, witnesses and evidence are authoritative:
 do not fit curves to them, change their tessellation, or infer a width or
 enclosure from witness separation.
