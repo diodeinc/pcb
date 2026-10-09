@@ -196,6 +196,71 @@ fn migrate_rewrites_root_zen_files_in_pure_container_workspace() {
     }
 }
 
+#[test]
+fn migrate_names_kicad_projects_after_their_board() {
+    let target = pcb_version_from_cargo();
+    let project = r#"{
+  "schematic": {
+    "top_level_sheets": [
+      { "filename": "Demo.kicad_sch", "name": "Demo", "uuid": "00000000-0000-0000-0000-000000000000" }
+    ]
+  },
+  "diode": {
+    "schematic_sheets": [
+      { "parent_id": "00000000-0000-0000-0000-000000000000", "parent_file": "Demo.kicad_sch", "sheet": "" }
+    ]
+  }
+}
+"#;
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write(
+            "pcb.toml",
+            format!("[workspace]\npcb-version = \"{target}\"\n"),
+        )
+        .write(
+            "boards/Demo/pcb.toml",
+            "[board]\nname = \"Demo\"\npath = \"Demo.zen\"\n",
+        )
+        .write(
+            "boards/Demo/Demo.zen",
+            "Board(name = \"Demo\", path = \"layout\", layers = 4)\n",
+        )
+        .write("boards/Demo/layout/layout.kicad_pro", project)
+        .write("boards/Demo/layout/layout.kicad_pcb", "board")
+        .write("boards/Demo/layout/layout.kicad_prl", "{}")
+        .write("boards/Demo/layout/Demo.kicad_sch", "root");
+
+    run_migrate(&mut sandbox);
+    run_migrate(&mut sandbox);
+
+    let layout = sandbox.root_path().join("boards/Demo/layout");
+    let mut files = fs::read_dir(&layout)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "Demo.kicad_pcb",
+            "Demo.kicad_prl",
+            "Demo.kicad_pro",
+            "Demo.kicad_sch"
+        ]
+    );
+    assert_eq!(
+        fs::read_to_string(layout.join("Demo.kicad_pcb")).unwrap(),
+        "board"
+    );
+    let migrated: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(layout.join("Demo.kicad_pro")).unwrap()).unwrap();
+    assert_eq!(
+        migrated,
+        serde_json::from_str::<serde_json::Value>(project).unwrap()
+    );
+}
+
 fn run_migrate(sandbox: &mut Sandbox) {
     let output = sandbox
         .run("pcbc", ["migrate"])

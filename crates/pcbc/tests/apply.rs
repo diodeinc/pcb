@@ -91,7 +91,7 @@ fn apply_schematic_opens_the_created_output_with_kicad() {
         .run()
         .expect("create and open schematic project");
 
-    let output = sandbox.root_path().join("hardware/layout.kicad_sch");
+    let output = sandbox.root_path().join("hardware/ApplyTest.kicad_sch");
     assert!(output.is_file());
     let reopened = sandbox
         .run("pcbc", ["apply", "schematic", "board.zen"])
@@ -122,9 +122,9 @@ fn complete_apply_reports_schematic_and_layout_artifacts_consistently() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
         stdout.contains("board.zen schematic created (")
-            && stdout.contains("layout.kicad_sch")
+            && stdout.contains("ApplyTest.kicad_sch")
             && stdout.contains("board.zen layout created (")
-            && stdout.contains("layout.kicad_pcb"),
+            && stdout.contains("ApplyTest.kicad_pcb"),
         "{stdout}"
     );
 
@@ -151,7 +151,11 @@ fn complete_apply_reports_schematic_and_layout_artifacts_consistently() {
             path(&json["schematic"]["rootSchematic"]),
             path(&json["layout"]["pcbFile"]),
         ],
-        ["layout.kicad_pro", "layout.kicad_sch", "layout.kicad_pcb"]
-            .map(|name| fs::canonicalize(hardware.join(name)).unwrap())
+        [
+            "ApplyTest.kicad_pro",
+            "ApplyTest.kicad_sch",
+            "ApplyTest.kicad_pcb",
+        ]
+        .map(|name| fs::canonicalize(hardware.join(name)).unwrap())
     );
 }
