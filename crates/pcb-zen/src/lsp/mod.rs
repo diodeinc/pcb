@@ -1,4 +1,9 @@
 pub mod signature;
+// Resolver-backed call intelligence.
+mod parameter;
+mod semantic;
+#[cfg(test)]
+mod semantic_tests;
 
 use log::{debug, info};
 use lsp_server::ResponseError;
@@ -79,6 +84,10 @@ type CustomRequestHandler =
 struct FileAnalysis {
     symbols: HashMap<String, pcb_zen_core::SymbolInfo>,
     dependencies: HashSet<PathBuf>,
+    /// Resolved `Module()` aliases from the last successful evaluation. Kept
+    /// across failed evaluations; only used while the buffer still binds the same
+    /// name to the same module file (see `semantic::resolve_callable`).
+    callables: HashMap<String, parameter::Callable>,
 }
 
 struct OverlayFileProvider {
@@ -475,6 +484,10 @@ impl LspEvalContext {
                     }
                     let target = self.normalize_path(&target);
                     analysis.dependencies.insert(target.clone());
+                    analysis.callables.insert(
+                        name.to_string(),
+                        self.module_callable(name, loader, &target),
+                    );
                     SymbolInfo {
                         kind: SymbolKind::Module,
                         parameters: Some(loader.params.clone()),
@@ -666,8 +679,31 @@ impl LspContext for LspEvalContext {
                     work_done_progress: None,
                 },
             }),
+            // References and document symbols for Zener.
+            references_provider: Some(lsp_types::OneOf::Left(true)),
+            document_symbol_provider: Some(lsp_types::OneOf::Left(true)),
             ..ServerCapabilities::default()
         }
+    }
+
+    fn completion_items(
+        &self,
+        uri: &LspUri,
+        position: lsp_types::Position,
+    ) -> Option<Vec<lsp_types::CompletionItem>> {
+        self.semantic_completion(uri, position)
+    }
+
+    fn definition_at(
+        &self,
+        uri: &LspUri,
+        position: lsp_types::Position,
+    ) -> Option<Vec<lsp_types::LocationLink>> {
+        self.semantic_definition(uri, position)
+    }
+
+    fn hover_at(&self, uri: &LspUri, position: lsp_types::Position) -> Option<Hover> {
+        self.semantic_hover(uri, position)
     }
 
     fn did_change_file_contents(&self, uri: &LspUri, contents: &str) {
@@ -1144,6 +1180,10 @@ impl LspContext for LspEvalContext {
         _initialize_params: &lsp_types::InitializeParams,
     ) -> Option<Response> {
         debug!("Received custom request: method={}", req.method);
+        // References, document symbols and parameter provenance.
+        if let Some(response) = self.handle_semantic_request(req) {
+            return Some(response);
+        }
         // Handle signature help requests
         if req.method == "textDocument/signatureHelp" {
             match serde_json::from_value::<lsp_types::SignatureHelpParams>(req.params.clone()) {
@@ -1170,11 +1210,22 @@ impl LspContext for LspEvalContext {
                         _ => String::new(),
                     };
 
-                    // Parse AST
+                    // Resolver-backed signature for Module aliases and builtins.
+                    if let LspUri::File(path) = &uri
+                        && let Some(help) = self.semantic_signature_help(
+                            path,
+                            &contents,
+                            params.text_document_position_params.position,
+                        )
+                    {
+                        return Some(Response::new_ok(req.id.clone(), help));
+                    }
+
+                    // Parse AST (same dialect as evaluation, incl. f-strings)
                     let ast = match starlark::syntax::AstModule::parse(
                         uri.path().to_string_lossy().as_ref(),
                         contents,
-                        &starlark::syntax::Dialect::Extended,
+                        &parameter::dialect(),
                     ) {
                         Ok(a) => a,
                         Err(_) => {
