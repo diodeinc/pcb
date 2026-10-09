@@ -49,7 +49,11 @@ pub fn apply_linked_schematic(netlist: &Schematic) -> Result<Option<SchematicApp
             initialize_project(project_file, netlist)?
         }
     };
-    pcb_layout::utils::write_footprint_library_table(&path, netlist)?;
+    let project_dir = result
+        .project_file
+        .parent()
+        .context("KiCad project file has no parent directory")?;
+    pcb_layout::utils::write_footprint_library_table(project_dir, netlist)?;
     Ok(Some(result))
 }
 
