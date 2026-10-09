@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Add `pcb gltf export` to write a GLB for a KiCad board without kicad-cli.
+- Add `pcb gltf export` to write a compressed, instanced GLB for a KiCad board without kicad-cli.
 
 ### Changed
 
@@ -22,10 +22,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - `pcb apply schematic` renames a root schematic that does not match its KiCad project, so KiCad saves project settings such as bus aliases and ERC exclusions.
+- `pcb apply` schematic symbols and layout footprints now agree on Footprint, Value and Datasheet; footprints show the part value instead of its MPN.
 - `pcb apply` names a new root schematic after its KiCad project, matching the board so DRC schematic parity runs.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.
 - `DiffPair(impedance=...)` applies to its nets even when the pair never crosses an `io()` boundary; conflicting impedance values on one net now warn.
+- Schematic sheet paths written with Windows separators, including `..`, resolve as KiCad resolves them.
 
 ## [0.4.74] - 2026-10-09
 

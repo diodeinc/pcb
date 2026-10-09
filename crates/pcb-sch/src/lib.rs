@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::physical::PhysicalValue;
@@ -698,7 +699,15 @@ impl Instance {
     }
 
     pub fn value(&self) -> Option<String> {
-        self.string_attr(&["Value", "value"])
+        self.string_attr(&["value"])
+    }
+
+    /// KiCad's Value field: explicit value, else part MPN, else symbol name.
+    pub fn kicad_value(&self) -> String {
+        self.value()
+            .or_else(|| self.mpn())
+            .or_else(|| self.string_attr(&["symbol_name"]))
+            .unwrap_or_else(|| "?".to_owned())
     }
 
     pub fn dnp(&self) -> bool {
@@ -825,6 +834,19 @@ impl Schematic {
     /// Resolve a `package://` URI to an absolute path using the schematic's package roots.
     pub fn resolve_package_uri(&self, uri: &str) -> anyhow::Result<PathBuf> {
         resolve_package_uri(uri, &self.package_roots)
+    }
+
+    /// KiCad `lib:fp` identifier for a component's footprint, with the
+    /// `(lib_name, dir)` entry it needs in the fp-lib-table.
+    pub fn kicad_footprint(
+        &self,
+        instance: &Instance,
+    ) -> anyhow::Result<(String, Option<(String, PathBuf)>)> {
+        let footprint = instance
+            .string_attr(&["footprint"])
+            .context("component has no footprint attribute")?;
+        kicad_netlist::try_format_footprint_with_package_roots(&footprint, &self.package_roots)
+            .with_context(|| format!("Failed to resolve footprint path '{footprint}'"))
     }
 
     /// Assign reference designators to all components in the schematic.

@@ -1,7 +1,11 @@
-//! The board side of a [`Scene`] as triangles: prisms become two caps and
-//! their walls, round holes are revolved from their profiles, and flat
-//! faces become one cap each. Curved walls get the exact normal of the
-//! arc or cylinder they lie on; everything else is flat shaded.
+//! The board side of a [`Scene`](pcb_step::scene::Scene) as triangles:
+//! prisms become two caps and their walls, round holes are revolved from
+//! their profiles, and flat faces become one cap each. Curved walls get
+//! the exact normal of the arc or cylinder they lie on; everything else is
+//! flat shaded.
+//!
+//! Copper faces that the board body hides are left out: caps resting on
+//! the body, copper inside it, and via barrels when vias are not cut.
 
 use std::f64::consts::TAU;
 
@@ -10,7 +14,7 @@ use i_triangle::float::triangulator::Triangulator;
 use i_triangle::i_overlay::core::fill_rule::FillRule;
 use i_triangle::i_overlay::core::solver::Solver;
 use i_triangle::int::validation::Validation;
-use pcb_step::scene::{Layer, Prism, RoundHole, Scene, Shape, Vertex};
+use pcb_step::scene::{Layer, LayerKind, Prism, RoundHole, Shape, Vertex};
 use rayon::prelude::*;
 
 use crate::mesh::Primitive;
@@ -18,14 +22,51 @@ use crate::mesh::Primitive;
 /// Chord error for arcs and circles, in millimetres.
 const MAX_ERROR: f64 = 0.01;
 
-/// One primitive per layer of the scene, in scene order.
-pub(crate) fn mesh(scene: &Scene) -> Vec<Primitive> {
-    scene.layers.par_iter().map(layer).collect()
+/// Tolerance for a copper face to count as resting on the body.
+const TOUCHING: f64 = 1e-6;
+
+/// What the board body hides.
+#[derive(Clone, Copy)]
+struct Hidden {
+    /// The body's bottom and top, when it is exported.
+    body: Option<(f64, f64)>,
+    /// Whether via barrels are inside the body, its drills not cut.
+    barrels: bool,
 }
 
-fn layer(layer: &Layer) -> Primitive {
+/// One optimized primitive per layer, in order.
+pub(crate) fn mesh(layers: &[Layer], cut_vias: bool) -> Vec<Primitive> {
+    let body = layers
+        .iter()
+        .find_map(|layer| match (&layer.kind, &layer.shape) {
+            (LayerKind::Body, Shape::Solids(prisms)) => prisms.first().map(|p| (p.z0, p.z1)),
+            _ => None,
+        });
+    let hidden = Hidden {
+        body,
+        barrels: body.is_some() && !cut_vias,
+    };
+    layers
+        .par_iter()
+        .map(|layer| {
+            let mut primitive = self::layer(layer, hidden);
+            primitive.optimize();
+            primitive
+        })
+        .collect()
+}
+
+fn layer(layer: &Layer, hidden: Hidden) -> Primitive {
+    let copper = matches!(
+        layer.kind,
+        LayerKind::Copper | LayerKind::Pads | LayerKind::Vias
+    );
+    let hidden = Hidden {
+        body: hidden.body.filter(|_| copper),
+        barrels: hidden.barrels && layer.kind == LayerKind::Vias,
+    };
     let parts: Vec<Primitive> = match &layer.shape {
-        Shape::Solids(prisms) => prisms.par_iter().map(prism).collect(),
+        Shape::Solids(prisms) => prisms.par_iter().map(|p| prism(p, hidden)).collect(),
         Shape::Faces { z, up, faces } => faces
             .par_iter()
             .map(|face| {
@@ -46,8 +87,21 @@ fn layer(layer: &Layer) -> Primitive {
     out
 }
 
-fn prism(prism: &Prism) -> Primitive {
+fn prism(prism: &Prism, hidden: Hidden) -> Primitive {
     let Prism { z0, z1, solid } = prism;
+    let (z0, z1) = (*z0, *z1);
+    // Which faces the body hides: all of copper inside it, and a cap
+    // resting on it.
+    let (top_hidden, bottom_hidden) = match hidden.body {
+        Some((b0, b1)) if z0 >= b0 - TOUCHING && z1 <= b1 + TOUCHING => {
+            return Primitive::default();
+        }
+        Some((b0, b1)) => (
+            (b0 - TOUCHING..b1 - TOUCHING).contains(&z1),
+            (b0 + TOUCHING..b1 + TOUCHING).contains(&z0),
+        ),
+        None => (false, false),
+    };
     let mut out = Primitive::default();
     let outer = solid.outer.polyline(MAX_ERROR);
     let holes: Vec<Vec<Vertex>> = solid.holes.iter().map(|h| h.polyline(MAX_ERROR)).collect();
@@ -68,11 +122,17 @@ fn prism(prism: &Prism) -> Primitive {
         }
         round_hole(&mut out, hole, n);
     }
-    cap(&mut out, &top, *z1, true);
-    cap(&mut out, &bottom, *z0, false);
-    walls(&mut out, &outer, true, *z0, *z1);
-    for hole in &holes {
-        walls(&mut out, hole, false, *z0, *z1);
+    if !top_hidden {
+        cap(&mut out, &top, z1, true);
+    }
+    if !bottom_hidden {
+        cap(&mut out, &bottom, z0, false);
+    }
+    if !hidden.barrels {
+        walls(&mut out, &outer, true, z0, z1);
+        for hole in &holes {
+            walls(&mut out, hole, false, z0, z1);
+        }
     }
     out
 }

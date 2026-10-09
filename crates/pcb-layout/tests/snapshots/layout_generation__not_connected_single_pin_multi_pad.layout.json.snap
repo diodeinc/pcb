@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
-assertion_line: 110
 expression: content
 ---
 {
@@ -39,7 +38,7 @@ expression: content
       },
       "reference": "U1",
       "uuid": "bb9170a7-68d4-539c-bed9-f036cbc8d7db",
-      "value": "?"
+      "value": "Symbol"
     }
   ],
   "groups": [],

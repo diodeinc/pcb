@@ -97,7 +97,10 @@ impl TestProject {
         schematic_result.diagnostics.extend(eval_result.diagnostics);
 
         WithDiagnostics {
-            output: schematic_result.output.as_ref().map(to_kicad_netlist),
+            output: schematic_result
+                .output
+                .as_ref()
+                .map(|schematic| to_kicad_netlist(schematic).unwrap()),
             diagnostics: schematic_result.diagnostics,
         }
     }

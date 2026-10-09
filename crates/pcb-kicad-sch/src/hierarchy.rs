@@ -4,8 +4,9 @@ use anyhow::{Context, Result, bail};
 use pcb_sch::InstanceRef;
 
 use crate::{
-    SchDocument, SchItem, connectivity::kicad::resolve_file_name, deterministic_uuid,
-    normalize_schematic_path,
+    SchDocument, SchItem,
+    connectivity::kicad::{normalize_file_name, resolve_file_name},
+    deterministic_uuid,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,14 +213,9 @@ pub(crate) fn prune_obsolete_pages(
         .iter()
         .enumerate()
         .filter_map(|(index, page)| {
-            page.file_name.as_deref().map(|name| {
-                (
-                    normalize_schematic_path(std::path::Path::new(name))
-                        .to_string_lossy()
-                        .replace('\\', "/"),
-                    index,
-                )
-            })
+            page.file_name
+                .as_deref()
+                .map(|name| (normalize_file_name(name), index))
         })
         .collect::<BTreeMap<_, _>>();
     let mut retained = BTreeSet::new();

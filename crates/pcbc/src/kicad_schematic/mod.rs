@@ -46,20 +46,23 @@ pub fn apply_linked_schematic(netlist: &Schematic) -> Result<Option<SchematicApp
     };
     let name = schematic_name(netlist)?;
     let files = layout_utils::resolve_kicad_files(&directory, &name)?;
-    if !files.kicad_pro.is_file() {
-        return initialize_project(files.kicad_pro, &name, netlist).map(Some);
-    }
-    // KiCad pairs a root schematic only with the same-stem project.
-    let project_file = files.rename(files.name())?.kicad_pro;
-    // A project whose declared roots are all missing is created from scratch.
-    if declared_root_schematics(&project_file)?
-        .iter()
-        .any(|root| root.is_file())
-    {
-        apply_existing(KicadProject::load(&project_file)?, netlist).map(Some)
+    let result = if files.kicad_pro.is_file() {
+        // KiCad pairs a root schematic only with the same-stem project.
+        let project_file = files.rename(files.name())?.kicad_pro;
+        // A project whose declared roots are all missing is created from scratch.
+        if declared_root_schematics(&project_file)?
+            .iter()
+            .any(|root| root.is_file())
+        {
+            apply_existing(KicadProject::load(&project_file)?, netlist)?
+        } else {
+            initialize_project(project_file, &name, netlist)?
+        }
     } else {
-        initialize_project(project_file, &name, netlist).map(Some)
-    }
+        initialize_project(files.kicad_pro, &name, netlist)?
+    };
+    layout_utils::write_footprint_library_table(&directory, netlist)?;
+    Ok(Some(result))
 }
 
 fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<SchematicApplyResult> {

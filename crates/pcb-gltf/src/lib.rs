@@ -24,10 +24,22 @@ pub fn export(
     sink: &mut dyn Write,
     report: &mut Report,
 ) -> Result<()> {
-    let scene = Scene::build(board, options, &mut report.warnings)?;
-    let (layers, mut models) =
-        rayon::join(|| board::mesh(&scene), || models::tessellate(board, &scene));
+    // The models need only the components, so they tessellate while the
+    // layers are built.
+    let mut scene = Scene::components(board, options, &mut report.warnings);
+    let mut layer_warnings = Vec::new();
+    let (layers, mut models) = rayon::join(
+        || -> Result<_> {
+            let layers = Scene::layers(board, options, &mut layer_warnings)?;
+            let meshes = board::mesh(&layers, options.cut_vias);
+            Ok((layers, meshes))
+        },
+        || models::tessellate(board, &scene),
+    );
+    report.warnings.append(&mut layer_warnings);
     report.warnings.append(&mut models.warnings);
     report.failed_models += models.failed;
-    glb::write(&options.name, &scene, &layers, &models, sink)
+    let (layers, meshes) = layers?;
+    scene.layers = layers;
+    glb::write(&options.name, &scene, &meshes, &models, sink)
 }

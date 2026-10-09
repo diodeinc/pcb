@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen/tests/test.rs
-assertion_line: 177
 expression: snapshot_output
 ---
 (export (version "E")
@@ -10,9 +9,9 @@ expression: snapshot_output
     (tool "pcb"))
   (components
     (comp (ref "C1")
-      (value "TEST")
+      (value "100nF")
       (footprint "stdlib_kicad-footprints_Capacitor_SMD:C_0805_2012Metric")
-      (libsource (lib "lib") (part "TEST") (description "unknown"))
+      (libsource (lib "lib") (part "100nF") (description "unknown"))
       (sheetpath (names "MyModule.MyComponent.Component.C") (tstamps "ea4c93b1-3277-5020-b515-e3532cd4ce61"))
       (tstamps "ea4c93b1-3277-5020-b515-e3532cd4ce61")
       (property (name "Reference") (value "C1"))
