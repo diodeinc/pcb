@@ -757,7 +757,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     }
 
     let mut workspace = get_workspace_info(&file_provider, start_path)?;
-    pcb_zen::workspace::enrich_git_metadata(&mut workspace);
+    let changed_paths = pcb_zen::workspace::enrich_git_metadata(&mut workspace);
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace.errors.is_empty() {
@@ -765,17 +765,6 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
             eprintln!("{}", err.error);
         }
         bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
-    }
-
-    if !args.no_build {
-        build_workspace(&workspace, &args.suppress)?;
-    }
-
-    if git::has_uncommitted_changes(&workspace.root)? {
-        bail!(
-            "Working directory has uncommitted changes.\n\
-             Resolve or commit the changes before publishing."
-        );
     }
 
     // Get dirty packages
@@ -789,6 +778,22 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     // Expand to include packages that depend on dirty packages (transitively)
     // These need to be published because their pcb.toml will be bumped
     let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
+
+    if !args.no_build {
+        // Packages can read only their own files, declared dependencies and the workspace manifest.
+        let manifest_changed = changed_paths
+            .iter()
+            .any(|path| path == Path::new("pcb.toml"));
+        let scope = (!manifest_changed).then_some(&dirty_urls);
+        build_workspace(&workspace, scope, &args.suppress)?;
+    }
+
+    if git::has_uncommitted_changes(&workspace.root)? {
+        bail!(
+            "Working directory has uncommitted changes.\n\
+             Resolve or commit the changes before publishing."
+        );
+    }
 
     let waves = compute_publish_waves(&workspace, &dirty_urls)?;
 
@@ -992,7 +997,11 @@ fn build_candidates(
         .collect()
 }
 
-fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()> {
+fn build_workspace(
+    workspace: &WorkspaceInfo,
+    scope: Option<&HashSet<String>>,
+    suppress: &[String],
+) -> Result<()> {
     println!();
     println!("{}", "Building workspace...".cyan().bold());
 
@@ -1002,7 +1011,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
     }
 
     // Filter to workspace packages only (consistent with pcb build).
-    let zen_files: Vec<_> = if workspace.packages.is_empty() {
+    let mut zen_files: Vec<_> = if workspace.packages.is_empty() {
         all_zen_files
     } else {
         all_zen_files
@@ -1016,12 +1025,30 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
             .collect()
     };
 
+    // Resolve every package so a dependency on a deleted package still fails.
+    let resolution =
+        pcb_zen::resolve_workspace_dependencies(workspace.clone(), &workspace.root, false)?;
+
+    if let Some(urls) = scope {
+        let total = zen_files.len();
+        zen_files.retain(|zen_path| {
+            workspace
+                .package_url_for_zen(zen_path)
+                .is_some_and(|url| urls.contains(&url))
+        });
+        println!(
+            "{}",
+            format!(
+                "Building {} of {total} files in the packages being published",
+                zen_files.len()
+            )
+            .dimmed()
+        );
+    }
+
     if zen_files.is_empty() {
         return Ok(());
     }
-
-    let resolution =
-        pcb_zen::resolve_workspace_dependencies(workspace.clone(), &workspace.root, false)?;
 
     let eval_state = crate::build::BuildEvalState::new(resolution);
     let mut has_errors = false;

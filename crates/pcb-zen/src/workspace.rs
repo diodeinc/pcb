@@ -154,14 +154,12 @@ impl WorkspaceInfoExt for WorkspaceInfo {
     }
 }
 
-/// Packages with no published tag, or with a path changed since the last
-/// publish, committed (`changed_paths`) or not (`status_paths`).
+/// Packages with no published tag, or with a workspace-relative path changed
+/// since the last publish.
 fn discover_dirty_packages(
     workspace: &WorkspaceInfo,
     latest_tags: &HashMap<String, PackageTagInfo>,
-    changed_paths: Vec<PathBuf>,
-    status_paths: Vec<PathBuf>,
-    workspace_subpath: Option<&Path>,
+    changed_paths: &[PathBuf],
 ) -> HashSet<String> {
     let unpublished = workspace
         .packages
@@ -170,8 +168,7 @@ fn discover_dirty_packages(
         .cloned();
     let changed = changed_paths
         .iter()
-        .chain(&status_paths)
-        .filter_map(|path| package_url_for_path(workspace, path, workspace_subpath));
+        .filter_map(|path| package_url_for_path(workspace, path));
     unpublished.chain(changed).collect()
 }
 
@@ -220,16 +217,7 @@ fn parse_package_tag(tag: &str) -> Option<(String, Version)> {
         .or_else(|| tags::parse_root_tag(tag).map(|version| (String::new(), version)))
 }
 
-fn package_url_for_path(
-    workspace: &WorkspaceInfo,
-    path: &Path,
-    workspace_subpath: Option<&Path>,
-) -> Option<String> {
-    let path = match workspace_subpath {
-        Some(prefix) => path.strip_prefix(prefix).ok()?,
-        None => path,
-    };
-
+fn package_url_for_path(workspace: &WorkspaceInfo, path: &Path) -> Option<String> {
     workspace
         .packages
         .iter()
@@ -304,10 +292,11 @@ fn apply_tag_versions(info: &mut WorkspaceInfo) -> (HashMap<String, PackageTagIn
 /// Populate package `version`, `published_at`, and `dirty` from git tags and
 /// working-tree status. Runs several git commands, so it is opt-in for the
 /// commands that actually display this metadata.
+/// Returns the paths changed since the last publish.
 #[instrument(name = "enrich_git_metadata", skip_all)]
-pub fn enrich_git_metadata(info: &mut WorkspaceInfo) {
+pub fn enrich_git_metadata(info: &mut WorkspaceInfo) -> Vec<PathBuf> {
     let root = info.root.clone();
-    let (latest_tags, tag_metadata, dirty) = thread::scope(|scope| {
+    let (latest_tags, tag_metadata, changed_paths, dirty) = thread::scope(|scope| {
         // The working-tree scan takes as long as everything else together.
         let status_paths = scope.spawn(|| git::status_paths_in_repo(&root));
 
@@ -324,14 +313,18 @@ pub fn enrich_git_metadata(info: &mut WorkspaceInfo) {
             .map(|base| git::changed_paths_since_in_repo(&root, base))
             .unwrap_or_default();
 
-        let dirty = discover_dirty_packages(
-            info,
-            &latest_tags,
-            changed_paths,
-            status_paths.join().unwrap_or_default(),
-            git::get_repo_subpath(&root).ok().flatten().as_deref(),
-        );
-        (latest_tags, tag_metadata, dirty)
+        let workspace_subpath = git::get_repo_subpath(&root).ok().flatten();
+        let changed_paths: Vec<PathBuf> = changed_paths
+            .into_iter()
+            .chain(status_paths.join().unwrap_or_default())
+            .filter_map(|path| match &workspace_subpath {
+                Some(prefix) => path.strip_prefix(prefix).ok().map(Path::to_path_buf),
+                None => Some(path),
+            })
+            .collect();
+
+        let dirty = discover_dirty_packages(info, &latest_tags, &changed_paths);
+        (latest_tags, tag_metadata, changed_paths, dirty)
     });
 
     for (url, pkg) in info.packages.iter_mut() {
@@ -342,6 +335,7 @@ pub fn enrich_git_metadata(info: &mut WorkspaceInfo) {
         }
         pkg.dirty = dirty.contains(url);
     }
+    changed_paths
 }
 
 /// Add path-patched forks as workspace packages.
