@@ -564,6 +564,9 @@ fn assert_preserved_schematic(path: &std::path::Path, original: &str, applied: b
                 imported
                     .fields
                     .retain(|name, _| !name.starts_with("pcb:net"));
+                // Apply writes the board's footprint library ID.
+                imported.fields.remove("Footprint");
+                original.fields.remove("Footprint");
                 if applied {
                     // KiCad may store all units' pin UUIDs on each unit. Apply keeps only the
                     // selected unit's records, without changing its physical pin identity.

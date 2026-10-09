@@ -81,18 +81,11 @@ fn cache_alias_lookup_is_distinct_from_library_identity() {
 fn save_apply_reopen_preserves_distinct_native_alias_presentation() {
     let mut netlist = common::compile_fixture("analysis", "simple.zen");
     for instance in netlist.instances.values_mut() {
-        match instance.reference_designator.as_deref() {
-            Some("R1") => {
-                instance.attributes.remove("Value");
-                instance.attributes.remove("value");
-            }
-            Some("R2") => {
-                instance.attributes.insert(
-                    "Value".into(),
-                    AttributeValue::String("explicit value".into()),
-                );
-            }
-            _ => {}
+        if instance.reference_designator.as_deref() == Some("R2") {
+            instance.attributes.insert(
+                "value".into(),
+                AttributeValue::String("explicit value".into()),
+            );
         }
     }
     let document = plan_reconciliation(None, &netlist, "Alias.kicad_sch")
@@ -134,10 +127,6 @@ fn save_apply_reopen_preserves_distinct_native_alias_presentation() {
         assert!(plan.inspection_after().analysis.is_equivalent());
         let applied = plan.apply(Some(&saved)).unwrap();
         assert_eq!(managed(&applied, "R1.R").lib_id, base_id);
-        assert_eq!(
-            managed(&applied, "R1.R").field_value("Value"),
-            Some(base_id.as_str())
-        );
         assert_eq!(
             managed(&applied, "R2.R").field_value("Value"),
             Some("explicit value")

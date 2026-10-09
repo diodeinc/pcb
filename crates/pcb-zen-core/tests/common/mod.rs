@@ -503,7 +503,7 @@ macro_rules! snapshot_netlist_eval {
                 diagnostics.extend(sch_result.diagnostics);
 
                 if let Some(schematic) = sch_result.output {
-                    output.push_str(&pcb_sch::kicad_netlist::to_kicad_netlist(&schematic));
+                    output.push_str(&pcb_sch::kicad_netlist::to_kicad_netlist(&schematic).unwrap());
                     output.push('\n');
                 }
             }

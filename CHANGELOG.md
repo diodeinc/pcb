@@ -10,21 +10,24 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Add `pcb gltf export` to write a GLB for a KiCad board without kicad-cli.
+- Add `pcb gltf export` to write a compressed, instanced GLB for a KiCad board without kicad-cli.
 
 ### Changed
 
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
 - `pcb build` rejects dependency symbol libraries KiCad cannot load.
 - `pcb build` and `pcb inspect` reject symbol libraries KiCad cannot load, such as ones with a root-level `embedded_fonts`, and accept what KiCad loads, such as repeated symbol names and private properties.
+- `moved()` is deprecated and emits a warning on each use; it still works for now.
 
 ### Fixed
 
 - `pcb import` accepts multi-unit symbols whose sheets keep stale caches of units they don't place.
+- `pcb apply` schematic symbols and layout footprints now agree on Footprint, Value and Datasheet; footprints show the part value instead of its MPN.
 - `pcb apply` names a new root schematic after its KiCad project, matching the board so DRC schematic parity runs.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.
 - `DiffPair(impedance=...)` applies to its nets even when the pair never crosses an `io()` boundary; conflicting impedance values on one net now warn.
+- Schematic sheet paths written with Windows separators, including `..`, resolve as KiCad resolves them.
 
 ## [0.4.74] - 2026-10-09
 

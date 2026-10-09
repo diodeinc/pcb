@@ -41,8 +41,7 @@ This model enforces four invariants:
 A footprint ID change is a removal followed by an addition. The new footprint
 is created in the placement of the footprint it replaces and takes over its
 UUID and the UUIDs of its pads, matched by pad number, so KiCad DRC exclusions
-keep referring to the same items. Zener `moved()` declarations are resolved
-before the Python synchronizer runs.
+keep referring to the same items.
 
 By default, a footprint with the same hierarchical path and footprint ID keeps
 its existing KiCad geometry. Run `pcb layout <FILE> --sync-footprints` to reload

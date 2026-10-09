@@ -49,11 +49,13 @@ pub fn apply_linked_schematic(netlist: &Schematic) -> Result<Option<SchematicApp
         && declared_root_schematics(&project_file)?
             .iter()
             .any(|root| root.is_file());
-    if has_root {
-        apply_existing(KicadProject::load(&project_file)?, netlist).map(Some)
+    let result = if has_root {
+        apply_existing(KicadProject::load(&project_file)?, netlist)?
     } else {
-        initialize_project(project_file, netlist).map(Some)
-    }
+        initialize_project(project_file, netlist)?
+    };
+    pcb_layout::utils::write_footprint_library_table(&path, netlist)?;
+    Ok(Some(result))
 }
 
 fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<SchematicApplyResult> {

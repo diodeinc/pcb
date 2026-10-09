@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen/tests/test.rs
-assertion_line: 208
 expression: snapshot_output
 ---
 (export (version "E")
@@ -10,9 +9,9 @@ expression: snapshot_output
     (tool "pcb"))
   (components
     (comp (ref "R1")
-      (value "TEST")
+      (value "1k")
       (footprint "stdlib_kicad-footprints_Resistor_SMD:R_0402_1005Metric")
-      (libsource (lib "lib") (part "TEST") (description "unknown"))
+      (libsource (lib "lib") (part "1k") (description "unknown"))
       (sheetpath (names "MyModule1.Component.R") (tstamps "fd151ad8-bfb8-5b4d-b24b-028398924ded"))
       (tstamps "fd151ad8-bfb8-5b4d-b24b-028398924ded")
       (property (name "Reference") (value "R1"))
@@ -24,9 +23,9 @@ expression: snapshot_output
       (property (name "value") (value "1k"))
     )
     (comp (ref "R2")
-      (value "TEST")
+      (value "1k")
       (footprint "stdlib_kicad-footprints_Resistor_SMD:R_0402_1005Metric")
-      (libsource (lib "lib") (part "TEST") (description "unknown"))
+      (libsource (lib "lib") (part "1k") (description "unknown"))
       (sheetpath (names "MyModule2.Component.R") (tstamps "abd6df5a-c895-5201-b0c7-94e477bd86ec"))
       (tstamps "abd6df5a-c895-5201-b0c7-94e477bd86ec")
       (property (name "Reference") (value "R2"))
@@ -38,9 +37,9 @@ expression: snapshot_output
       (property (name "value") (value "1k"))
     )
     (comp (ref "R3")
-      (value "TEST")
+      (value "1k")
       (footprint "stdlib_kicad-footprints_Resistor_SMD:R_0402_1005Metric")
-      (libsource (lib "lib") (part "TEST") (description "unknown"))
+      (libsource (lib "lib") (part "1k") (description "unknown"))
       (sheetpath (names "MyModule3.Component.R") (tstamps "7370bd72-b536-55c0-bd73-8bb99cf4456d"))
       (tstamps "7370bd72-b536-55c0-bd73-8bb99cf4456d")
       (property (name "Reference") (value "R3"))

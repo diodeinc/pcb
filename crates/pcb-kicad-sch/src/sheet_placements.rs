@@ -26,7 +26,9 @@ fn entries(project: &Value) -> Result<Option<Vec<Entry>>> {
 }
 
 pub(crate) fn normalized(base: &str, child: &str) -> Result<PathBuf> {
-    let child = Path::new(child);
+    // KiCad accepts Windows separators in sheet paths (SCH_SHEET::SetFileName).
+    let child = child.replace('\\', "/");
+    let child = Path::new(&child);
     if child.as_os_str().is_empty() || child.is_absolute() {
         bail!(
             "schematic sheet path '{child}' must be relative",

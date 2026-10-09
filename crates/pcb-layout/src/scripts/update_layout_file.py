@@ -223,30 +223,16 @@ class JsonNetlistParser:
             logger.debug(f"Found module {module_path} with layout_path: {layout_path}")
 
         # Parse components (only Component kind)
-        for instance_ref, instance in data["instances"].items():
+        for instance in data["instances"].values():
             if instance["kind"] != "Component":
                 continue
 
             # Get reference designator
             ref = instance.get("reference_designator", "U?")
 
-            # Get value - follow the same precedence as Rust: mpn > value > Value > "?"
-            value = "?"
-            for key in ["mpn", "value", "Value"]:
-                if (
-                    key in instance["attributes"]
-                    and "String" in instance["attributes"][key]
-                ):
-                    value = instance["attributes"][key]["String"]
-                    break
+            value = instance["kicad_value"]
 
-            # Get footprint
-            footprint = instance.get("footprint_fpid", "")
-            if not footprint:
-                raise ValueError(
-                    f"Component instance {instance_ref!r} is missing required "
-                    "'footprint_fpid'; regenerate the layout netlist with a current pcb tool."
-                )
+            footprint = instance["footprint_fpid"]
 
             # The hierarchical name is the dot-separated path (matching comp.hier_name in Rust)
             hier_name = instance["instance_path"]
@@ -262,7 +248,7 @@ class JsonNetlistParser:
 
             # Add properties from attributes
             for attr_name, attr_value in instance["attributes"].items():
-                if attr_name not in ["footprint", "value", "Value"] and isinstance(
+                if attr_name not in ["footprint", "value"] and isinstance(
                     attr_value, dict
                 ):
                     if "String" in attr_value:

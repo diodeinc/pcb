@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
 use pcb_sch::kicad_identity::{footprint_kiid_path, uuid_for_path};
-use pcb_sch::kicad_netlist::try_format_footprint_with_package_roots;
 use pcb_sch::{AttributeValue, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
 use pcb_sexpr::board::{extract_keyed_footprints, footprint_name_from_fpid};
@@ -82,11 +81,9 @@ pub fn source_effective_netlist(schematic: &Schematic) -> Result<EffectiveNetlis
         }
 
         let component_path = instance_ref.instance_path.join(".");
-        let Some(AttributeValue::String(fp_attr)) = instance.attributes.get("footprint") else {
-            bail!("component `{component_path}` is missing footprint attribute");
-        };
-        let (fpid, _) = try_format_footprint_with_package_roots(fp_attr, &schematic.package_roots)
-            .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?;
+        let (fpid, _) = schematic
+            .kicad_footprint(instance)
+            .with_context(|| format!("component `{component_path}`"))?;
 
         effective.footprints.insert(
             component_path,
