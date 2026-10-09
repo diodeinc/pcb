@@ -513,7 +513,7 @@ Component(
     name = "U",
     prefix = "U",
     footprint = File("test.kicad_mod"),
-    symbol = Symbol(library = "Part.kicad_sym"),
+    symbol = Symbol(library = "Part.kicad_sym", name = "Part"),
     pins = {"A": A, "B": B},
     type = "resistor",
     properties = {"value": "1k"},
@@ -586,6 +586,19 @@ fn dependency_symbols_report_what_kicad_rejects_and_nothing_else() {
     );
     assert!(output.contains("Part.kicad_sym:3:"), "{output}");
     assert!(!output.contains("pcb fix"), "{output}");
+
+    // KiCad reads every definition, used or not.
+    let sibling = DEPENDENCY_PART_SYMBOL.replacen(
+        "(symbol \"Part\"",
+        "(symbol \"Other\" (property \"Value\" 1)) (symbol \"Part\"",
+        1,
+    );
+    let output = build_with_dependency_symbol(&sibling);
+    assert!(output.contains("Exit Code: 1"), "{output}");
+    assert!(
+        output.contains("Other: `property` takes text, not `1`"),
+        "{output}"
+    );
 }
 
 #[test]

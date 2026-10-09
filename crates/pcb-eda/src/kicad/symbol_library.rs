@@ -441,8 +441,12 @@ fn scan_symbol_locations(
 
     let mut locations = BTreeMap::new();
     let mut current_top_end = 0;
+    // KiCad reads nothing after the root list.
+    let root_end = content.find('(').map_or(0, |root| {
+        find_matching_paren(bytes, root).unwrap_or(bytes.len())
+    });
 
-    for mat in SYMBOL_REGEX.find_iter(content) {
+    for mat in SYMBOL_REGEX.find_iter(&content[..root_end]) {
         let symbol_start = mat.start();
         if symbol_start < current_top_end {
             continue;
@@ -666,7 +670,7 @@ mod tests {
         let source = r#"(kicad_symbol_lib (version 20241209)
             (symbol "U" (property "Value" "first"))
             (symbol "U" (property private "Value" "last") (property private "Note" "n"))
-            (symbol "C" (extends "") (property "Value" "C")))"#;
+            (symbol "C" (extends "") (property "Value" "C"))) (symbol "T")"#;
         let library = KicadSymbolLibrary::from_string(source).unwrap();
         assert_eq!(library.symbol_names(), ["C", "U"]);
         let last = library.get_symbol_lazy("U").unwrap().unwrap();

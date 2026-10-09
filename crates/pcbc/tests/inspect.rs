@@ -294,4 +294,5 @@ fn inspect_accepts_what_kicad_loads() {
     fs::write(dir.path().join("valid.kicad_sym"), &source).unwrap();
     let output = inspect(dir.path(), "valid.kicad_sym", "json");
     assert!(output.status.success(), "{output:?}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("\"B\""));
 }

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, ValueEnum};
 use pcb_eda::kicad::metadata::SymbolMetadata;
-use pcb_eda::kicad::symbol_check::{check_library, check_symbol};
+use pcb_eda::kicad::symbol_check::unloadable;
 use pcb_eda::kicad::symbol_library::{KicadSymbolLibrary, library_paths};
 use serde::Serialize;
 use std::fs;
@@ -76,15 +76,7 @@ fn inspect(path: &std::path::Path) -> Result<Inspection> {
         })
         .collect::<Result<_>>()?;
     let library = KicadSymbolLibrary::from_sources(sources)?;
-    let names = library.symbol_names();
-    let symbol_issues = names
-        .iter()
-        .flat_map(|name| check_symbol(&library, name, None));
-    let unloadable = check_library(&library)
-        .into_iter()
-        .chain(symbol_issues)
-        .find(|issue| issue.blocks_kicad());
-    if let Some(issue) = unloadable {
+    if let Some(issue) = unloadable(&library).first() {
         let text = &library.sources()[issue.source];
         let line = text[..issue.span.start].matches('\n').count() + 1;
         let column = issue.span.start - text[..issue.span.start].rfind('\n').map_or(0, |at| at + 1);
@@ -96,7 +88,8 @@ fn inspect(path: &std::path::Path) -> Result<Inspection> {
             issue.message
         ));
     }
-    let symbols = names
+    let symbols = library
+        .symbol_names()
         .into_iter()
         .map(|name| {
             let symbol = library

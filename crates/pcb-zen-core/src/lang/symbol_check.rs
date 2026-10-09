@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pcb_eda::kicad::symbol_check::{
-    FootprintPads, Severity, SymbolIssue, check_library, check_symbol, fix,
+    FootprintPads, Severity, SymbolIssue, check_symbol, fix, unloadable,
 };
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use starlark::{codemap::CodeMap, errors::EvalSeverity, values::ValueLike};
@@ -91,7 +91,7 @@ pub(crate) fn fix_symbols(
         let sources = texts
             .map(|(path, text)| fixed.get(path).unwrap_or(text).clone())
             .collect();
-        let after = fix(sources, name);
+        let after = fix(sources);
         for ((path, before), after) in paths.into_iter().zip(library.sources()).zip(after) {
             if after != *before {
                 fixed.insert(path, after);
@@ -117,16 +117,16 @@ pub(crate) fn check_symbols(
 
     for (component, path, name, workspace) in symbols(module_tree, resolution) {
         // The library is the one the symbol was loaded from, already parsed.
-        // One KiCad cannot read is reported once and its symbols left alone.
+        // What KiCad refuses in it is reported, and its symbols left alone.
         let library = libraries.entry(path).or_insert_with_key(|path| {
             let library = Library::load(path, name, file_provider)?;
-            match check_library(&library.library) {
-                Some(unreadable) => {
-                    diagnostics.push(library.diagnostic(&unreadable, workspace));
-                    None
-                }
-                None => Some(library),
-            }
+            let faults = unloadable(&library.library);
+            diagnostics.extend(
+                faults
+                    .iter()
+                    .map(|issue| library.diagnostic(issue, workspace)),
+            );
+            faults.is_empty().then_some(library)
         });
         let Some(library) = library else {
             continue;

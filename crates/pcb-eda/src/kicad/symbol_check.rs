@@ -434,17 +434,23 @@ fn child_role(role: &str, head: &str) -> Option<&'static str> {
     })
 }
 
-/// The sources of a library with the fixable issues of symbol `name` fixed.
+/// The sources of a library with its fixable issues fixed.
 ///
 /// A fix can uncover the next issue, as a comment hides all that follows it,
 /// so this repeats until none is left. Each edit removes what it was made for.
-pub fn fix(mut sources: Vec<String>, name: &str) -> Vec<String> {
+pub fn fix(mut sources: Vec<String>) -> Vec<String> {
     loop {
         let Ok(library) = KicadSymbolLibrary::from_sources(sources.clone()) else {
             return sources;
         };
-        let issues = check_library(&library)
-            .map_or_else(|| check_symbol(&library, name, None), |issue| vec![issue]);
+        let symbols = || {
+            let names = library.symbol_names();
+            names
+                .into_iter()
+                .flat_map(|name| check_symbol(&library, name, None))
+                .collect()
+        };
+        let issues = check_library(&library).map_or_else(symbols, |issue| vec![issue]);
         let mut edits = vec![Vec::new(); sources.len()];
         for issue in issues {
             edits[issue.source].extend(issue.fix);
@@ -458,6 +464,20 @@ pub fn fix(mut sources: Vec<String>, name: &str) -> Vec<String> {
             .map(|(text, edits)| apply(text, edits))
             .collect();
     }
+}
+
+/// Every issue over which KiCad refuses to load `library`: a fault in a
+/// file, else those of each symbol, as KiCad reads every definition.
+pub fn unloadable(library: &KicadSymbolLibrary) -> Vec<SymbolIssue> {
+    let symbols = || {
+        let names = library.symbol_names();
+        names
+            .into_iter()
+            .flat_map(|name| check_symbol(library, name, None))
+            .filter(SymbolIssue::blocks_kicad)
+            .collect()
+    };
+    check_library(library).map_or_else(symbols, |fault| vec![fault])
 }
 
 /// Check that KiCad can read the files of `library` at all. Symbol loading
@@ -492,8 +512,26 @@ fn library_fault(text: &str) -> Option<(usize, String, Vec<Edit>)> {
         let message = "library does not open with `(kicad_symbol_lib (version …)`";
         return Some((root, message.to_string(), Vec::new()));
     };
+    let not_accepted = |found: &str| {
+        format!(
+            "`{found}` is not something KiCad accepts in a symbol library; it accepts generator, generator_version, host and symbol"
+        )
+    };
+    // KiCad reads a form at every position of the root.
+    let stray = |gap: std::ops::Range<usize>| {
+        let at = gap.start + text[gap].find(|c: char| !c.is_whitespace())?;
+        let word = text[at..]
+            .split(|c: char| c.is_whitespace() || c == '(')
+            .next()?;
+        Some((at, not_accepted(word), Vec::new()))
+    };
     let version = scan_format_version(text).map_or(0, i64::from);
+    let mut read = root + 1 + scan::head(text, root).len();
     for (index, range) in std::iter::once(first).chain(children).enumerate() {
+        if let Some(fault) = stray(read..range.start) {
+            return Some(fault);
+        }
+        read = range.end;
         let head = scan::head(text, range.start);
         let role = match head {
             _ if index == 0 => "version",
@@ -502,13 +540,10 @@ fn library_fault(text: &str) -> Option<(usize, String, Vec<Edit>)> {
             "host" if version < 20200827 => "old_host",
             "host" => head,
             _ => {
-                let message = format!(
-                    "`{head}` is not something KiCad accepts in a symbol library; it accepts generator, generator_version, host and symbol"
-                );
                 // A symbol-level flag at the root means nothing to KiCad.
                 let fix = (head == "embedded_fonts")
                     .then(|| vec![Edit::delete(Span::new(range.start, range.end))]);
-                return Some((range.start, message, fix.unwrap_or_default()));
+                return Some((range.start, not_accepted(head), fix.unwrap_or_default()));
             }
         };
         let Ok(node) = parse(&text[range.clone()]) else {
@@ -537,7 +572,7 @@ fn library_fault(text: &str) -> Option<(usize, String, Vec<Edit>)> {
             return Some((range.start, message, Vec::new()));
         }
     }
-    None
+    stray(read..read + text[read..].find(')').unwrap_or_default())
 }
 
 /// Check symbol `name` of `library`. Issues are ordered by source position.
@@ -1542,7 +1577,7 @@ mod tests {
                 "(name \"VCC\" (effects (font (size 1.27 1.27)) (justify left)))",
                 1,
             );
-        assert_eq!(fix(vec![dirty], "U"), [fixed]);
+        assert_eq!(fix(vec![dirty]), [fixed]);
 
         // What takes a decision is reported and left as written.
         for (from, to) in [
@@ -1553,7 +1588,7 @@ mod tests {
         ] {
             let source = CLEAN.replacen(from, to, 1);
             assert!(!kinds(&source, "U").is_empty(), "{to}");
-            assert_eq!(fix(vec![source.clone()], "U"), [source], "{to}");
+            assert_eq!(fix(vec![source.clone()]), [source], "{to}");
         }
     }
 
@@ -1779,7 +1814,7 @@ mod tests {
         // Only the misplaced root field keeps KiCad from loading these; fixing it is safe.
         let source = "(kicad_symbol_lib (version 20251024) (embedded_fonts no)\n  (symbol \"A\"))";
         assert_eq!(
-            fix(vec![source.to_string()], "A"),
+            fix(vec![source.to_string()]),
             ["(kicad_symbol_lib (version 20251024)\n  (symbol \"A\"))"]
         );
     }
