@@ -45,6 +45,9 @@ impl KicadProject {
         let project: Value = serde_json::from_str(&fs::read_to_string(&project_file)?)
             .with_context(|| format!("failed to parse {}", project_file.display()))?;
         let project_roots = project_root_schematics(&directory, &project_file)?;
+        if let Some(missing) = project_roots.iter().find(|root| !root.path.is_file()) {
+            bail!("root schematic {} does not exist", missing.path.display());
+        }
         let root_schematics = project_roots.iter().map(|root| root.path.clone()).collect();
         let (schematic_files, document) =
             load_schematic_hierarchy(&directory, &project_roots, &project)?;
@@ -59,8 +62,8 @@ impl KicadProject {
     }
 }
 
-struct ProjectRoot {
-    path: PathBuf,
+pub(crate) struct ProjectRoot {
+    pub(crate) path: PathBuf,
     id: Option<String>,
 }
 
@@ -142,7 +145,11 @@ fn load_schematic_hierarchy(
     ))
 }
 
-fn project_root_schematics(directory: &Path, project_file: &Path) -> Result<Vec<ProjectRoot>> {
+/// The project's declared root schematics, which may not exist yet.
+pub(crate) fn project_root_schematics(
+    directory: &Path,
+    project_file: &Path,
+) -> Result<Vec<ProjectRoot>> {
     let content = fs::read_to_string(project_file)
         .with_context(|| format!("failed to read {}", project_file.display()))?;
     let project: Value = serde_json::from_str(&content)
@@ -170,9 +177,6 @@ fn project_root_schematics(directory: &Path, project_file: &Path) -> Result<Vec<
                     format!("schematic.top_level_sheets[{index}].filename must be a string")
                 })?;
             let path = project_schematic_path(directory, directory, file_name)?;
-            if !path.is_file() {
-                bail!("top-level schematic {} does not exist", path.display());
-            }
             let id = match sheet.get("uuid") {
                 None => None,
                 Some(value) => {
@@ -241,16 +245,8 @@ pub(crate) fn project_schematic_path(
 }
 
 fn legacy_project_root(project_file: &Path) -> Result<Vec<ProjectRoot>> {
-    let root = project_file.with_extension("kicad_sch");
-    if !root.is_file() {
-        bail!(
-            "KiCad project {} has no legacy root schematic {}",
-            project_file.display(),
-            root.display()
-        );
-    }
     Ok(vec![ProjectRoot {
-        path: root,
+        path: project_file.with_extension("kicad_sch"),
         id: None,
     }])
 }
@@ -271,22 +267,6 @@ pub(crate) fn schematic_project_path(netlist: &Schematic) -> Result<Option<PathB
         bail!("schematic_path must be a string");
     };
     netlist.resolve_package_uri(path).map(Some)
-}
-
-pub(crate) fn files_with_extension(directory: &Path, extension: &str) -> Result<Vec<PathBuf>> {
-    let entries = fs::read_dir(directory)
-        .with_context(|| format!("failed to read {}", directory.display()))?;
-    let mut files = Vec::new();
-    for entry in entries {
-        let path = entry
-            .with_context(|| format!("failed to read an entry in {}", directory.display()))?
-            .path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some(extension) {
-            files.push(path);
-        }
-    }
-    files.sort();
-    Ok(files)
 }
 
 #[cfg(test)]

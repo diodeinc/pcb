@@ -1467,6 +1467,51 @@ fn root_interface_aliases_drive_their_component_pins() {
 }
 
 #[test]
+fn refuses_to_initialize_a_top_level_schematic_outside_the_project() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    fs::create_dir(&project_dir).unwrap();
+    let project_file = project_dir.join("layout.kicad_pro");
+    let project_source = r#"{
+  "schematic": {
+    "top_level_sheets": [
+      { "filename": "../outside.kicad_sch" }
+    ]
+  }
+}
+"#;
+    fs::write(&project_file, project_source).unwrap();
+    let outside = workspace.path().join("outside.kicad_sch");
+    let netlist = linked_fixture(&project_dir);
+
+    let error = apply_linked_schematic(&netlist).unwrap_err();
+
+    assert!(error.to_string().contains("escapes project directory"));
+    assert_eq!(fs::read_to_string(project_file).unwrap(), project_source);
+    assert!(!outside.exists());
+}
+
+#[test]
+fn a_stray_schematic_does_not_block_initializing_the_declared_root() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    fs::create_dir(&project_dir).unwrap();
+    fs::write(project_dir.join("layout.kicad_pro"), "{}\n").unwrap();
+    let stray = "(kicad_sch (version 20250114) (generator \"eeschema\"))\n";
+    fs::write(project_dir.join("notes.kicad_sch"), stray).unwrap();
+    let netlist = linked_fixture(&project_dir);
+
+    let created = apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    assert!(created.created);
+    assert_eq!(created.root_schematic, project_dir.join("layout.kicad_sch"));
+    assert_eq!(
+        fs::read_to_string(project_dir.join("notes.kicad_sch")).unwrap(),
+        stray
+    );
+}
+
+#[test]
 fn initializes_the_missing_schematic_in_an_existing_layout_project() {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
