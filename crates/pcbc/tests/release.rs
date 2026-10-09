@@ -142,8 +142,6 @@ fn source_only_args(board_zen: &str) -> Vec<&str> {
         "--exclude",
         "drc",
         "--exclude",
-        "bom",
-        "--exclude",
         "gerbers",
         "--exclude",
         "ipc2581",
@@ -300,8 +298,6 @@ fn test_release_check_drc_exclusion_does_not_claim_layout_checked() {
                 "--check",
                 "--exclude",
                 "drc",
-                "--exclude",
-                "bom",
             ],
         )
         .stdout_capture()
@@ -314,7 +310,7 @@ fn test_release_check_drc_exclusion_does_not_claim_layout_checked() {
 }
 
 #[test]
-fn test_release_check_respects_bom_suppression_and_exclusion() {
+fn test_release_check_respects_bom_suppression() {
     let server = MockServer::start();
     let _bom_match = server.mock(|when, then| {
         when.method(POST).path("/api/boms/match");
@@ -338,7 +334,7 @@ fn test_release_check_respects_bom_suppression_and_exclusion() {
         .commit("Initial commit")
         .sync();
 
-    for flags in [vec![], vec!["-S", "bom"], vec!["--exclude", "bom"]] {
+    for flags in [vec![], vec!["-S", "bom"]] {
         let mut args = vec!["publish", "boards/TestBoard.zen", "--check"];
         args.extend(&flags);
         let output = sb
@@ -354,8 +350,7 @@ fn test_release_check_respects_bom_suppression_and_exclusion() {
             .iter()
             .filter(|finding| finding["kind"] == "bom.sourceability.no_offers")
             .collect::<Vec<_>>();
-        let excluded = flags.contains(&"--exclude");
-        assert_eq!(bom_findings.len(), if excluded { 0 } else { 2 });
+        assert_eq!(bom_findings.len(), 2);
         for finding in bom_findings {
             assert_eq!(finding["suppressed"], flags.contains(&"-S"));
             assert_eq!(finding["severity"], "warning");
@@ -534,28 +529,6 @@ fn test_publish_preserves_authored_bom_intent() {
         .root_path()
         .join("src")
         .join(find_staging_dir(&sb, "TestBoard"));
-    let design_bom: Vec<Value> =
-        serde_json::from_reader(File::open(release_dir.join("bom/design_bom.json")).unwrap())
-            .unwrap();
-    let bom_entry = |path| {
-        design_bom
-            .iter()
-            .find(|entry| entry["path"] == path)
-            .unwrap()
-    };
-    let generic_bom = bom_entry("GENERIC.R");
-    assert_eq!(
-        (generic_bom.get("mpn"), generic_bom.get("manufacturer")),
-        (None, None)
-    );
-    assert_eq!(
-        (
-            bom_entry("AUTHORED.R")["mpn"].as_str(),
-            bom_entry("AUTHORED.R")["manufacturer"].as_str()
-        ),
-        (Some("AUTHORED-MPN"), Some("Authored Manufacturer"))
-    );
-
     let netlist: pcb_sch::Schematic =
         serde_json::from_reader(File::open(release_dir.join("netlist.json")).unwrap()).unwrap();
     let component = |path| {
@@ -663,7 +636,7 @@ fn test_publish_board_full() {
         .expect("Failed to run pcb publish command");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let bom_finished = stderr
-        .find("Generating design BOM")
+        .find("Checking BOM offers")
         .expect("BOM task should finish before preflight review");
     let build_warning = stderr
         .find("io() 'GND' in module 'LED1' is not connected to any ports")
@@ -732,8 +705,6 @@ fn test_publish_board_full() {
             "-S",
             "layout",
             "--no-push",
-            "--exclude",
-            "bom",
             "--exclude",
             "vrml",
         ];
