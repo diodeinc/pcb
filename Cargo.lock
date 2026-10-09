@@ -4034,12 +4034,15 @@ dependencies = [
 name = "pcb-step"
 version = "0.4.74"
 dependencies = [
+ "anyhow",
  "base64 0.23.1",
+ "clap",
  "glam 0.34.1",
  "kurbo",
  "memchr",
  "pcb-ir",
  "rustybuzz",
+ "serde_json",
  "zstd",
 ]
 

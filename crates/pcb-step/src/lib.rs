@@ -7,6 +7,8 @@
 //! embedded files.
 
 mod board;
+#[cfg(feature = "cli")]
+pub mod cli;
 mod copper;
 mod donor;
 mod faces;
@@ -17,6 +19,7 @@ mod newstroke;
 mod outline;
 mod outline_font;
 mod rings;
+pub mod scene;
 mod sexpr;
 mod step;
 
@@ -25,13 +28,10 @@ use std::io::Write;
 
 use crate::donor::Donor;
 use crate::geom::{Transform, Vec2};
-use crate::outline::{Frame, Loop, board_solids, cut_holes, cut_round};
+use crate::scene::{LayerKind, Scene, Shape};
 use crate::step::{Part, Root, Writer};
 
 pub use board::Board;
-
-/// Standoff KiCad leaves between the copper surface and a model.
-const MODEL_STANDOFF: f64 = 0.05;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Origin {
@@ -155,13 +155,18 @@ impl Board<'_> {
         }
         fallback
     }
+
+    /// The decoded STEP payload of an embedded model, or `None` when the
+    /// board embeds no file of that name.
+    pub fn model(&self, key: &str) -> Option<Result<Vec<u8>, Error>> {
+        self.embedded_step(key).map(decode_embedded)
+    }
 }
 
 fn model_key(path: &str) -> &str {
     path.strip_prefix("kicad-embed://").unwrap_or(path)
 }
 
-/// Write the STEP assembly for `board` to `sink`.
 /// The names every font embedded in a board answers to, lowercased: the
 /// family, full and typographic family names of each face. A text's
 /// `(face ...)` is drawn from an embedded font when its lowercased name
@@ -172,23 +177,10 @@ pub fn embedded_font_names(source: &[u8]) -> Result<Vec<String>, Error> {
     Ok(outline_font::Fonts::load(&board, &mut warnings).names())
 }
 
+/// Write the STEP assembly for `board` to `sink`.
 pub fn export(board: &Board, options: &Options, sink: &mut dyn Write) -> Result<Report, Error> {
-    if !options.board_body
-        && !options.components
-        && !(options.pads || options.tracks || options.zones)
-        && !(options.silkscreen || options.soldermask)
-    {
-        return Err(Error::NothingToExport);
-    }
     let mut report = Report::default();
-    let origin = match options.origin {
-        Origin::Board => Vec2::ZERO,
-        Origin::Drill => board.aux_origin,
-        Origin::Grid => board.grid_origin,
-        Origin::User { x, y } => Vec2::new(x, y),
-    };
-    let frame = Frame { origin };
-    let physical = board.physical();
+    let scene = Scene::build(board, options, &mut report.warnings)?;
 
     let mut w = Writer::new(1);
     let root = Root::reserve(&mut w);
@@ -203,99 +195,88 @@ FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\n\
 ENDSEC;\nDATA;\n",
     );
     let mut placements: Vec<u32> = Vec::new();
+    export_components(
+        board,
+        &scene,
+        &root,
+        &mut w,
+        sink,
+        &mut report,
+        &mut placements,
+    )?;
 
-    if options.components {
-        export_components(
-            board,
-            options,
-            frame,
-            &physical,
-            &root,
-            &mut w,
-            sink,
-            &mut report,
-            &mut placements,
-        )?;
-    }
-
-    if options.board_body {
-        let solids = board_solids(board, frame)?;
-        // Plain through drills first, in one boolean; machined holes after,
-        // each falling back to a plain drill where its shape cannot stand
-        // clear of everything else.
-        let mut drills = Vec::new();
-        let mut machined = Vec::new();
-        for hole in &board.holes {
-            let plain = hole.machining == board::Machining::default();
-            if plain || hole.a.distance(hole.b) > 1e-6 {
-                if !plain {
-                    report.warnings.push(format!(
-                        "slot at ({:.3}, {:.3}) mm: machining is only cut on round drills",
-                        hole.a.x, hole.a.y
-                    ));
-                }
-                drills.push(Loop::stadium(
-                    frame.point(hole.a),
-                    frame.point(hole.b),
-                    hole.r,
-                ));
-            } else if let Some(round) =
-                holes::pad_hole(frame.point(hole.a), hole.r, hole.machining, &physical)
-            {
-                machined.push(round);
-            }
-        }
-        if options.cut_vias {
-            for via in &board.vias {
-                let Some(round) =
-                    holes::via_hole(frame.point(via.at), via, &physical, &mut report.warnings)
-                else {
-                    continue;
-                };
-                if round.is_plain() {
-                    let r = round.profile[0].1;
-                    drills.push(Loop::stadium(round.center, round.center, r));
-                } else {
-                    machined.push(round);
-                }
-            }
-        }
-        let mut solids = cut_holes(solids, drills, &mut report.warnings);
-        let fallbacks: Vec<Loop> = machined
-            .into_iter()
-            .filter_map(|round| cut_round(&mut solids, round, &mut report.warnings))
-            .collect();
-        if !fallbacks.is_empty() {
-            solids = cut_holes(solids, fallbacks, &mut report.warnings);
-        }
-
-        // KiCad paints the body in the mask colour unless the mask is
-        // exported as a layer of its own.
-        let color = if options.soldermask {
-            board.core_color()
-        } else {
-            board.body_color()
+    let threads = worker_threads();
+    for layer in &scene.layers {
+        let (suffix, occurrence) = match layer.kind {
+            LayerKind::Body => ("PCB", "PCB"),
+            LayerKind::Copper => ("copper", "copper"),
+            LayerKind::Pads => ("pad", "pads"),
+            LayerKind::Vias => ("via", "vias"),
+            LayerKind::Silkscreen { front: true } => ("silkscreen", "Top Silkscreen"),
+            LayerKind::Silkscreen { front: false } => ("silkscreen", "Bottom Silkscreen"),
+            LayerKind::Soldermask { front: true } => ("soldermask", "Top Soldermask"),
+            LayerKind::Soldermask { front: false } => ("soldermask", "Bottom Soldermask"),
         };
-        let mut items = Vec::with_capacity(1 + solids.len());
-        let mut styled = Vec::with_capacity(solids.len());
         let placement = w.axis_placement(&Transform::IDENTITY);
-        items.push(placement);
-        for (index, solid) in solids.iter().enumerate() {
-            let name = if index == 0 {
-                "PCB".to_owned()
-            } else {
-                format!("PCB {}", index + 1)
-            };
-            let id = w.solid(&name, solid, 0.0, physical.body_top);
-            styled.push(w.styled_solid(id, color));
-            items.push(id);
-        }
-        let representation = w.id();
-        w.brep_representation(representation, &items, root.geom_context);
-        w.presentation_representation(&styled, root.geom_context);
+        let mut items = vec![placement];
+        let representation = match (&layer.shape, layer.kind) {
+            (Shape::Solids(solids), LayerKind::Body) => {
+                let mut styled = Vec::with_capacity(solids.len());
+                for (index, prism) in solids.iter().enumerate() {
+                    let name = if index == 0 {
+                        "PCB".to_owned()
+                    } else {
+                        format!("PCB {}", index + 1)
+                    };
+                    let id = w.solid(&name, &prism.solid, prism.z0, prism.z1);
+                    styled.push(w.styled_solid(id, layer.color));
+                    items.push(id);
+                }
+                let representation = w.id();
+                w.brep_representation(representation, &items, root.geom_context);
+                w.presentation_representation(&styled, root.geom_context);
+                representation
+            }
+            (Shape::Solids(solids), _) => {
+                let style = w.style_assignment(layer.color);
+                let weights: Vec<usize> = solids.iter().map(|s| solid_edges(&s.solid)).collect();
+                let ids = write_batched(&mut w, sink, threads, &weights, |local, i| {
+                    let s = &solids[i];
+                    local.solid(&format!("{suffix} {}", i + 1), &s.solid, s.z0, s.z1)
+                })?;
+                items.extend(ids);
+                let styled: Vec<u32> = items[1..]
+                    .iter()
+                    .map(|&id| w.styled_item(id, style))
+                    .collect();
+                let representation = w.id();
+                w.brep_representation(representation, &items, root.geom_context);
+                w.presentation_representation(&styled, root.geom_context);
+                representation
+            }
+            (Shape::Faces { z, up, faces }, _) => {
+                let style = w.style_assignment_with(layer.color, layer.transparency);
+                let weights: Vec<usize> = faces
+                    .iter()
+                    .map(|f| {
+                        f.outer.edges.len() + f.holes.iter().map(|h| h.edges.len()).sum::<usize>()
+                    })
+                    .collect();
+                let ids = write_batched(&mut w, sink, threads, &weights, |local, i| {
+                    let face = &faces[i];
+                    local.flat_face(&face.outer, &face.holes, *z, *up)
+                })?;
+                let styled: Vec<u32> = ids.iter().map(|&id| w.styled_item(id, style)).collect();
+                items.extend(ids);
+                let representation = w.id();
+                w.shape_representation(representation, &items, root.geom_context);
+                w.presentation_representation(&styled, root.geom_context);
+                representation
+            }
+        };
         let part = w.part(
             &root,
-            &format!("{}_PCB", options.name),
+            &format!("{}_{suffix}", options.name),
             representation,
             placement,
         );
@@ -303,151 +284,10 @@ ENDSEC;\nDATA;\n",
             &root,
             part,
             placements.len() + 1,
-            "PCB",
+            occurrence,
             &Transform::IDENTITY,
         );
         placements.push(axis);
-    }
-
-    let copper_options = copper::CopperOptions {
-        pads: options.pads,
-        tracks: options.tracks,
-        zones: options.zones,
-        inner: options.inner_copper,
-    };
-    if copper_options.any() {
-        let threads = worker_threads();
-        let copper = copper::build(
-            board,
-            frame,
-            &physical,
-            copper_options,
-            threads,
-            &mut report.warnings,
-        );
-        let copper_rgb = [0.7, 0.61, 0.0].map(board::linear_to_srgb);
-        let pad_rgb = if options.components {
-            [0.5, 0.5, 0.5].map(board::linear_to_srgb)
-        } else {
-            copper_rgb
-        };
-        for (solids, suffix, occurrence, rgb) in [
-            (&copper.islands, "copper", "copper", copper_rgb),
-            (&copper.pads, "pad", "pads", pad_rgb),
-            (&copper.vias, "via", "vias", copper_rgb),
-        ] {
-            if solids.is_empty() {
-                continue;
-            }
-            let placement = w.axis_placement(&Transform::IDENTITY);
-            let style = w.style_assignment(rgb);
-            let mut items = Vec::with_capacity(1 + solids.len());
-            let mut styled = Vec::with_capacity(solids.len());
-            items.push(placement);
-            let weights: Vec<usize> = solids.iter().map(|s| solid_edges(&s.solid)).collect();
-            let ids = write_batched(&mut w, sink, threads, &weights, |local, i| {
-                let s = &solids[i];
-                local.solid(&format!("{suffix} {}", i + 1), &s.solid, s.z0, s.z1)
-            })?;
-            items.extend(ids);
-            for &id in &items[1..] {
-                styled.push(w.styled_item(id, style));
-            }
-            let representation = w.id();
-            w.brep_representation(representation, &items, root.geom_context);
-            w.presentation_representation(&styled, root.geom_context);
-            let part = w.part(
-                &root,
-                &format!("{}_{suffix}", options.name),
-                representation,
-                placement,
-            );
-            let axis = w.occurrence(
-                &root,
-                part,
-                placements.len() + 1,
-                occurrence,
-                &Transform::IDENTITY,
-            );
-            placements.push(axis);
-        }
-    }
-
-    if options.silkscreen || options.soldermask {
-        let threads = worker_threads();
-        let variables: Vec<(String, String)> = board
-            .title_block
-            .iter()
-            .chain(&options.text_variables)
-            .cloned()
-            .collect();
-        let layers = faces::build(
-            board,
-            frame,
-            &physical,
-            options.silkscreen,
-            options.soldermask,
-            &variables,
-            threads,
-            &mut report.warnings,
-        )?;
-        for layer in &layers {
-            if layer.faces.is_empty() {
-                continue;
-            }
-            let (suffix, occurrence, rgb, transparency) = match layer.tech {
-                board::Tech::FrontSilk => {
-                    ("silkscreen", "Top Silkscreen", board.silk_color(true), 0.1)
-                }
-                board::Tech::BackSilk => (
-                    "silkscreen",
-                    "Bottom Silkscreen",
-                    board.silk_color(false),
-                    0.1,
-                ),
-                board::Tech::FrontMask => {
-                    ("soldermask", "Top Soldermask", board.mask_color(true), 0.17)
-                }
-                board::Tech::BackMask => (
-                    "soldermask",
-                    "Bottom Soldermask",
-                    board.mask_color(false),
-                    0.17,
-                ),
-            };
-            let placement = w.axis_placement(&Transform::IDENTITY);
-            let style = w.style_assignment_with(rgb, Some(transparency));
-            let mut items = Vec::with_capacity(1 + layer.faces.len());
-            items.push(placement);
-            let weights: Vec<usize> = layer
-                .faces
-                .iter()
-                .map(|f| f.outer.edges.len() + f.holes.iter().map(|h| h.edges.len()).sum::<usize>())
-                .collect();
-            let ids = write_batched(&mut w, sink, threads, &weights, |local, i| {
-                let face = &layer.faces[i];
-                local.flat_face(&face.outer, &face.holes, layer.z, layer.tech.front())
-            })?;
-            let styled: Vec<u32> = ids.iter().map(|&id| w.styled_item(id, style)).collect();
-            items.extend(ids);
-            let representation = w.id();
-            w.shape_representation(representation, &items, root.geom_context);
-            w.presentation_representation(&styled, root.geom_context);
-            let part = w.part(
-                &root,
-                &format!("{}_{suffix}", options.name),
-                representation,
-                placement,
-            );
-            let axis = w.occurrence(
-                &root,
-                part,
-                placements.len() + 1,
-                occurrence,
-                &Transform::IDENTITY,
-            );
-            placements.push(axis);
-        }
     }
 
     if placements.is_empty() {
@@ -545,19 +385,6 @@ fn solid_edges(solid: &outline::Solid) -> usize {
     solid.outer.edges.len() + solid.holes.iter().map(|h| h.edges.len()).sum::<usize>()
 }
 
-struct Occurrence {
-    model: u32,
-    reference: String,
-    transform: Transform,
-}
-
-/// One distinct model file at one scale.
-struct ModelUse {
-    key: String,
-    scale: f64,
-    part: Option<Part>,
-}
-
 enum Loaded {
     Missing,
     Failed(String),
@@ -573,13 +400,10 @@ struct Ready {
 
 /// Decode and analyze one model. Runs on a worker thread.
 fn load_model(board: &Board, key: &str) -> Loaded {
-    let payload = if let Some(data) = board.embedded_step(key) {
-        match decode_embedded(data) {
-            Ok(bytes) => bytes,
-            Err(err) => return Loaded::Failed(err.to_string()),
-        }
-    } else {
-        return Loaded::Missing;
+    let payload = match board.model(key) {
+        Some(Ok(bytes)) => bytes,
+        Some(Err(err)) => return Loaded::Failed(err.to_string()),
+        None => return Loaded::Missing,
     };
     let hash = content_hash(&payload);
     match Donor::parse(payload).and_then(|donor| donor.analyze().map(|a| (donor, a))) {
@@ -627,84 +451,17 @@ pub(crate) fn parallel_map<T: Sync, R: Send>(
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Copy each distinct model into the file and place its occurrences.
 fn export_components(
     board: &Board,
-    options: &Options,
-    frame: Frame,
-    physical: &board::Physical,
+    scene: &Scene,
     root: &Root,
     w: &mut Writer,
     sink: &mut dyn Write,
     report: &mut Report,
     placements: &mut Vec<u32>,
 ) -> Result<(), Error> {
-    let mut uses: Vec<ModelUse> = Vec::new();
-    let mut occurrences: Vec<Occurrence> = Vec::new();
-    let top = physical.body_top + physical.front_copper;
-    let bottom = -physical.back_copper;
-
-    for fp in &board.footprints {
-        if (fp.dnp && !options.include_dnp)
-            || (fp.unspecified && !options.include_unspecified)
-            || !(options.component_filter.is_empty()
-                || options
-                    .component_filter
-                    .iter()
-                    .any(|g| glob_match(g, fp.reference)))
-        {
-            continue;
-        }
-        for model in &board.models[fp.models.start as usize..fp.models.end as usize] {
-            let scale = model.scale;
-            if (scale.x - scale.y).abs() > 1e-9
-                || (scale.x - scale.z).abs() > 1e-9
-                || scale.x <= 0.0
-            {
-                report.warnings.push(format!(
-                    "{}: skipped model with non-uniform scale: {}",
-                    fp.reference, model.name
-                ));
-                continue;
-            }
-            let path = model.path();
-            let key = model_key(&path);
-            let index = match uses.iter().position(|u| u.key == key && u.scale == scale.x) {
-                Some(i) => i,
-                None => {
-                    uses.push(ModelUse {
-                        key: key.to_owned(),
-                        scale: scale.x,
-                        part: None,
-                    });
-                    uses.len() - 1
-                }
-            };
-            let position = frame.point(fp.at);
-            let mut offset = model.offset;
-            offset.z += MODEL_STANDOFF;
-            let mut transform = Transform::translation(position.extend(0.0))
-                .then(&Transform::rotation_z(fp.rotation.to_radians()));
-            if fp.back {
-                offset.z -= bottom;
-                transform = transform.then(&Transform::rotation_x(std::f64::consts::PI));
-            } else {
-                offset.z += top;
-            }
-            let rotate = model.rotate;
-            let transform = transform
-                .then(&Transform::translation(offset))
-                .then(&Transform::rotation_z(-rotate.z.to_radians()))
-                .then(&Transform::rotation_y(-rotate.y.to_radians()))
-                .then(&Transform::rotation_x(-rotate.x.to_radians()));
-            occurrences.push(Occurrence {
-                model: index as u32,
-                reference: fp.reference.to_owned(),
-                transform,
-            });
-        }
-    }
-
+    let mut parts: Vec<Option<Part>> = vec![None; scene.models.len()];
     // Models are copied in batches: each batch is decoded and analyzed on
     // worker threads, given id ranges in order, emitted on worker threads
     // into private buffers, and written out in order. Ids depend only on
@@ -722,27 +479,25 @@ fn export_components(
         donor: Donor,
         analysis: donor::Analysis,
     }
-    for first in (0..uses.len()).step_by(batch) {
-        let keys: Vec<String> = uses[first..(first + batch).min(uses.len())]
-            .iter()
-            .map(|u| u.key.clone())
-            .collect();
-        let loaded = parallel_map(threads, &keys, |key| load_model(board, key));
+    for first in (0..scene.models.len()).step_by(batch) {
+        let models = &scene.models[first..(first + batch).min(scene.models.len())];
+        let loaded = parallel_map(threads, models, |model| load_model(board, &model.key));
 
         let mut jobs: Vec<Job> = Vec::new();
         for (offset, loaded) in loaded.into_iter().enumerate() {
             let index = first + offset;
+            let model = &scene.models[index];
             match loaded {
                 Loaded::Missing => report
                     .warnings
-                    .push(format!("could not find 3D model: {}", uses[index].key)),
+                    .push(format!("could not find 3D model: {}", model.key)),
                 Loaded::Empty => report
                     .warnings
-                    .push(format!("model has no solid geometry: {}", uses[index].key)),
+                    .push(format!("model has no solid geometry: {}", model.key)),
                 Loaded::Failed(err) => {
                     report
                         .warnings
-                        .push(format!("could not load model {}: {err}", uses[index].key));
+                        .push(format!("could not load model {}: {err}", model.key));
                     report.failed_models += 1;
                 }
                 Loaded::Ready(ready) => {
@@ -751,31 +506,22 @@ fn export_components(
                         donor,
                         analysis,
                     } = *ready;
-                    let scale = uses[index].scale;
+                    let scale = model.scale;
                     if let Some((_, _, part)) = parts_by_content
                         .iter()
                         .find(|(h, s, _)| *h == hash && *s == scale)
                     {
-                        uses[index].part = Some(*part);
+                        parts[index] = Some(*part);
                         continue;
                     }
-                    if jobs
-                        .iter()
-                        .any(|j| j.hash == hash && uses[j.index].scale == scale)
-                    {
-                        // Same payload twice in one batch: resolved below.
-                        jobs.push(Job {
-                            index,
-                            base: 0,
-                            hash,
-                            scale,
-                            donor,
-                            analysis,
-                        });
-                        continue;
-                    }
-                    let base = w.next_id;
-                    w.next_id += analysis.id_budget();
+                    // The same payload twice in one batch is resolved below.
+                    let base = if jobs.iter().any(|j| j.hash == hash && j.scale == scale) {
+                        0
+                    } else {
+                        let base = w.next_id;
+                        w.next_id += analysis.id_budget();
+                        base
+                    };
                     jobs.push(Job {
                         index,
                         base,
@@ -792,7 +538,7 @@ fn export_components(
                 return Ok(None);
             }
             let mut local = Writer::new(job.base);
-            let key = &uses[job.index].key;
+            let key = &scene.models[job.index].key;
             let stem = std::path::Path::new(key)
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -807,30 +553,29 @@ fn export_components(
         sink.write_all(&w.buf)?;
         w.buf.clear();
         for (job, result) in jobs.iter().zip(emitted) {
-            let use_ = &mut uses[job.index];
             let Some((buf, part)) = result? else {
-                use_.part = parts_by_content
+                parts[job.index] = parts_by_content
                     .iter()
-                    .find(|(h, s, _)| *h == job.hash && *s == use_.scale)
+                    .find(|(h, s, _)| *h == job.hash && *s == job.scale)
                     .map(|(_, _, part)| *part);
                 continue;
             };
             sink.write_all(&buf)?;
-            parts_by_content.push((job.hash, use_.scale, part));
-            use_.part = Some(part);
+            parts_by_content.push((job.hash, job.scale, part));
+            parts[job.index] = Some(part);
         }
     }
 
-    for occurrence in &occurrences {
-        let Some(part) = uses[occurrence.model as usize].part else {
+    for component in &scene.components {
+        let Some(part) = parts[component.model] else {
             continue;
         };
         let axis = w.occurrence(
             root,
             part,
             placements.len() + 1,
-            &occurrence.reference,
-            &occurrence.transform,
+            &component.reference,
+            &Transform(component.transform),
         );
         placements.push(axis);
     }
