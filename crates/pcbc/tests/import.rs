@@ -1134,7 +1134,7 @@ fn project_import_retains_symbols_missing_from_pcb() {
                 }
             }
         }
-        let source = document.to_kicad_sch().unwrap();
+        let source = document.pages[0].to_kicad_sch();
         let mut pcb = pcb_sexpr::parse(PCB_FIXTURE).unwrap();
         pcb.as_list_mut().unwrap().retain(|item| {
             let Some(items) = item.as_list() else {
@@ -1236,7 +1236,7 @@ fn shared_parts_preserve_distinct_schematic_descriptions() {
             symbol.in_bom = false;
         }
     }
-    let source = document.to_kicad_sch().unwrap();
+    let source = document.pages[0].to_kicad_sch();
     sandbox.write("source/layout.kicad_sch", &source);
     let import = sandbox
         .run("pcbc", ["import", "source/layout.kicad_sch", "out"])

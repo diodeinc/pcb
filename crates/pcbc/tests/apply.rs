@@ -43,7 +43,7 @@ fn apply_schematic_creates_repairs_and_clears_build_diagnostics() {
     page.items.remove(label_index);
     fs::write(
         &project.schematic_files[0],
-        project.document.to_kicad_sch().unwrap(),
+        project.document.pages[0].to_kicad_sch(),
     )
     .unwrap();
 

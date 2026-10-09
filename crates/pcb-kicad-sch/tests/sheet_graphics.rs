@@ -41,7 +41,7 @@ fn graphics_are_typed_identified_and_round_trip_with_text_styles() {
         .unwrap();
     assert!(matches!(&multiline.kind, GraphicKind::Text(text)
         if text.angle == 22.5 && text.effects.italic && text.text.contains('\n')));
-    let serialized = document.to_kicad_sch().unwrap();
+    let serialized = document.pages[0].to_kicad_sch();
     assert_eq!(SchDocument::from_kicad_sch(&serialized).unwrap(), document);
     assert_eq!(patch_page_source(SOURCE, page).unwrap(), None);
     let json = serde_json::to_string(&document).unwrap();

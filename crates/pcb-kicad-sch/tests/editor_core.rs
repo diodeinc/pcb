@@ -87,7 +87,7 @@ fn reconciliation_refreshes_netlist_derived_symbol_properties() {
     symbol.unsupported.push(
         pcb_sexpr::parse("(exclude_from_sim yes)").expect("parse unsupported symbol property"),
     );
-    let stale = SchDocument::from_kicad_sch(&stale.to_kicad_sch().unwrap()).unwrap();
+    let stale = SchDocument::from_kicad_sch(&stale.pages[0].to_kicad_sch()).unwrap();
 
     let instance = netlist
         .instances
@@ -107,7 +107,7 @@ fn reconciliation_refreshes_netlist_derived_symbol_properties() {
     let plan = plan_reconciliation(Some(&stale), &netlist, "Editor.kicad_sch").unwrap();
     assert!(!plan.is_empty());
     let repaired = plan.apply(Some(&stale)).unwrap();
-    let source = repaired.to_kicad_sch().unwrap();
+    let source = repaired.pages[0].to_kicad_sch();
     assert!(source.contains("(exclude_from_sim yes)"));
     let reopened = SchDocument::from_kicad_sch(&source).unwrap();
     let symbol = reopened.pages[0]

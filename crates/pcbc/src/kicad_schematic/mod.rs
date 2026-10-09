@@ -275,13 +275,13 @@ fn initialize_project(
     }];
     writes.extend(
         document
-            .to_kicad_sch_files()
-            .into_iter()
+            .pages
+            .iter()
             .zip(&schematic_files)
-            .map(|(file, path)| PendingWrite {
+            .map(|(page, path)| PendingWrite {
                 path: path.clone(),
                 source: None,
-                next: Some(file.content),
+                next: Some(page.to_kicad_sch()),
             }),
     );
     commit_and_verify(
