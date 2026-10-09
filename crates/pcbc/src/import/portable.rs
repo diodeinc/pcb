@@ -360,15 +360,10 @@ pub(super) fn discover_and_validate(kicad_input_abs: &Path) -> Result<PortableKi
     let library_tables = load_project_library_tables(project_dir)?;
     abs_files.extend(library_tables.existing_tables.iter().cloned());
 
-    // Include direct project references from .kicad_pro.
-    for reference in &kicad_refs {
-        abs_files.insert(resolve_reference_path(
-            project_dir,
-            project_dir,
-            reference,
-            &variable_resolver,
-        )?);
-    }
+    // Bundle the project's other file references; a stale one is not part of the design.
+    abs_files.extend(kicad_refs.iter().filter_map(|reference| {
+        resolve_reference_path(project_dir, project_dir, reference, &variable_resolver).ok()
+    }));
 
     let mut referenced_assets =
         discover_schematic_assets(project_dir, &root_schematic_abs, &variable_resolver)?;
@@ -1891,6 +1886,30 @@ mod tests {
         assert!(project_footprint_ids.is_empty());
         assert_ne!(resolved.get("vendor:Thing"), Some(&project_footprint));
         assert!(abs_files.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn stale_project_references_do_not_block_a_boardless_project() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        fs::write(
+            dir.path().join("demo.kicad_pro"),
+            r#"{"project_refs": ["demo.kicad_pcb", "../outside.kicad_sym"]}"#,
+        )?;
+        fs::write(
+            dir.path().join("demo.kicad_sch"),
+            "(kicad_sch (uuid \"u\"))",
+        )?;
+
+        let project = discover_and_validate(&dir.path().join("demo.kicad_pro"))?;
+        assert_eq!(project.kicad_pcb_rel, None);
+        assert_eq!(
+            project.files_to_bundle_rel,
+            [
+                PathBuf::from("demo.kicad_pro"),
+                PathBuf::from("demo.kicad_sch")
+            ]
+        );
         Ok(())
     }
 
