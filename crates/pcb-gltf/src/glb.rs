@@ -237,6 +237,10 @@ pub(crate) fn write(
         children.push(nodes.len() - 1);
     }
 
+    if children.is_empty() {
+        return Err(pcb_step::Error::NothingToExport.into());
+    }
+
     // Millimetres to metres, then z up to y up.
     let root = DMat4::from_rotation_x(-FRAC_PI_2) * DMat4::from_scale(DVec3::splat(0.001));
     nodes[0] = json!({ "name": name, "matrix": matrix(root), "children": children });

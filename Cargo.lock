@@ -4048,6 +4048,7 @@ name = "pcb-step"
 version = "0.4.74"
 dependencies = [
  "anyhow",
+ "atomicwrites",
  "base64 0.23.1",
  "clap",
  "glam 0.34.1",

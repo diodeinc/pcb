@@ -9,6 +9,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 
 use crate::{Board, Options, Origin, Report};
 
@@ -104,8 +105,8 @@ impl ExportArgs {
     /// Export the board with `write`, to the output path or the board path
     /// with `extension`. The assembly is named after the board file and
     /// `${NAME}` text variables come from the project file beside it. The
-    /// file is written beside the output and renamed over it once complete,
-    /// so a failure leaves any previous output alone. Warnings are printed;
+    /// output is replaced atomically, so a failure leaves any previous
+    /// output alone. Warnings are printed;
     /// models that could not be read fail the command once the file is
     /// written.
     pub fn run(
@@ -130,21 +131,18 @@ impl ExportArgs {
             .map_err(anyhow::Error::from)
             .with_context(|| format!("Failed to parse {}", board.display()))?;
 
-        let partial = output.with_extension(format!("{extension}.part"));
-        let file = fs::File::create(&partial)
-            .with_context(|| format!("Failed to create {}", partial.display()))?;
-        let mut sink = BufWriter::with_capacity(1 << 20, file);
-        let report = write(&parsed, &options, &mut sink)
-            .and_then(|report| sink.flush().map(|()| report).map_err(Into::into))
-            .and_then(|report| {
-                fs::rename(&partial, &output)
-                    .map(|()| report)
-                    .map_err(Into::into)
+        let report = AtomicFile::new(&output, OverwriteBehavior::AllowOverwrite)
+            .write(|file| {
+                let mut sink = BufWriter::with_capacity(1 << 20, file);
+                let report = write(&parsed, &options, &mut sink)?;
+                sink.flush()?;
+                anyhow::Ok(report)
             })
-            .map_err(|err| {
-                let _ = fs::remove_file(&partial);
-                err.context(format!("Failed to export {}", board.display()))
-            })?;
+            .map_err(|err| match err {
+                atomicwrites::Error::Internal(err) => err.into(),
+                atomicwrites::Error::User(err) => err,
+            })
+            .with_context(|| format!("Failed to export {}", board.display()))?;
         for warning in &report.warnings {
             eprintln!("warning: {warning}");
         }
