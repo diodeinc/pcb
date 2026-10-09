@@ -38,6 +38,7 @@ pcb-interposer = { path = "../pcb-interposer" }
 pcb-eda = { workspace = true }
 pcb-sexpr = { workspace = true }
 pcb-step = { workspace = true, features = ["cli"] }
+pcb-gltf = { workspace = true }
 pcb-component-gen = { workspace = true }
 log = { workspace = true }
 dirs = { workspace = true }

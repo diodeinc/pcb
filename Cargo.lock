@@ -3777,6 +3777,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-gltf"
+version = "0.4.73"
+dependencies = [
+ "anyhow",
+ "glam 0.34.1",
+ "i_triangle",
+ "pcb-step",
+ "rayon",
+ "serde_json",
+ "triangulate",
+]
+
+[[package]]
 name = "pcb-intern"
 version = "0.1.0"
 
@@ -4207,6 +4220,7 @@ dependencies = [
  "pcb-diode-api",
  "pcb-eda",
  "pcb-fmt",
+ "pcb-gltf",
  "pcb-interposer",
  "pcb-ipc2581-tools",
  "pcb-ir",
@@ -6680,6 +6694,7 @@ dependencies = [
  "log",
  "nalgebra-glm",
  "nurbs",
+ "rayon",
  "robust",
  "serde",
  "step",

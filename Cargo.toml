@@ -49,6 +49,7 @@ pcb-diode-uri = { path = "crates/pcb-diode-uri" }
 pcb-native-dialog = { path = "crates/pcb-native-dialog" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools", default-features = false }
 pcb-step = { path = "crates/pcb-step" }
+pcb-gltf = { path = "crates/pcb-gltf" }
 
 anyhow = "1.0"
 anstream = "1.0"
@@ -169,7 +170,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-chrome = "0.7"
 
-# rectify: STEP tessellation (foxtrot), raster grids, and FFT numerics
+# rectify and pcb-gltf: STEP tessellation (foxtrot); rectify: raster grids and FFT numerics
 triangulate = { git = "https://github.com/diodeinc/foxtrot.git", rev = "b816efd2cc50772f4d0a36d76da669ffd7b28cdd" }
 ndarray = "0.17"
 rustfft = "6.4"
