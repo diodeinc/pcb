@@ -354,7 +354,7 @@ impl RuleResult {
         Self {
             id: rule.id.clone(),
             title: rule.title.clone(),
-            finding_title: semantics.finding_title,
+            finding_title: rule.finding_title(),
             severity: rule.severity,
             status: RuleStatus::Pass,
             limit: RuleLimit::from_rule(rule),

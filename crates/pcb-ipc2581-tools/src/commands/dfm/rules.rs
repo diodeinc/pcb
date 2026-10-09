@@ -511,6 +511,20 @@ impl RuleKind {
 }
 
 impl Rule {
+    /// What each of this rule's findings is called; a layer count fails on
+    /// the side of its limit.
+    pub fn finding_title(&self) -> String {
+        match (self.kind, self.comparison) {
+            (RuleKind::CopperLayerCount, Comparison::Minimum) => {
+                "Copper layer count is below the minimum".to_owned()
+            }
+            (RuleKind::CopperLayerCount, Comparison::Maximum) => {
+                "Copper layer count exceeds the maximum".to_owned()
+            }
+            (kind, _) => kind.semantics().finding_title,
+        }
+    }
+
     /// Every pool this rule depends on. Drill-span checks must use the
     /// declared physical order whenever the file carries a stackup, even
     /// though they measure no thickness; so must stackup-conditioned cases.
