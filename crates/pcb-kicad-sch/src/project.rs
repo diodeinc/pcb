@@ -151,3 +151,42 @@ fn project_roots(project_file: &str, project: &Value) -> Result<Vec<(String, Opt
 fn posix(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::load_project;
+    use crate::connectivity::ConnectivityGraph;
+
+    #[test]
+    fn windows_separated_sheet_paths_resolve_like_kicad() {
+        let page = |uuid: &str, child: Option<&str>| {
+            let sheet = child.map_or(String::new(), |child| {
+                format!(r#"(sheet (uuid s-{uuid}) (property "Sheetfile" "{child}" (at 0 0 0)))"#)
+            });
+            format!(
+                r#"(kicad_sch (version 20260306) (generator eeschema) (uuid {uuid}) (paper "A4") (lib_symbols) {sheet})"#
+            )
+        };
+        let files = BTreeMap::from([
+            ("demo.kicad_pro", "{}".to_string()),
+            (
+                "demo.kicad_sch",
+                page("root", Some(r"sub\\child.kicad_sch")),
+            ),
+            (
+                "sub/child.kicad_sch",
+                page("child", Some(r"..\\leaf.kicad_sch")),
+            ),
+            ("leaf.kicad_sch", page("leaf", None)),
+        ]);
+        let project = load_project("demo.kicad_pro", |path| Ok(files.get(path).cloned())).unwrap();
+
+        assert_eq!(
+            project.schematic_files,
+            ["demo.kicad_sch", "sub/child.kicad_sch", "leaf.kicad_sch"]
+        );
+        ConnectivityGraph::from_kicad(&project.document).unwrap();
+    }
+}

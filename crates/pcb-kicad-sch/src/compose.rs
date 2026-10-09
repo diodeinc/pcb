@@ -2962,9 +2962,7 @@ fn page_driver_contexts(
         .filter_map(|(index, page)| {
             let file_name = page.file_name.as_deref()?;
             Some((
-                crate::normalize_schematic_path(std::path::Path::new(file_name))
-                    .to_string_lossy()
-                    .replace('\\', "/"),
+                crate::connectivity::kicad::normalize_file_name(file_name),
                 index,
             ))
         })

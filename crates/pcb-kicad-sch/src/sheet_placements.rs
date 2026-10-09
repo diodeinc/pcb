@@ -126,17 +126,3 @@ pub fn sync_sheet_placements(project: &mut Value, document: &SchDocument) -> Res
     diode.insert("schematic_sheets".into(), value);
     Ok(true)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::normalized;
-
-    #[test]
-    fn windows_separators_normalize_like_posix() {
-        assert_eq!(
-            normalized("a/b.kicad_sch", r"..\c\d.kicad_sch").unwrap(),
-            normalized("a/b.kicad_sch", "../c/d.kicad_sch").unwrap()
-        );
-        assert!(normalized("b.kicad_sch", r"..\escape.kicad_sch").is_err());
-    }
-}
