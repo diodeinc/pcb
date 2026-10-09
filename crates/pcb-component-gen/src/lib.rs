@@ -1,5 +1,6 @@
 use anyhow::Result;
 use deunicode::deunicode;
+use minijinja::value::Serde;
 use minijinja::{Environment, UndefinedBehavior};
 use pcb_eda::{Pin, Symbol};
 use std::collections::{BTreeMap, BTreeSet};
@@ -246,7 +247,7 @@ fn generate_component_zen_inner(
 
     let content = env
         .get_template("component.zen")?
-        .render(serde_json::json!({
+        .render(Serde(serde_json::json!({
             "component_name": component_name,
             "component_name_literal": serde_json::to_string(&component_name)?,
             "sym_path_literal": serde_json::to_string(args.symbol_filename)?,
@@ -260,7 +261,7 @@ fn generate_component_zen_inner(
             "include_skip_pos": args.include_skip_pos,
             "skip_bom_default": args.skip_bom_default,
             "skip_pos_default": args.skip_pos_default,
-        }))?;
+        })))?;
 
     Ok(content)
 }

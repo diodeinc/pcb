@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use minijinja::value::Serde;
 use minijinja::{Environment, context};
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
@@ -93,9 +94,9 @@ pub fn generate_html(
 
     let html = template
         .render(context! {
-            board_summary,
-            stackup,
-            rendered_layers,
+            board_summary => Serde(board_summary),
+            stackup => Serde(stackup),
+            rendered_layers => Serde(rendered_layers),
             css_styles => CSS_STYLES,
             version,
             ipc_revision,

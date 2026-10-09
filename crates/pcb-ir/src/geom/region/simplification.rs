@@ -59,7 +59,7 @@ pub(super) fn overlay(
             })
             .collect::<Vec<_>>()
     };
-    Overlay::with_contours(&lattice(subject), &lattice(clip))
+    Overlay::from_subj_and_clip(lattice(subject).as_slice(), lattice(clip).as_slice())
         .overlay(rule, fill_rule)
         .into_iter()
         .map(|shape| {
