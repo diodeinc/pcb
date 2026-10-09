@@ -106,6 +106,14 @@ pub fn load_project(
     })
 }
 
+/// The root schematics a project declares, which need not exist yet.
+pub fn project_root_schematics(project_file: &str, project: &Value) -> Result<Vec<String>> {
+    Ok(project_roots(project_file, project)?
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect())
+}
+
 fn project_roots(project_file: &str, project: &Value) -> Result<Vec<(String, Option<String>)>> {
     let top_levels = project
         .pointer("/schematic/top_level_sheets")

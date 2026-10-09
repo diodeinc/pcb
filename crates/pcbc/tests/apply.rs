@@ -91,7 +91,7 @@ fn apply_schematic_opens_the_created_output_with_kicad() {
         .run()
         .expect("create and open schematic project");
 
-    let output = sandbox.root_path().join("hardware/ApplyTest.kicad_sch");
+    let output = sandbox.root_path().join("hardware/layout.kicad_sch");
     assert!(output.is_file());
     let reopened = sandbox
         .run("pcbc", ["apply", "schematic", "board.zen"])
@@ -122,7 +122,7 @@ fn complete_apply_reports_schematic_and_layout_artifacts_consistently() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
         stdout.contains("board.zen schematic created (")
-            && stdout.contains("ApplyTest.kicad_sch")
+            && stdout.contains("layout.kicad_sch")
             && stdout.contains("board.zen layout created (")
             && stdout.contains("layout.kicad_pcb"),
         "{stdout}"
@@ -141,15 +141,17 @@ fn complete_apply_reports_schematic_and_layout_artifacts_consistently() {
         .expect("apply complete project as JSON");
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["sourceFile"], "board.zen");
-    assert!(
-        json["schematic"]["rootSchematic"]
-            .as_str()
-            .is_some_and(|path| path.ends_with("ApplyTest.kicad_sch"))
-    );
     assert_eq!(json["layout"]["action"], "created");
-    assert!(
-        json["layout"]["pcbFile"]
-            .as_str()
-            .is_some_and(|path| path.ends_with("layout.kicad_pcb"))
+    // KiCad finds the schematic for a board (and for DRC parity) by basename.
+    let hardware = json_sandbox.root_path().join("hardware");
+    let path = |value: &serde_json::Value| fs::canonicalize(value.as_str().unwrap()).unwrap();
+    assert_eq!(
+        [
+            path(&json["schematic"]["projectFile"]),
+            path(&json["schematic"]["rootSchematic"]),
+            path(&json["layout"]["pcbFile"]),
+        ],
+        ["layout.kicad_pro", "layout.kicad_sch", "layout.kicad_pcb"]
+            .map(|name| fs::canonicalize(hardware.join(name)).unwrap())
     );
 }

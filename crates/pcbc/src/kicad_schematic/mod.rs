@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
-use pcb_sch::{ATTR_SCHEMATIC_NAME, AttributeValue, KICAD_PROJECT_BASENAME, Schematic};
+use pcb_sch::{ATTR_SCHEMATIC_NAME, AttributeValue, Schematic};
 use serde::Serialize;
 
 mod diagnostics;
@@ -21,7 +21,7 @@ use pcb_kicad_sch::{
 mod project;
 
 pub use project::KicadProject;
-use project::{files_with_extension, project_schematic_path, schematic_project_path};
+use project::{declared_root_schematics, project_schematic_path, schematic_project_path};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,50 +43,16 @@ pub fn apply_linked_schematic(netlist: &Schematic) -> Result<Option<SchematicApp
     let Some(path) = schematic_project_path(netlist)? else {
         return Ok(None);
     };
-    match project_state(&path)? {
-        ProjectState::Complete(project) => apply_existing(project, netlist).map(Some),
-        ProjectState::Uninitialized(project_file) | ProjectState::Missing(project_file) => {
-            initialize_project(project_file, netlist).map(Some)
-        }
-    }
-}
-
-enum ProjectState {
-    Complete(KicadProject),
-    Uninitialized(PathBuf),
-    Missing(PathBuf),
-}
-
-fn project_state(path: &Path) -> Result<ProjectState> {
-    let explicit_project =
-        path.extension().and_then(|extension| extension.to_str()) == Some("kicad_pro");
-    let project_file = if explicit_project {
-        path.to_path_buf()
-    } else if !path.exists() {
-        path.join(format!("{KICAD_PROJECT_BASENAME}.kicad_pro"))
+    let project_file = pcb_layout::utils::resolve_kicad_files(&path)?.kicad_pro;
+    // A project whose declared roots are all missing, or no project at all, is created from scratch.
+    let has_root = project_file.is_file()
+        && declared_root_schematics(&project_file)?
+            .iter()
+            .any(|root| root.is_file());
+    if has_root {
+        apply_existing(KicadProject::load(&project_file)?, netlist).map(Some)
     } else {
-        if !path.is_dir() {
-            bail!("schematic_path is not a directory: {}", path.display());
-        }
-        let mut projects = files_with_extension(path, "kicad_pro")?;
-        match projects.len() {
-            0 => path.join(format!("{KICAD_PROJECT_BASENAME}.kicad_pro")),
-            1 => projects.remove(0),
-            count => bail!(
-                "expected at most one .kicad_pro in {}, found {count}",
-                path.display()
-            ),
-        }
-    };
-    if !project_file.exists() {
-        return Ok(ProjectState::Missing(project_file));
-    }
-    match KicadProject::load(&project_file) {
-        Ok(project) => Ok(ProjectState::Complete(project)),
-        Err(_error) if project_has_single_missing_root(&project_file)? => {
-            Ok(ProjectState::Uninitialized(project_file))
-        }
-        Err(error) => Err(error),
+        initialize_project(project_file, netlist).map(Some)
     }
 }
 
@@ -240,11 +206,8 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
         .context("schematic project path has no parent directory")?
         .to_path_buf();
     let schematic_name = schematic_name(netlist, &project_file)?;
-    let root_schematic = project_schematic_path(
-        &directory,
-        &directory,
-        format!("{schematic_name}.kicad_sch"),
-    )?;
+    // KiCad pairs a board with the schematic sharing its basename.
+    let root_schematic = project_file.with_extension("kicad_sch");
     if root_schematic.exists() {
         bail!(
             "refusing to replace existing KiCad schematic {}",
@@ -332,23 +295,15 @@ fn schematic_name(netlist: &Schematic, project_file: &Path) -> Result<String> {
         .as_ref()
         .and_then(|root| netlist.instances.get(root))
         .and_then(|root| root.attributes.get(ATTR_SCHEMATIC_NAME));
-    let name = match value {
-        Some(AttributeValue::String(name)) => name.clone(),
+    match value {
+        Some(AttributeValue::String(name)) => Ok(name.clone()),
         Some(_) => bail!("schematic_name must be a string"),
-        None => project_file
+        None => Ok(project_file
             .file_stem()
             .and_then(|stem| stem.to_str())
             .context("KiCad project filename has no UTF-8 stem")?
-            .to_string(),
-    };
-    if name.trim().is_empty()
-        || name != name.trim()
-        || name.contains(['/', '\\'])
-        || matches!(name.as_str(), "." | "..")
-    {
-        bail!("schematic_name must be a non-empty file basename, got '{name}'");
+            .to_string()),
     }
-    Ok(name)
 }
 
 fn project_with_root_schematic(source: &str, name: &str, file_name: &str) -> Result<String> {
@@ -373,32 +328,6 @@ fn project_with_root_schematic(source: &str, name: &str, file_name: &str) -> Res
     let mut source = serde_json::to_string_pretty(&project)?;
     source.push('\n');
     Ok(source)
-}
-
-fn project_has_single_missing_root(project_file: &Path) -> Result<bool> {
-    let source = fs::read_to_string(project_file)
-        .with_context(|| format!("failed to read {}", project_file.display()))?;
-    let project: Value = serde_json::from_str(&source)
-        .with_context(|| format!("failed to parse {}", project_file.display()))?;
-    let top_levels = project
-        .get("schematic")
-        .and_then(|schematic| schematic.get("top_level_sheets"));
-    let root = match top_levels {
-        None => project_file.with_extension("kicad_sch"),
-        Some(Value::Array(roots)) if roots.is_empty() => project_file.with_extension("kicad_sch"),
-        Some(Value::Array(roots)) if roots.len() == 1 => {
-            let file_name = roots[0].get("filename").and_then(Value::as_str);
-            let Some(file_name) = file_name else {
-                return Ok(false);
-            };
-            let directory = project_file
-                .parent()
-                .context("KiCad project file has no parent directory")?;
-            project_schematic_path(directory, directory, file_name)?
-        }
-        _ => return Ok(false),
-    };
-    Ok(!root.is_file())
 }
 
 fn verify_project(project_file: &Path, netlist: &Schematic) -> Result<()> {
