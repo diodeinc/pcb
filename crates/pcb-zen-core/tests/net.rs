@@ -479,3 +479,30 @@ fn net_constructor_positional_cast_preserves_behavior() {
     let schematic = sch_result.output.expect("expected schematic output");
     assert_eq!(schematic.nets["SIG"].kind, "Net");
 }
+
+snapshot_netlist_eval!(net_property_conflict_warns, {
+    "test.zen" => r#"
+        load("@stdlib/units.zen", "Impedance")
+        load("@stdlib/interfaces.zen", "DiffPair")
+
+        p = Net("P")
+        n = Net("N")
+        first = DiffPair(P=p, N=n, impedance=Impedance(90))
+        second = DiffPair(P=p, N=n, impedance=Impedance(100))
+
+        Component(
+            name = "U1",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": first.P, "2": first.N},
+            skip_bom = True,
+        )
+        Component(
+            name = "U2",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": second.P, "2": second.N},
+            skip_bom = True,
+        )
+    "#
+});

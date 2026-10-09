@@ -3,9 +3,6 @@ load("@stdlib/interfaces.zen", "Usb2")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Accept Usb2 interface as input
-# When parent passes a Usb2 with DiffPair(impedance=90Ω) to this module,
-# propagate_diffpair_impedance() will walk the module signature and propagate
-# the impedance to D.P and D.N nets
 usb = io("USB", Usb2)
 
 # Add a simple component inside the module to make it non-empty

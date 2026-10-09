@@ -16,6 +16,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
 
+### Fixed
+
+- `DiffPair(impedance=...)` applies to its nets even when the pair never crosses an `io()` boundary; conflicting net properties now warn.
+
 ## [0.4.74] - 2026-10-09
 
 ### Changed
