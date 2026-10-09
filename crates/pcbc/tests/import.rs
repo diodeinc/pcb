@@ -1492,6 +1492,96 @@ fn cross_sheet_multi_unit_components_survive_import_and_apply() {
 }
 
 #[test]
+fn cross_sheet_units_ignore_stale_caches_of_units_they_do_not_place() {
+    let root_uuid = "00000000-0000-0000-0000-000000000001";
+    let font = "(effects (font (size 1.27 1.27)))";
+    let library = |value: &str, pin_a: &str| {
+        format!(
+            r#"(lib_symbols (symbol "Test:Dual" (in_bom no) (on_board yes)
+            (property "Reference" "U" (at 0 0 0) {font})
+            (property "Value" "{value}" (at 0 0 0) {font})
+            (symbol "Dual_1_1" (pin passive line (at -2.54 0 0) (length 2.54)
+                (name "{pin_a}" {font}) (number "1" {font})))
+            (symbol "Dual_2_1" (pin passive line (at -2.54 0 0) (length 2.54)
+                (name "B" {font}) (number "2" {font})))))"#
+        )
+    };
+    // B never places unit 1, so its stale copy of that unit is irrelevant; Value is shared.
+    for (b_library, error) in [
+        (library("Dual", "STALE"), None),
+        (
+            library("Other", "A"),
+            Some("Component U1 uses different embedded definitions across units"),
+        ),
+    ] {
+        let mut sandbox = sandbox();
+        let mut root = format!(
+            r#"(kicad_sch (version 20250114) (generator "eeschema")
+            (uuid "{root_uuid}") (paper "A4") (lib_symbols)
+            (sheet_instances (path "/" (page "1")))"#
+        );
+        for (unit, sheet, library) in [(1, "A", library("Dual", "A")), (2, "B", b_library)] {
+            let sheet_uuid = format!("00000000-0000-0000-0000-00000000001{unit}");
+            root.push_str(&format!(
+                r#"
+                (sheet (at 20 {y}) (size 20 10)
+                    (stroke (width 0) (type default)) (fill (color 0 0 0 0))
+                    (uuid "{sheet_uuid}")
+                    (property "Sheetname" "{sheet}" (at 20 {y} 0) {font})
+                    (property "Sheetfile" "{sheet}.kicad_sch" (at 20 {y} 0) {font})
+                    (instances (project "stale" (path "/{root_uuid}" (page "{page}")))))"#,
+                y = 20 * unit,
+                page = unit + 1
+            ));
+            let child = format!(
+                r#"(kicad_sch (version 20250114) (generator "eeschema")
+                (uuid "00000000-0000-0000-0000-00000000002{unit}") (paper "A4") {library}
+                (symbol (lib_id "Test:Dual") (at 50 30 0) (unit {unit})
+                    (in_bom no) (on_board yes) (dnp no)
+                    (uuid "00000000-0000-0000-0000-00000000010{unit}")
+                    (property "Reference" "U1" (at 50 30 0) {font})
+                    (property "Value" "Dual" (at 50 30 0) {font})
+                    (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 50 30 0) {font})
+                    (pin "{unit}" (uuid "00000000-0000-0000-0000-00000000030{unit}"))
+                    (instances (project "stale"
+                        (path "/{root_uuid}/{sheet_uuid}" (reference "U1") (unit {unit}))))))"#
+            );
+            sandbox.write(format!("source/{sheet}.kicad_sch"), &child);
+        }
+        root.push(')');
+        sandbox.write("source/stale.kicad_sch", &root);
+
+        let import = sandbox
+            .run("pcbc", ["import", "source/stale.kicad_sch", "out"])
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&import.stderr);
+        if let Some(error) = error {
+            assert!(
+                !import.status.success() && stderr.contains(error),
+                "{stderr}"
+            );
+            continue;
+        }
+        assert!(import.status.success(), "import failed:\n{stderr}");
+        let symbol = fs::read_dir(sandbox.root_path().join("out/components"))
+            .unwrap()
+            .flat_map(|dir| fs::read_dir(dir.unwrap().path()).unwrap())
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "kicad_sym"))
+            .unwrap();
+        let symbol = fs::read_to_string(symbol).unwrap();
+        assert!(
+            symbol.contains(r#"(name "A""#) && !symbol.contains("STALE"),
+            "{symbol}"
+        );
+    }
+}
+
+#[test]
 fn schematic_import_reads_bus_aliases_from_its_project() {
     let mut sandbox = sandbox();
     let root_uuid = "00000000-0000-0000-0000-000000000001";
