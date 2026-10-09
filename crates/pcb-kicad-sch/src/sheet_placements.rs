@@ -25,7 +25,7 @@ fn entries(project: &Value) -> Result<Option<Vec<Entry>>> {
         .map(Some)
 }
 
-fn normalized(base: &str, child: &str) -> Result<PathBuf> {
+pub(crate) fn normalized(base: &str, child: &str) -> Result<PathBuf> {
     let child = Path::new(child);
     if child.as_os_str().is_empty() || child.is_absolute() {
         bail!(

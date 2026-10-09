@@ -38,6 +38,13 @@ struct NetInfo {
     kind: Option<String>,
 }
 
+fn render_attribute(value: &AttributeValue) -> String {
+    match value {
+        AttributeValue::String(s) => s.clone(),
+        other => format!("{other:?}"),
+    }
+}
+
 fn net_info_requires_name(kind: Option<&str>) -> bool {
     kind.is_none_or(net_kind_requires_name)
 }
@@ -54,6 +61,7 @@ pub(crate) struct ModuleConverter {
     // the child's scoped name maps to the parent's canonical name.
     // Format: scoped_child_name -> canonical_name
     net_name_aliases: HashMap<String, String>,
+    net_property_conflicts: Vec<Diagnostic>,
 }
 
 /// Module signature information to be serialized as JSON
@@ -223,6 +231,7 @@ impl ModuleConverter {
             comp_models: Vec::new(),
             module_instances: Vec::new(),
             net_name_aliases: HashMap::new(),
+            net_property_conflicts: Vec::new(),
         }
     }
 
@@ -267,9 +276,6 @@ impl ModuleConverter {
                 }
             }
         }
-
-        // Propagate impedance from DiffPair interfaces to P/N nets (before creating Net objects)
-        propagate_diffpair_impedance(&mut self.net_to_info, &module_tree);
 
         // Create Net objects directly using the accumulated NetInfo.
         for (net_id, net_info) in &self.net_to_info {
@@ -354,6 +360,12 @@ impl ModuleConverter {
         self.diagnose_missing_bom_part_components(&mut diagnostics);
         self.diagnose_unused_module_io(&module_tree, &mut diagnostics);
         self.diagnose_not_connected_multi_port(root_module.source_path(), &mut diagnostics);
+        let mut seen = HashSet::new();
+        for conflict in std::mem::take(&mut self.net_property_conflicts) {
+            if seen.insert(conflict.body.clone()) {
+                diagnostics.push(conflict);
+            }
+        }
 
         // Merge net name aliases (from nets appearing in multiple modules' introduced_nets)
         // These map the child's scoped name to the parent's canonical name.
@@ -690,14 +702,38 @@ impl ModuleConverter {
             }
         }
 
-        // Convert regular properties to AttributeValue if not already present.
+        // Merge properties: the first observed value wins; impedance disagreements are reported.
+        let mut conflicts = Vec::new();
         for (key, value) in net.properties().iter() {
-            if !net_info.properties.contains_key(key)
-                && let Ok(attr_value) = to_attribute_value(*value)
-            {
-                net_info.properties.insert(key.clone(), attr_value);
+            let checked = matches!(key.as_str(), "impedance" | "differential_impedance");
+            if !checked && net_info.properties.contains_key(key) {
+                continue;
+            }
+            let Ok(attr_value) = to_attribute_value(*value) else {
+                continue;
+            };
+            match net_info.properties.get(key) {
+                None => {
+                    net_info.properties.insert(key.clone(), attr_value);
+                }
+                Some(existing) if *existing != attr_value => conflicts.push(
+                    Diagnostic::categorized(
+                        net.declaration_path().unwrap_or_default(),
+                        &format!(
+                            "Net '{}' has conflicting values for '{key}': keeping {}, ignoring {}",
+                            net_info.name.as_deref().unwrap_or(net.name()),
+                            render_attribute(existing),
+                            render_attribute(&attr_value),
+                        ),
+                        "net.property_conflict",
+                        EvalSeverity::Warning,
+                    )
+                    .with_span(net.declaration_span()),
+                ),
+                Some(_) => {}
             }
         }
+        self.net_property_conflicts.extend(conflicts);
     }
 
     fn add_component_at(
@@ -836,7 +872,7 @@ impl ModuleConverter {
         let symbol = component.symbol();
         if let Some(symbol_value) = symbol.downcast_ref::<SymbolValue>() {
             // First, group pads by signal name
-            let mut signal_to_pads: HashMap<String, Vec<String>> = HashMap::new();
+            let mut signal_to_pads: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
             for (pad_number, signal_val) in symbol_value.pad_to_signal().iter() {
                 signal_to_pads
@@ -1168,56 +1204,6 @@ fn collect_net_ids_into(value: Value, net_ids: &mut HashSet<NetId>) {
         for field in interface.fields().values() {
             collect_net_ids_into(field.to_value(), net_ids);
         }
-    }
-}
-
-/// Propagate impedance from DiffPair interfaces to P/N nets
-fn propagate_diffpair_impedance(
-    net_info: &mut HashMap<NetId, NetInfo>,
-    tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
-) {
-    for module in tree.values() {
-        for param in module.signature().iter().filter(|p| !p.is_config) {
-            if let Some(val) = param.actual_value {
-                propagate_from_value(val.to_value(), net_info);
-            }
-        }
-    }
-}
-
-/// Propagate impedance from DiffPair interfaces to their P/N nets
-fn propagate_from_value(value: Value, net_info: &mut HashMap<NetId, NetInfo>) {
-    let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() else {
-        return;
-    };
-
-    // Try to extract DiffPair impedance: interface must have impedance, P, and N fields
-    let fields = interface.fields();
-    if let (Some(impedance_val), Some(p), Some(n)) = (
-        fields.get("impedance").filter(|v| !v.is_none()),
-        fields
-            .get("P")
-            .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
-        fields
-            .get("N")
-            .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
-    ) && let Ok(attr) = to_attribute_value(*impedance_val)
-    {
-        net_info
-            .entry(p.id())
-            .or_default()
-            .properties
-            .insert("differential_impedance".to_string(), attr.clone());
-        net_info
-            .entry(n.id())
-            .or_default()
-            .properties
-            .insert("differential_impedance".to_string(), attr);
-    }
-
-    // Recursively check all nested interface fields
-    for field in fields.values() {
-        propagate_from_value(field.to_value(), net_info);
     }
 }
 

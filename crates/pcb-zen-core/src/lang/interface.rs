@@ -410,6 +410,8 @@ where
         fields.insert(field_name.clone(), field_value);
     }
 
+    apply_pair_impedance(&mut fields, heap);
+
     // Create the interface instance
     let interface_instance = heap.alloc(InterfaceValue {
         fields,
@@ -427,6 +429,23 @@ where
     }
 
     Ok(interface_instance)
+}
+
+/// DiffPair-shaped interfaces carry their impedance on the P/N nets themselves.
+fn apply_pair_impedance<'v>(fields: &mut SmallMap<String, Value<'v>>, heap: Heap<'v>) {
+    let Some(impedance) = fields.get("impedance").copied().filter(|v| !v.is_none()) else {
+        return;
+    };
+    let legs = ["P", "N"].map(|leg| fields.get(leg).and_then(|v| NetValue::from_value(*v)));
+    let [Some(p), Some(n)] = legs else {
+        return;
+    };
+    for (leg, net) in [("P", p), ("N", n)] {
+        fields.insert(
+            leg.to_owned(),
+            net.with_property("differential_impedance", impedance, heap),
+        );
+    }
 }
 
 /// Build a consistent parameter spec for interface factories, excluding reserved field names

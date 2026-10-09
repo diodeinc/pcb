@@ -123,20 +123,13 @@ impl ImportPaths {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ImportSourceKind {
-    Schematic,
-    Project,
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct PortableKicadProject {
     pub(super) project_dir: PathBuf, // absolute path
     pub(super) project_name: String,
-    pub(super) source_kind: ImportSourceKind,
     pub(super) kicad_pro_rel: Option<PathBuf>, // relative to project_dir
     pub(super) root_schematic_rel: PathBuf,    // relative to project_dir
-    pub(super) primary_kicad_pcb_rel: Option<PathBuf>, // relative to project_dir
+    pub(super) kicad_pcb_rel: Option<PathBuf>, // relative to project_dir
     pub(super) schematic_files_rel: Vec<PathBuf>,
     pub(super) files_to_bundle_rel: Vec<PathBuf>,
     /// KiCad footprint ID -> project-local `.kicad_mod` path.
@@ -176,9 +169,9 @@ pub(super) struct MaterializedBoard {
     pub(super) board_dir: PathBuf,
     pub(super) board_zen: PathBuf,
     pub(super) layout_dir: PathBuf,
-    pub(super) layout_kicad_pro: Option<PathBuf>,
+    pub(super) layout_kicad_pro: PathBuf,
     pub(super) layout_kicad_pcb: Option<PathBuf>,
-    /// Present for project imports, which preserve the source archive as before.
+    /// Present when the source has a board.
     pub(super) portable_kicad_project_zip: Option<PathBuf>,
     pub(super) validation_diagnostics_json: PathBuf,
     pub(super) import_extraction_json: PathBuf,
@@ -623,7 +616,7 @@ pub(super) struct GeneratedArtifacts {
     pub(super) validation_diagnostics_json: PathBuf,
     pub(super) import_extraction_json: PathBuf,
     pub(super) layout_dir: PathBuf,
-    pub(super) layout_kicad_pro: Option<PathBuf>,
+    pub(super) layout_kicad_pro: PathBuf,
     pub(super) layout_kicad_pcb: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) portable_kicad_project_zip: Option<PathBuf>,
@@ -642,6 +635,15 @@ pub(super) struct SelectedKicadFiles {
     pub(super) kicad_sch: PathBuf,
     /// Relative to `kicad_project_root` when layout metadata exists.
     pub(super) kicad_pcb: Option<PathBuf>,
+}
+
+impl SelectedKicadFiles {
+    /// The generated project keeps the source project's name, else the root schematic's.
+    pub(super) fn layout_kicad_pro(&self) -> PathBuf {
+        self.kicad_pro
+            .clone()
+            .unwrap_or_else(|| self.kicad_sch.with_extension("kicad_pro"))
+    }
 }
 
 pub(super) fn normalize_sheetpath_tstamps(sheetpath: &str) -> String {

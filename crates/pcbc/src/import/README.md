@@ -10,12 +10,12 @@ pcb import <design.kicad_sch|project.kicad_pro> <output-directory>
 
 `flow.rs` runs these phases in order:
 
-1. `discover` resolves the input schematic hierarchy and optional project files.
-2. `validate` runs ERC and, for project imports, DRC and schematic-layout parity checks.
+1. `discover` resolves the root schematic hierarchy, its project, and the project's board.
+2. `validate` runs ERC and, when there is a board, DRC and schematic-layout parity checks.
 3. `extract` converts schematic data and optional layout data into the import IR.
 4. `hierarchy` maps KiCad sheets to Zener modules.
 5. `semantic` classifies power and ground nets from native power symbols.
-6. `materialize` copies the original schematic hierarchy, optional project layout, and diagnostics.
+6. `materialize` copies the original schematic hierarchy, project, optional board, and diagnostics.
 7. `generate` writes board, module, and component sources using the original embedded symbols.
 8. `generated_validate` builds the board, verifies physical pins and net partitions, then binds and checks the persistent schematic through `pcb-kicad-sch`.
 9. `report` writes the extraction report.
@@ -35,7 +35,11 @@ standard-library setup. Import refuses an existing board repository unless
 `--force` is supplied. That flag removes generated board, module, component,
 report, and archive files before regeneration, and replaces project layout output.
 
-For a board named `<board>`, a standalone schematic import produces:
+As in KiCad, a `.kicad_sch` belongs to the same-name `.kicad_pro` beside it, and a
+project's board is its same-name `.kicad_pcb`, so `<board>.kicad_sch` and
+`<board>.kicad_pro` import the same design. Both are optional.
+
+For a board named `<board>`, an import without a source board produces:
 
 ```text
 <output-directory>/
@@ -54,9 +58,10 @@ For a board named `<board>`, a standalone schematic import produces:
 └── .kicad.validation.diagnostics.json
 ```
 
-A standalone import creates a minimal KiCad project for its persistent schematic,
-but no PCB or source archive. It keeps an existing layout and project configuration
-on forced reimport. A retained matching PCB supplies the layer count and stackup,
+The generated project is a copy of the source project, so its settings, including
+KiCad 10 bus aliases, reach both import and later edits. Without a source project, import
+keeps an existing generated project or creates an empty one. Without a source board,
+import creates no PCB or source archive and keeps an existing layout on forced reimport. A retained matching PCB supplies the layer count and stackup,
 supplies embedded footprint geometry before external library fallback, and receives
 identity binding updates without reconstructing its placement or routing. Its net
 names are retained, not passed through the source-name allocator again; otherwise
@@ -68,7 +73,7 @@ The board passes `path = "eda"` and `schematic = True`, so layout, Quiche, and
 Import refuses a board repository that still has an older `layout/` directory;
 move its KiCad project into `eda/` before reimporting.
 
-A project import also creates:
+An import with a source board also creates:
 
 ```text
 <output-directory>/
@@ -82,7 +87,7 @@ A project import also creates:
 ## Footprint resolution without PCB geometry
 
 A standalone `.kicad_sch` does not contain board-embedded footprint geometry.
-The same resolution applies to schematic components absent from a project's PCB;
+The same resolution applies to schematic components absent from the source PCB;
 existing board-embedded footprints remain authoritative and are not replaced.
 Import resolves each referenced footprint in this order:
 
@@ -139,7 +144,7 @@ Import joins schematic, netlist, and layout records by `KiCadUuidPathKey`:
 the instance sheet UUID path (`sheetpath.tstamps`) and symbol UUID.
 Schematic/netlist identities stay on these source anchors. Footprint geometry is
 matched to them by unique reference designator: a retained PCB already uses Zener
-sync UUIDs, not native schematic paths. For source project PCBs only, a native
+sync UUIDs, not native schematic paths. For source PCBs only, a native
 unit path also identifies geometry when its PCB reference is stale. Ambiguous
 matches are rejected rather than choosing one footprint's geometry. The matched
 PCB reference also targets its generated sync hooks, so stale references do not
@@ -148,7 +153,7 @@ generated hierarchy or symbol identities.
 
 ## Footprint de-instancing
 
-Project imports extract standalone footprints from the board, without requiring
+Imports with a source board extract standalone footprints from it, without requiring
 the original `.kicad_mod` libraries.
 `pcb-sexpr::board::transform_board_instance_footprint_to_standalone` removes
 instance placement, path, UUID, property, and net data. It preserves local geometry,

@@ -19,6 +19,7 @@ pub mod kicad;
 pub mod model;
 mod net_symbols;
 mod placement;
+mod project;
 pub mod reconcile;
 mod repair;
 mod root_interface;
@@ -43,6 +44,7 @@ pub use model::{
     SymbolField, SymbolLibrary, TextEffects, TextSize, Wire,
 };
 pub use net_symbols::NetSymbolSpec;
+pub use project::{LoadedProject, load_project, project_root_schematics};
 pub use repair::{
     ConnectivityRepairIntent, NetDriverKind, plan_connectivity_repair, verify_connectivity_repair,
 };

@@ -316,21 +316,9 @@ impl<V> NetValueGen<V> {
 }
 
 impl<'v, V: ValueLike<'v>> NetValueGen<V> {
-    fn alloc_clone(
-        &self,
-        heap: Heap<'v>,
-        net_id: NetId,
-        type_name: String,
-        connection_intent: ConnectionIntent,
-    ) -> Value<'v> {
-        let properties: SmallMap<String, Value<'v>> = self
-            .properties
-            .iter()
-            .map(|(k, v)| (k.clone(), v.to_value()))
-            .collect();
-
-        heap.alloc(NetValue {
-            net_id,
+    fn clone_with(&self, heap: Heap<'v>, edit: impl FnOnce(&mut NetValue<'v>)) -> Value<'v> {
+        let mut net = NetValue {
+            net_id: self.net_id,
             name: self.name().to_owned(),
             template_name: self.template_name.clone(),
             original_name: self.original_name_opt().map(str::to_owned),
@@ -339,10 +327,16 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             inferred_name: Self::clone_once_lock(&self.inferred_name),
             declaration_path: self.declaration_path.clone(),
             declaration_span: self.declaration_span,
-            type_name,
-            connection_intent,
-            properties,
-        })
+            type_name: self.type_name.clone(),
+            connection_intent: self.connection_intent,
+            properties: self
+                .properties
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_value()))
+                .collect(),
+        };
+        edit(&mut net);
+        heap.alloc(net)
     }
 
     pub(crate) fn mark_bound(&self) {
@@ -471,32 +465,24 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     /// Create a new net with the same fields but a fresh net ID.
     /// This avoids deep copying - properties are shared via Value references.
     pub fn with_new_id(&self, heap: Heap<'v>) -> Value<'v> {
-        self.alloc_clone(
-            heap,
-            generate_net_id(),
-            self.type_name.clone(),
-            self.connection_intent,
-        )
+        self.clone_with(heap, |net| net.net_id = generate_net_id())
     }
 
     /// Create a typed compatibility view with the same identity and properties.
     pub fn with_net_type(&self, new_type_name: &str, heap: Heap<'v>) -> Value<'v> {
-        self.alloc_clone(
-            heap,
-            self.net_id,
-            new_type_name.to_string(),
-            self.connection_intent,
-        )
+        self.clone_with(heap, |net| net.type_name = new_type_name.to_string())
+    }
+
+    /// Create a view with the same identity and one additional property.
+    pub(crate) fn with_property(&self, key: &str, value: Value<'v>, heap: Heap<'v>) -> Value<'v> {
+        self.clone_with(heap, |net| {
+            net.properties.insert(key.to_owned(), value);
+        })
     }
 
     /// Materialize this net on the current heap without changing its type or intent.
     pub fn to_current_heap(&self, heap: Heap<'v>) -> Value<'v> {
-        self.alloc_clone(
-            heap,
-            self.net_id,
-            self.type_name.clone(),
-            self.connection_intent,
-        )
+        self.clone_with(heap, |_| {})
     }
 
     /// Create a new net with identical runtime identity but updated declaration metadata.
@@ -506,25 +492,9 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         declaration_span: Option<starlark::codemap::ResolvedSpan>,
         heap: Heap<'v>,
     ) -> Value<'v> {
-        let properties: SmallMap<String, Value<'v>> = self
-            .properties
-            .iter()
-            .map(|(k, v)| (k.clone(), v.to_value()))
-            .collect();
-
-        heap.alloc(NetValue {
-            net_id: self.net_id,
-            name: self.name().to_owned(),
-            template_name: self.template_name.clone(),
-            original_name: self.original_name_opt().map(str::to_owned),
-            assignment_inferable: self.assignment_inferable,
-            was_bound: Self::clone_once_lock(&self.was_bound),
-            inferred_name: Self::clone_once_lock(&self.inferred_name),
-            declaration_path: declaration_path.into(),
-            declaration_span,
-            type_name: self.type_name.clone(),
-            connection_intent: self.connection_intent,
-            properties,
+        self.clone_with(heap, |net| {
+            net.declaration_path = declaration_path.into();
+            net.declaration_span = declaration_span;
         })
     }
 }

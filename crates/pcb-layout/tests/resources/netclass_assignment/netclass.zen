@@ -9,19 +9,27 @@ spi_clk_50 = Net("SPI_CLK_50", impedance=Impedance(50))
 clk_51 = Net("CLK_51", impedance=Impedance(51))
 
 # Test case 3: Differential pair 90Ω impedance → should match "90Ohm Diff"
-# Create Usb2 interface with DiffPair(impedance=90Ω) and pass to module
-# This tests propagate_diffpair_impedance() walking module tree (regression from 02bff04)
+# Usb2 carries DiffPair(impedance=90Ω); the pair crosses an io() boundary.
 usb = Usb2("USB")
 UsbModule = Module("usb_module.zen")
 usb_module = UsbModule(name="USB_MOD", USB=usb)
 
 # Test case 6: Locally-created DiffPair with impedance passed to child module
-# Regression test: propagate_from_value() must check the interface itself for impedance,
-# not just nested fields. This tests that a DiffPair created with impedance=85 gets
-# properly propagated when passed as a parameter to a child module.
 hdmi_local = DiffPair("HDMI", impedance=Impedance(85))
 DiffPairModule = Module("diffpair_module.zen")
 diffpair_module = DiffPairModule(name="HDMI_MOD", SIGNAL=hdmi_local)
+
+# Test case 7: DiffPair that never crosses io() → still 90Ohm Diff
+local_pair = DiffPair("LOCAL", impedance=Impedance(90))
+
+# Test case 8: DiffPair nested in a locally defined interface template → 100Ohm Diff
+Link = interface(TX=DiffPair(impedance=Impedance(100)))
+link = Link("LINK")
+
+# Test case 9: DiffPair built from pre-existing nets, with the originals also wired → 85Ohm Diff
+ext_p = Net("EXT_P")
+ext_n = Net("EXT_N")
+ext_pair = DiffPair(P=ext_p, N=ext_n, impedance=Impedance(85))
 
 # Test case 4: Unmatched impedance (no netclass for 1000Ω) → uses Default
 high_z = Net("HIGH_Z", impedance=Impedance(1000))
@@ -61,6 +69,25 @@ Component(
     ),
     pin_defs={"1": "1"},
     pins={"1": data},
+)
+
+Component(
+    name="U3",
+    skip_bom=True,
+    footprint=File(
+        "@stdlib/kicad-footprints/Connector_PinHeader_2.54mm.pretty/PinHeader_2x04_P2.54mm_Vertical.kicad_mod"
+    ),
+    pin_defs={"1": "1", "2": "2", "3": "3", "4": "4", "5": "5", "6": "6", "7": "7", "8": "8"},
+    pins={
+        "1": local_pair.P,
+        "2": local_pair.N,
+        "3": link.TX.P,
+        "4": link.TX.N,
+        "5": ext_pair.P,
+        "6": ext_pair.N,
+        "7": ext_p,
+        "8": ext_n,
+    },
 )
 
 # Use Board() with layers=4 which includes impedance netclasses (50Ohm SE, 85/90/100Ohm Diff)

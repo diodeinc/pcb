@@ -69,12 +69,7 @@ pub(super) fn generate(
 ) -> Result<GenerationResult> {
     let board_name = &selection.board_name;
     // Use the same KiCad 9 -> 10 symbol normalization as the persistent editor.
-    let project = pcbc::kicad_schematic::KicadProject::load(
-        materialized
-            .layout_kicad_pro
-            .as_ref()
-            .context("Import has no KiCad project")?,
-    )?;
+    let project = pcbc::kicad_schematic::KicadProject::load(&materialized.layout_kicad_pro)?;
     let port_to_net = build_port_to_net_map(&ir.nets)?;
     let not_connected_nets = build_not_connected_nets(ir, &project.document)?;
     let net_decls = build_net_decls(&ir.nets, &not_connected_nets, &ir.semantic.net_kinds.by_net);
@@ -114,8 +109,8 @@ pub(super) fn generate(
     write_imported_board_zen(ImportedBoardZenArgs {
         board_zen: &materialized.board_zen,
         board_name,
-        source_kind: selection.portable.source_kind,
-        layout_kicad_pro: materialized.layout_kicad_pro.as_deref(),
+        source_board: selection.selected.kicad_pcb.is_some(),
+        layout_kicad_pro: &materialized.layout_kicad_pro,
         layout_kicad_pcb: materialized.layout_kicad_pcb.as_deref(),
         port_to_net: &port_to_net,
         refdes_instance_names: &refdes_instance_names,
@@ -138,8 +133,8 @@ pub(super) fn generate(
 struct ImportedBoardZenArgs<'a> {
     board_zen: &'a Path,
     board_name: &'a str,
-    source_kind: ImportSourceKind,
-    layout_kicad_pro: Option<&'a Path>,
+    source_board: bool,
+    layout_kicad_pro: &'a Path,
     layout_kicad_pcb: Option<&'a Path>,
     port_to_net: &'a BTreeMap<ImportNetPort, KiCadNetName>,
     refdes_instance_names: &'a BTreeMap<KiCadRefDes, String>,
@@ -153,44 +148,43 @@ struct ImportedBoardZenArgs<'a> {
 }
 
 fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
-    let (copper_layers, stackup, design_rules) =
-        if let Some(layout_kicad_pcb) = args.layout_kicad_pcb {
-            let pcb_text = fs::read_to_string(layout_kicad_pcb).with_context(|| {
-                format!(
-                    "Failed to read KiCad PCB for stackup extraction: {}",
-                    layout_kicad_pcb.display()
-                )
-            })?;
-            let (copper_layers, stackup) = try_extract_stackup(&pcb_text, layout_kicad_pcb)?;
-            let design_rules = args.layout_kicad_pro.and_then(|layout_kicad_pro| {
-                pcb_layout::extract_design_rules_from_kicad_pro(layout_kicad_pro)
-                    .ok()
-                    .flatten()
-            });
+    let (copper_layers, stackup, design_rules) = if let Some(layout_kicad_pcb) =
+        args.layout_kicad_pcb
+    {
+        let pcb_text = fs::read_to_string(layout_kicad_pcb).with_context(|| {
+            format!(
+                "Failed to read KiCad PCB for stackup extraction: {}",
+                layout_kicad_pcb.display()
+            )
+        })?;
+        let (copper_layers, stackup) = try_extract_stackup(&pcb_text, layout_kicad_pcb)?;
+        let design_rules = pcb_layout::extract_design_rules_from_kicad_pro(args.layout_kicad_pro)
+            .ok()
+            .flatten();
 
-            let no_net_renames = BTreeMap::new();
-            prepatch_imported_layout_kicad_pcb(LayoutPrepatchArgs {
-                layout_kicad_pcb,
-                pcb_text: &pcb_text,
-                components: args.components,
-                refdes_instance_names: args.refdes_instance_names,
-                // Only fresh source PCBs use native net names. Retained boards
-                // may already use generated names, which can also be keys in
-                // this map. Applying it again could merge distinct nets.
-                net_ident_by_kicad_name: if args.source_kind == ImportSourceKind::Project {
-                    &args.net_decls.zener_name_by_kicad_name
-                } else {
-                    &no_net_renames
-                },
-                generated_components: args.component_modules,
-                sheet_modules: args.sheet_modules,
-            })
-            .context("Failed to pre-patch imported KiCad PCB for sync hooks")?;
+        let no_net_renames = BTreeMap::new();
+        prepatch_imported_layout_kicad_pcb(LayoutPrepatchArgs {
+            layout_kicad_pcb,
+            pcb_text: &pcb_text,
+            components: args.components,
+            refdes_instance_names: args.refdes_instance_names,
+            // Only fresh source PCBs use native net names. Retained boards
+            // may already use generated names, which can also be keys in
+            // this map. Applying it again could merge distinct nets.
+            net_ident_by_kicad_name: if args.source_board {
+                &args.net_decls.zener_name_by_kicad_name
+            } else {
+                &no_net_renames
+            },
+            generated_components: args.component_modules,
+            sheet_modules: args.sheet_modules,
+        })
+        .context("Failed to pre-patch imported KiCad PCB for sync hooks")?;
 
-            (copper_layers, stackup, design_rules)
-        } else {
-            (4, None, None)
-        };
+        (copper_layers, stackup, design_rules)
+    } else {
+        (4, None, None)
+    };
 
     let root_sheet = KiCadSheetPath::root();
     let root_plan = args

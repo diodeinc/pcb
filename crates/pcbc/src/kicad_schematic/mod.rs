@@ -21,7 +21,7 @@ use pcb_kicad_sch::{
 mod project;
 
 pub use project::KicadProject;
-use project::{project_root_schematics, project_schematic_path, schematic_project_path};
+use project::{declared_root_schematics, project_schematic_path, schematic_project_path};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,13 +45,10 @@ pub fn apply_linked_schematic(netlist: &Schematic) -> Result<Option<SchematicApp
     };
     let project_file = pcb_layout::utils::resolve_kicad_files(&path)?.kicad_pro;
     // A project whose declared roots are all missing, or no project at all, is created from scratch.
-    let has_root = project_file.is_file() && {
-        let project: Value = serde_json::from_str(&fs::read_to_string(&project_file)?)
-            .with_context(|| format!("failed to parse {}", project_file.display()))?;
-        project_root_schematics(&path, &project_file, &project)?
+    let has_root = project_file.is_file()
+        && declared_root_schematics(&project_file)?
             .iter()
-            .any(|root| root.path.is_file())
-    };
+            .any(|root| root.is_file());
     if has_root {
         apply_existing(KicadProject::load(&project_file)?, netlist).map(Some)
     } else {
