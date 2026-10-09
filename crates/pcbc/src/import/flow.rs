@@ -102,8 +102,8 @@ fn prepare_output(
     let layout_dir = paths.project_dir();
     let legacy_layout_dir = board_repo.join("layout");
     anyhow::ensure!(
-        layout_dir.exists() || !legacy_layout_dir.is_dir(),
-        "Board repository uses the legacy layout/ directory. Run `git mv layout {}` and reimport.",
+        !legacy_layout_dir.is_dir(),
+        "Board repository has a legacy layout/ directory. Move its KiCad project into {}/ and reimport.",
         crate::codegen::board::BOARD_PROJECT_DIR
     );
 

@@ -65,8 +65,8 @@ A differently named retained project is rejected before cleanup;
 import its matching schematic or choose a new output directory instead.
 The board passes `path = "eda"` and `schematic = True`, so layout, Quiche, and
 `pcb apply schematic` share the copied project directory, matching `pcb new board`.
-Import refuses a board repository that still has an older `layout/` directory and
-no `eda/`; move it with `git mv layout eda` before reimporting.
+Import refuses a board repository that still has an older `layout/` directory;
+move its KiCad project into `eda/` before reimporting.
 
 A project import also creates:
 
