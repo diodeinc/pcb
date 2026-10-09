@@ -530,6 +530,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         suppress: args.suppress.clone(),
         exclude: args.exclude.clone(),
         check: args.check,
+        check_bom_offers: false,
     };
 
     // Local hash release: --check stops the build after preflight.
@@ -575,6 +576,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
 
     // Build the release archive
     options.version = Some(format!("v{}", next_version));
+    options.check_bom_offers = true;
     let Some(zip_path) =
         release::build_board_release(&workspace.root, board_path, board_name.clone(), options)?
     else {

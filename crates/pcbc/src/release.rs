@@ -205,6 +205,9 @@ pub struct BoardReleaseOptions {
     pub suppress: Vec<String>,
     pub exclude: Vec<ArtifactType>,
     pub check: bool,
+    /// Query supplier offers for the BOM. Only versioned publishes need this;
+    /// local builds stay offline.
+    pub check_bom_offers: bool,
 }
 
 /// Run release preflight, then generate assets and an archive unless `check` is set.
@@ -417,7 +420,7 @@ fn preflight_board_release(
         ensure_board_compatible_with_installed_kicad(&kicad_pcb_path)?;
     }
 
-    run_release_preflight(&release_info, &options.exclude, start_time, diagnostics)?;
+    run_release_preflight(&release_info, options, start_time, diagnostics)?;
     Ok(Some(release_info))
 }
 
@@ -673,7 +676,7 @@ fn substitute_variables(info: &ReleaseInfo) -> Result<()> {
 
 fn run_release_preflight(
     info: &ReleaseInfo,
-    excluded: &[ArtifactType],
+    options: &BoardReleaseOptions,
     start_time: Instant,
     diagnostics: &mut Diagnostics,
 ) -> Result<()> {
@@ -699,7 +702,7 @@ fn run_release_preflight(
         |info, _| substitute_variables(info),
     )?;
 
-    if info.has_layout() && !excluded.contains(&ArtifactType::Drc) {
+    if info.has_layout() && !options.exclude.contains(&ArtifactType::Drc) {
         execute_task(
             info,
             "Running KiCad DRC checks",
@@ -710,12 +713,14 @@ fn run_release_preflight(
             return Ok(());
         }
     }
-    diagnostics.extend(execute_task(
-        info,
-        "Checking BOM offers",
-        start_time,
-        |info, _| Ok(check_bom_offers(info)),
-    )?);
+    if options.check_bom_offers {
+        diagnostics.extend(execute_task(
+            info,
+            "Checking BOM offers",
+            start_time,
+            |info, _| Ok(check_bom_offers(info)),
+        )?);
+    }
 
     // Process late-added BOM warnings before either JSON or interactive review.
     pcb_zen_core::FilterHiddenPass.apply(diagnostics);
