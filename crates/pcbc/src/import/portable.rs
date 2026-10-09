@@ -1,4 +1,4 @@
-use super::{ImportSourceKind, PortableExtraFile, PortableKicadProject};
+use super::{PortableExtraFile, PortableKicadProject};
 use anyhow::{Context, Result, bail};
 use pcb_sexpr::{Sexpr, parse as parse_sexpr};
 use serde::Serialize;
@@ -65,7 +65,6 @@ struct SchematicAssets {
 #[derive(Debug, Clone, Serialize)]
 struct KicadProjectManifest {
     project_dir: String,
-    source_kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     project_file: Option<String>,
     root_schematic: String,
@@ -74,17 +73,6 @@ struct KicadProjectManifest {
     schematic_files: Vec<String>,
     files: Vec<String>,
     bundled_models: Vec<String>,
-}
-
-pub(super) fn discover_and_validate(kicad_input_abs: &Path) -> Result<PortableKicadProject> {
-    match kicad_input_abs.extension().and_then(|ext| ext.to_str()) {
-        Some(KICAD_PRO_EXT) => discover_project_and_validate(kicad_input_abs),
-        Some(KICAD_SCH_EXT) => discover_schematic_and_validate(kicad_input_abs),
-        _ => bail!(
-            "Expected a .kicad_sch or .kicad_pro file path, got: {}",
-            kicad_input_abs.display()
-        ),
-    }
 }
 
 fn load_project_library_tables(project_dir: &Path) -> Result<ProjectLibraryTables> {
@@ -282,52 +270,61 @@ fn relative_sorted(project_dir: &Path, files: &BTreeSet<PathBuf>) -> Vec<PathBuf
         .collect()
 }
 
-fn discover_project_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadProject> {
-    if !kicad_pro_abs.exists() {
+/// A schematic belongs to the same-name project beside it, and a project's board is its same-name
+/// `.kicad_pcb`, as in KiCad. Either input therefore yields the same project.
+pub(super) fn discover_and_validate(kicad_input_abs: &Path) -> Result<PortableKicadProject> {
+    let input_ext = kicad_input_abs.extension().and_then(OsStr::to_str);
+    if !kicad_input_abs.is_file() || !matches!(input_ext, Some(KICAD_PRO_EXT | KICAD_SCH_EXT)) {
         bail!(
-            "KiCad project file does not exist: {}",
-            kicad_pro_abs.display()
-        );
-    }
-    if !kicad_pro_abs.is_file()
-        || kicad_pro_abs.extension().and_then(|ext| ext.to_str()) != Some(KICAD_PRO_EXT)
-    {
-        bail!(
-            "Expected a .kicad_pro file path, got: {}",
-            kicad_pro_abs.display()
+            "Expected a .kicad_sch or .kicad_pro file path, got: {}",
+            kicad_input_abs.display()
         );
     }
 
-    let kicad_pro_abs = kicad_pro_abs
+    let kicad_input_abs = kicad_input_abs
         .canonicalize()
-        .with_context(|| format!("Failed to canonicalize {}", kicad_pro_abs.display()))?;
-    let project_dir = kicad_pro_abs.parent().ok_or_else(|| {
+        .with_context(|| format!("Failed to canonicalize {}", kicad_input_abs.display()))?;
+    let project_dir = kicad_input_abs.parent().ok_or_else(|| {
         anyhow::anyhow!(
             "Failed to determine project directory from {}",
-            kicad_pro_abs.display()
+            kicad_input_abs.display()
         )
     })?;
-
-    let kicad_pro_rel = to_relative(project_dir, &kicad_pro_abs);
-    let project_name = kicad_pro_abs
+    let project_name = kicad_input_abs
         .file_stem()
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Failed to infer project name from .kicad_pro filename"))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Failed to infer board name from {}",
+                kicad_input_abs.display()
+            )
+        })?
         .to_string();
 
-    let kicad_pro_json = load_kicad_pro_json(&kicad_pro_abs)?;
+    let kicad_pro_abs = Some(kicad_input_abs.with_extension(KICAD_PRO_EXT)).filter(|p| p.is_file());
+    let kicad_pro_json = kicad_pro_abs
+        .as_deref()
+        .map(load_kicad_pro_json)
+        .transpose()?
+        .unwrap_or(Value::Null);
     let variable_resolver = build_kicad_variable_resolver(project_dir, &kicad_pro_json);
-
     let kicad_refs = collect_kicad_refs_from_json(&kicad_pro_json);
-    let primary_pcb_abs =
-        resolve_primary_pcb_from_pro(project_dir, &project_name, &kicad_refs, &variable_resolver)?;
-    let root_schematic_abs = resolve_root_schematic_from_pro(
-        project_dir,
-        &project_name,
-        &kicad_refs,
-        &variable_resolver,
-    )?;
+
+    let root_schematic_abs = if input_ext == Some(KICAD_SCH_EXT) {
+        kicad_input_abs.clone()
+    } else {
+        resolve_root_schematic_from_pro(
+            project_dir,
+            &project_name,
+            &kicad_refs,
+            &variable_resolver,
+        )?
+    };
+    let kicad_pcb_abs = kicad_pro_abs
+        .as_ref()
+        .map(|pro| pro.with_extension(KICAD_PCB_EXT))
+        .filter(|pcb| pcb.is_file());
 
     // Validate root schematic UUID if present in project.
     if let Ok(root_uuid) = extract_root_uuid(&kicad_pro_json)
@@ -342,16 +339,16 @@ fn discover_project_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadPr
         );
     }
 
-    let mut abs_files: BTreeSet<PathBuf> = BTreeSet::new();
-    abs_files.insert(kicad_pro_abs.clone());
-    abs_files.insert(primary_pcb_abs.clone());
-    abs_files.insert(root_schematic_abs.clone());
+    let mut abs_files: BTreeSet<PathBuf> = kicad_pro_abs
+        .iter()
+        .chain(&kicad_pcb_abs)
+        .cloned()
+        .collect();
 
     // KiCad loads project design rules by the project filename rather than an explicit project
     // reference. Preserve the conventional rules file in validation staging and the archive.
     let design_rules_name = format!("{project_name}.{KICAD_DRU_EXT}");
-    let design_rules_path = project_dir.join(&design_rules_name);
-    if design_rules_path.exists() {
+    if kicad_pro_abs.is_some() && project_dir.join(&design_rules_name).exists() {
         abs_files.insert(resolve_reference_path(
             project_dir,
             project_dir,
@@ -365,15 +362,12 @@ fn discover_project_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadPr
 
     // Include direct project references from .kicad_pro.
     for reference in &kicad_refs {
-        let Some(ext) = extension_of_reference(reference) else {
-            continue;
-        };
-        if !is_relevant_kicad_extension(&ext) {
-            continue;
-        }
-        let resolved =
-            resolve_reference_path(project_dir, project_dir, reference, &variable_resolver)?;
-        abs_files.insert(resolved);
+        abs_files.insert(resolve_reference_path(
+            project_dir,
+            project_dir,
+            reference,
+            &variable_resolver,
+        )?);
     }
 
     let mut referenced_assets =
@@ -381,19 +375,21 @@ fn discover_project_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadPr
     abs_files.extend(referenced_assets.files.iter().cloned());
 
     // Include references embedded in the PCB in addition to schematic assets.
-    let pcb_content = fs::read_to_string(&primary_pcb_abs)
-        .with_context(|| format!("Failed to read {}", primary_pcb_abs.display()))?;
-    let pcb_discovery = discover_from_sexpr_text(&pcb_content)
-        .with_context(|| format!("Failed to parse {}", primary_pcb_abs.display()))?;
-    referenced_assets
-        .symbol_ids
-        .extend(pcb_discovery.symbol_ids);
-    referenced_assets
-        .footprint_ids
-        .extend(pcb_discovery.footprint_ids);
-    referenced_assets
-        .model_refs
-        .extend(pcb_discovery.model_refs);
+    if let Some(pcb_abs) = &kicad_pcb_abs {
+        let pcb_content = fs::read_to_string(pcb_abs)
+            .with_context(|| format!("Failed to read {}", pcb_abs.display()))?;
+        let pcb_discovery = discover_from_sexpr_text(&pcb_content)
+            .with_context(|| format!("Failed to parse {}", pcb_abs.display()))?;
+        referenced_assets
+            .symbol_ids
+            .extend(pcb_discovery.symbol_ids);
+        referenced_assets
+            .footprint_ids
+            .extend(pcb_discovery.footprint_ids);
+        referenced_assets
+            .model_refs
+            .extend(pcb_discovery.model_refs);
+    }
 
     let (resolved_project_footprints, project_footprint_ids) = resolve_project_library_assets(
         project_dir,
@@ -409,17 +405,17 @@ fn discover_project_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadPr
     );
     let schematic_files_rel = relative_sorted(project_dir, &referenced_assets.files);
 
+    let kicad_pro_rel = kicad_pro_abs.map(|path| to_relative(project_dir, &path));
     let root_schematic_rel = to_relative(project_dir, &root_schematic_abs);
-    let primary_kicad_pcb_rel = to_relative(project_dir, &primary_pcb_abs);
+    let kicad_pcb_rel = kicad_pcb_abs.map(|path| to_relative(project_dir, &path));
     let files_to_bundle_rel = relative_sorted(project_dir, &abs_files);
 
     // Emit a small manifest into the archive for reproducibility/debugging.
     let manifest = KicadProjectManifest {
         project_dir: project_dir.display().to_string(),
-        source_kind: "project".to_string(),
-        project_file: Some(path_to_posix_string(&kicad_pro_rel)),
+        project_file: kicad_pro_rel.as_deref().map(path_to_posix_string),
         root_schematic: path_to_posix_string(&root_schematic_rel),
-        pcb_file: Some(path_to_posix_string(&primary_kicad_pcb_rel)),
+        pcb_file: kicad_pcb_rel.as_deref().map(path_to_posix_string),
         schematic_files: schematic_files_rel
             .iter()
             .map(|p| path_to_posix_string(p))
@@ -439,97 +435,9 @@ fn discover_project_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadPr
     Ok(PortableKicadProject {
         project_dir: project_dir.to_path_buf(),
         project_name,
-        source_kind: ImportSourceKind::Project,
-        kicad_pro_rel: Some(kicad_pro_rel),
+        kicad_pro_rel,
         root_schematic_rel,
-        primary_kicad_pcb_rel: Some(primary_kicad_pcb_rel),
-        schematic_files_rel,
-        files_to_bundle_rel,
-        resolved_project_footprints,
-        project_footprint_ids,
-        extra_files_to_bundle,
-        manifest_json,
-    })
-}
-
-fn discover_schematic_and_validate(kicad_sch_abs: &Path) -> Result<PortableKicadProject> {
-    if !kicad_sch_abs.is_file()
-        || kicad_sch_abs.extension().and_then(|ext| ext.to_str()) != Some(KICAD_SCH_EXT)
-    {
-        bail!(
-            "Expected a .kicad_sch file path, got: {}",
-            kicad_sch_abs.display()
-        );
-    }
-
-    let kicad_sch_abs = kicad_sch_abs
-        .canonicalize()
-        .with_context(|| format!("Failed to canonicalize {}", kicad_sch_abs.display()))?;
-    let project_dir = kicad_sch_abs.parent().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Failed to determine schematic directory from {}",
-            kicad_sch_abs.display()
-        )
-    })?;
-    let project_name = kicad_sch_abs
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Failed to infer board name from .kicad_sch filename"))?
-        .to_string();
-    let root_schematic_rel = to_relative(project_dir, &kicad_sch_abs);
-
-    let variable_resolver = build_kicad_variable_resolver(project_dir, &Value::Null);
-    let library_tables = load_project_library_tables(project_dir)?;
-    let schematic_assets =
-        discover_schematic_assets(project_dir, &kicad_sch_abs, &variable_resolver)?;
-
-    let mut abs_files = schematic_assets.files.clone();
-    abs_files.extend(library_tables.existing_tables.iter().cloned());
-    let (resolved_project_footprints, project_footprint_ids) = resolve_project_library_assets(
-        project_dir,
-        &variable_resolver,
-        &library_tables,
-        &schematic_assets,
-        &mut abs_files,
-    );
-    let extra_files_to_bundle = bundle_models(
-        project_dir,
-        &schematic_assets.model_refs,
-        &variable_resolver,
-    );
-    let schematic_files_rel = relative_sorted(project_dir, &schematic_assets.files);
-    let files_to_bundle_rel = relative_sorted(project_dir, &abs_files);
-
-    let manifest = KicadProjectManifest {
-        project_dir: project_dir.display().to_string(),
-        source_kind: "schematic".to_string(),
-        project_file: None,
-        root_schematic: path_to_posix_string(&root_schematic_rel),
-        pcb_file: None,
-        schematic_files: schematic_files_rel
-            .iter()
-            .map(|p| path_to_posix_string(p))
-            .collect(),
-        files: files_to_bundle_rel
-            .iter()
-            .map(|p| path_to_posix_string(p))
-            .collect(),
-        bundled_models: extra_files_to_bundle
-            .iter()
-            .map(|f| f.archive_relative_path.clone())
-            .collect(),
-    };
-    let manifest_json = serde_json::to_string_pretty(&manifest)
-        .context("Failed to serialize portable KiCad manifest")?;
-
-    Ok(PortableKicadProject {
-        project_dir: project_dir.to_path_buf(),
-        project_name,
-        source_kind: ImportSourceKind::Schematic,
-        kicad_pro_rel: None,
-        root_schematic_rel,
-        primary_kicad_pcb_rel: None,
+        kicad_pcb_rel,
         schematic_files_rel,
         files_to_bundle_rel,
         resolved_project_footprints,
@@ -852,38 +760,6 @@ fn collect_refs_recursive(value: &Value, refs: &mut BTreeSet<String>) {
         }
         _ => {}
     }
-}
-
-fn resolve_primary_pcb_from_pro(
-    project_dir: &Path,
-    project_name: &str,
-    references: &BTreeSet<String>,
-    variable_resolver: &KicadVariableResolver,
-) -> Result<PathBuf> {
-    let pcb_refs = references
-        .iter()
-        .filter(|r| extension_of_reference(r.as_str()).as_deref() == Some(KICAD_PCB_EXT))
-        .collect::<Vec<_>>();
-
-    if pcb_refs.len() > 1 {
-        let refs = pcb_refs
-            .iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        bail!(
-            "Expected at most one .kicad_pcb reference in .kicad_pro, found {}: {}",
-            pcb_refs.len(),
-            refs
-        );
-    }
-
-    let default_pcb = format!("{project_name}.{KICAD_PCB_EXT}");
-    let reference = pcb_refs
-        .first()
-        .map(|s| s.as_str())
-        .unwrap_or(default_pcb.as_str());
-    resolve_reference_path(project_dir, project_dir, reference, variable_resolver)
 }
 
 fn resolve_root_schematic_from_pro(
