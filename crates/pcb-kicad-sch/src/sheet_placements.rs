@@ -26,7 +26,9 @@ fn entries(project: &Value) -> Result<Option<Vec<Entry>>> {
 }
 
 pub(crate) fn normalized(base: &str, child: &str) -> Result<PathBuf> {
-    let child = Path::new(child);
+    // KiCad accepts Windows separators in sheet paths (SCH_SHEET::SetFileName).
+    let child = child.replace('\\', "/");
+    let child = Path::new(&child);
     if child.as_os_str().is_empty() || child.is_absolute() {
         bail!(
             "schematic sheet path '{child}' must be relative",
@@ -123,4 +125,18 @@ pub fn sync_sheet_placements(project: &mut Value, document: &SchDocument) -> Res
         .context("KiCad project diode section must be an object")?;
     diode.insert("schematic_sheets".into(), value);
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalized;
+
+    #[test]
+    fn windows_separators_normalize_like_posix() {
+        assert_eq!(
+            normalized("a/b.kicad_sch", r"..\c\d.kicad_sch").unwrap(),
+            normalized("a/b.kicad_sch", "../c/d.kicad_sch").unwrap()
+        );
+        assert!(normalized("b.kicad_sch", r"..\escape.kicad_sch").is_err());
+    }
 }
