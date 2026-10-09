@@ -18,7 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- `DiffPair(impedance=...)` applies to its nets even when the pair never crosses an `io()` boundary; conflicting net properties now warn.
+- `DiffPair(impedance=...)` applies to its nets even when the pair never crosses an `io()` boundary; conflicting impedance values on one net now warn.
 
 ## [0.4.74] - 2026-10-09
 

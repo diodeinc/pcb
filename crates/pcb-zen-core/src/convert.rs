@@ -702,9 +702,13 @@ impl ModuleConverter {
             }
         }
 
-        // Merge properties: the first observed value wins, later disagreements are reported.
+        // Merge properties: the first observed value wins; impedance disagreements are reported.
         let mut conflicts = Vec::new();
         for (key, value) in net.properties().iter() {
+            let checked = matches!(key.as_str(), "impedance" | "differential_impedance");
+            if !checked && net_info.properties.contains_key(key) {
+                continue;
+            }
             let Ok(attr_value) = to_attribute_value(*value) else {
                 continue;
             };
