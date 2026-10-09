@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use include_dir::{Dir, include_dir};
 use pcb_kicad::{PythonScriptBuilder, ensure_board_compatible_with_installed_kicad};
-use pcb_sch::kicad_netlist::{try_format_footprint_with_package_roots, write_fp_lib_table};
+use pcb_sch::kicad_netlist::write_fp_lib_table;
 
 mod effective_netlist;
 mod kicad_project_patch;
@@ -1084,13 +1084,9 @@ pub mod utils {
                 serde_json::Value::String(inst.kicad_value()),
             );
 
-            let Some(AttributeValue::String(fp_attr)) = inst.attributes.get("footprint") else {
-                continue;
-            };
-
-            let (footprint_fpid, _) =
-                try_format_footprint_with_package_roots(fp_attr, &schematic.package_roots)
-                    .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?;
+            let (footprint_fpid, _) = schematic
+                .kicad_footprint(inst)
+                .with_context(|| format!("component {inst_ref}"))?;
 
             instance.insert(
                 "footprint_fpid".to_string(),
@@ -1106,20 +1102,17 @@ pub mod utils {
         layout_dir: &Path,
         schematic: &Schematic,
     ) -> anyhow::Result<()> {
-        let mut fp_libs: HashMap<String, PathBuf> = HashMap::new();
-        for fp_attr in schematic
+        let fp_libs = schematic
             .instances
             .values()
             .filter(|inst| inst.kind == InstanceKind::Component)
-            .filter_map(|inst| inst.string_attr(&["footprint"]))
-        {
-            if let (_, Some((lib_name, dir))) =
-                try_format_footprint_with_package_roots(&fp_attr, &schematic.package_roots)
-                    .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?
-            {
-                fp_libs.entry(lib_name).or_insert(dir);
-            }
-        }
+            .filter_map(|inst| {
+                schematic
+                    .kicad_footprint(inst)
+                    .map(|(_, lib)| lib)
+                    .transpose()
+            })
+            .collect::<anyhow::Result<HashMap<_, _>>>()?;
 
         // Canonicalize the layout directory to avoid symlink issues on macOS
         let canonical_layout_dir = layout_dir

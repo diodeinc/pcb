@@ -160,21 +160,12 @@ pub fn to_kicad_netlist(sch: &Schematic) -> anyhow::Result<String> {
             )
         });
         let value = comp.instance.kicad_value();
-        let value_field = value.as_str();
-        let fp_attr = comp
-            .instance
-            .string_attr(&["footprint"])
-            .with_context(|| format!("component {} has no footprint", comp.reference))?;
-        let (fp_string, _) = try_format_footprint_with_package_roots(&fp_attr, &sch.package_roots)
-            .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?;
+        let (fp_string, _) = sch
+            .kicad_footprint(comp.instance)
+            .with_context(|| format!("component {}", comp.reference))?;
 
         writeln!(out, "    (comp (ref \"{}\")", escape_kicad_string(refdes)).unwrap();
-        writeln!(
-            out,
-            "      (value \"{}\")",
-            escape_kicad_string(value_field)
-        )
-        .unwrap();
+        writeln!(out, "      (value \"{}\")", escape_kicad_string(&value)).unwrap();
         writeln!(
             out,
             "      (footprint \"{}\")",
@@ -184,7 +175,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> anyhow::Result<String> {
         writeln!(
             out,
             "      (libsource (lib \"lib\") (part \"{}\") (description \"unknown\"))",
-            escape_kicad_string(value_field)
+            escape_kicad_string(&value)
         )
         .unwrap();
         // Deterministic UUID from hierarchical name.

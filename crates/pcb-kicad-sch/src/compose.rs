@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
-use pcb_sch::kicad_netlist::try_format_footprint_with_package_roots;
 use pcb_sch::{ATTR_SCHEMATIC_PATH, Instance, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
 
@@ -1828,11 +1827,9 @@ fn component_fields(
                 slot.component_path()
             )
         })?;
-    let footprint = component_slots::attribute_string(instance, "footprint")?
-        .with_context(|| format!("component '{}' has no footprint", slot.component_path()))?;
-    let (footprint_id, _) =
-        try_format_footprint_with_package_roots(footprint, &netlist.package_roots)
-            .with_context(|| format!("Failed to resolve footprint path '{footprint}'"))?;
+    let (footprint_id, _) = netlist
+        .kicad_footprint(instance)
+        .with_context(|| format!("component '{}'", slot.component_path()))?;
     let mut fields = vec![
         SymbolField::new("Reference", reference, at),
         SymbolField::new("Value", instance.kicad_value(), at),
