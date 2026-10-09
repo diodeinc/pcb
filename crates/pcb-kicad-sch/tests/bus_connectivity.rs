@@ -86,7 +86,12 @@ fn intermediate_bus_members_connect_without_breakouts() {
 
 #[test]
 fn scalar_named_items_on_buses_take_the_bus_connection() {
-    for child_names_bus in [true, false] {
+    for (project_alias, sheet_alias, child_names_bus) in [
+        (None, Some("A"), true),
+        (None, Some("A"), false),
+        (Some("A"), None, true),
+        (Some("A"), Some("C"), true),
+    ] {
         let mut builder = KicadBuilder::new();
         builder
             .sheet("child.kicad_sch", &[("PORT", (0.0, 0.0))])
@@ -100,17 +105,25 @@ fn scalar_named_items_on_buses_take_the_bus_connection() {
             builder.local_label("{SIG}", (5.0, 0.0));
         }
         let mut document = builder.build();
-        raw(
-            &mut document,
-            0,
-            "(bus_alias \"SIG\" (members \"A\" \"B\"))",
-        );
+        if let Some(member) = project_alias {
+            document
+                .bus_aliases
+                .insert("SIG".into(), vec![member.into(), "B".into()]);
+        }
+        if let Some(member) = sheet_alias {
+            let alias = format!("(bus_alias \"SIG\" (members \"{member}\" \"B\"))");
+            raw(&mut document, 0, &alias);
+        }
         for page in 0..2 {
             raw(&mut document, page, "(bus (pts (xy 0 0) (xy 10 0)))");
         }
         let groups = ConnectivityGraph::from_kicad(&document).unwrap().groups;
         let count = |name: &str| groups.iter().filter(|g| g.names.contains(name)).count();
-        assert_eq!((count("A"), count("BUS_ONLY")), (1, 0), "{child_names_bus}");
+        assert_eq!(
+            (count("A"), count("BUS_ONLY")),
+            (1, 0),
+            "{project_alias:?} {sheet_alias:?} {child_names_bus}"
+        );
     }
 }
 

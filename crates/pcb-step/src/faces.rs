@@ -28,9 +28,9 @@ const MASK_ABOVE_COPPER: f64 = 0.015;
 const OUTLINE_ERROR: f64 = 0.005;
 
 /// One face of a tech layer.
-pub(crate) struct Face {
-    pub(crate) outer: Loop,
-    pub(crate) holes: Vec<Loop>,
+pub struct Face {
+    pub outer: Loop,
+    pub holes: Vec<Loop>,
 }
 
 /// The faces of one tech layer and where they sit.

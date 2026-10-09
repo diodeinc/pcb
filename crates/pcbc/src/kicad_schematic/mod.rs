@@ -45,11 +45,14 @@ pub fn apply_linked_schematic(netlist: &Schematic) -> Result<Option<SchematicApp
     };
     let project_file = pcb_layout::utils::resolve_kicad_files(&path)?.kicad_pro;
     // A project whose declared roots are all missing, or no project at all, is created from scratch.
-    if project_file.is_file()
-        && project_root_schematics(&path, &project_file)?
+    let has_root = project_file.is_file() && {
+        let project: Value = serde_json::from_str(&fs::read_to_string(&project_file)?)
+            .with_context(|| format!("failed to parse {}", project_file.display()))?;
+        project_root_schematics(&path, &project_file, &project)?
             .iter()
             .any(|root| root.path.is_file())
-    {
+    };
+    if has_root {
         apply_existing(KicadProject::load(&project_file)?, netlist).map(Some)
     } else {
         initialize_project(project_file, netlist).map(Some)
@@ -103,11 +106,7 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
                     path.display()
                 );
             }
-            let next = SchDocument {
-                pages: vec![page.clone()],
-                root_page_ids: vec![page.id.clone()],
-            }
-            .to_kicad_sch()?;
+            let next = page.to_kicad_sch();
             writes.push(PendingWrite {
                 path,
                 source: None,

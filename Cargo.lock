@@ -604,7 +604,7 @@ dependencies = [
 [[package]]
 name = "cdt"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/foxtrot.git?rev=b816efd2cc50772f4d0a36d76da669ffd7b28cdd#b816efd2cc50772f4d0a36d76da669ffd7b28cdd"
+source = "git+https://github.com/diodeinc/foxtrot.git?rev=34b2d057e51f219c5bee839d164a0511b579e208#34b2d057e51f219c5bee839d164a0511b579e208"
 dependencies = [
  "spade",
  "thiserror",
@@ -3413,7 +3413,7 @@ dependencies = [
 [[package]]
 name = "nurbs"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/foxtrot.git?rev=b816efd2cc50772f4d0a36d76da669ffd7b28cdd#b816efd2cc50772f4d0a36d76da669ffd7b28cdd"
+source = "git+https://github.com/diodeinc/foxtrot.git?rev=34b2d057e51f219c5bee839d164a0511b579e208#34b2d057e51f219c5bee839d164a0511b579e208"
 dependencies = [
  "log",
  "nalgebra-glm",
@@ -3777,6 +3777,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-gltf"
+version = "0.4.74"
+dependencies = [
+ "anyhow",
+ "glam 0.34.1",
+ "i_triangle",
+ "pcb-step",
+ "rayon",
+ "serde_json",
+ "triangulate",
+]
+
+[[package]]
 name = "pcb-intern"
 version = "0.1.0"
 
@@ -4034,12 +4047,16 @@ dependencies = [
 name = "pcb-step"
 version = "0.4.74"
 dependencies = [
+ "anyhow",
+ "atomicwrites",
  "base64 0.23.1",
+ "clap",
  "glam 0.34.1",
  "kurbo",
  "memchr",
  "pcb-ir",
  "rustybuzz",
+ "serde_json",
  "zstd",
 ]
 
@@ -4204,6 +4221,7 @@ dependencies = [
  "pcb-diode-api",
  "pcb-eda",
  "pcb-fmt",
+ "pcb-gltf",
  "pcb-interposer",
  "pcb-ipc2581-tools",
  "pcb-ir",
@@ -6040,7 +6058,7 @@ dependencies = [
 [[package]]
 name = "step"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/foxtrot.git?rev=b816efd2cc50772f4d0a36d76da669ffd7b28cdd#b816efd2cc50772f4d0a36d76da669ffd7b28cdd"
+source = "git+https://github.com/diodeinc/foxtrot.git?rev=34b2d057e51f219c5bee839d164a0511b579e208#34b2d057e51f219c5bee839d164a0511b579e208"
 dependencies = [
  "arrayvec",
  "fast-float2",
@@ -6671,12 +6689,13 @@ dependencies = [
 [[package]]
 name = "triangulate"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/foxtrot.git?rev=b816efd2cc50772f4d0a36d76da669ffd7b28cdd#b816efd2cc50772f4d0a36d76da669ffd7b28cdd"
+source = "git+https://github.com/diodeinc/foxtrot.git?rev=34b2d057e51f219c5bee839d164a0511b579e208#34b2d057e51f219c5bee839d164a0511b579e208"
 dependencies = [
  "cdt",
  "log",
  "nalgebra-glm",
  "nurbs",
+ "rayon",
  "robust",
  "serde",
  "step",

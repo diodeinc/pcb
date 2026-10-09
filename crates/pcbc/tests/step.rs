@@ -173,7 +173,16 @@ fn step_export_refuses_the_board_as_output_and_keeps_the_previous_output() {
     let good = std::fs::read(&output).unwrap();
     let empty = directory.path().join("empty.kicad_pcb");
     std::fs::write(&empty, format!("{HEAD})")).unwrap();
+    let files = || {
+        let mut names: Vec<_> = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    let before = files();
     assert!(!export(&empty, &output, &[]).status.success());
     assert_eq!(std::fs::read(&output).unwrap(), good);
-    assert!(!directory.path().join("out.step.part").exists());
+    assert_eq!(files(), before);
 }

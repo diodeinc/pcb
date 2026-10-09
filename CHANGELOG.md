@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add `pcb gltf export` to write a GLB for a KiCad board without kicad-cli.
+
 ### Changed
 
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
@@ -15,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - `pcb apply` names a new root schematic after its KiCad project, matching the board so DRC schematic parity runs.
+- `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 
 ## [0.4.74] - 2026-10-09
 
