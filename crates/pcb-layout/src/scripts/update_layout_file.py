@@ -230,15 +230,7 @@ class JsonNetlistParser:
             # Get reference designator
             ref = instance.get("reference_designator", "U?")
 
-            # Get value - follow the same precedence as Rust: mpn > value > Value > "?"
-            value = "?"
-            for key in ["mpn", "value", "Value"]:
-                if (
-                    key in instance["attributes"]
-                    and "String" in instance["attributes"][key]
-                ):
-                    value = instance["attributes"][key]["String"]
-                    break
+            value = instance["kicad_value"]
 
             # Get footprint
             footprint = instance.get("footprint_fpid", "")
@@ -262,7 +254,7 @@ class JsonNetlistParser:
 
             # Add properties from attributes
             for attr_name, attr_value in instance["attributes"].items():
-                if attr_name not in ["footprint", "value", "Value"] and isinstance(
+                if attr_name not in ["footprint", "value"] and isinstance(
                     attr_value, dict
                 ):
                     if "String" in attr_value:

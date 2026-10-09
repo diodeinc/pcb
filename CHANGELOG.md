@@ -16,6 +16,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
 
+### Fixed
+
+- `pcb apply` schematic symbols and layout footprints now agree on Footprint, Value and Datasheet; footprints show the part value instead of its MPN.
+
 ## [0.4.74] - 2026-10-09
 
 ### Changed

@@ -799,13 +799,11 @@ pub fn generate_layout_in(
     })?;
 
     // Write netlist files
-    let netlist_content = pcb_sch::kicad_netlist::to_kicad_netlist(schematic);
+    let netlist_content = pcb_sch::kicad_netlist::to_kicad_netlist(schematic)?;
     fs::write(&paths.netlist, netlist_content)
         .with_context(|| format!("Failed to write netlist: {}", paths.netlist.display()))?;
 
-    // Write footprint library table
-    let footprint_lib_dirs = utils::footprint_library_dirs(schematic)?;
-    utils::write_footprint_library_dirs(&layout_dir, &footprint_lib_dirs)?;
+    utils::write_footprint_library_table(&layout_dir, schematic)?;
 
     // Write JSON netlist for Python script
     let json_content =
@@ -1081,6 +1079,10 @@ pub mod utils {
             if inst.kind != InstanceKind::Component {
                 continue;
             }
+            instance.insert(
+                "kicad_value".to_string(),
+                serde_json::Value::String(inst.kicad_value()),
+            );
 
             let Some(AttributeValue::String(fp_attr)) = inst.attributes.get("footprint") else {
                 continue;
@@ -1099,52 +1101,32 @@ pub mod utils {
         serde_json::to_string(&json).context("Failed to serialize enriched layout JSON")
     }
 
-    /// Write footprint library table for a layout
-    pub fn footprint_library_dirs(
+    /// Write the fp-lib-table for every footprint library the schematic uses.
+    pub fn write_footprint_library_table(
+        layout_dir: &Path,
         schematic: &Schematic,
-    ) -> anyhow::Result<HashMap<String, PathBuf>> {
+    ) -> anyhow::Result<()> {
         let mut fp_libs: HashMap<String, PathBuf> = HashMap::new();
-
-        for inst in schematic.instances.values() {
-            if inst.kind != InstanceKind::Component {
-                continue;
-            }
-
-            if let Some(AttributeValue::String(fp_attr)) = inst.attributes.get("footprint")
-                && let (_, Some((lib_name, dir))) =
-                    try_format_footprint_with_package_roots(fp_attr, &schematic.package_roots)
-                        .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?
+        for fp_attr in schematic
+            .instances
+            .values()
+            .filter(|inst| inst.kind == InstanceKind::Component)
+            .filter_map(|inst| inst.string_attr(&["footprint"]))
+        {
+            if let (_, Some((lib_name, dir))) =
+                try_format_footprint_with_package_roots(&fp_attr, &schematic.package_roots)
+                    .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?
             {
                 fp_libs.entry(lib_name).or_insert(dir);
             }
         }
 
-        Ok(fp_libs)
-    }
-
-    pub(crate) fn write_footprint_library_dirs(
-        layout_dir: &Path,
-        fp_libs: &HashMap<String, PathBuf>,
-    ) -> anyhow::Result<()> {
         // Canonicalize the layout directory to avoid symlink issues on macOS
         let canonical_layout_dir = layout_dir
             .canonicalize()
             .unwrap_or_else(|_| layout_dir.to_path_buf());
-
-        // Write or update the fp-lib-table for this layout directory
-        write_fp_lib_table(&canonical_layout_dir, fp_libs).with_context(|| {
-            format!("Failed to write fp-lib-table for {}", layout_dir.display())
-        })?;
-
-        Ok(())
-    }
-
-    pub fn write_footprint_library_table(
-        layout_dir: &Path,
-        schematic: &Schematic,
-    ) -> anyhow::Result<()> {
-        let fp_libs = footprint_library_dirs(schematic)?;
-        write_footprint_library_dirs(layout_dir, &fp_libs)
+        write_fp_lib_table(&canonical_layout_dir, &fp_libs)
+            .with_context(|| format!("Failed to write fp-lib-table for {}", layout_dir.display()))
     }
 }
 

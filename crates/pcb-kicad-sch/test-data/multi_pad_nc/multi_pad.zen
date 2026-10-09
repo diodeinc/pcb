@@ -5,7 +5,7 @@ B = io("B", Net)
 
 Component(
     name="MULTI_PAD",
-    footprint="Package_DIP:DIP-4_W7.62mm",
+    footprint="Package_DIP.pretty/DIP-4_W7.62mm.kicad_mod",
     symbol=Symbol(library="multi_pad.kicad_sym"),
     pins={
         "A": A,

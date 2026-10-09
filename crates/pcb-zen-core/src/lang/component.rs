@@ -2065,6 +2065,15 @@ where
 
             // Properties map.
             let mut properties_map = parse_component_properties(properties_val)?;
+            let legacy_value = ["Value", "Val"]
+                .into_iter()
+                .filter_map(|key| properties_map.shift_remove(key))
+                .next();
+            if let Some(value) = legacy_value
+                && !properties_map.contains_key(crate::attrs::VALUE)
+            {
+                properties_map.insert(crate::attrs::VALUE.to_owned(), value);
+            }
 
             // Warn on any legacy `Component()` inputs that have a typed-kwarg
             // replacement. The legacy values are still honored below.
@@ -2139,7 +2148,7 @@ where
                 .properties()
                 .get("Description")
                 .and_then(|value| non_empty_string(value));
-            let value_description = first_property_string(&properties_map, &["value", "Value"]);
+            let value_description = property_string(&properties_map, crate::attrs::VALUE);
             // Typed components use their parameterized value as the useful BOM description.
             let fallback_description = if final_ctype.is_some() {
                 value_description.or(symbol_description)

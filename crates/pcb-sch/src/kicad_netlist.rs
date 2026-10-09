@@ -1,5 +1,6 @@
 // Module implementing KiCad net-list export functionality for `pcb_sch::Schematic`.
 
+use anyhow::Context;
 use pathdiff::diff_paths;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
@@ -57,14 +58,13 @@ pub(crate) fn format_array_as_csv(arr: &[AttributeValue]) -> String {
 /// Export the provided [`Schematic`] into a KiCad-compatible net-list (S-expression, E-series).
 ///
 /// The implementation focuses on the mandatory `(components …)` and `(nets …)` sections that
-/// KiCad PCB-new needs to import a net-list.  All footprints are set to a dummy `lib:UNKNOWN`
-/// if the component instance doesn't specify one.
+/// KiCad PCB-new needs to import a net-list.
 ///
 /// This expects component instances to already have `reference_designator` assigned (typically
 /// done during schematic conversion). If you construct a [`Schematic`] manually, call
 /// [`Schematic::assign_reference_designators`](crate::Schematic::assign_reference_designators)
 /// before exporting.
-pub fn to_kicad_netlist(sch: &Schematic) -> String {
+pub fn to_kicad_netlist(sch: &Schematic) -> anyhow::Result<String> {
     let mut components: Vec<CompInfo<'_>> = Vec::new();
     for (inst_ref, inst) in &sch.instances {
         if inst.kind == InstanceKind::Component {
@@ -159,29 +159,14 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
                 comp.reference
             )
         });
-        let value_field = comp
-            .instance
-            .attributes
-            .get("mpn")
-            .or_else(|| comp.instance.attributes.get("Value"))
-            .or_else(|| comp.instance.attributes.get("Val"))
-            .or_else(|| comp.instance.attributes.get("type"))
-            .and_then(|av| match av {
-                AttributeValue::String(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .unwrap_or("?");
+        let value = comp.instance.kicad_value();
+        let value_field = value.as_str();
         let fp_attr = comp
             .instance
-            .attributes
-            .get("footprint")
-            .and_then(|av| match av {
-                AttributeValue::String(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .unwrap_or("UNKNOWN:UNKNOWN");
-        let (fp_string, _lib_info) =
-            format_footprint_with_package_roots(fp_attr, &sch.package_roots);
+            .string_attr(&["footprint"])
+            .with_context(|| format!("component {} has no footprint", comp.reference))?;
+        let (fp_string, _) = try_format_footprint_with_package_roots(&fp_attr, &sch.package_roots)
+            .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?;
 
         writeln!(out, "    (comp (ref \"{}\")", escape_kicad_string(refdes)).unwrap();
         writeln!(
@@ -388,7 +373,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
     writeln!(out, "  )").unwrap();
     writeln!(out, ")").unwrap();
 
-    out
+    Ok(out)
 }
 
 // Helper returning all pins (pad, name) for a given component reference.
@@ -427,30 +412,8 @@ fn collect_pins_for_component(
 // Footprint conversion helper
 // -------------------------------------------------------------------------------------------------
 
-/// Convert a footprint file path into a KiCad `lib:fp` identifier.
-///
-/// Returns the formatted footprint string and optional `(lib_name, dir)` tuple
-/// that can be used to populate the fp-lib-table.
-pub fn format_footprint(fp: &str) -> (String, Option<(String, PathBuf)>) {
-    format_footprint_with_package_roots(fp, &BTreeMap::new())
-}
-
-/// Package-aware variant of [`format_footprint`].
-pub fn format_footprint_with_package_roots(
-    fp: &str,
-    package_roots: &BTreeMap<String, PathBuf>,
-) -> (String, Option<(String, PathBuf)>) {
-    let resolved = if fp.starts_with(PACKAGE_URI_PREFIX) {
-        crate::resolve_package_uri(fp, package_roots).unwrap_or_else(|_| PathBuf::from(fp))
-    } else {
-        PathBuf::from(fp)
-    };
-
-    format_resolved_footprint_path(resolved.as_path(), package_roots)
-}
-
-/// Fallible package-aware formatter used by layout prep, which should reject
-/// unresolved package URIs before invoking KiCad.
+/// Convert a footprint file path or `package://` URI into a KiCad `lib:fp`
+/// identifier plus the `(lib_name, dir)` entry for the fp-lib-table.
 pub fn try_format_footprint_with_package_roots(
     fp: &str,
     package_roots: &BTreeMap<String, PathBuf>,
@@ -763,11 +726,12 @@ mod tests {
     use std::path::Path;
 
     fn assert_formatted_footprint(
-        formatted: (String, Option<(String, PathBuf)>),
+        formatted: anyhow::Result<(String, Option<(String, PathBuf)>)>,
         expected_fp: &str,
         expected_lib: &str,
         expected_dir: &str,
     ) {
+        let formatted = formatted.unwrap();
         assert_eq!(formatted.0, expected_fp);
         assert_eq!(
             formatted.1,
@@ -827,8 +791,9 @@ mod tests {
     #[test]
     fn test_format_footprint_for_pretty_library_path() {
         assert_formatted_footprint(
-            format_footprint(
+            try_format_footprint_with_package_roots(
                 "/tmp/cache/kicad-footprints/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod",
+                &BTreeMap::new(),
             ),
             "Capacitor_SMD:C_0402_1005Metric",
             "Capacitor_SMD",
@@ -845,7 +810,7 @@ mod tests {
         );
 
         assert_formatted_footprint(
-            format_footprint_with_package_roots(
+            try_format_footprint_with_package_roots(
                 "package://gitlab.com/example/libs/footprints@10.0.3/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod",
                 &package_roots,
             ),
@@ -858,7 +823,10 @@ mod tests {
     #[test]
     fn test_format_footprint_for_plain_directory_path() {
         assert_formatted_footprint(
-            format_footprint("/tmp/components/TLV9001IDBVR/SOT95P280X145-5N.kicad_mod"),
+            try_format_footprint_with_package_roots(
+                "/tmp/components/TLV9001IDBVR/SOT95P280X145-5N.kicad_mod",
+                &BTreeMap::new(),
+            ),
             "TLV9001IDBVR:SOT95P280X145-5N",
             "TLV9001IDBVR",
             "/tmp/components/TLV9001IDBVR",
@@ -868,7 +836,10 @@ mod tests {
     #[test]
     fn test_format_footprint_preserves_dotted_directory_name() {
         assert_formatted_footprint(
-            format_footprint("/tmp/components/lib.v2/SOT95P280X145-5N.kicad_mod"),
+            try_format_footprint_with_package_roots(
+                "/tmp/components/lib.v2/SOT95P280X145-5N.kicad_mod",
+                &BTreeMap::new(),
+            ),
             "lib.v2:SOT95P280X145-5N",
             "lib.v2",
             "/tmp/components/lib.v2",
@@ -884,7 +855,7 @@ mod tests {
         );
 
         assert_formatted_footprint(
-            format_footprint_with_package_roots(
+            try_format_footprint_with_package_roots(
                 "package://github.com/example/registry/components/ExamplePart@0.3.2/SOT96P240X115-3N.kicad_mod",
                 &package_roots,
             ),
@@ -903,7 +874,7 @@ mod tests {
         );
 
         assert_formatted_footprint(
-            format_footprint_with_package_roots(
+            try_format_footprint_with_package_roots(
                 "/tmp/workspace/components/MyPart/Thing.kicad_mod",
                 &package_roots,
             ),
@@ -999,6 +970,10 @@ mod tests {
         );
         let mut component = crate::Instance::component(module_ref.clone());
         component.reference_designator = Some("D1".to_owned());
+        component.add_attribute(
+            "footprint",
+            AttributeValue::String("/tmp/Diode.pretty/D_SOD-323.kicad_mod".to_owned()),
+        );
 
         // Simulate a dotted port name after lossy string parsing: "NC.2" -> ["NC", "2"].
         let port_ref = InstanceRef::new(
@@ -1028,7 +1003,7 @@ mod tests {
             properties: HashMap::new(),
         });
 
-        let netlist = to_kicad_netlist(&schematic);
+        let netlist = to_kicad_netlist(&schematic).unwrap();
         assert!(netlist.contains("(node (ref \"D1\") (pin \"2\") (pintype \"stereo\"))"));
     }
 
@@ -1038,9 +1013,9 @@ mod tests {
         let comp_ref = InstanceRef::new(module_ref.clone(), vec!["JP1".into()]);
         let mut component = crate::Instance::component(module_ref.clone());
         component.reference_designator = Some("JP1".to_owned());
-        component.attributes.insert(
-            "footprint".into(),
-            AttributeValue::String("Jumper:SolderJumper".to_owned()),
+        component.add_attribute(
+            "footprint",
+            AttributeValue::String("/tmp/Jumper.pretty/SolderJumper.kicad_mod".to_owned()),
         );
         component.internal_connectivity = crate::InternalConnectivity::new(
             true,
@@ -1069,7 +1044,7 @@ mod tests {
             properties: HashMap::new(),
         });
 
-        let netlist = to_kicad_netlist(&schematic);
+        let netlist = to_kicad_netlist(&schematic).unwrap();
 
         assert!(netlist.contains("(duplicate_pin_numbers_are_jumpers 1)"));
         assert!(netlist.contains("(jumper_pin_groups"));

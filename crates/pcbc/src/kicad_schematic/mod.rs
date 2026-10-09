@@ -43,12 +43,14 @@ pub fn apply_linked_schematic(netlist: &Schematic) -> Result<Option<SchematicApp
     let Some(path) = schematic_project_path(netlist)? else {
         return Ok(None);
     };
-    match project_state(&path)? {
-        ProjectState::Complete(project) => apply_existing(project, netlist).map(Some),
+    let result = match project_state(&path)? {
+        ProjectState::Complete(project) => apply_existing(project, netlist)?,
         ProjectState::Uninitialized(project_file) | ProjectState::Missing(project_file) => {
-            initialize_project(project_file, netlist).map(Some)
+            initialize_project(project_file, netlist)?
         }
-    }
+    };
+    pcb_layout::utils::write_footprint_library_table(&path, netlist)?;
+    Ok(Some(result))
 }
 
 enum ProjectState {

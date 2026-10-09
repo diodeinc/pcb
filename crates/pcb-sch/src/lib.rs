@@ -701,7 +701,15 @@ impl Instance {
     }
 
     pub fn value(&self) -> Option<String> {
-        self.string_attr(&["Value", "value"])
+        self.string_attr(&["value"])
+    }
+
+    /// KiCad's Value field: explicit value, else part MPN, else symbol name.
+    pub fn kicad_value(&self) -> String {
+        self.value()
+            .or_else(|| self.mpn())
+            .or_else(|| self.string_attr(&["symbol_name"]))
+            .unwrap_or_else(|| "?".to_owned())
     }
 
     pub fn dnp(&self) -> bool {

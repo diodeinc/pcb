@@ -12,7 +12,7 @@ VICTIM = io(Net())
 
 Component(
     name="STAIR",
-    footprint="Package_DIP:DIP-8_W7.62mm",
+    footprint="Package_DIP.pretty/DIP-8_W7.62mm.kicad_mod",
     symbol=Symbol(library="staircase.kicad_sym"),
     skip_bom=True,
     pins={

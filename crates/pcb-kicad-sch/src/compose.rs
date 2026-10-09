@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
+use pcb_sch::kicad_netlist::try_format_footprint_with_package_roots;
 use pcb_sch::{ATTR_SCHEMATIC_PATH, Instance, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
 
@@ -470,8 +471,9 @@ fn project_component_slot(
     };
     let mirror = previous.and_then(|symbol| symbol.mirror);
     // Derive fields and library identity from the authoritative definition, never a cache key.
-    let mut symbol =
-        build_component_symbol(instance, slot, definition, at, rotation, mirror, previous)?;
+    let mut symbol = build_component_symbol(
+        netlist, instance, slot, definition, at, rotation, mirror, previous,
+    )?;
 
     // A native save may give an instance its own presentation without changing
     // the library identity. Keep that presentation unless the symbol is replaced
@@ -1697,7 +1699,9 @@ fn replace_placed_symbol(document: &mut SchDocument, item: &PlacedSymbol) -> Res
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_component_symbol(
+    netlist: &Schematic,
     instance: &Instance,
     slot: &SymbolSlotKey,
     definition: &SymbolDefinition,
@@ -1709,7 +1713,7 @@ fn build_component_symbol(
     let mut fields = previous
         .map(|symbol| symbol.fields.clone())
         .unwrap_or_default();
-    for next in component_fields(instance, slot, &definition.lib_id, at)? {
+    for next in component_fields(netlist, instance, slot, at)? {
         match fields.get_mut(&next.name) {
             Some(existing) => {
                 existing.value = next.value;
@@ -1808,9 +1812,9 @@ fn reconcile_pin_instances(
 }
 
 fn component_fields(
+    netlist: &Schematic,
     instance: &Instance,
     slot: &SymbolSlotKey,
-    lib_id: &str,
     at: Point,
 ) -> Result<Vec<SymbolField>> {
     let reference = instance
@@ -1823,34 +1827,30 @@ fn component_fields(
                 slot.component_path()
             )
         })?;
-    let value = first_attribute(instance, &["Value", "value"])?
-        .unwrap_or(lib_id)
-        .to_string();
+    let footprint = component_slots::attribute_string(instance, "footprint")?
+        .with_context(|| format!("component '{}' has no footprint", slot.component_path()))?;
+    let (footprint_id, _) =
+        try_format_footprint_with_package_roots(footprint, &netlist.package_roots)
+            .with_context(|| format!("Failed to resolve footprint path '{footprint}'"))?;
     let mut fields = vec![
         SymbolField::new("Reference", reference, at),
-        SymbolField::new("Value", value, at),
+        SymbolField::new("Value", instance.kicad_value(), at),
+        SymbolField::new("Footprint", footprint_id, at).with_hidden(true),
         SymbolField::new("Path", slot.component_path(), at).with_hidden(true),
     ];
-    if let Some(footprint) = first_attribute(instance, &["Footprint", "footprint"])? {
-        fields.push(SymbolField::new("Footprint", footprint, at).with_hidden(true));
+    if let Some(datasheet) = component_slots::attribute_string(instance, "datasheet")? {
+        fields.push(SymbolField::new("Datasheet", datasheet, at).with_hidden(true));
     }
-    if let Some(description) = first_attribute(
-        instance,
-        &["schematic_description", "Description", "description"],
-    )? {
+    // Imported boards persist the original schematic Description; an explicitly
+    // empty one is meaningful.
+    let description = match component_slots::attribute_string(instance, "schematic_description")? {
+        Some(description) => Some(description),
+        None => component_slots::attribute_string(instance, "description")?,
+    };
+    if let Some(description) = description {
         fields.push(SymbolField::new("Description", description, at).with_hidden(true));
     }
     Ok(fields)
-}
-
-fn first_attribute<'a>(instance: &'a Instance, keys: &[&str]) -> Result<Option<&'a str>> {
-    for key in keys {
-        // Explicitly empty display fields are meaningful, unlike absent attributes.
-        if let Some(value) = component_slots::attribute_string(instance, key)? {
-            return Ok(Some(value));
-        }
-    }
-    Ok(None)
 }
 
 #[derive(Clone)]
@@ -3665,6 +3665,34 @@ fn resolve_pin_targets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn footprint_field_uses_kicad_library_id() {
+        let mut netlist = Schematic::new();
+        netlist.package_roots.insert(
+            "github.com/example/footprints@1.0.0".to_string(),
+            "/vendor/github.com/example/footprints/1.0.0".into(),
+        );
+        let mut instance = Instance::component(pcb_sch::ModuleRef::new("board.zen", "R1"));
+        instance.reference_designator = Some("R1".to_string());
+        instance.add_attribute(
+            "footprint",
+            pcb_sch::AttributeValue::String(
+                "package://github.com/example/footprints@1.0.0/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod".to_string(),
+            ),
+        );
+        let slot = SymbolSlotKey::new("R1", 1).unwrap();
+
+        let fields = component_fields(&netlist, &instance, &slot, Point::default()).unwrap();
+        let footprint = fields
+            .iter()
+            .find(|field| field.name == "Footprint")
+            .unwrap();
+        assert_eq!(
+            footprint.value,
+            "example_footprints_Resistor_SMD@1.0.0:R_0402_1005Metric"
+        );
+    }
 
     #[test]
     fn same_facing_net_symbols_make_two_pin_terminal_axis_horizontal() {
