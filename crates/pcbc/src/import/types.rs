@@ -115,6 +115,14 @@ pub(super) struct ImportPaths {
     pub(super) kicad_input_abs: PathBuf,
 }
 
+impl ImportPaths {
+    /// Generated KiCad project directory, shared by layout and schematic.
+    pub(super) fn project_dir(&self) -> PathBuf {
+        self.workspace_root
+            .join(crate::codegen::board::BOARD_PROJECT_DIR)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ImportSourceKind {
     Schematic,
@@ -157,7 +165,7 @@ pub(super) struct ImportSelection {
 pub(super) struct ImportIr {
     pub(super) components: BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     pub(super) nets: BTreeMap<KiCadNetName, ImportNetData>,
-    pub(super) schematic_lib_symbols: BTreeMap<KiCadLibId, String>,
+    pub(super) schematic_lib_symbol_ids: BTreeSet<KiCadLibId>,
     pub(super) schematic_power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl>,
     pub(super) schematic_sheet_tree: ImportSheetTree,
     pub(super) hierarchy_plan: ImportHierarchyPlan,

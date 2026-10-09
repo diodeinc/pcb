@@ -24,13 +24,14 @@ pub(super) fn materialize_board(
         &validation.diagnostics,
     )?;
 
-    let (layout_dir, layout_kicad_pro, layout_kicad_pcb) =
+    let layout_dir = paths.project_dir();
+    let (layout_kicad_pro, layout_kicad_pcb) =
         if selection.portable.source_kind == ImportSourceKind::Project {
-            let (layout_dir, kicad_pro, kicad_pcb) =
-                copy_layout_sources(staged_root, &validation.summary.selected, &board_dir)?;
-            (layout_dir, Some(kicad_pro), Some(kicad_pcb))
+            let (kicad_pro, kicad_pcb) =
+                copy_layout_sources(staged_root, &validation.summary.selected, &layout_dir)?;
+            (Some(kicad_pro), Some(kicad_pcb))
         } else {
-            (board_dir.join("layout"), None, None)
+            (None, None)
         };
 
     // The live schematic is the original hierarchy, not a reconstruction from symbol positions.
@@ -102,10 +103,9 @@ fn write_validation_diagnostics(
 fn copy_layout_sources(
     kicad_project_root: &Path,
     selected: &SelectedKicadFiles,
-    board_dir: &Path,
-) -> Result<(PathBuf, PathBuf, PathBuf)> {
-    let layout_dir = board_dir.join("layout");
-    fs::create_dir_all(&layout_dir)
+    layout_dir: &Path,
+) -> Result<(PathBuf, PathBuf)> {
+    fs::create_dir_all(layout_dir)
         .with_context(|| format!("Failed to create layout directory {}", layout_dir.display()))?;
 
     let selected_pro = selected
@@ -154,7 +154,7 @@ fn copy_layout_sources(
     })?;
     copy_optional_kicad_dru(&src_pro, &dst_pro)?;
 
-    Ok((layout_dir, dst_pro, dst_pcb))
+    Ok((dst_pro, dst_pcb))
 }
 
 fn copy_optional_kicad_dru(src_pro: &Path, dst_pro: &Path) -> Result<()> {
@@ -204,8 +204,9 @@ mod tests {
     #[test]
     fn copy_layout_sources_copies_kicad_dru_when_present() {
         let (_dir, src_root, board_dir) = setup_sources(true);
-        let (_layout_dir, dst_pro, _dst_pcb) =
-            copy_layout_sources(&src_root, &selected_files(), &board_dir).expect("copy layout");
+        let (dst_pro, _dst_pcb) =
+            copy_layout_sources(&src_root, &selected_files(), &board_dir.join("eda"))
+                .expect("copy layout");
 
         let dst_dru = dst_pro.with_extension("kicad_dru");
         assert!(dst_dru.is_file());
@@ -218,8 +219,9 @@ mod tests {
     #[test]
     fn copy_layout_sources_skips_kicad_dru_when_missing() {
         let (_dir, src_root, board_dir) = setup_sources(false);
-        let (_layout_dir, dst_pro, _dst_pcb) =
-            copy_layout_sources(&src_root, &selected_files(), &board_dir).expect("copy layout");
+        let (dst_pro, _dst_pcb) =
+            copy_layout_sources(&src_root, &selected_files(), &board_dir.join("eda"))
+                .expect("copy layout");
 
         assert!(!dst_pro.with_extension("kicad_dru").exists());
     }

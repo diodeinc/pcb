@@ -114,7 +114,7 @@ mod net_kind_tests {
         ImportIr {
             components: BTreeMap::new(),
             nets: BTreeMap::new(),
-            schematic_lib_symbols: BTreeMap::new(),
+            schematic_lib_symbol_ids: BTreeSet::new(),
             schematic_power_symbol_decls: Vec::new(),
             schematic_sheet_tree: ImportSheetTree {
                 root_schematic: PathBuf::from("root.kicad_sch"),

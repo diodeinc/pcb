@@ -98,8 +98,16 @@ fn prepare_output(
         );
     }
 
-    // Standalone reimport retains layout/, so reject conflicting projects before cleanup.
-    let layout_dir = board_repo.join("layout");
+    // Older imports wrote layout/. Require an explicit move rather than orphaning its PCB.
+    let layout_dir = paths.project_dir();
+    let legacy_layout_dir = board_repo.join("layout");
+    anyhow::ensure!(
+        !legacy_layout_dir.is_dir(),
+        "Board repository has a legacy layout/ directory. Move its KiCad project into {}/ and reimport.",
+        crate::codegen::board::BOARD_PROJECT_DIR
+    );
+
+    // Standalone reimport retains the project directory, so reject conflicting projects before cleanup.
     if selection.portable.source_kind == ImportSourceKind::Schematic && layout_dir.is_dir() {
         let expected = layout_dir.join(selection.selected.kicad_sch.with_extension("kicad_pro"));
         for entry in std::fs::read_dir(&layout_dir)? {
@@ -115,11 +123,7 @@ fn prepare_output(
     }
 
     if args.force {
-        remove_generated_output(
-            board_repo,
-            &selection.board_name,
-            selection.portable.source_kind,
-        )?;
+        remove_generated_output(paths, &selection.board_name, selection.portable.source_kind)?;
     }
 
     if !existing_board_repo {
@@ -133,10 +137,11 @@ fn prepare_output(
 }
 
 fn remove_generated_output(
-    board_dir: &Path,
+    import_paths: &ImportPaths,
     board_name: &str,
     source_kind: ImportSourceKind,
 ) -> Result<()> {
+    let board_dir = &import_paths.workspace_root;
     let mut paths = vec![
         board_dir.join(format!("{board_name}.zen")),
         board_dir.join("modules"),
@@ -146,7 +151,7 @@ fn remove_generated_output(
         board_dir.join(format!("{board_name}.kicad.archive.zip")),
     ];
     if source_kind == ImportSourceKind::Project {
-        paths.push(board_dir.join("layout"));
+        paths.push(import_paths.project_dir());
     }
 
     for path in paths {
@@ -317,18 +322,30 @@ impl Materialized {
 mod tests {
     use super::*;
 
+    fn import_paths(board_dir: &Path) -> ImportPaths {
+        ImportPaths {
+            workspace_root: board_dir.to_path_buf(),
+            kicad_project_root: board_dir.to_path_buf(),
+            kicad_input_abs: board_dir.join("board.kicad_sch"),
+        }
+    }
+
     #[test]
     fn standalone_cleanup_preserves_layout_and_removes_archive() {
         let temp = tempfile::tempdir().expect("tempdir");
         let board_dir = temp.path();
-        let layout_file = board_dir.join("layout/user-layout.kicad_pcb");
+        let layout_file = board_dir.join("eda/user-layout.kicad_pcb");
         let archive_file = board_dir.join("board.kicad.archive.zip");
         std::fs::create_dir_all(layout_file.parent().unwrap()).expect("create layout");
         std::fs::write(&layout_file, "user layout").expect("write layout");
         std::fs::write(&archive_file, "stale project archive").expect("write archive");
 
-        remove_generated_output(board_dir, "board", ImportSourceKind::Schematic)
-            .expect("clean standalone output");
+        remove_generated_output(
+            &import_paths(board_dir),
+            "board",
+            ImportSourceKind::Schematic,
+        )
+        .expect("clean standalone output");
 
         assert_eq!(
             std::fs::read_to_string(layout_file).expect("read preserved layout"),
@@ -347,8 +364,12 @@ mod tests {
         let board_zen = board_dir.join("board.zen");
         symlink(board_dir.join("missing-target"), &board_zen).expect("create dangling symlink");
 
-        remove_generated_output(board_dir, "board", ImportSourceKind::Schematic)
-            .expect("clean standalone output");
+        remove_generated_output(
+            &import_paths(board_dir),
+            "board",
+            ImportSourceKind::Schematic,
+        )
+        .expect("clean standalone output");
 
         assert!(std::fs::symlink_metadata(board_zen).is_err());
     }

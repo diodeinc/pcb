@@ -63,8 +63,7 @@ pub(super) fn extract_ir(
         .map(|relative| staged_root.join(relative))
         .or_else(|| {
             let retained = paths
-                .workspace_root
-                .join("layout")
+                .project_dir()
                 .join(selection.selected.kicad_sch.with_extension("kicad_pcb"));
             retained.is_file().then_some(retained)
         });
@@ -80,7 +79,7 @@ pub(super) fn extract_ir(
     Ok(ImportIr {
         components: netlist.components,
         nets: netlist.nets,
-        schematic_lib_symbols: schematic.lib_symbols,
+        schematic_lib_symbol_ids: schematic.lib_symbol_ids,
         schematic_power_symbol_decls: schematic.power_symbol_decls,
         schematic_sheet_tree,
         hierarchy_plan: ImportHierarchyPlan::default(),
@@ -90,7 +89,7 @@ pub(super) fn extract_ir(
 
 #[derive(Debug)]
 struct KiCadSchematicExtraction {
-    lib_symbols: BTreeMap<KiCadLibId, String>,
+    lib_symbol_ids: BTreeSet<KiCadLibId>,
     power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl>,
     sheet_symbols_by_uuid: BTreeMap<String, SchematicSheetSymbol>,
 }
@@ -170,7 +169,7 @@ fn extract_kicad_schematic_data(
     kicad_sch_files: &[PathBuf],
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
 ) -> Result<KiCadSchematicExtraction> {
-    let mut lib_symbols: BTreeMap<KiCadLibId, String> = BTreeMap::new();
+    let mut lib_symbol_ids: BTreeSet<KiCadLibId> = BTreeSet::new();
     let mut power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl> = Vec::new();
     let mut sheet_symbols_by_uuid: BTreeMap<String, SchematicSheetSymbol> = BTreeMap::new();
     let root_text = fs::read_to_string(staged_root.join(root_schematic))?;
@@ -218,30 +217,7 @@ fn extract_kicad_schematic_data(
                 if sexpr_kicad::child_list(items, "power").is_some() {
                     power_lib_ids.insert(lib_id.clone());
                 }
-
-                let rendered = text
-                    .get(node.span.start..node.span.end)
-                    .with_context(|| {
-                        format!(
-                            "Failed to slice embedded lib_symbol S-expression span {}..{} from {}",
-                            node.span.start,
-                            node.span.end,
-                            source_abs.display()
-                        )
-                    })?
-                    .to_string();
-                match lib_symbols.get(&lib_id) {
-                    None => {
-                        lib_symbols.insert(lib_id, rendered);
-                    }
-                    Some(existing) if existing == &rendered => {}
-                    Some(_) => {
-                        debug!(
-                            "Conflicting embedded lib_symbols entry for {}; keeping first",
-                            lib_id.as_str()
-                        );
-                    }
-                }
+                lib_symbol_ids.insert(lib_id);
             }
         }
 
@@ -407,7 +383,7 @@ fn extract_kicad_schematic_data(
     }
 
     Ok(KiCadSchematicExtraction {
-        lib_symbols,
+        lib_symbol_ids,
         power_symbol_decls,
         sheet_symbols_by_uuid,
     })

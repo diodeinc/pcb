@@ -46,7 +46,7 @@ pub(super) fn build_import_report(
         extraction: Some(super::ImportExtractionReport {
             netlist_components: ir.components,
             netlist_nets: ir.nets,
-            schematic_lib_symbol_ids: ir.schematic_lib_symbols.keys().cloned().collect(),
+            schematic_lib_symbol_ids: ir.schematic_lib_symbol_ids,
             schematic_power_symbol_decls: ir.schematic_power_symbol_decls,
             schematic_sheet_tree: ir.schematic_sheet_tree,
             hierarchy_plan: ir.hierarchy_plan,
