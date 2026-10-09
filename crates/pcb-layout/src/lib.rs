@@ -1106,13 +1106,11 @@ pub mod utils {
             .instances
             .values()
             .filter(|inst| inst.kind == InstanceKind::Component)
-            .filter_map(|inst| {
-                schematic
-                    .kicad_footprint(inst)
-                    .map(|(_, lib)| lib)
-                    .transpose()
-            })
-            .collect::<anyhow::Result<HashMap<_, _>>>()?;
+            .map(|inst| schematic.kicad_footprint(inst))
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .into_iter()
+            .filter_map(|(_, lib)| lib)
+            .collect::<HashMap<_, _>>();
 
         // Canonicalize the layout directory to avoid symlink issues on macOS
         let canonical_layout_dir = layout_dir
