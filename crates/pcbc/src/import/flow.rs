@@ -139,6 +139,7 @@ fn prepare_output(
                     .iter()
                     .map(|extra| extra.source_path.clone()),
             )
+            .chain(portable.resolved_project_footprints.values().cloned())
             .collect();
         remove_generated_output(paths, &selection.board_name, source_board, &inputs)?;
     }
