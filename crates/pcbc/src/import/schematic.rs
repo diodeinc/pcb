@@ -163,29 +163,57 @@ fn issue_summary(
     }
 }
 
+/// Each piece's visible label text and sheet files. Island names carry the bound `pcb:net`
+/// names and nested page ids are instance paths, so both are resolved through item UUIDs.
 fn split_net_pieces(
     net: &NetAnalysis,
     islands: &BTreeMap<IslandRef, PhysicalIsland>,
     document: &pcb_kicad_sch::SchDocument,
 ) -> String {
+    let items_by_id = document
+        .pages
+        .iter()
+        .flat_map(|page| {
+            let file = page.file_name.as_deref().unwrap_or_default();
+            page.items
+                .iter()
+                .filter_map(move |item| Some((item.id()?, (file, item))))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let lookup = |item: &ConnectivityItemRef| {
+        let id = match item {
+            ConnectivityItemRef::Symbol { id, .. }
+            | ConnectivityItemRef::Wire { id, .. }
+            | ConnectivityItemRef::Junction { id, .. }
+            | ConnectivityItemRef::NoConnect { id, .. }
+            | ConnectivityItemRef::Label { id, .. } => id,
+            ConnectivityItemRef::SheetPin { sheet_id, .. } => sheet_id,
+        };
+        items_by_id.get(id.as_str()).copied()
+    };
     net.connected_islands
         .iter()
         .map(|piece| {
-            let names = piece
+            let piece = piece
                 .iter()
                 .filter_map(|island| islands.get(island))
-                .flat_map(|island| &island.names)
+                .collect::<Vec<_>>();
+            let names = piece
+                .iter()
+                .flat_map(|island| island.named_drivers.values().flatten())
+                .filter_map(lookup)
+                .filter_map(|(_, item)| match item {
+                    pcb_kicad_sch::SchItem::Label(label) => Some(label.text.as_str()),
+                    pcb_kicad_sch::SchItem::Symbol(symbol) => symbol.field_value("Value"),
+                    _ => None,
+                })
                 .map(|name| format!("'{name}'"))
                 .collect::<BTreeSet<_>>();
             let files = piece
                 .iter()
-                .filter_map(|island| {
-                    let page = document
-                        .pages
-                        .iter()
-                        .find(|page| page.id == island.page_id)?;
-                    page.file_name.clone()
-                })
+                .flat_map(|island| &island.items)
+                .filter_map(lookup)
+                .map(|(file, _)| file)
                 .collect::<BTreeSet<_>>();
             let names = if names.is_empty() {
                 "unlabelled wiring".to_string()
@@ -312,41 +340,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn split_net_names_each_piece_and_its_sheet() {
-        let island = |page_id: &str, index| IslandRef {
-            page_id: page_id.into(),
-            index,
+    fn split_net_names_visible_labels_and_nested_sheets() -> Result<()> {
+        let page = |uuid: &str, body: &str| {
+            format!(
+                r#"(kicad_sch (version 20260306) (generator "eeschema") (uuid "{uuid}") (paper "A4") (lib_symbols) {body})"#
+            )
         };
-        let named = |names: &[&str]| {
-            let mut island = PhysicalIsland::default();
-            island.names = names.iter().map(|name| name.to_string()).collect();
-            island
+        let label = |uuid: &str, text: &str| {
+            format!(
+                r#"(label "{text}" (at 10 10 0) (effects (font (size 1.27 1.27))) (uuid "{uuid}")
+                (property "pcb:net" "VCC" (at 0 0 0) (hide yes)))"#
+            )
         };
-        let page = |id: &str, file: &str| pcb_kicad_sch::SchPage {
-            file_name: Some(file.into()),
-            ..pcb_kicad_sch::SchPage::new(id)
-        };
+        let files = BTreeMap::from([
+            (
+                "root.kicad_sch",
+                page(
+                    "root",
+                    &[
+                        label("root-label", "VCC"),
+                        r#"(sheet (at 0 0) (size 10 10) (uuid "sheet-a")
+                        (property "Sheetname" "A" (at 0 0 0)) (property "Sheetfile" "child.kicad_sch" (at 0 0 0)))"#
+                            .to_string(),
+                    ]
+                    .concat(),
+                ),
+            ),
+            ("child.kicad_sch", page("child", &label("child-label", "VCC_ALIAS"))),
+        ]);
+        let document =
+            pcb_kicad_sch::load_project("root.kicad_pro", |path| Ok(files.get(path).cloned()))?
+                .document;
+        let physical = PhysicalConnectivity::from_kicad(&document, PinVisibility::IncludeHidden)?;
+        let pieces = physical
+            .islands
+            .iter()
+            .filter(|(_, island)| !island.named_drivers.is_empty())
+            .map(|(island, _)| vec![island.clone()])
+            .collect::<Vec<_>>();
         let net = NetAnalysis {
             name: "VCC".into(),
             expected_terminals: Vec::new(),
             missing_terminals: Vec::new(),
-            islands: vec![island("root", 0), island("power", 0)],
-            connected_islands: vec![vec![island("root", 0)], vec![island("power", 0)]],
+            islands: pieces.concat(),
+            connected_islands: pieces,
         };
-        let islands = BTreeMap::from([
-            (island("root", 0), named(&["VCC"])),
-            (island("power", 0), named(&["/power/VCC_ALIAS"])),
-        ]);
-        let document = pcb_kicad_sch::SchDocument {
-            pages: vec![
-                page("root", "root.kicad_sch"),
-                page("power", "power.kicad_sch"),
-            ],
-            ..Default::default()
-        };
-        assert_eq!(
-            split_net_pieces(&net, &islands, &document),
-            "'VCC' in root.kicad_sch | '/power/VCC_ALIAS' in power.kicad_sch"
+        let summary = split_net_pieces(&net, &physical.islands, &document);
+        assert!(summary.contains("'VCC' in root.kicad_sch"), "{summary}");
+        assert!(
+            summary.contains("'VCC_ALIAS' in child.kicad_sch"),
+            "{summary}"
         );
+        Ok(())
     }
 }

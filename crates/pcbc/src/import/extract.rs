@@ -30,7 +30,6 @@ pub(super) fn extract_ir(
 
     let schematic =
         extract_kicad_schematic_data(&selection.portable.schematic, &mut netlist.components)?;
-    ensure_footprints_linked(&pcb_refdes_to_anchor_key, &netlist.components)?;
     netlist.unit_to_anchor = netlist
         .components
         .iter()
@@ -48,6 +47,7 @@ pub(super) fn extract_ir(
         &netlist.components,
         &schematic.sheet_symbols,
     );
+    ensure_footprints_linked(&pcb_refdes_to_anchor_key, &schematic_sheet_tree)?;
 
     let layout_pcb = source_pcb
         .map(|relative| staged_root.join(relative))
@@ -167,25 +167,27 @@ fn parse_kicad_pcb_refdes_to_anchor_key(
     Ok(out)
 }
 
-/// Footprints join the schematic by UUID path; a path naming no placed symbol (typical of
-/// converted projects) would hang the component off a sheet that does not exist.
+/// Footprints whose paths name a sheet outside the schematic (typical of converted projects)
+/// would hang their components off a sheet that does not exist. Stale symbol UUIDs on a real
+/// sheet are fine: layout extraction joins those by reference.
 fn ensure_footprints_linked(
     pcb_anchors: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
-    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    sheet_tree: &ImportSheetTree,
 ) -> Result<()> {
     let unlinked = pcb_anchors
         .iter()
         .filter(|(_, path)| {
-            components
-                .get(*path)
-                .and_then(|component| component.schematic.as_ref())
-                .is_some_and(|schematic| !schematic.units.contains_key(*path))
+            let sheet = KiCadSheetPath::from_sheetpath_tstamps(&path.sheetpath_tstamps);
+            sheet_tree
+                .nodes
+                .get(&sheet)
+                .is_some_and(|node| node.schematic_file.is_none())
         })
         .map(|(refdes, path)| format!("{} (footprint path {})", refdes.as_str(), path.pcb_path()))
         .collect::<Vec<_>>();
     anyhow::ensure!(
         unlinked.is_empty(),
-        "PCB footprints are not linked to the schematic (their paths match no placed symbol): {}. \
+        "PCB footprints are not linked to the schematic (their paths name sheets the schematic does not have): {}. \
          In KiCad's PCB editor, run Update PCB from Schematic with \
          \"Re-link footprints to schematic symbols based on their reference designators\" \
          checked, save, and import again",
@@ -1418,13 +1420,18 @@ mod tests {
         let netlist = r#"(export (components
             (comp (ref "R1") (sheetpath (tstamps "/sheet-a/")) (tstamps "r1")))
             (nets))"#;
-        for (pcb_path, linked) in [("/sheet-a/r1", true), ("/altium/r1", false)] {
+        // A stale symbol UUID on a real sheet still joins by reference.
+        for (pcb_path, linked) in [
+            ("/sheet-a/r1", true),
+            ("/sheet-a/stale", true),
+            ("/altium/r1", false),
+        ] {
             let pcb_anchors = BTreeMap::from([(
                 KiCadRefDes::from("R1".to_string()),
                 KiCadUuidPathKey::from_pcb_path(pcb_path)?,
             )]);
             let mut netlist = parse_kicad_sexpr_netlist(netlist, &pcb_anchors)?;
-            extract_kicad_schematic_data(&schematic, &mut netlist.components)?;
+            let extracted = extract_kicad_schematic_data(&schematic, &mut netlist.components)?;
             let units = &netlist.components[&pcb_anchors[&KiCadRefDes::from("R1".to_string())]]
                 .schematic
                 .as_ref()
@@ -1434,7 +1441,12 @@ mod tests {
                 units.keys().map(|key| key.pcb_path()).collect::<Vec<_>>(),
                 ["/sheet-a/r1"]
             );
-            let linked_result = ensure_footprints_linked(&pcb_anchors, &netlist.components);
+            let tree = build_schematic_sheet_tree(
+                Path::new("root.kicad_sch"),
+                &netlist.components,
+                &extracted.sheet_symbols,
+            );
+            let linked_result = ensure_footprints_linked(&pcb_anchors, &tree);
             if linked {
                 linked_result?;
             } else {
