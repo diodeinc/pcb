@@ -264,7 +264,7 @@ pub fn build_board_release(
                 ));
         }
         let report = serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 1,
             "version": options.version,
             "stages": stages,
             "diagnostics": release_diagnostics(&diagnostics, workspace_root, &temporary.path().join("release")),
