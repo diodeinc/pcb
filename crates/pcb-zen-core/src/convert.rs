@@ -359,6 +359,7 @@ impl ModuleConverter {
         // so emit them during schematic conversion rather than in layout sync.
         self.diagnose_missing_bom_part_components(&mut diagnostics);
         self.diagnose_unused_module_io(&module_tree, &mut diagnostics);
+        diagnose_ignored_schematic_option(&module_tree, &mut diagnostics);
         self.diagnose_not_connected_multi_port(root_module.source_path(), &mut diagnostics);
         let mut seen = HashSet::new();
         for conflict in std::mem::take(&mut self.net_property_conflicts) {
@@ -1148,6 +1149,40 @@ impl ModuleConverter {
         }
 
         (diagnostics, filtered)
+    }
+}
+
+/// In a linked KiCad schematic, `Project()` alone decides which modules are sheets.
+fn diagnose_ignored_schematic_option(
+    module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
+    diagnostics: &mut Diagnostics,
+) {
+    let linked = |module: &FrozenModuleValue| {
+        module
+            .properties()
+            .contains_key(pcb_sch::ATTR_SCHEMATIC_PATH)
+    };
+    if !linked(module_tree[&ModulePath::root()]) {
+        return;
+    }
+    for (path, module) in module_tree {
+        let Some((file, span)) = module.call_site.as_ref().filter(|_| linked(module)) else {
+            continue;
+        };
+        for option in ["collapse", "embed"]
+            .into_iter()
+            .filter(|option| module.properties().contains_key(*option))
+        {
+            diagnostics.push(
+                Diagnostic::categorized(
+                    file,
+                    &format!("`schematic=\"{option}\"` is ignored: '{path}' declares Project() in a linked schematic"),
+                    "module.schematic.ignored",
+                    EvalSeverity::Warning,
+                )
+                .with_span(Some(*span)),
+            );
+        }
     }
 }
 

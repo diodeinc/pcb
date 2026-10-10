@@ -1095,6 +1095,8 @@ impl EvalContext {
                         .map(|v| v.to_value())
                         .collect(),
                 );
+                module_value.call_site =
+                    Some((pending.call_site_path.clone(), pending.call_site_span));
             }
             if let Some(properties) = &pending.properties {
                 for (name, value) in properties {
