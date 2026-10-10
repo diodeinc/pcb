@@ -2648,8 +2648,10 @@ mod tests {
 
     #[test]
     fn kicad_10_saved_sheet_round_trips_byte_identically() {
-        let document = SchDocument::from_kicad_sch(KICAD_10_RESAVED_FIXTURE).unwrap();
-        let expected = KICAD_10_RESAVED_FIXTURE
+        // Git may check the fixture out with CRLF on Windows.
+        let fixture = KICAD_10_RESAVED_FIXTURE.replace("\r\n", "\n");
+        let document = SchDocument::from_kicad_sch(&fixture).unwrap();
+        let expected = fixture
             .replace("(generator \"eeschema\")", "(generator \"diode\")")
             .replace(
                 "(generator_version \"10.0\")",
