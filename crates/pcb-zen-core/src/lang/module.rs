@@ -479,6 +479,10 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     /// parent.parent_component_modifiers(), creating the full ancestor chain.
     /// Applied AFTER the module's own modifiers.
     parent_component_modifiers: Vec<V>,
+    /// Where the parent instantiated this module; `None` for the root.
+    #[freeze(identity)]
+    #[allocative(skip)]
+    pub(crate) call_site: Option<(String, ResolvedSpan)>,
 }
 
 pub type ModuleValue<'v> = ModuleValueGen<Value<'v>>;
@@ -589,6 +593,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             children: Vec::new(),
             component_modifiers: Vec::new(),
             parent_component_modifiers: Vec::new(),
+            call_site: None,
         }
     }
 

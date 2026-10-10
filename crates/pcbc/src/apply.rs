@@ -159,6 +159,9 @@ fn print_schematic_result(
         LayoutOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&result)?),
         LayoutOutputFormat::Human => {
             if let Some(result) = result {
+                for warning in &result.warnings {
+                    eprintln!("{} {warning}", pcb_ui::icons::warning());
+                }
                 println!(
                     "{} {} schematic {} ({})",
                     pcb_ui::icons::success(),
