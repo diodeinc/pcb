@@ -323,17 +323,39 @@ fn extract_kicad_schematic_data(
                         }
                         _ => None,
                     });
-            for instance in &symbol.instances {
-                // A reused file can retain instances from other projects. Their references
-                // are unrelated even when their symbol UUID or reference happens to match.
-                if instance.path.trim_matches('/').split('/').next() != Some(root.id.as_str())
-                    || !targets_file(&instance.path)
-                {
-                    continue;
-                }
-                let Some(anchor) = instance.reference.as_ref().and_then(|reference| {
-                    refdes_to_anchor.get(&KiCadRefDes::from(reference.clone()))
-                }) else {
+            // Placements of this symbol as (sheet path, reference, unit). A reused file
+            // can retain instances from other projects or deleted sheets; their
+            // references are unrelated even when the symbol UUID or reference matches.
+            let mut placements = symbol
+                .instances
+                .iter()
+                .filter(|instance| {
+                    instance.path.trim_matches('/').split('/').next() == Some(root.id.as_str())
+                        && targets_file(&instance.path)
+                })
+                .filter_map(|instance| {
+                    let reference = instance.reference.clone()?;
+                    let unit = instance.unit.unwrap_or(symbol.unit);
+                    Some((instance.path.clone(), reference, unit))
+                })
+                .collect::<Vec<_>>();
+            // Without instance data, as in files KiCad has not re-saved since an Altium
+            // import, KiCad reads the reference and unit from the symbol itself and its
+            // netlist says which sheet the symbol is on.
+            if placements.is_empty()
+                && let Some(reference) = symbol.reference()
+            {
+                let sheet = refdes_to_anchor
+                    .get(&KiCadRefDes::from(reference.to_string()))
+                    .and_then(|anchor| {
+                        let units = &netlist_components[anchor].netlist.unit_pcb_paths;
+                        units.iter().find(|unit| unit.symbol_uuid == symbol.id)
+                    })
+                    .map(|unit| format!("/{}{}", root.id, unit.sheetpath_tstamps));
+                placements.extend(sheet.map(|path| (path, reference.to_string(), symbol.unit)));
+            }
+            for (path, reference, unit) in placements {
+                let Some(anchor) = refdes_to_anchor.get(&KiCadRefDes::from(reference)) else {
                     continue;
                 };
                 let Some(entry) = netlist_components.get_mut(anchor) else {
@@ -343,18 +365,18 @@ fn extract_kicad_schematic_data(
                     );
                     continue;
                 };
-                let key = key_from_schematic_instance_path(&instance.path, &symbol.id)?;
+                let key = key_from_schematic_instance_path(&path, &symbol.id)?;
                 let unit = ImportSchematicUnit {
                     lib_name: symbol.lib_name.clone(),
                     lib_id: Some(lib_id.clone()),
-                    unit: Some(i64::from(instance.unit.unwrap_or(symbol.unit))),
+                    unit: Some(i64::from(unit)),
                     at: at.clone(),
                     mirror: mirror.clone(),
                     in_bom: Some(symbol.in_bom),
                     on_board: Some(symbol.on_board),
                     dnp: Some(symbol.dnp),
                     exclude_from_sim,
-                    instance_path: Some(instance.path.clone()),
+                    instance_path: Some(path),
                     properties: properties.clone(),
                     pins: (!pins.is_empty()).then(|| pins.clone()),
                 };
@@ -1609,6 +1631,84 @@ mod tests {
                 ("other:+3V3", Some("+3V3"))
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn symbols_without_instance_data_join_by_reference_on_the_netlist_sheet() -> Result<()> {
+        let schematic = load(&[
+            (
+                "root.kicad_sch",
+                page(
+                    "root-uuid",
+                    &[
+                        sheet("sheet-a", "A", "child.kicad_sch"),
+                        symbol("Device:R", "sym-a", "10 20 0", &[("Reference", "R1")], ""),
+                        // Instance data for a sheet that no longer exists is dead.
+                        symbol(
+                            "Device:J",
+                            "sym-c",
+                            "50 60 0",
+                            &[("Reference", "J1")],
+                            r#"(project "demo" (path "/root-uuid/gone" (reference "J1") (unit 1)))"#,
+                        ),
+                    ]
+                    .concat(),
+                ),
+            ),
+            (
+                "child.kicad_sch",
+                page(
+                    "child-uuid",
+                    &symbol("Device:C", "sym-b", "30 40 0", &[("Reference", "C1")], ""),
+                ),
+            ),
+        ])?;
+        let anchor = |sheetpath: &str, uuid: &str| KiCadUuidPathKey {
+            sheetpath_tstamps: sheetpath.to_string(),
+            symbol_uuid: uuid.to_string(),
+        };
+        // A retained PCB anchors J1 by a sync path that is not a schematic sheet;
+        // only the netlist's unit path says where KiCad placed the symbol.
+        let mut netlist_components = [
+            (anchor("/", "sym-a"), "/", "sym-a", "R1"),
+            (anchor("/sheet-a/", "sym-b"), "/sheet-a/", "sym-b", "C1"),
+            (anchor("/pcb-sync/", "pcb-sync"), "/", "sym-c", "J1"),
+        ]
+        .into_iter()
+        .map(|(anchor_key, sheetpath, uuid, refdes)| {
+            (
+                anchor_key,
+                ImportComponentData {
+                    netlist: ImportNetlistComponent {
+                        refdes: KiCadRefDes::from(refdes.to_string()),
+                        value: None,
+                        footprint: None,
+                        sheetpath_names: None,
+                        unit_pcb_paths: vec![anchor(sheetpath, uuid)],
+                    },
+                    schematic: None,
+                    layout: None,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+        extract_kicad_schematic_data(&schematic, &mut netlist_components)?;
+
+        for (anchor_key, unit_key) in [
+            (anchor("/", "sym-a"), anchor("/", "sym-a")),
+            (anchor("/sheet-a/", "sym-b"), anchor("/sheet-a/", "sym-b")),
+            (anchor("/pcb-sync/", "pcb-sync"), anchor("/", "sym-c")),
+        ] {
+            let units = &netlist_components[&anchor_key]
+                .schematic
+                .as_ref()
+                .unwrap()
+                .units;
+            assert_eq!(units.keys().collect::<Vec<_>>(), [&unit_key]);
+            assert_eq!(units[&unit_key].unit, Some(1));
+        }
         Ok(())
     }
 
