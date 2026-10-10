@@ -1778,48 +1778,39 @@ fn reconcile_pin_instances(
     definition: &SymbolDefinition,
     previous: &[crate::PinInstance],
 ) -> Result<()> {
+    // KiCad's SCH_SYMBOL::UpdatePins: one record per definition pin, previous
+    // records matched by number in file order, alternate shared per number.
     let parsed = symbol::ParsedSymbolDefinition::parse(definition)?;
-    let mut pins_by_number = BTreeMap::<String, Vec<_>>::new();
-    for pin in parsed.instance_pins(symbol) {
-        if !pin.number.is_empty() {
-            pins_by_number
-                .entry(pin.number.clone())
-                .or_default()
-                .push(pin);
-        }
-    }
-
-    let mut previous_by_number = BTreeMap::new();
-    for pin in previous {
-        if previous_by_number
-            .insert(pin.number.clone(), pin.clone())
-            .is_some()
-        {
-            bail!(
-                "symbol {} has multiple placed pin instances numbered {}",
-                symbol.id,
-                pin.number
-            );
-        }
-    }
-
-    symbol.pins = pins_by_number
-        .into_iter()
-        .map(|(number, definition_pins)| {
-            let Some(mut pin) = previous_by_number.remove(&number) else {
-                return crate::PinInstance {
-                    id: deterministic_uuid(format!("{}:pin:{number}", symbol.id)),
-                    number,
-                    alternate: None,
-                    unsupported: Vec::new(),
-                };
-            };
-            pin.alternate = pin.alternate.filter(|alternate| {
-                definition_pins.len() == 1 && definition_pins[0].supports_alternate(alternate)
-            });
-            pin
+    let mut seen = BTreeMap::<&str, usize>::new();
+    symbol.pins = parsed
+        .instance_pins(symbol)
+        .filter(|pin| !pin.number.is_empty())
+        .map(|pin| {
+            let number = pin.number.as_str();
+            let n = seen.entry(number).and_modify(|n| *n += 1).or_insert(1);
+            let same_number = || previous.iter().filter(|p| p.number == number);
+            let mut instance =
+                same_number()
+                    .nth(*n - 1)
+                    .cloned()
+                    .unwrap_or_else(|| crate::PinInstance {
+                        id: deterministic_uuid(match *n {
+                            1 => format!("{}:pin:{number}", symbol.id),
+                            n => format!("{}:pin:{number}:{n}", symbol.id),
+                        }),
+                        number: pin.number.clone(),
+                        alternate: None,
+                        unsupported: Vec::new(),
+                    });
+            instance.alternate = same_number()
+                .rev()
+                .find_map(|p| p.alternate.as_deref())
+                .filter(|alternate| pin.supports_alternate(alternate))
+                .map(str::to_string);
+            instance
         })
         .collect();
+    symbol.pins.sort_by(|a, b| a.number.cmp(&b.number));
     Ok(())
 }
 

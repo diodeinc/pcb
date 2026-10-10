@@ -226,6 +226,7 @@ pub struct SheetInstance {
     /// Parent sheet UUID path, e.g. `/root-uuid`.
     pub path: String,
     pub page: String,
+    pub unsupported: Vec<Sexpr>,
 }
 
 impl Sheet {

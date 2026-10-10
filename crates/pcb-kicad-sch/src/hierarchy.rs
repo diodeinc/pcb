@@ -371,11 +371,10 @@ pub(crate) fn sync_instances(
                 )
             }
         };
-        match page {
-            Some(page) => {
-                used.insert(page);
-            }
-            None => unnumbered.push(sheet),
+        // Like KiCad's `RepairPageNumbers`: the first sheet claims a number;
+        // blank and repeated numbers get the lowest unused ones.
+        if !page.is_some_and(|page| used.insert(page)) {
+            unnumbered.push(sheet);
         }
     }
     drop(instances);
@@ -391,6 +390,7 @@ pub(crate) fn sync_instances(
                 project: project.to_string(),
                 path,
                 page,
+                unsupported: Vec::new(),
             });
     }
 
@@ -410,23 +410,25 @@ pub(crate) fn sync_instances(
             continue;
         };
         if let Some(root) = new_pages.remove(&(page.id.clone(), None)) {
-            // A root without a page number usually lacks KiCad's other trailing section too.
+            let is_section = |item: &SchItem, tag: &str| {
+                matches!(item, SchItem::Unsupported(sexpr)
+                    if find_child(std::slice::from_ref(sexpr), tag).is_some())
+            };
+            page.items
+                .retain(|item| !is_section(item, "sheet_instances"));
             let number = &root[0].page;
-            for (tag, source) in [
-                (
-                    "sheet_instances",
-                    format!(r#"(sheet_instances (path "/" (page "{number}")))"#),
-                ),
-                ("embedded_fonts", "(embedded_fonts no)".to_string()),
-            ] {
-                let present = page.items.iter().any(|item| {
-                    matches!(item, SchItem::Unsupported(sexpr)
-                        if find_child(std::slice::from_ref(sexpr), tag).is_some())
-                });
-                if !present {
-                    page.items
-                        .push(SchItem::Unsupported(pcb_sexpr::parse(&source)?));
-                }
+            let section = format!(r#"(sheet_instances (path "/" (page "{number}")))"#);
+            page.items
+                .push(SchItem::Unsupported(pcb_sexpr::parse(&section)?));
+            // A root without a page number usually lacks KiCad's other trailing section too.
+            if !page
+                .items
+                .iter()
+                .any(|item| is_section(item, "embedded_fonts"))
+            {
+                page.items.push(SchItem::Unsupported(pcb_sexpr::parse(
+                    "(embedded_fonts no)",
+                )?));
             }
         }
         for item in &mut page.items {
@@ -469,10 +471,14 @@ pub(crate) fn sync_instances(
                     symbol.instances.sort_by(|a, b| a.path.cmp(&b.path));
                 }
                 SchItem::Sheet(sheet) => {
-                    if let Some(added) =
-                        new_pages.remove(&(page.id.clone(), Some(sheet.id.clone())))
+                    for added in new_pages
+                        .remove(&(page.id.clone(), Some(sheet.id.clone())))
+                        .unwrap_or_default()
                     {
-                        sheet.instances.extend(added);
+                        match sheet.instances.iter_mut().find(|i| i.path == added.path) {
+                            Some(instance) => instance.page = added.page,
+                            None => sheet.instances.push(added),
+                        }
                     }
                     for instance in &mut sheet.instances {
                         if is_root_path(&instance.path) {

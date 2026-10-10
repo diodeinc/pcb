@@ -208,7 +208,7 @@ impl ParsedSymbolDefinition {
             };
             if placed_alternates
                 .insert(pin.number.as_str(), alternate)
-                .is_some()
+                .is_some_and(|prior| prior != alternate)
             {
                 bail!(
                     "symbol {} selects more than one alternate for pin {}",
@@ -219,17 +219,19 @@ impl ParsedSymbolDefinition {
         }
         for number in placed_alternates.keys() {
             match pin_number_counts.get(number).copied() {
-                None => bail!(
+                None if !self.instance_pins(symbol).any(|pin| pin.number == *number) => bail!(
                     "symbol {} selects an alternate for undefined pin {number}",
                     symbol.id
                 ),
-                Some(1) => {}
+                None | Some(1) => {}
                 Some(count) => bail!(
                     "symbol {} selects one alternate for {count} definition pins numbered {number}",
                     symbol.id
                 ),
             }
         }
+        // Pin records cover every unit; only this unit's pins resolve here.
+        placed_alternates.retain(|number, _| pin_number_counts.contains_key(number));
         let resolved = pins
             .into_iter()
             .map(|mut pin| {

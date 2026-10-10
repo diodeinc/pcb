@@ -686,18 +686,21 @@ fn parse_sheet(items: SexprList<'_>) -> Result<Sheet> {
             }
             Some("instances") => {
                 for (project, path) in parse_instance_paths(list)? {
-                    let page = path
-                        .children_from(2)
-                        .find_map(|child| {
-                            SexprList::from_sexpr(child).filter(|item| item.tag() == Some("page"))
-                        })
-                        .and_then(|page| page.string(1))
-                        .unwrap_or_default();
-                    instances.push(SheetInstance {
+                    let mut instance = SheetInstance {
                         project,
                         path: path.string(1).context("instance path is not a string")?,
-                        page,
-                    });
+                        page: String::new(),
+                        unsupported: Vec::new(),
+                    };
+                    for child in path.children_from(2) {
+                        match SexprList::from_sexpr(child) {
+                            Some(item) if item.tag() == Some("page") => {
+                                instance.page = item.string(1).unwrap_or_default();
+                            }
+                            _ => instance.unsupported.push(child.clone()),
+                        }
+                    }
+                    instances.push(instance);
                 }
             }
             _ => unsupported.push(child.clone()),
@@ -1315,10 +1318,12 @@ pub(crate) fn sheet_to_sexpr(sheet: &Sheet) -> Sexpr {
             (
                 instance.project.as_str(),
                 instance.path.as_str(),
-                vec![Sexpr::list(vec![
+                std::iter::once(Sexpr::list(vec![
                     Sexpr::symbol("page"),
                     Sexpr::string(&instance.page),
-                ])],
+                ]))
+                .chain(instance.unsupported.iter().cloned())
+                .collect(),
             )
         })));
     }
@@ -1729,44 +1734,97 @@ fn pin_number(items: &[Sexpr]) -> &str {
         .unwrap_or("")
 }
 
-/// `SCH_ITEM::compare` in library coordinates (internal units, y up): the
-/// item's anchor, then its shape and remaining points.
+const LINE_STYLES: [&str; 6] = [
+    "default",
+    "solid",
+    "dash",
+    "dot",
+    "dash_dot",
+    "dash_dot_dot",
+];
+const FILL_TYPES: [&str; 7] = [
+    "none",
+    "outline",
+    "background",
+    "color",
+    "hatch",
+    "reverse_hatch",
+    "cross_hatch",
+];
+
+/// `SCH_SHAPE::compare` in library coordinates (internal units, y up):
+/// private flag and position, then `EDA_SHAPE::Compare` (start, end, shape,
+/// shape-specific points, vertices, stroke width, line style, fill).
 fn draw_item_sort_key(items: &[Sexpr]) -> Vec<i64> {
     let iu = |value: f64| (value * 10_000.0).round() as i64;
     let point = |list: &[Sexpr]| -> Option<[i64; 2]> {
         Some([iu(atom_f64(list.get(1)?)?), -iu(atom_f64(list.get(2)?)?)])
     };
-    let named = |tags: &[&str]| -> Vec<[i64; 2]> {
-        tags.iter()
-            .filter_map(|tag| point(find_child(items, tag)?))
+    let named = |tag: &str| find_child(items, tag).and_then(point).unwrap_or_default();
+    let scalar = |list: &[Sexpr], tag: &str| {
+        find_child(list, tag)
+            .and_then(|child| atom_f64(child.get(1)?))
+            .map_or(0, iu)
+    };
+    let token_index = |list: &[Sexpr], tag: &str, tokens: &[&str]| -> i64 {
+        let token = find_child(list, tag).and_then(|child| child.get(1)?.as_atom());
+        tokens
+            .iter()
+            .position(|t| Some(*t) == token)
+            .map_or(-1, |i| i as i64)
+    };
+    let private = find_child(items, "private")
+        .and_then(|p| p.get(1)?.as_atom())
+        .is_some_and(|value| value == "yes");
+    let pts = find_child(items, "pts").map_or(Vec::new(), |pts| {
+        pts[1..]
+            .iter()
+            .filter_map(|xy| point(xy.as_list()?))
             .collect()
-    };
-    let (shape, points) = match list_tag(items) {
-        Some("rectangle") => (1, named(&["start", "end"])),
+    });
+    let first = pts.first().copied().unwrap_or_default();
+    let (position, start, end, shape, rest) = match list_tag(items) {
+        Some("rectangle") => {
+            let (start, end) = (named("start"), named("end"));
+            (start, start, end, 1, Vec::new())
+        }
         Some("arc") => {
-            let mut points = named(&["start", "mid", "end"]);
-            if let [a, b, c] = points[..] {
-                points.insert(0, circumcenter(a, b, c));
-            }
-            (2, points)
+            let (start, mid, end) = (named("start"), named("mid"), named("end"));
+            (circumcenter(start, mid, end), start, end, 2, mid.to_vec())
         }
-        Some("circle") => (3, named(&["center"])),
-        Some(tag @ ("polyline" | "bezier")) => {
-            let points = find_child(items, "pts")
-                .map(|pts| {
-                    pts[1..]
-                        .iter()
-                        .filter_map(|xy| point(xy.as_list()?))
-                        .collect()
-                })
-                .unwrap_or_default();
-            (if tag == "polyline" { 4 } else { 5 }, points)
+        Some("circle") => {
+            let center = named("center");
+            let end = [center[0] + scalar(items, "radius"), center[1]];
+            (center, center, end, 3, Vec::new())
         }
-        _ => (0, named(&["at"])),
+        Some("polyline") => {
+            let mut rest = vec![pts.len() as i64];
+            rest.extend(pts.iter().flatten());
+            (first, [0, 0], [0, 0], 4, rest)
+        }
+        Some("bezier") => {
+            let at = |i: usize| pts.get(i).copied().unwrap_or_default();
+            (first, first, at(3), 5, [at(1), at(2)].concat())
+        }
+        _ => {
+            return [i64::from(private)]
+                .into_iter()
+                .chain(named("at"))
+                .collect();
+        }
     };
-    let mut key = points.first().map_or(Vec::new(), |anchor| anchor.to_vec());
+    let stroke = find_child(items, "stroke").unwrap_or_default();
+    let mut key = vec![i64::from(private)];
+    key.extend([position, start, end].concat());
     key.push(shape);
-    key.extend(points.iter().flatten());
+    key.extend(rest);
+    key.push(scalar(stroke, "width"));
+    key.push(token_index(stroke, "type", &LINE_STYLES));
+    key.push(token_index(
+        find_child(items, "fill").unwrap_or_default(),
+        "type",
+        &FILL_TYPES,
+    ));
     key
 }
 
