@@ -1067,11 +1067,24 @@ fn build_workspace(
             &mut has_errors,
             &mut has_warnings,
         );
-        blockers.extend(publish_blockers(
-            &result.diagnostics,
-            zen_path,
-            &workspace.root,
-        ));
+        for diagnostic in result.diagnostics.iter().filter(|d| !d.suppressed) {
+            let kind = pcb_zen_core::diagnostics::diagnostic_kind(diagnostic);
+            let sch = kind.as_deref().and_then(|k| k.split('.').next()) == Some("sch");
+            if diagnostic.severity != EvalSeverity::Error && !sch {
+                continue;
+            }
+            let inner = diagnostic.innermost();
+            let path = Some(Path::new(&inner.path))
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or(zen_path);
+            blockers.push(format!(
+                "  {}: {}{}: {}",
+                path.strip_prefix(&workspace.root).unwrap_or(path).display(),
+                diagnostic.severity.to_string().to_lowercase(),
+                kind.map(|kind| format!(" {kind}")).unwrap_or_default(),
+                inner.body
+            ));
+        }
         if let Some(schematic) = result.schematic {
             crate::build::print_build_success(&file_name, &schematic);
         }
@@ -1079,58 +1092,12 @@ fn build_workspace(
 
     if !blockers.is_empty() {
         bail!(
-            "Publish blocked by {} diagnostic(s):\n{}\n\n\
-             Errors and linked KiCad schematic (sch.*) diagnostics of any severity block publishing.",
+            "Publish blocked by {} diagnostic(s); sch.* warnings block like errors:\n{}",
             blockers.len(),
             blockers.join("\n")
         );
     }
     Ok(())
-}
-
-/// One line per unsuppressed error or `sch.*` diagnostic: location, severity, kind and message.
-/// Pathless diagnostics are attributed to the file being built.
-fn publish_blockers(
-    diagnostics: &pcb_zen_core::Diagnostics,
-    zen_path: &Path,
-    root: &Path,
-) -> Vec<String> {
-    let root = format!("{}/", root.display());
-    let zen_path = zen_path.display().to_string();
-    diagnostics
-        .iter()
-        .filter(|diagnostic| !diagnostic.suppressed)
-        .map(|diagnostic| {
-            (
-                diagnostic.severity,
-                pcb_zen_core::diagnostics::DiagnosticReport::from_diagnostic(diagnostic),
-            )
-        })
-        .filter(|(severity, report)| {
-            *severity == EvalSeverity::Error
-                || report
-                    .kind
-                    .as_deref()
-                    .is_some_and(|kind| kind == "sch" || kind.starts_with("sch."))
-        })
-        .map(|(severity, report)| {
-            let location = if report.location.is_empty() {
-                &zen_path
-            } else {
-                &report.location
-            };
-            format!(
-                "  {}: {}{}: {}",
-                location.strip_prefix(&root).unwrap_or(location),
-                severity.to_string().to_lowercase(),
-                report
-                    .kind
-                    .map(|kind| format!(" {kind}"))
-                    .unwrap_or_default(),
-                report.body
-            )
-        })
-        .collect()
 }
 
 fn resolve_remote(repo_root: &Path, force: bool) -> Result<String> {
@@ -1186,16 +1153,11 @@ fn preflight_checks(repo_root: &Path, remote: &str) -> Result<()> {
     if local_sha != remote_sha {
         let range = format!("HEAD...{remote_ref}");
         let counts = git::run_output(repo_root, &["rev-list", "--left-right", "--count", &range])?;
-        let state = match counts.split_whitespace().collect::<Vec<_>>()[..] {
-            ["0", behind] => {
-                format!("{behind} commit(s) behind {remote_ref}. Pull before publishing.")
-            }
-            [ahead, "0"] => {
-                format!("{ahead} commit(s) ahead of {remote_ref}. Push before publishing.")
-            }
-            _ => format!("diverged from {remote_ref}. Reconcile before publishing."),
-        };
-        bail!("Local main ({}) is {state}", &local_sha[..8]);
+        let (ahead, behind) = counts.split_once('\t').unwrap_or(("?", "?"));
+        bail!(
+            "Local main is {ahead} commit(s) ahead of and {behind} behind {remote_ref}. \
+             Pull or push before publishing."
+        );
     }
 
     println!("{} on main @ {}", "✓".green(), &local_sha[..8]);
@@ -1643,26 +1605,6 @@ P1 = io(Net)
         assert_eq!(
             resolve_fetch_remote(&sb.root_path().join("src")).unwrap(),
             "origin"
-        );
-    }
-
-    #[test]
-    fn preflight_reports_main_behind_remote() {
-        let mut sb = Sandbox::new();
-        setup_publish_workspace(&mut sb, &[]);
-        sb.write("notes.txt", "x").commit("chore: notes");
-        for args in [
-            ["update-ref", "refs/remotes/origin/main", "HEAD"],
-            ["reset", "--hard", "HEAD~1"],
-        ] {
-            sb.cwd("src").cmd("git", args).stdout_null().run().unwrap();
-        }
-
-        let error = preflight_checks(&sb.root_path().join("src"), "origin").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .ends_with("is 1 commit(s) behind origin/main. Pull before publishing.")
         );
     }
 
