@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use anyhow::{Result, bail};
 
-use crate::{CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Paper, Point, field_autoplace::Bounds};
+use crate::{
+    CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Paper, Point, SchDocument, SchItem,
+    field_autoplace::{Bounds, symbol_visual_bounds},
+};
 
 const DEFAULT_TITLE_BLOCK_WIDTH_MM: f64 = 110.0;
 const DEFAULT_TITLE_BLOCK_HEIGHT_MM: f64 = 34.0;
@@ -336,6 +339,33 @@ fn grid_ceil(value: f64) -> i32 {
     ((value - GEOMETRY_EPS_MM) / CONNECTION_GRID_MM).ceil() as i32
 }
 
+/// One warning per page whose symbols extend past its paper.
+pub fn off_page_warnings(document: &SchDocument) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    for page in &document.pages {
+        let Ok((width, height)) = paper_dimensions(&page.paper) else {
+            continue;
+        };
+        let (mut max_x, mut max_y) = (width, height);
+        for item in &page.items {
+            if let SchItem::Symbol(symbol) = item
+                && let Some(definition) = page.library.definitions.get(symbol.library_key())
+                && let Some(bounds) = symbol_visual_bounds(symbol, definition)?
+            {
+                max_x = max_x.max(bounds.max_x);
+                max_y = max_y.max(bounds.max_y);
+            }
+        }
+        if max_x > width || max_y > height {
+            warnings.push(format!(
+                "schematic sheet '{}' has symbols outside its {width:.0}×{height:.0} mm page; they extend to {max_x:.0}×{max_y:.0} mm",
+                page.file_name.as_deref().unwrap_or(&page.id),
+            ));
+        }
+    }
+    Ok(warnings)
+}
+
 fn paper_dimensions(paper: &Paper) -> Result<(f64, f64)> {
     let (mut width, mut height) = match paper {
         Paper::Custom {
@@ -482,5 +512,25 @@ mod tests {
         let unanchored = packer_with_existing().place(new_block);
         assert_ne!(unanchored.x, existing_anchor.x);
         assert_ne!(unanchored.y, existing_anchor.y);
+    }
+
+    #[test]
+    fn warns_about_symbols_past_the_paper() {
+        let source = include_str!("../../pcb-sch/test/kicad-bom/layout.kicad_sch");
+        let mut document = SchDocument {
+            pages: vec![crate::parse_kicad_sch_page(Some("layout.kicad_sch"), source).unwrap()],
+            ..SchDocument::default()
+        };
+        assert!(off_page_warnings(&document).unwrap().is_empty());
+
+        document.pages[0].paper = Paper::Custom {
+            width_mm: 10.0,
+            height_mm: 10.0,
+        };
+        let warnings = off_page_warnings(&document).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with(
+            "schematic sheet 'layout.kicad_sch' has symbols outside its 10×10 mm page"
+        ));
     }
 }

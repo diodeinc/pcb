@@ -44,6 +44,7 @@ pub use model::{
     SymbolField, SymbolInstance, SymbolLibrary, TextEffects, TextSize, Wire,
 };
 pub use net_symbols::NetSymbolSpec;
+pub use placement::off_page_warnings;
 pub use project::{LoadedProject, load_project, project_root_schematics, sheet_file};
 pub use repair::{
     ConnectivityRepairIntent, NetDriverKind, plan_connectivity_repair, verify_connectivity_repair,
