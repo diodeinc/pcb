@@ -80,3 +80,34 @@ fn test_publish_board_with_patches() {
         );
     assert_snapshot!("publish_board_with_patches", output);
 }
+
+#[test]
+fn test_publish_check_reports_package_versions() {
+    let mut sb = Sandbox::new();
+    sb.write("pcb.toml", PCB_TOML)
+        .write("modules/Foo/pcb.toml", "")
+        .write("modules/Foo/Foo.zen", "P1 = io(Net)\n")
+        .init_git()
+        .commit("feat: add Foo")
+        .tag("modules/Foo/v0.2.0")
+        .write("modules/Foo/Foo.zen", "P1 = io(Net)\nP2 = io(Net)\n")
+        .write("modules/Bar/pcb.toml", "")
+        .write("modules/Bar/Bar.zen", "P1 = io(Net)\n")
+        .commit("feat: add Bar, extend Foo");
+
+    let output = sb
+        .run("pcbc", ["publish", "--check"])
+        .stdout_capture()
+        .stderr_null()
+        .run()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report,
+        serde_json::json!({ "packages": [
+            { "path": "modules/Bar", "current": null, "version": "0.1.0", "tag": "modules/Bar/v0.1.0" },
+            { "path": "modules/Foo", "current": "0.2.0", "version": "0.2.1", "tag": "modules/Foo/v0.2.1" },
+        ]})
+    );
+    assert_eq!(sb.cmd("git", ["tag"]).read().unwrap(), "modules/Foo/v0.2.0");
+}
