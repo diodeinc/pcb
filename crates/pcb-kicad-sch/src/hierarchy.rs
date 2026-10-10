@@ -322,8 +322,8 @@ fn path_depth(path: &str) -> usize {
 pub(crate) fn sync_instances(
     document: &mut SchDocument,
     slots: &BTreeSet<SymbolSlotKey>,
-    project: &str,
 ) -> Result<()> {
+    let project = document.project_name.clone();
     let instances = page_instances(document)?;
     let page_of = instances
         .iter()
@@ -332,6 +332,8 @@ pub(crate) fn sync_instances(
     let mut paths_by_page = BTreeMap::<String, Vec<String>>::new();
     let mut used = BTreeSet::new();
     let mut unnumbered = Vec::new();
+    // Sheets KiCad cannot reach (unplaced, or below an unplaced sheet) take no page number.
+    let mut unreachable = BTreeSet::new();
     for instance in &instances {
         paths_by_page
             .entry(instance.page.id.clone())
@@ -342,15 +344,24 @@ pub(crate) fn sync_instances(
             None => (root_page_number(instance.page), None),
             Some((parent_id, sheet_id)) => {
                 let parent = page_of[parent_id];
+                let sheet = parent
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        SchItem::Sheet(sheet) if sheet.id == sheet_id => Some(sheet),
+                        _ => None,
+                    })
+                    .context("sheet instance without a sheet item")?;
+                if !sheet.placed || unreachable.contains(parent_id) {
+                    unreachable.insert(instance.id.as_str());
+                    continue;
+                }
                 let parent_path = format!("/{parent_id}");
-                let page = parent.items.iter().find_map(|item| match item {
-                    SchItem::Sheet(sheet) if sheet.id == sheet_id => sheet
-                        .instances
-                        .iter()
-                        .find(|instance| instance.path == parent_path)
-                        .map(|instance| instance.page.clone()),
-                    _ => None,
-                });
+                let page = sheet
+                    .instances
+                    .iter()
+                    .find(|instance| instance.path == parent_path)
+                    .map(|instance| instance.page.clone());
                 let sheet = (parent.id.clone(), sheet_id.to_string(), parent_path);
                 (page, Some(sheet))
             }
@@ -385,10 +396,10 @@ pub(crate) fn sync_instances(
         ..
     } = document;
     let is_root_path = |path: &str| {
-        !project.is_empty()
-            && root_page_ids
-                .iter()
-                .any(|root| path[1..].split('/').next() == Some(root))
+        let root = path
+            .strip_prefix('/')
+            .and_then(|path| path.split('/').next());
+        !project.is_empty() && root.is_some_and(|root| root_page_ids.iter().any(|id| id == root))
     };
     for page in pages {
         let Some(paths) = paths_by_page.get(&page.id) else {

@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use pcb_sch::{ATTR_SCHEMATIC_PATH, Instance, InstanceKind, Schematic};
@@ -18,6 +17,7 @@ use crate::{
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     placement::{GridPacker, GridPoint, GridRect, point_rect},
+    project,
     repair::{
         ConnectivityRepairIntent, NetDriverKind, item_matches, plan_connectivity_repair_core,
         point_on_segment, remove_items,
@@ -78,6 +78,8 @@ pub(crate) fn reconcile_document(
                     ..SchPage::new(root_page_id())
                 }],
                 root_page_ids: vec![root_page_id()],
+                // pcb pairs a new root schematic with a same-stem project.
+                project_name: project::file_stem(root_file_name),
                 ..SchDocument::default()
             }
         }
@@ -336,15 +338,7 @@ pub(crate) fn reconcile_document(
         )?;
     }
 
-    // The root schematic and the project share a file stem.
-    let project_name = document
-        .root_page_ids
-        .first()
-        .and_then(|id| document.pages.iter().find(|page| &page.id == id))
-        .and_then(|root| Path::new(root.file_name.as_deref()?).file_stem())
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    hierarchy::sync_instances(&mut document, &project_slots, &project_name)?;
+    hierarchy::sync_instances(&mut document, &project_slots)?;
 
     // Cleanup is a whole-document concern; a scoped repair must not
     // touch pages outside its selection.

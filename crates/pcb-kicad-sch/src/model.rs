@@ -18,6 +18,9 @@ pub struct SchDocument {
     pub root_page_ids: Vec<Id>,
     /// KiCad 10 project bus aliases (`schematic.bus_aliases`).
     pub bus_aliases: BTreeMap<String, Vec<String>>,
+    /// The project file stem, which names this project's symbol and sheet instances.
+    #[serde(default)]
+    pub project_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
