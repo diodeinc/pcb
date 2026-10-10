@@ -166,7 +166,11 @@ pub fn sheet_file(parent: &str, child: &str) -> Result<String> {
             child.as_str(),
         ),
     };
-    if child.is_empty() || child.starts_with('/') {
+    let drive = child
+        .split('/')
+        .next()
+        .is_some_and(|first| first.ends_with(':'));
+    if child.is_empty() || child.starts_with('/') || drive {
         bail!("schematic sheet path '{child}' must be relative");
     }
     let mut parts = Vec::new();
@@ -188,7 +192,7 @@ pub fn sheet_file(parent: &str, child: &str) -> Result<String> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::load_project;
+    use super::{load_project, sheet_file};
     use crate::connectivity::ConnectivityGraph;
 
     #[test]
@@ -232,5 +236,6 @@ mod tests {
             ]
         );
         ConnectivityGraph::from_kicad(&project.document).unwrap();
+        assert!(sheet_file("demo.kicad_sch", r"C:\other\x.kicad_sch").is_err());
     }
 }
