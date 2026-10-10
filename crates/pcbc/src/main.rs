@@ -176,9 +176,6 @@ enum Commands {
     /// Scan datasheets from local PDFs or URLs
     Scan(pcb_diode_api::ScanArgs),
 
-    /// Search for electronic components
-    Search(pcb_diode_api::SearchArgs),
-
     /// Run SPICE simulations
     #[command(alias = "sim", alias = "s")]
     Simulate(sim::SimArgs),
@@ -266,7 +263,6 @@ fn run() -> anyhow::Result<()> {
             Ok(())
         }
         Commands::Scan(args) => pcb_diode_api::execute_scan(args),
-        Commands::Search(args) => pcb_diode_api::execute_search(args),
         Commands::EmbedStep(args) => embed_step::execute(args),
         Commands::Simulate(args) => sim::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args, resolution),
