@@ -368,6 +368,23 @@ pub(super) struct ImportSheetTree {
     pub(super) nodes: BTreeMap<KiCadSheetPath, ImportSheetNode>,
 }
 
+impl ImportSheetTree {
+    pub(super) fn unit_file(&self, refdes: &KiCadRefDes, key: &KiCadUuidPathKey) -> Result<&Path> {
+        let sheet = KiCadSheetPath::from_sheetpath_tstamps(&key.sheetpath_tstamps);
+        self.nodes
+            .get(&sheet)
+            .and_then(|node| node.schematic_file.as_deref())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Symbol {} (UUID {}) is placed on sheet path {} which is not in the schematic hierarchy",
+                    refdes.as_str(),
+                    key.symbol_uuid,
+                    sheet.as_str()
+                )
+            })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct ImportSheetNode {
     /// UUID for this sheet instance (None for root).

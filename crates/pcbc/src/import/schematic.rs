@@ -5,7 +5,11 @@ use anyhow::{Context, Result, ensure};
 use pcb_kicad_sch::connectivity::{
     ConnectionOrigin, ConnectivityGraph, ConnectivityItemRef, PhysicalConnectivity, PinVisibility,
 };
-use pcb_kicad_sch::{SymbolSlotKey, analysis::inspect_schematic, canonical_component_path};
+use pcb_kicad_sch::{
+    SymbolSlotKey,
+    analysis::{ConnectivityInspection, SchematicIssue, inspect_schematic},
+    canonical_component_path,
+};
 use pcb_sch::{InstanceKind, Schematic};
 use pcb_sexpr::{PatchSet, Sexpr, Span, find_child_list, formatter::quote_string};
 use std::{
@@ -46,21 +50,22 @@ pub(super) fn bind_imported_schematic(
         for (key, unit) in &component
             .schematic
             .as_ref()
-            .context("Imported component has no schematic")?
+            .with_context(|| {
+                format!(
+                    "Component {} has no schematic symbol",
+                    component.netlist.refdes.as_str()
+                )
+            })?
             .units
         {
-            let sheet_path = KiCadSheetPath::from_sheetpath_tstamps(&key.sheetpath_tstamps);
             let file = ir
                 .schematic_sheet_tree
-                .nodes
-                .get(&sheet_path)
-                .and_then(|sheet| sheet.schematic_file.as_ref())
-                .context("Imported symbol has no source sheet")?;
+                .unit_file(&component.netlist.refdes, key)?;
             let slot = SymbolSlotKey::new(path.clone(), u32::try_from(unit.unit.unwrap_or(1))?)
                 .context("Imported symbol has an invalid unit")?;
             ensure!(
                 bindings
-                    .insert((file.clone(), key.symbol_uuid.clone()), slot)
+                    .insert((file.to_path_buf(), key.symbol_uuid.clone()), slot)
                     .is_none(),
                 "Persistent schematics do not support managed components on reused sheet files: {}",
                 file.display()
@@ -126,11 +131,87 @@ pub(super) fn bind_imported_schematic(
             .analysis
             .issues()
             .iter()
-            .map(|issue| issue.summary())
+            .map(|issue| issue_summary(issue, &inspection, &project.document))
             .collect::<Vec<_>>()
             .join("; ")
     );
     Ok(())
+}
+
+fn issue_summary(
+    issue: &SchematicIssue,
+    inspection: &ConnectivityInspection,
+    document: &pcb_kicad_sch::SchDocument,
+) -> String {
+    let summary = issue.summary();
+    let SchematicIssue::DisconnectedNet {
+        net_name,
+        missing_terminals,
+        ..
+    } = issue
+    else {
+        return summary;
+    };
+    if !missing_terminals.is_empty() {
+        return summary;
+    }
+    // Island names are the bound `pcb:net` names, so show what the schematic itself says.
+    let items = document
+        .pages
+        .iter()
+        .flat_map(|page| page.items.iter().map(move |item| (page, item)))
+        .filter_map(|(page, item)| {
+            let name = match item {
+                pcb_kicad_sch::SchItem::Label(label) => Some(format!("'{}'", label.text)),
+                pcb_kicad_sch::SchItem::Symbol(symbol) => symbol
+                    .field_value("Value")
+                    .map(|value| format!("'{value}'")),
+                _ => None,
+            };
+            Some((
+                item.id()?,
+                (page.file_name.as_deref().unwrap_or_default(), name),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let id = |item: &ConnectivityItemRef| match item {
+        ConnectivityItemRef::Symbol { id, .. }
+        | ConnectivityItemRef::Wire { id, .. }
+        | ConnectivityItemRef::Junction { id, .. }
+        | ConnectivityItemRef::NoConnect { id, .. }
+        | ConnectivityItemRef::Label { id, .. } => id.clone(),
+        ConnectivityItemRef::SheetPin { sheet_id, .. } => sheet_id.clone(),
+    };
+    let pieces = inspection.analysis.nets[net_name]
+        .connected_islands
+        .iter()
+        .map(|piece| {
+            let islands = piece
+                .iter()
+                .map(|island| &inspection.physical.islands[island])
+                .collect::<Vec<_>>();
+            let names = islands
+                .iter()
+                .flat_map(|island| island.named_drivers.values().flatten())
+                .filter_map(|driver| items.get(id(driver).as_str())?.1.clone())
+                .collect::<BTreeSet<_>>();
+            let files = islands
+                .iter()
+                .flat_map(|island| &island.items)
+                .filter_map(|item| Some(items.get(id(item).as_str())?.0))
+                .collect::<BTreeSet<_>>();
+            let names = if names.is_empty() {
+                "unlabelled wiring".to_string()
+            } else {
+                names.into_iter().collect::<Vec<_>>().join(", ")
+            };
+            format!(
+                "{names} in {}",
+                files.into_iter().collect::<Vec<_>>().join(", ")
+            )
+        })
+        .collect::<Vec<_>>();
+    format!("{summary}: {}", pieces.join(" | "))
 }
 
 fn bind_net_names(project_file: &Path, netlist: &Schematic) -> Result<()> {
