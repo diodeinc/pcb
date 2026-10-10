@@ -39,6 +39,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.
 - `pcb import` accepts multi-unit symbols whose sheets keep stale caches of units they do not place.
+- `pcb import` reads symbols without per-sheet instance data, such as Altium imports KiCad has not re-saved, and ignores instance data for sheets that no longer exist.
 - Schematic sheet paths written with Windows separators, including `..`, resolve as KiCad resolves them.
 - KiCad netlist (`.net`) libparts use the same part name as their components.
 
